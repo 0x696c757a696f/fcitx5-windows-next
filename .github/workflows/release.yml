@@ -17,10 +17,21 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: pwsh
+
 jobs:
   build-once:
     runs-on: windows-2022
     steps:
+      - name: Require PowerShell 7
+        run: |
+          if ($PSVersionTable.PSEdition -ne 'Core' -or
+              $PSVersionTable.PSVersion.Major -ne 7) {
+            throw "PowerShell 7 is required; found $($PSVersionTable.PSVersion)."
+          }
+
       - name: Check out immutable release source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -52,6 +63,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Require PowerShell 7
+        run: |
+          if ($PSVersionTable.PSEdition -ne 'Core' -or
+              $PSVersionTable.PSVersion.Major -ne 7) {
+            throw "PowerShell 7 is required; found $($PSVersionTable.PSVersion)."
+          }
+
       - name: Check out the same source without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
