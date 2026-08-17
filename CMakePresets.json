@@ -12,7 +12,8 @@
       "generator": "Visual Studio 17 2022",
       "cacheVariables": {
         "BUILD_TESTING": "ON",
-        "FCITX_WARNINGS_AS_ERRORS": "ON"
+        "FCITX_WARNINGS_AS_ERRORS": "ON",
+        "FCITX_RELEASE_CHANNEL": "stable"
       }
     },
     {

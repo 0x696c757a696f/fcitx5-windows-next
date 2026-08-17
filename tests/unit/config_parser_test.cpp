@@ -1,7 +1,7 @@
 #include "config_model.h"
 
-#include <iostream>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 int main() {
@@ -9,8 +9,7 @@ int main() {
     Config config;
     ParseError error;
     const auto defaults = defaultConfigToml();
-    if (!parseConfig(defaults, config, error) ||
-        config.orientation != Orientation::vertical ||
+    if (!parseConfig(defaults, config, error) || config.orientation != Orientation::vertical ||
         config.appearanceMode != AppearanceMode::system || config.colors.size() != 11) {
         std::cerr << "annotated default config rejected: " << error.message << '\n';
         return 1;
@@ -30,17 +29,17 @@ int main() {
             return 1;
         }
     }
-    if (!parseConfig("format_version = 1\n[candidate]\norientation = 'horizontal'\n",
-                     config, error) || config.orientation != Orientation::horizontal) {
+    if (!parseConfig("format_version = 1\n[candidate]\norientation = 'horizontal'\n", config,
+                     error) ||
+        config.orientation != Orientation::horizontal) {
         return 1;
     }
     std::ifstream themeFile("resources/themes/default/theme.toml", std::ios::binary);
     std::ostringstream themeText;
     themeText << themeFile.rdbuf();
     Theme theme;
-    if (!themeFile || !parseTheme(themeText.str(), theme, error) ||
-        theme.id != "builtin.default" || theme.light.colors.empty() ||
-        theme.dark.colors.empty()) {
+    if (!themeFile || !parseTheme(themeText.str(), theme, error) || theme.id != "builtin.default" ||
+        theme.light.colors.empty() || theme.dark.colors.empty()) {
         std::cerr << "annotated theme rejected: " << error.message << '\n';
         return 1;
     }
@@ -50,7 +49,7 @@ int main() {
     const auto darkResolved = resolveTheme(theme, true, userOverride);
     if (darkResolved.orientation != Orientation::horizontal ||
         darkResolved.colors.at("candidate_text") != "#112233FF" ||
-        darkResolved.colors.at("background") != "#202124F2") {
+        darkResolved.colors.at("background") != "#242629F7") {
         std::cerr << "theme/user merge order failed\n";
         return 1;
     }
@@ -61,19 +60,21 @@ int main() {
         return 1;
     }
     if (parseTheme("format_version=1\n[theme]\nid='Bad ID'\nname='x'\nversion='1'\nlicense='MIT'\n",
-                   theme, error)) return 1;
+                   theme, error))
+        return 1;
     std::string updated;
-    if (!updatePresentationToml(defaults, "dark", "builtin:default", "horizontal",
+    if (!updatePresentationToml(defaults, "dark", "builtin:default", "horizontal", "enabled",
                                 "Microsoft YaHei", updated, error) ||
-        !updated.starts_with("# Fcitx5 for Windows") ||
-        !parseConfig(updated, config, error) || config.appearanceMode != AppearanceMode::dark ||
-        config.orientation != Orientation::horizontal || config.maxWidth != 720.0 ||
-        config.colors.size() != 11 || !config.candidateFont.families ||
+        !updated.starts_with("# Fcitx5 for Windows") || !parseConfig(updated, config, error) ||
+        config.appearanceMode != AppearanceMode::dark ||
+        config.orientation != Orientation::horizontal || config.scrollMode != true ||
+        config.maxWidth != 860.0 || config.colors.size() != 11 || !config.candidateFont.families ||
         config.candidateFont.families->front() != "Microsoft YaHei") {
         std::cerr << "typed presentation update failed: " << error.message << '\n';
         return 1;
     }
-    if (updatePresentationToml(defaults, "invalid", "builtin:default", "vertical",
-                               "system", updated, error)) return 1;
+    if (updatePresentationToml(defaults, "invalid", "builtin:default", "vertical", "disabled",
+                               "system", updated, error))
+        return 1;
     return 0;
 }

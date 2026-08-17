@@ -14,7 +14,7 @@ bool validMetadata(MessageType type, const Metadata& metadata) noexcept {
 }
 
 class Writer {
-public:
+  public:
     Writer(MessageType type, const Metadata& metadata) {
         bytes_.reserve(kHeaderSize);
         appendU32(kMagic);
@@ -59,28 +59,29 @@ public:
     std::vector<std::uint8_t> finish() {
         const auto bodySize = static_cast<std::uint32_t>(bytes_.size() - kHeaderSize);
         for (unsigned index = 0; index < 4; ++index) {
-            bytes_[8 + index] =
-                static_cast<std::uint8_t>((bodySize >> (index * 8U)) & 0xffU);
+            bytes_[8 + index] = static_cast<std::uint8_t>((bodySize >> (index * 8U)) & 0xffU);
         }
         return std::move(bytes_);
     }
 
-private:
+  private:
     std::vector<std::uint8_t> bytes_;
 };
 
 class Reader {
-public:
+  public:
     explicit Reader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
 
     bool readU8(std::uint8_t& value) noexcept {
-        if (remaining() < 1) return false;
+        if (remaining() < 1)
+            return false;
         value = bytes_[offset_++];
         return true;
     }
 
     bool readU16(std::uint16_t& value) noexcept {
-        if (remaining() < 2) return false;
+        if (remaining() < 2)
+            return false;
         value = static_cast<std::uint16_t>(bytes_[offset_]) |
                 static_cast<std::uint16_t>(bytes_[offset_ + 1] << 8U);
         offset_ += 2;
@@ -88,7 +89,8 @@ public:
     }
 
     bool readU32(std::uint32_t& value) noexcept {
-        if (remaining() < 4) return false;
+        if (remaining() < 4)
+            return false;
         value = 0;
         for (unsigned index = 0; index < 4; ++index) {
             value |= static_cast<std::uint32_t>(bytes_[offset_ + index]) << (index * 8U);
@@ -99,13 +101,15 @@ public:
 
     bool readI32(std::int32_t& value) noexcept {
         std::uint32_t raw = 0;
-        if (!readU32(raw)) return false;
+        if (!readU32(raw))
+            return false;
         value = static_cast<std::int32_t>(raw);
         return true;
     }
 
     bool readU64(std::uint64_t& value) noexcept {
-        if (remaining() < 8) return false;
+        if (remaining() < 8)
+            return false;
         value = 0;
         for (unsigned index = 0; index < 8; ++index) {
             value |= static_cast<std::uint64_t>(bytes_[offset_ + index]) << (index * 8U);
@@ -116,7 +120,8 @@ public:
 
     bool readString(std::string& value) {
         std::uint32_t size = 0;
-        if (!readU32(size) || size > remaining()) return false;
+        if (!readU32(size) || size > remaining())
+            return false;
         value.assign(reinterpret_cast<const char*>(bytes_.data() + offset_), size);
         offset_ += size;
         return true;
@@ -124,7 +129,7 @@ public:
 
     [[nodiscard]] bool done() const noexcept { return offset_ == bytes_.size(); }
 
-private:
+  private:
     [[nodiscard]] std::size_t remaining() const noexcept { return bytes_.size() - offset_; }
 
     std::span<const std::uint8_t> bytes_;
@@ -132,13 +137,13 @@ private:
 };
 
 bool validHelloRequestMetadata(const Metadata& metadata) noexcept {
-    return metadata.engineEpoch == 0 && metadata.contextId == 0 &&
-           metadata.compositionId == 0 && metadata.revision == 0;
+    return metadata.engineEpoch == 0 && metadata.contextId == 0 && metadata.compositionId == 0 &&
+           metadata.revision == 0;
 }
 
 bool validHelloResponseMetadata(const Metadata& metadata) noexcept {
-    return metadata.engineEpoch != 0 && metadata.contextId == 0 &&
-           metadata.compositionId == 0 && metadata.revision == 0;
+    return metadata.engineEpoch != 0 && metadata.contextId == 0 && metadata.compositionId == 0 &&
+           metadata.revision == 0;
 }
 
 bool validKeyMetadata(const Metadata& metadata) noexcept {
@@ -147,14 +152,14 @@ bool validKeyMetadata(const Metadata& metadata) noexcept {
 
 bool validCaret(const CaretRect& caret) noexcept {
     if (!caret.valid) {
-        return caret.left == 0 && caret.top == 0 && caret.right == 0 &&
-               caret.bottom == 0 && caret.dpi == 96;
+        return caret.left == 0 && caret.top == 0 && caret.right == 0 && caret.bottom == 0 &&
+               caret.dpi == 96;
     }
     constexpr std::int32_t kCoordinateLimit = 1'000'000;
     return caret.left >= -kCoordinateLimit && caret.top >= -kCoordinateLimit &&
            caret.right <= kCoordinateLimit && caret.bottom <= kCoordinateLimit &&
-           caret.right >= caret.left && caret.bottom >= caret.top &&
-           caret.dpi >= 48 && caret.dpi <= 960;
+           caret.right >= caret.left && caret.bottom >= caret.top && caret.dpi >= 48 &&
+           caret.dpi <= 960;
 }
 
 bool validKeyResponsePayload(const KeyResponse& message) noexcept {
@@ -162,11 +167,13 @@ bool validKeyResponsePayload(const KeyResponse& message) noexcept {
         message.preeditUtf8.size() > kMaxPreeditUtf8 ||
         message.preeditCaretUtf8 > message.preeditUtf8.size() ||
         message.candidates.size() > kMaxCandidates || message.candidateVisibility > 2 ||
+        message.candidatePageSize > kMaxCandidates ||
         (message.selectedCandidate != UINT32_MAX &&
          message.selectedCandidate >= message.candidates.size()) ||
         message.candidateTotal < message.candidates.size() || !validCaret(message.caret))
         return false;
-    if (message.candidateVisibility == 0 && !message.candidates.empty()) return false;
+    if (message.candidateVisibility == 0 && !message.candidates.empty())
+        return false;
     return std::all_of(message.candidates.begin(), message.candidates.end(),
                        [](const CandidateRecord& candidate) {
                            return candidate.id != 0 &&
@@ -201,9 +208,10 @@ bool isResponse(MessageType type) noexcept {
            type == MessageType::launcherResponse;
 }
 
-bool decodeHeader(std::span<const std::uint8_t> bytes, MessageType& type,
-                  std::uint32_t& bodySize, Metadata& metadata) noexcept {
-    if (bytes.size() != kHeaderSize) return false;
+bool decodeHeader(std::span<const std::uint8_t> bytes, MessageType& type, std::uint32_t& bodySize,
+                  Metadata& metadata) noexcept {
+    if (bytes.size() != kHeaderSize)
+        return false;
     Reader reader(bytes);
     std::uint32_t magic = 0;
     std::uint16_t version = 0;
@@ -222,12 +230,12 @@ bool decodeHeader(std::span<const std::uint8_t> bytes, MessageType& type,
         return false;
     }
     type = static_cast<MessageType>(rawType);
-    return bodySize <= maximumFrameSize(type) - kHeaderSize &&
-           validMetadata(type, metadata);
+    return bodySize <= maximumFrameSize(type) - kHeaderSize && validMetadata(type, metadata);
 }
 
 bool decodeFrame(std::span<const std::uint8_t> bytes, FrameView& output) noexcept {
-    if (bytes.size() < kHeaderSize || bytes.size() > kMaxControlFrameSize) return false;
+    if (bytes.size() < kHeaderSize || bytes.size() > kMaxControlFrameSize)
+        return false;
     std::uint32_t bodySize = 0;
     Metadata metadata;
     MessageType type{};
@@ -301,6 +309,9 @@ std::vector<std::uint8_t> encode(const KeyResponse& message) {
     writer.appendU32(message.candidatePage);
     writer.appendU32(message.candidateTotal);
     writer.appendU8(message.candidateVisibility);
+    writer.appendU32(message.candidatePageSize);
+    writer.appendU8(message.candidateBulk ? 1U : 0U);
+    writer.appendU8(message.candidateEnd ? 1U : 0U);
     writer.appendU8(message.caret.valid ? 1U : 0U);
     writer.appendI32(message.caret.left);
     writer.appendI32(message.caret.top);
@@ -346,8 +357,8 @@ std::vector<std::uint8_t> encode(const LauncherResponse& message) {
 }
 
 bool decode(const FrameView& frame, HelloRequest& message) noexcept {
-    if (frame.type != MessageType::helloRequest ||
-        !validHelloRequestMetadata(frame.metadata)) return false;
+    if (frame.type != MessageType::helloRequest || !validHelloRequestMetadata(frame.metadata))
+        return false;
     Reader reader(frame.body);
     message.metadata = frame.metadata;
     return reader.readU32(message.clientArchitectureBits) &&
@@ -357,8 +368,8 @@ bool decode(const FrameView& frame, HelloRequest& message) noexcept {
 }
 
 bool decode(const FrameView& frame, HelloResponse& message) noexcept {
-    if (frame.type != MessageType::helloResponse ||
-        !validHelloResponseMetadata(frame.metadata)) return false;
+    if (frame.type != MessageType::helloResponse || !validHelloResponseMetadata(frame.metadata))
+        return false;
     Reader reader(frame.body);
     std::uint32_t status = 0;
     message.metadata = frame.metadata;
@@ -372,54 +383,56 @@ bool decode(const FrameView& frame, HelloResponse& message) noexcept {
 }
 
 bool decode(const FrameView& frame, KeyRequest& message) noexcept {
-    if (frame.type != MessageType::keyRequest || !validKeyMetadata(frame.metadata)) return false;
+    if (frame.type != MessageType::keyRequest || !validKeyMetadata(frame.metadata))
+        return false;
     Reader reader(frame.body);
     message.metadata = frame.metadata;
     std::uint8_t valid = 0;
     return reader.readU32(message.virtualKey) && reader.readU32(message.keyFlags) &&
-           reader.readU8(valid) && valid <= 1 &&
-           reader.readI32(message.caret.left) && reader.readI32(message.caret.top) &&
-           reader.readI32(message.caret.right) && reader.readI32(message.caret.bottom) &&
-           reader.readU32(message.caret.dpi) && reader.done() &&
-           ((message.caret.valid = valid != 0), validCaret(message.caret));
+           reader.readU8(valid) && valid <= 1 && reader.readI32(message.caret.left) &&
+           reader.readI32(message.caret.top) && reader.readI32(message.caret.right) &&
+           reader.readI32(message.caret.bottom) && reader.readU32(message.caret.dpi) &&
+           reader.done() && ((message.caret.valid = valid != 0), validCaret(message.caret));
 }
 
 bool decode(const FrameView& frame, KeyResponse& message) noexcept {
-    if (frame.type != MessageType::keyResponse || !validKeyMetadata(frame.metadata)) return false;
+    if (frame.type != MessageType::keyResponse || !validKeyMetadata(frame.metadata))
+        return false;
     Reader reader(frame.body);
     std::uint32_t status = 0;
     std::uint8_t handled = 0;
     std::uint8_t caretValid = 0;
+    std::uint8_t candidateBulk = 0;
+    std::uint8_t candidateEnd = 0;
     std::uint32_t candidateCount = 0;
     message.metadata = frame.metadata;
     try {
         if (!reader.readU32(status) || !reader.readU8(handled) || handled > 1 ||
-            !reader.readString(message.commitUtf8) ||
-            !reader.readString(message.preeditUtf8) ||
-            !reader.readU32(message.preeditCaretUtf8) ||
-            !reader.readU32(candidateCount) || candidateCount > kMaxCandidates ||
-            !reader.readU32(message.selectedCandidate) ||
-            !reader.readU32(message.candidatePage) ||
-            !reader.readU32(message.candidateTotal) ||
+            !reader.readString(message.commitUtf8) || !reader.readString(message.preeditUtf8) ||
+            !reader.readU32(message.preeditCaretUtf8) || !reader.readU32(candidateCount) ||
+            candidateCount > kMaxCandidates || !reader.readU32(message.selectedCandidate) ||
+            !reader.readU32(message.candidatePage) || !reader.readU32(message.candidateTotal) ||
             !reader.readU8(message.candidateVisibility) ||
-            !reader.readU8(caretValid) || caretValid > 1 ||
-            !reader.readI32(message.caret.left) || !reader.readI32(message.caret.top) ||
-            !reader.readI32(message.caret.right) || !reader.readI32(message.caret.bottom) ||
-            !reader.readU32(message.caret.dpi)) {
+            !reader.readU32(message.candidatePageSize) || !reader.readU8(candidateBulk) ||
+            candidateBulk > 1 || !reader.readU8(candidateEnd) || candidateEnd > 1 ||
+            !reader.readU8(caretValid) || caretValid > 1 || !reader.readI32(message.caret.left) ||
+            !reader.readI32(message.caret.top) || !reader.readI32(message.caret.right) ||
+            !reader.readI32(message.caret.bottom) || !reader.readU32(message.caret.dpi)) {
             return false;
         }
         message.caret.valid = caretValid != 0;
+        message.candidateBulk = candidateBulk != 0;
+        message.candidateEnd = candidateEnd != 0;
         message.candidates.clear();
         message.candidates.reserve(candidateCount);
         for (std::uint32_t index = 0; index < candidateCount; ++index) {
             CandidateRecord candidate;
             if (!reader.readU64(candidate.id) || !reader.readString(candidate.labelUtf8) ||
-                !reader.readString(candidate.textUtf8) ||
-                !reader.readString(candidate.commentUtf8)) return false;
+                !reader.readString(candidate.textUtf8) || !reader.readString(candidate.commentUtf8))
+                return false;
             message.candidates.emplace_back(std::move(candidate));
         }
-        if (!reader.done() ||
-            !validKeyResponsePayload(message) ||
+        if (!reader.done() || !validKeyResponsePayload(message) ||
             status > static_cast<std::uint32_t>(Status::accessDenied)) {
             return false;
         }
@@ -432,8 +445,8 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
 }
 
 bool decode(const FrameView& frame, LauncherRequest& message) noexcept {
-    if (frame.type != MessageType::launcherRequest ||
-        !validLauncherMetadata(frame.metadata)) return false;
+    if (frame.type != MessageType::launcherRequest || !validLauncherMetadata(frame.metadata))
+        return false;
     Reader reader(frame.body);
     std::uint32_t command = 0;
     if (!reader.readU32(command) || !reader.done() ||
@@ -447,8 +460,8 @@ bool decode(const FrameView& frame, LauncherRequest& message) noexcept {
 }
 
 bool decode(const FrameView& frame, LauncherResponse& message) noexcept {
-    if (frame.type != MessageType::launcherResponse ||
-        !validLauncherMetadata(frame.metadata)) return false;
+    if (frame.type != MessageType::launcherResponse || !validLauncherMetadata(frame.metadata))
+        return false;
     Reader reader(frame.body);
     std::uint32_t status = 0;
     std::uint8_t safeMode = 0;

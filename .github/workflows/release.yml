@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version matching the protected v<version> tag
+        required: true
+        type: string
+      channel:
+        description: Release identity and repository channel
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta, nightly]
+
+permissions:
+  contents: read
+
+jobs:
+  build-once:
+    runs-on: windows-2022
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Require the matching release tag
+        shell: pwsh
+        run: |
+          if ('${{ github.ref }}' -ne 'refs/tags/v${{ inputs.version }}') {
+            throw 'Release must run from the matching v<version> tag.'
+          }
+
+      - name: Build once, analyze, test, and stage
+        shell: pwsh
+        run: ./tools/build.ps1 package -Configuration Release
+
+      - name: Upload only the verified lineage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: verified-lineage
+          path: out/package
+          retention-days: 1
+          if-no-files-found: error
+
+  sign-and-publish:
+    needs: build-once
+    runs-on: windows-2022
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the same source without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Download verified lineage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: verified-lineage
+          path: out/package
+
+      - name: Restore stage pointer and protected release material
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+          UPDATE_KEYRING_BASE64: ${{ secrets.UPDATE_KEYRING_BASE64 }}
+        run: |
+          $stage = Get-ChildItem out/package -Directory -Filter 'stage-*' |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $stage) { throw 'Verified stage was not transferred.' }
+          [IO.File]::WriteAllText((Resolve-Path out/package/current-stage.txt),
+            $stage.FullName, [Text.UTF8Encoding]::new($false))
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/signing.pfx",
+            [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/trusted-keys.json",
+            [Convert]::FromBase64String($env:UPDATE_KEYRING_BASE64))
+          $secure = ConvertTo-SecureString $env:SIGNING_PFX_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath "$env:RUNNER_TEMP/signing.pfx" `
+            -CertStoreLocation Cert:\CurrentUser\My -Password $secure
+          "FCITX_RELEASE_CERT_THUMBPRINT=$($certificate.Thumbprint)" >> $env:GITHUB_ENV
+          "FCITX_RELEASE_TRUSTED_KEYRING=$env:RUNNER_TEMP/trusted-keys.json" >> $env:GITHUB_ENV
+
+      - name: Sign and promote without rebuilding
+        shell: pwsh
+        env:
+          FCITX_RELEASE_VERSION: ${{ inputs.version }}
+          FCITX_RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: ./tools/build.ps1 release
+
+      - name: Publish exact release artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $arguments = @('release', 'create', 'v${{ inputs.version }}',
+            'out/package/release-artifacts/*', '--verify-tag',
+            '--title', 'Fcitx5 for Windows ${{ inputs.version }}', '--generate-notes')
+          if ('${{ inputs.channel }}' -ne 'stable') { $arguments += '--prerelease' }
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publication failed.' }
+
+      - name: Remove imported signing certificate
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:FCITX_RELEASE_CERT_THUMBPRINT) {
+            Remove-Item "Cert:\CurrentUser\My\$env:FCITX_RELEASE_CERT_THUMBPRINT" -Force
+          }

@@ -5,6 +5,7 @@
 #include "state_machine.h"
 #include "state_store.h"
 
+#include <fcitx5_windows/release_identity.h>
 #include <fcitx5_windows/version.h>
 
 #include <Windows.h>
@@ -23,7 +24,7 @@ namespace {
 using namespace fcitx::windows;
 
 class SystemClock final : public launcher::Clock {
-public:
+  public:
     [[nodiscard]] std::uint64_t nowMilliseconds() const noexcept override {
         return GetTickCount64();
     }
@@ -42,16 +43,15 @@ bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeo
     std::size_t completed = 0;
     while (completed < size) {
         HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!event) return false;
+        if (!event)
+            return false;
         OVERLAPPED operation{};
         operation.hEvent = event;
         DWORD transferred = 0;
         const DWORD requested = static_cast<DWORD>(size - completed);
-        const BOOL immediate = write
-                                   ? WriteFile(pipe, cursor + completed, requested, &transferred,
-                                               &operation)
-                                   : ReadFile(pipe, cursor + completed, requested, &transferred,
-                                              &operation);
+        const BOOL immediate =
+            write ? WriteFile(pipe, cursor + completed, requested, &transferred, &operation)
+                  : ReadFile(pipe, cursor + completed, requested, &transferred, &operation);
         bool success = immediate != FALSE;
         if (!success && GetLastError() == ERROR_IO_PENDING) {
             if (WaitForSingleObject(event, timeout) == WAIT_OBJECT_0) {
@@ -63,7 +63,8 @@ bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeo
             }
         }
         CloseHandle(event);
-        if (!success || transferred == 0) return false;
+        if (!success || transferred == 0)
+            return false;
         completed += transferred;
     }
     return true;
@@ -71,11 +72,13 @@ bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeo
 
 bool readFrame(HANDLE pipe, std::vector<std::uint8_t>& bytes) {
     std::array<std::uint8_t, protocol::kHeaderSize> header{};
-    if (!transfer(pipe, false, header.data(), header.size(), 500)) return false;
+    if (!transfer(pipe, false, header.data(), header.size(), 500))
+        return false;
     protocol::MessageType type{};
     protocol::Metadata metadata;
     std::uint32_t bodySize = 0;
-    if (!protocol::decodeHeader(header, type, bodySize, metadata)) return false;
+    if (!protocol::decodeHeader(header, type, bodySize, metadata))
+        return false;
     bytes.assign(header.begin(), header.end());
     bytes.resize(protocol::kHeaderSize + bodySize);
     return bodySize == 0 ||
@@ -102,10 +105,12 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
                   const std::wstring& stopEventName, bool safeMode, HANDLE job,
                   SECURITY_ATTRIBUTES* security, EngineProcess& output) {
     HANDLE stopEvent = CreateEventW(security, TRUE, FALSE, stopEventName.c_str());
-    if (!stopEvent) return false;
+    if (!stopEvent)
+        return false;
     std::wstring command = quote(enginePath) + L" --ready-event " + quote(readyEventName) +
                            L" --stop-event " + quote(stopEventName);
-    if (safeMode) command += L" --safe-mode";
+    if (safeMode)
+        command += L" --safe-mode";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};
@@ -129,16 +134,18 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
 }
 
 bool launchUi(const std::wstring& uiPath, bool safeMode, HANDLE job, UiProcess& output) {
-    std::wstring command = quote(uiPath) + L" --parent-pid " +
-                           std::to_wstring(GetCurrentProcessId());
-    if (safeMode) command += L" --safe-mode";
+    std::wstring command =
+        quote(uiPath) + L" --parent-pid " + std::to_wstring(GetCurrentProcessId());
+    if (safeMode)
+        command += L" --safe-mode";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(uiPath.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
-                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) return false;
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process))
+        return false;
     CloseHandle(process.hThread);
     if (!AssignProcessToJobObject(job, process.hProcess)) {
         TerminateProcess(process.hProcess, 2);
@@ -151,7 +158,8 @@ bool launchUi(const std::wstring& uiPath, bool safeMode, HANDLE job, UiProcess& 
 }
 
 void stopUi(UiProcess& ui) {
-    if (!ui.process) return;
+    if (!ui.process)
+        return;
     if (WaitForSingleObject(ui.process, 0) != WAIT_OBJECT_0) {
         TerminateProcess(ui.process, 0);
         WaitForSingleObject(ui.process, 1000);
@@ -161,14 +169,17 @@ void stopUi(UiProcess& ui) {
 }
 
 void stopEngine(EngineProcess& engine) {
-    if (!engine.process) return;
-    if (engine.stopEvent) SetEvent(engine.stopEvent);
+    if (!engine.process)
+        return;
+    if (engine.stopEvent)
+        SetEvent(engine.stopEvent);
     if (WaitForSingleObject(engine.process, 2000) != WAIT_OBJECT_0) {
         TerminateProcess(engine.process, 2);
         WaitForSingleObject(engine.process, 1000);
     }
     CloseHandle(engine.process);
-    if (engine.stopEvent) CloseHandle(engine.stopEvent);
+    if (engine.stopEvent)
+        CloseHandle(engine.stopEvent);
     engine = {};
 }
 
@@ -221,8 +232,8 @@ protocol::Status applyCommand(protocol::LauncherCommand command,
 
 int wmain(int argc, wchar_t** argv) {
     if (argc == 2 && std::wstring_view(argv[1]) == L"--version") {
-        std::cout << "fcitx5-launcher " << fcitx::windows::version()
-                  << " protocol " << protocol::kVersion << '\n';
+        std::cout << "fcitx5-launcher " << fcitx::windows::version() << " protocol "
+                  << protocol::kVersion << '\n';
         return 0;
     }
     std::wstring enginePath;
@@ -249,26 +260,33 @@ int wmain(int argc, wchar_t** argv) {
         } else if (argument == L"--state-file" && index + 1 < argc) {
             stateFilePath = argv[++index];
         } else {
-            std::wcerr << L"Usage: fcitx5-launcher --engine ABSOLUTE_PATH [--ui ABSOLUTE_PATH] [--no-warmup] "
+            std::wcerr << L"Usage: fcitx5-launcher --engine ABSOLUTE_PATH [--ui ABSOLUTE_PATH] "
+                          L"[--no-warmup] "
                           L"[--engine-ready-event NAME] [--ready-event NAME] "
                           L"[--stop-event NAME] [--state-file ABSOLUTE_PATH]\n";
             return 1;
         }
     }
     if (!absoluteWindowsPath(enginePath) ||
-        GetFileAttributesW(enginePath.c_str()) == INVALID_FILE_ATTRIBUTES) return 1;
+        GetFileAttributesW(enginePath.c_str()) == INVALID_FILE_ATTRIBUTES)
+        return 1;
     if (!uiPath.empty() && (!absoluteWindowsPath(uiPath) ||
-        GetFileAttributesW(uiPath.c_str()) == INVALID_FILE_ATTRIBUTES)) return 1;
+                            GetFileAttributesW(uiPath.c_str()) == INVALID_FILE_ATTRIBUTES))
+        return 1;
 
     platform::RuntimeIdentity identity;
     platform::PipeSecurity security;
     if (!platform::queryCurrentIdentity(identity) || !identity.mayUseUserEngine() ||
-        !platform::PipeSecurity::create(identity, security)) return 4;
+        !platform::PipeSecurity::create(identity, security))
+        return 4;
     const std::wstring endpoint = platform::makeLocalEndpointName(identity, L"launcher");
-    const std::wstring mutexName = L"Local\\Fcitx5WindowsNext.Launcher." + identity.userSid +
-                                   L".Session." + std::to_wstring(identity.sessionId);
+    const std::wstring objectPrefix =
+        L"Local\\" + std::wstring(kReleaseIdentity.local_object_prefix);
+    const std::wstring mutexName = objectPrefix + L".Launcher." + identity.userSid + L".Session." +
+                                   std::to_wstring(identity.sessionId);
     HANDLE mutex = CreateMutexW(security.attributes(), FALSE, mutexName.c_str());
-    if (!mutex) return 2;
+    if (!mutex)
+        return 2;
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         const BOOL available = WaitNamedPipeW(endpoint.c_str(), 100);
         CloseHandle(mutex);
@@ -293,32 +311,37 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(mutex);
         return 2;
     }
-    const std::wstring readyEventName =
-        externalReadyEvent.empty()
-            ? L"Local\\Fcitx5WindowsNext.Engine.Ready." + identity.userSid + L".Session." +
-                  std::to_wstring(identity.sessionId)
-            : externalReadyEvent;
+    const std::wstring readyEventName = externalReadyEvent.empty()
+                                            ? objectPrefix + L".Engine.Ready." + identity.userSid +
+                                                  L".Session." + std::to_wstring(identity.sessionId)
+                                            : externalReadyEvent;
     HANDLE engineReady = CreateEventW(security.attributes(), TRUE, FALSE, readyEventName.c_str());
     HANDLE launcherReady =
         launcherReadyEventName.empty()
             ? nullptr
             : CreateEventW(security.attributes(), TRUE, FALSE, launcherReadyEventName.c_str());
-    HANDLE stopEvent = stopEventName.empty()
-                           ? CreateEventW(security.attributes(), TRUE, FALSE, nullptr)
-                           : CreateEventW(security.attributes(), TRUE, FALSE, stopEventName.c_str());
+    HANDLE stopEvent =
+        stopEventName.empty()
+            ? CreateEventW(security.attributes(), TRUE, FALSE, nullptr)
+            : CreateEventW(security.attributes(), TRUE, FALSE, stopEventName.c_str());
     if (!engineReady || !stopEvent || (!launcherReadyEventName.empty() && !launcherReady)) {
-        if (engineReady) CloseHandle(engineReady);
-        if (launcherReady) CloseHandle(launcherReady);
-        if (stopEvent) CloseHandle(stopEvent);
+        if (engineReady)
+            CloseHandle(engineReady);
+        if (launcherReady)
+            CloseHandle(launcherReady);
+        if (stopEvent)
+            CloseHandle(stopEvent);
         CloseHandle(job);
         CloseHandle(mutex);
         return 2;
     }
 
-    if (stateFilePath.empty()) stateFilePath = launcher::defaultStateStorePath();
+    if (stateFilePath.empty())
+        stateFilePath = launcher::defaultStateStorePath();
     if (!absoluteWindowsPath(stateFilePath)) {
         CloseHandle(stopEvent);
-        if (launcherReady) CloseHandle(launcherReady);
+        if (launcherReady)
+            CloseHandle(launcherReady);
         CloseHandle(engineReady);
         CloseHandle(job);
         CloseHandle(mutex);
@@ -331,7 +354,8 @@ int wmain(int argc, wchar_t** argv) {
          !stateStore.save(launcher::LauncherState::normal)) ||
         loadResult == launcher::LoadStateResult::ioError) {
         CloseHandle(stopEvent);
-        if (launcherReady) CloseHandle(launcherReady);
+        if (launcherReady)
+            CloseHandle(launcherReady);
         CloseHandle(engineReady);
         CloseHandle(job);
         CloseHandle(mutex);
@@ -359,10 +383,9 @@ int wmain(int argc, wchar_t** argv) {
             const auto decision = state.requestStart();
             if (decision.disposition == launcher::StartDisposition::start) {
                 ResetEvent(engineReady);
-                const std::wstring engineStopEventName =
-                    L"Local\\Fcitx5WindowsNext.Engine.Stop." +
-                    std::to_wstring(GetCurrentProcessId()) + L"." +
-                    std::to_wstring(++engineGeneration);
+                const std::wstring engineStopEventName = objectPrefix + L".Engine.Stop." +
+                                                         std::to_wstring(GetCurrentProcessId()) +
+                                                         L"." + std::to_wstring(++engineGeneration);
                 if (!launchEngine(enginePath, readyEventName, engineStopEventName,
                                   decision.safeMode, job, security.attributes(), engine)) {
                     state.engineExited(0);
@@ -381,11 +404,12 @@ int wmain(int argc, wchar_t** argv) {
                 endpoint.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 2,
                 static_cast<DWORD>(protocol::kMaxControlFrameSize),
-                static_cast<DWORD>(protocol::kMaxControlFrameSize), 100,
-                security.attributes());
+                static_cast<DWORD>(protocol::kMaxControlFrameSize), 100, security.attributes());
         }
-        if (pipe == INVALID_HANDLE_VALUE) break;
-        if (launcherReady) SetEvent(launcherReady);
+        if (pipe == INVALID_HANDLE_VALUE)
+            break;
+        if (launcherReady)
+            SetEvent(launcherReady);
         HANDLE connectEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         OVERLAPPED connection{};
         connection.hEvent = connectEvent;
@@ -393,19 +417,26 @@ int wmain(int argc, wchar_t** argv) {
         const DWORD connectError = connected ? ERROR_SUCCESS : GetLastError();
         bool connectionIssued = false;
         bool connectionSucceeded = connected != FALSE || connectError == ERROR_PIPE_CONNECTED;
-        if (connected) SetEvent(connectEvent);
-        else if (connectError == ERROR_PIPE_CONNECTED) SetEvent(connectEvent);
-        else if (connectError == ERROR_IO_PENDING) connectionIssued = true;
-        else SetEvent(connectEvent);
+        if (connected)
+            SetEvent(connectEvent);
+        else if (connectError == ERROR_PIPE_CONNECTED)
+            SetEvent(connectEvent);
+        else if (connectError == ERROR_IO_PENDING)
+            connectionIssued = true;
+        else
+            SetEvent(connectEvent);
 
         std::array<HANDLE, 3> waits{connectEvent, stopEvent, engine.process};
         const DWORD waitCount = engine.process ? 3U : 2U;
         DWORD timeout = INFINITE;
-        if (restartDesired && !engine.process && state.state() == launcher::LauncherState::crashBackoff) {
+        if (restartDesired && !engine.process &&
+            state.state() == launcher::LauncherState::crashBackoff) {
             const auto now = clock.nowMilliseconds();
             const auto allowed = state.nextStartAllowedMilliseconds();
-            timeout = now >= allowed ? 0 : static_cast<DWORD>((std::min)(allowed - now,
-                                                                          std::uint64_t{MAXDWORD - 1}));
+            timeout =
+                now >= allowed
+                    ? 0
+                    : static_cast<DWORD>((std::min)(allowed - now, std::uint64_t{MAXDWORD - 1}));
         }
         const DWORD waitResult = WaitForMultipleObjects(waitCount, waits.data(), FALSE, timeout);
         HANDLE standbyPipe = nullptr;
@@ -414,7 +445,8 @@ int wmain(int argc, wchar_t** argv) {
         } else if (engine.process && waitResult == WAIT_OBJECT_0 + 2) {
             const auto runtime = clock.nowMilliseconds() - engine.startedAt;
             CloseHandle(engine.process);
-            if (engine.stopEvent) CloseHandle(engine.stopEvent);
+            if (engine.stopEvent)
+                CloseHandle(engine.stopEvent);
             engine = {};
             state.engineExited(runtime);
             restartDesired = true;
@@ -430,11 +462,9 @@ int wmain(int argc, wchar_t** argv) {
             if (connectionSucceeded) {
                 standbyPipe = CreateNamedPipeW(
                     endpoint.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
-                        PIPE_REJECT_REMOTE_CLIENTS,
-                    2, static_cast<DWORD>(protocol::kMaxControlFrameSize),
-                    static_cast<DWORD>(protocol::kMaxControlFrameSize), 100,
-                    security.attributes());
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 2,
+                    static_cast<DWORD>(protocol::kMaxControlFrameSize),
+                    static_cast<DWORD>(protocol::kMaxControlFrameSize), 100, security.attributes());
                 if (standbyPipe != INVALID_HANDLE_VALUE && launcherReady) {
                     SetEvent(launcherReady);
                 }
@@ -459,12 +489,12 @@ int wmain(int argc, wchar_t** argv) {
                             restartDesired = true;
                             decision = state.requestStart();
                             if (decision.disposition == launcher::StartDisposition::start &&
-                                !launchEngine(
-                                    enginePath, readyEventName,
-                                    L"Local\\Fcitx5WindowsNext.Engine.Stop." +
-                                        std::to_wstring(GetCurrentProcessId()) + L"." +
-                                        std::to_wstring(++engineGeneration),
-                                    decision.safeMode, job, security.attributes(), engine)) {
+                                !launchEngine(enginePath, readyEventName,
+                                              objectPrefix + L".Engine.Stop." +
+                                                  std::to_wstring(GetCurrentProcessId()) + L"." +
+                                                  std::to_wstring(++engineGeneration),
+                                              decision.safeMode, job, security.attributes(),
+                                              engine)) {
                                 state.engineExited(0);
                                 status = protocol::Status::unsupported;
                             }
@@ -474,11 +504,13 @@ int wmain(int argc, wchar_t** argv) {
                         }
                         const protocol::LauncherResponse response{
                             protocol::Metadata{nextResponseId.fetch_add(1),
-                                               request.metadata.requestId, 0,
-                                               identity.sessionId, 0, 0, 0},
-                            status, static_cast<std::uint32_t>(state.state()),
+                                               request.metadata.requestId, 0, identity.sessionId, 0,
+                                               0, 0},
+                            status,
+                            static_cast<std::uint32_t>(state.state()),
                             static_cast<std::uint32_t>(state.engineState()),
-                            static_cast<std::uint32_t>(decision.disposition), decision.safeMode,
+                            static_cast<std::uint32_t>(decision.disposition),
+                            decision.safeMode,
                             decision.retryAfterMilliseconds};
                         if (writeFrame(pipe, protocol::encode(response))) {
                             std::uint8_t unexpected = 0;
@@ -497,16 +529,20 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(connectEvent);
         CloseHandle(pipe);
         if (standbyPipe && standbyPipe != INVALID_HANDLE_VALUE) {
-            if (running) pendingPipe = standbyPipe;
-            else CloseHandle(standbyPipe);
+            if (running)
+                pendingPipe = standbyPipe;
+            else
+                CloseHandle(standbyPipe);
         }
     }
 
-    if (pendingPipe) CloseHandle(pendingPipe);
+    if (pendingPipe)
+        CloseHandle(pendingPipe);
     stopEngine(engine);
     stopUi(ui);
     CloseHandle(stopEvent);
-    if (launcherReady) CloseHandle(launcherReady);
+    if (launcherReady)
+        CloseHandle(launcherReady);
     CloseHandle(engineReady);
     CloseHandle(job);
     CloseHandle(mutex);

@@ -4,7 +4,7 @@ project(
   fcitx5-windows-next
   VERSION 0.1.0
   DESCRIPTION "Native Fcitx5 platform frontend for Windows"
-  LANGUAGES CXX)
+  LANGUAGES C CXX)
 
 include(CTest)
 
@@ -16,12 +16,41 @@ if(NOT EXISTS "${FCITX_WTL_INCLUDE_DIR}/atlapp.h")
           "Pinned WTL headers are missing. Run tools/prepare-wtl.ps1.")
 endif()
 
+set(FCITX_NLOHMANN_JSON_INCLUDE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/nlohmann-json-3.12.0"
+    CACHE PATH "Path to the pinned nlohmann/json 3.12.0 header")
+if(NOT EXISTS "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp")
+  message(FATAL_ERROR
+          "Pinned nlohmann/json header is missing. Run tools/prepare-package-dependencies.ps1.")
+endif()
+
+set(FCITX_MINIZ_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/miniz-3.1.2"
+    CACHE PATH "Path to the pinned miniz 3.1.2 sources")
+if(NOT EXISTS "${FCITX_MINIZ_SOURCE_DIR}/miniz.c" OR
+   NOT EXISTS "${FCITX_MINIZ_SOURCE_DIR}/miniz.h")
+  message(FATAL_ERROR
+          "Pinned miniz sources are missing. Run tools/prepare-package-dependencies.ps1.")
+endif()
+
 option(FCITX_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
 option(FCITX_ENABLE_MSVC_ANALYZE "Run MSVC static analysis" OFF)
 option(FCITX_BUILD_BENCHMARKS "Build repeatable microbenchmarks" ON)
 option(FCITX_BUILD_FUZZERS "Build security-boundary fuzz harnesses" ON)
 option(FCITX_DEVELOPMENT_PEER_EXCEPTION
        "Allow explicitly marked same-user/session peers in development builds" OFF)
+
+set(FCITX_RELEASE_CHANNEL "stable" CACHE STRING "Release identity: stable, beta, or nightly")
+set_property(CACHE FCITX_RELEASE_CHANNEL PROPERTY STRINGS stable beta nightly)
+if(FCITX_RELEASE_CHANNEL STREQUAL "stable")
+  set(FCITX_RELEASE_CHANNEL_INDEX 0)
+elseif(FCITX_RELEASE_CHANNEL STREQUAL "beta")
+  set(FCITX_RELEASE_CHANNEL_INDEX 1)
+elseif(FCITX_RELEASE_CHANNEL STREQUAL "nightly")
+  set(FCITX_RELEASE_CHANNEL_INDEX 2)
+else()
+  message(FATAL_ERROR "FCITX_RELEASE_CHANNEL must be stable, beta, or nightly")
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerOptions)
@@ -30,6 +59,16 @@ configure_file(
   cmake/version.h.in
   "${CMAKE_CURRENT_BINARY_DIR}/generated/fcitx5_windows/version.h"
   @ONLY)
+configure_file(
+  cmake/release_identity.h.in
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/fcitx5_windows/release_identity.h"
+  @ONLY)
+
+add_library(fcitx5_release_identity INTERFACE)
+add_library(fcitx5::release_identity ALIAS fcitx5_release_identity)
+target_include_directories(
+  fcitx5_release_identity
+  INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>")
 
 add_library(fcitx5_windows_common STATIC src/common/version.cpp)
 add_library(fcitx5::windows_common ALIAS fcitx5_windows_common)
@@ -53,6 +92,47 @@ target_include_directories(
   fcitx5_candidate_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/candidate")
 fcitx_apply_project_options(fcitx5_candidate_model)
 
+add_library(fcitx5_miniz STATIC "${FCITX_MINIZ_SOURCE_DIR}/miniz.c")
+target_include_directories(fcitx5_miniz SYSTEM PUBLIC "${FCITX_MINIZ_SOURCE_DIR}")
+target_compile_definitions(fcitx5_miniz PRIVATE MINIZ_NO_ZLIB_APIS)
+if(MSVC)
+  target_compile_options(fcitx5_miniz PRIVATE /W3 /sdl)
+endif()
+
+add_library(
+  fcitx5_package_core STATIC
+  src/package/package_core.cpp
+  src/package/package_archive.cpp
+  src/package/repository.cpp)
+add_library(fcitx5::package_core ALIAS fcitx5_package_core)
+target_compile_features(fcitx5_package_core PUBLIC cxx_std_20)
+target_include_directories(
+  fcitx5_package_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/package")
+target_include_directories(
+  fcitx5_package_core SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+target_link_libraries(fcitx5_package_core PUBLIC bcrypt crypt32 PRIVATE fcitx5_miniz)
+fcitx_apply_project_options(fcitx5_package_core)
+if(MSVC)
+  target_compile_options(fcitx5_package_core PRIVATE /external:W0 /analyze:external-)
+endif()
+
+add_library(fcitx5_provider_policy STATIC src/package/provider_policy.cpp)
+add_library(fcitx5::provider_policy ALIAS fcitx5_provider_policy)
+target_include_directories(
+  fcitx5_provider_policy PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/package")
+target_link_libraries(fcitx5_provider_policy PUBLIC fcitx5::package_core)
+fcitx_apply_project_options(fcitx5_provider_policy)
+
+add_library(fcitx5_deployment_core STATIC src/updater/deployment_core.cpp)
+add_library(fcitx5::deployment_core ALIAS fcitx5_deployment_core)
+target_compile_features(fcitx5_deployment_core PUBLIC cxx_std_20)
+target_include_directories(fcitx5_deployment_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/updater")
+target_include_directories(fcitx5_deployment_core SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+fcitx_apply_project_options(fcitx5_deployment_core)
+if(MSVC)
+  target_compile_options(fcitx5_deployment_core PRIVATE /external:W0 /analyze:external-)
+endif()
+
 add_library(fcitx5_config STATIC src/config/config_parser.cpp)
 add_library(fcitx5::config ALIAS fcitx5_config)
 target_compile_features(fcitx5_config PUBLIC cxx_std_20)
@@ -75,7 +155,7 @@ add_library(
 add_library(fcitx5::platform ALIAS fcitx5_platform)
 target_compile_features(fcitx5_platform PUBLIC cxx_std_20)
 target_include_directories(fcitx5_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/platform")
-target_link_libraries(fcitx5_platform PUBLIC advapi32 user32)
+target_link_libraries(fcitx5_platform PUBLIC fcitx5::release_identity advapi32 user32)
 fcitx_apply_project_options(fcitx5_platform)
 
 add_library(
@@ -86,7 +166,8 @@ add_library(fcitx5::launcher_state ALIAS fcitx5_launcher_state)
 target_compile_features(fcitx5_launcher_state PUBLIC cxx_std_20)
 target_include_directories(
   fcitx5_launcher_state PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/launcher")
-target_link_libraries(fcitx5_launcher_state PUBLIC shell32 ole32)
+target_link_libraries(
+  fcitx5_launcher_state PUBLIC fcitx5::release_identity shell32 ole32)
 fcitx_apply_project_options(fcitx5_launcher_state)
 
 add_library(
@@ -125,7 +206,8 @@ set_target_properties(fcitx5_control PROPERTIES OUTPUT_NAME "fcitx5-control")
 target_link_libraries(
   fcitx5_control
   PRIVATE fcitx5::windows_common fcitx5::config fcitx5::protocol
-          fcitx5::ipc_client fcitx5::platform shell32 ole32)
+          fcitx5::ipc_client fcitx5::platform fcitx5::package_core
+          fcitx5::deployment_core shell32 ole32)
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
@@ -133,8 +215,9 @@ add_executable(fcitx5_config_app WIN32 src/config/app_main.cpp)
 set_target_properties(fcitx5_config_app PROPERTIES OUTPUT_NAME "fcitx5-config")
 target_link_libraries(
   fcitx5_config_app
-  PRIVATE fcitx5::windows_common d2d1 dwrite shell32 user32 comctl32)
+  PRIVATE fcitx5::windows_common fcitx5::release_identity d2d1 dwrite shell32 user32 comctl32)
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
+target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
 if(MSVC)
   target_compile_options(fcitx5_config_app PRIVATE /external:W0 /analyze:external-)
 endif()
@@ -180,7 +263,8 @@ add_library(
   src/tsf/fcitx5-tsf.def)
 set_target_properties(fcitx5_tsf PROPERTIES PREFIX "" OUTPUT_NAME "fcitx5-tsf")
 target_include_directories(fcitx5_tsf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-target_link_libraries(fcitx5_tsf PRIVATE fcitx5::ipc_client uuid ole32 oleaut32 advapi32)
+target_link_libraries(
+  fcitx5_tsf PRIVATE fcitx5::release_identity fcitx5::ipc_client uuid ole32 oleaut32 advapi32)
 fcitx_apply_project_options(fcitx5_tsf)
 fcitx_apply_binary_hardening(fcitx5_tsf)
 
@@ -191,18 +275,86 @@ target_link_libraries(fcitx5_register PRIVATE fcitx5::windows_common advapi32 ol
 fcitx_apply_project_options(fcitx5_register)
 fcitx_apply_binary_hardening(fcitx5_register)
 
+add_executable(fcitx5_package src/package/package_main.cpp)
+set_target_properties(fcitx5_package PROPERTIES OUTPUT_NAME "fcitx5-package")
+target_link_libraries(fcitx5_package PRIVATE fcitx5::windows_common fcitx5::package_core)
+fcitx_apply_project_options(fcitx5_package)
+fcitx_apply_binary_hardening(fcitx5_package)
+
+add_executable(fcitx5_downloader src/package/downloader_main.cpp)
+set_target_properties(fcitx5_downloader PROPERTIES OUTPUT_NAME "fcitx5-downloader")
+target_link_libraries(
+  fcitx5_downloader PRIVATE fcitx5::windows_common fcitx5::package_core winhttp advapi32)
+fcitx_apply_project_options(fcitx5_downloader)
+fcitx_apply_binary_hardening(fcitx5_downloader)
+
+add_executable(fcitx5_deployer src/package/deployer_main.cpp)
+set_target_properties(fcitx5_deployer PROPERTIES OUTPUT_NAME "fcitx5-deployer")
+target_link_libraries(
+  fcitx5_deployer PRIVATE fcitx5::windows_common fcitx5::package_core advapi32 shell32)
+fcitx_apply_project_options(fcitx5_deployer)
+fcitx_apply_binary_hardening(fcitx5_deployer)
+
+add_executable(fcitx5_provider src/package/provider_main.cpp)
+set_target_properties(fcitx5_provider PROPERTIES OUTPUT_NAME "fcitx5-provider")
+target_link_libraries(
+  fcitx5_provider PRIVATE fcitx5::windows_common fcitx5::provider_policy advapi32)
+fcitx_apply_project_options(fcitx5_provider)
+fcitx_apply_binary_hardening(fcitx5_provider)
+
+add_executable(fcitx5_updater src/updater/updater_main.cpp)
+set_target_properties(fcitx5_updater PROPERTIES OUTPUT_NAME "fcitx5-updater")
+target_link_libraries(fcitx5_updater PRIVATE fcitx5::windows_common fcitx5::package_core
+                                             fcitx5::deployment_core)
+fcitx_apply_project_options(fcitx5_updater)
+fcitx_apply_binary_hardening(fcitx5_updater)
+
 if(BUILD_TESTING)
   add_executable(fcitx5_version_test tests/unit/version_test.cpp)
   target_link_libraries(fcitx5_version_test PRIVATE fcitx5::windows_common)
   fcitx_apply_project_options(fcitx5_version_test)
   fcitx_apply_binary_hardening(fcitx5_version_test)
   add_test(NAME version-contract COMMAND fcitx5_version_test)
+
+  add_executable(fcitx5_release_identity_test tests/unit/release_identity_test.cpp)
+  target_link_libraries(
+    fcitx5_release_identity_test PRIVATE fcitx5::windows_common fcitx5::release_identity ole32)
+  fcitx_apply_project_options(fcitx5_release_identity_test)
+  fcitx_apply_binary_hardening(fcitx5_release_identity_test)
+  add_test(NAME release-identity-contract COMMAND fcitx5_release_identity_test)
+
+  add_executable(fcitx5_package_core_test tests/unit/package_core_test.cpp)
+  target_include_directories(
+    fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_MINIZ_SOURCE_DIR}")
+  target_link_libraries(
+    fcitx5_package_core_test PRIVATE fcitx5::package_core fcitx5_miniz bcrypt)
+  fcitx_apply_project_options(fcitx5_package_core_test)
+  fcitx_apply_binary_hardening(fcitx5_package_core_test)
+  add_test(NAME package-core-contract COMMAND fcitx5_package_core_test)
   add_test(NAME launcher-version COMMAND fcitx5_launcher --version)
   add_test(NAME mock-engine-version COMMAND fcitx5_mock_engine --version)
   add_test(NAME control-version COMMAND fcitx5_control --version)
   add_test(NAME control-schema COMMAND fcitx5_control --schema)
   add_test(NAME control-startup-query COMMAND fcitx5_control --get-startup)
   add_test(NAME register-version COMMAND fcitx5_register --version)
+  add_test(NAME package-version COMMAND fcitx5_package --version)
+  add_executable(fcitx5_deployment_core_test tests/unit/deployment_core_test.cpp)
+  target_link_libraries(fcitx5_deployment_core_test PRIVATE fcitx5::deployment_core)
+  fcitx_apply_project_options(fcitx5_deployment_core_test)
+  fcitx_apply_binary_hardening(fcitx5_deployment_core_test)
+  add_test(NAME deployment-previous-known-good COMMAND fcitx5_deployment_core_test)
+  add_test(NAME updater-version COMMAND fcitx5_updater --version)
+  add_test(NAME downloader-version COMMAND fcitx5_downloader --version)
+  add_test(NAME downloader-boundary-smoke COMMAND fcitx5_downloader --self-test)
+  add_test(NAME deployer-version COMMAND fcitx5_deployer --version)
+  add_test(NAME deployer-boundary-smoke COMMAND fcitx5_deployer --self-test)
+  add_test(NAME provider-version COMMAND fcitx5_provider --version)
+
+  add_executable(fcitx5_provider_policy_test tests/unit/provider_policy_test.cpp)
+  target_link_libraries(fcitx5_provider_policy_test PRIVATE fcitx5::provider_policy)
+  fcitx_apply_project_options(fcitx5_provider_policy_test)
+  fcitx_apply_binary_hardening(fcitx5_provider_policy_test)
+  add_test(NAME provider-policy-contract COMMAND fcitx5_provider_policy_test)
   add_test(NAME control-config-roundtrip
            COMMAND fcitx5_control --data-root
                    "${CMAKE_CURRENT_BINARY_DIR}/control-test-data"
@@ -315,7 +467,7 @@ if(BUILD_TESTING)
 
   add_executable(fcitx5_tsf_module_test tests/unit/tsf_module_test.cpp)
   target_include_directories(fcitx5_tsf_module_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-  target_link_libraries(fcitx5_tsf_module_test PRIVATE uuid ole32)
+  target_link_libraries(fcitx5_tsf_module_test PRIVATE fcitx5::release_identity uuid ole32)
   fcitx_apply_project_options(fcitx5_tsf_module_test)
   fcitx_apply_binary_hardening(fcitx5_tsf_module_test)
   add_test(NAME tsf-module-activation
@@ -331,7 +483,7 @@ if(BUILD_TESTING)
   add_executable(fcitx5_tsf_key_commit_test tests/integration/tsf_key_commit_test.cpp)
   target_sources(fcitx5_tsf_key_commit_test PRIVATE src/tsf/input_scope_guids.cpp)
   target_include_directories(fcitx5_tsf_key_commit_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-  target_link_libraries(fcitx5_tsf_key_commit_test PRIVATE uuid ole32 oleaut32)
+  target_link_libraries(fcitx5_tsf_key_commit_test PRIVATE fcitx5::release_identity uuid ole32 oleaut32)
   fcitx_apply_project_options(fcitx5_tsf_key_commit_test)
   fcitx_apply_binary_hardening(fcitx5_tsf_key_commit_test)
   add_test(NAME tsf-key-commit-e2e
@@ -354,6 +506,16 @@ if(FCITX_BUILD_FUZZERS)
   if(BUILD_TESTING)
     add_test(NAME protocol-fuzz-smoke COMMAND fcitx5_protocol_fuzz)
   endif()
+
+  add_executable(fcitx5_package_fuzz tests/fuzz/package_fuzz.cpp)
+  target_include_directories(
+    fcitx5_package_fuzz SYSTEM PRIVATE "${FCITX_MINIZ_SOURCE_DIR}")
+  target_link_libraries(fcitx5_package_fuzz PRIVATE fcitx5::package_core fcitx5_miniz)
+  fcitx_apply_project_options(fcitx5_package_fuzz)
+  fcitx_apply_binary_hardening(fcitx5_package_fuzz)
+  if(BUILD_TESTING)
+    add_test(NAME package-manifest-path-fuzz-smoke COMMAND fcitx5_package_fuzz)
+  endif()
 endif()
 
 if(FCITX_BUILD_BENCHMARKS)
@@ -365,7 +527,7 @@ if(FCITX_BUILD_BENCHMARKS)
   add_executable(fcitx5_handle_leak_soak tests/perf/handle_leak_soak.cpp)
   target_include_directories(
     fcitx5_handle_leak_soak PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-  target_link_libraries(fcitx5_handle_leak_soak PRIVATE uuid ole32 user32)
+  target_link_libraries(fcitx5_handle_leak_soak PRIVATE fcitx5::release_identity uuid ole32 user32)
   fcitx_apply_project_options(fcitx5_handle_leak_soak)
   fcitx_apply_binary_hardening(fcitx5_handle_leak_soak)
 

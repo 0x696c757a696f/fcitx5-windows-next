@@ -2,6 +2,25 @@
 #ifndef ProductVersion
   #define ProductVersion "0.1.0"
 #endif
+#ifndef ReleaseChannel
+  #define ReleaseChannel "stable"
+#endif
+#if ReleaseChannel == "beta"
+  #define ChannelSuffix " Beta"
+  #define DirectorySuffix "-Beta"
+  #define ArtifactSuffix "-beta"
+  #define InstallerAppId "{{61C768CC-19D8-4314-9ADE-CA5E70A836B2}"
+#elif ReleaseChannel == "nightly"
+  #define ChannelSuffix " Nightly"
+  #define DirectorySuffix "-Nightly"
+  #define ArtifactSuffix "-nightly"
+  #define InstallerAppId "{{50F78015-B016-4F62-8D37-A376505333C3}"
+#else
+  #define ChannelSuffix ""
+  #define DirectorySuffix ""
+  #define ArtifactSuffix ""
+  #define InstallerAppId "{{A57DA7F2-9343-4FD4-8D29-CB68B77B82B1}"
+#endif
 #ifndef StageDir
   #error StageDir must be passed to ISCC
 #endif
@@ -10,15 +29,15 @@
 #endif
 
 [Setup]
-AppId={{A57DA7F2-9343-4FD4-8D29-CB68B77B82B1}
-AppName={#ProductName}
+AppId={#InstallerAppId}
+AppName={#ProductName}{#ChannelSuffix}
 AppVersion={#ProductVersion}
-DefaultDirName={autopf}\Fcitx5
+DefaultDirName={autopf}\Fcitx5{#DirectorySuffix}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 OutputDir={#ArtifactDir}
-OutputBaseFilename=fcitx5-windows-{#ProductVersion}-setup
+OutputBaseFilename=fcitx5-windows-{#ProductVersion}{#ArtifactSuffix}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -46,3 +65,19 @@ Filename: "{app}\bin\fcitx5-config.exe"; Description: "Open Fcitx5 settings"; Fl
 [UninstallRun]
 Filename: "{app}\bin\fcitx5-register-x86.exe"; Parameters: "--unregister --dll ""{app}\tsf\x86\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; Check: IsWin64; RunOnceId: "unregister-x86-tsf"
 Filename: "{app}\bin\fcitx5-register.exe"; Parameters: "--unregister --dll ""{app}\tsf\x64\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; RunOnceId: "unregister-x64-tsf"
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Owner: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    Owner := ExpandConstant('{param:UPDATEOWNER|builtin}');
+    if (Owner <> 'builtin') and (Owner <> 'chocolatey') and (Owner <> 'winget') and
+       (Owner <> 'enterprise') and (Owner <> 'manual') then
+      RaiseException('Invalid UPDATEOWNER value');
+    SaveStringToFile(ExpandConstant('{app}\update-owner.json'),
+      '{"format_version":1,"update_owner":"' + Owner + '"}' + #10, False);
+  end;
+end;

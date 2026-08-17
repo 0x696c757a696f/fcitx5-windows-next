@@ -9,7 +9,7 @@
 namespace fcitx::windows::protocol {
 
 inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
-inline constexpr std::uint16_t kVersion = 4;
+inline constexpr std::uint16_t kVersion = 5;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
@@ -106,6 +106,9 @@ struct KeyResponse {
     std::uint32_t candidatePage{};
     std::uint32_t candidateTotal{};
     std::uint8_t candidateVisibility{};
+    std::uint32_t candidatePageSize{};
+    bool candidateBulk{};
+    bool candidateEnd{};
     CaretRect caret;
 };
 
@@ -138,12 +141,9 @@ struct LauncherResponse {
 
 [[nodiscard]] bool isRequest(MessageType type) noexcept;
 [[nodiscard]] bool isResponse(MessageType type) noexcept;
-[[nodiscard]] bool decodeFrame(std::span<const std::uint8_t> bytes,
-                               FrameView& output) noexcept;
-[[nodiscard]] bool decodeHeader(std::span<const std::uint8_t> bytes,
-                                MessageType& type,
-                                std::uint32_t& bodySize,
-                                Metadata& metadata) noexcept;
+[[nodiscard]] bool decodeFrame(std::span<const std::uint8_t> bytes, FrameView& output) noexcept;
+[[nodiscard]] bool decodeHeader(std::span<const std::uint8_t> bytes, MessageType& type,
+                                std::uint32_t& bodySize, Metadata& metadata) noexcept;
 
 [[nodiscard]] std::vector<std::uint8_t> encode(const HelloRequest& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const HelloResponse& message);

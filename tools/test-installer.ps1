@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param([string] $Version = '0.1.0', [switch] $Elevated)
+param(
+  [string] $Version = '0.1.0',
+  [string] $InstallerPath,
+  [switch] $Elevated
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -7,6 +11,9 @@ $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 if (-not $Elevated) {
   $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
                  '-Version', $Version, '-Elevated')
+  if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) {
+    $arguments += @('-InstallerPath', $InstallerPath)
+  }
   $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments `
     -Verb RunAs -Wait -PassThru
   if ($process.ExitCode -ne 0) { throw "Elevated installer smoke failed: $($process.ExitCode)" }
@@ -20,7 +27,14 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
   throw 'Installer smoke must run elevated.'
 }
 
-$installer = Join-Path $repoRoot "out/package/artifacts/fcitx5-windows-$Version-setup.exe"
+$installer = if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
+  Join-Path $repoRoot "out/package/artifacts/fcitx5-windows-$Version-setup.exe"
+} else {
+  [IO.Path]::GetFullPath($InstallerPath)
+}
+if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+  throw "Installer smoke input is missing: $installer"
+}
 $installRoot = Join-Path $repoRoot ('out/installer-smoke-' + [guid]::NewGuid().ToString('N'))
 $restoreX64 = Join-Path $repoRoot 'out/build/windows-x64-dev/Debug/fcitx5-tsf.dll'
 $restoreX86 = Join-Path $repoRoot 'out/build/windows-x86-dev/Debug/fcitx5-tsf.dll'

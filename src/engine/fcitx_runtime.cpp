@@ -28,30 +28,34 @@ namespace {
 
 std::string utf8Path(const std::filesystem::path& path) {
     const auto& native = path.native();
-    if (native.empty()) return {};
-    const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, native.data(),
-                                         static_cast<int>(native.size()), nullptr, 0,
-                                         nullptr, nullptr);
-    if (size <= 0) return {};
+    if (native.empty())
+        return {};
+    const int size =
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, native.data(),
+                            static_cast<int>(native.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0)
+        return {};
     std::string output(static_cast<std::size_t>(size), '\0');
     return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, native.data(),
-                               static_cast<int>(native.size()), output.data(), size,
-                               nullptr, nullptr) == size
+                               static_cast<int>(native.size()), output.data(), size, nullptr,
+                               nullptr) == size
                ? output
                : std::string{};
 }
 
 bool setupEnvironment() {
     std::wstring modulePath(32'768, L'\0');
-    const DWORD size = GetModuleFileNameW(nullptr, modulePath.data(),
-                                          static_cast<DWORD>(modulePath.size()));
-    if (size == 0 || size >= modulePath.size()) return false;
+    const DWORD size =
+        GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (size == 0 || size >= modulePath.size())
+        return false;
     modulePath.resize(size);
     const auto root = std::filesystem::path(modulePath).parent_path().parent_path();
     if (!getEnvironment("FCITX_USER_DATA_ROOT") &&
         std::filesystem::exists(root / "portable.flag")) {
         const auto portableData = utf8Path(root / "data");
-        if (portableData.empty()) return false;
+        if (portableData.empty())
+            return false;
         setEnvironment("FCITX_USER_DATA_ROOT", portableData.c_str());
     }
     using SetDefaultDirectories = BOOL(WINAPI*)(DWORD);
@@ -59,17 +63,13 @@ bool setupEnvironment() {
     const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
     const auto setDefaultDirectories = kernel
                                            ? reinterpret_cast<SetDefaultDirectories>(
-                                                 GetProcAddress(
-                                                     kernel,
-                                                     "SetDefaultDllDirectories"))
+                                                 GetProcAddress(kernel, "SetDefaultDllDirectories"))
                                            : nullptr;
-    const auto addDirectory = kernel
-                                  ? reinterpret_cast<AddDirectory>(
-                                        GetProcAddress(kernel, "AddDllDirectory"))
-                                  : nullptr;
+    const auto addDirectory =
+        kernel ? reinterpret_cast<AddDirectory>(GetProcAddress(kernel, "AddDllDirectory"))
+               : nullptr;
     if (!setDefaultDirectories || !addDirectory ||
-        !setDefaultDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR |
-                               LOAD_LIBRARY_SEARCH_SYSTEM32 |
+        !setDefaultDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 |
                                LOAD_LIBRARY_SEARCH_USER_DIRS) ||
         !addDirectory((root / "bin").c_str())) {
         return false;
@@ -78,7 +78,8 @@ bool setupEnvironment() {
     const auto share = utf8Path(root / "share");
     const auto data = utf8Path(root / "share" / "fcitx5");
     const auto models = utf8Path(root / "lib" / "libime");
-    if (addon.empty() || share.empty() || data.empty() || models.empty()) return false;
+    if (addon.empty() || share.empty() || data.empty() || models.empty())
+        return false;
     setEnvironment("FCITX_ADDON_DIRS", addon.c_str());
     setEnvironment("XDG_DATA_DIRS", share.c_str());
     setEnvironment("FCITX_DATA_DIRS", data.c_str());
@@ -95,9 +96,8 @@ struct KeyHash {
 };
 
 class EngineInputContext final : public InputContext {
-public:
-    explicit EngineInputContext(InputContextManager& manager)
-        : InputContext(manager, "tsf") {
+  public:
+    explicit EngineInputContext(InputContextManager& manager) : InputContext(manager, "tsf") {
         setEnablePreedit(true);
         setCapabilityFlags(CapabilityFlags{CapabilityFlag::Preedit,
                                            CapabilityFlag::FormattedPreedit,
@@ -111,7 +111,7 @@ public:
 
     std::string takeCommit() { return std::exchange(commit_, {}); }
 
-private:
+  private:
     void commitStringImpl(const std::string& text) override { commit_ += text; }
     void forwardKeyImpl(const ForwardKeyEvent&) override {}
     void deleteSurroundingTextImpl(int, unsigned int) override {}
@@ -124,17 +124,28 @@ Key keyFromRequest(const protocol::KeyRequest& request) {
     KeyStates states;
     const auto vk = request.virtualKey;
     switch (vk) {
-    case VK_BACK: return Key(FcitxKey_BackSpace, states);
-    case VK_RETURN: return Key(FcitxKey_Return, states);
-    case VK_SPACE: return Key(FcitxKey_space, states);
-    case VK_ESCAPE: return Key(FcitxKey_Escape, states);
-    case VK_LEFT: return Key(FcitxKey_Left, states);
-    case VK_RIGHT: return Key(FcitxKey_Right, states);
-    case VK_UP: return Key(FcitxKey_Up, states);
-    case VK_DOWN: return Key(FcitxKey_Down, states);
-    case VK_PRIOR: return Key(FcitxKey_Page_Up, states);
-    case VK_NEXT: return Key(FcitxKey_Page_Down, states);
-    default: break;
+    case VK_BACK:
+        return Key(FcitxKey_BackSpace, states);
+    case VK_RETURN:
+        return Key(FcitxKey_Return, states);
+    case VK_SPACE:
+        return Key(FcitxKey_space, states);
+    case VK_ESCAPE:
+        return Key(FcitxKey_Escape, states);
+    case VK_LEFT:
+        return Key(FcitxKey_Left, states);
+    case VK_RIGHT:
+        return Key(FcitxKey_Right, states);
+    case VK_UP:
+        return Key(FcitxKey_Up, states);
+    case VK_DOWN:
+        return Key(FcitxKey_Down, states);
+    case VK_PRIOR:
+        return Key(FcitxKey_Page_Up, states);
+    case VK_NEXT:
+        return Key(FcitxKey_Page_Down, states);
+    default:
+        break;
     }
     if (vk >= 'A' && vk <= 'Z') {
         return Key(static_cast<KeySym>(FcitxKey_a + (vk - 'A')), states);
@@ -151,7 +162,8 @@ std::pair<std::string, std::uint32_t> readPreedit(EngineInputContext& context) {
     const Text& selected = client.empty() ? server : client;
     std::string text = selected.toString();
     int cursor = selected.cursor();
-    if (cursor < 0) cursor = static_cast<int>(text.size());
+    if (cursor < 0)
+        cursor = static_cast<int>(text.size());
     cursor = std::clamp(cursor, 0, static_cast<int>(text.size()));
     return {std::move(text), static_cast<std::uint32_t>(cursor)};
 }
@@ -159,7 +171,7 @@ std::pair<std::string, std::uint32_t> readPreedit(EngineInputContext& context) {
 } // namespace
 
 class FcitxRuntime::Impl final {
-public:
+  public:
     std::unique_ptr<Instance> instance;
     std::unordered_map<ClientContextKey, std::unique_ptr<EngineInputContext>, KeyHash> contexts;
     EngineInputContext* focused{};
@@ -173,9 +185,8 @@ public:
         InputMethodGroup group = manager.currentGroup();
         auto& items = group.inputMethodList();
         auto contains = [&items](const std::string& name) {
-            return std::any_of(items.begin(), items.end(), [&](const auto& item) {
-                return item.name() == name;
-            });
+            return std::any_of(items.begin(), items.end(),
+                               [&](const auto& item) { return item.name() == name; });
         };
         bool changed = false;
         if (manager.entry("wbx") && !contains("wbx")) {
@@ -198,7 +209,8 @@ public:
 
     EngineInputContext& contextFor(const ClientContextKey& key) {
         auto found = contexts.find(key);
-        if (found != contexts.end()) return *found->second;
+        if (found != contexts.end())
+            return *found->second;
         auto context = std::make_unique<EngineInputContext>(instance->inputContextManager());
         auto* result = context.get();
         contexts.emplace(key, std::move(context));
@@ -211,7 +223,8 @@ FcitxRuntime::~FcitxRuntime() = default;
 
 bool FcitxRuntime::initialize(bool safeMode) {
     try {
-        if (!setupEnvironment()) return false;
+        if (!setupEnvironment())
+            return false;
         if (safeMode) {
             char executable[] = "fcitx5-engine";
             char disable[] = "--disable=all";
@@ -224,8 +237,10 @@ bool FcitxRuntime::initialize(bool safeMode) {
         impl_->instance->addonManager().registerDefaultLoader(nullptr);
         impl_->instance->initialize();
         impl_->ensureInputMethods();
-        if (!impl_->instance->inputMethodManager().entry("pinyin")) return false;
-        if (!impl_->instance->inputMethodEngine("pinyin")) return false;
+        if (!impl_->instance->inputMethodManager().entry("pinyin"))
+            return false;
+        if (!impl_->instance->inputMethodEngine("pinyin"))
+            return false;
         EngineInputContext warmup(impl_->instance->inputContextManager());
         warmup.focusIn();
         impl_->instance->setCurrentInputMethod(&warmup, "pinyin", true);
@@ -253,7 +268,8 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     }
     auto& context = impl_->contextFor(key);
     if (impl_->focused != &context) {
-        if (impl_->focused && impl_->focused->hasFocus()) impl_->focused->focusOut();
+        if (impl_->focused && impl_->focused->hasFocus())
+            impl_->focused->focusOut();
         context.focusIn();
         impl_->focused = &context;
     }
@@ -274,31 +290,46 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     auto& composition = impl_->compositions[key];
     if ((!output.preeditUtf8.empty() || hasCandidates) && composition == 0) {
         composition = impl_->nextCompositionId++;
-        if (composition == 0) composition = impl_->nextCompositionId++;
+        if (composition == 0)
+            composition = impl_->nextCompositionId++;
     }
-    if (output.preeditUtf8.empty() && !hasCandidates) composition = 0;
+    if (output.preeditUtf8.empty() && !hasCandidates)
+        composition = 0;
     if (hasCandidates) {
-        const int size = std::clamp(candidateList->size(), 0,
-                                    static_cast<int>(protocol::kMaxCandidates));
+        const int pageSize =
+            std::clamp(candidateList->size(), 0, static_cast<int>(protocol::kMaxCandidates));
+        output.candidatePageSize = static_cast<std::uint32_t>(pageSize);
+        const auto* bulk = candidateList->toBulk();
+        const int reportedTotal = bulk ? bulk->totalSize() : pageSize;
+        const int size =
+            bulk && reportedTotal >= 0
+                ? std::clamp(reportedTotal, 0, static_cast<int>(protocol::kMaxCandidates))
+                : pageSize;
+        output.candidateBulk = bulk != nullptr;
+        output.candidateEnd = !bulk || (reportedTotal >= 0 && size >= reportedTotal);
         output.candidates.reserve(static_cast<std::size_t>(size));
         for (int index = 0; index < size; ++index) {
-            const auto& word = candidateList->candidate(index);
+            const auto& word =
+                bulk ? bulk->candidateFromAll(index) : candidateList->candidate(index);
             output.candidates.push_back(protocol::CandidateRecord{
                 (composition << 8U) | static_cast<std::uint64_t>(index + 1),
-                candidateList->label(index).toString(), word.text().toString(),
-                word.comment().toString()});
+                bulk ? std::string{} : candidateList->label(index).toString(),
+                word.text().toString(), word.comment().toString()});
         }
-        const int cursor = candidateList->cursorIndex();
+        const int cursor = candidateList->toBulkCursor()
+                               ? candidateList->toBulkCursor()->globalCursorIndex()
+                               : candidateList->cursorIndex();
         if (cursor >= 0 && cursor < size) {
             output.selectedCandidate = static_cast<std::uint32_t>(cursor);
         }
         output.candidateTotal = static_cast<std::uint32_t>(size);
-        if (const auto* bulk = candidateList->toBulk(); bulk && bulk->totalSize() >= 0) {
+        if (bulk && bulk->totalSize() >= 0) {
             output.candidateTotal = static_cast<std::uint32_t>(bulk->totalSize());
         }
         if (const auto* pageable = candidateList->toPageable(); pageable) {
             const int page = pageable->currentPage();
-            if (page >= 0) output.candidatePage = static_cast<std::uint32_t>(page);
+            if (page >= 0)
+                output.candidatePage = static_cast<std::uint32_t>(page);
         }
         output.candidateVisibility = output.preeditUtf8.empty() ? 2U : 1U;
     }
@@ -310,7 +341,8 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
 void FcitxRuntime::forgetProcess(std::uint32_t processId) {
     for (auto iterator = impl_->contexts.begin(); iterator != impl_->contexts.end();) {
         if (iterator->first.processId == processId) {
-            if (impl_->focused == iterator->second.get()) impl_->focused = nullptr;
+            if (impl_->focused == iterator->second.get())
+                impl_->focused = nullptr;
             impl_->revisions.erase(iterator->first);
             impl_->compositions.erase(iterator->first);
             iterator = impl_->contexts.erase(iterator);

@@ -1,0 +1,21 @@
+# Generated from the signed installer release manifest. Do not hand-edit hashes.
+PackageIdentifier: Fcitx.Fcitx5Windows
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: Fcitx5 for Windows contributors
+PackageName: Fcitx5 for Windows
+License: GPL-3.0-or-later
+ShortDescription: Native Fcitx5 input platform for Windows
+InstallerType: inno
+InstallModes:
+  - silent
+  - silentWithProgress
+Installers:
+  - Architecture: x64
+    InstallerUrl: "@INSTALLER_URL@"
+    InstallerSha256: "@INSTALLER_SHA256@"
+    InstallerSwitches:
+      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /UPDATEOWNER=winget
+      SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /UPDATEOWNER=winget
+ManifestType: singleton
+ManifestVersion: 1.12.0

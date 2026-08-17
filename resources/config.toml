@@ -11,19 +11,19 @@ theme = "builtin:default"
 # vertical（纵向，默认）或 horizontal（横向）。
 orientation = "vertical"
 # 候选窗最大宽度，单位 DIP，范围 160–2048。
-max_width_dip = 720.0
+max_width_dip = 860.0
 opacity = 1.0 # 范围 0.20–1.00
 
 [candidate.geometry]
 # 以下尺寸均为 DIP，会随显示器 DPI 自动缩放。
-padding_x_dip = 8.0
-padding_y_dip = 6.0
-item_padding_x_dip = 6.0
-item_padding_y_dip = 4.0
-row_gap_dip = 2.0
-column_gap_dip = 8.0
+padding_x_dip = 12.0
+padding_y_dip = 9.0
+item_padding_x_dip = 10.0
+item_padding_y_dip = 8.0
+row_gap_dip = 1.0
+column_gap_dip = 12.0
 border_width_dip = 1.0
-corner_radius_dip = 8.0
+corner_radius_dip = 12.0
 shadow = true
 
 [candidate.label]
@@ -39,7 +39,7 @@ families = ["system"]
 [fonts.candidate]
 # 按顺序 fallback；最后仍使用 DirectWrite 系统 fallback 补字。
 families = ["Microsoft YaHei", "system"]
-size_dip = 16.0
+size_dip = 20.0
 weight = 400
 
 [fonts.annotation]
@@ -51,14 +51,14 @@ families = ["Cascadia Mono", "Consolas", "system"]
 
 [candidate.colors]
 # 颜色只接受 #RRGGBB 或 #RRGGBBAA；高对比度模式可覆盖这些值。
-background = "#FFFFFFFF"
-border = "#D0D0D0FF"
+background = "#FCFCFCFA"
+border = "#D7D9DDFF"
 preedit_text = "#202124FF"
-label_text = "#5F6368FF"
-candidate_text = "#202124FF"
-comment_text = "#5F6368FF"
-selected_background = "#D2E3FCFF"
-selected_label_text = "#174EA6FF"
-selected_candidate_text = "#174EA6FF"
-selected_comment_text = "#174EA6FF"
+label_text = "#85888DFF"
+candidate_text = "#303236FF"
+comment_text = "#85888DFF"
+selected_background = "#00B578FF"
+selected_label_text = "#FFFFFFFF"
+selected_candidate_text = "#FFFFFFFF"
+selected_comment_text = "#E9FFF7FF"
 shadow = "#00000040"

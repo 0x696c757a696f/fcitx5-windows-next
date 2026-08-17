@@ -33,7 +33,12 @@ $binaries = @(
   (Join-Path $binaryRoot 'fcitx5-ui.exe'),
   (Join-Path $binaryRoot 'fcitx5-control.exe'),
   (Join-Path $binaryRoot 'fcitx5-config.exe'),
-  (Join-Path $binaryRoot 'fcitx5-register.exe')
+  (Join-Path $binaryRoot 'fcitx5-register.exe'),
+  (Join-Path $binaryRoot 'fcitx5-package.exe'),
+  (Join-Path $binaryRoot 'fcitx5-updater.exe'),
+  (Join-Path $binaryRoot 'fcitx5-downloader.exe'),
+  (Join-Path $binaryRoot 'fcitx5-deployer.exe'),
+  (Join-Path $binaryRoot 'fcitx5-provider.exe')
 )
 if ($Architecture -eq 'x64') {
   $nativeEngine = Join-Path $repoRoot 'out/stage/fcitx5/bin/fcitx5-engine.exe'
@@ -66,9 +71,18 @@ foreach ($binary in $binaries) {
       throw "Win7-incompatible hard import '$name' found in $binary"
     }
   }
-  if ([IO.Path]::GetFileName($binary) -eq 'fcitx5-tsf.dll' -and
+  $fileName = [IO.Path]::GetFileName($binary)
+  if ($fileName -in @('fcitx5-tsf.dll', 'fcitx5-engine.exe', 'fcitx5-ui.exe') -and
       $imports -match '(?im)^\s+(WINHTTP|WININET|WS2_32|URLMON)\.dll\s*$') {
-    throw "Network-capable library imported by thin TSF DLL: $binary"
+    throw "Network-capable library imported by input-plane binary: $binary"
+  }
+  if ($fileName -in @('fcitx5-package.exe', 'fcitx5-deployer.exe', 'fcitx5-updater.exe') -and
+      $imports -match '(?im)^\s+(WINHTTP|WININET|WS2_32|URLMON)\.dll\s*$') {
+    throw "Network library crossed into non-downloader package boundary: $binary"
+  }
+  if ($fileName -eq 'fcitx5-downloader.exe' -and
+      $imports -notmatch '(?im)^\s+WINHTTP\.dll\s*$') {
+    throw "Downloader is missing its explicit WinHTTP boundary: $binary"
   }
 }
 

@@ -12,5 +12,11 @@ support. Exact versions and source URLs are in the dependency manifest.
 toml++ provides the TOML 1.0 syntax parser used by the typed Windows configuration
 model. Project code remains responsible for unknown-key, enum, range and ownership validation.
 
+nlohmann/json 3.12.0 provides JSON syntax parsing for strict package manifests,
+lockfiles and release metadata. miniz 3.1.2 provides ZIP container parsing and
+decompression. Project code validates schemas, resource budgets and every archive
+path before extraction. Both dependencies are MIT licensed and are downloaded from
+pinned upstream release assets with SHA-256 verification.
+
 Repositories listed only in `docs/reference-baseline.md` remain design and behavior
 references unless they also appear in the dependency manifest.

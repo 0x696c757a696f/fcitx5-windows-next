@@ -31,10 +31,13 @@ struct RuntimeResult {
     std::uint32_t candidatePage{};
     std::uint32_t candidateTotal{};
     std::uint8_t candidateVisibility{};
+    std::uint32_t candidatePageSize{};
+    bool candidateBulk{};
+    bool candidateEnd{};
 };
 
 class FcitxRuntime final {
-public:
+  public:
     FcitxRuntime();
     ~FcitxRuntime();
 
@@ -49,7 +52,7 @@ public:
 
     class Impl;
 
-private:
+  private:
     std::unique_ptr<Impl> impl_;
 };
 

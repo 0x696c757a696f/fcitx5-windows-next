@@ -2,7 +2,8 @@
 
 This repository implements the native Windows frontend and distribution layer for Fcitx5. The architecture keeps the in-process TSF DLL small and moves Fcitx, addons, candidate rendering, configuration, and package management into explicit out-of-process boundaries.
 
-The project follows the frozen engineering specification v1.5. Work advances by accepted vertical phases; Phases 0 through 6 are implemented, with compatibility evidence tracked separately from automated gates.
+The project follows the frozen engineering specification v1.5. Phases 0 through 8 are implemented;
+compatibility evidence is tracked separately from automated gates.
 
 ## Build
 
@@ -21,6 +22,8 @@ The runtime and Config build use the pinned C++/WTL CMake toolchain and require 
 ./tools/build.ps1 dev
 ./tools/build.ps1 test
 ./tools/build.ps1 package -Architecture all -Configuration Release
+# After `package`, protected CI supplies the three FCITX_RELEASE_* secrets:
+./tools/build.ps1 release
 ./tools/build.ps1 clean
 ```
 
@@ -32,6 +35,17 @@ Reference pins, source-audit findings, and the reason for the process boundaries
 
 ## Current scope
 
-Phase 6 adds the C++/WTL Config application, typed Control API, external English/Chinese locales, production-renderer candidate preview, TSF registration/repair utility, portable layout, and Inno installer. Package/addon/update transactions remain Phase 7 work.
+The native C++/WTL Config includes the online signed repository plugin manager. Package/addon/data/
+theme/translation updates use exact dependencies, bounded signed archives, staging, atomic activation,
+restart-safe enable/disable/removal, and isolated downloader/deployer/provider processes. Candidate
+scroll mode uses the production C++ D2D/DWrite renderer. Stable/Beta/Nightly identities, update-owner
+arbitration, previous-known-good rollback, Authenticode, SPDX SBOM, provenance, WinGet and Chocolatey
+metadata are part of the protected release path.
+
+`fcitx5-rime` is distributed as an addon package, not built into the host or TSF DLL. A repository
+entry must declare exact compatible runtime dependencies. Rime Lua works only when the signed package
+set includes the matching `librime-lua` module and its exact `librime` dependency; an ABI, architecture,
+missing-dependency, signature, or hash mismatch is rejected instead of producing a partially enabled
+addon.
 
 Acceptance evidence is recorded per phase under `docs/phase-*-acceptance.md`.

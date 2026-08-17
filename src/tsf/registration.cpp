@@ -25,14 +25,14 @@ std::wstring guidString(REFGUID guid) {
 HRESULT setStringValue(HKEY root, const std::wstring& path, const wchar_t* name,
                        const std::wstring& value) {
     HKEY key = nullptr;
-    const LSTATUS createResult = RegCreateKeyExW(root, path.c_str(), 0, nullptr, 0, KEY_WRITE,
-                                                 nullptr, &key, nullptr);
+    const LSTATUS createResult =
+        RegCreateKeyExW(root, path.c_str(), 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr);
     if (createResult != ERROR_SUCCESS) {
         return HRESULT_FROM_WIN32(createResult);
     }
-    const LSTATUS setResult = RegSetValueExW(
-        key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
-        static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+    const LSTATUS setResult =
+        RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+                       static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
     RegCloseKey(key);
     return HRESULT_FROM_WIN32(setResult);
 }
@@ -53,8 +53,7 @@ HRESULT registerComServer() {
     if (modulePath.empty()) {
         return HRESULT_FROM_WIN32(GetLastError());
     }
-    const std::wstring classPath = L"Software\\Classes\\CLSID\\" +
-                                   guidString(kTextServiceClsid);
+    const std::wstring classPath = L"Software\\Classes\\CLSID\\" + guidString(kTextServiceClsid);
     HRESULT result = setStringValue(HKEY_LOCAL_MACHINE, classPath, nullptr, kServiceDescription);
     if (FAILED(result)) {
         return result;
@@ -68,12 +67,10 @@ HRESULT registerComServer() {
 }
 
 HRESULT unregisterComServer() {
-    const std::wstring classPath = L"Software\\Classes\\CLSID\\" +
-                                   guidString(kTextServiceClsid);
+    const std::wstring classPath = L"Software\\Classes\\CLSID\\" + guidString(kTextServiceClsid);
     const LSTATUS result = RegDeleteTreeW(HKEY_LOCAL_MACHINE, classPath.c_str());
-    return result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND
-               ? S_OK
-               : HRESULT_FROM_WIN32(result);
+    return result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND ? S_OK
+                                                                     : HRESULT_FROM_WIN32(result);
 }
 
 HRESULT registerProfiles() {
@@ -82,9 +79,9 @@ HRESULT registerProfiles() {
         return HRESULT_FROM_WIN32(GetLastError());
     }
     ITfInputProcessorProfileMgr* profiles = nullptr;
-    HRESULT result = CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
-                                      CLSCTX_INPROC_SERVER, IID_ITfInputProcessorProfileMgr,
-                                      reinterpret_cast<void**>(&profiles));
+    HRESULT result =
+        CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr, CLSCTX_INPROC_SERVER,
+                         IID_ITfInputProcessorProfileMgr, reinterpret_cast<void**>(&profiles));
     if (FAILED(result)) {
         return result;
     }
@@ -93,7 +90,8 @@ HRESULT registerProfiles() {
             kTextServiceClsid, profile.language, profile.guid, profile.description,
             static_cast<ULONG>(std::wcslen(profile.description)), modulePath.c_str(),
             static_cast<ULONG>(modulePath.size()), 0, nullptr, 0, TRUE, 0);
-        if (FAILED(result)) break;
+        if (FAILED(result))
+            break;
     }
     profiles->Release();
     if (FAILED(result)) {
@@ -114,31 +112,25 @@ HRESULT registerProfiles() {
 HRESULT unregisterProfiles() {
     ITfCategoryMgr* categories = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
-                                   IID_ITfCategoryMgr,
-                                   reinterpret_cast<void**>(&categories)))) {
+                                   IID_ITfCategoryMgr, reinterpret_cast<void**>(&categories)))) {
         categories->UnregisterCategory(kTextServiceClsid, GUID_TFCAT_TIP_KEYBOARD,
                                        kTextServiceClsid);
         categories->Release();
     }
 
     ITfInputProcessorProfileMgr* profiles = nullptr;
-    HRESULT result = CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
-                                      CLSCTX_INPROC_SERVER, IID_ITfInputProcessorProfileMgr,
-                                      reinterpret_cast<void**>(&profiles));
+    HRESULT result =
+        CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr, CLSCTX_INPROC_SERVER,
+                         IID_ITfInputProcessorProfileMgr, reinterpret_cast<void**>(&profiles));
     if (FAILED(result)) {
         return result;
     }
     for (const auto& profile : kInputProfiles) {
-        const HRESULT profileResult = profiles->UnregisterProfile(
-            kTextServiceClsid, profile.language, profile.guid, 0);
-        if (FAILED(profileResult) && SUCCEEDED(result)) result = profileResult;
+        const HRESULT profileResult =
+            profiles->UnregisterProfile(kTextServiceClsid, profile.language, profile.guid, 0);
+        if (FAILED(profileResult) && SUCCEEDED(result))
+            result = profileResult;
     }
-    // Remove the Phase 1 development registration that used this GUID under
-    // en-US before the typed profile model existed.
-    const HRESULT legacyResult = profiles->UnregisterProfile(
-        kTextServiceClsid, MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US),
-        kLanguageProfileGuid, 0);
-    if (FAILED(legacyResult) && SUCCEEDED(result)) result = legacyResult;
     profiles->Release();
     return result;
 }
@@ -219,10 +211,6 @@ HRESULT unregisterTextService() noexcept {
 
 } // namespace fcitx::windows::tsf
 
-STDAPI DllRegisterServer() {
-    return fcitx::windows::tsf::registerTextService();
-}
+STDAPI DllRegisterServer() { return fcitx::windows::tsf::registerTextService(); }
 
-STDAPI DllUnregisterServer() {
-    return fcitx::windows::tsf::unregisterTextService();
-}
+STDAPI DllUnregisterServer() { return fcitx::windows::tsf::unregisterTextService(); }

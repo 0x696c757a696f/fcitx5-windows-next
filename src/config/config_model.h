@@ -1,7 +1,7 @@
 #pragma once
 
-#include <optional>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -43,6 +43,7 @@ struct Config {
     std::optional<AppearanceMode> appearanceMode;
     std::optional<std::string> theme;
     std::optional<Orientation> orientation;
+    std::optional<bool> scrollMode;
     std::optional<double> maxWidth;
     std::optional<double> opacity;
     Geometry geometry;
@@ -71,20 +72,15 @@ struct Theme {
     Config dark;
 };
 
-[[nodiscard]] bool parseConfig(std::string_view text, Config& output,
-                               ParseError& error) noexcept;
+[[nodiscard]] bool parseConfig(std::string_view text, Config& output, ParseError& error) noexcept;
 [[nodiscard]] std::string defaultConfigToml();
-[[nodiscard]] bool updatePresentationToml(std::string_view source,
-                                          std::string_view appearanceMode,
-                                          std::string_view theme,
-                                          std::string_view orientation,
-                                          std::string_view candidateFont,
-                                          std::string& output,
+[[nodiscard]] bool updatePresentationToml(std::string_view source, std::string_view appearanceMode,
+                                          std::string_view theme, std::string_view orientation,
+                                          std::string_view scrollMode,
+                                          std::string_view candidateFont, std::string& output,
                                           ParseError& error) noexcept;
-[[nodiscard]] bool parseTheme(std::string_view text, Theme& output,
-                              ParseError& error) noexcept;
+[[nodiscard]] bool parseTheme(std::string_view text, Theme& output, ParseError& error) noexcept;
 [[nodiscard]] Config mergeConfig(const Config& base, const Config& overrideConfig);
-[[nodiscard]] Config resolveTheme(const Theme& theme, bool dark,
-                                  const Config& userOverride);
+[[nodiscard]] Config resolveTheme(const Theme& theme, bool dark, const Config& userOverride);
 
 } // namespace fcitx::windows::config

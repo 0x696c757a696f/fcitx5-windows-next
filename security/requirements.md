@@ -1,6 +1,6 @@
 # Engineering requirement register
 
-Baseline: Frozen specification v1.4, SHA-256 `A89C5822479BBB8771416B214D024DE15CD8D7F161DFCCE86AA3F316BCD9AA9F`  
+Baseline: Frozen specification v1.5, SHA-256 `C85E2D4207D64DE9FC6455A9DCDBF114FF94C8F964FAD5B9652C1D65516C67C8`
 Last reviewed: 2026-08-17
 
 This file assigns one stable owner to each engineering constraint. A requirement becomes enforceable when its boundary exists; it is not implemented early through placeholder frameworks.

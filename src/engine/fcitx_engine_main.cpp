@@ -29,21 +29,20 @@ bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeo
     std::size_t completed = 0;
     while (completed < size) {
         HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!event) return false;
+        if (!event)
+            return false;
         OVERLAPPED operation{};
         operation.hEvent = event;
         DWORD transferred = 0;
         const DWORD requested = static_cast<DWORD>(size - completed);
-        const BOOL immediate = write
-                                   ? WriteFile(pipe, cursor + completed, requested,
-                                               &transferred, &operation)
-                                   : ReadFile(pipe, cursor + completed, requested,
-                                              &transferred, &operation);
+        const BOOL immediate =
+            write ? WriteFile(pipe, cursor + completed, requested, &transferred, &operation)
+                  : ReadFile(pipe, cursor + completed, requested, &transferred, &operation);
         bool success = immediate != FALSE;
         if (!success && GetLastError() == ERROR_IO_PENDING) {
             const std::array<HANDLE, 2> waits{event, stopEvent};
-            const DWORD waitResult = WaitForMultipleObjects(
-                stopEvent ? 2U : 1U, waits.data(), FALSE, timeout);
+            const DWORD waitResult =
+                WaitForMultipleObjects(stopEvent ? 2U : 1U, waits.data(), FALSE, timeout);
             if (waitResult == WAIT_OBJECT_0) {
                 success = GetOverlappedResult(pipe, &operation, &transferred, FALSE) != FALSE;
             } else {
@@ -53,7 +52,8 @@ bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeo
             }
         }
         CloseHandle(event);
-        if (!success || transferred == 0) return false;
+        if (!success || transferred == 0)
+            return false;
         completed += transferred;
     }
     return true;
@@ -61,7 +61,8 @@ bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeo
 
 bool connectClient(HANDLE pipe, HANDLE stopEvent) {
     HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (!event) return false;
+    if (!event)
+        return false;
     OVERLAPPED operation{};
     operation.hEvent = event;
     const BOOL immediate = ConnectNamedPipe(pipe, &operation);
@@ -72,8 +73,8 @@ bool connectClient(HANDLE pipe, HANDLE stopEvent) {
             connected = true;
         } else if (error == ERROR_IO_PENDING) {
             const std::array<HANDLE, 2> waits{event, stopEvent};
-            const DWORD waitResult = WaitForMultipleObjects(
-                stopEvent ? 2U : 1U, waits.data(), FALSE, 60'000);
+            const DWORD waitResult =
+                WaitForMultipleObjects(stopEvent ? 2U : 1U, waits.data(), FALSE, 60'000);
             if (waitResult == WAIT_OBJECT_0) {
                 DWORD transferred = 0;
                 connected = GetOverlappedResult(pipe, &operation, &transferred, FALSE) != FALSE;
@@ -90,26 +91,28 @@ bool connectClient(HANDLE pipe, HANDLE stopEvent) {
 
 bool readFrame(HANDLE pipe, std::vector<std::uint8_t>& bytes, HANDLE stopEvent) {
     std::array<std::uint8_t, protocol::kHeaderSize> header{};
-    if (!transfer(pipe, false, header.data(), header.size(), 60'000, stopEvent)) return false;
+    if (!transfer(pipe, false, header.data(), header.size(), 60'000, stopEvent))
+        return false;
     protocol::MessageType type{};
     std::uint32_t bodySize = 0;
     protocol::Metadata metadata;
-    if (!protocol::decodeHeader(header, type, bodySize, metadata)) return false;
+    if (!protocol::decodeHeader(header, type, bodySize, metadata))
+        return false;
     bytes.assign(header.begin(), header.end());
     bytes.resize(protocol::kHeaderSize + bodySize);
-    return bodySize == 0 || transfer(pipe, false, bytes.data() + protocol::kHeaderSize,
-                                     bodySize, 100, stopEvent);
+    return bodySize == 0 ||
+           transfer(pipe, false, bytes.data() + protocol::kHeaderSize, bodySize, 100, stopEvent);
 }
 
-std::vector<std::uint8_t> handleRequest(
-    std::span<const std::uint8_t> requestBytes, std::uint64_t engineEpoch,
-    std::atomic<std::uint64_t>& nextResponseId,
-    const platform::ProcessIdentity& clientIdentity, bool& handshakeComplete,
-    std::uint64_t& lastRequestId, engine::FcitxDispatcher& dispatcher,
-    engine::PresentationPublisher& presentation) {
+std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestBytes,
+                                        std::uint64_t engineEpoch,
+                                        std::atomic<std::uint64_t>& nextResponseId,
+                                        const platform::ProcessIdentity& clientIdentity,
+                                        bool& handshakeComplete, std::uint64_t& lastRequestId,
+                                        engine::FcitxDispatcher& dispatcher,
+                                        engine::PresentationPublisher& presentation) {
     protocol::FrameView frame;
-    if (!protocol::decodeFrame(requestBytes, frame) ||
-        frame.metadata.requestId <= lastRequestId) {
+    if (!protocol::decodeFrame(requestBytes, frame) || frame.metadata.requestId <= lastRequestId) {
         return {};
     }
     if (frame.type == protocol::MessageType::helloRequest) {
@@ -122,29 +125,29 @@ std::vector<std::uint8_t> handleRequest(
         handshakeComplete = true;
         lastRequestId = request.metadata.requestId;
         return protocol::encode(protocol::HelloResponse{
-            protocol::Metadata{nextResponseId.fetch_add(1), request.metadata.requestId,
-                               engineEpoch, request.metadata.sessionId, 0, 0, 0},
+            protocol::Metadata{nextResponseId.fetch_add(1), request.metadata.requestId, engineEpoch,
+                               request.metadata.sessionId, 0, 0, 0},
             protocol::Status::ok, 64});
     }
-    if (frame.type != protocol::MessageType::keyRequest || !handshakeComplete) return {};
+    if (frame.type != protocol::MessageType::keyRequest || !handshakeComplete)
+        return {};
     protocol::KeyRequest request;
-    if (!protocol::decode(frame, request) ||
-        request.metadata.engineEpoch != engineEpoch ||
+    if (!protocol::decode(frame, request) || request.metadata.engineEpoch != engineEpoch ||
         request.metadata.sessionId != clientIdentity.sessionId) {
         return {};
     }
     engine::RuntimeResult runtimeResult;
     if (!dispatcher.processKey(
-            engine::ClientContextKey{clientIdentity.processId, request.metadata.contextId},
-            request, runtimeResult, std::chrono::milliseconds(100))) {
+            engine::ClientContextKey{clientIdentity.processId, request.metadata.contextId}, request,
+            runtimeResult, std::chrono::milliseconds(100))) {
         return {};
     }
     lastRequestId = request.metadata.requestId;
     protocol::KeyResponse response;
     response.metadata = protocol::Metadata{
         nextResponseId.fetch_add(1), request.metadata.requestId, engineEpoch,
-        request.metadata.sessionId, request.metadata.contextId,
-        runtimeResult.compositionId, runtimeResult.revision};
+        request.metadata.sessionId,  request.metadata.contextId, runtimeResult.compositionId,
+        runtimeResult.revision};
     response.status = protocol::Status::ok;
     response.handled = runtimeResult.handled;
     response.commitUtf8 = std::move(runtimeResult.commitUtf8);
@@ -155,14 +158,16 @@ std::vector<std::uint8_t> handleRequest(
     response.candidatePage = runtimeResult.candidatePage;
     response.candidateTotal = runtimeResult.candidateTotal;
     response.candidateVisibility = runtimeResult.candidateVisibility;
+    response.candidatePageSize = runtimeResult.candidatePageSize;
+    response.candidateBulk = runtimeResult.candidateBulk;
+    response.candidateEnd = runtimeResult.candidateEnd;
     response.caret = request.caret;
     presentation.publish(response);
     return protocol::encode(response);
 }
 
 int serve(const std::wstring& pipeName, unsigned testClientCount,
-          const std::wstring& readyEventName, const std::wstring& stopEventName,
-          bool safeMode) {
+          const std::wstring& readyEventName, const std::wstring& stopEventName, bool safeMode) {
     platform::RuntimeIdentity identity;
     platform::PipeSecurity pipeSecurity;
     if (!platform::queryCurrentIdentity(identity) || !identity.mayUseUserEngine() ||
@@ -170,11 +175,13 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
         return 4;
     }
     engine::FcitxDispatcher dispatcher;
-    if (!dispatcher.start(safeMode)) return 5;
+    if (!dispatcher.start(safeMode))
+        return 5;
     std::wstring executable(32'768, L'\0');
-    const DWORD executableSize = GetModuleFileNameW(
-        nullptr, executable.data(), static_cast<DWORD>(executable.size()));
-    if (executableSize == 0 || executableSize >= executable.size()) return 6;
+    const DWORD executableSize =
+        GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    if (executableSize == 0 || executableSize >= executable.size())
+        return 6;
     executable.resize(executableSize);
     const auto uiExecutable =
         (std::filesystem::path(executable).parent_path() / "fcitx5-ui.exe").wstring();
@@ -187,10 +194,10 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     std::atomic<std::uint64_t> nextResponseId{1};
     std::atomic<bool> readinessSignaled{};
     std::atomic<int> serverError{};
-    HANDLE stopEvent = stopEventName.empty()
-                           ? nullptr
-                           : OpenEventW(SYNCHRONIZE, FALSE, stopEventName.c_str());
-    if (!stopEventName.empty() && !stopEvent) return 3;
+    HANDLE stopEvent =
+        stopEventName.empty() ? nullptr : OpenEventW(SYNCHRONIZE, FALSE, stopEventName.c_str());
+    if (!stopEventName.empty() && !stopEvent)
+        return 3;
     const unsigned workerCount = testClientCount == 0 ? 4U : testClientCount;
     std::vector<std::thread> workers;
     workers.reserve(workerCount);
@@ -198,21 +205,20 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
         workers.emplace_back([&] {
             unsigned completed = 0;
             for (;;) {
-                if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) return;
+                if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
+                    return;
                 HANDLE pipe = CreateNamedPipeW(
                     pipeName.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
-                        PIPE_REJECT_REMOTE_CLIENTS,
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                     workerCount, static_cast<DWORD>(protocol::kMaxFrameSize),
-                    static_cast<DWORD>(protocol::kMaxFrameSize), 25,
-                    pipeSecurity.attributes());
+                    static_cast<DWORD>(protocol::kMaxFrameSize), 25, pipeSecurity.attributes());
                 if (pipe == INVALID_HANDLE_VALUE) {
                     serverError.store(2);
                     return;
                 }
                 if (!readinessSignaled.exchange(true) && !readyEventName.empty()) {
-                    HANDLE readyEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE,
-                                                   readyEventName.c_str());
+                    HANDLE readyEvent =
+                        OpenEventW(EVENT_MODIFY_STATE, FALSE, readyEventName.c_str());
                     if (!readyEvent) {
                         CloseHandle(pipe);
                         serverError.store(3);
@@ -223,7 +229,8 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                 }
                 if (!connectClient(pipe, stopEvent)) {
                     CloseHandle(pipe);
-                    if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) return;
+                    if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
+                        return;
                     continue;
                 }
                 platform::ProcessIdentity clientIdentity;
@@ -232,12 +239,11 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                     std::uint64_t lastRequestId = 0;
                     std::vector<std::uint8_t> request;
                     while (readFrame(pipe, request, stopEvent)) {
-                        auto response = handleRequest(
-                            request, engineEpoch, nextResponseId, clientIdentity,
-                            handshakeComplete, lastRequestId, dispatcher, presentation);
-                        if (response.empty() ||
-                            !transfer(pipe, true, response.data(), response.size(), 100,
-                                      stopEvent)) {
+                        auto response = handleRequest(request, engineEpoch, nextResponseId,
+                                                      clientIdentity, handshakeComplete,
+                                                      lastRequestId, dispatcher, presentation);
+                        if (response.empty() || !transfer(pipe, true, response.data(),
+                                                          response.size(), 100, stopEvent)) {
                             break;
                         }
                     }
@@ -245,12 +251,15 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                 DisconnectNamedPipe(pipe);
                 CloseHandle(pipe);
                 ++completed;
-                if (testClientCount != 0 && completed == 1) return;
+                if (testClientCount != 0 && completed == 1)
+                    return;
             }
         });
     }
-    for (auto& worker : workers) worker.join();
-    if (stopEvent) CloseHandle(stopEvent);
+    for (auto& worker : workers)
+        worker.join();
+    if (stopEvent)
+        CloseHandle(stopEvent);
     dispatcher.stop();
     return serverError.load();
 }
@@ -259,17 +268,14 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
 
 int wmain(int argc, wchar_t** argv) {
     if (argc == 2 && std::wstring_view(argv[1]) == L"--version") {
-        std::cout << "fcitx5-engine 0.1.0 protocol "
-                  << fcitx::windows::protocol::kVersion << '\n';
+        std::cout << "fcitx5-engine 0.1.0 protocol " << fcitx::windows::protocol::kVersion << '\n';
         return 0;
     }
     fcitx::windows::platform::RuntimeIdentity identity;
-    if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
-        !identity.mayUseUserEngine()) {
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity) || !identity.mayUseUserEngine()) {
         return 4;
     }
-    std::wstring pipeName =
-        fcitx::windows::platform::makeLocalEndpointName(identity, L"engine");
+    std::wstring pipeName = fcitx::windows::platform::makeLocalEndpointName(identity, L"engine");
     std::wstring readyEventName;
     std::wstring stopEventName;
     unsigned testClientCount = 0;
@@ -283,7 +289,8 @@ int wmain(int argc, wchar_t** argv) {
         } else if (argument == L"--test-clients" && index + 1 < argc) {
             wchar_t* end = nullptr;
             const unsigned long parsed = std::wcstoul(argv[++index], &end, 10);
-            if (!end || *end != L'\0' || parsed == 0 || parsed > 16) return 1;
+            if (!end || *end != L'\0' || parsed == 0 || parsed > 16)
+                return 1;
             testClientCount = static_cast<unsigned>(parsed);
         } else if (argument == L"--pipe" && index + 1 < argc) {
             pipeName = argv[++index];

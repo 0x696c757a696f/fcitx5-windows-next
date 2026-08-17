@@ -1,0 +1,12 @@
+$ErrorActionPreference = 'Stop'
+$packageArgs = @{
+  packageName = 'fcitx5-windows'
+  fileType = 'exe'
+  url64bit = '@INSTALLER_URL@'
+  checksum64 = '@INSTALLER_SHA256@'
+  checksumType64 = 'sha256'
+  silentArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /UPDATEOWNER=chocolatey'
+  validExitCodes = @(0)
+  softwareName = 'Fcitx5 for Windows*'
+}
+Install-ChocolateyPackage @packageArgs

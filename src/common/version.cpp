@@ -7,12 +7,14 @@ namespace fcitx::windows {
 std::string_view version() noexcept { return kVersion; }
 
 Architecture architecture() noexcept {
-    static_assert(sizeof(void *) == 4 || sizeof(void *) == 8);
-    if constexpr (sizeof(void *) == 8) {
+    static_assert(sizeof(void*) == 4 || sizeof(void*) == 8);
+    if constexpr (sizeof(void*) == 8) {
         return Architecture::x64;
     } else {
         return Architecture::x86;
     }
 }
+
+std::string_view release_channel() noexcept { return kReleaseIdentity.channel_name; }
 
 } // namespace fcitx::windows

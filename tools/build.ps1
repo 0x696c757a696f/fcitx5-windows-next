@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('bootstrap', 'clean', 'dev', 'test', 'package')]
+  [ValidateSet('bootstrap', 'clean', 'dev', 'test', 'package', 'release')]
   [string] $Command = 'dev',
 
   [ValidateSet('all', 'x64', 'x86')]
@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $minimumCMake = [version]'3.28.0'
+$buildTempRoot = Join-Path $repoRoot 'out/tmp'
 
 function Invoke-Native {
   param(
@@ -73,6 +74,7 @@ function Get-BuildDirectory([string] $TargetArchitecture) {
 
 function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze) {
   & (Join-Path $PSScriptRoot 'prepare-wtl.ps1')
+  & (Join-Path $PSScriptRoot 'prepare-package-dependencies.ps1')
   $cmake = Get-CMakeCommand
   $preset = Get-PresetName $TargetArchitecture
   $analyzeValue = if ($Analyze) { 'ON' } else { 'OFF' }
@@ -115,12 +117,18 @@ function Remove-BuildOutput {
 
 Push-Location $repoRoot
 try {
+  # Keep compiler, linker and packaging scratch files on the workspace drive.
+  # This is especially important on development machines with a small system disk.
+  New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
+  $env:TEMP = $buildTempRoot
+  $env:TMP = $buildTempRoot
   switch ($Command) {
     'bootstrap' {
       $cmake = Get-CMakeCommand
       Write-Host "Repository: $repoRoot"
       Invoke-Native $cmake @('--version')
       & (Join-Path $PSScriptRoot 'prepare-wtl.ps1')
+      & (Join-Path $PSScriptRoot 'prepare-package-dependencies.ps1')
       Write-Host 'Bootstrap check passed.'
     }
     'clean' {
@@ -166,6 +174,21 @@ try {
       & (Join-Path $PSScriptRoot 'stage-package.ps1')
       & (Join-Path $PSScriptRoot 'test-portable.ps1')
       Write-Host 'Package gate passed using the tested Release artifacts.'
+    }
+    'release' {
+      foreach ($name in @('FCITX_RELEASE_VERSION', 'FCITX_RELEASE_CERT_THUMBPRINT',
+                           'FCITX_RELEASE_TRUSTED_KEYRING')) {
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+          throw "Release requires environment variable $name. Run package first; release never rebuilds."
+        }
+      }
+      $channel = [Environment]::GetEnvironmentVariable('FCITX_RELEASE_CHANNEL')
+      if ([string]::IsNullOrWhiteSpace($channel)) { $channel = 'stable' }
+      & (Join-Path $PSScriptRoot 'release.ps1') `
+        -Version $env:FCITX_RELEASE_VERSION -Channel $channel `
+        -CertificateThumbprint $env:FCITX_RELEASE_CERT_THUMBPRINT `
+        -TrustedKeyring $env:FCITX_RELEASE_TRUSTED_KEYRING
+      if ($LASTEXITCODE -ne 0) { throw 'Release gate failed.' }
     }
   }
 } finally {

@@ -14,7 +14,9 @@ The input data plane is `host → TSF → local IPC → engine/Fcitx → Candida
 | Engine ↔ Fcitx/addons | Native addon reads input or crashes engine, ABI mismatch | Load only in engine; source/signature/ABI classification; Safe Mode; crash/backoff tests |
 | Engine ↔ candidate UI | Candidate disclosure, stale-window update, UI crash or focus theft | Revisioned CandidateModel projection; no input business logic; no network; crash/no-focus E2E |
 | Config/control ↔ engine | Management client obtains S0 or mutates live state unsafely | Separate typed control API with no input/history endpoints; validate and atomically publish config |
-| Package/updater ↔ internet | Manifest/artifact tampering, downgrade, key compromise, privilege escalation | Signed strict manifest, SHA-256, staging/verify/atomic activation, minimal elevated deployer, revocation/rollback evidence |
+| Downloader/provider ↔ internet | Manifest/artifact tampering, downgrade, source confusion, input disclosure | Dedicated unelevated processes with no input API; HTTPS/no-redirect downloader; explicit Plum source/trust and `rime_dir` |
+| Package core ↔ archive/addon data | Parser DoS, traversal, duplicate/case-collision, ZIP bomb, unsigned native code | Strict JSON, RSA-SHA256 detached signature, bounded miniz adapter, exact file set/hash, fuzz and malicious corpus |
+| Package core ↔ elevated deployer | Artifact substitution, junction/reparse escape, arbitrary privileged write, network+admin composition | Deployer runs only from Program Files, fixed root/keyring, exclusive local copy, pre/post hash, allowlisted activation, no network imports |
 | Program versions ↔ user data | Upgrade destroys or rolls back irreplaceable data | Separate roots and transactions; at most one previous-known-good program artifact |
 | CI/release | Malicious PR steals secrets or substitutes artifacts | Read-only PR token, immutable Actions, protected signing, build once/promote same bytes, final hashes/SBOM/provenance |
 
@@ -27,7 +29,7 @@ The input data plane is `host → TSF → local IPC → engine/Fcitx → Candida
 | Repudiation | S2-only local diagnostics record version, opaque identities, state transition, error category, and artifact hashes—not typed content. | Affected logging tests and release manifest |
 | Information disclosure | S0 stays within input-plane memory, is never logged, and cannot reach network-capable components. | Imports/capability checks and API/log review |
 | Denial of service | Bounded IPC, queues, retry/backoff, fail-open TSF, independent UI, Safe Mode. | Phase 1B absent peer; Phase 2 fault/virtual-time; Phase 4 UI crash |
-| Elevation of privilege | TSF does not broker arbitrary launch; package service validates before a minimal deployer performs an allowlisted activation. | Phase 2 launcher and Phase 7 deployer tests |
+| Elevation of privilege | TSF does not broker arbitrary launch; downloader refuses elevation; package service validates before a fixed-root deployer performs only verified activation. | Phase 2 launcher and Phase 7 package/deployer tests |
 
 ## Explicitly forbidden mitigations
 

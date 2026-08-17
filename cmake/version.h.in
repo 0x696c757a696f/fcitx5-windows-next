@@ -2,6 +2,8 @@
 
 #include <string_view>
 
+#include <fcitx5_windows/release_identity.h>
+
 namespace fcitx::windows {
 
 inline constexpr std::string_view kVersion = "@PROJECT_VERSION@";
@@ -13,5 +15,6 @@ enum class Architecture {
 
 [[nodiscard]] std::string_view version() noexcept;
 [[nodiscard]] Architecture architecture() noexcept;
+[[nodiscard]] std::string_view release_channel() noexcept;
 
 } // namespace fcitx::windows
