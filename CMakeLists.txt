@@ -8,6 +8,14 @@ project(
 
 include(CTest)
 
+set(FCITX_WTL_INCLUDE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/wtl-10.1.0/lib/native/include"
+    CACHE PATH "Path to the pinned WTL 10.1.0 headers")
+if(NOT EXISTS "${FCITX_WTL_INCLUDE_DIR}/atlapp.h")
+  message(FATAL_ERROR
+          "Pinned WTL headers are missing. Run tools/prepare-wtl.ps1.")
+endif()
+
 option(FCITX_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
 option(FCITX_ENABLE_MSVC_ANALYZE "Run MSVC static analysis" OFF)
 option(FCITX_BUILD_BENCHMARKS "Build repeatable microbenchmarks" ON)
@@ -112,6 +120,33 @@ target_link_libraries(
 fcitx_apply_project_options(fcitx5_launcher)
 fcitx_apply_binary_hardening(fcitx5_launcher)
 
+add_executable(fcitx5_control src/control/control_main.cpp)
+set_target_properties(fcitx5_control PROPERTIES OUTPUT_NAME "fcitx5-control")
+target_link_libraries(
+  fcitx5_control
+  PRIVATE fcitx5::windows_common fcitx5::config fcitx5::protocol
+          fcitx5::ipc_client fcitx5::platform shell32 ole32)
+fcitx_apply_project_options(fcitx5_control)
+fcitx_apply_binary_hardening(fcitx5_control)
+
+add_executable(fcitx5_config_app WIN32 src/config/app_main.cpp)
+set_target_properties(fcitx5_config_app PROPERTIES OUTPUT_NAME "fcitx5-config")
+target_link_libraries(
+  fcitx5_config_app
+  PRIVATE fcitx5::windows_common d2d1 dwrite shell32 user32 comctl32)
+target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
+if(MSVC)
+  target_compile_options(fcitx5_config_app PRIVATE /external:W0 /analyze:external-)
+endif()
+fcitx_apply_project_options(fcitx5_config_app)
+fcitx_apply_binary_hardening(fcitx5_config_app)
+add_custom_command(
+  TARGET fcitx5_config_app POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/locales"
+          "$<TARGET_FILE_DIR:fcitx5_config_app>/locales"
+  VERBATIM)
+
 add_library(fcitx5_candidate_layout STATIC src/ui/candidate_layout.cpp)
 add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
 target_compile_features(fcitx5_candidate_layout PUBLIC cxx_std_20)
@@ -149,6 +184,13 @@ target_link_libraries(fcitx5_tsf PRIVATE fcitx5::ipc_client uuid ole32 oleaut32 
 fcitx_apply_project_options(fcitx5_tsf)
 fcitx_apply_binary_hardening(fcitx5_tsf)
 
+add_executable(fcitx5_register src/register/register_main.cpp)
+set_target_properties(fcitx5_register PROPERTIES OUTPUT_NAME "fcitx5-register")
+target_include_directories(fcitx5_register PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
+target_link_libraries(fcitx5_register PRIVATE fcitx5::windows_common advapi32 ole32)
+fcitx_apply_project_options(fcitx5_register)
+fcitx_apply_binary_hardening(fcitx5_register)
+
 if(BUILD_TESTING)
   add_executable(fcitx5_version_test tests/unit/version_test.cpp)
   target_link_libraries(fcitx5_version_test PRIVATE fcitx5::windows_common)
@@ -157,6 +199,17 @@ if(BUILD_TESTING)
   add_test(NAME version-contract COMMAND fcitx5_version_test)
   add_test(NAME launcher-version COMMAND fcitx5_launcher --version)
   add_test(NAME mock-engine-version COMMAND fcitx5_mock_engine --version)
+  add_test(NAME control-version COMMAND fcitx5_control --version)
+  add_test(NAME control-schema COMMAND fcitx5_control --schema)
+  add_test(NAME control-startup-query COMMAND fcitx5_control --get-startup)
+  add_test(NAME register-version COMMAND fcitx5_register --version)
+  add_test(NAME control-config-roundtrip
+           COMMAND fcitx5_control --data-root
+                   "${CMAKE_CURRENT_BINARY_DIR}/control-test-data"
+                   --apply-config "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml")
+  add_test(NAME config-ui-headless-smoke COMMAND fcitx5_config_app --self-test)
+  add_test(NAME config-ui-i18n-check COMMAND fcitx5_config_app --check-i18n)
+  add_test(NAME config-ui-resource-check COMMAND fcitx5_config_app --check-resources)
 
   add_executable(fcitx5_protocol_test tests/unit/protocol_test.cpp)
   target_link_libraries(fcitx5_protocol_test PRIVATE fcitx5::protocol)

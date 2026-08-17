@@ -66,6 +66,12 @@
       "version": "3.4.0",
       "source": "https://github.com/marzer/tomlplusplus/tree/30172438cee64926dc41fdd9c11fb3ba5b2ba9de",
       "license": "MIT"
+    },
+    {
+      "name": "WTL",
+      "version": "10.1.0",
+      "source": "https://sourceforge.net/projects/wtl/files/WTL%2010/WTL%2010.01%20Release/",
+      "license": "MS-PL"
     }
   ]
 }

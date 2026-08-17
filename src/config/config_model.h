@@ -74,6 +74,13 @@ struct Theme {
 [[nodiscard]] bool parseConfig(std::string_view text, Config& output,
                                ParseError& error) noexcept;
 [[nodiscard]] std::string defaultConfigToml();
+[[nodiscard]] bool updatePresentationToml(std::string_view source,
+                                          std::string_view appearanceMode,
+                                          std::string_view theme,
+                                          std::string_view orientation,
+                                          std::string_view candidateFont,
+                                          std::string& output,
+                                          ParseError& error) noexcept;
 [[nodiscard]] bool parseTheme(std::string_view text, Theme& output,
                               ParseError& error) noexcept;
 [[nodiscard]] Config mergeConfig(const Config& base, const Config& overrideConfig);

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('bootstrap', 'clean', 'dev', 'test')]
+  [ValidateSet('bootstrap', 'clean', 'dev', 'test', 'package')]
   [string] $Command = 'dev',
 
   [ValidateSet('all', 'x64', 'x86')]
@@ -72,11 +72,15 @@ function Get-BuildDirectory([string] $TargetArchitecture) {
 }
 
 function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze) {
+  & (Join-Path $PSScriptRoot 'prepare-wtl.ps1')
   $cmake = Get-CMakeCommand
   $preset = Get-PresetName $TargetArchitecture
   $analyzeValue = if ($Analyze) { 'ON' } else { 'OFF' }
   Invoke-Native $cmake @('--preset', $preset, "-DFCITX_ENABLE_MSVC_ANALYZE=$analyzeValue")
-  Invoke-Native $cmake @('--build', (Get-BuildDirectory $TargetArchitecture), '--config', $Configuration, '--parallel')
+  # Keep MSVC child-process pressure bounded. Unbounded --parallel can fail
+  # nondeterministically with D8040 on constrained runners.
+  Invoke-Native $cmake @('--build', (Get-BuildDirectory $TargetArchitecture), '--config',
+                         $Configuration, '--parallel', '4')
 }
 
 function Invoke-Tests([string] $TargetArchitecture) {
@@ -116,6 +120,7 @@ try {
       $cmake = Get-CMakeCommand
       Write-Host "Repository: $repoRoot"
       Invoke-Native $cmake @('--version')
+      & (Join-Path $PSScriptRoot 'prepare-wtl.ps1')
       Write-Host 'Bootstrap check passed.'
     }
     'clean' {
@@ -138,8 +143,29 @@ try {
       & (Join-Path $PSScriptRoot 'check-licenses.ps1') -SelfTest
       & (Join-Path $PSScriptRoot 'check-licenses.ps1')
       & (Join-Path $PSScriptRoot 'check-dependencies.ps1')
+      & (Join-Path $PSScriptRoot 'check-locales.ps1')
       & (Join-Path $PSScriptRoot 'check-text-format.ps1')
       Write-Host 'All build, test, and policy checks passed.'
+    }
+    'package' {
+      if ($Architecture -ne 'all' -or $Configuration -ne 'Release') {
+        throw 'Package requires -Architecture all -Configuration Release.'
+      }
+      foreach ($targetArchitecture in Get-Architectures) {
+        Invoke-ConfigureAndBuild $targetArchitecture $true
+        Invoke-Tests $targetArchitecture
+        & (Join-Path $PSScriptRoot 'check-runtime-security.ps1') `
+          -Architecture $targetArchitecture -Configuration $Configuration
+      }
+      & (Join-Path $PSScriptRoot 'test-fcitx.ps1') -Configuration Release
+      & (Join-Path $PSScriptRoot 'check-secrets.ps1')
+      & (Join-Path $PSScriptRoot 'check-licenses.ps1')
+      & (Join-Path $PSScriptRoot 'check-dependencies.ps1')
+      & (Join-Path $PSScriptRoot 'check-locales.ps1')
+      & (Join-Path $PSScriptRoot 'check-text-format.ps1')
+      & (Join-Path $PSScriptRoot 'stage-package.ps1')
+      & (Join-Path $PSScriptRoot 'test-portable.ps1')
+      Write-Host 'Package gate passed using the tested Release artifacts.'
     }
   }
 } finally {

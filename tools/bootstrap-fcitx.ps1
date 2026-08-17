@@ -57,7 +57,34 @@ function Convert-ToMsysPath([string] $Path) {
 
 function Invoke-Msys([string] $Command) {
   $bash = Join-Path $toolchain 'usr/bin/bash.exe'
-  Invoke-Checked $bash @('-lc', "export PATH=/clang64/bin:/usr/bin; $Command")
+  $previousMsystem = [Environment]::GetEnvironmentVariable('MSYSTEM', 'Process')
+  $previousChere = [Environment]::GetEnvironmentVariable('CHERE_INVOKING', 'Process')
+  try {
+    # Enter the real CLANG64 subsystem so CMake never mixes MSYS /usr headers
+    # into native Windows binaries.
+    [Environment]::SetEnvironmentVariable('MSYSTEM', 'CLANG64', 'Process')
+    [Environment]::SetEnvironmentVariable('CHERE_INVOKING', '1', 'Process')
+    Invoke-Checked $bash @('-lc', $Command)
+  } finally {
+    [Environment]::SetEnvironmentVariable('MSYSTEM', $previousMsystem, 'Process')
+    [Environment]::SetEnvironmentVariable('CHERE_INVOKING', $previousChere, 'Process')
+  }
+}
+
+function Apply-PinnedPatch([string] $Repository, [string] $Patch) {
+  & git -C $Repository apply --check $Patch 2>$null
+  if ($LASTEXITCODE -eq 0) {
+    Invoke-Checked git @('-C', $Repository, 'apply', $Patch)
+    return
+  }
+
+  & git -C $Repository apply --reverse --check $Patch 2>$null
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host "Pinned patch already applied: $([IO.Path]::GetFileName($Patch))"
+    return
+  }
+
+  throw "Pinned patch does not apply cleanly: $Patch"
 }
 
 function Assert-Pins {
@@ -150,20 +177,19 @@ foreach ($pin in $sourcePins) {
 
 $libime = Join-Path $sources 'libime'
 $chinese = Join-Path $sources 'fcitx5-chinese-addons'
-Invoke-Checked git @('-C', $libime, 'apply', '--check',
-  (Join-Path $repoRoot 'third_party/patches/libime-windows-model-dirs.patch'))
-Invoke-Checked git @('-C', $libime, 'apply',
-  (Join-Path $repoRoot 'third_party/patches/libime-windows-model-dirs.patch'))
-Invoke-Checked git @('-C', $chinese, 'apply', '--check',
-  (Join-Path $repoRoot 'third_party/patches/fcitx5-chinese-addons-msys2-clang-libcxx.patch'))
-Invoke-Checked git @('-C', $chinese, 'apply',
-  (Join-Path $repoRoot 'third_party/patches/fcitx5-chinese-addons-msys2-clang-libcxx.patch'))
+$fcitx = Join-Path $sources 'fcitx5'
+Apply-PinnedPatch $fcitx `
+  (Join-Path $repoRoot 'third_party/patches/fcitx5-windows-user-data-root.patch')
+Apply-PinnedPatch $libime `
+  (Join-Path $repoRoot 'third_party/patches/libime-windows-model-dirs.patch')
+Apply-PinnedPatch $chinese `
+  (Join-Path $repoRoot 'third_party/patches/fcitx5-chinese-addons-msys2-clang-libcxx.patch')
 
 $msysRepo = Convert-ToMsysPath $repoRoot
 $msysSources = Convert-ToMsysPath $sources
 $msysStage = Convert-ToMsysPath $stage
 $common = "-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX='$msysStage'"
-Invoke-Msys "cmake -S '$msysSources/fcitx5' -B '$msysRepo/out/build/fcitx5-core' $common -DENABLE_DBUS=OFF -DENABLE_X11=OFF -DENABLE_WAYLAND=OFF -DENABLE_KEYBOARD=OFF -DENABLE_SERVER=OFF -DENABLE_TEST=OFF -DENABLE_DOC=OFF; cmake --build '$msysRepo/out/build/fcitx5-core' --parallel; cmake --install '$msysRepo/out/build/fcitx5-core'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5' -B '$msysRepo/out/build/fcitx5-core' $common -DCMAKE_CXX_FLAGS=-fexperimental-library -DENABLE_DBUS=OFF -DENABLE_X11=OFF -DENABLE_WAYLAND=OFF -DENABLE_KEYBOARD=OFF -DENABLE_SERVER=OFF -DENABLE_TEST=OFF -DENABLE_TESTING_ADDONS=OFF -DBUILD_SPELL_DICT=OFF -DENABLE_DOC=OFF -DENABLE_LIBUUID=OFF -DENABLE_ENCHANT=OFF -DENABLE_EMOJI=OFF -DENABLE_XDGAUTOSTART=OFF; cmake --build '$msysRepo/out/build/fcitx5-core' --parallel; cmake --install '$msysRepo/out/build/fcitx5-core'"
 Invoke-Msys "cmake -S '$msysSources/libime' -B '$msysRepo/out/build/libime' $common -DCMAKE_PREFIX_PATH='$msysStage' -DENABLE_TEST=OFF -DENABLE_DOC=OFF; cmake --build '$msysRepo/out/build/libime' --parallel; cmake --install '$msysRepo/out/build/libime'"
 Invoke-Msys "cmake -S '$msysSources/fcitx5-chinese-addons' -B '$msysRepo/out/build/fcitx5-chinese-addons' $common -DCMAKE_PREFIX_PATH='$msysStage' -DENABLE_TEST=OFF -DENABLE_GUI=OFF -DENABLE_BROWSER=OFF -DENABLE_CLOUDPINYIN=OFF -DENABLE_OPENCC=OFF; cmake --build '$msysRepo/out/build/fcitx5-chinese-addons' --parallel; cmake --install '$msysRepo/out/build/fcitx5-chinese-addons'"
 Invoke-Msys "cmake -S '$msysRepo/native-engine' -B '$msysRepo/out/build/native-engine' $common -DCMAKE_PREFIX_PATH='$msysStage'; cmake --build '$msysRepo/out/build/native-engine' --parallel; cmake --install '$msysRepo/out/build/native-engine'"

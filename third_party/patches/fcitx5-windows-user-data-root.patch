@@ -1,0 +1,21 @@
+diff --git a/src/lib/fcitx-utils/standardpaths_p_win.cpp b/src/lib/fcitx-utils/standardpaths_p_win.cpp
+index c29cf47..dfe61ab 100644
+--- a/src/lib/fcitx-utils/standardpaths_p_win.cpp
++++ b/src/lib/fcitx-utils/standardpaths_p_win.cpp
+@@ -124,6 +124,16 @@ static bool isProcessLowIntegrity() {
+ }
+ 
+ std::filesystem::path localAppData(bool isRoaming) {
++    // Windows does not normally consult XDG variables.  The Windows frontend
++    // supplies this explicit process-local override for Portable mode and
++    // isolated integration tests.  It never changes the user's shell or
++    // registry environment.
++    if (const auto root = getEnvironment("FCITX_USER_DATA_ROOT");
++        root && !root->empty()) {
++        auto path = utf8::UTF8ToUTF16(*root);
++        normalizeSlash(path);
++        return std::filesystem::path(path).lexically_normal();
++    }
+     static const bool isLow = isProcessLowIntegrity();
+     GUID id{};
+     if (isRoaming) {

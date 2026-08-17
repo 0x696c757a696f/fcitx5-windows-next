@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "name": "WTL",
+  "version": "10.1.0",
+  "url": "https://api.nuget.org/v3-flatcontainer/wtl/10.1.0/wtl.10.1.0.nupkg",
+  "archive": "wtl.10.1.0.nupkg",
+  "size": 337759,
+  "sha256": "28aabecf3f32ca6299e94f3d41043058114d8c341e47b3d9117dfe95da6af37d",
+  "source_directory": "wtl-10.1.0",
+  "include_directory": "lib/native/include"
+}

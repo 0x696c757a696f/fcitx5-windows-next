@@ -62,5 +62,18 @@ int main() {
     }
     if (parseTheme("format_version=1\n[theme]\nid='Bad ID'\nname='x'\nversion='1'\nlicense='MIT'\n",
                    theme, error)) return 1;
+    std::string updated;
+    if (!updatePresentationToml(defaults, "dark", "builtin:default", "horizontal",
+                                "Microsoft YaHei", updated, error) ||
+        !updated.starts_with("# Fcitx5 for Windows") ||
+        !parseConfig(updated, config, error) || config.appearanceMode != AppearanceMode::dark ||
+        config.orientation != Orientation::horizontal || config.maxWidth != 720.0 ||
+        config.colors.size() != 11 || !config.candidateFont.families ||
+        config.candidateFont.families->front() != "Microsoft YaHei") {
+        std::cerr << "typed presentation update failed: " << error.message << '\n';
+        return 1;
+    }
+    if (updatePresentationToml(defaults, "invalid", "builtin:default", "vertical",
+                               "system", updated, error)) return 1;
     return 0;
 }

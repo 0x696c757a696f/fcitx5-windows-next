@@ -48,6 +48,12 @@ bool setupEnvironment() {
     if (size == 0 || size >= modulePath.size()) return false;
     modulePath.resize(size);
     const auto root = std::filesystem::path(modulePath).parent_path().parent_path();
+    if (!getEnvironment("FCITX_USER_DATA_ROOT") &&
+        std::filesystem::exists(root / "portable.flag")) {
+        const auto portableData = utf8Path(root / "data");
+        if (portableData.empty()) return false;
+        setEnvironment("FCITX_USER_DATA_ROOT", portableData.c_str());
+    }
     using SetDefaultDirectories = BOOL(WINAPI*)(DWORD);
     using AddDirectory = DLL_DIRECTORY_COOKIE(WINAPI*)(PCWSTR);
     const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");

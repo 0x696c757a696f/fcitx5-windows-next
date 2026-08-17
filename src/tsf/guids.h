@@ -1,6 +1,9 @@
 #pragma once
 
 #include <guiddef.h>
+#include <Windows.h>
+
+#include <array>
 
 namespace fcitx::windows::tsf {
 
@@ -18,5 +21,20 @@ inline constexpr GUID kLanguageProfileGuid = {
     {0x89, 0xaf, 0xa7, 0x7e, 0x9e, 0x0d, 0xa1, 0x02}};
 
 inline constexpr wchar_t kServiceDescription[] = L"Fcitx5 for Windows Next (Development)";
+
+struct InputProfile {
+    const char* id;
+    const char* bcp47;
+    LANGID language;
+    GUID guid;
+    const wchar_t* description;
+    const char* engine;
+    bool candidates;
+};
+
+inline constexpr std::array<InputProfile, 1> kInputProfiles{{
+    {"zh-cn-pinyin", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
+     kLanguageProfileGuid, L"Fcitx5 Pinyin", "pinyin", true},
+}};
 
 } // namespace fcitx::windows::tsf

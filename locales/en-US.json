@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "app.title": "Fcitx5 for Windows Settings",
+  "status.label": "Status and diagnostics",
+  "action.refresh": "Refresh",
+  "action.restart": "Restart engine",
+  "action.reset_config": "Reset settings",
+  "language.hint": "Start with --lang=zh-CN or --lang=en-US to change language.",
+  "error.control_missing": "fcitx5-control.exe is missing. Run Repair from the installer.",
+  "error.command": "The operation failed. Input remains available."
+  ,"nav.general": "General"
+  ,"nav.appearance": "Appearance"
+  ,"nav.theme": "Theme"
+  ,"nav.diagnostics": "Diagnostics"
+  ,"nav.repair": "Repair"
+  ,"general.startup": "Start after Windows sign-in"
+  ,"general.input_method": "Input method"
+  ,"input.pinyin": "Pinyin (current)"
+  ,"appearance.mode": "Appearance mode"
+  ,"mode.system": "Use system setting"
+  ,"mode.light": "Light"
+  ,"mode.dark": "Dark"
+  ,"theme.label": "Candidate theme"
+  ,"theme.default": "Default theme"
+  ,"font.label": "Candidate font"
+  ,"candidate.layout": "Candidate layout"
+  ,"candidate.vertical": "Vertical"
+  ,"candidate.horizontal": "Horizontal"
+  ,"action.apply": "Apply"
+  ,"action.preview": "Preview candidates"
+  ,"action.diagnostics": "Refresh diagnostics"
+  ,"action.repair": "Repair input method"
+  ,"status.saved": "Settings were saved safely."
+  ,"restart.done": "The input engine was restarted."
+  ,"repair.started": "The elevated repair flow was started."
+}

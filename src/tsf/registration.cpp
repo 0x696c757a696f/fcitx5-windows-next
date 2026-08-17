@@ -6,6 +6,7 @@
 #include <objbase.h>
 
 #include <array>
+#include <cwchar>
 #include <iterator>
 #include <new>
 #include <string>
@@ -87,11 +88,13 @@ HRESULT registerProfiles() {
     if (FAILED(result)) {
         return result;
     }
-    const LANGID language = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
-    result = profiles->RegisterProfile(
-        kTextServiceClsid, language, kLanguageProfileGuid, kServiceDescription,
-        static_cast<ULONG>(std::size(kServiceDescription) - 1), modulePath.c_str(),
-        static_cast<ULONG>(modulePath.size()), 0, nullptr, 0, TRUE, 0);
+    for (const auto& profile : kInputProfiles) {
+        result = profiles->RegisterProfile(
+            kTextServiceClsid, profile.language, profile.guid, profile.description,
+            static_cast<ULONG>(std::wcslen(profile.description)), modulePath.c_str(),
+            static_cast<ULONG>(modulePath.size()), 0, nullptr, 0, TRUE, 0);
+        if (FAILED(result)) break;
+    }
     profiles->Release();
     if (FAILED(result)) {
         return result;
@@ -125,8 +128,17 @@ HRESULT unregisterProfiles() {
     if (FAILED(result)) {
         return result;
     }
-    const LANGID language = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
-    result = profiles->UnregisterProfile(kTextServiceClsid, language, kLanguageProfileGuid, 0);
+    for (const auto& profile : kInputProfiles) {
+        const HRESULT profileResult = profiles->UnregisterProfile(
+            kTextServiceClsid, profile.language, profile.guid, 0);
+        if (FAILED(profileResult) && SUCCEEDED(result)) result = profileResult;
+    }
+    // Remove the Phase 1 development registration that used this GUID under
+    // en-US before the typed profile model existed.
+    const HRESULT legacyResult = profiles->UnregisterProfile(
+        kTextServiceClsid, MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US),
+        kLanguageProfileGuid, 0);
+    if (FAILED(legacyResult) && SUCCEEDED(result)) result = legacyResult;
     profiles->Release();
     return result;
 }

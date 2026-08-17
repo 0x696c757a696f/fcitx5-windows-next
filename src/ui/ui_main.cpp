@@ -91,6 +91,15 @@ std::filesystem::path executableDirectory() {
 }
 
 std::filesystem::path localDataDirectory() {
+    const auto executable = executableDirectory();
+    if (!executable.empty() &&
+        std::filesystem::exists(executable / L"portable.flag")) {
+        return executable / L"data";
+    }
+    if (!executable.empty() &&
+        std::filesystem::exists(executable.parent_path() / L"portable.flag")) {
+        return executable.parent_path() / L"data";
+    }
     PWSTR path = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &path)))
         return {};
@@ -194,6 +203,22 @@ public:
     [[nodiscard]] HWND handle() const noexcept { return window_; }
 
     void simulateDeviceLossForTest() noexcept { renderTarget_.Reset(); }
+
+    void showSyntheticPreview() {
+        fcitx::windows::protocol::KeyResponse response;
+        response.metadata.engineEpoch = 1;
+        response.metadata.contextId = 1;
+        response.metadata.compositionId = 1;
+        response.metadata.revision = 1;
+        response.candidates = {{1, "1", "输入法", "shūrùfǎ"},
+                               {2, "2", "输入", "shūrù"},
+                               {3, "3", "中文", "zhōngwén"}};
+        response.selectedCandidate = 0;
+        response.candidateTotal = static_cast<std::uint32_t>(response.candidates.size());
+        response.candidateVisibility = 1;
+        response.caret = {true, 100, 100, 102, 124, 96};
+        update(response);
+    }
 
     void reloadVisualConfig() {
         visualConfig_ = loadVisualConfig(safeMode_);
@@ -693,6 +718,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     const bool safeMode = arguments.find(L"--safe-mode") != std::wstring_view::npos;
     CandidateWindow window;
     if (!window.create(instance, demo, safeMode) || !window.paintOnce()) return 1;
+    if (demo) window.showSyntheticPreview();
     if (simulateDeviceLoss) {
         window.simulateDeviceLossForTest();
         if (!window.paintOnce()) return 1;

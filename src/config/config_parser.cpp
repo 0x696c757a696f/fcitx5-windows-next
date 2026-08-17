@@ -394,6 +394,57 @@ bool parseTheme(std::string_view text, Theme& output, ParseError& error) noexcep
     }
 }
 
+bool updatePresentationToml(std::string_view source, std::string_view appearanceMode,
+                            std::string_view theme, std::string_view orientation,
+                            std::string_view candidateFont, std::string& output,
+                            ParseError& error) noexcept {
+    output.clear();
+    error = {};
+    if ((appearanceMode != "system" && appearanceMode != "light" &&
+         appearanceMode != "dark") ||
+        (orientation != "vertical" && orientation != "horizontal") ||
+        theme.empty() || theme.size() > 128 || candidateFont.empty() ||
+        candidateFont.size() > 128) {
+        return setError(error, "invalid presentation setting");
+    }
+    try {
+        toml::table root = toml::parse(source.empty() ? defaultConfigToml() : source);
+        if (!root["appearance"].as_table()) root.insert_or_assign("appearance", toml::table{});
+        auto& appearance = *root["appearance"].as_table();
+        appearance.insert_or_assign("mode", appearanceMode);
+        appearance.insert_or_assign("theme", theme);
+        if (!root["candidate"].as_table()) root.insert_or_assign("candidate", toml::table{});
+        auto& candidate = *root["candidate"].as_table();
+        candidate.insert_or_assign("orientation", orientation);
+        if (!root["fonts"].as_table()) root.insert_or_assign("fonts", toml::table{});
+        auto& fonts = *root["fonts"].as_table();
+        if (!fonts["candidate"].as_table())
+            fonts.insert_or_assign("candidate", toml::table{});
+        auto& candidateFonts = *fonts["candidate"].as_table();
+        toml::array families;
+        families.push_back(candidateFont);
+        families.push_back("system");
+        candidateFonts.insert_or_assign("families", std::move(families));
+
+        std::ostringstream stream;
+        stream << "# Fcitx5 for Windows 用户配置。UTF-8（无 BOM）、LF。\n"
+                  "# 此文件由 typed Control API 写入；可手工编辑，但未知字段会被严格拒绝。\n"
+                  "# appearance 控制明暗与主题；candidate 控制候选布局；fonts 控制字体 fallback。\n"
+               << toml::toml_formatter(root) << '\n';
+        Config validated;
+        if (!parseConfig(stream.str(), validated, error)) return false;
+        output = stream.str();
+        return true;
+    } catch (const toml::parse_error& exception) {
+        error.message = exception.description();
+        error.line = exception.source().begin.line;
+        error.column = exception.source().begin.column;
+        return false;
+    } catch (...) {
+        return setError(error, "unexpected presentation update error");
+    }
+}
+
 Config mergeConfig(const Config& base, const Config& overrideConfig) {
     Config result = base;
     mergeOptional(result.appearanceMode, overrideConfig.appearanceMode);

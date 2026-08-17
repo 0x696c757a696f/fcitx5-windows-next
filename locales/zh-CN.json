@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "app.title": "Fcitx5 for Windows 设置",
+  "status.label": "状态与诊断",
+  "action.refresh": "刷新",
+  "action.restart": "重启输入引擎",
+  "action.reset_config": "重置设置",
+  "language.hint": "使用 --lang=zh-CN 或 --lang=en-US 启动以切换语言。",
+  "error.control_missing": "缺少 fcitx5-control.exe，请从安装器运行修复。",
+  "error.command": "操作失败；输入主链仍可继续使用。"
+  ,"nav.general": "常规"
+  ,"nav.appearance": "外观"
+  ,"nav.theme": "主题"
+  ,"nav.diagnostics": "诊断"
+  ,"nav.repair": "修复"
+  ,"general.startup": "登录 Windows 后自动启动"
+  ,"general.input_method": "输入法"
+  ,"input.pinyin": "拼音（当前）"
+  ,"appearance.mode": "界面模式"
+  ,"mode.system": "跟随系统"
+  ,"mode.light": "浅色"
+  ,"mode.dark": "深色"
+  ,"theme.label": "候选主题"
+  ,"theme.default": "默认主题"
+  ,"font.label": "候选字体"
+  ,"candidate.layout": "候选布局"
+  ,"candidate.vertical": "纵向"
+  ,"candidate.horizontal": "横向"
+  ,"action.apply": "应用"
+  ,"action.preview": "预览候选框"
+  ,"action.diagnostics": "刷新诊断"
+  ,"action.repair": "修复输入法"
+  ,"status.saved": "设置已安全保存。"
+  ,"restart.done": "输入引擎已重启。"
+  ,"repair.started": "已启动管理员修复流程。"
+}

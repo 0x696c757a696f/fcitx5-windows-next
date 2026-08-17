@@ -30,7 +30,10 @@ $binaryRoot = Join-Path $repoRoot "out/build/windows-$Architecture-dev/$Configur
 $binaries = @(
   (Join-Path $binaryRoot 'fcitx5-tsf.dll'),
   (Join-Path $binaryRoot 'fcitx5-launcher.exe'),
-  (Join-Path $binaryRoot 'fcitx5-ui.exe')
+  (Join-Path $binaryRoot 'fcitx5-ui.exe'),
+  (Join-Path $binaryRoot 'fcitx5-control.exe'),
+  (Join-Path $binaryRoot 'fcitx5-config.exe'),
+  (Join-Path $binaryRoot 'fcitx5-register.exe')
 )
 if ($Architecture -eq 'x64') {
   $nativeEngine = Join-Path $repoRoot 'out/stage/fcitx5/bin/fcitx5-engine.exe'
