@@ -7,7 +7,8 @@ $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $stage = Join-Path $repoRoot 'out/stage/fcitx5'
 $engine = Join-Path $stage 'bin/fcitx5-engine.exe'
 $bash = Join-Path $repoRoot 'out/toolchains/msys64/usr/bin/bash.exe'
-$cmake = (Get-Command cmake.exe -ErrorAction SilentlyContinue).Source
+$cmakeCommand = Get-Command cmake.exe -ErrorAction SilentlyContinue
+$cmake = if ($cmakeCommand) { $cmakeCommand.Source } else { $null }
 if (-not $cmake) { $cmake = Join-Path $env:ProgramFiles 'CMake/bin/cmake.exe' }
 
 foreach ($path in @($bash, $cmake, (Join-Path $stage 'lib/cmake/Fcitx5Core/Fcitx5CoreConfig.cmake'))) {
@@ -33,6 +34,9 @@ foreach ($architecture in @('x64', 'x86')) {
   & $cmake --build $build --config $Configuration --target fcitx5_engine_integration_test
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") $engine
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
+    $engine --safe-mode
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

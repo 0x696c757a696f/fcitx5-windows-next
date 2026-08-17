@@ -13,14 +13,14 @@ namespace fcitx::windows::engine {
 FcitxDispatcher::FcitxDispatcher() = default;
 FcitxDispatcher::~FcitxDispatcher() { stop(); }
 
-bool FcitxDispatcher::start() {
+bool FcitxDispatcher::start(bool safeMode) {
     if (thread_.joinable()) return false;
     auto ready = std::make_shared<std::promise<bool>>();
     auto future = ready->get_future();
-    thread_ = std::thread([this, ready] {
+    thread_ = std::thread([this, ready, safeMode] {
         try {
             runtime_ = std::make_unique<FcitxRuntime>();
-            if (!runtime_->initialize()) {
+            if (!runtime_->initialize(safeMode)) {
                 runtime_.reset();
                 ready->set_value(false);
                 return;
@@ -28,7 +28,7 @@ bool FcitxDispatcher::start() {
             dispatcher_ = std::make_unique<::fcitx::EventDispatcher>();
             dispatcher_->attach(&runtime_->eventLoop());
             accepting_.store(true, std::memory_order_release);
-            ready->set_value(true);
+            dispatcher_->schedule([ready] { ready->set_value(true); });
             runtime_->eventLoop().exec();
             accepting_.store(false, std::memory_order_release);
             dispatcher_->detach();

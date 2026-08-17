@@ -40,7 +40,8 @@ struct Process {
     }
 };
 
-bool startEngine(const wchar_t* executable, unsigned sequence, Process& process) {
+bool startEngine(const wchar_t* executable, unsigned sequence, bool safeMode,
+                 Process& process) {
     const std::wstring eventName =
         L"Local\\Fcitx5WindowsNext.RealEngine.Ready." +
         std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(sequence);
@@ -48,6 +49,7 @@ bool startEngine(const wchar_t* executable, unsigned sequence, Process& process)
     if (!ready) return false;
     std::wstring command = quote(executable) + L" --test-once --ready-event " +
                            quote(eventName);
+    if (safeMode) command += L" --safe-mode";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};
@@ -72,22 +74,50 @@ bool startEngine(const wchar_t* executable, unsigned sequence, Process& process)
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 2) return 1;
+    if (argc != 2 && argc != 3) return 1;
+    const bool safeMode = argc == 3 && std::wstring_view(argv[2]) == L"--safe-mode";
+    if (argc == 3 && !safeMode) return 1;
     Process process;
     const auto startupBegin = std::chrono::steady_clock::now();
-    if (!startEngine(argv[1], 1, process)) return 1;
+    if (!startEngine(argv[1], 1, safeMode, process)) return 1;
     const auto startupDuration = std::chrono::steady_clock::now() - startupBegin;
 
     FILETIME creationBefore{}, exitBefore{}, kernelBefore{}, userBefore{};
     FILETIME creationAfter{}, exitAfter{}, kernelAfter{}, userAfter{};
     if (!GetProcessTimes(process.handle, &creationBefore, &exitBefore, &kernelBefore,
                          &userBefore)) return 1;
+    const auto settleBegin = std::chrono::steady_clock::now();
+    unsigned quietWindows = 0;
+    for (unsigned sample = 0; sample < 50 && quietWindows < 3; ++sample) {
+        if (WaitForSingleObject(process.handle, 100) != WAIT_TIMEOUT) return 1;
+        if (!GetProcessTimes(process.handle, &creationAfter, &exitAfter, &kernelAfter,
+                             &userAfter)) return 1;
+        ULARGE_INTEGER previousKernel{}, currentKernel{}, previousUser{}, currentUser{};
+        previousKernel.LowPart = kernelBefore.dwLowDateTime;
+        previousKernel.HighPart = kernelBefore.dwHighDateTime;
+        currentKernel.LowPart = kernelAfter.dwLowDateTime;
+        currentKernel.HighPart = kernelAfter.dwHighDateTime;
+        previousUser.LowPart = userBefore.dwLowDateTime;
+        previousUser.HighPart = userBefore.dwHighDateTime;
+        currentUser.LowPart = userAfter.dwLowDateTime;
+        currentUser.HighPart = userAfter.dwHighDateTime;
+        const auto cpu100ns = (currentKernel.QuadPart - previousKernel.QuadPart) +
+                              (currentUser.QuadPart - previousUser.QuadPart);
+        quietWindows = cpu100ns <= 50'000U ? quietWindows + 1 : 0;
+        kernelBefore = kernelAfter;
+        userBefore = userAfter;
+    }
+    if (quietWindows < 3) {
+        std::cerr << "engine did not reach a steady idle state within 5 seconds\n";
+        return 1;
+    }
+    const auto settleDuration = std::chrono::steady_clock::now() - settleBegin;
     PROCESS_MEMORY_COUNTERS_EX memory{};
     memory.cb = sizeof(memory);
     if (!GetProcessMemoryInfo(process.handle,
                               reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),
                               sizeof(memory))) return 1;
-    Sleep(1000);
+    if (WaitForSingleObject(process.handle, 1000) != WAIT_TIMEOUT) return 1;
     if (!GetProcessTimes(process.handle, &creationAfter, &exitAfter, &kernelAfter,
                          &userAfter)) return 1;
     ULARGE_INTEGER kernelStart{}, kernelEnd{}, userStart{}, userEnd{};
@@ -102,7 +132,8 @@ int wmain(int argc, wchar_t** argv) {
     const auto idleCpu100ns = (kernelEnd.QuadPart - kernelStart.QuadPart) +
                               (userEnd.QuadPart - userStart.QuadPart);
     if (idleCpu100ns > 500'000U) {
-        std::cerr << "engine idle CPU exceeded 50 ms per second\n";
+        std::cerr << "engine idle CPU exceeded 50 ms per second: "
+                  << idleCpu100ns / 10U << " us\n";
         return 1;
     }
 
@@ -147,6 +178,8 @@ int wmain(int argc, wchar_t** argv) {
     std::cout << "engine-startup-ms="
               << std::chrono::duration_cast<std::chrono::milliseconds>(startupDuration).count()
               << " idle-cpu-us=" << idleCpu100ns / 10U
+              << " settle-ms="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(settleDuration).count()
               << " private-kib=" << memory.PrivateUsage / 1024U
               << " context-start-us="
               << std::chrono::duration_cast<std::chrono::microseconds>(firstDuration).count()
@@ -163,7 +196,8 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
     if (!client.processKey(contextId, 'H', 0, result) || result.preedit != L"h") {
-        std::wcerr << L"first context retained state from second context\n";
+        std::wcerr << L"first context retained state from second context: preedit="
+                   << result.preedit << L" commit=" << result.commit << L'\n';
         return 1;
     }
     if (!client.processKey(secondContextId, 'A', 0, result) ||
@@ -212,7 +246,7 @@ int wmain(int argc, wchar_t** argv) {
     if (exitCode != 0 || firstEpoch == 0) return 1;
 
     Process restarted;
-    if (!startEngine(argv[1], 2, restarted)) return 1;
+    if (!startEngine(argv[1], 2, safeMode, restarted)) return 1;
     fcitx::windows::ipc::PipeClient restartedClient(
         fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
         fcitx::windows::ipc::PeerPolicy::exact(argv[1]));

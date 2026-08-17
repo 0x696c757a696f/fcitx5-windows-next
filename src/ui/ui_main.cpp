@@ -99,14 +99,14 @@ std::filesystem::path localDataDirectory() {
     return result / L"Fcitx5";
 }
 
-fcitx::windows::config::Config loadVisualConfig() {
+fcitx::windows::config::Config loadVisualConfig(bool safeMode) {
     using namespace fcitx::windows::config;
     Config defaults;
     ParseError error;
     if (!parseConfig(defaultConfigToml(), defaults, error)) return {};
     Config user;
     const auto data = localDataDirectory();
-    if (!data.empty()) {
+    if (!safeMode && !data.empty()) {
         if (const auto text = readBoundedFile(data / L"config.toml", 256U * 1024U)) {
             Config parsed;
             if (parseConfig(*text, parsed, error)) user = std::move(parsed);
@@ -116,7 +116,8 @@ fcitx::windows::config::Config loadVisualConfig() {
         defaults.appearanceMode.value_or(AppearanceMode::system));
     const bool dark = mode == AppearanceMode::dark ||
                       (mode == AppearanceMode::system && systemUsesDarkAppearance());
-    const std::string themeId = user.theme.value_or("builtin:default");
+    const std::string themeId = safeMode ? "builtin:default"
+                                         : user.theme.value_or("builtin:default");
     std::filesystem::path themePath;
     if (themeId == "builtin:default") {
         themePath = executableDirectory() / L"resources" / L"themes" / L"default" /
@@ -156,8 +157,9 @@ D2D1_COLOR_F parseColor(const fcitx::windows::config::Config& config,
 
 class CandidateWindow final {
 public:
-    bool create(HINSTANCE instance, bool visible) {
-        visualConfig_ = loadVisualConfig();
+    bool create(HINSTANCE instance, bool visible, bool safeMode) {
+        safeMode_ = safeMode;
+        visualConfig_ = loadVisualConfig(safeMode_);
         WNDCLASSW windowClass{};
         windowClass.hInstance = instance;
         windowClass.lpszClassName = L"Fcitx5WindowsNextCandidate";
@@ -194,7 +196,7 @@ public:
     void simulateDeviceLossForTest() noexcept { renderTarget_.Reset(); }
 
     void reloadVisualConfig() {
-        visualConfig_ = loadVisualConfig();
+        visualConfig_ = loadVisualConfig(safeMode_);
         textFormat_.Reset();
         labelFormat_.Reset();
         annotationFormat_.Reset();
@@ -607,6 +609,7 @@ private:
     fcitx::windows::protocol::CaretRect lastCaret_;
     fcitx::windows::ui::Placement placement_{fcitx::windows::ui::Placement::unlocked};
     std::uint64_t compositionId_{};
+    bool safeMode_{};
 };
 
 bool readExact(HANDLE pipe, void* destination, std::size_t size) {
@@ -687,8 +690,9 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
         arguments.find(L"--simulate-device-loss") != std::wstring_view::npos;
     const bool demo = arguments.find(L"--demo") != std::wstring_view::npos;
     const bool testOnce = arguments.find(L"--test-once") != std::wstring_view::npos;
+    const bool safeMode = arguments.find(L"--safe-mode") != std::wstring_view::npos;
     CandidateWindow window;
-    if (!window.create(instance, demo) || !window.paintOnce()) return 1;
+    if (!window.create(instance, demo, safeMode) || !window.paintOnce()) return 1;
     if (simulateDeviceLoss) {
         window.simulateDeviceLossForTest();
         if (!window.paintOnce()) return 1;

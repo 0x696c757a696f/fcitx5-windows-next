@@ -1,7 +1,9 @@
 #include "text_service.h"
 
+#include "input_scope_policy.h"
 #include "module.h"
 
+#include <OleAuto.h>
 #include <cstdint>
 #include <memory>
 #include <new>
@@ -28,10 +30,39 @@ UINT windowDpi(HWND window) noexcept {
     return dpi > 0 ? static_cast<UINT>(dpi) : 96U;
 }
 
-class CaretEditSession final : public ITfEditSession {
+bool readSensitiveInputScope(ITfContext* context, TfEditCookie editCookie,
+                             ITfRange* range) noexcept {
+    Microsoft::WRL::ComPtr<ITfReadOnlyProperty> property;
+    if (FAILED(context->GetAppProperty(GUID_PROP_INPUTSCOPE, &property)) || !property) {
+        return false;
+    }
+    VARIANT value;
+    VariantInit(&value);
+    const HRESULT valueResult = property->GetValue(editCookie, range, &value);
+    if (FAILED(valueResult) || value.vt != VT_UNKNOWN || !value.punkVal) {
+        VariantClear(&value);
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ITfInputScope> inputScope;
+    const HRESULT queryResult = value.punkVal->QueryInterface(IID_PPV_ARGS(&inputScope));
+    VariantClear(&value);
+    if (FAILED(queryResult) || !inputScope) return false;
+    InputScope* scopes = nullptr;
+    UINT count = 0;
+    if (FAILED(inputScope->GetInputScopes(&scopes, &count))) return false;
+    if (count != 0 && !scopes) return false;
+    bool sensitive = false;
+    for (UINT index = 0; index < count; ++index) {
+        sensitive = sensitive || isSensitiveInputScope(scopes[index]);
+    }
+    CoTaskMemFree(scopes);
+    return sensitive;
+}
+
+class ContextReadSession final : public ITfEditSession {
 public:
-    CaretEditSession(ITfContext* context, protocol::CaretRect* caret)
-        : context_(context), caret_(caret) {}
+    ContextReadSession(ITfContext* context, protocol::CaretRect* caret, bool* sensitive)
+        : context_(context), caret_(caret), sensitive_(sensitive) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID interfaceId, void** object) noexcept override {
         if (!object) return E_POINTER;
@@ -65,6 +96,8 @@ public:
             return FAILED(result) ? result : E_FAIL;
         }
         range.Attach(selection.range);
+        *sensitive_ = readSensitiveInputScope(context_.Get(), editCookie, range.Get());
+        if (*sensitive_) return S_OK;
         Microsoft::WRL::ComPtr<ITfContextView> view;
         result = context_->GetActiveView(&view);
         if (FAILED(result) || !view) return FAILED(result) ? result : E_FAIL;
@@ -83,11 +116,23 @@ public:
     }
 
 private:
-    ~CaretEditSession() = default;
+    ~ContextReadSession() = default;
     std::atomic<ULONG> referenceCount_{1};
     Microsoft::WRL::ComPtr<ITfContext> context_;
     protocol::CaretRect* caret_{};
+    bool* sensitive_{};
 };
+
+bool queryContext(ITfContext* context, TfClientId clientId, protocol::CaretRect* caret,
+                  bool* sensitive) noexcept {
+    auto* session = new (std::nothrow) ContextReadSession(context, caret, sensitive);
+    if (!session) return false;
+    HRESULT sessionResult = E_FAIL;
+    const HRESULT requestResult = context->RequestEditSession(
+        clientId, session, TF_ES_SYNC | TF_ES_READ, &sessionResult);
+    session->Release();
+    return SUCCEEDED(requestResult) && SUCCEEDED(sessionResult);
+}
 
 class CompositionEditSession final : public ITfEditSession {
 public:
@@ -339,12 +384,17 @@ bool TextService::canHandle(WPARAM virtualKey) const noexcept {
 
 HRESULT TextService::OnSetFocus(BOOL /*foreground*/) noexcept { return S_OK; }
 
-HRESULT TextService::OnTestKeyDown(ITfContext* /*context*/, WPARAM virtualKey,
+HRESULT TextService::OnTestKeyDown(ITfContext* context, WPARAM virtualKey,
                                    LPARAM /*keyData*/, BOOL* eaten) noexcept {
     if (!eaten) {
         return E_POINTER;
     }
-    *eaten = canHandle(virtualKey) ? TRUE : FALSE;
+    bool sensitive = false;
+    protocol::CaretRect ignored;
+    if (context && clientId_ != TF_CLIENTID_NULL) {
+        (void)queryContext(context, clientId_, &ignored, &sensitive);
+    }
+    *eaten = !sensitive && canHandle(virtualKey) ? TRUE : FALSE;
     return S_OK;
 }
 
@@ -375,15 +425,18 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
             found != lastCaretRects_.end()) {
             caret = found->second;
         }
-        auto* caretSession = new (std::nothrow) CaretEditSession(context, &caret);
-        if (caretSession) {
-            HRESULT caretResult = E_FAIL;
-            const HRESULT requestCaret = context->RequestEditSession(
-                clientId_, caretSession, TF_ES_SYNC | TF_ES_READ, &caretResult);
-            caretSession->Release();
-            if (SUCCEEDED(requestCaret) && SUCCEEDED(caretResult) && caret.valid) {
-                lastCaretRects_[contextId] = caret;
+        bool sensitive = false;
+        if (queryContext(context, clientId_, &caret, &sensitive) && caret.valid) {
+            lastCaretRects_[contextId] = caret;
+        }
+        if (sensitive) {
+            client_.disconnect();
+            if (candidateUiElementId_ != TF_INVALID_UIELEMENTID && uiElementManager_) {
+                (void)uiElementManager_->EndUIElement(candidateUiElementId_);
+                candidateUiElementId_ = TF_INVALID_UIELEMENTID;
+                candidateUiElement_.Reset();
             }
+            return S_OK;
         }
         if (!client_.processKey(contextId, static_cast<std::uint32_t>(virtualKey),
                                 static_cast<std::uint32_t>(keyData), keyResult, caret) ||

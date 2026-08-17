@@ -30,6 +30,11 @@ try {
     & (Join-Path $binaryDirectory 'fcitx5_key_roundtrip_bench.exe') `
       (Join-Path $binaryDirectory 'fcitx5-mock-engine.exe')
     if ($LASTEXITCODE -ne 0) { throw "Roundtrip benchmark failed for $targetArchitecture." }
+    & (Join-Path $binaryDirectory 'fcitx5_focus_context_churn.exe')
+    if ($LASTEXITCODE -ne 0) { throw "Focus/context churn failed for $targetArchitecture." }
+    & (Join-Path $binaryDirectory 'fcitx5_handle_leak_soak.exe') `
+      (Join-Path $binaryDirectory 'fcitx5-tsf.dll')
+    if ($LASTEXITCODE -ne 0) { throw "Handle leak soak failed for $targetArchitecture." }
   }
 } finally {
   Pop-Location

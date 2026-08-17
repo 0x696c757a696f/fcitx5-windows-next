@@ -1,6 +1,7 @@
 #include "guids.h"
 
 #include <Windows.h>
+#include <inputscope.h>
 #include <msctf.h>
 #include <objbase.h>
 #include <wrl/client.h>
@@ -98,7 +99,8 @@ private:
 
 class TestComposition final : public ITfComposition {
 public:
-    TestComposition(TestRange* range, bool* ended) : range_(range), ended_(ended) {}
+    TestComposition(TestRange* range, bool* ended, ITfCompositionSink* sink)
+        : range_(range), ended_(ended), sink_(sink) {}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
         if (!object) return E_POINTER;
         *object = nullptr;
@@ -129,8 +131,9 @@ public:
     HRESULT STDMETHODCALLTYPE ShiftEnd(TfEditCookie, ITfRange*) noexcept override {
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE EndComposition(TfEditCookie) noexcept override {
+    HRESULT STDMETHODCALLTYPE EndComposition(TfEditCookie editCookie) noexcept override {
         *ended_ = true;
+        if (sink_) return sink_->OnCompositionTerminated(editCookie, this);
         return S_OK;
     }
 
@@ -139,10 +142,91 @@ private:
     std::atomic<ULONG> references_{1};
     TestRange* range_{};
     bool* ended_{};
+    ComPtr<ITfCompositionSink> sink_;
+};
+
+class TestInputScope final : public ITfInputScope {
+public:
+    explicit TestInputScope(InputScope scope) : scope_(scope) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, IID_ITfInputScope)) {
+            *object = static_cast<ITfInputScope*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override {
+        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() noexcept override {
+        return references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    }
+    HRESULT STDMETHODCALLTYPE GetInputScopes(InputScope** scopes, UINT* count) noexcept override {
+        if (!scopes || !count) return E_POINTER;
+        *scopes = static_cast<InputScope*>(CoTaskMemAlloc(sizeof(scope_)));
+        if (!*scopes) return E_OUTOFMEMORY;
+        **scopes = scope_;
+        *count = 1;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPhrase(BSTR**, UINT*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetRegularExpression(BSTR*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetSRGS(BSTR*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetXML(BSTR*) noexcept override { return E_NOTIMPL; }
+
+private:
+    std::atomic<ULONG> references_{1};
+    InputScope scope_{};
+};
+
+class TestInputScopeProperty final : public ITfReadOnlyProperty {
+public:
+    explicit TestInputScopeProperty(TestInputScope* scope) : scope_(scope) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, IID_ITfReadOnlyProperty)) {
+            *object = static_cast<ITfReadOnlyProperty*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override {
+        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() noexcept override {
+        return references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    }
+    HRESULT STDMETHODCALLTYPE GetType(GUID* type) noexcept override {
+        if (!type) return E_POINTER;
+        *type = GUID_PROP_INPUTSCOPE;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE EnumRanges(TfEditCookie, IEnumTfRanges**,
+                                         ITfRange*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetValue(TfEditCookie, ITfRange*, VARIANT* value) noexcept override {
+        if (!value) return E_POINTER;
+        VariantInit(value);
+        value->vt = VT_UNKNOWN;
+        value->punkVal = scope_;
+        scope_->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetContext(ITfContext**) noexcept override { return E_NOTIMPL; }
+
+private:
+    std::atomic<ULONG> references_{1};
+    TestInputScope* scope_{};
 };
 
 class TestContext final : public ITfContext, public ITfContextComposition {
 public:
+    explicit TestContext(InputScope scope = IS_DEFAULT)
+        : inputScope_(scope), inputScopeProperty_(&inputScope_) {}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
         if (!object) return E_POINTER;
         *object = nullptr;
@@ -165,7 +249,8 @@ public:
                                                  DWORD flags,
                                                  HRESULT* sessionResult) noexcept override {
         if (!session || !sessionResult) return E_POINTER;
-        if ((flags & (TF_ES_SYNC | TF_ES_READWRITE)) != (TF_ES_SYNC | TF_ES_READWRITE)) {
+        if ((flags & TF_ES_SYNC) == 0 ||
+            (flags & (TF_ES_READ | TF_ES_READWRITE)) == 0) {
             *sessionResult = E_INVALIDARG;
             return E_INVALIDARG;
         }
@@ -203,8 +288,14 @@ public:
     HRESULT STDMETHODCALLTYPE GetProperty(REFGUID, ITfProperty**) noexcept override {
         return E_NOTIMPL;
     }
-    HRESULT STDMETHODCALLTYPE GetAppProperty(REFGUID, ITfReadOnlyProperty**) noexcept override {
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetAppProperty(REFGUID guid,
+                                             ITfReadOnlyProperty** property) noexcept override {
+        if (!property) return E_POINTER;
+        *property = nullptr;
+        if (!IsEqualGUID(guid, GUID_PROP_INPUTSCOPE)) return E_NOTIMPL;
+        inputScopeProperty_.AddRef();
+        *property = &inputScopeProperty_;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE TrackProperties(const GUID**, ULONG, const GUID**, ULONG,
                                               ITfReadOnlyProperty**) noexcept override {
@@ -220,12 +311,12 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE StartComposition(TfEditCookie, ITfRange* range,
-                                               ITfCompositionSink*,
+                                               ITfCompositionSink* sink,
                                                ITfComposition** composition) noexcept override {
         if (!range || !composition || active_) return E_INVALIDARG;
         active_ = true;
         ended_ = false;
-        *composition = new (std::nothrow) TestComposition(&range_, &ended_);
+        *composition = new (std::nothrow) TestComposition(&range_, &ended_, sink);
         return *composition ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE EnumCompositions(IEnumITfCompositionView**) noexcept override {
@@ -248,6 +339,8 @@ public:
 private:
     std::atomic<ULONG> references_{1};
     TestRange range_;
+    TestInputScope inputScope_;
+    TestInputScopeProperty inputScopeProperty_;
     bool active_{};
     bool ended_{};
 };
@@ -415,36 +508,64 @@ int exercise(const wchar_t* dllPath) {
                   << ", clientId=0x" << clientId << '\n';
     } else {
         activated = true;
-        TestContext context;
-        BOOL preeditTestEaten = FALSE;
-        BOOL preeditEaten = FALSE;
-        const HRESULT preeditTest =
-            keySink->OnTestKeyDown(&context, 'N', 0, &preeditTestEaten);
-        const HRESULT preeditResult =
-            keySink->OnKeyDown(&context, 'N', 0, &preeditEaten);
-        BOOL commitTestEaten = FALSE;
-        BOOL commitEaten = FALSE;
-        const HRESULT commitTest =
-            keySink->OnTestKeyDown(&context, VK_SPACE, 0, &commitTestEaten);
-        const HRESULT commitResult =
-            keySink->OnKeyDown(&context, VK_SPACE, 0, &commitEaten);
-        if (SUCCEEDED(preeditTest) && SUCCEEDED(preeditResult) &&
-            SUCCEEDED(commitTest) && SUCCEEDED(commitResult) &&
-            preeditTestEaten && preeditEaten && commitTestEaten && commitEaten &&
-            context.text() == L"\x4f60" && context.compositionEnded()) {
-            result = 0;
+        TestContext passwordContext(IS_PASSWORD);
+        BOOL passwordTestEaten = TRUE;
+        BOOL passwordEaten = TRUE;
+        const HRESULT passwordTest =
+            keySink->OnTestKeyDown(&passwordContext, 'P', 0, &passwordTestEaten);
+        const HRESULT passwordResult =
+            keySink->OnKeyDown(&passwordContext, 'P', 0, &passwordEaten);
+        if (FAILED(passwordTest) || FAILED(passwordResult) || passwordTestEaten ||
+            passwordEaten || !passwordContext.text().empty()) {
+            std::cerr << "password input scope was not passed through\n";
         } else {
-            std::cerr << "composition path failed: preedit=0x" << std::hex
-                      << preeditResult << ", commit=0x" << commitResult
-                      << ", preeditEaten=" << std::dec << preeditEaten
-                      << ", commitEaten=" << commitEaten
-                      << ", started=" << context.compositionStarted()
-                      << ", ended=" << context.compositionEnded()
-                      << ", text=0x" << std::hex
-                      << (context.text().empty() ? 0U
-                                                 : static_cast<unsigned>(context.text()[0]))
-                      << ", textLength=" << context.text().size()
-                      << '\n';
+            TestContext context;
+            BOOL preeditTestEaten = FALSE;
+            BOOL duplicatePreeditTestEaten = FALSE;
+            BOOL preeditEaten = FALSE;
+            const HRESULT preeditTest =
+                keySink->OnTestKeyDown(&context, 'N', 0, &preeditTestEaten);
+            const HRESULT duplicatePreeditTest =
+                keySink->OnTestKeyDown(&context, 'N', 0, &duplicatePreeditTestEaten);
+            const HRESULT preeditResult =
+                keySink->OnKeyDown(&context, 'N', 0, &preeditEaten);
+            BOOL commitTestEaten = FALSE;
+            BOOL duplicateCommitTestEaten = FALSE;
+            BOOL commitEaten = FALSE;
+            const HRESULT commitTest =
+                keySink->OnTestKeyDown(&context, VK_SPACE, 0, &commitTestEaten);
+            const HRESULT duplicateCommitTest =
+                keySink->OnTestKeyDown(&context, VK_SPACE, 0, &duplicateCommitTestEaten);
+            const HRESULT commitResult =
+                keySink->OnKeyDown(&context, VK_SPACE, 0, &commitEaten);
+            BOOL orphanTestEaten = FALSE;
+            BOOL orphanKeyUpEaten = TRUE;
+            const HRESULT orphanTest =
+                keySink->OnTestKeyDown(&context, 'A', 0, &orphanTestEaten);
+            const HRESULT orphanKeyUp =
+                keySink->OnKeyUp(&context, 'A', 0, &orphanKeyUpEaten);
+            if (SUCCEEDED(preeditTest) && SUCCEEDED(preeditResult) &&
+                SUCCEEDED(duplicatePreeditTest) && SUCCEEDED(commitTest) &&
+                SUCCEEDED(duplicateCommitTest) && SUCCEEDED(commitResult) &&
+                SUCCEEDED(orphanTest) && SUCCEEDED(orphanKeyUp) &&
+                preeditTestEaten && duplicatePreeditTestEaten && preeditEaten &&
+                commitTestEaten && duplicateCommitTestEaten && commitEaten &&
+                orphanTestEaten && !orphanKeyUpEaten &&
+                context.text() == L"\x4f60" && context.compositionEnded()) {
+                result = 0;
+            } else {
+                std::cerr << "composition path failed: preedit=0x" << std::hex
+                          << preeditResult << ", commit=0x" << commitResult
+                          << ", preeditEaten=" << std::dec << preeditEaten
+                          << ", commitEaten=" << commitEaten
+                          << ", started=" << context.compositionStarted()
+                          << ", ended=" << context.compositionEnded()
+                          << ", text=0x" << std::hex
+                          << (context.text().empty()
+                                  ? 0U
+                                  : static_cast<unsigned>(context.text()[0]))
+                          << ", textLength=" << context.text().size() << '\n';
+            }
         }
     }
     if (activated) service->Deactivate();

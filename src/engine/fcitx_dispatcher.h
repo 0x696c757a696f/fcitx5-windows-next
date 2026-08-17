@@ -21,7 +21,7 @@ public:
     FcitxDispatcher(const FcitxDispatcher&) = delete;
     FcitxDispatcher& operator=(const FcitxDispatcher&) = delete;
 
-    [[nodiscard]] bool start();
+    [[nodiscard]] bool start(bool safeMode = false);
     [[nodiscard]] bool processKey(const ClientContextKey& context,
                                   const protocol::KeyRequest& request,
                                   RuntimeResult& result,

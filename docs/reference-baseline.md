@@ -30,6 +30,10 @@ Branch heads below were resolved on 2026-08-17. A pin is evidence for this audit
 | [chewing/windows-chewing-tsf](https://github.com/chewing/windows-chewing-tsf/tree/342ead0c0b445ec376fbd6ffb3b105e78c499419) | `342ead0c0b445ec376fbd6ffb3b105e78c499419` | GPL-3.0 repository | Composition, UIElement, IPC ACL, and packaging patterns |
 | [gaboolic/moqi-im-windows](https://github.com/gaboolic/moqi-im-windows/tree/13af5bc97eedc4c31bbf57418abe2427c8881aa5) | `13af5bc97eedc4c31bbf57418abe2427c8881aa5` | MIT repository | Request correlation and launcher lifecycle comparison |
 | [EasyIME/PIME](https://github.com/EasyIME/PIME/tree/9f6a1e9161b7f609eb1fadf282048c2907da04c9) | `9f6a1e9161b7f609eb1fadf282048c2907da04c9` | GitHub reports NOASSERTION; inspect per-file notices | Launcher/process-model comparison only |
+| [rimeinn/rabbit](https://github.com/rimeinn/rabbit/tree/b99f01109008f700eb0241770ccfceff0593e200) | `b99f01109008f700eb0241770ccfceff0593e200` | GPL-3.0 repository | Phase 5 caret/focus/password behavior and compatibility scenarios; no Hook code copied |
+| [huanfeng/WindInput](https://github.com/huanfeng/WindInput/tree/e7a0693ef94312ec78e3df7e5b8a1c00490ce27b) | `e7a0693ef94312ec78e3df7e5b8a1c00490ce27b` | Inspect per-file notices before reuse | Phase 5 timeout, stale-response and recovery behavior only |
+| [katahiromz/ImeStudy](https://github.com/katahiromz/ImeStudy/tree/8200c2552210d8ad913208679d1aa3aa1de28e7d) | `8200c2552210d8ad913208679d1aa3aa1de28e7d` | MIT repository | Phase 5 IMM32/CUAS host behavior and test-scenario reference |
+| [mangokingTW/ImeModePersistence](https://github.com/mangokingTW/ImeModePersistence/tree/533b28d0bd70d609e62ad27e2d816bebd25e3cbd) | `533b28d0bd70d609e62ad27e2d816bebd25e3cbd` | MIT repository | Phase 5 legacy compatibility risk and scenario reference; no injection path inherited |
 
 Microsoft documentation is versionless and is therefore pinned by access date rather than commit:
 

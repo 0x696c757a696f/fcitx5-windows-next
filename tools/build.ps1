@@ -130,6 +130,8 @@ try {
       foreach ($targetArchitecture in Get-Architectures) {
         Invoke-ConfigureAndBuild $targetArchitecture $true
         Invoke-Tests $targetArchitecture
+        & (Join-Path $PSScriptRoot 'check-runtime-security.ps1') `
+          -Architecture $targetArchitecture -Configuration $Configuration
       }
       & (Join-Path $PSScriptRoot 'check-secrets.ps1') -SelfTest
       & (Join-Path $PSScriptRoot 'check-secrets.ps1')

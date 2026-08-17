@@ -93,6 +93,11 @@ struct EngineProcess {
     std::uint64_t startedAt{};
 };
 
+struct UiProcess {
+    HANDLE process{};
+    bool safeMode{};
+};
+
 bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEventName,
                   const std::wstring& stopEventName, bool safeMode, HANDLE job,
                   SECURITY_ATTRIBUTES* security, EngineProcess& output) {
@@ -123,9 +128,10 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
     return true;
 }
 
-bool launchUi(const std::wstring& uiPath) {
+bool launchUi(const std::wstring& uiPath, bool safeMode, HANDLE job, UiProcess& output) {
     std::wstring command = quote(uiPath) + L" --parent-pid " +
                            std::to_wstring(GetCurrentProcessId());
+    if (safeMode) command += L" --safe-mode";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};
@@ -134,8 +140,24 @@ bool launchUi(const std::wstring& uiPath) {
     if (!CreateProcessW(uiPath.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
                         CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) return false;
     CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
+    if (!AssignProcessToJobObject(job, process.hProcess)) {
+        TerminateProcess(process.hProcess, 2);
+        WaitForSingleObject(process.hProcess, 1000);
+        CloseHandle(process.hProcess);
+        return false;
+    }
+    output = {process.hProcess, safeMode};
     return true;
+}
+
+void stopUi(UiProcess& ui) {
+    if (!ui.process) return;
+    if (WaitForSingleObject(ui.process, 0) != WAIT_OBJECT_0) {
+        TerminateProcess(ui.process, 0);
+        WaitForSingleObject(ui.process, 1000);
+    }
+    CloseHandle(ui.process);
+    ui = {};
 }
 
 void stopEngine(EngineProcess& engine) {
@@ -252,15 +274,16 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(mutex);
         return available ? 0 : 3;
     }
-    if (!uiPath.empty() && !launchUi(uiPath)) {
-        CloseHandle(mutex);
-        return 5;
-    }
-
     HANDLE job = CreateJobObjectW(security.attributes(), nullptr);
     if (!job) {
         CloseHandle(mutex);
         return 2;
+    }
+    UiProcess ui;
+    if (!uiPath.empty() && !launchUi(uiPath, false, job, ui)) {
+        CloseHandle(job);
+        CloseHandle(mutex);
+        return 5;
     }
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobLimits{};
     jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -327,6 +350,11 @@ int wmain(int argc, wchar_t** argv) {
     std::uint64_t engineGeneration = 0;
     std::atomic<std::uint64_t> nextResponseId{1};
     while (running) {
+        const bool uiSafeMode = state.state() == launcher::LauncherState::safeMode;
+        if (!uiPath.empty() && ui.process && ui.safeMode != uiSafeMode) {
+            stopUi(ui);
+            (void)launchUi(uiPath, uiSafeMode, job, ui);
+        }
         if (restartDesired && !engine.process) {
             const auto decision = state.requestStart();
             if (decision.disposition == launcher::StartDisposition::start) {
@@ -476,6 +504,7 @@ int wmain(int argc, wchar_t** argv) {
 
     if (pendingPipe) CloseHandle(pendingPipe);
     stopEngine(engine);
+    stopUi(ui);
     CloseHandle(stopEvent);
     if (launcherReady) CloseHandle(launcherReady);
     CloseHandle(engineReady);

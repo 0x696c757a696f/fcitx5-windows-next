@@ -161,7 +161,8 @@ std::vector<std::uint8_t> handleRequest(
 }
 
 int serve(const std::wstring& pipeName, unsigned testClientCount,
-          const std::wstring& readyEventName, const std::wstring& stopEventName) {
+          const std::wstring& readyEventName, const std::wstring& stopEventName,
+          bool safeMode) {
     platform::RuntimeIdentity identity;
     platform::PipeSecurity pipeSecurity;
     if (!platform::queryCurrentIdentity(identity) || !identity.mayUseUserEngine() ||
@@ -169,7 +170,7 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
         return 4;
     }
     engine::FcitxDispatcher dispatcher;
-    if (!dispatcher.start()) return 5;
+    if (!dispatcher.start(safeMode)) return 5;
     std::wstring executable(32'768, L'\0');
     const DWORD executableSize = GetModuleFileNameW(
         nullptr, executable.data(), static_cast<DWORD>(executable.size()));
@@ -272,11 +273,13 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring readyEventName;
     std::wstring stopEventName;
     unsigned testClientCount = 0;
+    bool safeMode = false;
     for (int index = 1; index < argc; ++index) {
         const std::wstring_view argument(argv[index]);
         if (argument == L"--test-once") {
             testClientCount = 1;
         } else if (argument == L"--safe-mode") {
+            safeMode = true;
         } else if (argument == L"--test-clients" && index + 1 < argc) {
             wchar_t* end = nullptr;
             const unsigned long parsed = std::wcstoul(argv[++index], &end, 10);
@@ -294,5 +297,5 @@ int wmain(int argc, wchar_t** argv) {
             return 1;
         }
     }
-    return serve(pipeName, testClientCount, readyEventName, stopEventName);
+    return serve(pipeName, testClientCount, readyEventName, stopEventName, safeMode);
 }

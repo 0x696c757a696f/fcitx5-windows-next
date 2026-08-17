@@ -1,6 +1,6 @@
 # Phase 4 implementation and acceptance record
 
-Date: 2026-08-17  
+Date: 2026-08-17
 Status: automated acceptance passed; external host/DPI matrix pending
 
 ## Delivered contract

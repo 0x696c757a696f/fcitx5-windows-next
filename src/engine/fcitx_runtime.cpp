@@ -48,7 +48,26 @@ bool setupEnvironment() {
     if (size == 0 || size >= modulePath.size()) return false;
     modulePath.resize(size);
     const auto root = std::filesystem::path(modulePath).parent_path().parent_path();
-    if (!SetDllDirectoryW((root / "bin").c_str())) return false;
+    using SetDefaultDirectories = BOOL(WINAPI*)(DWORD);
+    using AddDirectory = DLL_DIRECTORY_COOKIE(WINAPI*)(PCWSTR);
+    const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    const auto setDefaultDirectories = kernel
+                                           ? reinterpret_cast<SetDefaultDirectories>(
+                                                 GetProcAddress(
+                                                     kernel,
+                                                     "SetDefaultDllDirectories"))
+                                           : nullptr;
+    const auto addDirectory = kernel
+                                  ? reinterpret_cast<AddDirectory>(
+                                        GetProcAddress(kernel, "AddDllDirectory"))
+                                  : nullptr;
+    if (!setDefaultDirectories || !addDirectory ||
+        !setDefaultDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR |
+                               LOAD_LIBRARY_SEARCH_SYSTEM32 |
+                               LOAD_LIBRARY_SEARCH_USER_DIRS) ||
+        !addDirectory((root / "bin").c_str())) {
+        return false;
+    }
     const auto addon = utf8Path(root / "lib" / "fcitx5");
     const auto share = utf8Path(root / "share");
     const auto data = utf8Path(root / "share" / "fcitx5");
@@ -184,10 +203,18 @@ public:
 FcitxRuntime::FcitxRuntime() : impl_(std::make_unique<Impl>()) {}
 FcitxRuntime::~FcitxRuntime() = default;
 
-bool FcitxRuntime::initialize() {
+bool FcitxRuntime::initialize(bool safeMode) {
     try {
         if (!setupEnvironment()) return false;
-        impl_->instance = std::make_unique<Instance>(0, nullptr);
+        if (safeMode) {
+            char executable[] = "fcitx5-engine";
+            char disable[] = "--disable=all";
+            char enable[] = "--enable=pinyin,punctuation";
+            char* arguments[]{executable, disable, enable};
+            impl_->instance = std::make_unique<Instance>(3, arguments);
+        } else {
+            impl_->instance = std::make_unique<Instance>(0, nullptr);
+        }
         impl_->instance->addonManager().registerDefaultLoader(nullptr);
         impl_->instance->initialize();
         impl_->ensureInputMethods();

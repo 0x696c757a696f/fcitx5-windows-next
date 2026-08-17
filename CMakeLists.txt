@@ -139,6 +139,7 @@ add_library(
   fcitx5_tsf SHARED
   src/tsf/module.cpp
   src/tsf/candidate_ui_element.cpp
+  src/tsf/input_scope_guids.cpp
   src/tsf/registration.cpp
   src/tsf/text_service.cpp
   src/tsf/fcitx5-tsf.def)
@@ -183,6 +184,7 @@ if(BUILD_TESTING)
   add_test(NAME candidate-layout-contract COMMAND fcitx5_candidate_layout_test)
   add_test(NAME candidate-ui-device-smoke
            COMMAND fcitx5_ui --self-test --simulate-device-loss)
+  add_test(NAME candidate-ui-safe-mode-smoke COMMAND fcitx5_ui --self-test --safe-mode)
 
   add_executable(
     fcitx5_candidate_ui_element_test
@@ -242,6 +244,22 @@ if(BUILD_TESTING)
                    $<TARGET_FILE:fcitx5_launcher>
                    $<TARGET_FILE:fcitx5_mock_engine>)
 
+  add_executable(fcitx5_crash_engine_fixture tests/fixtures/crashing_engine_main.cpp)
+  set_target_properties(
+    fcitx5_crash_engine_fixture PROPERTIES OUTPUT_NAME "fcitx5-crash-engine-fixture")
+  fcitx_apply_project_options(fcitx5_crash_engine_fixture)
+  fcitx_apply_binary_hardening(fcitx5_crash_engine_fixture)
+  add_executable(fcitx5_launcher_crash_loop_test
+                 tests/integration/launcher_crash_loop_test.cpp)
+  target_link_libraries(
+    fcitx5_launcher_crash_loop_test PRIVATE fcitx5::ipc_client fcitx5::launcher_state)
+  fcitx_apply_project_options(fcitx5_launcher_crash_loop_test)
+  fcitx_apply_binary_hardening(fcitx5_launcher_crash_loop_test)
+  add_test(NAME launcher-crash-loop-safe-mode
+           COMMAND fcitx5_launcher_crash_loop_test
+                   $<TARGET_FILE:fcitx5_launcher>
+                   $<TARGET_FILE:fcitx5_crash_engine_fixture>)
+
   add_executable(fcitx5_tsf_module_test tests/unit/tsf_module_test.cpp)
   target_include_directories(fcitx5_tsf_module_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
   target_link_libraries(fcitx5_tsf_module_test PRIVATE uuid ole32)
@@ -250,9 +268,17 @@ if(BUILD_TESTING)
   add_test(NAME tsf-module-activation
            COMMAND fcitx5_tsf_module_test $<TARGET_FILE:fcitx5_tsf>)
 
+  add_executable(fcitx5_input_scope_policy_test tests/unit/input_scope_policy_test.cpp)
+  target_include_directories(
+    fcitx5_input_scope_policy_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
+  fcitx_apply_project_options(fcitx5_input_scope_policy_test)
+  fcitx_apply_binary_hardening(fcitx5_input_scope_policy_test)
+  add_test(NAME tsf-sensitive-input-policy COMMAND fcitx5_input_scope_policy_test)
+
   add_executable(fcitx5_tsf_key_commit_test tests/integration/tsf_key_commit_test.cpp)
+  target_sources(fcitx5_tsf_key_commit_test PRIVATE src/tsf/input_scope_guids.cpp)
   target_include_directories(fcitx5_tsf_key_commit_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-  target_link_libraries(fcitx5_tsf_key_commit_test PRIVATE uuid ole32)
+  target_link_libraries(fcitx5_tsf_key_commit_test PRIVATE uuid ole32 oleaut32)
   fcitx_apply_project_options(fcitx5_tsf_key_commit_test)
   fcitx_apply_binary_hardening(fcitx5_tsf_key_commit_test)
   add_test(NAME tsf-key-commit-e2e
@@ -278,6 +304,18 @@ if(FCITX_BUILD_FUZZERS)
 endif()
 
 if(FCITX_BUILD_BENCHMARKS)
+  add_executable(fcitx5_focus_context_churn tests/perf/focus_context_churn.cpp)
+  target_link_libraries(fcitx5_focus_context_churn PRIVATE fcitx5::candidate_model)
+  fcitx_apply_project_options(fcitx5_focus_context_churn)
+  fcitx_apply_binary_hardening(fcitx5_focus_context_churn)
+
+  add_executable(fcitx5_handle_leak_soak tests/perf/handle_leak_soak.cpp)
+  target_include_directories(
+    fcitx5_handle_leak_soak PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
+  target_link_libraries(fcitx5_handle_leak_soak PRIVATE uuid ole32 user32)
+  fcitx_apply_project_options(fcitx5_handle_leak_soak)
+  fcitx_apply_binary_hardening(fcitx5_handle_leak_soak)
+
   add_executable(fcitx5_candidate_render_bench tests/perf/candidate_render_bench.cpp)
   target_link_libraries(
     fcitx5_candidate_render_bench

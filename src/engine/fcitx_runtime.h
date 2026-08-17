@@ -41,7 +41,7 @@ public:
     FcitxRuntime(const FcitxRuntime&) = delete;
     FcitxRuntime& operator=(const FcitxRuntime&) = delete;
 
-    [[nodiscard]] bool initialize();
+    [[nodiscard]] bool initialize(bool safeMode = false);
     [[nodiscard]] ::fcitx::EventLoop& eventLoop();
     [[nodiscard]] RuntimeResult processKey(const ClientContextKey& key,
                                            const protocol::KeyRequest& request);
