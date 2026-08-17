@@ -220,9 +220,10 @@ int wmain(int argc, wchar_t** argv) {
     for (unsigned index = 0; index < repeatCount; ++index) {
         deadline += repeatPeriod;
         const auto virtualKey = (index & 1U) == 0 ? 'N' : VK_BACK;
-        if (!client.processKey(repeatContextId, virtualKey, 0, result) ||
-            !result.handled) {
-            std::cerr << "60 Hz key-repeat request failed at " << index << '\n';
+        const bool repeatOk = client.processKey(repeatContextId, virtualKey, 0, result);
+        if (!repeatOk || !result.handled) {
+            std::cerr << "60 Hz key-repeat request failed at " << index
+                      << " ipc=" << repeatOk << " handled=" << result.handled << '\n';
             return 1;
         }
         std::this_thread::sleep_until(deadline);
