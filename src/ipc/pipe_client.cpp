@@ -36,6 +36,20 @@ bool utf8ToWide(std::string_view input, std::wstring& output) {
                                static_cast<int>(input.size()), output.data(), size) == size;
 }
 
+bool utf8OffsetToWide(std::string_view input, std::uint32_t offset,
+                      std::uint32_t& output) {
+    if (offset > input.size()) return false;
+    if (offset == 0) {
+        output = 0;
+        return true;
+    }
+    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
+                                         static_cast<int>(offset), nullptr, 0);
+    if (size <= 0) return false;
+    output = static_cast<std::uint32_t>(size);
+    return true;
+}
+
 } // namespace
 
 PipeClient::PipeClient()
@@ -63,6 +77,7 @@ void PipeClient::disconnect() noexcept {
     }
     handshakeComplete_ = false;
     engineEpoch_ = 0;
+    contexts_.clear();
 }
 
 bool PipeClient::connect(std::uint64_t deadline) noexcept {
@@ -197,7 +212,10 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
                             std::uint32_t keyFlags, KeyResult& result) noexcept {
     result = {};
     try {
-        const std::uint64_t deadline = GetTickCount64() + kInputDeadlineMilliseconds;
+        const bool newContext = contexts_.find(contextId) == contexts_.end();
+        const std::uint64_t deadline =
+            GetTickCount64() + (newContext ? kContextStartDeadlineMilliseconds
+                                           : kInputDeadlineMilliseconds);
         if (!connect(deadline)) {
             (void)requestLauncherStart(identity_, deadline, PeerPolicy::development());
         }
@@ -206,8 +224,10 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
             return false;
         }
         const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        auto& contextState = contexts_[contextId];
         protocol::KeyRequest request{
-            protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId, 0, 0},
+            protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
+                               contextState.compositionId, contextState.revision},
             virtualKey, keyFlags};
         std::vector<std::uint8_t> responseBytes;
         if (!transact(protocol::encode(request), responseBytes, deadline)) {
@@ -220,13 +240,20 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
             response.metadata.engineEpoch != engineEpoch_ ||
             response.metadata.sessionId != sessionId_ ||
             response.metadata.contextId != contextId ||
-            response.metadata.compositionId != request.metadata.compositionId ||
-            response.metadata.revision < request.metadata.revision ||
+            response.metadata.revision <= request.metadata.revision ||
             response.status != protocol::Status::ok ||
-            !utf8ToWide(response.commitUtf8, result.commit)) {
+            !utf8ToWide(response.commitUtf8, result.commit) ||
+            !utf8ToWide(response.preeditUtf8, result.preedit) ||
+            !utf8OffsetToWide(response.preeditUtf8, response.preeditCaretUtf8,
+                              result.preeditCaretUtf16)) {
             disconnect();
             return false;
         }
+        contextState.compositionId = response.metadata.compositionId;
+        contextState.revision = response.metadata.revision;
+        result.engineEpoch = response.metadata.engineEpoch;
+        result.compositionId = response.metadata.compositionId;
+        result.revision = response.metadata.revision;
         result.handled = response.handled;
         return true;
     } catch (...) {

@@ -9,15 +9,22 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace fcitx::windows::ipc {
 
 inline constexpr DWORD kInputDeadlineMilliseconds = 25;
+inline constexpr DWORD kContextStartDeadlineMilliseconds = 100;
 
 struct KeyResult {
     bool handled{};
+    std::uint64_t engineEpoch{};
+    std::uint64_t compositionId{};
+    std::uint64_t revision{};
     std::wstring commit;
+    std::wstring preedit;
+    std::uint32_t preeditCaretUtf16{};
 };
 
 class PipeClient final {
@@ -51,6 +58,11 @@ private:
     std::uint64_t engineEpoch_{};
     std::uint32_t sessionId_{};
     std::atomic<std::uint64_t> nextRequestId_{1};
+    struct ContextState {
+        std::uint64_t compositionId{};
+        std::uint64_t revision{};
+    };
+    std::unordered_map<std::uint64_t, ContextState> contexts_;
 };
 
 } // namespace fcitx::windows::ipc

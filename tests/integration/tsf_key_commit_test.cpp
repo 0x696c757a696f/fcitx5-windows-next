@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -54,8 +55,12 @@ public:
                                              IDataObject*) noexcept override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE ShiftStart(TfEditCookie, LONG, LONG*,
                                          const TF_HALTCOND*) noexcept override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE ShiftEnd(TfEditCookie, LONG, LONG*,
-                                       const TF_HALTCOND*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE ShiftEnd(TfEditCookie, LONG count, LONG* shifted,
+                                       const TF_HALTCOND*) noexcept override {
+        if (!shifted) return E_POINTER;
+        *shifted = count;
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE ShiftStartToRange(TfEditCookie, ITfRange*,
                                                 TfAnchor) noexcept override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE ShiftEndToRange(TfEditCookie, ITfRange*,
@@ -91,17 +96,64 @@ private:
     std::wstring text_;
 };
 
-class TestContext final : public ITfContext {
+class TestComposition final : public ITfComposition {
+public:
+    TestComposition(TestRange* range, bool* ended) : range_(range), ended_(ended) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, IID_ITfComposition)) {
+            *object = static_cast<ITfComposition*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override {
+        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() noexcept override {
+        const ULONG remaining = references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE GetRange(ITfRange** range) noexcept override {
+        if (!range) return E_POINTER;
+        range_->AddRef();
+        *range = range_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE ShiftStart(TfEditCookie, ITfRange*) noexcept override {
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE ShiftEnd(TfEditCookie, ITfRange*) noexcept override {
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE EndComposition(TfEditCookie) noexcept override {
+        *ended_ = true;
+        return S_OK;
+    }
+
+private:
+    ~TestComposition() = default;
+    std::atomic<ULONG> references_{1};
+    TestRange* range_{};
+    bool* ended_{};
+};
+
+class TestContext final : public ITfContext, public ITfContextComposition {
 public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
         if (!object) return E_POINTER;
         *object = nullptr;
         if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, IID_ITfContext)) {
             *object = static_cast<ITfContext*>(this);
-            AddRef();
-            return S_OK;
+        } else if (IsEqualIID(iid, IID_ITfContextComposition)) {
+            *object = static_cast<ITfContextComposition*>(this);
         }
-        return E_NOINTERFACE;
+        if (!*object) return E_NOINTERFACE;
+        AddRef();
+        return S_OK;
     }
     ULONG STDMETHODCALLTYPE AddRef() noexcept override {
         return references_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -167,11 +219,37 @@ public:
         return E_NOTIMPL;
     }
 
+    HRESULT STDMETHODCALLTYPE StartComposition(TfEditCookie, ITfRange* range,
+                                               ITfCompositionSink*,
+                                               ITfComposition** composition) noexcept override {
+        if (!range || !composition || active_) return E_INVALIDARG;
+        active_ = true;
+        ended_ = false;
+        *composition = new (std::nothrow) TestComposition(&range_, &ended_);
+        return *composition ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE EnumCompositions(IEnumITfCompositionView**) noexcept override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FindComposition(TfEditCookie, ITfRange*,
+                                              IEnumITfCompositionView**) noexcept override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE TakeOwnership(TfEditCookie, ITfCompositionView*,
+                                            ITfCompositionSink*,
+                                            ITfComposition**) noexcept override {
+        return E_NOTIMPL;
+    }
+
     [[nodiscard]] const std::wstring& text() const noexcept { return range_.text(); }
+    [[nodiscard]] bool compositionEnded() const noexcept { return ended_; }
+    [[nodiscard]] bool compositionStarted() const noexcept { return active_; }
 
 private:
     std::atomic<ULONG> references_{1};
     TestRange range_;
+    bool active_{};
+    bool ended_{};
 };
 
 class TestThreadManager final : public ITfThreadMgr, public ITfKeystrokeMgr {
@@ -284,7 +362,9 @@ EngineProcess startEngine(const wchar_t* executable) {
         std::cerr << "readiness event creation failed: " << GetLastError() << '\n';
         return {};
     }
-    std::wstring command = quote(executable) + L" --test-once --ready-event " + quote(eventName);
+    std::wstring command = quote(executable) +
+                           L" --test-once --composition-test --ready-event " +
+                           quote(eventName);
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};
@@ -336,17 +416,34 @@ int exercise(const wchar_t* dllPath) {
     } else {
         activated = true;
         TestContext context;
-        BOOL testEaten = FALSE;
-        BOOL eaten = FALSE;
-        const HRESULT testResult = keySink->OnTestKeyDown(&context, 'A', 0, &testEaten);
-        const HRESULT keyResult = keySink->OnKeyDown(&context, 'A', 0, &eaten);
-        if (SUCCEEDED(testResult) && SUCCEEDED(keyResult) && testEaten && eaten &&
-            context.text() == L"a") {
+        BOOL preeditTestEaten = FALSE;
+        BOOL preeditEaten = FALSE;
+        const HRESULT preeditTest =
+            keySink->OnTestKeyDown(&context, 'N', 0, &preeditTestEaten);
+        const HRESULT preeditResult =
+            keySink->OnKeyDown(&context, 'N', 0, &preeditEaten);
+        BOOL commitTestEaten = FALSE;
+        BOOL commitEaten = FALSE;
+        const HRESULT commitTest =
+            keySink->OnTestKeyDown(&context, VK_SPACE, 0, &commitTestEaten);
+        const HRESULT commitResult =
+            keySink->OnKeyDown(&context, VK_SPACE, 0, &commitEaten);
+        if (SUCCEEDED(preeditTest) && SUCCEEDED(preeditResult) &&
+            SUCCEEDED(commitTest) && SUCCEEDED(commitResult) &&
+            preeditTestEaten && preeditEaten && commitTestEaten && commitEaten &&
+            context.text() == L"\x4f60" && context.compositionEnded()) {
             result = 0;
         } else {
-            std::cerr << "key path failed: test=0x" << std::hex << testResult << ", key=0x"
-                      << keyResult << ", testEaten=" << std::dec << testEaten
-                      << ", eaten=" << eaten << ", textLength=" << context.text().size()
+            std::cerr << "composition path failed: preedit=0x" << std::hex
+                      << preeditResult << ", commit=0x" << commitResult
+                      << ", preeditEaten=" << std::dec << preeditEaten
+                      << ", commitEaten=" << commitEaten
+                      << ", started=" << context.compositionStarted()
+                      << ", ended=" << context.compositionEnded()
+                      << ", text=0x" << std::hex
+                      << (context.text().empty() ? 0U
+                                                 : static_cast<unsigned>(context.text()[0]))
+                      << ", textLength=" << context.text().size()
                       << '\n';
         }
     }

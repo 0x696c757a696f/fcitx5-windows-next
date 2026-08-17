@@ -47,13 +47,15 @@ int main() {
     }
 
     const KeyResponse responseInput{Metadata{43, 42, 99, 3, 7, 11, 14},
-                                    Status::ok, true, "a"};
+                                    Status::ok, true, "a", "ni", 2};
     const auto responseBytes = encode(responseInput);
     KeyResponse responseOutput;
     if (!expect(decodeFrame(responseBytes, frame) && decode(frame, responseOutput),
                 "valid response rejected") ||
         !expect(responseOutput.metadata == responseInput.metadata && responseOutput.handled &&
-                    responseOutput.commitUtf8 == "a",
+                    responseOutput.commitUtf8 == "a" &&
+                    responseOutput.preeditUtf8 == "ni" &&
+                    responseOutput.preeditCaretUtf8 == 2,
                 "roundtrip changed response")) {
         return 1;
     }
@@ -129,14 +131,17 @@ int main() {
                      requestMetadata.compositionId, requestMetadata.revision},
             static_cast<Status>(random() %
                                 (static_cast<std::uint32_t>(Status::accessDenied) + 1U)),
-            (random() & 1U) != 0, commit};
+            (random() & 1U) != 0, commit, "preedit", 3};
         KeyResponse propertyResponseOutput;
         if (!expect(decodeFrame(encode(propertyResponse), frame) &&
                         decode(frame, propertyResponseOutput) &&
                         propertyResponseOutput.metadata == propertyResponse.metadata &&
                         propertyResponseOutput.status == propertyResponse.status &&
                         propertyResponseOutput.handled == propertyResponse.handled &&
-                        propertyResponseOutput.commitUtf8 == propertyResponse.commitUtf8,
+                        propertyResponseOutput.commitUtf8 == propertyResponse.commitUtf8 &&
+                        propertyResponseOutput.preeditUtf8 == propertyResponse.preeditUtf8 &&
+                        propertyResponseOutput.preeditCaretUtf8 ==
+                            propertyResponse.preeditCaretUtf8,
                     "key response property roundtrip failed")) return 1;
     }
 
@@ -145,6 +150,16 @@ int main() {
                                    std::string(kMaxCommitUtf8 + 1, 'x')})
                     .empty(),
                 "oversize commit encoded")) {
+        return 1;
+    }
+    if (!expect(encode(KeyResponse{Metadata{1, 1, 1, 1, 1, 0, 0}, Status::ok, true,
+                                   {}, std::string(kMaxPreeditUtf8 + 1, 'x'), 0})
+                    .empty(),
+                "oversize preedit encoded") ||
+        !expect(encode(KeyResponse{Metadata{1, 1, 1, 1, 1, 0, 0}, Status::ok, true,
+                                   {}, "x", 2})
+                    .empty(),
+                "out-of-range preedit caret encoded")) {
         return 1;
     }
 

@@ -180,7 +180,7 @@ int wmain(int argc, wchar_t** argv) {
             const protocol::KeyResponse keyResponse{
                 protocol::Metadata{nextResponseId++, key.metadata.requestId, epoch,
                                    identity.sessionId, key.metadata.contextId,
-                                   key.metadata.compositionId, key.metadata.revision},
+                                   key.metadata.compositionId, key.metadata.revision + 1},
                 protocol::Status::ok, true, connectionIndex == 0 ? "late" : "a"};
             if (connectionIndex == 0) {
                 SetEvent(keyReceived);

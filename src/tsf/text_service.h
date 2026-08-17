@@ -10,7 +10,9 @@
 
 namespace fcitx::windows::tsf {
 
-class TextService final : public ITfTextInputProcessorEx, public ITfKeyEventSink {
+class TextService final : public ITfTextInputProcessorEx,
+                          public ITfKeyEventSink,
+                          public ITfCompositionSink {
 public:
     TextService();
 
@@ -35,6 +37,8 @@ public:
                                       BOOL* eaten) noexcept override;
     HRESULT STDMETHODCALLTYPE OnPreservedKey(ITfContext* context, REFGUID keyGuid,
                                              BOOL* eaten) noexcept override;
+    HRESULT STDMETHODCALLTYPE OnCompositionTerminated(
+        TfEditCookie editCookie, ITfComposition* composition) noexcept override;
 
 private:
     ~TextService();
@@ -45,6 +49,7 @@ private:
     Microsoft::WRL::ComPtr<ITfThreadMgr> threadManager_;
     TfClientId clientId_{TF_CLIENTID_NULL};
     ipc::PipeClient client_;
+    Microsoft::WRL::ComPtr<ITfComposition> composition_;
 };
 
 } // namespace fcitx::windows::tsf

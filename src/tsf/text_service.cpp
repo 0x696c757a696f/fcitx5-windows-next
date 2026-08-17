@@ -3,6 +3,7 @@
 #include "module.h"
 
 #include <cstdint>
+#include <memory>
 #include <new>
 #include <string>
 #include <utility>
@@ -10,10 +11,14 @@
 namespace fcitx::windows::tsf {
 namespace {
 
-class CommitEditSession final : public ITfEditSession {
+class CompositionEditSession final : public ITfEditSession {
 public:
-    CommitEditSession(ITfContext* context, std::wstring text)
-        : context_(context), text_(std::move(text)) {}
+    CompositionEditSession(ITfContext* context, ITfCompositionSink* sink,
+                           Microsoft::WRL::ComPtr<ITfComposition>* composition,
+                           std::wstring commit, std::wstring preedit,
+                           std::uint32_t caret)
+        : context_(context), sink_(sink), composition_(composition),
+          commit_(std::move(commit)), preedit_(std::move(preedit)), caret_(caret) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID interfaceId, void** object) noexcept override {
         if (!object) {
@@ -49,30 +54,88 @@ public:
         if (FAILED(result) || fetched != 1 || !selection.range) {
             return FAILED(result) ? result : E_FAIL;
         }
-        result = selection.range->SetText(editCookie, 0, text_.data(),
-                                          static_cast<LONG>(text_.size()));
-        if (SUCCEEDED(result)) {
-            result = selection.range->Collapse(editCookie, TF_ANCHOR_END);
+        Microsoft::WRL::ComPtr<ITfRange> selectionRange;
+        selectionRange.Attach(selection.range);
+
+        if (*composition_) {
+            Microsoft::WRL::ComPtr<ITfRange> range;
+            result = (*composition_)->GetRange(&range);
+            if (FAILED(result)) return result;
+            if (!commit_.empty()) {
+                result = range->SetText(editCookie, 0, commit_.data(),
+                                        static_cast<LONG>(commit_.size()));
+                if (SUCCEEDED(result)) result = (*composition_)->EndComposition(editCookie);
+                if (FAILED(result)) return result;
+                composition_->Reset();
+                selectionRange = std::move(range);
+            } else if (preedit_.empty()) {
+                result = range->SetText(editCookie, 0, nullptr, 0);
+                if (SUCCEEDED(result)) result = (*composition_)->EndComposition(editCookie);
+                if (FAILED(result)) return result;
+                composition_->Reset();
+                selectionRange = std::move(range);
+            }
+        } else if (!commit_.empty()) {
+            result = selectionRange->SetText(editCookie, 0, commit_.data(),
+                                             static_cast<LONG>(commit_.size()));
+            if (FAILED(result)) return result;
         }
-        if (SUCCEEDED(result)) {
+
+        if (!preedit_.empty()) {
+            if (!*composition_) {
+                Microsoft::WRL::ComPtr<ITfContextComposition> contextComposition;
+                result = context_.As(&contextComposition);
+                if (FAILED(result)) return result;
+                Microsoft::WRL::ComPtr<ITfComposition> started;
+                result = contextComposition->StartComposition(
+                    editCookie, selectionRange.Get(), sink_.Get(), &started);
+                if (FAILED(result) || !started) return FAILED(result) ? result : E_FAIL;
+                composition_->Attach(started.Detach());
+            }
+            Microsoft::WRL::ComPtr<ITfRange> range;
+            result = (*composition_)->GetRange(&range);
+            if (FAILED(result)) return result;
+            result = range->SetText(editCookie, 0, preedit_.data(),
+                                    static_cast<LONG>(preedit_.size()));
+            if (FAILED(result)) return result;
+            result = range->Collapse(editCookie, TF_ANCHOR_START);
+            if (FAILED(result)) return result;
+            LONG shifted = 0;
+            result = range->ShiftEnd(editCookie, static_cast<LONG>(caret_), &shifted, nullptr);
+            if (FAILED(result) || shifted != static_cast<LONG>(caret_)) {
+                return FAILED(result) ? result : E_FAIL;
+            }
+            result = range->Collapse(editCookie, TF_ANCHOR_END);
+            if (FAILED(result)) return result;
+            selectionRange = std::move(range);
+        } else {
+            result = selectionRange->Collapse(editCookie, TF_ANCHOR_END);
+            if (FAILED(result)) return result;
+        }
+
+        if (selectionRange) {
+            selection.range = selectionRange.Get();
             selection.style.ase = TF_AE_END;
             selection.style.fInterimChar = FALSE;
             result = context_->SetSelection(editCookie, 1, &selection);
         }
-        selection.range->Release();
-        committed_ = SUCCEEDED(result);
+        applied_ = SUCCEEDED(result);
         return result;
     }
 
-    [[nodiscard]] bool committed() const noexcept { return committed_; }
+    [[nodiscard]] bool applied() const noexcept { return applied_; }
 
 private:
-    ~CommitEditSession() = default;
+    ~CompositionEditSession() = default;
 
     std::atomic<ULONG> referenceCount_{1};
     Microsoft::WRL::ComPtr<ITfContext> context_;
-    std::wstring text_;
-    bool committed_{};
+    Microsoft::WRL::ComPtr<ITfCompositionSink> sink_;
+    Microsoft::WRL::ComPtr<ITfComposition>* composition_{};
+    std::wstring commit_;
+    std::wstring preedit_;
+    std::uint32_t caret_{};
+    bool applied_{};
 };
 
 } // namespace
@@ -95,6 +158,8 @@ HRESULT TextService::QueryInterface(REFIID interfaceId, void** object) noexcept 
         *object = static_cast<ITfTextInputProcessorEx*>(this);
     } else if (IsEqualIID(interfaceId, IID_ITfKeyEventSink)) {
         *object = static_cast<ITfKeyEventSink*>(this);
+    } else if (IsEqualIID(interfaceId, IID_ITfCompositionSink)) {
+        *object = static_cast<ITfCompositionSink*>(this);
     }
     if (!*object) {
         return E_NOINTERFACE;
@@ -144,6 +209,7 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
 
 HRESULT TextService::Deactivate() noexcept {
     client_.disconnect();
+    composition_.Reset();
     HRESULT result = S_OK;
     if (threadManager_ && clientId_ != TF_CLIENTID_NULL) {
         Microsoft::WRL::ComPtr<ITfKeystrokeMgr> keystrokeManager;
@@ -157,10 +223,32 @@ HRESULT TextService::Deactivate() noexcept {
 }
 
 bool TextService::canHandle(WPARAM virtualKey) const noexcept {
-    if (virtualKey < 'A' || virtualKey > 'Z') {
+    if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 ||
+        (GetKeyState(VK_MENU) & 0x8000) != 0) {
         return false;
     }
-    return (GetKeyState(VK_CONTROL) & 0x8000) == 0 && (GetKeyState(VK_MENU) & 0x8000) == 0;
+    if ((virtualKey >= 'A' && virtualKey <= 'Z') ||
+        (virtualKey >= '0' && virtualKey <= '9')) {
+        return true;
+    }
+    if (!composition_) {
+        return false;
+    }
+    switch (virtualKey) {
+    case VK_SPACE:
+    case VK_BACK:
+    case VK_RETURN:
+    case VK_ESCAPE:
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN:
+    case VK_PRIOR:
+    case VK_NEXT:
+        return true;
+    default:
+        return false;
+    }
 }
 
 HRESULT TextService::OnSetFocus(BOOL /*foreground*/) noexcept { return S_OK; }
@@ -201,21 +289,23 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
             !keyResult.handled) {
             return S_OK;
         }
-        if (keyResult.commit.empty()) {
+        if (keyResult.commit.empty() && keyResult.preedit.empty() && !composition_) {
             *eaten = TRUE;
             return S_OK;
         }
-        auto* editSession = new (std::nothrow) CommitEditSession(context, std::move(keyResult.commit));
+        auto* editSession = new (std::nothrow) CompositionEditSession(
+            context, this, std::addressof(composition_), std::move(keyResult.commit),
+            std::move(keyResult.preedit), keyResult.preeditCaretUtf16);
         if (!editSession) {
             return E_OUTOFMEMORY;
         }
         HRESULT sessionResult = E_FAIL;
         const HRESULT requestResult = context->RequestEditSession(
             clientId_, editSession, TF_ES_SYNC | TF_ES_READWRITE, &sessionResult);
-        const bool committed = SUCCEEDED(requestResult) && SUCCEEDED(sessionResult) &&
-                               editSession->committed();
+        const bool applied = SUCCEEDED(requestResult) && SUCCEEDED(sessionResult) &&
+                             editSession->applied();
         editSession->Release();
-        *eaten = committed ? TRUE : FALSE;
+        *eaten = applied ? TRUE : FALSE;
         return S_OK;
     } catch (...) {
         client_.disconnect();
@@ -238,6 +328,14 @@ HRESULT TextService::OnPreservedKey(ITfContext* /*context*/, REFGUID /*keyGuid*/
         return E_POINTER;
     }
     *eaten = FALSE;
+    return S_OK;
+}
+
+HRESULT TextService::OnCompositionTerminated(
+    TfEditCookie /*editCookie*/, ITfComposition* composition) noexcept {
+    if (composition_.Get() == composition) {
+        composition_.Reset();
+    }
     return S_OK;
 }
 

@@ -8,13 +8,14 @@
 
 namespace fcitx::windows::protocol {
 
-inline constexpr std::uint32_t kMagic = 0x32574346U; // "FCW2"
-inline constexpr std::uint16_t kVersion = 2;
+inline constexpr std::uint32_t kMagic = 0x33574346U; // "FCW3"
+inline constexpr std::uint16_t kVersion = 3;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
 inline constexpr std::size_t kMaxFrameSize = kMaxHotFrameSize;
-inline constexpr std::size_t kMaxCommitUtf8 = 32;
+inline constexpr std::size_t kMaxCommitUtf8 = 16U * 1024U;
+inline constexpr std::size_t kMaxPreeditUtf8 = 16U * 1024U;
 
 enum class MessageType : std::uint16_t {
     helloRequest = 1,
@@ -75,6 +76,8 @@ struct KeyResponse {
     Status status{Status::malformed};
     bool handled{};
     std::string commitUtf8;
+    std::string preeditUtf8;
+    std::uint32_t preeditCaretUtf8{};
 };
 
 enum class LauncherCommand : std::uint32_t {

@@ -135,6 +135,12 @@ bool validKeyMetadata(const Metadata& metadata) noexcept {
     return metadata.engineEpoch != 0 && metadata.contextId != 0;
 }
 
+bool validKeyResponsePayload(const KeyResponse& message) noexcept {
+    return message.commitUtf8.size() <= kMaxCommitUtf8 &&
+           message.preeditUtf8.size() <= kMaxPreeditUtf8 &&
+           message.preeditCaretUtf8 <= message.preeditUtf8.size();
+}
+
 bool validLauncherMetadata(const Metadata& metadata) noexcept {
     return metadata.contextId == 0 && metadata.compositionId == 0 && metadata.revision == 0;
 }
@@ -235,7 +241,7 @@ std::vector<std::uint8_t> encode(const KeyRequest& message) {
 
 std::vector<std::uint8_t> encode(const KeyResponse& message) {
     if (!validMetadata(MessageType::keyResponse, message.metadata) ||
-        !validKeyMetadata(message.metadata) || message.commitUtf8.size() > kMaxCommitUtf8 ||
+        !validKeyMetadata(message.metadata) || !validKeyResponsePayload(message) ||
         static_cast<std::uint32_t>(message.status) >
             static_cast<std::uint32_t>(Status::accessDenied)) {
         return {};
@@ -244,6 +250,8 @@ std::vector<std::uint8_t> encode(const KeyResponse& message) {
     writer.appendU32(static_cast<std::uint32_t>(message.status));
     writer.appendU8(message.handled ? 1U : 0U);
     writer.appendString(message.commitUtf8);
+    writer.appendString(message.preeditUtf8);
+    writer.appendU32(message.preeditCaretUtf8);
     return writer.finish();
 }
 
@@ -317,8 +325,10 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
     message.metadata = frame.metadata;
     try {
         if (!reader.readU32(status) || !reader.readU8(handled) || handled > 1 ||
-            !reader.readString(message.commitUtf8) || !reader.done() ||
-            message.commitUtf8.size() > kMaxCommitUtf8 ||
+            !reader.readString(message.commitUtf8) ||
+            !reader.readString(message.preeditUtf8) ||
+            !reader.readU32(message.preeditCaretUtf8) || !reader.done() ||
+            !validKeyResponsePayload(message) ||
             status > static_cast<std::uint32_t>(Status::accessDenied)) {
             return false;
         }

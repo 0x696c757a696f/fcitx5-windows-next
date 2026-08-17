@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::mt19937_64 random(0x46435732U);
+    std::mt19937_64 random(0x33574346U);
     std::vector<std::uint8_t> bytes;
     for (std::size_t iteration = 0; iteration < 20'000; ++iteration) {
         const std::size_t size = static_cast<std::size_t>(random() % 1024U);

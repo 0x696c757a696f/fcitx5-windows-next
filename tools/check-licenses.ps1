@@ -57,6 +57,9 @@ foreach ($package in $manifest.packages) {
 $thirdPartyRoot = Join-Path $repoRoot 'third_party'
 $vendoredDirectories = Get-ChildItem -LiteralPath $thirdPartyRoot -Directory
 foreach ($directory in $vendoredDirectories) {
+  if ($directory.Name -eq 'patches') {
+    continue
+  }
   if (-not $names.Contains($directory.Name)) {
     throw "Vendored directory '$($directory.Name)' has no dependency/license record."
   }

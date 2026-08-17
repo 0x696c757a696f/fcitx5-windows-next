@@ -178,6 +178,12 @@ if(BUILD_TESTING)
            COMMAND fcitx5_tsf_key_commit_test
                    $<TARGET_FILE:fcitx5_tsf>
                    $<TARGET_FILE:fcitx5_mock_engine>)
+
+  add_executable(fcitx5_engine_integration_test
+                 tests/integration/fcitx_engine_integration_test.cpp)
+  target_link_libraries(fcitx5_engine_integration_test PRIVATE fcitx5::ipc_client)
+  fcitx_apply_project_options(fcitx5_engine_integration_test)
+  fcitx_apply_binary_hardening(fcitx5_engine_integration_test)
 endif()
 
 if(FCITX_BUILD_FUZZERS)

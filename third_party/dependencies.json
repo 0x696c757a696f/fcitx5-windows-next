@@ -1,4 +1,65 @@
 {
   "schemaVersion": 1,
-  "packages": []
+  "packages": [
+    {
+      "name": "fcitx5",
+      "version": "5.1.14+windows.50a3069",
+      "source": "https://github.com/gaboolic/fcitx5/tree/50a3069a2f1bb8647abef713d98ad10d0713b752",
+      "license": "LGPL-2.1-or-later AND Unicode-DFS-2016"
+    },
+    {
+      "name": "libime",
+      "version": "1.1.14",
+      "source": "https://github.com/fcitx/libime/tree/92bf7144d31d42549d35e5db348dc79100cb2074",
+      "license": "LGPL-2.1-or-later"
+    },
+    {
+      "name": "fcitx5-chinese-addons",
+      "version": "5.1.12",
+      "source": "https://github.com/fcitx/fcitx5-chinese-addons/tree/bc84e3acb022f5b6b5bed254b14ba19d05023645",
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later"
+    },
+    {
+      "name": "llvm-libcxx-runtime",
+      "version": "22.1.8-1",
+      "source": "https://packages.msys2.org/packages/mingw-w64-clang-x86_64-libc%2B%2B",
+      "license": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "name": "zstd-runtime",
+      "version": "1.5.7-2",
+      "source": "https://packages.msys2.org/packages/mingw-w64-clang-x86_64-zstd",
+      "license": "BSD-3-Clause OR GPL-2.0-only"
+    },
+    {
+      "name": "dlfcn-win32-runtime",
+      "version": "1.4.2-1",
+      "source": "https://packages.msys2.org/packages/mingw-w64-clang-x86_64-dlfcn",
+      "license": "MIT"
+    },
+    {
+      "name": "gettext-runtime",
+      "version": "1.0-1",
+      "source": "https://packages.msys2.org/packages/mingw-w64-clang-x86_64-gettext-runtime",
+      "license": "LGPL-2.1-or-later"
+    },
+    {
+      "name": "mingw-w64-winpthreads-runtime",
+      "version": "14.0.0.r262.g5ea8e9fac-1",
+      "source": "https://packages.msys2.org/packages/mingw-w64-clang-x86_64-libwinpthread",
+      "license": "ZPL-2.1"
+    },
+    {
+      "name": "libuv-runtime",
+      "version": "1.52.1-1",
+      "source": "https://packages.msys2.org/packages/mingw-w64-clang-x86_64-libuv",
+      "license": "MIT"
+    },
+    {
+      "name": "libiconv-runtime",
+      "version": "1.19-1",
+      "source": "https://packages.msys2.org/packages/mingw-w64-clang-x86_64-libiconv",
+      "license": "LGPL-2.1-or-later"
+    }
+  ]
 }
