@@ -60,6 +60,12 @@
       "version": "1.19-1",
       "source": "https://packages.msys2.org/packages/mingw-w64-clang-x86_64-libiconv",
       "license": "LGPL-2.1-or-later"
+    },
+    {
+      "name": "tomlplusplus",
+      "version": "3.4.0",
+      "source": "https://github.com/marzer/tomlplusplus/tree/30172438cee64926dc41fdd9c11fb3ba5b2ba9de",
+      "license": "MIT"
     }
   ]
 }

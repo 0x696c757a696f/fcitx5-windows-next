@@ -153,6 +153,7 @@ std::vector<std::uint8_t> handle(std::span<const std::uint8_t> requestBytes,
             request.metadata.sessionId, request.metadata.contextId,
             request.metadata.compositionId, request.metadata.revision + 1};
         response.status = protocol::Status::ok;
+        response.caret = request.caret;
         if (compositionTest && request.virtualKey == 'N') {
             response.handled = true;
             response.preeditUtf8 = "n";

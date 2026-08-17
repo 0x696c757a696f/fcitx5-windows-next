@@ -9,5 +9,8 @@ models and dictionaries. The packaged MSYS2 CLANG64 runtime DLLs provide the C++
 runtime, compression, dynamic loading, gettext/iconv, threading and event-loop
 support. Exact versions and source URLs are in the dependency manifest.
 
+toml++ provides the TOML 1.0 syntax parser used by the typed Windows configuration
+model. Project code remains responsible for unknown-key, enum, range and ownership validation.
+
 Repositories listed only in `docs/reference-baseline.md` remain design and behavior
 references unless they also appear in the dependency manifest.

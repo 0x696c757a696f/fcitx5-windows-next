@@ -236,12 +236,39 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     auto [preedit, caret] = readPreedit(context);
     output.preeditUtf8 = std::move(preedit);
     output.preeditCaretUtf8 = caret;
+    const auto candidateList = context.inputPanel().candidateList();
+    const bool hasCandidates = candidateList && !candidateList->empty();
     auto& composition = impl_->compositions[key];
-    if (!output.preeditUtf8.empty() && composition == 0) {
+    if ((!output.preeditUtf8.empty() || hasCandidates) && composition == 0) {
         composition = impl_->nextCompositionId++;
         if (composition == 0) composition = impl_->nextCompositionId++;
     }
-    if (output.preeditUtf8.empty()) composition = 0;
+    if (output.preeditUtf8.empty() && !hasCandidates) composition = 0;
+    if (hasCandidates) {
+        const int size = std::clamp(candidateList->size(), 0,
+                                    static_cast<int>(protocol::kMaxCandidates));
+        output.candidates.reserve(static_cast<std::size_t>(size));
+        for (int index = 0; index < size; ++index) {
+            const auto& word = candidateList->candidate(index);
+            output.candidates.push_back(protocol::CandidateRecord{
+                (composition << 8U) | static_cast<std::uint64_t>(index + 1),
+                candidateList->label(index).toString(), word.text().toString(),
+                word.comment().toString()});
+        }
+        const int cursor = candidateList->cursorIndex();
+        if (cursor >= 0 && cursor < size) {
+            output.selectedCandidate = static_cast<std::uint32_t>(cursor);
+        }
+        output.candidateTotal = static_cast<std::uint32_t>(size);
+        if (const auto* bulk = candidateList->toBulk(); bulk && bulk->totalSize() >= 0) {
+            output.candidateTotal = static_cast<std::uint32_t>(bulk->totalSize());
+        }
+        if (const auto* pageable = candidateList->toPageable(); pageable) {
+            const int page = pageable->currentPage();
+            if (page >= 0) output.candidatePage = static_cast<std::uint32_t>(page);
+        }
+        output.candidateVisibility = output.preeditUtf8.empty() ? 2U : 1U;
+    }
     output.compositionId = composition;
     output.revision = ++impl_->revisions[key];
     return output;

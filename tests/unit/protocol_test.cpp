@@ -21,14 +21,16 @@ int main() {
     using namespace fcitx::windows::protocol;
 
     const KeyRequest input{Metadata{42, 0, 99, 3, 7, 11, 13},
-                           static_cast<std::uint32_t>('A'), 0};
+                           static_cast<std::uint32_t>('A'), 0,
+                           CaretRect{true, -100, 200, -98, 222, 144}};
     const auto bytes = encode(input);
     FrameView frame;
     KeyRequest output;
     if (!expect(decodeFrame(bytes, frame), "valid frame rejected") ||
         !expect(decode(frame, output), "valid key request rejected") ||
         !expect(output.metadata == input.metadata &&
-                    output.virtualKey == input.virtualKey && output.keyFlags == input.keyFlags,
+                    output.virtualKey == input.virtualKey && output.keyFlags == input.keyFlags &&
+                    output.caret == input.caret,
                 "roundtrip changed key request")) {
         return 1;
     }
@@ -46,8 +48,13 @@ int main() {
         return 1;
     }
 
-    const KeyResponse responseInput{Metadata{43, 42, 99, 3, 7, 11, 14},
-                                    Status::ok, true, "a", "ni", 2};
+    KeyResponse responseInput{Metadata{43, 42, 99, 3, 7, 11, 14},
+                              Status::ok, true, "a", "ni", 2};
+    responseInput.candidates = {{101, "1", "\xe4\xbd\xa0", "n\xc7\x90"}};
+    responseInput.selectedCandidate = 0;
+    responseInput.candidateTotal = 1;
+    responseInput.candidateVisibility = 1;
+    responseInput.caret = input.caret;
     const auto responseBytes = encode(responseInput);
     KeyResponse responseOutput;
     if (!expect(decodeFrame(responseBytes, frame) && decode(frame, responseOutput),
@@ -55,7 +62,11 @@ int main() {
         !expect(responseOutput.metadata == responseInput.metadata && responseOutput.handled &&
                     responseOutput.commitUtf8 == "a" &&
                     responseOutput.preeditUtf8 == "ni" &&
-                    responseOutput.preeditCaretUtf8 == 2,
+                    responseOutput.preeditCaretUtf8 == 2 &&
+                    responseOutput.candidates == responseInput.candidates &&
+                    responseOutput.selectedCandidate == 0 &&
+                    responseOutput.candidateVisibility == 1 &&
+                    responseOutput.caret == responseInput.caret,
                 "roundtrip changed response")) {
         return 1;
     }
@@ -152,6 +163,9 @@ int main() {
                 "oversize commit encoded")) {
         return 1;
     }
+    KeyRequest invalidCaret{Metadata{88, 0, 1, 1, 1, 0, 0}, 'A', 0,
+                            CaretRect{true, 100, 100, 90, 110, 96}};
+    if (!expect(encode(invalidCaret).empty(), "inverted caret rectangle encoded")) return 1;
     if (!expect(encode(KeyResponse{Metadata{1, 1, 1, 1, 1, 0, 0}, Status::ok, true,
                                    {}, std::string(kMaxPreeditUtf8 + 1, 'x'), 0})
                     .empty(),

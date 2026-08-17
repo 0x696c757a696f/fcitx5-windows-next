@@ -1,5 +1,6 @@
 #pragma once
 
+#include "candidate_ui_element.h"
 #include "pipe_client.h"
 
 #include <Windows.h>
@@ -7,6 +8,8 @@
 #include <wrl/client.h>
 
 #include <atomic>
+#include <cstdint>
+#include <unordered_map>
 
 namespace fcitx::windows::tsf {
 
@@ -47,9 +50,13 @@ private:
 
     std::atomic<ULONG> referenceCount_{1};
     Microsoft::WRL::ComPtr<ITfThreadMgr> threadManager_;
+    Microsoft::WRL::ComPtr<ITfUIElementMgr> uiElementManager_;
     TfClientId clientId_{TF_CLIENTID_NULL};
     ipc::PipeClient client_;
     Microsoft::WRL::ComPtr<ITfComposition> composition_;
+    Microsoft::WRL::ComPtr<CandidateUiElement> candidateUiElement_;
+    DWORD candidateUiElementId_{TF_INVALID_UIELEMENTID};
+    std::unordered_map<std::uint64_t, protocol::CaretRect> lastCaretRects_;
 };
 
 } // namespace fcitx::windows::tsf

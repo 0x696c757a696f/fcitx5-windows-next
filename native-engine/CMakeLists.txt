@@ -21,6 +21,7 @@ add_executable(
   "${REPOSITORY_ROOT}/src/ipc/peer_verification.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_runtime.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_dispatcher.cpp"
+  "${REPOSITORY_ROOT}/src/engine/presentation_publisher.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_engine_main.cpp")
 
 set_target_properties(

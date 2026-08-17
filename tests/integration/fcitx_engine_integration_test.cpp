@@ -130,7 +130,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     const auto secondStart = std::chrono::steady_clock::now();
     if (!client.processKey(contextId, 'I', 0, result) || !result.handled ||
-        result.preedit != L"ni" || !result.commit.empty()) {
+        result.preedit != L"ni" || !result.commit.empty() ||
+        result.candidates.empty() || result.candidateVisibility != 1) {
         std::wcerr << L"second pinyin key failed: preedit=" << result.preedit << L'\n';
         return 1;
     }

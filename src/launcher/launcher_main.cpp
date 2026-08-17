@@ -123,6 +123,21 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
     return true;
 }
 
+bool launchUi(const std::wstring& uiPath) {
+    std::wstring command = quote(uiPath) + L" --parent-pid " +
+                           std::to_wstring(GetCurrentProcessId());
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(uiPath.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) return false;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
+
 void stopEngine(EngineProcess& engine) {
     if (!engine.process) return;
     if (engine.stopEvent) SetEvent(engine.stopEvent);
@@ -189,6 +204,7 @@ int wmain(int argc, wchar_t** argv) {
         return 0;
     }
     std::wstring enginePath;
+    std::wstring uiPath;
     std::wstring externalReadyEvent;
     std::wstring launcherReadyEventName;
     std::wstring stopEventName;
@@ -198,6 +214,8 @@ int wmain(int argc, wchar_t** argv) {
         const std::wstring_view argument(argv[index]);
         if (argument == L"--engine" && index + 1 < argc) {
             enginePath = argv[++index];
+        } else if (argument == L"--ui" && index + 1 < argc) {
+            uiPath = argv[++index];
         } else if (argument == L"--no-warmup") {
             warmup = false;
         } else if (argument == L"--engine-ready-event" && index + 1 < argc) {
@@ -209,7 +227,7 @@ int wmain(int argc, wchar_t** argv) {
         } else if (argument == L"--state-file" && index + 1 < argc) {
             stateFilePath = argv[++index];
         } else {
-            std::wcerr << L"Usage: fcitx5-launcher --engine ABSOLUTE_PATH [--no-warmup] "
+            std::wcerr << L"Usage: fcitx5-launcher --engine ABSOLUTE_PATH [--ui ABSOLUTE_PATH] [--no-warmup] "
                           L"[--engine-ready-event NAME] [--ready-event NAME] "
                           L"[--stop-event NAME] [--state-file ABSOLUTE_PATH]\n";
             return 1;
@@ -217,6 +235,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (!absoluteWindowsPath(enginePath) ||
         GetFileAttributesW(enginePath.c_str()) == INVALID_FILE_ATTRIBUTES) return 1;
+    if (!uiPath.empty() && (!absoluteWindowsPath(uiPath) ||
+        GetFileAttributesW(uiPath.c_str()) == INVALID_FILE_ATTRIBUTES)) return 1;
 
     platform::RuntimeIdentity identity;
     platform::PipeSecurity security;
@@ -231,6 +251,10 @@ int wmain(int argc, wchar_t** argv) {
         const BOOL available = WaitNamedPipeW(endpoint.c_str(), 100);
         CloseHandle(mutex);
         return available ? 0 : 3;
+    }
+    if (!uiPath.empty() && !launchUi(uiPath)) {
+        CloseHandle(mutex);
+        return 5;
     }
 
     HANDLE job = CreateJobObjectW(security.attributes(), nullptr);

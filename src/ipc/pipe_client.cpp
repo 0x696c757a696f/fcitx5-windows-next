@@ -209,7 +209,8 @@ bool PipeClient::handshake(std::uint64_t deadline) noexcept {
 }
 
 bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
-                            std::uint32_t keyFlags, KeyResult& result) noexcept {
+                            std::uint32_t keyFlags, KeyResult& result,
+                            const protocol::CaretRect& caret) noexcept {
     result = {};
     try {
         const bool newContext = contexts_.find(contextId) == contexts_.end();
@@ -228,7 +229,7 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
         protocol::KeyRequest request{
             protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
                                contextState.compositionId, contextState.revision},
-            virtualKey, keyFlags};
+            virtualKey, keyFlags, caret};
         std::vector<std::uint8_t> responseBytes;
         if (!transact(protocol::encode(request), responseBytes, deadline)) {
             return false;
@@ -255,6 +256,24 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
         result.compositionId = response.metadata.compositionId;
         result.revision = response.metadata.revision;
         result.handled = response.handled;
+        result.selectedCandidate = response.selectedCandidate;
+        result.candidatePage = response.candidatePage;
+        result.candidateTotal = response.candidateTotal;
+        result.candidateVisibility = response.candidateVisibility;
+        result.caret = response.caret;
+        result.candidates.reserve(response.candidates.size());
+        for (const auto& source : response.candidates) {
+            KeyResult::Candidate candidate;
+            candidate.id = source.id;
+            if (!utf8ToWide(source.labelUtf8, candidate.label) ||
+                !utf8ToWide(source.textUtf8, candidate.text) ||
+                !utf8ToWide(source.commentUtf8, candidate.comment)) {
+                disconnect();
+                result = {};
+                return false;
+            }
+            result.candidates.emplace_back(std::move(candidate));
+        }
         return true;
     } catch (...) {
         disconnect();

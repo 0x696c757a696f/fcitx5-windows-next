@@ -38,6 +38,28 @@ target_compile_features(fcitx5_protocol PUBLIC cxx_std_20)
 target_include_directories(fcitx5_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
 fcitx_apply_project_options(fcitx5_protocol)
 
+add_library(fcitx5_candidate_model STATIC src/candidate/candidate_model.cpp)
+add_library(fcitx5::candidate_model ALIAS fcitx5_candidate_model)
+target_compile_features(fcitx5_candidate_model PUBLIC cxx_std_20)
+target_include_directories(
+  fcitx5_candidate_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/candidate")
+fcitx_apply_project_options(fcitx5_candidate_model)
+
+add_library(fcitx5_config STATIC src/config/config_parser.cpp)
+add_library(fcitx5::config ALIAS fcitx5_config)
+target_compile_features(fcitx5_config PUBLIC cxx_std_20)
+target_include_directories(
+  fcitx5_config
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
+target_include_directories(
+  fcitx5_config SYSTEM
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tomlplusplus/include")
+target_compile_definitions(fcitx5_config PRIVATE TOML_EXCEPTIONS=1)
+fcitx_apply_project_options(fcitx5_config)
+if(MSVC)
+  target_compile_options(fcitx5_config PRIVATE /external:W0 /analyze:external-)
+endif()
+
 add_library(
   fcitx5_platform STATIC
   src/platform/runtime_identity.cpp
@@ -90,15 +112,39 @@ target_link_libraries(
 fcitx_apply_project_options(fcitx5_launcher)
 fcitx_apply_binary_hardening(fcitx5_launcher)
 
+add_library(fcitx5_candidate_layout STATIC src/ui/candidate_layout.cpp)
+add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
+target_compile_features(fcitx5_candidate_layout PUBLIC cxx_std_20)
+target_include_directories(
+  fcitx5_candidate_layout PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
+fcitx_apply_project_options(fcitx5_candidate_layout)
+
+add_executable(fcitx5_ui WIN32 src/ui/ui_main.cpp)
+set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
+target_link_libraries(
+  fcitx5_ui
+  PRIVATE fcitx5::candidate_model fcitx5::candidate_layout fcitx5::config
+          fcitx5::protocol fcitx5::ipc_client fcitx5::platform
+          d2d1 dwrite shell32 ole32)
+fcitx_apply_project_options(fcitx5_ui)
+fcitx_apply_binary_hardening(fcitx5_ui)
+add_custom_command(
+  TARGET fcitx5_ui POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+          "$<TARGET_FILE_DIR:fcitx5_ui>/resources"
+  VERBATIM)
+
 add_library(
   fcitx5_tsf SHARED
   src/tsf/module.cpp
+  src/tsf/candidate_ui_element.cpp
   src/tsf/registration.cpp
   src/tsf/text_service.cpp
   src/tsf/fcitx5-tsf.def)
 set_target_properties(fcitx5_tsf PROPERTIES PREFIX "" OUTPUT_NAME "fcitx5-tsf")
 target_include_directories(fcitx5_tsf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-target_link_libraries(fcitx5_tsf PRIVATE fcitx5::ipc_client uuid ole32 advapi32)
+target_link_libraries(fcitx5_tsf PRIVATE fcitx5::ipc_client uuid ole32 oleaut32 advapi32)
 fcitx_apply_project_options(fcitx5_tsf)
 fcitx_apply_binary_hardening(fcitx5_tsf)
 
@@ -116,6 +162,41 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_protocol_test)
   fcitx_apply_binary_hardening(fcitx5_protocol_test)
   add_test(NAME protocol-contract COMMAND fcitx5_protocol_test)
+
+  add_executable(fcitx5_candidate_model_test tests/unit/candidate_model_test.cpp)
+  target_link_libraries(fcitx5_candidate_model_test PRIVATE fcitx5::candidate_model)
+  fcitx_apply_project_options(fcitx5_candidate_model_test)
+  fcitx_apply_binary_hardening(fcitx5_candidate_model_test)
+  add_test(NAME candidate-model-contract COMMAND fcitx5_candidate_model_test)
+
+  add_executable(fcitx5_config_parser_test tests/unit/config_parser_test.cpp)
+  target_link_libraries(fcitx5_config_parser_test PRIVATE fcitx5::config)
+  fcitx_apply_project_options(fcitx5_config_parser_test)
+  fcitx_apply_binary_hardening(fcitx5_config_parser_test)
+  add_test(NAME config-toml-contract COMMAND fcitx5_config_parser_test)
+  set_tests_properties(config-toml-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+  add_executable(fcitx5_candidate_layout_test tests/unit/candidate_layout_test.cpp)
+  target_link_libraries(fcitx5_candidate_layout_test PRIVATE fcitx5::candidate_layout)
+  fcitx_apply_project_options(fcitx5_candidate_layout_test)
+  fcitx_apply_binary_hardening(fcitx5_candidate_layout_test)
+  add_test(NAME candidate-layout-contract COMMAND fcitx5_candidate_layout_test)
+  add_test(NAME candidate-ui-device-smoke
+           COMMAND fcitx5_ui --self-test --simulate-device-loss)
+
+  add_executable(
+    fcitx5_candidate_ui_element_test
+    tests/unit/candidate_ui_element_test.cpp
+    src/tsf/candidate_ui_element.cpp)
+  target_include_directories(
+    fcitx5_candidate_ui_element_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/ipc")
+  target_link_libraries(
+    fcitx5_candidate_ui_element_test PRIVATE fcitx5::ipc_client ole32 oleaut32)
+  fcitx_apply_project_options(fcitx5_candidate_ui_element_test)
+  fcitx_apply_binary_hardening(fcitx5_candidate_ui_element_test)
+  add_test(NAME tsf-uiless-candidate-contract COMMAND fcitx5_candidate_ui_element_test)
 
   add_executable(fcitx5_runtime_identity_test tests/unit/runtime_identity_test.cpp)
   target_link_libraries(fcitx5_runtime_identity_test PRIVATE fcitx5::platform)
@@ -197,6 +278,18 @@ if(FCITX_BUILD_FUZZERS)
 endif()
 
 if(FCITX_BUILD_BENCHMARKS)
+  add_executable(fcitx5_candidate_render_bench tests/perf/candidate_render_bench.cpp)
+  target_link_libraries(
+    fcitx5_candidate_render_bench
+    PRIVATE fcitx5::candidate_model d2d1 dwrite user32)
+  fcitx_apply_project_options(fcitx5_candidate_render_bench)
+  fcitx_apply_binary_hardening(fcitx5_candidate_render_bench)
+
+  add_executable(fcitx5_candidate_model_bench tests/perf/candidate_model_bench.cpp)
+  target_link_libraries(fcitx5_candidate_model_bench PRIVATE fcitx5::candidate_model)
+  fcitx_apply_project_options(fcitx5_candidate_model_bench)
+  fcitx_apply_binary_hardening(fcitx5_candidate_model_bench)
+
   add_executable(fcitx5_ipc_codec_bench tests/perf/ipc_codec_bench.cpp)
   target_link_libraries(fcitx5_ipc_codec_bench PRIVATE fcitx5::protocol)
   fcitx_apply_project_options(fcitx5_ipc_codec_bench)

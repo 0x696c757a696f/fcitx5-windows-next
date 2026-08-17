@@ -8,14 +8,16 @@
 
 namespace fcitx::windows::protocol {
 
-inline constexpr std::uint32_t kMagic = 0x33574346U; // "FCW3"
-inline constexpr std::uint16_t kVersion = 3;
+inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
+inline constexpr std::uint16_t kVersion = 4;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
 inline constexpr std::size_t kMaxFrameSize = kMaxHotFrameSize;
 inline constexpr std::size_t kMaxCommitUtf8 = 16U * 1024U;
 inline constexpr std::size_t kMaxPreeditUtf8 = 16U * 1024U;
+inline constexpr std::size_t kMaxCandidates = 128;
+inline constexpr std::size_t kMaxCandidateFieldUtf8 = 4096;
 
 enum class MessageType : std::uint16_t {
     helloRequest = 1,
@@ -65,10 +67,31 @@ struct HelloResponse {
     std::uint32_t serverArchitectureBits{};
 };
 
+struct CaretRect {
+    bool valid{};
+    std::int32_t left{};
+    std::int32_t top{};
+    std::int32_t right{};
+    std::int32_t bottom{};
+    std::uint32_t dpi{96};
+
+    bool operator==(const CaretRect&) const = default;
+};
+
 struct KeyRequest {
     Metadata metadata;
     std::uint32_t virtualKey{};
     std::uint32_t keyFlags{};
+    CaretRect caret;
+};
+
+struct CandidateRecord {
+    std::uint64_t id{};
+    std::string labelUtf8;
+    std::string textUtf8;
+    std::string commentUtf8;
+
+    bool operator==(const CandidateRecord&) const = default;
 };
 
 struct KeyResponse {
@@ -78,6 +101,12 @@ struct KeyResponse {
     std::string commitUtf8;
     std::string preeditUtf8;
     std::uint32_t preeditCaretUtf8{};
+    std::vector<CandidateRecord> candidates;
+    std::uint32_t selectedCandidate{UINT32_MAX};
+    std::uint32_t candidatePage{};
+    std::uint32_t candidateTotal{};
+    std::uint8_t candidateVisibility{};
+    CaretRect caret;
 };
 
 enum class LauncherCommand : std::uint32_t {

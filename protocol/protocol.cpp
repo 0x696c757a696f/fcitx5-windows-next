@@ -1,5 +1,6 @@
 #include "protocol.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace fcitx::windows::protocol {
@@ -36,6 +37,8 @@ public:
             bytes_.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffU));
         }
     }
+
+    void appendI32(std::int32_t value) { appendU32(static_cast<std::uint32_t>(value)); }
 
     void appendU16(std::uint16_t value) {
         bytes_.push_back(static_cast<std::uint8_t>(value & 0xffU));
@@ -94,6 +97,13 @@ public:
         return true;
     }
 
+    bool readI32(std::int32_t& value) noexcept {
+        std::uint32_t raw = 0;
+        if (!readU32(raw)) return false;
+        value = static_cast<std::int32_t>(raw);
+        return true;
+    }
+
     bool readU64(std::uint64_t& value) noexcept {
         if (remaining() < 8) return false;
         value = 0;
@@ -135,8 +145,36 @@ bool validKeyMetadata(const Metadata& metadata) noexcept {
     return metadata.engineEpoch != 0 && metadata.contextId != 0;
 }
 
+bool validCaret(const CaretRect& caret) noexcept {
+    if (!caret.valid) {
+        return caret.left == 0 && caret.top == 0 && caret.right == 0 &&
+               caret.bottom == 0 && caret.dpi == 96;
+    }
+    constexpr std::int32_t kCoordinateLimit = 1'000'000;
+    return caret.left >= -kCoordinateLimit && caret.top >= -kCoordinateLimit &&
+           caret.right <= kCoordinateLimit && caret.bottom <= kCoordinateLimit &&
+           caret.right >= caret.left && caret.bottom >= caret.top &&
+           caret.dpi >= 48 && caret.dpi <= 960;
+}
+
 bool validKeyResponsePayload(const KeyResponse& message) noexcept {
-    return message.commitUtf8.size() <= kMaxCommitUtf8 &&
+    if (message.commitUtf8.size() > kMaxCommitUtf8 ||
+        message.preeditUtf8.size() > kMaxPreeditUtf8 ||
+        message.preeditCaretUtf8 > message.preeditUtf8.size() ||
+        message.candidates.size() > kMaxCandidates || message.candidateVisibility > 2 ||
+        (message.selectedCandidate != UINT32_MAX &&
+         message.selectedCandidate >= message.candidates.size()) ||
+        message.candidateTotal < message.candidates.size() || !validCaret(message.caret))
+        return false;
+    if (message.candidateVisibility == 0 && !message.candidates.empty()) return false;
+    return std::all_of(message.candidates.begin(), message.candidates.end(),
+                       [](const CandidateRecord& candidate) {
+                           return candidate.id != 0 &&
+                                  candidate.labelUtf8.size() <= kMaxCandidateFieldUtf8 &&
+                                  candidate.textUtf8.size() <= kMaxCandidateFieldUtf8 &&
+                                  candidate.commentUtf8.size() <= kMaxCandidateFieldUtf8;
+                       }) &&
+           message.commitUtf8.size() <= kMaxCommitUtf8 &&
            message.preeditUtf8.size() <= kMaxPreeditUtf8 &&
            message.preeditCaretUtf8 <= message.preeditUtf8.size();
 }
@@ -230,12 +268,18 @@ std::vector<std::uint8_t> encode(const HelloResponse& message) {
 
 std::vector<std::uint8_t> encode(const KeyRequest& message) {
     if (!validMetadata(MessageType::keyRequest, message.metadata) ||
-        !validKeyMetadata(message.metadata)) {
+        !validKeyMetadata(message.metadata) || !validCaret(message.caret)) {
         return {};
     }
     Writer writer(MessageType::keyRequest, message.metadata);
     writer.appendU32(message.virtualKey);
     writer.appendU32(message.keyFlags);
+    writer.appendU8(message.caret.valid ? 1U : 0U);
+    writer.appendI32(message.caret.left);
+    writer.appendI32(message.caret.top);
+    writer.appendI32(message.caret.right);
+    writer.appendI32(message.caret.bottom);
+    writer.appendU32(message.caret.dpi);
     return writer.finish();
 }
 
@@ -252,6 +296,23 @@ std::vector<std::uint8_t> encode(const KeyResponse& message) {
     writer.appendString(message.commitUtf8);
     writer.appendString(message.preeditUtf8);
     writer.appendU32(message.preeditCaretUtf8);
+    writer.appendU32(static_cast<std::uint32_t>(message.candidates.size()));
+    writer.appendU32(message.selectedCandidate);
+    writer.appendU32(message.candidatePage);
+    writer.appendU32(message.candidateTotal);
+    writer.appendU8(message.candidateVisibility);
+    writer.appendU8(message.caret.valid ? 1U : 0U);
+    writer.appendI32(message.caret.left);
+    writer.appendI32(message.caret.top);
+    writer.appendI32(message.caret.right);
+    writer.appendI32(message.caret.bottom);
+    writer.appendU32(message.caret.dpi);
+    for (const auto& candidate : message.candidates) {
+        writer.appendU64(candidate.id);
+        writer.appendString(candidate.labelUtf8);
+        writer.appendString(candidate.textUtf8);
+        writer.appendString(candidate.commentUtf8);
+    }
     return writer.finish();
 }
 
@@ -314,7 +375,13 @@ bool decode(const FrameView& frame, KeyRequest& message) noexcept {
     if (frame.type != MessageType::keyRequest || !validKeyMetadata(frame.metadata)) return false;
     Reader reader(frame.body);
     message.metadata = frame.metadata;
-    return reader.readU32(message.virtualKey) && reader.readU32(message.keyFlags) && reader.done();
+    std::uint8_t valid = 0;
+    return reader.readU32(message.virtualKey) && reader.readU32(message.keyFlags) &&
+           reader.readU8(valid) && valid <= 1 &&
+           reader.readI32(message.caret.left) && reader.readI32(message.caret.top) &&
+           reader.readI32(message.caret.right) && reader.readI32(message.caret.bottom) &&
+           reader.readU32(message.caret.dpi) && reader.done() &&
+           ((message.caret.valid = valid != 0), validCaret(message.caret));
 }
 
 bool decode(const FrameView& frame, KeyResponse& message) noexcept {
@@ -322,12 +389,36 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
     Reader reader(frame.body);
     std::uint32_t status = 0;
     std::uint8_t handled = 0;
+    std::uint8_t caretValid = 0;
+    std::uint32_t candidateCount = 0;
     message.metadata = frame.metadata;
     try {
         if (!reader.readU32(status) || !reader.readU8(handled) || handled > 1 ||
             !reader.readString(message.commitUtf8) ||
             !reader.readString(message.preeditUtf8) ||
-            !reader.readU32(message.preeditCaretUtf8) || !reader.done() ||
+            !reader.readU32(message.preeditCaretUtf8) ||
+            !reader.readU32(candidateCount) || candidateCount > kMaxCandidates ||
+            !reader.readU32(message.selectedCandidate) ||
+            !reader.readU32(message.candidatePage) ||
+            !reader.readU32(message.candidateTotal) ||
+            !reader.readU8(message.candidateVisibility) ||
+            !reader.readU8(caretValid) || caretValid > 1 ||
+            !reader.readI32(message.caret.left) || !reader.readI32(message.caret.top) ||
+            !reader.readI32(message.caret.right) || !reader.readI32(message.caret.bottom) ||
+            !reader.readU32(message.caret.dpi)) {
+            return false;
+        }
+        message.caret.valid = caretValid != 0;
+        message.candidates.clear();
+        message.candidates.reserve(candidateCount);
+        for (std::uint32_t index = 0; index < candidateCount; ++index) {
+            CandidateRecord candidate;
+            if (!reader.readU64(candidate.id) || !reader.readString(candidate.labelUtf8) ||
+                !reader.readString(candidate.textUtf8) ||
+                !reader.readString(candidate.commentUtf8)) return false;
+            message.candidates.emplace_back(std::move(candidate));
+        }
+        if (!reader.done() ||
             !validKeyResponsePayload(message) ||
             status > static_cast<std::uint32_t>(Status::accessDenied)) {
             return false;

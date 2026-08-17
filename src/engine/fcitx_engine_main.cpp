@@ -1,6 +1,7 @@
 #include "fcitx_dispatcher.h"
 #include "peer_verification.h"
 #include "pipe_security.h"
+#include "presentation_publisher.h"
 #include "protocol.h"
 #include "runtime_identity.h"
 
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <span>
 #include <string>
@@ -103,7 +105,8 @@ std::vector<std::uint8_t> handleRequest(
     std::span<const std::uint8_t> requestBytes, std::uint64_t engineEpoch,
     std::atomic<std::uint64_t>& nextResponseId,
     const platform::ProcessIdentity& clientIdentity, bool& handshakeComplete,
-    std::uint64_t& lastRequestId, engine::FcitxDispatcher& dispatcher) {
+    std::uint64_t& lastRequestId, engine::FcitxDispatcher& dispatcher,
+    engine::PresentationPublisher& presentation) {
     protocol::FrameView frame;
     if (!protocol::decodeFrame(requestBytes, frame) ||
         frame.metadata.requestId <= lastRequestId) {
@@ -147,6 +150,13 @@ std::vector<std::uint8_t> handleRequest(
     response.commitUtf8 = std::move(runtimeResult.commitUtf8);
     response.preeditUtf8 = std::move(runtimeResult.preeditUtf8);
     response.preeditCaretUtf8 = runtimeResult.preeditCaretUtf8;
+    response.candidates = std::move(runtimeResult.candidates);
+    response.selectedCandidate = runtimeResult.selectedCandidate;
+    response.candidatePage = runtimeResult.candidatePage;
+    response.candidateTotal = runtimeResult.candidateTotal;
+    response.candidateVisibility = runtimeResult.candidateVisibility;
+    response.caret = request.caret;
+    presentation.publish(response);
     return protocol::encode(response);
 }
 
@@ -160,6 +170,15 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     }
     engine::FcitxDispatcher dispatcher;
     if (!dispatcher.start()) return 5;
+    std::wstring executable(32'768, L'\0');
+    const DWORD executableSize = GetModuleFileNameW(
+        nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    if (executableSize == 0 || executableSize >= executable.size()) return 6;
+    executable.resize(executableSize);
+    const auto uiExecutable =
+        (std::filesystem::path(executable).parent_path() / "fcitx5-ui.exe").wstring();
+    engine::PresentationPublisher presentation(
+        platform::makeLocalEndpointName(identity, L"presentation"), uiExecutable);
     FILETIME now{};
     GetSystemTimeAsFileTime(&now);
     const std::uint64_t engineEpoch =
@@ -214,7 +233,7 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                     while (readFrame(pipe, request, stopEvent)) {
                         auto response = handleRequest(
                             request, engineEpoch, nextResponseId, clientIdentity,
-                            handshakeComplete, lastRequestId, dispatcher);
+                            handshakeComplete, lastRequestId, dispatcher, presentation);
                         if (response.empty() ||
                             !transfer(pipe, true, response.data(), response.size(), 100,
                                       stopEvent)) {

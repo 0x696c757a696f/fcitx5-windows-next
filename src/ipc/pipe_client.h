@@ -1,6 +1,7 @@
 #pragma once
 
 #include "peer_verification.h"
+#include "protocol.h"
 #include "runtime_identity.h"
 
 #include <Windows.h>
@@ -18,6 +19,12 @@ inline constexpr DWORD kInputDeadlineMilliseconds = 25;
 inline constexpr DWORD kContextStartDeadlineMilliseconds = 100;
 
 struct KeyResult {
+    struct Candidate {
+        std::uint64_t id{};
+        std::wstring label;
+        std::wstring text;
+        std::wstring comment;
+    };
     bool handled{};
     std::uint64_t engineEpoch{};
     std::uint64_t compositionId{};
@@ -25,6 +32,12 @@ struct KeyResult {
     std::wstring commit;
     std::wstring preedit;
     std::uint32_t preeditCaretUtf16{};
+    std::vector<Candidate> candidates;
+    std::uint32_t selectedCandidate{UINT32_MAX};
+    std::uint32_t candidatePage{};
+    std::uint32_t candidateTotal{};
+    std::uint8_t candidateVisibility{};
+    protocol::CaretRect caret;
 };
 
 class PipeClient final {
@@ -38,7 +51,8 @@ public:
     PipeClient& operator=(const PipeClient&) = delete;
 
     [[nodiscard]] bool processKey(std::uint64_t contextId, std::uint32_t virtualKey,
-                                  std::uint32_t keyFlags, KeyResult& result) noexcept;
+                                  std::uint32_t keyFlags, KeyResult& result,
+                                  const protocol::CaretRect& caret = {}) noexcept;
     void disconnect() noexcept;
 
 private:

@@ -11,6 +11,84 @@
 namespace fcitx::windows::tsf {
 namespace {
 
+UINT windowDpi(HWND window) noexcept {
+    using GetDpiForWindowFunction = UINT(WINAPI*)(HWND);
+    const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    const auto getDpiForWindow = user32
+                                     ? reinterpret_cast<GetDpiForWindowFunction>(
+                                           GetProcAddress(user32, "GetDpiForWindow"))
+                                     : nullptr;
+    if (getDpiForWindow && window) {
+        const UINT dpi = getDpiForWindow(window);
+        if (dpi != 0) return dpi;
+    }
+    HDC device = GetDC(window);
+    const int dpi = device ? GetDeviceCaps(device, LOGPIXELSX) : 96;
+    if (device) ReleaseDC(window, device);
+    return dpi > 0 ? static_cast<UINT>(dpi) : 96U;
+}
+
+class CaretEditSession final : public ITfEditSession {
+public:
+    CaretEditSession(ITfContext* context, protocol::CaretRect* caret)
+        : context_(context), caret_(caret) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID interfaceId, void** object) noexcept override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualIID(interfaceId, IID_IUnknown) ||
+            IsEqualIID(interfaceId, IID_ITfEditSession)) {
+            *object = static_cast<ITfEditSession*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override {
+        return referenceCount_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() noexcept override {
+        const ULONG remaining = referenceCount_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE DoEditSession(TfEditCookie editCookie) noexcept override {
+        TF_SELECTION selection{};
+        ULONG fetched = 0;
+        HRESULT result = context_->GetSelection(editCookie, TF_DEFAULT_SELECTION, 1,
+                                                &selection, &fetched);
+        Microsoft::WRL::ComPtr<ITfRange> range;
+        if (FAILED(result) || fetched != 1 || !selection.range) {
+            return FAILED(result) ? result : E_FAIL;
+        }
+        range.Attach(selection.range);
+        Microsoft::WRL::ComPtr<ITfContextView> view;
+        result = context_->GetActiveView(&view);
+        if (FAILED(result) || !view) return FAILED(result) ? result : E_FAIL;
+        RECT rect{};
+        BOOL clipped = FALSE;
+        result = view->GetTextExt(editCookie, range.Get(), &rect, &clipped);
+        if (FAILED(result)) return result;
+        if (rect.left == 0 && rect.top == 0 && rect.right == 0 && rect.bottom == 0) {
+            return TS_E_NOLAYOUT;
+        }
+        HWND window = nullptr;
+        (void)view->GetWnd(&window);
+        *caret_ = protocol::CaretRect{true, rect.left, rect.top, rect.right,
+                                      rect.bottom, windowDpi(window)};
+        return S_OK;
+    }
+
+private:
+    ~CaretEditSession() = default;
+    std::atomic<ULONG> referenceCount_{1};
+    Microsoft::WRL::ComPtr<ITfContext> context_;
+    protocol::CaretRect* caret_{};
+};
+
 class CompositionEditSession final : public ITfEditSession {
 public:
     CompositionEditSession(ITfContext* context, ITfCompositionSink* sink,
@@ -198,6 +276,7 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
         return result;
     }
     threadManager_ = threadManager;
+    (void)threadManager_.As(&uiElementManager_);
     clientId_ = clientId;
     result = keystrokeManager->AdviseKeyEventSink(clientId_, this, TRUE);
     if (FAILED(result)) {
@@ -210,6 +289,13 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
 HRESULT TextService::Deactivate() noexcept {
     client_.disconnect();
     composition_.Reset();
+    if (uiElementManager_ && candidateUiElementId_ != TF_INVALID_UIELEMENTID) {
+        (void)uiElementManager_->EndUIElement(candidateUiElementId_);
+    }
+    candidateUiElementId_ = TF_INVALID_UIELEMENTID;
+    candidateUiElement_.Reset();
+    lastCaretRects_.clear();
+    uiElementManager_.Reset();
     HRESULT result = S_OK;
     if (threadManager_ && clientId_ != TF_CLIENTID_NULL) {
         Microsoft::WRL::ComPtr<ITfKeystrokeMgr> keystrokeManager;
@@ -284,10 +370,50 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
         ipc::KeyResult keyResult;
         const auto contextId = static_cast<std::uint64_t>(
             reinterpret_cast<std::uintptr_t>(context));
+        protocol::CaretRect caret;
+        if (const auto found = lastCaretRects_.find(contextId);
+            found != lastCaretRects_.end()) {
+            caret = found->second;
+        }
+        auto* caretSession = new (std::nothrow) CaretEditSession(context, &caret);
+        if (caretSession) {
+            HRESULT caretResult = E_FAIL;
+            const HRESULT requestCaret = context->RequestEditSession(
+                clientId_, caretSession, TF_ES_SYNC | TF_ES_READ, &caretResult);
+            caretSession->Release();
+            if (SUCCEEDED(requestCaret) && SUCCEEDED(caretResult) && caret.valid) {
+                lastCaretRects_[contextId] = caret;
+            }
+        }
         if (!client_.processKey(contextId, static_cast<std::uint32_t>(virtualKey),
-                                static_cast<std::uint32_t>(keyData), keyResult) ||
+                                static_cast<std::uint32_t>(keyData), keyResult, caret) ||
             !keyResult.handled) {
             return S_OK;
+        }
+        if (uiElementManager_) {
+            if (keyResult.candidateVisibility != 0) {
+                if (!candidateUiElement_) {
+                    candidateUiElement_.Attach(new (std::nothrow) CandidateUiElement());
+                    if (!candidateUiElement_) return E_OUTOFMEMORY;
+                    candidateUiElement_->update(context, keyResult);
+                    BOOL show = TRUE;
+                    const HRESULT begin = uiElementManager_->BeginUIElement(
+                        candidateUiElement_.Get(), &show, &candidateUiElementId_);
+                    if (FAILED(begin)) {
+                        candidateUiElementId_ = TF_INVALID_UIELEMENTID;
+                        candidateUiElement_.Reset();
+                    } else {
+                        (void)candidateUiElement_->Show(show);
+                    }
+                } else {
+                    candidateUiElement_->update(context, keyResult);
+                    (void)uiElementManager_->UpdateUIElement(candidateUiElementId_);
+                }
+            } else if (candidateUiElementId_ != TF_INVALID_UIELEMENTID) {
+                (void)uiElementManager_->EndUIElement(candidateUiElementId_);
+                candidateUiElementId_ = TF_INVALID_UIELEMENTID;
+                candidateUiElement_.Reset();
+            }
         }
         if (keyResult.commit.empty() && keyResult.preedit.empty() && !composition_) {
             *eaten = TRUE;

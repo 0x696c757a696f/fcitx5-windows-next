@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace fcitx {
 class EventLoop;
@@ -25,6 +26,11 @@ struct RuntimeResult {
     std::uint32_t preeditCaretUtf8{};
     std::uint64_t compositionId{};
     std::uint64_t revision{};
+    std::vector<protocol::CandidateRecord> candidates;
+    std::uint32_t selectedCandidate{UINT32_MAX};
+    std::uint32_t candidatePage{};
+    std::uint32_t candidateTotal{};
+    std::uint8_t candidateVisibility{};
 };
 
 class FcitxRuntime final {
