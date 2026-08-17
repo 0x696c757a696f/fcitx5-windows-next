@@ -59,7 +59,8 @@ int wmain(int argc, wchar_t** argv) {
     microseconds.reserve(sampleCount);
     bool succeeded = ready;
     {
-        fcitx::windows::ipc::PipeClient client(pipeName);
+        fcitx::windows::ipc::PipeClient client(
+            pipeName, fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
         fcitx::windows::ipc::KeyResult result;
         for (std::size_t index = 0; succeeded && index < warmupCount + sampleCount; ++index) {
             LARGE_INTEGER started{};

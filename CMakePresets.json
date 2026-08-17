@@ -20,6 +20,9 @@
       "displayName": "Windows x64 development",
       "inherits": "windows-base",
       "architecture": "x64",
+      "cacheVariables": {
+        "FCITX_DEVELOPMENT_PEER_EXCEPTION": "ON"
+      },
       "binaryDir": "${sourceDir}/out/build/windows-x64-dev"
     },
     {
@@ -27,7 +30,32 @@
       "displayName": "Windows x86 development",
       "inherits": "windows-base",
       "architecture": "Win32",
+      "cacheVariables": {
+        "FCITX_DEVELOPMENT_PEER_EXCEPTION": "ON"
+      },
       "binaryDir": "${sourceDir}/out/build/windows-x86-dev"
+    },
+    {
+      "name": "windows-x64-release",
+      "displayName": "Windows x64 release-validation",
+      "inherits": "windows-base",
+      "architecture": "x64",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "FCITX_DEVELOPMENT_PEER_EXCEPTION": "OFF"
+      },
+      "binaryDir": "${sourceDir}/out/build/windows-x64-release"
+    },
+    {
+      "name": "windows-x86-release",
+      "displayName": "Windows x86 release-validation",
+      "inherits": "windows-base",
+      "architecture": "Win32",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "FCITX_DEVELOPMENT_PEER_EXCEPTION": "OFF"
+      },
+      "binaryDir": "${sourceDir}/out/build/windows-x86-release"
     }
   ]
 }

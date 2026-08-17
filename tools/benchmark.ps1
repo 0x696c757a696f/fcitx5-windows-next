@@ -17,7 +17,7 @@ $architectures = if ($Architecture -eq 'all') { @('x64', 'x86') } else { @($Arch
 Push-Location $repoRoot
 try {
   foreach ($targetArchitecture in $architectures) {
-    $preset = "windows-$targetArchitecture-dev"
+    $preset = "windows-$targetArchitecture-release"
     $buildDirectory = Join-Path $repoRoot "out/build/$preset"
     & $cmake --preset $preset -DFCITX_ENABLE_MSVC_ANALYZE=OFF
     if ($LASTEXITCODE -ne 0) { throw "Configure failed for $targetArchitecture." }

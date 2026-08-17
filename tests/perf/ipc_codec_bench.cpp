@@ -18,7 +18,9 @@ int main() {
     std::uint64_t checksum = 0;
     for (std::uint64_t index = 0; index < iterations; ++index) {
         const auto bytes = fcitx::windows::protocol::encode(
-            fcitx::windows::protocol::KeyRequest{index + 1, 7, 'A', 0});
+            fcitx::windows::protocol::KeyRequest{
+                fcitx::windows::protocol::Metadata{index + 1, 0, 1, 1, 7, 0, 0},
+                'A', 0});
         fcitx::windows::protocol::FrameView frame;
         fcitx::windows::protocol::KeyRequest decoded;
         if (!fcitx::windows::protocol::decodeFrame(bytes, frame) ||
@@ -26,7 +28,7 @@ int main() {
             std::cerr << "codec failed during benchmark\n";
             return 1;
         }
-        checksum += decoded.requestId;
+        checksum += decoded.metadata.requestId;
     }
     QueryPerformanceCounter(&finished);
     const double elapsedSeconds =

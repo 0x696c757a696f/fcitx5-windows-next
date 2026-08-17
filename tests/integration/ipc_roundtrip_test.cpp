@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -21,6 +22,14 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     const std::wstring uniqueSuffix = std::to_wstring(GetCurrentProcessId());
+    std::wstring executablePath(32768, L'\0');
+    const DWORD executableLength = GetModuleFileNameW(
+        nullptr, executablePath.data(), static_cast<DWORD>(executablePath.size()));
+    if (executableLength == 0 || executableLength == executablePath.size()) {
+        std::cerr << "failed to resolve test executable path\n";
+        return 1;
+    }
+    executablePath.resize(executableLength);
 
     {
         fcitx::windows::ipc::PipeClient missingClient(
@@ -67,7 +76,8 @@ int wmain(int argc, wchar_t** argv) {
             WaitForSingleObject(releaseEvent, 1000);
         });
 
-        fcitx::windows::ipc::PipeClient stalledClient(stalledPipeName);
+        fcitx::windows::ipc::PipeClient stalledClient(
+            stalledPipeName, fcitx::windows::ipc::PeerPolicy::exact(executablePath));
         fcitx::windows::ipc::KeyResult stalledResult;
         const auto started = GetTickCount64();
         const bool processed = stalledClient.processKey(1, 'A', 0, stalledResult);
@@ -111,7 +121,8 @@ int wmain(int argc, wchar_t** argv) {
 
     int resultCode = 0;
     {
-        fcitx::windows::ipc::PipeClient client(pipeName);
+        fcitx::windows::ipc::PipeClient client(
+            pipeName, fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
         fcitx::windows::ipc::KeyResult result;
         if (!available || !client.processKey(7, 'A', 0, result) || !result.handled ||
             result.commit != L"a") {

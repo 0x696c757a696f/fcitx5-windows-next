@@ -17,16 +17,17 @@ $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   throw 'TSF profile registration requires an elevated PowerShell session. Re-run this script as Administrator.'
 }
-$x64Dll = Join-Path $repoRoot "out/build/windows-x64-dev/$Configuration/fcitx5-tsf.dll"
-$x86Dll = Join-Path $repoRoot "out/build/windows-x86-dev/$Configuration/fcitx5-tsf.dll"
+
+$sourceX64Dll = Join-Path $repoRoot "out/build/windows-x64-dev/$Configuration/fcitx5-tsf.dll"
+$sourceX86Dll = Join-Path $repoRoot "out/build/windows-x86-dev/$Configuration/fcitx5-tsf.dll"
 $x64Regsvr = Join-Path $env:SystemRoot 'System32/regsvr32.exe'
 $x86Regsvr = Join-Path $env:SystemRoot 'SysWOW64/regsvr32.exe'
 $clsid = '{3A21B9E2-4F47-4C36-8BFA-91D7D3B3E901}'
 $classKeyPath = "Software\Classes\CLSID\$clsid\InprocServer32"
 
-foreach ($path in @($x64Dll, $x86Dll, $x64Regsvr, $x86Regsvr)) {
+foreach ($path in @($x64Regsvr, $x86Regsvr)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-    throw "Required registration artifact is missing: $path"
+    throw "Required registration tool is missing: $path"
   }
 }
 
@@ -64,29 +65,58 @@ function Get-ComServerPath {
   }
 }
 
-function Assert-ComRegistration {
-  param([Parameter(Mandatory)] [bool] $Present)
-
-  $registrations = @(
-    [pscustomobject]@{ Name = 'x64'; View = [Microsoft.Win32.RegistryView]::Registry64; Expected = $x64Dll }
-    [pscustomobject]@{ Name = 'x86'; View = [Microsoft.Win32.RegistryView]::Registry32; Expected = $x86Dll }
+function Assert-PathUnderRoot {
+  param(
+    [Parameter(Mandatory)] [string] $Path,
+    [Parameter(Mandatory)] [string[]] $AllowedRoots
   )
-  foreach ($registration in $registrations) {
+
+  $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+  foreach ($root in $AllowedRoots) {
+    $resolvedRoot = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    if ($resolvedPath.StartsWith($resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+      return
+    }
+  }
+  throw "Refusing to unregister a COM server outside this repository's development paths: $Path"
+}
+
+function Assert-ComRegistration {
+  param(
+    [Parameter(Mandatory)] [string] $ExpectedX64,
+    [Parameter(Mandatory)] [string] $ExpectedX86
+  )
+
+  foreach ($registration in @(
+      [pscustomobject]@{ Name = 'x64'; View = [Microsoft.Win32.RegistryView]::Registry64; Expected = $ExpectedX64 }
+      [pscustomobject]@{ Name = 'x86'; View = [Microsoft.Win32.RegistryView]::Registry32; Expected = $ExpectedX86 }
+    )) {
     $actual = Get-ComServerPath -View $registration.View
-    if ($Present -and -not [string]::Equals(
+    if (-not [string]::Equals(
         $actual,
         $registration.Expected,
         [StringComparison]::OrdinalIgnoreCase
       )) {
       throw "$($registration.Name) COM registration mismatch. Expected '$($registration.Expected)', found '$actual'."
     }
-    if (-not $Present -and $actual) {
-      throw "$($registration.Name) COM registration remains at '$actual'."
-    }
   }
 }
 
 if ($Action -eq 'register') {
+  foreach ($path in @($sourceX64Dll, $sourceX86Dll)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+      throw "Required registration artifact is missing: $path"
+    }
+  }
+
+  $deploymentId = '{0:yyyyMMdd-HHmmss}-{1}' -f (Get-Date).ToUniversalTime(), ([guid]::NewGuid().ToString('N'))
+  $deploymentRoot = Join-Path $repoRoot "out/dev-registration/$deploymentId"
+  $x64Dll = Join-Path $deploymentRoot 'x64/fcitx5-tsf.dll'
+  $x86Dll = Join-Path $deploymentRoot 'x86/fcitx5-tsf.dll'
+  New-Item -ItemType Directory -Path (Split-Path -Parent $x64Dll), (Split-Path -Parent $x86Dll) | Out-Null
+  Copy-Item -LiteralPath $sourceX64Dll -Destination $x64Dll
+  Copy-Item -LiteralPath $sourceX86Dll -Destination $x86Dll
+
   $targets = @(
     [pscustomobject]@{ Executable = $x64Regsvr; Dll = $x64Dll }
     [pscustomobject]@{ Executable = $x86Regsvr; Dll = $x86Dll }
@@ -97,7 +127,7 @@ if ($Action -eq 'register') {
       Invoke-Regsvr -Executable $target.Executable -Dll $target.Dll -Unregister $false
       $completed.Add($target)
     }
-    Assert-ComRegistration -Present $true
+    Assert-ComRegistration -ExpectedX64 $x64Dll -ExpectedX86 $x86Dll
   } catch {
     for ($index = $completed.Count - 1; $index -ge 0; --$index) {
       try {
@@ -108,22 +138,40 @@ if ($Action -eq 'register') {
     }
     throw
   }
+  Write-Host "Developer TSF registration completed from isolated deployment '$deploymentRoot'."
 } else {
-  $unregisterErrors = [Collections.Generic.List[string]]::new()
-  foreach ($target in @(
-      [pscustomobject]@{ Executable = $x64Regsvr; Dll = $x64Dll }
-      [pscustomobject]@{ Executable = $x86Regsvr; Dll = $x86Dll }
-    )) {
-    try {
-      Invoke-Regsvr -Executable $target.Executable -Dll $target.Dll -Unregister $true
-    } catch {
-      $unregisterErrors.Add($_.Exception.Message)
+  $allowedRoots = @(
+    (Join-Path $repoRoot 'out/dev-registration'),
+    (Join-Path $repoRoot 'out/build/windows-x64-dev'),
+    (Join-Path $repoRoot 'out/build/windows-x86-dev')
+  )
+  $targets = @(
+    [pscustomobject]@{
+      Name = 'x64'
+      View = [Microsoft.Win32.RegistryView]::Registry64
+      Executable = $x64Regsvr
+      Dll = Get-ComServerPath -View ([Microsoft.Win32.RegistryView]::Registry64
+      )
+    }
+    [pscustomobject]@{
+      Name = 'x86'
+      View = [Microsoft.Win32.RegistryView]::Registry32
+      Executable = $x86Regsvr
+      Dll = Get-ComServerPath -View ([Microsoft.Win32.RegistryView]::Registry32
+      )
+    }
+  )
+  foreach ($target in $targets) {
+    if (-not $target.Dll) { continue }
+    Assert-PathUnderRoot -Path $target.Dll -AllowedRoots $allowedRoots
+    if (-not (Test-Path -LiteralPath $target.Dll -PathType Leaf)) {
+      throw "$($target.Name) registered DLL is missing and cannot self-unregister: $($target.Dll)"
+    }
+    Invoke-Regsvr -Executable $target.Executable -Dll $target.Dll -Unregister $true
+    $remaining = Get-ComServerPath -View $target.View
+    if ($remaining) {
+      throw "$($target.Name) COM registration remains at '$remaining'."
     }
   }
-  Assert-ComRegistration -Present $false
-  foreach ($message in $unregisterErrors) {
-    Write-Warning $message
-  }
+  Write-Host 'Developer TSF unregistration completed for x64 and x86.'
 }
-
-Write-Host "Developer TSF $Action completed for x64 and x86."

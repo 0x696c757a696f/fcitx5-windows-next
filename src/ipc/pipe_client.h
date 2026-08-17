@@ -1,5 +1,8 @@
 #pragma once
 
+#include "peer_verification.h"
+#include "runtime_identity.h"
+
 #include <Windows.h>
 
 #include <atomic>
@@ -10,7 +13,6 @@
 
 namespace fcitx::windows::ipc {
 
-inline constexpr wchar_t kDefaultPipeName[] = L"\\\\.\\pipe\\Fcitx5WindowsNext.v2";
 inline constexpr DWORD kInputDeadlineMilliseconds = 25;
 
 struct KeyResult {
@@ -21,7 +23,8 @@ struct KeyResult {
 class PipeClient final {
 public:
     PipeClient();
-    explicit PipeClient(std::wstring pipeName);
+    explicit PipeClient(std::wstring pipeName,
+                        PeerPolicy peerPolicy = PeerPolicy::development());
     ~PipeClient();
 
     PipeClient(const PipeClient&) = delete;
@@ -41,9 +44,12 @@ private:
                                 std::uint64_t deadline) noexcept;
 
     std::wstring pipeName_;
+    PeerPolicy peerPolicy_;
+    platform::RuntimeIdentity identity_;
     HANDLE pipe_{INVALID_HANDLE_VALUE};
     bool handshakeComplete_{};
     std::uint64_t engineEpoch_{};
+    std::uint32_t sessionId_{};
     std::atomic<std::uint64_t> nextRequestId_{1};
 };
 

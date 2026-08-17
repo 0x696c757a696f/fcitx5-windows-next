@@ -1,5 +1,6 @@
 #include "pipe_client.h"
 
+#include "launcher_client.h"
 #include "protocol.h"
 
 #include <algorithm>
@@ -37,9 +38,20 @@ bool utf8ToWide(std::string_view input, std::wstring& output) {
 
 } // namespace
 
-PipeClient::PipeClient() : PipeClient(kDefaultPipeName) {}
+PipeClient::PipeClient()
+    : peerPolicy_(PeerPolicy::development()) {
+    if (platform::queryCurrentIdentity(identity_)) {
+        pipeName_ = platform::makeLocalEndpointName(identity_, L"engine");
+        sessionId_ = identity_.sessionId;
+    }
+}
 
-PipeClient::PipeClient(std::wstring pipeName) : pipeName_(std::move(pipeName)) {}
+PipeClient::PipeClient(std::wstring pipeName, PeerPolicy peerPolicy)
+    : pipeName_(std::move(pipeName)), peerPolicy_(std::move(peerPolicy)) {
+    if (platform::queryCurrentIdentity(identity_)) {
+        sessionId_ = identity_.sessionId;
+    }
+}
 
 PipeClient::~PipeClient() { disconnect(); }
 
@@ -57,12 +69,17 @@ bool PipeClient::connect(std::uint64_t deadline) noexcept {
     if (pipe_ != INVALID_HANDLE_VALUE) {
         return true;
     }
-    if (remainingMilliseconds(deadline) == 0) {
+    if (remainingMilliseconds(deadline) == 0 || pipeName_.empty() ||
+        !identity_.mayUseUserEngine()) {
         return false;
     }
     pipe_ = CreateFileW(pipeName_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
                         FILE_FLAG_OVERLAPPED, nullptr);
     if (pipe_ == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    if (!verifyPipeServer(pipe_, identity_, peerPolicy_)) {
+        disconnect();
         return false;
     }
     return true;
@@ -125,7 +142,8 @@ bool PipeClient::transact(const std::vector<std::uint8_t>& request,
     }
     protocol::MessageType type{};
     std::uint32_t bodySize = 0;
-    if (!protocol::decodeHeader(header, type, bodySize)) {
+    protocol::Metadata metadata;
+    if (!protocol::decodeHeader(header, type, bodySize, metadata)) {
         disconnect();
         return false;
     }
@@ -149,8 +167,11 @@ bool PipeClient::handshake(std::uint64_t deadline) noexcept {
         if (handshakeComplete_) {
             return true;
         }
+        if (sessionId_ == 0) return false;
         const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
-        protocol::HelloRequest request{requestId, static_cast<std::uint32_t>(sizeof(void*) * 8)};
+        protocol::HelloRequest request{
+            protocol::Metadata{requestId, 0, 0, sessionId_, 0, 0, 0},
+            static_cast<std::uint32_t>(sizeof(void*) * 8), GetCurrentProcessId()};
         std::vector<std::uint8_t> responseBytes;
         if (!transact(protocol::encode(request), responseBytes, deadline)) {
             return false;
@@ -158,11 +179,12 @@ bool PipeClient::handshake(std::uint64_t deadline) noexcept {
         protocol::FrameView frame;
         protocol::HelloResponse response;
         if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response) ||
-            response.responseTo != requestId || response.status != protocol::Status::ok) {
+            response.metadata.responseTo != requestId ||
+            response.metadata.sessionId != sessionId_ || response.status != protocol::Status::ok) {
             disconnect();
             return false;
         }
-        engineEpoch_ = response.engineEpoch;
+        engineEpoch_ = response.metadata.engineEpoch;
         handshakeComplete_ = true;
         return true;
     } catch (...) {
@@ -176,12 +198,17 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
     result = {};
     try {
         const std::uint64_t deadline = GetTickCount64() + kInputDeadlineMilliseconds;
+        if (!connect(deadline)) {
+            (void)requestLauncherStart(identity_, deadline, PeerPolicy::development());
+        }
         if (!connect(deadline) || !handshake(deadline)) {
             disconnect();
             return false;
         }
         const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
-        protocol::KeyRequest request{requestId, contextId, virtualKey, keyFlags};
+        protocol::KeyRequest request{
+            protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId, 0, 0},
+            virtualKey, keyFlags};
         std::vector<std::uint8_t> responseBytes;
         if (!transact(protocol::encode(request), responseBytes, deadline)) {
             return false;
@@ -189,7 +216,13 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
         protocol::FrameView frame;
         protocol::KeyResponse response;
         if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response) ||
-            response.responseTo != requestId || response.status != protocol::Status::ok ||
+            response.metadata.responseTo != requestId ||
+            response.metadata.engineEpoch != engineEpoch_ ||
+            response.metadata.sessionId != sessionId_ ||
+            response.metadata.contextId != contextId ||
+            response.metadata.compositionId != request.metadata.compositionId ||
+            response.metadata.revision < request.metadata.revision ||
+            response.status != protocol::Status::ok ||
             !utf8ToWide(response.commitUtf8, result.commit)) {
             disconnect();
             return false;
