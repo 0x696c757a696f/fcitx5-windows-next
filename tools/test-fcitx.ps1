@@ -29,7 +29,7 @@ $previousChere = [Environment]::GetEnvironmentVariable('CHERE_INVOKING', 'Proces
 try {
   [Environment]::SetEnvironmentVariable('MSYSTEM', 'CLANG64', 'Process')
   [Environment]::SetEnvironmentVariable('CHERE_INVOKING', '1', 'Process')
-  & $bash -lc "cmake -S '$repoMsys/native-engine' -B '$repoMsys/out/build/native-engine' -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX='$stageMsys' -DCMAKE_PREFIX_PATH='$stageMsys'; cmake --build '$repoMsys/out/build/native-engine' --parallel; cmake --install '$repoMsys/out/build/native-engine'"
+  & $bash -lc "set -e; cmake -S '$repoMsys/native-engine' -B '$repoMsys/out/build/native-engine' -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX='$stageMsys' -DCMAKE_PREFIX_PATH='$stageMsys'; cmake --build '$repoMsys/out/build/native-engine' --parallel; cmake --install '$repoMsys/out/build/native-engine'"
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
   [Environment]::SetEnvironmentVariable('MSYSTEM', $previousMsystem, 'Process')

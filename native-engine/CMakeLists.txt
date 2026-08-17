@@ -9,9 +9,25 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(FCITX_DEVELOPMENT_PEER_EXCEPTION
        "Allow explicitly marked development peers" OFF)
 
+set(FCITX_RELEASE_CHANNEL "stable" CACHE STRING "Release identity: stable, beta, or nightly")
+set_property(CACHE FCITX_RELEASE_CHANNEL PROPERTY STRINGS stable beta nightly)
+if(FCITX_RELEASE_CHANNEL STREQUAL "stable")
+  set(FCITX_RELEASE_CHANNEL_INDEX 0)
+elseif(FCITX_RELEASE_CHANNEL STREQUAL "beta")
+  set(FCITX_RELEASE_CHANNEL_INDEX 1)
+elseif(FCITX_RELEASE_CHANNEL STREQUAL "nightly")
+  set(FCITX_RELEASE_CHANNEL_INDEX 2)
+else()
+  message(FATAL_ERROR "FCITX_RELEASE_CHANNEL must be stable, beta, or nightly")
+endif()
+
 find_package(Fcitx5Core 5.1.14 REQUIRED CONFIG)
 
 set(REPOSITORY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+configure_file(
+  "${REPOSITORY_ROOT}/cmake/release_identity.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/fcitx5_windows/release_identity.h"
+  @ONLY)
 
 add_executable(
   fcitx5_engine
@@ -35,6 +51,7 @@ target_link_options(fcitx5_engine PRIVATE -municode)
 target_include_directories(
   fcitx5_engine
   PRIVATE "${REPOSITORY_ROOT}/protocol"
+          "${CMAKE_CURRENT_BINARY_DIR}/generated"
           "${REPOSITORY_ROOT}/src/platform"
           "${REPOSITORY_ROOT}/src/ipc"
           "${REPOSITORY_ROOT}/src/engine")

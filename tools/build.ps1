@@ -166,6 +166,7 @@ try {
           -Architecture $targetArchitecture -Configuration $Configuration
       }
       & (Join-Path $PSScriptRoot 'test-fcitx.ps1') -Configuration Release
+      if ($LASTEXITCODE -ne 0) { throw "Real Fcitx acceptance failed with exit code $LASTEXITCODE." }
       & (Join-Path $PSScriptRoot 'check-secrets.ps1')
       & (Join-Path $PSScriptRoot 'check-licenses.ps1')
       & (Join-Path $PSScriptRoot 'check-dependencies.ps1')
