@@ -1,7 +1,8 @@
 function(fcitx_apply_project_options target)
+  target_compile_features(${target} PRIVATE cxx_std_20)
   target_compile_definitions(
     ${target}
-    PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0601)
 
   if(MSVC)
     target_compile_options(
@@ -25,7 +26,7 @@ function(fcitx_apply_project_options target)
   endif()
 endfunction()
 
-function(fcitx_apply_executable_hardening target)
+function(fcitx_apply_binary_hardening target)
   if(MSVC)
     target_compile_options(${target} PRIVATE /guard:cf)
     target_link_options(

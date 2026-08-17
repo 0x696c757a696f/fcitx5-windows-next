@@ -2,7 +2,7 @@
 
 This repository implements the native Windows frontend and distribution layer for Fcitx5. The architecture keeps the in-process TSF DLL small and moves Fcitx, addons, candidate rendering, configuration, and package management into explicit out-of-process boundaries.
 
-The project follows the frozen engineering specification v1.4. Work advances by accepted vertical phases; the current implementation baseline is Phase 1A.
+The project follows the frozen engineering specification v1.4. Work advances by accepted vertical phases; Phase 1B is implemented and awaiting its elevated Notepad acceptance check.
 
 ## Build
 
@@ -28,4 +28,6 @@ Reference pins, source-audit findings, and the reason for the process boundaries
 
 ## Current scope
 
-Phase 1A intentionally contains only the durable common version target needed to prove clean x86/x64 builds. TSF, IPC, mock engine, and commit behavior enter together as the Phase 1B vertical slice. Candidate UI, configuration, packaging, and updating remain out of scope until their specified phases.
+Phase 1B contains the first vertical slice: x86/x64 TSF DLLs, a strict versioned protocol, bounded named-pipe IPC, and a separate mock engine that can commit text. Candidate UI, configuration, packaging, and updating remain out of scope until their specified phases.
+
+The automated acceptance evidence and the one remaining elevated desktop procedure are recorded in [docs/phase-1b-acceptance.md](docs/phase-1b-acceptance.md).

@@ -136,7 +136,8 @@ try {
       & (Join-Path $PSScriptRoot 'check-licenses.ps1') -SelfTest
       & (Join-Path $PSScriptRoot 'check-licenses.ps1')
       & (Join-Path $PSScriptRoot 'check-dependencies.ps1')
-      Write-Host 'All Phase 1A tests and policy checks passed.'
+      & (Join-Path $PSScriptRoot 'check-text-format.ps1')
+      Write-Host 'All build, test, and policy checks passed.'
     }
   }
 } finally {
