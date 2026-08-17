@@ -1,0 +1,33 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "FCITX_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "windows-x64-dev",
+      "displayName": "Windows x64 development",
+      "inherits": "windows-base",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/windows-x64-dev"
+    },
+    {
+      "name": "windows-x86-dev",
+      "displayName": "Windows x86 development",
+      "inherits": "windows-base",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/out/build/windows-x86-dev"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+/out/
+/.vs/
+/.idea/
+*.user
+*.VC.db
+*.VC.opendb

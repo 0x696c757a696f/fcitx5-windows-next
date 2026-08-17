@@ -1,0 +1,17 @@
+#pragma once
+
+#include <string_view>
+
+namespace fcitx::windows {
+
+inline constexpr std::string_view kVersion = "@PROJECT_VERSION@";
+
+enum class Architecture {
+    x86,
+    x64,
+};
+
+[[nodiscard]] std::string_view version() noexcept;
+[[nodiscard]] Architecture architecture() noexcept;
+
+} // namespace fcitx::windows
