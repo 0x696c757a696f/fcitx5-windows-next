@@ -19,7 +19,8 @@ int main() {
         "format_version = 2\n",
         "format_version = 1\nunknown = true\n",
         "format_version = 1\n[candidate]\nopacity = 1.01\n",
-        "format_version = 1\n[candidate]\npage_size = 7\n",
+        "format_version = 1\n[candidate]\npage_size = 0\n",
+        "format_version = 1\n[candidate]\npage_size = 10\n",
         "format_version = 1\n[candidate.colors]\nbackground = 'red'\n",
         "format_version = 1\n[fonts.candidate]\nfamilies = []\n",
         "format_version = 1\n[appearance]\ntheme = '../escape'\n",
@@ -33,6 +34,29 @@ int main() {
     if (!parseConfig("format_version = 1\n[candidate]\norientation = 'horizontal'\n", config,
                      error) ||
         config.orientation != Orientation::horizontal) {
+        return 1;
+    }
+    if (!parseConfig("format_version = 1\n[candidate]\npage_size = 7\n", config, error) ||
+        !config.candidatePageSize || *config.candidatePageSize != 7) {
+        std::cerr << "valid page_size rejected: " << error.message << '\n';
+        return 1;
+    }
+    if (!parseConfig("format_version = 1\n[input_methods]\nenabled = [\"pinyin\", \"wbx\"]\n"
+                     "default = \"wbx\"\n",
+                     config, error) ||
+        config.enabledInputMethods.size() != 2 ||
+        config.enabledInputMethods[0] != "pinyin" ||
+        config.enabledInputMethods[1] != "wbx" ||
+        config.defaultInputMethod != "wbx") {
+        std::cerr << "input_methods rejected: " << error.message << '\n';
+        return 1;
+    }
+    if (!parseConfig("format_version = 1\n[hotkeys]\ntoggle_input_method = \"Ctrl+Space\"\n"
+                     "next_input_method = \"Ctrl+Shift\"\n",
+                     config, error) ||
+        config.hotkeyToggleInputMethod != "Ctrl+Space" ||
+        config.hotkeyNextInputMethod != "Ctrl+Shift") {
+        std::cerr << "hotkeys rejected: " << error.message << '\n';
         return 1;
     }
     std::ifstream themeFile("resources/themes/default/theme.toml", std::ios::binary);

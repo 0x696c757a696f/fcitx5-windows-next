@@ -151,7 +151,9 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
         return setError(error, "config.toml exceeds 256 KiB");
     try {
         const toml::table root = toml::parse(text);
-        if (!allowed(root, {"format_version", "appearance", "candidate", "fonts"}, "", error))
+        if (!allowed(root, {"format_version", "appearance", "candidate", "input_methods",
+                            "hotkeys", "fonts"},
+                     "", error))
             return false;
         const auto version = root["format_version"].value<std::int64_t>();
         if (!version || *version != 1)
@@ -184,12 +186,13 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
 
         if (const auto* candidate = root["candidate"].as_table()) {
             if (!allowed(*candidate,
-                         {"orientation", "scroll_mode", "max_width_dip", "opacity", "geometry",
-                          "label", "colors"},
+                         {"orientation", "page_size", "scroll_mode", "max_width_dip", "opacity",
+                          "geometry", "label", "colors"},
                          "candidate.", error))
                 return false;
             std::optional<std::string> orientation;
             if (!optionalValue(*candidate, "orientation", orientation, error) ||
+                !optionalValue(*candidate, "page_size", output.candidatePageSize, error) ||
                 !optionalValue(*candidate, "max_width_dip", output.maxWidth, error) ||
                 !optionalValue(*candidate, "scroll_mode", output.scrollMode, error) ||
                 !optionalValue(*candidate, "opacity", output.opacity, error))
@@ -202,7 +205,8 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
                 else
                     return setError(error, "candidate.orientation must be vertical or horizontal");
             }
-            if (!ranged(output.maxWidth, 160, 2048, "candidate.max_width_dip", error) ||
+            if (!ranged(output.candidatePageSize, 1, 9, "candidate.page_size", error) ||
+                !ranged(output.maxWidth, 160, 2048, "candidate.max_width_dip", error) ||
                 !ranged(output.opacity, 0.2, 1.0, "candidate.opacity", error))
                 return false;
 
@@ -298,6 +302,44 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
         } else if (root.contains("candidate"))
             return setError(error, "candidate must be a table");
 
+        if (const auto* inputMethods = root["input_methods"].as_table()) {
+            if (!allowed(*inputMethods, {"enabled", "default"}, "input_methods.", error))
+                return false;
+            if (const auto* enabled = (*inputMethods)["enabled"].as_array()) {
+                for (const auto& item : *enabled) {
+                    const auto value = item.value<std::string>();
+                    if (!value || value->empty() || value->find(' ') != std::string::npos)
+                        return setError(error, "input_methods.enabled must be non-empty ids",
+                                        &item.source());
+                    if (std::find(output.enabledInputMethods.begin(),
+                                  output.enabledInputMethods.end(),
+                                  *value) == output.enabledInputMethods.end())
+                        output.enabledInputMethods.push_back(*value);
+                }
+                if (output.enabledInputMethods.empty())
+                    return setError(error, "input_methods.enabled must not be empty");
+            }
+            if (!optionalValue(*inputMethods, "default", output.defaultInputMethod, error))
+                return false;
+            if (output.defaultInputMethod && !output.enabledInputMethods.empty() &&
+                std::find(output.enabledInputMethods.begin(), output.enabledInputMethods.end(),
+                          *output.defaultInputMethod) == output.enabledInputMethods.end())
+                return setError(error, "input_methods.default must be in enabled");
+        } else if (root.contains("input_methods"))
+            return setError(error, "input_methods must be a table");
+
+        if (const auto* hotkeys = root["hotkeys"].as_table()) {
+            if (!allowed(*hotkeys, {"toggle_input_method", "next_input_method"}, "hotkeys.",
+                         error))
+                return false;
+            if (!optionalValue(*hotkeys, "toggle_input_method", output.hotkeyToggleInputMethod,
+                               error) ||
+                !optionalValue(*hotkeys, "next_input_method", output.hotkeyNextInputMethod,
+                               error))
+                return false;
+        } else if (root.contains("hotkeys"))
+            return setError(error, "hotkeys must be a table");
+
         if (const auto* fonts = root["fonts"].as_table()) {
             if (!allowed(*fonts, {"ui", "candidate", "annotation", "monospace"}, "fonts.", error))
                 return false;
@@ -334,6 +376,8 @@ theme = "builtin:default"
 [candidate]
 # vertical（纵向，默认）或 horizontal（横向）。
 orientation = "vertical"
+# 每页候选数，范围 1–9。仅对支持分页的引擎生效。
+page_size = 5
 # 卷轴模式：引擎提供 BulkCandidateList 时，方向键/PageUp/PageDown/Home/End
 # 在六行六列视口内连续滚动候选（对齐 fcitx5-macos 的 ScrollConfig）。
 scroll_mode = true
@@ -341,6 +385,18 @@ scroll_mode = true
 max_width_dip = 860.0
 # 整体不透明度，范围 0.20–1.00。
 opacity = 1.0
+
+[input_methods]
+# 启用的输入法（有序，顺序即切换顺序）。可用的 id 见 --get-input-methods。
+enabled = ["pinyin", "rime", "wbx"]
+# 默认（激活）输入法。
+default = "pinyin"
+
+[hotkeys]
+# 中英文切换：在当前输入法与 inactive（直接英文）之间切换。
+toggle_input_method = "Ctrl+Space"
+# 下一个输入法（按 enabled 顺序循环）。
+next_input_method = "Ctrl+Shift"
 
 [candidate.geometry]
 # 以下尺寸均为 DIP，会随显示器 DPI 自动缩放。

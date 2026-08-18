@@ -46,6 +46,11 @@ struct Config {
     std::optional<bool> scrollMode;
     std::optional<double> maxWidth;
     std::optional<double> opacity;
+    std::optional<int> candidatePageSize;
+    std::vector<std::string> enabledInputMethods;
+    std::optional<std::string> defaultInputMethod;
+    std::optional<std::string> hotkeyToggleInputMethod;
+    std::optional<std::string> hotkeyNextInputMethod;
     Geometry geometry;
     Label label;
     Font uiFont;

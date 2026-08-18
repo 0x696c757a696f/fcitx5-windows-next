@@ -1,4 +1,5 @@
 #include "fcitx_runtime.h"
+#include <fcitx5_windows/release_identity.h>
 
 #include <fcitx-utils/capabilityflags.h>
 #include <fcitx-utils/environ.h>
@@ -14,11 +15,14 @@
 #include <fcitx/instance.h>
 
 #include <Windows.h>
+#include <ShlObj.h>
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -26,6 +30,118 @@
 
 namespace fcitx::windows::engine {
 namespace {
+
+struct EngineConfig {
+    std::vector<std::string> enabled;
+    std::optional<std::string> defaultInputMethod;
+    std::optional<std::string> hotkeyToggle;
+    std::optional<std::string> hotkeyNext;
+};
+
+std::filesystem::path executableDirectory() {
+    std::wstring path(32'768, L'\0');
+    const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (size == 0 || size >= path.size())
+        return {};
+    path.resize(size);
+    return std::filesystem::path(path).parent_path();
+}
+
+std::filesystem::path localDataDirectory() {
+    const auto executable = executableDirectory();
+    if (!executable.empty() && std::filesystem::exists(executable / L"portable.flag"))
+        return executable / L"data";
+    if (!executable.empty() &&
+        std::filesystem::exists(executable.parent_path() / L"portable.flag"))
+        return executable.parent_path() / L"data";
+    PWSTR path = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &path)))
+        return {};
+    std::filesystem::path result(path);
+    CoTaskMemFree(path);
+    return result / kReleaseIdentity.data_directory;
+}
+
+// config.toml 由 fcitx5-control 写入（格式受控）。这里做轻量解析，只读取
+// [input_methods] 与 [hotkeys] 两个小节；解析失败时回退默认值。
+EngineConfig readEngineConfig() {
+    EngineConfig config;
+    std::filesystem::path text;
+    const auto data = localDataDirectory();
+    if (!data.empty()) {
+        std::ifstream file(data / L"config.toml");
+        if (file) {
+            bool inInputMethods = false;
+            bool inHotkeys = false;
+            std::string line;
+            while (std::getline(file, line)) {
+                const auto hash = line.find('#');
+                if (hash != std::string::npos)
+                    line = line.substr(0, hash);
+                const auto first = line.find_first_not_of(" \t\r\n");
+                if (first == std::string::npos)
+                    continue;
+                line = line.substr(first);
+                if (line[0] == '[') {
+                    inInputMethods = line.rfind("[input_methods]", 0) == 0;
+                    inHotkeys = line.rfind("[hotkeys]", 0) == 0;
+                    continue;
+                }
+                if (inInputMethods && line.rfind("enabled", 0) == 0) {
+                    const auto bracket = line.find('[');
+                    std::size_t pos = bracket == std::string::npos ? 0 : bracket + 1;
+                    while (pos < line.size()) {
+                        const auto quote = line.find('"', pos);
+                        if (quote == std::string::npos)
+                            break;
+                        const auto endQuote = line.find('"', quote + 1);
+                        if (endQuote == std::string::npos)
+                            break;
+                        config.enabled.push_back(
+                            line.substr(quote + 1, endQuote - quote - 1));
+                        pos = endQuote + 1;
+                    }
+                } else if (inInputMethods && line.rfind("default", 0) == 0) {
+                    const auto quote = line.find('"');
+                    if (quote != std::string::npos) {
+                        const auto endQuote = line.find('"', quote + 1);
+                        if (endQuote != std::string::npos)
+                            config.defaultInputMethod =
+                                line.substr(quote + 1, endQuote - quote - 1);
+                    }
+                } else if (inHotkeys &&
+                           line.rfind("toggle_input_method", 0) == 0) {
+                    const auto quote = line.find('"');
+                    if (quote != std::string::npos) {
+                        const auto endQuote = line.find('"', quote + 1);
+                        if (endQuote != std::string::npos)
+                            config.hotkeyToggle =
+                                line.substr(quote + 1, endQuote - quote - 1);
+                    }
+                } else if (inHotkeys && line.rfind("next_input_method", 0) == 0) {
+                    const auto quote = line.find('"');
+                    if (quote != std::string::npos) {
+                        const auto endQuote = line.find('"', quote + 1);
+                        if (endQuote != std::string::npos)
+                            config.hotkeyNext =
+                                line.substr(quote + 1, endQuote - quote - 1);
+                    }
+                }
+            }
+        }
+    }
+    if (config.enabled.empty())
+        config.enabled = {"pinyin", "rime", "wbx"};
+    if (!config.defaultInputMethod ||
+        std::find(config.enabled.begin(), config.enabled.end(),
+                  *config.defaultInputMethod) == config.enabled.end())
+        config.defaultInputMethod = config.enabled.front();
+    if (!config.hotkeyToggle)
+        config.hotkeyToggle = "Ctrl+Space";
+    if (!config.hotkeyNext)
+        config.hotkeyNext = "Ctrl+Shift";
+    return config;
+}
 
 std::string utf8Path(const std::filesystem::path& path) {
     const auto& native = path.native();
@@ -224,7 +340,8 @@ class FcitxRuntime::Impl final {
                         return manager.entry(item.name()) == nullptr;
                     }),
                     items.end());
-        for (const char* id : {"pinyin", "rime", "wbx"}) {
+        const EngineConfig engineConfig = readEngineConfig();
+        for (const std::string& id : engineConfig.enabled) {
             if (manager.entry(id) && !contains(id)) {
                 items.emplace_back(id);
             }
@@ -232,7 +349,7 @@ class FcitxRuntime::Impl final {
         std::string selected = previousDefault;
         if (!contains(selected)) {
             selected.clear();
-            for (const char* fallback : {"pinyin", "rime", "wbx"}) {
+            for (const std::string& fallback : engineConfig.enabled) {
                 if (contains(fallback)) {
                     selected = fallback;
                     break;
@@ -253,6 +370,32 @@ class FcitxRuntime::Impl final {
         group.setDefaultInputMethod(selected);
         manager.setGroup(std::move(group));
         manager.save();
+    }
+
+    void toggleInputMethod(const EngineConfig& config) {
+        auto& manager = instance->inputMethodManager();
+        const std::string current = instance->currentInputMethod();
+        if (current == "keyboard-us") {
+            const auto defaultName = config.defaultInputMethod.value_or("pinyin");
+            if (manager.entry(defaultName))
+                instance->setCurrentInputMethod(defaultName);
+        } else if (manager.entry("keyboard-us")) {
+            instance->setCurrentInputMethod("keyboard-us");
+        }
+    }
+
+    void nextInputMethod(const EngineConfig& config) {
+        auto& manager = instance->inputMethodManager();
+        const std::string current = instance->currentInputMethod();
+        if (config.enabled.empty())
+            return;
+        auto iter = std::find(config.enabled.begin(), config.enabled.end(), current);
+        const std::string next =
+            iter == config.enabled.end() ? config.enabled.front()
+                                         : config.enabled[(iter - config.enabled.begin() + 1) %
+                                                          config.enabled.size()];
+        if (manager.entry(next))
+            instance->setCurrentInputMethod(next);
     }
 
     EngineInputContext& contextFor(const ClientContextKey& key) {
@@ -410,6 +553,40 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         impl_->instance->setCurrentInputMethod(&context, selected, true);
     }
     KeyEvent event(&context, keyFromRequest(request), false);
+    // Input-method switch hotkeys from [hotkeys] in config.toml. The toggle
+    // flips between the active input method and keyboard passthrough; next
+    // cycles through [input_methods].enabled.
+    if (!event.isRelease()) {
+        const auto& keySym = event.key().sym();
+        const auto states = event.key().states();
+        const bool ctrl = states.test(KeyState::Ctrl);
+        const bool shift = states.test(KeyState::Shift);
+        const bool alt = states.test(KeyState::Alt);
+        const EngineConfig engineConfig = readEngineConfig();
+        const auto matches = [&](const std::optional<std::string>& hotkey) {
+            if (!hotkey || keySym == FcitxKey_None)
+                return false;
+            if (*hotkey == "Ctrl+Space")
+                return ctrl && !shift && !alt && keySym == FcitxKey_space;
+            if (*hotkey == "Ctrl+Shift")
+                return ctrl && shift && !alt && keySym == FcitxKey_Shift_L;
+            if (*hotkey == "Ctrl+Shift+Space")
+                return ctrl && shift && !alt && keySym == FcitxKey_space;
+            if (*hotkey == "Alt+Shift")
+                return alt && shift && !ctrl && keySym == FcitxKey_Shift_L;
+            return false;
+        };
+        if (matches(engineConfig.hotkeyToggle)) {
+            impl_->toggleInputMethod(engineConfig);
+            event.filterAndAccept();
+            return impl_->collectResult(key, context, true);
+        }
+        if (matches(engineConfig.hotkeyNext)) {
+            impl_->nextInputMethod(engineConfig);
+            event.filterAndAccept();
+            return impl_->collectResult(key, context, true);
+        }
+    }
     // Laptop-friendly page keys: '-' / '_' previous page, '=' / '+' next page.
     // Fcitx's default PrevPage/NextPage are Up/Down, which the scroll viewport
     // uses for continuous cursor movement, so route the number-row keys to the
