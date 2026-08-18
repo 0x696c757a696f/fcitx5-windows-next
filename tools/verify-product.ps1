@@ -4,7 +4,7 @@ param(
   [ValidateSet('pr', 'package', 'desktop', 'release')]
   [string] $Gate,
 
-  [ValidateSet('all', 'x64', 'x86')]
+  [ValidateSet('all', 'x64', 'x86', 'arm64')]
   [string] $Architecture = 'all',
 
   [ValidateSet('Debug', 'Release')]
