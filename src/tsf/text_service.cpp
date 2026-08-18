@@ -696,6 +696,8 @@ bool TextService::canHandle(WPARAM virtualKey) const noexcept {
     case VK_DOWN:
     case VK_PRIOR:
     case VK_NEXT:
+    case VK_HOME:
+    case VK_END:
         return true;
     default:
         return false;

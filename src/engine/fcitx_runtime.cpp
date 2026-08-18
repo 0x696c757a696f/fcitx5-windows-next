@@ -156,6 +156,12 @@ Key keyFromRequest(const protocol::KeyRequest& request) {
         return Key(FcitxKey_Page_Up, states);
     case VK_NEXT:
         return Key(FcitxKey_Page_Down, states);
+    case VK_HOME:
+        // Scroll-mode row start (fcitx5-macos ScrollConfig rowStart).
+        return Key(FcitxKey_Home, states);
+    case VK_END:
+        // Scroll-mode row end (fcitx5-macos ScrollConfig rowEnd).
+        return Key(FcitxKey_End, states);
     default:
         break;
     }

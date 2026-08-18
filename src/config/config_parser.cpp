@@ -334,8 +334,9 @@ theme = "builtin:default"
 [candidate]
 # vertical（纵向，默认）或 horizontal（横向）。
 orientation = "vertical"
-# 卷轴模式只在引擎提供 BulkCandidateList 时启用；最多显示六行六列。
-scroll_mode = false
+# 卷轴模式：引擎提供 BulkCandidateList 时，方向键/PageUp/PageDown/Home/End
+# 在六行六列视口内连续滚动候选（对齐 fcitx5-macos 的 ScrollConfig）。
+scroll_mode = true
 # 候选窗最大宽度，单位 DIP，范围 160–2048。
 max_width_dip = 860.0
 # 整体不透明度，范围 0.20–1.00。
