@@ -642,6 +642,15 @@ class CandidateWindow final {
                                             response.candidatePageSize,
                                         current.candidates.size() - ordinaryCount)
                 : 0U;
+        // In the ordinary (non-bulk) lane the engine reports the selected
+        // candidate as a page-local index, while candidates_ is built from the
+        // full list and renderIndices_ addresses it with a global offset
+        // (ordinaryStart). Translate the selection to the global index so the
+        // paint loop can match it against visibleIndices_.
+        if (!scrollMode_ && !response.candidateBulk && selected_ &&
+            *selected_ < ordinaryCount && ordinaryStart + *selected_ < current.candidates.size()) {
+            selected_ = ordinaryStart + *selected_;
+        }
         for (std::size_t candidateIndex = 0; candidateIndex < current.candidates.size();
              ++candidateIndex) {
             const auto& candidate = current.candidates[candidateIndex];

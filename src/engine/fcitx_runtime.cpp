@@ -290,30 +290,39 @@ class FcitxRuntime::Impl final {
             output.candidatePageSize = static_cast<std::uint32_t>(pageSize);
             const auto* bulk = candidateList->toBulk();
             const int reportedTotal = bulk ? bulk->totalSize() : pageSize;
+            // Some addons (e.g. Rime) expose a BulkCandidateList without a
+            // real bulk API: totalSize() returns -1 and globalCursorIndex()
+            // returns -1. Treat them as an ordinary pageable list so the UI
+            // gets page-local candidates plus a valid selection; otherwise the
+            // selection would be missing and the candidate window renders
+            // without any highlight.
+            const bool realBulk = bulk != nullptr && reportedTotal >= 0;
             const int size =
-                bulk && reportedTotal >= 0
-                    ? std::clamp(reportedTotal, 0,
-                                 static_cast<int>(protocol::kMaxCandidates))
-                    : pageSize;
-            output.candidateBulk = bulk != nullptr;
-            output.candidateEnd = !bulk || (reportedTotal >= 0 && size >= reportedTotal);
+                realBulk ? std::clamp(reportedTotal, 0,
+                                      static_cast<int>(protocol::kMaxCandidates))
+                         : pageSize;
+            output.candidateBulk = realBulk;
+            output.candidateEnd = !realBulk || (reportedTotal >= 0 && size >= reportedTotal);
             output.candidates.reserve(static_cast<std::size_t>(size));
             for (int index = 0; index < size; ++index) {
                 const auto& word =
-                    bulk ? bulk->candidateFromAll(index) : candidateList->candidate(index);
+                    realBulk ? bulk->candidateFromAll(index) : candidateList->candidate(index);
                 output.candidates.push_back(protocol::CandidateRecord{
                     (composition << 8U) | static_cast<std::uint64_t>(index + 1),
-                    bulk ? std::string{} : candidateList->label(index).toString(),
+                    realBulk ? std::string{} : candidateList->label(index).toString(),
                     word.text().toString(), word.comment().toString()});
             }
-            const int cursor = candidateList->toBulkCursor()
-                                   ? candidateList->toBulkCursor()->globalCursorIndex()
-                                   : candidateList->cursorIndex();
+            int cursor = candidateList->cursorIndex();
+            if (const auto* bulkCursor = candidateList->toBulkCursor()) {
+                const int global = bulkCursor->globalCursorIndex();
+                if (global >= 0)
+                    cursor = global;
+            }
             if (cursor >= 0 && cursor < size)
                 output.selectedCandidate = static_cast<std::uint32_t>(cursor);
             output.candidateTotal = static_cast<std::uint32_t>(size);
-            if (bulk && bulk->totalSize() >= 0)
-                output.candidateTotal = static_cast<std::uint32_t>(bulk->totalSize());
+            if (realBulk)
+                output.candidateTotal = static_cast<std::uint32_t>(reportedTotal);
             if (const auto* pageable = candidateList->toPageable(); pageable) {
                 const int page = pageable->currentPage();
                 if (page >= 0)
@@ -404,8 +413,11 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     // Laptop-friendly page keys: '-' / '_' previous page, '=' / '+' next page.
     // Fcitx's default PrevPage/NextPage are Up/Down, which the scroll viewport
     // uses for continuous cursor movement, so route the number-row keys to the
-    // pageable candidate list explicitly when candidates are visible.
-    if (event.key().isSimple()) {
+    // pageable candidate list explicitly when candidates are visible. Compare
+    // the key symbol directly: '+' (Shift+'=') and '_' (Shift+'-') carry a
+    // Shift state and would fail an isSimple() check, but their symbols are
+    // distinct (FcitxKey_plus / FcitxKey_underscore).
+    {
         const KeySym sym = event.key().sym();
         if (const auto list = context.inputPanel().candidateList();
             list && !list->empty()) {
