@@ -769,7 +769,6 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         show(kApply, general || appearance || theme);
         show(kSaveStatus, general || appearance || theme);
         const bool dirty = general ? generalDirty_ : presentationDirty_;
-        ::SetWindowTextW(control(kSaveStatus), dirty ? get("status.unsaved") : L"");
         for (const int id : {kRestart, kDiagnostics})
             show(id, diagnostics);
         for (const int id : {kRepair})
@@ -778,6 +777,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                              kPackageRemove, kPackagesTitle})
             show(id, packages);
         show(kStatus, diagnostics || repair || packages);
+        setSaveStatus(dirty ? get("status.unsaved") : L"");
         ::SetWindowTextW(control(kPageTitle), page == kNavGeneral       ? get("nav.general")
                                               : page == kNavAppearance  ? get("nav.appearance")
                                               : page == kNavTheme       ? get("nav.theme")
@@ -1149,7 +1149,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 cover(kCoveredThemeApply);
                 presentationDirty_ = false;
             }
-            ::SetWindowTextW(control(kSaveStatus), get("status.saved"));
+            setSaveStatus(get("status.saved"));
             return 0;
         }
         bool ok = false;
@@ -1164,7 +1164,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             if (ok)
                 presentationDirty_ = false;
         }
-        ::SetWindowTextW(control(kSaveStatus), ok ? get("status.saved") : get("error.command"));
+        setSaveStatus(ok ? get("status.saved") : get("error.command"));
         return 0;
     }
     LRESULT onNavigate(WORD, WORD id, HWND, BOOL&) {
@@ -1252,12 +1252,22 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         updatePackageActions();
         return 0;
     }
+    // Updating a STATIC control with SetWindowTextW only repaints the new
+    // text's bounding box. When the new text is shorter than the previous one
+    // (for example "设置已安全保存" -> "有未应用的更改"), the tail of the old
+    // text stays on screen and the two messages overlap. Invalidate the whole
+    // control so the background is erased before drawing the new text.
+    void setSaveStatus(const wchar_t* text) {
+        ::SetWindowTextW(control(kSaveStatus), text);
+        if (const HWND status = control(kSaveStatus))
+            ::InvalidateRect(status, nullptr, TRUE);
+    }
     LRESULT onDirty(WORD, WORD id, HWND, BOOL&) {
         if (id == kStartup || id == kInputMethod)
             generalDirty_ = true;
         else
             presentationDirty_ = true;
-        ::SetWindowTextW(control(kSaveStatus), get("status.unsaved"));
+        setSaveStatus(get("status.unsaved"));
         return 0;
     }
 
