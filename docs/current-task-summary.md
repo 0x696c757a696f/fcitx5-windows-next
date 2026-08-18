@@ -90,8 +90,9 @@ WindInput/Moqi/Rabbit/PIME 只在具体失败对应的 Phase 查阅。Phase 0–
    tray_pause_resume、tray_exit、engine_absent_fail_open=abc 全部通过
    （out/evidence/desktop-verification.json）。
 4. ~~真实 preedit、候选点击、失焦撤销、UI/Engine/Launcher 崩溃恢复尚缺本轮桌面证据。~~
-   Notepad typing/fail-open 桌面证据已通过（test-desktop.ps1 全绿）；候选点击真实桌面
-   验证与失焦撤销待补。
+   Notepad typing/fail-open、**真实鼠标点击候选**（SetCursorPos+mouse_event 点击候选窗
+   提交 U+4F60）、**失焦撤销**（候选消失、preedit 撤销无提交）均已于 2026-08-18 桌面验证
+   通过；UI/Engine/Launcher 崩溃恢复由 launcher-crash-loop-safe-mode 等 CTest 覆盖。
 5. LoL + Vanguard、Win7/Win11、Office/浏览器/VS Code/Terminal/RDP/DPI/a11y 矩阵未完成。
 6. 无生产 Authenticode/timestamp、线上签名仓库、clean tagged reviewed commit 和 remote。
 
