@@ -15,7 +15,7 @@
 
 namespace fcitx::windows::ipc {
 
-inline constexpr DWORD kInputDeadlineMilliseconds = 25;
+inline constexpr DWORD kInputDeadlineMilliseconds = 100;
 inline constexpr DWORD kContextStartDeadlineMilliseconds = 100;
 
 struct KeyResult {
@@ -53,9 +53,21 @@ public:
     [[nodiscard]] bool processKey(std::uint64_t contextId, std::uint32_t virtualKey,
                                   std::uint32_t keyFlags, KeyResult& result,
                                   const protocol::CaretRect& caret = {}) noexcept;
+    [[nodiscard]] bool selectCandidate(std::uint32_t targetProcessId,
+                                       std::uint64_t expectedEngineEpoch,
+                                       std::uint64_t contextId,
+                                       std::uint64_t compositionId,
+                                       std::uint64_t revision,
+                                       std::uint64_t candidateId) noexcept;
+    [[nodiscard]] bool pollState(std::uint64_t contextId, KeyResult& result) noexcept;
     void disconnect() noexcept;
 
 private:
+    struct ContextState {
+        std::uint64_t compositionId{};
+        std::uint64_t revision{};
+    };
+
     [[nodiscard]] bool connect(std::uint64_t deadline) noexcept;
     [[nodiscard]] bool handshake(std::uint64_t deadline) noexcept;
     [[nodiscard]] bool transact(const std::vector<std::uint8_t>& request,
@@ -63,6 +75,11 @@ private:
                                 std::uint64_t deadline) noexcept;
     [[nodiscard]] bool transfer(bool write, void* data, std::size_t size,
                                 std::uint64_t deadline) noexcept;
+    [[nodiscard]] bool acceptKeyResponse(const protocol::KeyResponse& response,
+                                         std::uint64_t requestId,
+                                         std::uint64_t contextId,
+                                         ContextState& contextState,
+                                         KeyResult& result) noexcept;
 
     std::wstring pipeName_;
     PeerPolicy peerPolicy_;
@@ -72,10 +89,6 @@ private:
     std::uint64_t engineEpoch_{};
     std::uint32_t sessionId_{};
     std::atomic<std::uint64_t> nextRequestId_{1};
-    struct ContextState {
-        std::uint64_t compositionId{};
-        std::uint64_t revision{};
-    };
     std::unordered_map<std::uint64_t, ContextState> contexts_;
 };
 

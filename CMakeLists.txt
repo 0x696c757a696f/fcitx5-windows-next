@@ -192,12 +192,18 @@ target_link_libraries(
 fcitx_apply_project_options(fcitx5_mock_engine)
 fcitx_apply_binary_hardening(fcitx5_mock_engine)
 
-add_executable(fcitx5_launcher src/launcher/launcher_main.cpp)
+add_executable(
+  fcitx5_launcher WIN32
+  src/launcher/launcher_main.cpp
+  src/launcher/tray_icon.cpp
+  resources/windows/launcher.rc)
 set_target_properties(fcitx5_launcher PROPERTIES OUTPUT_NAME "fcitx5-launcher")
 target_link_libraries(
   fcitx5_launcher
   PRIVATE fcitx5::windows_common fcitx5::launcher_state fcitx5::protocol
           fcitx5::ipc_client fcitx5::platform)
+target_include_directories(
+  fcitx5_launcher PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
 fcitx_apply_project_options(fcitx5_launcher)
 fcitx_apply_binary_hardening(fcitx5_launcher)
 
@@ -211,7 +217,10 @@ target_link_libraries(
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
-add_executable(fcitx5_config_app WIN32 src/config/app_main.cpp)
+add_executable(
+  fcitx5_config_app WIN32
+  src/config/app_main.cpp
+  resources/windows/app.rc)
 set_target_properties(fcitx5_config_app PROPERTIES OUTPUT_NAME "fcitx5-config")
 target_link_libraries(
   fcitx5_config_app
@@ -237,11 +246,22 @@ target_include_directories(
   fcitx5_candidate_layout PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
 fcitx_apply_project_options(fcitx5_candidate_layout)
 
-add_executable(fcitx5_ui WIN32 src/ui/ui_main.cpp)
+add_library(fcitx5_candidate_interaction STATIC src/ui/candidate_interaction.cpp)
+add_library(fcitx5::candidate_interaction ALIAS fcitx5_candidate_interaction)
+target_compile_features(fcitx5_candidate_interaction PUBLIC cxx_std_20)
+target_include_directories(
+  fcitx5_candidate_interaction PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
+target_link_libraries(fcitx5_candidate_interaction PUBLIC d2d1 user32)
+fcitx_apply_project_options(fcitx5_candidate_interaction)
+
+add_executable(
+  fcitx5_ui WIN32
+  src/ui/ui_main.cpp
+  resources/windows/app.rc)
 set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
-target_link_libraries(
+  target_link_libraries(
   fcitx5_ui
-  PRIVATE fcitx5::candidate_model fcitx5::candidate_layout fcitx5::config
+  PRIVATE fcitx5::candidate_model fcitx5::candidate_layout fcitx5::candidate_interaction fcitx5::config
           fcitx5::protocol fcitx5::ipc_client fcitx5::platform
           d2d1 dwrite shell32 ole32)
 fcitx_apply_project_options(fcitx5_ui)
@@ -260,11 +280,15 @@ add_library(
   src/tsf/input_scope_guids.cpp
   src/tsf/registration.cpp
   src/tsf/text_service.cpp
-  src/tsf/fcitx5-tsf.def)
+  src/tsf/fcitx5-tsf.def
+  resources/windows/app.rc)
 set_target_properties(fcitx5_tsf PROPERTIES PREFIX "" OUTPUT_NAME "fcitx5-tsf")
 target_include_directories(fcitx5_tsf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
 target_link_libraries(
   fcitx5_tsf PRIVATE fcitx5::release_identity fcitx5::ipc_client uuid ole32 oleaut32 advapi32)
+if(FCITX_DEVELOPMENT_PEER_EXCEPTION)
+  target_compile_definitions(fcitx5_tsf PRIVATE FCITX_DEVELOPMENT_PEER_EXCEPTION=1)
+endif()
 fcitx_apply_project_options(fcitx5_tsf)
 fcitx_apply_binary_hardening(fcitx5_tsf)
 
@@ -274,6 +298,15 @@ target_include_directories(fcitx5_register PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(fcitx5_register PRIVATE fcitx5::windows_common advapi32 ole32)
 fcitx_apply_project_options(fcitx5_register)
 fcitx_apply_binary_hardening(fcitx5_register)
+
+add_executable(
+  fcitx5_bootstrap WIN32
+  src/bootstrap/bootstrap_main.cpp
+  resources/windows/app.rc)
+set_target_properties(fcitx5_bootstrap PROPERTIES OUTPUT_NAME "fcitx5-bootstrap")
+target_link_libraries(fcitx5_bootstrap PRIVATE fcitx5::windows_common shell32 user32)
+fcitx_apply_project_options(fcitx5_bootstrap)
+fcitx_apply_binary_hardening(fcitx5_bootstrap)
 
 add_executable(fcitx5_package src/package/package_main.cpp)
 set_target_properties(fcitx5_package PROPERTIES OUTPUT_NAME "fcitx5-package")
@@ -331,6 +364,24 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_package_core_test)
   fcitx_apply_binary_hardening(fcitx5_package_core_test)
   add_test(NAME package-core-contract COMMAND fcitx5_package_core_test)
+
+  add_executable(
+    fcitx5_control_package_integration_test
+    tests/integration/control_package_integration_test.cpp)
+  target_include_directories(
+    fcitx5_control_package_integration_test SYSTEM PRIVATE "${FCITX_MINIZ_SOURCE_DIR}")
+  target_link_libraries(
+    fcitx5_control_package_integration_test
+    PRIVATE fcitx5::package_core fcitx5_miniz bcrypt crypt32)
+  add_dependencies(
+    fcitx5_control_package_integration_test fcitx5_control fcitx5_downloader)
+  fcitx_apply_project_options(fcitx5_control_package_integration_test)
+  fcitx_apply_binary_hardening(fcitx5_control_package_integration_test)
+  add_test(
+    NAME control-package-stopped-service-contract
+    COMMAND fcitx5_control_package_integration_test
+            "$<TARGET_FILE:fcitx5_control>" "$<TARGET_FILE:fcitx5_downloader>")
+  set_tests_properties(control-package-stopped-service-contract PROPERTIES TIMEOUT 30)
   add_test(NAME launcher-version COMMAND fcitx5_launcher --version)
   add_test(NAME mock-engine-version COMMAND fcitx5_mock_engine --version)
   add_test(NAME control-version COMMAND fcitx5_control --version)
@@ -362,6 +413,9 @@ if(BUILD_TESTING)
   add_test(NAME config-ui-headless-smoke COMMAND fcitx5_config_app --self-test)
   add_test(NAME config-ui-i18n-check COMMAND fcitx5_config_app --check-i18n)
   add_test(NAME config-ui-resource-check COMMAND fcitx5_config_app --check-resources)
+  add_test(NAME config-ui-behavior-contract COMMAND fcitx5_config_app --ui-contract-test)
+  add_test(NAME config-ui-interaction-coverage
+           COMMAND fcitx5_config_app --ui-interaction-test)
 
   add_executable(fcitx5_protocol_test tests/unit/protocol_test.cpp)
   target_link_libraries(fcitx5_protocol_test PRIVATE fcitx5::protocol)
@@ -387,9 +441,36 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_candidate_layout_test)
   fcitx_apply_binary_hardening(fcitx5_candidate_layout_test)
   add_test(NAME candidate-layout-contract COMMAND fcitx5_candidate_layout_test)
+
+  add_executable(fcitx5_candidate_interaction_test tests/unit/candidate_interaction_test.cpp)
+  target_link_libraries(fcitx5_candidate_interaction_test PRIVATE fcitx5::candidate_interaction)
+  fcitx_apply_project_options(fcitx5_candidate_interaction_test)
+  fcitx_apply_binary_hardening(fcitx5_candidate_interaction_test)
+  add_test(NAME candidate-interaction-contract COMMAND fcitx5_candidate_interaction_test)
   add_test(NAME candidate-ui-device-smoke
            COMMAND fcitx5_ui --self-test --simulate-device-loss)
   add_test(NAME candidate-ui-safe-mode-smoke COMMAND fcitx5_ui --self-test --safe-mode)
+  add_test(NAME candidate-ui-interaction-contract
+           COMMAND fcitx5_ui --interaction-self-test)
+  set_tests_properties(candidate-ui-interaction-contract PROPERTIES TIMEOUT 5)
+  add_test(NAME candidate-ui-live-config-reflow
+           COMMAND fcitx5_ui --self-test --reload-test)
+
+  add_executable(
+    fcitx5_candidate_ui_config_integration_test
+    tests/integration/candidate_ui_config_integration_test.cpp)
+  add_dependencies(
+    fcitx5_candidate_ui_config_integration_test fcitx5_ui fcitx5_control)
+  target_link_libraries(
+    fcitx5_candidate_ui_config_integration_test PRIVATE fcitx5::config user32)
+  fcitx_apply_project_options(fcitx5_candidate_ui_config_integration_test)
+  fcitx_apply_binary_hardening(fcitx5_candidate_ui_config_integration_test)
+  add_test(
+    NAME candidate-ui-live-presentation-contract
+    COMMAND fcitx5_candidate_ui_config_integration_test
+            "$<TARGET_FILE:fcitx5_ui>" "$<TARGET_FILE:fcitx5_control>"
+            "$<TARGET_FILE_DIR:fcitx5_ui>/resources")
+  set_tests_properties(candidate-ui-live-presentation-contract PROPERTIES TIMEOUT 30)
 
   add_executable(
     fcitx5_candidate_ui_element_test
@@ -490,6 +571,18 @@ if(BUILD_TESTING)
            COMMAND fcitx5_tsf_key_commit_test
                    $<TARGET_FILE:fcitx5_tsf>
                    $<TARGET_FILE:fcitx5_mock_engine>)
+
+  # Interactive desktop E2E. It is built with the test suite but intentionally
+  # not registered with CTest because it requires installed TSF registration
+  # and a foreground user desktop with Notepad.
+  add_executable(fcitx5_tsf_notepad_e2e_test
+                 tests/integration/tsf_notepad_e2e_test.cpp)
+  target_include_directories(fcitx5_tsf_notepad_e2e_test
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
+  target_link_libraries(fcitx5_tsf_notepad_e2e_test
+                        PRIVATE fcitx5::release_identity ole32 user32)
+  fcitx_apply_project_options(fcitx5_tsf_notepad_e2e_test)
+  fcitx_apply_binary_hardening(fcitx5_tsf_notepad_e2e_test)
 
   add_executable(fcitx5_engine_integration_test
                  tests/integration/fcitx_engine_integration_test.cpp)

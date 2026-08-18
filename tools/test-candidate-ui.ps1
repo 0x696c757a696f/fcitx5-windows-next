@@ -22,6 +22,13 @@ if (Test-Path -LiteralPath $resourceSource -PathType Container) {
   New-Item -ItemType Directory -Path $resourceTarget -Force | Out-Null
   Copy-Item -Path (Join-Path $resourceSource '*') -Destination $resourceTarget -Recurse -Force
 }
+# The engine integration test publishes the candidate snapshot on a pipe under
+# FCITX5_TEST_NAMESPACE. Inject one shared namespace here so the UI process and
+# the engine/test process listen on the same pipe, then remove it afterwards so
+# a desktop Fcitx5 instance for this user/session is never affected.
+$sharedNamespace = 'candidate-ui-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+$previousNamespace = [Environment]::GetEnvironmentVariable('FCITX5_TEST_NAMESPACE', 'Process')
+[Environment]::SetEnvironmentVariable('FCITX5_TEST_NAMESPACE', $sharedNamespace, 'Process')
 $ui = Start-Process -FilePath $uiTarget -ArgumentList '--test-once' `
   -PassThru -WindowStyle Hidden
 try {
@@ -32,6 +39,7 @@ try {
     throw 'Independent UI did not consume the authenticated candidate snapshot.'
   }
 } finally {
+  [Environment]::SetEnvironmentVariable('FCITX5_TEST_NAMESPACE', $previousNamespace, 'Process')
   if (-not $ui.HasExited) { Stop-Process -Id $ui.Id }
 }
 Write-Host 'Engine-owned candidate snapshot reached the independent UI process.'

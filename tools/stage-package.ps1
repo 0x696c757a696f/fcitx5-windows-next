@@ -24,6 +24,7 @@ $required = @(
   (Join-Path $x64 'fcitx5-package.exe'), (Join-Path $x64 'fcitx5-downloader.exe'),
   (Join-Path $x64 'fcitx5-deployer.exe'), (Join-Path $x64 'fcitx5-provider.exe'),
   (Join-Path $x64 'fcitx5-updater.exe'),
+  (Join-Path $x64 'fcitx5-bootstrap.exe'),
   (Join-Path $x64 'fcitx5-register.exe'), (Join-Path $x64 'fcitx5-tsf.dll'),
   (Join-Path $x86 'fcitx5-register.exe'), (Join-Path $x86 'fcitx5-tsf.dll'))
 foreach ($path in $required) {
@@ -46,6 +47,11 @@ foreach ($name in @('fcitx5-config.exe', 'fcitx5-control.exe', 'fcitx5-launcher.
                      'fcitx5-downloader.exe', 'fcitx5-deployer.exe',
                      'fcitx5-provider.exe', 'fcitx5-updater.exe')) {
   Copy-Item -LiteralPath (Join-Path $x64 $name) -Destination $bin -Force
+}
+foreach ($name in @('Start Fcitx5.exe', 'Fcitx5 Settings.exe',
+                     'Unregister Fcitx5.exe')) {
+  Copy-Item -LiteralPath (Join-Path $x64 'fcitx5-bootstrap.exe') `
+    -Destination (Join-Path $root $name) -Force
 }
 Copy-Item -LiteralPath (Join-Path $x86 'fcitx5-register.exe') `
   -Destination (Join-Path $bin 'fcitx5-register-x86.exe') -Force
@@ -76,6 +82,7 @@ $manifest = [ordered]@{
   version = $Version
   channel = $Channel
   source_commit = (git -C $repoRoot rev-parse HEAD).Trim()
+  source_tree_clean = @((git -C $repoRoot status --porcelain=v1 --untracked-files=all)).Count -eq 0
   architecture = 'x64-with-x86-tsf'
   files = @($files)
 }
@@ -88,10 +95,28 @@ Compress-Archive -Path $root -DestinationPath $portable -CompressionLevel Optima
 if (-not $SkipInstaller) {
   & (Join-Path $PSScriptRoot 'prepare-package-toolchains.ps1')
   $iscc = Join-Path $repoRoot 'out/toolchains/inno-7.0.2/ISCC.exe'
+  # Build to the immutable per-stage directory first. Antivirus and Explorer may briefly hold the
+  # previously published fixed-name installer; compiling directly over it makes that transient
+  # Windows lock look like a source/build failure.
+  $installerOutput = Join-Path $work 'installer-output'
+  New-Item -ItemType Directory -Force -Path $installerOutput | Out-Null
   & $iscc "/DProductVersion=$Version" "/DReleaseChannel=$Channel" `
-    "/DStageDir=$root" "/DArtifactDir=$artifacts" `
+    "/DStageDir=$root" "/DArtifactDir=$installerOutput" `
     (Join-Path $repoRoot 'installer/fcitx5-windows.iss')
   if ($LASTEXITCODE -ne 0) { throw 'Inno Setup package build failed.' }
+  $installerName = "fcitx5-windows-$Version$artifactSuffix-setup.exe"
+  $stagedInstaller = Join-Path $installerOutput $installerName
+  $publishedInstaller = Join-Path $artifacts $installerName
+  $published = $false
+  for ($attempt = 1; $attempt -le 20 -and -not $published; $attempt++) {
+    try {
+      Copy-Item -LiteralPath $stagedInstaller -Destination $publishedInstaller -Force
+      $published = $true
+    } catch [IO.IOException] {
+      if ($attempt -eq 20) { throw }
+      Start-Sleep -Milliseconds 250
+    }
+  }
 }
 [IO.File]::WriteAllText((Join-Path $outRoot 'current-stage.txt'), $root,
   [Text.UTF8Encoding]::new($false))

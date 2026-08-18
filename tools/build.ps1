@@ -24,9 +24,32 @@ function Invoke-Native {
     [Parameter(Mandatory)] [string[]] $Arguments
   )
 
-  & $Executable @Arguments
-  if ($LASTEXITCODE -ne 0) {
-    throw "Command failed ($LASTEXITCODE): $Executable $($Arguments -join ' ')"
+  # Some desktop hosts provide both `Path` and `PATH` in the native process
+  # environment. MSBuild's .NET Framework task runner treats those names as
+  # equal and aborts before invoking CL.exe. Rebuild a case-insensitive child
+  # environment for every release-critical native process instead of mutating
+  # the caller's environment or relying on a machine-specific shell state.
+  $environment = [System.Collections.Generic.Dictionary[string, string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+    $environment[[string] $entry.Key] = [string] $entry.Value
+  }
+
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $Executable
+  $startInfo.UseShellExecute = $false
+  $startInfo.WorkingDirectory = (Get-Location).Path
+  $startInfo.Environment.Clear()
+  foreach ($entry in $environment.GetEnumerator()) {
+    $startInfo.Environment[$entry.Key] = $entry.Value
+  }
+  foreach ($argument in $Arguments) {
+    $startInfo.ArgumentList.Add($argument)
+  }
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  $process.WaitForExit()
+  if ($process.ExitCode -ne 0) {
+    throw "Command failed ($($process.ExitCode)): $Executable $($Arguments -join ' ')"
   }
 }
 

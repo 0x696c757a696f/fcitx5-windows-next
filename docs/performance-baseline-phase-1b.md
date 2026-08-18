@@ -29,6 +29,28 @@ The key benchmark uses the production `PipeClient`, the versioned wire codec, a 
 pipe, and the independent mock-engine process. The 25 ms input deadline remains a fail-open safety
 budget; it is not derived from these first measurements and will be reviewed by ADR in Phase 2.
 
+## Trend re-run on 2026-08-18 (v1.6 work tree, protocol v7, Release)
+
+Re-ran `tools/benchmark.ps1` on the same reference machine after the v1.6 candidate-selection
+intent, protocol v7 and launcher/tray changes. Same binaries and sample counts as the baseline.
+
+| Architecture | Codec ns/op | Codec ops/s | Key p50 | Key p95 | Key p99 | Key max |
+|---|---:|---:|---:|---:|---:|---:|
+| x64 | 441.9 | 2,262,710 | 21.6 us | 25.4 us | 40.2 us | 99.1 us |
+| x86 | 610.7 | 1,637,590 | 36.2 us | 50.4 us | 61.8 us | 99.8 us |
+
+Additional soak evidence on the same re-run:
+
+- `focus-context-churn` (10,000 identity switches): x64 170.8 ns/switch, x86 211.0 ns/switch,
+  stale-context rejection intact (0 stale accepted).
+- `handle-leak-soak` (10,000 TSF COM create/destroy cycles): x64 and x86 both
+  handle-delta=1, gdi-delta=0, user-delta=0 — no resource leak.
+- `tsf-module-activation` x64/x86: COM activation, QueryInterface and teardown pass.
+
+All values remain far below the 100 ms fail-open safety deadline (ADR 0003) and improve on the
+2026-08-17 baseline in every measured category. The 100 ms cutoff is distinct from the p95/p99
+optimization targets; tail regression continues to be reported by the long-string test.
+
 ## Release binary size baseline
 
 | Binary | x64 | x86 |

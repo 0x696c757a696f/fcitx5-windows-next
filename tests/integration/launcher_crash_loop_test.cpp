@@ -21,6 +21,8 @@ int wmain(int argc, wchar_t** argv) {
     platform::RuntimeIdentity identity;
     if (!platform::queryCurrentIdentity(identity)) return 1;
     const std::wstring suffix = std::to_wstring(GetCurrentProcessId());
+    if (!SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", (L"crash-" + suffix).c_str()))
+        return 1;
     const std::wstring launcherReadyName =
         L"Local\\Fcitx5WindowsNext.CrashTest.Launcher." + suffix;
     const std::wstring stopName = L"Local\\Fcitx5WindowsNext.CrashTest.Stop." + suffix;

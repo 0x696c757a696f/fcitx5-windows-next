@@ -28,7 +28,8 @@ renderer orientation and must not be represented as `candidate.orientation = "sc
 
 ## Windows design implications
 
-Protocol v5 carries page size, bulk availability, and end-of-list state. The engine obtains global
+Protocol v6 carries page size, bulk availability, end-of-list state, and semantic Windows modifier
+flags. The engine obtains global
 items through `candidateFromAll()` and keeps selection authoritative; the UI derives only a bounded
 viewport and row-local labels. Ordinary Fcitx key processing remains the sole commit path. The
 production D2D renderer supplies the grid, selected-row labels, automatic selected-row reveal, and

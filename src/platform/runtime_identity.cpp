@@ -159,11 +159,36 @@ bool queryCurrentIdentity(RuntimeIdentity& output) noexcept {
     }
 }
 
+std::wstring localTestNamespace() {
+    std::array<wchar_t, 34> value{};
+    const DWORD length = GetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", value.data(),
+                                                  static_cast<DWORD>(value.size()));
+    if (length == 0 || length >= value.size())
+        return {};
+    const std::wstring_view candidate(value.data(), length);
+    return validChannel(candidate) ? std::wstring(candidate) : std::wstring{};
+}
+
 std::wstring makeLocalEndpointName(const RuntimeIdentity& identity, std::wstring_view channel) {
     if (identity.userSid.empty() || identity.sessionId == 0 || !validChannel(channel))
         return {};
+    const std::wstring testNamespace = localTestNamespace();
+    const std::wstring namespacePart =
+        testNamespace.empty() ? std::wstring{} : L".Test." + testNamespace;
     return L"\\\\.\\pipe\\" + std::wstring(kReleaseIdentity.pipe_prefix) + L"." + identity.userSid +
-           L".Session." + std::to_wstring(identity.sessionId) + L"." + std::wstring(channel);
+           L".Session." + std::to_wstring(identity.sessionId) + namespacePart + L"." +
+           std::wstring(channel);
+}
+
+std::wstring makeLocalObjectName(const RuntimeIdentity& identity, std::wstring_view channel) {
+    if (identity.userSid.empty() || identity.sessionId == 0 || !validChannel(channel))
+        return {};
+    const std::wstring testNamespace = localTestNamespace();
+    const std::wstring namespacePart =
+        testNamespace.empty() ? std::wstring{} : L".Test." + testNamespace;
+    return L"Local\\" + std::wstring(kReleaseIdentity.local_object_prefix) + L"." +
+           identity.userSid + L".Session." + std::to_wstring(identity.sessionId) +
+           namespacePart + L"." + std::wstring(channel);
 }
 
 bool pathsReferToSameFile(std::wstring_view left, std::wstring_view right) noexcept {

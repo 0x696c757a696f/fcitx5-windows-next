@@ -33,10 +33,26 @@ int main() {
         std::cerr << "secure desktop identity was allowed to launch user engine\n";
         return 1;
     }
+    if (!SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", L"../invalid") ||
+        !localTestNamespace().empty() ||
+        !SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", L"contract-42") ||
+        localTestNamespace() != L"contract-42") {
+        std::cerr << "test namespace validation failed\n";
+        return 1;
+    }
+    const std::wstring isolatedEndpoint = makeLocalEndpointName(identity, L"engine");
+    const std::wstring isolatedObject = makeLocalObjectName(identity, L"candidate-42");
+    SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", nullptr);
+    if (isolatedEndpoint.find(L".Test.contract-42.engine") == std::wstring::npos ||
+        isolatedObject.find(L".Test.contract-42.candidate-42") == std::wstring::npos) {
+        std::cerr << "test namespace isolation was not applied\n";
+        return 1;
+    }
     const std::wstring endpoint = makeLocalEndpointName(identity, L"engine");
     if (endpoint.find(identity.userSid) == std::wstring::npos ||
         endpoint.find(std::to_wstring(identity.sessionId)) == std::wstring::npos ||
-        !makeLocalEndpointName(identity, L"../bad").empty()) {
+        !makeLocalEndpointName(identity, L"../bad").empty() ||
+        !makeLocalObjectName(identity, L"../bad").empty()) {
         std::cerr << "endpoint namespace validation failed\n";
         return 1;
     }

@@ -46,7 +46,7 @@ jobs:
 
       - name: Build once, analyze, test, and stage
         shell: pwsh
-        run: ./tools/build.ps1 package -Configuration Release
+        run: ./tools/verify-product.ps1 package
 
       - name: Upload only the verified lineage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -108,7 +108,7 @@ jobs:
         env:
           FCITX_RELEASE_VERSION: ${{ inputs.version }}
           FCITX_RELEASE_CHANNEL: ${{ inputs.channel }}
-        run: ./tools/build.ps1 release
+        run: ./tools/verify-product.ps1 release
 
       - name: Publish exact release artifacts
         shell: pwsh

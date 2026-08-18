@@ -1,0 +1,95 @@
+# v1.6 技术统筹与执行计划
+
+状态：current  
+更新：2026-08-18
+
+## 交付定义
+
+交付的是可持续输入的 Windows 平台，不是“许多能启动的 EXE”。用户安装后只需用
+`Win + Space` 选择 Fcitx5；托盘负责状态/恢复，Settings 负责低频管理，内部 helper
+均由受控调用链启动。
+
+```text
+Host → TSF → bounded IPC → Launcher/Engine → Fcitx5 → CandidateModel
+       ↑ EditSession commit                         ├→ UILess UIElement
+       └──────── authoritative result ──────────────└→ on-demand D2D UI
+```
+
+候选点击也走同一主链：UI 只发送带身份的 `SelectCandidate` 意图；Engine 校验并改变权威
+状态；TSF 通过 EditSession 投影 commit。禁止 SendInput、Hook 或 UI 直接写宿主。
+
+## Phase 执行顺序
+
+| Phase | 主参考 | 本阶段交付 | 退出门禁 |
+| --- | --- | --- | --- |
+| 0 | Chewing；gaboolic/Fcitx、McBopomofo、Weasel 定向补充 | pins、许可证、Reference Matrix、Keep/Rewrite/Do-not-inherit | 每个关键设计有首选参考和禁止继承项 |
+| 1A | MSVC/CMake/Windows SDK | x86/x64 空壳、统一 build、编码/静态/依赖基础门禁 | clean checkout 的 `dev/test` 确定通过 |
+| 1B | Chewing + McBopomofo | TSF → versioned IPC → mock engine → Notepad commit | 双架构注册激活；bounded fail-open；自动 E2E |
+| 2 | Chewing；按问题看 WindInput/Moqi | IPC v2、身份/ACL/deadline、Launcher、contract/fuzz/fault | timeout/late/backoff/并发/SYSTEM-LogonUI 确定测试与延迟基线 |
+| 3 | gaboolic/Fcitx + upstream | Fcitx Instance/event loop、InputContext adapter、基础 engine | 多 context 隔离；restart epoch；启动/idle/key repeat 基线 |
+| 4 | Chewing + McBopomofo；Weasel 病例 | CandidateModel、独立 C++ D2D UI、UILess、strict TOML、DPI/a11y | 真实宿主候选；UI crash 不阻塞；隐藏无 render loop；Win7 import smoke |
+| D0.1 | 真实宿主 | 停止加能力，维护者 dogfood；LoL+Vanguard 正规 TSF 路径 | 日常输入稳定；无 Hook/SendInput/注入；故障不拖垮宿主 |
+| 5 | Weasel；失败定向看 Rabbit/WindInput/Moqi | 可靠性、安全、Win7/游戏/Office/browser/RDP 兼容 | crash-loop、hijack、Safe Mode、实机矩阵 |
+| 6 | v1.6 Config 规则 | WTL Config、真实预览、安装/repair/uninstall/portable、i18n | typed round-trip；headless self-tests；GUI 生命周期一致 |
+| 7 | package/provider 契约 | addon/data/theme/translation、签名仓库、事务/回滚/权限分离 | parser fuzz；atomic activation；坏插件 Safe Mode |
+| 8 | release gate | identity、签名、SBOM/provenance、系统包管理器、PKG rollback | exact artifacts 与 release checklist 完整 |
+
+不得合并 Phase 来“节省步骤”。提前存在的后期代码可以保留，但只有通过前置契约后才能
+成为当前交付证据。
+
+## 状态与进程所有权
+
+- TSF：composition、EditSession commit、UILess 投影；没有 renderer/engine/network。
+- Engine：InputContext、CandidateModel、选择语义、epoch/revision 的唯一权威。
+- UI：按需启动，非激活渲染不可变 snapshot；窗口消失不改变输入真相。
+- Launcher：per-user/per-session；Engine 监督、UI 按需拉起/退避、托盘与最小健康状态。
+- Config/package/updater/deployer：按需，完成后退出。
+
+Launcher 崩溃不能靠新增永久 watchdog 解决。Windows Application Restart 可作补充，但必须
+保证下次正常 TSF activation 也能重新建立 launcher。输入线程等待总有硬 deadline，失败
+即 passthrough/fail-open。
+
+## 设置生效语义
+
+- `Live`：安全、可逆的视觉或低风险设置立即生效并持久化；
+- `Deferred`：复杂编辑在明确 Apply/Cancel 后提交；
+- `Restart-required`：只对确需重启的边界显示结果和动作。
+
+Config 不强制每页出现没有语义的 Apply。预览使用生产 CandidateModel/theme/layout 和真实
+renderer synthetic host，不维护第二套近似 UI。
+
+## 本轮执行队列
+
+1. 清除 v1.5/旧技术路线和虚假完成叙述，完成 Phase 0 文档门禁。
+2. 建立 `no-hook-sendinput` 静态门禁和候选交互 RED tests。
+3. 实现 UI → Engine 语义选择 → TSF EditSession commit；验证旧 revision/失焦/重复点击。
+4. 修正 UI 按需启动、Engine/UI 独立故障预算和 Launcher 再激活恢复。
+5. 覆盖 preedit UTF-8→UTF-16 caret、emoji、commit+new-preedit、UILess 与焦点 churn。
+6. 双架构 focused/full gates，再做无需 UAC 的 Desktop/Package；需重注册证据保持待办。
+7. 达到 D0.1 后再扩大 Phase 5；Config/package/release 按 6/7/8 顺序重新验收。
+
+## 质量门禁
+
+| 风险 | 必须有的证据 |
+| --- | --- |
+| preedit/caret | UTF-8 边界/UTF-16 offset 单测；TSF fake session；emoji/焦点真实宿主 |
+| 候选点击 | hit/identity/property；UI↔Engine↔TSF contract；Notepad 点击提交 |
+| UILess | CandidateModel 同源；UIElement Begin/Update/End；NVDA/Narrator/host smoke |
+| 生命周期 | virtual clock；crash-loop fixture；逐一 kill Engine/UI/Launcher 后恢复 |
+| 配置 | typed parser/model；Live/Deferred/Restart round-trip；真实 renderer 预览 |
+| package | schema/signature/path fuzz；install/update/remove/rollback；离线/损坏/占用 |
+| 反作弊 | import/static scan；LoL/Vanguard smoke；无 Hook/SendInput/注入/规避 |
+
+每项高风险行为至少需要最低层确定测试、跨进程契约/集成以及对应真实宿主或故障证据。
+历史报告只表明曾通过，受影响代码改变后立即过期。
+
+## 明确不做
+
+- 不更换冻结技术栈，不从 Config/商店/主题开始；
+- 不复制 GPL 非平凡实现，除非先做许可证决策；
+- 不采用 Hook、SendInput、UIA、坐标点击或宿主内 WebView；
+- 不让 TSF 下载、解压、加载 addon 或自绘候选；
+- 不让 UI 拥有 CandidateModel 或直接 commit；
+- 不把 UI 永久常驻，也不新增 watchdog；
+- 不在无新授权时触发 UAC；
+- 不在生产签名/仓库/兼容证据缺失时宣布 Phase 8 完成。

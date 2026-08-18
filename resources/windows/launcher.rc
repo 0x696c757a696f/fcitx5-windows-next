@@ -1,0 +1,5 @@
+#include "resource.h"
+
+IDI_FCITX5_APP ICON "../icons/fcitx5.ico"
+IDI_FCITX5_PAUSED ICON "../icons/fcitx5-paused.ico"
+IDI_FCITX5_ERROR ICON "../icons/fcitx5-error.ico"

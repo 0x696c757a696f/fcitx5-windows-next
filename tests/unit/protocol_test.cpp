@@ -89,6 +89,30 @@ int main() {
                         helloResponseInput.serverArchitectureBits,
                 "hello response roundtrip failed")) return 1;
 
+    const CandidateSelectRequest selectInput{
+        Metadata{3, 0, 99, 3, 7, 11, 14}, 1234, 0x0b02};
+    CandidateSelectRequest selectOutput;
+    if (!expect(decodeFrame(encode(selectInput), frame) && decode(frame, selectOutput) &&
+                    selectOutput.metadata == selectInput.metadata &&
+                    selectOutput.targetProcessId == selectInput.targetProcessId &&
+                    selectOutput.candidateId == selectInput.candidateId,
+                "candidate selection request roundtrip failed")) return 1;
+
+    const CandidateSelectResponse selectResponseInput{
+        Metadata{4, 3, 99, 3, 7, 0, 15}, Status::ok};
+    CandidateSelectResponse selectResponseOutput;
+    if (!expect(decodeFrame(encode(selectResponseInput), frame) &&
+                    decode(frame, selectResponseOutput) &&
+                    selectResponseOutput.metadata == selectResponseInput.metadata &&
+                    selectResponseOutput.status == Status::ok,
+                "candidate selection response roundtrip failed")) return 1;
+
+    const StateRequest stateInput{Metadata{5, 0, 99, 3, 7, 11, 14}};
+    StateRequest stateOutput;
+    if (!expect(decodeFrame(encode(stateInput), frame) && decode(frame, stateOutput) &&
+                    stateOutput.metadata == stateInput.metadata,
+                "state request roundtrip failed")) return 1;
+
     for (std::uint32_t rawCommand =
              static_cast<std::uint32_t>(LauncherCommand::startDemand);
          rawCommand <= static_cast<std::uint32_t>(LauncherCommand::shutdown); ++rawCommand) {

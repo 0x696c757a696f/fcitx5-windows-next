@@ -6,6 +6,13 @@
 
 #include <iostream>
 
+static_assert(fcitx::windows::tsf::kInputProfiles.size() == 1);
+static_assert(fcitx::windows::tsf::kInputProfiles[0].language ==
+              MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED));
+static_assert(fcitx::windows::tsf::kObsoleteInputProfiles.size() == 1);
+static_assert(fcitx::windows::tsf::kObsoleteInputProfiles[0].language ==
+              MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
+
 int wmain(int argc, wchar_t** argv) {
     if (argc != 2) {
         std::cerr << "TSF DLL argument required\n";
@@ -29,9 +36,25 @@ int wmain(int argc, wchar_t** argv) {
     HRESULT result = getClassObject(fcitx::windows::tsf::kTextServiceClsid, IID_IClassFactory,
                                     reinterpret_cast<void**>(&factory));
     ITfTextInputProcessorEx* service = nullptr;
+    ITfThreadMgrEventSink* threadManagerEventSink = nullptr;
+    ITfThreadFocusSink* threadFocusSink = nullptr;
     if (SUCCEEDED(result)) {
         result = factory->CreateInstance(nullptr, IID_ITfTextInputProcessorEx,
                                          reinterpret_cast<void**>(&service));
+    }
+    if (SUCCEEDED(result)) {
+        result = service->QueryInterface(IID_ITfThreadMgrEventSink,
+                                         reinterpret_cast<void**>(&threadManagerEventSink));
+    }
+    if (SUCCEEDED(result)) {
+        result = service->QueryInterface(IID_ITfThreadFocusSink,
+                                         reinterpret_cast<void**>(&threadFocusSink));
+    }
+    if (threadFocusSink) {
+        threadFocusSink->Release();
+    }
+    if (threadManagerEventSink) {
+        threadManagerEventSink->Release();
     }
     if (service) {
         service->Release();

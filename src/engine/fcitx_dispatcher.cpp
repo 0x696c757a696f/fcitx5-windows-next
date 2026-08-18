@@ -81,6 +81,58 @@ bool FcitxDispatcher::processKey(const ClientContextKey& context,
     }
 }
 
+bool FcitxDispatcher::selectCandidate(
+    std::uint32_t targetProcessId,
+    const protocol::CandidateSelectRequest& request,
+    RuntimeResult& result, std::chrono::milliseconds timeout) {
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
+    auto completed = std::make_shared<std::promise<RuntimeResult>>();
+    auto future = completed->get_future();
+    dispatcher_->schedule([this, targetProcessId, request, completed] {
+        try {
+            completed->set_value(runtime_->selectCandidate(targetProcessId, request));
+        } catch (...) {
+            completed->set_exception(std::current_exception());
+        }
+    });
+    if (future.wait_for(timeout) != std::future_status::ready) return false;
+    try {
+        result = future.get();
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool FcitxDispatcher::takePendingState(
+    const ClientContextKey& context, const protocol::StateRequest& request,
+    RuntimeResult& result, std::chrono::milliseconds timeout) {
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
+    auto completed = std::make_shared<std::promise<RuntimeResult>>();
+    auto future = completed->get_future();
+    dispatcher_->schedule([this, context, request, completed] {
+        try {
+            completed->set_value(runtime_->takePendingState(context, request));
+        } catch (...) {
+            completed->set_exception(std::current_exception());
+        }
+    });
+    if (future.wait_for(timeout) != std::future_status::ready) return false;
+    try {
+        result = future.get();
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void FcitxDispatcher::forgetConnection(std::uint64_t connectionId) {
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_ || connectionId == 0)
+        return;
+    dispatcher_->schedule(
+        [this, connectionId] { runtime_->forgetConnection(connectionId); });
+}
+
 void FcitxDispatcher::stop() {
     accepting_.store(false, std::memory_order_release);
     if (dispatcher_ && runtime_) {

@@ -99,8 +99,8 @@ private:
 
 class TestComposition final : public ITfComposition {
 public:
-    TestComposition(TestRange* range, bool* ended, ITfCompositionSink* sink)
-        : range_(range), ended_(ended), sink_(sink) {}
+    TestComposition(TestRange* range, bool* active, bool* ended, ITfCompositionSink* sink)
+        : range_(range), active_(active), ended_(ended), sink_(sink) {}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
         if (!object) return E_POINTER;
         *object = nullptr;
@@ -132,6 +132,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE EndComposition(TfEditCookie editCookie) noexcept override {
+        *active_ = false;
         *ended_ = true;
         if (sink_) return sink_->OnCompositionTerminated(editCookie, this);
         return S_OK;
@@ -141,6 +142,7 @@ private:
     ~TestComposition() = default;
     std::atomic<ULONG> references_{1};
     TestRange* range_{};
+    bool* active_{};
     bool* ended_{};
     ComPtr<ITfCompositionSink> sink_;
 };
@@ -315,8 +317,9 @@ public:
                                                ITfComposition** composition) noexcept override {
         if (!range || !composition || active_) return E_INVALIDARG;
         active_ = true;
+        started_ = true;
         ended_ = false;
-        *composition = new (std::nothrow) TestComposition(&range_, &ended_, sink);
+        *composition = new (std::nothrow) TestComposition(&range_, &active_, &ended_, sink);
         return *composition ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE EnumCompositions(IEnumITfCompositionView**) noexcept override {
@@ -334,7 +337,7 @@ public:
 
     [[nodiscard]] const std::wstring& text() const noexcept { return range_.text(); }
     [[nodiscard]] bool compositionEnded() const noexcept { return ended_; }
-    [[nodiscard]] bool compositionStarted() const noexcept { return active_; }
+    [[nodiscard]] bool compositionStarted() const noexcept { return started_; }
 
 private:
     std::atomic<ULONG> references_{1};
@@ -342,10 +345,55 @@ private:
     TestInputScope inputScope_;
     TestInputScopeProperty inputScopeProperty_;
     bool active_{};
+    bool started_{};
     bool ended_{};
 };
 
-class TestThreadManager final : public ITfThreadMgr, public ITfKeystrokeMgr {
+class TestDocumentManager final : public ITfDocumentMgr {
+public:
+    explicit TestDocumentManager(ITfContext* context) : context_(context) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, IID_ITfDocumentMgr)) {
+            *object = static_cast<ITfDocumentMgr*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override {
+        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() noexcept override {
+        return references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    }
+    HRESULT STDMETHODCALLTYPE CreateContext(TfClientId, DWORD, IUnknown*, ITfContext**,
+                                            TfEditCookie*) noexcept override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE Push(ITfContext*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Pop(DWORD) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetTop(ITfContext** context) noexcept override {
+        if (!context) return E_POINTER;
+        *context = context_.Get();
+        if (*context) (*context)->AddRef();
+        return *context ? S_OK : S_FALSE;
+    }
+    HRESULT STDMETHODCALLTYPE GetBase(ITfContext** context) noexcept override {
+        return GetTop(context);
+    }
+    HRESULT STDMETHODCALLTYPE EnumContexts(IEnumTfContexts**) noexcept override {
+        return E_NOTIMPL;
+    }
+
+private:
+    std::atomic<ULONG> references_{1};
+    ComPtr<ITfContext> context_;
+};
+
+class TestThreadManager final : public ITfThreadMgr, public ITfKeystrokeMgr, public ITfSource {
 public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
         if (!object) return E_POINTER;
@@ -354,6 +402,8 @@ public:
             *object = static_cast<ITfThreadMgr*>(this);
         } else if (IsEqualIID(iid, IID_ITfKeystrokeMgr)) {
             *object = static_cast<ITfKeystrokeMgr*>(this);
+        } else if (IsEqualIID(iid, IID_ITfSource)) {
+            *object = static_cast<ITfSource*>(this);
         }
         if (!*object) return E_NOINTERFACE;
         AddRef();
@@ -434,10 +484,54 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SimulatePreservedKey(ITfContext*, REFGUID,
                                                    BOOL*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE AdviseSink(REFIID iid, IUnknown* unknown,
+                                         DWORD* cookie) noexcept override {
+        if (!unknown || !cookie) return E_POINTER;
+        if (IsEqualIID(iid, IID_ITfThreadMgrEventSink) && !threadManagerEventSink_) {
+            const HRESULT result = unknown->QueryInterface(
+                IID_PPV_ARGS(threadManagerEventSink_.ReleaseAndGetAddressOf()));
+            if (FAILED(result)) return result;
+            *cookie = 1;
+            return S_OK;
+        }
+        if (IsEqualIID(iid, IID_ITfThreadFocusSink) && !threadFocusSink_) {
+            const HRESULT result = unknown->QueryInterface(
+                IID_PPV_ARGS(threadFocusSink_.ReleaseAndGetAddressOf()));
+            if (FAILED(result)) return result;
+            *cookie = 2;
+            return S_OK;
+        }
+        return E_UNEXPECTED;
+    }
+    HRESULT STDMETHODCALLTYPE UnadviseSink(DWORD cookie) noexcept override {
+        if (cookie == 1 && threadManagerEventSink_) {
+            threadManagerEventSink_.Reset();
+            return S_OK;
+        }
+        if (cookie == 2 && threadFocusSink_) {
+            threadFocusSink_.Reset();
+            return S_OK;
+        }
+        return E_INVALIDARG;
+    }
+
+    [[nodiscard]] bool lifecycleSinksAdvised() const noexcept {
+        return threadManagerEventSink_ && threadFocusSink_;
+    }
+    [[nodiscard]] bool lifecycleSinksReleased() const noexcept {
+        return !threadManagerEventSink_ && !threadFocusSink_;
+    }
+    HRESULT simulateDocumentFocusLost(ITfContext* context) noexcept {
+        if (!threadManagerEventSink_) return E_UNEXPECTED;
+        TestDocumentManager previous(context);
+        return threadManagerEventSink_->OnSetFocus(nullptr, &previous);
+    }
 
 private:
     std::atomic<ULONG> references_{1};
     bool advised_{};
+    ComPtr<ITfThreadMgrEventSink> threadManagerEventSink_;
+    ComPtr<ITfThreadFocusSink> threadFocusSink_;
 };
 
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
@@ -456,7 +550,7 @@ EngineProcess startEngine(const wchar_t* executable) {
         return {};
     }
     std::wstring command = quote(executable) +
-                           L" --test-once --composition-test --ready-event " +
+                           L" --test-clients 2 --composition-test --ready-event " +
                            quote(eventName);
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
@@ -476,7 +570,7 @@ EngineProcess startEngine(const wchar_t* executable) {
     return {process.hProcess, ready};
 }
 
-int exercise(const wchar_t* dllPath) {
+int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
     HMODULE module = LoadLibraryExW(dllPath, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
                                                         LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!module) {
@@ -492,6 +586,7 @@ int exercise(const wchar_t* dllPath) {
     TestThreadManager threadManager;
     constexpr TfClientId clientId = 1;
     bool activated = false;
+    bool lifecycleSinksAdvised = false;
     int result = 1;
     HRESULT stepResult = getClassObject
                              ? getClassObject(fcitx::windows::tsf::kTextServiceClsid,
@@ -508,6 +603,7 @@ int exercise(const wchar_t* dllPath) {
                   << ", clientId=0x" << clientId << '\n';
     } else {
         activated = true;
+        lifecycleSinksAdvised = threadManager.lifecycleSinksAdvised();
         TestContext passwordContext(IS_PASSWORD);
         BOOL passwordTestEaten = TRUE;
         BOOL passwordEaten = TRUE;
@@ -529,6 +625,15 @@ int exercise(const wchar_t* dllPath) {
                 keySink->OnTestKeyDown(&context, 'N', 0, &duplicatePreeditTestEaten);
             const HRESULT preeditResult =
                 keySink->OnKeyDown(&context, 'N', 0, &preeditEaten);
+            const HRESULT focusLost = threadManager.simulateDocumentFocusLost(&context);
+            const bool focusLossClearedComposition =
+                SUCCEEDED(focusLost) && context.compositionEnded() && context.text().empty();
+            BOOL resumedPreeditTestEaten = FALSE;
+            BOOL resumedPreeditEaten = FALSE;
+            const HRESULT resumedPreeditTest =
+                keySink->OnTestKeyDown(&context, 'N', 0, &resumedPreeditTestEaten);
+            const HRESULT resumedPreeditResult =
+                keySink->OnKeyDown(&context, 'N', 0, &resumedPreeditEaten);
             BOOL commitTestEaten = FALSE;
             BOOL duplicateCommitTestEaten = FALSE;
             BOOL commitEaten = FALSE;
@@ -538,26 +643,61 @@ int exercise(const wchar_t* dllPath) {
                 keySink->OnTestKeyDown(&context, VK_SPACE, 0, &duplicateCommitTestEaten);
             const HRESULT commitResult =
                 keySink->OnKeyDown(&context, VK_SPACE, 0, &commitEaten);
+            const bool committedChinese = context.text() == L"\x4f60";
             BOOL orphanTestEaten = FALSE;
             BOOL orphanKeyUpEaten = TRUE;
             const HRESULT orphanTest =
                 keySink->OnTestKeyDown(&context, 'A', 0, &orphanTestEaten);
+            const bool engineAlreadyStopped =
+                WaitForSingleObject(engineProcess, 0) == WAIT_OBJECT_0;
+            if (!engineAlreadyStopped) (void)TerminateProcess(engineProcess, 0);
+            const bool engineStopped =
+                engineAlreadyStopped || WaitForSingleObject(engineProcess, 2000) == WAIT_OBJECT_0;
+            BOOL fallbackEaten = FALSE;
+            const HRESULT fallbackResult =
+                keySink->OnKeyDown(&context, 'A', 0, &fallbackEaten);
             const HRESULT orphanKeyUp =
                 keySink->OnKeyUp(&context, 'A', 0, &orphanKeyUpEaten);
             if (SUCCEEDED(preeditTest) && SUCCEEDED(preeditResult) &&
                 SUCCEEDED(duplicatePreeditTest) && SUCCEEDED(commitTest) &&
+                SUCCEEDED(resumedPreeditTest) && SUCCEEDED(resumedPreeditResult) &&
                 SUCCEEDED(duplicateCommitTest) && SUCCEEDED(commitResult) &&
-                SUCCEEDED(orphanTest) && SUCCEEDED(orphanKeyUp) &&
+                SUCCEEDED(orphanTest) && SUCCEEDED(fallbackResult) &&
+                SUCCEEDED(orphanKeyUp) && engineStopped && committedChinese &&
                 preeditTestEaten && duplicatePreeditTestEaten && preeditEaten &&
+                resumedPreeditTestEaten && resumedPreeditEaten &&
                 commitTestEaten && duplicateCommitTestEaten && commitEaten &&
-                orphanTestEaten && !orphanKeyUpEaten &&
-                context.text() == L"\x4f60" && context.compositionEnded()) {
+                orphanTestEaten && fallbackEaten && !orphanKeyUpEaten &&
+                context.text() == L"a" && context.compositionEnded() &&
+                lifecycleSinksAdvised && focusLossClearedComposition) {
                 result = 0;
             } else {
                 std::cerr << "composition path failed: preedit=0x" << std::hex
                           << preeditResult << ", commit=0x" << commitResult
+                          << ", preeditTest=0x" << preeditTest
+                          << ", duplicatePreeditTest=0x" << duplicatePreeditTest
+                          << ", resumedPreeditTest=0x" << resumedPreeditTest
+                          << ", resumedPreedit=0x" << resumedPreeditResult
+                          << ", commitTest=0x" << commitTest
+                          << ", duplicateCommitTest=0x" << duplicateCommitTest
+                          << ", orphanTest=0x" << orphanTest
+                          << ", fallback=0x" << fallbackResult
+                          << ", orphanKeyUp=0x" << orphanKeyUp
                           << ", preeditEaten=" << std::dec << preeditEaten
+                          << ", preeditTestEaten=" << preeditTestEaten
+                          << ", duplicatePreeditTestEaten=" << duplicatePreeditTestEaten
+                          << ", resumedPreeditTestEaten=" << resumedPreeditTestEaten
+                          << ", resumedPreeditEaten=" << resumedPreeditEaten
                           << ", commitEaten=" << commitEaten
+                          << ", commitTestEaten=" << commitTestEaten
+                          << ", duplicateCommitTestEaten=" << duplicateCommitTestEaten
+                          << ", orphanTestEaten=" << orphanTestEaten
+                          << ", orphanKeyUpEaten=" << orphanKeyUpEaten
+                          << ", fallbackEaten=" << fallbackEaten
+                          << ", engineStopped=" << engineStopped
+                          << ", committedChinese=" << committedChinese
+                          << ", focusLossCleared=" << focusLossClearedComposition
+                          << ", lifecycleSinksAdvised=" << lifecycleSinksAdvised
                           << ", started=" << context.compositionStarted()
                           << ", ended=" << context.compositionEnded()
                           << ", text=0x" << std::hex
@@ -568,7 +708,10 @@ int exercise(const wchar_t* dllPath) {
             }
         }
     }
-    if (activated) service->Deactivate();
+    if (activated) {
+        const HRESULT deactivated = service->Deactivate();
+        if (FAILED(deactivated) || !threadManager.lifecycleSinksReleased()) result = 1;
+    }
     keySink.Reset();
     service.Reset();
     factory.Reset();
@@ -583,11 +726,14 @@ int wmain(int argc, wchar_t** argv) {
         std::cerr << "TSF DLL and mock engine arguments required\n";
         return 1;
     }
+    const std::wstring testNamespace = L"tsf-" + std::to_wstring(GetCurrentProcessId());
+    if (!SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", testNamespace.c_str())) return 1;
+    if (!SetEnvironmentVariableW(L"FCITX5_TEST_ENGINE_PATH", argv[2])) return 1;
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(initialized)) return 1;
     EngineProcess engine = startEngine(argv[2]);
     if (!engine.process) std::cerr << "mock engine process unavailable\n";
-    int result = engine.process && engine.ready ? exercise(argv[1]) : 1;
+    int result = engine.process && engine.ready ? exercise(argv[1], engine.process) : 1;
     if (engine.process) {
         if (WaitForSingleObject(engine.process, 2000) != WAIT_OBJECT_0) {
             TerminateProcess(engine.process, 2);

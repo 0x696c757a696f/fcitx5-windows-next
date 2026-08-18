@@ -10,6 +10,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$dirty = @(git -C $repoRoot status --porcelain=v1 --untracked-files=all)
+if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
+  throw 'Release promotion requires a clean source tree; package/dev stages may be dirty but cannot be signed.'
+}
 $outRoot = Join-Path $repoRoot 'out/package'
 $stagePointer = Join-Path $outRoot 'current-stage.txt'
 if (-not (Test-Path -LiteralPath $stagePointer -PathType Leaf)) {
@@ -30,7 +34,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Protected trusted keyring is not usable by Pac
 $sourceCommit = (git -C $repoRoot rev-parse HEAD).Trim()
 $manifest = Get-Content -LiteralPath (Join-Path $stage 'manifest.json') -Raw | ConvertFrom-Json
 if ($manifest.version -ne $Version -or $manifest.channel -ne $Channel -or
-    $manifest.source_commit -ne $sourceCommit) {
+    $manifest.source_commit -ne $sourceCommit -or $manifest.source_tree_clean -ne $true) {
   throw 'Tested stage lineage does not match requested release identity.'
 }
 $peFiles = @(Get-ChildItem -LiteralPath $stage -File -Recurse -Include *.exe,*.dll |

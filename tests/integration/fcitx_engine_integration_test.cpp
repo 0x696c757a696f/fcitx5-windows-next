@@ -4,11 +4,16 @@
 #include <Windows.h>
 #include <Psapi.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
+#include <random>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -18,37 +23,66 @@ std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value)
 
 struct Process {
     HANDLE handle{};
+    HANDLE stopEvent{};
     Process() = default;
-    explicit Process(HANDLE value) : handle(value) {}
+    explicit Process(HANDLE value, HANDLE stop = nullptr) : handle(value), stopEvent(stop) {}
     Process(const Process&) = delete;
     Process& operator=(const Process&) = delete;
-    Process(Process&& other) noexcept : handle(std::exchange(other.handle, nullptr)) {}
+    Process(Process&& other) noexcept
+        : handle(std::exchange(other.handle, nullptr)),
+          stopEvent(std::exchange(other.stopEvent, nullptr)) {}
     Process& operator=(Process&& other) noexcept {
         if (this != &other) {
             if (handle) CloseHandle(handle);
+            if (stopEvent) CloseHandle(stopEvent);
             handle = std::exchange(other.handle, nullptr);
+            stopEvent = std::exchange(other.stopEvent, nullptr);
         }
         return *this;
     }
     ~Process() {
-        if (!handle) return;
+        if (stopEvent) SetEvent(stopEvent);
+        if (!handle) {
+            if (stopEvent) CloseHandle(stopEvent);
+            return;
+        }
         if (WaitForSingleObject(handle, 5000) != WAIT_OBJECT_0) {
             TerminateProcess(handle, 9);
             WaitForSingleObject(handle, 1000);
         }
         CloseHandle(handle);
+        if (stopEvent) CloseHandle(stopEvent);
+    }
+
+    void requestStop() const {
+        if (stopEvent) SetEvent(stopEvent);
     }
 };
 
 bool startEngine(const wchar_t* executable, unsigned sequence, bool safeMode,
+                 unsigned testClientCount,
                  Process& process) {
     const std::wstring eventName =
         L"Local\\Fcitx5WindowsNext.RealEngine.Ready." +
         std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(sequence);
+    const std::wstring stopEventName =
+        L"Local\\Fcitx5WindowsNext.RealEngine.Stop." +
+        std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(sequence);
     HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, eventName.c_str());
     if (!ready) return false;
-    std::wstring command = quote(executable) + L" --test-once --ready-event " +
-                           quote(eventName);
+    HANDLE stop = testClientCount == 0
+                      ? CreateEventW(nullptr, TRUE, FALSE, stopEventName.c_str())
+                      : nullptr;
+    if (testClientCount == 0 && !stop) {
+        CloseHandle(ready);
+        return false;
+    }
+    std::wstring command = quote(executable);
+    if (testClientCount == 0)
+        command += L" --stop-event " + quote(stopEventName);
+    else
+        command += L" --test-clients " + std::to_wstring(testClientCount);
+    command += L" --ready-event " + quote(eventName);
     if (safeMode) command += L" --safe-mode";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
@@ -61,25 +95,87 @@ bool startEngine(const wchar_t* executable, unsigned sequence, bool safeMode,
     if (!created) {
         std::cerr << "real engine creation failed: " << GetLastError() << '\n';
         CloseHandle(ready);
+        if (stop) CloseHandle(stop);
         return false;
     }
     CloseHandle(information.hThread);
-    process = Process(information.hProcess);
+    process = Process(information.hProcess, stop);
     const bool signaled = WaitForSingleObject(ready, 15'000) == WAIT_OBJECT_0;
     CloseHandle(ready);
     if (!signaled) std::cerr << "real engine readiness timed out\n";
     return signaled;
 }
 
+bool runCandidateSelection(const std::filesystem::path& uiExecutable,
+                           const wchar_t* engineExecutable,
+                           std::uint64_t engineEpoch, std::uint64_t contextId,
+                           std::uint64_t compositionId, std::uint64_t revision,
+                           std::uint64_t candidateId) {
+    std::wstring command = quote(uiExecutable.wstring()) + L" --candidate-select-test " +
+                           quote(engineExecutable) + L" " +
+                           std::to_wstring(GetCurrentProcessId()) + L" " +
+                           std::to_wstring(engineEpoch) + L" " +
+                           std::to_wstring(contextId) + L" " +
+                           std::to_wstring(compositionId) + L" " +
+                           std::to_wstring(revision) + L" " +
+                           std::to_wstring(candidateId);
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION information{};
+    if (!CreateProcessW(uiExecutable.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &information)) return false;
+    CloseHandle(information.hThread);
+    const bool stopped = WaitForSingleObject(information.hProcess, 5000) == WAIT_OBJECT_0;
+    DWORD exitCode = UINT32_MAX;
+    if (stopped) GetExitCodeProcess(information.hProcess, &exitCode);
+    CloseHandle(information.hProcess);
+    return stopped && exitCode == 0;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 2 && argc != 3) return 1;
-    const bool safeMode = argc == 3 && std::wstring_view(argv[2]) == L"--safe-mode";
-    if (argc == 3 && !safeMode) return 1;
+    if (argc < 2 || argc > 6) return 1;
+    // An external runner (for example tools/test-candidate-ui.ps1) may already
+    // have injected a shared FCITX5_TEST_NAMESPACE so that the engine and the
+    // independent UI process listen on the same pipe namespace. Respect it;
+    // otherwise default to a process-unique namespace as before.
+    wchar_t injected[34]{};
+    const DWORD injectedLength = GetEnvironmentVariableW(
+        L"FCITX5_TEST_NAMESPACE", injected, static_cast<DWORD>(std::size(injected)));
+    const std::wstring testNamespace =
+        injectedLength > 0 && injectedLength < std::size(injected)
+            ? std::wstring(injected, injectedLength)
+            : L"engine-" + std::to_wstring(GetCurrentProcessId());
+    if (!SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", testNamespace.c_str())) return 1;
+    bool safeMode = false;
+    bool firstRunRime = false;
+    bool rimeLua = false;
+    bool typingFuzz = false;
+    bool chttrans = false;
+    for (int index = 2; index < argc; ++index) {
+        const std::wstring_view argument(argv[index]);
+        if (argument == L"--safe-mode") {
+            safeMode = true;
+        } else if (argument == L"--first-run-rime") {
+            firstRunRime = true;
+        } else if (argument == L"--rime-lua") {
+            firstRunRime = true;
+            rimeLua = true;
+        } else if (argument == L"--typing-fuzz") {
+            typingFuzz = true;
+        } else if (argument == L"--chttrans") {
+            chttrans = true;
+        } else {
+            return 1;
+        }
+    }
+    if (safeMode && firstRunRime) return 1;
     Process process;
     const auto startupBegin = std::chrono::steady_clock::now();
-    if (!startEngine(argv[1], 1, safeMode, process)) return 1;
+    if (!startEngine(argv[1], 1, safeMode, typingFuzz ? 0U : 2U, process)) return 1;
     const auto startupDuration = std::chrono::steady_clock::now() - startupBegin;
 
     FILETIME creationBefore{}, exitBefore{}, kernelBefore{}, userBefore{};
@@ -87,8 +183,11 @@ int wmain(int argc, wchar_t** argv) {
     if (!GetProcessTimes(process.handle, &creationBefore, &exitBefore, &kernelBefore,
                          &userBefore)) return 1;
     const auto settleBegin = std::chrono::steady_clock::now();
+    const unsigned requiredQuietWindows = firstRunRime ? 20U : 3U;
+    const unsigned maximumSamples = firstRunRime ? 1'200U : 50U;
     unsigned quietWindows = 0;
-    for (unsigned sample = 0; sample < 50 && quietWindows < 3; ++sample) {
+    for (unsigned sample = 0;
+         sample < maximumSamples && quietWindows < requiredQuietWindows; ++sample) {
         if (WaitForSingleObject(process.handle, 100) != WAIT_TIMEOUT) return 1;
         if (!GetProcessTimes(process.handle, &creationAfter, &exitAfter, &kernelAfter,
                              &userAfter)) return 1;
@@ -107,8 +206,9 @@ int wmain(int argc, wchar_t** argv) {
         kernelBefore = kernelAfter;
         userBefore = userAfter;
     }
-    if (quietWindows < 3) {
-        std::cerr << "engine did not reach a steady idle state within 5 seconds\n";
+    if (quietWindows < requiredQuietWindows) {
+        std::cerr << "engine did not reach a steady idle state within "
+                  << maximumSamples / 10U << " seconds\n";
         return 1;
     }
     const auto settleDuration = std::chrono::steady_clock::now() - settleBegin;
@@ -175,6 +275,34 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
     const auto commitDuration = std::chrono::steady_clock::now() - commitStart;
+
+    constexpr std::uint64_t candidateContextId = 0x43414E4449444154ULL;
+    if (!client.processKey(candidateContextId, 'N', 0, result) ||
+        !client.processKey(candidateContextId, 'I', 0, result) ||
+        result.candidates.empty() || result.compositionId == 0 || result.revision == 0) {
+        std::cerr << "candidate selection setup failed\n";
+        return 1;
+    }
+    const auto selectionSnapshot = result;
+    const std::filesystem::path uiExecutable =
+        std::filesystem::path(argv[1]).parent_path() / L"fcitx5-ui.exe";
+    const std::wstring notificationName =
+        fcitx::windows::platform::makeLocalObjectName(
+            identity, L"candidate-" + std::to_wstring(GetCurrentProcessId()));
+    HANDLE notification = CreateEventW(nullptr, FALSE, FALSE, notificationName.c_str());
+    if (!notification ||
+        !runCandidateSelection(uiExecutable, argv[1], selectionSnapshot.engineEpoch,
+                               candidateContextId, selectionSnapshot.compositionId,
+                               selectionSnapshot.revision,
+                               selectionSnapshot.candidates.front().id) ||
+        WaitForSingleObject(notification, 2000) != WAIT_OBJECT_0 ||
+        !client.pollState(candidateContextId, result) || result.commit.empty() ||
+        !result.preedit.empty()) {
+        if (notification) CloseHandle(notification);
+        std::cerr << "semantic candidate selection did not commit through Engine and TSF state\n";
+        return 1;
+    }
+    CloseHandle(notification);
     std::cout << "engine-startup-ms="
               << std::chrono::duration_cast<std::chrono::milliseconds>(startupDuration).count()
               << " idle-cpu-us=" << idleCpu100ns / 10U
@@ -189,27 +317,235 @@ int wmain(int argc, wchar_t** argv) {
               << std::chrono::duration_cast<std::chrono::microseconds>(commitDuration).count()
               << '\n';
 
+    if (chttrans) {
+        constexpr std::uint64_t conversionContext = 0x4348545452414E53ULL;
+        constexpr std::uint32_t conversionFlags =
+            fcitx::windows::protocol::kKeyFlagControl |
+            fcitx::windows::protocol::kKeyFlagShift;
+        if (!client.processKey(conversionContext, 'F', conversionFlags, result) ||
+            !result.handled) {
+            std::cerr << "chttrans toggle hotkey was not handled\n";
+            return 1;
+        }
+        for (const std::uint32_t key : {'S', 'H', 'U'}) {
+            if (!client.processKey(conversionContext, key, 0, result) || !result.handled) {
+                std::cerr << "chttrans pinyin input failed\n";
+                return 1;
+            }
+        }
+        if (!client.processKey(conversionContext, VK_SPACE, 0, result) ||
+            result.commit != L"書") {
+            std::wcerr << L"chttrans did not convert the committed word: "
+                       << result.commit << L'\n';
+            return 1;
+        }
+        if (!client.processKey(conversionContext, 'F', conversionFlags, result) ||
+            !result.handled) {
+            std::cerr << "chttrans restore hotkey was not handled\n";
+            return 1;
+        }
+    }
+
     constexpr std::uint64_t secondContextId = 0x27182818U;
-    if (!client.processKey(secondContextId, 'H', 0, result) ||
-        result.preedit != L"h") {
-        std::wcerr << L"second context did not start independently\n";
-        return 1;
+    if (firstRunRime) {
+        if (!client.processKey(contextId, 'H', 0, result) || result.preedit != L"h") {
+            std::wcerr << L"Rime first context start failed: " << result.preedit << L'\n';
+            return 1;
+        }
+        if (!client.processKey(secondContextId, 'N', 0, result) || result.preedit != L"n") {
+            std::wcerr << L"Rime second context start failed: " << result.preedit << L'\n';
+            return 1;
+        }
+        if (!client.processKey(contextId, VK_BACK, 0, result) || !result.preedit.empty()) {
+            std::wcerr << L"Rime first context clear failed: " << result.preedit << L'\n';
+            return 1;
+        }
+        // Rime deliberately clears the inactive session when focus moves between
+        // contexts. The new composition must start clean rather than leak "h" or "n".
+        if (!client.processKey(secondContextId, 'I', 0, result) || result.preedit != L"i") {
+            std::wcerr << L"Rime second context resume failed: " << result.preedit << L'\n';
+            return 1;
+        }
+    } else {
+        if (!client.processKey(secondContextId, 'H', 0, result) ||
+            result.preedit != L"h") {
+            std::wcerr << L"second context did not start independently\n";
+            return 1;
+        }
+        if (!client.processKey(contextId, 'H', 0, result) || result.preedit != L"h") {
+            std::wcerr << L"first context retained state from second context: preedit="
+                       << result.preedit << L" commit=" << result.commit << L'\n';
+            return 1;
+        }
+        if (!client.processKey(secondContextId, 'A', 0, result) ||
+            result.preedit != L"a" || result.commit != L"h") {
+            std::wcerr << L"second context state was not preserved: "
+                       << result.preedit << L" commit=" << result.commit << L'\n';
+            return 1;
+        }
+        if (!client.processKey(contextId, 'A', 0, result) ||
+            result.preedit != L"a" || result.commit != L"h") {
+            std::wcerr << L"first context received state from second context\n";
+            return 1;
+        }
     }
-    if (!client.processKey(contextId, 'H', 0, result) || result.preedit != L"h") {
-        std::wcerr << L"first context retained state from second context: preedit="
-                   << result.preedit << L" commit=" << result.commit << L'\n';
-        return 1;
+
+    if (rimeLua) {
+        constexpr std::uint64_t luaContextId = 0x14142135U;
+        for (const std::uint32_t key : {'Z', 'Z', 'L', 'U', 'A'}) {
+            if (!client.processKey(luaContextId, key, 0, result) || !result.handled) {
+                std::cerr << "Rime Lua probe input failed\n";
+                return 1;
+            }
+        }
+        const auto luaCandidate = std::ranges::find_if(
+            result.candidates,
+            [](const auto& candidate) { return candidate.text == L"Lua Works"; });
+        if (luaCandidate == result.candidates.end()) {
+            std::wcerr << L"Rime Lua translator did not produce its probe candidate\n";
+            return 1;
+        }
+        const auto luaIndex = static_cast<std::size_t>(
+            std::distance(result.candidates.begin(), luaCandidate));
+        if (luaIndex >= 9U ||
+            !client.processKey(luaContextId, static_cast<std::uint32_t>('1' + luaIndex), 0,
+                               result) ||
+            !result.handled ||
+            result.commit != L"Lua Works") {
+            std::wcerr << L"Rime Lua candidate did not commit: " << result.commit << L'\n';
+            return 1;
+        }
     }
-    if (!client.processKey(secondContextId, 'A', 0, result) ||
-        result.preedit != L"a" || result.commit != L"h") {
-        std::wcerr << L"second context state was not preserved: "
-                   << result.preedit << L" commit=" << result.commit << L'\n';
-        return 1;
+
+    if (typingFuzz) {
+        constexpr std::uint64_t reconnectContextId = 0x42424242U;
+        {
+            fcitx::windows::ipc::PipeClient abandoned(
+                fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
+                fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
+            if (!abandoned.processKey(reconnectContextId, 'H', 0, result) ||
+                result.preedit != L"h") {
+                std::cerr << "disconnect recovery setup failed\n";
+                return 1;
+            }
+        }
+        fcitx::windows::ipc::PipeClient recovered(
+            fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
+            fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
+        if (!recovered.processKey(reconnectContextId, 'N', 0, result) ||
+            result.preedit != L"n") {
+            std::wcerr << L"same-epoch reconnect retained stale composition: "
+                       << result.preedit << L'\n';
+            return 1;
+        }
+        recovered.disconnect();
     }
-    if (!client.processKey(contextId, 'A', 0, result) ||
-        result.preedit != L"a" || result.commit != L"h") {
-        std::wcerr << L"first context received state from second context\n";
-        return 1;
+
+    if (typingFuzz) {
+        constexpr std::array<std::uint32_t, 48> commonKeys{
+            'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
+            'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
+            'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+            VK_SPACE, VK_BACK, VK_RETURN, VK_ESCAPE, VK_LEFT, VK_RIGHT,
+            VK_UP, VK_DOWN, VK_PRIOR, VK_NEXT, 0U, UINT32_MAX};
+        constexpr unsigned longStringRounds = 300;
+        constexpr std::uint64_t longStringContext = 0x48414841U;
+        constexpr std::array<std::uint32_t, 3> longStringKeys{
+            static_cast<std::uint32_t>('H'), static_cast<std::uint32_t>('A'),
+            static_cast<std::uint32_t>(VK_SPACE)};
+        std::vector<std::int64_t> longStringLatency;
+        longStringLatency.reserve(longStringRounds * longStringKeys.size());
+        for (unsigned round = 0; round < longStringRounds; ++round) {
+            for (const std::uint32_t key : longStringKeys) {
+                const auto keyStart = std::chrono::steady_clock::now();
+                if (!client.processKey(longStringContext, key, 0, result)) {
+                    std::cerr << "continuous ha typing smoke failed at round " << round
+                              << " key=0x" << std::hex << key << std::dec << '\n';
+                    return 1;
+                }
+                longStringLatency.push_back(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - keyStart)
+                        .count());
+            }
+            if (result.commit.empty() || !result.preedit.empty()) {
+                std::cerr << "continuous ha typing did not commit cleanly at round "
+                          << round << '\n';
+                return 1;
+            }
+        }
+        std::ranges::sort(longStringLatency);
+        const auto percentile = [&](std::size_t value) {
+            return longStringLatency[(longStringLatency.size() - 1U) * value / 100U];
+        };
+        std::cout << "continuous-typing-rounds=" << longStringRounds
+                  << " keys=" << longStringRounds * 3U
+                  << " p50-us=" << percentile(50U)
+                  << " p95-us=" << percentile(95U)
+                  << " p99-us=" << percentile(99U)
+                  << " max-us=" << longStringLatency.back() << '\n';
+
+        constexpr unsigned iterations = 4'000;
+        constexpr std::uint64_t contextBase = 0xF0220000U;
+        std::mt19937_64 random(0x46575F545950494EULL);
+        std::unordered_map<std::uint64_t, bool> activeContexts;
+        unsigned recoveredTransportFailures = 0;
+        const auto fuzzStart = std::chrono::steady_clock::now();
+        for (unsigned index = 0; index < iterations; ++index) {
+            const std::uint64_t context = contextBase + (random() % 16U);
+            const bool active = activeContexts[context];
+            const std::size_t reachableKeyCount = active ? commonKeys.size() - 2U : 36U;
+            const std::uint32_t key = commonKeys[random() % reachableKeyCount];
+            // This is a stateful typing fuzz, so generate only modifier states that
+            // ordinary printable typing can reach. Control hotkeys have dedicated
+            // functional tests and can trigger intentionally expensive on-demand addons.
+            const std::uint32_t flags =
+                (random() & 1U) == 0 ? 0U : fcitx::windows::protocol::kKeyFlagShift;
+            if (!client.processKey(context, key, flags, result)) {
+                ++recoveredTransportFailures;
+                activeContexts.clear();
+                constexpr std::uint64_t recoveryContext = contextBase + 100U;
+                if (!client.processKey(recoveryContext, 'N', 0, result) ||
+                    result.preedit != L"n") {
+                    std::cerr << "typing fuzz did not recover after transport failure at "
+                              << index << " key=0x" << std::hex << key << std::dec << '\n';
+                    return 1;
+                }
+                activeContexts[recoveryContext] = true;
+                continue;
+            }
+            if (result.preedit.size() > fcitx::windows::protocol::kMaxPreeditUtf8 ||
+                result.commit.size() > fcitx::windows::protocol::kMaxCommitUtf8 ||
+                result.candidates.size() > fcitx::windows::protocol::kMaxCandidates ||
+                result.candidateVisibility > 2U ||
+                (result.selectedCandidate != UINT32_MAX &&
+                 result.selectedCandidate >= result.candidates.size())) {
+                std::cerr << "typing fuzz response invariant failed at iteration "
+                          << index << '\n';
+                return 1;
+            }
+            activeContexts[context] = !result.preedit.empty() || !result.candidates.empty();
+            if ((index % 64U) == 63U) {
+                for (unsigned cleanup = 0; cleanup < 16U; ++cleanup) {
+                    if (!client.processKey(contextBase + cleanup, VK_ESCAPE, 0, result)) {
+                        std::cerr << "typing fuzz context cleanup failed\n";
+                        return 1;
+                    }
+                    activeContexts[contextBase + cleanup] = false;
+                }
+            }
+        }
+        if (recoveredTransportFailures > iterations / 100U) {
+            std::cerr << "typing fuzz transport failure rate exceeded 1%: "
+                      << recoveredTransportFailures << '/' << iterations << '\n';
+            return 1;
+        }
+        const auto fuzzElapsed = std::chrono::steady_clock::now() - fuzzStart;
+        std::cout << "typing-fuzz-seed=0x46575f545950494e iterations="
+                  << iterations << " recovered-failures=" << recoveredTransportFailures
+                  << " elapsed-ms="
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(fuzzElapsed).count()
+                  << '\n';
     }
 
     constexpr std::uint64_t repeatContextId = 0x16180339U;
@@ -238,6 +574,7 @@ int wmain(int argc, wchar_t** argv) {
               << '\n';
     const std::uint64_t firstEpoch = result.engineEpoch;
     client.disconnect();
+    if (typingFuzz) process.requestStop();
     if (WaitForSingleObject(process.handle, 5000) != WAIT_OBJECT_0) {
         std::cerr << "real engine did not stop after test client disconnected\n";
         return 1;
@@ -247,13 +584,16 @@ int wmain(int argc, wchar_t** argv) {
     if (exitCode != 0 || firstEpoch == 0) return 1;
 
     Process restarted;
-    if (!startEngine(argv[1], 2, safeMode, restarted)) return 1;
+    if (!startEngine(argv[1], 2, safeMode, 1U, restarted)) return 1;
     fcitx::windows::ipc::PipeClient restartedClient(
         fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
         fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
-    if (!restartedClient.processKey(contextId, 'N', 0, result) ||
-        result.engineEpoch <= firstEpoch) {
-        std::cerr << "engine restart did not advance epoch\n";
+    const bool restartKeyOk = restartedClient.processKey(contextId, 'N', 0, result);
+    if (!restartKeyOk || result.engineEpoch <= firstEpoch) {
+        std::wcerr << L"engine restart did not advance epoch: ipc=" << restartKeyOk
+                   << L" handled=" << result.handled << L" preedit=" << result.preedit
+                   << L" first-epoch=" << firstEpoch
+                   << L" restart-epoch=" << result.engineEpoch << L'\n';
         return 1;
     }
     restartedClient.disconnect();

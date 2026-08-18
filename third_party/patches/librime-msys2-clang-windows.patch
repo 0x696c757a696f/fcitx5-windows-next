@@ -1,0 +1,44 @@
+diff --git a/cmake/AddRCInfo.cmake b/cmake/AddRCInfo.cmake
+index 6b95a69..d165520 100644
+--- a/cmake/AddRCInfo.cmake
++++ b/cmake/AddRCInfo.cmake
+@@ -55,11 +55,10 @@ if(build_release)
+ endif(build_release)
+ 
+ # if mingw env add -c 65001 to CMAKE_RC_FLAGS
+-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
++if(MINGW)
+   set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -c 65001")
+-endif()
+-# if clang build, use llvm-rc to compile resource file
+-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
++elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
++  # if clang-cl build, use llvm-rc to compile resource file
+   set(CMAKE_RC_COMPILER "llvm-rc")
+   set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -finput-charset=UTF-8")
+ endif()
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 625481e..b7eb9a4 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -89,7 +89,10 @@ if(BUILD_SHARED_LIBS)
+   if(XCODE_VERSION)
+     set_target_properties(rime PROPERTIES INSTALL_NAME_DIR "@rpath")
+   endif()
+-  install(TARGETS rime DESTINATION ${CMAKE_INSTALL_FULL_LIBDIR})
++  install(TARGETS rime
++    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
++    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
++    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+   if(MSVC)
+     install(FILES $<TARGET_PDB_FILE:rime>
+       DESTINATION ${CMAKE_INSTALL_FULL_LIBDIR}
+@@ -162,5 +165,7 @@ if(BUILD_STATIC)
+   set_target_properties(rime-static PROPERTIES
+     OUTPUT_NAME "rime" PREFIX "lib"
+     ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+-  install(TARGETS rime-static DESTINATION ${CMAKE_INSTALL_FULL_LIBDIR})
++  install(TARGETS rime-static
++    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
++    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+ endif()

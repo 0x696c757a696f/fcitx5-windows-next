@@ -32,6 +32,7 @@
   ,"action.diagnostics": "刷新诊断"
   ,"action.repair": "修复输入法"
   ,"status.saved": "设置已安全保存。"
+  ,"status.unsaved": "有未应用的更改。"
   ,"restart.done": "输入引擎已重启。"
   ,"repair.started": "已启动管理员修复流程。"
   ,"nav.packages": "插件"
@@ -41,4 +42,8 @@
   ,"packages.enable_disable": "启用 / 禁用"
   ,"packages.uninstall": "卸载"
   ,"packages.changed": "插件操作已完成，并已重启输入引擎。"
+  ,"packages.bundled": "（内置）"
+  ,"packages.bundled_readonly": "这是随程序提供并经过整包测试的内置组件；请通过整包更新管理它。"
+  ,"packages.online_unavailable": "内置组件可正常使用；在线仓库尚未配置受信任的发布密钥。"
+  ,"packages.online_error": "在线仓库刷新失败；已保留并显示本机可用组件。"
 }

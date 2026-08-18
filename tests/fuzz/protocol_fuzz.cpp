@@ -46,6 +46,21 @@ void consume(std::span<const std::uint8_t> bytes) {
         (void)decode(frame, message);
         break;
     }
+    case MessageType::candidateSelectRequest: {
+        CandidateSelectRequest message;
+        (void)decode(frame, message);
+        break;
+    }
+    case MessageType::candidateSelectResponse: {
+        CandidateSelectResponse message;
+        (void)decode(frame, message);
+        break;
+    }
+    case MessageType::stateRequest: {
+        StateRequest message;
+        (void)decode(frame, message);
+        break;
+    }
     }
 }
 

@@ -1,5 +1,7 @@
 # Phase 6 acceptance
 
+> Status: historical v1.5 evidence; Phase 6 is not currently accepted under v1.6.
+
 Date: 2026-08-17  
 Specification: Frozen v1.5  
 Scope: WTL Config, typed Control API, registration/repair, i18n, installer, Portable
@@ -8,7 +10,7 @@ Scope: WTL Config, typed Control API, registration/repair, i18n, installer, Port
 
 - WTL 10.1.0 package is pinned by URL, size, and SHA-256; ATL is an explicit
   checked Visual Studio component. No IDE publish or GUI automation is used.
-- x64 and x86 Release builds each pass 29/29 CTest cases with MSVC analysis.
+- x64 and x86 Release builds each pass 44/44 CTest cases with MSVC analysis.
 - Config exposes `--self-test`, `--check-resources`, and `--check-i18n`; the
   corresponding headless tests pass.
 - Config edits presentation only through `fcitx5-control.exe`; the typed TOML
@@ -30,9 +32,9 @@ Scope: WTL Config, typed Control API, registration/repair, i18n, installer, Port
 ## Artifacts from the accepted run
 
 - `fcitx5-windows-0.1.0-portable.zip`
-  - SHA-256: `F213B1712BF9242E4917222A55F89369CD63FF96335501B2332D2E1551BFF43F`
+  - SHA-256: `7A7F2FD6872AA93F0090CA7755B6FBB46A67D5B3B4480EDEA7BFDC87896D8A56`
 - `fcitx5-windows-0.1.0-setup.exe`
-  - SHA-256: `4740C8356134E35E5F6E7F454E5AC4E2EDB77EA395B09A18C3F35546767FD16A`
+  - SHA-256: `50952B5D64A3A681FF916643FA92BD1B10A6CABEF8B58619CC9ECDA783815B14`
 
 These are unsigned package-gate artifacts, not Stable release artifacts.
 Production signing, SBOM/provenance, channel identity, system-package metadata,

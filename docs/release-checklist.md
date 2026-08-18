@@ -7,6 +7,18 @@
 - [ ] Signing certificate is valid, protected, timestamping succeeds, and build jobs cannot read it.
 - [ ] `release` promotes the recorded tested stage and does not compile source.
 - [ ] Installer and portable smoke use the actual final signed artifacts.
+- [ ] Interactive desktop gate passed against the exact staged lineage and
+      `out/evidence/desktop-verification.json` records tray, Config Apply behavior, real Notepad
+      commit, engine restart and engine-absent fail-open.
+- [ ] Product-function inventory in `docs/ssdlc-verification-matrix.md` has no unowned or
+      implicitly-passed row; settings persistence, real/preview renderer parity, long typing,
+      scroll candidates, tray recovery and every bundled engine/addon have current evidence.
+- [ ] Every applicable case in `docs/product-test-plan.md` has current same-lineage evidence; the
+      Config HWND inventory and real tray popup action sweep pass without an untested command.
+- [ ] Signed production package repository and non-empty protected keyring pass refresh, install,
+      update, disable/enable, uninstall, interrupted activation, rollback and offline scenarios.
+- [ ] Compatibility evidence covers the declared Modern and Legacy host/DPI/session matrix; any
+      unsupported row is called out as a release blocker or explicit scoped exception.
 - [ ] Final manifest hashes, detached CMS signature, Authenticode, SPDX SBOM and provenance verify.
 - [ ] WinGet/Chocolatey metadata points at the final installer SHA-256 and records its update owner.
 - [ ] Release notes state user-visible changes, compatibility changes, security fixes and known issues.

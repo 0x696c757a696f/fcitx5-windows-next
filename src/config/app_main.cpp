@@ -14,9 +14,11 @@ extern CAppModule _Module;
 
 #include <filesystem>
 #include <fstream>
+#include <array>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -331,6 +333,7 @@ constexpr int kThemeLabel = 202;
 constexpr int kFontLabel = 203;
 constexpr int kLayoutLabel = 204;
 constexpr int kPackagesTitle = 205;
+constexpr int kSaveStatus = 206;
 
 struct PackageRow {
     std::wstring id;
@@ -341,13 +344,51 @@ struct PackageRow {
     bool update{};
 };
 
-bool parsePackages(std::wstring_view output, std::vector<PackageRow>& rows) {
+struct InputMethodRow {
+    std::wstring id;
+    std::wstring name;
+    std::wstring nativeName;
+    bool selected{};
+};
+
+bool parseInputMethods(std::wstring_view output, std::vector<InputMethodRow>& rows) {
+    try {
+        const auto document = nlohmann::json::parse(narrow(output));
+        if (!document.is_object() || document.size() != 2U ||
+            document.at("format_version") != 1 || !document.at("input_methods").is_array() ||
+            document.at("input_methods").size() > 128U)
+            return false;
+        rows.clear();
+        unsigned selectedCount = 0;
+        for (const auto& item : document.at("input_methods")) {
+            if (!item.is_object() || item.size() != 4U || !item.at("id").is_string() ||
+                !item.at("name").is_string() || !item.at("native_name").is_string() ||
+                !item.at("selected").is_boolean())
+                return false;
+            InputMethodRow row{widen(item.at("id").get<std::string>()),
+                               widen(item.at("name").get<std::string>()),
+                               widen(item.at("native_name").get<std::string>()),
+                               item.at("selected").get<bool>()};
+            if (row.id.empty() || row.name.empty())
+                return false;
+            selectedCount += row.selected ? 1U : 0U;
+            rows.push_back(std::move(row));
+        }
+        return !rows.empty() && selectedCount == 1U;
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+}
+
+bool parsePackages(std::wstring_view output, std::vector<PackageRow>& rows,
+                   bool& repositoryAvailable) {
     try {
         const auto document = nlohmann::json::parse(narrow(output));
         if (!document.is_object() || document.size() != 3U || document.at("format_version") != 1 ||
             !document.at("repository_available").is_boolean() ||
             !document.at("packages").is_array() || document.at("packages").size() > 4096U)
             return false;
+        repositoryAvailable = document.at("repository_available").get<bool>();
         rows.clear();
         for (const auto& item : document.at("packages")) {
             if (!item.is_object() || item.size() != 8U)
@@ -378,6 +419,197 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
 
     explicit ConfigWindow(Strings strings) : strings_(std::move(strings)) {}
     const wchar_t* title() const { return get("app.title"); }
+    void selectPage(int page) { showPage(page); }
+
+    [[nodiscard]] bool verifyUiContract() {
+        const auto hasVisibleStyle = [&](int id) {
+            const HWND child = control(id);
+            return child &&
+                   (::GetWindowLongPtrW(child, GWL_STYLE) &
+                    static_cast<LONG_PTR>(WS_VISIBLE)) != 0;
+        };
+        const auto pageMatches = [&](int page, bool apply, bool details) {
+            showPage(page);
+            return hasVisibleStyle(kApply) == apply &&
+                   hasVisibleStyle(kSaveStatus) == apply &&
+                   hasVisibleStyle(kStatus) == details;
+        };
+        if (!pageMatches(kNavGeneral, true, false) ||
+            !pageMatches(kNavAppearance, true, false) ||
+            !pageMatches(kNavTheme, true, false) ||
+            !pageMatches(kNavDiagnostics, false, true) ||
+            !pageMatches(kNavRepair, false, true) ||
+            !pageMatches(kNavPackages, false, true)) {
+            return false;
+        }
+        const fs::path directory = executableDirectory();
+        const fs::path root = directory.filename() == L"bin" ? directory.parent_path() : directory;
+        if (fs::is_regular_file(root / L"lib/fcitx5/librime.dll")) {
+            showPage(kNavPackages);
+            refreshPackages(false);
+            if (SendMessageW(control(kPackages), LB_GETCOUNT, 0, 0) < 5 ||
+                ::IsWindowEnabled(control(kPackageInstall)) ||
+                ::IsWindowEnabled(control(kPackageToggle)) ||
+                ::IsWindowEnabled(control(kPackageRemove))) {
+                return false;
+            }
+        }
+        showPage(kNavAppearance);
+        BOOL handled = FALSE;
+        (void)onDirty(0, kHorizontal, control(kHorizontal), handled);
+        std::array<wchar_t, 128> status{};
+        ::GetWindowTextW(control(kSaveStatus), status.data(), static_cast<int>(status.size()));
+        return status[0] != L'\0' && std::wstring_view(status.data()) == get("status.unsaved");
+    }
+
+    [[nodiscard]] bool verifyInteractionCoverage() {
+        interactionTest_ = true;
+        actionCoverage_ = 0;
+        std::unordered_set<int> clickedButtons;
+        const auto click = [&](int id) {
+            const HWND child = control(id);
+            if (!child ||
+                (::GetWindowLongPtrW(child, GWL_STYLE) &
+                 static_cast<LONG_PTR>(WS_VISIBLE)) == 0 ||
+                !::IsWindowEnabled(child))
+                return false;
+            if (SendMessageW(child, BM_CLICK, 0, 0) != 0)
+                return false;
+            clickedButtons.insert(id);
+            return true;
+        };
+        const auto notify = [&](int id, int notification) {
+            const HWND child = control(id);
+            if (!child ||
+                (::GetWindowLongPtrW(child, GWL_STYLE) &
+                 static_cast<LONG_PTR>(WS_VISIBLE)) == 0 ||
+                !::IsWindowEnabled(child))
+                return false;
+            SendMessageW(WM_COMMAND, MAKEWPARAM(id, notification),
+                         reinterpret_cast<LPARAM>(child));
+            return true;
+        };
+        const auto statusIs = [&](const char* key) {
+            std::array<wchar_t, 128> status{};
+            ::GetWindowTextW(control(kSaveStatus), status.data(),
+                             static_cast<int>(status.size()));
+            return std::wstring_view(status.data()) == get(key);
+        };
+
+        // Navigate through every page using the actual owner-drawn buttons.
+        for (const int page : {kNavGeneral, kNavAppearance, kNavTheme, kNavDiagnostics,
+                               kNavRepair, kNavPackages}) {
+            if (!click(page) || selectedPage_ != page)
+                return false;
+        }
+
+        if (!click(kNavGeneral) || !click(kStartup) || !statusIs("status.unsaved") ||
+            !click(kStartup) ||
+            !([&] {
+                if (!::IsWindowEnabled(control(kInputMethod))) {
+                    inputMethods_ = {{L"test", L"Test", L"Test", true}};
+                    SendMessageW(control(kInputMethod), CB_RESETCONTENT, 0, 0);
+                    SendMessageW(control(kInputMethod), CB_ADDSTRING, 0,
+                                 reinterpret_cast<LPARAM>(L"Test"));
+                    SendMessageW(control(kInputMethod), CB_SETCURSEL, 0, 0);
+                    ::EnableWindow(control(kInputMethod), TRUE);
+                }
+                const LRESULT count = SendMessageW(control(kInputMethod), CB_GETCOUNT, 0, 0);
+                if (count <= 0)
+                    return false;
+                for (LRESULT index = 0; index < count; ++index) {
+                    SendMessageW(control(kInputMethod), CB_SETCURSEL, index, 0);
+                    if (!notify(kInputMethod, CBN_SELCHANGE))
+                        return false;
+                }
+                return true;
+            }()) || !click(kApply) ||
+            !statusIs("status.saved"))
+            return false;
+
+        if (!click(kNavAppearance))
+            return false;
+        const LRESULT appearanceCount = SendMessageW(control(kAppearance), CB_GETCOUNT, 0, 0);
+        for (LRESULT index = 0; index < appearanceCount; ++index) {
+            SendMessageW(control(kAppearance), CB_SETCURSEL, index, 0);
+            if (!notify(kAppearance, CBN_SELCHANGE))
+                return false;
+        }
+        if (appearanceCount != 3 || !click(kVertical) || !click(kHorizontal))
+            return false;
+        if (!click(kVertical))
+            return false;
+        if (!click(kScrollMode))
+            return false;
+        if (!click(kScrollMode))
+            return false;
+        if (!statusIs("status.unsaved") || !click(kApply) || !statusIs("status.saved"))
+            return false;
+
+        if (!click(kNavTheme))
+            return false;
+        const LRESULT themeCount = SendMessageW(control(kTheme), CB_GETCOUNT, 0, 0);
+        for (LRESULT index = 0; index < themeCount; ++index) {
+            SendMessageW(control(kTheme), CB_SETCURSEL, index, 0);
+            if (!notify(kTheme, CBN_SELCHANGE))
+                return false;
+        }
+        for (const wchar_t* font : {L"", L"Microsoft YaHei", L"思源黑体"}) {
+            ::SetWindowTextW(control(kFont), font);
+            if (!notify(kFont, EN_KILLFOCUS))
+                return false;
+        }
+        if (themeCount <= 0 || !click(kPreview) || !click(kApply) ||
+            !statusIs("status.saved"))
+            return false;
+
+        if (!click(kNavDiagnostics) || !click(kRestart) || !click(kDiagnostics) ||
+            !click(kNavRepair) || !click(kRepair) || !click(kNavPackages) ||
+            !click(kPackageRefresh))
+            return false;
+
+        // Exercise each package action through a synthetic managed row. Production package
+        // transaction semantics are covered separately with a signed fixture repository.
+        packages_ = {{L"test-addon", L"Test addon", L"1.1.0", L"", L"", false}};
+        SendMessageW(control(kPackages), LB_RESETCONTENT, 0, 0);
+        SendMessageW(control(kPackages), LB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(L"Test addon  1.1.0"));
+        SendMessageW(control(kPackages), LB_SETCURSEL, 0, 0);
+        updatePackageActions();
+        if (!notify(kPackages, LBN_SELCHANGE) || !click(kPackageInstall))
+            return false;
+        packages_[0].installed = L"1.0.0";
+        packages_[0].update = true;
+        packages_[0].state = L"enabled";
+        updatePackageActions();
+        if (!click(kPackageInstall) || !click(kPackageToggle))
+            return false;
+        packages_[0].state = L"disabled";
+        if (!click(kPackageToggle) || !click(kPackageRemove))
+            return false;
+
+        constexpr unsigned long long expected =
+            kCoveredGeneralApply | kCoveredAppearanceApply | kCoveredThemeApply |
+            kCoveredRestart | kCoveredDiagnostics | kCoveredRepair | kCoveredPreview |
+            kCoveredPackageRefresh | kCoveredPackageInstall | kCoveredPackageUpdate |
+            kCoveredPackageDisable | kCoveredPackageEnable | kCoveredPackageRemove;
+        if (actionCoverage_ != expected)
+            return false;
+
+        // Fail closed when a future visible command is added without extending this sweep.
+        // This inventories the real HWND tree rather than maintaining a second hand-written list.
+        for (HWND child = ::GetWindow(m_hWnd, GW_CHILD); child;
+             child = ::GetWindow(child, GW_HWNDNEXT)) {
+            std::array<wchar_t, 16> className{};
+            if (::GetClassNameW(child, className.data(), static_cast<int>(className.size())) <= 0 ||
+                _wcsicmp(className.data(), L"Button") != 0)
+                continue;
+            const int id = ::GetDlgCtrlID(child);
+            if (id != 0 && !clickedButtons.contains(id))
+                return false;
+        }
+        return true;
+    }
 
     BEGIN_MSG_MAP(ConfigWindow)
     MESSAGE_HANDLER(WM_CREATE, onCreate)
@@ -395,9 +627,33 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     COMMAND_ID_HANDLER(kPackageInstall, onPackageInstall)
     COMMAND_ID_HANDLER(kPackageRemove, onPackageRemove)
     COMMAND_ID_HANDLER(kPackageToggle, onPackageToggle)
+    COMMAND_HANDLER(kPackages, LBN_SELCHANGE, onPackageSelection)
+    COMMAND_HANDLER(kInputMethod, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kStartup, BN_CLICKED, onDirty)
+    COMMAND_HANDLER(kAppearance, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kTheme, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kVertical, BN_CLICKED, onDirty)
+    COMMAND_HANDLER(kHorizontal, BN_CLICKED, onDirty)
+    COMMAND_HANDLER(kScrollMode, BN_CLICKED, onDirty)
+    COMMAND_HANDLER(kFont, EN_KILLFOCUS, onDirty)
     END_MSG_MAP()
 
   private:
+    static constexpr unsigned long long kCoveredGeneralApply = 1ULL << 0U;
+    static constexpr unsigned long long kCoveredAppearanceApply = 1ULL << 1U;
+    static constexpr unsigned long long kCoveredThemeApply = 1ULL << 2U;
+    static constexpr unsigned long long kCoveredRestart = 1ULL << 3U;
+    static constexpr unsigned long long kCoveredDiagnostics = 1ULL << 4U;
+    static constexpr unsigned long long kCoveredRepair = 1ULL << 5U;
+    static constexpr unsigned long long kCoveredPreview = 1ULL << 6U;
+    static constexpr unsigned long long kCoveredPackageRefresh = 1ULL << 7U;
+    static constexpr unsigned long long kCoveredPackageInstall = 1ULL << 8U;
+    static constexpr unsigned long long kCoveredPackageUpdate = 1ULL << 9U;
+    static constexpr unsigned long long kCoveredPackageDisable = 1ULL << 10U;
+    static constexpr unsigned long long kCoveredPackageEnable = 1ULL << 11U;
+    static constexpr unsigned long long kCoveredPackageRemove = 1ULL << 12U;
+
+    void cover(unsigned long long action) noexcept { actionCoverage_ |= action; }
     const wchar_t* get(const char* key) const {
         const auto iterator = strings_.find(key);
         return iterator == strings_.end() ? L"" : iterator->second.c_str();
@@ -439,9 +695,6 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             kStartup);
         add(L"STATIC", get("general.input_method"), 0, 250, 158, 150, 24, kInputMethodLabel);
         add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST, 420, 152, 330, 140, kInputMethod);
-        SendMessageW(control(kInputMethod), CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(get("input.pinyin")));
-        SendMessageW(control(kInputMethod), CB_SETCURSEL, 0, 0);
         ::EnableWindow(control(kInputMethod), FALSE);
         add(L"STATIC", get("appearance.mode"), 0, 250, 106, 150, 24, kAppearanceLabel);
         add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, 420, 100, 330, 150, kAppearance);
@@ -467,6 +720,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         add(L"BUTTON", get("action.apply"), BS_DEFPUSHBUTTON | WS_TABSTOP, 650, 264, 120, 36,
             kApply);
         add(L"BUTTON", get("action.preview"), WS_TABSTOP, 250, 264, 160, 36, kPreview);
+        add(L"STATIC", L"", SS_LEFT, 420, 272, 210, 24, kSaveStatus);
         add(L"BUTTON", get("action.restart"), WS_TABSTOP, 250, 106, 170, 36, kRestart);
         add(L"BUTTON", get("action.diagnostics"), WS_TABSTOP, 436, 106, 170, 36, kDiagnostics);
         add(L"BUTTON", get("action.repair"), WS_TABSTOP, 250, 106, 170, 36, kRepair);
@@ -497,7 +751,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                              kScrollMode,      kApply,          kPreview,          kRestart,
                              kDiagnostics,     kRepair,         kStatus,           kPackages,
                              kPackageRefresh,  kPackageInstall, kPackageToggle,    kPackageRemove,
-                             kPackagesTitle})
+                             kPackagesTitle,   kSaveStatus})
             show(id, false);
         const bool general = page == kNavGeneral;
         const bool appearance = page == kNavAppearance;
@@ -508,17 +762,22 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         for (const int id : {kStartup, kInputMethod, kInputMethodLabel})
             show(id, general);
         for (const int id : {kAppearance, kAppearanceLabel, kVertical, kHorizontal, kLayoutLabel,
-                             kScrollMode, kApply})
+                             kScrollMode})
             show(id, appearance);
-        for (const int id : {kTheme, kThemeLabel, kFont, kFontLabel, kPreview, kApply})
+        for (const int id : {kTheme, kThemeLabel, kFont, kFontLabel, kPreview})
             show(id, theme);
-        for (const int id : {kRestart, kDiagnostics, kStatus})
+        show(kApply, general || appearance || theme);
+        show(kSaveStatus, general || appearance || theme);
+        const bool dirty = general ? generalDirty_ : presentationDirty_;
+        ::SetWindowTextW(control(kSaveStatus), dirty ? get("status.unsaved") : L"");
+        for (const int id : {kRestart, kDiagnostics})
             show(id, diagnostics);
-        for (const int id : {kRepair, kStatus})
+        for (const int id : {kRepair})
             show(id, repair);
         for (const int id : {kPackages, kPackageRefresh, kPackageInstall, kPackageToggle,
-                             kPackageRemove, kStatus, kPackagesTitle})
+                             kPackageRemove, kPackagesTitle})
             show(id, packages);
+        show(kStatus, diagnostics || repair || packages);
         ::SetWindowTextW(control(kPageTitle), page == kNavGeneral       ? get("nav.general")
                                               : page == kNavAppearance  ? get("nav.appearance")
                                               : page == kNavTheme       ? get("nav.theme")
@@ -560,8 +819,52 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                          output.find(L"\"enabled\":true") != std::wstring::npos ? BST_CHECKED
                                                                                 : BST_UNCHECKED,
                          0);
+        loadInputMethods();
         refresh();
         refreshPackages(false);
+    }
+    void loadInputMethods() {
+        std::wstring output;
+        std::vector<InputMethodRow> rows;
+        if (!runControl({L"--get-input-methods"}, output) ||
+            !parseInputMethods(output, rows)) {
+            ::EnableWindow(control(kInputMethod), FALSE);
+            return;
+        }
+        SendMessageW(control(kInputMethod), CB_RESETCONTENT, 0, 0);
+        inputMethods_ = std::move(rows);
+        int selected = 0;
+        for (std::size_t index = 0; index < inputMethods_.size(); ++index) {
+            const auto& method = inputMethods_[index];
+            std::wstring label = method.nativeName.empty() || method.nativeName == method.name
+                                     ? method.name
+                                     : method.nativeName + L" (" + method.name + L")";
+            SendMessageW(control(kInputMethod), CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(label.c_str()));
+            if (method.selected)
+                selected = static_cast<int>(index);
+        }
+        SendMessageW(control(kInputMethod), CB_SETCURSEL, selected, 0);
+        ::EnableWindow(control(kInputMethod), TRUE);
+    }
+    bool applyInputMethod() {
+        const auto selected = SendMessageW(control(kInputMethod), CB_GETCURSEL, 0, 0);
+        if (selected == CB_ERR || static_cast<std::size_t>(selected) >= inputMethods_.size())
+            return false;
+        std::wstring output;
+        const bool ok = runControl(
+            {L"--set-input-method", inputMethods_[static_cast<std::size_t>(selected)].id}, output);
+        if (ok)
+            loadInputMethods();
+        return ok;
+    }
+    bool applyStartup() {
+        std::wstring output;
+        return runControl(
+            {L"--set-startup",
+             SendMessageW(control(kStartup), BM_GETCHECK, 0, 0) == BST_CHECKED ? L"enabled"
+                                                                               : L"disabled"},
+            output);
     }
     void refresh() {
         std::wstring output;
@@ -574,7 +877,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                                                ? get("restart.done")
                                                : get("error.command"));
     }
-    void apply() {
+    bool applyPresentation() {
         const auto modeIndex = SendMessageW(control(kAppearance), CB_GETCURSEL, 0, 0);
         const wchar_t* const mode =
             modeIndex == 1 ? L"light" : (modeIndex == 2 ? L"dark" : L"system");
@@ -585,32 +888,26 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         ::GetWindowTextW(control(kFont), fontBuffer, static_cast<int>(std::size(fontBuffer)));
         const std::wstring font(fontBuffer);
         std::wstring output;
-        std::wstring startupOutput;
         const bool ok =
             !font.empty() &&
-            runControl(
-                {L"--set-startup", SendMessageW(control(kStartup), BM_GETCHECK, 0, 0) == BST_CHECKED
-                                       ? L"enabled"
-                                       : L"disabled"},
-                startupOutput) &&
             runControl({L"--set-presentation", mode, L"builtin:default", orientation,
                         SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) == BST_CHECKED
                             ? L"enabled"
                             : L"disabled",
                         font},
                        output);
-        ::SetWindowTextW(control(kStatus), ok ? get("status.saved") : get("error.command"));
+        return ok;
     }
     void repair() {
         const fs::path directory = executableDirectory();
         const fs::path root = directory.filename() == L"bin" ? directory.parent_path() : directory;
-        fs::path dll = root / L"tsf/x64/fcitx5-tsf.dll";
-        if (!fs::exists(dll))
-            dll = directory / L"fcitx5-tsf.dll";
-        const fs::path registration = directory / L"fcitx5-register.exe";
-        const std::wstring arguments = L"--repair --dll " + quote(dll.wstring());
+        const fs::path bootstrap = root / L"Start Fcitx5.exe";
+        if (!fs::is_regular_file(bootstrap)) {
+            ::SetWindowTextW(control(kStatus), get("error.command"));
+            return;
+        }
         const auto result = reinterpret_cast<std::intptr_t>(ShellExecuteW(
-            m_hWnd, L"runas", registration.c_str(), arguments.c_str(), directory.c_str(), SW_HIDE));
+            m_hWnd, nullptr, bootstrap.c_str(), L"--repair-only", root.c_str(), SW_SHOWNORMAL));
         ::SetWindowTextW(control(kStatus),
                          result > 32 ? get("repair.started") : get("error.command"));
     }
@@ -625,8 +922,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     void refreshPackages(bool online) {
         std::wstring output;
         const bool refreshed = !online || runControl({L"--packages-refresh"}, output);
-        if (!refreshed || !runControl({L"--packages-list"}, output) ||
-            !parsePackages(output, packages_)) {
+        if (!runControl({L"--packages-list"}, output) ||
+            !parsePackages(output, packages_, repositoryAvailable_)) {
             ::SetWindowTextW(control(kStatus), get("error.command"));
             return;
         }
@@ -639,11 +936,31 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 label += L"  ↑";
             if (package.state == L"disabled")
                 label += L"  (disabled)";
+            if (package.state == L"bundled")
+                label += std::wstring(L"  ") + get("packages.bundled");
             SendMessageW(control(kPackages), LB_ADDSTRING, 0,
                          reinterpret_cast<LPARAM>(label.c_str()));
         }
         if (!packages_.empty())
             SendMessageW(control(kPackages), LB_SETCURSEL, 0, 0);
+        updatePackageActions();
+        if (!refreshed)
+            ::SetWindowTextW(control(kStatus), get("packages.online_error"));
+        else if (!repositoryAvailable_)
+            ::SetWindowTextW(control(kStatus), get("packages.online_unavailable"));
+    }
+
+    void updatePackageActions() {
+        const int selected = selectedPackage();
+        const PackageRow* package =
+            selected < 0 ? nullptr : &packages_[static_cast<std::size_t>(selected)];
+        const bool bundled = package && package->state == L"bundled";
+        ::EnableWindow(control(kPackageInstall),
+                       package && !bundled && !package->available.empty());
+        ::EnableWindow(control(kPackageToggle),
+                       package && !bundled && !package->installed.empty());
+        ::EnableWindow(control(kPackageRemove),
+                       package && !bundled && !package->installed.empty());
     }
 
     void installOrUpdatePackage() {
@@ -651,6 +968,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         if (selected < 0)
             return;
         auto& package = packages_[static_cast<std::size_t>(selected)];
+        if (package.state == L"bundled") {
+            ::SetWindowTextW(control(kStatus), get("packages.bundled_readonly"));
+            return;
+        }
         if (package.available.empty())
             return;
         std::wstring output;
@@ -665,6 +986,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const int selected = selectedPackage();
         if (selected < 0 || packages_[static_cast<std::size_t>(selected)].installed.empty())
             return;
+        if (packages_[static_cast<std::size_t>(selected)].state == L"bundled") {
+            ::SetWindowTextW(control(kStatus), get("packages.bundled_readonly"));
+            return;
+        }
         std::wstring output;
         const bool ok = runControl(
             {L"--packages-remove", packages_[static_cast<std::size_t>(selected)].id}, output);
@@ -679,6 +1004,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const auto& package = packages_[static_cast<std::size_t>(selected)];
         if (package.installed.empty())
             return;
+        if (package.state == L"bundled") {
+            ::SetWindowTextW(control(kStatus), get("packages.bundled_readonly"));
+            return;
+        }
         std::wstring output;
         const bool ok = runControl({L"--packages-state", package.id,
                                     package.state == L"disabled" ? L"enabled" : L"disabled"},
@@ -809,7 +1138,33 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         return 0;
     }
     LRESULT onApply(WORD, WORD, HWND, BOOL&) {
-        apply();
+        if (interactionTest_) {
+            if (selectedPage_ == kNavGeneral) {
+                cover(kCoveredGeneralApply);
+                generalDirty_ = false;
+            } else if (selectedPage_ == kNavAppearance) {
+                cover(kCoveredAppearanceApply);
+                presentationDirty_ = false;
+            } else if (selectedPage_ == kNavTheme) {
+                cover(kCoveredThemeApply);
+                presentationDirty_ = false;
+            }
+            ::SetWindowTextW(control(kSaveStatus), get("status.saved"));
+            return 0;
+        }
+        bool ok = false;
+        if (selectedPage_ == kNavGeneral) {
+            const bool startupSaved = applyStartup();
+            const bool inputMethodSaved = applyInputMethod();
+            ok = startupSaved && inputMethodSaved;
+            if (ok)
+                generalDirty_ = false;
+        } else if (selectedPage_ == kNavAppearance || selectedPage_ == kNavTheme) {
+            ok = applyPresentation();
+            if (ok)
+                presentationDirty_ = false;
+        }
+        ::SetWindowTextW(control(kSaveStatus), ok ? get("status.saved") : get("error.command"));
         return 0;
     }
     LRESULT onNavigate(WORD, WORD id, HWND, BOOL&) {
@@ -817,35 +1172,92 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         return 0;
     }
     LRESULT onRestart(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_) {
+            cover(kCoveredRestart);
+            ::SetWindowTextW(control(kStatus), L"restart-covered");
+            return 0;
+        }
         restart();
         return 0;
     }
     LRESULT onDiagnostics(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_) {
+            cover(kCoveredDiagnostics);
+            ::SetWindowTextW(control(kStatus), L"diagnostics-covered");
+            return 0;
+        }
         refresh();
         return 0;
     }
     LRESULT onRepair(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_) {
+            cover(kCoveredRepair);
+            ::SetWindowTextW(control(kStatus), L"repair-covered");
+            return 0;
+        }
         repair();
         return 0;
     }
     LRESULT onPreview(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_) {
+            cover(kCoveredPreview);
+            return 0;
+        }
         preview();
         return 0;
     }
     LRESULT onPackageRefresh(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_) {
+            cover(kCoveredPackageRefresh);
+            return 0;
+        }
         refreshPackages(true);
         return 0;
     }
     LRESULT onPackageInstall(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_) {
+            const int selected = selectedPackage();
+            if (selected >= 0 &&
+                packages_[static_cast<std::size_t>(selected)].installed.empty())
+                cover(kCoveredPackageInstall);
+            else
+                cover(kCoveredPackageUpdate);
+            return 0;
+        }
         installOrUpdatePackage();
         return 0;
     }
     LRESULT onPackageRemove(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_) {
+            cover(kCoveredPackageRemove);
+            return 0;
+        }
         removePackage();
         return 0;
     }
     LRESULT onPackageToggle(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_) {
+            const int selected = selectedPackage();
+            if (selected < 0)
+                return 0;
+            cover(packages_[static_cast<std::size_t>(selected)].state == L"disabled"
+                      ? kCoveredPackageEnable
+                      : kCoveredPackageDisable);
+            return 0;
+        }
         togglePackage();
+        return 0;
+    }
+    LRESULT onPackageSelection(WORD, WORD, HWND, BOOL&) {
+        updatePackageActions();
+        return 0;
+    }
+    LRESULT onDirty(WORD, WORD id, HWND, BOOL&) {
+        if (id == kStartup || id == kInputMethod)
+            generalDirty_ = true;
+        else
+            presentationDirty_ = true;
+        ::SetWindowTextW(control(kSaveStatus), get("status.unsaved"));
         return 0;
     }
 
@@ -856,7 +1268,13 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     ID2D1HwndRenderTarget* target_{};
     HANDLE previewProcess_{};
     std::vector<PackageRow> packages_;
+    std::vector<InputMethodRow> inputMethods_;
     int selectedPage_{kNavGeneral};
+    bool generalDirty_{};
+    bool presentationDirty_{};
+    bool repositoryAvailable_{};
+    bool interactionTest_{};
+    unsigned long long actionCoverage_{};
 };
 
 } // namespace
@@ -873,6 +1291,11 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         return checkResources() ? 0 : 2;
     if (command == L"--self-test")
         return checkI18n() && checkResources() ? 0 : 2;
+    const bool uiContractTest = command == L"--ui-contract-test";
+    const bool uiInteractionTest = command == L"--ui-interaction-test";
+    const bool showDiagnostics = command == L"--diagnostics";
+    if (!command.empty() && !uiContractTest && !uiInteractionTest && !showDiagnostics)
+        return 1;
     const LANGID language = GetUserDefaultUILanguage();
     const wchar_t* locale = PRIMARYLANGID(language) == LANG_CHINESE ? L"zh-CN.json" : L"en-US.json";
     Strings strings;
@@ -892,6 +1315,16 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     enableNativeWindowEffects(window);
     window.ResizeClient(1010, 650);
     window.CenterWindow();
+    if (uiContractTest || uiInteractionTest) {
+        const bool passed = uiContractTest ? window.verifyUiContract()
+                                           : window.verifyInteractionCoverage();
+        window.DestroyWindow();
+        _Module.RemoveMessageLoop();
+        _Module.Term();
+        return passed ? 0 : 5;
+    }
+    if (showDiagnostics)
+        window.selectPage(kNavDiagnostics);
     window.ShowWindow(showCommand);
     const int result = loop.Run();
     _Module.RemoveMessageLoop();

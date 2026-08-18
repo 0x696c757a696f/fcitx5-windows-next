@@ -10,10 +10,11 @@ int main() {
     ParseError error;
     const auto defaults = defaultConfigToml();
     if (!parseConfig(defaults, config, error) || config.orientation != Orientation::vertical ||
-        config.appearanceMode != AppearanceMode::system || config.colors.size() != 11) {
+        config.appearanceMode != AppearanceMode::system || !config.colors.empty()) {
         std::cerr << "annotated default config rejected: " << error.message << '\n';
         return 1;
     }
+    const Config defaultUserConfig = config;
     constexpr std::string_view invalidCases[]{
         "format_version = 2\n",
         "format_version = 1\nunknown = true\n",
@@ -43,6 +44,14 @@ int main() {
         std::cerr << "annotated theme rejected: " << error.message << '\n';
         return 1;
     }
+    const auto defaultLight = resolveTheme(theme, false, defaultUserConfig);
+    const auto defaultDark = resolveTheme(theme, true, defaultUserConfig);
+    if (defaultLight.colors.at("background") != "#FCFCFCFA" ||
+        defaultDark.colors.at("background") != "#242629F7" ||
+        defaultDark.colors.at("candidate_text") != "#FFFFFFFF") {
+        std::cerr << "default user config masked the selected theme appearance branch\n";
+        return 1;
+    }
     Config userOverride;
     userOverride.orientation = Orientation::horizontal;
     userOverride.colors["candidate_text"] = "#112233FF";
@@ -68,7 +77,7 @@ int main() {
         !updated.starts_with("# Fcitx5 for Windows") || !parseConfig(updated, config, error) ||
         config.appearanceMode != AppearanceMode::dark ||
         config.orientation != Orientation::horizontal || config.scrollMode != true ||
-        config.maxWidth != 860.0 || config.colors.size() != 11 || !config.candidateFont.families ||
+        config.maxWidth != 860.0 || !config.colors.empty() || !config.candidateFont.families ||
         config.candidateFont.families->front() != "Microsoft YaHei") {
         std::cerr << "typed presentation update failed: " << error.message << '\n';
         return 1;

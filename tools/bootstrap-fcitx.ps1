@@ -17,7 +17,14 @@ $signingFingerprint = '0EBF782C5D53F7E5FB02A66746BD761F7A49B0EC'
 $sourcePins = @(
   @{ Name = 'fcitx5'; Url = 'https://github.com/gaboolic/fcitx5.git'; Commit = '50a3069a2f1bb8647abef713d98ad10d0713b752' },
   @{ Name = 'libime'; Url = 'https://github.com/fcitx/libime.git'; Commit = '92bf7144d31d42549d35e5db348dc79100cb2074' },
-  @{ Name = 'fcitx5-chinese-addons'; Url = 'https://github.com/fcitx/fcitx5-chinese-addons.git'; Commit = 'bc84e3acb022f5b6b5bed254b14ba19d05023645' }
+  @{ Name = 'fcitx5-chinese-addons'; Url = 'https://github.com/fcitx/fcitx5-chinese-addons.git'; Commit = 'bc84e3acb022f5b6b5bed254b14ba19d05023645' },
+  @{ Name = 'fcitx5-rime'; Url = 'https://github.com/fcitx/fcitx5-rime.git'; Commit = '4e996319edea790495edc2c91893e9af4c4e6d6a' },
+  @{ Name = 'fcitx5-lua'; Url = 'https://github.com/fcitx/fcitx5-lua.git'; Commit = '05db9ee519d448a64ccbe216044e8e0342e8c536' },
+  @{ Name = 'librime'; Url = 'https://github.com/rime/librime.git'; Commit = '33e78140250125871856cdc5b42ddc6a5fcd3cd4' },
+  @{ Name = 'librime-lua'; Url = 'https://github.com/hchunhui/librime-lua.git'; Commit = '68f9c364a2d25a04c7d4794981d7c796b05ab627' },
+  @{ Name = 'librime-octagram'; Url = 'https://github.com/lotem/librime-octagram.git'; Commit = 'dfcc15115788c828d9dd7b4bff68067d3ce2ffb8' },
+  @{ Name = 'librime-proto'; Url = 'https://github.com/lotem/librime-proto.git'; Commit = '657a923cd4c333e681dc943e6894e6f6d42d25b4' },
+  @{ Name = 'librime-predict'; Url = 'https://github.com/rime/librime-predict.git'; Commit = '920bd41ebf6f9bf6855d14fbe80212e54e749791' }
 )
 
 $packagePins = @(
@@ -37,6 +44,23 @@ $packagePins = @(
   'mingw-w64-clang-x86_64-libc++=22.1.8-1',
   'mingw-w64-clang-x86_64-libwinpthread=14.0.0.r262.g5ea8e9fac-1',
   'mingw-w64-clang-x86_64-pkgconf=1~3.0.5-1',
+  'mingw-w64-clang-x86_64-capnproto=1.4.0-3',
+  'mingw-w64-clang-x86_64-gflags=2.3.0-1',
+  'mingw-w64-clang-x86_64-glog=0.7.1-10',
+  'mingw-w64-clang-x86_64-leveldb=1.23-3',
+  'mingw-w64-clang-x86_64-librime=1.17.0-1',
+  'mingw-w64-clang-x86_64-librime-data=0.0.0.20251229-1',
+  'mingw-w64-clang-x86_64-lua54=5.4.8-1',
+  'mingw-w64-clang-x86_64-marisa=0.2.7-1',
+  'mingw-w64-clang-x86_64-opencc=1.3.1-1',
+  'mingw-w64-clang-x86_64-rime-bopomofo=0.0.0.20260106-1',
+  'mingw-w64-clang-x86_64-rime-cangjie=0.0.0.20240325-1',
+  'mingw-w64-clang-x86_64-rime-essay=0.0.0.20260106-1',
+  'mingw-w64-clang-x86_64-rime-luna-pinyin=0.0.0.20260106-1',
+  'mingw-w64-clang-x86_64-rime-prelude=0.0.0.20251229-1',
+  'mingw-w64-clang-x86_64-rime-stroke=0.0.0.20250923-1',
+  'mingw-w64-clang-x86_64-rime-terra-pinyin=0.0.0.20251206-1',
+  'mingw-w64-clang-x86_64-yaml-cpp=0.9.0-1',
   'gettext=0.22.5-1'
 )
 
@@ -64,27 +88,45 @@ function Invoke-Msys([string] $Command) {
     # into native Windows binaries.
     [Environment]::SetEnvironmentVariable('MSYSTEM', 'CLANG64', 'Process')
     [Environment]::SetEnvironmentVariable('CHERE_INVOKING', '1', 'Process')
-    Invoke-Checked $bash @('-lc', $Command)
+    Invoke-Checked $bash @('-lc', "set -e; $Command")
   } finally {
     [Environment]::SetEnvironmentVariable('MSYSTEM', $previousMsystem, 'Process')
     [Environment]::SetEnvironmentVariable('CHERE_INVOKING', $previousChere, 'Process')
   }
 }
 
+function Get-RepositoryGitPrefix([string] $Repository) {
+  $safeDirectory = [IO.Path]::GetFullPath($Repository).Replace('\', '/')
+  return @('-c', "safe.directory=$safeDirectory", '-C', $Repository)
+}
+
 function Apply-PinnedPatch([string] $Repository, [string] $Patch) {
-  & git -C $Repository apply --check $Patch 2>$null
+  $gitPrefix = Get-RepositoryGitPrefix $Repository
+  & git @gitPrefix apply --check $Patch 2>$null
   if ($LASTEXITCODE -eq 0) {
-    Invoke-Checked git @('-C', $Repository, 'apply', $Patch)
+    Invoke-Checked git ($gitPrefix + @('apply', $Patch))
     return
   }
 
-  & git -C $Repository apply --reverse --check $Patch 2>$null
+  & git @gitPrefix apply --reverse --check $Patch 2>$null
   if ($LASTEXITCODE -eq 0) {
     Write-Host "Pinned patch already applied: $([IO.Path]::GetFileName($Patch))"
     return
   }
 
   throw "Pinned patch does not apply cleanly: $Patch"
+}
+
+function Ensure-PluginJunction([string] $Link, [string] $Target) {
+  if (Test-Path -LiteralPath $Link) {
+    $item = Get-Item -LiteralPath $Link -Force
+    if ($item.LinkType -eq 'Junction' -and
+        [IO.Path]::GetFullPath($item.Target) -eq [IO.Path]::GetFullPath($Target)) {
+      return
+    }
+    throw "Unexpected file at pinned Rime plugin path: $Link"
+  }
+  New-Item -ItemType Junction -Path $Link -Target $Target | Out-Null
 }
 
 function Assert-Pins {
@@ -98,7 +140,8 @@ function Assert-Pins {
     if (-not (Test-Path -LiteralPath (Join-Path $path '.git'))) {
       throw "Missing pinned source checkout: $($pin.Name)"
     }
-    $actual = (& git -C $path rev-parse HEAD).Trim()
+    $gitPrefix = Get-RepositoryGitPrefix $path
+    $actual = (& git @gitPrefix rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $actual -ne $pin.Commit) {
       throw "Unexpected $($pin.Name) commit: $actual"
     }
@@ -170,20 +213,34 @@ foreach ($pin in $sourcePins) {
   if (-not (Test-Path -LiteralPath (Join-Path $path '.git'))) {
     Invoke-Checked git @('clone', '--filter=blob:none', $pin.Url, $path)
   }
-  Invoke-Checked git @('-C', $path, 'fetch', '--depth', '1', 'origin', $pin.Commit)
-  Invoke-Checked git @('-C', $path, 'checkout', '--detach', $pin.Commit)
-  Invoke-Checked git @('-C', $path, 'submodule', 'update', '--init', '--recursive')
+  $gitPrefix = Get-RepositoryGitPrefix $path
+  Invoke-Checked git ($gitPrefix + @('fetch', '--depth', '1', 'origin', $pin.Commit))
+  Invoke-Checked git ($gitPrefix + @('checkout', '--detach', $pin.Commit))
+  Invoke-Checked git ($gitPrefix + @('submodule', 'update', '--init', '--recursive'))
 }
 
 $libime = Join-Path $sources 'libime'
 $chinese = Join-Path $sources 'fcitx5-chinese-addons'
+$rime = Join-Path $sources 'fcitx5-rime'
+$lua = Join-Path $sources 'fcitx5-lua'
 $fcitx = Join-Path $sources 'fcitx5'
+$librime = Join-Path $sources 'librime'
 Apply-PinnedPatch $fcitx `
   (Join-Path $repoRoot 'third_party/patches/fcitx5-windows-user-data-root.patch')
 Apply-PinnedPatch $libime `
   (Join-Path $repoRoot 'third_party/patches/libime-windows-model-dirs.patch')
 Apply-PinnedPatch $chinese `
   (Join-Path $repoRoot 'third_party/patches/fcitx5-chinese-addons-msys2-clang-libcxx.patch')
+Apply-PinnedPatch $rime `
+  (Join-Path $repoRoot 'third_party/patches/fcitx5-rime-windows-paths.patch')
+Apply-PinnedPatch $lua `
+  (Join-Path $repoRoot 'third_party/patches/fcitx5-lua-windows-lua54.patch')
+Apply-PinnedPatch $librime `
+  (Join-Path $repoRoot 'third_party/patches/librime-msys2-clang-windows.patch')
+foreach ($plugin in @('librime-lua', 'librime-octagram', 'librime-proto', 'librime-predict')) {
+  Ensure-PluginJunction (Join-Path $librime "plugins/$plugin") `
+    (Join-Path $sources $plugin)
+}
 
 $msysRepo = Convert-ToMsysPath $repoRoot
 $msysSources = Convert-ToMsysPath $sources
@@ -192,12 +249,33 @@ $common = "-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX='$msysStag
 Invoke-Msys "cmake -S '$msysSources/fcitx5' -B '$msysRepo/out/build/fcitx5-core' $common -DCMAKE_CXX_FLAGS=-fexperimental-library -DENABLE_DBUS=OFF -DENABLE_X11=OFF -DENABLE_WAYLAND=OFF -DENABLE_KEYBOARD=OFF -DENABLE_SERVER=OFF -DENABLE_TEST=OFF -DENABLE_TESTING_ADDONS=OFF -DBUILD_SPELL_DICT=OFF -DENABLE_DOC=OFF -DENABLE_LIBUUID=OFF -DENABLE_ENCHANT=OFF -DENABLE_EMOJI=OFF -DENABLE_XDGAUTOSTART=OFF; cmake --build '$msysRepo/out/build/fcitx5-core' --parallel; cmake --install '$msysRepo/out/build/fcitx5-core'"
 Invoke-Msys "cmake -S '$msysSources/libime' -B '$msysRepo/out/build/libime' $common -DCMAKE_PREFIX_PATH='$msysStage' -DENABLE_TEST=OFF -DENABLE_DOC=OFF; cmake --build '$msysRepo/out/build/libime' --parallel; cmake --install '$msysRepo/out/build/libime'"
 Invoke-Msys "cmake -S '$msysSources/fcitx5-chinese-addons' -B '$msysRepo/out/build/fcitx5-chinese-addons' $common -DCMAKE_PREFIX_PATH='$msysStage' -DENABLE_TEST=OFF -DENABLE_GUI=OFF -DENABLE_BROWSER=OFF -DENABLE_CLOUDPINYIN=OFF -DENABLE_OPENCC=OFF; cmake --build '$msysRepo/out/build/fcitx5-chinese-addons' --parallel; cmake --install '$msysRepo/out/build/fcitx5-chinese-addons'"
+Invoke-Msys "cmake -S '$msysSources/librime' -B '$msysRepo/out/build/librime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DCMAKE_DLL_NAME_WITH_SOVERSION=ON -DBUILD_TEST=OFF -DENABLE_LOGGING=OFF -DLUA_VERSION=lua5.4; cmake --build '$msysRepo/out/build/librime' --parallel; cmake --install '$msysRepo/out/build/librime'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5-rime' -B '$msysRepo/out/build/fcitx5-rime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DRIME_DATA_DIR='$msysStage/share/rime-data'; cmake --build '$msysRepo/out/build/fcitx5-rime' --parallel; cmake --install '$msysRepo/out/build/fcitx5-rime'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5-lua' -B '$msysRepo/out/build/fcitx5-lua' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DUSE_DLOPEN=OFF -DENABLE_TEST=OFF; cmake --build '$msysRepo/out/build/fcitx5-lua' --parallel; cmake --install '$msysRepo/out/build/fcitx5-lua'"
 Invoke-Msys "cmake -S '$msysRepo/native-engine' -B '$msysRepo/out/build/native-engine' $common -DCMAKE_PREFIX_PATH='$msysStage'; cmake --build '$msysRepo/out/build/native-engine' --parallel; cmake --install '$msysRepo/out/build/native-engine'"
 
 $runtimeDlls = @('libc++.dll', 'libzstd.dll', 'libdl.dll', 'libintl-8.dll',
-  'libwinpthread-1.dll', 'libuv-1.dll', 'libiconv-2.dll')
+  'libwinpthread-1.dll', 'libuv-1.dll', 'libiconv-2.dll',
+  'libyaml-cpp.dll', 'libleveldb.dll', 'libmarisa-0.dll',
+  'libopencc-1.3.dll', 'lua54.dll', 'libcapnp.dll', 'libkj.dll', 'libunwind.dll')
 foreach ($dll in $runtimeDlls) {
   Copy-Item -LiteralPath (Join-Path $toolchain "clang64/bin/$dll") `
     -Destination (Join-Path $stage 'bin') -Force
+}
+$rimeDataSource = Join-Path $toolchain 'clang64/share/rime-data'
+$rimeDataDestination = Join-Path $stage 'share/rime-data'
+$openccSource = Join-Path $toolchain 'clang64/share/opencc'
+$openccDestination = Join-Path $stage 'share/opencc'
+New-Item -ItemType Directory -Force -Path $rimeDataDestination, $openccDestination | Out-Null
+Get-ChildItem -LiteralPath $rimeDataSource -Force |
+  Copy-Item -Destination $rimeDataDestination -Recurse -Force
+Get-ChildItem -LiteralPath $openccSource -Force |
+  Copy-Item -Destination $openccDestination -Recurse -Force
+foreach ($requiredRimeFile in @('default.yaml', 'luna_pinyin.schema.yaml',
+    'luna_pinyin.dict.yaml', 'essay.txt', 'fcitx5.yaml')) {
+  if (-not (Test-Path -LiteralPath (Join-Path $rimeDataDestination $requiredRimeFile) `
+      -PathType Leaf)) {
+    throw "Incomplete staged Rime data: missing $requiredRimeFile"
+  }
 }
 Assert-Pins

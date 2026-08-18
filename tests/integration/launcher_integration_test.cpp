@@ -33,6 +33,8 @@ int wmain(int argc, wchar_t** argv) {
     fcitx::windows::platform::RuntimeIdentity identity;
     if (!fcitx::windows::platform::queryCurrentIdentity(identity)) return 1;
     const std::wstring suffix = std::to_wstring(GetCurrentProcessId());
+    if (!SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", (L"launcher-" + suffix).c_str()))
+        return 1;
     const std::wstring engineReadyName =
         L"Local\\Fcitx5WindowsNext.LauncherTest.EngineReady." + suffix;
     const std::wstring launcherReadyName =

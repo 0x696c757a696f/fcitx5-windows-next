@@ -1,0 +1,7 @@
+local marker = os.getenv("FCITX_LUA_TEST_MARKER")
+assert(marker ~= nil and marker ~= "")
+assert(ime.utf16_to_utf8(ime.utf8_to_utf16("你好")) == "你好")
+assert(ime.int_to_hex_string(100, 6) == "000064")
+local file = assert(io.open(marker, "wb"))
+file:write("fcitx5-lua-ok\n")
+file:close()

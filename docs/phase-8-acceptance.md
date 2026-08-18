@@ -1,8 +1,11 @@
 # Phase 8 acceptance
 
+> Status: historical v1.5 evidence; Phase 8 is not currently accepted under v1.6.
+
 Date: 2026-08-17  
 Specification: Frozen v1.5  
 Scope: Release identities, update ownership, rollback, signing, SBOM and distribution
+Status: release machinery implemented; Stable publication blocked by external release authority
 
 ## Evidence
 

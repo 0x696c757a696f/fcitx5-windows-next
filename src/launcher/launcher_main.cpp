@@ -4,6 +4,7 @@
 #include "runtime_identity.h"
 #include "state_machine.h"
 #include "state_store.h"
+#include "tray_icon.h"
 
 #include <fcitx5_windows/release_identity.h>
 #include <fcitx5_windows/version.h>
@@ -14,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <span>
 #include <string>
@@ -37,6 +39,16 @@ bool absoluteWindowsPath(std::wstring_view path) {
 }
 
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
+
+std::filesystem::path executableDirectory() {
+    std::wstring path(32'768, L'\0');
+    const DWORD size =
+        GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (size == 0 || size >= path.size())
+        return {};
+    path.resize(size);
+    return std::filesystem::path(path).parent_path();
+}
 
 bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeout) {
     auto* cursor = static_cast<std::uint8_t*>(data);
@@ -230,11 +242,28 @@ protocol::Status applyCommand(protocol::LauncherCommand command,
 
 } // namespace
 
-int wmain(int argc, wchar_t** argv) {
+int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
+    const int argc = __argc;
+    wchar_t** argv = __wargv;
     if (argc == 2 && std::wstring_view(argv[1]) == L"--version") {
         std::cout << "fcitx5-launcher " << fcitx::windows::version() << " protocol "
                   << protocol::kVersion << '\n';
         return 0;
+    }
+    if (argc == 2 && std::wstring_view(argv[1]) == L"--tray-self-test") {
+        launcher::TrayIcon tray;
+        if (!tray.create(instance, executableDirectory()))
+            return 10;
+        const std::uint64_t deadline = GetTickCount64() + 5000;
+        do {
+            tray.dispatchMessages();
+            if (tray.iconAdded() && tray.shellVisible())
+                return 0;
+            Sleep(25);
+        } while (GetTickCount64() < deadline);
+        if (!tray.iconAdded())
+            return 11;
+        return tray.usesGuidIdentity() ? 13 : 12;
     }
     std::wstring enginePath;
     std::wstring uiPath;
@@ -243,6 +272,7 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring stopEventName;
     std::wstring stateFilePath;
     bool warmup = true;
+    bool installedDefaults = argc == 1;
     for (int index = 1; index < argc; ++index) {
         const std::wstring_view argument(argv[index]);
         if (argument == L"--engine" && index + 1 < argc) {
@@ -251,6 +281,8 @@ int wmain(int argc, wchar_t** argv) {
             uiPath = argv[++index];
         } else if (argument == L"--no-warmup") {
             warmup = false;
+        } else if (argument == L"--background") {
+            installedDefaults = true;
         } else if (argument == L"--engine-ready-event" && index + 1 < argc) {
             externalReadyEvent = argv[++index];
         } else if (argument == L"--ready-event" && index + 1 < argc) {
@@ -260,12 +292,19 @@ int wmain(int argc, wchar_t** argv) {
         } else if (argument == L"--state-file" && index + 1 < argc) {
             stateFilePath = argv[++index];
         } else {
-            std::wcerr << L"Usage: fcitx5-launcher --engine ABSOLUTE_PATH [--ui ABSOLUTE_PATH] "
+            std::wcerr << L"Usage: fcitx5-launcher [--background] | "
+                          L"--tray-self-test | "
+                          L"--engine ABSOLUTE_PATH [--ui ABSOLUTE_PATH] "
                           L"[--no-warmup] "
                           L"[--engine-ready-event NAME] [--ready-event NAME] "
                           L"[--stop-event NAME] [--state-file ABSOLUTE_PATH]\n";
             return 1;
         }
+    }
+    if (enginePath.empty() && installedDefaults) {
+        const auto directory = executableDirectory();
+        enginePath = (directory / L"fcitx5-engine.exe").wstring();
+        uiPath = (directory / L"fcitx5-ui.exe").wstring();
     }
     if (!absoluteWindowsPath(enginePath) ||
         GetFileAttributesW(enginePath.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -283,7 +322,10 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring objectPrefix =
         L"Local\\" + std::wstring(kReleaseIdentity.local_object_prefix);
     const std::wstring mutexName = objectPrefix + L".Launcher." + identity.userSid + L".Session." +
-                                   std::to_wstring(identity.sessionId);
+                                   std::to_wstring(identity.sessionId) +
+                                   (platform::localTestNamespace().empty()
+                                        ? std::wstring{}
+                                        : L".Test." + platform::localTestNamespace());
     HANDLE mutex = CreateMutexW(security.attributes(), FALSE, mutexName.c_str());
     if (!mutex)
         return 2;
@@ -367,6 +409,9 @@ int wmain(int argc, wchar_t** argv) {
 
     SystemClock clock;
     launcher::LauncherStateMachine state(clock, initialState);
+    launcher::TrayIcon tray;
+    if (installedDefaults)
+        (void)tray.create(instance, executableDirectory());
     EngineProcess engine;
     bool restartDesired = warmup;
     bool running = true;
@@ -374,6 +419,41 @@ int wmain(int argc, wchar_t** argv) {
     std::uint64_t engineGeneration = 0;
     std::atomic<std::uint64_t> nextResponseId{1};
     while (running) {
+        switch (tray.takeCommand()) {
+        case launcher::TrayCommand::restart:
+            stopEngine(engine);
+            state.engineStoppedIntentionally();
+            if (state.state() == launcher::LauncherState::userStopped &&
+                state.canApply(launcher::Command::resume) &&
+                stateStore.save(state.stateAfter(launcher::Command::resume))) {
+                (void)state.apply(launcher::Command::resume);
+            }
+            restartDesired = true;
+            break;
+        case launcher::TrayCommand::pause:
+            if (state.canApply(launcher::Command::userStop) &&
+                stateStore.save(state.stateAfter(launcher::Command::userStop)) &&
+                state.apply(launcher::Command::userStop)) {
+                stopEngine(engine);
+                state.engineStoppedIntentionally();
+                restartDesired = false;
+            }
+            break;
+        case launcher::TrayCommand::resume:
+            if (state.canApply(launcher::Command::resume) &&
+                stateStore.save(state.stateAfter(launcher::Command::resume)) &&
+                state.apply(launcher::Command::resume)) {
+                restartDesired = true;
+            }
+            break;
+        case launcher::TrayCommand::exit:
+            running = false;
+            break;
+        case launcher::TrayCommand::none:
+            break;
+        }
+        if (!running)
+            break;
         const bool uiSafeMode = state.state() == launcher::LauncherState::safeMode;
         if (!uiPath.empty() && ui.process && ui.safeMode != uiSafeMode) {
             stopUi(ui);
@@ -396,6 +476,7 @@ int wmain(int argc, wchar_t** argv) {
             WaitForSingleObject(engineReady, 0) == WAIT_OBJECT_0) {
             state.engineReady();
         }
+        tray.update(state.state(), state.engineState());
 
         HANDLE pipe = pendingPipe;
         pendingPipe = nullptr;
@@ -438,9 +519,14 @@ int wmain(int argc, wchar_t** argv) {
                     ? 0
                     : static_cast<DWORD>((std::min)(allowed - now, std::uint64_t{MAXDWORD - 1}));
         }
-        const DWORD waitResult = WaitForMultipleObjects(waitCount, waits.data(), FALSE, timeout);
+        const DWORD waitResult =
+            tray.valid()
+                ? MsgWaitForMultipleObjects(waitCount, waits.data(), FALSE, timeout, QS_ALLINPUT)
+                : WaitForMultipleObjects(waitCount, waits.data(), FALSE, timeout);
         HANDLE standbyPipe = nullptr;
-        if (waitResult == WAIT_OBJECT_0 + 1) {
+        if (tray.valid() && waitResult == WAIT_OBJECT_0 + waitCount) {
+            tray.dispatchMessages();
+        } else if (waitResult == WAIT_OBJECT_0 + 1) {
             running = false;
         } else if (engine.process && waitResult == WAIT_OBJECT_0 + 2) {
             const auto runtime = clock.nowMilliseconds() - engine.startedAt;

@@ -1,0 +1,3 @@
+patch:
+  engine/translators/+:
+    - lua_translator@fcitx_windows_lua_probe

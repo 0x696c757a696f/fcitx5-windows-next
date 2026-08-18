@@ -27,9 +27,22 @@ struct InputProfile {
     bool candidates;
 };
 
+struct ProfileIdentity {
+    LANGID language;
+    GUID guid;
+};
+
 inline constexpr std::array<InputProfile, 1> kInputProfiles{{
     {"zh-cn-pinyin", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
      kLanguageProfileGuid, L"Fcitx5 Pinyin", "pinyin", true},
+}};
+
+// Migration-only identities which were registered by development builds but are
+// no longer product input profiles. Keep this list so repair and uninstall can
+// remove the stale entry without touching unrelated keyboards or the current
+// Simplified Chinese profile.
+inline constexpr std::array<ProfileIdentity, 1> kObsoleteInputProfiles{{
+    {MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), kLanguageProfileGuid},
 }};
 
 } // namespace fcitx::windows::tsf

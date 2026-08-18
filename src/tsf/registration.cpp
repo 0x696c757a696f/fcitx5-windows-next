@@ -66,6 +66,29 @@ HRESULT registerComServer() {
     return result;
 }
 
+HRESULT unregisterProfileIfPresent(ITfInputProcessorProfileMgr* profiles, LANGID language,
+                                   REFGUID profileGuid) {
+    TF_INPUTPROCESSORPROFILE profile{};
+    const HRESULT queryResult = profiles->GetProfile(
+        TF_PROFILETYPE_INPUTPROCESSOR, language, kTextServiceClsid, profileGuid, nullptr,
+        &profile);
+    if (FAILED(queryResult)) {
+        return S_OK;
+    }
+
+    const HRESULT unregisterResult =
+        profiles->UnregisterProfile(kTextServiceClsid, language, profileGuid, 0);
+    if (FAILED(unregisterResult)) {
+        return unregisterResult;
+    }
+
+    TF_INPUTPROCESSORPROFILE remaining{};
+    return SUCCEEDED(profiles->GetProfile(TF_PROFILETYPE_INPUTPROCESSOR, language,
+                                          kTextServiceClsid, profileGuid, nullptr, &remaining))
+               ? E_FAIL
+               : S_OK;
+}
+
 HRESULT unregisterComServer() {
     const std::wstring classPath = L"Software\\Classes\\CLSID\\" + guidString(kTextServiceClsid);
     const LSTATUS result = RegDeleteTreeW(HKEY_LOCAL_MACHINE, classPath.c_str());
@@ -85,13 +108,20 @@ HRESULT registerProfiles() {
     if (FAILED(result)) {
         return result;
     }
+    for (const auto& profile : kObsoleteInputProfiles) {
+        result = unregisterProfileIfPresent(profiles, profile.language, profile.guid);
+        if (FAILED(result)) {
+            break;
+        }
+    }
     for (const auto& profile : kInputProfiles) {
+        if (FAILED(result)) {
+            break;
+        }
         result = profiles->RegisterProfile(
             kTextServiceClsid, profile.language, profile.guid, profile.description,
             static_cast<ULONG>(std::wcslen(profile.description)), modulePath.c_str(),
             static_cast<ULONG>(modulePath.size()), 0, nullptr, 0, TRUE, 0);
-        if (FAILED(result))
-            break;
     }
     profiles->Release();
     if (FAILED(result)) {
@@ -127,7 +157,13 @@ HRESULT unregisterProfiles() {
     }
     for (const auto& profile : kInputProfiles) {
         const HRESULT profileResult =
-            profiles->UnregisterProfile(kTextServiceClsid, profile.language, profile.guid, 0);
+            unregisterProfileIfPresent(profiles, profile.language, profile.guid);
+        if (FAILED(profileResult) && SUCCEEDED(result))
+            result = profileResult;
+    }
+    for (const auto& profile : kObsoleteInputProfiles) {
+        const HRESULT profileResult =
+            unregisterProfileIfPresent(profiles, profile.language, profile.guid);
         if (FAILED(profileResult) && SUCCEEDED(result))
             result = profileResult;
     }

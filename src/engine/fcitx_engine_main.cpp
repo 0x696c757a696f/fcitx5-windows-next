@@ -1,4 +1,5 @@
 #include "fcitx_dispatcher.h"
+#include "fcitx_runtime.h"
 #include "peer_verification.h"
 #include "pipe_security.h"
 #include "presentation_publisher.h"
@@ -22,6 +23,19 @@
 namespace {
 
 using namespace fcitx::windows;
+
+std::string jsonString(std::string_view value) {
+    std::string output = "\"";
+    for (const unsigned char character : value) {
+        if (character == '\\' || character == '"')
+            output.push_back('\\');
+        if (character < 0x20U)
+            return {};
+        output.push_back(static_cast<char>(character));
+    }
+    output.push_back('"');
+    return output;
+}
 
 bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeout,
               HANDLE stopEvent) {
@@ -104,13 +118,52 @@ bool readFrame(HANDLE pipe, std::vector<std::uint8_t>& bytes, HANDLE stopEvent) 
            transfer(pipe, false, bytes.data() + protocol::kHeaderSize, bodySize, 100, stopEvent);
 }
 
+protocol::KeyResponse makeStateResponse(
+    const protocol::Metadata& requestMetadata, std::uint64_t responseId,
+    std::uint64_t engineEpoch, const engine::RuntimeResult& runtimeResult) {
+    protocol::KeyResponse response;
+    response.metadata = protocol::Metadata{
+        responseId, requestMetadata.requestId, engineEpoch, requestMetadata.sessionId,
+        requestMetadata.contextId, runtimeResult.compositionId, runtimeResult.revision};
+    response.status = protocol::Status::ok;
+    response.handled = runtimeResult.handled;
+    response.commitUtf8 = runtimeResult.commitUtf8;
+    response.preeditUtf8 = runtimeResult.preeditUtf8;
+    response.preeditCaretUtf8 = runtimeResult.preeditCaretUtf8;
+    response.candidates = runtimeResult.candidates;
+    response.selectedCandidate = runtimeResult.selectedCandidate;
+    response.candidatePage = runtimeResult.candidatePage;
+    response.candidateTotal = runtimeResult.candidateTotal;
+    response.candidateVisibility = runtimeResult.candidateVisibility;
+    response.candidatePageSize = runtimeResult.candidatePageSize;
+    response.candidateBulk = runtimeResult.candidateBulk;
+    response.candidateEnd = runtimeResult.candidateEnd;
+    response.caret = runtimeResult.caret;
+    return response;
+}
+
+bool signalCandidateUpdate(const platform::RuntimeIdentity& identity,
+                           std::uint32_t targetProcessId) noexcept {
+    const std::wstring name = platform::makeLocalObjectName(
+        identity, L"candidate-" + std::to_wstring(targetProcessId));
+    if (name.empty()) return false;
+    const HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, name.c_str());
+    if (!event) return false;
+    const bool signaled = SetEvent(event) != FALSE;
+    CloseHandle(event);
+    return signaled;
+}
+
 std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestBytes,
                                         std::uint64_t engineEpoch,
                                         std::atomic<std::uint64_t>& nextResponseId,
                                         const platform::ProcessIdentity& clientIdentity,
+                                        std::uint64_t connectionId,
                                         bool& handshakeComplete, std::uint64_t& lastRequestId,
                                         engine::FcitxDispatcher& dispatcher,
-                                        engine::PresentationPublisher& presentation) {
+                                        engine::PresentationPublisher& presentation,
+                                        const platform::RuntimeIdentity& serverIdentity,
+                                        const std::wstring& uiExecutable) {
     protocol::FrameView frame;
     if (!protocol::decodeFrame(requestBytes, frame) || frame.metadata.requestId <= lastRequestId) {
         return {};
@@ -129,41 +182,60 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
                                request.metadata.sessionId, 0, 0, 0},
             protocol::Status::ok, 64});
     }
-    if (frame.type != protocol::MessageType::keyRequest || !handshakeComplete)
+    if (!handshakeComplete)
         return {};
-    protocol::KeyRequest request;
-    if (!protocol::decode(frame, request) || request.metadata.engineEpoch != engineEpoch ||
-        request.metadata.sessionId != clientIdentity.sessionId) {
-        return {};
+    if (frame.metadata.engineEpoch != engineEpoch ||
+        frame.metadata.sessionId != clientIdentity.sessionId) return {};
+
+    if (frame.type == protocol::MessageType::keyRequest) {
+        protocol::KeyRequest request;
+        engine::RuntimeResult runtimeResult;
+        if (!protocol::decode(frame, request) ||
+            !dispatcher.processKey(
+                engine::ClientContextKey{clientIdentity.processId, connectionId,
+                                         request.metadata.contextId},
+                request, runtimeResult, std::chrono::milliseconds(75))) return {};
+        lastRequestId = request.metadata.requestId;
+        auto response = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
+                                          engineEpoch, runtimeResult);
+        presentation.publish(response);
+        return protocol::encode(response);
     }
-    engine::RuntimeResult runtimeResult;
-    if (!dispatcher.processKey(
-            engine::ClientContextKey{clientIdentity.processId, request.metadata.contextId}, request,
-            runtimeResult, std::chrono::milliseconds(100))) {
-        return {};
+
+    if (frame.type == protocol::MessageType::candidateSelectRequest) {
+        protocol::CandidateSelectRequest request;
+        engine::RuntimeResult runtimeResult;
+        if (!platform::pathsReferToSameFile(clientIdentity.executablePath, uiExecutable) ||
+            !protocol::decode(frame, request) ||
+            !dispatcher.selectCandidate(request.targetProcessId, request, runtimeResult,
+                                        std::chrono::milliseconds(75))) return {};
+        lastRequestId = request.metadata.requestId;
+        auto state = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
+                                       engineEpoch, runtimeResult);
+        presentation.publish(state);
+        const bool notified = signalCandidateUpdate(serverIdentity, request.targetProcessId);
+        const protocol::CandidateSelectResponse response{
+            protocol::Metadata{nextResponseId.fetch_add(1), request.metadata.requestId,
+                               engineEpoch, request.metadata.sessionId,
+                               request.metadata.contextId, runtimeResult.compositionId,
+                               runtimeResult.revision},
+            notified ? protocol::Status::ok : protocol::Status::unsupported};
+        return protocol::encode(response);
     }
-    lastRequestId = request.metadata.requestId;
-    protocol::KeyResponse response;
-    response.metadata = protocol::Metadata{
-        nextResponseId.fetch_add(1), request.metadata.requestId, engineEpoch,
-        request.metadata.sessionId,  request.metadata.contextId, runtimeResult.compositionId,
-        runtimeResult.revision};
-    response.status = protocol::Status::ok;
-    response.handled = runtimeResult.handled;
-    response.commitUtf8 = std::move(runtimeResult.commitUtf8);
-    response.preeditUtf8 = std::move(runtimeResult.preeditUtf8);
-    response.preeditCaretUtf8 = runtimeResult.preeditCaretUtf8;
-    response.candidates = std::move(runtimeResult.candidates);
-    response.selectedCandidate = runtimeResult.selectedCandidate;
-    response.candidatePage = runtimeResult.candidatePage;
-    response.candidateTotal = runtimeResult.candidateTotal;
-    response.candidateVisibility = runtimeResult.candidateVisibility;
-    response.candidatePageSize = runtimeResult.candidatePageSize;
-    response.candidateBulk = runtimeResult.candidateBulk;
-    response.candidateEnd = runtimeResult.candidateEnd;
-    response.caret = request.caret;
-    presentation.publish(response);
-    return protocol::encode(response);
+
+    if (frame.type == protocol::MessageType::stateRequest) {
+        protocol::StateRequest request;
+        engine::RuntimeResult runtimeResult;
+        if (!protocol::decode(frame, request) ||
+            !dispatcher.takePendingState(
+                engine::ClientContextKey{clientIdentity.processId, connectionId,
+                                         request.metadata.contextId},
+                request, runtimeResult, std::chrono::milliseconds(75))) return {};
+        lastRequestId = request.metadata.requestId;
+        return protocol::encode(makeStateResponse(
+            request.metadata, nextResponseId.fetch_add(1), engineEpoch, runtimeResult));
+    }
+    return {};
 }
 
 int serve(const std::wstring& pipeName, unsigned testClientCount,
@@ -192,6 +264,7 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     const std::uint64_t engineEpoch =
         (static_cast<std::uint64_t>(now.dwHighDateTime) << 32U) | now.dwLowDateTime;
     std::atomic<std::uint64_t> nextResponseId{1};
+    std::atomic<std::uint64_t> nextConnectionId{1};
     std::atomic<bool> readinessSignaled{};
     std::atomic<int> serverError{};
     HANDLE stopEvent =
@@ -235,18 +308,23 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                 }
                 platform::ProcessIdentity clientIdentity;
                 if (ipc::verifyPipeClient(pipe, identity, &clientIdentity)) {
+                    const std::uint64_t connectionId =
+                        nextConnectionId.fetch_add(1, std::memory_order_relaxed);
                     bool handshakeComplete = false;
                     std::uint64_t lastRequestId = 0;
                     std::vector<std::uint8_t> request;
                     while (readFrame(pipe, request, stopEvent)) {
                         auto response = handleRequest(request, engineEpoch, nextResponseId,
-                                                      clientIdentity, handshakeComplete,
-                                                      lastRequestId, dispatcher, presentation);
+                                                      clientIdentity, connectionId,
+                                                      handshakeComplete,
+                                                      lastRequestId, dispatcher, presentation,
+                                                      identity, uiExecutable);
                         if (response.empty() || !transfer(pipe, true, response.data(),
                                                           response.size(), 100, stopEvent)) {
                             break;
                         }
                     }
+                    dispatcher.forgetConnection(connectionId);
                 }
                 DisconnectNamedPipe(pipe);
                 CloseHandle(pipe);
@@ -270,6 +348,37 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 2 && std::wstring_view(argv[1]) == L"--version") {
         std::cout << "fcitx5-engine 0.1.0 protocol " << fcitx::windows::protocol::kVersion << '\n';
         return 0;
+    }
+    if (argc == 2 && std::wstring_view(argv[1]) == L"--list-input-methods") {
+        fcitx::windows::engine::FcitxRuntime runtime;
+        if (!runtime.initialize(false))
+            return 5;
+        const auto methods = runtime.inputMethods();
+        std::cout << "{\"format_version\":1,\"input_methods\":[";
+        for (std::size_t index = 0; index < methods.size(); ++index) {
+            if (index != 0)
+                std::cout << ',';
+            const auto& method = methods[index];
+            std::cout << "{\"id\":" << jsonString(method.id)
+                      << ",\"name\":" << jsonString(method.name)
+                      << ",\"native_name\":" << jsonString(method.nativeName)
+                      << ",\"selected\":" << (method.selected ? "true" : "false") << '}';
+        }
+        std::cout << "]}\n";
+        return methods.empty() ? 6 : 0;
+    }
+    if (argc == 3 && std::wstring_view(argv[1]) == L"--set-input-method") {
+        const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, argv[2], -1, nullptr,
+                                             0, nullptr, nullptr);
+        if (size <= 1 || size > 66)
+            return 2;
+        std::string id(static_cast<std::size_t>(size), '\0');
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, argv[2], -1, id.data(), size,
+                                nullptr, nullptr) != size)
+            return 2;
+        id.pop_back();
+        fcitx::windows::engine::FcitxRuntime runtime;
+        return runtime.initialize(false) && runtime.setDefaultInputMethod(id) ? 0 : 5;
     }
     fcitx::windows::platform::RuntimeIdentity identity;
     if (!fcitx::windows::platform::queryCurrentIdentity(identity) || !identity.mayUseUserEngine()) {

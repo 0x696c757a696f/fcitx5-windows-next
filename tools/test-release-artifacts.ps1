@@ -45,6 +45,8 @@ try {
   }
   & (Join-Path $portableRoot 'bin/fcitx5-config.exe') --self-test
   if ($LASTEXITCODE -ne 0) { throw 'Signed portable Config smoke failed.' }
+  & (Join-Path $portableRoot 'bin/fcitx5-config.exe') --ui-interaction-test
+  if ($LASTEXITCODE -ne 0) { throw 'Signed portable Config interaction sweep failed.' }
   & (Join-Path $portableRoot 'bin/fcitx5-control.exe') --schema
   if ($LASTEXITCODE -ne 0) { throw 'Signed portable Control smoke failed.' }
 } finally {

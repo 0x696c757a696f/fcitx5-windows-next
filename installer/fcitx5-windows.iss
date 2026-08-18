@@ -60,9 +60,13 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Run]
 Filename: "{app}\bin\fcitx5-register.exe"; Parameters: "--register --dll ""{app}\tsf\x64\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated
 Filename: "{app}\bin\fcitx5-register-x86.exe"; Parameters: "--register --dll ""{app}\tsf\x86\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; Check: IsWin64
+Filename: "{app}\bin\fcitx5-control.exe"; Parameters: "--set-startup enabled"; Flags: runhidden waituntilterminated runasoriginaluser
+Filename: "{app}\bin\fcitx5-launcher.exe"; Parameters: "--background"; Flags: runhidden nowait runasoriginaluser
 Filename: "{app}\bin\fcitx5-config.exe"; Description: "Open Fcitx5 settings"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{app}\bin\fcitx5-control.exe"; Parameters: "--shutdown"; Flags: runhidden waituntilterminated; RunOnceId: "stop-user-service"
+Filename: "{app}\bin\fcitx5-control.exe"; Parameters: "--set-startup disabled"; Flags: runhidden waituntilterminated; RunOnceId: "remove-user-startup"
 Filename: "{app}\bin\fcitx5-register-x86.exe"; Parameters: "--unregister --dll ""{app}\tsf\x86\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; Check: IsWin64; RunOnceId: "unregister-x86-tsf"
 Filename: "{app}\bin\fcitx5-register.exe"; Parameters: "--unregister --dll ""{app}\tsf\x64\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; RunOnceId: "unregister-x64-tsf"
 

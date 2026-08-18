@@ -200,12 +200,14 @@ std::size_t maximumFrameSize(MessageType type) noexcept {
 
 bool isRequest(MessageType type) noexcept {
     return type == MessageType::helloRequest || type == MessageType::keyRequest ||
-           type == MessageType::launcherRequest;
+           type == MessageType::launcherRequest ||
+           type == MessageType::candidateSelectRequest || type == MessageType::stateRequest;
 }
 
 bool isResponse(MessageType type) noexcept {
     return type == MessageType::helloResponse || type == MessageType::keyResponse ||
-           type == MessageType::launcherResponse;
+           type == MessageType::launcherResponse ||
+           type == MessageType::candidateSelectResponse;
 }
 
 bool decodeHeader(std::span<const std::uint8_t> bytes, MessageType& type, std::uint32_t& bodySize,
@@ -226,7 +228,7 @@ bool decodeHeader(std::span<const std::uint8_t> bytes, MessageType& type, std::u
     }
     if (magic != kMagic || version != kVersion ||
         rawType < static_cast<std::uint16_t>(MessageType::helloRequest) ||
-        rawType > static_cast<std::uint16_t>(MessageType::launcherResponse)) {
+        rawType > static_cast<std::uint16_t>(MessageType::stateRequest)) {
         return false;
     }
     type = static_cast<MessageType>(rawType);
@@ -324,6 +326,39 @@ std::vector<std::uint8_t> encode(const KeyResponse& message) {
         writer.appendString(candidate.textUtf8);
         writer.appendString(candidate.commentUtf8);
     }
+    return writer.finish();
+}
+
+std::vector<std::uint8_t> encode(const CandidateSelectRequest& message) {
+    if (!validMetadata(MessageType::candidateSelectRequest, message.metadata) ||
+        !validKeyMetadata(message.metadata) || message.targetProcessId == 0 ||
+        message.candidateId == 0) {
+        return {};
+    }
+    Writer writer(MessageType::candidateSelectRequest, message.metadata);
+    writer.appendU32(message.targetProcessId);
+    writer.appendU64(message.candidateId);
+    return writer.finish();
+}
+
+std::vector<std::uint8_t> encode(const CandidateSelectResponse& message) {
+    if (!validMetadata(MessageType::candidateSelectResponse, message.metadata) ||
+        !validKeyMetadata(message.metadata) ||
+        static_cast<std::uint32_t>(message.status) >
+            static_cast<std::uint32_t>(Status::accessDenied)) {
+        return {};
+    }
+    Writer writer(MessageType::candidateSelectResponse, message.metadata);
+    writer.appendU32(static_cast<std::uint32_t>(message.status));
+    return writer.finish();
+}
+
+std::vector<std::uint8_t> encode(const StateRequest& message) {
+    if (!validMetadata(MessageType::stateRequest, message.metadata) ||
+        !validKeyMetadata(message.metadata)) {
+        return {};
+    }
+    Writer writer(MessageType::stateRequest, message.metadata);
     return writer.finish();
 }
 
@@ -441,6 +476,43 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
     }
     message.status = static_cast<Status>(status);
     message.handled = handled != 0;
+    return true;
+}
+
+bool decode(const FrameView& frame, CandidateSelectRequest& message) noexcept {
+    if (frame.type != MessageType::candidateSelectRequest ||
+        !validKeyMetadata(frame.metadata)) {
+        return false;
+    }
+    Reader reader(frame.body);
+    message.metadata = frame.metadata;
+    return reader.readU32(message.targetProcessId) &&
+           reader.readU64(message.candidateId) && message.targetProcessId != 0 &&
+           message.candidateId != 0 && reader.done();
+}
+
+bool decode(const FrameView& frame, CandidateSelectResponse& message) noexcept {
+    if (frame.type != MessageType::candidateSelectResponse ||
+        !validKeyMetadata(frame.metadata)) {
+        return false;
+    }
+    Reader reader(frame.body);
+    std::uint32_t status = 0;
+    if (!reader.readU32(status) || !reader.done() ||
+        status > static_cast<std::uint32_t>(Status::accessDenied)) {
+        return false;
+    }
+    message.metadata = frame.metadata;
+    message.status = static_cast<Status>(status);
+    return true;
+}
+
+bool decode(const FrameView& frame, StateRequest& message) noexcept {
+    if (frame.type != MessageType::stateRequest || !validKeyMetadata(frame.metadata) ||
+        !frame.body.empty()) {
+        return false;
+    }
+    message.metadata = frame.metadata;
     return true;
 }
 

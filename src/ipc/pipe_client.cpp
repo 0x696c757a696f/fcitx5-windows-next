@@ -208,6 +208,49 @@ bool PipeClient::handshake(std::uint64_t deadline) noexcept {
     }
 }
 
+bool PipeClient::acceptKeyResponse(const protocol::KeyResponse& response,
+                                   std::uint64_t requestId,
+                                   std::uint64_t contextId,
+                                   ContextState& contextState,
+                                   KeyResult& result) noexcept {
+    if (response.metadata.responseTo != requestId ||
+        response.metadata.engineEpoch != engineEpoch_ ||
+        response.metadata.sessionId != sessionId_ ||
+        response.metadata.contextId != contextId ||
+        response.metadata.revision <= contextState.revision ||
+        response.status != protocol::Status::ok ||
+        !utf8ToWide(response.commitUtf8, result.commit) ||
+        !utf8ToWide(response.preeditUtf8, result.preedit) ||
+        !utf8OffsetToWide(response.preeditUtf8, response.preeditCaretUtf8,
+                          result.preeditCaretUtf16)) {
+        return false;
+    }
+    contextState.compositionId = response.metadata.compositionId;
+    contextState.revision = response.metadata.revision;
+    result.engineEpoch = response.metadata.engineEpoch;
+    result.compositionId = response.metadata.compositionId;
+    result.revision = response.metadata.revision;
+    result.handled = response.handled;
+    result.selectedCandidate = response.selectedCandidate;
+    result.candidatePage = response.candidatePage;
+    result.candidateTotal = response.candidateTotal;
+    result.candidateVisibility = response.candidateVisibility;
+    result.caret = response.caret;
+    result.candidates.reserve(response.candidates.size());
+    for (const auto& source : response.candidates) {
+        KeyResult::Candidate candidate;
+        candidate.id = source.id;
+        if (!utf8ToWide(source.labelUtf8, candidate.label) ||
+            !utf8ToWide(source.textUtf8, candidate.text) ||
+            !utf8ToWide(source.commentUtf8, candidate.comment)) {
+            result = {};
+            return false;
+        }
+        result.candidates.emplace_back(std::move(candidate));
+    }
+    return true;
+}
+
 bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
                             std::uint32_t keyFlags, KeyResult& result,
                             const protocol::CaretRect& caret) noexcept {
@@ -237,48 +280,81 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
         protocol::FrameView frame;
         protocol::KeyResponse response;
         if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response) ||
-            response.metadata.responseTo != requestId ||
-            response.metadata.engineEpoch != engineEpoch_ ||
-            response.metadata.sessionId != sessionId_ ||
-            response.metadata.contextId != contextId ||
-            response.metadata.revision <= request.metadata.revision ||
-            response.status != protocol::Status::ok ||
-            !utf8ToWide(response.commitUtf8, result.commit) ||
-            !utf8ToWide(response.preeditUtf8, result.preedit) ||
-            !utf8OffsetToWide(response.preeditUtf8, response.preeditCaretUtf8,
-                              result.preeditCaretUtf16)) {
+            !acceptKeyResponse(response, requestId, contextId, contextState, result)) {
             disconnect();
             return false;
-        }
-        contextState.compositionId = response.metadata.compositionId;
-        contextState.revision = response.metadata.revision;
-        result.engineEpoch = response.metadata.engineEpoch;
-        result.compositionId = response.metadata.compositionId;
-        result.revision = response.metadata.revision;
-        result.handled = response.handled;
-        result.selectedCandidate = response.selectedCandidate;
-        result.candidatePage = response.candidatePage;
-        result.candidateTotal = response.candidateTotal;
-        result.candidateVisibility = response.candidateVisibility;
-        result.caret = response.caret;
-        result.candidates.reserve(response.candidates.size());
-        for (const auto& source : response.candidates) {
-            KeyResult::Candidate candidate;
-            candidate.id = source.id;
-            if (!utf8ToWide(source.labelUtf8, candidate.label) ||
-                !utf8ToWide(source.textUtf8, candidate.text) ||
-                !utf8ToWide(source.commentUtf8, candidate.comment)) {
-                disconnect();
-                result = {};
-                return false;
-            }
-            result.candidates.emplace_back(std::move(candidate));
         }
         return true;
     } catch (...) {
         disconnect();
         result.handled = false;
         result.commit.clear();
+        return false;
+    }
+}
+
+bool PipeClient::selectCandidate(std::uint32_t targetProcessId,
+                                 std::uint64_t expectedEngineEpoch,
+                                 std::uint64_t contextId,
+                                 std::uint64_t compositionId,
+                                 std::uint64_t revision,
+                                 std::uint64_t candidateId) noexcept {
+    try {
+        const std::uint64_t deadline = GetTickCount64() + kInputDeadlineMilliseconds;
+        if (!connect(deadline) || !handshake(deadline) || targetProcessId == 0 ||
+            expectedEngineEpoch == 0 || engineEpoch_ != expectedEngineEpoch ||
+            contextId == 0 || compositionId == 0 || revision == 0 || candidateId == 0) {
+            return false;
+        }
+        const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        const protocol::CandidateSelectRequest request{
+            protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
+                               compositionId, revision},
+            targetProcessId, candidateId};
+        std::vector<std::uint8_t> responseBytes;
+        if (!transact(protocol::encode(request), responseBytes, deadline)) return false;
+        protocol::FrameView frame;
+        protocol::CandidateSelectResponse response;
+        if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response) ||
+            response.metadata.responseTo != requestId ||
+            response.metadata.engineEpoch != engineEpoch_ ||
+            response.metadata.sessionId != sessionId_ ||
+            response.metadata.contextId != contextId ||
+            response.metadata.revision <= revision || response.status != protocol::Status::ok) {
+            disconnect();
+            return false;
+        }
+        return true;
+    } catch (...) {
+        disconnect();
+        return false;
+    }
+}
+
+bool PipeClient::pollState(std::uint64_t contextId, KeyResult& result) noexcept {
+    result = {};
+    try {
+        const std::uint64_t deadline = GetTickCount64() + kInputDeadlineMilliseconds;
+        const auto found = contexts_.find(contextId);
+        if (found == contexts_.end() || !connect(deadline) || !handshake(deadline)) return false;
+        auto& contextState = found->second;
+        const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        const protocol::StateRequest request{
+            protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
+                               contextState.compositionId, contextState.revision}};
+        std::vector<std::uint8_t> responseBytes;
+        if (!transact(protocol::encode(request), responseBytes, deadline)) return false;
+        protocol::FrameView frame;
+        protocol::KeyResponse response;
+        if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response) ||
+            !acceptKeyResponse(response, requestId, contextId, contextState, result)) {
+            disconnect();
+            return false;
+        }
+        return true;
+    } catch (...) {
+        disconnect();
+        result = {};
         return false;
     }
 }

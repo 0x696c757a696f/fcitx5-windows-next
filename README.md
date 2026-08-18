@@ -2,8 +2,9 @@
 
 This repository implements the native Windows frontend and distribution layer for Fcitx5. The architecture keeps the in-process TSF DLL small and moves Fcitx, addons, candidate rendering, configuration, and package management into explicit out-of-process boundaries.
 
-The project follows the frozen engineering specification v1.5. Phases 0 through 8 are implemented;
-compatibility evidence is tracked separately from automated gates.
+The sole current engineering baseline is the frozen v1.6 specification. Existing code spans several
+phases, but acceptance is being re-established strictly in Phase 0 through Phase 8 order; historical
+green tests do not mean that every phase is currently accepted.
 
 ## Build
 
@@ -33,7 +34,7 @@ Reference pins, source-audit findings, and the reason for the process boundaries
 
 `package` builds and tests the exact x64/x86 Release artifacts, verifies the real Fcitx engine, creates the portable ZIP and Inno installer, then runs a portable move smoke. `tools/test-installer.ps1` performs the elevated install/repair/uninstall smoke and restores the development TSF registration.
 
-## Current scope
+## Implemented surface (subject to v1.6 re-acceptance)
 
 The native C++/WTL Config includes the online signed repository plugin manager. Package/addon/data/
 theme/translation updates use exact dependencies, bounded signed archives, staging, atomic activation,
@@ -48,4 +49,5 @@ set includes the matching `librime-lua` module and its exact `librime` dependenc
 missing-dependency, signature, or hash mismatch is rejected instead of producing a partially enabled
 addon.
 
-Acceptance evidence is recorded per phase under `docs/phase-*-acceptance.md`.
+Start with [docs/README.md](docs/README.md). Acceptance evidence is recorded per phase under
+`docs/phase-*-acceptance.md`; documents still naming v1.5 are historical until revalidated.

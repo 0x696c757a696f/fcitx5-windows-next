@@ -9,7 +9,7 @@
 namespace fcitx::windows::protocol {
 
 inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
-inline constexpr std::uint16_t kVersion = 5;
+inline constexpr std::uint16_t kVersion = 7;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
@@ -26,6 +26,9 @@ enum class MessageType : std::uint16_t {
     keyResponse = 4,
     launcherRequest = 5,
     launcherResponse = 6,
+    candidateSelectRequest = 7,
+    candidateSelectResponse = 8,
+    stateRequest = 9,
 };
 
 enum class Status : std::uint32_t {
@@ -78,6 +81,13 @@ struct CaretRect {
     bool operator==(const CaretRect&) const = default;
 };
 
+enum KeyFlag : std::uint32_t {
+    kKeyFlagShift = 1U << 0U,
+    kKeyFlagControl = 1U << 1U,
+    kKeyFlagAlt = 1U << 2U,
+    kKeyFlagSuper = 1U << 3U,
+};
+
 struct KeyRequest {
     Metadata metadata;
     std::uint32_t virtualKey{};
@@ -110,6 +120,21 @@ struct KeyResponse {
     bool candidateBulk{};
     bool candidateEnd{};
     CaretRect caret;
+};
+
+struct CandidateSelectRequest {
+    Metadata metadata;
+    std::uint32_t targetProcessId{};
+    std::uint64_t candidateId{};
+};
+
+struct CandidateSelectResponse {
+    Metadata metadata;
+    Status status{Status::malformed};
+};
+
+struct StateRequest {
+    Metadata metadata;
 };
 
 enum class LauncherCommand : std::uint32_t {
@@ -149,6 +174,9 @@ struct LauncherResponse {
 [[nodiscard]] std::vector<std::uint8_t> encode(const HelloResponse& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const KeyRequest& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const KeyResponse& message);
+[[nodiscard]] std::vector<std::uint8_t> encode(const CandidateSelectRequest& message);
+[[nodiscard]] std::vector<std::uint8_t> encode(const CandidateSelectResponse& message);
+[[nodiscard]] std::vector<std::uint8_t> encode(const StateRequest& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const LauncherRequest& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const LauncherResponse& message);
 
@@ -156,6 +184,9 @@ struct LauncherResponse {
 [[nodiscard]] bool decode(const FrameView& frame, HelloResponse& message) noexcept;
 [[nodiscard]] bool decode(const FrameView& frame, KeyRequest& message) noexcept;
 [[nodiscard]] bool decode(const FrameView& frame, KeyResponse& message) noexcept;
+[[nodiscard]] bool decode(const FrameView& frame, CandidateSelectRequest& message) noexcept;
+[[nodiscard]] bool decode(const FrameView& frame, CandidateSelectResponse& message) noexcept;
+[[nodiscard]] bool decode(const FrameView& frame, StateRequest& message) noexcept;
 [[nodiscard]] bool decode(const FrameView& frame, LauncherRequest& message) noexcept;
 [[nodiscard]] bool decode(const FrameView& frame, LauncherResponse& message) noexcept;
 

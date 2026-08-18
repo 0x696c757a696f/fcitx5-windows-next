@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -91,7 +92,10 @@ struct KeyHash {
     std::size_t operator()(const ClientContextKey& key) const noexcept {
         const auto high = static_cast<std::size_t>(key.contextId >> 32U);
         const auto low = static_cast<std::size_t>(key.contextId);
-        return (static_cast<std::size_t>(key.processId) * 0x9e3779b1U) ^ high ^ low;
+        const auto connectionHigh = static_cast<std::size_t>(key.connectionId >> 32U);
+        const auto connectionLow = static_cast<std::size_t>(key.connectionId);
+        return (static_cast<std::size_t>(key.processId) * 0x9e3779b1U) ^
+               (connectionHigh * 0x85ebca6bU) ^ connectionLow ^ high ^ low;
     }
 };
 
@@ -122,6 +126,14 @@ class EngineInputContext final : public InputContext {
 
 Key keyFromRequest(const protocol::KeyRequest& request) {
     KeyStates states;
+    if ((request.keyFlags & protocol::kKeyFlagShift) != 0)
+        states |= KeyState::Shift;
+    if ((request.keyFlags & protocol::kKeyFlagControl) != 0)
+        states |= KeyState::Ctrl;
+    if ((request.keyFlags & protocol::kKeyFlagAlt) != 0)
+        states |= KeyState::Alt;
+    if ((request.keyFlags & protocol::kKeyFlagSuper) != 0)
+        states |= KeyState::Super;
     const auto vk = request.virtualKey;
     switch (vk) {
     case VK_BACK:
@@ -174,10 +186,13 @@ class FcitxRuntime::Impl final {
   public:
     std::unique_ptr<Instance> instance;
     std::unordered_map<ClientContextKey, std::unique_ptr<EngineInputContext>, KeyHash> contexts;
+    std::unique_ptr<EngineInputContext> warmupContext;
     EngineInputContext* focused{};
     std::uint64_t nextCompositionId{1};
     std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> revisions;
     std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> compositions;
+    std::unordered_map<ClientContextKey, protocol::CaretRect, KeyHash> carets;
+    std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
 
     void ensureInputMethods() {
         auto& manager = instance->inputMethodManager();
@@ -188,23 +203,40 @@ class FcitxRuntime::Impl final {
             return std::any_of(items.begin(), items.end(),
                                [&](const auto& item) { return item.name() == name; });
         };
-        bool changed = false;
-        if (manager.entry("wbx") && !contains("wbx")) {
-            items.insert(items.begin(), InputMethodGroupItem("wbx"));
-            changed = true;
+        const std::string previousDefault = group.defaultInputMethod();
+        items.erase(std::remove_if(items.begin(), items.end(), [&](const auto& item) {
+                        return manager.entry(item.name()) == nullptr;
+                    }),
+                    items.end());
+        for (const char* id : {"pinyin", "rime", "wbx"}) {
+            if (manager.entry(id) && !contains(id)) {
+                items.emplace_back(id);
+            }
         }
-        if (manager.entry("pinyin") && !contains("pinyin")) {
-            items.emplace_back("pinyin");
-            changed = true;
+        std::string selected = previousDefault;
+        if (!contains(selected)) {
+            selected.clear();
+            for (const char* fallback : {"pinyin", "rime", "wbx"}) {
+                if (contains(fallback)) {
+                    selected = fallback;
+                    break;
+                }
+            }
         }
-        if (manager.entry("pinyin")) {
-            group.setDefaultInputMethod("pinyin");
-            changed = true;
-        }
-        if (changed) {
-            manager.setGroup(std::move(group));
-            manager.save();
-        }
+        if (selected.empty())
+            return;
+        const auto keyboard = std::find_if(items.begin(), items.end(), [](const auto& item) {
+            return item.name() == "keyboard-us";
+        });
+        if (!manager.entry("keyboard-us"))
+            throw std::runtime_error("Windows keyboard passthrough addon is unavailable");
+        if (keyboard == items.end())
+            items.insert(items.begin(), InputMethodGroupItem("keyboard-us"));
+        else if (keyboard != items.begin())
+            std::rotate(items.begin(), keyboard, std::next(keyboard));
+        group.setDefaultInputMethod(selected);
+        manager.setGroup(std::move(group));
+        manager.save();
     }
 
     EngineInputContext& contextFor(const ClientContextKey& key) {
@@ -215,6 +247,69 @@ class FcitxRuntime::Impl final {
         auto* result = context.get();
         contexts.emplace(key, std::move(context));
         return *result;
+    }
+
+    RuntimeResult collectResult(const ClientContextKey& key,
+                                EngineInputContext& context, bool handled) {
+        RuntimeResult output;
+        output.handled = handled;
+        output.commitUtf8 = context.takeCommit();
+        auto [preedit, caretOffset] = readPreedit(context);
+        output.preeditUtf8 = std::move(preedit);
+        output.preeditCaretUtf8 = caretOffset;
+        const auto candidateList = context.inputPanel().candidateList();
+        const bool hasCandidates = candidateList && !candidateList->empty();
+        auto& composition = compositions[key];
+        if ((!output.preeditUtf8.empty() || hasCandidates) && composition == 0) {
+            composition = nextCompositionId++;
+            if (composition == 0)
+                composition = nextCompositionId++;
+        }
+        if (output.preeditUtf8.empty() && !hasCandidates)
+            composition = 0;
+        if (hasCandidates) {
+            const int pageSize =
+                std::clamp(candidateList->size(), 0,
+                           static_cast<int>(protocol::kMaxCandidates));
+            output.candidatePageSize = static_cast<std::uint32_t>(pageSize);
+            const auto* bulk = candidateList->toBulk();
+            const int reportedTotal = bulk ? bulk->totalSize() : pageSize;
+            const int size =
+                bulk && reportedTotal >= 0
+                    ? std::clamp(reportedTotal, 0,
+                                 static_cast<int>(protocol::kMaxCandidates))
+                    : pageSize;
+            output.candidateBulk = bulk != nullptr;
+            output.candidateEnd = !bulk || (reportedTotal >= 0 && size >= reportedTotal);
+            output.candidates.reserve(static_cast<std::size_t>(size));
+            for (int index = 0; index < size; ++index) {
+                const auto& word =
+                    bulk ? bulk->candidateFromAll(index) : candidateList->candidate(index);
+                output.candidates.push_back(protocol::CandidateRecord{
+                    (composition << 8U) | static_cast<std::uint64_t>(index + 1),
+                    bulk ? std::string{} : candidateList->label(index).toString(),
+                    word.text().toString(), word.comment().toString()});
+            }
+            const int cursor = candidateList->toBulkCursor()
+                                   ? candidateList->toBulkCursor()->globalCursorIndex()
+                                   : candidateList->cursorIndex();
+            if (cursor >= 0 && cursor < size)
+                output.selectedCandidate = static_cast<std::uint32_t>(cursor);
+            output.candidateTotal = static_cast<std::uint32_t>(size);
+            if (bulk && bulk->totalSize() >= 0)
+                output.candidateTotal = static_cast<std::uint32_t>(bulk->totalSize());
+            if (const auto* pageable = candidateList->toPageable(); pageable) {
+                const int page = pageable->currentPage();
+                if (page >= 0)
+                    output.candidatePage = static_cast<std::uint32_t>(page);
+            }
+            output.candidateVisibility = output.preeditUtf8.empty() ? 2U : 1U;
+        }
+        output.compositionId = composition;
+        output.revision = ++revisions[key];
+        if (const auto found = carets.find(key); found != carets.end())
+            output.caret = found->second;
+        return output;
     }
 };
 
@@ -228,7 +323,7 @@ bool FcitxRuntime::initialize(bool safeMode) {
         if (safeMode) {
             char executable[] = "fcitx5-engine";
             char disable[] = "--disable=all";
-            char enable[] = "--enable=pinyin,punctuation";
+            char enable[] = "--enable=windowskeyboard,pinyin,punctuation";
             char* arguments[]{executable, disable, enable};
             impl_->instance = std::make_unique<Instance>(3, arguments);
         } else {
@@ -237,17 +332,27 @@ bool FcitxRuntime::initialize(bool safeMode) {
         impl_->instance->addonManager().registerDefaultLoader(nullptr);
         impl_->instance->initialize();
         impl_->ensureInputMethods();
-        if (!impl_->instance->inputMethodManager().entry("pinyin"))
+        const auto& group = impl_->instance->inputMethodManager().currentGroup();
+        const std::string selected = group.defaultInputMethod();
+        if (selected.empty() || !impl_->instance->inputMethodManager().entry(selected))
             return false;
-        if (!impl_->instance->inputMethodEngine("pinyin"))
+        if (!impl_->instance->inputMethodEngine(selected))
             return false;
-        EngineInputContext warmup(impl_->instance->inputContextManager());
-        warmup.focusIn();
-        impl_->instance->setCurrentInputMethod(&warmup, "pinyin", true);
-        KeyEvent event(&warmup, Key(FcitxKey_n), false);
-        warmup.keyEvent(event);
-        warmup.reset();
-        warmup.focusOut();
+        // Load and activate the selected engine before accepting TSF traffic.
+        // This is an internal context initialization only: no synthetic user key
+        // is generated, so a cold Rime session cannot consume or duplicate input.
+        impl_->warmupContext =
+            std::make_unique<EngineInputContext>(impl_->instance->inputContextManager());
+        impl_->warmupContext->focusIn();
+        impl_->instance->setCurrentInputMethod(impl_->warmupContext.get(), selected, true);
+        // Fcitx engines build process-wide decoder caches on their first text
+        // event. Prime those caches in an isolated context before the ready
+        // signal, then reset without committing or learning any text.
+        KeyEvent warmupEvent(impl_->warmupContext.get(), Key(FcitxKey_n), false);
+        impl_->warmupContext->keyEvent(warmupEvent);
+        impl_->warmupContext->reset();
+        (void)impl_->warmupContext->takeCommit();
+        impl_->focused = impl_->warmupContext.get();
         return true;
     } catch (...) {
         impl_->instance.reset();
@@ -259,7 +364,6 @@ bool FcitxRuntime::initialize(bool safeMode) {
 
 RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                                        const protocol::KeyRequest& request) {
-    RuntimeResult output;
     const auto currentRevision = impl_->revisions[key];
     const auto currentComposition = impl_->compositions[key];
     if (request.metadata.revision != currentRevision ||
@@ -273,78 +377,116 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         context.focusIn();
         impl_->focused = &context;
     }
-    if (impl_->instance->inputMethodManager().entry("pinyin") &&
-        impl_->instance->inputMethod(&context) != "pinyin") {
-        (void)impl_->instance->inputMethodEngine("pinyin");
-        impl_->instance->setCurrentInputMethod(&context, "pinyin", true);
+    const std::string selected =
+        impl_->instance->inputMethodManager().currentGroup().defaultInputMethod();
+    if (!selected.empty() && impl_->instance->inputMethodManager().entry(selected) &&
+        impl_->instance->inputMethod(&context) != selected) {
+        (void)impl_->instance->inputMethodEngine(selected);
+        impl_->instance->setCurrentInputMethod(&context, selected, true);
     }
     KeyEvent event(&context, keyFromRequest(request), false);
     context.keyEvent(event);
-    output.handled = event.accepted();
-    output.commitUtf8 = context.takeCommit();
-    auto [preedit, caret] = readPreedit(context);
-    output.preeditUtf8 = std::move(preedit);
-    output.preeditCaretUtf8 = caret;
+    impl_->carets[key] = request.caret;
+    return impl_->collectResult(key, context, event.accepted());
+}
+
+RuntimeResult FcitxRuntime::selectCandidate(
+    std::uint32_t targetProcessId,
+    const protocol::CandidateSelectRequest& request) {
+    const auto found = std::find_if(
+        impl_->contexts.begin(), impl_->contexts.end(), [&](const auto& item) {
+            return item.first.processId == targetProcessId &&
+                   item.first.contextId == request.metadata.contextId;
+        });
+    if (found == impl_->contexts.end() ||
+        impl_->revisions[found->first] != request.metadata.revision ||
+        impl_->compositions[found->first] != request.metadata.compositionId ||
+        request.candidateId == 0 || (request.candidateId >> 8U) != request.metadata.compositionId) {
+        throw std::invalid_argument("stale candidate selection state");
+    }
+    auto& context = *found->second;
     const auto candidateList = context.inputPanel().candidateList();
-    const bool hasCandidates = candidateList && !candidateList->empty();
-    auto& composition = impl_->compositions[key];
-    if ((!output.preeditUtf8.empty() || hasCandidates) && composition == 0) {
-        composition = impl_->nextCompositionId++;
-        if (composition == 0)
-            composition = impl_->nextCompositionId++;
+    const std::uint64_t encodedIndex = request.candidateId & 0xffU;
+    if (!candidateList || encodedIndex == 0)
+        throw std::invalid_argument("candidate selection is unavailable");
+    const std::size_t index = static_cast<std::size_t>(encodedIndex - 1U);
+    const auto* bulk = candidateList->toBulk();
+    const int count = bulk && bulk->totalSize() >= 0 ? bulk->totalSize() : candidateList->size();
+    if (index >= static_cast<std::size_t>(std::clamp(
+                     count, 0, static_cast<int>(protocol::kMaxCandidates)))) {
+        throw std::invalid_argument("candidate selection index is invalid");
     }
-    if (output.preeditUtf8.empty() && !hasCandidates)
-        composition = 0;
-    if (hasCandidates) {
-        const int pageSize =
-            std::clamp(candidateList->size(), 0, static_cast<int>(protocol::kMaxCandidates));
-        output.candidatePageSize = static_cast<std::uint32_t>(pageSize);
-        const auto* bulk = candidateList->toBulk();
-        const int reportedTotal = bulk ? bulk->totalSize() : pageSize;
-        const int size =
-            bulk && reportedTotal >= 0
-                ? std::clamp(reportedTotal, 0, static_cast<int>(protocol::kMaxCandidates))
-                : pageSize;
-        output.candidateBulk = bulk != nullptr;
-        output.candidateEnd = !bulk || (reportedTotal >= 0 && size >= reportedTotal);
-        output.candidates.reserve(static_cast<std::size_t>(size));
-        for (int index = 0; index < size; ++index) {
-            const auto& word =
-                bulk ? bulk->candidateFromAll(index) : candidateList->candidate(index);
-            output.candidates.push_back(protocol::CandidateRecord{
-                (composition << 8U) | static_cast<std::uint64_t>(index + 1),
-                bulk ? std::string{} : candidateList->label(index).toString(),
-                word.text().toString(), word.comment().toString()});
-        }
-        const int cursor = candidateList->toBulkCursor()
-                               ? candidateList->toBulkCursor()->globalCursorIndex()
-                               : candidateList->cursorIndex();
-        if (cursor >= 0 && cursor < size) {
-            output.selectedCandidate = static_cast<std::uint32_t>(cursor);
-        }
-        output.candidateTotal = static_cast<std::uint32_t>(size);
-        if (bulk && bulk->totalSize() >= 0) {
-            output.candidateTotal = static_cast<std::uint32_t>(bulk->totalSize());
-        }
-        if (const auto* pageable = candidateList->toPageable(); pageable) {
-            const int page = pageable->currentPage();
-            if (page >= 0)
-                output.candidatePage = static_cast<std::uint32_t>(page);
-        }
-        output.candidateVisibility = output.preeditUtf8.empty() ? 2U : 1U;
-    }
-    output.compositionId = composition;
-    output.revision = ++impl_->revisions[key];
+    const auto& candidate = bulk ? bulk->candidateFromAll(static_cast<int>(index))
+                                 : candidateList->candidate(static_cast<int>(index));
+    candidate.select(&context);
+    RuntimeResult output = impl_->collectResult(found->first, context, true);
+    impl_->pendingStates[found->first] = output;
     return output;
 }
 
-void FcitxRuntime::forgetProcess(std::uint32_t processId) {
+RuntimeResult FcitxRuntime::takePendingState(
+    const ClientContextKey& key, const protocol::StateRequest& request) {
+    const auto found = impl_->pendingStates.find(key);
+    if (found == impl_->pendingStates.end() ||
+        request.metadata.revision >= found->second.revision) {
+        throw std::invalid_argument("pending state is unavailable");
+    }
+    RuntimeResult output = std::move(found->second);
+    impl_->pendingStates.erase(found);
+    return output;
+}
+
+std::vector<InputMethodInfo> FcitxRuntime::inputMethods() const {
+    std::vector<InputMethodInfo> output;
+    if (!impl_->instance)
+        return output;
+    const auto& manager = impl_->instance->inputMethodManager();
+    const auto& group = manager.currentGroup();
+    output.reserve(group.inputMethodList().size());
+    for (const auto& item : group.inputMethodList()) {
+        const auto* entry = manager.entry(item.name());
+        if (!entry || entry->uniqueName() == "keyboard-us")
+            continue;
+        output.push_back(InputMethodInfo{entry->uniqueName(), entry->name(), entry->nativeName(),
+                                         entry->uniqueName() == group.defaultInputMethod()});
+    }
+    return output;
+}
+
+bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {
+    if (!impl_->instance || id.empty() || id == "keyboard-us")
+        return false;
+    auto& manager = impl_->instance->inputMethodManager();
+    InputMethodGroup group = manager.currentGroup();
+    const bool present = std::any_of(group.inputMethodList().begin(), group.inputMethodList().end(),
+                                     [&](const auto& item) { return item.name() == id; });
+    if (!present || !manager.entry(std::string(id)))
+        return false;
+    auto& items = group.inputMethodList();
+    const auto keyboard = std::find_if(items.begin(), items.end(), [](const auto& item) {
+        return item.name() == "keyboard-us";
+    });
+    if (!manager.entry("keyboard-us"))
+        return false;
+    if (keyboard == items.end())
+        items.insert(items.begin(), InputMethodGroupItem("keyboard-us"));
+    else if (keyboard != items.begin())
+        std::rotate(items.begin(), keyboard, std::next(keyboard));
+    group.setDefaultInputMethod(std::string(id));
+    manager.setGroup(std::move(group));
+    manager.save();
+    return manager.currentGroup().defaultInputMethod() == id;
+}
+
+void FcitxRuntime::forgetConnection(std::uint64_t connectionId) {
     for (auto iterator = impl_->contexts.begin(); iterator != impl_->contexts.end();) {
-        if (iterator->first.processId == processId) {
+        if (iterator->first.connectionId == connectionId) {
             if (impl_->focused == iterator->second.get())
                 impl_->focused = nullptr;
             impl_->revisions.erase(iterator->first);
             impl_->compositions.erase(iterator->first);
+            impl_->carets.erase(iterator->first);
+            impl_->pendingStates.erase(iterator->first);
             iterator = impl_->contexts.erase(iterator);
         } else {
             ++iterator;

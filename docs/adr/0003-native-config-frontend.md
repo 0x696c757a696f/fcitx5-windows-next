@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-17
 - Decider: Project owner
-- Governing specification: Frozen v1.5
+- Governing specification: Frozen v1.6 (decision retained)
 
 ## Context
 
@@ -43,7 +43,7 @@ network operations.
 | WTL/ATL | Selected: small native Windows-only management UI and controlled Legacy lane |
 | Pure Win32 | Rejected for Config: duplicates layout/control lifecycle plumbing |
 | wxWidgets | Rejected: cross-platform Config is not a current requirement |
-| Slint/Rust | Rejected: not a formal runtime dependency under the v1.5 Legacy policy |
+| Slint/Rust | Rejected: not a formal runtime dependency under the v1.6 Legacy policy |
 | aardio | Rejected: deterministic unattended publication was not demonstrated |
 
 ## Consequences
@@ -54,4 +54,4 @@ network operations.
   engine, or Candidate rendering hot paths.
 - The first surface remains Basic appearance/settings plus Diagnostics and Repair.
 - Theme preview must reuse the production renderer instead of forking paint logic.
-- Reconsideration requires the evidence listed in specification v1.5 section 13.6.2.
+- Reconsideration requires the evidence listed in specification v1.6 section 13.6.2.

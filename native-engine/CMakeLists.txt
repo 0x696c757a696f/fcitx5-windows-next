@@ -57,8 +57,22 @@ target_include_directories(
           "${REPOSITORY_ROOT}/src/engine")
 target_link_libraries(fcitx5_engine PRIVATE Fcitx5::Core advapi32 user32)
 
+# Platform keyboard layer following the same design used by Fcitx5 Android:
+# keep keyboard-us as the first group item while letting the OS handle keys.
+add_library(
+  windowskeyboard MODULE
+  "${REPOSITORY_ROOT}/src/engine/windows_keyboard.cpp")
+set_target_properties(
+  windowskeyboard
+  PROPERTIES PREFIX "lib"
+             OUTPUT_NAME "windowskeyboard")
+target_compile_options(windowskeyboard PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_link_libraries(windowskeyboard PRIVATE Fcitx5::Core)
+
 if(FCITX_DEVELOPMENT_PEER_EXCEPTION)
   target_compile_definitions(fcitx5_engine PRIVATE FCITX_DEVELOPMENT_PEER_EXCEPTION=1)
 endif()
 
 install(TARGETS fcitx5_engine RUNTIME DESTINATION bin)
+install(TARGETS windowskeyboard RUNTIME DESTINATION lib/fcitx5 LIBRARY DESTINATION lib/fcitx5)
+install(FILES windowskeyboard.conf DESTINATION share/fcitx5/addon)

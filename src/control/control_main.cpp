@@ -28,6 +28,9 @@ namespace fs = std::filesystem;
 using fcitx::windows::config::Config;
 using fcitx::windows::config::ParseError;
 
+constexpr wchar_t kVisualConfigChangedMessage[] =
+    L"Fcitx5WindowsNext.VisualConfigChanged.v1";
+
 std::string narrow(std::wstring_view value) {
     if (value.empty())
         return {};
@@ -175,6 +178,57 @@ bool runProcess(const fs::path& executable, const std::vector<std::wstring>& arg
     return wait == WAIT_OBJECT_0 && code == 0;
 }
 
+bool runProcessCapture(const fs::path& executable,
+                       const std::vector<std::wstring>& arguments,
+                       std::string& output, DWORD timeout = 120000U) {
+    output.clear();
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+    HANDLE readPipe = nullptr;
+    HANDLE writePipe = nullptr;
+    if (!CreatePipe(&readPipe, &writePipe, &attributes, 0))
+        return false;
+    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+    HANDLE nullError = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                   &attributes, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (nullError == INVALID_HANDLE_VALUE) {
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        return false;
+    }
+    std::wstring command = quoteArgument(executable.wstring());
+    for (const auto& argument : arguments)
+        command += L" " + quoteArgument(argument);
+    STARTUPINFOW startup{sizeof(startup)};
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = writePipe;
+    startup.hStdError = nullError;
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
+                                        CREATE_NO_WINDOW, nullptr,
+                                        executable.parent_path().c_str(), &startup, &process);
+    CloseHandle(writePipe);
+    CloseHandle(nullError);
+    if (!created) {
+        CloseHandle(readPipe);
+        return false;
+    }
+    const DWORD wait = WaitForSingleObject(process.hProcess, timeout);
+    if (wait == WAIT_TIMEOUT)
+        TerminateProcess(process.hProcess, ERROR_TIMEOUT);
+    char buffer[4096];
+    DWORD count = 0;
+    while (output.size() <= 1024U * 1024U &&
+           ReadFile(readPipe, buffer, sizeof(buffer), &count, nullptr) && count != 0)
+        output.append(buffer, count);
+    DWORD code = 1;
+    GetExitCodeProcess(process.hProcess, &code);
+    CloseHandle(readPipe);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return wait == WAIT_OBJECT_0 && code == 0 && output.size() <= 1024U * 1024U;
+}
+
 struct RepositoryFiles {
     fs::path index;
     fs::path signature;
@@ -304,6 +358,15 @@ bool atomicWrite(const fs::path& destination, std::string_view text) {
     return true;
 }
 
+bool writeVisualConfig(const fs::path& destination, std::string_view text) {
+    if (!atomicWrite(destination, text))
+        return false;
+    const UINT message = RegisterWindowMessageW(kVisualConfigChangedMessage);
+    if (message != 0)
+        (void)PostMessageW(HWND_BROADCAST, message, 0, 0);
+    return true;
+}
+
 bool launcherCommand(fcitx::windows::protocol::LauncherCommand command,
                      fcitx::windows::protocol::LauncherResponse& response) {
     fcitx::windows::platform::RuntimeIdentity identity;
@@ -313,6 +376,24 @@ bool launcherCommand(fcitx::windows::protocol::LauncherCommand command,
         (executableDirectory() / L"fcitx5-launcher.exe").wstring());
     return fcitx::windows::ipc::sendLauncherCommand(identity, GetTickCount64() + 1000, policy,
                                                     command, response);
+}
+
+bool runEngineManagement(const std::vector<std::wstring>& arguments, std::string& output) {
+    fcitx::windows::protocol::LauncherResponse response;
+    const bool launcherReachable =
+        launcherCommand(fcitx::windows::protocol::LauncherCommand::status, response);
+    if (launcherReachable &&
+        !launcherCommand(fcitx::windows::protocol::LauncherCommand::userStop, response))
+        return false;
+    const bool commandOk =
+        runProcessCapture(executableDirectory() / L"fcitx5-engine.exe", arguments, output);
+    bool restoreOk = true;
+    if (launcherReachable) {
+        restoreOk = launcherCommand(fcitx::windows::protocol::LauncherCommand::resume, response) &&
+                    launcherCommand(fcitx::windows::protocol::LauncherCommand::startDemand,
+                                    response);
+    }
+    return commandOk && restoreOk;
 }
 
 std::string nativeArchitecture() {
@@ -386,12 +467,17 @@ void installRepositoryPackage(const fs::path& dataRoot,
     fcitx::package::activate_staged_package(staged, packageRoot, keys);
 }
 
-void restartEngineOrThrow() {
+void requestEngineReload() {
     fcitx::windows::protocol::LauncherResponse response;
+    if (!launcherCommand(fcitx::windows::protocol::LauncherCommand::status, response))
+        return;
     if (!launcherCommand(fcitx::windows::protocol::LauncherCommand::userStop, response) ||
         !launcherCommand(fcitx::windows::protocol::LauncherCommand::resume, response) ||
         !launcherCommand(fcitx::windows::protocol::LauncherCommand::startDemand, response)) {
-        throw fcitx::package::PackageError("restart_failed", "engine restart was rejected");
+        // The package transaction is already durable at this point. Never report that install,
+        // update, or state persistence failed merely because a concurrent launcher transition
+        // could not hot-reload it; the tray's restart action remains available to the user.
+        std::cerr << "warning: package change is saved; restart the input service to activate it\n";
     }
 }
 
@@ -401,6 +487,28 @@ void printPackages(const fs::path& dataRoot) {
     std::map<std::string, fcitx::package::LockEntry, std::less<>> active;
     for (const auto& entry : installed)
         active.emplace(entry.id, entry);
+    struct BundledComponent {
+        const char* id;
+        const char* title;
+        fs::path probe;
+    };
+    const fs::path installRoot = installationRoot();
+    const std::array bundledCandidates{
+        BundledComponent{"fcitx5-chinese-addons", "Fcitx5 Chinese Addons",
+                         installRoot / L"lib/fcitx5/libpinyin.dll"},
+        BundledComponent{"fcitx5-rime", "Rime",
+                         installRoot / L"lib/fcitx5/librime.dll"},
+        BundledComponent{"fcitx5-lua", "Fcitx5 Lua",
+                         installRoot / L"lib/fcitx5/libluaaddonloader.dll"},
+        BundledComponent{"fcitx5-chttrans", "Simplified / Traditional Conversion",
+                         installRoot / L"lib/fcitx5/libchttrans.dll"},
+        BundledComponent{"librime-lua", "Rime Lua", installRoot / L"bin/lua54.dll"},
+    };
+    std::map<std::string, BundledComponent, std::less<>> bundled;
+    for (const auto& component : bundledCandidates) {
+        if (fs::is_regular_file(component.probe))
+            bundled.emplace(component.id, component);
+    }
     fcitx::package::RepositoryIndex repository;
     bool repositoryAvailable = false;
     try {
@@ -420,16 +528,22 @@ void printPackages(const fs::path& dataRoot) {
                 std::cout << ',';
             first = false;
             const auto found = active.find(entry.id);
-            const bool installedNow = found != active.end();
-            const bool update = installedNow && found->second.version != entry.version;
+            const bool bundledNow = bundled.contains(entry.id);
+            const bool update = found != active.end() && found->second.version != entry.version;
             std::cout << "{\"id\":" << jsonString(entry.id)
                       << ",\"title\":" << jsonString(entry.title)
                       << ",\"summary\":" << jsonString(entry.summary)
                       << ",\"type\":" << jsonString(typeName(entry.type))
                       << ",\"available_version\":" << jsonString(entry.version)
                       << ",\"installed_version\":"
-                      << (installedNow ? jsonString(found->second.version) : "null")
-                      << ",\"state\":" << (installedNow ? jsonString(found->second.state) : "null")
+                      << (found != active.end()
+                              ? jsonString(found->second.version)
+                              : (bundledNow ? jsonString(std::string(fcitx::windows::version()))
+                                            : "null"))
+                      << ",\"state\":"
+                      << (found != active.end()
+                              ? jsonString(found->second.state)
+                              : (bundledNow ? "\"bundled\"" : "null"))
                       << ",\"update_available\":" << (update ? "true" : "false") << '}';
             emitted.emplace(entry.id);
         }
@@ -445,6 +559,20 @@ void printPackages(const fs::path& dataRoot) {
                      "\"available_version\":null,\"installed_version\":"
                   << jsonString(entry.version) << ",\"state\":" << jsonString(entry.state)
                   << ",\"update_available\":false}";
+    }
+    for (const auto& [id, component] : bundled) {
+        if (emitted.contains(id) || active.contains(id))
+            continue;
+        if (!first)
+            std::cout << ',';
+        first = false;
+        std::cout << "{\"id\":" << jsonString(id)
+                  << ",\"title\":" << jsonString(component.title)
+                  << ",\"summary\":\"Bundled with Fcitx5 for Windows\","
+                     "\"type\":\"addon\",\"available_version\":null,"
+                     "\"installed_version\":"
+                  << jsonString(std::string(fcitx::windows::version()))
+                  << ",\"state\":\"bundled\",\"update_available\":false}";
     }
     std::cout << "]}\n";
 }
@@ -510,7 +638,8 @@ void usage() {
                   L"--status|--restart-engine|--validate-config FILE|--apply-config FILE|"
                   L"--reset-config|--get-startup|--set-startup enabled|disabled|"
                   L"--get-presentation|"
-                  L"--set-presentation MODE THEME ORIENTATION FONT|"
+                  L"--get-input-methods|--set-input-method ID|--shutdown|"
+                  L"--set-presentation MODE THEME ORIENTATION SCROLL FONT|"
                   L"--packages-list|--packages-refresh [HTTPS_BASE]|"
                   L"--packages-install ID|--packages-update ID|"
                   L"--packages-state ID enabled|disabled|--packages-remove ID|"
@@ -533,17 +662,53 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << fcitx::windows::version() << '\n';
         return 0;
     }
-    if (dataRoot.empty() || arguments.empty()) {
+    if (arguments.empty()) {
         usage();
         return 2;
     }
     if (arguments.size() == 1 && arguments[0] == L"--schema") {
         std::cout
-            << R"({"format_version":1,"commands":["status","restart_engine","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","packages_list","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
+            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","packages_list","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
             << '\n';
         return 0;
     }
+    if (arguments.size() == 1 && arguments[0] == L"--get-startup") {
+        bool enabled = false;
+        if (!queryStartup(enabled))
+            return 5;
+        std::cout << "{\"format_version\":1,\"enabled\":" << (enabled ? "true" : "false") << "}\n";
+        return 0;
+    }
+    if (arguments.size() == 2 && arguments[0] == L"--set-startup" &&
+        (arguments[1] == L"enabled" || arguments[1] == L"disabled")) {
+        return setStartup(arguments[1] == L"enabled") ? 0 : 5;
+    }
+    if (dataRoot.empty()) {
+        std::cerr << "unable to resolve the user data directory\n";
+        return 5;
+    }
     try {
+        if (arguments.size() == 1 && arguments[0] == L"--get-input-methods") {
+            std::string output;
+            if (!runEngineManagement({L"--list-input-methods"}, output))
+                return 4;
+            std::cout << output;
+            return 0;
+        }
+        if (arguments.size() == 2 && arguments[0] == L"--set-input-method") {
+            const std::string id = narrow(arguments[1]);
+            if (id.empty() || id.size() > 64U ||
+                !std::ranges::all_of(id, [](unsigned char value) {
+                    return (value >= 'a' && value <= 'z') ||
+                           (value >= '0' && value <= '9') || value == '-' || value == '_';
+                }))
+                return 2;
+            std::string ignored;
+            return runEngineManagement({L"--set-input-method", std::wstring(arguments[1])},
+                                       ignored)
+                       ? 0
+                       : 4;
+        }
         if (arguments.size() == 1 && arguments[0] == L"--packages-list") {
             printPackages(dataRoot);
             return 0;
@@ -563,7 +728,7 @@ int wmain(int argc, wchar_t** argv) {
             const auto repository = loadRepository(dataRoot);
             std::set<std::string> visiting;
             installRepositoryPackage(dataRoot, repository, narrow(arguments[1]), visiting);
-            restartEngineOrThrow();
+            requestEngineReload();
             printPackages(dataRoot);
             return 0;
         }
@@ -571,13 +736,13 @@ int wmain(int argc, wchar_t** argv) {
             (arguments[2] == L"enabled" || arguments[2] == L"disabled")) {
             fcitx::package::set_package_state(dataRoot / L"packages", narrow(arguments[1]),
                                               narrow(arguments[2]));
-            restartEngineOrThrow();
+            requestEngineReload();
             return 0;
         }
         if (arguments.size() == 2 && arguments[0] == L"--packages-remove") {
             const auto id = narrow(arguments[1]);
             fcitx::package::mark_package_for_removal(dataRoot / L"packages", id);
-            restartEngineOrThrow();
+            requestEngineReload();
             fcitx::package::finalize_package_removal(dataRoot / L"packages", id);
             printPackages(dataRoot);
             return 0;
@@ -592,17 +757,6 @@ int wmain(int argc, wchar_t** argv) {
     } catch (const fcitx::package::PackageError& error) {
         std::cerr << error.code() << ": " << error.what() << '\n';
         return 6;
-    }
-    if (arguments.size() == 1 && arguments[0] == L"--get-startup") {
-        bool enabled = false;
-        if (!queryStartup(enabled))
-            return 5;
-        std::cout << "{\"format_version\":1,\"enabled\":" << (enabled ? "true" : "false") << "}\n";
-        return 0;
-    }
-    if (arguments.size() == 2 && arguments[0] == L"--set-startup" &&
-        (arguments[1] == L"enabled" || arguments[1] == L"disabled")) {
-        return setStartup(arguments[1] == L"enabled") ? 0 : 5;
     }
     if (arguments.size() == 1 && arguments[0] == L"--get-presentation") {
         const fs::path configPath = dataRoot / L"config.toml";
@@ -652,7 +806,7 @@ int wmain(int argc, wchar_t** argv) {
                       << error.message << '\n';
             return 3;
         }
-        return atomicWrite(configPath, updated) ? 0 : 5;
+        return writeVisualConfig(configPath, updated) ? 0 : 5;
     }
     if (arguments.size() == 1 && arguments[0] == L"--status") {
         fcitx::windows::protocol::LauncherResponse response;
@@ -668,6 +822,8 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << "{\"format_version\":1,\"launcher_reachable\":"
                   << (reachable ? "true" : "false") << ",\"launcher_state\":"
                   << (reachable ? std::to_string(response.launcherState) : "null")
+                  << ",\"engine_state\":"
+                  << (reachable ? std::to_string(response.engineState) : "null")
                   << ",\"config_valid\":" << (configValid ? "true" : "false") << ",\"data_root\":\""
                   << narrow(dataRoot.generic_wstring()) << "\",\"update_owner\":\""
                   << fcitx::update::owner_name(fcitx::update::read_update_owner(installationRoot()))
@@ -684,8 +840,15 @@ int wmain(int argc, wchar_t** argv) {
         }
         return 0;
     }
+    if (arguments.size() == 1 && arguments[0] == L"--shutdown") {
+        fcitx::windows::protocol::LauncherResponse response;
+        return launcherCommand(fcitx::windows::protocol::LauncherCommand::shutdown, response)
+                   ? 0
+                   : 4;
+    }
     if (arguments.size() == 1 && arguments[0] == L"--reset-config") {
-        return atomicWrite(dataRoot / L"config.toml", fcitx::windows::config::defaultConfigToml())
+        return writeVisualConfig(dataRoot / L"config.toml",
+                                 fcitx::windows::config::defaultConfigToml())
                    ? 0
                    : 5;
     }
@@ -700,7 +863,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (arguments[0] == L"--validate-config")
             return 0;
-        return atomicWrite(dataRoot / L"config.toml", text) ? 0 : 5;
+        return writeVisualConfig(dataRoot / L"config.toml", text) ? 0 : 5;
     }
     usage();
     return 2;

@@ -26,6 +26,14 @@ public:
                                   const protocol::KeyRequest& request,
                                   RuntimeResult& result,
                                   std::chrono::milliseconds timeout);
+    [[nodiscard]] bool selectCandidate(
+        std::uint32_t targetProcessId,
+        const protocol::CandidateSelectRequest& request,
+        RuntimeResult& result, std::chrono::milliseconds timeout);
+    [[nodiscard]] bool takePendingState(
+        const ClientContextKey& context, const protocol::StateRequest& request,
+        RuntimeResult& result, std::chrono::milliseconds timeout);
+    void forgetConnection(std::uint64_t connectionId);
     void stop();
 
 private:

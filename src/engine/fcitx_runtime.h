@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace fcitx {
@@ -14,6 +15,7 @@ namespace fcitx::windows::engine {
 
 struct ClientContextKey {
     std::uint32_t processId{};
+    std::uint64_t connectionId{};
     std::uint64_t contextId{};
 
     bool operator==(const ClientContextKey&) const = default;
@@ -34,6 +36,14 @@ struct RuntimeResult {
     std::uint32_t candidatePageSize{};
     bool candidateBulk{};
     bool candidateEnd{};
+    protocol::CaretRect caret;
+};
+
+struct InputMethodInfo {
+    std::string id;
+    std::string name;
+    std::string nativeName;
+    bool selected{};
 };
 
 class FcitxRuntime final {
@@ -48,7 +58,14 @@ class FcitxRuntime final {
     [[nodiscard]] ::fcitx::EventLoop& eventLoop();
     [[nodiscard]] RuntimeResult processKey(const ClientContextKey& key,
                                            const protocol::KeyRequest& request);
-    void forgetProcess(std::uint32_t processId);
+    [[nodiscard]] RuntimeResult selectCandidate(
+        std::uint32_t targetProcessId,
+        const protocol::CandidateSelectRequest& request);
+    [[nodiscard]] RuntimeResult takePendingState(
+        const ClientContextKey& key, const protocol::StateRequest& request);
+    [[nodiscard]] std::vector<InputMethodInfo> inputMethods() const;
+    [[nodiscard]] bool setDefaultInputMethod(std::string_view id);
+    void forgetConnection(std::uint64_t connectionId);
 
     class Impl;
 

@@ -1,0 +1,5 @@
+#pragma once
+
+#define IDI_FCITX5_APP 101
+#define IDI_FCITX5_PAUSED 102
+#define IDI_FCITX5_ERROR 103

@@ -34,4 +34,4 @@ jobs:
 
       - name: Build, analyze, test, and run policy checks
         shell: pwsh
-        run: ./tools/build.ps1 test -Architecture ${{ matrix.architecture }}
+        run: ./tools/verify-product.ps1 pr -Architecture ${{ matrix.architecture }}

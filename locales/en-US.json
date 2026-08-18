@@ -32,6 +32,7 @@
   ,"action.diagnostics": "Refresh diagnostics"
   ,"action.repair": "Repair input method"
   ,"status.saved": "Settings were saved safely."
+  ,"status.unsaved": "There are unapplied changes."
   ,"restart.done": "The input engine was restarted."
   ,"repair.started": "The elevated repair flow was started."
   ,"nav.packages": "Plugins"
@@ -41,4 +42,8 @@
   ,"packages.enable_disable": "Enable / Disable"
   ,"packages.uninstall": "Uninstall"
   ,"packages.changed": "The plugin change was applied and the engine restarted."
+  ,"packages.bundled": "(bundled)"
+  ,"packages.bundled_readonly": "This component is bundled and tested with the whole product; manage it through a product update."
+  ,"packages.online_unavailable": "Bundled components are available; trusted online repository keys have not been provisioned."
+  ,"packages.online_error": "Online repository refresh failed; locally available components are still shown."
 }

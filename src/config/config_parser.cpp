@@ -375,20 +375,6 @@ scale = 0.80
 
 [fonts.monospace]
 families = ["Cascadia Mono", "Consolas", "system"]
-
-[candidate.colors]
-# 颜色只接受 #RRGGBB 或 #RRGGBBAA；高对比度模式可覆盖这些值。
-background = "#FCFCFCFA"
-border = "#D7D9DDFF"
-preedit_text = "#202124FF"
-label_text = "#85888DFF"
-candidate_text = "#303236FF"
-comment_text = "#85888DFF"
-selected_background = "#00B578FF"
-selected_label_text = "#FFFFFFFF"
-selected_candidate_text = "#FFFFFFFF"
-selected_comment_text = "#E9FFF7FF"
-shadow = "#00000040"
 )";
 }
 

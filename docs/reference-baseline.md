@@ -1,41 +1,99 @@
 # Phase 0 reference baseline
 
-Status: accepted for Phase 0  
-Baseline date: 2026-08-17  
-Task contract: CHANGE, limited in this batch to Phase 0 research artifacts
+Status: in progress for v1.6 Phase 0
+Baseline date: 2026-08-18
+Task contract: CHANGE; Phase 0 must pass before implementation evidence advances
 
 ## Specification authority
 
-The implementation baseline is `Fcitx5_for_Windows_工程规格_现代软件工程_轻量SSDLC_DevSecOps_Codex执行版_v1.4(1).md`, Frozen 1.4. The source copy inspected on 2026-08-17 had SHA-256:
+The sole implementation baseline is `Fcitx5_for_Windows_工程规格_现代软件工程_轻量SSDLC_DevSecOps_Codex执行版_v1_6.md`. It supersedes v1.5 and all earlier baselines. The source copy inspected on 2026-08-18 had SHA-256:
 
 ```text
-A89C5822479BBB8771416B214D024DE15CD8D7F161DFCCE86AA3F316BCD9AA9F
+ED652A385C9F3F7DFC710B0BF905F7129D831894FBD50297BB0278509574615F
 ```
 
 The specification is not copied into this repository. This document records the decisions needed to start implementation without turning reference repositories into product dependencies.
 
+## Mandatory learning order
+
+| Priority | Repository | Phase role | Explicit non-inheritance |
+| --- | --- | --- | --- |
+| 1 (~50%) | `chewing/windows-chewing-tsf` | Main textbook for TSF, composition, UILess, out-of-process renderer, x86/x64, recovery, build/tests in Phase 1B–4 | Do not copy GPL code; do not adopt its protocol or trust decisions without this project's contract |
+| 2 (~25%) | `gaboolic/fcitx5-windows` | Phase 3 Fcitx adapter/event loop/addon/build wiring only | No WebView, early IPC, UI, startup topology or in-host Fcitx fallback |
+| 3 (~10%) | `openvanilla/win-mcbopomofo` | Thin Client/Server and out-of-process candidate boundary | Not Win7 evidence; do not replace the frozen renderer/protocol |
+| 4 (~15%) | Weasel | Phase 4–5 Windows compatibility case library | No architecture cloning and no `SendInput` candidate commit |
+
+WindInput, Moqi, Rabbit and PIME/libIME2 are problem-specific secondary sources. They are not a reason
+to read all repositories evenly or to start Phase 0–4 product features such as AI, cloud sync, stores or
+configuration polish.
+
+### Phase reference weights (specification 0.4)
+
+| Phase | Primary textbooks | Problem-specific sources read only when the issue is reachable |
+| --- | --- | --- |
+| 1B | Windows Chewing + win-mcbopomofo | — |
+| 2 | Windows Chewing + win-mcbopomofo | WindInput / Moqi (timeout, stale response, launcher/crash lifecycle) |
+| 3 | gaboolic/fcitx5-windows + Fcitx upstream | — |
+| 4 | Windows Chewing + win-mcbopomofo + Weasel | — |
+| 5 | Weasel + Rabbit + WindInput + Moqi + real host source/E2E | Caret/focus/password/game cases as failures appear |
+
+Phase 0–4 prohibitions from specification 0.4: do not research Moqi AI/cloud sync, WindInput
+non-current product features, theme stores, or configuration polish; do not change the frozen
+technology stack because a reference project uses some GUI/Hook/message-forwarding approach; do not
+copy non-trivial source from GPL projects to "speed up" without completing the license decision first.
+
+### Pin refresh on 2026-08-18
+
+Live remotes were checked with `git ls-remote`; pins that had advanced were re-resolved and the local
+research clones were checked out to the new commits:
+
+- `fcitx/fcitx5` advanced to `d3d2e1fd…` (authoritative core API remains the primary Fcitx reference).
+- `fcitx-contrib/fcitx5-plugins` advanced to `26a94720…` (cross-platform addon feasibility).
+- `fcitx/fcitx5-macos` advanced to `a3521d3b…` (ECM 6.27 build adaptation; core/frontend comparison).
+- `rime/weasel` advanced to `d73f6295…` (`fix(WeaselServer): avoid tray refresh blocking IPC pipe` —
+  a Phase 5-relevant case showing tray refresh must not block the IPC pipe; supports this project's
+  launcher design that keeps tray and engine IPC on separate responsibilities).
+- `rimeinn/rabbit` advanced to `be06cbe8…` (browser combo-box/dropdown and key-passthrough fixes,
+  caret/focus cases for Phase 5).
+- `huanfeng/WindInput` advanced to `411d6492…` (timeout/stale-response/recovery behavior for Phase 5).
+
+Unchanged pins confirmed identical to their live remotes on 2026-08-18: `gaboolic/fcitx5-windows`
+(`72c0b914…`), `fcitx-contrib/fcitx5-windows` (`aec96f21…`), `chewing/windows-chewing-tsf`
+(`342ead0c…`), `openvanilla/win-mcbopomofo` (`06a570a7…`), `gaboolic/moqi-im-windows` (`13af5bc9…`),
+`EasyIME/PIME` (`9f6a1e91…`), Microsoft Windows-classic-samples (`d59e5f1d…`), `katahiromz/ImeStudy`
+(`8200c255…`), `mangokingTW/ImeModePersistence` (`533b28d0…`). The Phase 0 audit conclusions in this
+document were written against the primary textbook pins, none of which changed.
+
 ## Pinned sources
 
-Branch heads below were resolved on 2026-08-17. A pin is evidence for this audit, not an instruction to vendor the repository. Before copying any source, inspect that file's copyright and license notice and record it in `THIRD_PARTY_NOTICES.md`.
+Branch heads below were re-resolved on 2026-08-18 against the live remotes; pins that had advanced since the
+2026-08-17 audit were updated. A pin is evidence for this audit, not an instruction to vendor the repository.
+Before copying any source, inspect that file's copyright and license notice and record it in `THIRD_PARTY_NOTICES.md`.
 
 | Source | Pin | License state at audit | Current use |
 |---|---|---|---|
 | [gaboolic/fcitx5-windows](https://github.com/gaboolic/fcitx5-windows/tree/72c0b91414dd6e8702209e7cb9c10deb86bb719b) | `72c0b91414dd6e8702209e7cb9c10deb86bb719b` | GPL-3.0 repository | Required subsystem audit; behavior and implementation-pattern reference only |
 | [fcitx-contrib/fcitx5-windows](https://github.com/fcitx-contrib/fcitx5-windows/tree/aec96f21f06c30f75c1035242afbccfd29826681) | `aec96f21f06c30f75c1035242afbccfd29826681` | GPL-3.0 repository | Minimal Windows prototype and registration/TSF comparison |
-| [fcitx/fcitx5](https://github.com/fcitx/fcitx5/tree/a31cff7968e7864fa6d40ca4764afc7b859bfb88) | `a31cff7968e7864fa6d40ca4764afc7b859bfb88` | REUSE metadata; core is LGPL-2.1-or-later, verify per file | Authoritative Fcitx core API and build behavior |
-| [fcitx-contrib/fcitx5-plugins](https://github.com/fcitx-contrib/fcitx5-plugins/tree/46337894e0ab82cb9e1b7948ea31def00ecd3be2) | `46337894e0ab82cb9e1b7948ea31def00ecd3be2` | MIT repository | Cross-platform addon feasibility; not needed before Fcitx integration |
-| [fcitx/fcitx5-macos](https://github.com/fcitx/fcitx5-macos/tree/5209c3e77d3334eccde72ded46eb82598a68bd56) | `5209c3e77d3334eccde72ded46eb82598a68bd56` | GPL-3.0 repository; dependencies have their own licenses | Core/frontend and package-management comparison |
+| [fcitx/fcitx5](https://github.com/fcitx/fcitx5/tree/d3d2e1fdb0cdef8d2f7267d032ffc9e6aa511ba6) | `d3d2e1fdb0cdef8d2f7267d032ffc9e6aa511ba6` | REUSE metadata; core is LGPL-2.1-or-later, verify per file | Authoritative Fcitx core API and build behavior |
+| [fcitx-contrib/fcitx5-plugins](https://github.com/fcitx-contrib/fcitx5-plugins/tree/26a94720f0a01e106046f6a7607215ff96bf2f6f) | `26a94720f0a01e106046f6a7607215ff96bf2f6f` | MIT repository | Cross-platform addon feasibility; not needed before Fcitx integration |
+| [fcitx/fcitx5-macos](https://github.com/fcitx/fcitx5-macos/tree/a3521d3b5700806cae8bf35460807e10d5facc5d) | `a3521d3b5700806cae8bf35460807e10d5facc5d` | GPL-3.0 repository; dependencies have their own licenses | Core/frontend and package-management comparison |
 | [Microsoft Windows classic samples](https://github.com/microsoft/Windows-classic-samples/tree/d59e5f1dc9c768615e4e1ab1f0f009e6a3ed747c) | `d59e5f1dc9c768615e4e1ab1f0f009e6a3ed747c` | GitHub reports NOASSERTION; inspect SampleIME notices before reuse | Primary TSF semantic reference, especially SampleIME |
-| [rime/weasel](https://github.com/rime/weasel/tree/287ce64e202c9c573c7cfb5557048ad3f6a5e95c) | `287ce64e202c9c573c7cfb5557048ad3f6a5e95c` | GPL-3.0 repository | Production TSF lifecycle and host-compatibility patterns |
+| [rime/weasel](https://github.com/rime/weasel/tree/d73f6295e8252ed2f7b9c12bae32e9001b1afdaa) | `d73f6295e8252ed2f7b9c12bae32e9001b1afdaa` | GPL-3.0 repository | Production TSF lifecycle and host-compatibility patterns |
 | [chewing/windows-chewing-tsf](https://github.com/chewing/windows-chewing-tsf/tree/342ead0c0b445ec376fbd6ffb3b105e78c499419) | `342ead0c0b445ec376fbd6ffb3b105e78c499419` | GPL-3.0 repository | Composition, UIElement, IPC ACL, and packaging patterns |
+| [openvanilla/win-mcbopomofo](https://github.com/openvanilla/win-mcbopomofo/tree/06a570a780c088f329cf8532cc558d670a73c5f6) | `06a570a780c088f329cf8532cc558d670a73c5f6` | GPL-3.0 repository | Thin Client/Server, server-owned popup, TSF state projection and UILess cross-check |
 | [gaboolic/moqi-im-windows](https://github.com/gaboolic/moqi-im-windows/tree/13af5bc97eedc4c31bbf57418abe2427c8881aa5) | `13af5bc97eedc4c31bbf57418abe2427c8881aa5` | MIT repository | Request correlation and launcher lifecycle comparison |
 | [EasyIME/PIME](https://github.com/EasyIME/PIME/tree/9f6a1e9161b7f609eb1fadf282048c2907da04c9) | `9f6a1e9161b7f609eb1fadf282048c2907da04c9` | GitHub reports NOASSERTION; inspect per-file notices | Launcher/process-model comparison only |
-| [rimeinn/rabbit](https://github.com/rimeinn/rabbit/tree/b99f01109008f700eb0241770ccfceff0593e200) | `b99f01109008f700eb0241770ccfceff0593e200` | GPL-3.0 repository | Phase 5 caret/focus/password behavior and compatibility scenarios; no Hook code copied |
-| [huanfeng/WindInput](https://github.com/huanfeng/WindInput/tree/e7a0693ef94312ec78e3df7e5b8a1c00490ce27b) | `e7a0693ef94312ec78e3df7e5b8a1c00490ce27b` | Inspect per-file notices before reuse | Phase 5 timeout, stale-response and recovery behavior only |
+| [rimeinn/rabbit](https://github.com/rimeinn/rabbit/tree/be06cbe890b593db75bef56ff685a51e995723e8) | `be06cbe890b593db75bef56ff685a51e995723e8` | GPL-3.0 repository | Phase 5 caret/focus/password behavior and compatibility scenarios; no Hook code copied |
+| [huanfeng/WindInput](https://github.com/huanfeng/WindInput/tree/411d6492cf6cf81d00ce10aca5f58997ab38b91a) | `411d6492cf6cf81d00ce10aca5f58997ab38b91a` | Inspect per-file notices before reuse | Phase 5 timeout, stale-response and recovery behavior only |
 | [katahiromz/ImeStudy](https://github.com/katahiromz/ImeStudy/tree/8200c2552210d8ad913208679d1aa3aa1de28e7d) | `8200c2552210d8ad913208679d1aa3aa1de28e7d` | MIT repository | Phase 5 IMM32/CUAS host behavior and test-scenario reference |
 | [mangokingTW/ImeModePersistence](https://github.com/mangokingTW/ImeModePersistence/tree/533b28d0bd70d609e62ad27e2d816bebd25e3cbd) | `533b28d0bd70d609e62ad27e2d816bebd25e3cbd` | MIT repository | Phase 5 legacy compatibility risk and scenario reference; no injection path inherited |
 
 Microsoft documentation is versionless and is therefore pinned by access date rather than commit:
+
+The detailed subsystem and trade-off review for Windows Chewing is recorded in
+[`reference-review-windows-chewing-tsf.md`](reference-review-windows-chewing-tsf.md).
+The cross-project preedit, UI, process-topology, and recovery review is recorded in
+[`reference-review-windows-ime-matrix.md`](reference-review-windows-ime-matrix.md).
 
 - [Text Services Framework](https://learn.microsoft.com/windows/win32/tsf/text-services-framework), accessed 2026-08-17.
 - [Text Services Framework reference](https://learn.microsoft.com/windows/win32/api/_tsf/), accessed 2026-08-17.
@@ -172,6 +230,31 @@ Do not inherit:
 - The existing automated test is only two assertions for GUID formatting and UTF conversion. It does not prove TSF lifecycle, IPC bounds, failure behavior, composition, or commit.
 - Do not copy ad-hoc build scripts, large patch collections, installers, or package-provider work into Phase 1A.
 - Do not make network package installation part of an otherwise clean core build.
+
+## Code-level re-verification on 2026-08-18 (pin `72c0b914…`)
+
+Per specification 0.4 ("read the relevant implementation, not just commits"), the audited commit was
+checked out locally and the following files were read directly to confirm the audit findings:
+
+- `src/main.cpp`: Fcitx `Instance(0, nullptr)` + `registerDefaultLoader` + `EventDispatcher`
+  attached to `instance->eventLoop()` + `eventLoop().exec()`. Confirms the standalone-engine and
+  single-event-loop pattern this project keeps in `fcitx5-engine.exe`.
+- `win32/ipc/PipeImeEngine.cpp`: 60-second `WaitForSingleObject(mx, 60000)` on the launch mutex,
+  `Sleep(50)` × 100 probe loop after `CreateProcessW`, 8 connect attempts with `Sleep(40 * attempt)`,
+  synchronous `imeIpcReadAll`/`imeIpcWriteAll` without deadline, no request_id/response correlation.
+  These are the exact blocking behaviors this project's IPC v2 deadline/request-correlation design
+  replaces.
+- `win32/ipc/Fcitx5ImeIpcCodec.cpp`: explicit little-endian `appendU32/U64/Utf8` encoding and
+  truncation checks — consistent with the project's explicit wire-format rule; the protocol still
+  lacks identity fields (epoch/context/composition/revision) that v2 adds.
+- `win32/tsf/Fcitx5ImeEngine.cpp` (1589 lines): broad `ImeEngine` interface owning candidates,
+  tray, config, and engine-shaped state inside the DLL — confirms the "refactor: thin TSF only"
+  finding; `win32/tsf/StubImeEngine.cpp` confirms the "do not inherit in-process fallback" finding.
+- `win32/tsf/CandidateWindow.cpp` + WebView assets: in-host candidate rendering and WebView2 staging
+  beside the TSF DLL — confirms the "do not inherit WebView/in-host renderer" finding.
+
+No code was copied. The keep/refactor/do-not-inherit rows in the subsystem audits above remain valid
+against the pinned commit.
 
 ## Architecture decisions established by Phase 0
 

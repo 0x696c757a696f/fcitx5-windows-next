@@ -1,7 +1,9 @@
 #include "candidate_layout.h"
+#include "candidate_interaction.h"
 #include "candidate_model.h"
 #include "config_model.h"
 #include "peer_verification.h"
+#include "pipe_client.h"
 #include "pipe_security.h"
 #include "protocol.h"
 #include "runtime_identity.h"
@@ -9,17 +11,21 @@
 #include <fcitx5_windows/release_identity.h>
 
 #include <ShlObj.h>
+#include <Shellapi.h>
 #include <Windows.h>
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
 
 #include <array>
+#include <cerrno>
+#include <charconv>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -30,6 +36,22 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 constexpr UINT kSnapshotMessage = WM_APP + 1;
+constexpr UINT_PTR kFocusWatchTimer = 1;
+constexpr UINT_PTR kClickGuardTimer = 2;
+constexpr wchar_t kVisualConfigChangedMessage[] =
+    L"Fcitx5WindowsNext.VisualConfigChanged.v1";
+constexpr wchar_t kCandidateDismissMessage[] =
+    L"Fcitx5WindowsNext.CandidateDismiss.v1";
+
+UINT visualConfigChangedMessage() noexcept {
+    static const UINT message = RegisterWindowMessageW(kVisualConfigChangedMessage);
+    return message;
+}
+
+UINT candidateDismissMessage() noexcept {
+    static const UINT message = RegisterWindowMessageW(kCandidateDismissMessage);
+    return message;
+}
 
 struct CandidateVisual {
     std::wstring label;
@@ -111,6 +133,42 @@ std::filesystem::path executableDirectory() {
     return std::filesystem::path(path).parent_path();
 }
 
+bool parseUnsigned(std::wstring_view text, std::uint64_t& value) noexcept {
+    if (text.empty()) return false;
+    wchar_t* end = nullptr;
+    errno = 0;
+    const auto parsed = _wcstoui64(text.data(), &end, 10);
+    if (errno == ERANGE || end != text.data() + text.size()) return false;
+    value = parsed;
+    return true;
+}
+
+int runCandidateSelectionTest(int argumentCount, wchar_t** arguments) {
+    if (argumentCount != 9 ||
+        std::wstring_view(arguments[1]) != L"--candidate-select-test") return 64;
+    std::uint64_t targetProcessId = 0;
+    std::uint64_t engineEpoch = 0;
+    std::uint64_t contextId = 0;
+    std::uint64_t compositionId = 0;
+    std::uint64_t revision = 0;
+    std::uint64_t candidateId = 0;
+    if (!parseUnsigned(arguments[3], targetProcessId) || targetProcessId > UINT32_MAX ||
+        !parseUnsigned(arguments[4], engineEpoch) ||
+        !parseUnsigned(arguments[5], contextId) ||
+        !parseUnsigned(arguments[6], compositionId) ||
+        !parseUnsigned(arguments[7], revision) ||
+        !parseUnsigned(arguments[8], candidateId)) return 65;
+    fcitx::windows::platform::RuntimeIdentity identity;
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity)) return 66;
+    fcitx::windows::ipc::PipeClient client(
+        fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
+        fcitx::windows::ipc::PeerPolicy::exact(arguments[2]));
+    return client.selectCandidate(static_cast<std::uint32_t>(targetProcessId), engineEpoch,
+                                  contextId, compositionId, revision, candidateId)
+               ? 0
+               : 67;
+}
+
 std::filesystem::path localDataDirectory() {
     const auto executable = executableDirectory();
     if (!executable.empty() && std::filesystem::exists(executable / L"portable.flag")) {
@@ -188,8 +246,23 @@ D2D1_COLOR_F parseColor(const fcitx::windows::config::Config& config, std::strin
 
 class CandidateWindow final {
   public:
-    bool create(HINSTANCE instance, bool visible, bool safeMode) {
+    bool create(HINSTANCE instance, bool visible, bool safeMode, bool interactionTest = false) {
         safeMode_ = safeMode;
+        interactionTest_ = interactionTest;
+        if (!interactionTest_) {
+            fcitx::windows::platform::RuntimeIdentity identity;
+            std::wstring executable(32'768, L'\0');
+            const DWORD executableSize = GetModuleFileNameW(
+                nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+            if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
+                executableSize == 0 || executableSize >= executable.size()) return false;
+            executable.resize(executableSize);
+            const auto engine =
+                (std::filesystem::path(executable).parent_path() / L"fcitx5-engine.exe").wstring();
+            candidateClient_ = std::make_unique<fcitx::windows::ipc::PipeClient>(
+                fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
+                fcitx::windows::ipc::PeerPolicy::exact(engine));
+        }
         visualConfig_ = loadVisualConfig(safeMode_);
         WNDCLASSW windowClass{};
         windowClass.hInstance = instance;
@@ -205,6 +278,8 @@ class CandidateWindow final {
                             windowClass.lpszClassName, L"", WS_POPUP, 100, 100, 360, 120, nullptr,
                             nullptr, instance, this);
         if (!window_)
+            return false;
+        if (SetTimer(window_, kFocusWatchTimer, 100, nullptr) == 0)
             return false;
         enableNativeWindowEffects(window_);
         const LONG_PTR styles = GetWindowLongPtrW(window_, GWL_EXSTYLE);
@@ -271,6 +346,37 @@ class CandidateWindow final {
         update(response);
     }
 
+    [[nodiscard]] bool runInteractionSelfTest() {
+        if (itemRects_.size() < 2U || visibleIndices_.size() < 2U)
+            return false;
+        const auto& rectangle = itemRects_[1];
+        const LONG x = static_cast<LONG>((rectangle.left + rectangle.right) / 2.0F);
+        const LONG y = static_cast<LONG>((rectangle.top + rectangle.bottom) / 2.0F);
+        POINT screen{x, y};
+        ClientToScreen(window_, &screen);
+        const LPARAM screenPoint = MAKELPARAM(static_cast<WORD>(screen.x),
+                                               static_cast<WORD>(screen.y));
+        const LPARAM clientPoint = MAKELPARAM(static_cast<WORD>(x), static_cast<WORD>(y));
+        if (SendMessageW(window_, WM_NCHITTEST, 0, screenPoint) != HTCLIENT ||
+            SendMessageW(window_, WM_MOUSEACTIVATE, 0, 0) != MA_NOACTIVATE)
+            return false;
+        SendMessageW(window_, WM_LBUTTONDOWN, MK_LBUTTON, clientPoint);
+        SendMessageW(window_, WM_LBUTTONUP, 0, clientPoint);
+        if (!capturedTestIntent_ || !capturedTestIntent_->valid() ||
+            capturedTestIntent_->candidateId != 2U)
+            return false;
+        const auto& current = model_.current();
+        if (!current)
+            return false;
+        SendMessageW(window_, candidateDismissMessage(), targetForegroundProcessId_,
+                     static_cast<LPARAM>(current->contextId + 1U));
+        if (!IsWindowVisible(window_))
+            return false;
+        SendMessageW(window_, candidateDismissMessage(), targetForegroundProcessId_,
+                     static_cast<LPARAM>(current->contextId));
+        return !IsWindowVisible(window_);
+    }
+
     void reloadVisualConfig() {
         visualConfig_ = loadVisualConfig(safeMode_);
         textFormat_.Reset();
@@ -280,7 +386,7 @@ class CandidateWindow final {
         SetLayeredWindowAttributes(
             window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
         (void)createDeviceResources();
-        InvalidateRect(window_, nullptr, FALSE);
+        reflowCurrentModel();
     }
 
     bool paintOnce() {
@@ -464,6 +570,10 @@ class CandidateWindow final {
         const auto applied = model_.apply(std::move(snapshot));
         if (applied == candidate::ApplyResult::stale || applied == candidate::ApplyResult::invalid)
             return;
+        clickInFlight_ = false;
+        KillTimer(window_, kClickGuardTimer);
+        lastCandidateBulk_ = response.candidateBulk;
+        lastCandidatePageSize_ = response.candidatePageSize;
         if (response.caret.valid)
             lastCaret_ = response.caret;
         const float requestedFontScale = static_cast<float>(lastCaret_.dpi) / 96.0F;
@@ -564,9 +674,13 @@ class CandidateWindow final {
         }
         if (current.visibility == candidate::Visibility::hidden || candidates_.empty() ||
             !lastCaret_.valid) {
-            ShowWindow(window_, SW_HIDE);
+            dismissPresentation();
             return;
         }
+        targetForegroundWindow_ = GetForegroundWindow();
+        targetForegroundProcessId_ = 0;
+        if (targetForegroundWindow_)
+            GetWindowThreadProcessId(targetForegroundWindow_, &targetForegroundProcessId_);
         POINT caretPoint{lastCaret_.left, lastCaret_.top};
         HMONITOR monitor = MonitorFromPoint(caretPoint, MONITOR_DEFAULTTONEAREST);
         MONITORINFO monitorInfo{};
@@ -661,6 +775,104 @@ class CandidateWindow final {
         InvalidateRect(window_, nullptr, FALSE);
     }
 
+    void reflowCurrentModel() {
+        if (!model_.current()) {
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        const auto current = *model_.current();
+        fcitx::windows::protocol::KeyResponse response;
+        response.metadata.engineEpoch = current.engineEpoch;
+        response.metadata.contextId = current.contextId;
+        response.metadata.compositionId = current.compositionId;
+        response.metadata.revision = current.revision;
+        response.preeditUtf8 = current.preedit;
+        response.selectedCandidate = current.selected
+                                         ? static_cast<std::uint32_t>(*current.selected)
+                                         : UINT32_MAX;
+        response.candidatePage = current.page;
+        response.candidatePageSize = lastCandidatePageSize_;
+        response.candidateTotal = current.total;
+        response.candidateBulk = lastCandidateBulk_;
+        response.candidateEnd = true;
+        response.candidateVisibility =
+            current.visibility == fcitx::windows::candidate::Visibility::prediction
+                ? 2U
+            : current.visibility == fcitx::windows::candidate::Visibility::composition
+                ? 1U
+                : 0U;
+        response.caret = lastCaret_;
+        response.candidates.reserve(current.candidates.size());
+        for (const auto& item : current.candidates) {
+            response.candidates.push_back(
+                {item.id, item.label, item.text, item.comment});
+        }
+        model_.reset();
+        update(response);
+    }
+
+    void dismissPresentation() noexcept {
+        ShowWindow(window_, SW_HIDE);
+        if (GetCapture() == window_)
+            ReleaseCapture();
+        pressedCandidate_.reset();
+        clickInFlight_ = false;
+        KillTimer(window_, kClickGuardTimer);
+        model_.reset();
+        candidates_.clear();
+        itemRects_.clear();
+        visibleIndices_.clear();
+        renderIndices_.clear();
+        selected_.reset();
+        compositionId_ = 0;
+        targetForegroundWindow_ = nullptr;
+        targetForegroundProcessId_ = 0;
+    }
+
+    [[nodiscard]] bool foregroundTargetIsValid() const noexcept {
+        if (interactionTest_)
+            return true;
+        if (!targetForegroundProcessId_)
+            return false;
+        const HWND foreground = GetForegroundWindow();
+        DWORD processId = 0;
+        if (foreground)
+            GetWindowThreadProcessId(foreground, &processId);
+        return processId == targetForegroundProcessId_;
+    }
+
+    [[nodiscard]] bool dispatchCandidate(std::size_t localIndex) {
+        if (clickInFlight_ || localIndex >= visibleIndices_.size() ||
+            !foregroundTargetIsValid())
+            return false;
+        const std::size_t targetIndex = visibleIndices_[localIndex];
+        if (targetIndex >= candidates_.size())
+            return false;
+        const auto& current = model_.current();
+        if (!current || targetIndex >= current->candidates.size())
+            return false;
+        const auto intent = fcitx::windows::ui::makeCandidateSelectionIntent(
+            targetForegroundProcessId_, current->engineEpoch, current->contextId,
+            current->compositionId, current->revision, current->candidates[targetIndex].id);
+        if (!intent.valid())
+            return false;
+        clickInFlight_ = true;
+        SetTimer(window_, kClickGuardTimer, 750, nullptr);
+        if (interactionTest_) {
+            capturedTestIntent_ = intent;
+            return true;
+        }
+        if (!candidateClient_ ||
+            !candidateClient_->selectCandidate(
+                intent.targetProcessId, intent.engineEpoch, intent.contextId,
+                intent.compositionId, intent.revision, intent.candidateId)) {
+            clickInFlight_ = false;
+            KillTimer(window_, kClickGuardTimer);
+            return false;
+        }
+        return true;
+    }
+
   private:
     static LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam,
                                             LPARAM lparam) {
@@ -685,6 +897,31 @@ class CandidateWindow final {
             self->update(*response);
             return 0;
         }
+        if (self && message == visualConfigChangedMessage()) {
+            self->reloadVisualConfig();
+            return 0;
+        }
+        if (self && message == candidateDismissMessage()) {
+            const auto sourceContext = static_cast<std::uint64_t>(lparam);
+            const auto& current = self->model_.current();
+            const bool sameContext = sourceContext == 0 ||
+                                     (current && sourceContext == current->contextId);
+            if ((wparam == 0 ||
+                 static_cast<DWORD>(wparam) == self->targetForegroundProcessId_) &&
+                sameContext)
+                self->dismissPresentation();
+            return 0;
+        }
+        if (self && message == WM_TIMER) {
+            if (wparam == kFocusWatchTimer && IsWindowVisible(window) &&
+                !self->foregroundTargetIsValid()) {
+                self->dismissPresentation();
+            } else if (wparam == kClickGuardTimer) {
+                self->clickInFlight_ = false;
+                KillTimer(window, kClickGuardTimer);
+            }
+            return 0;
+        }
         if (self && message == WM_DPICHANGED) {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
             SetWindowPos(window, nullptr, suggested->left, suggested->top,
@@ -700,8 +937,36 @@ class CandidateWindow final {
             self->reloadVisualConfig();
             return 0;
         }
+        if (self && message == WM_MOUSEACTIVATE)
+            return MA_NOACTIVATE;
+        if (self && message == WM_LBUTTONDOWN) {
+            const float x = static_cast<float>(static_cast<short>(LOWORD(lparam)));
+            const float y = static_cast<float>(static_cast<short>(HIWORD(lparam)));
+            self->pressedCandidate_ =
+                fcitx::windows::ui::hitTestCandidate(self->itemRects_, x, y);
+            if (self->pressedCandidate_)
+                SetCapture(window);
+            return 0;
+        }
+        if (self && message == WM_LBUTTONUP) {
+            const float x = static_cast<float>(static_cast<short>(LOWORD(lparam)));
+            const float y = static_cast<float>(static_cast<short>(HIWORD(lparam)));
+            const auto released =
+                fcitx::windows::ui::hitTestCandidate(self->itemRects_, x, y);
+            const auto pressed = self->pressedCandidate_;
+            self->pressedCandidate_.reset();
+            if (GetCapture() == window)
+                ReleaseCapture();
+            if (pressed && released == pressed)
+                (void)self->dispatchCandidate(*pressed);
+            return 0;
+        }
+        if (self && (message == WM_CANCELMODE || message == WM_CAPTURECHANGED)) {
+            self->pressedCandidate_.reset();
+            return 0;
+        }
         if (message == WM_NCHITTEST)
-            return HTTRANSPARENT;
+            return HTCLIENT;
         if (message == WM_DESTROY) {
             PostQuitMessage(0);
             return 0;
@@ -778,6 +1043,7 @@ class CandidateWindow final {
     std::vector<std::size_t> visibleIndices_;
     std::vector<std::size_t> renderIndices_;
     std::optional<std::size_t> selected_;
+    std::optional<std::size_t> pressedCandidate_;
     fcitx::windows::config::Config visualConfig_;
     fcitx::windows::candidate::CandidateModel model_;
     fcitx::windows::protocol::CaretRect lastCaret_;
@@ -786,6 +1052,8 @@ class CandidateWindow final {
     bool safeMode_{};
     bool scrollMode_{};
     bool scrollExpanded_{};
+    bool lastCandidateBulk_{};
+    std::uint32_t lastCandidatePageSize_{};
     std::optional<std::uint32_t> lastCandidatePage_;
     bool hasScrollbar_{};
     float fontDpiScale_{1.0F};
@@ -793,6 +1061,12 @@ class CandidateWindow final {
     float selectionInflateY_{};
     D2D1_RECT_F scrollbarTrack_{};
     D2D1_RECT_F scrollbarThumb_{};
+    HWND targetForegroundWindow_{};
+    DWORD targetForegroundProcessId_{};
+    bool clickInFlight_{};
+    bool interactionTest_{};
+    std::optional<fcitx::windows::ui::CandidateSelectionIntent> capturedTestIntent_;
+    std::unique_ptr<fcitx::windows::ipc::PipeClient> candidateClient_;
 };
 
 bool readExact(HANDLE pipe, void* destination, std::size_t size) {
@@ -874,21 +1148,42 @@ void servePresentation(HWND window, bool testOnce) {
 
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR commandLine, _In_ int) {
     enableDpiAwareness();
+    int argumentCount = 0;
+    wchar_t** argumentValues = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (argumentValues && argumentCount > 1 &&
+        std::wstring_view(argumentValues[1]) == L"--candidate-select-test") {
+        const int result = runCandidateSelectionTest(argumentCount, argumentValues);
+        LocalFree(argumentValues);
+        return result;
+    }
+    if (argumentValues) LocalFree(argumentValues);
     const std::wstring_view arguments = commandLine ? commandLine : L"";
     const bool selfTest = arguments.find(L"--self-test") != std::wstring_view::npos;
+    const bool interactionSelfTest =
+        arguments.find(L"--interaction-self-test") != std::wstring_view::npos;
+    const bool reloadTest = arguments.find(L"--reload-test") != std::wstring_view::npos;
     const bool simulateDeviceLoss =
         arguments.find(L"--simulate-device-loss") != std::wstring_view::npos;
     const bool scrollDemo = arguments.find(L"--scroll-demo") != std::wstring_view::npos;
-    const bool demo = scrollDemo || arguments.find(L"--demo") != std::wstring_view::npos;
+    const bool demo = interactionSelfTest || scrollDemo ||
+                      arguments.find(L"--demo") != std::wstring_view::npos;
     const bool testOnce = arguments.find(L"--test-once") != std::wstring_view::npos;
     const bool safeMode = arguments.find(L"--safe-mode") != std::wstring_view::npos;
     CandidateWindow window;
-    if (!window.create(instance, demo, safeMode) || !window.paintOnce())
+    if (!window.create(instance, demo, safeMode, interactionSelfTest) || !window.paintOnce())
         return 1;
     if (demo)
         window.showSyntheticPreview(scrollDemo);
+    if (interactionSelfTest)
+        return window.runInteractionSelfTest() ? 0 : 2;
     if (simulateDeviceLoss) {
         window.simulateDeviceLossForTest();
+        if (!window.paintOnce())
+            return 1;
+    }
+    if (reloadTest) {
+        window.showSyntheticPreview(false);
+        SendMessageW(window.handle(), visualConfigChangedMessage(), 0, 0);
         if (!window.paintOnce())
             return 1;
     }

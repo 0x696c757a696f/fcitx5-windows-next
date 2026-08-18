@@ -1,0 +1,25 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 70d1210..1540313 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -12,7 +12,7 @@ include(ECMUninstallTarget)
+ find_package(PkgConfig REQUIRED)
+ 
+ # Prefer pkg-config over cmake Lua
+-pkg_check_modules(PcLua IMPORTED_TARGET "lua>=5.3")
++pkg_check_modules(PcLua IMPORTED_TARGET "lua5.4>=5.3")
+ unset(FCITX_LUA_LIBRARY_PATH)
+ if (TARGET PkgConfig::PcLua)
+     set(LUA_TARGET PkgConfig::PcLua)
+diff --git a/src/addonloader/luaaddonstate.cpp b/src/addonloader/luaaddonstate.cpp
+index 0485bab..0f853a2 100644
+--- a/src/addonloader/luaaddonstate.cpp
++++ b/src/addonloader/luaaddonstate.cpp
+@@ -160,6 +160,7 @@ LuaAddonState::LuaAddonState(LibraryPtr luaLibrary, const std::string &name,
+             {"standardPathLocate", &LuaAddonState::standardPathLocate},
+             {"UTF16ToUTF8", &LuaAddonState::UTF16ToUTF8},
+             {"UTF8ToUTF16", &LuaAddonState::UTF8ToUTF16},
++            {nullptr, nullptr},
+         };
+         auto *addon = GetLuaAddonState(state);
+         luaL_newlib(addon->state_, fcitxlib);

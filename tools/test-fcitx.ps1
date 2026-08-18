@@ -39,20 +39,56 @@ try {
 $testDataParent = [IO.Path]::GetFullPath((Join-Path $repoRoot 'out/test-data'))
 $testDataRoot = Join-Path $testDataParent ('fcitx-engine-' + [guid]::NewGuid().ToString('N'))
 $previousUserDataRoot = [Environment]::GetEnvironmentVariable('FCITX_USER_DATA_ROOT', 'Process')
+$previousLuaMarker = [Environment]::GetEnvironmentVariable('FCITX_LUA_TEST_MARKER', 'Process')
 New-Item -ItemType Directory -Path $testDataRoot | Out-Null
 [Environment]::SetEnvironmentVariable('FCITX_USER_DATA_ROOT', $testDataRoot, 'Process')
 try {
+  $luaExtensionDirectory = Join-Path $testDataRoot 'Fcitx5/lua/imeapi/extensions'
+  $luaMarker = Join-Path $testDataRoot 'fcitx5-lua.marker'
+  New-Item -ItemType Directory -Force -Path $luaExtensionDirectory | Out-Null
+  Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/fcitx5-lua/functional.lua') `
+    -Destination $luaExtensionDirectory -Force
+  [Environment]::SetEnvironmentVariable('FCITX_LUA_TEST_MARKER', $luaMarker, 'Process')
   foreach ($architecture in @('x64', 'x86')) {
     & $cmake --preset "windows-$architecture-dev"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
-    & $cmake --build $build --config $Configuration --target fcitx5_engine_integration_test
+    & $cmake --build $build --config $Configuration --target fcitx5_engine_integration_test fcitx5_ui
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Copy-Item -LiteralPath (Join-Path $build "$Configuration/fcitx5-ui.exe") `
+      -Destination (Join-Path $stage 'bin/fcitx5-ui.exe') -Force
     & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") $engine
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
+      $engine --typing-fuzz
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
+      $engine --chttrans
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
       $engine --safe-mode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  }
+  if (-not (Test-Path -LiteralPath $luaMarker -PathType Leaf) -or
+      (Get-Content -LiteralPath $luaMarker -Raw) -ne "fcitx5-lua-ok`n") {
+    throw 'fcitx5-lua did not execute the isolated functional extension.'
+  }
+  $rimeUserDirectory = Join-Path $testDataRoot 'Fcitx5/rime'
+  New-Item -ItemType Directory -Force -Path $rimeUserDirectory | Out-Null
+  Get-ChildItem -LiteralPath (Join-Path $repoRoot 'tests/fixtures/rime-lua') -File |
+    Copy-Item -Destination $rimeUserDirectory -Force
+  & $engine --set-input-method rime
+  if ($LASTEXITCODE -ne 0) { throw 'Could not select Rime in the isolated profile.' }
+  foreach ($architecture in @('x64', 'x86')) {
+    $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
+    & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
+      $engine --rime-lua
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  }
+  foreach ($required in @('build/luna_pinyin.schema.yaml', 'build/luna_pinyin.prism.bin')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $rimeUserDirectory $required) -PathType Leaf)) {
+      throw "Rime did not deploy required artifact: $required"
+    }
   }
   if (-not (Get-ChildItem -LiteralPath $testDataRoot -Force | Select-Object -First 1)) {
     throw 'Fcitx did not consume FCITX_USER_DATA_ROOT; isolated test data is empty.'
@@ -60,6 +96,8 @@ try {
 } finally {
   [Environment]::SetEnvironmentVariable(
     'FCITX_USER_DATA_ROOT', $previousUserDataRoot, 'Process')
+  [Environment]::SetEnvironmentVariable(
+    'FCITX_LUA_TEST_MARKER', $previousLuaMarker, 'Process')
   $resolvedTestRoot = [IO.Path]::GetFullPath($testDataRoot)
   $testPrefix = $testDataParent.TrimEnd('\') + '\'
   if (-not $resolvedTestRoot.StartsWith($testPrefix, [StringComparison]::OrdinalIgnoreCase)) {
