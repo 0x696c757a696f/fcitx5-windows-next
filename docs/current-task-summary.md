@@ -75,6 +75,15 @@ WindInput/Moqi/Rabbit/PIME 只在具体失败对应的 Phase 查阅。Phase 0–
   `check-runtime-security.ps1` 门禁覆盖。
 - 已有焦点/context 身份与候选撤销改动保留为候选实现，但需双架构和真实宿主重验。
 - 任何 v1.5 下的 44/44、46/46、旧安装器/桌面报告均降级为 historical。
+- 2026-08-18 候选/配置收尾修复（提交 973920b / 4e4a62b / e4040ed / 5993922，均已推送）：
+  - Rime 伪 bulk 候选（totalSize()/globalCursorIndex() 均 -1）降级为普通分页，选中高亮恢复
+    （Rime 真实输入绿色高亮 desktop 证据）；`=`/`+`/`-`/`_` 翻页去掉 isSimple 限制，
+    pinyin 翻页 desktop 验证生效。
+  - Config 瞬时提示（保存成功/未保存/命令错误/包管理/重启/修复）3 秒自动消失；状态 STATIC
+    透明背景残留导致的重叠，改为整窗 D2D 背景 + 控件同步重绘，屏幕级验证（截图像素对比）
+    通过；config 窗口标题带构建版本号便于确认运行版本。
+  - TSF 已卸载旧注册并注册新版（isolated deployment，2026-08-18）；stage 与构建产物
+    SHA 一致，x64/x86 全量 ALL_BUILD 通过。
 
 ## 当前红灯
 
