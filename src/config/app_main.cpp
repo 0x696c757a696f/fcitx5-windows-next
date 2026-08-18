@@ -1277,10 +1277,21 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         if (text && *text)
             armStatusTimer();
     }
-    void setSaveStatus(const wchar_t* text) {
-        ::SetWindowTextW(control(kSaveStatus), text);
+    // The status STATICs use a transparent background (WM_CTLCOLORSTATIC ->
+    // HOLLOW_BRUSH), so invalidating only the control leaves the previous
+    // text on screen and the notices overlap ("保存成功" + "有未应用的更改").
+    // Redraw the whole window background (D2D layer) as well as the controls.
+    void refreshStatusControls() {
+        if (m_hWnd)
+            ::InvalidateRect(m_hWnd, nullptr, TRUE);
         if (const HWND status = control(kSaveStatus))
             ::InvalidateRect(status, nullptr, TRUE);
+        if (const HWND status = control(kStatus))
+            ::InvalidateRect(status, nullptr, TRUE);
+    }
+    void setSaveStatus(const wchar_t* text) {
+        ::SetWindowTextW(control(kSaveStatus), text);
+        refreshStatusControls();
         // Every notice ("已保存" / "有未应用的更改" / 命令错误) clears the
         // status control a few seconds after it appears.
         if (text && *text)
@@ -1292,10 +1303,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             statusTimer_ = 0;
         }
         ::SetWindowTextW(control(kSaveStatus), L"");
-        if (const HWND status = control(kSaveStatus))
-            ::InvalidateRect(status, nullptr, TRUE);
-        if (control(kStatus))
-            ::SetWindowTextW(control(kStatus), L"");
+        ::SetWindowTextW(control(kStatus), L"");
+        refreshStatusControls();
         return 0;
     }
     LRESULT onDirty(WORD, WORD id, HWND, BOOL&) {
