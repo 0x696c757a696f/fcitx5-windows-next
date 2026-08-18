@@ -31,6 +31,13 @@ function(fcitx_apply_binary_hardening target)
     target_compile_options(${target} PRIVATE /guard:cf)
     target_link_options(
       ${target}
-      PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf /CETCOMPAT)
+      PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
+    # /CETCOMPAT (CET shadow stack) is only supported for x64 targets; the
+    # ARM64 linker rejects it with LNK1246. Keep the hardening flags that
+    # apply everywhere and add CET only on x64.
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT CMAKE_CROSSCOMPILING_EMULATOR AND
+       CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
+      target_link_options(${target} PRIVATE /CETCOMPAT)
+    endif()
   endif()
 endfunction()
