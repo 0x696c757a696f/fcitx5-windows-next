@@ -1281,10 +1281,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         ::SetWindowTextW(control(kSaveStatus), text);
         if (const HWND status = control(kSaveStatus))
             ::InvalidateRect(status, nullptr, TRUE);
-        // Transient notices ("已保存", "命令失败") disappear after a few
-        // seconds; "有未应用的更改" is a persistent state and stays until the
-        // user applies or reverts.
-        if (text && *text && std::wstring_view(text) != get("status.unsaved"))
+        // Every notice ("已保存" / "有未应用的更改" / 命令错误) clears the
+        // status control a few seconds after it appears.
+        if (text && *text)
             armStatusTimer();
     }
     LRESULT onTimer(UINT, WPARAM, LPARAM, BOOL&) {
@@ -1354,7 +1353,10 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     CMessageLoop loop;
     _Module.AddMessageLoop(&loop);
     ConfigWindow window(std::move(strings));
-    if (!window.Create(nullptr, CWindow::rcDefault, window.title(),
+    std::wstring title = window.title();
+    title += L"  v";
+    title += widen(fcitx::windows::version());
+    if (!window.Create(nullptr, CWindow::rcDefault, title.c_str(),
                        WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX)) {
         _Module.RemoveMessageLoop();
         _Module.Term();
