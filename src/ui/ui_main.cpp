@@ -550,6 +550,21 @@ class CandidateWindow final {
 
     void update(const fcitx::windows::protocol::KeyResponse& response) {
         using namespace fcitx::windows;
+        // Re-read the visual config when the file changed. The launcher may
+        // start this process before the config window saves a new orientation,
+        // and the HWND_BROADCAST reload message can race with window creation;
+        // comparing the file's last write time keeps the candidate window in
+        // sync with the saved config on every snapshot without per-key IO cost.
+        if (!safeMode_) {
+            const auto data = localDataDirectory();
+            const auto path = data / L"config.toml";
+            std::error_code error;
+            const auto written = std::filesystem::last_write_time(path, error);
+            if (!error && written != configWriteTime_) {
+                configWriteTime_ = written;
+                reloadVisualConfig();
+            }
+        }
         candidate::Snapshot snapshot;
         snapshot.engineEpoch = response.metadata.engineEpoch;
         snapshot.contextId = response.metadata.contextId;
@@ -1082,6 +1097,7 @@ class CandidateWindow final {
     bool interactionTest_{};
     std::optional<fcitx::windows::ui::CandidateSelectionIntent> capturedTestIntent_;
     std::unique_ptr<fcitx::windows::ipc::PipeClient> candidateClient_;
+    std::filesystem::file_time_type configWriteTime_{};
 };
 
 bool readExact(HANDLE pipe, void* destination, std::size_t size) {
