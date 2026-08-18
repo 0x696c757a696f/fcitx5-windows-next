@@ -162,6 +162,16 @@ Key keyFromRequest(const protocol::KeyRequest& request) {
     case VK_END:
         // Scroll-mode row end (fcitx5-macos ScrollConfig rowEnd).
         return Key(FcitxKey_End, states);
+    case VK_OEM_PLUS:
+        // Laptop-friendly next page: '=' without Shift, '+' with Shift.
+        return (request.keyFlags & protocol::kKeyFlagShift) != 0
+                   ? Key(FcitxKey_plus, states)
+                   : Key(FcitxKey_equal, states);
+    case VK_OEM_MINUS:
+        // Laptop-friendly previous page: '-' without Shift, '_' with Shift.
+        return (request.keyFlags & protocol::kKeyFlagShift) != 0
+                   ? Key(FcitxKey_underscore, states)
+                   : Key(FcitxKey_minus, states);
     default:
         break;
     }
@@ -391,6 +401,27 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         impl_->instance->setCurrentInputMethod(&context, selected, true);
     }
     KeyEvent event(&context, keyFromRequest(request), false);
+    // Laptop-friendly page keys: '-' / '_' previous page, '=' / '+' next page.
+    // Fcitx's default PrevPage/NextPage are Up/Down, which the scroll viewport
+    // uses for continuous cursor movement, so route the number-row keys to the
+    // pageable candidate list explicitly when candidates are visible.
+    if (event.key().isSimple()) {
+        const KeySym sym = event.key().sym();
+        if (const auto list = context.inputPanel().candidateList();
+            list && !list->empty()) {
+            if (auto* pageable = list->toPageable(); pageable) {
+                if ((sym == FcitxKey_equal || sym == FcitxKey_plus) &&
+                    pageable->hasNext()) {
+                    pageable->next();
+                    event.filter();
+                } else if ((sym == FcitxKey_minus || sym == FcitxKey_underscore) &&
+                           pageable->hasPrev()) {
+                    pageable->prev();
+                    event.filter();
+                }
+            }
+        }
+    }
     context.keyEvent(event);
     impl_->carets[key] = request.caret;
     return impl_->collectResult(key, context, event.accepted());

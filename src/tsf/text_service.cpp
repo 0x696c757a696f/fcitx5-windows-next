@@ -698,6 +698,8 @@ bool TextService::canHandle(WPARAM virtualKey) const noexcept {
     case VK_NEXT:
     case VK_HOME:
     case VK_END:
+    case VK_OEM_MINUS:
+    case VK_OEM_PLUS:
         return true;
     default:
         return false;
