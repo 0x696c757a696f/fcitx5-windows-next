@@ -36,4 +36,18 @@ jobs:
 
       - name: Build, analyze, test, and run policy checks
         shell: pwsh
-        run: ./tools/verify-product.ps1 pr -Architecture ${{ matrix.architecture }}
+        run: |
+          if ('${{ matrix.architecture }}' -eq 'arm64') {
+            # ARM64 is a cross-compile lane on x64 runners: build and run the
+            # static policy checks, but skip CTest because ARM64 executables
+            # cannot start on an x64 host. The native Fcitx engine is x64/x86.
+            ./tools/build.ps1 dev -Architecture arm64 -Configuration Release
+            ./tools/check-runtime-security.ps1 -Architecture arm64 -Configuration Release
+            ./tools/check-secrets.ps1
+            ./tools/check-licenses.ps1
+            ./tools/check-dependencies.ps1
+            ./tools/check-locales.ps1
+            ./tools/check-text-format.ps1
+          } else {
+            ./tools/verify-product.ps1 pr -Architecture ${{ matrix.architecture }}
+          }
