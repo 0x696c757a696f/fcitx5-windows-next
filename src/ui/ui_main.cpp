@@ -377,7 +377,12 @@ class CandidateWindow final {
         return !IsWindowVisible(window_);
     }
 
-    void reloadVisualConfig() {
+    // Refresh only the visual configuration and text formats, without
+    // reflowing the current model. Used from update(): the caller continues to
+    // rebuild the candidate list with the new config, so calling reflow here
+    // would consume/reset the model and leave the outer update with an empty
+    // current() snapshot.
+    void refreshVisualConfig() {
         visualConfig_ = loadVisualConfig(safeMode_);
         textFormat_.Reset();
         labelFormat_.Reset();
@@ -386,6 +391,10 @@ class CandidateWindow final {
         SetLayeredWindowAttributes(
             window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
         (void)createDeviceResources();
+    }
+
+    void reloadVisualConfig() {
+        refreshVisualConfig();
         reflowCurrentModel();
     }
 
@@ -562,7 +571,7 @@ class CandidateWindow final {
             const auto written = std::filesystem::last_write_time(path, error);
             if (!error && written != configWriteTime_) {
                 configWriteTime_ = written;
-                reloadVisualConfig();
+                refreshVisualConfig();
             }
         }
         candidate::Snapshot snapshot;
