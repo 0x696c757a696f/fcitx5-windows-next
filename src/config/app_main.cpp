@@ -879,10 +879,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     }
     void restart() {
         std::wstring output;
-        ::SetWindowTextW(control(kStatus), runControl({L"--restart-engine"}, output)
-                                               ? get("restart.done")
-                                               : get("error.command"));
-        armStatusTimer();
+        setStatus(runControl({L"--restart-engine"}, output) ? get("restart.done")
+                                                            : get("error.command"));
     }
     bool applyPresentation() {
         const auto modeIndex = SendMessageW(control(kAppearance), CB_GETCURSEL, 0, 0);
@@ -910,14 +908,12 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const fs::path root = directory.filename() == L"bin" ? directory.parent_path() : directory;
         const fs::path bootstrap = root / L"Start Fcitx5.exe";
         if (!fs::is_regular_file(bootstrap)) {
-            ::SetWindowTextW(control(kStatus), get("error.command"));
+            setStatus(get("error.command"));
             return;
         }
         const auto result = reinterpret_cast<std::intptr_t>(ShellExecuteW(
             m_hWnd, nullptr, bootstrap.c_str(), L"--repair-only", root.c_str(), SW_SHOWNORMAL));
-        ::SetWindowTextW(control(kStatus),
-                         result > 32 ? get("repair.started") : get("error.command"));
-        armStatusTimer();
+        setStatus(result > 32 ? get("repair.started") : get("error.command"));
     }
 
     int selectedPackage() const {
@@ -932,7 +928,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const bool refreshed = !online || runControl({L"--packages-refresh"}, output);
         if (!runControl({L"--packages-list"}, output) ||
             !parsePackages(output, packages_, repositoryAvailable_)) {
-            ::SetWindowTextW(control(kStatus), get("error.command"));
+            setStatus(get("error.command"));
             return;
         }
         SendMessageW(control(kPackages), LB_RESETCONTENT, 0, 0);
@@ -953,9 +949,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             SendMessageW(control(kPackages), LB_SETCURSEL, 0, 0);
         updatePackageActions();
         if (!refreshed)
-            ::SetWindowTextW(control(kStatus), get("packages.online_error"));
+            setStatus(get("packages.online_error"));
         else if (!repositoryAvailable_)
-            ::SetWindowTextW(control(kStatus), get("packages.online_unavailable"));
+            setStatus(get("packages.online_unavailable"));
     }
 
     void updatePackageActions() {
@@ -977,7 +973,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             return;
         auto& package = packages_[static_cast<std::size_t>(selected)];
         if (package.state == L"bundled") {
-            ::SetWindowTextW(control(kStatus), get("packages.bundled_readonly"));
+            setStatus(get("packages.bundled_readonly"));
             return;
         }
         if (package.available.empty())
@@ -986,7 +982,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const bool ok = runControl(
             {package.installed.empty() ? L"--packages-install" : L"--packages-update", package.id},
             output);
-        ::SetWindowTextW(control(kStatus), ok ? get("packages.changed") : get("error.command"));
+        setStatus(ok ? get("packages.changed") : get("error.command"));
         refreshPackages(false);
     }
 
@@ -995,13 +991,13 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         if (selected < 0 || packages_[static_cast<std::size_t>(selected)].installed.empty())
             return;
         if (packages_[static_cast<std::size_t>(selected)].state == L"bundled") {
-            ::SetWindowTextW(control(kStatus), get("packages.bundled_readonly"));
+            setStatus(get("packages.bundled_readonly"));
             return;
         }
         std::wstring output;
         const bool ok = runControl(
             {L"--packages-remove", packages_[static_cast<std::size_t>(selected)].id}, output);
-        ::SetWindowTextW(control(kStatus), ok ? get("packages.changed") : get("error.command"));
+        setStatus(ok ? get("packages.changed") : get("error.command"));
         refreshPackages(false);
     }
 
@@ -1013,14 +1009,14 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         if (package.installed.empty())
             return;
         if (package.state == L"bundled") {
-            ::SetWindowTextW(control(kStatus), get("packages.bundled_readonly"));
+            setStatus(get("packages.bundled_readonly"));
             return;
         }
         std::wstring output;
         const bool ok = runControl({L"--packages-state", package.id,
                                     package.state == L"disabled" ? L"enabled" : L"disabled"},
                                    output);
-        ::SetWindowTextW(control(kStatus), ok ? get("packages.changed") : get("error.command"));
+        setStatus(ok ? get("packages.changed") : get("error.command"));
         refreshPackages(false);
     }
 
@@ -1033,7 +1029,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         }
         const fs::path executable = executableDirectory() / L"fcitx5-ui.exe";
         if (!fs::exists(executable)) {
-            ::SetWindowTextW(control(kStatus), get("error.command"));
+            setStatus(get("error.command"));
             return;
         }
         std::wstring command = quote(executable.wstring()) + L" --demo --parent-pid " +
@@ -1043,7 +1039,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         PROCESS_INFORMATION process{};
         if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr,
                             executable.parent_path().c_str(), &startup, &process)) {
-            ::SetWindowTextW(control(kStatus), get("error.command"));
+            setStatus(get("error.command"));
             return;
         }
         CloseHandle(process.hThread);
@@ -1271,6 +1267,15 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         if (statusTimer_)
             ::KillTimer(m_hWnd, statusTimer_);
         statusTimer_ = ::SetTimer(m_hWnd, kStatusTimerId, kStatusTimeoutMs, nullptr);
+    }
+    // Transient notices in the diagnostics status line (package operations,
+    // restart/repair/preview results, command errors) auto-dismiss after a few
+    // seconds. The diagnostics --status snapshot (refresh) is persistent and
+    // does not go through this helper.
+    void setStatus(const wchar_t* text) {
+        ::SetWindowTextW(control(kStatus), text);
+        if (text && *text)
+            armStatusTimer();
     }
     void setSaveStatus(const wchar_t* text) {
         ::SetWindowTextW(control(kSaveStatus), text);
