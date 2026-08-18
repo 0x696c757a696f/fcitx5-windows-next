@@ -335,6 +335,11 @@ constexpr int kLayoutLabel = 204;
 constexpr int kPackagesTitle = 205;
 constexpr int kSaveStatus = 206;
 
+// Transient notices ("保存成功" / 命令错误 / 重启完成 / 修复已开始) are
+// cleared automatically a few seconds after they appear.
+constexpr UINT_PTR kStatusTimerId = 0x4A44U;
+constexpr UINT kStatusTimeoutMs = 3000;
+
 struct PackageRow {
     std::wstring id;
     std::wstring title;
@@ -616,6 +621,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     MESSAGE_HANDLER(WM_PAINT, onPaint)
     MESSAGE_HANDLER(WM_DRAWITEM, onDrawItem)
     MESSAGE_HANDLER(WM_CTLCOLORSTATIC, onColorStatic)
+    MESSAGE_HANDLER(WM_TIMER, onTimer)
     MESSAGE_HANDLER(WM_DESTROY, onDestroy)
     COMMAND_RANGE_HANDLER(kNavGeneral, kNavPackages, onNavigate)
     COMMAND_ID_HANDLER(kApply, onApply)
@@ -876,6 +882,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         ::SetWindowTextW(control(kStatus), runControl({L"--restart-engine"}, output)
                                                ? get("restart.done")
                                                : get("error.command"));
+        armStatusTimer();
     }
     bool applyPresentation() {
         const auto modeIndex = SendMessageW(control(kAppearance), CB_GETCURSEL, 0, 0);
@@ -910,6 +917,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             m_hWnd, nullptr, bootstrap.c_str(), L"--repair-only", root.c_str(), SW_SHOWNORMAL));
         ::SetWindowTextW(control(kStatus),
                          result > 32 ? get("repair.started") : get("error.command"));
+        armStatusTimer();
     }
 
     int selectedPackage() const {
@@ -1121,6 +1129,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
     }
     LRESULT onDestroy(UINT, WPARAM, LPARAM, BOOL&) {
+        if (statusTimer_)
+            ::KillTimer(m_hWnd, statusTimer_);
         if (previewProcess_) {
             if (WaitForSingleObject(previewProcess_, 0) == WAIT_TIMEOUT)
                 TerminateProcess(previewProcess_, 0);
@@ -1257,10 +1267,32 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     // (for example "设置已安全保存" -> "有未应用的更改"), the tail of the old
     // text stays on screen and the two messages overlap. Invalidate the whole
     // control so the background is erased before drawing the new text.
+    void armStatusTimer() {
+        if (statusTimer_)
+            ::KillTimer(m_hWnd, statusTimer_);
+        statusTimer_ = ::SetTimer(m_hWnd, kStatusTimerId, kStatusTimeoutMs, nullptr);
+    }
     void setSaveStatus(const wchar_t* text) {
         ::SetWindowTextW(control(kSaveStatus), text);
         if (const HWND status = control(kSaveStatus))
             ::InvalidateRect(status, nullptr, TRUE);
+        // Transient notices ("已保存", "命令失败") disappear after a few
+        // seconds; "有未应用的更改" is a persistent state and stays until the
+        // user applies or reverts.
+        if (text && *text && std::wstring_view(text) != get("status.unsaved"))
+            armStatusTimer();
+    }
+    LRESULT onTimer(UINT, WPARAM, LPARAM, BOOL&) {
+        if (statusTimer_) {
+            ::KillTimer(m_hWnd, statusTimer_);
+            statusTimer_ = 0;
+        }
+        ::SetWindowTextW(control(kSaveStatus), L"");
+        if (const HWND status = control(kSaveStatus))
+            ::InvalidateRect(status, nullptr, TRUE);
+        if (control(kStatus))
+            ::SetWindowTextW(control(kStatus), L"");
+        return 0;
     }
     LRESULT onDirty(WORD, WORD id, HWND, BOOL&) {
         if (id == kStartup || id == kInputMethod)
@@ -1276,6 +1308,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     HFONT titleFont_{};
     ID2D1Factory* factory_{};
     ID2D1HwndRenderTarget* target_{};
+    UINT_PTR statusTimer_{};
     HANDLE previewProcess_{};
     std::vector<PackageRow> packages_;
     std::vector<InputMethodRow> inputMethods_;
