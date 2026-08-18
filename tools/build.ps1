@@ -4,7 +4,7 @@ param(
   [ValidateSet('bootstrap', 'clean', 'dev', 'test', 'package', 'release')]
   [string] $Command = 'dev',
 
-  [ValidateSet('all', 'x64', 'x86')]
+  [ValidateSet('all', 'x64', 'x86', 'arm64')]
   [string] $Architecture = 'all',
 
   [ValidateSet('Debug', 'Release')]
@@ -83,6 +83,7 @@ function Get-Architectures {
   switch ($Architecture) {
     'x64' { return @('x64') }
     'x86' { return @('x86') }
+    'arm64' { return @('arm64') }
     default { return @('x64', 'x86') }
   }
 }

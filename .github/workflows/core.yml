@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        architecture: [x64, x86]
+        architecture: [x64, x86, arm64]
     steps:
       - name: Require PowerShell 7
         run: |

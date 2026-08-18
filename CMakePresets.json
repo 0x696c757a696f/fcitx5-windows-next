@@ -57,6 +57,27 @@
         "FCITX_DEVELOPMENT_PEER_EXCEPTION": "OFF"
       },
       "binaryDir": "${sourceDir}/out/build/windows-x86-release"
+    },
+    {
+      "name": "windows-arm64-dev",
+      "displayName": "Windows ARM64 development",
+      "inherits": "windows-base",
+      "architecture": "ARM64",
+      "cacheVariables": {
+        "FCITX_DEVELOPMENT_PEER_EXCEPTION": "ON"
+      },
+      "binaryDir": "${sourceDir}/out/build/windows-arm64-dev"
+    },
+    {
+      "name": "windows-arm64-release",
+      "displayName": "Windows ARM64 release-validation",
+      "inherits": "windows-base",
+      "architecture": "ARM64",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "FCITX_DEVELOPMENT_PEER_EXCEPTION": "OFF"
+      },
+      "binaryDir": "${sourceDir}/out/build/windows-arm64-release"
     }
   ]
 }

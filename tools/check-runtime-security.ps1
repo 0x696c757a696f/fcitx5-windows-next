@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [ValidateSet('x64', 'x86')]
+  [ValidateSet('x64', 'x86', 'arm64')]
   [string] $Architecture = 'x64',
 
   [ValidateSet('Debug', 'Release')]
@@ -40,7 +40,10 @@ $binaries = @(
   (Join-Path $binaryRoot 'fcitx5-deployer.exe'),
   (Join-Path $binaryRoot 'fcitx5-provider.exe')
 )
-if ($Architecture -eq 'x64') {
+# The native Fcitx engine is built through the MSYS2 toolchain for x64/x86
+# only; ARM64 keeps the Windows frontend surface while the engine remains
+# a planned platform.
+if ($Architecture -in @('x64', 'x86')) {
   $nativeEngine = Join-Path $repoRoot 'out/stage/fcitx5/bin/fcitx5-engine.exe'
   if (Test-Path -LiteralPath $nativeEngine -PathType Leaf) { $binaries += $nativeEngine }
 }
