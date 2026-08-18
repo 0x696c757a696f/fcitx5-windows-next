@@ -29,7 +29,22 @@ if (-not (Test-Path -LiteralPath (Join-Path $include 'atlapp.h') -PathType Leaf)
   Expand-Archive -LiteralPath $archive -DestinationPath $source
 }
 
-$atl = Get-ChildItem 'C:/BuildTools/VC/Tools/MSVC/*/atlmfc/include/atlbase.h' -File `
+# Locate the ATL headers through vswhere so the same script works on a local
+# Build Tools layout (C:\BuildTools) and on GitHub Actions runners
+# (C:\Program Files\Microsoft Visual Studio\2022\*).
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+  throw 'Visual Studio vswhere.exe is required to locate the ATL headers.'
+}
+$installation = (& $vswhere -latest -products * `
+  -requires Microsoft.VisualStudio.Component.VC.ATL `
+  -property installationPath | Select-Object -First 1)
+if (-not $installation) {
+  $installation = (& $vswhere -latest -products * `
+    -property installationPath | Select-Object -First 1)
+}
+$atlRoot = if ($installation) { Join-Path $installation 'VC/Tools/MSVC' } else { 'C:/BuildTools/VC/Tools/MSVC' }
+$atl = Get-ChildItem (Join-Path $atlRoot '*/atlmfc/include/atlbase.h') -File `
   -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
 if (-not $atl) {
   throw ('Visual Studio ATL is required for WTL. Install component ' +
