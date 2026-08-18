@@ -505,8 +505,11 @@ class CandidateWindow final {
                     return;
                 const D2D1_RECT_F segment =
                     D2D1::RectF(left, bounds.top, bounds.right, bounds.bottom);
+                // Clip instead of wrapping: a long label/comment that exceeds
+                // the remaining row width must not wrap onto the candidate
+                // row below and visually overlap it.
                 renderTarget_->DrawTextW(value.data(), static_cast<UINT32>(value.size()), format,
-                                         segment, brush);
+                                         segment, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
                 left += metrics.widthIncludingTrailingWhitespace;
             };
             drawSegment(candidate.label, labelFormat_.Get(),
@@ -1001,15 +1004,27 @@ class CandidateWindow final {
                         break;
                 }
             }
-            return SUCCEEDED(writeFactory_->CreateTextFormat(
-                family.c_str(), nullptr,
-                static_cast<DWRITE_FONT_WEIGHT>(
-                    font.weight.value_or(visualConfig_.candidateFont.weight.value_or(400))),
-                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                static_cast<float>(
-                    font.size.value_or(visualConfig_.candidateFont.size.value_or(16.0)) * scale *
-                    fontDpiScale_),
-                L"zh-CN", &format));
+            if (FAILED(writeFactory_->CreateTextFormat(
+                    family.c_str(), nullptr,
+                    static_cast<DWRITE_FONT_WEIGHT>(
+                        font.weight.value_or(visualConfig_.candidateFont.weight.value_or(400))),
+                    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                    static_cast<float>(
+                        font.size.value_or(visualConfig_.candidateFont.size.value_or(16.0)) *
+                        scale * fontDpiScale_),
+                    L"zh-CN", &format)))
+                return false;
+            // Single line with ellipsis trimming: a label/comment longer than
+            // the remaining row width must not wrap onto the candidate row
+            // below (which visually overlaps the next candidate).
+            if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)))
+                return false;
+            DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+            ComPtr<IDWriteInlineObject> ellipsis;
+            if (FAILED(writeFactory_->CreateEllipsisTrimmingSign(format.Get(), &ellipsis)) ||
+                FAILED(format->SetTrimming(&trimming, ellipsis.Get())))
+                return false;
+            return true;
         };
         if (!createFormat(visualConfig_.candidateFont, 1.0, textFormat_) ||
             !createFormat(visualConfig_.candidateFont, visualConfig_.label.fontScale.value_or(0.85),
