@@ -125,29 +125,6 @@ std::string require_string(const Json& object, std::string_view key, std::size_t
   return result;
 }
 
-bool is_ascii_token(std::string_view value, std::string_view extra) {
-  return !value.empty() && std::ranges::all_of(value, [extra](char raw_character) {
-           const auto character = static_cast<unsigned char>(raw_character);
-           return (character >= 'a' && character <= 'z') ||
-                  (character >= 'A' && character <= 'Z') ||
-                  (character >= '0' && character <= '9') ||
-                  extra.find(static_cast<char>(character)) != std::string_view::npos;
-         });
-}
-
-bool is_lower_package_id(std::string_view value) {
-  if (value.empty() || value.size() > kMaximumIdBytes || value.front() < 'a' ||
-      value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](char raw_character) {
-    const auto character = static_cast<unsigned char>(raw_character);
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '.' || character == '-' ||
-           character == '_';
-  });
-}
-
 bool is_hex_digest(std::string_view value) {
   return value.size() == 64U && std::ranges::all_of(value, [](char raw_character) {
            const auto character = static_cast<unsigned char>(raw_character);
@@ -236,6 +213,31 @@ void write_lockfile_atomic(const std::filesystem::path& install_root,
 }
 
 }  // namespace
+
+// Validators declared in package_core.h and used by the updater and deployer
+// for CLI-supplied identifiers that later become filesystem paths.
+bool is_ascii_token(std::string_view value, std::string_view extra) noexcept {
+  return !value.empty() && std::ranges::all_of(value, [extra](char raw_character) {
+           const auto character = static_cast<unsigned char>(raw_character);
+           return (character >= 'a' && character <= 'z') ||
+                  (character >= 'A' && character <= 'Z') ||
+                  (character >= '0' && character <= '9') ||
+                  extra.find(static_cast<char>(character)) != std::string_view::npos;
+         });
+}
+
+bool is_lower_package_id(std::string_view value) noexcept {
+  if (value.empty() || value.size() > kMaximumIdBytes || value.front() < 'a' ||
+      value.front() > 'z') {
+    return false;
+  }
+  return std::ranges::all_of(value, [](char raw_character) {
+    const auto character = static_cast<unsigned char>(raw_character);
+    return (character >= 'a' && character <= 'z') ||
+           (character >= '0' && character <= '9') || character == '.' || character == '-' ||
+           character == '_';
+  });
+}
 
 PackageError::PackageError(std::string code, std::string message)
     : std::runtime_error(std::move(message)), code_(std::move(code)) {}

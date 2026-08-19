@@ -12,6 +12,16 @@
 
 namespace fcitx::package {
 
+// Package identifiers are strictly lowercase alphanumerics with '.', '-', '_',
+// and must start with a lowercase letter. Everything that is later turned into
+// a filesystem path (package versions dir, transaction id, ...) goes through
+// this check so a CLI-supplied value cannot escape the versions directory.
+[[nodiscard]] bool is_lower_package_id(std::string_view value) noexcept;
+// Generic restricted token check (letters/digits plus an explicit extra set),
+// used for version strings.
+[[nodiscard]] bool is_ascii_token(std::string_view value,
+                                  std::string_view extra) noexcept;
+
 inline constexpr std::uint32_t kManifestFormatVersion = 1;
 inline constexpr std::size_t kMaximumManifestBytes = 1024U * 1024U;
 inline constexpr std::size_t kMaximumFileCount = 4096U;

@@ -376,6 +376,20 @@ int main() {
                std::filesystem::exists(user_data),
            "uninstall did not deactivate payload or preserve user data");
 
+    // Identifier validators shared with the updater/deployer for CLI-supplied
+    // values that later become filesystem paths.
+    expect(is_lower_package_id("fcitx5-rime") && is_lower_package_id("core") &&
+               is_lower_package_id("a-b.c_d"),
+           "valid package ids rejected");
+    expect(!is_lower_package_id("") && !is_lower_package_id("..") &&
+               !is_lower_package_id("a/../b") && !is_lower_package_id("A.b") &&
+               !is_lower_package_id("1abc") && !is_lower_package_id("a\\b") &&
+               !is_lower_package_id("a b"),
+           "path-escaping or invalid package ids accepted");
+    expect(is_ascii_token("1.0.0-beta.2", ".+-_") && !is_ascii_token("../1.0.0", ".+-_") &&
+               !is_ascii_token("1.0.0/../x", ".+-_"),
+           "version token validation mismatch");
+
     std::cout << "package core contract passed\n";
     return 0;
   } catch (const std::exception& error) {

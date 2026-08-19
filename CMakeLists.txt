@@ -402,6 +402,14 @@ if(BUILD_TESTING)
   add_test(NAME deployer-boundary-smoke COMMAND fcitx5_deployer --self-test)
   add_test(NAME provider-version COMMAND fcitx5_provider --version)
 
+  add_executable(fcitx5_updater_cleanup_test tests/unit/updater_cleanup_test.cpp)
+  target_link_libraries(fcitx5_updater_cleanup_test PRIVATE fcitx5::deployment_core)
+  add_dependencies(fcitx5_updater_cleanup_test fcitx5_updater)
+  fcitx_apply_project_options(fcitx5_updater_cleanup_test)
+  fcitx_apply_binary_hardening(fcitx5_updater_cleanup_test)
+  add_test(NAME updater-cleanup-previous
+           COMMAND fcitx5_updater_cleanup_test "$<TARGET_FILE:fcitx5_updater>")
+
   add_executable(fcitx5_provider_policy_test tests/unit/provider_policy_test.cpp)
   target_link_libraries(fcitx5_provider_policy_test PRIVATE fcitx5::provider_policy)
   fcitx_apply_project_options(fcitx5_provider_policy_test)
