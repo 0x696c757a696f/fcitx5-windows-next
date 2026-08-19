@@ -13,31 +13,16 @@
 #include <string>
 #include <string_view>
 
-static_assert(fcitx::windows::tsf::kInputProfiles.size() >= 3);
+static_assert(fcitx::windows::tsf::kInputProfiles.size() == 1);
 static_assert(fcitx::windows::tsf::kInputProfiles[0].language ==
               MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED));
-static_assert(!fcitx::windows::tsf::equalGuid(
-    fcitx::windows::tsf::kInputProfiles[0].guid,
-    fcitx::windows::tsf::kInputProfiles[1].guid));
-static_assert(fcitx::windows::tsf::kInputProfiles[1].language ==
-              MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED));
-static_assert(fcitx::windows::tsf::kInputProfiles[1].engine ==
-              std::string_view("rime"));
 static_assert(fcitx::windows::tsf::profileForGuid(
-                  fcitx::windows::tsf::kInputProfiles[1].guid)
-                  ->id == std::string_view("zh-cn-rime"));
-static_assert(!fcitx::windows::tsf::equalGuid(
-    fcitx::windows::tsf::kInputProfiles[1].guid,
-    fcitx::windows::tsf::kInputProfiles[2].guid));
-static_assert(fcitx::windows::tsf::kInputProfiles[2].language ==
-              MAKELANGID(LANG_JAPANESE, SUBLANG_DEFAULT));
-static_assert(fcitx::windows::tsf::kInputProfiles[2].engine ==
-              std::string_view("mozc"));
-static_assert(fcitx::windows::tsf::profileForGuid(
-                  fcitx::windows::tsf::kInputProfiles[2].guid)
-                  ->bcp47 == std::string_view("ja-JP"));
+                  fcitx::windows::tsf::kInputProfiles[0].guid)
+                  ->id == std::string_view("zh-cn-fcitx5"));
+static_assert(std::wstring_view(fcitx::windows::tsf::kInputProfiles[0].description) ==
+              L"Fcitx5 for Windows Next");
 static_assert(fcitx::windows::tsf::profileForGuid(GUID{}) == nullptr);
-static_assert(fcitx::windows::tsf::kObsoleteInputProfiles.size() == 1);
+static_assert(fcitx::windows::tsf::kObsoleteInputProfiles.size() == 3);
 static_assert(fcitx::windows::tsf::kObsoleteInputProfiles[0].language ==
               MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
 
@@ -47,11 +32,7 @@ int wmain(int argc, wchar_t** argv) {
         fcitx::windows::tsf::deterministicProfileGuid("zh-cn-rime-addon");
     if (!fcitx::windows::tsf::equalGuid(dynamicRime, dynamicRimeAgain) ||
         fcitx::windows::tsf::equalGuid(dynamicRime,
-                                       fcitx::windows::tsf::kInputProfiles[0].guid) ||
-        fcitx::windows::tsf::equalGuid(dynamicRime,
-                                       fcitx::windows::tsf::kInputProfiles[1].guid) ||
-        fcitx::windows::tsf::equalGuid(dynamicRime,
-                                       fcitx::windows::tsf::kInputProfiles[2].guid)) {
+                                       fcitx::windows::tsf::kInputProfiles[0].guid)) {
         std::cerr << "dynamic TSF profile GUID contract failed\n";
         return 1;
     }
@@ -98,6 +79,35 @@ int wmain(int argc, wchar_t** argv) {
         !fcitx::windows::tsf::storeDynamicProfileLedger(runtimeProfiles) ||
         fcitx::windows::tsf::loadDynamicProfileLedger().empty()) {
         std::cerr << "dynamic TSF profile surface contract failed\n";
+        return 1;
+    }
+    const auto defaultRegistrable = fcitx::windows::tsf::loadRegistrableInputProfiles();
+    if (defaultRegistrable.size() != 1U || defaultRegistrable[0].id != "zh-cn-fcitx5" ||
+        defaultRegistrable[0].engine != "" ||
+        defaultRegistrable[0].description != L"Fcitx5 for Windows Next") {
+        std::cerr << "TSF registration should expose one product profile\n";
+        return 1;
+    }
+    {
+        std::ofstream file(dataDirectory / L"config.toml");
+        file << "format_version = 1\n[input_methods]\n"
+                "enabled = [\"pinyin\", \"custom\"]\n"
+                "default = \"pinyin\"\n";
+    }
+    const auto customRegistrable = fcitx::windows::tsf::loadRegistrableInputProfiles();
+    if (customRegistrable.size() != 1U || customRegistrable[0].id != "zh-cn-fcitx5") {
+        std::cerr << "enabled input methods should not create extra TSF profiles\n";
+        return 1;
+    }
+    {
+        std::ofstream file(dataDirectory / L"config.toml", std::ios::trunc);
+        file << "format_version = 1\n[input_methods]\n"
+                "enabled = [\"rime\"]\n"
+                "default = \"rime\"\n";
+    }
+    const auto rimeOnlyRegistrable = fcitx::windows::tsf::loadRegistrableInputProfiles();
+    if (rimeOnlyRegistrable.size() != 1U || rimeOnlyRegistrable[0].id != "zh-cn-fcitx5") {
+        std::cerr << "Rime should be selected inside Fcitx, not as a separate TSF profile\n";
         return 1;
     }
     if (previousLocalAppDataLength == 0) {

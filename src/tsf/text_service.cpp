@@ -1131,14 +1131,12 @@ HRESULT TextService::OnKillThreadFocus() noexcept {
     return S_OK;
 }
 
-HRESULT TextService::OnActivated(REFCLSID classId, REFGUID profileGuid,
+HRESULT TextService::OnActivated(REFCLSID classId, REFGUID /*profileGuid*/,
                                  BOOL activated) noexcept {
     if (!activated || !IsEqualGUID(classId, kTextServiceClsid)) {
         return S_OK;
     }
-    if (const auto inputMethod = inputMethodForProfileGuid(profileGuid)) {
-        activeInputMethod_ = *inputMethod;
-    }
+    activeInputMethod_.clear();
     return S_OK;
 }
 

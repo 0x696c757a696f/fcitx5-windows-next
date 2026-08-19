@@ -27,9 +27,9 @@ PowerShell、不需要理解内部 EXE，也不会因 Engine/UI 失效卡住宿�
    C++↔Rust correctness differential 是切换门槛，性能对比排第二，不用性能结果掩盖语义不一致。
 3. **Advanced surface**：Advanced 配置只提供 generic Fcitx addon/config surface，
    复用 Fcitx 原生配置模型；避免维护 Windows 专用巨型硬编码 input-method/addon 映射表。
-   TSF profile 同样分成 baseline profiles 与动态 surface：插件/配置工具通过
-   `tsf-profiles.tsv` 声明 `id/BCP-47/engine/description`，注册器派生稳定 GUID 并用
-   ledger 清理旧动态 profile，不把后续 addon 全硬编码进 TSF DLL。
+   Windows 语言栏只注册一个产品级 TSF profile：`Fcitx5 for Windows Next`。Pinyin、Rime、
+   Mozc 或后续插件输入法都由 Fcitx engine 内部配置/状态管理；旧动态 profile ledger 仅用于
+   repair/uninstall 清理幽灵项。
 4. **CI 分档**：PR / Nightly / Win7 VM milestone / Stable 四档执行；每档按风险选矩阵，
    不跑 OS × 架构 × 宿主 × DPI × 输入法的笛卡尔积。
 
@@ -92,6 +92,15 @@ Core CI 以 `ea81f86` 为准等待最新结果（前序 run 34 因 C6001 失败�
 正常长期进程只允许 launcher、engine，以及实际显示候选/通知时的 UI。Config、package、
 updater、deployer 用完即退出；TSF DLL 加载在宿主中，不计作 EXE。
 
+## Windows 入口与状态图标
+
+- Windows 输入法列表/语言栏只显示一个 TSF profile：`Fcitx5 for Windows Next`。
+- 具体输入引擎（Pinyin/Rime/Mozc/后续插件）不作为 Windows profile 暴露，由 Fcitx engine
+  内部配置、默认输入法和切换热键管理。
+- 托盘图标是当前用户可见状态入口：运行中使用 `fcitx5.ico`；暂停/安全模式使用
+  `fcitx5-paused.ico`；崩溃恢复、服务停止、卸载中使用 `fcitx5-error.ico`。
+- tooltip 使用产品名加状态文本，例如 `Fcitx5 for Windows Next — Running/Paused/Safe mode`。
+
 ## Phase 0 参考顺序
 
 1. `chewing/windows-chewing-tsf`：Phase 1B–4 主教材；TSF、composition、UILess、独立 UI、
@@ -135,6 +144,9 @@ WindInput/Moqi/Rabbit/PIME 只在具体失败对应的 Phase 查阅。Phase 0–
     通过；config 窗口标题带构建版本号便于确认运行版本。
   - TSF 已卸载旧注册并注册新版（isolated deployment，2026-08-18）；stage 与构建产物
     SHA 一致，x64/x86 全量 ALL_BUILD 通过。
+- 2026-08-19 TSF profile 注册收敛为单一产品入口：注册器启动时先清理旧 built-in
+  profile 与动态 ledger，再只注册 `Fcitx5 for Windows Next`。Rime/Mozc/后续插件不再进入
+  Windows 输入法列表，而由 Fcitx engine 内部状态选择。
 
 ## 当前红灯
 

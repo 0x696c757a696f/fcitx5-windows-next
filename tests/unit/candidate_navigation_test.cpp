@@ -6,6 +6,8 @@ int main() {
     using fcitx::windows::engine::rowNavigationTarget;
     using fcitx::windows::engine::rowSelectionColumn;
     using fcitx::windows::engine::rowSelectionTarget;
+    using fcitx::windows::engine::columnSelectionRow;
+    using fcitx::windows::engine::columnSelectionTarget;
     using fcitx::windows::engine::columnNavigationTarget;
     using fcitx::windows::engine::sameColumnNavigationTarget;
 
@@ -58,6 +60,15 @@ int main() {
         rightNextColumn.index != 14U || leftPreviousColumn.index != 8U ||
         rightShortFinalColumn.index != 19U || rightColumnTop.index != 12U) {
         std::cerr << "vertical scroll navigation did not keep row/column semantics\n";
+        return 1;
+    }
+    if (columnSelectionTarget(8U, 0U, 6U, 20U) != 6U ||
+        columnSelectionTarget(8U, 5U, 6U, 20U) != 11U ||
+        columnSelectionTarget(19U, 2U, 6U, 20U).has_value() ||
+        columnSelectionRow(8U, 6U, 6U, 20U) != 0U ||
+        columnSelectionRow(8U, 11U, 6U, 20U) != 5U ||
+        columnSelectionRow(8U, 12U, 6U, 20U).has_value()) {
+        std::cerr << "vertical labels did not map to the current column\n";
         return 1;
     }
     return 0;

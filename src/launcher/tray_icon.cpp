@@ -87,8 +87,8 @@ bool TrayIcon::create(HINSTANCE instance,
     if (!registered && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         return false;
     window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kWindowClass,
-                              L"Fcitx5 for Windows", WS_POPUP, 0, 0, 0, 0, nullptr,
-                              nullptr, instance_, this);
+                              fcitx::windows::kReleaseIdentity.service_description, WS_POPUP, 0,
+                              0, 0, 0, nullptr, nullptr, instance_, this);
     if (!window_)
         return false;
     icon_.cbSize = sizeof(icon_);
@@ -111,7 +111,7 @@ void TrayIcon::addIcon() noexcept {
     if (!icon_.hIcon)
         icon_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     copyText(icon_.szTip, std::size(icon_.szTip),
-             std::wstring(L"Fcitx5 for Windows — ") +
+             std::wstring(fcitx::windows::kReleaseIdentity.service_description) + L" — " +
                  statusText(launcherState_, engineState_));
     icon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP |
                    (usesGuidIdentity_ ? NIF_GUID : 0U);
@@ -160,7 +160,7 @@ void TrayIcon::update(LauncherState launcherState, EngineState engineState) {
                    (usesGuidIdentity_ ? NIF_GUID : 0U);
     icon_.hIcon = statusIcon(instance_, launcherState_, engineState_);
     copyText(icon_.szTip, std::size(icon_.szTip),
-             std::wstring(L"Fcitx5 for Windows — ") +
+             std::wstring(fcitx::windows::kReleaseIdentity.service_description) + L" — " +
                  statusText(launcherState_, engineState_));
     (void)Shell_NotifyIconW(NIM_MODIFY, &icon_);
     icon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP |

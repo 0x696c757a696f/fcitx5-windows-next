@@ -72,13 +72,9 @@ constexpr GUID rimeProfileGuid() noexcept {
 
 inline constexpr GUID kRimeProfileGuid = rimeProfileGuid();
 
-inline constexpr std::array<InputProfile, 3> kInputProfiles{{
-    {"zh-cn-pinyin", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
-     kLanguageProfileGuid, L"Fcitx5 Pinyin", "pinyin", true},
-    {"zh-cn-rime", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
-     kRimeProfileGuid, L"Fcitx5 Rime", "rime", true},
-    {"ja-jp-mozc", "ja-JP", MAKELANGID(LANG_JAPANESE, SUBLANG_DEFAULT),
-     kJapaneseProfileGuid, L"Fcitx5 Mozc", "mozc", true},
+inline constexpr std::array<InputProfile, 1> kInputProfiles{{
+    {"zh-cn-fcitx5", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
+     kLanguageProfileGuid, L"Fcitx5 for Windows Next", "", true},
 }};
 
 constexpr const InputProfile* profileForGuid(REFGUID guid) noexcept {
@@ -92,8 +88,10 @@ constexpr const InputProfile* profileForGuid(REFGUID guid) noexcept {
 // no longer product input profiles. Keep this list so repair and uninstall can
 // remove the stale entry without touching unrelated keyboards or the current
 // Simplified Chinese profile.
-inline constexpr std::array<ProfileIdentity, 1> kObsoleteInputProfiles{{
+inline constexpr std::array<ProfileIdentity, 3> kObsoleteInputProfiles{{
     {MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), kLanguageProfileGuid},
+    {MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED), kRimeProfileGuid},
+    {MAKELANGID(LANG_JAPANESE, SUBLANG_DEFAULT), kJapaneseProfileGuid},
 }};
 
 } // namespace fcitx::windows::tsf

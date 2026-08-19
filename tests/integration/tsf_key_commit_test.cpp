@@ -752,7 +752,7 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
         } else {
             TestContext context;
             const HRESULT activeProfile = threadManager.simulateActiveProfile(
-                fcitx::windows::tsf::kInputProfiles[2].guid);
+                fcitx::windows::tsf::kInputProfiles[0].guid);
             BOOL preeditTestEaten = FALSE;
             BOOL duplicatePreeditTestEaten = FALSE;
             BOOL preeditEaten = FALSE;

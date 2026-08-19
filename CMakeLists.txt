@@ -627,6 +627,7 @@ if(BUILD_TESTING)
   # and a foreground user desktop with Notepad.
   add_executable(fcitx5_tsf_notepad_e2e_test
                  tests/integration/tsf_notepad_e2e_test.cpp)
+  target_sources(fcitx5_tsf_notepad_e2e_test PRIVATE src/tsf/input_profiles.cpp)
   target_include_directories(fcitx5_tsf_notepad_e2e_test
                              PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
   target_link_libraries(fcitx5_tsf_notepad_e2e_test

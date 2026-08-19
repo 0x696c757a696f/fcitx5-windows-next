@@ -29,6 +29,7 @@ struct ProfileIdentityRecord {
 
 [[nodiscard]] GUID deterministicProfileGuid(std::string_view profileId) noexcept;
 [[nodiscard]] std::vector<RuntimeInputProfile> loadInputProfiles();
+[[nodiscard]] std::vector<RuntimeInputProfile> loadRegistrableInputProfiles();
 [[nodiscard]] std::optional<std::string> inputMethodForProfileGuid(REFGUID guid);
 [[nodiscard]] std::vector<ProfileIdentityRecord> loadDynamicProfileLedger();
 bool storeDynamicProfileLedger(const std::vector<RuntimeInputProfile>& profiles) noexcept;

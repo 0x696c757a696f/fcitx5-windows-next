@@ -32,6 +32,26 @@ rowSelectionColumn(std::size_t focus, std::size_t candidate, std::size_t columns
     return candidate % columns;
 }
 
+[[nodiscard]] constexpr std::optional<std::size_t>
+columnSelectionTarget(std::size_t focus, std::size_t row, std::size_t rows,
+                      std::size_t candidateCount) noexcept {
+    if (rows == 0U || row >= rows || focus >= candidateCount)
+        return std::nullopt;
+    const std::size_t target = focus - focus % rows + row;
+    if (target >= candidateCount)
+        return std::nullopt;
+    return target;
+}
+
+[[nodiscard]] constexpr std::optional<std::size_t>
+columnSelectionRow(std::size_t focus, std::size_t candidate, std::size_t rows,
+                   std::size_t candidateCount) noexcept {
+    if (rows == 0U || focus >= candidateCount || candidate >= candidateCount ||
+        focus / rows != candidate / rows)
+        return std::nullopt;
+    return candidate % rows;
+}
+
 [[nodiscard]] constexpr RowNavigationTarget
 rowNavigationTarget(std::size_t focus, std::size_t columns,
                     std::size_t candidateCount, bool forward,

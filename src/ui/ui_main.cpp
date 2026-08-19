@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <span>
@@ -350,8 +351,11 @@ class CandidateWindow final {
     }
 
     [[nodiscard]] bool runInteractionSelfTest() {
-        if (itemRects_.size() < 2U || visibleIndices_.size() < 2U)
+        if (itemRects_.size() < 2U || visibleIndices_.size() < 2U) {
+            std::cerr << "interaction self-test has insufficient items: rects="
+                      << itemRects_.size() << " visible=" << visibleIndices_.size() << '\n';
             return false;
+        }
         const auto& rectangle = itemRects_[1];
         const LONG x = static_cast<LONG>((rectangle.left + rectangle.right) / 2.0F);
         const LONG y = static_cast<LONG>((rectangle.top + rectangle.bottom) / 2.0F);
@@ -361,23 +365,35 @@ class CandidateWindow final {
                                                static_cast<WORD>(screen.y));
         const LPARAM clientPoint = MAKELPARAM(static_cast<WORD>(x), static_cast<WORD>(y));
         if (SendMessageW(window_, WM_NCHITTEST, 0, screenPoint) != HTCLIENT ||
-            SendMessageW(window_, WM_MOUSEACTIVATE, 0, 0) != MA_NOACTIVATE)
+            SendMessageW(window_, WM_MOUSEACTIVATE, 0, 0) != MA_NOACTIVATE) {
+            std::cerr << "interaction self-test hit activation contract failed\n";
             return false;
+        }
         SendMessageW(window_, WM_LBUTTONDOWN, MK_LBUTTON, clientPoint);
         SendMessageW(window_, WM_LBUTTONUP, 0, clientPoint);
         if (!capturedTestIntent_ || !capturedTestIntent_->valid() ||
-            capturedTestIntent_->candidateId != 2U)
+            capturedTestIntent_->candidateId != 2U) {
+            std::cerr << "interaction self-test did not capture candidate 2\n";
             return false;
+        }
         const auto& current = model_.current();
-        if (!current)
+        if (!current) {
+            std::cerr << "interaction self-test lost candidate model\n";
             return false;
+        }
         SendMessageW(window_, candidateDismissMessage(), targetForegroundProcessId_,
                      static_cast<LPARAM>(current->contextId + 1U));
-        if (!IsWindowVisible(window_))
+        if (!IsWindowVisible(window_)) {
+            std::cerr << "interaction self-test dismissed the wrong context\n";
             return false;
+        }
         SendMessageW(window_, candidateDismissMessage(), targetForegroundProcessId_,
                      static_cast<LPARAM>(current->contextId));
-        return !IsWindowVisible(window_);
+        if (IsWindowVisible(window_)) {
+            std::cerr << "interaction self-test did not dismiss the matching context\n";
+            return false;
+        }
+        return true;
     }
 
     // Refresh only the visual configuration and text formats, without
@@ -498,12 +514,28 @@ class CandidateWindow final {
         }
         if (scrollMode_ && itemRects_.size() > scrollColumns_) {
             borderBrush->SetOpacity(0.55F);
-            for (std::size_t row = scrollColumns_; row < itemRects_.size();
-                 row += scrollColumns_) {
-                const float y = (itemRects_[row - 1U].bottom + itemRects_[row].top) / 2.0F;
-                renderTarget_->DrawLine(D2D1::Point2F(12.0F, y),
-                                        D2D1::Point2F(renderTarget_->GetSize().width - 12.0F, y),
-                                        borderBrush.Get(), 1.0F);
+            const bool horizontalLayout =
+                visualConfig_.orientation.value_or(fcitx::windows::config::Orientation::vertical) ==
+                fcitx::windows::config::Orientation::horizontal;
+            if (horizontalLayout) {
+                for (std::size_t row = scrollColumns_; row < itemRects_.size();
+                     row += scrollColumns_) {
+                    const float y = (itemRects_[row - 1U].bottom + itemRects_[row].top) / 2.0F;
+                    renderTarget_->DrawLine(
+                        D2D1::Point2F(12.0F, y),
+                        D2D1::Point2F(renderTarget_->GetSize().width - 12.0F, y),
+                        borderBrush.Get(), 1.0F);
+                }
+            } else {
+                for (std::size_t column = scrollColumns_; column < itemRects_.size();
+                     column += scrollColumns_) {
+                    const float x =
+                        (itemRects_[column - 1U].right + itemRects_[column].left) / 2.0F;
+                    renderTarget_->DrawLine(
+                        D2D1::Point2F(x, 12.0F),
+                        D2D1::Point2F(x, renderTarget_->GetSize().height - 12.0F),
+                        borderBrush.Get(), 1.0F);
+                }
             }
             borderBrush->SetOpacity(1.0F);
         }
@@ -528,17 +560,33 @@ class CandidateWindow final {
                 renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(selection, radius, radius),
                                                     selectionBrush.Get());
             }
+            const auto naturalTextWidth = [&](const std::wstring& value,
+                                              IDWriteTextFormat* format) {
+                ComPtr<IDWriteTextLayout> layout;
+                DWRITE_TEXT_METRICS metrics{};
+                if (value.empty() || !format ||
+                    FAILED(writeFactory_->CreateTextLayout(
+                        value.data(), static_cast<UINT32>(value.size()), format,
+                        4096.0F, (std::max)(1.0F, bounds.bottom - bounds.top), &layout)) ||
+                    FAILED(layout->GetMetrics(&metrics))) {
+                    return 0.0F;
+                }
+                return metrics.widthIncludingTrailingWhitespace;
+            };
             const auto drawTextAt = [&](float x, const std::wstring& value,
                                         IDWriteTextFormat* format, ID2D1Brush* brush,
-                                        float* widthOut) {
+                                        float* widthOut, bool requireFullWidth) {
                 if (value.empty())
+                    return;
+                const float available = (std::max)(1.0F, bounds.right - x);
+                const float naturalWidth = naturalTextWidth(value, format);
+                if (requireFullWidth && naturalWidth > available + 2.0F)
                     return;
                 ComPtr<IDWriteTextLayout> layout;
                 DWRITE_TEXT_METRICS metrics{};
                 if (FAILED(writeFactory_->CreateTextLayout(
                         value.data(), static_cast<UINT32>(value.size()), format,
-                        (std::max)(1.0F, bounds.right - x),
-                        (std::max)(1.0F, bounds.bottom - bounds.top), &layout)) ||
+                        available, (std::max)(1.0F, bounds.bottom - bounds.top), &layout)) ||
                     FAILED(layout->GetMetrics(&metrics)))
                     return;
                 const D2D1_RECT_F segment = D2D1::RectF(x, bounds.top, bounds.right, bounds.bottom);
@@ -548,20 +596,23 @@ class CandidateWindow final {
                 renderTarget_->DrawTextW(value.data(), static_cast<UINT32>(value.size()), format,
                                          segment, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
                 if (widthOut)
-                    *widthOut = metrics.widthIncludingTrailingWhitespace;
+                    *widthOut = naturalWidth > 0.0F
+                                    ? (std::min)(naturalWidth, available)
+                                    : metrics.widthIncludingTrailingWhitespace;
             };
             // The label column has a fixed width across every row so the
             // candidate text starts at the same x in all rows (the selected
             // row included), keeping the Chinese text columns aligned.
             if (!candidate.label.empty())
                 drawTextAt(bounds.left, candidate.label, labelFormat_.Get(),
-                           selected ? selectedLabelBrush.Get() : labelBrush.Get(), nullptr);
+                           selected ? selectedLabelBrush.Get() : labelBrush.Get(), nullptr,
+                           false);
             float textWidth = 0.0F;
             drawTextAt(bounds.left + labelColumnWidth, candidate.text, textFormat_.Get(),
-                       selected ? selectedTextBrush.Get() : textBrush.Get(), &textWidth);
+                       selected ? selectedTextBrush.Get() : textBrush.Get(), &textWidth, false);
             drawTextAt(bounds.left + labelColumnWidth + textWidth + 4.0F, candidate.comment,
                        annotationFormat_.Get(),
-                       selected ? selectedCommentBrush.Get() : commentBrush.Get(), nullptr);
+                       selected ? selectedCommentBrush.Get() : commentBrush.Get(), nullptr, true);
             fallbackTop += 32.0F;
         }
         if (hasScrollbar_) {
@@ -662,8 +713,7 @@ class CandidateWindow final {
         const bool scrollEligible = visualConfig_.scrollMode.value_or(false) &&
                                     response.candidateBulk && response.candidatePageSize > 0U &&
                                     current.candidates.size() > response.candidatePageSize;
-        scrollExpanded_ = !compositionChanged && scrollEligible && current.selected &&
-                          *current.selected >= response.candidatePageSize;
+        scrollExpanded_ = scrollEligible;
         scrollMode_ = scrollEligible && scrollExpanded_;
         scrollColumns_ = std::clamp<std::size_t>(response.candidatePageSize, 1U, 9U);
         const std::size_t ordinaryCount =

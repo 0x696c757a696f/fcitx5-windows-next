@@ -91,20 +91,21 @@ int main() {
     LayoutInput verticalScroll = scroll;
     verticalScroll.orientation = Orientation::vertical;
     verticalScroll.scrollColumns = 6;
+    verticalScroll.maxWidth = 720;
     verticalScroll.selected = 6;
-    const auto nextColumn = layout(verticalScroll);
-    if (nextColumn.items.size() != 6U || nextColumn.itemIndices.front() != 6U ||
-        nextColumn.itemIndices.back() != 11U ||
-        std::abs((nextColumn.window.right - nextColumn.window.left) -
-                 (120.0F + 8.0F * 2.0F)) > 0.01F) {
-        std::cerr << "vertical scroll layout did not render a single candidate column\n";
+    const auto firstColumns = layout(verticalScroll);
+    if (firstColumns.items.size() != 36U || firstColumns.itemIndices.front() != 0U ||
+        firstColumns.itemIndices.back() != 35U ||
+        std::abs((firstColumns.window.right - firstColumns.window.left) -
+                 (120.0F * 6.0F + 8.0F * 2.0F + 8.0F * 5.0F)) > 0.01F) {
+        std::cerr << "vertical scroll layout squeezed or dropped six candidate columns\n";
         return 1;
     }
     verticalScroll.selected = 58;
     const auto finalColumn = layout(verticalScroll);
-    if (finalColumn.items.size() != 6U || finalColumn.itemIndices.front() != 54U ||
+    if (finalColumn.items.size() != 36U || finalColumn.itemIndices.front() != 24U ||
         finalColumn.itemIndices.back() != 59U) {
-        std::cerr << "vertical scroll layout did not keep the selected candidate column\n";
+        std::cerr << "vertical scroll layout did not keep the selected column viewport\n";
         return 1;
     }
     return 0;

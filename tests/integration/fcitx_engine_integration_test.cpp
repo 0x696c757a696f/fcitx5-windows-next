@@ -197,7 +197,7 @@ int wmain(int argc, wchar_t** argv) {
     if (safeMode && firstRunRime) return 1;
     Process process;
     const auto startupBegin = std::chrono::steady_clock::now();
-    if (!startEngine(argv[1], 1, safeMode, typingFuzz ? 0U : 2U, process)) return 1;
+    if (!startEngine(argv[1], 1, safeMode, 0U, process)) return 1;
     const auto startupDuration = std::chrono::steady_clock::now() - startupBegin;
 
     FILETIME creationBefore{}, exitBefore{}, kernelBefore{}, userBefore{};
@@ -495,9 +495,13 @@ int wmain(int argc, wchar_t** argv) {
         constexpr std::uint32_t ctrlShift =
             fcitx::windows::protocol::kKeyFlagControl |
             fcitx::windows::protocol::kKeyFlagShift;
-        if (!client.processKey(hotkeyContext, VK_SHIFT, ctrlShift, result) ||
-            !result.handled) {
-            std::cerr << "Ctrl+Shift next hotkey was not handled\n";
+        const bool ctrlShiftOk = client.processKey(hotkeyContext, VK_SHIFT, ctrlShift, result);
+        if (!ctrlShiftOk || !result.handled) {
+            std::wcerr << L"Ctrl+Shift next hotkey was not handled: ipc="
+                       << ctrlShiftOk << L" handled=" << result.handled
+                       << L" preedit=" << result.preedit << L" commit=" << result.commit
+                       << L" candidates=" << result.candidates.size()
+                       << L" selected=" << result.selectedCandidate << L'\n';
             return 1;
         }
     }
@@ -730,7 +734,7 @@ int wmain(int argc, wchar_t** argv) {
               << '\n';
     const std::uint64_t firstEpoch = result.engineEpoch;
     client.disconnect();
-    if (typingFuzz) process.requestStop();
+    process.requestStop();
     if (WaitForSingleObject(process.handle, 5000) != WAIT_OBJECT_0) {
         std::cerr << "real engine did not stop after test client disconnected\n";
         return 1;

@@ -221,6 +221,15 @@ std::vector<RuntimeInputProfile> loadInputProfiles() {
     return profiles;
 }
 
+std::vector<RuntimeInputProfile> loadRegistrableInputProfiles() {
+    std::vector<RuntimeInputProfile> registrable;
+    registrable.reserve(kInputProfiles.size());
+    for (const auto& profile : kInputProfiles) {
+        registrable.push_back(runtimeProfileFromBuiltin(profile));
+    }
+    return registrable;
+}
+
 std::optional<std::string> inputMethodForProfileGuid(REFGUID guid) {
     if (const InputProfile* profile = profileForGuid(guid)) {
         return profile->engine;

@@ -80,7 +80,7 @@ contract where practical, and desktop evidence when Windows/TSF/Shell behavior i
 | Use horizontal/vertical/scroll candidates | labels align with candidates, page/navigation semantics remain stable, empty/large lists are bounded, and the Rabbit/macOS scroll-grid behavior has layout and rendering regressions | PR + Stable |
 | Manage packages safely | installed/bundled state is visible; bundled components cannot be destructively managed; online refresh, install, update, disable/enable, uninstall, rollback, offline and bad-signature states are tested against a signed fixture repository | PR + Nightly + Stable |
 | Move/upgrade portable build | entry points remain usable after relocation; configuration and Rime user data survive move and archive-overwrite upgrade; product data never falls back to the system drive unexpectedly | Nightly |
-| Install, repair and remove | installer registers the intended profiles, repair restores files/registration, uninstall removes owned profiles/files, stale profile cleanup works, and user-data retention follows the selected policy | Win7 VM milestone + Stable |
+| Install, repair and remove | installer registers the single product TSF profile, repair restores files/registration, uninstall removes owned profiles/files, stale multi-profile cleanup works, and user-data retention follows the selected policy | Win7 VM milestone + Stable |
 | Resist malformed input | deterministic protocol, package/archive and stateful typing fuzz suites retain seeds; malformed/oversized/late data fails closed at trust boundaries and fails open in the TSF host | PR + Nightly |
 
 The package-manager row is not satisfied by placeholder URLs or an empty production keyring.

@@ -96,6 +96,12 @@ EngineConfig readEngineConfig() {
                 fcitx::windows::config::defaultConfigToml(), defaults, defaultError)) {
             parsed = std::move(defaults);
         }
+        // Missing or broken user config must not implicitly enable every
+        // bundled/input-method profile. Keep the engine's default activation
+        // policy aligned with TSF registration: pinyin only until the user or
+        // package config explicitly enables additional engines such as Rime.
+        parsed.enabledInputMethods = {"pinyin"};
+        parsed.defaultInputMethod = "pinyin";
     }
     config.enabled = parsed.enabledInputMethods;
     config.defaultInputMethod = parsed.defaultInputMethod;
@@ -106,7 +112,7 @@ EngineConfig readEngineConfig() {
     config.candidatePageSize = parsed.candidatePageSize;
     config.scrollMode = parsed.scrollMode.value_or(false);
     if (config.enabled.empty())
-        config.enabled = {"pinyin", "rime", "wbx"};
+        config.enabled = {"pinyin"};
     if (!config.defaultInputMethod ||
         std::find(config.enabled.begin(), config.enabled.end(),
                   *config.defaultInputMethod) == config.enabled.end())
@@ -616,11 +622,17 @@ class FcitxRuntime::Impl final {
                 if (!realBulk) {
                     label = candidateList->label(index).toString();
                 } else if (config.scrollMode) {
-                    if (const auto offset = rowSelectionColumn(
-                            static_cast<std::size_t>((std::max)(0, cursor)),
-                            static_cast<std::size_t>(index),
-                            static_cast<std::size_t>(dimension),
-                            static_cast<std::size_t>(size))) {
+                    const auto offset =
+                        config.orientation == config::Orientation::vertical
+                            ? columnSelectionRow(static_cast<std::size_t>((std::max)(0, cursor)),
+                                                 static_cast<std::size_t>(index),
+                                                 static_cast<std::size_t>(dimension),
+                                                 static_cast<std::size_t>(size))
+                            : rowSelectionColumn(static_cast<std::size_t>((std::max)(0, cursor)),
+                                                 static_cast<std::size_t>(index),
+                                                 static_cast<std::size_t>(dimension),
+                                                 static_cast<std::size_t>(size));
+                    if (offset) {
                         label = std::to_string(*offset + 1U);
                     }
                 } else if (index >= page * dimension && index < (page + 1) * dimension) {
@@ -669,20 +681,32 @@ bool FcitxRuntime::initialize(bool safeMode) {
             return false;
         if (!impl_->instance->inputMethodEngine(selected))
             return false;
-        // Load and activate the selected engine before accepting TSF traffic.
+        // Load and activate the enabled engines before accepting TSF traffic.
         // This is an internal context initialization only: no synthetic user key
-        // is generated, so a cold Rime session cannot consume or duplicate input.
+        // reaches TSF, so a cold Rime session cannot consume or duplicate input.
+        // Activating each enabled IM here keeps Ctrl+Shift cycling inside the
+        // input deadline; inputMethodEngine(id) alone is not enough for addons
+        // that defer decoder/session initialization until first focus.
         impl_->warmupContext =
             std::make_unique<EngineInputContext>(impl_->instance->inputContextManager());
         impl_->warmupContext->focusIn();
+        std::vector<std::string> warmupIds = impl_->config.enabled;
+        if (std::find(warmupIds.begin(), warmupIds.end(), selected) == warmupIds.end())
+            warmupIds.push_back(selected);
+        for (const auto& id : warmupIds) {
+            if (!impl_->instance->inputMethodManager().entry(id))
+                continue;
+            (void)impl_->instance->inputMethodEngine(id);
+            impl_->instance->setCurrentInputMethod(impl_->warmupContext.get(), id, true);
+            // Fcitx engines build process-wide decoder caches on their first
+            // text event. Prime those caches in an isolated context before the
+            // ready signal, then reset without committing or learning any text.
+            KeyEvent warmupEvent(impl_->warmupContext.get(), Key(FcitxKey_n), false);
+            impl_->warmupContext->keyEvent(warmupEvent);
+            impl_->warmupContext->reset();
+            (void)impl_->warmupContext->takeCommit();
+        }
         impl_->instance->setCurrentInputMethod(impl_->warmupContext.get(), selected, true);
-        // Fcitx engines build process-wide decoder caches on their first text
-        // event. Prime those caches in an isolated context before the ready
-        // signal, then reset without committing or learning any text.
-        KeyEvent warmupEvent(impl_->warmupContext.get(), Key(FcitxKey_n), false);
-        impl_->warmupContext->keyEvent(warmupEvent);
-        impl_->warmupContext->reset();
-        (void)impl_->warmupContext->takeCommit();
         impl_->focused = impl_->warmupContext.get();
         return true;
     } catch (...) {
@@ -730,10 +754,9 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     // cycles through [input_methods].enabled.
     if (!event.isRelease()) {
         const auto& keySym = event.key().sym();
-        const auto states = event.key().states();
-        const bool ctrl = states.test(KeyState::Ctrl);
-        const bool shift = states.test(KeyState::Shift);
-        const bool alt = states.test(KeyState::Alt);
+        const bool ctrl = (request.keyFlags & protocol::kKeyFlagControl) != 0;
+        const bool shift = (request.keyFlags & protocol::kKeyFlagShift) != 0;
+        const bool alt = (request.keyFlags & protocol::kKeyFlagAlt) != 0;
         // Read the immutable config snapshot loaded at startup - never reopen
         // config.toml on the input hot path.
         const auto& engineConfig = impl_->config;
@@ -832,10 +855,13 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                     }
                     if (consume) {
                         const auto target =
-                            column ? rowSelectionTarget(
-                                         static_cast<std::size_t>(currentFocus()), *column,
-                                         dimension,
-                                         static_cast<std::size_t>(bounded))
+                            column ? (verticalScroll
+                                          ? columnSelectionTarget(
+                                                static_cast<std::size_t>(currentFocus()), *column,
+                                                dimension, static_cast<std::size_t>(bounded))
+                                          : rowSelectionTarget(
+                                                static_cast<std::size_t>(currentFocus()), *column,
+                                                dimension, static_cast<std::size_t>(bounded)))
                                    : std::nullopt;
                         if (target) {
                             bulk->candidateFromAll(static_cast<int>(*target)).select(&context);
@@ -1049,11 +1075,13 @@ bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {
         return false;
     auto& manager = impl_->instance->inputMethodManager();
     InputMethodGroup group = manager.currentGroup();
-    const bool present = std::any_of(group.inputMethodList().begin(), group.inputMethodList().end(),
-                                     [&](const auto& item) { return item.name() == id; });
-    if (!present || !manager.entry(std::string(id)))
+    if (!manager.entry(std::string(id)))
         return false;
     auto& items = group.inputMethodList();
+    const bool present = std::any_of(items.begin(), items.end(),
+                                     [&](const auto& item) { return item.name() == id; });
+    if (!present)
+        items.emplace_back(std::string(id));
     const auto keyboard = std::find_if(items.begin(), items.end(), [](const auto& item) {
         return item.name() == "keyboard-us";
     });

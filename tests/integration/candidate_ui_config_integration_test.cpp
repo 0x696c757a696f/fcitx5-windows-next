@@ -37,7 +37,8 @@ class TemporaryDirectory final {
 
 class ChildProcess final {
  public:
-  explicit ChildProcess(const fs::path& executable);
+  explicit ChildProcess(const fs::path& executable,
+                        std::vector<std::wstring> arguments = {L"--demo"});
 
   ~ChildProcess() {
     if (process_.hProcess != nullptr) {
@@ -109,8 +110,9 @@ std::wstring command_line(const fs::path& executable,
   return command;
 }
 
-ChildProcess::ChildProcess(const fs::path& executable) {
-  std::wstring command = command_line(executable, {L"--demo"});
+ChildProcess::ChildProcess(const fs::path& executable,
+                           std::vector<std::wstring> arguments) {
+  std::wstring command = command_line(executable, arguments);
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
   if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr,
@@ -220,6 +222,18 @@ RECT wait_for_stable_size(HWND window) {
   throw std::runtime_error("candidate UI size did not stabilize");
 }
 
+RECT wait_for_matching_size(HWND window, const RECT& expected) {
+  RECT current = window_rectangle(window);
+  for (unsigned attempt = 0; attempt < 200U; ++attempt) {
+    current = window_rectangle(window);
+    if (same_size(current, expected)) {
+      return wait_for_stable_size(window);
+    }
+    Sleep(25U);
+  }
+  return current;
+}
+
 std::string size_text(const RECT& rectangle) {
   return std::to_string(rectangle.right - rectangle.left) + "x" +
          std::to_string(rectangle.bottom - rectangle.top);
@@ -280,6 +294,27 @@ int wmain(int argc, wchar_t** argv) {
     const LONG horizontal_height = horizontal.bottom - horizontal.top;
     expect(horizontal_width > vertical_width && horizontal_height < vertical_height,
            "horizontal setting did not produce the expected candidate reflow");
+    expect(horizontal_height < 96,
+           "ordinary horizontal candidate preview unexpectedly used multiple rows");
+
+    candidate.close_window(window);
+
+    expect(run_process(control, {L"--set-presentation", L"dark", L"builtin:default",
+                                 L"horizontal", L"enabled", L"6", L"Microsoft YaHei"}) == 0,
+           "scroll-demo horizontal presentation save failed");
+    ChildProcess scroll_candidate(ui, {L"--demo", L"--scroll-demo"});
+    const HWND scroll_window = wait_for_window(scroll_candidate);
+    Sleep(300U);
+    const RECT horizontal_scroll = wait_for_stable_size(scroll_window);
+    const LONG horizontal_scroll_width = horizontal_scroll.right - horizontal_scroll.left;
+    const LONG horizontal_scroll_height = horizontal_scroll.bottom - horizontal_scroll.top;
+    expect(horizontal_scroll_width > 0 && horizontal_scroll_height > horizontal_height * 2,
+           "horizontal scroll mode did not expand into multiple candidate rows: ordinary " +
+               size_text(horizontal) + ", scroll " + size_text(horizontal_scroll));
+    expect(horizontal_scroll_width <= horizontal_width + 6,
+           "horizontal scroll mode became wider than the ordinary candidate row: ordinary " +
+               size_text(horizontal) + ", scroll " + size_text(horizontal_scroll));
+    scroll_candidate.close_window(scroll_window);
 
     const auto saved = read_text(root / L"data/config.toml");
     fcitx::windows::config::Config saved_config;
@@ -301,13 +336,14 @@ int wmain(int argc, wchar_t** argv) {
     expect(run_process(control, {L"--set-presentation", L"light", L"builtin:default",
                                  L"vertical", L"disabled", L"5", L"Segoe UI"}) == 0,
            "reversible vertical presentation save failed");
-    static_cast<void>(wait_for_size_change(window, horizontal));
-    const RECT restored = wait_for_stable_size(window);
+    ChildProcess restored_candidate(ui);
+    const HWND restored_window = wait_for_window(restored_candidate);
+    const RECT restored = wait_for_matching_size(restored_window, vertical);
     expect(same_size(restored, vertical),
            "reversible presentation did not restore candidate size: initial " +
                size_text(vertical) + ", horizontal " + size_text(horizontal) + ", restored " +
                size_text(restored));
-    candidate.close_window(window);
+    restored_candidate.close_window(restored_window);
 
     std::cout << "candidate UI live presentation contract passed: " << vertical_width << 'x'
               << vertical_height << " -> " << horizontal_width << 'x' << horizontal_height

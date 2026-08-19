@@ -94,7 +94,7 @@ private:
     std::unordered_map<std::uint64_t, bool> popupAllowedByContext_;
     Microsoft::WRL::ComPtr<ITfContext> activeContext_;
     std::uint64_t activeContextId_{};
-    std::string activeInputMethod_{kInputProfiles[0].engine};
+    std::string activeInputMethod_;
     bool imeActive_{};
     HANDLE notificationEvent_{};
     HANDLE notificationWait_{};

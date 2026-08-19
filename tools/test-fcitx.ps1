@@ -57,14 +57,18 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Copy-Item -LiteralPath (Join-Path $build "$Configuration/fcitx5-ui.exe") `
       -Destination (Join-Path $stage 'bin/fcitx5-ui.exe') -Force
+    Write-Host "Running real Fcitx acceptance: $architecture baseline"
     & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") $engine
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Running real Fcitx acceptance: $architecture typing-fuzz"
     & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
       $engine --typing-fuzz
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Running real Fcitx acceptance: $architecture chttrans"
     & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
       $engine --chttrans
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Running real Fcitx acceptance: $architecture safe-mode"
     & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
       $engine --safe-mode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -81,6 +85,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Could not select Rime in the isolated profile.' }
   foreach ($architecture in @('x64', 'x86')) {
     $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
+    Write-Host "Running real Fcitx acceptance: $architecture rime-lua"
     & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
       $engine --rime-lua
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

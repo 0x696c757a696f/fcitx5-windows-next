@@ -11,7 +11,7 @@
 - 数字行 `,`/`.`、`-`/`=`、`[`/`]` 翻页；
 - `;`/`'` 直接选择第 2/3 个候选；
 - `←`/`→` 在高亮之间移动焦点（不提交）；
-- **卷轴模式**（`scroll_mode=true` 且输入法提供真 bulk 候选）下按当前布局方向滚动：横向是多列网格，纵向是一列列表；数字键始终选择当前可见行/列里的 label 对应候选。
+- **卷轴模式**（`scroll_mode=true` 且输入法提供真 bulk 候选）下按当前布局方向滚动：横向是按行展开的网格，纵向是按列展开的网格；数字键始终选择当前高亮行/列里的 label 对应候选。
 
 `f3c472d` 后继续实测发现四类问题：数字标签与实际选择不是同一套索引；Enter/Space 缺少“提交文字等于高亮文字”的回归断言；每次按 `+`/`-` 都会把目标行顶到六行视口的第一行；`+`/`-`、`,`/`.`、`[`/`]` 等行移动键会被 Windows frontend 处理后又继续交给 Fcitx 处理，造成 UI snapshot 与最终提交候选错位。当前工作树按 v1.6 规格修正：候选 label 由 engine snapshot 唯一提供，UI 不再生成选择标签；卷轴行移动键在 engine 产出新 snapshot 后立即消费并返回。
 
@@ -41,7 +41,7 @@
 | `;` / `'` | 选择当前行/列第 2 / 第 3 个候选 |
 | Enter / Space | 提交**当前高亮**的候选 |
 
-- 横向卷轴显示 `candidate.page_size × 6 行`；纵向卷轴显示 `1 列 × candidate.page_size 行`。
+- 横向卷轴显示 `candidate.page_size × 6 行`；纵向卷轴显示 `6 列 × candidate.page_size 行`。
 - `candidate.page_size` 在设置里显示为“每行/每列候选数”：横向表示每行候选数，纵向表示每列候选数，范围 1–9。
 - 横向六行视口在内部移动时保持稳定；只有高亮跨过六行边界时才翻屏，最后不足六行时向前回填以保持窗口高度。纵向按列分组，最后一列不足时仍只显示该列。
 - 末行/末列不足 N 个时，不存在的数字标签不会选择越界候选。
@@ -91,11 +91,11 @@
 ### 3.2 UI —— `src/ui/ui_main.cpp` / `src/ui/candidate_layout.cpp`
 
 - **scrollEligible**：`scroll_mode && candidateBulk && candidatePageSize > 0`；
-- **scrollExpanded**：新 composition 第一帧保持折叠；同一 composition 内 authoritative `selectedCandidate >= candidatePageSize` 时展开，回到首行时收起。这样避免初始候选窗被 Fcitx 残留 page/cursor 状态直接摊成 6 行。
-- **scrollMode_ = scrollEligible && scrollExpanded_**：横向按 `candidatePageSize × 6 行` 网格渲染；纵向按 `1 列 × candidatePageSize 行` 列表渲染；UI 只渲染 engine snapshot 的 label。
+- **scrollExpanded**：`scrollEligible` 后立即展开。用户开启卷轴模式时，候选窗不再退回普通单行/单列分页。
+- **scrollMode_ = scrollEligible && scrollExpanded_**：横向按 `candidatePageSize × 6 行` 网格渲染；纵向按 `6 列 × candidatePageSize 行` 网格渲染；UI 只渲染 engine snapshot 的 label。
 - **对齐**：paint 前遍历可见候选测最宽 label → `labelColumnWidth`；`drawTextAt(text, bounds.left + labelColumnWidth)`；comment 起点再 +4px。
 - **视口跟随**：按六行分组计算 viewport；组内移动不改变 `firstVisible`，末屏向前回填，避免窗口高度变化。
-- **宽度**：scroll 布局按可见内容测宽，与普通候选窗一样只受 `max_width_dip` 上限约束；不再因为进入卷轴模式就固定拉到最大宽度。
+- **宽度**：横向 scroll 布局按普通候选行测宽，避免无意义拉长；纵向 scroll 是列主序，优先保留每列自然宽度，最多 6 列，只有超过工作区宽度时才减少可见列或裁剪单个超宽列。
 
 ### 3.3 键路由（TSF 层，前期已定）
 

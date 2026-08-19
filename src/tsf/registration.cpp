@@ -115,6 +115,12 @@ HRESULT registerProfiles() {
             break;
         }
     }
+    for (const auto& profile : kInputProfiles) {
+        result = unregisterProfileIfPresent(profiles, profile.language, profile.guid);
+        if (FAILED(result)) {
+            break;
+        }
+    }
     const auto ledger = loadDynamicProfileLedger();
     for (const auto& profile : ledger) {
         result = unregisterProfileIfPresent(profiles, profile.language, profile.guid);
@@ -122,7 +128,7 @@ HRESULT registerProfiles() {
             break;
         }
     }
-    const auto inputProfiles = loadInputProfiles();
+    const auto inputProfiles = loadRegistrableInputProfiles();
     for (const auto& profile : inputProfiles) {
         if (FAILED(result)) {
             break;
