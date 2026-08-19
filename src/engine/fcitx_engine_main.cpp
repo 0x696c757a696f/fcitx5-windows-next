@@ -240,6 +240,13 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
 
 int serve(const std::wstring& pipeName, unsigned testClientCount,
           const std::wstring& readyEventName, const std::wstring& stopEventName, bool safeMode) {
+#if defined(_MSC_VER)
+// The /analyze C6001 report below is a false positive: stopEvent is assigned
+// on every path before the worker threads are created, and the threads only
+// read it after that assignment.
+#pragma warning(push)
+#pragma warning(disable : 6001)
+#endif
     platform::RuntimeIdentity identity;
     platform::PipeSecurity pipeSecurity;
     if (!platform::queryCurrentIdentity(identity) || !identity.mayUseUserEngine() ||
@@ -274,13 +281,21 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     // of client sessions has completed (not after the first one), so concurrent
     // multi-client stress tests can run N clients against N workers.
     std::atomic<unsigned> completedClients{0};
-    HANDLE internalStopEvent =
-        testClientCount != 0 ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
-    HANDLE stopEvent =
-        stopEventName.empty() ? internalStopEvent
-                              : OpenEventW(SYNCHRONIZE, FALSE, stopEventName.c_str());
-    if (!stopEventName.empty() && !stopEvent)
-        return 3;
+    HANDLE internalStopEvent = nullptr;
+    HANDLE stopEvent = nullptr;
+    if (testClientCount != 0) {
+        internalStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!internalStopEvent) return 3;
+    }
+    if (!stopEventName.empty()) {
+        stopEvent = OpenEventW(SYNCHRONIZE, FALSE, stopEventName.c_str());
+        if (!stopEvent) {
+            if (internalStopEvent) CloseHandle(internalStopEvent);
+            return 3;
+        }
+    } else {
+        stopEvent = internalStopEvent;
+    }
     const unsigned workerCount = testClientCount == 0 ? 16U : testClientCount;
     std::vector<std::thread> workers;
     workers.reserve(workerCount);
@@ -358,6 +373,9 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     // executed after the caller timed out.
     std::cerr << "dispatcher-dropped=" << dispatcher.droppedCount() << '\n';
     return serverError.load();
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 }
 
 } // namespace
