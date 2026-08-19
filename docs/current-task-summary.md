@@ -1,7 +1,7 @@
 # 当前任务摘要（唯一执行入口）
 
 状态：current  
-更新时间：2026-08-18
+更新时间：2026-08-19
 
 后续执行只以 v1.6 工程规格、本摘要、当前工作树和本轮新证据为依据。聊天中的旧技术选型、
 重复 Bug 过程、旧 stage 与旧绿灯不再作为当前完成证明。
@@ -14,6 +14,39 @@ PowerShell、不需要理解内部 EXE，也不会因 Engine/UI 失效卡住宿�
 
 当前授权是 CHANGE：重新设计现行技术统筹文档并执行。但必须遵守阶段门禁，不能用已经
 存在的后期功能或历史测试跳过前置验收。
+
+## Core Correctness / Security Stabilization Sprint（2026-08-19，审计 1–8）
+
+针对外部源码级静态审计的 8 项缺陷，本轮已全部修复并提交（main 头 `ea81f86`）：
+
+1. **TSF key routing**（`1a27a4c`）：删 canHandle 白名单 → `shouldRouteToEngine`，标点/
+   修饰键/Ctrl+Space/Ctrl+Shift/Alt+Shift 可达 Fcitx；key-up 带 `kKeyFlagRelease` 转发；
+   engine 侧 VK_SHIFT/CONTROL/MENU 映射、翻页 isRelease 守卫、切换持久化（per-context
+   override）、启动预加载 enabled 输入法。
+2. **dispatcher 超时取消**（`8bca64e`）：绝对 deadline + 执行前检查，超时任务 DROP；
+   REG-DISPATCH-LATE 测试（`dispatcher-dropped=N`）。
+3+4. **config 单 parser + 内存快照**（`074ad97`）：engine 复用 config_parser（toml++），
+   删除手写第二套 TOML parser；processKey 不再每键读 config.toml。
+5. **Config 子进程 pipe 死锁**（`fc20fb3`）：runExecutable 改 reader thread 并发 drain；
+   process-execution-pipe 测试（64KiB/1MiB 输出）。
+6. **updater cleanup-previous 路径校验**（`d504893`）：is_lower_package_id +
+   is_ascii_token 导出 + lexically_normal 包含检查；updater-cleanup-previous 测试。
+7. **repository channel 绑定 + anti-rollback**（`5791c1f`）：verify_repository_index 强绑定
+   当前 release channel；按 channel 持久化 max_release_sequence，旧 sequence index 拒绝；
+   control-repository-rollback 测试。
+8. **IPC 并发上限**（`232244b`）：默认 worker 4→16，`--test-clients` ≤64；test 模式等全部
+   client 会话完成再停；ipc-multi-client-32 + ipc-idle-client 测试。
+9. **CI Release 修复**（`ea81f86`）：/analyze C6001 误报抑制（stopEvent 跨线程捕获）。
+
+验证：53/53 CTest（x64 Debug + Release）、engine 集成测试（x64/x86：主/fuzz/chttrans/
+safe-mode/REG-DISPATCH-LATE）、UI self/reload/interaction 自测、Release build.ps1 test
+全绿（含 runtime-security/secrets/licenses/locales/text-format）。GitHub Actions 三架构
+Core CI 以 `ea81f86` 为准等待最新结果（前序 run 34 因 C6001 失败，已修复）。
+
+未完成/已知：test-fcitx 的 rime-lua 用例为既有基线失败（与本次 sprint 无关）；审计第
+9–10 项（Win7/Office/LoL/Chrome/VS Code 实机矩阵、Release pipeline 首次真实运行）仍需
+用户实机/发布环境，本地无法代验。
+
 
 ## 唯一规格与环境约束
 
