@@ -652,12 +652,17 @@ class CandidateWindow final {
         if (compositionId_ != current.compositionId) {
             placement_ = ui::Placement::unlocked;
             compositionId_ = current.compositionId;
-            scrollExpanded_ = response.candidatePage > 0U;
+            // Open the scroll viewport as soon as the engine reports a bulk
+            // candidate list with scroll mode enabled; the panel is a fixed
+            // 6x6 grid and fills partially when fewer candidates are
+            // available. The old candidatePage>0 gate kept the panel closed
+            // for one-page corpora, which made the arrow/page keys appear to
+            // do nothing ('全是在第一行').
+            scrollExpanded_ = true;
             lastCandidatePage_.reset();
         }
         const bool scrollEligible = visualConfig_.scrollMode.value_or(false) &&
-                                    response.candidateBulk && response.candidatePageSize > 0U &&
-                                    current.candidates.size() > response.candidatePageSize;
+                                    response.candidateBulk && response.candidatePageSize > 0U;
         if (scrollEligible && lastCandidatePage_ && response.candidatePage != *lastCandidatePage_) {
             scrollExpanded_ = !(*lastCandidatePage_ == 1U && response.candidatePage == 0U);
         }
