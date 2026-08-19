@@ -660,39 +660,52 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                     if (scroll) {
                         // Scroll viewport: '+'/'-' move one row (the fixed
                         // 6-column grid) and land the highlight on the FIRST
-                        // candidate of the new row, not on the column the
-                        // cursor was on before. When the target row would fall
-                        // outside the candidates fetched so far, page the list
-                        // (still landing on the new page's first row).
+                        // candidate of the new row. While the scroll panel is
+                        // not yet open (still on page 0, which is how the UI
+                        // decides to expand it), first turn the page so the
+                        // candidatePage advances and the viewport opens; once
+                        // paged, the row moves inside the fetched candidates
+                        // without paging again.
                         constexpr int columns = 6;
+                        const int page = pageable->currentPage();
                         const int available = bounded;
-                        int cursor = 0;
-                        if (const auto found = impl_->selectedOverride.find(key);
-                            found != impl_->selectedOverride.end() && found->second) {
-                            cursor = static_cast<int>(*found->second);
-                        } else if (const auto* bulkCursor = list->toBulkCursor()) {
-                            const int global = bulkCursor->globalCursorIndex();
-                            if (global >= 0)
-                                cursor = global;
-                        } else {
-                            cursor = list->cursorIndex();
-                        }
-                        cursor = std::clamp(cursor, 0, (std::max)(0, available - 1));
-                        const int rowStart = (cursor / columns) * columns;
-                        int target = rowStart + (nextPage ? columns : -columns);
-                        if (target < 0 || target >= available) {
-                            if (target < 0 && pageable->hasPrev()) {
-                                pageable->prev();
-                                event.filter();
-                            } else if (target >= available && pageable->hasNext()) {
-                                pageable->next();
-                                event.filter();
-                            }
+                        if (page <= 0 && nextPage && pageable->hasNext()) {
+                            pageable->next();
+                            event.filter();
+                            impl_->selectedOverride[key] = 0;
+                        } else if (page <= 0 && prevPage && pageable->hasPrev()) {
+                            pageable->prev();
+                            event.filter();
                             impl_->selectedOverride[key] = 0;
                         } else {
-                            impl_->selectedOverride[key] =
-                                static_cast<std::uint32_t>(target);
-                            event.filter();
+                            int cursor = 0;
+                            if (const auto found = impl_->selectedOverride.find(key);
+                                found != impl_->selectedOverride.end() && found->second) {
+                                cursor = static_cast<int>(*found->second);
+                            } else if (const auto* bulkCursor = list->toBulkCursor()) {
+                                const int global = bulkCursor->globalCursorIndex();
+                                if (global >= 0)
+                                    cursor = global;
+                            } else {
+                                cursor = list->cursorIndex();
+                            }
+                            cursor = std::clamp(cursor, 0, (std::max)(0, available - 1));
+                            const int rowStart = (cursor / columns) * columns;
+                            int target = rowStart + (nextPage ? columns : -columns);
+                            if (target < 0 || target >= available) {
+                                if (target < 0 && pageable->hasPrev()) {
+                                    pageable->prev();
+                                    event.filter();
+                                } else if (target >= available && pageable->hasNext()) {
+                                    pageable->next();
+                                    event.filter();
+                                }
+                                impl_->selectedOverride[key] = 0;
+                            } else {
+                                impl_->selectedOverride[key] =
+                                    static_cast<std::uint32_t>(target);
+                                event.filter();
+                            }
                         }
                     } else if (nextPage && pageable->hasNext()) {
                         pageable->next();
