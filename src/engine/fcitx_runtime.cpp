@@ -708,14 +708,26 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                                 target = rowStart + (scrollNext ? columns : -columns);
                             }
                             if (target < 0 || target >= available) {
+                                // Target row falls outside the fetched
+                                // candidates: page to the next/previous
+                                // screen. Up/Down keep the current column on
+                                // the new screen's first row; '+'/'-' land on
+                                // the new screen's first row start. When there
+                                // is no further page, stay put instead of
+                                // jumping back to the first row.
                                 if (target < 0 && pageable->hasPrev()) {
                                     pageable->prev();
                                     event.filter();
+                                    impl_->selectedOverride[key] =
+                                        upDown ? static_cast<std::uint32_t>(cursor % columns)
+                                               : 0;
                                 } else if (target >= available && pageable->hasNext()) {
                                     pageable->next();
                                     event.filter();
+                                    impl_->selectedOverride[key] =
+                                        upDown ? static_cast<std::uint32_t>(cursor % columns)
+                                               : 0;
                                 }
-                                impl_->selectedOverride[key] = 0;
                             } else {
                                 impl_->selectedOverride[key] =
                                     static_cast<std::uint32_t>(target);
