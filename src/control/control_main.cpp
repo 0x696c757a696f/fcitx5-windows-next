@@ -13,6 +13,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -240,6 +251,51 @@ RepositoryFiles repositoryFiles(const fs::path& dataRoot) {
             installationRoot() / L"security/trusted-keys.json"};
 }
 
+// Anti-rollback state: the highest release_sequence ever accepted for this
+// channel. A signed-but-stale repository index (lower sequences) is rejected
+// so a compromised/old CDN cannot silently roll packages back. Only an
+// explicit manual rollback path is allowed to move versions downwards.
+fs::path repositorySequencePath(const fs::path& dataRoot, std::string_view channel) {
+    return dataRoot / L"repository" /
+           (L"sequence-" + widen(std::string(channel)) + L".json");
+}
+
+std::uint64_t readMaxSequence(const fs::path& dataRoot, std::string_view channel) {
+    std::string text;
+    if (!readUtf8(repositorySequencePath(dataRoot, channel), text))
+        return 0;
+    // Simple line format: max_release_sequence=N
+    constexpr std::string_view marker = "max_release_sequence=";
+    const auto position = text.find(marker);
+    if (position == std::string::npos)
+        return 0;
+    std::uint64_t maximum = 0;
+    try {
+        maximum = std::stoull(text.substr(position + marker.size()));
+    } catch (...) {
+        return 0;
+    }
+    return maximum;
+}
+
+void writeMaxSequence(const fs::path& dataRoot, std::string_view channel,
+                      std::uint64_t maximum) {
+    const auto path = repositorySequencePath(dataRoot, channel);
+    std::error_code ignored;
+    fs::create_directories(path.parent_path(), ignored);
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << "format_version=1\n"
+           << "channel=" << channel << '\n'
+           << "max_release_sequence=" << maximum << '\n';
+}
+
+std::uint64_t indexMaxSequence(const fcitx::package::RepositoryIndex& repository) {
+    std::uint64_t maximum = 0;
+    for (const auto& entry : repository.packages)
+        maximum = std::max(maximum, entry.release_sequence);
+    return maximum;
+}
+
 fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
     const auto files = repositoryFiles(dataRoot);
     std::string index;
@@ -247,8 +303,17 @@ fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
         throw fcitx::package::PackageError("repository_unavailable",
                                            "repository cache is unavailable");
     const auto signature = readBinary(files.signature, 16U * 1024U);
-    return fcitx::package::verify_repository_index(
-        index, signature, fcitx::package::read_trusted_keys(files.keyring));
+    const auto repository = fcitx::package::verify_repository_index(
+        index, signature, fcitx::package::read_trusted_keys(files.keyring),
+        fcitx::windows::kReleaseIdentity.channel_name);
+    // Defense in depth: the cached index itself must not be an older
+    // sequence than what was previously accepted, even if the cache file was
+    // replaced outside the refresh path.
+    if (indexMaxSequence(repository) < readMaxSequence(dataRoot, repository.channel))
+        throw fcitx::package::PackageError(
+            "rollback_rejected",
+            "cached repository index is older than the accepted release sequence");
+    return repository;
 }
 
 void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
@@ -274,14 +339,26 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
     if (!readUtf8(incomingIndex, index))
         throw fcitx::package::PackageError("invalid_repository", "repository index is unreadable");
     const auto signature = readBinary(incomingSignature, 16U * 1024U);
-    static_cast<void>(fcitx::package::verify_repository_index(
-        index, signature, fcitx::package::read_trusted_keys(files.keyring)));
+    const auto repository = fcitx::package::verify_repository_index(
+        index, signature, fcitx::package::read_trusted_keys(files.keyring),
+        fcitx::windows::kReleaseIdentity.channel_name);
+    // Anti-rollback: reject an index whose release sequences are older than
+    // the highest previously accepted for this channel. The signature proves
+    // who published it, not that it is the latest; the sequence check keeps
+    // a stale-but-valid index from being treated as an update.
+    const auto maximum = indexMaxSequence(repository);
+    const auto accepted = readMaxSequence(dataRoot, repository.channel);
+    if (maximum < accepted)
+        throw fcitx::package::PackageError("rollback_rejected",
+                                           "repository index is older than the accepted "
+                                           "release sequence");
     if (!MoveFileExW(incomingSignature.c_str(), files.signature.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ||
         !MoveFileExW(incomingIndex.c_str(), files.index.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         throw fcitx::package::PackageError("io_error", "repository cache publication failed");
     }
+    writeMaxSequence(dataRoot, repository.channel, maximum);
 }
 
 std::string typeName(fcitx::package::PackageType type) {

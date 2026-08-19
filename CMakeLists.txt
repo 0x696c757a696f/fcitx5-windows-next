@@ -410,6 +410,19 @@ if(BUILD_TESTING)
   add_test(NAME updater-cleanup-previous
            COMMAND fcitx5_updater_cleanup_test "$<TARGET_FILE:fcitx5_updater>")
 
+  add_executable(fcitx5_control_repository_rollback_test
+                 tests/unit/control_repository_rollback_test.cpp)
+  target_include_directories(
+    fcitx5_control_repository_rollback_test SYSTEM PRIVATE
+    "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+  target_link_libraries(
+    fcitx5_control_repository_rollback_test PRIVATE fcitx5::package_core bcrypt crypt32)
+  add_dependencies(fcitx5_control_repository_rollback_test fcitx5_control)
+  fcitx_apply_project_options(fcitx5_control_repository_rollback_test)
+  fcitx_apply_binary_hardening(fcitx5_control_repository_rollback_test)
+  add_test(NAME control-repository-rollback
+           COMMAND fcitx5_control_repository_rollback_test "$<TARGET_FILE:fcitx5_control>")
+
   add_executable(fcitx5_provider_policy_test tests/unit/provider_policy_test.cpp)
   target_link_libraries(fcitx5_provider_policy_test PRIVATE fcitx5::provider_policy)
   fcitx_apply_project_options(fcitx5_provider_policy_test)

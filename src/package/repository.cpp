@@ -69,7 +69,8 @@ bool https_url(std::string_view value) {
 
 RepositoryIndex verify_repository_index(std::string_view index_bytes,
                                         std::span<const std::byte> signature,
-                                        std::span<const TrustedKey> trusted_keys) {
+                                        std::span<const TrustedKey> trusted_keys,
+                                        std::string_view expectedChannel) {
   if (index_bytes.empty() || index_bytes.size() > kMaximumManifestBytes) {
     repository_fail("repository index exceeds its resource budget");
   }
@@ -89,9 +90,12 @@ RepositoryIndex verify_repository_index(std::string_view index_bytes,
   result.channel = text(document, "channel", 16U);
   result.generated_at = text(document, "generated_at", 64U);
   result.key_id = text(document, "key_id", 64U);
-  if ((result.channel != "stable" && result.channel != "beta" &&
-       result.channel != "nightly") || !token(result.key_id, "-_.")) {
-    repository_fail("repository identity is invalid");
+  // The repository channel must match the release identity of this build, not
+  // merely be one of the three known names: a stable build must never accept
+  // a beta or nightly index (and vice versa), so a stale or misdirected index
+  // cannot steer a different channel's packages into this installation.
+  if (result.channel != expectedChannel || !token(result.key_id, "-_.")) {
+    repository_fail("repository identity is invalid or channel mismatch");
   }
   const auto key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
     return candidate.id == result.key_id;

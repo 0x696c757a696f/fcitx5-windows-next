@@ -146,7 +146,7 @@ void activate_staged_package(const std::filesystem::path& staged_root,
 [[nodiscard]] std::vector<TrustedKey> read_trusted_keys(const std::filesystem::path& path);
 [[nodiscard]] RepositoryIndex verify_repository_index(
     std::string_view index_bytes, std::span<const std::byte> signature,
-    std::span<const TrustedKey> trusted_keys);
+    std::span<const TrustedKey> trusted_keys, std::string_view expectedChannel);
 [[nodiscard]] const RepositoryEntry* find_repository_package(
     const RepositoryIndex& index, std::string_view package_id,
     std::string_view architecture) noexcept;

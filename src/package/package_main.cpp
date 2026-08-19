@@ -1,5 +1,6 @@
 #include "package_core.h"
 
+#include <fcitx5_windows/release_identity.h>
 #include <fcitx5_windows/version.h>
 
 #include <filesystem>
@@ -102,11 +103,17 @@ int wmain(int argc, wchar_t** argv) {
       }
       return 0;
     }
-    if (argc == 5 && std::wstring_view(argv[1]) == L"--verify-repository") {
+    if ((argc == 5 || argc == 6) && std::wstring_view(argv[1]) == L"--verify-repository") {
       const auto index_bytes = read_file(argv[2], kMaximumManifestBytes);
       const auto signature_bytes = read_file(argv[3], 16U * 1024U);
+      // Optional expected channel (defaults to this build's release channel);
+      // the index must match it exactly.
+      const std::string expectedChannel =
+          argc == 6 ? std::filesystem::path(argv[5]).string()
+                    : std::string(fcitx::windows::kReleaseIdentity.channel_name);
       const auto index = verify_repository_index(
-          index_bytes, std::as_bytes(std::span(signature_bytes)), read_trusted_keys(argv[4]));
+          index_bytes, std::as_bytes(std::span(signature_bytes)),
+          read_trusted_keys(argv[4]), expectedChannel);
       for (const auto& entry : index.packages) {
         std::cout << entry.id << '\t' << entry.version << '\t' << entry.release_sequence << '\t'
                   << entry.architecture << '\t' << entry.sha256 << '\t' << entry.download_url

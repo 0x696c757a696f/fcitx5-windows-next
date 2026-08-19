@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <cstring>
 #include <iostream>
 #include <span>
 #include <string>
@@ -279,7 +280,7 @@ int main() {
         "\"sha256\":\"" + file_hash + "\",\"dependencies\":[]}]}";
     const auto repository_signature = signer.sign(repository_bytes);
     const auto repository = verify_repository_index(repository_bytes, repository_signature,
-                                                    std::span(&trusted, 1U));
+                                                    std::span(&trusted, 1U), "stable");
     expect(repository.packages.size() == 1U &&
                find_repository_package(repository, "fcitx5-rime", "x64") != nullptr,
            "signed repository did not expose its package");
@@ -287,7 +288,17 @@ int main() {
     repository_tampered.replace(repository_tampered.find("Rime input"), 4U, "Fake");
     expect_error("invalid_signature", [&] {
       static_cast<void>(verify_repository_index(repository_tampered, repository_signature,
-                                                std::span(&trusted, 1U)));
+                                                std::span(&trusted, 1U), "stable"));
+    });
+    // Channel binding: a stable build must reject a beta/nightly index even
+    // though the signature is valid.
+    auto repository_beta = repository_bytes;
+    repository_beta.replace(repository_beta.find("\"channel\":\"stable\""),
+                            std::strlen("\"channel\":\"stable\""), "\"channel\":\"beta\"");
+    const auto beta_signature = signer.sign(repository_beta);
+    expect_error("invalid_repository", [&] {
+      static_cast<void>(verify_repository_index(repository_beta, beta_signature,
+                                                std::span(&trusted, 1U), "stable"));
     });
     const auto staged = stage_verified_payload(manifest, manifest_bytes, payload, install, "tx-one",
                                                signature, trusted);
