@@ -9,7 +9,7 @@
 namespace fcitx::windows::protocol {
 
 inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
-inline constexpr std::uint16_t kVersion = 9;
+inline constexpr std::uint16_t kVersion = 10;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
@@ -20,6 +20,7 @@ inline constexpr std::size_t kMaxCandidates = 128;
 inline constexpr std::size_t kMaxCandidateFieldUtf8 = 4096;
 inline constexpr std::size_t kMaxLogicalKeyUtf8 = 64;
 inline constexpr std::size_t kMaxInputMethodIdUtf8 = 64;
+inline constexpr std::size_t kMaxSurroundingTextUtf8 = 16U * 1024U;
 
 enum class MessageType : std::uint16_t {
     helloRequest = 1,
@@ -108,6 +109,10 @@ struct KeyRequest {
     std::uint64_t keyboardLayout{};
     std::string logicalTextUtf8;
     std::string inputMethodUtf8;
+    bool surroundingTextValid{};
+    std::string surroundingTextUtf8;
+    std::uint32_t surroundingCursor{};
+    std::uint32_t surroundingAnchor{};
     CaretRect caret;
 };
 
@@ -135,6 +140,14 @@ struct KeyResponse {
     std::uint32_t candidatePageSize{};
     bool candidateBulk{};
     bool candidateEnd{};
+    bool deleteSurroundingText{};
+    std::int32_t deleteSurroundingOffset{};
+    std::uint32_t deleteSurroundingSize{};
+    bool forwardKey{};
+    std::uint32_t forwardKeySym{};
+    std::uint32_t forwardKeyStates{};
+    std::int32_t forwardKeyCode{};
+    bool forwardKeyRelease{};
     CaretRect caret;
 };
 

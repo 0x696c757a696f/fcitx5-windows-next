@@ -57,9 +57,26 @@ constexpr GUID japaneseProfileGuid() noexcept {
 
 inline constexpr GUID kJapaneseProfileGuid = japaneseProfileGuid();
 
-inline constexpr std::array<InputProfile, 2> kInputProfiles{{
+constexpr GUID rimeProfileGuid() noexcept {
+    if constexpr (kReleaseIdentity.channel == ReleaseChannel::stable) {
+        return {0xa79f94c2, 0xbd7e, 0x4498,
+                {0x8f, 0xe5, 0x65, 0x22, 0xf8, 0x3c, 0xd4, 0xd0}};
+    } else if constexpr (kReleaseIdentity.channel == ReleaseChannel::beta) {
+        return {0xa2327e53, 0xb15c, 0x4560,
+                {0x99, 0x7a, 0x7c, 0x4f, 0x56, 0x42, 0xbf, 0x75}};
+    } else {
+        return {0xd37249ca, 0xa365, 0x4aa2,
+                {0xb8, 0xb1, 0xbe, 0x98, 0x4b, 0x6a, 0xf9, 0x5e}};
+    }
+}
+
+inline constexpr GUID kRimeProfileGuid = rimeProfileGuid();
+
+inline constexpr std::array<InputProfile, 3> kInputProfiles{{
     {"zh-cn-pinyin", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
      kLanguageProfileGuid, L"Fcitx5 Pinyin", "pinyin", true},
+    {"zh-cn-rime", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
+     kRimeProfileGuid, L"Fcitx5 Rime", "rime", true},
     {"ja-jp-mozc", "ja-JP", MAKELANGID(LANG_JAPANESE, SUBLANG_DEFAULT),
      kJapaneseProfileGuid, L"Fcitx5 Mozc", "mozc", true},
 }};

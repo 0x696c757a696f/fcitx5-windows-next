@@ -24,6 +24,7 @@ int main() {
                            static_cast<std::uint32_t>('A'), 0,
                            0x1e, false, true, 0x04090409ULL, "a",
                            "pinyin",
+                           true, "你a", 2, 2,
                            CaretRect{true, -100, 200, -98, 222, 144}};
     const auto bytes = encode(input);
     FrameView frame;
@@ -38,6 +39,10 @@ int main() {
                     output.keyboardLayout == input.keyboardLayout &&
                     output.logicalTextUtf8 == input.logicalTextUtf8 &&
                     output.inputMethodUtf8 == input.inputMethodUtf8 &&
+                    output.surroundingTextValid == input.surroundingTextValid &&
+                    output.surroundingTextUtf8 == input.surroundingTextUtf8 &&
+                    output.surroundingCursor == input.surroundingCursor &&
+                    output.surroundingAnchor == input.surroundingAnchor &&
                     output.caret == input.caret,
                 "roundtrip changed key request")) {
         return 1;
@@ -62,6 +67,14 @@ int main() {
     responseInput.selectedCandidate = 0;
     responseInput.candidateTotal = 1;
     responseInput.candidateVisibility = 1;
+    responseInput.deleteSurroundingText = true;
+    responseInput.deleteSurroundingOffset = -1;
+    responseInput.deleteSurroundingSize = 1;
+    responseInput.forwardKey = true;
+    responseInput.forwardKeySym = 0xff0d;
+    responseInput.forwardKeyStates = 4;
+    responseInput.forwardKeyCode = 28;
+    responseInput.forwardKeyRelease = true;
     responseInput.caret = input.caret;
     const auto responseBytes = encode(responseInput);
     KeyResponse responseOutput;
@@ -74,6 +87,14 @@ int main() {
                     responseOutput.candidates == responseInput.candidates &&
                     responseOutput.selectedCandidate == 0 &&
                     responseOutput.candidateVisibility == 1 &&
+                    responseOutput.deleteSurroundingText &&
+                    responseOutput.deleteSurroundingOffset == -1 &&
+                    responseOutput.deleteSurroundingSize == 1 &&
+                    responseOutput.forwardKey &&
+                    responseOutput.forwardKeySym == 0xff0d &&
+                    responseOutput.forwardKeyStates == 4 &&
+                    responseOutput.forwardKeyCode == 28 &&
+                    responseOutput.forwardKeyRelease &&
                     responseOutput.caret == responseInput.caret,
                 "roundtrip changed response")) {
         return 1;
@@ -161,7 +182,8 @@ int main() {
                                        static_cast<std::uint32_t>(random() & 0xffU),
                                        (random() & 1U) != 0,
                                        (random() & 1U) != 0,
-                                       random(), "x", "pinyin"};
+                                       random(), "x", "pinyin",
+                                       true, "\xe4\xbd\xa0", 1, 1};
         KeyRequest propertyOutput;
         if (!expect(decodeFrame(encode(propertyInput), frame) &&
                         decode(frame, propertyOutput) &&
@@ -173,7 +195,15 @@ int main() {
                         propertyOutput.popupAllowed == propertyInput.popupAllowed &&
                         propertyOutput.keyboardLayout == propertyInput.keyboardLayout &&
                         propertyOutput.logicalTextUtf8 == propertyInput.logicalTextUtf8 &&
-                        propertyOutput.inputMethodUtf8 == propertyInput.inputMethodUtf8,
+                        propertyOutput.inputMethodUtf8 == propertyInput.inputMethodUtf8 &&
+                        propertyOutput.surroundingTextValid ==
+                            propertyInput.surroundingTextValid &&
+                        propertyOutput.surroundingTextUtf8 ==
+                            propertyInput.surroundingTextUtf8 &&
+                        propertyOutput.surroundingCursor ==
+                            propertyInput.surroundingCursor &&
+                        propertyOutput.surroundingAnchor ==
+                            propertyInput.surroundingAnchor,
                     "key request property roundtrip failed")) return 1;
 
         std::string commit(static_cast<std::size_t>(random() % (kMaxCommitUtf8 + 1)), '\0');
@@ -207,18 +237,38 @@ int main() {
     }
     KeyRequest invalidCaret{Metadata{88, 0, 1, 1, 1, 0, 0}, 'A', 0,
                             0, false, true, 0, {}, {},
+                            false, {}, 0, 0,
                             CaretRect{true, 100, 100, 90, 110, 96}};
     if (!expect(encode(invalidCaret).empty(), "inverted caret rectangle encoded")) return 1;
     KeyRequest oversizedLogical{Metadata{89, 0, 1, 1, 1, 0, 0}, 'A', 0,
                                 0, false, true, 0,
-                                std::string(kMaxLogicalKeyUtf8 + 1, 'x'), {}};
+                                std::string(kMaxLogicalKeyUtf8 + 1, 'x'), {},
+                                false, {}, 0, 0};
     if (!expect(encode(oversizedLogical).empty(),
                 "oversize logical key text encoded")) return 1;
     KeyRequest oversizedInputMethod{Metadata{90, 0, 1, 1, 1, 0, 0}, 'A', 0,
                                     0, false, true, 0, {},
-                                    std::string(kMaxInputMethodIdUtf8 + 1, 'x')};
+                                    std::string(kMaxInputMethodIdUtf8 + 1, 'x'),
+                                    false, {}, 0, 0};
     if (!expect(encode(oversizedInputMethod).empty(),
                 "oversize input method id encoded")) return 1;
+    KeyRequest invalidSurroundingCursor{Metadata{91, 0, 1, 1, 1, 0, 0}, 'A', 0,
+                                        0, false, true, 0, {}, {},
+                                        true, "\xe4\xbd\xa0", 2, 1};
+    if (!expect(encode(invalidSurroundingCursor).empty(),
+                "out-of-range surrounding cursor encoded")) return 1;
+    KeyRequest invalidSurroundingState{Metadata{92, 0, 1, 1, 1, 0, 0}, 'A', 0,
+                                       0, false, true, 0, {}, {},
+                                       false, "stale", 0, 0};
+    if (!expect(encode(invalidSurroundingState).empty(),
+                "invalid surrounding snapshot carried text")) return 1;
+    if (!expect(encode(KeyResponse{Metadata{1, 1, 1, 1, 1, 0, 0},
+                                   Status::ok, true, {}, {}, 0, {}, UINT32_MAX,
+                                   0, 0, 0, 0, false, false, false, -1, 1})
+                    .empty(),
+                "disabled delete-surrounding carried payload")) {
+        return 1;
+    }
     if (!expect(encode(KeyResponse{Metadata{1, 1, 1, 1, 1, 0, 0}, Status::ok, true,
                                    {}, std::string(kMaxPreeditUtf8 + 1, 'x'), 0})
                     .empty(),

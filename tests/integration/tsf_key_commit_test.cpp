@@ -7,9 +7,11 @@
 #include <objbase.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <new>
 #include <string>
 #include <vector>
@@ -20,6 +22,10 @@ using Microsoft::WRL::ComPtr;
 
 class TestRange final : public ITfRange {
 public:
+    TestRange() : document_(std::make_shared<std::wstring>()) {}
+    TestRange(std::shared_ptr<std::wstring> document, std::size_t start, std::size_t end)
+        : document_(std::move(document)), start_(start), end_(end) {}
+
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
         if (!object) return E_POINTER;
         *object = nullptr;
@@ -36,13 +42,30 @@ public:
     ULONG STDMETHODCALLTYPE Release() noexcept override {
         return references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
     }
-    HRESULT STDMETHODCALLTYPE GetText(TfEditCookie, DWORD, WCHAR*, ULONG,
-                                      ULONG*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetText(TfEditCookie, DWORD, WCHAR* text, ULONG count,
+                                      ULONG* fetched) noexcept override {
+        if (!fetched || (!text && count != 0)) return E_POINTER;
+        const auto begin = (std::min)(start_, document_->size());
+        const auto finish = (std::min)((std::max)(begin, end_), document_->size());
+        const auto available = finish - begin;
+        const auto copied = (std::min)(available, static_cast<std::size_t>(count));
+        if (copied != 0) {
+            std::copy_n(document_->data() + begin, copied, text);
+        }
+        *fetched = static_cast<ULONG>(copied);
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE SetText(TfEditCookie, DWORD, const WCHAR* text,
                                       LONG length) noexcept override {
         if (length < 0 || (!text && length != 0)) return E_INVALIDARG;
         try {
-            text_.assign(text ? text : L"", static_cast<std::size_t>(length));
+            const std::wstring replacement(text ? text : L"",
+                                           static_cast<std::size_t>(length));
+            const auto begin = (std::min)(start_, document_->size());
+            const auto finish = (std::min)((std::max)(begin, end_), document_->size());
+            document_->replace(begin, finish - begin, replacement);
+            start_ = begin;
+            end_ = begin + replacement.size();
             return S_OK;
         } catch (...) {
             return E_OUTOFMEMORY;
@@ -55,11 +78,31 @@ public:
                                           IUnknown**) noexcept override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE InsertEmbedded(TfEditCookie, DWORD,
                                              IDataObject*) noexcept override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE ShiftStart(TfEditCookie, LONG, LONG*,
-                                         const TF_HALTCOND*) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE ShiftStart(TfEditCookie, LONG count, LONG* shifted,
+                                         const TF_HALTCOND*) noexcept override {
+        if (!shifted) return E_POINTER;
+        const auto original = start_;
+        if (count < 0) {
+            const auto requested = static_cast<std::size_t>(-count);
+            start_ = requested > start_ ? 0 : start_ - requested;
+        } else {
+            start_ = (std::min)(end_, start_ + static_cast<std::size_t>(count));
+        }
+        *shifted = count < 0 ? -static_cast<LONG>(original - start_)
+                             : static_cast<LONG>(start_ - original);
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE ShiftEnd(TfEditCookie, LONG count, LONG* shifted,
                                        const TF_HALTCOND*) noexcept override {
         if (!shifted) return E_POINTER;
+        const auto original = end_;
+        if (count < 0) {
+            const auto requested = static_cast<std::size_t>(-count);
+            end_ = requested > end_ - start_ ? start_ : end_ - requested;
+        } else {
+            end_ = (std::min)(document_->size(), end_ + static_cast<std::size_t>(count));
+        }
+        (void)original;
         *shifted = count;
         return S_OK;
     }
@@ -88,14 +131,25 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetGravity(TfEditCookie, TfGravity,
                                          TfGravity) noexcept override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE Clone(ITfRange**) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Clone(ITfRange** range) noexcept override {
+        if (!range) return E_POINTER;
+        *range = new (std::nothrow) TestRange(document_, start_, end_);
+        return *range ? S_OK : E_OUTOFMEMORY;
+    }
     HRESULT STDMETHODCALLTYPE GetContext(ITfContext**) noexcept override { return E_NOTIMPL; }
 
-    [[nodiscard]] const std::wstring& text() const noexcept { return text_; }
+    [[nodiscard]] const std::wstring& text() const noexcept { return *document_; }
+    void setDocumentText(std::wstring text, std::size_t cursor) {
+        *document_ = std::move(text);
+        start_ = (std::min)(cursor, document_->size());
+        end_ = start_;
+    }
 
 private:
     std::atomic<ULONG> references_{1};
-    std::wstring text_;
+    std::shared_ptr<std::wstring> document_;
+    std::size_t start_{};
+    std::size_t end_{};
 };
 
 class TestComposition final : public ITfComposition {
@@ -339,6 +393,9 @@ public:
     [[nodiscard]] const std::wstring& text() const noexcept { return range_.text(); }
     [[nodiscard]] bool compositionEnded() const noexcept { return ended_; }
     [[nodiscard]] bool compositionStarted() const noexcept { return started_; }
+    void setDocumentText(std::wstring text, std::size_t cursor) {
+        range_.setDocumentText(std::move(text), cursor);
+    }
 
 private:
     std::atomic<ULONG> references_{1};
@@ -695,7 +752,7 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
         } else {
             TestContext context;
             const HRESULT activeProfile = threadManager.simulateActiveProfile(
-                fcitx::windows::tsf::kInputProfiles[1].guid);
+                fcitx::windows::tsf::kInputProfiles[2].guid);
             BOOL preeditTestEaten = FALSE;
             BOOL duplicatePreeditTestEaten = FALSE;
             BOOL preeditEaten = FALSE;

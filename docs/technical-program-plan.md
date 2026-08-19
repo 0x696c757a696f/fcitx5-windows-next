@@ -67,6 +67,13 @@ Advanced 页面只暴露 generic Fcitx addon/config surface：读取 Fcitx 原�
 描述并以受限、类型化方式呈现；Windows 层不维护巨型硬编码 input-method/addon 配置映射。
 确有高价值的一线设置可以提升为普通页面，但必须仍以 Fcitx 原生配置为单一语义来源。
 
+TSF input profile 也采用同一原则：源码内只保留首装/冷启动必须稳定存在的 baseline profile
+（例如 Pinyin、Rime、Mozc），后续由插件或配置工具写入用户数据目录下的 `tsf-profiles.tsv`
+surface（`id<TAB>bcp47<TAB>engine<TAB>description`）。注册器从该 surface 派生稳定
+per-channel GUID 并写入 `tsf-profile-ledger.tsv`，repair/uninstall 以 ledger 清理曾注册的
+动态 profile，避免插件移除后留下 Windows 语言栏“幽灵键盘”。TSF DLL 只读取 profile→engine
+映射，不加载 Fcitx addon、Rime、Lua 或配置 GUI。
+
 ## Rust 迁移约束
 
 Rust 迁移按 risk-driven 组件推进。每个组件必须先在 C++ 中修正语义并冻结 contract、

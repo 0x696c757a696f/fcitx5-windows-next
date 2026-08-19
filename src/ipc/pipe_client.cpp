@@ -235,6 +235,14 @@ bool PipeClient::acceptKeyResponse(const protocol::KeyResponse& response,
     result.candidatePage = response.candidatePage;
     result.candidateTotal = response.candidateTotal;
     result.candidateVisibility = response.candidateVisibility;
+    result.deleteSurroundingText = response.deleteSurroundingText;
+    result.deleteSurroundingOffset = response.deleteSurroundingOffset;
+    result.deleteSurroundingSize = response.deleteSurroundingSize;
+    result.forwardKey = response.forwardKey;
+    result.forwardKeySym = response.forwardKeySym;
+    result.forwardKeyStates = response.forwardKeyStates;
+    result.forwardKeyCode = response.forwardKeyCode;
+    result.forwardKeyRelease = response.forwardKeyRelease;
     result.caret = response.caret;
     result.candidates.reserve(response.candidates.size());
     for (const auto& source : response.candidates) {
@@ -257,7 +265,11 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
                             std::uint32_t scanCode, bool extendedKey,
                             std::uint64_t keyboardLayout,
                             std::string_view logicalText,
-                            std::string_view inputMethod) noexcept {
+                            std::string_view inputMethod,
+                            bool surroundingTextValid,
+                            std::string_view surroundingText,
+                            std::uint32_t surroundingCursor,
+                            std::uint32_t surroundingAnchor) noexcept {
     result = {};
     try {
         const bool newContext = contexts_.find(contextId) == contexts_.end();
@@ -277,7 +289,9 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
             protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
                                contextState.compositionId, contextState.revision},
             virtualKey, keyFlags, scanCode, extendedKey, popupAllowed, keyboardLayout,
-            std::string(logicalText), std::string(inputMethod), caret};
+            std::string(logicalText), std::string(inputMethod),
+            surroundingTextValid, std::string(surroundingText),
+            surroundingCursor, surroundingAnchor, caret};
         std::vector<std::uint8_t> responseBytes;
         if (!transact(protocol::encode(request), responseBytes, deadline)) {
             return false;

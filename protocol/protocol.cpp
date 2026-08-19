@@ -162,6 +162,52 @@ bool validCaret(const CaretRect& caret) noexcept {
            caret.dpi <= 960;
 }
 
+bool utf8CodePointCount(std::string_view text, std::size_t& count) noexcept {
+    count = 0;
+    for (std::size_t index = 0; index < text.size();) {
+        const auto byte = static_cast<unsigned char>(text[index]);
+        std::size_t length = 0;
+        if ((byte & 0x80U) == 0) {
+            length = 1;
+        } else if ((byte & 0xe0U) == 0xc0U) {
+            length = 2;
+            if (byte < 0xc2U)
+                return false;
+        } else if ((byte & 0xf0U) == 0xe0U) {
+            length = 3;
+        } else if ((byte & 0xf8U) == 0xf0U) {
+            length = 4;
+            if (byte > 0xf4U)
+                return false;
+        } else {
+            return false;
+        }
+        if (index + length > text.size())
+            return false;
+        for (std::size_t offset = 1; offset < length; ++offset) {
+            if ((static_cast<unsigned char>(text[index + offset]) & 0xc0U) != 0x80U)
+                return false;
+        }
+        index += length;
+        ++count;
+    }
+    return true;
+}
+
+bool validSurroundingText(const KeyRequest& message) noexcept {
+    if (!message.surroundingTextValid) {
+        return message.surroundingTextUtf8.empty() &&
+               message.surroundingCursor == 0 &&
+               message.surroundingAnchor == 0;
+    }
+    if (message.surroundingTextUtf8.size() > kMaxSurroundingTextUtf8)
+        return false;
+    std::size_t length = 0;
+    return utf8CodePointCount(message.surroundingTextUtf8, length) &&
+           message.surroundingCursor <= length &&
+           message.surroundingAnchor <= length;
+}
+
 bool validKeyResponsePayload(const KeyResponse& message) noexcept {
     if (message.commitUtf8.size() > kMaxCommitUtf8 ||
         message.preeditUtf8.size() > kMaxPreeditUtf8 ||
@@ -173,6 +219,13 @@ bool validKeyResponsePayload(const KeyResponse& message) noexcept {
         message.candidateTotal < message.candidates.size() || !validCaret(message.caret))
         return false;
     if (message.candidateVisibility == 0 && !message.candidates.empty())
+        return false;
+    if (!message.deleteSurroundingText &&
+        (message.deleteSurroundingOffset != 0 || message.deleteSurroundingSize != 0))
+        return false;
+    if (!message.forwardKey &&
+        (message.forwardKeySym != 0 || message.forwardKeyStates != 0 ||
+         message.forwardKeyCode != 0 || message.forwardKeyRelease))
         return false;
     return std::all_of(message.candidates.begin(), message.candidates.end(),
                        [](const CandidateRecord& candidate) {
@@ -190,6 +243,7 @@ bool validKeyRequestPayload(const KeyRequest& message) noexcept {
     return message.scanCode <= 0xffU &&
            message.logicalTextUtf8.size() <= kMaxLogicalKeyUtf8 &&
            message.inputMethodUtf8.size() <= kMaxInputMethodIdUtf8 &&
+           validSurroundingText(message) &&
            validCaret(message.caret);
 }
 
@@ -297,6 +351,10 @@ std::vector<std::uint8_t> encode(const KeyRequest& message) {
     writer.appendU64(message.keyboardLayout);
     writer.appendString(message.logicalTextUtf8);
     writer.appendString(message.inputMethodUtf8);
+    writer.appendU8(message.surroundingTextValid ? 1U : 0U);
+    writer.appendString(message.surroundingTextUtf8);
+    writer.appendU32(message.surroundingCursor);
+    writer.appendU32(message.surroundingAnchor);
     writer.appendU8(message.caret.valid ? 1U : 0U);
     writer.appendI32(message.caret.left);
     writer.appendI32(message.caret.top);
@@ -327,6 +385,14 @@ std::vector<std::uint8_t> encode(const KeyResponse& message) {
     writer.appendU32(message.candidatePageSize);
     writer.appendU8(message.candidateBulk ? 1U : 0U);
     writer.appendU8(message.candidateEnd ? 1U : 0U);
+    writer.appendU8(message.deleteSurroundingText ? 1U : 0U);
+    writer.appendI32(message.deleteSurroundingOffset);
+    writer.appendU32(message.deleteSurroundingSize);
+    writer.appendU8(message.forwardKey ? 1U : 0U);
+    writer.appendU32(message.forwardKeySym);
+    writer.appendU32(message.forwardKeyStates);
+    writer.appendI32(message.forwardKeyCode);
+    writer.appendU8(message.forwardKeyRelease ? 1U : 0U);
     writer.appendU8(message.caret.valid ? 1U : 0U);
     writer.appendI32(message.caret.left);
     writer.appendI32(message.caret.top);
@@ -438,6 +504,7 @@ bool decode(const FrameView& frame, KeyRequest& message) noexcept {
     std::uint8_t valid = 0;
     std::uint8_t extended = 0;
     std::uint8_t popupAllowed = 0;
+    std::uint8_t surroundingTextValid = 0;
     try {
         return reader.readU32(message.virtualKey) && reader.readU32(message.keyFlags) &&
                reader.readU32(message.scanCode) && reader.readU8(extended) && extended <= 1 &&
@@ -445,12 +512,17 @@ bool decode(const FrameView& frame, KeyRequest& message) noexcept {
                reader.readU64(message.keyboardLayout) &&
                reader.readString(message.logicalTextUtf8) &&
                reader.readString(message.inputMethodUtf8) &&
+               reader.readU8(surroundingTextValid) && surroundingTextValid <= 1 &&
+               reader.readString(message.surroundingTextUtf8) &&
+               reader.readU32(message.surroundingCursor) &&
+               reader.readU32(message.surroundingAnchor) &&
                reader.readU8(valid) && valid <= 1 && reader.readI32(message.caret.left) &&
                reader.readI32(message.caret.top) && reader.readI32(message.caret.right) &&
                reader.readI32(message.caret.bottom) && reader.readU32(message.caret.dpi) &&
                reader.done() &&
                ((message.extendedKey = extended != 0),
                 (message.popupAllowed = popupAllowed != 0),
+                (message.surroundingTextValid = surroundingTextValid != 0),
                 (message.caret.valid = valid != 0),
                 validKeyRequestPayload(message));
     } catch (...) {
@@ -467,6 +539,9 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
     std::uint8_t caretValid = 0;
     std::uint8_t candidateBulk = 0;
     std::uint8_t candidateEnd = 0;
+    std::uint8_t deleteSurroundingText = 0;
+    std::uint8_t forwardKey = 0;
+    std::uint8_t forwardKeyRelease = 0;
     std::uint32_t candidateCount = 0;
     message.metadata = frame.metadata;
     try {
@@ -478,6 +553,14 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
             !reader.readU8(message.candidateVisibility) ||
             !reader.readU32(message.candidatePageSize) || !reader.readU8(candidateBulk) ||
             candidateBulk > 1 || !reader.readU8(candidateEnd) || candidateEnd > 1 ||
+            !reader.readU8(deleteSurroundingText) || deleteSurroundingText > 1 ||
+            !reader.readI32(message.deleteSurroundingOffset) ||
+            !reader.readU32(message.deleteSurroundingSize) ||
+            !reader.readU8(forwardKey) || forwardKey > 1 ||
+            !reader.readU32(message.forwardKeySym) ||
+            !reader.readU32(message.forwardKeyStates) ||
+            !reader.readI32(message.forwardKeyCode) ||
+            !reader.readU8(forwardKeyRelease) || forwardKeyRelease > 1 ||
             !reader.readU8(caretValid) || caretValid > 1 || !reader.readI32(message.caret.left) ||
             !reader.readI32(message.caret.top) || !reader.readI32(message.caret.right) ||
             !reader.readI32(message.caret.bottom) || !reader.readU32(message.caret.dpi)) {
@@ -486,6 +569,9 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
         message.caret.valid = caretValid != 0;
         message.candidateBulk = candidateBulk != 0;
         message.candidateEnd = candidateEnd != 0;
+        message.deleteSurroundingText = deleteSurroundingText != 0;
+        message.forwardKey = forwardKey != 0;
+        message.forwardKeyRelease = forwardKeyRelease != 0;
         message.candidates.clear();
         message.candidates.reserve(candidateCount);
         for (std::uint32_t index = 0; index < candidateCount; ++index) {

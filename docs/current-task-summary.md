@@ -27,6 +27,9 @@ PowerShell、不需要理解内部 EXE，也不会因 Engine/UI 失效卡住宿�
    C++↔Rust correctness differential 是切换门槛，性能对比排第二，不用性能结果掩盖语义不一致。
 3. **Advanced surface**：Advanced 配置只提供 generic Fcitx addon/config surface，
    复用 Fcitx 原生配置模型；避免维护 Windows 专用巨型硬编码 input-method/addon 映射表。
+   TSF profile 同样分成 baseline profiles 与动态 surface：插件/配置工具通过
+   `tsf-profiles.tsv` 声明 `id/BCP-47/engine/description`，注册器派生稳定 GUID 并用
+   ledger 清理旧动态 profile，不把后续 addon 全硬编码进 TSF DLL。
 4. **CI 分档**：PR / Nightly / Win7 VM milestone / Stable 四档执行；每档按风险选矩阵，
    不跑 OS × 架构 × 宿主 × DPI × 输入法的笛卡尔积。
 

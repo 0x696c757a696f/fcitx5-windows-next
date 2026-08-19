@@ -37,6 +37,14 @@ struct KeyResult {
     std::uint32_t candidatePage{};
     std::uint32_t candidateTotal{};
     std::uint8_t candidateVisibility{};
+    bool deleteSurroundingText{};
+    std::int32_t deleteSurroundingOffset{};
+    std::uint32_t deleteSurroundingSize{};
+    bool forwardKey{};
+    std::uint32_t forwardKeySym{};
+    std::uint32_t forwardKeyStates{};
+    std::int32_t forwardKeyCode{};
+    bool forwardKeyRelease{};
     protocol::CaretRect caret;
 };
 
@@ -58,7 +66,11 @@ public:
                                   bool extendedKey = false,
                                   std::uint64_t keyboardLayout = 0,
                                   std::string_view logicalText = {},
-                                  std::string_view inputMethod = {}) noexcept;
+                                  std::string_view inputMethod = {},
+                                  bool surroundingTextValid = false,
+                                  std::string_view surroundingText = {},
+                                  std::uint32_t surroundingCursor = 0,
+                                  std::uint32_t surroundingAnchor = 0) noexcept;
     [[nodiscard]] bool selectCandidate(std::uint32_t targetProcessId,
                                        std::uint64_t expectedEngineEpoch,
                                        std::uint64_t contextId,

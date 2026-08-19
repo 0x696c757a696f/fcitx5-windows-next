@@ -192,9 +192,22 @@ struct KeyHash {
 
 class EngineInputContext final : public InputContext {
   public:
+    struct DeleteSurroundingOperation {
+        std::int32_t offset{};
+        std::uint32_t size{};
+    };
+
+    struct ForwardKeyOperation {
+        std::uint32_t sym{};
+        std::uint32_t states{};
+        std::int32_t code{};
+        bool release{};
+    };
+
     explicit EngineInputContext(InputContextManager& manager) : InputContext(manager, "tsf") {
         setEnablePreedit(true);
         setCapabilityFlags(CapabilityFlags{CapabilityFlag::Preedit,
+                                           CapabilityFlag::SurroundingText,
                                            CapabilityFlag::ClientSideInputPanel});
         created();
     }
@@ -204,14 +217,49 @@ class EngineInputContext final : public InputContext {
     const char* frontend() const override { return "tsf"; }
 
     std::string takeCommit() { return std::exchange(commit_, {}); }
+    std::optional<DeleteSurroundingOperation> takeDeleteSurroundingText() {
+        return std::exchange(deleteSurroundingText_, std::nullopt);
+    }
+    std::optional<ForwardKeyOperation> takeForwardKey() {
+        return std::exchange(forwardKey_, std::nullopt);
+    }
+    bool applySurroundingText(const protocol::KeyRequest& request) {
+        if (request.surroundingTextValid) {
+            surroundingText().setText(request.surroundingTextUtf8,
+                                      request.surroundingCursor,
+                                      request.surroundingAnchor);
+            surroundingTextValid_ = true;
+            return true;
+        }
+        if (surroundingTextValid_) {
+            surroundingText().invalidate();
+            surroundingTextValid_ = false;
+            return true;
+        }
+        surroundingText().invalidate();
+        return false;
+    }
 
   private:
     void commitStringImpl(const std::string& text) override { commit_ += text; }
-    void forwardKeyImpl(const ForwardKeyEvent&) override {}
-    void deleteSurroundingTextImpl(int, unsigned int) override {}
+    void forwardKeyImpl(const ForwardKeyEvent& key) override {
+        const auto rawKey = key.rawKey();
+        forwardKey_ = ForwardKeyOperation{
+            static_cast<std::uint32_t>(rawKey.sym()),
+            static_cast<std::uint32_t>(rawKey.states().toInteger()),
+            rawKey.code(),
+            key.isRelease()};
+    }
+    void deleteSurroundingTextImpl(int offset, unsigned int size) override {
+        deleteSurroundingText_ = DeleteSurroundingOperation{
+            static_cast<std::int32_t>(offset), static_cast<std::uint32_t>(size)};
+    }
     void updatePreeditImpl() override {}
 
     std::string commit_;
+    std::optional<DeleteSurroundingOperation> deleteSurroundingText_;
+    std::optional<ForwardKeyOperation> forwardKey_;
+    bool surroundingTextValid_{};
 };
 
 Key keyFromRequest(const protocol::KeyRequest& request) {
@@ -444,10 +492,38 @@ class FcitxRuntime::Impl final {
         auto found = contexts.find(key);
         if (found != contexts.end())
             return *found->second;
+        for (auto iterator = contexts.begin(); iterator != contexts.end();) {
+            if (iterator->first.processId == key.processId &&
+                iterator->first.contextId == key.contextId &&
+                iterator->first.connectionId != key.connectionId) {
+                iterator = eraseContext(iterator);
+            } else {
+                ++iterator;
+            }
+        }
         auto context = std::make_unique<EngineInputContext>(instance->inputContextManager());
         auto* result = context.get();
         contexts.emplace(key, std::move(context));
         return *result;
+    }
+
+    decltype(contexts)::iterator eraseContext(decltype(contexts)::iterator iterator) {
+        auto* context = iterator->second.get();
+        try {
+            context->reset();
+            if (context->hasFocus())
+                context->focusOut();
+        } catch (...) {
+        }
+        if (focused == context)
+            focused = nullptr;
+        revisions.erase(iterator->first);
+        compositions.erase(iterator->first);
+        carets.erase(iterator->first);
+        pendingStates.erase(iterator->first);
+        inputMethodOverridden.erase(iterator->first);
+        selectedOverride.erase(iterator->first);
+        return contexts.erase(iterator);
     }
 
     void applyFcitxPageSize() {
@@ -467,6 +543,18 @@ class FcitxRuntime::Impl final {
         auto [preedit, caretOffset] = readPreedit(context);
         output.preeditUtf8 = std::move(preedit);
         output.preeditCaretUtf8 = caretOffset;
+        if (const auto operation = context.takeDeleteSurroundingText()) {
+            output.deleteSurroundingText = true;
+            output.deleteSurroundingOffset = operation->offset;
+            output.deleteSurroundingSize = operation->size;
+        }
+        if (const auto operation = context.takeForwardKey()) {
+            output.forwardKey = true;
+            output.forwardKeySym = operation->sym;
+            output.forwardKeyStates = operation->states;
+            output.forwardKeyCode = operation->code;
+            output.forwardKeyRelease = operation->release;
+        }
         const auto candidateList = context.inputPanel().candidateList();
         const bool hasCandidates = candidateList && !candidateList->empty();
         auto& composition = compositions[key];
@@ -619,6 +707,9 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
             impl_->focused->focusOut();
         context.focusIn();
         impl_->focused = &context;
+    }
+    if (context.applySurroundingText(request)) {
+        context.updateSurroundingText();
     }
     const auto& group = impl_->instance->inputMethodManager().currentGroup();
     const std::string selected =
@@ -981,15 +1072,7 @@ bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {
 void FcitxRuntime::forgetConnection(std::uint64_t connectionId) {
     for (auto iterator = impl_->contexts.begin(); iterator != impl_->contexts.end();) {
         if (iterator->first.connectionId == connectionId) {
-            if (impl_->focused == iterator->second.get())
-                impl_->focused = nullptr;
-            impl_->revisions.erase(iterator->first);
-            impl_->compositions.erase(iterator->first);
-            impl_->carets.erase(iterator->first);
-            impl_->pendingStates.erase(iterator->first);
-            impl_->inputMethodOverridden.erase(iterator->first);
-            impl_->selectedOverride.erase(iterator->first);
-            iterator = impl_->contexts.erase(iterator);
+            iterator = impl_->eraseContext(iterator);
         } else {
             ++iterator;
         }

@@ -1,5 +1,6 @@
 #include "text_service.h"
 
+#include "input_profiles.h"
 #include "input_scope_policy.h"
 #include "module.h"
 #include "pipe_security.h"
@@ -13,6 +14,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace fcitx::windows::tsf {
@@ -21,6 +23,14 @@ namespace {
 constexpr wchar_t kCandidateDismissMessageName[] =
     L"Fcitx5WindowsNext.CandidateDismiss.v1";
 constexpr UINT kCandidateStateAvailableMessage = WM_APP + 0x315;
+constexpr LONG kMaxSurroundingTextChars = 4096;
+
+struct SurroundingTextSnapshot {
+    bool valid{};
+    std::string textUtf8;
+    std::uint32_t cursor{};
+    std::uint32_t anchor{};
+};
 
 std::wstring modulePath() {
     std::wstring path(32'768, L'\0');
@@ -52,6 +62,46 @@ std::wstring expectedEnginePath() {
     const auto packaged = dll.parent_path().parent_path().parent_path() / L"bin" /
                           L"fcitx5-engine.exe";
     return packaged.wstring();
+}
+
+std::string utf8FromWide(std::wstring_view input) {
+    if (input.empty()) return {};
+    const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input.data(),
+                                            static_cast<int>(input.size()), nullptr, 0,
+                                            nullptr, nullptr);
+    if (required <= 0) return {};
+    std::string output(static_cast<std::size_t>(required), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input.data(),
+                            static_cast<int>(input.size()), output.data(), required,
+                            nullptr, nullptr) != required) {
+        return {};
+    }
+    return output;
+}
+
+std::uint32_t utf16CodePointCount(std::wstring_view text) noexcept {
+    std::uint32_t count = 0;
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const wchar_t ch = text[index];
+        if (ch >= 0xd800 && ch <= 0xdbff && index + 1 < text.size() &&
+            text[index + 1] >= 0xdc00 && text[index + 1] <= 0xdfff) {
+            ++index;
+        }
+        ++count;
+    }
+    return count;
+}
+
+bool rangeText(TfEditCookie editCookie, ITfRange* range, std::wstring& output) noexcept {
+    if (!range) return false;
+    std::wstring buffer(static_cast<std::size_t>(kMaxSurroundingTextChars), L'\0');
+    ULONG fetched = 0;
+    const HRESULT result = range->GetText(editCookie, 0, buffer.data(),
+                                          static_cast<ULONG>(buffer.size()), &fetched);
+    if (FAILED(result)) return false;
+    buffer.resize(fetched);
+    output = std::move(buffer);
+    return true;
 }
 
 std::wstring engineEndpoint() {
@@ -136,8 +186,10 @@ bool readSensitiveInputScope(ITfContext* context, TfEditCookie editCookie,
 
 class ContextReadSession final : public ITfEditSession {
 public:
-    ContextReadSession(ITfContext* context, protocol::CaretRect* caret, bool* sensitive)
-        : context_(context), caret_(caret), sensitive_(sensitive) {}
+    ContextReadSession(ITfContext* context, protocol::CaretRect* caret, bool* sensitive,
+                       SurroundingTextSnapshot* surrounding)
+        : context_(context), caret_(caret), sensitive_(sensitive),
+          surrounding_(surrounding) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID interfaceId, void** object) noexcept override {
         if (!object) return E_POINTER;
@@ -173,6 +225,41 @@ public:
         range.Attach(selection.range);
         *sensitive_ = readSensitiveInputScope(context_.Get(), editCookie, range.Get());
         if (*sensitive_) return S_OK;
+        if (surrounding_) {
+            Microsoft::WRL::ComPtr<ITfRange> before;
+            Microsoft::WRL::ComPtr<ITfRange> after;
+            std::wstring beforeText;
+            std::wstring selectedText;
+            std::wstring afterText;
+            if (SUCCEEDED(range->Clone(&before)) && SUCCEEDED(range->Clone(&after))) {
+                LONG shifted = 0;
+                if (SUCCEEDED(before->Collapse(editCookie, TF_ANCHOR_START)) &&
+                    SUCCEEDED(before->ShiftStart(editCookie, -kMaxSurroundingTextChars,
+                                                &shifted, nullptr)) &&
+                    SUCCEEDED(after->Collapse(editCookie, TF_ANCHOR_END)) &&
+                    SUCCEEDED(after->ShiftEnd(editCookie, kMaxSurroundingTextChars,
+                                             &shifted, nullptr)) &&
+                    rangeText(editCookie, before.Get(), beforeText) &&
+                    rangeText(editCookie, range.Get(), selectedText) &&
+                    rangeText(editCookie, after.Get(), afterText)) {
+                    const auto beforeLength = utf16CodePointCount(beforeText);
+                    const auto selectedLength = utf16CodePointCount(selectedText);
+                    const std::wstring combined = beforeText + selectedText + afterText;
+                    const auto textUtf8 = utf8FromWide(combined);
+                    if (combined.empty() || !textUtf8.empty()) {
+                        surrounding_->valid = true;
+                        surrounding_->textUtf8 = textUtf8;
+                        if (selection.style.ase == TF_AE_START) {
+                            surrounding_->cursor = beforeLength;
+                            surrounding_->anchor = beforeLength + selectedLength;
+                        } else {
+                            surrounding_->cursor = beforeLength + selectedLength;
+                            surrounding_->anchor = beforeLength;
+                        }
+                    }
+                }
+            }
+        }
         Microsoft::WRL::ComPtr<ITfContextView> view;
         result = context_->GetActiveView(&view);
         if (FAILED(result) || !view) return FAILED(result) ? result : E_FAIL;
@@ -196,11 +283,14 @@ private:
     Microsoft::WRL::ComPtr<ITfContext> context_;
     protocol::CaretRect* caret_{};
     bool* sensitive_{};
+    SurroundingTextSnapshot* surrounding_{};
 };
 
 bool queryContext(ITfContext* context, TfClientId clientId, protocol::CaretRect* caret,
-                  bool* sensitive) noexcept {
-    auto* session = new (std::nothrow) ContextReadSession(context, caret, sensitive);
+                  bool* sensitive,
+                  SurroundingTextSnapshot* surrounding = nullptr) noexcept {
+    auto* session = new (std::nothrow) ContextReadSession(context, caret, sensitive,
+                                                          surrounding);
     if (!session) return false;
     HRESULT sessionResult = E_FAIL;
     const HRESULT requestResult = context->RequestEditSession(
@@ -835,7 +925,9 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
             caret = found->second;
         }
         bool sensitive = false;
-        if (queryContext(context, clientId_, &caret, &sensitive) && caret.valid) {
+        SurroundingTextSnapshot surrounding;
+        if (queryContext(context, clientId_, &caret, &sensitive, &surrounding) &&
+            caret.valid) {
             lastCaretRects_[contextId] = caret;
         }
         if (sensitive) {
@@ -867,7 +959,8 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
         const bool engineResponded = client_.processKey(
             contextId, static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult, caret,
             popupAllowed, scanCodeFromKeyData(virtualKey, keyData), extendedFromKeyData(keyData),
-            currentKeyboardLayout(), {}, activeInputMethod_);
+            currentKeyboardLayout(), {}, activeInputMethod_, surrounding.valid,
+            surrounding.textUtf8, surrounding.cursor, surrounding.anchor);
         if (!engineResponded) {
             if (candidateUiElementId_ != TF_INVALID_UIELEMENTID && uiElementManager_) {
                 (void)uiElementManager_->EndUIElement(candidateUiElementId_);
@@ -1043,9 +1136,8 @@ HRESULT TextService::OnActivated(REFCLSID classId, REFGUID profileGuid,
     if (!activated || !IsEqualGUID(classId, kTextServiceClsid)) {
         return S_OK;
     }
-    const InputProfile* profile = profileForGuid(profileGuid);
-    if (profile) {
-        activeInputMethod_ = profile->engine;
+    if (const auto inputMethod = inputMethodForProfileGuid(profileGuid)) {
+        activeInputMethod_ = *inputMethod;
     }
     return S_OK;
 }

@@ -138,6 +138,14 @@ protocol::KeyResponse makeStateResponse(
     response.candidatePageSize = runtimeResult.candidatePageSize;
     response.candidateBulk = runtimeResult.candidateBulk;
     response.candidateEnd = runtimeResult.candidateEnd;
+    response.deleteSurroundingText = runtimeResult.deleteSurroundingText;
+    response.deleteSurroundingOffset = runtimeResult.deleteSurroundingOffset;
+    response.deleteSurroundingSize = runtimeResult.deleteSurroundingSize;
+    response.forwardKey = runtimeResult.forwardKey;
+    response.forwardKeySym = runtimeResult.forwardKeySym;
+    response.forwardKeyStates = runtimeResult.forwardKeyStates;
+    response.forwardKeyCode = runtimeResult.forwardKeyCode;
+    response.forwardKeyRelease = runtimeResult.forwardKeyRelease;
     response.caret = runtimeResult.caret;
     return response;
 }
@@ -155,6 +163,14 @@ protocol::KeyResponse makeHiddenPresentation(protocol::KeyResponse response) {
     response.candidatePageSize = 0;
     response.candidateBulk = false;
     response.candidateEnd = true;
+    response.deleteSurroundingText = false;
+    response.deleteSurroundingOffset = 0;
+    response.deleteSurroundingSize = 0;
+    response.forwardKey = false;
+    response.forwardKeySym = 0;
+    response.forwardKeyStates = 0;
+    response.forwardKeyCode = 0;
+    response.forwardKeyRelease = false;
     return response;
 }
 

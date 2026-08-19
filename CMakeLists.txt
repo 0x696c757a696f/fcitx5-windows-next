@@ -279,6 +279,7 @@ add_library(
   src/tsf/module.cpp
   src/tsf/candidate_ui_element.cpp
   src/tsf/input_scope_guids.cpp
+  src/tsf/input_profiles.cpp
   src/tsf/registration.cpp
   src/tsf/text_service.cpp
   src/tsf/fcitx5-tsf.def
@@ -595,6 +596,7 @@ if(BUILD_TESTING)
                    $<TARGET_FILE:fcitx5_crash_engine_fixture>)
 
   add_executable(fcitx5_tsf_module_test tests/unit/tsf_module_test.cpp)
+  target_sources(fcitx5_tsf_module_test PRIVATE src/tsf/input_profiles.cpp)
   target_include_directories(fcitx5_tsf_module_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
   target_link_libraries(fcitx5_tsf_module_test PRIVATE fcitx5::release_identity uuid ole32)
   fcitx_apply_project_options(fcitx5_tsf_module_test)

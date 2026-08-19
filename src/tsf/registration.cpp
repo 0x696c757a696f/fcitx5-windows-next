@@ -1,4 +1,5 @@
 #include "guids.h"
+#include "input_profiles.h"
 #include "module.h"
 
 #include <Windows.h>
@@ -114,19 +115,28 @@ HRESULT registerProfiles() {
             break;
         }
     }
-    for (const auto& profile : kInputProfiles) {
+    const auto ledger = loadDynamicProfileLedger();
+    for (const auto& profile : ledger) {
+        result = unregisterProfileIfPresent(profiles, profile.language, profile.guid);
+        if (FAILED(result)) {
+            break;
+        }
+    }
+    const auto inputProfiles = loadInputProfiles();
+    for (const auto& profile : inputProfiles) {
         if (FAILED(result)) {
             break;
         }
         result = profiles->RegisterProfile(
-            kTextServiceClsid, profile.language, profile.guid, profile.description,
-            static_cast<ULONG>(std::wcslen(profile.description)), modulePath.c_str(),
+            kTextServiceClsid, profile.language, profile.guid, profile.description.c_str(),
+            static_cast<ULONG>(profile.description.size()), modulePath.c_str(),
             static_cast<ULONG>(modulePath.size()), 0, nullptr, 0, TRUE, 0);
     }
     profiles->Release();
     if (FAILED(result)) {
         return result;
     }
+    (void)storeDynamicProfileLedger(inputProfiles);
 
     ITfCategoryMgr* categories = nullptr;
     result = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
@@ -155,7 +165,13 @@ HRESULT unregisterProfiles() {
     if (FAILED(result)) {
         return result;
     }
-    for (const auto& profile : kInputProfiles) {
+    for (const auto& profile : loadInputProfiles()) {
+        const HRESULT profileResult =
+            unregisterProfileIfPresent(profiles, profile.language, profile.guid);
+        if (FAILED(profileResult) && SUCCEEDED(result))
+            result = profileResult;
+    }
+    for (const auto& profile : loadDynamicProfileLedger()) {
         const HRESULT profileResult =
             unregisterProfileIfPresent(profiles, profile.language, profile.guid);
         if (FAILED(profileResult) && SUCCEEDED(result))

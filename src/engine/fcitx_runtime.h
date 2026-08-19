@@ -36,6 +36,14 @@ struct RuntimeResult {
     std::uint32_t candidatePageSize{};
     bool candidateBulk{};
     bool candidateEnd{};
+    bool deleteSurroundingText{};
+    std::int32_t deleteSurroundingOffset{};
+    std::uint32_t deleteSurroundingSize{};
+    bool forwardKey{};
+    std::uint32_t forwardKeySym{};
+    std::uint32_t forwardKeyStates{};
+    std::int32_t forwardKeyCode{};
+    bool forwardKeyRelease{};
     protocol::CaretRect caret;
 };
 

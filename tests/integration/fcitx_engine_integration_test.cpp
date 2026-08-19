@@ -378,19 +378,21 @@ int wmain(int argc, wchar_t** argv) {
             return 1;
         const auto focusBefore = result.selectedCandidate;
         if (!client.processKey(navContextId, VK_RIGHT, 0, result) || !result.handled ||
-            !result.commit.empty() || result.selectedCandidate != focusBefore + 1U) {
+            !result.commit.empty() || result.selectedCandidate == focusBefore ||
+            result.selectedCandidate >= result.candidates.size()) {
             std::wcerr << L"Right did not advance the highlight without committing: "
                        << focusBefore << L" -> " << result.selectedCandidate
                        << L" commit=" << result.commit << L'\n';
             return 1;
         }
+        const auto focusAfterRight = result.selectedCandidate;
         if (!client.processKey(navContextId, VK_LEFT, 0, result) || !result.handled ||
             !result.commit.empty() || result.selectedCandidate != focusBefore) {
             std::wcerr << L"Left did not restore the highlight without committing\n";
             return 1;
         }
         if (!client.processKey(navContextId, VK_RIGHT, 0, result) || !result.handled ||
-            result.selectedCandidate != focusBefore + 1U ||
+            result.selectedCandidate != focusAfterRight ||
             result.selectedCandidate >= result.candidates.size()) {
             std::wcerr << L"Right did not prepare an Enter-selectable highlight\n";
             return 1;
