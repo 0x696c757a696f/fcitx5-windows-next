@@ -15,18 +15,18 @@ opacity = 1.0
 
 [common.candidate.geometry]
 # 所有尺寸均为 DIP，会随每个显示器的 DPI 缩放。
-padding_x_dip = 12.0
-padding_y_dip = 9.0
+padding_x_dip = 10.0
+padding_y_dip = 6.0
 corner_radius_dip = 12.0
 border_width_dip = 1.0
 row_gap_dip = 1.0
 column_gap_dip = 12.0
-item_padding_x_dip = 10.0
-item_padding_y_dip = 8.0
+item_padding_x_dip = 8.0
+item_padding_y_dip = 4.0
 
 [common.fonts.candidate]
 families = ["Microsoft YaHei", "system"]
-size_dip = 20.0
+size_dip = 18.0
 weight = 400
 
 [common.fonts.annotation]

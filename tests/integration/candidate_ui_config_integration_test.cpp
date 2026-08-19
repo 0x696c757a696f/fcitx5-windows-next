@@ -258,7 +258,7 @@ int wmain(int argc, wchar_t** argv) {
              fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 
     expect(run_process(control, {L"--set-presentation", L"light", L"builtin:default",
-                                 L"vertical", L"disabled", L"Segoe UI"}) == 0,
+                                 L"vertical", L"disabled", L"5", L"Segoe UI"}) == 0,
            "initial vertical presentation save failed");
     ChildProcess candidate(ui);
     const HWND window = wait_for_window(candidate);
@@ -272,7 +272,7 @@ int wmain(int argc, wchar_t** argv) {
            "vertical candidate preview has an invalid size");
 
     expect(run_process(control, {L"--set-presentation", L"dark", L"builtin:default",
-                                 L"horizontal", L"enabled", L"Microsoft YaHei"}) == 0,
+                                 L"horizontal", L"enabled", L"6", L"Microsoft YaHei"}) == 0,
            "live horizontal presentation save failed");
     static_cast<void>(wait_for_size_change(window, vertical));
     const RECT horizontal = wait_for_stable_size(window);
@@ -291,13 +291,15 @@ int wmain(int argc, wchar_t** argv) {
     expect(saved_config.orientation == fcitx::windows::config::Orientation::horizontal,
            "candidate orientation was not persisted");
     expect(saved_config.scrollMode == true, "scroll mode was not persisted");
+    expect(saved_config.candidatePageSize && *saved_config.candidatePageSize == 6,
+           "candidate page size was not persisted");
     expect(saved_config.candidateFont.families &&
                !saved_config.candidateFont.families->empty() &&
                saved_config.candidateFont.families->front() == "Microsoft YaHei",
            "candidate font was not persisted");
 
     expect(run_process(control, {L"--set-presentation", L"light", L"builtin:default",
-                                 L"vertical", L"disabled", L"Segoe UI"}) == 0,
+                                 L"vertical", L"disabled", L"5", L"Segoe UI"}) == 0,
            "reversible vertical presentation save failed");
     static_cast<void>(wait_for_size_change(window, horizontal));
     const RECT restored = wait_for_stable_size(window);

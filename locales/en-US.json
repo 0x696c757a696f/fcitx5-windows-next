@@ -27,6 +27,7 @@
   ,"candidate.vertical": "Vertical"
   ,"candidate.horizontal": "Horizontal"
   ,"candidate.scroll": "Scroll mode (expanded grid)"
+  ,"candidate.page_size": "Candidates per row/column"
   ,"action.apply": "Apply"
   ,"action.preview": "Preview candidates"
   ,"action.diagnostics": "Refresh diagnostics"

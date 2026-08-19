@@ -278,6 +278,7 @@ constexpr int kPackageInstall = 115;
 constexpr int kPackageRemove = 116;
 constexpr int kPackageToggle = 117;
 constexpr int kScrollMode = 118;
+constexpr int kPageSize = 119;
 constexpr int kNavGeneral = 130;
 constexpr int kNavAppearance = 131;
 constexpr int kNavTheme = 132;
@@ -292,6 +293,7 @@ constexpr int kFontLabel = 203;
 constexpr int kLayoutLabel = 204;
 constexpr int kPackagesTitle = 205;
 constexpr int kSaveStatus = 206;
+constexpr int kPageSizeLabel = 207;
 
 // Transient notices ("保存成功" / 命令错误 / 重启完成 / 修复已开始) are
 // cleared automatically a few seconds after they appear.
@@ -596,6 +598,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     COMMAND_HANDLER(kStartup, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kAppearance, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kTheme, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kPageSize, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kVertical, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kHorizontal, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kScrollMode, BN_CLICKED, onDirty)
@@ -680,6 +683,13 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             28, kHorizontal);
         add(L"BUTTON", get("candidate.scroll"), BS_AUTOCHECKBOX | WS_TABSTOP, 420, 204, 300, 28,
             kScrollMode);
+        add(L"STATIC", get("candidate.page_size"), 0, 250, 236, 150, 24, kPageSizeLabel);
+        add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, 420, 230, 120, 180, kPageSize);
+        for (int value = 1; value <= 9; ++value) {
+            const std::wstring text = std::to_wstring(value);
+            SendMessageW(control(kPageSize), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        }
+        SendMessageW(control(kPageSize), CB_SETCURSEL, 4, 0);
         SendMessageW(control(kVertical), BM_SETCHECK, BST_CHECKED, 0);
         add(L"BUTTON", get("action.apply"), BS_DEFPUSHBUTTON | WS_TABSTOP, 650, 264, 120, 36,
             kApply);
@@ -712,7 +722,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         for (const int id : {kStartup,         kInputMethod,    kInputMethodLabel, kAppearance,
                              kAppearanceLabel, kTheme,          kThemeLabel,       kFont,
                              kFontLabel,       kVertical,       kHorizontal,       kLayoutLabel,
-                             kScrollMode,      kApply,          kPreview,          kRestart,
+                             kScrollMode,      kPageSize,       kPageSizeLabel,    kApply,
+                             kPreview,         kRestart,
                              kDiagnostics,     kRepair,         kStatus,           kPackages,
                              kPackageRefresh,  kPackageInstall, kPackageToggle,    kPackageRemove,
                              kPackagesTitle,   kSaveStatus})
@@ -726,7 +737,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         for (const int id : {kStartup, kInputMethod, kInputMethodLabel})
             show(id, general);
         for (const int id : {kAppearance, kAppearanceLabel, kVertical, kHorizontal, kLayoutLabel,
-                             kScrollMode})
+                             kScrollMode, kPageSize, kPageSizeLabel})
             show(id, appearance);
         for (const int id : {kTheme, kThemeLabel, kFont, kFontLabel, kPreview})
             show(id, theme);
@@ -777,6 +788,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             if (scrollMode != presentation.end())
                 SendMessageW(control(kScrollMode), BM_SETCHECK,
                              scrollMode->second == L"true" ? BST_CHECKED : BST_UNCHECKED, 0);
+            const auto pageSize = presentation.find("candidate_page_size");
+            if (pageSize != presentation.end() && pageSize->second.size() == 1U &&
+                pageSize->second[0] >= L'1' && pageSize->second[0] <= L'9') {
+                SendMessageW(control(kPageSize), CB_SETCURSEL, pageSize->second[0] - L'1', 0);
+            }
         }
         if (runControl({L"--get-startup"}, output))
             SendMessageW(control(kStartup), BM_SETCHECK,
@@ -847,6 +863,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const wchar_t* const orientation =
             SendMessageW(control(kHorizontal), BM_GETCHECK, 0, 0) == BST_CHECKED ? L"horizontal"
                                                                                  : L"vertical";
+        const auto pageSizeIndex = SendMessageW(control(kPageSize), CB_GETCURSEL, 0, 0);
+        if (pageSizeIndex == CB_ERR || pageSizeIndex < 0 || pageSizeIndex > 8)
+            return false;
+        const std::wstring pageSize = std::to_wstring(pageSizeIndex + 1);
         wchar_t fontBuffer[129]{};
         ::GetWindowTextW(control(kFont), fontBuffer, static_cast<int>(std::size(fontBuffer)));
         const std::wstring font(fontBuffer);
@@ -857,7 +877,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                         SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) == BST_CHECKED
                             ? L"enabled"
                             : L"disabled",
-                        font},
+                        pageSize, font},
                        output);
         return ok;
     }

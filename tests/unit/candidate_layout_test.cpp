@@ -55,17 +55,56 @@ int main() {
     scroll.scrollMode = true;
     scroll.scrollColumns = 6;
     scroll.scrollVisibleRows = 6;
-    scroll.selected = 42;
     scroll.caret = {100, 100};
     scroll.caretHeight = 24;
     scroll.workArea = {0, 0, 1920, 1080};
     scroll.maxWidth = 860;
     scroll.items.assign(60, Size{120, 34});
-    const auto grid = layout(scroll);
-    if (grid.items.size() != 36U || grid.itemIndices.front() != 24U ||
-        grid.itemIndices.back() != 59U || !grid.hasScrollbar ||
-        grid.scrollbarThumb.bottom > grid.scrollbarTrack.bottom) {
-        std::cerr << "scroll grid did not keep the selected row in its six-row viewport\n";
+    scroll.orientation = Orientation::horizontal;
+    scroll.selected = 6;
+    const auto sameViewport = layout(scroll);
+    if (sameViewport.firstVisible != 0U || sameViewport.itemIndices.front() != 0U ||
+        sameViewport.itemIndices.back() != 35U) {
+        std::cerr << "moving within the first six rows shifted the scroll viewport\n";
+        return 1;
+    }
+    LayoutInput horizontalBaseline = scroll;
+    horizontalBaseline.scrollMode = false;
+    horizontalBaseline.orientation = Orientation::horizontal;
+    horizontalBaseline.items.resize(6);
+    const auto horizontalBaselineLayout = layout(horizontalBaseline);
+    const float baselineWidth =
+        horizontalBaselineLayout.window.right - horizontalBaselineLayout.window.left;
+    if (std::abs((sameViewport.window.right - sameViewport.window.left) -
+                 baselineWidth) > 0.01F) {
+        std::cerr << "scroll layout width did not match the ordinary candidate width\n";
+        return 1;
+    }
+    scroll.selected = 42;
+    const auto nextViewport = layout(scroll);
+    if (nextViewport.items.size() != 36U || nextViewport.itemIndices.front() != 24U ||
+        nextViewport.itemIndices.back() != 59U || !nextViewport.hasScrollbar ||
+        nextViewport.scrollbarThumb.bottom > nextViewport.scrollbarTrack.bottom) {
+        std::cerr << "scroll grid did not advance at its six-row boundary\n";
+        return 1;
+    }
+    LayoutInput verticalScroll = scroll;
+    verticalScroll.orientation = Orientation::vertical;
+    verticalScroll.scrollColumns = 6;
+    verticalScroll.selected = 6;
+    const auto nextColumn = layout(verticalScroll);
+    if (nextColumn.items.size() != 6U || nextColumn.itemIndices.front() != 6U ||
+        nextColumn.itemIndices.back() != 11U ||
+        std::abs((nextColumn.window.right - nextColumn.window.left) -
+                 (120.0F + 8.0F * 2.0F)) > 0.01F) {
+        std::cerr << "vertical scroll layout did not render a single candidate column\n";
+        return 1;
+    }
+    verticalScroll.selected = 58;
+    const auto finalColumn = layout(verticalScroll);
+    if (finalColumn.items.size() != 6U || finalColumn.itemIndices.front() != 54U ||
+        finalColumn.itemIndices.back() != 59U) {
+        std::cerr << "vertical scroll layout did not keep the selected candidate column\n";
         return 1;
     }
     return 0;

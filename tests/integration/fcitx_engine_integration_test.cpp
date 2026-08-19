@@ -331,7 +331,8 @@ int wmain(int argc, wchar_t** argv) {
     CloseHandle(notification);
     // Candidate navigation keys while candidates are visible: ';' selects the
     // 2nd candidate, '\'' the 3rd, Left/Right move the highlight without
-    // committing, and '.' / ',' / ']' / '[' page forward / back.
+    // committing, Enter commits that highlight, and '.' / ',' / ']' / '[' page
+    // forward / back.
     {
         constexpr std::uint64_t navContextId = 0x4E41564947415445ULL;
         auto typeNi = [&] {
@@ -345,9 +346,21 @@ int wmain(int argc, wchar_t** argv) {
             std::wcerr << L"navigation setup failed (need >= 3 candidates)\n";
             return 1;
         }
+        const auto secondCandidate = result.candidates[1].text;
+        if (!client.processKey(navContextId, '2', 0, result) || !result.handled ||
+            result.commit != secondCandidate) {
+            std::wcerr << L"number 2 committed a candidate other than its label\n";
+            return 1;
+        }
         // ';' selects candidate 2 (index 1) and commits it.
+        if (!typeNi() || result.candidates.size() < 2U) {
+            std::wcerr << L"semicolon setup failed: preedit=" << result.preedit
+                       << L" candidates=" << result.candidates.size() << L'\n';
+            return 1;
+        }
+        const auto semicolonCandidate = result.candidates[1].text;
         if (!client.processKey(navContextId, VK_OEM_1, 0, result) || !result.handled ||
-            result.commit.empty()) {
+            result.commit != semicolonCandidate) {
             std::wcerr << L"semicolon did not select the 2nd candidate\n";
             return 1;
         }
@@ -358,19 +371,34 @@ int wmain(int argc, wchar_t** argv) {
             std::wcerr << L"apostrophe did not select the 3rd candidate\n";
             return 1;
         }
-        // Left/Right move the highlight without committing.
-        if (!typeNi() || !result.handled || result.selectedCandidate == UINT32_MAX)
+        // Left/Right move the highlight without committing, and Enter commits
+        // exactly the highlighted candidate.
+        if (!typeNi() || !result.handled || result.selectedCandidate == UINT32_MAX ||
+            result.selectedCandidate + 1U >= result.candidates.size())
             return 1;
         const auto focusBefore = result.selectedCandidate;
         if (!client.processKey(navContextId, VK_RIGHT, 0, result) || !result.handled ||
-            result.selectedCandidate != focusBefore + 1U) {
-            std::wcerr << L"Right did not advance the highlight: " << focusBefore
-                       << L" -> " << result.selectedCandidate << L'\n';
+            !result.commit.empty() || result.selectedCandidate != focusBefore + 1U) {
+            std::wcerr << L"Right did not advance the highlight without committing: "
+                       << focusBefore << L" -> " << result.selectedCandidate
+                       << L" commit=" << result.commit << L'\n';
             return 1;
         }
         if (!client.processKey(navContextId, VK_LEFT, 0, result) || !result.handled ||
-            result.selectedCandidate != focusBefore) {
-            std::wcerr << L"Left did not restore the highlight\n";
+            !result.commit.empty() || result.selectedCandidate != focusBefore) {
+            std::wcerr << L"Left did not restore the highlight without committing\n";
+            return 1;
+        }
+        if (!client.processKey(navContextId, VK_RIGHT, 0, result) || !result.handled ||
+            result.selectedCandidate != focusBefore + 1U ||
+            result.selectedCandidate >= result.candidates.size()) {
+            std::wcerr << L"Right did not prepare an Enter-selectable highlight\n";
+            return 1;
+        }
+        const auto highlightedCandidate = result.candidates[result.selectedCandidate].text;
+        if (!client.processKey(navContextId, VK_RETURN, 0, result) || !result.handled ||
+            result.commit != highlightedCandidate || !result.preedit.empty()) {
+            std::wcerr << L"Enter committed a candidate other than the Left/Right highlight\n";
             return 1;
         }
         // Page keys ('.' / ',' / ']' / '[') share the same pageable path as

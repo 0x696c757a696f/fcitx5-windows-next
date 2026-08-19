@@ -471,6 +471,14 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_candidate_layout_test)
   add_test(NAME candidate-layout-contract COMMAND fcitx5_candidate_layout_test)
 
+  add_executable(fcitx5_candidate_navigation_test
+                 tests/unit/candidate_navigation_test.cpp)
+  target_include_directories(
+    fcitx5_candidate_navigation_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/engine")
+  fcitx_apply_project_options(fcitx5_candidate_navigation_test)
+  fcitx_apply_binary_hardening(fcitx5_candidate_navigation_test)
+  add_test(NAME candidate-navigation-contract COMMAND fcitx5_candidate_navigation_test)
+
   add_executable(fcitx5_candidate_interaction_test tests/unit/candidate_interaction_test.cpp)
   target_link_libraries(fcitx5_candidate_interaction_test PRIVATE fcitx5::candidate_interaction)
   fcitx_apply_project_options(fcitx5_candidate_interaction_test)

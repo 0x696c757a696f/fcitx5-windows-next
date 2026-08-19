@@ -7,22 +7,47 @@ namespace fcitx::windows::ui {
 LayoutResult layout(const LayoutInput& input) {
     LayoutResult result;
     if (input.scrollMode && !input.items.empty()) {
-        const std::size_t columns = std::clamp<std::size_t>(input.scrollColumns, 1U, 6U);
-        const std::size_t visibleRows = std::clamp<std::size_t>(input.scrollVisibleRows, 1U, 6U);
+        const std::size_t columns =
+            input.orientation == Orientation::vertical
+                ? 1U
+                : std::clamp<std::size_t>(input.scrollColumns, 1U, 9U);
+        const std::size_t visibleRows =
+            input.orientation == Orientation::vertical
+                ? std::clamp<std::size_t>(input.scrollColumns, 1U, 9U)
+                : std::clamp<std::size_t>(input.scrollVisibleRows, 1U, 6U);
         const std::size_t rows = (input.items.size() + columns - 1U) / columns;
         const std::size_t selectedRow = std::min(input.selected, input.items.size() - 1U) / columns;
-        // Keep the active page at the top like the native macOS scroll panel. Near the
-        // end, backfill earlier rows so the viewport does not leave a large empty area.
+        // Keep a stable six-row viewport while focus moves inside it. Advancing
+        // from row 1 to row 2 must not make row 2 jump to the top; move the
+        // viewport only after focus crosses a visible-row boundary.
+        const std::size_t viewportStart = (selectedRow / visibleRows) * visibleRows;
         const std::size_t firstRow =
-            rows > visibleRows ? std::min(selectedRow, rows - visibleRows) : 0U;
+            input.orientation == Orientation::vertical
+                ? viewportStart
+                : (rows > visibleRows ? std::min(viewportStart, rows - visibleRows) : 0U);
         const std::size_t shownRows = std::min(visibleRows, rows - firstRow);
+        const std::size_t firstVisible = firstRow * columns;
+        const std::size_t end = std::min(input.items.size(), (firstRow + shownRows) * columns);
         float rowHeight = 0.0F;
         for (const auto& item : input.items)
             rowHeight = std::max(rowHeight, item.height);
         const float workWidth = std::max(0.0F, input.workArea.right - input.workArea.left);
         const float workHeight = std::max(0.0F, input.workArea.bottom - input.workArea.top);
-        const float desiredWidth = std::min(input.maxWidth, workWidth);
-        const float width = std::max(0.0F, desiredWidth);
+        float contentWidth = 0.0F;
+        for (std::size_t row = 0; row < shownRows; ++row) {
+            float rowWidth = 0.0F;
+            for (std::size_t column = 0; column < columns; ++column) {
+                const std::size_t index = firstVisible + row * columns + column;
+                if (index >= end)
+                    break;
+                if (rowWidth > 0.0F)
+                    rowWidth += input.columnGap;
+                rowWidth += input.items[index].width;
+            }
+            contentWidth = std::max(contentWidth, rowWidth);
+        }
+        const float width =
+            std::min({contentWidth + input.paddingX * 2.0F, input.maxWidth, workWidth});
         const float height =
             std::min(input.paddingY * 2.0F + rowHeight * static_cast<float>(shownRows) +
                          input.rowGap * static_cast<float>(shownRows - 1U),
@@ -38,13 +63,12 @@ LayoutResult layout(const LayoutInput& input) {
             std::clamp(input.caret.x, input.workArea.left, input.workArea.right - width);
         result.window = {left, top, left + width, top + height};
         result.placement = placement;
-        result.firstVisible = firstRow * columns;
-        const float scrollbarWidth = rows > shownRows ? 8.0F : 0.0F;
+        result.firstVisible = firstVisible;
         const float usableWidth =
-            std::max(0.0F, width - input.paddingX * 2.0F - scrollbarWidth -
-                               input.columnGap * static_cast<float>(columns - 1U));
+            std::max(0.0F,
+                     width - input.paddingX * 2.0F -
+                         input.columnGap * static_cast<float>(columns - 1U));
         const float cellWidth = usableWidth / static_cast<float>(columns);
-        const std::size_t end = std::min(input.items.size(), (firstRow + shownRows) * columns);
         for (std::size_t index = result.firstVisible; index < end; ++index) {
             const std::size_t local = index - result.firstVisible;
             const std::size_t row = local / columns;

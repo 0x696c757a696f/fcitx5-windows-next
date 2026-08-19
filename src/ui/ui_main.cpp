@@ -323,14 +323,17 @@ class CandidateWindow final {
             for (std::size_t index = 0; index < 60U; ++index) {
                 const std::string text = index < words.size() ? std::string(words[index])
                                                               : "候选" + std::to_string(index + 1U);
-                response.candidates.push_back(
-                    {index + 1U, std::to_string(index % 6U + 1U), text, {}});
+                const std::string label = index >= 18U && index < 24U
+                                              ? std::to_string(index - 18U + 1U)
+                                              : std::string{};
+                response.candidates.push_back({index + 1U, label, text, {}});
             }
             response.selectedCandidate = 18;
             response.candidatePage = 3;
             response.candidatePageSize = 6;
             response.candidateBulk = true;
             visualConfig_.scrollMode = true;
+            compositionId_ = response.metadata.compositionId;
         } else {
             response.candidates = {{1, "1", "输入法", "shūrùfǎ"},
                                    {2, "2", "输入", "shūrù"},
@@ -493,9 +496,10 @@ class CandidateWindow final {
                     std::max(labelColumnWidth, metrics.widthIncludingTrailingWhitespace);
             }
         }
-        if (scrollMode_ && itemRects_.size() > 6U) {
+        if (scrollMode_ && itemRects_.size() > scrollColumns_) {
             borderBrush->SetOpacity(0.55F);
-            for (std::size_t row = 6U; row < itemRects_.size(); row += 6U) {
+            for (std::size_t row = scrollColumns_; row < itemRects_.size();
+                 row += scrollColumns_) {
                 const float y = (itemRects_[row - 1U].bottom + itemRects_[row].top) / 2.0F;
                 renderTarget_->DrawLine(D2D1::Point2F(12.0F, y),
                                         D2D1::Point2F(renderTarget_->GetSize().width - 12.0F, y),
@@ -649,20 +653,19 @@ class CandidateWindow final {
         renderIndices_.clear();
         const auto& current = *model_.current();
         selected_ = current.selected;
-        if (compositionId_ != current.compositionId) {
+        const bool compositionChanged = compositionId_ != current.compositionId;
+        if (compositionChanged) {
             placement_ = ui::Placement::unlocked;
             compositionId_ = current.compositionId;
-            scrollExpanded_ = response.candidatePage > 0U;
-            lastCandidatePage_.reset();
+            scrollExpanded_ = false;
         }
         const bool scrollEligible = visualConfig_.scrollMode.value_or(false) &&
                                     response.candidateBulk && response.candidatePageSize > 0U &&
                                     current.candidates.size() > response.candidatePageSize;
-        if (scrollEligible && lastCandidatePage_ && response.candidatePage != *lastCandidatePage_) {
-            scrollExpanded_ = !(*lastCandidatePage_ == 1U && response.candidatePage == 0U);
-        }
-        lastCandidatePage_ = response.candidatePage;
+        scrollExpanded_ = !compositionChanged && scrollEligible && current.selected &&
+                          *current.selected >= response.candidatePageSize;
         scrollMode_ = scrollEligible && scrollExpanded_;
+        scrollColumns_ = std::clamp<std::size_t>(response.candidatePageSize, 1U, 9U);
         const std::size_t ordinaryCount =
             response.candidatePageSize == 0U
                 ? current.candidates.size()
@@ -692,16 +695,6 @@ class CandidateWindow final {
                 !utf8ToWide(candidate.comment, comment))
                 continue;
             CandidateVisual visual;
-            if (scrollMode_) {
-                const std::size_t selectedRow = selected_.value_or(0U) / 6U;
-                if (candidateIndex / 6U == selectedRow)
-                    label = std::to_wstring(candidateIndex % 6U + 1U);
-                else
-                    label.clear();
-            } else if (response.candidateBulk && candidateIndex >= ordinaryStart &&
-                       candidateIndex < ordinaryStart + ordinaryCount) {
-                label = std::to_wstring(candidateIndex - ordinaryStart + 1U);
-            }
             if (visualConfig_.label.visible.value_or(true) && !label.empty()) {
                 using fcitx::windows::config::LabelStyle;
                 switch (visualConfig_.label.style.value_or(LabelStyle::dot)) {
@@ -808,7 +801,7 @@ class CandidateWindow final {
             static_cast<float>(visualConfig_.geometry.columnGap.value_or(8.0) * scale),
             placement_,
             scrollMode_,
-            6U,
+            scrollColumns_,
             6U,
             selected_.value_or(0U)};
         const auto layout = ui::layout(input);
@@ -1131,9 +1124,9 @@ class CandidateWindow final {
     bool safeMode_{};
     bool scrollMode_{};
     bool scrollExpanded_{};
+    std::size_t scrollColumns_{6U};
     bool lastCandidateBulk_{};
     std::uint32_t lastCandidatePageSize_{};
-    std::optional<std::uint32_t> lastCandidatePage_;
     bool hasScrollbar_{};
     float fontDpiScale_{1.0F};
     float selectionInflateX_{};

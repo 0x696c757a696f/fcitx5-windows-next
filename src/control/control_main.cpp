@@ -716,7 +716,7 @@ void usage() {
                   L"--reset-config|--get-startup|--set-startup enabled|disabled|"
                   L"--get-presentation|"
                   L"--get-input-methods|--set-input-method ID|--shutdown|"
-                  L"--set-presentation MODE THEME ORIENTATION SCROLL FONT|"
+                  L"--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT|"
                   L"--packages-list|--packages-refresh [HTTPS_BASE]|"
                   L"--packages-install ID|--packages-update ID|"
                   L"--packages-state ID enabled|disabled|--packages-remove ID|"
@@ -858,6 +858,7 @@ int wmain(int argc, wchar_t** argv) {
                 : "horizontal";
         const std::string theme = config.theme.value_or("builtin:default");
         const bool scrollMode = config.scrollMode.value_or(false);
+        const int pageSize = config.candidatePageSize.value_or(5);
         const std::string font =
             config.candidateFont.families && !config.candidateFont.families->empty()
                 ? config.candidateFont.families->front()
@@ -866,10 +867,11 @@ int wmain(int argc, wchar_t** argv) {
                   << ",\"theme\":" << jsonString(theme)
                   << ",\"orientation\":" << jsonString(orientation)
                   << ",\"candidate_font\":" << jsonString(font)
+                  << ",\"candidate_page_size\":" << jsonString(std::to_string(pageSize))
                   << ",\"scroll_mode\":" << (scrollMode ? "true" : "false") << "}\n";
         return 0;
     }
-    if (arguments.size() == 6 && arguments[0] == L"--set-presentation") {
+    if (arguments.size() == 7 && arguments[0] == L"--set-presentation") {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string source = fcitx::windows::config::defaultConfigToml();
         if (fs::exists(configPath) && !readUtf8(configPath, source))
@@ -878,7 +880,8 @@ int wmain(int argc, wchar_t** argv) {
         ParseError error;
         if (!fcitx::windows::config::updatePresentationToml(
                 source, narrow(arguments[1]), narrow(arguments[2]), narrow(arguments[3]),
-                narrow(arguments[4]), narrow(arguments[5]), updated, error)) {
+                narrow(arguments[4]), narrow(arguments[5]), narrow(arguments[6]), updated,
+                error)) {
             std::cerr << "invalid presentation at " << error.line << ':' << error.column << ": "
                       << error.message << '\n';
             return 3;

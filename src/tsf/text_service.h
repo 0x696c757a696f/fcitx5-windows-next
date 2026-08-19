@@ -86,6 +86,7 @@ private:
     std::unordered_map<std::uint64_t, protocol::CaretRect> lastCaretRects_;
     Microsoft::WRL::ComPtr<ITfContext> activeContext_;
     std::uint64_t activeContextId_{};
+    bool imeActive_{};
     HANDLE notificationEvent_{};
     HANDLE notificationWait_{};
     HWND notificationWindow_{};

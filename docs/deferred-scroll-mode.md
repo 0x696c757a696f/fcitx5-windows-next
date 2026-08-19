@@ -14,13 +14,15 @@ renderer orientation and must not be represented as `candidate.orientation = "sc
   avoids opening a large grid for every short composition.
 - Enable expansion only when Fcitx exposes a `BulkCandidateList`; the engine remains the owner of
   selection, highlight, candidate order, and commit.
-- Keep the transport bounded at 128 candidates and the visible D2D viewport bounded at six rows
-  by six columns. Known-size `BulkCandidateList` values are copied only up to that protocol cap;
-  the scrollbar communicates the visible portion without creating an unbounded UI tree.
+- Keep the transport bounded at 128 candidates. In horizontal layout, the visible D2D viewport is
+  bounded to the configured candidates-per-row by six rows; in vertical layout it is one column by
+  the configured candidates-per-column. Known-size `BulkCandidateList` values are copied only up to
+  that protocol cap; the scrollbar communicates the visible portion without creating an unbounded
+  UI tree.
 - Use `BulkCandidateList::candidateFromAll()` for global items and
   `BulkCursorCandidateList::setGlobalCursorIndex()` for highlight intent.
-- Support up/down/left/right, row start/end, page up/down, commit, and per-row numeric selection.
-  Only the highlighted row receives labels 1–6.
+- Support up/down/left/right, row start/end, page up/down, commit, and numeric selection within the
+  current row/column. Only the highlighted row/column receives labels 1–N.
 - Keep the highlighted cell visible; lazy loading and visual scrolling must not block the input
   channel. UI callbacks are intents sent to the engine, never local commit decisions.
 - Collapse back to the ordinary horizontal candidate row without losing the authoritative Fcitx

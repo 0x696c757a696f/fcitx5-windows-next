@@ -515,6 +515,7 @@ void TextService::applyPendingCandidateState() noexcept {
     ScopedBusyFlag busy(keyEventBusy_);
     ipc::KeyResult state;
     if (!client_.pollState(activeContextId_, state)) return;
+    imeActive_ = state.candidateVisibility != 0 || !state.preedit.empty();
     if (state.candidateVisibility != 0)
         lastPresentedContextId_ = activeContextId_;
     else if (lastPresentedContextId_ == activeContextId_)
@@ -616,6 +617,7 @@ HRESULT TextService::Deactivate() noexcept {
     composition_.Reset();
     activeContext_.Reset();
     activeContextId_ = 0;
+    imeActive_ = false;
     HRESULT result = S_OK;
     if (threadManager_ && clientId_ != TF_CLIENTID_NULL) {
         Microsoft::WRL::ComPtr<ITfSource> source;
@@ -651,6 +653,7 @@ void TextService::dismissCandidatePresentation(bool disconnectEngine,
     candidateUiElementId_ = TF_INVALID_UIELEMENTID;
     candidateUiElement_.Reset();
     lastCaretRects_.clear();
+    imeActive_ = false;
     if (disconnectEngine) client_.disconnect();
     const std::uint64_t dismissedContext = contextId != 0 ? contextId : lastPresentedContextId_;
     broadcastCandidateDismiss(dismissedContext);
@@ -667,21 +670,20 @@ void TextService::dismissForFocusLoss(ITfContext* context) noexcept {
         true, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(context)));
     activeContext_.Reset();
     activeContextId_ = 0;
+    imeActive_ = false;
 }
 
 bool TextService::shouldRouteToEngine(WPARAM virtualKey, bool alt, bool rightAlt,
                                       bool win) const noexcept {
-    // Fcitx is the authority on whether a key is handled; this function only
-    // filters combinations the OS or the application own outright, so the
-    // engine is not asked about keys it can never claim. Everything else -
-    // letters, digits, punctuation, space, editing keys, modifier keys
-    // themselves, Ctrl+* and AltGr (right Alt) chords - is routed to Fcitx,
-    // which decides handled vs passthrough. This keeps the routing open for
-    // engine-side hotkeys (Ctrl+Space, Ctrl+Shift, Alt+Shift) and for Fcitx
-    // punctuation modules instead of growing a TSF whitelist per feature.
+    // In the idle state the host editor owns navigation, Enter, Backspace,
+    // punctuation and ordinary shortcuts. Route only keys that can start real
+    // IME input or explicit IME hotkeys; once preedit/candidates exist, Fcitx
+    // becomes the authority for candidate and composition keys.
     if (win) {
         return false;  // Win+* is reserved by the OS.
     }
+    const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    const bool activeImeState = imeActive_;
     if (virtualKey >= VK_F1 && virtualKey <= VK_F24) {
         return false;  // Application function keys (F5 refresh, Alt+F4, ...).
     }
@@ -690,6 +692,31 @@ bool TextService::shouldRouteToEngine(WPARAM virtualKey, bool alt, bool rightAlt
         // is a configurable IME-switch hotkey, so the Shift key itself must
         // still reach Fcitx while Alt is held.
         return false;
+    }
+    if (!activeImeState) {
+        if ((virtualKey >= 'A' && virtualKey <= 'Z') && !ctrl && !alt)
+            return true;
+        if (virtualKey == VK_SPACE && ctrl && !alt)
+            return true;
+        if (virtualKey == VK_SHIFT && (ctrl || alt))
+            return true;
+        return false;
+    }
+    switch (virtualKey) {
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN:
+    case VK_HOME:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+        // With no active IME state, navigation keys belong to the host editor.
+        // Once a composition/candidate UI is active, route them so Fcitx can
+        // move the preedit caret or candidate selection.
+        return true;
+    default:
+        break;
     }
     return true;
 }
@@ -798,6 +825,7 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
         if (!keyResult.handled) {
             return S_OK;
         }
+        imeActive_ = keyResult.candidateVisibility != 0 || !keyResult.preedit.empty();
         if (keyResult.candidateVisibility != 0) {
             lastPresentedContextId_ = contextId;
         } else if (lastPresentedContextId_ == contextId) {

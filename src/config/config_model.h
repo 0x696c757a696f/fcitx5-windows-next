@@ -82,6 +82,7 @@ struct Theme {
 [[nodiscard]] bool updatePresentationToml(std::string_view source, std::string_view appearanceMode,
                                           std::string_view theme, std::string_view orientation,
                                           std::string_view scrollMode,
+                                          std::string_view candidatePageSize,
                                           std::string_view candidateFont, std::string& output,
                                           ParseError& error) noexcept;
 [[nodiscard]] bool parseTheme(std::string_view text, Theme& output, ParseError& error) noexcept;

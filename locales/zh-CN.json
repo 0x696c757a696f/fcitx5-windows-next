@@ -27,6 +27,7 @@
   ,"candidate.vertical": "纵向"
   ,"candidate.horizontal": "横向"
   ,"candidate.scroll": "卷轴模式（展开候选网格）"
+  ,"candidate.page_size": "每行/每列候选数"
   ,"action.apply": "应用"
   ,"action.preview": "预览候选框"
   ,"action.diagnostics": "刷新诊断"

@@ -376,10 +376,10 @@ theme = "builtin:default"
 [candidate]
 # vertical（纵向，默认）或 horizontal（横向）。
 orientation = "vertical"
-# 每页候选数，范围 1–9。仅对支持分页的引擎生效。
+# 横向时表示每行候选数；纵向时表示每列候选数。范围 1–9。
 page_size = 5
 # 卷轴模式：引擎提供 BulkCandidateList 时，方向键/PageUp/PageDown/Home/End
-# 在六行六列视口内连续滚动候选（对齐 fcitx5-macos 的 ScrollConfig）。
+# 按当前布局方向连续滚动候选（对齐 fcitx5-macos 的 ScrollConfig）。
 scroll_mode = true
 # 候选窗最大宽度，单位 DIP，范围 160–2048。
 max_width_dip = 860.0
@@ -400,10 +400,10 @@ next_input_method = "Ctrl+Shift"
 
 [candidate.geometry]
 # 以下尺寸均为 DIP，会随显示器 DPI 自动缩放。
-padding_x_dip = 12.0
-padding_y_dip = 9.0
-item_padding_x_dip = 10.0
-item_padding_y_dip = 8.0
+padding_x_dip = 10.0
+padding_y_dip = 6.0
+item_padding_x_dip = 8.0
+item_padding_y_dip = 4.0
 row_gap_dip = 1.0
 column_gap_dip = 12.0
 border_width_dip = 1.0
@@ -423,7 +423,7 @@ families = ["system"]
 [fonts.candidate]
 # 按顺序 fallback；最后仍使用 DirectWrite 系统 fallback 补字。
 families = ["Microsoft YaHei", "system"]
-size_dip = 20.0 # 范围 8–72 DIP
+size_dip = 18.0 # 范围 8–72 DIP
 weight = 400    # 100–900，步进 100
 
 [fonts.annotation]
@@ -515,16 +515,26 @@ bool parseTheme(std::string_view text, Theme& output, ParseError& error) noexcep
 
 bool updatePresentationToml(std::string_view source, std::string_view appearanceMode,
                             std::string_view theme, std::string_view orientation,
-                            std::string_view scrollMode, std::string_view candidateFont,
-                            std::string& output, ParseError& error) noexcept {
+                            std::string_view scrollMode, std::string_view candidatePageSize,
+                            std::string_view candidateFont, std::string& output,
+                            ParseError& error) noexcept {
     output.clear();
     error = {};
     if ((appearanceMode != "system" && appearanceMode != "light" && appearanceMode != "dark") ||
         (orientation != "vertical" && orientation != "horizontal") ||
         (scrollMode != "enabled" && scrollMode != "disabled") || theme.empty() ||
-        theme.size() > 128 || candidateFont.empty() || candidateFont.size() > 128) {
+        theme.size() > 128 || candidatePageSize.empty() || candidatePageSize.size() > 2U ||
+        candidateFont.empty() || candidateFont.size() > 128) {
         return setError(error, "invalid presentation setting");
     }
+    int pageSize = 0;
+    for (const char digit : candidatePageSize) {
+        if (digit < '0' || digit > '9')
+            return setError(error, "invalid presentation setting");
+        pageSize = pageSize * 10 + digit - '0';
+    }
+    if (pageSize < 1 || pageSize > 9)
+        return setError(error, "invalid presentation setting");
     try {
         toml::table root = toml::parse(source.empty() ? defaultConfigToml() : source);
         if (!root["appearance"].as_table())
@@ -536,6 +546,7 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
             root.insert_or_assign("candidate", toml::table{});
         auto& candidate = *root["candidate"].as_table();
         candidate.insert_or_assign("orientation", orientation);
+        candidate.insert_or_assign("page_size", pageSize);
         candidate.insert_or_assign("scroll_mode", scrollMode == "enabled");
         if (!root["fonts"].as_table())
             root.insert_or_assign("fonts", toml::table{});

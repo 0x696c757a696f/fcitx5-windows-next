@@ -183,7 +183,7 @@ try {
   New-Item -ItemType File -Path (Join-Path $appRoot 'portable.flag') | Out-Null
 
   Invoke-Control @('--set-presentation', 'light', 'builtin:default', 'vertical', 'disabled',
-    'Segoe UI')
+    '5', 'Segoe UI')
   $demo = Start-CandidateDemo '--demo'
   $window = Wait-CandidateWindow -Process $demo
   # The HWND becomes visible before the synthetic CandidateModel finishes its first reflow.
@@ -191,20 +191,20 @@ try {
   $vertical = Save-WindowPng -Window $window -Path (Join-Path $evidence 'candidate-live-vertical.png')
 
   Invoke-Control @('--set-presentation', 'dark', 'builtin:default', 'horizontal', 'enabled',
-    'Microsoft YaHei')
+    '6', 'Microsoft YaHei')
   Start-Sleep -Milliseconds 200
   $horizontal = Save-WindowPng -Window $window `
     -Path (Join-Path $evidence 'candidate-live-horizontal-dark.png')
 
   Invoke-Control @('--set-presentation', 'light', 'builtin:default', 'vertical', 'disabled',
-    'Segoe UI')
+    '5', 'Segoe UI')
   Start-Sleep -Milliseconds 200
   $restored = Save-WindowPng -Window $window -Path (Join-Path $evidence 'candidate-live-restored.png')
   $demo.Kill($true)
   $demo.WaitForExit(5000) | Out-Null
 
   Invoke-Control @('--set-presentation', 'light', 'builtin:default', 'vertical', 'enabled',
-    'Microsoft YaHei')
+    '5', 'Microsoft YaHei')
   $scroll = Start-CandidateDemo '--scroll-demo'
   $scrollWindow = Wait-CandidateWindow -Process $scroll
   Start-Sleep -Milliseconds 300

@@ -1,4 +1,5 @@
 #include "fcitx_runtime.h"
+#include "candidate_navigation.h"
 #include "config_model.h"
 #include <fcitx5_windows/release_identity.h>
 
@@ -38,6 +39,9 @@ struct EngineConfig {
     std::optional<std::string> defaultInputMethod;
     std::optional<std::string> hotkeyToggle;
     std::optional<std::string> hotkeyNext;
+    config::Orientation orientation{config::Orientation::vertical};
+    std::optional<int> candidatePageSize;
+    bool scrollMode{};
 };
 
 std::filesystem::path executableDirectory() {
@@ -97,6 +101,10 @@ EngineConfig readEngineConfig() {
     config.defaultInputMethod = parsed.defaultInputMethod;
     config.hotkeyToggle = parsed.hotkeyToggleInputMethod;
     config.hotkeyNext = parsed.hotkeyNextInputMethod;
+    config.orientation =
+        parsed.orientation.value_or(config::Orientation::vertical);
+    config.candidatePageSize = parsed.candidatePageSize;
+    config.scrollMode = parsed.scrollMode.value_or(false);
     if (config.enabled.empty())
         config.enabled = {"pinyin", "rime", "wbx"};
     if (!config.defaultInputMethod ||
@@ -187,7 +195,6 @@ class EngineInputContext final : public InputContext {
     explicit EngineInputContext(InputContextManager& manager) : InputContext(manager, "tsf") {
         setEnablePreedit(true);
         setCapabilityFlags(CapabilityFlags{CapabilityFlag::Preedit,
-                                           CapabilityFlag::FormattedPreedit,
                                            CapabilityFlag::ClientSideInputPanel});
         created();
     }
@@ -330,9 +337,9 @@ class FcitxRuntime::Impl final {
     std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> compositions;
     std::unordered_map<ClientContextKey, protocol::CaretRect, KeyHash> carets;
     std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
-    // Focus override set by the Left/Right arrow keys: moves the candidate
-    // highlight without committing. Cleared whenever the candidate list
-    // changes (page turn, selection, new snapshot).
+    // Focus override set by row/page navigation: moves the candidate highlight
+    // without committing. Cleared whenever ordinary input or selection changes
+    // the candidate state.
     std::unordered_map<ClientContextKey, std::optional<std::uint32_t>, KeyHash>
         selectedOverride;
     // Immutable snapshot of config.toml, loaded once at startup. The input
@@ -443,6 +450,15 @@ class FcitxRuntime::Impl final {
         return *result;
     }
 
+    void applyFcitxPageSize() {
+        if (!config.candidatePageSize)
+            return;
+        RawConfig raw;
+        instance->globalConfig().save(raw);
+        raw.setValueByPath("Behavior/DefaultPageSize", std::to_string(*config.candidatePageSize));
+        instance->globalConfig().load(raw, true);
+    }
+
     RuntimeResult collectResult(const ClientContextKey& key,
                                 EngineInputContext& context, bool handled) {
         RuntimeResult output;
@@ -462,12 +478,11 @@ class FcitxRuntime::Impl final {
         if (output.preeditUtf8.empty() && !hasCandidates)
             composition = 0;
         if (hasCandidates) {
-            const int pageSize =
+            const int fcitxPageSize =
                 std::clamp(candidateList->size(), 0,
                            static_cast<int>(protocol::kMaxCandidates));
-            output.candidatePageSize = static_cast<std::uint32_t>(pageSize);
             const auto* bulk = candidateList->toBulk();
-            const int reportedTotal = bulk ? bulk->totalSize() : pageSize;
+            const int reportedTotal = bulk ? bulk->totalSize() : fcitxPageSize;
             // Some addons (e.g. Rime) expose a BulkCandidateList without a
             // real bulk API: totalSize() returns -1 and globalCursorIndex()
             // returns -1. Treat them as an ordinary pageable list so the UI
@@ -475,21 +490,18 @@ class FcitxRuntime::Impl final {
             // selection would be missing and the candidate window renders
             // without any highlight.
             const bool realBulk = bulk != nullptr && reportedTotal >= 0;
+            const int pageSize =
+                realBulk
+                    ? std::clamp(config.candidatePageSize.value_or(fcitxPageSize), 1,
+                                 static_cast<int>(protocol::kMaxCandidates))
+                    : fcitxPageSize;
+            output.candidatePageSize = static_cast<std::uint32_t>(pageSize);
             const int size =
                 realBulk ? std::clamp(reportedTotal, 0,
                                       static_cast<int>(protocol::kMaxCandidates))
-                         : pageSize;
+                         : fcitxPageSize;
             output.candidateBulk = realBulk;
             output.candidateEnd = !realBulk || (reportedTotal >= 0 && size >= reportedTotal);
-            output.candidates.reserve(static_cast<std::size_t>(size));
-            for (int index = 0; index < size; ++index) {
-                const auto& word =
-                    realBulk ? bulk->candidateFromAll(index) : candidateList->candidate(index);
-                output.candidates.push_back(protocol::CandidateRecord{
-                    (composition << 8U) | static_cast<std::uint64_t>(index + 1),
-                    realBulk ? std::string{} : candidateList->label(index).toString(),
-                    word.text().toString(), word.comment().toString()});
-            }
             int cursor = candidateList->cursorIndex();
             if (const auto* bulkCursor = candidateList->toBulkCursor()) {
                 const int global = bulkCursor->globalCursorIndex();
@@ -502,14 +514,37 @@ class FcitxRuntime::Impl final {
             }
             if (cursor >= 0 && cursor < size)
                 output.selectedCandidate = static_cast<std::uint32_t>(cursor);
+            int page = 0;
+            if (const auto* pageable = candidateList->toPageable(); pageable) {
+                page = (std::max)(0, pageable->currentPage());
+                output.candidatePage = static_cast<std::uint32_t>(page);
+            }
+            const int dimension = (std::max)(1, pageSize);
+            output.candidates.reserve(static_cast<std::size_t>(size));
+            for (int index = 0; index < size; ++index) {
+                const auto& word =
+                    realBulk ? bulk->candidateFromAll(index) : candidateList->candidate(index);
+                std::string label;
+                if (!realBulk) {
+                    label = candidateList->label(index).toString();
+                } else if (config.scrollMode) {
+                    if (const auto offset = rowSelectionColumn(
+                            static_cast<std::size_t>((std::max)(0, cursor)),
+                            static_cast<std::size_t>(index),
+                            static_cast<std::size_t>(dimension),
+                            static_cast<std::size_t>(size))) {
+                        label = std::to_string(*offset + 1U);
+                    }
+                } else if (index >= page * dimension && index < (page + 1) * dimension) {
+                    label = std::to_string(index - page * dimension + 1);
+                }
+                output.candidates.push_back(protocol::CandidateRecord{
+                    (composition << 8U) | static_cast<std::uint64_t>(index + 1),
+                    std::move(label), word.text().toString(), word.comment().toString()});
+            }
             output.candidateTotal = static_cast<std::uint32_t>(size);
             if (realBulk)
                 output.candidateTotal = static_cast<std::uint32_t>(reportedTotal);
-            if (const auto* pageable = candidateList->toPageable(); pageable) {
-                const int page = pageable->currentPage();
-                if (page >= 0)
-                    output.candidatePage = static_cast<std::uint32_t>(page);
-            }
             output.candidateVisibility = output.preeditUtf8.empty() ? 2U : 1U;
         }
         output.compositionId = composition;
@@ -539,6 +574,7 @@ bool FcitxRuntime::initialize(bool safeMode) {
         impl_->instance->addonManager().registerDefaultLoader(nullptr);
         impl_->instance->initialize();
         impl_->ensureInputMethods();
+        impl_->applyFcitxPageSize();
         const auto& group = impl_->instance->inputMethodManager().currentGroup();
         const std::string selected = group.defaultInputMethod();
         if (selected.empty() || !impl_->instance->inputMethodManager().entry(selected))
@@ -654,89 +690,130 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                     sym == FcitxKey_minus || sym == FcitxKey_underscore ||
                     sym == FcitxKey_comma || sym == FcitxKey_bracketleft;
                 const bool upDown = sym == FcitxKey_Up || sym == FcitxKey_Down;
-                const bool scroll = bulk && bulk->totalSize() >= 0;
+                const bool scroll = impl_->config.scrollMode && bulk && bulk->totalSize() >= 0;
+                const bool verticalScroll =
+                    impl_->config.orientation == config::Orientation::vertical;
+                const std::size_t dimension = static_cast<std::size_t>(
+                    std::clamp(impl_->config.candidatePageSize.value_or(list->size()), 1,
+                               static_cast<int>(protocol::kMaxCandidates)));
                 // In the scroll viewport, Up/Down scroll one row instead of
                 // the Fcitx default page turn; in ordinary paging they keep
                 // the Fcitx default (Up=PrevPage, Down=NextPage).
                 const bool scrollNext = nextPage || (scroll && sym == FcitxKey_Down);
                 const bool scrollPrev = prevPage || (scroll && sym == FcitxKey_Up);
-                auto* pageable = list->toPageable();
-                if (scroll && (scrollNext || scrollPrev)) {
-                    // Scroll viewport (bulk candidate list). '+/'-' move one
-                    // row (the fixed 6-column grid) and land on the FIRST
-                    // candidate of the new row; Up/Down keep the current
-                    // column and move to the same column of the previous/next
-                    // row. The highlight always moves; when the target row
-                    // falls outside the fetched candidates the list pages (if
-                    // it is pageable) and lands on the new screen's first row
-                    // (keeping the column for Up/Down), otherwise it clamps to
-                    // the last candidate. This is independent of toPageable():
-                    // a bulk list without a pageable still scrolls the
-                    // highlight, so the arrow keys never silently fall through
-                    // to Fcitx's default page turn ('第二排显示成第一排').
-                    constexpr int columns = 6;
-                    const int available = (std::max)(0, bounded);
-                    int cursor = 0;
+                const auto currentFocus = [&] {
+                    int focus = 0;
                     if (const auto found = impl_->selectedOverride.find(key);
                         found != impl_->selectedOverride.end() && found->second) {
-                        cursor = static_cast<int>(*found->second);
+                        focus = static_cast<int>(*found->second);
                     } else if (const auto* bulkCursor = list->toBulkCursor()) {
                         const int global = bulkCursor->globalCursorIndex();
-                        if (global >= 0)
-                            cursor = global;
+                        focus = global >= 0 ? global : list->cursorIndex();
                     } else {
-                        cursor = list->cursorIndex();
+                        focus = list->cursorIndex();
                     }
-                    cursor = std::clamp(cursor, 0, (std::max)(0, available - 1));
-                    int target = 0;
-                    if (upDown) {
-                        target = cursor + (scrollNext ? columns : -columns);
-                    } else {
-                        const int rowStart = (cursor / columns) * columns;
-                        target = rowStart + (scrollNext ? columns : -columns);
+                    return std::clamp(focus, 0, (std::max)(0, bounded - 1));
+                };
+                const bool plainShortcut =
+                    (request.keyFlags & (protocol::kKeyFlagShift |
+                                         protocol::kKeyFlagControl |
+                                         protocol::kKeyFlagAlt)) == 0;
+                if (scroll && plainShortcut) {
+                    std::optional<std::size_t> column;
+                    bool consume = false;
+                    if (sym == FcitxKey_0) {
+                        consume = true;
+                    } else if (sym >= FcitxKey_1 && sym <= FcitxKey_9) {
+                        consume = true;
+                        const auto digit = static_cast<std::size_t>(sym - FcitxKey_1);
+                        if (digit < dimension)
+                            column = digit;
+                    } else if (sym == FcitxKey_semicolon) {
+                        consume = true;
+                        column = 1U;
+                    } else if (sym == FcitxKey_apostrophe) {
+                        consume = true;
+                        column = 2U;
                     }
-                    if (target < 0) {
-                        if (pageable && pageable->hasPrev()) {
+                    if (consume) {
+                        const auto target =
+                            column ? rowSelectionTarget(
+                                         static_cast<std::size_t>(currentFocus()), *column,
+                                         dimension,
+                                         static_cast<std::size_t>(bounded))
+                                   : std::nullopt;
+                        if (target) {
+                            bulk->candidateFromAll(static_cast<int>(*target)).select(&context);
+                            impl_->selectedOverride.erase(key);
+                        }
+                        event.filterAndAccept();
+                        return impl_->collectResult(key, context, true);
+                    }
+                }
+                auto* pageable = list->toPageable();
+                if (scroll && (scrollNext || scrollPrev)) {
+                    // Scroll viewport (bulk candidate list). Horizontal
+                    // layout is a row grid: Up/Down keep the column, while
+                    // page keys land on the row start. Vertical layout is a
+                    // single visible column: Up/Down move within that column,
+                    // while page keys switch to the previous/next column top.
+                    const int rowWidth = static_cast<int>(dimension);
+                    const int available = (std::max)(0, bounded);
+                    const int cursor = currentFocus();
+                    const auto navigation =
+                        verticalScroll && upDown
+                            ? sameColumnNavigationTarget(static_cast<std::size_t>(cursor),
+                                                         dimension,
+                                                         static_cast<std::size_t>(available),
+                                                         scrollNext)
+                        : verticalScroll
+                            ? columnNavigationTarget(static_cast<std::size_t>(cursor),
+                                                     dimension,
+                                                     static_cast<std::size_t>(available),
+                                                     scrollNext, false)
+                            : rowNavigationTarget(static_cast<std::size_t>(cursor),
+                                                  dimension,
+                                                  static_cast<std::size_t>(available),
+                                                  scrollNext, upDown);
+                    int target = static_cast<int>(navigation.index);
+                    if (navigation.beforeStart) {
+                        if (!(verticalScroll && upDown) && pageable && pageable->hasPrev()) {
                             pageable->prev();
                             event.filter();
-                            target = upDown ? cursor % columns : 0;
-                        } else {
-                            target = 0;
+                            target = !verticalScroll && upDown ? cursor % rowWidth : 0;
                         }
-                    } else if (target >= available) {
-                        if (pageable && pageable->hasNext()) {
+                    } else if (navigation.afterEnd) {
+                        if (!(verticalScroll && upDown) && pageable && pageable->hasNext()) {
                             pageable->next();
                             event.filter();
-                            target = upDown ? cursor % columns : 0;
-                        } else {
-                            target = (std::max)(0, available - 1);
+                            target = !verticalScroll && upDown ? cursor % rowWidth : 0;
                         }
                     }
                     impl_->selectedOverride[key] =
                         static_cast<std::uint32_t>(std::clamp(
                             target, 0, (std::max)(0, available - 1)));
-                    event.filter();
-                    goto page_keys_done;
+                    event.filterAndAccept();
+                    return impl_->collectResult(key, context, true);
                 }
                 if (pageable && (nextPage || prevPage)) {
                     if (nextPage && pageable->hasNext()) {
                         pageable->next();
-                        event.filter();
                         // The highlight jumps to the first candidate of the
                         // new page instead of keeping the previous position
                         // (Fcitx's cursor can stay within the page column).
                         impl_->selectedOverride[key] = 0;
                     } else if (prevPage && pageable->hasPrev()) {
                         pageable->prev();
-                        event.filter();
                         impl_->selectedOverride[key] = 0;
                     }
-                    goto page_keys_done;
+                    event.filterAndAccept();
+                    return impl_->collectResult(key, context, true);
                 }
-            page_keys_done:;
-                // ';' selects the second candidate, '\'' the third, on top of
-                // the digit keys Fcitx already handles.
-                if (sym == FcitxKey_semicolon || sym == FcitxKey_apostrophe) {
+                // In ordinary paging, ';' selects the second candidate and
+                // '\'' the third. Scroll mode handled them above relative to
+                // the highlighted row so their semantics match labels 2/3.
+                if (!scroll &&
+                    (sym == FcitxKey_semicolon || sym == FcitxKey_apostrophe)) {
                     const std::size_t target = sym == FcitxKey_semicolon ? 1U : 2U;
                     if (target < static_cast<std::size_t>(bounded)) {
                         const auto& candidate =
@@ -749,23 +826,29 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                         return impl_->collectResult(key, context, true);
                     }
                 }
-                // Left/Right move the highlight without committing.
-                if (sym == FcitxKey_Left || sym == FcitxKey_Right) {
-                    if (bounded > 0) {
-                        int focus = 0;
-                        if (const auto found = impl_->selectedOverride.find(key);
-                            found != impl_->selectedOverride.end() && found->second) {
-                            focus = static_cast<int>(*found->second);
-                        } else {
-                            focus = list->cursorIndex();
-                        }
-                        focus += sym == FcitxKey_Right ? 1 : -1;
-                        focus = std::clamp(focus, 0, bounded - 1);
-                        impl_->selectedOverride[key] =
-                            static_cast<std::uint32_t>(focus);
-                        event.filterAndAccept();
-                        return impl_->collectResult(key, context, true);
+                // Left/Right move the highlighted candidate without
+                // committing, but only while a candidate list is present. TSF
+                // keeps idle navigation in the host editor, so this does not
+                // freeze caret movement outside real IME input.
+                if (plainShortcut && (sym == FcitxKey_Left || sym == FcitxKey_Right) &&
+                    bounded > 0) {
+                    const int focus = currentFocus();
+                    int nextFocus = focus;
+                    if (scroll && verticalScroll) {
+                        const auto navigation =
+                            columnNavigationTarget(static_cast<std::size_t>(focus),
+                                                   dimension,
+                                                   static_cast<std::size_t>(bounded),
+                                                   sym == FcitxKey_Right, true);
+                        nextFocus = static_cast<int>(navigation.index);
+                    } else {
+                        nextFocus = std::clamp(
+                            focus + (sym == FcitxKey_Right ? 1 : -1), 0, bounded - 1);
                     }
+                    impl_->selectedOverride[key] =
+                        static_cast<std::uint32_t>(nextFocus);
+                    event.filterAndAccept();
+                    return impl_->collectResult(key, context, true);
                 }
                 // Space / Enter commit the highlighted candidate (the
                 // selectedOverride set by the arrow/page keys) instead of the
@@ -791,6 +874,11 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                 }
             }
         }
+    }
+    if (!event.isRelease() && event.key().sym() != FcitxKey_Shift_L &&
+        event.key().sym() != FcitxKey_Control_L &&
+        event.key().sym() != FcitxKey_Alt_L) {
+        impl_->selectedOverride.erase(key);
     }
     context.keyEvent(event);
     impl_->carets[key] = request.caret;
@@ -826,6 +914,7 @@ RuntimeResult FcitxRuntime::selectCandidate(
     const auto& candidate = bulk ? bulk->candidateFromAll(static_cast<int>(index))
                                  : candidateList->candidate(static_cast<int>(index));
     candidate.select(&context);
+    impl_->selectedOverride.erase(found->first);
     RuntimeResult output = impl_->collectResult(found->first, context, true);
     impl_->pendingStates[found->first] = output;
     return output;

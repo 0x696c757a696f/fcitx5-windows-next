@@ -62,13 +62,14 @@ try {
     }
     if ($location -eq 'first') {
       & (Join-Path $app 'bin/fcitx5-control.exe') --set-presentation dark `
-        builtin:default horizontal enabled 'Microsoft YaHei'
+        builtin:default horizontal enabled 6 'Microsoft YaHei'
       if ($LASTEXITCODE -ne 0) { throw 'Portable presentation save failed.' }
       $presentation = (& (Join-Path $app 'bin/fcitx5-control.exe') --get-presentation) |
         ConvertFrom-Json
       if ($presentation.appearance_mode -ne 'dark' -or
           $presentation.orientation -ne 'horizontal' -or
           -not $presentation.scroll_mode -or
+          $presentation.candidate_page_size -ne '6' -or
           $presentation.candidate_font -ne 'Microsoft YaHei') {
         throw 'Portable presentation did not round-trip through the typed Control API.'
       }
