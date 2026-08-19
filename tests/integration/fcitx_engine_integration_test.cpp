@@ -8,9 +8,13 @@
 #include <array>
 #include <cstdint>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -61,7 +65,7 @@ struct Process {
 
 bool startEngine(const wchar_t* executable, unsigned sequence, bool safeMode,
                  unsigned testClientCount,
-                 Process& process) {
+                 Process& process, const wchar_t* stderrPath = nullptr) {
     const std::wstring eventName =
         L"Local\\Fcitx5WindowsNext.RealEngine.Ready." +
         std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(sequence);
@@ -88,10 +92,28 @@ bool startEngine(const wchar_t* executable, unsigned sequence, bool safeMode,
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
+    SECURITY_ATTRIBUTES inheritAttributes{sizeof(inheritAttributes), nullptr, TRUE};
+    HANDLE stderrFile = INVALID_HANDLE_VALUE;
+    if (stderrPath) {
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        stderrFile =
+            CreateFileW(stderrPath, GENERIC_WRITE, FILE_SHARE_READ, &inheritAttributes,
+                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (stderrFile == INVALID_HANDLE_VALUE) {
+            CloseHandle(ready);
+            if (stop) CloseHandle(stop);
+            return false;
+        }
+        SetFilePointer(stderrFile, 0, nullptr, FILE_BEGIN);
+        SetEndOfFile(stderrFile);
+        startup.hStdError = stderrFile;
+    }
     PROCESS_INFORMATION information{};
     const bool created = CreateProcessW(executable, mutableCommand.data(), nullptr, nullptr,
-                                        FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                                        TRUE, CREATE_NO_WINDOW, nullptr, nullptr,
                                         &startup, &information) != FALSE;
+    if (stderrFile != INVALID_HANDLE_VALUE) CloseHandle(stderrFile);
     if (!created) {
         std::cerr << "real engine creation failed: " << GetLastError() << '\n';
         CloseHandle(ready);
@@ -648,5 +670,78 @@ int wmain(int argc, wchar_t** argv) {
     restartedClient.disconnect();
     if (WaitForSingleObject(restarted.handle, 5000) != WAIT_OBJECT_0) return 1;
     GetExitCodeProcess(restarted.handle, &exitCode);
-    return exitCode == 0 ? 0 : 1;
+    if (exitCode != 0) return 1;
+
+    // REG-DISPATCH-LATE: a key request that times out must never execute late.
+    // Start an engine whose FIRST dispatcher task is stalled past the client
+    // deadline; the client gives up, then the stalled task must be dropped at
+    // its deadline check instead of touching Fcitx state. The engine reports
+    // how many tasks it dropped on exit; the assertion below requires at
+    // least one drop, and a subsequent key on the same engine still works.
+    {
+        const std::filesystem::path stderrPath =
+            std::filesystem::temp_directory_path() /
+            (L"fcitx5-engine-late-" + std::to_wstring(GetCurrentProcessId()) + L".log");
+        SetEnvironmentVariableW(L"FCITX5_TEST_DISPATCH_DELAY_MS", L"800");
+        Process late;
+        const bool lateStarted =
+            startEngine(argv[1], 3, safeMode, 0U, late, stderrPath.c_str());
+        SetEnvironmentVariableW(L"FCITX5_TEST_DISPATCH_DELAY_MS", nullptr);
+        if (!lateStarted) {
+            std::cerr << "late-engine start failed\n";
+            return 1;
+        }
+        fcitx::windows::ipc::PipeClient lateClient(
+            fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
+            fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
+        // The first dispatcher task sleeps 800 ms while the client deadline is
+        // 100 ms, so this request must time out at the client.
+        const std::uint64_t lateContextId = 0x4C4154454B4559ULL;
+        const bool lateFirst = lateClient.processKey(lateContextId, 'N', 0, result);
+        if (lateFirst) {
+            std::cerr << "stalled dispatcher task did not time out the client\n";
+            return 1;
+        }
+        // Give the stalled task time to reach its deadline check and be
+        // dropped, then verify the engine still serves keys normally.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        const bool lateSecond = lateClient.processKey(lateContextId, 'N', 0, result);
+        if (!lateSecond || !result.handled || result.preedit != L"n") {
+            std::wcerr << L"engine unhealthy after dropped late key: ipc=" << lateSecond
+                       << L" handled=" << result.handled << L" preedit=" << result.preedit
+                       << L'\n';
+            return 1;
+        }
+        lateClient.disconnect();
+        late.requestStop();
+        if (WaitForSingleObject(late.handle, 5000) != WAIT_OBJECT_0) {
+            TerminateProcess(late.handle, 9);
+            WaitForSingleObject(late.handle, 1000);
+        }
+        DWORD lateExit = 1;
+        GetExitCodeProcess(late.handle, &lateExit);
+        std::string lateStderr;
+        {
+            std::ifstream log(stderrPath, std::ios::binary);
+            std::ostringstream buffer;
+            buffer << log.rdbuf();
+            lateStderr = buffer.str();
+        }
+        (void)DeleteFileW(stderrPath.c_str());
+        if (lateExit != 0 || lateStderr.find("dispatcher-dropped=") == std::string::npos) {
+            std::cerr << "late engine did not report dropped count (exit=" << lateExit
+                      << ")\n";
+            return 1;
+        }
+        const auto marker = lateStderr.find("dispatcher-dropped=");
+        const auto dropped =
+            std::strtoull(lateStderr.c_str() + marker + std::strlen("dispatcher-dropped="),
+                          nullptr, 10);
+        if (dropped == 0) {
+            std::cerr << "stalled key was executed instead of dropped\n";
+            return 1;
+        }
+        std::cout << "dispatcher-dropped=" << dropped << '\n';
+    }
+    return 0;
 }

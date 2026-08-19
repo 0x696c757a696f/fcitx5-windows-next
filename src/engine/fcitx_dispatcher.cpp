@@ -4,6 +4,8 @@
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx/instance.h>
 
+#include <windows.h>
+
 #include <future>
 #include <iostream>
 #include <utility>
@@ -58,7 +60,26 @@ bool FcitxDispatcher::processKey(const ClientContextKey& context,
     if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
     auto completed = std::make_shared<std::promise<RuntimeResult>>();
     auto future = completed->get_future();
-    dispatcher_->schedule([this, context, request, completed] {
+    // Absolute deadline: the queued work re-checks it right before touching
+    // Fcitx state. If the caller already gave up (timeout), the task must not
+    // execute at all - the client has fail-opened the key and a late
+    // processKey would silently mutate composition/history after the caller
+    // stopped listening. Already-running work cannot be aborted mid-flight,
+    // but work that only got scheduled and then stalled is dropped here.
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    dispatcher_->schedule([this, context, request, completed, deadline] {
+        if (testDispatchDelayMs_ > 0 &&
+            !testDispatchDelayConsumed_.exchange(true, std::memory_order_acq_rel)) {
+            Sleep(testDispatchDelayMs_);
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            droppedCount_.fetch_add(1, std::memory_order_acq_rel);
+            try {
+                completed->set_value(RuntimeResult{});
+            } catch (...) {
+            }
+            return;
+        }
         try {
             completed->set_value(runtime_->processKey(context, request));
         } catch (const std::exception& error) {
@@ -88,7 +109,20 @@ bool FcitxDispatcher::selectCandidate(
     if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
     auto completed = std::make_shared<std::promise<RuntimeResult>>();
     auto future = completed->get_future();
-    dispatcher_->schedule([this, targetProcessId, request, completed] {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    dispatcher_->schedule([this, targetProcessId, request, completed, deadline] {
+        if (testDispatchDelayMs_ > 0 &&
+            !testDispatchDelayConsumed_.exchange(true, std::memory_order_acq_rel)) {
+            Sleep(testDispatchDelayMs_);
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            droppedCount_.fetch_add(1, std::memory_order_acq_rel);
+            try {
+                completed->set_value(RuntimeResult{});
+            } catch (...) {
+            }
+            return;
+        }
         try {
             completed->set_value(runtime_->selectCandidate(targetProcessId, request));
         } catch (...) {
@@ -110,7 +144,20 @@ bool FcitxDispatcher::takePendingState(
     if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
     auto completed = std::make_shared<std::promise<RuntimeResult>>();
     auto future = completed->get_future();
-    dispatcher_->schedule([this, context, request, completed] {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    dispatcher_->schedule([this, context, request, completed, deadline] {
+        if (testDispatchDelayMs_ > 0 &&
+            !testDispatchDelayConsumed_.exchange(true, std::memory_order_acq_rel)) {
+            Sleep(testDispatchDelayMs_);
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            droppedCount_.fetch_add(1, std::memory_order_acq_rel);
+            try {
+                completed->set_value(RuntimeResult{});
+            } catch (...) {
+            }
+            return;
+        }
         try {
             completed->set_value(runtime_->takePendingState(context, request));
         } catch (...) {

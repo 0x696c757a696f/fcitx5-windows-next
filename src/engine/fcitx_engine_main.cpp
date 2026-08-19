@@ -247,6 +247,9 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
         return 4;
     }
     engine::FcitxDispatcher dispatcher;
+    if (const char* delay = std::getenv("FCITX5_TEST_DISPATCH_DELAY_MS"); delay) {
+        dispatcher.setTestDispatchDelay(static_cast<std::uint32_t>(std::atoi(delay)));
+    }
     if (!dispatcher.start(safeMode))
         return 5;
     std::wstring executable(32'768, L'\0');
@@ -339,6 +342,10 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     if (stopEvent)
         CloseHandle(stopEvent);
     dispatcher.stop();
+    // Emitted for the REG-DISPATCH-LATE integration test: the count of queued
+    // key requests that were dropped at their deadline check instead of being
+    // executed after the caller timed out.
+    std::cerr << "dispatcher-dropped=" << dispatcher.droppedCount() << '\n';
     return serverError.load();
 }
 
