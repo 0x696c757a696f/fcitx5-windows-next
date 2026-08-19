@@ -654,9 +654,15 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                     const bool prevPage =
                         sym == FcitxKey_minus || sym == FcitxKey_underscore ||
                         sym == FcitxKey_comma || sym == FcitxKey_bracketleft;
-                    if (!nextPage && !prevPage)
-                        goto page_keys_done;
+                    const bool upDown = sym == FcitxKey_Up || sym == FcitxKey_Down;
                     const bool scroll = bulk && bulk->totalSize() >= 0;
+                    // In the scroll viewport, Up/Down scroll one row instead of
+                    // the Fcitx default page turn; in ordinary paging they keep
+                    // the Fcitx default (Up=PrevPage, Down=NextPage).
+                    const bool scrollNext = nextPage || (scroll && sym == FcitxKey_Down);
+                    const bool scrollPrev = prevPage || (scroll && sym == FcitxKey_Up);
+                    if (!scrollNext && !scrollPrev)
+                        goto page_keys_done;
                     if (scroll) {
                         // Scroll viewport: '+'/'-' move one row (the fixed
                         // 6-column grid) and land the highlight on the FIRST
@@ -669,11 +675,11 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                         constexpr int columns = 6;
                         const int page = pageable->currentPage();
                         const int available = bounded;
-                        if (page <= 0 && nextPage && pageable->hasNext()) {
+                        if (page <= 0 && scrollNext && pageable->hasNext()) {
                             pageable->next();
                             event.filter();
                             impl_->selectedOverride[key] = 0;
-                        } else if (page <= 0 && prevPage && pageable->hasPrev()) {
+                        } else if (page <= 0 && scrollPrev && pageable->hasPrev()) {
                             pageable->prev();
                             event.filter();
                             impl_->selectedOverride[key] = 0;
@@ -690,8 +696,17 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                                 cursor = list->cursorIndex();
                             }
                             cursor = std::clamp(cursor, 0, (std::max)(0, available - 1));
-                            const int rowStart = (cursor / columns) * columns;
-                            int target = rowStart + (nextPage ? columns : -columns);
+                            // '+'/'-' (and the comma/period/bracket variants)
+                            // land on the FIRST candidate of the new row;
+                            // Up/Down keep the current column and move to the
+                            // same column of the previous/next row.
+                            int target = 0;
+                            if (upDown) {
+                                target = cursor + (scrollNext ? columns : -columns);
+                            } else {
+                                const int rowStart = (cursor / columns) * columns;
+                                target = rowStart + (scrollNext ? columns : -columns);
+                            }
                             if (target < 0 || target >= available) {
                                 if (target < 0 && pageable->hasPrev()) {
                                     pageable->prev();
