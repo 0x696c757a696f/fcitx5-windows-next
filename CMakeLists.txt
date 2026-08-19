@@ -220,6 +220,7 @@ fcitx_apply_binary_hardening(fcitx5_control)
 add_executable(
   fcitx5_config_app WIN32
   src/config/app_main.cpp
+  src/config/process_execution.cpp
   resources/windows/app.rc)
 set_target_properties(fcitx5_config_app PROPERTIES OUTPUT_NAME "fcitx5-config")
 target_link_libraries(
@@ -435,6 +436,13 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_config_parser_test)
   add_test(NAME config-toml-contract COMMAND fcitx5_config_parser_test)
   set_tests_properties(config-toml-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+  add_executable(fcitx5_process_execution_test tests/unit/process_execution_test.cpp
+                 src/config/process_execution.cpp)
+  target_include_directories(fcitx5_process_execution_test PRIVATE src/config)
+  fcitx_apply_project_options(fcitx5_process_execution_test)
+  fcitx_apply_binary_hardening(fcitx5_process_execution_test)
+  add_test(NAME process-execution-pipe COMMAND fcitx5_process_execution_test)
 
   add_executable(fcitx5_candidate_layout_test tests/unit/candidate_layout_test.cpp)
   target_link_libraries(fcitx5_candidate_layout_test PRIVATE fcitx5::candidate_layout)

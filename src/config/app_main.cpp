@@ -1,4 +1,5 @@
 #include "fcitx5_windows/version.h"
+#include "process_execution.h"
 
 #include <Windows.h>
 #include <CommCtrl.h>
@@ -232,52 +233,9 @@ std::wstring quote(std::wstring_view value) {
     return result;
 }
 
-bool runExecutable(const fs::path& executable, const std::vector<std::wstring>& arguments,
-                   std::wstring& output) {
-    if (!fs::exists(executable))
-        return false;
-    std::wstring command = quote(executable.wstring());
-    for (const auto& argument : arguments)
-        command += L" " + quote(argument);
-    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
-    HANDLE readPipe = nullptr;
-    HANDLE writePipe = nullptr;
-    if (!CreatePipe(&readPipe, &writePipe, &attributes, 0))
-        return false;
-    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdOutput = writePipe;
-    startup.hStdError = writePipe;
-    PROCESS_INFORMATION process{};
-    const BOOL created =
-        CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-                       nullptr, executable.parent_path().c_str(), &startup, &process);
-    CloseHandle(writePipe);
-    if (!created) {
-        CloseHandle(readPipe);
-        return false;
-    }
-    const DWORD wait = WaitForSingleObject(process.hProcess, 120000);
-    if (wait == WAIT_TIMEOUT)
-        TerminateProcess(process.hProcess, ERROR_TIMEOUT);
-    std::string bytes;
-    char buffer[2048];
-    DWORD count = 0;
-    while (ReadFile(readPipe, buffer, sizeof(buffer), &count, nullptr) && count != 0)
-        bytes.append(buffer, count);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(process.hProcess, &exitCode);
-    CloseHandle(readPipe);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    output = widen(bytes);
-    return wait == WAIT_OBJECT_0 && exitCode == 0;
-}
-
 bool runControl(const std::vector<std::wstring>& arguments, std::wstring& output) {
-    return runExecutable(executableDirectory() / L"fcitx5-control.exe", arguments, output);
+    return fcitx::windows::config::runExecutable(
+        executableDirectory() / L"fcitx5-control.exe", arguments, output);
 }
 
 bool checkI18n() {
@@ -297,8 +255,8 @@ bool checkI18n() {
 
 bool checkResources() {
     std::wstring output;
-    return runExecutable(executableDirectory() / L"fcitx5-ui.exe", {L"--self-test", L"--safe-mode"},
-                         output);
+    return fcitx::windows::config::runExecutable(
+        executableDirectory() / L"fcitx5-ui.exe", {L"--self-test", L"--safe-mode"}, output);
 }
 
 constexpr int kStartup = 100;
