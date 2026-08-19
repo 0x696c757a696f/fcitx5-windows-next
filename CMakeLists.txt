@@ -540,6 +540,17 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_ipc_multi_client_test)
   add_test(NAME ipc-multi-client
            COMMAND fcitx5_ipc_multi_client_test $<TARGET_FILE:fcitx5_mock_engine>)
+  add_test(NAME ipc-multi-client-32
+           COMMAND fcitx5_ipc_multi_client_test $<TARGET_FILE:fcitx5_mock_engine> 32)
+  set_tests_properties(ipc-multi-client-32 PROPERTIES TIMEOUT 30)
+
+  add_executable(fcitx5_ipc_idle_client_test tests/integration/ipc_idle_client_test.cpp)
+  target_link_libraries(fcitx5_ipc_idle_client_test PRIVATE fcitx5::ipc_client)
+  fcitx_apply_project_options(fcitx5_ipc_idle_client_test)
+  fcitx_apply_binary_hardening(fcitx5_ipc_idle_client_test)
+  add_test(NAME ipc-idle-client
+           COMMAND fcitx5_ipc_idle_client_test $<TARGET_FILE:fcitx5_mock_engine>)
+  set_tests_properties(ipc-idle-client PROPERTIES TIMEOUT 30)
 
   add_executable(fcitx5_ipc_late_response_test
                  tests/integration/ipc_late_response_test.cpp)

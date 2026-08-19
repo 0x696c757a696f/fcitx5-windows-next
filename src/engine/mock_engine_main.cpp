@@ -187,8 +187,11 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     std::atomic<std::uint64_t> nextResponseId{1};
     std::atomic<bool> readinessSignaled{};
     std::atomic<int> serverError{};
+    std::atomic<unsigned> completedClients{0};
+    HANDLE internalStopEvent =
+        testClientCount != 0 ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
     HANDLE stopEvent = stopEventName.empty()
-                           ? nullptr
+                           ? internalStopEvent
                            : OpenEventW(SYNCHRONIZE, FALSE, stopEventName.c_str());
     if (!stopEventName.empty() && !stopEvent) return 3;
     const unsigned workerCount = testClientCount == 0 ? 4U : testClientCount;
@@ -196,7 +199,6 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     workers.reserve(workerCount);
     for (unsigned workerIndex = 0; workerIndex < workerCount; ++workerIndex) {
         workers.emplace_back([&] {
-            unsigned completedByWorker = 0;
             for (;;) {
                 if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) return;
                 HANDLE pipe = CreateNamedPipeW(
@@ -243,13 +245,18 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                 }
                 DisconnectNamedPipe(pipe);
                 CloseHandle(pipe);
-                ++completedByWorker;
-                if (testClientCount != 0 && completedByWorker == 1) return;
+                if (testClientCount != 0 &&
+                    completedClients.fetch_add(1, std::memory_order_acq_rel) + 1U ==
+                        testClientCount) {
+                    if (stopEvent) SetEvent(stopEvent);
+                    return;
+                }
             }
         });
     }
     for (auto& worker : workers) worker.join();
     if (stopEvent) CloseHandle(stopEvent);
+    if (internalStopEvent && internalStopEvent != stopEvent) CloseHandle(internalStopEvent);
     return serverError.load();
 }
 
@@ -283,7 +290,7 @@ int wmain(int argc, wchar_t** argv) {
         } else if (argument == L"--test-clients" && index + 1 < argc) {
             wchar_t* end = nullptr;
             const unsigned long parsed = std::wcstoul(argv[++index], &end, 10);
-            if (!end || *end != L'\0' || parsed == 0 || parsed > 16) return 1;
+            if (!end || *end != L'\0' || parsed == 0 || parsed > 64) return 1;
             testClientCount = static_cast<unsigned>(parsed);
         } else if (argument == L"--pipe" && index + 1 < argc) {
             pipeName = argv[++index];

@@ -270,16 +270,22 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     std::atomic<std::uint64_t> nextConnectionId{1};
     std::atomic<bool> readinessSignaled{};
     std::atomic<int> serverError{};
+    // In --test-clients mode every worker must stop once the configured number
+    // of client sessions has completed (not after the first one), so concurrent
+    // multi-client stress tests can run N clients against N workers.
+    std::atomic<unsigned> completedClients{0};
+    HANDLE internalStopEvent =
+        testClientCount != 0 ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
     HANDLE stopEvent =
-        stopEventName.empty() ? nullptr : OpenEventW(SYNCHRONIZE, FALSE, stopEventName.c_str());
+        stopEventName.empty() ? internalStopEvent
+                              : OpenEventW(SYNCHRONIZE, FALSE, stopEventName.c_str());
     if (!stopEventName.empty() && !stopEvent)
         return 3;
-    const unsigned workerCount = testClientCount == 0 ? 4U : testClientCount;
+    const unsigned workerCount = testClientCount == 0 ? 16U : testClientCount;
     std::vector<std::thread> workers;
     workers.reserve(workerCount);
     for (unsigned index = 0; index < workerCount; ++index) {
         workers.emplace_back([&] {
-            unsigned completed = 0;
             for (;;) {
                 if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
                     return;
@@ -331,9 +337,12 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                 }
                 DisconnectNamedPipe(pipe);
                 CloseHandle(pipe);
-                ++completed;
-                if (testClientCount != 0 && completed == 1)
+                if (testClientCount != 0 &&
+                    completedClients.fetch_add(1, std::memory_order_acq_rel) + 1U ==
+                        testClientCount) {
+                    if (stopEvent) SetEvent(stopEvent);
                     return;
+                }
             }
         });
     }
@@ -341,6 +350,8 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
         worker.join();
     if (stopEvent)
         CloseHandle(stopEvent);
+    if (internalStopEvent && internalStopEvent != stopEvent)
+        CloseHandle(internalStopEvent);
     dispatcher.stop();
     // Emitted for the REG-DISPATCH-LATE integration test: the count of queued
     // key requests that were dropped at their deadline check instead of being
@@ -405,7 +416,7 @@ int wmain(int argc, wchar_t** argv) {
         } else if (argument == L"--test-clients" && index + 1 < argc) {
             wchar_t* end = nullptr;
             const unsigned long parsed = std::wcstoul(argv[++index], &end, 10);
-            if (!end || *end != L'\0' || parsed == 0 || parsed > 16)
+            if (!end || *end != L'\0' || parsed == 0 || parsed > 64)
                 return 1;
             testClientCount = static_cast<unsigned>(parsed);
         } else if (argument == L"--pipe" && index + 1 < argc) {
