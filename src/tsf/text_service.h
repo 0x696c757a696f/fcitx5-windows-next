@@ -2,6 +2,7 @@
 
 #include "candidate_ui_element.h"
 #include "pipe_client.h"
+#include "guids.h"
 
 #include <Windows.h>
 #include <msctf.h>
@@ -9,6 +10,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 
 namespace fcitx::windows::tsf {
@@ -17,7 +19,8 @@ class TextService final : public ITfTextInputProcessorEx,
                           public ITfKeyEventSink,
                           public ITfCompositionSink,
                           public ITfThreadMgrEventSink,
-                          public ITfThreadFocusSink {
+                          public ITfThreadFocusSink,
+                          public ITfActiveLanguageProfileNotifySink {
 public:
     TextService();
 
@@ -55,6 +58,9 @@ public:
     HRESULT STDMETHODCALLTYPE OnSetThreadFocus() noexcept override;
     HRESULT STDMETHODCALLTYPE OnKillThreadFocus() noexcept override;
 
+    HRESULT STDMETHODCALLTYPE OnActivated(REFCLSID classId, REFGUID profileGuid,
+                                          BOOL activated) noexcept override;
+
 private:
     ~TextService();
 
@@ -82,11 +88,13 @@ private:
     DWORD candidateUiElementId_{TF_INVALID_UIELEMENTID};
     DWORD threadManagerEventSinkCookie_{TF_INVALID_COOKIE};
     DWORD threadFocusSinkCookie_{TF_INVALID_COOKIE};
+    DWORD activeProfileSinkCookie_{TF_INVALID_COOKIE};
     std::uint64_t lastPresentedContextId_{};
     std::unordered_map<std::uint64_t, protocol::CaretRect> lastCaretRects_;
     std::unordered_map<std::uint64_t, bool> popupAllowedByContext_;
     Microsoft::WRL::ComPtr<ITfContext> activeContext_;
     std::uint64_t activeContextId_{};
+    std::string activeInputMethod_{kInputProfiles[0].engine};
     bool imeActive_{};
     HANDLE notificationEvent_{};
     HANDLE notificationWait_{};

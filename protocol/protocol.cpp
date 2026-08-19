@@ -189,6 +189,7 @@ bool validKeyResponsePayload(const KeyResponse& message) noexcept {
 bool validKeyRequestPayload(const KeyRequest& message) noexcept {
     return message.scanCode <= 0xffU &&
            message.logicalTextUtf8.size() <= kMaxLogicalKeyUtf8 &&
+           message.inputMethodUtf8.size() <= kMaxInputMethodIdUtf8 &&
            validCaret(message.caret);
 }
 
@@ -295,6 +296,7 @@ std::vector<std::uint8_t> encode(const KeyRequest& message) {
     writer.appendU8(message.popupAllowed ? 1U : 0U);
     writer.appendU64(message.keyboardLayout);
     writer.appendString(message.logicalTextUtf8);
+    writer.appendString(message.inputMethodUtf8);
     writer.appendU8(message.caret.valid ? 1U : 0U);
     writer.appendI32(message.caret.left);
     writer.appendI32(message.caret.top);
@@ -442,6 +444,7 @@ bool decode(const FrameView& frame, KeyRequest& message) noexcept {
                reader.readU8(popupAllowed) && popupAllowed <= 1 &&
                reader.readU64(message.keyboardLayout) &&
                reader.readString(message.logicalTextUtf8) &&
+               reader.readString(message.inputMethodUtf8) &&
                reader.readU8(valid) && valid <= 1 && reader.readI32(message.caret.left) &&
                reader.readI32(message.caret.top) && reader.readI32(message.caret.right) &&
                reader.readI32(message.caret.bottom) && reader.readU32(message.caret.dpi) &&

@@ -620,8 +620,12 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         context.focusIn();
         impl_->focused = &context;
     }
+    const auto& group = impl_->instance->inputMethodManager().currentGroup();
     const std::string selected =
-        impl_->instance->inputMethodManager().currentGroup().defaultInputMethod();
+        !request.inputMethodUtf8.empty() &&
+                impl_->instance->inputMethodManager().entry(request.inputMethodUtf8)
+            ? request.inputMethodUtf8
+            : group.defaultInputMethod();
     if (!impl_->inputMethodOverridden[key] && !selected.empty() &&
         impl_->instance->inputMethodManager().entry(selected) &&
         impl_->instance->inputMethod(&context) != selected) {

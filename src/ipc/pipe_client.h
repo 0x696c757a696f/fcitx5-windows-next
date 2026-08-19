@@ -57,7 +57,8 @@ public:
                                   std::uint32_t scanCode = 0,
                                   bool extendedKey = false,
                                   std::uint64_t keyboardLayout = 0,
-                                  std::string_view logicalText = {}) noexcept;
+                                  std::string_view logicalText = {},
+                                  std::string_view inputMethod = {}) noexcept;
     [[nodiscard]] bool selectCandidate(std::uint32_t targetProcessId,
                                        std::uint64_t expectedEngineEpoch,
                                        std::uint64_t contextId,

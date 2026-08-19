@@ -507,6 +507,14 @@ public:
             *cookie = 2;
             return S_OK;
         }
+        if (IsEqualIID(iid, IID_ITfActiveLanguageProfileNotifySink) &&
+            !activeProfileSink_) {
+            const HRESULT result = unknown->QueryInterface(
+                IID_PPV_ARGS(activeProfileSink_.ReleaseAndGetAddressOf()));
+            if (FAILED(result)) return result;
+            *cookie = 3;
+            return S_OK;
+        }
         return E_UNEXPECTED;
     }
     HRESULT STDMETHODCALLTYPE UnadviseSink(DWORD cookie) noexcept override {
@@ -516,6 +524,10 @@ public:
         }
         if (cookie == 2 && threadFocusSink_) {
             threadFocusSink_.Reset();
+            return S_OK;
+        }
+        if (cookie == 3 && activeProfileSink_) {
+            activeProfileSink_.Reset();
             return S_OK;
         }
         return E_INVALIDARG;
@@ -551,10 +563,10 @@ public:
     }
 
     [[nodiscard]] bool lifecycleSinksAdvised() const noexcept {
-        return threadManagerEventSink_ && threadFocusSink_;
+        return threadManagerEventSink_ && threadFocusSink_ && activeProfileSink_;
     }
     [[nodiscard]] bool lifecycleSinksReleased() const noexcept {
-        return !threadManagerEventSink_ && !threadFocusSink_;
+        return !threadManagerEventSink_ && !threadFocusSink_ && !activeProfileSink_;
     }
     HRESULT simulateDocumentFocusLost(ITfContext* context) noexcept {
         if (!threadManagerEventSink_) return E_UNEXPECTED;
@@ -562,6 +574,11 @@ public:
         return threadManagerEventSink_->OnSetFocus(nullptr, &previous);
     }
     void setBeginShow(BOOL show) noexcept { beginShow_ = show; }
+    HRESULT simulateActiveProfile(REFGUID profileGuid) noexcept {
+        if (!activeProfileSink_) return E_UNEXPECTED;
+        return activeProfileSink_->OnActivated(
+            fcitx::windows::tsf::kTextServiceClsid, profileGuid, TRUE);
+    }
     [[nodiscard]] DWORD uiBeginCount() const noexcept { return uiBeginCount_; }
     [[nodiscard]] DWORD uiEndCount() const noexcept { return uiEndCount_; }
     [[nodiscard]] bool hiddenCandidateSemanticsAvailable() const noexcept {
@@ -590,6 +607,7 @@ private:
     DWORD uiEndCount_{};
     ComPtr<ITfThreadMgrEventSink> threadManagerEventSink_;
     ComPtr<ITfThreadFocusSink> threadFocusSink_;
+    ComPtr<ITfActiveLanguageProfileNotifySink> activeProfileSink_;
     ComPtr<ITfUIElement> uiElement_;
 };
 
@@ -676,6 +694,8 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
             std::cerr << "password input scope was not passed through\n";
         } else {
             TestContext context;
+            const HRESULT activeProfile = threadManager.simulateActiveProfile(
+                fcitx::windows::tsf::kInputProfiles[1].guid);
             BOOL preeditTestEaten = FALSE;
             BOOL duplicatePreeditTestEaten = FALSE;
             BOOL preeditEaten = FALSE;
@@ -741,7 +761,8 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                 keySink->OnKeyDown(&context, 'A', 0, &fallbackEaten);
             const HRESULT orphanKeyUp =
                 keySink->OnKeyUp(&context, 'A', 0, &orphanKeyUpEaten);
-            if (SUCCEEDED(preeditTest) && SUCCEEDED(preeditResult) &&
+            if (SUCCEEDED(activeProfile) &&
+                SUCCEEDED(preeditTest) && SUCCEEDED(preeditResult) &&
                 SUCCEEDED(duplicatePreeditTest) && SUCCEEDED(commitTest) &&
                 SUCCEEDED(punctuationTest) && SUCCEEDED(enterTest) &&
                 SUCCEEDED(leftTest) && SUCCEEDED(backspaceTest) &&
@@ -764,6 +785,7 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
             } else {
                 std::cerr << "composition path failed: preedit=0x" << std::hex
                           << preeditResult << ", commit=0x" << commitResult
+                          << ", activeProfile=0x" << activeProfile
                           << ", preeditTest=0x" << preeditTest
                           << ", duplicatePreeditTest=0x" << duplicatePreeditTest
                           << ", resumedPreeditTest=0x" << resumedPreeditTest

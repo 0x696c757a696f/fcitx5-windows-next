@@ -6,6 +6,7 @@
 #include <fcitx5_windows/release_identity.h>
 
 #include <array>
+#include <string_view>
 
 namespace fcitx::windows::tsf {
 
@@ -16,6 +17,15 @@ inline constexpr GUID kTextServiceClsid = kReleaseIdentity.text_service_clsid;
 inline constexpr GUID kLanguageProfileGuid = kReleaseIdentity.language_profile_guid;
 
 inline constexpr const wchar_t* kServiceDescription = kReleaseIdentity.service_description;
+
+constexpr bool equalGuid(REFGUID left, REFGUID right) noexcept {
+    return left.Data1 == right.Data1 && left.Data2 == right.Data2 &&
+           left.Data3 == right.Data3 &&
+           left.Data4[0] == right.Data4[0] && left.Data4[1] == right.Data4[1] &&
+           left.Data4[2] == right.Data4[2] && left.Data4[3] == right.Data4[3] &&
+           left.Data4[4] == right.Data4[4] && left.Data4[5] == right.Data4[5] &&
+           left.Data4[6] == right.Data4[6] && left.Data4[7] == right.Data4[7];
+}
 
 struct InputProfile {
     const char* id;
@@ -32,10 +42,34 @@ struct ProfileIdentity {
     GUID guid;
 };
 
-inline constexpr std::array<InputProfile, 1> kInputProfiles{{
+constexpr GUID japaneseProfileGuid() noexcept {
+    if constexpr (kReleaseIdentity.channel == ReleaseChannel::stable) {
+        return {0x90672aa7, 0xdb8c, 0x45f9,
+                {0x8e, 0x97, 0x27, 0x86, 0x65, 0x70, 0xa8, 0xfa}};
+    } else if constexpr (kReleaseIdentity.channel == ReleaseChannel::beta) {
+        return {0x3874209c, 0xc633, 0x42cb,
+                {0xb7, 0x46, 0x14, 0xb7, 0xf3, 0xc4, 0xf2, 0x73}};
+    } else {
+        return {0x1796964c, 0x4b36, 0x499d,
+                {0xac, 0x6c, 0xbe, 0xcc, 0x28, 0x30, 0x3a, 0xad}};
+    }
+}
+
+inline constexpr GUID kJapaneseProfileGuid = japaneseProfileGuid();
+
+inline constexpr std::array<InputProfile, 2> kInputProfiles{{
     {"zh-cn-pinyin", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
      kLanguageProfileGuid, L"Fcitx5 Pinyin", "pinyin", true},
+    {"ja-jp-mozc", "ja-JP", MAKELANGID(LANG_JAPANESE, SUBLANG_DEFAULT),
+     kJapaneseProfileGuid, L"Fcitx5 Mozc", "mozc", true},
 }};
+
+constexpr const InputProfile* profileForGuid(REFGUID guid) noexcept {
+    for (const auto& profile : kInputProfiles) {
+        if (equalGuid(profile.guid, guid)) return &profile;
+    }
+    return nullptr;
+}
 
 // Migration-only identities which were registered by development builds but are
 // no longer product input profiles. Keep this list so repair and uninstall can

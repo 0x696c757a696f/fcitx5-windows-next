@@ -70,14 +70,17 @@ struct TsfSessionActivation {
                                     reinterpret_cast<void**>(&profiles))))
             return false;
 
-        const auto& expected = fcitx::windows::tsf::kInputProfiles[0];
-        TF_INPUTPROCESSORPROFILE registered{};
-        if (FAILED(profileManager->GetProfile(TF_PROFILETYPE_INPUTPROCESSOR, expected.language,
-                                              fcitx::windows::tsf::kTextServiceClsid,
-                                              expected.guid, nullptr, &registered))) {
-            std::cerr << "registered TSF profile was not enumerated\n";
-            return false;
+        for (const auto& expectedProfile : fcitx::windows::tsf::kInputProfiles) {
+            TF_INPUTPROCESSORPROFILE registered{};
+            if (FAILED(profileManager->GetProfile(
+                    TF_PROFILETYPE_INPUTPROCESSOR, expectedProfile.language,
+                    fcitx::windows::tsf::kTextServiceClsid, expectedProfile.guid,
+                    nullptr, &registered))) {
+                std::cerr << "registered TSF profile was not enumerated\n";
+                return false;
+            }
         }
+        const auto& expected = fcitx::windows::tsf::kInputProfiles[0];
         // ActivateProfile with DONTCARECURRENTINPUTLANGUAGE only queues the profile until its
         // language is selected. A deterministic host test first switches the desktop TSF
         // language, then activates and verifies the exact keyboard profile.

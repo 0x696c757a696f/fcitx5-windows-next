@@ -5,10 +5,22 @@
 #include <objbase.h>
 
 #include <iostream>
+#include <string_view>
 
-static_assert(fcitx::windows::tsf::kInputProfiles.size() == 1);
+static_assert(fcitx::windows::tsf::kInputProfiles.size() >= 2);
 static_assert(fcitx::windows::tsf::kInputProfiles[0].language ==
               MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED));
+static_assert(!fcitx::windows::tsf::equalGuid(
+    fcitx::windows::tsf::kInputProfiles[0].guid,
+    fcitx::windows::tsf::kInputProfiles[1].guid));
+static_assert(fcitx::windows::tsf::kInputProfiles[1].language ==
+              MAKELANGID(LANG_JAPANESE, SUBLANG_DEFAULT));
+static_assert(fcitx::windows::tsf::kInputProfiles[1].engine ==
+              std::string_view("mozc"));
+static_assert(fcitx::windows::tsf::profileForGuid(
+                  fcitx::windows::tsf::kInputProfiles[1].guid)
+                  ->bcp47 == std::string_view("ja-JP"));
+static_assert(fcitx::windows::tsf::profileForGuid(GUID{}) == nullptr);
 static_assert(fcitx::windows::tsf::kObsoleteInputProfiles.size() == 1);
 static_assert(fcitx::windows::tsf::kObsoleteInputProfiles[0].language ==
               MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));

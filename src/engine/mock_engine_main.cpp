@@ -155,7 +155,8 @@ std::vector<std::uint8_t> handle(std::span<const std::uint8_t> requestBytes,
         response.status = protocol::Status::ok;
         response.caret = request.caret;
         if (compositionTest && request.virtualKey == 'N') {
-            if (request.scanCode == 0 || request.keyboardLayout == 0) return {};
+            if (request.scanCode == 0 || request.keyboardLayout == 0 ||
+                request.inputMethodUtf8 != "mozc") return {};
             response.handled = true;
             response.preeditUtf8 = "n";
             response.preeditCaretUtf8 = 1;

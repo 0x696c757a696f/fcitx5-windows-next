@@ -9,7 +9,7 @@
 namespace fcitx::windows::protocol {
 
 inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
-inline constexpr std::uint16_t kVersion = 8;
+inline constexpr std::uint16_t kVersion = 9;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
@@ -19,6 +19,7 @@ inline constexpr std::size_t kMaxPreeditUtf8 = 16U * 1024U;
 inline constexpr std::size_t kMaxCandidates = 128;
 inline constexpr std::size_t kMaxCandidateFieldUtf8 = 4096;
 inline constexpr std::size_t kMaxLogicalKeyUtf8 = 64;
+inline constexpr std::size_t kMaxInputMethodIdUtf8 = 64;
 
 enum class MessageType : std::uint16_t {
     helloRequest = 1,
@@ -106,6 +107,7 @@ struct KeyRequest {
     bool popupAllowed{true};
     std::uint64_t keyboardLayout{};
     std::string logicalTextUtf8;
+    std::string inputMethodUtf8;
     CaretRect caret;
 };
 

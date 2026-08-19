@@ -429,6 +429,8 @@ HRESULT TextService::QueryInterface(REFIID interfaceId, void** object) noexcept 
         *object = static_cast<ITfThreadMgrEventSink*>(this);
     } else if (IsEqualIID(interfaceId, IID_ITfThreadFocusSink)) {
         *object = static_cast<ITfThreadFocusSink*>(this);
+    } else if (IsEqualIID(interfaceId, IID_ITfActiveLanguageProfileNotifySink)) {
+        *object = static_cast<ITfActiveLanguageProfileNotifySink*>(this);
     }
     if (!*object) {
         return E_NOINTERFACE;
@@ -620,10 +622,26 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
         clientId_ = TF_CLIENTID_NULL;
         return result;
     }
-    result = keystrokeManager->AdviseKeyEventSink(clientId_, this, TRUE);
+    result = source->AdviseSink(IID_ITfActiveLanguageProfileNotifySink,
+                                static_cast<ITfActiveLanguageProfileNotifySink*>(this),
+                                &activeProfileSinkCookie_);
     if (FAILED(result)) {
         (void)source->UnadviseSink(threadFocusSinkCookie_);
         (void)source->UnadviseSink(threadManagerEventSinkCookie_);
+        activeProfileSinkCookie_ = TF_INVALID_COOKIE;
+        threadFocusSinkCookie_ = TF_INVALID_COOKIE;
+        threadManagerEventSinkCookie_ = TF_INVALID_COOKIE;
+        threadManager_.Reset();
+        uiElementManager_.Reset();
+        clientId_ = TF_CLIENTID_NULL;
+        return result;
+    }
+    result = keystrokeManager->AdviseKeyEventSink(clientId_, this, TRUE);
+    if (FAILED(result)) {
+        (void)source->UnadviseSink(activeProfileSinkCookie_);
+        (void)source->UnadviseSink(threadFocusSinkCookie_);
+        (void)source->UnadviseSink(threadManagerEventSinkCookie_);
+        activeProfileSinkCookie_ = TF_INVALID_COOKIE;
         threadFocusSinkCookie_ = TF_INVALID_COOKIE;
         threadManagerEventSinkCookie_ = TF_INVALID_COOKIE;
         threadManager_.Reset();
@@ -649,6 +667,10 @@ HRESULT TextService::Deactivate() noexcept {
     if (threadManager_ && clientId_ != TF_CLIENTID_NULL) {
         Microsoft::WRL::ComPtr<ITfSource> source;
         if (SUCCEEDED(threadManager_.As(&source))) {
+            if (activeProfileSinkCookie_ != TF_INVALID_COOKIE) {
+                const HRESULT unadvise = source->UnadviseSink(activeProfileSinkCookie_);
+                if (FAILED(unadvise) && SUCCEEDED(result)) result = unadvise;
+            }
             if (threadFocusSinkCookie_ != TF_INVALID_COOKIE) {
                 const HRESULT unadvise = source->UnadviseSink(threadFocusSinkCookie_);
                 if (FAILED(unadvise) && SUCCEEDED(result)) result = unadvise;
@@ -658,6 +680,7 @@ HRESULT TextService::Deactivate() noexcept {
                 if (FAILED(unadvise) && SUCCEEDED(result)) result = unadvise;
             }
         }
+        activeProfileSinkCookie_ = TF_INVALID_COOKIE;
         threadFocusSinkCookie_ = TF_INVALID_COOKIE;
         threadManagerEventSinkCookie_ = TF_INVALID_COOKIE;
         Microsoft::WRL::ComPtr<ITfKeystrokeMgr> keystrokeManager;
@@ -844,7 +867,7 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
         const bool engineResponded = client_.processKey(
             contextId, static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult, caret,
             popupAllowed, scanCodeFromKeyData(virtualKey, keyData), extendedFromKeyData(keyData),
-            currentKeyboardLayout());
+            currentKeyboardLayout(), {}, activeInputMethod_);
         if (!engineResponded) {
             if (candidateUiElementId_ != TF_INVALID_UIELEMENTID && uiElementManager_) {
                 (void)uiElementManager_->EndUIElement(candidateUiElementId_);
@@ -957,7 +980,7 @@ HRESULT TextService::OnKeyUp(ITfContext* context, WPARAM virtualKey,
     (void)client_.processKey(
         contextId, static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult, {},
         popupAllowed, scanCodeFromKeyData(virtualKey, keyData), extendedFromKeyData(keyData),
-        currentKeyboardLayout());
+        currentKeyboardLayout(), {}, activeInputMethod_);
     return S_OK;
 }
 
@@ -1012,6 +1035,18 @@ HRESULT TextService::OnKillThreadFocus() noexcept {
     Microsoft::WRL::ComPtr<ITfDocumentMgr> documentManager;
     if (threadManager_) (void)threadManager_->GetFocus(&documentManager);
     dismissForFocusLoss(topContext(documentManager.Get()).Get());
+    return S_OK;
+}
+
+HRESULT TextService::OnActivated(REFCLSID classId, REFGUID profileGuid,
+                                 BOOL activated) noexcept {
+    if (!activated || !IsEqualGUID(classId, kTextServiceClsid)) {
+        return S_OK;
+    }
+    const InputProfile* profile = profileForGuid(profileGuid);
+    if (profile) {
+        activeInputMethod_ = profile->engine;
+    }
     return S_OK;
 }
 
