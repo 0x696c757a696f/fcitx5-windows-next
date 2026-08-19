@@ -264,6 +264,35 @@ Key keyFromRequest(const protocol::KeyRequest& request) {
         return (request.keyFlags & protocol::kKeyFlagShift) != 0
                    ? Key(FcitxKey_underscore, states)
                    : Key(FcitxKey_minus, states);
+    case VK_OEM_COMMA:
+        // Comma/period page keys: ',' previous page, '.' next page (Shift
+        // variants '<' '>' are punctuation passthrough for Fcitx to decide).
+        return (request.keyFlags & protocol::kKeyFlagShift) != 0
+                   ? Key(FcitxKey_less, states)
+                   : Key(FcitxKey_comma, states);
+    case VK_OEM_PERIOD:
+        return (request.keyFlags & protocol::kKeyFlagShift) != 0
+                   ? Key(FcitxKey_greater, states)
+                   : Key(FcitxKey_period, states);
+    case VK_OEM_1:
+        // Semicolon/apostrophe select the 2nd/3rd candidate; shifted variants
+        // ':' '"' keep their punctuation meaning.
+        return (request.keyFlags & protocol::kKeyFlagShift) != 0
+                   ? Key(FcitxKey_colon, states)
+                   : Key(FcitxKey_semicolon, states);
+    case VK_OEM_7:
+        return (request.keyFlags & protocol::kKeyFlagShift) != 0
+                   ? Key(FcitxKey_quotedbl, states)
+                   : Key(FcitxKey_apostrophe, states);
+    case VK_OEM_4:
+        // Bracket page keys: '[' previous page, ']' next page.
+        return (request.keyFlags & protocol::kKeyFlagShift) != 0
+                   ? Key(FcitxKey_braceleft, states)
+                   : Key(FcitxKey_bracketleft, states);
+    case VK_OEM_6:
+        return (request.keyFlags & protocol::kKeyFlagShift) != 0
+                   ? Key(FcitxKey_braceright, states)
+                   : Key(FcitxKey_bracketright, states);
     default:
         break;
     }
@@ -301,6 +330,11 @@ class FcitxRuntime::Impl final {
     std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> compositions;
     std::unordered_map<ClientContextKey, protocol::CaretRect, KeyHash> carets;
     std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
+    // Focus override set by the Left/Right arrow keys: moves the candidate
+    // highlight without committing. Cleared whenever the candidate list
+    // changes (page turn, selection, new snapshot).
+    std::unordered_map<ClientContextKey, std::optional<std::uint32_t>, KeyHash>
+        selectedOverride;
     // Immutable snapshot of config.toml, loaded once at startup. The input
     // hot path (processKey) reads this in memory instead of reopening and
     // re-parsing the file on every keystroke.
@@ -462,6 +496,10 @@ class FcitxRuntime::Impl final {
                 if (global >= 0)
                     cursor = global;
             }
+            if (const auto found = selectedOverride.find(key);
+                found != selectedOverride.end() && found->second) {
+                cursor = static_cast<int>(*found->second);
+            }
             if (cursor >= 0 && cursor < size)
                 output.selectedCandidate = static_cast<std::uint32_t>(cursor);
             output.candidateTotal = static_cast<std::uint32_t>(size);
@@ -592,28 +630,71 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
             return impl_->collectResult(key, context, true);
         }
     }
-    // Laptop-friendly page keys: '-' / '_' previous page, '=' / '+' next page.
-    // Fcitx's default PrevPage/NextPage are Up/Down, which the scroll viewport
-    // uses for continuous cursor movement, so route the number-row keys to the
-    // pageable candidate list explicitly when candidates are visible. Compare
-    // the key symbol directly: '+' (Shift+'=') and '_' (Shift+'-') carry a
-    // Shift state and would fail an isSimple() check, but their symbols are
-    // distinct (FcitxKey_plus / FcitxKey_underscore).
+    // Candidate navigation keys while candidates are visible. Fcitx's default
+    // PrevPage/NextPage are Up/Down, which the scroll viewport uses for
+    // continuous cursor movement, so route the number-row page keys and the
+    // comma/period and bracket pairs to the pageable list explicitly, compare
+    // key symbols directly ('+' and '_' carry a Shift state), select the
+    // second/third candidate with ';'/''', and move the highlight with the
+    // Left/Right arrow keys without committing.
     {
         const KeySym sym = event.key().sym();
         if (!event.isRelease()) {
             if (const auto list = context.inputPanel().candidateList();
                 list && !list->empty()) {
+                const auto* bulk = list->toBulk();
+                const int count =
+                    bulk && bulk->totalSize() >= 0 ? bulk->totalSize() : list->size();
+                const int bounded = std::clamp(
+                    count, 0, static_cast<int>(protocol::kMaxCandidates));
                 if (auto* pageable = list->toPageable(); pageable) {
-                    if ((sym == FcitxKey_equal || sym == FcitxKey_plus) &&
-                        pageable->hasNext()) {
+                    const bool nextPage =
+                        sym == FcitxKey_equal || sym == FcitxKey_plus ||
+                        sym == FcitxKey_period || sym == FcitxKey_bracketright;
+                    const bool prevPage =
+                        sym == FcitxKey_minus || sym == FcitxKey_underscore ||
+                        sym == FcitxKey_comma || sym == FcitxKey_bracketleft;
+                    if (nextPage && pageable->hasNext()) {
                         pageable->next();
                         event.filter();
-                    } else if ((sym == FcitxKey_minus ||
-                                sym == FcitxKey_underscore) &&
-                               pageable->hasPrev()) {
+                        impl_->selectedOverride.erase(key);
+                    } else if (prevPage && pageable->hasPrev()) {
                         pageable->prev();
                         event.filter();
+                        impl_->selectedOverride.erase(key);
+                    }
+                }
+                // ';' selects the second candidate, '\'' the third, on top of
+                // the digit keys Fcitx already handles.
+                if (sym == FcitxKey_semicolon || sym == FcitxKey_apostrophe) {
+                    const std::size_t target = sym == FcitxKey_semicolon ? 1U : 2U;
+                    if (target < static_cast<std::size_t>(bounded)) {
+                        const auto& candidate =
+                            bulk && bulk->totalSize() >= 0
+                                ? bulk->candidateFromAll(static_cast<int>(target))
+                                : list->candidate(static_cast<int>(target));
+                        candidate.select(&context);
+                        event.filterAndAccept();
+                        impl_->selectedOverride.erase(key);
+                        return impl_->collectResult(key, context, true);
+                    }
+                }
+                // Left/Right move the highlight without committing.
+                if (sym == FcitxKey_Left || sym == FcitxKey_Right) {
+                    if (bounded > 0) {
+                        int focus = 0;
+                        if (const auto found = impl_->selectedOverride.find(key);
+                            found != impl_->selectedOverride.end() && found->second) {
+                            focus = static_cast<int>(*found->second);
+                        } else {
+                            focus = list->cursorIndex();
+                        }
+                        focus += sym == FcitxKey_Right ? 1 : -1;
+                        focus = std::clamp(focus, 0, bounded - 1);
+                        impl_->selectedOverride[key] =
+                            static_cast<std::uint32_t>(focus);
+                        event.filterAndAccept();
+                        return impl_->collectResult(key, context, true);
                     }
                 }
             }
@@ -722,6 +803,7 @@ void FcitxRuntime::forgetConnection(std::uint64_t connectionId) {
             impl_->carets.erase(iterator->first);
             impl_->pendingStates.erase(iterator->first);
             impl_->inputMethodOverridden.erase(iterator->first);
+            impl_->selectedOverride.erase(iterator->first);
             iterator = impl_->contexts.erase(iterator);
         } else {
             ++iterator;

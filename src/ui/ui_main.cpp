@@ -468,6 +468,31 @@ class CandidateWindow final {
         float fallbackTop = 8.0F;
         const std::size_t paintCount =
             visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
+        // Fixed label column width across all visible rows: the candidate text
+        // then starts at the same x in every row (selected row included) so the
+        // Chinese text columns align regardless of label width.
+        float labelColumnWidth = 0.0F;
+        for (std::size_t local = 0; local < paintCount; ++local) {
+            const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
+            if (index >= lines.size())
+                continue;
+            const auto& label = lines[index].label;
+            if (label.empty())
+                continue;
+            const D2D1_RECT_F bounds = itemRects_.size() == paintCount
+                                           ? itemRects_[local]
+                                           : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
+            ComPtr<IDWriteTextLayout> layout;
+            DWRITE_TEXT_METRICS metrics{};
+            if (SUCCEEDED(writeFactory_->CreateTextLayout(
+                    label.data(), static_cast<UINT32>(label.size()), labelFormat_.Get(),
+                    (std::max)(1.0F, bounds.right - bounds.left),
+                    (std::max)(1.0F, bounds.bottom - bounds.top), &layout)) &&
+                SUCCEEDED(layout->GetMetrics(&metrics))) {
+                labelColumnWidth =
+                    std::max(labelColumnWidth, metrics.widthIncludingTrailingWhitespace);
+            }
+        }
         if (scrollMode_ && itemRects_.size() > 6U) {
             borderBrush->SetOpacity(0.55F);
             for (std::size_t row = 6U; row < itemRects_.size(); row += 6U) {
@@ -499,34 +524,40 @@ class CandidateWindow final {
                 renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(selection, radius, radius),
                                                     selectionBrush.Get());
             }
-            float left = bounds.left;
-            const auto drawSegment = [&](const std::wstring& value, IDWriteTextFormat* format,
-                                         ID2D1Brush* brush) {
+            const auto drawTextAt = [&](float x, const std::wstring& value,
+                                        IDWriteTextFormat* format, ID2D1Brush* brush,
+                                        float* widthOut) {
                 if (value.empty())
                     return;
                 ComPtr<IDWriteTextLayout> layout;
                 DWRITE_TEXT_METRICS metrics{};
                 if (FAILED(writeFactory_->CreateTextLayout(
                         value.data(), static_cast<UINT32>(value.size()), format,
-                        (std::max)(1.0F, bounds.right - left),
+                        (std::max)(1.0F, bounds.right - x),
                         (std::max)(1.0F, bounds.bottom - bounds.top), &layout)) ||
                     FAILED(layout->GetMetrics(&metrics)))
                     return;
-                const D2D1_RECT_F segment =
-                    D2D1::RectF(left, bounds.top, bounds.right, bounds.bottom);
+                const D2D1_RECT_F segment = D2D1::RectF(x, bounds.top, bounds.right, bounds.bottom);
                 // Clip instead of wrapping: a long label/comment that exceeds
                 // the remaining row width must not wrap onto the candidate
                 // row below and visually overlap it.
                 renderTarget_->DrawTextW(value.data(), static_cast<UINT32>(value.size()), format,
                                          segment, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
-                left += metrics.widthIncludingTrailingWhitespace;
+                if (widthOut)
+                    *widthOut = metrics.widthIncludingTrailingWhitespace;
             };
-            drawSegment(candidate.label, labelFormat_.Get(),
-                        selected ? selectedLabelBrush.Get() : labelBrush.Get());
-            drawSegment(candidate.text, textFormat_.Get(),
-                        selected ? selectedTextBrush.Get() : textBrush.Get());
-            drawSegment(candidate.comment, annotationFormat_.Get(),
-                        selected ? selectedCommentBrush.Get() : commentBrush.Get());
+            // The label column has a fixed width across every row so the
+            // candidate text starts at the same x in all rows (the selected
+            // row included), keeping the Chinese text columns aligned.
+            if (!candidate.label.empty())
+                drawTextAt(bounds.left, candidate.label, labelFormat_.Get(),
+                           selected ? selectedLabelBrush.Get() : labelBrush.Get(), nullptr);
+            float textWidth = 0.0F;
+            drawTextAt(bounds.left + labelColumnWidth, candidate.text, textFormat_.Get(),
+                       selected ? selectedTextBrush.Get() : textBrush.Get(), &textWidth);
+            drawTextAt(bounds.left + labelColumnWidth + textWidth + 4.0F, candidate.comment,
+                       annotationFormat_.Get(),
+                       selected ? selectedCommentBrush.Get() : commentBrush.Get(), nullptr);
             fallbackTop += 32.0F;
         }
         if (hasScrollbar_) {
