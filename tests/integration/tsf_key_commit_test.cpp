@@ -644,6 +644,18 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
             const HRESULT commitResult =
                 keySink->OnKeyDown(&context, VK_SPACE, 0, &commitEaten);
             const bool committedChinese = context.text() == L"\x4f60";
+            // Punctuation and modifier keys route to the engine even without an
+            // active composition: Fcitx (not the TSF whitelist) decides whether
+            // they are handled or passed through.
+            BOOL punctuationTestEaten = FALSE;
+            BOOL modifierTestEaten = FALSE;
+            BOOL liveKeyUpEaten = TRUE;
+            const HRESULT punctuationTest =
+                keySink->OnTestKeyDown(&context, VK_OEM_COMMA, 0, &punctuationTestEaten);
+            const HRESULT modifierTest =
+                keySink->OnTestKeyDown(&context, VK_SHIFT, 0, &modifierTestEaten);
+            const HRESULT liveKeyUp =
+                keySink->OnKeyUp(&context, VK_SHIFT, 0, &liveKeyUpEaten);
             BOOL orphanTestEaten = FALSE;
             BOOL orphanKeyUpEaten = TRUE;
             const HRESULT orphanTest =
@@ -660,6 +672,8 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                 keySink->OnKeyUp(&context, 'A', 0, &orphanKeyUpEaten);
             if (SUCCEEDED(preeditTest) && SUCCEEDED(preeditResult) &&
                 SUCCEEDED(duplicatePreeditTest) && SUCCEEDED(commitTest) &&
+                SUCCEEDED(punctuationTest) && SUCCEEDED(modifierTest) &&
+                SUCCEEDED(liveKeyUp) &&
                 SUCCEEDED(resumedPreeditTest) && SUCCEEDED(resumedPreeditResult) &&
                 SUCCEEDED(duplicateCommitTest) && SUCCEEDED(commitResult) &&
                 SUCCEEDED(orphanTest) && SUCCEEDED(fallbackResult) &&
@@ -667,6 +681,7 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                 preeditTestEaten && duplicatePreeditTestEaten && preeditEaten &&
                 resumedPreeditTestEaten && resumedPreeditEaten &&
                 commitTestEaten && duplicateCommitTestEaten && commitEaten &&
+                punctuationTestEaten && modifierTestEaten && !liveKeyUpEaten &&
                 orphanTestEaten && fallbackEaten && !orphanKeyUpEaten &&
                 context.text() == L"a" && context.compositionEnded() &&
                 lifecycleSinksAdvised && focusLossClearedComposition) {
@@ -680,6 +695,9 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                           << ", resumedPreedit=0x" << resumedPreeditResult
                           << ", commitTest=0x" << commitTest
                           << ", duplicateCommitTest=0x" << duplicateCommitTest
+                          << ", punctuationTest=0x" << punctuationTest
+                          << ", modifierTest=0x" << modifierTest
+                          << ", liveKeyUp=0x" << liveKeyUp
                           << ", orphanTest=0x" << orphanTest
                           << ", fallback=0x" << fallbackResult
                           << ", orphanKeyUp=0x" << orphanKeyUp
@@ -691,6 +709,9 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                           << ", commitEaten=" << commitEaten
                           << ", commitTestEaten=" << commitTestEaten
                           << ", duplicateCommitTestEaten=" << duplicateCommitTestEaten
+                          << ", punctuationTestEaten=" << punctuationTestEaten
+                          << ", modifierTestEaten=" << modifierTestEaten
+                          << ", liveKeyUpEaten=" << liveKeyUpEaten
                           << ", orphanTestEaten=" << orphanTestEaten
                           << ", orphanKeyUpEaten=" << orphanKeyUpEaten
                           << ", fallbackEaten=" << fallbackEaten

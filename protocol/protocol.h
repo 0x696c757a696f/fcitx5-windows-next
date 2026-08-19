@@ -86,6 +86,10 @@ enum KeyFlag : std::uint32_t {
     kKeyFlagControl = 1U << 1U,
     kKeyFlagAlt = 1U << 2U,
     kKeyFlagSuper = 1U << 3U,
+    // Distinguishes a key-up event from a key-down. Key-up events are routed
+    // to the engine so Fcitx can track modifier release (e.g. Ctrl+Shift IME
+    // switching) without the TSF whitelist deciding which keys matter.
+    kKeyFlagRelease = 1U << 4U,
 };
 
 struct KeyRequest {

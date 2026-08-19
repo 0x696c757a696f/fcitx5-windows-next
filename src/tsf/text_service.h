@@ -58,7 +58,8 @@ public:
 private:
     ~TextService();
 
-    [[nodiscard]] bool canHandle(WPARAM virtualKey) const noexcept;
+    [[nodiscard]] bool shouldRouteToEngine(WPARAM virtualKey, bool alt, bool rightAlt,
+                                           bool win) const noexcept;
     void dismissCandidatePresentation(bool disconnectEngine,
                                       std::uint64_t contextId = 0) noexcept;
     void dismissForFocusLoss(ITfContext* context) noexcept;

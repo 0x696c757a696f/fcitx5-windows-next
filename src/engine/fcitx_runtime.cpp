@@ -260,6 +260,15 @@ Key keyFromRequest(const protocol::KeyRequest& request) {
         return Key(FcitxKey_space, states);
     case VK_ESCAPE:
         return Key(FcitxKey_Escape, states);
+    case VK_SHIFT:
+        // Modifier key events carry the engine hotkeys Ctrl+Shift / Alt+Shift
+        // (matched by keySym on the Shift key itself); Fcitx also tracks the
+        // modifier release from key-up events.
+        return Key(FcitxKey_Shift_L, states);
+    case VK_CONTROL:
+        return Key(FcitxKey_Control_L, states);
+    case VK_MENU:
+        return Key(FcitxKey_Alt_L, states);
     case VK_LEFT:
         return Key(FcitxKey_Left, states);
     case VK_RIGHT:
@@ -325,6 +334,10 @@ class FcitxRuntime::Impl final {
     std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> compositions;
     std::unordered_map<ClientContextKey, protocol::CaretRect, KeyHash> carets;
     std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
+    // Set when the user switched the input method on this context via the
+    // Ctrl+Space / Ctrl+Shift hotkeys; the per-key reset to the group default
+    // respects it so a switch survives the next keystroke.
+    std::unordered_map<ClientContextKey, bool, KeyHash> inputMethodOverridden;
 
     void ensureInputMethods() {
         auto& manager = instance->inputMethodManager();
@@ -344,6 +357,16 @@ class FcitxRuntime::Impl final {
         for (const std::string& id : engineConfig.enabled) {
             if (manager.entry(id) && !contains(id)) {
                 items.emplace_back(id);
+            }
+        }
+        // Preload every enabled input method addon at startup so the
+        // Ctrl+Space / Ctrl+Shift switch hotkeys never pay a first-activation
+        // cost inside the 100 ms TSF input deadline. Without this, switching
+        // to an input method that was never focused before (e.g. Rime from a
+        // pinyin default, or vice versa) can time out the key request.
+        for (const std::string& id : engineConfig.enabled) {
+            if (manager.entry(id)) {
+                (void)instance->inputMethodEngine(id);
             }
         }
         std::string selected = previousDefault;
@@ -372,21 +395,26 @@ class FcitxRuntime::Impl final {
         manager.save();
     }
 
-    void toggleInputMethod(const EngineConfig& config) {
+    void toggleInputMethod(const EngineConfig& config, const ClientContextKey& key,
+                           EngineInputContext& context) {
         auto& manager = instance->inputMethodManager();
-        const std::string current = instance->currentInputMethod();
+        const std::string current = instance->inputMethod(&context);
         if (current == "keyboard-us") {
             const auto defaultName = config.defaultInputMethod.value_or("pinyin");
             if (manager.entry(defaultName))
-                instance->setCurrentInputMethod(defaultName);
+                instance->setCurrentInputMethod(&context, defaultName, true);
         } else if (manager.entry("keyboard-us")) {
-            instance->setCurrentInputMethod("keyboard-us");
+            instance->setCurrentInputMethod(&context, "keyboard-us", true);
         }
+        // The per-key reset to the group default below must not undo a user
+        // switch on the following keystroke.
+        inputMethodOverridden[key] = true;
     }
 
-    void nextInputMethod(const EngineConfig& config) {
+    void nextInputMethod(const EngineConfig& config, const ClientContextKey& key,
+                         EngineInputContext& context) {
         auto& manager = instance->inputMethodManager();
-        const std::string current = instance->currentInputMethod();
+        const std::string current = instance->inputMethod(&context);
         if (config.enabled.empty())
             return;
         auto iter = std::find(config.enabled.begin(), config.enabled.end(), current);
@@ -394,8 +422,10 @@ class FcitxRuntime::Impl final {
             iter == config.enabled.end() ? config.enabled.front()
                                          : config.enabled[(iter - config.enabled.begin() + 1) %
                                                           config.enabled.size()];
-        if (manager.entry(next))
-            instance->setCurrentInputMethod(next);
+        if (manager.entry(next)) {
+            instance->setCurrentInputMethod(&context, next, true);
+            inputMethodOverridden[key] = true;
+        }
     }
 
     EngineInputContext& contextFor(const ClientContextKey& key) {
@@ -547,12 +577,14 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     }
     const std::string selected =
         impl_->instance->inputMethodManager().currentGroup().defaultInputMethod();
-    if (!selected.empty() && impl_->instance->inputMethodManager().entry(selected) &&
+    if (!impl_->inputMethodOverridden[key] && !selected.empty() &&
+        impl_->instance->inputMethodManager().entry(selected) &&
         impl_->instance->inputMethod(&context) != selected) {
         (void)impl_->instance->inputMethodEngine(selected);
         impl_->instance->setCurrentInputMethod(&context, selected, true);
     }
-    KeyEvent event(&context, keyFromRequest(request), false);
+    KeyEvent event(&context, keyFromRequest(request),
+                   (request.keyFlags & protocol::kKeyFlagRelease) != 0);
     // Input-method switch hotkeys from [hotkeys] in config.toml. The toggle
     // flips between the active input method and keyboard passthrough; next
     // cycles through [input_methods].enabled.
@@ -577,12 +609,12 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
             return false;
         };
         if (matches(engineConfig.hotkeyToggle)) {
-            impl_->toggleInputMethod(engineConfig);
+            impl_->toggleInputMethod(engineConfig, key, context);
             event.filterAndAccept();
             return impl_->collectResult(key, context, true);
         }
         if (matches(engineConfig.hotkeyNext)) {
-            impl_->nextInputMethod(engineConfig);
+            impl_->nextInputMethod(engineConfig, key, context);
             event.filterAndAccept();
             return impl_->collectResult(key, context, true);
         }
@@ -596,17 +628,20 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     // distinct (FcitxKey_plus / FcitxKey_underscore).
     {
         const KeySym sym = event.key().sym();
-        if (const auto list = context.inputPanel().candidateList();
-            list && !list->empty()) {
-            if (auto* pageable = list->toPageable(); pageable) {
-                if ((sym == FcitxKey_equal || sym == FcitxKey_plus) &&
-                    pageable->hasNext()) {
-                    pageable->next();
-                    event.filter();
-                } else if ((sym == FcitxKey_minus || sym == FcitxKey_underscore) &&
-                           pageable->hasPrev()) {
-                    pageable->prev();
-                    event.filter();
+        if (!event.isRelease()) {
+            if (const auto list = context.inputPanel().candidateList();
+                list && !list->empty()) {
+                if (auto* pageable = list->toPageable(); pageable) {
+                    if ((sym == FcitxKey_equal || sym == FcitxKey_plus) &&
+                        pageable->hasNext()) {
+                        pageable->next();
+                        event.filter();
+                    } else if ((sym == FcitxKey_minus ||
+                                sym == FcitxKey_underscore) &&
+                               pageable->hasPrev()) {
+                        pageable->prev();
+                        event.filter();
+                    }
                 }
             }
         }
@@ -713,6 +748,7 @@ void FcitxRuntime::forgetConnection(std::uint64_t connectionId) {
             impl_->compositions.erase(iterator->first);
             impl_->carets.erase(iterator->first);
             impl_->pendingStates.erase(iterator->first);
+            impl_->inputMethodOverridden.erase(iterator->first);
             iterator = impl_->contexts.erase(iterator);
         } else {
             ++iterator;

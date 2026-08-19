@@ -669,41 +669,29 @@ void TextService::dismissForFocusLoss(ITfContext* context) noexcept {
     activeContextId_ = 0;
 }
 
-bool TextService::canHandle(WPARAM virtualKey) const noexcept {
-    const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
-    if (control || alt) {
-        // Fcitx5 Chinese Addons uses this mature default for Simplified /
-        // Traditional conversion. Other application shortcuts remain fail-open.
-        return control && shift && !alt && virtualKey == 'F';
+bool TextService::shouldRouteToEngine(WPARAM virtualKey, bool alt, bool rightAlt,
+                                      bool win) const noexcept {
+    // Fcitx is the authority on whether a key is handled; this function only
+    // filters combinations the OS or the application own outright, so the
+    // engine is not asked about keys it can never claim. Everything else -
+    // letters, digits, punctuation, space, editing keys, modifier keys
+    // themselves, Ctrl+* and AltGr (right Alt) chords - is routed to Fcitx,
+    // which decides handled vs passthrough. This keeps the routing open for
+    // engine-side hotkeys (Ctrl+Space, Ctrl+Shift, Alt+Shift) and for Fcitx
+    // punctuation modules instead of growing a TSF whitelist per feature.
+    if (win) {
+        return false;  // Win+* is reserved by the OS.
     }
-    if ((virtualKey >= 'A' && virtualKey <= 'Z') ||
-        (virtualKey >= '0' && virtualKey <= '9')) {
-        return true;
+    if (virtualKey >= VK_F1 && virtualKey <= VK_F24) {
+        return false;  // Application function keys (F5 refresh, Alt+F4, ...).
     }
-    if (!composition_) {
+    if (alt && !rightAlt && virtualKey != VK_SHIFT) {
+        // Left-Alt chords are application menus / window shortcuts. Alt+Shift
+        // is a configurable IME-switch hotkey, so the Shift key itself must
+        // still reach Fcitx while Alt is held.
         return false;
     }
-    switch (virtualKey) {
-    case VK_SPACE:
-    case VK_BACK:
-    case VK_RETURN:
-    case VK_ESCAPE:
-    case VK_LEFT:
-    case VK_RIGHT:
-    case VK_UP:
-    case VK_DOWN:
-    case VK_PRIOR:
-    case VK_NEXT:
-    case VK_HOME:
-    case VK_END:
-    case VK_OEM_MINUS:
-    case VK_OEM_PLUS:
-        return true;
-    default:
-        return false;
-    }
+    return true;
 }
 
 HRESULT TextService::OnSetFocus(BOOL foreground) noexcept {
@@ -723,7 +711,11 @@ HRESULT TextService::OnTestKeyDown(ITfContext* context, WPARAM virtualKey,
     if (context && clientId_ != TF_CLIENTID_NULL) {
         (void)queryContext(context, clientId_, &ignored, &sensitive);
     }
-    *eaten = !sensitive && canHandle(virtualKey) ? TRUE : FALSE;
+    const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    const bool rightAlt = (GetKeyState(VK_RMENU) & 0x8000) != 0;
+    const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 ||
+                     (GetKeyState(VK_RWIN) & 0x8000) != 0;
+    *eaten = !sensitive && shouldRouteToEngine(virtualKey, alt, rightAlt, win) ? TRUE : FALSE;
     return S_OK;
 }
 
@@ -742,7 +734,12 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
         return E_POINTER;
     }
     *eaten = FALSE;
-    if (!context || !canHandle(virtualKey) || clientId_ == TF_CLIENTID_NULL) {
+    const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    const bool rightAlt = (GetKeyState(VK_RMENU) & 0x8000) != 0;
+    const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 ||
+                     (GetKeyState(VK_RWIN) & 0x8000) != 0;
+    if (!context || !shouldRouteToEngine(virtualKey, alt, rightAlt, win) ||
+        clientId_ == TF_CLIENTID_NULL) {
         return S_OK;
     }
     ScopedBusyFlag busy(keyEventBusy_);
@@ -847,12 +844,38 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
     }
 }
 
-HRESULT TextService::OnKeyUp(ITfContext* /*context*/, WPARAM /*virtualKey*/,
+HRESULT TextService::OnKeyUp(ITfContext* context, WPARAM virtualKey,
                              LPARAM /*keyData*/, BOOL* eaten) noexcept {
     if (!eaten) {
         return E_POINTER;
     }
     *eaten = FALSE;
+    const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    const bool rightAlt = (GetKeyState(VK_RMENU) & 0x8000) != 0;
+    const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 ||
+                     (GetKeyState(VK_RWIN) & 0x8000) != 0;
+    if (!context || !shouldRouteToEngine(virtualKey, alt, rightAlt, win) ||
+        clientId_ == TF_CLIENTID_NULL || keyEventBusy_) {
+        return S_OK;
+    }
+    // Key-up events reach Fcitx so it can track modifier release (Ctrl+Shift
+    // / Alt+Shift IME switching depends on the modifier key event, not on a
+    // TSF whitelist). The application still receives the key-up: eaten stays
+    // FALSE and the engine result is intentionally ignored.
+    std::uint32_t keyFlags = protocol::kKeyFlagRelease;
+    if ((GetKeyState(VK_SHIFT) & 0x8000) != 0)
+        keyFlags |= protocol::kKeyFlagShift;
+    if ((GetKeyState(VK_CONTROL) & 0x8000) != 0)
+        keyFlags |= protocol::kKeyFlagControl;
+    if ((GetKeyState(VK_MENU) & 0x8000) != 0)
+        keyFlags |= protocol::kKeyFlagAlt;
+    if ((GetKeyState(VK_LWIN) & 0x8000) != 0 ||
+        (GetKeyState(VK_RWIN) & 0x8000) != 0)
+        keyFlags |= protocol::kKeyFlagSuper;
+    ipc::KeyResult keyResult;
+    (void)client_.processKey(
+        static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(context)),
+        static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult);
     return S_OK;
 }
 

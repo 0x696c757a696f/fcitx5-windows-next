@@ -346,6 +346,55 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
 
+    // Engine-side switch hotkeys must be reachable through the routing layer:
+    // TSF now forwards modifier chords and modifier keys themselves, and the
+    // engine decides. Ctrl+Space toggles active input method / keyboard
+    // passthrough, Ctrl+Shift cycles the enabled list, and a key-up (release)
+    // of the toggle chord must not switch again.
+    {
+        constexpr std::uint64_t hotkeyContext = 0x484F544B455953ULL;
+        constexpr std::uint32_t ctrl = fcitx::windows::protocol::kKeyFlagControl;
+        constexpr std::uint32_t ctrlRelease =
+            ctrl | fcitx::windows::protocol::kKeyFlagRelease;
+        // Toggle to keyboard passthrough: the chord is handled, a following
+        // letter is not claimed by Fcitx.
+        if (!client.processKey(hotkeyContext, VK_SPACE, ctrl, result) ||
+            !result.handled) {
+            std::cerr << "Ctrl+Space toggle hotkey was not handled\n";
+            return 1;
+        }
+        if (!client.processKey(hotkeyContext, 'N', 0, result) || result.handled ||
+            !result.preedit.empty()) {
+            std::wcerr << L"toggle did not reach keyboard passthrough: preedit="
+                       << result.preedit << L'\n';
+            return 1;
+        }
+        // Releasing Ctrl+Space must not toggle back.
+        (void)client.processKey(hotkeyContext, VK_SPACE, ctrlRelease, result);
+        if (!client.processKey(hotkeyContext, 'N', 0, result) || result.handled) {
+            std::wcerr << L"key-up of Ctrl+Space changed the input method\n";
+            return 1;
+        }
+        // Toggle back to pinyin.
+        if (!client.processKey(hotkeyContext, VK_SPACE, ctrl, result) ||
+            !result.handled) {
+            std::cerr << "Ctrl+Space restore hotkey was not handled\n";
+            return 1;
+        }
+        // Ctrl+Shift cycles the enabled input method list. The Shift key-down
+        // carries the modifier state of the chord (as TSF reports it: by the
+        // time OnKeyDown(VK_SHIFT) runs, GetKeyState(VK_SHIFT) is already
+        // down), so the request must include both modifiers.
+        constexpr std::uint32_t ctrlShift =
+            fcitx::windows::protocol::kKeyFlagControl |
+            fcitx::windows::protocol::kKeyFlagShift;
+        if (!client.processKey(hotkeyContext, VK_SHIFT, ctrlShift, result) ||
+            !result.handled) {
+            std::cerr << "Ctrl+Shift next hotkey was not handled\n";
+            return 1;
+        }
+    }
+
     constexpr std::uint64_t secondContextId = 0x27182818U;
     if (firstRunRime) {
         if (!client.processKey(contextId, 'H', 0, result) || result.preedit != L"h") {
