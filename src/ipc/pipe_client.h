@@ -78,6 +78,9 @@ public:
                                        std::uint64_t revision,
                                        std::uint64_t candidateId) noexcept;
     [[nodiscard]] bool pollState(std::uint64_t contextId, KeyResult& result) noexcept;
+    [[nodiscard]] bool queryEngineStatus(protocol::EngineStatusResponse& result,
+                                         DWORD timeoutMilliseconds =
+                                             kInputDeadlineMilliseconds) noexcept;
     void disconnect() noexcept;
 
 private:

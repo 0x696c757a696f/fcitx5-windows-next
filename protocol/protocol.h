@@ -9,7 +9,7 @@
 namespace fcitx::windows::protocol {
 
 inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
-inline constexpr std::uint16_t kVersion = 10;
+inline constexpr std::uint16_t kVersion = 11;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
@@ -20,6 +20,7 @@ inline constexpr std::size_t kMaxCandidates = 128;
 inline constexpr std::size_t kMaxCandidateFieldUtf8 = 4096;
 inline constexpr std::size_t kMaxLogicalKeyUtf8 = 64;
 inline constexpr std::size_t kMaxInputMethodIdUtf8 = 64;
+inline constexpr std::size_t kMaxInputMethodNameUtf8 = 128;
 inline constexpr std::size_t kMaxSurroundingTextUtf8 = 16U * 1024U;
 
 enum class MessageType : std::uint16_t {
@@ -32,6 +33,8 @@ enum class MessageType : std::uint16_t {
     candidateSelectRequest = 7,
     candidateSelectResponse = 8,
     stateRequest = 9,
+    engineStatusRequest = 10,
+    engineStatusResponse = 11,
 };
 
 enum class Status : std::uint32_t {
@@ -166,6 +169,19 @@ struct StateRequest {
     Metadata metadata;
 };
 
+struct EngineStatusRequest {
+    Metadata metadata;
+};
+
+struct EngineStatusResponse {
+    Metadata metadata;
+    Status status{Status::malformed};
+    std::string currentInputMethodId;
+    std::string currentInputMethodName;
+    std::string currentInputMethodNativeName;
+    std::string currentInputMethodShortLabel;
+};
+
 enum class LauncherCommand : std::uint32_t {
     startDemand = 1,
     userStop = 2,
@@ -191,6 +207,10 @@ struct LauncherResponse {
     std::uint32_t startDisposition{};
     bool safeMode{};
     std::uint64_t retryAfterMilliseconds{};
+    std::string currentInputMethodId;
+    std::string currentInputMethodName;
+    std::string currentInputMethodNativeName;
+    std::string currentInputMethodShortLabel;
 };
 
 [[nodiscard]] bool isRequest(MessageType type) noexcept;
@@ -206,6 +226,8 @@ struct LauncherResponse {
 [[nodiscard]] std::vector<std::uint8_t> encode(const CandidateSelectRequest& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const CandidateSelectResponse& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const StateRequest& message);
+[[nodiscard]] std::vector<std::uint8_t> encode(const EngineStatusRequest& message);
+[[nodiscard]] std::vector<std::uint8_t> encode(const EngineStatusResponse& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const LauncherRequest& message);
 [[nodiscard]] std::vector<std::uint8_t> encode(const LauncherResponse& message);
 
@@ -216,6 +238,8 @@ struct LauncherResponse {
 [[nodiscard]] bool decode(const FrameView& frame, CandidateSelectRequest& message) noexcept;
 [[nodiscard]] bool decode(const FrameView& frame, CandidateSelectResponse& message) noexcept;
 [[nodiscard]] bool decode(const FrameView& frame, StateRequest& message) noexcept;
+[[nodiscard]] bool decode(const FrameView& frame, EngineStatusRequest& message) noexcept;
+[[nodiscard]] bool decode(const FrameView& frame, EngineStatusResponse& message) noexcept;
 [[nodiscard]] bool decode(const FrameView& frame, LauncherRequest& message) noexcept;
 [[nodiscard]] bool decode(const FrameView& frame, LauncherResponse& message) noexcept;
 

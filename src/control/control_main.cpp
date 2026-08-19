@@ -904,6 +904,14 @@ int wmain(int argc, wchar_t** argv) {
                   << (reachable ? std::to_string(response.launcherState) : "null")
                   << ",\"engine_state\":"
                   << (reachable ? std::to_string(response.engineState) : "null")
+                  << ",\"current_input_method_id\":"
+                  << (reachable ? jsonString(response.currentInputMethodId) : "null")
+                  << ",\"current_input_method_name\":"
+                  << (reachable ? jsonString(response.currentInputMethodName) : "null")
+                  << ",\"current_input_method_native_name\":"
+                  << (reachable ? jsonString(response.currentInputMethodNativeName) : "null")
+                  << ",\"current_input_method_short_label\":"
+                  << (reachable ? jsonString(response.currentInputMethodShortLabel) : "null")
                   << ",\"config_valid\":" << (configValid ? "true" : "false") << ",\"data_root\":\""
                   << narrow(dataRoot.generic_wstring()) << "\",\"update_owner\":\""
                   << fcitx::update::owner_name(fcitx::update::read_update_owner(installationRoot()))

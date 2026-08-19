@@ -178,6 +178,23 @@ std::vector<std::uint8_t> handle(std::span<const std::uint8_t> requestBytes,
         }
         return protocol::encode(response);
     }
+    if (frame.type == protocol::MessageType::engineStatusRequest) {
+        protocol::EngineStatusRequest request;
+        if (!protocol::decode(frame, request) || !handshakeComplete ||
+            request.metadata.engineEpoch != engineEpoch ||
+            request.metadata.sessionId != clientIdentity.sessionId) {
+            return {};
+        }
+        lastRequestId = request.metadata.requestId;
+        return protocol::encode(protocol::EngineStatusResponse{
+            protocol::Metadata{nextResponseId.fetch_add(1), request.metadata.requestId,
+                               engineEpoch, request.metadata.sessionId, 0, 0, 0},
+            protocol::Status::ok,
+            "mock-pinyin",
+            "Mock Pinyin",
+            "\xe5\xb0\x8f\xe4\xbc\x81\xe9\xb9\x85",
+            "\xe5\xb0\x8f"});
+    }
     return {};
 }
 

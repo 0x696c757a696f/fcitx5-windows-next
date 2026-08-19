@@ -173,6 +173,38 @@ bool FcitxDispatcher::takePendingState(
     }
 }
 
+bool FcitxDispatcher::queryInputMethodStatus(InputMethodStatus& result,
+                                             std::chrono::milliseconds timeout) {
+    result = {};
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
+    auto completed = std::make_shared<std::promise<InputMethodStatus>>();
+    auto future = completed->get_future();
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    dispatcher_->schedule([this, completed, deadline] {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            droppedCount_.fetch_add(1, std::memory_order_acq_rel);
+            try {
+                completed->set_value(InputMethodStatus{});
+            } catch (...) {
+            }
+            return;
+        }
+        try {
+            completed->set_value(runtime_->currentInputMethod());
+        } catch (...) {
+            completed->set_exception(std::current_exception());
+        }
+    });
+    if (future.wait_for(timeout) != std::future_status::ready) return false;
+    try {
+        result = future.get();
+        return true;
+    } catch (...) {
+        result = {};
+        return false;
+    }
+}
+
 void FcitxDispatcher::forgetConnection(std::uint64_t connectionId) {
     if (!accepting_.load(std::memory_order_acquire) || !dispatcher_ || connectionId == 0)
         return;

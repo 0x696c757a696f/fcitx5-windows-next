@@ -113,6 +113,16 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     if (result == 0 &&
+        (!sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::status) ||
+         response.status != fcitx::windows::protocol::Status::ok ||
+         response.currentInputMethodId != "mock-pinyin" ||
+         response.currentInputMethodName != "Mock Pinyin" ||
+         response.currentInputMethodNativeName != "\xe5\xb0\x8f\xe4\xbc\x81\xe9\xb9\x85" ||
+         response.currentInputMethodShortLabel != "\xe5\xb0\x8f")) {
+        result = 1;
+        stage = 35;
+    }
+    if (result == 0 &&
         (!sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::userStop) ||
          response.status != fcitx::windows::protocol::Status::ok ||
          response.launcherState != static_cast<std::uint32_t>(

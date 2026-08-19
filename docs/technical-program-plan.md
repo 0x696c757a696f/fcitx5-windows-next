@@ -1,7 +1,7 @@
-# v1.6 技术统筹与执行计划
+# v1.7 技术统筹与执行计划
 
 状态：current  
-更新：2026-08-18
+更新：2026-08-19
 
 ## 交付定义
 
@@ -66,6 +66,9 @@ renderer synthetic host，不维护第二套近似 UI。
 Advanced 页面只暴露 generic Fcitx addon/config surface：读取 Fcitx 原生 addon/config
 描述并以受限、类型化方式呈现；Windows 层不维护巨型硬编码 input-method/addon 配置映射。
 确有高价值的一线设置可以提升为普通页面，但必须仍以 Fcitx 原生配置为单一语义来源。
+`docs/macos-config-reference.md` 记录 macOS 配置器和 fcitx-contrib 文档中可借鉴的能力边界：
+输入法分组、addon 动态配置、typed option renderer、插件管理器、数据/词库/短语管理等均
+通过 engine/control 暴露，不从 TSF DLL、Candidate UI 或包管理代码直接加载 Fcitx addon。
 
 TSF input profile 采用单入口原则：Windows 语言栏只出现一个产品级 profile
 `Fcitx5 for Windows Next`，不把 Pinyin、Rime、Mozc 或后续插件拆成多个 Windows 输入法。

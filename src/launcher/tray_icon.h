@@ -1,5 +1,6 @@
 #pragma once
 
+#include "protocol.h"
 #include "state_machine.h"
 
 #include <Windows.h>
@@ -21,7 +22,8 @@ public:
 
     [[nodiscard]] bool create(HINSTANCE instance,
                               const std::filesystem::path& executableDirectory);
-    void update(LauncherState launcherState, EngineState engineState);
+    void update(LauncherState launcherState, EngineState engineState,
+                const protocol::EngineStatusResponse& inputMethodStatus = {});
     void dispatchMessages();
     [[nodiscard]] TrayCommand takeCommand() noexcept;
     [[nodiscard]] bool valid() const noexcept { return window_ != nullptr; }
@@ -45,6 +47,7 @@ private:
     std::filesystem::path configPath_;
     LauncherState launcherState_{LauncherState::normal};
     EngineState engineState_{EngineState::stopped};
+    protocol::EngineStatusResponse inputMethodStatus_;
     TrayCommand pendingCommand_{TrayCommand::none};
     bool iconAdded_{};
     bool usesGuidIdentity_{true};

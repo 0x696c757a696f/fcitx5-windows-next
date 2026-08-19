@@ -61,6 +61,16 @@ void consume(std::span<const std::uint8_t> bytes) {
         (void)decode(frame, message);
         break;
     }
+    case MessageType::engineStatusRequest: {
+        EngineStatusRequest message;
+        (void)decode(frame, message);
+        break;
+    }
+    case MessageType::engineStatusResponse: {
+        EngineStatusResponse message;
+        (void)decode(frame, message);
+        break;
+    }
     }
 }
 

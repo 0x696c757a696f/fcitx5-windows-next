@@ -1,4 +1,5 @@
 #include "peer_verification.h"
+#include "pipe_client.h"
 #include "pipe_security.h"
 #include "protocol.h"
 #include "runtime_identity.h"
@@ -417,12 +418,36 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
     bool running = true;
     HANDLE pendingPipe = nullptr;
     std::uint64_t engineGeneration = 0;
+    std::uint64_t nextInputMethodStatusPoll = 0;
+    protocol::EngineStatusResponse inputMethodStatus;
+    ipc::PipeClient engineStatusClient(platform::makeLocalEndpointName(identity, L"engine"),
+                                       ipc::PeerPolicy::exact(enginePath));
     std::atomic<std::uint64_t> nextResponseId{1};
+    const auto clearInputMethodStatus = [&] {
+        engineStatusClient.disconnect();
+        inputMethodStatus = {};
+        nextInputMethodStatusPoll = 0;
+    };
+    const auto refreshInputMethodStatus = [&](bool force) {
+        if (state.engineState() != launcher::EngineState::ready || !engine.process) {
+            clearInputMethodStatus();
+            return;
+        }
+        const auto now = clock.nowMilliseconds();
+        if (!force && now < nextInputMethodStatusPoll)
+            return;
+        protocol::EngineStatusResponse status;
+        if (engineStatusClient.queryEngineStatus(status, 75)) {
+            inputMethodStatus = std::move(status);
+        }
+        nextInputMethodStatusPoll = now + 1000;
+    };
     while (running) {
         switch (tray.takeCommand()) {
         case launcher::TrayCommand::restart:
             stopEngine(engine);
             state.engineStoppedIntentionally();
+            clearInputMethodStatus();
             if (state.state() == launcher::LauncherState::userStopped &&
                 state.canApply(launcher::Command::resume) &&
                 stateStore.save(state.stateAfter(launcher::Command::resume))) {
@@ -436,6 +461,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                 state.apply(launcher::Command::userStop)) {
                 stopEngine(engine);
                 state.engineStoppedIntentionally();
+                clearInputMethodStatus();
                 restartDesired = false;
             }
             break;
@@ -475,8 +501,10 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         if (engine.process && state.engineState() == launcher::EngineState::starting &&
             WaitForSingleObject(engineReady, 0) == WAIT_OBJECT_0) {
             state.engineReady();
+            refreshInputMethodStatus(true);
         }
-        tray.update(state.state(), state.engineState());
+        refreshInputMethodStatus(false);
+        tray.update(state.state(), state.engineState(), inputMethodStatus);
 
         HANDLE pipe = pendingPipe;
         pendingPipe = nullptr;
@@ -535,6 +563,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                 CloseHandle(engine.stopEvent);
             engine = {};
             state.engineExited(runtime);
+            clearInputMethodStatus();
             restartDesired = true;
         } else if (waitResult == WAIT_TIMEOUT) {
             restartDesired = true;
@@ -557,6 +586,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                 if (engine.process && state.engineState() == launcher::EngineState::starting &&
                     WaitForSingleObject(engineReady, 0) == WAIT_OBJECT_0) {
                     state.engineReady();
+                    refreshInputMethodStatus(true);
                 }
                 platform::ProcessIdentity client;
                 if (ipc::verifyPipeClient(pipe, identity, &client)) {
@@ -588,6 +618,12 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                         if (request.command == protocol::LauncherCommand::shutdown) {
                             running = false;
                         }
+                        if (!engine.process ||
+                            state.engineState() != launcher::EngineState::ready) {
+                            clearInputMethodStatus();
+                        } else if (request.command == protocol::LauncherCommand::status) {
+                            refreshInputMethodStatus(true);
+                        }
                         const protocol::LauncherResponse response{
                             protocol::Metadata{nextResponseId.fetch_add(1),
                                                request.metadata.requestId, 0, identity.sessionId, 0,
@@ -597,7 +633,11 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                             static_cast<std::uint32_t>(state.engineState()),
                             static_cast<std::uint32_t>(decision.disposition),
                             decision.safeMode,
-                            decision.retryAfterMilliseconds};
+                            decision.retryAfterMilliseconds,
+                            inputMethodStatus.currentInputMethodId,
+                            inputMethodStatus.currentInputMethodName,
+                            inputMethodStatus.currentInputMethodNativeName,
+                            inputMethodStatus.currentInputMethodShortLabel};
                         if (writeFrame(pipe, protocol::encode(response))) {
                             std::uint8_t unexpected = 0;
                             (void)transfer(pipe, false, &unexpected, 1, 100);

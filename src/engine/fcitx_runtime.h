@@ -54,6 +54,13 @@ struct InputMethodInfo {
     bool selected{};
 };
 
+struct InputMethodStatus {
+    std::string id;
+    std::string name;
+    std::string nativeName;
+    std::string shortLabel;
+};
+
 class FcitxRuntime final {
   public:
     FcitxRuntime();
@@ -72,6 +79,7 @@ class FcitxRuntime final {
     [[nodiscard]] RuntimeResult takePendingState(
         const ClientContextKey& key, const protocol::StateRequest& request);
     [[nodiscard]] std::vector<InputMethodInfo> inputMethods() const;
+    [[nodiscard]] InputMethodStatus currentInputMethod() const;
     [[nodiscard]] bool setDefaultInputMethod(std::string_view id);
     void forgetConnection(std::uint64_t connectionId);
 

@@ -142,6 +142,33 @@ int main() {
                     stateOutput.metadata == stateInput.metadata,
                 "state request roundtrip failed")) return 1;
 
+    const EngineStatusRequest engineStatusInput{Metadata{6, 0, 99, 3, 0, 0, 0}};
+    EngineStatusRequest engineStatusOutput;
+    if (!expect(decodeFrame(encode(engineStatusInput), frame) &&
+                    decode(frame, engineStatusOutput) &&
+                    engineStatusOutput.metadata == engineStatusInput.metadata,
+                "engine status request roundtrip failed")) return 1;
+
+    const EngineStatusResponse engineStatusResponseInput{
+        Metadata{7, 6, 99, 3, 0, 0, 0}, Status::ok,
+        "pinyin", "Pinyin", "\xe6\x8b\xbc\xe9\x9f\xb3", "\xe6\x8b\xbc"};
+    EngineStatusResponse engineStatusResponseOutput;
+    if (!expect(decodeFrame(encode(engineStatusResponseInput), frame) &&
+                    decode(frame, engineStatusResponseOutput) &&
+                    engineStatusResponseOutput.metadata ==
+                        engineStatusResponseInput.metadata &&
+                    engineStatusResponseOutput.status ==
+                        engineStatusResponseInput.status &&
+                    engineStatusResponseOutput.currentInputMethodId ==
+                        engineStatusResponseInput.currentInputMethodId &&
+                    engineStatusResponseOutput.currentInputMethodName ==
+                        engineStatusResponseInput.currentInputMethodName &&
+                    engineStatusResponseOutput.currentInputMethodNativeName ==
+                        engineStatusResponseInput.currentInputMethodNativeName &&
+                    engineStatusResponseOutput.currentInputMethodShortLabel ==
+                        engineStatusResponseInput.currentInputMethodShortLabel,
+                "engine status response roundtrip failed")) return 1;
+
     for (std::uint32_t rawCommand =
              static_cast<std::uint32_t>(LauncherCommand::startDemand);
          rawCommand <= static_cast<std::uint32_t>(LauncherCommand::shutdown); ++rawCommand) {
@@ -157,7 +184,8 @@ int main() {
     }
 
     const LauncherResponse launcherResponseInput{
-        Metadata{9, 8, 0, 3, 0, 0, 0}, Status::ok, 1, 2, 3, true, 250};
+        Metadata{9, 8, 0, 3, 0, 0, 0}, Status::ok, 1, 2, 3, true, 250,
+        "rime", "Rime", "\xe4\xb8\xad\xe6\xb4\xb2\xe9\x9f\xb5", "\xe4\xb8\xad"};
     LauncherResponse launcherResponseOutput;
     if (!expect(decodeFrame(encode(launcherResponseInput), frame) &&
                     decode(frame, launcherResponseOutput) &&
@@ -170,7 +198,15 @@ int main() {
                         launcherResponseInput.startDisposition &&
                     launcherResponseOutput.safeMode == launcherResponseInput.safeMode &&
                     launcherResponseOutput.retryAfterMilliseconds ==
-                        launcherResponseInput.retryAfterMilliseconds,
+                        launcherResponseInput.retryAfterMilliseconds &&
+                    launcherResponseOutput.currentInputMethodId ==
+                        launcherResponseInput.currentInputMethodId &&
+                    launcherResponseOutput.currentInputMethodName ==
+                        launcherResponseInput.currentInputMethodName &&
+                    launcherResponseOutput.currentInputMethodNativeName ==
+                        launcherResponseInput.currentInputMethodNativeName &&
+                    launcherResponseOutput.currentInputMethodShortLabel ==
+                        launcherResponseInput.currentInputMethodShortLabel,
                 "launcher response roundtrip failed")) return 1;
 
     std::mt19937_64 random(0x32574346U);

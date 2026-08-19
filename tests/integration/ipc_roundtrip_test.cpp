@@ -124,9 +124,15 @@ int wmain(int argc, wchar_t** argv) {
         fcitx::windows::ipc::PipeClient client(
             pipeName, fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
         fcitx::windows::ipc::KeyResult result;
+        fcitx::windows::protocol::EngineStatusResponse status;
         if (!available || !client.processKey(7, 'A', 0, result) || !result.handled ||
             result.commit != L"a") {
             std::cerr << "IPC key-to-commit roundtrip failed\n";
+            resultCode = 1;
+        } else if (!client.queryEngineStatus(status) ||
+                   status.currentInputMethodId != "mock-pinyin" ||
+                   status.currentInputMethodShortLabel != "\xe5\xb0\x8f") {
+            std::cerr << "IPC engine-status roundtrip failed\n";
             resultCode = 1;
         }
     }

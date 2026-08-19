@@ -303,6 +303,8 @@ constexpr UINT kStatusTimeoutMs = 3000;
 struct PackageRow {
     std::wstring id;
     std::wstring title;
+    std::wstring summary;
+    std::wstring type;
     std::wstring available;
     std::wstring installed;
     std::wstring state;
@@ -361,6 +363,8 @@ bool parsePackages(std::wstring_view output, std::vector<PackageRow>& rows,
             PackageRow row;
             row.id = widen(item.at("id").get<std::string>());
             row.title = widen(item.at("title").get<std::string>());
+            row.summary = widen(item.at("summary").get<std::string>());
+            row.type = widen(item.at("type").get<std::string>());
             if (!item.at("available_version").is_null())
                 row.available = widen(item.at("available_version").get<std::string>());
             if (!item.at("installed_version").is_null())
@@ -368,7 +372,7 @@ bool parsePackages(std::wstring_view output, std::vector<PackageRow>& rows,
             if (!item.at("state").is_null())
                 row.state = widen(item.at("state").get<std::string>());
             row.update = item.at("update_available").get<bool>();
-            if (row.id.empty() || row.title.empty())
+            if (row.id.empty() || row.title.empty() || row.type.empty())
                 return false;
             rows.push_back(std::move(row));
         }
@@ -378,6 +382,44 @@ bool parsePackages(std::wstring_view output, std::vector<PackageRow>& rows,
     }
 }
 
+std::wstring localeValue(const Strings& strings, const char* key,
+                         std::wstring_view fallback = {}) {
+    const auto iterator = strings.find(key);
+    if (iterator != strings.end())
+        return iterator->second;
+    return std::wstring(fallback);
+}
+
+std::wstring packageTypeLabel(const PackageRow& package, const Strings& strings) {
+    if (package.type == L"addon")
+        return localeValue(strings, "packages.type.addon", L"Addon");
+    if (package.type == L"inputmethod-data")
+        return localeValue(strings, "packages.type.input_method_data", L"Input data");
+    if (package.type == L"theme")
+        return localeValue(strings, "packages.type.theme", L"Theme");
+    if (package.type == L"translation")
+        return localeValue(strings, "packages.type.translation", L"Translation");
+    if (package.type == L"core")
+        return localeValue(strings, "packages.type.core", L"Core");
+    return localeValue(strings, "packages.type.component", L"Component");
+}
+
+std::wstring packageListLabel(const PackageRow& package, const Strings& strings) {
+    std::wstring label = L"[" + packageTypeLabel(package, strings) + L"] " + package.title;
+    if (!package.summary.empty())
+        label += L" — " + package.summary;
+    const std::wstring version = !package.installed.empty() ? package.installed : package.available;
+    if (!version.empty())
+        label += L"  " + version;
+    if (package.update)
+        label += L"  ↑";
+    if (package.state == L"disabled")
+        label += L"  " + localeValue(strings, "packages.disabled", L"(disabled)");
+    if (package.state == L"bundled")
+        label += L"  " + localeValue(strings, "packages.bundled", L"(bundled)");
+    return label;
+}
+
 class ConfigWindow final : public CWindowImpl<ConfigWindow> {
   public:
     DECLARE_WND_CLASS_EX(L"Fcitx5ConfigWindow", CS_HREDRAW | CS_VREDRAW, COLOR_WINDOW)
@@ -385,6 +427,20 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     explicit ConfigWindow(Strings strings) : strings_(std::move(strings)) {}
     const wchar_t* title() const { return get("app.title"); }
     void selectPage(int page) { showPage(page); }
+    void resizeToDefaultClient() {
+        RECT windowRect{};
+        GetWindowRect(&windowRect);
+        const HMONITOR monitor = MonitorFromRect(&windowRect, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO monitorInfo{};
+        monitorInfo.cbSize = sizeof(monitorInfo);
+        GetMonitorInfoW(monitor, &monitorInfo);
+        const int workWidth = monitorInfo.rcWork.right - monitorInfo.rcWork.left;
+        const int workHeight = monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
+        const int desiredWidth = (std::min)(scale(1010), (std::max)(scale(820), workWidth - 80));
+        const int desiredHeight = (std::min)(scale(650), (std::max)(scale(520), workHeight - 80));
+        ResizeClient(desiredWidth, desiredHeight);
+        layoutControls();
+    }
 
     [[nodiscard]] bool verifyUiContract() {
         const auto hasVisibleStyle = [&](int id) {
@@ -535,11 +591,27 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
 
         // Exercise each package action through a synthetic managed row. Production package
         // transaction semantics are covered separately with a signed fixture repository.
-        packages_ = {{L"test-addon", L"Test addon", L"1.1.0", L"", L"", false}};
+        packages_ = {{L"test-addon", L"Test addon", L"Test summary", L"addon",
+                      L"1.1.0", L"", L"", false}};
         SendMessageW(control(kPackages), LB_RESETCONTENT, 0, 0);
+        const std::wstring testPackageLabel = packageListLabel(packages_[0], strings_);
         SendMessageW(control(kPackages), LB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"Test addon  1.1.0"));
+                     reinterpret_cast<LPARAM>(testPackageLabel.c_str()));
         SendMessageW(control(kPackages), LB_SETCURSEL, 0, 0);
+        std::array<wchar_t, 128> packageText{};
+        SendMessageW(control(kPackages), LB_GETTEXT, 0,
+                     reinterpret_cast<LPARAM>(packageText.data()));
+        if (std::wstring_view(packageText.data()).find(
+                L"[" + localeValue(strings_, "packages.type.addon", L"Addon") +
+                L"] Test addon") ==
+            std::wstring_view::npos)
+            return false;
+        packages_[0].type = L"inputmethod-data";
+        if (packageListLabel(packages_[0], strings_)
+                .find(localeValue(strings_, "packages.type.input_method_data", L"Input data")) ==
+            std::wstring::npos)
+            return false;
+        packages_[0].type = L"addon";
         updatePackageActions();
         if (!notify(kPackages, LBN_SELCHANGE) || !click(kPackageInstall))
             return false;
@@ -578,6 +650,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
 
     BEGIN_MSG_MAP(ConfigWindow)
     MESSAGE_HANDLER(WM_CREATE, onCreate)
+    MESSAGE_HANDLER(WM_SIZE, onSize)
+    MESSAGE_HANDLER(WM_GETMINMAXINFO, onGetMinMaxInfo)
+    MESSAGE_HANDLER(WM_DPICHANGED, onDpiChanged)
     MESSAGE_HANDLER(WM_PAINT, onPaint)
     MESSAGE_HANDLER(WM_DRAWITEM, onDrawItem)
     MESSAGE_HANDLER(WM_CTLCOLORSTATIC, onColorStatic)
@@ -626,26 +701,138 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         return iterator == strings_.end() ? L"" : iterator->second.c_str();
     }
     HWND control(int id) const { return GetDlgItem(id); }
-    void add(const wchar_t* type, const wchar_t* label, DWORD style, int x, int y, int width,
-             int height, int id = 0) {
-        HWND child =
-            CreateWindowExW(0, type, label, WS_CHILD | WS_VISIBLE | style, x, y, width, height,
-                            m_hWnd, reinterpret_cast<HMENU>(static_cast<std::intptr_t>(id)),
-                            _Module.GetModuleInstance(), nullptr);
-        SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    [[nodiscard]] int scale(int value) const noexcept {
+        return MulDiv(value, static_cast<int>(dpi_), 96);
     }
-    LRESULT onCreate(UINT, WPARAM, LPARAM, BOOL&) {
+    [[nodiscard]] int unscale(int value) const noexcept {
+        return MulDiv(value, 96, static_cast<int>(dpi_ == 0 ? 96 : dpi_));
+    }
+    [[nodiscard]] UINT windowDpi() const noexcept {
+        const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        using GetDpiForWindowProc = UINT(WINAPI*)(HWND);
+        const auto getDpiForWindow =
+            user32 ? reinterpret_cast<GetDpiForWindowProc>(
+                         GetProcAddress(user32, "GetDpiForWindow"))
+                   : nullptr;
+        if (getDpiForWindow) {
+            const UINT dpi = getDpiForWindow(m_hWnd);
+            if (dpi != 0)
+                return dpi;
+        }
+        HDC screen = ::GetDC(nullptr);
+        const UINT dpi = screen ? static_cast<UINT>(GetDeviceCaps(screen, LOGPIXELSX)) : 96U;
+        if (screen)
+            ::ReleaseDC(nullptr, screen);
+        return dpi == 0 ? 96U : dpi;
+    }
+    void createFonts() {
+        if (font_) {
+            DeleteObject(font_);
+            font_ = nullptr;
+        }
+        if (titleFont_) {
+            DeleteObject(titleFont_);
+            titleFont_ = nullptr;
+        }
         NONCLIENTMETRICSW metrics{};
         metrics.cbSize = sizeof(metrics);
-        if (!SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0)) {
+        const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        using SystemParametersInfoForDpiProc = BOOL(WINAPI*)(UINT, UINT, PVOID, UINT, UINT);
+        const auto systemParametersInfoForDpi =
+            user32 ? reinterpret_cast<SystemParametersInfoForDpiProc>(
+                         GetProcAddress(user32, "SystemParametersInfoForDpi"))
+                   : nullptr;
+        const bool dpiMetrics =
+            systemParametersInfoForDpi &&
+            systemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0,
+                                       dpi_);
+        if (!dpiMetrics &&
+            !SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0)) {
             GetObjectW(GetStockObject(DEFAULT_GUI_FONT), sizeof(metrics.lfMessageFont),
                        &metrics.lfMessageFont);
+        } else if (!dpiMetrics && dpi_ != 96U && metrics.lfMessageFont.lfHeight != 0) {
+            metrics.lfMessageFont.lfHeight =
+                MulDiv(metrics.lfMessageFont.lfHeight, static_cast<int>(dpi_), 96);
         }
         font_ = CreateFontIndirectW(&metrics.lfMessageFont);
         LOGFONTW titleMetrics = metrics.lfMessageFont;
-        titleMetrics.lfHeight = -24;
+        titleMetrics.lfHeight = -scale(24);
         titleMetrics.lfWeight = FW_SEMIBOLD;
         titleFont_ = CreateFontIndirectW(&titleMetrics);
+    }
+    void applyFonts() {
+        for (HWND child = ::GetWindow(m_hWnd, GW_CHILD); child;
+             child = ::GetWindow(child, GW_HWNDNEXT)) {
+            SendMessageW(child, WM_SETFONT,
+                         reinterpret_cast<WPARAM>(child == control(kPageTitle) ? titleFont_
+                                                                               : font_),
+                         TRUE);
+        }
+    }
+    void moveControl(int id, int x, int y, int width, int height) const {
+        if (const HWND child = control(id)) {
+            ::SetWindowPos(child, nullptr, scale(x), scale(y), scale(width), scale(height),
+                           SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+    void layoutControls() {
+        if (!m_hWnd)
+            return;
+        RECT client{};
+        GetClientRect(&client);
+        const int logicalWidth = (std::max)(820, unscale(client.right - client.left));
+        const int logicalHeight = (std::max)(520, unscale(client.bottom - client.top));
+        const int contentWidth = (std::max)(430, logicalWidth - 310);
+        const int tallStatusHeight = (std::max)(250, logicalHeight - 400);
+        const int packageListHeight = (std::max)(220, logicalHeight - 300);
+        const int packageButtonY = (std::max)(488, logicalHeight - 162);
+        const int packageStatusY = (std::max)(542, logicalHeight - 108);
+
+        moveControl(kPageTitle, 238, 26, contentWidth, 38);
+        moveControl(kStartup, 250, 104, (std::min)(contentWidth, 520), 32);
+        moveControl(kInputMethodLabel, 250, 158, 150, 24);
+        moveControl(kInputMethod, 420, 152, (std::min)(contentWidth - 170, 380), 140);
+        moveControl(kAppearanceLabel, 250, 106, 150, 24);
+        moveControl(kAppearance, 420, 100, (std::min)(contentWidth - 170, 380), 150);
+        moveControl(kThemeLabel, 250, 106, 150, 24);
+        moveControl(kTheme, 420, 100, (std::min)(contentWidth - 170, 380), 150);
+        moveControl(kFontLabel, 250, 162, 150, 24);
+        moveControl(kFont, 420, 156, (std::min)(contentWidth - 170, 380), 30);
+        moveControl(kLayoutLabel, 250, 162, 150, 24);
+        moveControl(kVertical, 420, 156, 120, 28);
+        moveControl(kHorizontal, 550, 156, 140, 28);
+        moveControl(kScrollMode, 420, 204, (std::min)(contentWidth - 170, 420), 28);
+        moveControl(kPageSizeLabel, 250, 236, 150, 24);
+        moveControl(kPageSize, 420, 230, 120, 180);
+        moveControl(kApply, 650, 264, 120, 36);
+        moveControl(kPreview, 250, 264, 160, 36);
+        moveControl(kSaveStatus, 420, 272, (std::min)(contentWidth - 170, 320), 24);
+        moveControl(kRestart, 250, 106, 170, 36);
+        moveControl(kDiagnostics, 436, 106, 170, 36);
+        moveControl(kRepair, 250, 106, 170, 36);
+        moveControl(kPackagesTitle, 250, 88, 300, 28);
+        moveControl(kPackages, 250, 122, contentWidth, packageListHeight);
+        moveControl(kPackageRefresh, 250, packageButtonY, 150, 34);
+        moveControl(kPackageInstall, 414, packageButtonY, 160, 34);
+        moveControl(kPackageToggle, 588, packageButtonY, 160, 34);
+        moveControl(kPackageRemove, 762, packageButtonY, 150, 34);
+        if (selectedPage_ == kNavPackages) {
+            moveControl(kStatus, 250, packageStatusY, contentWidth, 50);
+        } else {
+            moveControl(kStatus, 250, 168, contentWidth, tallStatusHeight);
+        }
+    }
+    void add(const wchar_t* type, const wchar_t* label, DWORD style, int x, int y, int width,
+             int height, int id = 0) {
+        HWND child = CreateWindowExW(
+            0, type, label, WS_CHILD | WS_VISIBLE | style, scale(x), scale(y), scale(width),
+            scale(height), m_hWnd, reinterpret_cast<HMENU>(static_cast<std::intptr_t>(id)),
+            _Module.GetModuleInstance(), nullptr);
+        SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    }
+    LRESULT onCreate(UINT, WPARAM, LPARAM, BOOL&) {
+        dpi_ = windowDpi();
+        createFonts();
         add(L"STATIC", L"Fcitx5", 0, 24, 28, 160, 34);
         add(L"BUTTON", get("nav.general"), BS_OWNERDRAW | WS_TABSTOP, 12, 82, 180, 34, kNavGeneral);
         add(L"BUTTON", get("nav.appearance"), BS_OWNERDRAW | WS_TABSTOP, 12, 122, 180, 34,
@@ -710,7 +897,35 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             kPackageToggle);
         add(L"BUTTON", get("packages.uninstall"), WS_TABSTOP, 762, 488, 150, 34, kPackageRemove);
         loadState();
+        layoutControls();
         showPage(kNavGeneral);
+        return 0;
+    }
+    LRESULT onSize(UINT, WPARAM, LPARAM, BOOL&) {
+        layoutControls();
+        return 0;
+    }
+    LRESULT onGetMinMaxInfo(UINT, WPARAM, LPARAM lparam, BOOL&) {
+        auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
+        limits->ptMinTrackSize.x = scale(820);
+        limits->ptMinTrackSize.y = scale(520);
+        return 0;
+    }
+    LRESULT onDpiChanged(UINT, WPARAM wparam, LPARAM lparam, BOOL&) {
+        dpi_ = LOWORD(wparam);
+        if (dpi_ == 0)
+            dpi_ = 96;
+        createFonts();
+        applyFonts();
+        const auto* suggested = reinterpret_cast<const RECT*>(lparam);
+        if (suggested) {
+            ::SetWindowPos(m_hWnd, nullptr, suggested->left, suggested->top,
+                           suggested->right - suggested->left,
+                           suggested->bottom - suggested->top,
+                           SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        layoutControls();
+        InvalidateRect(nullptr, TRUE);
         return 0;
     }
     void showPage(int page) {
@@ -759,10 +974,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                                               : page == kNavDiagnostics ? get("nav.diagnostics")
                                               : page == kNavRepair      ? get("nav.repair")
                                                                         : get("nav.packages"));
-        if (packages)
-            ::SetWindowPos(control(kStatus), nullptr, 250, 542, 700, 50, SWP_NOZORDER);
-        else
-            ::SetWindowPos(control(kStatus), nullptr, 250, 168, 700, 250, SWP_NOZORDER);
+        layoutControls();
         for (int id = kNavGeneral; id <= kNavPackages; ++id)
             ::InvalidateRect(control(id), nullptr, TRUE);
         InvalidateRect(nullptr, TRUE);
@@ -911,15 +1123,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         }
         SendMessageW(control(kPackages), LB_RESETCONTENT, 0, 0);
         for (const auto& package : packages_) {
-            std::wstring label =
-                package.title + L"  " +
-                (!package.installed.empty() ? package.installed : package.available);
-            if (package.update)
-                label += L"  ↑";
-            if (package.state == L"disabled")
-                label += L"  (disabled)";
-            if (package.state == L"bundled")
-                label += std::wstring(L"  ") + get("packages.bundled");
+            const std::wstring label = packageListLabel(package, strings_);
             SendMessageW(control(kPackages), LB_ADDSTRING, 0,
                          reinterpret_cast<LPARAM>(label.c_str()));
         }
@@ -1309,6 +1513,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     bool repositoryAvailable_{};
     bool interactionTest_{};
     unsigned long long actionCoverage_{};
+    UINT dpi_{96};
 };
 
 } // namespace
@@ -1350,7 +1555,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         return 4;
     }
     enableNativeWindowEffects(window);
-    window.ResizeClient(1010, 650);
+    window.resizeToDefaultClient();
     window.CenterWindow();
     if (uiContractTest || uiInteractionTest) {
         const bool passed = uiContractTest ? window.verifyUiContract()

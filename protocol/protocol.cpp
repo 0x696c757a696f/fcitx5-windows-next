@@ -150,6 +150,11 @@ bool validKeyMetadata(const Metadata& metadata) noexcept {
     return metadata.engineEpoch != 0 && metadata.contextId != 0;
 }
 
+bool validEngineStatusMetadata(const Metadata& metadata) noexcept {
+    return metadata.engineEpoch != 0 && metadata.contextId == 0 &&
+           metadata.compositionId == 0 && metadata.revision == 0;
+}
+
 bool validCaret(const CaretRect& caret) noexcept {
     if (!caret.valid) {
         return caret.left == 0 && caret.top == 0 && caret.right == 0 && caret.bottom == 0 &&
@@ -208,6 +213,34 @@ bool validSurroundingText(const KeyRequest& message) noexcept {
            message.surroundingAnchor <= length;
 }
 
+bool validInputMethodText(std::string_view text, std::size_t maximumBytes) noexcept {
+    std::size_t codePoints = 0;
+    return text.size() <= maximumBytes && utf8CodePointCount(text, codePoints);
+}
+
+bool validInputMethodStatus(std::string_view id, std::string_view name,
+                            std::string_view nativeName,
+                            std::string_view shortLabel) noexcept {
+    return validInputMethodText(id, kMaxInputMethodIdUtf8) &&
+           validInputMethodText(name, kMaxInputMethodNameUtf8) &&
+           validInputMethodText(nativeName, kMaxInputMethodNameUtf8) &&
+           validInputMethodText(shortLabel, kMaxInputMethodNameUtf8);
+}
+
+bool validLauncherResponsePayload(const LauncherResponse& message) noexcept {
+    return validInputMethodStatus(message.currentInputMethodId,
+                                  message.currentInputMethodName,
+                                  message.currentInputMethodNativeName,
+                                  message.currentInputMethodShortLabel);
+}
+
+bool validEngineStatusResponsePayload(const EngineStatusResponse& message) noexcept {
+    return validInputMethodStatus(message.currentInputMethodId,
+                                  message.currentInputMethodName,
+                                  message.currentInputMethodNativeName,
+                                  message.currentInputMethodShortLabel);
+}
+
 bool validKeyResponsePayload(const KeyResponse& message) noexcept {
     if (message.commitUtf8.size() > kMaxCommitUtf8 ||
         message.preeditUtf8.size() > kMaxPreeditUtf8 ||
@@ -262,13 +295,15 @@ std::size_t maximumFrameSize(MessageType type) noexcept {
 bool isRequest(MessageType type) noexcept {
     return type == MessageType::helloRequest || type == MessageType::keyRequest ||
            type == MessageType::launcherRequest ||
-           type == MessageType::candidateSelectRequest || type == MessageType::stateRequest;
+           type == MessageType::candidateSelectRequest || type == MessageType::stateRequest ||
+           type == MessageType::engineStatusRequest;
 }
 
 bool isResponse(MessageType type) noexcept {
     return type == MessageType::helloResponse || type == MessageType::keyResponse ||
            type == MessageType::launcherResponse ||
-           type == MessageType::candidateSelectResponse;
+           type == MessageType::candidateSelectResponse ||
+           type == MessageType::engineStatusResponse;
 }
 
 bool decodeHeader(std::span<const std::uint8_t> bytes, MessageType& type, std::uint32_t& bodySize,
@@ -289,7 +324,7 @@ bool decodeHeader(std::span<const std::uint8_t> bytes, MessageType& type, std::u
     }
     if (magic != kMagic || version != kVersion ||
         rawType < static_cast<std::uint16_t>(MessageType::helloRequest) ||
-        rawType > static_cast<std::uint16_t>(MessageType::stateRequest)) {
+        rawType > static_cast<std::uint16_t>(MessageType::engineStatusResponse)) {
         return false;
     }
     type = static_cast<MessageType>(rawType);
@@ -441,6 +476,32 @@ std::vector<std::uint8_t> encode(const StateRequest& message) {
     return writer.finish();
 }
 
+std::vector<std::uint8_t> encode(const EngineStatusRequest& message) {
+    if (!validMetadata(MessageType::engineStatusRequest, message.metadata) ||
+        !validEngineStatusMetadata(message.metadata)) {
+        return {};
+    }
+    Writer writer(MessageType::engineStatusRequest, message.metadata);
+    return writer.finish();
+}
+
+std::vector<std::uint8_t> encode(const EngineStatusResponse& message) {
+    if (!validMetadata(MessageType::engineStatusResponse, message.metadata) ||
+        !validEngineStatusMetadata(message.metadata) ||
+        !validEngineStatusResponsePayload(message) ||
+        static_cast<std::uint32_t>(message.status) >
+            static_cast<std::uint32_t>(Status::accessDenied)) {
+        return {};
+    }
+    Writer writer(MessageType::engineStatusResponse, message.metadata);
+    writer.appendU32(static_cast<std::uint32_t>(message.status));
+    writer.appendString(message.currentInputMethodId);
+    writer.appendString(message.currentInputMethodName);
+    writer.appendString(message.currentInputMethodNativeName);
+    writer.appendString(message.currentInputMethodShortLabel);
+    return writer.finish();
+}
+
 std::vector<std::uint8_t> encode(const LauncherRequest& message) {
     if (!validMetadata(MessageType::launcherRequest, message.metadata) ||
         !validLauncherMetadata(message.metadata) ||
@@ -456,6 +517,7 @@ std::vector<std::uint8_t> encode(const LauncherRequest& message) {
 std::vector<std::uint8_t> encode(const LauncherResponse& message) {
     if (!validMetadata(MessageType::launcherResponse, message.metadata) ||
         !validLauncherMetadata(message.metadata) ||
+        !validLauncherResponsePayload(message) ||
         static_cast<std::uint32_t>(message.status) >
             static_cast<std::uint32_t>(Status::accessDenied)) {
         return {};
@@ -467,6 +529,10 @@ std::vector<std::uint8_t> encode(const LauncherResponse& message) {
     writer.appendU32(message.startDisposition);
     writer.appendU8(message.safeMode ? 1U : 0U);
     writer.appendU64(message.retryAfterMilliseconds);
+    writer.appendString(message.currentInputMethodId);
+    writer.appendString(message.currentInputMethodName);
+    writer.appendString(message.currentInputMethodNativeName);
+    writer.appendString(message.currentInputMethodShortLabel);
     return writer.finish();
 }
 
@@ -630,6 +696,36 @@ bool decode(const FrameView& frame, StateRequest& message) noexcept {
     return true;
 }
 
+bool decode(const FrameView& frame, EngineStatusRequest& message) noexcept {
+    if (frame.type != MessageType::engineStatusRequest ||
+        !validEngineStatusMetadata(frame.metadata) || !frame.body.empty()) {
+        return false;
+    }
+    message.metadata = frame.metadata;
+    return true;
+}
+
+bool decode(const FrameView& frame, EngineStatusResponse& message) noexcept {
+    if (frame.type != MessageType::engineStatusResponse ||
+        !validEngineStatusMetadata(frame.metadata)) {
+        return false;
+    }
+    Reader reader(frame.body);
+    std::uint32_t status = 0;
+    if (!reader.readU32(status) ||
+        !reader.readString(message.currentInputMethodId) ||
+        !reader.readString(message.currentInputMethodName) ||
+        !reader.readString(message.currentInputMethodNativeName) ||
+        !reader.readString(message.currentInputMethodShortLabel) || !reader.done() ||
+        !validEngineStatusResponsePayload(message) ||
+        status > static_cast<std::uint32_t>(Status::accessDenied)) {
+        return false;
+    }
+    message.metadata = frame.metadata;
+    message.status = static_cast<Status>(status);
+    return true;
+}
+
 bool decode(const FrameView& frame, LauncherRequest& message) noexcept {
     if (frame.type != MessageType::launcherRequest || !validLauncherMetadata(frame.metadata))
         return false;
@@ -654,7 +750,12 @@ bool decode(const FrameView& frame, LauncherResponse& message) noexcept {
     if (!reader.readU32(status) || !reader.readU32(message.launcherState) ||
         !reader.readU32(message.engineState) || !reader.readU32(message.startDisposition) ||
         !reader.readU8(safeMode) || safeMode > 1 ||
-        !reader.readU64(message.retryAfterMilliseconds) || !reader.done() ||
+        !reader.readU64(message.retryAfterMilliseconds) ||
+        !reader.readString(message.currentInputMethodId) ||
+        !reader.readString(message.currentInputMethodName) ||
+        !reader.readString(message.currentInputMethodNativeName) ||
+        !reader.readString(message.currentInputMethodShortLabel) || !reader.done() ||
+        !validLauncherResponsePayload(message) ||
         status > static_cast<std::uint32_t>(Status::accessDenied)) {
         return false;
     }

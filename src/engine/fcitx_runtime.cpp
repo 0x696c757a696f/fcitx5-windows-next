@@ -10,6 +10,7 @@
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputcontext.h>
+#include <fcitx/inputmethodengine.h>
 #include <fcitx/inputmethodentry.h>
 #include <fcitx/inputmethodgroup.h>
 #include <fcitx/inputmethodmanager.h>
@@ -376,6 +377,31 @@ std::pair<std::string, std::uint32_t> readPreedit(EngineInputContext& context) {
         cursor = static_cast<int>(text.size());
     cursor = std::clamp(cursor, 0, static_cast<int>(text.size()));
     return {std::move(text), static_cast<std::uint32_t>(cursor)};
+}
+
+std::size_t utf8CharacterEnd(std::string_view text, std::size_t offset) noexcept {
+    if (offset >= text.size())
+        return text.size();
+    const auto byte = static_cast<unsigned char>(text[offset]);
+    std::size_t length = 1;
+    if ((byte & 0xe0U) == 0xc0U)
+        length = 2;
+    else if ((byte & 0xf0U) == 0xe0U)
+        length = 3;
+    else if ((byte & 0xf8U) == 0xf0U)
+        length = 4;
+    return (std::min)(text.size(), offset + length);
+}
+
+std::string statusShortLabel(std::string_view text) {
+    if (text.empty())
+        return {};
+    if (text.size() >= 2 &&
+        static_cast<unsigned char>(text[0]) < 0x80U &&
+        static_cast<unsigned char>(text[1]) < 0x80U) {
+        return std::string(text.substr(0, 2));
+    }
+    return std::string(text.substr(0, utf8CharacterEnd(text, 0)));
 }
 
 } // namespace
@@ -1067,6 +1093,39 @@ std::vector<InputMethodInfo> FcitxRuntime::inputMethods() const {
         output.push_back(InputMethodInfo{entry->uniqueName(), entry->name(), entry->nativeName(),
                                          entry->uniqueName() == group.defaultInputMethod()});
     }
+    return output;
+}
+
+InputMethodStatus FcitxRuntime::currentInputMethod() const {
+    InputMethodStatus output;
+    if (!impl_->instance)
+        return output;
+    auto* context = impl_->focused ? impl_->focused : impl_->warmupContext.get();
+    auto& manager = impl_->instance->inputMethodManager();
+    const std::string id = context ? impl_->instance->inputMethod(context)
+                                   : manager.currentGroup().defaultInputMethod();
+    if (id.empty())
+        return output;
+    output.id = id;
+    const auto* entry = manager.entry(id);
+    if (!entry) {
+        output.name = id;
+        output.shortLabel = statusShortLabel(output.name);
+        return output;
+    }
+    output.name = entry->name();
+    output.nativeName = entry->nativeName();
+    std::string display;
+    if (context) {
+        if (auto* engine = impl_->instance->inputMethodEngine(context)) {
+            display = engine->subModeLabel(*entry, *context);
+        }
+    }
+    if (display.empty())
+        display = entry->label().empty() ? output.nativeName : entry->label();
+    if (display.empty())
+        display = output.nativeName.empty() ? output.name : output.nativeName;
+    output.shortLabel = statusShortLabel(display);
     return output;
 }
 

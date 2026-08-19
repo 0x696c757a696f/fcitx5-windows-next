@@ -6,6 +6,7 @@
 #include <shellapi.h>
 
 #include <array>
+#include <algorithm>
 #include <cwchar>
 #include <iterator>
 #include <string>
@@ -66,6 +67,47 @@ void copyText(wchar_t* destination, std::size_t capacity, const std::wstring& va
     wcsncpy_s(destination, capacity, value.c_str(), _TRUNCATE);
 }
 
+bool utf8ToWide(std::string_view input, std::wstring& output) {
+    output.clear();
+    if (input.empty())
+        return true;
+    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
+                                         static_cast<int>(input.size()), nullptr, 0);
+    if (size <= 0)
+        return false;
+    output.resize(static_cast<std::size_t>(size));
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
+                               static_cast<int>(input.size()), output.data(), size) == size;
+}
+
+std::wstring inputMethodDisplay(
+    const protocol::EngineStatusResponse& status) {
+    std::wstring display;
+    if (!status.currentInputMethodNativeName.empty() &&
+        utf8ToWide(status.currentInputMethodNativeName, display) && !display.empty()) {
+        return display;
+    }
+    if (!status.currentInputMethodName.empty() &&
+        utf8ToWide(status.currentInputMethodName, display) && !display.empty()) {
+        return display;
+    }
+    if (!status.currentInputMethodId.empty() &&
+        utf8ToWide(status.currentInputMethodId, display) && !display.empty()) {
+        return display;
+    }
+    return {};
+}
+
+std::wstring tooltipText(LauncherState launcherState, EngineState engineState,
+                         const protocol::EngineStatusResponse& inputMethodStatus) {
+    std::wstring text = std::wstring(fcitx::windows::kReleaseIdentity.service_description) +
+                        L" — " + statusText(launcherState, engineState);
+    std::wstring method = inputMethodDisplay(inputMethodStatus);
+    if (!method.empty())
+        text += L" — " + method;
+    return text;
+}
+
 } // namespace
 
 TrayIcon::~TrayIcon() {
@@ -111,8 +153,7 @@ void TrayIcon::addIcon() noexcept {
     if (!icon_.hIcon)
         icon_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     copyText(icon_.szTip, std::size(icon_.szTip),
-             std::wstring(fcitx::windows::kReleaseIdentity.service_description) + L" — " +
-                 statusText(launcherState_, engineState_));
+             tooltipText(launcherState_, engineState_, inputMethodStatus_));
     icon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP |
                    (usesGuidIdentity_ ? NIF_GUID : 0U);
     iconAdded_ = Shell_NotifyIconW(NIM_ADD, &icon_) != FALSE;
@@ -147,11 +188,19 @@ void TrayIcon::removeIcon() noexcept {
     iconAdded_ = false;
 }
 
-void TrayIcon::update(LauncherState launcherState, EngineState engineState) {
-    if (launcherState_ == launcherState && engineState_ == engineState)
+void TrayIcon::update(LauncherState launcherState, EngineState engineState,
+                      const protocol::EngineStatusResponse& inputMethodStatus) {
+    if (launcherState_ == launcherState && engineState_ == engineState &&
+        inputMethodStatus_.currentInputMethodId == inputMethodStatus.currentInputMethodId &&
+        inputMethodStatus_.currentInputMethodName == inputMethodStatus.currentInputMethodName &&
+        inputMethodStatus_.currentInputMethodNativeName ==
+            inputMethodStatus.currentInputMethodNativeName &&
+        inputMethodStatus_.currentInputMethodShortLabel ==
+            inputMethodStatus.currentInputMethodShortLabel)
         return;
     launcherState_ = launcherState;
     engineState_ = engineState;
+    inputMethodStatus_ = inputMethodStatus;
     if (!iconAdded_) {
         addIcon();
         return;
@@ -160,8 +209,7 @@ void TrayIcon::update(LauncherState launcherState, EngineState engineState) {
                    (usesGuidIdentity_ ? NIF_GUID : 0U);
     icon_.hIcon = statusIcon(instance_, launcherState_, engineState_);
     copyText(icon_.szTip, std::size(icon_.szTip),
-             std::wstring(fcitx::windows::kReleaseIdentity.service_description) + L" — " +
-                 statusText(launcherState_, engineState_));
+             tooltipText(launcherState_, engineState_, inputMethodStatus_));
     (void)Shell_NotifyIconW(NIM_MODIFY, &icon_);
     icon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP |
                    (usesGuidIdentity_ ? NIF_GUID : 0U);
@@ -224,6 +272,12 @@ void TrayIcon::showMenu() noexcept {
     const std::wstring status = std::wstring(chinese ? L"状态：" : L"Status: ") +
                                 statusText(launcherState_, engineState_);
     AppendMenuW(menu, MF_STRING | MF_DISABLED, kStatus, status.c_str());
+    const std::wstring inputMethod = inputMethodDisplay(inputMethodStatus_);
+    if (!inputMethod.empty()) {
+        const std::wstring method = std::wstring(chinese ? L"当前方案：" : L"Input method: ") +
+                                    inputMethod;
+        AppendMenuW(menu, MF_STRING | MF_DISABLED, kStatus + 1U, method.c_str());
+    }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kRestart,
                 chinese ? L"重新启动输入服务" : L"Restart input service");

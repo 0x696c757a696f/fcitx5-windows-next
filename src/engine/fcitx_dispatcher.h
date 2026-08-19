@@ -41,6 +41,8 @@ public:
     [[nodiscard]] bool takePendingState(
         const ClientContextKey& context, const protocol::StateRequest& request,
         RuntimeResult& result, std::chrono::milliseconds timeout);
+    [[nodiscard]] bool queryInputMethodStatus(InputMethodStatus& result,
+                                              std::chrono::milliseconds timeout);
     void forgetConnection(std::uint64_t connectionId);
     void stop();
 

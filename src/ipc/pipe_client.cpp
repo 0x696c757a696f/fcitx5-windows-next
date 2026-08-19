@@ -378,4 +378,38 @@ bool PipeClient::pollState(std::uint64_t contextId, KeyResult& result) noexcept 
     }
 }
 
+bool PipeClient::queryEngineStatus(protocol::EngineStatusResponse& result,
+                                   DWORD timeoutMilliseconds) noexcept {
+    result = {};
+    try {
+        const std::uint64_t deadline = GetTickCount64() + timeoutMilliseconds;
+        if (!connect(deadline) || !handshake(deadline)) {
+            disconnect();
+            return false;
+        }
+        const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        const protocol::EngineStatusRequest request{
+            protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, 0, 0, 0}};
+        std::vector<std::uint8_t> responseBytes;
+        if (!transact(protocol::encode(request), responseBytes, deadline)) return false;
+        protocol::FrameView frame;
+        protocol::EngineStatusResponse response;
+        if (!protocol::decodeFrame(responseBytes, frame) ||
+            !protocol::decode(frame, response) ||
+            response.metadata.responseTo != requestId ||
+            response.metadata.engineEpoch != engineEpoch_ ||
+            response.metadata.sessionId != sessionId_ ||
+            response.status != protocol::Status::ok) {
+            disconnect();
+            return false;
+        }
+        result = std::move(response);
+        return true;
+    } catch (...) {
+        disconnect();
+        result = {};
+        return false;
+    }
+}
+
 } // namespace fcitx::windows::ipc

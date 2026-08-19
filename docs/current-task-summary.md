@@ -99,7 +99,9 @@ updater、deployer 用完即退出；TSF DLL 加载在宿主中，不计作 EXE�
   内部配置、默认输入法和切换热键管理。
 - 托盘图标是当前用户可见状态入口：运行中使用 `fcitx5.ico`；暂停/安全模式使用
   `fcitx5-paused.ico`；崩溃恢复、服务停止、卸载中使用 `fcitx5-error.ico`。
-- tooltip 使用产品名加状态文本，例如 `Fcitx5 for Windows Next — Running/Paused/Safe mode`。
+- tooltip 使用产品名加状态文本和当前 Fcitx 内部输入方案，例如
+  `Fcitx5 for Windows Next — Running — Pinyin`；当前方案来自 engine 状态查询，而不是
+  Windows TSF profile。
 
 ## Phase 0 参考顺序
 
@@ -147,6 +149,15 @@ WindInput/Moqi/Rabbit/PIME 只在具体失败对应的 Phase 查阅。Phase 0–
 - 2026-08-19 TSF profile 注册收敛为单一产品入口：注册器启动时先清理旧 built-in
   profile 与动态 ledger，再只注册 `Fcitx5 for Windows Next`。Rime/Mozc/后续插件不再进入
   Windows 输入法列表，而由 Fcitx engine 内部状态选择。
+- 2026-08-19 macOS 配置器与 fcitx-contrib 文档参考已整理到
+  `docs/macos-config-reference.md`：Windows 插件管理器继续以 signed repository 为源，显示
+  package type/title/summary/state；Advanced 后续按 Fcitx typed config metadata 动态渲染，
+  不维护 Windows 专用巨型配置映射表。
+- 2026-08-19 Config UI 补上基础 DPI/尺寸适配：窗口按工作区 clamp，控件布局和标题字体按
+  当前窗口 DPI 缩放，`WM_DPICHANGED` 时重建字体并重排，诊断/插件列表随窗口尺寸伸缩。
+  Candidate UI 已有 PMv2、caret DPI 字体重建、布局几何缩放、monitor work-area clamp 与
+  `WM_DPICHANGED` 处理。真实多显示器/200% DPI 视觉证据仍属兼容矩阵待办；后续精致化作为
+  Phase 6 polish，不得为了视觉重做而改变 TSF/engine 输入语义边界。
 
 ## 当前红灯
 

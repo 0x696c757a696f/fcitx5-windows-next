@@ -174,6 +174,19 @@ protocol::KeyResponse makeHiddenPresentation(protocol::KeyResponse response) {
     return response;
 }
 
+protocol::EngineStatusResponse makeEngineStatusResponse(
+    const protocol::Metadata& requestMetadata, std::uint64_t responseId,
+    std::uint64_t engineEpoch, const engine::InputMethodStatus& status) {
+    return protocol::EngineStatusResponse{
+        protocol::Metadata{responseId, requestMetadata.requestId, engineEpoch,
+                           requestMetadata.sessionId, 0, 0, 0},
+        protocol::Status::ok,
+        status.id,
+        status.name,
+        status.nativeName,
+        status.shortLabel};
+}
+
 bool signalCandidateUpdate(const platform::RuntimeIdentity& identity,
                            std::uint32_t targetProcessId) noexcept {
     const std::wstring name = platform::makeLocalObjectName(
@@ -267,6 +280,17 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
         lastRequestId = request.metadata.requestId;
         return protocol::encode(makeStateResponse(
             request.metadata, nextResponseId.fetch_add(1), engineEpoch, runtimeResult));
+    }
+    if (frame.type == protocol::MessageType::engineStatusRequest) {
+        protocol::EngineStatusRequest request;
+        engine::InputMethodStatus status;
+        if (!protocol::decode(frame, request) ||
+            !dispatcher.queryInputMethodStatus(status, std::chrono::milliseconds(75))) {
+            return {};
+        }
+        lastRequestId = request.metadata.requestId;
+        return protocol::encode(makeEngineStatusResponse(
+            request.metadata, nextResponseId.fetch_add(1), engineEpoch, status));
     }
     return {};
 }
