@@ -205,8 +205,12 @@ int wmain(int argc, wchar_t** argv) {
     if (!GetProcessTimes(process.handle, &creationBefore, &exitBefore, &kernelBefore,
                          &userBefore)) return 1;
     const auto settleBegin = std::chrono::steady_clock::now();
+    // Startup preloads every enabled input method addon (so Ctrl+Space /
+    // Ctrl+Shift switching never pays a first-activation cost inside the
+    // input deadline); allow the resulting one-time initialization CPU time
+    // to settle before declaring the engine idle.
     const unsigned requiredQuietWindows = firstRunRime ? 20U : 3U;
-    const unsigned maximumSamples = firstRunRime ? 1'200U : 50U;
+    const unsigned maximumSamples = firstRunRime ? 1'200U : 150U;
     unsigned quietWindows = 0;
     for (unsigned sample = 0;
          sample < maximumSamples && quietWindows < requiredQuietWindows; ++sample) {
