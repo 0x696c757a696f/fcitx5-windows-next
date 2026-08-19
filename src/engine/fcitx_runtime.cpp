@@ -1,4 +1,5 @@
 #include "fcitx_runtime.h"
+#include "config_model.h"
 #include <fcitx5_windows/release_identity.h>
 
 #include <fcitx-utils/capabilityflags.h>
@@ -23,6 +24,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -62,74 +64,39 @@ std::filesystem::path localDataDirectory() {
     return result / kReleaseIdentity.data_directory;
 }
 
-// config.toml 由 fcitx5-control 写入（格式受控）。这里做轻量解析，只读取
-// [input_methods] 与 [hotkeys] 两个小节；解析失败时回退默认值。
+// config.toml is owned by the config module; parse it with the single
+// authoritative parser (config_parser.cpp) instead of a second, hand-rolled
+// TOML reader that could drift from the config tool's semantics.
 EngineConfig readEngineConfig() {
     EngineConfig config;
-    std::filesystem::path text;
     const auto data = localDataDirectory();
+    std::string text;
     if (!data.empty()) {
         std::ifstream file(data / L"config.toml");
         if (file) {
-            bool inInputMethods = false;
-            bool inHotkeys = false;
-            std::string line;
-            while (std::getline(file, line)) {
-                const auto hash = line.find('#');
-                if (hash != std::string::npos)
-                    line = line.substr(0, hash);
-                const auto first = line.find_first_not_of(" \t\r\n");
-                if (first == std::string::npos)
-                    continue;
-                line = line.substr(first);
-                if (line[0] == '[') {
-                    inInputMethods = line.rfind("[input_methods]", 0) == 0;
-                    inHotkeys = line.rfind("[hotkeys]", 0) == 0;
-                    continue;
-                }
-                if (inInputMethods && line.rfind("enabled", 0) == 0) {
-                    const auto bracket = line.find('[');
-                    std::size_t pos = bracket == std::string::npos ? 0 : bracket + 1;
-                    while (pos < line.size()) {
-                        const auto quote = line.find('"', pos);
-                        if (quote == std::string::npos)
-                            break;
-                        const auto endQuote = line.find('"', quote + 1);
-                        if (endQuote == std::string::npos)
-                            break;
-                        config.enabled.push_back(
-                            line.substr(quote + 1, endQuote - quote - 1));
-                        pos = endQuote + 1;
-                    }
-                } else if (inInputMethods && line.rfind("default", 0) == 0) {
-                    const auto quote = line.find('"');
-                    if (quote != std::string::npos) {
-                        const auto endQuote = line.find('"', quote + 1);
-                        if (endQuote != std::string::npos)
-                            config.defaultInputMethod =
-                                line.substr(quote + 1, endQuote - quote - 1);
-                    }
-                } else if (inHotkeys &&
-                           line.rfind("toggle_input_method", 0) == 0) {
-                    const auto quote = line.find('"');
-                    if (quote != std::string::npos) {
-                        const auto endQuote = line.find('"', quote + 1);
-                        if (endQuote != std::string::npos)
-                            config.hotkeyToggle =
-                                line.substr(quote + 1, endQuote - quote - 1);
-                    }
-                } else if (inHotkeys && line.rfind("next_input_method", 0) == 0) {
-                    const auto quote = line.find('"');
-                    if (quote != std::string::npos) {
-                        const auto endQuote = line.find('"', quote + 1);
-                        if (endQuote != std::string::npos)
-                            config.hotkeyNext =
-                                line.substr(quote + 1, endQuote - quote - 1);
-                    }
-                }
-            }
+            std::ostringstream buffer;
+            buffer << file.rdbuf();
+            text = buffer.str();
         }
     }
+    fcitx::windows::config::Config parsed;
+    fcitx::windows::config::ParseError error;
+    const bool parsedOk = !text.empty() &&
+                          fcitx::windows::config::parseConfig(text, parsed, error);
+    if (!parsedOk) {
+        // Fall back to the canonical defaults owned by the config module,
+        // which include [input_methods] and [hotkeys].
+        fcitx::windows::config::Config defaults;
+        fcitx::windows::config::ParseError defaultError;
+        if (fcitx::windows::config::parseConfig(
+                fcitx::windows::config::defaultConfigToml(), defaults, defaultError)) {
+            parsed = std::move(defaults);
+        }
+    }
+    config.enabled = parsed.enabledInputMethods;
+    config.defaultInputMethod = parsed.defaultInputMethod;
+    config.hotkeyToggle = parsed.hotkeyToggleInputMethod;
+    config.hotkeyNext = parsed.hotkeyNextInputMethod;
     if (config.enabled.empty())
         config.enabled = {"pinyin", "rime", "wbx"};
     if (!config.defaultInputMethod ||
@@ -334,6 +301,10 @@ class FcitxRuntime::Impl final {
     std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> compositions;
     std::unordered_map<ClientContextKey, protocol::CaretRect, KeyHash> carets;
     std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
+    // Immutable snapshot of config.toml, loaded once at startup. The input
+    // hot path (processKey) reads this in memory instead of reopening and
+    // re-parsing the file on every keystroke.
+    EngineConfig config;
     // Set when the user switched the input method on this context via the
     // Ctrl+Space / Ctrl+Shift hotkeys; the per-key reset to the group default
     // respects it so a switch survives the next keystroke.
@@ -353,8 +324,8 @@ class FcitxRuntime::Impl final {
                         return manager.entry(item.name()) == nullptr;
                     }),
                     items.end());
-        const EngineConfig engineConfig = readEngineConfig();
-        for (const std::string& id : engineConfig.enabled) {
+        config = readEngineConfig();
+        for (const std::string& id : config.enabled) {
             if (manager.entry(id) && !contains(id)) {
                 items.emplace_back(id);
             }
@@ -364,7 +335,7 @@ class FcitxRuntime::Impl final {
         // cost inside the 100 ms TSF input deadline. Without this, switching
         // to an input method that was never focused before (e.g. Rime from a
         // pinyin default, or vice versa) can time out the key request.
-        for (const std::string& id : engineConfig.enabled) {
+        for (const std::string& id : config.enabled) {
             if (manager.entry(id)) {
                 (void)instance->inputMethodEngine(id);
             }
@@ -372,7 +343,7 @@ class FcitxRuntime::Impl final {
         std::string selected = previousDefault;
         if (!contains(selected)) {
             selected.clear();
-            for (const std::string& fallback : engineConfig.enabled) {
+            for (const std::string& fallback : config.enabled) {
                 if (contains(fallback)) {
                     selected = fallback;
                     break;
@@ -594,7 +565,9 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         const bool ctrl = states.test(KeyState::Ctrl);
         const bool shift = states.test(KeyState::Shift);
         const bool alt = states.test(KeyState::Alt);
-        const EngineConfig engineConfig = readEngineConfig();
+        // Read the immutable config snapshot loaded at startup - never reopen
+        // config.toml on the input hot path.
+        const auto& engineConfig = impl_->config;
         const auto matches = [&](const std::optional<std::string>& hotkey) {
             if (!hotkey || keySym == FcitxKey_None)
                 return false;

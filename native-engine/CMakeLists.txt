@@ -35,6 +35,7 @@ add_executable(
   "${REPOSITORY_ROOT}/src/platform/runtime_identity.cpp"
   "${REPOSITORY_ROOT}/src/platform/pipe_security.cpp"
   "${REPOSITORY_ROOT}/src/ipc/peer_verification.cpp"
+  "${REPOSITORY_ROOT}/src/config/config_parser.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_runtime.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_dispatcher.cpp"
   "${REPOSITORY_ROOT}/src/engine/presentation_publisher.cpp"
@@ -54,7 +55,11 @@ target_include_directories(
           "${CMAKE_CURRENT_BINARY_DIR}/generated"
           "${REPOSITORY_ROOT}/src/platform"
           "${REPOSITORY_ROOT}/src/ipc"
+          "${REPOSITORY_ROOT}/src/config"
           "${REPOSITORY_ROOT}/src/engine")
+target_include_directories(
+  fcitx5_engine
+  SYSTEM PRIVATE "${REPOSITORY_ROOT}/third_party/tomlplusplus/include")
 target_link_libraries(fcitx5_engine PRIVATE Fcitx5::Core advapi32 user32)
 
 # Platform keyboard layer following the same design used by Fcitx5 Android:
