@@ -1,6 +1,7 @@
 #include "guids.h"
 
 #include <Windows.h>
+#include <OleAuto.h>
 #include <inputscope.h>
 #include <msctf.h>
 #include <objbase.h>
@@ -393,7 +394,10 @@ private:
     ComPtr<ITfContext> context_;
 };
 
-class TestThreadManager final : public ITfThreadMgr, public ITfKeystrokeMgr, public ITfSource {
+class TestThreadManager final : public ITfThreadMgr,
+                                public ITfKeystrokeMgr,
+                                public ITfSource,
+                                public ITfUIElementMgr {
 public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) noexcept override {
         if (!object) return E_POINTER;
@@ -404,6 +408,8 @@ public:
             *object = static_cast<ITfKeystrokeMgr*>(this);
         } else if (IsEqualIID(iid, IID_ITfSource)) {
             *object = static_cast<ITfSource*>(this);
+        } else if (IsEqualIID(iid, IID_ITfUIElementMgr)) {
+            *object = static_cast<ITfUIElementMgr*>(this);
         }
         if (!*object) return E_NOINTERFACE;
         AddRef();
@@ -514,6 +520,35 @@ public:
         }
         return E_INVALIDARG;
     }
+    HRESULT STDMETHODCALLTYPE BeginUIElement(ITfUIElement* element, BOOL* show,
+                                             DWORD* id) noexcept override {
+        if (!element || !show || !id) return E_POINTER;
+        uiElement_ = element;
+        *show = beginShow_;
+        *id = 1;
+        ++uiBeginCount_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE UpdateUIElement(DWORD id) noexcept override {
+        if (id != 1 || !uiElement_) return E_INVALIDARG;
+        ++uiUpdateCount_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE EndUIElement(DWORD id) noexcept override {
+        if (id != 1 || !uiElement_) return E_INVALIDARG;
+        ++uiEndCount_;
+        uiElement_.Reset();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetUIElement(DWORD id, ITfUIElement** element) noexcept override {
+        if (!element) return E_POINTER;
+        *element = nullptr;
+        if (id != 1 || !uiElement_) return E_INVALIDARG;
+        return uiElement_.CopyTo(element);
+    }
+    HRESULT STDMETHODCALLTYPE EnumUIElements(IEnumTfUIElements**) noexcept override {
+        return E_NOTIMPL;
+    }
 
     [[nodiscard]] bool lifecycleSinksAdvised() const noexcept {
         return threadManagerEventSink_ && threadFocusSink_;
@@ -526,12 +561,36 @@ public:
         TestDocumentManager previous(context);
         return threadManagerEventSink_->OnSetFocus(nullptr, &previous);
     }
+    void setBeginShow(BOOL show) noexcept { beginShow_ = show; }
+    [[nodiscard]] DWORD uiBeginCount() const noexcept { return uiBeginCount_; }
+    [[nodiscard]] DWORD uiEndCount() const noexcept { return uiEndCount_; }
+    [[nodiscard]] bool hiddenCandidateSemanticsAvailable() const noexcept {
+        ComPtr<ITfCandidateListUIElement> candidates;
+        if (!uiElement_ || FAILED(uiElement_.As(&candidates))) return false;
+        UINT count = 0;
+        UINT selection = UINT_MAX;
+        BOOL shown = TRUE;
+        BSTR text = nullptr;
+        const bool ok = SUCCEEDED(candidates->GetCount(&count)) && count != 0 &&
+                        SUCCEEDED(candidates->GetSelection(&selection)) &&
+                        selection < count &&
+                        SUCCEEDED(candidates->IsShown(&shown)) && !shown &&
+                        SUCCEEDED(candidates->GetString(selection, &text)) && text &&
+                        SysStringLen(text) != 0;
+        SysFreeString(text);
+        return ok;
+    }
 
 private:
     std::atomic<ULONG> references_{1};
     bool advised_{};
+    BOOL beginShow_{TRUE};
+    DWORD uiBeginCount_{};
+    DWORD uiUpdateCount_{};
+    DWORD uiEndCount_{};
     ComPtr<ITfThreadMgrEventSink> threadManagerEventSink_;
     ComPtr<ITfThreadFocusSink> threadFocusSink_;
+    ComPtr<ITfUIElement> uiElement_;
 };
 
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
@@ -604,6 +663,7 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
     } else {
         activated = true;
         lifecycleSinksAdvised = threadManager.lifecycleSinksAdvised();
+        threadManager.setBeginShow(FALSE);
         TestContext passwordContext(IS_PASSWORD);
         BOOL passwordTestEaten = TRUE;
         BOOL passwordEaten = TRUE;
@@ -625,6 +685,8 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                 keySink->OnTestKeyDown(&context, 'N', 0, &duplicatePreeditTestEaten);
             const HRESULT preeditResult =
                 keySink->OnKeyDown(&context, 'N', 0, &preeditEaten);
+            const bool hiddenUiElementAfterPreedit =
+                threadManager.hiddenCandidateSemanticsAvailable();
             const HRESULT focusLost = threadManager.simulateDocumentFocusLost(&context);
             const bool focusLossClearedComposition =
                 SUCCEEDED(focusLost) && context.compositionEnded() && context.text().empty();
@@ -695,7 +757,9 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                 !backspaceTestEaten && !modifierTestEaten && !liveKeyUpEaten &&
                 orphanTestEaten && fallbackEaten && !orphanKeyUpEaten &&
                 context.text() == L"a" && context.compositionEnded() &&
-                lifecycleSinksAdvised && focusLossClearedComposition) {
+                lifecycleSinksAdvised && focusLossClearedComposition &&
+                hiddenUiElementAfterPreedit && threadManager.uiBeginCount() >= 2 &&
+                threadManager.uiEndCount() >= 1) {
                 result = 0;
             } else {
                 std::cerr << "composition path failed: preedit=0x" << std::hex
@@ -736,6 +800,9 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                           << ", committedChinese=" << committedChinese
                           << ", focusLossCleared=" << focusLossClearedComposition
                           << ", lifecycleSinksAdvised=" << lifecycleSinksAdvised
+                          << ", hiddenUiElement=" << hiddenUiElementAfterPreedit
+                          << ", uiBegin=" << threadManager.uiBeginCount()
+                          << ", uiEnd=" << threadManager.uiEndCount()
                           << ", started=" << context.compositionStarted()
                           << ", ended=" << context.compositionEnded()
                           << ", text=0x" << std::hex

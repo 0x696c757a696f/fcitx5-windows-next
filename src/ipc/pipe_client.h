@@ -52,7 +52,12 @@ public:
 
     [[nodiscard]] bool processKey(std::uint64_t contextId, std::uint32_t virtualKey,
                                   std::uint32_t keyFlags, KeyResult& result,
-                                  const protocol::CaretRect& caret = {}) noexcept;
+                                  const protocol::CaretRect& caret = {},
+                                  bool popupAllowed = true,
+                                  std::uint32_t scanCode = 0,
+                                  bool extendedKey = false,
+                                  std::uint64_t keyboardLayout = 0,
+                                  std::string_view logicalText = {}) noexcept;
     [[nodiscard]] bool selectCandidate(std::uint32_t targetProcessId,
                                        std::uint64_t expectedEngineEpoch,
                                        std::uint64_t contextId,

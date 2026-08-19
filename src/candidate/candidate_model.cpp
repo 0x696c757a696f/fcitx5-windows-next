@@ -43,10 +43,6 @@ ApplyResult CandidateModel::apply(Snapshot snapshot) {
                 snapshot.revision == current_->revision) {
                 return snapshot == *current_ ? ApplyResult::duplicate : ApplyResult::stale;
             }
-            if (snapshot.compositionId != 0 && current_->compositionId != 0 &&
-                snapshot.compositionId < current_->compositionId) {
-                return ApplyResult::stale;
-            }
         }
     }
     current_ = std::move(snapshot);

@@ -155,10 +155,18 @@ std::vector<std::uint8_t> handle(std::span<const std::uint8_t> requestBytes,
         response.status = protocol::Status::ok;
         response.caret = request.caret;
         if (compositionTest && request.virtualKey == 'N') {
+            if (request.scanCode == 0 || request.keyboardLayout == 0) return {};
             response.handled = true;
             response.preeditUtf8 = "n";
             response.preeditCaretUtf8 = 1;
+            response.candidates = {{101, "1", "\xe4\xbd\xa0", "ni"},
+                                   {102, "2", "\xe5\x91\xa2", "ne"}};
+            response.selectedCandidate = 0;
+            response.candidateTotal = 2;
+            response.candidateVisibility = 1;
+            response.candidatePageSize = 2;
         } else if (compositionTest && request.virtualKey == VK_SPACE) {
+            if (request.popupAllowed) return {};
             response.handled = true;
             response.commitUtf8 = "\xe4\xbd\xa0";
         } else if (request.virtualKey >= 'A' && request.virtualKey <= 'Z') {

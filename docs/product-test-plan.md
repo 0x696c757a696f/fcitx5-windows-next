@@ -1,6 +1,6 @@
 # Product-wide test plan
 
-This is the risk-based test design for the frozen v1.6 product. It complements the
+This is the risk-based test design for the frozen v1.7 product. It complements the
 requirement traceability in `ssdlc-verification-matrix.md` and the control inventory in
 `config-ui-test-cases.md`. A row is not accepted merely because code exists: the named gate must
 pass against the same artifact lineage. Environment-dependent rows remain open until their real
@@ -49,10 +49,10 @@ control notification. It then enumerates every child `Button` HWND and fails if 
 | UI-PKG-004 | Uninstall | pending removal, restart/finalize, owned files only, user dictionary retained |
 
 The former 19-button inventory is historical and must be regenerated from the Phase 6 UI after its
-v1.6 Live/Deferred/Restart-required redesign. Automation must exercise every reachable button and
+v1.7 Live/Deferred/Restart-required redesign. Automation must exercise every reachable button and
 semantic branch; a hard-coded count is not acceptance.
 
-### v1.6 mandatory regressions
+### v1.7 mandatory regressions
 
 | ID | Scenario | Required result |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ semantic branch; a hard-coded count is not acceptance.
 
 ### Notification-area menu
 
-The Desktop gate obtains the real Shell icon rectangle, opens the production popup and invokes its
+The Stable gate obtains the real Shell icon rectangle, opens the production popup and invokes its
 actual menu item rectangles.
 
 | ID | Menu action | Expected result |
@@ -94,18 +94,18 @@ actual menu item rectangles.
 |---|---|---|---|
 | Reference baseline | pinned source/commit/license and keep/refactor/reject record | missing/unpinned/unknown-license reference | PR |
 | Build/toolchain | x64+x86 warnings-as-errors, analysis, UTF-8/LF, declared dependencies | missing tool, cache removal, undeclared IDE/manual step | PR |
-| TSF/COM | register, activate, TestKey/KeyDown, composition and commit | duplicate TestKey, orphan KeyUp, sync termination, sensitive scope, missing engine | PR + Desktop |
-| IPC | legal codec round-trip, multi-client, correct peer | truncation, oversized/unknown enum/version, wrong peer, timeout, late/stale response | PR + Fuzz |
-| Launcher | normal start, warm ready, restart, stop/resume | immediate crash loop, Updating/Uninstalling/UserStopped demand start, secure desktop/session 0 | PR + Desktop |
-| Fcitx engine | Pinyin and Rime preedit/candidate/commit; two contexts; x86+x64 clients | restart epoch, stale context/revision, UI absent, burst/key-repeat backlog | Package |
-| Addons | Rime Lua, fcitx5-lua and chttrans execute functional assertions; Chinese Addons produce real Pinyin | missing/ABI mismatch/broken optional addon enters Safe Mode | Package |
-| Candidate UI | vertical/horizontal/scroll, empty/large list, labels/comments, caret clamp, High Contrast | stale snapshot, invalid selected index, D2D device loss, missing font/theme/UI crash | PR + Compatibility |
-| Config/TOML | sparse override merge/reset, all enum/range boundaries, atomic write and reload | unknown/duplicate/wrong type/version, NaN/Inf, over-limit, interrupted/read-only/full-disk write | PR + Fuzz |
-| Package repository | trusted signed index/package, dependency resolution, install/update/state/remove/rollback | bad/revoked key, hash mismatch, downgrade/cycle, offline/TLS error, interrupted transaction | PR + Package + Release |
-| Archive/filesystem | declared files extract inside staging | traversal, absolute/UNC/ADS, case collision, symlink/reparse, zip bomb, undeclared file | PR + Fuzz |
-| Deployment/update | atomic activation, health mark, one previous-known-good, owner-aware update | activation/health failure, external owner, rollback and cleanup interruption | PR + Release |
-| Security/privacy | input processes have no network import; structured operational diagnostics | raw key/preedit/candidate/commit logging, unsafe DLL path, hook/injection/memory-access capability | PR + Release |
-| Distribution | same-artifact promotion, hashes, SBOM, provenance, system metadata | dirty/untagged source, unsigned bytes, empty keyring, artifact/hash lineage mismatch | Release |
+| TSF/COM | register, activate, TestKey/KeyDown, composition and commit | duplicate TestKey, orphan KeyUp, sync termination, sensitive scope, missing engine | PR + Stable |
+| IPC | legal codec round-trip, multi-client, correct peer | truncation, oversized/unknown enum/version, wrong peer, timeout, late/stale response | PR + Nightly |
+| Launcher | normal start, warm ready, restart, stop/resume | immediate crash loop, Updating/Uninstalling/UserStopped demand start, secure desktop/session 0 | PR + Stable |
+| Fcitx engine | Pinyin and Rime preedit/candidate/commit; two contexts; x86+x64 clients | restart epoch, stale context/revision, UI absent, burst/key-repeat backlog | Nightly |
+| Addons | Rime Lua, fcitx5-lua and chttrans execute functional assertions; Chinese Addons produce real Pinyin | missing/ABI mismatch/broken optional addon enters Safe Mode | Nightly |
+| Candidate UI | vertical/horizontal/scroll, empty/large list, labels/comments, caret clamp, High Contrast | stale snapshot, invalid selected index, D2D device loss, missing font/theme/UI crash | PR + Stable |
+| Config/TOML | sparse override merge/reset, all enum/range boundaries, atomic write and reload | unknown/duplicate/wrong type/version, NaN/Inf, over-limit, interrupted/read-only/full-disk write | PR + Nightly |
+| Package repository | trusted signed index/package, dependency resolution, install/update/state/remove/rollback | bad/revoked key, hash mismatch, downgrade/cycle, offline/TLS error, interrupted transaction | PR + Nightly + Stable |
+| Archive/filesystem | declared files extract inside staging | traversal, absolute/UNC/ADS, case collision, symlink/reparse, zip bomb, undeclared file | PR + Nightly |
+| Deployment/update | atomic activation, health mark, one previous-known-good, owner-aware update | activation/health failure, external owner, rollback and cleanup interruption | PR + Stable |
+| Security/privacy | input processes have no network import; structured operational diagnostics | raw key/preedit/candidate/commit logging, unsafe DLL path, hook/injection/memory-access capability | PR + Stable |
+| Distribution | same-artifact promotion, hashes, SBOM, provenance, system metadata | dirty/untagged source, unsigned bytes, empty keyring, artifact/hash lineage mismatch | Stable |
 
 ## Real typing and robustness
 
@@ -137,7 +137,8 @@ Every evidence record contains source commit, dirty state, configuration, archit
 stage and manifest SHA-256, OS/host identity, test IDs, timestamps and pass/fail details without S0/S1
 content. A downstream stage invalidates when its binary lineage changes.
 
-The local PR, Package and Desktop gates may pass independently. Stable completion additionally
-requires the production signed repository/keyring, protected Authenticode authority, clean tagged
-source and the real compatibility matrix. Missing external evidence is reported as a blocker; it is
-never replaced by a mock, screenshot or prose assertion.
+The PR, Nightly, Win7 VM milestone and Stable gates may pass independently. Stable completion
+additionally requires the production signed repository/keyring, protected Authenticode authority,
+clean tagged source and the targeted real compatibility matrix. The matrix is risk-selected rather
+than a Cartesian product of every OS, architecture, host, DPI and input method. Missing external
+evidence is reported as a blocker; it is never replaced by a mock, screenshot or prose assertion.

@@ -9,7 +9,7 @@
 namespace fcitx::windows::protocol {
 
 inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
-inline constexpr std::uint16_t kVersion = 7;
+inline constexpr std::uint16_t kVersion = 8;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
@@ -18,6 +18,7 @@ inline constexpr std::size_t kMaxCommitUtf8 = 16U * 1024U;
 inline constexpr std::size_t kMaxPreeditUtf8 = 16U * 1024U;
 inline constexpr std::size_t kMaxCandidates = 128;
 inline constexpr std::size_t kMaxCandidateFieldUtf8 = 4096;
+inline constexpr std::size_t kMaxLogicalKeyUtf8 = 64;
 
 enum class MessageType : std::uint16_t {
     helloRequest = 1,
@@ -90,12 +91,21 @@ enum KeyFlag : std::uint32_t {
     // to the engine so Fcitx can track modifier release (e.g. Ctrl+Shift IME
     // switching) without the TSF whitelist deciding which keys matter.
     kKeyFlagRelease = 1U << 4U,
+    // AltGr appears to many Windows clients as Ctrl+RightAlt. Keeping it as a
+    // first-class bit prevents non-US layouts from looking like generic
+    // Ctrl+Alt shortcuts at the protocol boundary.
+    kKeyFlagAltGr = 1U << 5U,
 };
 
 struct KeyRequest {
     Metadata metadata;
     std::uint32_t virtualKey{};
     std::uint32_t keyFlags{};
+    std::uint32_t scanCode{};
+    bool extendedKey{};
+    bool popupAllowed{true};
+    std::uint64_t keyboardLayout{};
+    std::string logicalTextUtf8;
     CaretRect caret;
 };
 

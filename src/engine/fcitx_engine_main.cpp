@@ -142,6 +142,22 @@ protocol::KeyResponse makeStateResponse(
     return response;
 }
 
+protocol::KeyResponse makeHiddenPresentation(protocol::KeyResponse response) {
+    response.handled = true;
+    response.commitUtf8.clear();
+    response.preeditUtf8.clear();
+    response.preeditCaretUtf8 = 0;
+    response.candidates.clear();
+    response.selectedCandidate = UINT32_MAX;
+    response.candidatePage = 0;
+    response.candidateTotal = 0;
+    response.candidateVisibility = 0;
+    response.candidatePageSize = 0;
+    response.candidateBulk = false;
+    response.candidateEnd = true;
+    return response;
+}
+
 bool signalCandidateUpdate(const platform::RuntimeIdentity& identity,
                            std::uint32_t targetProcessId) noexcept {
     const std::wstring name = platform::makeLocalObjectName(
@@ -198,7 +214,8 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
         lastRequestId = request.metadata.requestId;
         auto response = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
                                           engineEpoch, runtimeResult);
-        presentation.publish(response);
+        presentation.publish(request.popupAllowed ? response
+                                                  : makeHiddenPresentation(response));
         return protocol::encode(response);
     }
 

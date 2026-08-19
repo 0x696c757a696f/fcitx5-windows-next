@@ -39,9 +39,19 @@ int main() {
     if (model.apply(std::move(invalid)) != ApplyResult::invalid) return 1;
     auto switched = snapshot(1);
     switched.contextId = 21;
+    switched.compositionId = 40;
     if (model.apply(std::move(switched)) != ApplyResult::applied ||
         !model.current() || model.current()->contextId != 21) {
         std::cerr << "active context switch was rejected\n";
+        return 1;
+    }
+    auto returned = snapshot(3);
+    returned.contextId = 20;
+    returned.compositionId = 30;
+    if (model.apply(std::move(returned)) != ApplyResult::applied ||
+        !model.current() || model.current()->contextId != 20 ||
+        model.current()->revision != 3) {
+        std::cerr << "A->B->A candidate snapshot was rejected by global composition ordering\n";
         return 1;
     }
     auto preeditOnly = snapshot(2);

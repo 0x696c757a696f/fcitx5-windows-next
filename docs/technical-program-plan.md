@@ -49,6 +49,11 @@ Launcher 崩溃不能靠新增永久 watchdog 解决。Windows Application Resta
 保证下次正常 TSF activation 也能重新建立 launcher。输入线程等待总有硬 deadline，失败
 即 passthrough/fail-open。
 
+Engine dispatcher 的队列语义必须作为 contract 管理：同一 connection/context 内保持请求
+顺序；队列压力只允许按明确 backpressure 策略拒绝或 fail-open；超过 absolute deadline
+且尚未执行的任务必须 DROP；已超时但可能执行过的 key 不重试，避免双提交或双翻页。
+性能优化不能改变这些 order/deadline/drop 语义。
+
 ## 设置生效语义
 
 - `Live`：安全、可逆的视觉或低风险设置立即生效并持久化；
@@ -57,6 +62,18 @@ Launcher 崩溃不能靠新增永久 watchdog 解决。Windows Application Resta
 
 Config 不强制每页出现没有语义的 Apply。预览使用生产 CandidateModel/theme/layout 和真实
 renderer synthetic host，不维护第二套近似 UI。
+
+Advanced 页面只暴露 generic Fcitx addon/config surface：读取 Fcitx 原生 addon/config
+描述并以受限、类型化方式呈现；Windows 层不维护巨型硬编码 input-method/addon 配置映射。
+确有高价值的一线设置可以提升为普通页面，但必须仍以 Fcitx 原生配置为单一语义来源。
+
+## Rust 迁移约束
+
+Rust 迁移按 risk-driven 组件推进。每个组件必须先在 C++ 中修正语义并冻结 contract、
+hostile corpus、golden corpus 和 fuzz seeds，再做 C++↔Rust correctness differential。
+只有 differential 通过后才比较性能、资源和包体积；performance second，不能用更快但语义
+不一致的 Rust 实现替换现有 C++。切换按单组件 cutover 完成，同批删除旧实现，不保留永久
+双栈。
 
 ## 本轮执行队列
 

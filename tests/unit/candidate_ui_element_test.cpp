@@ -39,6 +39,19 @@ int main() {
     }
     const std::wstring first(text, SysStringLen(text));
     SysFreeString(text);
+    text = nullptr;
     if (first.find(L"\x4f60") == std::wstring::npos) return 1;
+    if (FAILED(element->Show(FALSE)) ||
+        FAILED(element->IsShown(&shown)) || shown ||
+        FAILED(element->GetCount(&count)) || count != 2 ||
+        FAILED(element->GetSelection(&selected)) || selected != 1 ||
+        FAILED(element->GetString(1, &text)) || !text) {
+        SysFreeString(text);
+        std::cerr << "UILess hidden state lost candidate semantics\n";
+        return 1;
+    }
+    const std::wstring second(text, SysStringLen(text));
+    SysFreeString(text);
+    if (second.find(L"\x5462") == std::wstring::npos) return 1;
     return 0;
 }

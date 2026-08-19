@@ -186,6 +186,12 @@ bool validKeyResponsePayload(const KeyResponse& message) noexcept {
            message.preeditCaretUtf8 <= message.preeditUtf8.size();
 }
 
+bool validKeyRequestPayload(const KeyRequest& message) noexcept {
+    return message.scanCode <= 0xffU &&
+           message.logicalTextUtf8.size() <= kMaxLogicalKeyUtf8 &&
+           validCaret(message.caret);
+}
+
 bool validLauncherMetadata(const Metadata& metadata) noexcept {
     return metadata.contextId == 0 && metadata.compositionId == 0 && metadata.revision == 0;
 }
@@ -278,12 +284,17 @@ std::vector<std::uint8_t> encode(const HelloResponse& message) {
 
 std::vector<std::uint8_t> encode(const KeyRequest& message) {
     if (!validMetadata(MessageType::keyRequest, message.metadata) ||
-        !validKeyMetadata(message.metadata) || !validCaret(message.caret)) {
+        !validKeyMetadata(message.metadata) || !validKeyRequestPayload(message)) {
         return {};
     }
     Writer writer(MessageType::keyRequest, message.metadata);
     writer.appendU32(message.virtualKey);
     writer.appendU32(message.keyFlags);
+    writer.appendU32(message.scanCode);
+    writer.appendU8(message.extendedKey ? 1U : 0U);
+    writer.appendU8(message.popupAllowed ? 1U : 0U);
+    writer.appendU64(message.keyboardLayout);
+    writer.appendString(message.logicalTextUtf8);
     writer.appendU8(message.caret.valid ? 1U : 0U);
     writer.appendI32(message.caret.left);
     writer.appendI32(message.caret.top);
@@ -423,11 +434,25 @@ bool decode(const FrameView& frame, KeyRequest& message) noexcept {
     Reader reader(frame.body);
     message.metadata = frame.metadata;
     std::uint8_t valid = 0;
-    return reader.readU32(message.virtualKey) && reader.readU32(message.keyFlags) &&
-           reader.readU8(valid) && valid <= 1 && reader.readI32(message.caret.left) &&
-           reader.readI32(message.caret.top) && reader.readI32(message.caret.right) &&
-           reader.readI32(message.caret.bottom) && reader.readU32(message.caret.dpi) &&
-           reader.done() && ((message.caret.valid = valid != 0), validCaret(message.caret));
+    std::uint8_t extended = 0;
+    std::uint8_t popupAllowed = 0;
+    try {
+        return reader.readU32(message.virtualKey) && reader.readU32(message.keyFlags) &&
+               reader.readU32(message.scanCode) && reader.readU8(extended) && extended <= 1 &&
+               reader.readU8(popupAllowed) && popupAllowed <= 1 &&
+               reader.readU64(message.keyboardLayout) &&
+               reader.readString(message.logicalTextUtf8) &&
+               reader.readU8(valid) && valid <= 1 && reader.readI32(message.caret.left) &&
+               reader.readI32(message.caret.top) && reader.readI32(message.caret.right) &&
+               reader.readI32(message.caret.bottom) && reader.readU32(message.caret.dpi) &&
+               reader.done() &&
+               ((message.extendedKey = extended != 0),
+                (message.popupAllowed = popupAllowed != 0),
+                (message.caret.valid = valid != 0),
+                validKeyRequestPayload(message));
+    } catch (...) {
+        return false;
+    }
 }
 
 bool decode(const FrameView& frame, KeyResponse& message) noexcept {

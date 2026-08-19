@@ -253,7 +253,10 @@ bool PipeClient::acceptKeyResponse(const protocol::KeyResponse& response,
 
 bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
                             std::uint32_t keyFlags, KeyResult& result,
-                            const protocol::CaretRect& caret) noexcept {
+                            const protocol::CaretRect& caret, bool popupAllowed,
+                            std::uint32_t scanCode, bool extendedKey,
+                            std::uint64_t keyboardLayout,
+                            std::string_view logicalText) noexcept {
     result = {};
     try {
         const bool newContext = contexts_.find(contextId) == contexts_.end();
@@ -272,7 +275,8 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
         protocol::KeyRequest request{
             protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
                                contextState.compositionId, contextState.revision},
-            virtualKey, keyFlags, caret};
+            virtualKey, keyFlags, scanCode, extendedKey, popupAllowed, keyboardLayout,
+            std::string(logicalText), caret};
         std::vector<std::uint8_t> responseBytes;
         if (!transact(protocol::encode(request), responseBytes, deadline)) {
             return false;

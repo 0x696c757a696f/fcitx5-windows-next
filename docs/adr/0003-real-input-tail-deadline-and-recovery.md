@@ -33,6 +33,11 @@ this project's host-protection target.
   engine epoch is unchanged; another TSF connection in the same host process is not disturbed.
 - Keep timeout behavior fail-open. Do not retry an ambiguous timed-out key because the engine may
   already have processed it.
+- Treat dispatcher behavior as a contract, not an implementation detail. For a single
+  connection/context, requests are accepted and executed in order. Backpressure may reject/fail-open
+  new work only through an explicit bounded policy. Queued work whose absolute deadline has already
+  expired before execution is dropped without mutating runtime state. Work that may already have
+  run is never retried by the client.
 - Gate the path with a 900-key repeated `ha + Space` smoke and a deterministic 4,000-event,
   16-context stateful typing fuzz. The fuzz must recover after every transport timeout and fails if
   the timeout rate exceeds one percent.

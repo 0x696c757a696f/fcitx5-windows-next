@@ -22,6 +22,7 @@ int main() {
 
     const KeyRequest input{Metadata{42, 0, 99, 3, 7, 11, 13},
                            static_cast<std::uint32_t>('A'), 0,
+                           0x1e, false, true, 0x04090409ULL, "a",
                            CaretRect{true, -100, 200, -98, 222, 144}};
     const auto bytes = encode(input);
     FrameView frame;
@@ -30,6 +31,11 @@ int main() {
         !expect(decode(frame, output), "valid key request rejected") ||
         !expect(output.metadata == input.metadata &&
                     output.virtualKey == input.virtualKey && output.keyFlags == input.keyFlags &&
+                    output.scanCode == input.scanCode &&
+                    output.extendedKey == input.extendedKey &&
+                    output.popupAllowed == input.popupAllowed &&
+                    output.keyboardLayout == input.keyboardLayout &&
+                    output.logicalTextUtf8 == input.logicalTextUtf8 &&
                     output.caret == input.caret,
                 "roundtrip changed key request")) {
         return 1;
@@ -149,13 +155,22 @@ int main() {
         const Metadata requestMetadata{iteration, 0, random() | 1U, 1U, random() | 1U,
                                        random(), random()};
         const KeyRequest propertyInput{requestMetadata, static_cast<std::uint32_t>(random()),
-                                       static_cast<std::uint32_t>(random())};
+                                       static_cast<std::uint32_t>(random()),
+                                       static_cast<std::uint32_t>(random() & 0xffU),
+                                       (random() & 1U) != 0,
+                                       (random() & 1U) != 0,
+                                       random(), "x"};
         KeyRequest propertyOutput;
         if (!expect(decodeFrame(encode(propertyInput), frame) &&
                         decode(frame, propertyOutput) &&
                         propertyOutput.metadata == propertyInput.metadata &&
                         propertyOutput.virtualKey == propertyInput.virtualKey &&
-                        propertyOutput.keyFlags == propertyInput.keyFlags,
+                        propertyOutput.keyFlags == propertyInput.keyFlags &&
+                        propertyOutput.scanCode == propertyInput.scanCode &&
+                        propertyOutput.extendedKey == propertyInput.extendedKey &&
+                        propertyOutput.popupAllowed == propertyInput.popupAllowed &&
+                        propertyOutput.keyboardLayout == propertyInput.keyboardLayout &&
+                        propertyOutput.logicalTextUtf8 == propertyInput.logicalTextUtf8,
                     "key request property roundtrip failed")) return 1;
 
         std::string commit(static_cast<std::size_t>(random() % (kMaxCommitUtf8 + 1)), '\0');
@@ -188,8 +203,14 @@ int main() {
         return 1;
     }
     KeyRequest invalidCaret{Metadata{88, 0, 1, 1, 1, 0, 0}, 'A', 0,
+                            0, false, true, 0, {},
                             CaretRect{true, 100, 100, 90, 110, 96}};
     if (!expect(encode(invalidCaret).empty(), "inverted caret rectangle encoded")) return 1;
+    KeyRequest oversizedLogical{Metadata{89, 0, 1, 1, 1, 0, 0}, 'A', 0,
+                                0, false, true, 0,
+                                std::string(kMaxLogicalKeyUtf8 + 1, 'x')};
+    if (!expect(encode(oversizedLogical).empty(),
+                "oversize logical key text encoded")) return 1;
     if (!expect(encode(KeyResponse{Metadata{1, 1, 1, 1, 1, 0, 0}, Status::ok, true,
                                    {}, std::string(kMaxPreeditUtf8 + 1, 'x'), 0})
                     .empty(),

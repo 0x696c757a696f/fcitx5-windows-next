@@ -381,6 +381,25 @@ bool translatePrintableKey(WPARAM virtualKey, LPARAM keyData,
     }
 }
 
+std::uint32_t scanCodeFromKeyData(WPARAM virtualKey, LPARAM keyData) noexcept {
+    std::uint32_t scanCode =
+        static_cast<std::uint32_t>((static_cast<std::uintptr_t>(keyData) >> 16U) & 0xffU);
+    if (scanCode == 0) {
+        scanCode = MapVirtualKeyExW(static_cast<UINT>(virtualKey), MAPVK_VK_TO_VSC,
+                                    GetKeyboardLayout(0));
+    }
+    return scanCode & 0xffU;
+}
+
+bool extendedFromKeyData(LPARAM keyData) noexcept {
+    return (static_cast<std::uintptr_t>(keyData) & 0x01000000ULL) != 0;
+}
+
+std::uint64_t currentKeyboardLayout() noexcept {
+    return static_cast<std::uint64_t>(
+        reinterpret_cast<std::uintptr_t>(GetKeyboardLayout(0)));
+}
+
 } // namespace
 
 TextService::TextService()
@@ -533,9 +552,16 @@ void TextService::applyPendingCandidateState() noexcept {
                     candidateUiElement_.Reset();
                 } else {
                     (void)candidateUiElement_->Show(show);
+                    popupAllowedByContext_[activeContextId_] = show != FALSE;
+                    if (!show) broadcastCandidateDismiss(activeContextId_);
                 }
             } else {
                 candidateUiElement_->update(activeContext_.Get(), state);
+                const bool popupAllowed =
+                    popupAllowedByContext_.find(activeContextId_) ==
+                        popupAllowedByContext_.end() ||
+                    popupAllowedByContext_[activeContextId_];
+                (void)candidateUiElement_->Show(popupAllowed ? TRUE : FALSE);
                 (void)uiElementManager_->UpdateUIElement(candidateUiElementId_);
             }
         } else if (candidateUiElementId_ != TF_INVALID_UIELEMENTID) {
@@ -618,6 +644,7 @@ HRESULT TextService::Deactivate() noexcept {
     activeContext_.Reset();
     activeContextId_ = 0;
     imeActive_ = false;
+    popupAllowedByContext_.clear();
     HRESULT result = S_OK;
     if (threadManager_ && clientId_ != TF_CLIENTID_NULL) {
         Microsoft::WRL::ComPtr<ITfSource> source;
@@ -653,6 +680,11 @@ void TextService::dismissCandidatePresentation(bool disconnectEngine,
     candidateUiElementId_ = TF_INVALID_UIELEMENTID;
     candidateUiElement_.Reset();
     lastCaretRects_.clear();
+    if (contextId != 0) {
+        popupAllowedByContext_.erase(contextId);
+    } else {
+        popupAllowedByContext_.clear();
+    }
     imeActive_ = false;
     if (disconnectEngine) client_.disconnect();
     const std::uint64_t dismissedContext = contextId != 0 ? contextId : lastPresentedContextId_;
@@ -801,11 +833,18 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
             keyFlags |= protocol::kKeyFlagControl;
         if ((GetKeyState(VK_MENU) & 0x8000) != 0)
             keyFlags |= protocol::kKeyFlagAlt;
+        if ((GetKeyState(VK_RMENU) & 0x8000) != 0)
+            keyFlags |= protocol::kKeyFlagAltGr;
         if ((GetKeyState(VK_LWIN) & 0x8000) != 0 ||
             (GetKeyState(VK_RWIN) & 0x8000) != 0)
             keyFlags |= protocol::kKeyFlagSuper;
+        const bool popupAllowed =
+            popupAllowedByContext_.find(contextId) == popupAllowedByContext_.end() ||
+            popupAllowedByContext_[contextId];
         const bool engineResponded = client_.processKey(
-            contextId, static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult, caret);
+            contextId, static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult, caret,
+            popupAllowed, scanCodeFromKeyData(virtualKey, keyData), extendedFromKeyData(keyData),
+            currentKeyboardLayout());
         if (!engineResponded) {
             if (candidateUiElementId_ != TF_INVALID_UIELEMENTID && uiElementManager_) {
                 (void)uiElementManager_->EndUIElement(candidateUiElementId_);
@@ -845,9 +884,16 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
                         candidateUiElement_.Reset();
                     } else {
                         (void)candidateUiElement_->Show(show);
+                        popupAllowedByContext_[contextId] = show != FALSE;
+                        if (!show) broadcastCandidateDismiss(contextId);
                     }
                 } else {
                     candidateUiElement_->update(context, keyResult);
+                    const bool popupStillAllowed =
+                        popupAllowedByContext_.find(contextId) ==
+                            popupAllowedByContext_.end() ||
+                        popupAllowedByContext_[contextId];
+                    (void)candidateUiElement_->Show(popupStillAllowed ? TRUE : FALSE);
                     (void)uiElementManager_->UpdateUIElement(candidateUiElementId_);
                 }
             } else if (candidateUiElementId_ != TF_INVALID_UIELEMENTID) {
@@ -873,7 +919,7 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
 }
 
 HRESULT TextService::OnKeyUp(ITfContext* context, WPARAM virtualKey,
-                             LPARAM /*keyData*/, BOOL* eaten) noexcept {
+                             LPARAM keyData, BOOL* eaten) noexcept {
     if (!eaten) {
         return E_POINTER;
     }
@@ -897,13 +943,21 @@ HRESULT TextService::OnKeyUp(ITfContext* context, WPARAM virtualKey,
         keyFlags |= protocol::kKeyFlagControl;
     if ((GetKeyState(VK_MENU) & 0x8000) != 0)
         keyFlags |= protocol::kKeyFlagAlt;
+    if ((GetKeyState(VK_RMENU) & 0x8000) != 0)
+        keyFlags |= protocol::kKeyFlagAltGr;
     if ((GetKeyState(VK_LWIN) & 0x8000) != 0 ||
         (GetKeyState(VK_RWIN) & 0x8000) != 0)
         keyFlags |= protocol::kKeyFlagSuper;
     ipc::KeyResult keyResult;
+    const auto contextId =
+        static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(context));
+    const bool popupAllowed =
+        popupAllowedByContext_.find(contextId) == popupAllowedByContext_.end() ||
+        popupAllowedByContext_[contextId];
     (void)client_.processKey(
-        static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(context)),
-        static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult);
+        contextId, static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult, {},
+        popupAllowed, scanCodeFromKeyData(virtualKey, keyData), extendedFromKeyData(keyData),
+        currentKeyboardLayout());
     return S_OK;
 }
 

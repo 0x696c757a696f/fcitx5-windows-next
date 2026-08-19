@@ -84,6 +84,7 @@ private:
     DWORD threadFocusSinkCookie_{TF_INVALID_COOKIE};
     std::uint64_t lastPresentedContextId_{};
     std::unordered_map<std::uint64_t, protocol::CaretRect> lastCaretRects_;
+    std::unordered_map<std::uint64_t, bool> popupAllowedByContext_;
     Microsoft::WRL::ComPtr<ITfContext> activeContext_;
     std::uint64_t activeContextId_{};
     bool imeActive_{};
