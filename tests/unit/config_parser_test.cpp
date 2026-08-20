@@ -97,14 +97,17 @@ int main() {
         return 1;
     std::string updated;
     if (!updatePresentationToml(defaults, "dark", "builtin:default", "horizontal", "enabled", "6",
-                                "Microsoft YaHei", updated, error, "720", "88") ||
+                                "Microsoft YaHei", updated, error, "720", "88", "20", "16",
+                                "disabled") ||
         !updated.starts_with("# Fcitx5 for Windows") || !parseConfig(updated, config, error) ||
         config.appearanceMode != AppearanceMode::dark ||
         config.orientation != Orientation::horizontal || config.scrollMode != true ||
         !config.candidatePageSize || *config.candidatePageSize != 6 ||
         config.maxWidth != 720.0 || config.scrollCellWidth != 88.0 || !config.colors.empty() ||
         !config.candidateFont.families ||
-        config.candidateFont.families->front() != "Microsoft YaHei") {
+        config.candidateFont.families->front() != "Microsoft YaHei" ||
+        config.candidateFont.size != 20.0 || config.geometry.cornerRadius != 16.0 ||
+        config.geometry.shadow != false) {
         std::cerr << "typed presentation update failed: " << error.message << '\n';
         return 1;
     }
@@ -121,6 +124,18 @@ int main() {
         return 1;
     if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
                                "system", updated, error, "720", "161"))
+        return 1;
+    if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
+                               "system", updated, error, "720", "96", "7.9", "12",
+                               "enabled"))
+        return 1;
+    if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
+                               "system", updated, error, "720", "96", "18", "65",
+                               "enabled"))
+        return 1;
+    if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
+                               "system", updated, error, "720", "96", "18", "12",
+                               "maybe"))
         return 1;
     return 0;
 }

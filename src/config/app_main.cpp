@@ -281,6 +281,9 @@ constexpr int kScrollMode = 118;
 constexpr int kPageSize = 119;
 constexpr int kMaxWidth = 120;
 constexpr int kScrollCellWidth = 121;
+constexpr int kFontSize = 122;
+constexpr int kCornerRadius = 123;
+constexpr int kShadow = 124;
 constexpr int kNavGeneral = 130;
 constexpr int kNavAppearance = 131;
 constexpr int kNavTheme = 132;
@@ -298,6 +301,8 @@ constexpr int kSaveStatus = 206;
 constexpr int kPageSizeLabel = 207;
 constexpr int kMaxWidthLabel = 208;
 constexpr int kScrollCellWidthLabel = 209;
+constexpr int kFontSizeLabel = 210;
+constexpr int kCornerRadiusLabel = 211;
 
 // Transient notices ("保存成功" / 命令错误 / 重启完成 / 修复已开始) are
 // cleared automatically a few seconds after they appear.
@@ -568,7 +573,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             return false;
         if (!click(kScrollMode))
             return false;
-        for (const int combo : {kPageSize, kMaxWidth, kScrollCellWidth}) {
+        for (const int combo : {kPageSize, kMaxWidth, kScrollCellWidth, kFontSize,
+                                kCornerRadius}) {
             const LRESULT count = SendMessageW(control(combo), CB_GETCOUNT, 0, 0);
             if (count <= 0)
                 return false;
@@ -578,6 +584,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                     return false;
             }
         }
+        if (!click(kShadow))
+            return false;
+        if (!click(kShadow))
+            return false;
         if (!statusIs("status.unsaved") || !click(kApply) || !statusIs("status.saved"))
             return false;
 
@@ -690,9 +700,12 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     COMMAND_HANDLER(kPageSize, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kMaxWidth, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kScrollCellWidth, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kFontSize, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kCornerRadius, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kVertical, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kHorizontal, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kScrollMode, BN_CLICKED, onDirty)
+    COMMAND_HANDLER(kShadow, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kFont, EN_KILLFOCUS, onDirty)
     END_MSG_MAP()
 
@@ -849,9 +862,14 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         moveControl(kMaxWidth, 420, 266, 120, 180);
         moveControl(kScrollCellWidthLabel, 250, 308, 150, 24);
         moveControl(kScrollCellWidth, 420, 302, 120, 180);
-        moveControl(kApply, 650, 344, 120, 36);
-        moveControl(kPreview, 250, 344, 160, 36);
-        moveControl(kSaveStatus, 420, 352, (std::min)(contentWidth - 170, 320), 24);
+        moveControl(kFontSizeLabel, 250, 344, 150, 24);
+        moveControl(kFontSize, 420, 338, 120, 180);
+        moveControl(kCornerRadiusLabel, 250, 380, 150, 24);
+        moveControl(kCornerRadius, 420, 374, 120, 180);
+        moveControl(kShadow, 420, 416, (std::min)(contentWidth - 170, 280), 28);
+        moveControl(kApply, 650, 460, 120, 36);
+        moveControl(kPreview, 250, 460, 160, 36);
+        moveControl(kSaveStatus, 420, 468, (std::min)(contentWidth - 170, 320), 24);
         moveControl(kRestart, 250, 106, 170, 36);
         moveControl(kDiagnostics, 436, 106, 170, 36);
         moveControl(kRepair, 250, 106, 170, 36);
@@ -937,6 +955,25 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                          reinterpret_cast<LPARAM>(value));
         }
         SendMessageW(control(kScrollCellWidth), CB_SETCURSEL, 2, 0);
+        add(L"STATIC", get("candidate.font_size"), 0, 250, 344, 150, 24, kFontSizeLabel);
+        add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, 420, 338, 120, 180,
+            kFontSize);
+        for (const wchar_t* value : {L"16", L"18", L"20", L"22", L"24"}) {
+            SendMessageW(control(kFontSize), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value));
+        }
+        SendMessageW(control(kFontSize), CB_SETCURSEL, 1, 0);
+        add(L"STATIC", get("candidate.corner_radius"), 0, 250, 380, 150, 24,
+            kCornerRadiusLabel);
+        add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, 420, 374, 120, 180,
+            kCornerRadius);
+        for (const wchar_t* value : {L"0", L"8", L"12", L"16", L"24"}) {
+            SendMessageW(control(kCornerRadius), CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(value));
+        }
+        SendMessageW(control(kCornerRadius), CB_SETCURSEL, 2, 0);
+        add(L"BUTTON", get("candidate.shadow"), BS_AUTOCHECKBOX | WS_TABSTOP, 420, 416, 260,
+            28, kShadow);
+        SendMessageW(control(kShadow), BM_SETCHECK, BST_CHECKED, 0);
         SendMessageW(control(kVertical), BM_SETCHECK, BST_CHECKED, 0);
         add(L"BUTTON", get("action.apply"), BS_DEFPUSHBUTTON | WS_TABSTOP, 650, 264, 120, 36,
             kApply);
@@ -999,7 +1036,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                              kFontLabel,       kVertical,       kHorizontal,       kLayoutLabel,
                              kScrollMode,      kPageSize,       kPageSizeLabel,    kApply,
                              kMaxWidth,        kMaxWidthLabel,  kScrollCellWidth,
-                             kScrollCellWidthLabel,
+                             kScrollCellWidthLabel, kFontSize,  kFontSizeLabel,
+                             kCornerRadius,    kCornerRadiusLabel, kShadow,
                              kPreview,         kRestart,
                              kDiagnostics,     kRepair,         kStatus,           kPackages,
                              kPackageRefresh,  kPackageInstall, kPackageToggle,    kPackageRemove,
@@ -1015,7 +1053,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             show(id, general);
         for (const int id : {kAppearance, kAppearanceLabel, kVertical, kHorizontal, kLayoutLabel,
                              kScrollMode, kPageSize, kPageSizeLabel, kMaxWidth, kMaxWidthLabel,
-                             kScrollCellWidth, kScrollCellWidthLabel})
+                             kScrollCellWidth, kScrollCellWidthLabel, kFontSize, kFontSizeLabel,
+                             kCornerRadius, kCornerRadiusLabel, kShadow})
             show(id, appearance);
         for (const int id : {kTheme, kThemeLabel, kFont, kFontLabel, kPreview})
             show(id, theme);
@@ -1074,6 +1113,16 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             const auto scrollCellWidth = presentation.find("candidate_scroll_cell_width_dip");
             if (scrollCellWidth != presentation.end())
                 selectComboText(kScrollCellWidth, scrollCellWidth->second);
+            const auto fontSize = presentation.find("candidate_font_size_dip");
+            if (fontSize != presentation.end())
+                selectComboText(kFontSize, fontSize->second);
+            const auto cornerRadius = presentation.find("candidate_corner_radius_dip");
+            if (cornerRadius != presentation.end())
+                selectComboText(kCornerRadius, cornerRadius->second);
+            const auto shadow = presentation.find("candidate_shadow");
+            if (shadow != presentation.end())
+                SendMessageW(control(kShadow), BM_SETCHECK,
+                             shadow->second == L"true" ? BST_CHECKED : BST_UNCHECKED, 0);
         }
         if (runControl({L"--get-startup"}, output))
             SendMessageW(control(kStartup), BM_SETCHECK,
@@ -1150,17 +1199,24 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const std::wstring pageSize = std::to_wstring(pageSizeIndex + 1);
         const std::wstring maxWidth = comboText(kMaxWidth);
         const std::wstring scrollCellWidth = comboText(kScrollCellWidth);
+        const std::wstring fontSize = comboText(kFontSize);
+        const std::wstring cornerRadius = comboText(kCornerRadius);
+        const wchar_t* const shadow =
+            SendMessageW(control(kShadow), BM_GETCHECK, 0, 0) == BST_CHECKED ? L"enabled"
+                                                                             : L"disabled";
         wchar_t fontBuffer[129]{};
         ::GetWindowTextW(control(kFont), fontBuffer, static_cast<int>(std::size(fontBuffer)));
         const std::wstring font(fontBuffer);
         std::wstring output;
         const bool ok =
             !font.empty() && !maxWidth.empty() && !scrollCellWidth.empty() &&
+            !fontSize.empty() && !cornerRadius.empty() &&
             runControl({L"--set-presentation", mode, L"builtin:default", orientation,
                         SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) == BST_CHECKED
                             ? L"enabled"
                             : L"disabled",
-                        pageSize, font, maxWidth, scrollCellWidth},
+                        pageSize, font, maxWidth, scrollCellWidth, fontSize, cornerRadius,
+                        shadow},
                        output);
         return ok;
     }

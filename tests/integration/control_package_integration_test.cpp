@@ -4,6 +4,7 @@
 #include <bcrypt.h>
 #include <wincrypt.h>
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -231,6 +232,59 @@ DWORD run_process(const fs::path& executable, const std::vector<std::wstring>& a
   return exit_code;
 }
 
+DWORD run_process_capture(const fs::path& executable,
+                          const std::vector<std::wstring>& arguments,
+                          std::string& output) {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+  HANDLE readPipe = nullptr;
+  HANDLE writePipe = nullptr;
+  if (!CreatePipe(&readPipe, &writePipe, &attributes, 0)) {
+    throw std::runtime_error("control output pipe creation failed");
+  }
+  SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+  std::wstring command = quote_argument(executable.wstring());
+  for (const auto& argument : arguments) {
+    command.push_back(L' ');
+    command += quote_argument(argument);
+  }
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdOutput = writePipe;
+  startup.hStdError = writePipe;
+  PROCESS_INFORMATION process{};
+  if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
+                      CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+    CloseHandle(readPipe);
+    CloseHandle(writePipe);
+    throw std::runtime_error("control capture process creation failed");
+  }
+  CloseHandle(writePipe);
+  CloseHandle(process.hThread);
+  output.clear();
+  std::array<char, 4096> buffer{};
+  DWORD count = 0;
+  while (ReadFile(readPipe, buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr) &&
+         count != 0) {
+    output.append(buffer.data(), buffer.data() + count);
+    if (output.size() > 1024U * 1024U) {
+      TerminateProcess(process.hProcess, ERROR_FILE_TOO_LARGE);
+      break;
+    }
+  }
+  CloseHandle(readPipe);
+  const DWORD wait = WaitForSingleObject(process.hProcess, 20000U);
+  if (wait != WAIT_OBJECT_0) {
+    TerminateProcess(process.hProcess, ERROR_TIMEOUT);
+  }
+  DWORD exit_code = ERROR_TIMEOUT;
+  if (wait == WAIT_OBJECT_0) {
+    GetExitCodeProcess(process.hProcess, &exit_code);
+  }
+  CloseHandle(process.hProcess);
+  return exit_code;
+}
+
 std::string architecture() {
 #if defined(_WIN64)
   return "x64";
@@ -353,6 +407,17 @@ int wmain(int argc, wchar_t** argv) {
     expect(fs::is_regular_file(data_root /
                                L"packages/versions/fcitx5-rime/1.0.0/bin/addon.dll"),
            "control install did not activate the verified payload");
+    std::string detail;
+    const DWORD detail_exit =
+        run_process_capture(control, {L"--data-root", data_root.wstring(), L"--packages-detail",
+                                      L"fcitx5-rime"},
+                            detail);
+    expect(detail_exit == 0, "package detail must succeed for an installed package");
+    expect(detail.find("\"permissions\":[\"native-code\",\"input-data\"]") !=
+               std::string::npos &&
+               detail.find("\"source_commit\":\"0123456789abcdef\"") != std::string::npos &&
+               detail.find("\"kind\":\"fcitx-addon\"") != std::string::npos,
+           "package detail did not expose generic addon config surface: " + detail);
 
     const DWORD disable_exit =
         run_process(control, {L"--data-root", data_root.wstring(), L"--packages-state",

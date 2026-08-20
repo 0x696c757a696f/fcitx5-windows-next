@@ -524,7 +524,10 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
                             std::string_view scrollMode, std::string_view candidatePageSize,
                             std::string_view candidateFont, std::string& output,
                             ParseError& error, std::string_view maxWidthDip,
-                            std::string_view scrollCellWidthDip) noexcept {
+                            std::string_view scrollCellWidthDip,
+                            std::string_view candidateFontSizeDip,
+                            std::string_view cornerRadiusDip,
+                            std::string_view shadow) noexcept {
     output.clear();
     error = {};
     if ((appearanceMode != "system" && appearanceMode != "light" && appearanceMode != "dark") ||
@@ -559,8 +562,13 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
     };
     double maxWidth = 0.0;
     double scrollCellWidth = 0.0;
+    double candidateFontSize = 0.0;
+    double cornerRadius = 0.0;
     if (!parseDip(maxWidthDip, 160.0, 2048.0, maxWidth) ||
-        !parseDip(scrollCellWidthDip, 40.0, 160.0, scrollCellWidth)) {
+        !parseDip(scrollCellWidthDip, 40.0, 160.0, scrollCellWidth) ||
+        !parseDip(candidateFontSizeDip, 8.0, 72.0, candidateFontSize) ||
+        !parseDip(cornerRadiusDip, 0.0, 64.0, cornerRadius) ||
+        (!shadow.empty() && shadow != "enabled" && shadow != "disabled")) {
         return setError(error, "invalid presentation setting");
     }
     try {
@@ -580,6 +588,15 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
             candidate.insert_or_assign("max_width_dip", maxWidth);
         if (!scrollCellWidthDip.empty())
             candidate.insert_or_assign("scroll_cell_width_dip", scrollCellWidth);
+        if (!cornerRadiusDip.empty() || !shadow.empty()) {
+            if (!candidate["geometry"].as_table())
+                candidate.insert_or_assign("geometry", toml::table{});
+            auto& geometry = *candidate["geometry"].as_table();
+            if (!cornerRadiusDip.empty())
+                geometry.insert_or_assign("corner_radius_dip", cornerRadius);
+            if (!shadow.empty())
+                geometry.insert_or_assign("shadow", shadow == "enabled");
+        }
         if (!root["fonts"].as_table())
             root.insert_or_assign("fonts", toml::table{});
         auto& fonts = *root["fonts"].as_table();
@@ -590,6 +607,8 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
         families.push_back(candidateFont);
         families.push_back("system");
         candidateFonts.insert_or_assign("families", std::move(families));
+        if (!candidateFontSizeDip.empty())
+            candidateFonts.insert_or_assign("size_dip", candidateFontSize);
 
         std::ostringstream stream;
         stream << "# Fcitx5 for Windows 用户配置。UTF-8（无 BOM）、LF。\n"

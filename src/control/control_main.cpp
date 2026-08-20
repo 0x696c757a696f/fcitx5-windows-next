@@ -22,6 +22,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -393,6 +394,86 @@ std::string typeName(fcitx::package::PackageType type) {
     return "unknown";
 }
 
+std::string jsonDependencies(std::span<const fcitx::package::Dependency> dependencies) {
+    std::string output = "[";
+    bool first = true;
+    for (const auto& dependency : dependencies) {
+        if (!first)
+            output += ',';
+        first = false;
+        output += "{\"id\":" + jsonString(dependency.id) +
+                  ",\"version\":" + jsonString(dependency.version) + '}';
+    }
+    output += ']';
+    return output;
+}
+
+std::string jsonStringArray(std::span<const std::string> values) {
+    std::string output = "[";
+    bool first = true;
+    for (const auto& value : values) {
+        if (!first)
+            output += ',';
+        first = false;
+        output += jsonString(value);
+    }
+    output += ']';
+    return output;
+}
+
+std::string installedManifestBytes(const fs::path& packageRoot,
+                                   const fcitx::package::LockEntry& entry) {
+    const auto path = packageRoot / L"manifests" / widen(entry.id) /
+                      widen(entry.version + ".json");
+    std::error_code error;
+    const auto size = fs::file_size(path, error);
+    if (error || size > fcitx::package::kMaximumManifestBytes)
+        return {};
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return {};
+    return {std::istreambuf_iterator<char>(input), {}};
+}
+
+std::string configSurfaceJson(const fcitx::package::Manifest* manifest,
+                              fcitx::package::PackageType type,
+                              std::string_view packageId) {
+    std::set<std::string> surfaces;
+    if (type == fcitx::package::PackageType::theme)
+        surfaces.emplace("theme");
+    if (type == fcitx::package::PackageType::input_method_data)
+        surfaces.emplace("input-method-data");
+    if (type == fcitx::package::PackageType::addon)
+        surfaces.emplace("fcitx-addon");
+    if (manifest) {
+        if (std::ranges::find(manifest->permissions, "input-data") !=
+            manifest->permissions.end())
+            surfaces.emplace("input-method-data");
+        for (const auto& file : manifest->files) {
+            if (file.path.starts_with("share/fcitx5/addon/") && file.path.ends_with(".conf"))
+                surfaces.emplace("fcitx-addon-config");
+            if (file.path.starts_with("lib/fcitx5/") && file.path.ends_with(".dll"))
+                surfaces.emplace("fcitx-addon");
+            if (file.path.starts_with("share/rime-data/"))
+                surfaces.emplace("rime-data");
+            if (file.path.starts_with("themes/") || file.path.starts_with("share/themes/"))
+                surfaces.emplace("theme");
+        }
+    }
+    std::string output = "[";
+    bool first = true;
+    for (const auto& surface : surfaces) {
+        if (!first)
+            output += ',';
+        first = false;
+        output += "{\"kind\":" + jsonString(surface) +
+                  ",\"owner\":" + jsonString(packageId) +
+                  ",\"schema\":\"generic-fcitx-config-v1\"}";
+    }
+    output += ']';
+    return output;
+}
+
 fs::path defaultDataRoot() {
     std::wstring modulePath(32768, L'\0');
     const DWORD size = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
@@ -674,6 +755,93 @@ void printPackages(const fs::path& dataRoot) {
     std::cout << "]}\n";
 }
 
+void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
+    if (!fcitx::package::is_lower_package_id(packageId))
+        throw fcitx::package::PackageError("invalid_package", "package id is invalid");
+    const auto packageRoot = dataRoot / L"packages";
+    const auto installed = fcitx::package::read_lockfile(packageRoot);
+    const auto active = std::ranges::find_if(installed, [&](const fcitx::package::LockEntry& item) {
+        return item.id == packageId;
+    });
+    std::optional<fcitx::package::Manifest> manifest;
+    std::string manifestBytes;
+    if (active != installed.end()) {
+        manifestBytes = installedManifestBytes(packageRoot, *active);
+        if (!manifestBytes.empty())
+            manifest = fcitx::package::parse_manifest(manifestBytes);
+    }
+    fcitx::package::RepositoryIndex repository;
+    const fcitx::package::RepositoryEntry* repositoryEntry = nullptr;
+    bool repositoryAvailable = false;
+    try {
+        repository = loadRepository(dataRoot);
+        repositoryAvailable = true;
+        repositoryEntry = fcitx::package::find_repository_package(repository, packageId,
+                                                                  nativeArchitecture());
+    } catch (const fcitx::package::PackageError&) {
+    }
+
+    const fs::path installRoot = installationRoot();
+    const std::map<std::string, fs::path, std::less<>> bundledProbes{
+        {"fcitx5-chinese-addons", installRoot / L"lib/fcitx5/libpinyin.dll"},
+        {"fcitx5-rime", installRoot / L"lib/fcitx5/librime.dll"},
+        {"fcitx5-lua", installRoot / L"lib/fcitx5/libluaaddonloader.dll"},
+        {"fcitx5-chttrans", installRoot / L"lib/fcitx5/libchttrans.dll"},
+        {"librime-lua", installRoot / L"bin/lua54.dll"},
+    };
+    const auto bundled = bundledProbes.find(packageId);
+    const bool bundledNow = bundled != bundledProbes.end() && fs::is_regular_file(bundled->second);
+    if (active == installed.end() && !repositoryEntry && !bundledNow)
+        throw fcitx::package::PackageError("package_not_found", "package is unknown");
+
+    const std::string type = manifest ? typeName(manifest->type)
+                             : repositoryEntry ? typeName(repositoryEntry->type)
+                                               : "addon";
+    const std::string title = repositoryEntry ? repositoryEntry->title : std::string(packageId);
+    const std::string summary = repositoryEntry ? repositoryEntry->summary
+                                : bundledNow ? "Bundled with Fcitx5 for Windows"
+                                             : "";
+    const std::string available = repositoryEntry ? repositoryEntry->version : "";
+    const std::string installedVersion = active != installed.end()
+                                             ? active->version
+                                             : (bundledNow ? std::string(fcitx::windows::version())
+                                                          : "");
+    const std::string state = active != installed.end()
+                                  ? active->state
+                                  : (bundledNow ? "bundled" : "");
+    const bool update = active != installed.end() && repositoryEntry &&
+                        active->version != repositoryEntry->version;
+    const auto typeValue = manifest ? manifest->type
+                                    : (repositoryEntry ? repositoryEntry->type
+                                                       : fcitx::package::PackageType::addon);
+    std::cout << "{\"format_version\":1,\"repository_available\":"
+              << (repositoryAvailable ? "true" : "false")
+              << ",\"id\":" << jsonString(packageId)
+              << ",\"title\":" << jsonString(title)
+              << ",\"summary\":" << jsonString(summary)
+              << ",\"type\":" << jsonString(type)
+              << ",\"available_version\":"
+              << (available.empty() ? "null" : jsonString(available))
+              << ",\"installed_version\":"
+              << (installedVersion.empty() ? "null" : jsonString(installedVersion))
+              << ",\"state\":" << (state.empty() ? "null" : jsonString(state))
+              << ",\"bundled\":" << (bundledNow ? "true" : "false")
+              << ",\"update_available\":" << (update ? "true" : "false")
+              << ",\"manifest_sha256\":"
+              << (active != installed.end() ? jsonString(active->manifest_sha256) : "null")
+              << ",\"source_commit\":"
+              << (manifest ? jsonString(manifest->source_commit) : "null")
+              << ",\"dependencies\":"
+              << (manifest ? jsonDependencies(manifest->dependencies)
+                           : (repositoryEntry ? jsonDependencies(repositoryEntry->dependencies)
+                                              : "[]"))
+              << ",\"permissions\":"
+              << (manifest ? jsonStringArray(manifest->permissions) : "[]")
+              << ",\"config_surface\":"
+              << configSurfaceJson(manifest ? &*manifest : nullptr, typeValue, packageId)
+              << "}\n";
+}
+
 std::wstring startupCommand() {
     const fs::path launcher = executableDirectory() / L"fcitx5-launcher.exe";
     return L"\"" + launcher.wstring() + L"\" --background";
@@ -737,8 +905,9 @@ void usage() {
                   L"--get-presentation|"
                   L"--get-input-methods|--set-input-method ID|--shutdown|"
                   L"--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT "
-                  L"[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP]|"
-                  L"--packages-list|--packages-refresh [HTTPS_BASE]|"
+                  L"[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP "
+                  L"FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW]|"
+                  L"--packages-list|--packages-detail ID|--packages-refresh [HTTPS_BASE]|"
                   L"--packages-install ID|--packages-update ID|"
                   L"--packages-state ID enabled|disabled|--packages-remove ID|"
                   L"--packages-repair|--get-tsf-guard|--reset-tsf-guard|--schema|--version\n";
@@ -766,7 +935,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (arguments.size() == 1 && arguments[0] == L"--schema") {
         std::cout
-            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","packages_list","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
+            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","packages_list","packages_detail","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
             << '\n';
         return 0;
     }
@@ -826,6 +995,10 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (arguments.size() == 1 && arguments[0] == L"--packages-list") {
             printPackages(dataRoot);
+            return 0;
+        }
+        if (arguments.size() == 2 && arguments[0] == L"--packages-detail") {
+            printPackageDetail(dataRoot, narrow(arguments[1]));
             return 0;
         }
         if ((arguments.size() == 1 || arguments.size() == 2) &&
@@ -899,6 +1072,9 @@ int wmain(int argc, wchar_t** argv) {
         const int pageSize = config.candidatePageSize.value_or(5);
         const double maxWidth = config.maxWidth.value_or(860.0);
         const double scrollCellWidth = config.scrollCellWidth.value_or(96.0);
+        const double fontSize = config.candidateFont.size.value_or(18.0);
+        const double cornerRadius = config.geometry.cornerRadius.value_or(12.0);
+        const bool shadow = config.geometry.shadow.value_or(true);
         const std::string font =
             config.candidateFont.families && !config.candidateFont.families->empty()
                 ? config.candidateFont.families->front()
@@ -912,10 +1088,15 @@ int wmain(int argc, wchar_t** argv) {
                   << jsonString(std::to_string(static_cast<int>(maxWidth)))
                   << ",\"candidate_scroll_cell_width_dip\":"
                   << jsonString(std::to_string(static_cast<int>(scrollCellWidth)))
+                  << ",\"candidate_font_size_dip\":"
+                  << jsonString(std::to_string(static_cast<int>(fontSize)))
+                  << ",\"candidate_corner_radius_dip\":"
+                  << jsonString(std::to_string(static_cast<int>(cornerRadius)))
+                  << ",\"candidate_shadow\":" << (shadow ? "true" : "false")
                   << ",\"scroll_mode\":" << (scrollMode ? "true" : "false") << "}\n";
         return 0;
     }
-    if ((arguments.size() == 7 || arguments.size() == 9) &&
+    if ((arguments.size() == 7 || arguments.size() == 9 || arguments.size() == 12) &&
         arguments[0] == L"--set-presentation") {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string source = fcitx::windows::config::defaultConfigToml();
@@ -926,8 +1107,11 @@ int wmain(int argc, wchar_t** argv) {
         if (!fcitx::windows::config::updatePresentationToml(
                 source, narrow(arguments[1]), narrow(arguments[2]), narrow(arguments[3]),
                 narrow(arguments[4]), narrow(arguments[5]), narrow(arguments[6]), updated,
-                error, arguments.size() == 9 ? narrow(arguments[7]) : std::string{},
-                arguments.size() == 9 ? narrow(arguments[8]) : std::string{})) {
+                error, arguments.size() >= 9 ? narrow(arguments[7]) : std::string{},
+                arguments.size() >= 9 ? narrow(arguments[8]) : std::string{},
+                arguments.size() == 12 ? narrow(arguments[9]) : std::string{},
+                arguments.size() == 12 ? narrow(arguments[10]) : std::string{},
+                arguments.size() == 12 ? narrow(arguments[11]) : std::string{})) {
             std::cerr << "invalid presentation at " << error.line << ':' << error.column << ": "
                       << error.message << '\n';
             return 3;
