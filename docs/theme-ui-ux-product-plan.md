@@ -133,7 +133,7 @@ package parser 都不加载 Fcitx addon，也不把 addon schema 硬编码进 Wi
 
 | 阶段 | 交付 | 验证 |
 | --- | --- | --- |
-| Now | control 暴露 theme list/detail；package detail 暴露 config surface；外观常用字段可 round-trip | unit + integration + schema + package gate |
+| Now | control 暴露 theme list/detail；Config Theme 页消费主题库并显示安全详情；package detail 暴露 config surface；外观常用字段可 round-trip | unit + integration + schema + package gate |
 | Phase 6 polish | Config 外观页重排、主题库页、生产 renderer preview、高 DPI 视觉证据 | config UI contract + visual smoke + real DPI matrix |
 | Phase 7 | theme package 安装/启用/禁用/回滚；importer staging | package transaction + importer hostile corpus |
 | Advanced R1 | addon/config metadata read-only 浏览 | engine/control contract + unknown option fallback |
@@ -145,10 +145,14 @@ package parser 都不加载 Fcitx addon，也不把 addon schema 硬编码进 Wi
 
 - `fcitx5-control --themes-list`：列出 builtin 和 user themes；
 - `fcitx5-control --themes-detail ID`：返回主题元数据、浅/深色分支、可编辑字段和安全策略；
+- Config Theme 页消费 `--themes-list/detail`，展示主题库、来源、版本、许可证、分支、安全策略，
+  并把选中的 theme id 写入 `appearance.theme`；
 - `fcitx5-control --packages-detail ID`：返回 permissions、dependencies、manifest SHA、source commit 和 config surface；
 - Config 外观页已暴露候选宽度、滚动单元宽度、字号、圆角、阴影等常用字段。
 
-下一步不应该从“继续加硬编码控件”开始，而应该补 Theme Library UI 和 renderer preview seam。
+下一步不应该从“继续加硬编码控件”开始，而应该补嵌入式 renderer preview seam 和 importer staging。
+当前 Preview 按钮已经启动生产 `fcitx5-ui.exe --demo` 并读取真实 visual config/theme；后续若要做
+嵌入式预览，应把生产 renderer 作为独立预览 surface 接入，而不是在 Config 里重画第二套候选窗。
 这会让后续导入 Weasel/Squirrel/Rime 风格主题时，有地方预览、验证、回滚，而不是直接污染用户配置。
 
 ## 10. 参考链接
