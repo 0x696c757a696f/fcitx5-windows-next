@@ -416,6 +416,7 @@ class FcitxRuntime::Impl final {
     std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> revisions;
     std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> compositions;
     std::unordered_map<ClientContextKey, protocol::CaretRect, KeyHash> carets;
+    std::unordered_map<ClientContextKey, bool, KeyHash> popupAllowed;
     std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
     // Focus override set by row/page navigation: moves the candidate highlight
     // without committing. Cleared whenever ordinary input or selection changes
@@ -552,6 +553,7 @@ class FcitxRuntime::Impl final {
         revisions.erase(iterator->first);
         compositions.erase(iterator->first);
         carets.erase(iterator->first);
+        popupAllowed.erase(iterator->first);
         pendingStates.erase(iterator->first);
         inputMethodOverridden.erase(iterator->first);
         selectedOverride.erase(iterator->first);
@@ -577,6 +579,8 @@ class FcitxRuntime::Impl final {
         dispatchPendingEvents();
         RuntimeResult output;
         output.handled = handled;
+        if (const auto policy = popupAllowed.find(key); policy != popupAllowed.end())
+            output.popupAllowed = policy->second;
         output.commitUtf8 = context.takeCommit();
         auto [preedit, caretOffset] = readPreedit(context);
         output.preeditUtf8 = std::move(preedit);
@@ -754,6 +758,7 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         throw std::invalid_argument("stale input context state");
     }
     auto& context = impl_->contextFor(key);
+    impl_->popupAllowed[key] = request.popupAllowed;
     if (impl_->focused != &context) {
         if (impl_->focused && impl_->focused->hasFocus())
             impl_->focused->focusOut();

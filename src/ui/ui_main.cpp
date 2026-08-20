@@ -407,6 +407,86 @@ class CandidateWindow final {
         return true;
     }
 
+    [[nodiscard]] bool runUilessPresentationSelfTest() {
+        const auto makeResponse = [](std::uint64_t epoch, std::uint64_t context,
+                                     std::uint64_t composition, std::uint64_t revision,
+                                     bool popupAllowed, std::uint32_t selected) {
+            fcitx::windows::protocol::KeyResponse response;
+            response.metadata.engineEpoch = epoch;
+            response.metadata.contextId = context;
+            response.metadata.compositionId = composition;
+            response.metadata.revision = revision;
+            response.preeditUtf8 = "ni";
+            response.candidates = {{1, "1", "你", "nǐ"}, {2, "2", "呢", {}}};
+            response.selectedCandidate = selected;
+            response.candidatePageSize = 2;
+            response.candidateEnd = true;
+            response.candidateTotal = 2;
+            response.candidateVisibility = 1;
+            response.caret = {true, 100, 100, 102, 124, 96};
+            response.popupAllowed = popupAllowed;
+            return response;
+        };
+
+        auto contextA = makeResponse(1, 10, 100, 1, false, 0);
+        update(contextA);
+        if (IsWindowVisible(window_) || !model_.current() ||
+            model_.current()->candidates.size() != 2 ||
+            model_.current()->selected != std::optional<std::size_t>{0U} ||
+            model_.current()->popupAllowed) {
+            std::cerr << "REG-UILESS-001 hidden popup lost candidate state\n";
+            return false;
+        }
+        contextA.metadata.revision = 2;
+        contextA.selectedCandidate = 1;
+        update(contextA);
+        if (IsWindowVisible(window_) || !model_.current() ||
+            model_.current()->selected != std::optional<std::size_t>{1U}) {
+            std::cerr << "REG-UILESS-001 hidden selection update failed\n";
+            return false;
+        }
+
+        const auto contextB = makeResponse(1, 20, 200, 1, true, 0);
+        update(contextB);
+        if (!IsWindowVisible(window_) || !model_.current() ||
+            model_.current()->contextId != 20 || !model_.current()->popupAllowed) {
+            std::cerr << "REG-UILESS-001 policy leaked into normal context\n";
+            return false;
+        }
+
+        contextA.metadata.revision = 3;
+        update(contextA);
+        if (IsWindowVisible(window_) || !model_.current() ||
+            model_.current()->contextId != 10 || model_.current()->popupAllowed) {
+            std::cerr << "REG-UILESS-001 context return resurrected popup\n";
+            return false;
+        }
+
+        auto ended = contextA;
+        ended.metadata.compositionId = 0;
+        ended.metadata.revision = 4;
+        ended.preeditUtf8.clear();
+        ended.candidates.clear();
+        ended.selectedCandidate = UINT32_MAX;
+        ended.candidatePageSize = 0;
+        ended.candidateTotal = 0;
+        ended.candidateVisibility = 0;
+        update(ended);
+        if (IsWindowVisible(window_) || model_.current()) {
+            std::cerr << "REG-UILESS-001 composition end retained policy state\n";
+            return false;
+        }
+
+        const auto reconnected = makeResponse(2, 10, 1, 1, false, 1);
+        update(reconnected);
+        if (IsWindowVisible(window_) || !model_.current() || model_.current()->popupAllowed ||
+            model_.current()->selected != std::optional<std::size_t>{1U}) {
+            std::cerr << "REG-UILESS-001 reconnect ignored authoritative policy\n";
+            return false;
+        }
+        return true;
+    }
+
     [[nodiscard]] bool runScrollExpansionSelfTest() {
         const auto runCase = [&](fcitx::windows::config::Orientation orientation) {
             dismissPresentation();
@@ -533,10 +613,13 @@ class CandidateWindow final {
         ComPtr<ID2D1SolidColorBrush> selectedLabelBrush;
         ComPtr<ID2D1SolidColorBrush> selectedCommentBrush;
         ComPtr<ID2D1SolidColorBrush> borderBrush;
+        ComPtr<ID2D1SolidColorBrush> preeditBrush;
         const auto labelColor =
             highContrast ? foreground : parseColor(visualConfig_, "label_text", foreground);
         const auto commentColor =
             highContrast ? foreground : parseColor(visualConfig_, "comment_text", foreground);
+        const auto preeditColor =
+            highContrast ? foreground : parseColor(visualConfig_, "preedit_text", foreground);
         const auto selectedLabelColor =
             highContrast ? selectedForeground
                          : parseColor(visualConfig_, "selected_label_text", selectedForeground);
@@ -554,8 +637,19 @@ class CandidateWindow final {
             FAILED(renderTarget_->CreateSolidColorBrush(selectedLabelColor, &selectedLabelBrush)) ||
             FAILED(renderTarget_->CreateSolidColorBrush(selectedCommentColor,
                                                         &selectedCommentBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(borderColor, &borderBrush)))
+            FAILED(renderTarget_->CreateSolidColorBrush(borderColor, &borderBrush)) ||
+            FAILED(renderTarget_->CreateSolidColorBrush(preeditColor, &preeditBrush)))
             return false;
+        if (!preeditPanel_.empty()) {
+            renderTarget_->DrawTextW(preeditPanel_.data(), static_cast<UINT32>(preeditPanel_.size()),
+                                     textFormat_.Get(), preeditPanelRect_, preeditBrush.Get(),
+                                     D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            borderBrush->SetOpacity(0.45F);
+            renderTarget_->DrawLine(D2D1::Point2F(preeditPanelRect_.left, preeditDividerY_),
+                                    D2D1::Point2F(preeditPanelRect_.right, preeditDividerY_),
+                                    borderBrush.Get(), 1.0F);
+            borderBrush->SetOpacity(1.0F);
+        }
         const std::vector<CandidateVisual> fallback{{L"1. ", L"你", L"nǐ"}, {L"2. ", L"呢", L""}};
         const auto& lines = candidates_.empty() ? fallback : candidates_;
         float fallbackTop = 8.0F;
@@ -752,6 +846,7 @@ class CandidateWindow final {
                               : response.candidateVisibility == 1
                                   ? candidate::Visibility::composition
                                   : candidate::Visibility::hidden;
+        snapshot.popupAllowed = response.popupAllowed;
         snapshot.candidates.reserve(response.candidates.size());
         for (const auto& source : response.candidates) {
             snapshot.candidates.push_back(
@@ -779,8 +874,18 @@ class CandidateWindow final {
         itemRects_.clear();
         visibleIndices_.clear();
         renderIndices_.clear();
+        preeditPanel_.clear();
+        preeditPanelRect_ = {};
+        preeditDividerY_ = 0.0F;
         const auto& current = *model_.current();
         selected_ = current.selected;
+        if (visualConfig_.preeditMode.value_or(config::PreeditMode::inline_) ==
+                config::PreeditMode::panel &&
+            !current.preedit.empty()) {
+            std::wstring preedit;
+            if (utf8ToWide(current.preedit, preedit))
+                preeditPanel_ = std::move(preedit);
+        }
         const bool compositionChanged = compositionId_ != current.compositionId;
         if (compositionChanged) {
             placement_ = ui::Placement::unlocked;
@@ -868,6 +973,10 @@ class CandidateWindow final {
             dismissPresentation();
             return;
         }
+        if (!current.popupAllowed) {
+            hidePopup();
+            return;
+        }
         targetForegroundWindow_ = GetForegroundWindow();
         targetForegroundProcessId_ = 0;
         if (targetForegroundWindow_)
@@ -936,6 +1045,19 @@ class CandidateWindow final {
                 items.push_back({336 * scale, 32 * scale});
             }
         }
+        float preeditPanelHeight = 0.0F;
+        float preeditPanelWidth = 0.0F;
+        if (!preeditPanel_.empty() && writeFactory_ && textFormat_) {
+            ComPtr<IDWriteTextLayout> preeditLayout;
+            DWRITE_TEXT_METRICS metrics{};
+            if (SUCCEEDED(writeFactory_->CreateTextLayout(
+                    preeditPanel_.data(), static_cast<UINT32>(preeditPanel_.size()),
+                    textFormat_.Get(), 4096.0F, 512.0F, &preeditLayout)) &&
+                SUCCEEDED(preeditLayout->GetMetrics(&metrics))) {
+                preeditPanelHeight = metrics.height + itemPaddingY * 2.0F;
+                preeditPanelWidth = metrics.widthIncludingTrailingWhitespace + itemPaddingX * 2.0F;
+            }
+        }
         ui::LayoutInput input{
             horizontalPresentation ? ui::Orientation::horizontal : ui::Orientation::vertical,
             std::move(items),
@@ -959,27 +1081,56 @@ class CandidateWindow final {
             static_cast<float>(visualConfig_.scrollCellWidth.value_or(96.0) * scale);
         const auto layout = ui::layout(input);
         placement_ = layout.placement;
-        const LONG left = static_cast<LONG>(layout.window.left);
-        const LONG top = static_cast<LONG>(layout.window.top);
-        const LONG width = static_cast<LONG>(layout.window.right - layout.window.left);
-        const LONG height = static_cast<LONG>(layout.window.bottom - layout.window.top);
+        const float preeditBlock =
+            preeditPanelHeight > 0.0F ? preeditPanelHeight + input.rowGap : 0.0F;
+        const float workWidth = (std::max)(0.0F, input.workArea.right - input.workArea.left);
+        const float workHeight = (std::max)(0.0F, input.workArea.bottom - input.workArea.top);
+        float windowWidth =
+            std::min({std::max(layout.window.right - layout.window.left, preeditPanelWidth),
+                      input.maxWidth, workWidth});
+        float windowHeight =
+            std::min(layout.window.bottom - layout.window.top + preeditBlock, workHeight);
+        float windowLeft =
+            std::clamp(layout.window.left, input.workArea.left, input.workArea.right - windowWidth);
+        float windowTop = layout.window.top;
+        if (preeditBlock > 0.0F && layout.placement == ui::Placement::above)
+            windowTop -= preeditBlock;
+        windowTop =
+            std::clamp(windowTop, input.workArea.top, input.workArea.bottom - windowHeight);
+        const LONG left = static_cast<LONG>(windowLeft);
+        const LONG top = static_cast<LONG>(windowTop);
+        const LONG width = static_cast<LONG>(windowWidth);
+        const LONG height = static_cast<LONG>(windowHeight);
+        if (preeditBlock > 0.0F) {
+            preeditPanelRect_ =
+                D2D1::RectF(itemPaddingX, itemPaddingY, windowWidth - itemPaddingX,
+                            (std::max)(itemPaddingY, preeditPanelHeight - itemPaddingY));
+            preeditDividerY_ = preeditPanelHeight + input.rowGap / 2.0F;
+        }
         for (std::size_t local = 0; local < layout.items.size(); ++local) {
             const auto& item = layout.items[local];
-            itemRects_.push_back(D2D1::RectF(item.left - layout.window.left + itemPaddingX,
-                                             item.top - layout.window.top + itemPaddingY,
-                                             item.right - layout.window.left - itemPaddingX,
-                                             item.bottom - layout.window.top - itemPaddingY));
+            const float candidateOffset =
+                layout.placement == ui::Placement::below ? preeditBlock : 0.0F;
+            itemRects_.push_back(D2D1::RectF(
+                item.left - windowLeft + itemPaddingX,
+                item.top + candidateOffset - windowTop + itemPaddingY,
+                item.right - windowLeft - itemPaddingX,
+                item.bottom + candidateOffset - windowTop - itemPaddingY));
             visibleIndices_.push_back(renderIndices_[layout.itemIndices[local]]);
         }
         hasScrollbar_ = layout.hasScrollbar;
-        scrollbarTrack_ = D2D1::RectF(layout.scrollbarTrack.left - layout.window.left,
-                                      layout.scrollbarTrack.top - layout.window.top,
-                                      layout.scrollbarTrack.right - layout.window.left,
-                                      layout.scrollbarTrack.bottom - layout.window.top);
-        scrollbarThumb_ = D2D1::RectF(layout.scrollbarThumb.left - layout.window.left,
-                                      layout.scrollbarThumb.top - layout.window.top,
-                                      layout.scrollbarThumb.right - layout.window.left,
-                                      layout.scrollbarThumb.bottom - layout.window.top);
+        const float candidateOffset =
+            layout.placement == ui::Placement::below ? preeditBlock : 0.0F;
+        scrollbarTrack_ =
+            D2D1::RectF(layout.scrollbarTrack.left - windowLeft,
+                        layout.scrollbarTrack.top + candidateOffset - windowTop,
+                        layout.scrollbarTrack.right - windowLeft,
+                        layout.scrollbarTrack.bottom + candidateOffset - windowTop);
+        scrollbarThumb_ =
+            D2D1::RectF(layout.scrollbarThumb.left - windowLeft,
+                        layout.scrollbarThumb.top + candidateOffset - windowTop,
+                        layout.scrollbarThumb.right - windowLeft,
+                        layout.scrollbarThumb.bottom + candidateOffset - windowTop);
         SetWindowPos(window_, HWND_TOPMOST, left, top, width, height,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
         if (renderTarget_)
@@ -1015,6 +1166,7 @@ class CandidateWindow final {
                 ? 1U
                 : 0U;
         response.caret = lastCaret_;
+        response.popupAllowed = current.popupAllowed;
         response.candidates.reserve(current.candidates.size());
         for (const auto& item : current.candidates) {
             response.candidates.push_back(
@@ -1024,18 +1176,25 @@ class CandidateWindow final {
         update(response);
     }
 
-    void dismissPresentation() noexcept {
+    void hidePopup() noexcept {
         ShowWindow(window_, SW_HIDE);
         if (GetCapture() == window_)
             ReleaseCapture();
         pressedCandidate_.reset();
         clickInFlight_ = false;
         KillTimer(window_, kClickGuardTimer);
+    }
+
+    void dismissPresentation() noexcept {
+        hidePopup();
         model_.reset();
         candidates_.clear();
         itemRects_.clear();
         visibleIndices_.clear();
         renderIndices_.clear();
+        preeditPanel_.clear();
+        preeditPanelRect_ = {};
+        preeditDividerY_ = 0.0F;
         selected_.reset();
         compositionId_ = 0;
         targetForegroundWindow_ = nullptr;
@@ -1265,6 +1424,7 @@ class CandidateWindow final {
     ComPtr<IDWriteTextFormat> annotationFormat_;
     ComPtr<ID2D1HwndRenderTarget> renderTarget_;
     std::vector<CandidateVisual> candidates_;
+    std::wstring preeditPanel_;
     std::vector<D2D1_RECT_F> itemRects_;
     std::vector<std::size_t> visibleIndices_;
     std::vector<std::size_t> renderIndices_;
@@ -1285,6 +1445,8 @@ class CandidateWindow final {
     float fontDpiScale_{1.0F};
     float selectionInflateX_{};
     float selectionInflateY_{};
+    float preeditDividerY_{};
+    D2D1_RECT_F preeditPanelRect_{};
     D2D1_RECT_F scrollbarTrack_{};
     D2D1_RECT_F scrollbarThumb_{};
     HWND targetForegroundWindow_{};
@@ -1402,6 +1564,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     const bool selfTest = arguments.find(L"--self-test") != std::wstring_view::npos;
     const bool interactionSelfTest =
         arguments.find(L"--interaction-self-test") != std::wstring_view::npos;
+    const bool uilessPresentationSelfTest =
+        arguments.find(L"--uiless-presentation-self-test") != std::wstring_view::npos;
     const bool scrollExpansionSelfTest =
         arguments.find(L"--scroll-expansion-self-test") != std::wstring_view::npos;
     const bool reloadTest = arguments.find(L"--reload-test") != std::wstring_view::npos;
@@ -1419,6 +1583,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         window.showSyntheticPreview(scrollDemo);
     if (interactionSelfTest)
         return window.runInteractionSelfTest() ? 0 : 2;
+    if (uilessPresentationSelfTest)
+        return window.runUilessPresentationSelfTest() ? 0 : 2;
     if (scrollExpansionSelfTest)
         return window.runScrollExpansionSelfTest() ? 0 : 2;
     if (simulateDeviceLoss) {

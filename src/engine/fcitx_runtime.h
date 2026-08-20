@@ -45,6 +45,7 @@ struct RuntimeResult {
     std::int32_t forwardKeyCode{};
     bool forwardKeyRelease{};
     protocol::CaretRect caret;
+    bool popupAllowed{true};
 };
 
 struct InputMethodInfo {

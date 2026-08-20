@@ -9,7 +9,7 @@
 namespace fcitx::windows::protocol {
 
 inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
-inline constexpr std::uint16_t kVersion = 11;
+inline constexpr std::uint16_t kVersion = 12;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
@@ -152,6 +152,7 @@ struct KeyResponse {
     std::int32_t forwardKeyCode{};
     bool forwardKeyRelease{};
     CaretRect caret;
+    bool popupAllowed{true};
 };
 
 struct CandidateSelectRequest {

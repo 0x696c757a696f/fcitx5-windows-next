@@ -76,6 +76,7 @@ int main() {
     responseInput.forwardKeyCode = 28;
     responseInput.forwardKeyRelease = true;
     responseInput.caret = input.caret;
+    responseInput.popupAllowed = false;
     const auto responseBytes = encode(responseInput);
     KeyResponse responseOutput;
     if (!expect(decodeFrame(responseBytes, frame) && decode(frame, responseOutput),
@@ -95,6 +96,7 @@ int main() {
                     responseOutput.forwardKeyStates == 4 &&
                     responseOutput.forwardKeyCode == 28 &&
                     responseOutput.forwardKeyRelease &&
+                    !responseOutput.popupAllowed &&
                     responseOutput.caret == responseInput.caret,
                 "roundtrip changed response")) {
         return 1;
@@ -260,7 +262,9 @@ int main() {
                         propertyResponseOutput.commitUtf8 == propertyResponse.commitUtf8 &&
                         propertyResponseOutput.preeditUtf8 == propertyResponse.preeditUtf8 &&
                         propertyResponseOutput.preeditCaretUtf8 ==
-                            propertyResponse.preeditCaretUtf8,
+                            propertyResponse.preeditCaretUtf8 &&
+                        propertyResponseOutput.popupAllowed ==
+                            propertyResponse.popupAllowed,
                     "key response property roundtrip failed")) return 1;
     }
 

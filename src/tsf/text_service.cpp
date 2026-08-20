@@ -833,10 +833,11 @@ void TextService::dismissCandidatePresentation(bool disconnectEngine,
     }
     candidateUiElementId_ = TF_INVALID_UIELEMENTID;
     candidateUiElement_.Reset();
-    lastCaretRects_.clear();
     if (contextId != 0) {
+        lastCaretRects_.erase(contextId);
         popupAllowedByContext_.erase(contextId);
     } else {
+        lastCaretRects_.clear();
         popupAllowedByContext_.clear();
     }
     imeActive_ = false;
@@ -1142,7 +1143,7 @@ HRESULT TextService::OnCompositionTerminated(
     if (composition_.Get() == composition) {
         composition_.Reset();
     }
-    dismissCandidatePresentation(true);
+    dismissCandidatePresentation(true, activeContextId_);
     return S_OK;
 }
 

@@ -147,30 +147,7 @@ protocol::KeyResponse makeStateResponse(
     response.forwardKeyCode = runtimeResult.forwardKeyCode;
     response.forwardKeyRelease = runtimeResult.forwardKeyRelease;
     response.caret = runtimeResult.caret;
-    return response;
-}
-
-protocol::KeyResponse makeHiddenPresentation(protocol::KeyResponse response) {
-    response.handled = true;
-    response.commitUtf8.clear();
-    response.preeditUtf8.clear();
-    response.preeditCaretUtf8 = 0;
-    response.candidates.clear();
-    response.selectedCandidate = UINT32_MAX;
-    response.candidatePage = 0;
-    response.candidateTotal = 0;
-    response.candidateVisibility = 0;
-    response.candidatePageSize = 0;
-    response.candidateBulk = false;
-    response.candidateEnd = true;
-    response.deleteSurroundingText = false;
-    response.deleteSurroundingOffset = 0;
-    response.deleteSurroundingSize = 0;
-    response.forwardKey = false;
-    response.forwardKeySym = 0;
-    response.forwardKeyStates = 0;
-    response.forwardKeyCode = 0;
-    response.forwardKeyRelease = false;
+    response.popupAllowed = runtimeResult.popupAllowed;
     return response;
 }
 
@@ -247,8 +224,7 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
         lastRequestId = request.metadata.requestId;
         auto response = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
                                           engineEpoch, runtimeResult);
-        presentation.publish(request.popupAllowed ? response
-                                                  : makeHiddenPresentation(response));
+        presentation.publish(response);
         return protocol::encode(response);
     }
 

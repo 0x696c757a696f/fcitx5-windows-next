@@ -34,6 +34,7 @@ struct Snapshot {
     std::uint32_t page{};
     std::uint32_t total{};
     Visibility visibility{Visibility::hidden};
+    bool popupAllowed{true};
 
     bool operator==(const Snapshot&) const = default;
 };

@@ -434,6 +434,7 @@ std::vector<std::uint8_t> encode(const KeyResponse& message) {
     writer.appendI32(message.caret.right);
     writer.appendI32(message.caret.bottom);
     writer.appendU32(message.caret.dpi);
+    writer.appendU8(message.popupAllowed ? 1U : 0U);
     for (const auto& candidate : message.candidates) {
         writer.appendU64(candidate.id);
         writer.appendString(candidate.labelUtf8);
@@ -608,6 +609,7 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
     std::uint8_t deleteSurroundingText = 0;
     std::uint8_t forwardKey = 0;
     std::uint8_t forwardKeyRelease = 0;
+    std::uint8_t popupAllowed = 0;
     std::uint32_t candidateCount = 0;
     message.metadata = frame.metadata;
     try {
@@ -629,7 +631,8 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
             !reader.readU8(forwardKeyRelease) || forwardKeyRelease > 1 ||
             !reader.readU8(caretValid) || caretValid > 1 || !reader.readI32(message.caret.left) ||
             !reader.readI32(message.caret.top) || !reader.readI32(message.caret.right) ||
-            !reader.readI32(message.caret.bottom) || !reader.readU32(message.caret.dpi)) {
+            !reader.readI32(message.caret.bottom) || !reader.readU32(message.caret.dpi) ||
+            !reader.readU8(popupAllowed) || popupAllowed > 1) {
             return false;
         }
         message.caret.valid = caretValid != 0;
@@ -638,6 +641,7 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
         message.deleteSurroundingText = deleteSurroundingText != 0;
         message.forwardKey = forwardKey != 0;
         message.forwardKeyRelease = forwardKeyRelease != 0;
+        message.popupAllowed = popupAllowed != 0;
         message.candidates.clear();
         message.candidates.reserve(candidateCount);
         for (std::uint32_t index = 0; index < candidateCount; ++index) {

@@ -513,6 +513,9 @@ if(BUILD_TESTING)
   add_test(NAME candidate-ui-interaction-contract
            COMMAND fcitx5_ui --interaction-self-test)
   set_tests_properties(candidate-ui-interaction-contract PROPERTIES TIMEOUT 5)
+  add_test(NAME candidate-ui-uiless-presentation-contract
+           COMMAND fcitx5_ui --uiless-presentation-self-test)
+  set_tests_properties(candidate-ui-uiless-presentation-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-scroll-expansion-contract
            COMMAND fcitx5_ui --scroll-expansion-self-test)
   set_tests_properties(candidate-ui-scroll-expansion-contract PROPERTIES TIMEOUT 5)
