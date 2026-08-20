@@ -404,6 +404,23 @@ int wmain(int argc, wchar_t** argv) {
     fs::copy_file(control_source, control, fs::copy_options::overwrite_existing);
     fs::copy_file(downloader_source, app_bin / L"fcitx5-downloader.exe",
                   fs::copy_options::overwrite_existing);
+    write_text(app_root / L"share/fcitx5/addon/pinyin.conf",
+               "[Addon]\n"
+               "Name=Pinyin\n"
+               "Category=InputMethod\n"
+               "Version=5.1.12\n"
+               "Library=libpinyin\n"
+               "Type=SharedLibrary\n"
+               "Configurable=True\n"
+               "OnDemand=True\n");
+    write_text(app_root / L"share/fcitx5/addon/clipboard.conf",
+               "[Addon]\n"
+               "Name=Clipboard\n"
+               "Category=Module\n"
+               "Library=libclipboard\n"
+               "Type=SharedLibrary\n"
+               "Configurable=False\n");
+    write_text(app_root / L"lib/fcitx5/libpinyin.dll", "fixture");
     write_text(app_root / L"resources/themes/default/theme.toml",
                theme_fixture("builtin.default", "Fcitx5 Default"));
     write_text(data_root / L"themes/eosphoros-night/theme.toml",
@@ -430,6 +447,21 @@ int wmain(int argc, wchar_t** argv) {
                theme_detail.find("\"candidate.colors.background\"") != std::string::npos &&
                theme_detail.find("\"network_allowed\":false") != std::string::npos,
            "theme detail did not expose the safe editor surface: " + theme_detail);
+
+    std::string addons_list;
+    const DWORD addons_list_exit =
+        run_process_capture(control, {L"--data-root", data_root.wstring(), L"--addons-list"},
+                            addons_list);
+    expect(addons_list_exit == 0, "addon descriptor inventory must succeed");
+    expect(addons_list.find("\"surface\":\"descriptor-inventory\"") != std::string::npos &&
+               addons_list.find("\"typed_config\":\"not_available\"") != std::string::npos &&
+               addons_list.find("\"id\":\"pinyin\"") != std::string::npos &&
+               addons_list.find("\"category\":\"InputMethod\"") != std::string::npos &&
+               addons_list.find("\"configurable\":true") != std::string::npos &&
+               addons_list.find("\"library_present\":true") != std::string::npos &&
+               addons_list.find("\"id\":\"clipboard\"") != std::string::npos,
+           "addon descriptor inventory did not expose safe Advanced R1 surface: " +
+               addons_list);
 
     SigningFixture signer;
     const auto public_key = signer.public_blob();

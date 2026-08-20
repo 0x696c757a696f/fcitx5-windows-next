@@ -484,6 +484,129 @@ struct ThemeRecord {
     fcitx::windows::config::Theme theme;
 };
 
+struct AddonDescriptor {
+    std::string id;
+    std::string name;
+    std::string category;
+    std::string library;
+    std::string type;
+    std::string version;
+    bool configurable{};
+    bool onDemand{};
+    bool libraryPresent{};
+};
+
+std::string_view trimAscii(std::string_view value) {
+    while (!value.empty() &&
+           (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
+        value.remove_prefix(1);
+    while (!value.empty() &&
+           (value.back() == ' ' || value.back() == '\t' || value.back() == '\r'))
+        value.remove_suffix(1);
+    return value;
+}
+
+bool parseBool(std::string_view value) {
+    return value == "True" || value == "true" || value == "1";
+}
+
+std::optional<AddonDescriptor> parseAddonDescriptor(const fs::path& path,
+                                                    const fs::path& libraryRoot) {
+    std::string text;
+    if (!readUtf8(path, text))
+        return std::nullopt;
+    AddonDescriptor descriptor;
+    descriptor.id = narrow(path.stem().wstring());
+    bool inAddon = false;
+    std::size_t offset = 0;
+    while (offset <= text.size()) {
+        const std::size_t end = text.find('\n', offset);
+        std::string_view line(text.data() + offset,
+                              (end == std::string::npos ? text.size() : end) - offset);
+        offset = end == std::string::npos ? text.size() + 1 : end + 1;
+        line = trimAscii(line);
+        if (line.empty() || line.front() == '#')
+            continue;
+        if (line.front() == '[' && line.back() == ']') {
+            inAddon = line == "[Addon]";
+            continue;
+        }
+        if (!inAddon)
+            continue;
+        const std::size_t separator = line.find('=');
+        if (separator == std::string_view::npos)
+            continue;
+        const auto key = trimAscii(line.substr(0, separator));
+        const auto value = trimAscii(line.substr(separator + 1));
+        if (key == "Name")
+            descriptor.name = std::string(value);
+        else if (key == "Category")
+            descriptor.category = std::string(value);
+        else if (key == "Library")
+            descriptor.library = std::string(value);
+        else if (key == "Type")
+            descriptor.type = std::string(value);
+        else if (key == "Version")
+            descriptor.version = std::string(value);
+        else if (key == "Configurable")
+            descriptor.configurable = parseBool(value);
+        else if (key == "OnDemand")
+            descriptor.onDemand = parseBool(value);
+    }
+    if (descriptor.id.empty() || !fcitx::package::is_lower_package_id(descriptor.id) ||
+        descriptor.name.empty())
+        return std::nullopt;
+    if (!descriptor.library.empty()) {
+        const auto dllName = widen(descriptor.library + ".dll");
+        descriptor.libraryPresent = !dllName.empty() && fs::is_regular_file(libraryRoot / dllName);
+    }
+    return descriptor;
+}
+
+std::vector<AddonDescriptor> listAddonDescriptors() {
+    std::vector<AddonDescriptor> result;
+    const fs::path installRoot = installationRoot();
+    const fs::path addonRoot = installRoot / L"share/fcitx5/addon";
+    const fs::path libraryRoot = installRoot / L"lib/fcitx5";
+    std::error_code error;
+    if (!fs::is_directory(addonRoot, error))
+        return result;
+    for (const auto& entry : fs::directory_iterator(addonRoot, error)) {
+        if (error)
+            break;
+        if (!entry.is_regular_file(error) || entry.path().extension() != L".conf")
+            continue;
+        if (auto descriptor = parseAddonDescriptor(entry.path(), libraryRoot))
+            result.push_back(std::move(*descriptor));
+    }
+    std::ranges::sort(result, {}, &AddonDescriptor::id);
+    return result;
+}
+
+void printAddons() {
+    const auto addons = listAddonDescriptors();
+    std::cout << "{\"format_version\":1,\"surface\":\"descriptor-inventory\","
+                 "\"typed_config\":\"not_available\",\"addons\":[";
+    bool first = true;
+    for (const auto& addon : addons) {
+        if (!first)
+            std::cout << ',';
+        first = false;
+        std::cout << "{\"id\":" << jsonString(addon.id)
+                  << ",\"name\":" << jsonString(addon.name)
+                  << ",\"category\":" << jsonString(addon.category)
+                  << ",\"library\":" << jsonString(addon.library)
+                  << ",\"type\":" << jsonString(addon.type)
+                  << ",\"version\":"
+                  << (addon.version.empty() ? "null" : jsonString(addon.version))
+                  << ",\"configurable\":" << (addon.configurable ? "true" : "false")
+                  << ",\"on_demand\":" << (addon.onDemand ? "true" : "false")
+                  << ",\"library_present\":" << (addon.libraryPresent ? "true" : "false")
+                  << '}';
+    }
+    std::cout << "]}\n";
+}
+
 std::optional<ThemeRecord> loadThemeRecord(const fs::path& path, std::string id,
                                            std::string source) {
     std::string text;
@@ -1050,6 +1173,7 @@ void usage() {
                   L"[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP "
                   L"FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW]|"
                   L"--themes-list|--themes-detail ID|"
+                  L"--addons-list|"
                   L"--packages-list|--packages-detail ID|--packages-refresh [HTTPS_BASE]|"
                   L"--packages-install ID|--packages-update ID|"
                   L"--packages-state ID enabled|disabled|--packages-remove ID|"
@@ -1078,7 +1202,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (arguments.size() == 1 && arguments[0] == L"--schema") {
         std::cout
-            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","themes_list","themes_detail","packages_list","packages_detail","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
+            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","themes_list","themes_detail","addons_list","packages_list","packages_detail","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
             << '\n';
         return 0;
     }
@@ -1146,6 +1270,10 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (arguments.size() == 2 && arguments[0] == L"--themes-detail") {
             printThemeDetail(dataRoot, narrow(arguments[1]));
+            return 0;
+        }
+        if (arguments.size() == 1 && arguments[0] == L"--addons-list") {
+            printAddons();
             return 0;
         }
         if (arguments.size() == 2 && arguments[0] == L"--packages-detail") {
