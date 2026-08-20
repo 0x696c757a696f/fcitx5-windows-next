@@ -72,6 +72,31 @@ std::string read_text(const fs::path& path) {
   return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
+std::string theme_fixture(std::string_view id, std::string_view name) {
+  return "format_version = 1\n"
+         "[theme]\n"
+         "id = \"" +
+         std::string(id) +
+         "\"\n"
+         "name = \"" +
+         std::string(name) +
+         "\"\n"
+         "version = \"1.0.0\"\n"
+         "license = \"MIT\"\n"
+         "description = \"Theme fixture\"\n"
+         "[common.candidate]\n"
+         "orientation = \"vertical\"\n"
+         "[common.fonts.candidate]\n"
+         "families = [\"Microsoft YaHei\", \"system\"]\n"
+         "size_dip = 18.0\n"
+         "[light.candidate.colors]\n"
+         "background = \"#FFFFFFFF\"\n"
+         "candidate_text = \"#222222FF\"\n"
+         "[dark.candidate.colors]\n"
+         "background = \"#222222FF\"\n"
+         "candidate_text = \"#FFFFFFFF\"\n";
+}
+
 class SigningFixture final {
  public:
   SigningFixture() {
@@ -379,8 +404,32 @@ int wmain(int argc, wchar_t** argv) {
     fs::copy_file(control_source, control, fs::copy_options::overwrite_existing);
     fs::copy_file(downloader_source, app_bin / L"fcitx5-downloader.exe",
                   fs::copy_options::overwrite_existing);
+    write_text(app_root / L"resources/themes/default/theme.toml",
+               theme_fixture("builtin.default", "Fcitx5 Default"));
+    write_text(data_root / L"themes/eosphoros-night/theme.toml",
+               theme_fixture("eosphoros-night", "Eosphoros Night"));
     expect(!fs::exists(app_bin / L"fcitx5-launcher.exe"),
            "fixture must exercise package management with no launcher service");
+
+    std::string themes_list;
+    const DWORD themes_list_exit =
+        run_process_capture(control, {L"--data-root", data_root.wstring(), L"--themes-list"},
+                            themes_list);
+    expect(themes_list_exit == 0, "theme list must succeed with builtin and user themes");
+    expect(themes_list.find("\"id\":\"builtin:default\"") != std::string::npos &&
+               themes_list.find("\"id\":\"eosphoros-night\"") != std::string::npos &&
+               themes_list.find("\"source\":\"user\"") != std::string::npos,
+           "theme list did not expose builtin and imported user themes: " + themes_list);
+
+    std::string theme_detail;
+    const DWORD theme_detail_exit = run_process_capture(
+        control, {L"--data-root", data_root.wstring(), L"--themes-detail", L"eosphoros-night"},
+        theme_detail);
+    expect(theme_detail_exit == 0, "theme detail must succeed for an imported user theme");
+    expect(theme_detail.find("\"editable_fields\"") != std::string::npos &&
+               theme_detail.find("\"candidate.colors.background\"") != std::string::npos &&
+               theme_detail.find("\"network_allowed\":false") != std::string::npos,
+           "theme detail did not expose the safe editor surface: " + theme_detail);
 
     SigningFixture signer;
     const auto public_key = signer.public_blob();

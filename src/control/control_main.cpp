@@ -474,6 +474,148 @@ std::string configSurfaceJson(const fcitx::package::Manifest* manifest,
     return output;
 }
 
+struct ThemeRecord {
+    std::string id;
+    std::string source;
+    std::string name;
+    std::string version;
+    std::string license;
+    std::string description;
+    fcitx::windows::config::Theme theme;
+};
+
+std::optional<ThemeRecord> loadThemeRecord(const fs::path& path, std::string id,
+                                           std::string source) {
+    std::string text;
+    if (!readUtf8(path, text))
+        return std::nullopt;
+    fcitx::windows::config::Theme theme;
+    ParseError error;
+    if (!fcitx::windows::config::parseTheme(text, theme, error))
+        return std::nullopt;
+    if (source == "user" && theme.id != id)
+        return std::nullopt;
+    return ThemeRecord{std::move(id), std::move(source), theme.name, theme.version,
+                       theme.license, theme.description, std::move(theme)};
+}
+
+std::vector<ThemeRecord> listThemes(const fs::path& dataRoot) {
+    std::vector<ThemeRecord> result;
+    if (auto builtin = loadThemeRecord(installationRoot() / L"resources/themes/default/theme.toml",
+                                       "builtin:default", "builtin")) {
+        result.push_back(std::move(*builtin));
+    }
+    const auto userThemes = dataRoot / L"themes";
+    std::error_code error;
+    if (fs::is_directory(userThemes, error)) {
+        for (const auto& entry : fs::directory_iterator(userThemes, error)) {
+            if (error)
+                break;
+            if (!entry.is_directory(error))
+                continue;
+            const auto id = narrow(entry.path().filename().wstring());
+            if (!fcitx::package::is_lower_package_id(id))
+                continue;
+            if (auto theme = loadThemeRecord(entry.path() / L"theme.toml", id, "user"))
+                result.push_back(std::move(*theme));
+        }
+    }
+    std::ranges::sort(result, {}, &ThemeRecord::id);
+    return result;
+}
+
+const ThemeRecord* findTheme(std::span<const ThemeRecord> themes, std::string_view id) {
+    const auto found = std::ranges::find_if(themes, [&](const ThemeRecord& theme) {
+        return theme.id == id;
+    });
+    return found == themes.end() ? nullptr : &*found;
+}
+
+std::string themeRecordJson(const ThemeRecord& theme) {
+    return "{\"id\":" + jsonString(theme.id) + ",\"source\":" + jsonString(theme.source) +
+           ",\"name\":" + jsonString(theme.name) + ",\"version\":" +
+           jsonString(theme.version) + ",\"license\":" + jsonString(theme.license) +
+           ",\"description\":" + jsonString(theme.description) + '}';
+}
+
+std::string themeEditableFieldsJson() {
+    static constexpr std::array fields{
+        "appearance.mode",
+        "candidate.orientation",
+        "candidate.page_size",
+        "candidate.scroll_mode",
+        "candidate.max_width_dip",
+        "candidate.scroll_cell_width_dip",
+        "candidate.opacity",
+        "candidate.geometry.padding_x_dip",
+        "candidate.geometry.padding_y_dip",
+        "candidate.geometry.item_padding_x_dip",
+        "candidate.geometry.item_padding_y_dip",
+        "candidate.geometry.row_gap_dip",
+        "candidate.geometry.column_gap_dip",
+        "candidate.geometry.border_width_dip",
+        "candidate.geometry.corner_radius_dip",
+        "candidate.geometry.shadow",
+        "candidate.label.visible",
+        "candidate.label.style",
+        "candidate.label.font_scale",
+        "candidate.label.gap_dip",
+        "fonts.candidate.families",
+        "fonts.candidate.size_dip",
+        "fonts.candidate.weight",
+        "fonts.annotation.scale",
+        "candidate.colors.background",
+        "candidate.colors.border",
+        "candidate.colors.candidate_text",
+        "candidate.colors.label_text",
+        "candidate.colors.comment_text",
+        "candidate.colors.selected_background",
+        "candidate.colors.selected_candidate_text",
+        "candidate.colors.selected_label_text",
+        "candidate.colors.selected_comment_text",
+    };
+    std::string output = "[";
+    bool first = true;
+    for (const auto field : fields) {
+        if (!first)
+            output += ',';
+        first = false;
+        output += jsonString(field);
+    }
+    output += ']';
+    return output;
+}
+
+void printThemes(const fs::path& dataRoot) {
+    const auto themes = listThemes(dataRoot);
+    std::cout << "{\"format_version\":1,\"themes\":[";
+    bool first = true;
+    for (const auto& theme : themes) {
+        if (!first)
+            std::cout << ',';
+        first = false;
+        std::cout << themeRecordJson(theme);
+    }
+    std::cout << "]}\n";
+}
+
+void printThemeDetail(const fs::path& dataRoot, std::string_view id) {
+    if (id != "builtin:default" && !fcitx::package::is_lower_package_id(id))
+        throw fcitx::package::PackageError("invalid_theme", "theme id is invalid");
+    const auto themes = listThemes(dataRoot);
+    const auto* theme = findTheme(themes, id);
+    if (!theme)
+        throw fcitx::package::PackageError("theme_not_found", "theme is unknown");
+    std::cout << "{\"format_version\":1,\"theme\":" << themeRecordJson(*theme)
+              << ",\"has_light_branch\":"
+              << (!theme->theme.light.colors.empty() ? "true" : "false")
+              << ",\"has_dark_branch\":"
+              << (!theme->theme.dark.colors.empty() ? "true" : "false")
+              << ",\"editable_fields\":" << themeEditableFieldsJson()
+              << ",\"security\":{\"script_allowed\":false,\"network_allowed\":false,"
+                 "\"unknown_fields\":\"reject\",\"path_scope\":\"theme-directory\"}}\n";
+}
+
 fs::path defaultDataRoot() {
     std::wstring modulePath(32768, L'\0');
     const DWORD size = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
@@ -907,6 +1049,7 @@ void usage() {
                   L"--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT "
                   L"[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP "
                   L"FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW]|"
+                  L"--themes-list|--themes-detail ID|"
                   L"--packages-list|--packages-detail ID|--packages-refresh [HTTPS_BASE]|"
                   L"--packages-install ID|--packages-update ID|"
                   L"--packages-state ID enabled|disabled|--packages-remove ID|"
@@ -935,7 +1078,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (arguments.size() == 1 && arguments[0] == L"--schema") {
         std::cout
-            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","packages_list","packages_detail","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
+            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","themes_list","themes_detail","packages_list","packages_detail","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
             << '\n';
         return 0;
     }
@@ -995,6 +1138,14 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (arguments.size() == 1 && arguments[0] == L"--packages-list") {
             printPackages(dataRoot);
+            return 0;
+        }
+        if (arguments.size() == 1 && arguments[0] == L"--themes-list") {
+            printThemes(dataRoot);
+            return 0;
+        }
+        if (arguments.size() == 2 && arguments[0] == L"--themes-detail") {
+            printThemeDetail(dataRoot, narrow(arguments[1]));
             return 0;
         }
         if (arguments.size() == 2 && arguments[0] == L"--packages-detail") {
