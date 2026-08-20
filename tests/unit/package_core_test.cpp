@@ -212,6 +212,17 @@ int main() {
     expect(!is_safe_relative_package_path("//server/share"), "UNC path accepted");
     expect(!is_safe_relative_package_path("bin\\addon.dll"), "backslash path accepted");
     expect(!is_safe_relative_package_path("bin/addon.dll:evil"), "ADS path accepted");
+    expect(!is_safe_relative_package_path("bin/addon.dll."), "trailing dot path accepted");
+    expect(!is_safe_relative_package_path("bin/addon.dll "), "trailing space path accepted");
+    expect(!is_safe_relative_package_path("bin/CON"), "DOS device path accepted");
+    expect(!is_safe_relative_package_path("bin/con.txt"), "DOS device path with extension accepted");
+    expect(!is_safe_relative_package_path("bin/PRN"), "uppercase DOS device path accepted");
+    expect(!is_safe_relative_package_path("bin/AUX.dat"), "AUX device path accepted");
+    expect(!is_safe_relative_package_path("bin/NUL"), "NUL device path accepted");
+    expect(!is_safe_relative_package_path("bin/COM1"), "COM device path accepted");
+    expect(!is_safe_relative_package_path("bin/LPT9.log"), "LPT device path accepted");
+    expect(!is_safe_relative_package_path(std::string_view("bin/bad\x01name.dll", 16)),
+           "control-character path accepted");
 
     TemporaryDirectory temporary;
     const auto payload = temporary.path() / "source";

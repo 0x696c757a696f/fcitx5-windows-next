@@ -28,6 +28,8 @@
   ,"candidate.horizontal": "Horizontal"
   ,"candidate.scroll": "Scroll mode (expanded grid)"
   ,"candidate.page_size": "Candidates per row/column"
+  ,"candidate.max_width": "Candidate max width"
+  ,"candidate.scroll_cell_width": "Scroll cell width"
   ,"action.apply": "Apply"
   ,"action.preview": "Preview candidates"
   ,"action.diagnostics": "Refresh diagnostics"

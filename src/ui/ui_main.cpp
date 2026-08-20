@@ -54,6 +54,14 @@ UINT candidateDismissMessage() noexcept {
     return message;
 }
 
+std::wstring defaultDwriteLocale() {
+    std::array<wchar_t, LOCALE_NAME_MAX_LENGTH> locale{};
+    const int length = GetUserDefaultLocaleName(locale.data(), static_cast<int>(locale.size()));
+    if (length > 1 && length <= static_cast<int>(locale.size()))
+        return locale.data();
+    return L"en-US";
+}
+
 struct CandidateVisual {
     std::wstring label;
     std::wstring text;
@@ -1194,6 +1202,7 @@ class CandidateWindow final {
                     break;
             }
         }
+        const std::wstring dwriteLocale = defaultDwriteLocale();
         const auto createFormat = [&](const fcitx::windows::config::Font& font, double scale,
                                       ComPtr<IDWriteTextFormat>& format) {
             if (format)
@@ -1214,7 +1223,7 @@ class CandidateWindow final {
                     static_cast<float>(
                         font.size.value_or(visualConfig_.candidateFont.size.value_or(16.0)) *
                         scale * fontDpiScale_),
-                    L"zh-CN", &format)))
+                    dwriteLocale.c_str(), &format)))
                 return false;
             // Single line with ellipsis trimming: a label/comment longer than
             // the remaining row width must not wrap onto the candidate row

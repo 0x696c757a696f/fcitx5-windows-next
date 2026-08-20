@@ -85,7 +85,9 @@ struct Theme {
                                           std::string_view scrollMode,
                                           std::string_view candidatePageSize,
                                           std::string_view candidateFont, std::string& output,
-                                          ParseError& error) noexcept;
+                                          ParseError& error,
+                                          std::string_view maxWidthDip = {},
+                                          std::string_view scrollCellWidthDip = {}) noexcept;
 [[nodiscard]] bool parseTheme(std::string_view text, Theme& output, ParseError& error) noexcept;
 [[nodiscard]] Config mergeConfig(const Config& base, const Config& overrideConfig);
 [[nodiscard]] Config resolveTheme(const Theme& theme, bool dark, const Config& userOverride);

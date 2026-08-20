@@ -41,6 +41,12 @@ struct StartDecision {
     std::uint64_t retryAfterMilliseconds{};
 };
 
+struct LauncherSnapshot {
+    LauncherState state{LauncherState::normal};
+    unsigned consecutiveStartupCrashes{};
+    std::uint64_t nextStartAllowedMilliseconds{};
+};
+
 class Clock {
 public:
     virtual ~Clock() = default;
@@ -51,6 +57,7 @@ class LauncherStateMachine final {
 public:
     explicit LauncherStateMachine(const Clock& clock,
                                   LauncherState initialState = LauncherState::normal) noexcept;
+    explicit LauncherStateMachine(const Clock& clock, LauncherSnapshot snapshot) noexcept;
 
     [[nodiscard]] LauncherState state() const noexcept { return state_; }
     [[nodiscard]] EngineState engineState() const noexcept { return engineState_; }
@@ -60,6 +67,7 @@ public:
     [[nodiscard]] std::uint64_t nextStartAllowedMilliseconds() const noexcept {
         return nextStartAllowedMilliseconds_;
     }
+    [[nodiscard]] LauncherSnapshot snapshot() const noexcept;
 
     [[nodiscard]] bool apply(Command command) noexcept;
     [[nodiscard]] bool canApply(Command command) const noexcept;

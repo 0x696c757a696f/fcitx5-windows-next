@@ -97,12 +97,12 @@ int main() {
         return 1;
     std::string updated;
     if (!updatePresentationToml(defaults, "dark", "builtin:default", "horizontal", "enabled", "6",
-                                "Microsoft YaHei", updated, error) ||
+                                "Microsoft YaHei", updated, error, "720", "88") ||
         !updated.starts_with("# Fcitx5 for Windows") || !parseConfig(updated, config, error) ||
         config.appearanceMode != AppearanceMode::dark ||
         config.orientation != Orientation::horizontal || config.scrollMode != true ||
         !config.candidatePageSize || *config.candidatePageSize != 6 ||
-        config.maxWidth != 860.0 || config.scrollCellWidth != 96.0 || !config.colors.empty() ||
+        config.maxWidth != 720.0 || config.scrollCellWidth != 88.0 || !config.colors.empty() ||
         !config.candidateFont.families ||
         config.candidateFont.families->front() != "Microsoft YaHei") {
         std::cerr << "typed presentation update failed: " << error.message << '\n';
@@ -115,6 +115,12 @@ int main() {
         return 1;
     if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "10",
                                "system", updated, error))
+        return 1;
+    if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
+                               "system", updated, error, "159", "96"))
+        return 1;
+    if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
+                               "system", updated, error, "720", "161"))
         return 1;
     return 0;
 }

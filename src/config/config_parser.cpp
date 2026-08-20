@@ -523,7 +523,8 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
                             std::string_view theme, std::string_view orientation,
                             std::string_view scrollMode, std::string_view candidatePageSize,
                             std::string_view candidateFont, std::string& output,
-                            ParseError& error) noexcept {
+                            ParseError& error, std::string_view maxWidthDip,
+                            std::string_view scrollCellWidthDip) noexcept {
     output.clear();
     error = {};
     if ((appearanceMode != "system" && appearanceMode != "light" && appearanceMode != "dark") ||
@@ -541,6 +542,27 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
     }
     if (pageSize < 1 || pageSize > 9)
         return setError(error, "invalid presentation setting");
+    const auto parseDip = [&](std::string_view value, double minimum, double maximum,
+                              double& parsed) {
+        if (value.empty())
+            return true;
+        if (value.size() > 8U)
+            return false;
+        std::string text(value);
+        std::size_t consumed = 0;
+        try {
+            parsed = std::stod(text, &consumed);
+        } catch (...) {
+            return false;
+        }
+        return consumed == text.size() && parsed >= minimum && parsed <= maximum;
+    };
+    double maxWidth = 0.0;
+    double scrollCellWidth = 0.0;
+    if (!parseDip(maxWidthDip, 160.0, 2048.0, maxWidth) ||
+        !parseDip(scrollCellWidthDip, 40.0, 160.0, scrollCellWidth)) {
+        return setError(error, "invalid presentation setting");
+    }
     try {
         toml::table root = toml::parse(source.empty() ? defaultConfigToml() : source);
         if (!root["appearance"].as_table())
@@ -554,6 +576,10 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
         candidate.insert_or_assign("orientation", orientation);
         candidate.insert_or_assign("page_size", pageSize);
         candidate.insert_or_assign("scroll_mode", scrollMode == "enabled");
+        if (!maxWidthDip.empty())
+            candidate.insert_or_assign("max_width_dip", maxWidth);
+        if (!scrollCellWidthDip.empty())
+            candidate.insert_or_assign("scroll_cell_width_dip", scrollCellWidth);
         if (!root["fonts"].as_table())
             root.insert_or_assign("fonts", toml::table{});
         auto& fonts = *root["fonts"].as_table();

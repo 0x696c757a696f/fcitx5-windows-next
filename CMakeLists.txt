@@ -148,6 +148,13 @@ if(MSVC)
   target_compile_options(fcitx5_config PRIVATE /external:W0 /analyze:external-)
 endif()
 
+add_library(fcitx5_process_execution STATIC src/config/process_execution.cpp)
+add_library(fcitx5::process_execution ALIAS fcitx5_process_execution)
+target_compile_features(fcitx5_process_execution PUBLIC cxx_std_20)
+target_include_directories(
+  fcitx5_process_execution PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
+fcitx_apply_project_options(fcitx5_process_execution)
+
 add_library(
   fcitx5_platform STATIC
   src/platform/runtime_identity.cpp
@@ -221,19 +228,20 @@ target_link_libraries(
   fcitx5_control
   PRIVATE fcitx5::windows_common fcitx5::config fcitx5::protocol
           fcitx5::ipc_client fcitx5::platform fcitx5::package_core
-          fcitx5::deployment_core fcitx5::tsf_activation_guard shell32 ole32)
+          fcitx5::deployment_core fcitx5::tsf_activation_guard
+          fcitx5::process_execution shell32 ole32)
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
 add_executable(
   fcitx5_config_app WIN32
   src/config/app_main.cpp
-  src/config/process_execution.cpp
   resources/windows/app.rc)
 set_target_properties(fcitx5_config_app PROPERTIES OUTPUT_NAME "fcitx5-config")
 target_link_libraries(
   fcitx5_config_app
-  PRIVATE fcitx5::windows_common fcitx5::release_identity d2d1 dwrite shell32 user32 comctl32)
+  PRIVATE fcitx5::windows_common fcitx5::release_identity fcitx5::process_execution d2d1
+          dwrite shell32 user32 comctl32)
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
 if(MSVC)
@@ -469,12 +477,16 @@ if(BUILD_TESTING)
   add_test(NAME config-toml-contract COMMAND fcitx5_config_parser_test)
   set_tests_properties(config-toml-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-  add_executable(fcitx5_process_execution_test tests/unit/process_execution_test.cpp
-                 src/config/process_execution.cpp)
-  target_include_directories(fcitx5_process_execution_test PRIVATE src/config)
+  add_executable(fcitx5_process_execution_test tests/unit/process_execution_test.cpp)
+  target_link_libraries(fcitx5_process_execution_test PRIVATE fcitx5::process_execution)
   fcitx_apply_project_options(fcitx5_process_execution_test)
   fcitx_apply_binary_hardening(fcitx5_process_execution_test)
   add_test(NAME process-execution-pipe COMMAND fcitx5_process_execution_test)
+
+  add_executable(fcitx5_source_contract_test tests/unit/source_contract_test.cpp)
+  fcitx_apply_project_options(fcitx5_source_contract_test)
+  fcitx_apply_binary_hardening(fcitx5_source_contract_test)
+  add_test(NAME source-contract COMMAND fcitx5_source_contract_test "${CMAKE_CURRENT_SOURCE_DIR}")
 
   add_executable(fcitx5_candidate_layout_test tests/unit/candidate_layout_test.cpp)
   target_link_libraries(fcitx5_candidate_layout_test PRIVATE fcitx5::candidate_layout)

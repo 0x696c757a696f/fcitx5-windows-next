@@ -7,9 +7,27 @@ namespace fcitx::windows::launcher {
 
 LauncherStateMachine::LauncherStateMachine(const Clock& clock,
                                            LauncherState initialState) noexcept
-    : clock_(clock), state_(initialState) {
-    if (initialState == LauncherState::crashBackoff || initialState == LauncherState::safeMode) {
-        state_ = LauncherState::normal;
+    : LauncherStateMachine(clock, LauncherSnapshot{initialState, 0, 0}) {}
+
+LauncherStateMachine::LauncherStateMachine(const Clock& clock, LauncherSnapshot snapshot) noexcept
+    : clock_(clock),
+      state_(snapshot.state),
+      consecutiveStartupCrashes_(snapshot.consecutiveStartupCrashes),
+      nextStartAllowedMilliseconds_(snapshot.nextStartAllowedMilliseconds) {
+    if (state_ == LauncherState::crashBackoff) {
+        if (consecutiveStartupCrashes_ == 0)
+            consecutiveStartupCrashes_ = 1;
+        const auto now = clock_.nowMilliseconds();
+        if (nextStartAllowedMilliseconds_ == 0 ||
+            nextStartAllowedMilliseconds_ > now + kMaximumBackoffMilliseconds) {
+            nextStartAllowedMilliseconds_ = now + kInitialBackoffMilliseconds;
+        }
+    } else if (state_ == LauncherState::safeMode) {
+        if (consecutiveStartupCrashes_ < kSafeModeCrashThreshold)
+            consecutiveStartupCrashes_ = kSafeModeCrashThreshold;
+        nextStartAllowedMilliseconds_ = 0;
+    } else {
+        resetCrashAccounting();
     }
 }
 
@@ -21,6 +39,10 @@ bool LauncherStateMachine::startSuppressed() const noexcept {
 void LauncherStateMachine::resetCrashAccounting() noexcept {
     consecutiveStartupCrashes_ = 0;
     nextStartAllowedMilliseconds_ = 0;
+}
+
+LauncherSnapshot LauncherStateMachine::snapshot() const noexcept {
+    return {state_, consecutiveStartupCrashes_, nextStartAllowedMilliseconds_};
 }
 
 bool LauncherStateMachine::apply(Command command) noexcept {

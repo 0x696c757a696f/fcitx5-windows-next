@@ -28,6 +28,8 @@
   ,"candidate.horizontal": "横向"
   ,"candidate.scroll": "卷轴模式（展开候选网格）"
   ,"candidate.page_size": "每行/每列候选数"
+  ,"candidate.max_width": "候选窗最大宽度"
+  ,"candidate.scroll_cell_width": "卷轴单元宽度"
   ,"action.apply": "应用"
   ,"action.preview": "预览候选框"
   ,"action.diagnostics": "刷新诊断"

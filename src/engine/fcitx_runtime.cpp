@@ -567,8 +567,14 @@ class FcitxRuntime::Impl final {
         instance->globalConfig().load(raw, true);
     }
 
+    void dispatchPendingEvents() {
+        if (instance)
+            instance->eventDispatcher().dispatchPending();
+    }
+
     RuntimeResult collectResult(const ClientContextKey& key,
                                 EngineInputContext& context, bool handled) {
+        dispatchPendingEvents();
         RuntimeResult output;
         output.handled = handled;
         output.commitUtf8 = context.takeCommit();
@@ -708,11 +714,10 @@ bool FcitxRuntime::initialize(bool safeMode) {
         if (!impl_->instance->inputMethodEngine(selected))
             return false;
         // Load and activate the enabled engines before accepting TSF traffic.
-        // This is an internal context initialization only: no synthetic user key
-        // reaches TSF, so a cold Rime session cannot consume or duplicate input.
-        // Activating each enabled IM here keeps Ctrl+Shift cycling inside the
-        // input deadline; inputMethodEngine(id) alone is not enough for addons
-        // that defer decoder/session initialization until first focus.
+        // This is an internal context initialization only: no synthetic text key
+        // is sent. Addons that need deeper preload must expose an explicit,
+        // side-effect-free preload hook; generic warmup must not learn,
+        // commit, mutate history, or consume what looks like a real user key.
         impl_->warmupContext =
             std::make_unique<EngineInputContext>(impl_->instance->inputContextManager());
         impl_->warmupContext->focusIn();
@@ -724,15 +729,12 @@ bool FcitxRuntime::initialize(bool safeMode) {
                 continue;
             (void)impl_->instance->inputMethodEngine(id);
             impl_->instance->setCurrentInputMethod(impl_->warmupContext.get(), id, true);
-            // Fcitx engines build process-wide decoder caches on their first
-            // text event. Prime those caches in an isolated context before the
-            // ready signal, then reset without committing or learning any text.
-            KeyEvent warmupEvent(impl_->warmupContext.get(), Key(FcitxKey_n), false);
-            impl_->warmupContext->keyEvent(warmupEvent);
+            impl_->dispatchPendingEvents();
             impl_->warmupContext->reset();
             (void)impl_->warmupContext->takeCommit();
         }
         impl_->instance->setCurrentInputMethod(impl_->warmupContext.get(), selected, true);
+        impl_->dispatchPendingEvents();
         impl_->focused = impl_->warmupContext.get();
         return true;
     } catch (...) {
@@ -757,6 +759,7 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
             impl_->focused->focusOut();
         context.focusIn();
         impl_->focused = &context;
+        impl_->dispatchPendingEvents();
     }
     if (context.applySurroundingText(request)) {
         context.updateSurroundingText();
@@ -772,6 +775,7 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         impl_->instance->inputMethod(&context) != selected) {
         (void)impl_->instance->inputMethodEngine(selected);
         impl_->instance->setCurrentInputMethod(&context, selected, true);
+        impl_->dispatchPendingEvents();
     }
     KeyEvent event(&context, keyFromRequest(request),
                    (request.keyFlags & protocol::kKeyFlagRelease) != 0);

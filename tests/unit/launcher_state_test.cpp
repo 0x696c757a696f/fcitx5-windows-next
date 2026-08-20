@@ -54,6 +54,13 @@ int main() {
     if (!require(machine.state() == LauncherState::safeMode &&
                      machine.requestStart().safeMode,
                  "third startup crash did not enter SafeMode")) return 1;
+    const auto safeModeSnapshot = machine.snapshot();
+    LauncherStateMachine restartedDuringSafeMode(clock, safeModeSnapshot);
+    if (!require(restartedDuringSafeMode.state() == LauncherState::safeMode &&
+                     restartedDuringSafeMode.consecutiveStartupCrashes() >=
+                         LauncherStateMachine::kSafeModeCrashThreshold &&
+                     restartedDuringSafeMode.requestStart().safeMode,
+                 "REG-LAUNCHER-LEDGER-001 SafeMode did not survive launcher restart")) return 1;
     machine.engineExited(LauncherStateMachine::kStableRuntimeMilliseconds);
     if (!require(machine.state() == LauncherState::normal &&
                      machine.consecutiveStartupCrashes() == 0,
@@ -101,9 +108,25 @@ int main() {
         !require(store.save(LauncherState::uninstalling), "Uninstalling state save failed") ||
         !require(store.load(loaded) == LoadStateResult::loaded &&
                      loaded == LauncherState::uninstalling,
-                 "Uninstalling state did not survive reload") ||
-        !require(!store.save(LauncherState::crashBackoff),
-                 "ephemeral crash backoff was persisted")) {
+                 "Uninstalling state did not survive reload")) {
+        DeleteFileW(statePath.c_str());
+        return 1;
+    }
+    LauncherSnapshot persistedCrash{LauncherState::crashBackoff, 2, clock.nowMilliseconds() + 500};
+    LauncherSnapshot loadedSnapshot;
+    if (!require(store.save(persistedCrash), "crash ledger save failed") ||
+        !require(store.load(loadedSnapshot) == LoadStateResult::loaded &&
+                     loadedSnapshot.state == LauncherState::crashBackoff &&
+                     loadedSnapshot.consecutiveStartupCrashes == 2,
+                 "crash ledger did not survive reload")) {
+        DeleteFileW(statePath.c_str());
+        return 1;
+    }
+    LauncherStateMachine restoredCrash(clock, loadedSnapshot);
+    if (!require(restoredCrash.state() == LauncherState::crashBackoff &&
+                     restoredCrash.consecutiveStartupCrashes() == 2 &&
+                     restoredCrash.requestStart().disposition == StartDisposition::backoff,
+                 "restored crash ledger did not enforce backoff")) {
         DeleteFileW(statePath.c_str());
         return 1;
     }

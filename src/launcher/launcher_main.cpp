@@ -230,8 +230,8 @@ protocol::Status applyCommand(protocol::LauncherCommand command,
         break;
     }
     if (changesState) {
-        accepted = state.canApply(stateCommand) && store.save(state.stateAfter(stateCommand)) &&
-                   state.apply(stateCommand);
+        accepted = state.canApply(stateCommand) && state.apply(stateCommand) &&
+                   store.save(state.snapshot());
     }
     if (accepted && engine.process &&
         (command == protocol::LauncherCommand::userStop ||
@@ -239,6 +239,7 @@ protocol::Status applyCommand(protocol::LauncherCommand command,
          command == protocol::LauncherCommand::beginUninstall)) {
         stopEngine(engine);
         state.engineStoppedIntentionally();
+        (void)store.save(state.snapshot());
     }
     return accepted ? protocol::Status::ok : protocol::Status::unsupported;
 }
@@ -403,10 +404,10 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         return 2;
     }
     launcher::StateStore stateStore(stateFilePath);
-    launcher::LauncherState initialState = launcher::LauncherState::normal;
-    const auto loadResult = stateStore.load(initialState);
+    launcher::LauncherSnapshot initialSnapshot;
+    const auto loadResult = stateStore.load(initialSnapshot);
     if ((loadResult == launcher::LoadStateResult::missing &&
-         !stateStore.save(launcher::LauncherState::normal)) ||
+         !stateStore.save(launcher::LauncherSnapshot{})) ||
         loadResult == launcher::LoadStateResult::ioError) {
         CloseHandle(stopEvent);
         if (launcherReady)
@@ -417,11 +418,11 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         return 2;
     }
     if (loadResult == launcher::LoadStateResult::invalid) {
-        initialState = launcher::LauncherState::userStopped;
+        initialSnapshot = {.state = launcher::LauncherState::userStopped};
     }
 
     SystemClock clock;
-    launcher::LauncherStateMachine state(clock, initialState);
+    launcher::LauncherStateMachine state(clock, initialSnapshot);
     launcher::TrayIcon tray;
     if (installedDefaults)
         (void)tray.create(instance, executableDirectory());
@@ -462,25 +463,24 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
             clearInputMethodStatus();
             if (state.state() == launcher::LauncherState::userStopped &&
                 state.canApply(launcher::Command::resume) &&
-                stateStore.save(state.stateAfter(launcher::Command::resume))) {
-                (void)state.apply(launcher::Command::resume);
+                state.apply(launcher::Command::resume) && stateStore.save(state.snapshot())) {
+                // Resumed by an explicit restart command.
             }
             restartDesired = true;
             break;
         case launcher::TrayCommand::pause:
             if (state.canApply(launcher::Command::userStop) &&
-                stateStore.save(state.stateAfter(launcher::Command::userStop)) &&
-                state.apply(launcher::Command::userStop)) {
+                state.apply(launcher::Command::userStop) && stateStore.save(state.snapshot())) {
                 stopEngine(engine);
                 state.engineStoppedIntentionally();
+                (void)stateStore.save(state.snapshot());
                 clearInputMethodStatus();
                 restartDesired = false;
             }
             break;
         case launcher::TrayCommand::resume:
             if (state.canApply(launcher::Command::resume) &&
-                stateStore.save(state.stateAfter(launcher::Command::resume)) &&
-                state.apply(launcher::Command::resume)) {
+                state.apply(launcher::Command::resume) && stateStore.save(state.snapshot())) {
                 restartDesired = true;
             }
             break;
@@ -507,6 +507,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                 if (!launchEngine(enginePath, readyEventName, engineStopEventName,
                                   decision.safeMode, job, security.attributes(), engine)) {
                     state.engineExited(0);
+                    (void)stateStore.save(state.snapshot());
                 }
             }
         }
@@ -575,6 +576,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                 CloseHandle(engine.stopEvent);
             engine = {};
             state.engineExited(runtime);
+            (void)stateStore.save(state.snapshot());
             clearInputMethodStatus();
             restartDesired = true;
         } else if (waitResult == WAIT_TIMEOUT) {
@@ -625,6 +627,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                                               decision.safeMode, job, security.attributes(),
                                               engine)) {
                                 state.engineExited(0);
+                                (void)stateStore.save(state.snapshot());
                                 status = protocol::Status::unsupported;
                             }
                         }

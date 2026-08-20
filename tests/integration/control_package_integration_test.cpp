@@ -297,6 +297,9 @@ void publish_package_fixture(const fs::path& fixture_root, const fs::path& data_
   const auto repository = make_repository(version, release_sequence, archive_hash);
   write_text(data_root / L"repository/index.json", repository);
   write_bytes(data_root / L"repository/index.sig", signer.sign(repository));
+  write_text(data_root / L"repository/sequence-stable.json",
+             "format_version=1\nchannel=stable\nmax_release_sequence=" +
+                 std::to_string(release_sequence) + "\n");
   fs::create_directories(data_root / L"downloads");
   fs::copy_file(archive,
                 data_root / L"downloads" / (L"fcitx5-rime-" + wide_version + L".fcpkg"),

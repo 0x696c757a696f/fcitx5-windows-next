@@ -369,6 +369,23 @@ bool is_safe_relative_package_path(std::string_view path) noexcept {
         component.back() == '.' || component.back() == ' ') {
       return false;
     }
+    for (const unsigned char character : component) {
+      if (character < 0x20U)
+        return false;
+    }
+    auto stem = component.substr(0, component.find('.'));
+    std::string lowered;
+    lowered.reserve(stem.size());
+    for (const unsigned char character : stem) {
+      lowered.push_back(static_cast<char>(
+          character >= 'A' && character <= 'Z' ? character - 'A' + 'a' : character));
+    }
+    if (lowered == "con" || lowered == "prn" || lowered == "aux" || lowered == "nul" ||
+        (lowered.size() == 4U &&
+         ((lowered.starts_with("com") && lowered[3] >= '1' && lowered[3] <= '9') ||
+          (lowered.starts_with("lpt") && lowered[3] >= '1' && lowered[3] <= '9')))) {
+      return false;
+    }
     begin = end == std::string_view::npos ? path.size() : end + 1U;
   }
   return true;

@@ -235,11 +235,15 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
     if (frame.type == protocol::MessageType::keyRequest) {
         protocol::KeyRequest request;
         engine::RuntimeResult runtimeResult;
+        const auto timeout =
+            frame.metadata.revision == 0
+                ? std::chrono::milliseconds(2500)
+                : std::chrono::milliseconds(75);
         if (!protocol::decode(frame, request) ||
             !dispatcher.processKey(
                 engine::ClientContextKey{clientIdentity.processId, connectionId,
                                          request.metadata.contextId},
-                request, runtimeResult, std::chrono::milliseconds(75))) return {};
+                request, runtimeResult, timeout)) return {};
         lastRequestId = request.metadata.requestId;
         auto response = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
                                           engineEpoch, runtimeResult);

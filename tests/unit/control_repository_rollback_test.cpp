@@ -211,6 +211,26 @@ int wmain(int argc, wchar_t** argv) {
       return 1;
     }
 
+    // Mature cache without sequence state fails closed instead of pretending it
+    // was never initialized.
+    fs::remove(dataRoot / "repository/sequence-stable.json", ignored);
+    output.clear();
+    (void)run_control(control, dataRoot, output);
+    if (repository_available(output)) {
+      std::cerr << "repository cache with missing sequence state was accepted\n";
+      return 1;
+    }
+
+    // Corrupt sequence state also fails closed and requires explicit repair.
+    write_bytes(dataRoot / "repository/sequence-stable.json",
+                "format_version=1\nchannel=stable\nmax_release_sequence=not-a-number\n");
+    output.clear();
+    (void)run_control(control, dataRoot, output);
+    if (repository_available(output)) {
+      std::cerr << "repository cache with corrupt sequence state was accepted\n";
+      return 1;
+    }
+
     // A newer sequence is accepted.
     const auto fresh_index = index_json("stable", 6U);
     write_bytes(dataRoot / "repository/index.json", fresh_index);

@@ -6,6 +6,7 @@
 #include "launcher_client.h"
 #include "package_core.h"
 #include "peer_verification.h"
+#include "process_execution.h"
 #include "protocol.h"
 #include "runtime_identity.h"
 
@@ -190,57 +191,6 @@ bool runProcess(const fs::path& executable, const std::vector<std::wstring>& arg
     return wait == WAIT_OBJECT_0 && code == 0;
 }
 
-bool runProcessCapture(const fs::path& executable,
-                       const std::vector<std::wstring>& arguments,
-                       std::string& output, DWORD timeout = 120000U) {
-    output.clear();
-    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
-    HANDLE readPipe = nullptr;
-    HANDLE writePipe = nullptr;
-    if (!CreatePipe(&readPipe, &writePipe, &attributes, 0))
-        return false;
-    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-    HANDLE nullError = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                   &attributes, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (nullError == INVALID_HANDLE_VALUE) {
-        CloseHandle(readPipe);
-        CloseHandle(writePipe);
-        return false;
-    }
-    std::wstring command = quoteArgument(executable.wstring());
-    for (const auto& argument : arguments)
-        command += L" " + quoteArgument(argument);
-    STARTUPINFOW startup{sizeof(startup)};
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    startup.hStdOutput = writePipe;
-    startup.hStdError = nullError;
-    PROCESS_INFORMATION process{};
-    const BOOL created = CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
-                                        CREATE_NO_WINDOW, nullptr,
-                                        executable.parent_path().c_str(), &startup, &process);
-    CloseHandle(writePipe);
-    CloseHandle(nullError);
-    if (!created) {
-        CloseHandle(readPipe);
-        return false;
-    }
-    const DWORD wait = WaitForSingleObject(process.hProcess, timeout);
-    if (wait == WAIT_TIMEOUT)
-        TerminateProcess(process.hProcess, ERROR_TIMEOUT);
-    char buffer[4096];
-    DWORD count = 0;
-    while (output.size() <= 1024U * 1024U &&
-           ReadFile(readPipe, buffer, sizeof(buffer), &count, nullptr) && count != 0)
-        output.append(buffer, count);
-    DWORD code = 1;
-    GetExitCodeProcess(process.hProcess, &code);
-    CloseHandle(readPipe);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    return wait == WAIT_OBJECT_0 && code == 0 && output.size() <= 1024U * 1024U;
-}
-
 struct RepositoryFiles {
     fs::path index;
     fs::path signature;
@@ -261,33 +211,94 @@ fs::path repositorySequencePath(const fs::path& dataRoot, std::string_view chann
            (L"sequence-" + widen(std::string(channel)) + L".json");
 }
 
-std::uint64_t readMaxSequence(const fs::path& dataRoot, std::string_view channel) {
+struct SequenceState {
+    bool present{};
+    bool valid{};
+    std::uint64_t maximum{};
+};
+
+std::optional<std::string_view> lineValue(std::string_view text, std::string_view key) {
+    const std::string marker = std::string(key) + "=";
+    std::size_t position = 0;
+    while (position <= text.size()) {
+        const std::size_t lineEnd = text.find('\n', position);
+        std::string_view line =
+            lineEnd == std::string_view::npos
+                ? text.substr(position)
+                : text.substr(position, lineEnd - position);
+        if (!line.empty() && line.back() == '\r')
+            line.remove_suffix(1);
+        if (line.starts_with(marker))
+            return line.substr(marker.size());
+        if (lineEnd == std::string_view::npos)
+            break;
+        position = lineEnd + 1;
+    }
+    return std::nullopt;
+}
+
+bool parseUnsigned(std::string_view value, std::uint64_t& output) {
+    if (value.empty() ||
+        !std::all_of(value.begin(), value.end(),
+                     [](char character) { return character >= '0' && character <= '9'; }))
+        return false;
+    try {
+        output = std::stoull(std::string(value));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+SequenceState readSequenceState(const fs::path& dataRoot, std::string_view channel) {
     std::string text;
     if (!readUtf8(repositorySequencePath(dataRoot, channel), text))
-        return 0;
-    // Simple line format: max_release_sequence=N
-    constexpr std::string_view marker = "max_release_sequence=";
-    const auto position = text.find(marker);
-    if (position == std::string::npos)
-        return 0;
+        return {};
     std::uint64_t maximum = 0;
-    try {
-        maximum = std::stoull(text.substr(position + marker.size()));
-    } catch (...) {
-        return 0;
+    const auto format = lineValue(text, "format_version");
+    const auto storedChannel = lineValue(text, "channel");
+    const auto storedMaximum = lineValue(text, "max_release_sequence");
+    if (!format || *format != "1" || !storedChannel || *storedChannel != channel ||
+        !storedMaximum || !parseUnsigned(*storedMaximum, maximum)) {
+        return {.present = true, .valid = false, .maximum = 0};
     }
-    return maximum;
+    return {.present = true, .valid = true, .maximum = maximum};
+}
+
+std::uint64_t readMaxSequence(const fs::path& dataRoot, std::string_view channel,
+                              bool sequenceStateExpected) {
+    const auto state = readSequenceState(dataRoot, channel);
+    if (state.valid)
+        return state.maximum;
+    if (state.present)
+        throw fcitx::package::PackageError(
+            "sequence_state_corrupt",
+            "repository anti-rollback sequence state is corrupt; run explicit repair/reset");
+    if (sequenceStateExpected)
+        throw fcitx::package::PackageError(
+            "sequence_state_missing",
+            "repository anti-rollback sequence state is missing; run explicit repair/reset");
+    return 0;
 }
 
 void writeMaxSequence(const fs::path& dataRoot, std::string_view channel,
                       std::uint64_t maximum) {
     const auto path = repositorySequencePath(dataRoot, channel);
+    const auto incoming = fs::path(path.wstring() + L".new");
     std::error_code ignored;
     fs::create_directories(path.parent_path(), ignored);
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    fs::remove(incoming, ignored);
+    std::ofstream output(incoming, std::ios::binary | std::ios::trunc);
     output << "format_version=1\n"
            << "channel=" << channel << '\n'
            << "max_release_sequence=" << maximum << '\n';
+    output.close();
+    if (!output || !MoveFileExW(incoming.c_str(), path.c_str(),
+                                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        fs::remove(incoming, ignored);
+        throw fcitx::package::PackageError(
+            "io_error", "repository sequence state publication failed");
+    }
 }
 
 std::uint64_t indexMaxSequence(const fcitx::package::RepositoryIndex& repository) {
@@ -310,7 +321,7 @@ fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
     // Defense in depth: the cached index itself must not be an older
     // sequence than what was previously accepted, even if the cache file was
     // replaced outside the refresh path.
-    if (indexMaxSequence(repository) < readMaxSequence(dataRoot, repository.channel))
+    if (indexMaxSequence(repository) < readMaxSequence(dataRoot, repository.channel, true))
         throw fcitx::package::PackageError(
             "rollback_rejected",
             "cached repository index is older than the accepted release sequence");
@@ -348,7 +359,10 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
     // who published it, not that it is the latest; the sequence check keeps
     // a stale-but-valid index from being treated as an update.
     const auto maximum = indexMaxSequence(repository);
-    const auto accepted = readMaxSequence(dataRoot, repository.channel);
+    const auto accepted = readMaxSequence(
+        dataRoot, repository.channel,
+        fs::exists(files.index) ||
+            readSequenceState(dataRoot, repository.channel).present);
     if (maximum < accepted)
         throw fcitx::package::PackageError("rollback_rejected",
                                            "repository index is older than the accepted "
@@ -466,8 +480,10 @@ bool runEngineManagement(const std::vector<std::wstring>& arguments, std::string
     if (launcherReachable &&
         !launcherCommand(fcitx::windows::protocol::LauncherCommand::userStop, response))
         return false;
-    const bool commandOk =
-        runProcessCapture(executableDirectory() / L"fcitx5-engine.exe", arguments, output);
+    std::wstring wideOutput;
+    const bool commandOk = fcitx::windows::config::runExecutable(
+        executableDirectory() / L"fcitx5-engine.exe", arguments, wideOutput);
+    output = narrow(wideOutput);
     bool restoreOk = true;
     if (launcherReachable) {
         restoreOk = launcherCommand(fcitx::windows::protocol::LauncherCommand::resume, response) &&
@@ -720,7 +736,8 @@ void usage() {
                   L"--reset-config|--get-startup|--set-startup enabled|disabled|"
                   L"--get-presentation|"
                   L"--get-input-methods|--set-input-method ID|--shutdown|"
-                  L"--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT|"
+                  L"--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT "
+                  L"[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP]|"
                   L"--packages-list|--packages-refresh [HTTPS_BASE]|"
                   L"--packages-install ID|--packages-update ID|"
                   L"--packages-state ID enabled|disabled|--packages-remove ID|"
@@ -880,6 +897,8 @@ int wmain(int argc, wchar_t** argv) {
         const std::string theme = config.theme.value_or("builtin:default");
         const bool scrollMode = config.scrollMode.value_or(false);
         const int pageSize = config.candidatePageSize.value_or(5);
+        const double maxWidth = config.maxWidth.value_or(860.0);
+        const double scrollCellWidth = config.scrollCellWidth.value_or(96.0);
         const std::string font =
             config.candidateFont.families && !config.candidateFont.families->empty()
                 ? config.candidateFont.families->front()
@@ -889,10 +908,15 @@ int wmain(int argc, wchar_t** argv) {
                   << ",\"orientation\":" << jsonString(orientation)
                   << ",\"candidate_font\":" << jsonString(font)
                   << ",\"candidate_page_size\":" << jsonString(std::to_string(pageSize))
+                  << ",\"candidate_max_width_dip\":"
+                  << jsonString(std::to_string(static_cast<int>(maxWidth)))
+                  << ",\"candidate_scroll_cell_width_dip\":"
+                  << jsonString(std::to_string(static_cast<int>(scrollCellWidth)))
                   << ",\"scroll_mode\":" << (scrollMode ? "true" : "false") << "}\n";
         return 0;
     }
-    if (arguments.size() == 7 && arguments[0] == L"--set-presentation") {
+    if ((arguments.size() == 7 || arguments.size() == 9) &&
+        arguments[0] == L"--set-presentation") {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string source = fcitx::windows::config::defaultConfigToml();
         if (fs::exists(configPath) && !readUtf8(configPath, source))
@@ -902,7 +926,8 @@ int wmain(int argc, wchar_t** argv) {
         if (!fcitx::windows::config::updatePresentationToml(
                 source, narrow(arguments[1]), narrow(arguments[2]), narrow(arguments[3]),
                 narrow(arguments[4]), narrow(arguments[5]), narrow(arguments[6]), updated,
-                error)) {
+                error, arguments.size() == 9 ? narrow(arguments[7]) : std::string{},
+                arguments.size() == 9 ? narrow(arguments[8]) : std::string{})) {
             std::cerr << "invalid presentation at " << error.line << ':' << error.column << ": "
                       << error.message << '\n';
             return 3;

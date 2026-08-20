@@ -202,5 +202,30 @@ int main() {
         std::cerr << "path identity comparison failed\n";
         return 1;
     }
+    const auto identityRoot =
+        std::filesystem::temp_directory_path() /
+        (L"fcitx5-peer-identity-" + std::to_wstring(GetCurrentProcessId()));
+    std::filesystem::remove_all(identityRoot, cleanupError);
+    std::filesystem::create_directories(identityRoot);
+    const auto original = identityRoot / L"peer.exe";
+    const auto hardlink = identityRoot / L"peer-hardlink.exe";
+    const auto copy = identityRoot / L"peer-copy.exe";
+    {
+        std::ofstream output(original, std::ios::binary);
+        output << "peer identity fixture\n";
+    }
+    std::filesystem::copy_file(original, copy);
+    if (!CreateHardLinkW(hardlink.c_str(), original.c_str(), nullptr)) {
+        std::filesystem::remove_all(identityRoot, cleanupError);
+        std::cerr << "hardlink fixture creation failed\n";
+        return 1;
+    }
+    if (!pathsReferToSameFile(original.wstring(), hardlink.wstring()) ||
+        pathsReferToSameFile(original.wstring(), copy.wstring())) {
+        std::filesystem::remove_all(identityRoot, cleanupError);
+        std::cerr << "REG-PEER-ID-001 handle file identity comparison failed\n";
+        return 1;
+    }
+    std::filesystem::remove_all(identityRoot, cleanupError);
     return 0;
 }

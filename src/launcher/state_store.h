@@ -20,7 +20,9 @@ public:
     explicit StateStore(std::wstring path) : path_(std::move(path)) {}
 
     [[nodiscard]] LoadStateResult load(LauncherState& state) const noexcept;
+    [[nodiscard]] LoadStateResult load(LauncherSnapshot& snapshot) const noexcept;
     [[nodiscard]] bool save(LauncherState state) const noexcept;
+    [[nodiscard]] bool save(LauncherSnapshot snapshot) const noexcept;
     [[nodiscard]] const std::wstring& path() const noexcept { return path_; }
 
 private:

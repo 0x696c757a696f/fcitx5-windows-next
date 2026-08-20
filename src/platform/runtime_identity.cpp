@@ -21,13 +21,16 @@ class Handle final {
   public:
     explicit Handle(HANDLE value = nullptr) noexcept : value_(value) {}
     ~Handle() {
-        if (value_)
+        if (valid())
             CloseHandle(value_);
     }
     Handle(const Handle&) = delete;
     Handle& operator=(const Handle&) = delete;
     [[nodiscard]] HANDLE get() const noexcept { return value_; }
-    [[nodiscard]] explicit operator bool() const noexcept { return value_ != nullptr; }
+    [[nodiscard]] bool valid() const noexcept {
+        return value_ != nullptr && value_ != INVALID_HANDLE_VALUE;
+    }
+    [[nodiscard]] explicit operator bool() const noexcept { return valid(); }
 
   private:
     HANDLE value_;
@@ -225,20 +228,30 @@ std::wstring runtimeGenerationForRuntimeModule(const std::filesystem::path& modu
     return validGeneration(generation) ? generation : std::wstring{};
 }
 
-std::wstring normalized(std::wstring_view input) {
-    if (input.empty() || input.size() >= 32768)
-        return {};
-    std::wstring source(input);
-    std::wstring output(32768, L'\0');
-    const DWORD length =
-        GetFullPathNameW(source.c_str(), static_cast<DWORD>(output.size()), output.data(), nullptr);
-    if (length == 0 || length >= output.size())
-        return {};
-    output.resize(length);
-    while (output.size() > 3 && (output.back() == L'\\' || output.back() == L'/')) {
-        output.pop_back();
-    }
-    return output;
+struct FileIdentity {
+    DWORD volumeSerialNumber{};
+    DWORD fileIndexHigh{};
+    DWORD fileIndexLow{};
+};
+
+bool queryFileIdentity(std::wstring_view path, FileIdentity& identity) {
+    identity = {};
+    if (path.empty() || path.size() >= 32768)
+        return false;
+    const std::wstring source(path);
+    Handle file(CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                            OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    if (!file)
+        return false;
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!GetFileInformationByHandle(file.get(), &information))
+        return false;
+    identity.volumeSerialNumber = information.dwVolumeSerialNumber;
+    identity.fileIndexHigh = information.nFileIndexHigh;
+    identity.fileIndexLow = information.nFileIndexLow;
+    return true;
 }
 
 } // namespace
@@ -413,12 +426,12 @@ std::wstring makeLocalObjectName(const RuntimeIdentity& identity,
 
 bool pathsReferToSameFile(std::wstring_view left, std::wstring_view right) noexcept {
     try {
-        const std::wstring normalizedLeft = normalized(left);
-        const std::wstring normalizedRight = normalized(right);
-        return !normalizedLeft.empty() && !normalizedRight.empty() &&
-               CompareStringOrdinal(normalizedLeft.c_str(), static_cast<int>(normalizedLeft.size()),
-                                    normalizedRight.c_str(),
-                                    static_cast<int>(normalizedRight.size()), TRUE) == CSTR_EQUAL;
+        FileIdentity leftIdentity;
+        FileIdentity rightIdentity;
+        return queryFileIdentity(left, leftIdentity) && queryFileIdentity(right, rightIdentity) &&
+               leftIdentity.volumeSerialNumber == rightIdentity.volumeSerialNumber &&
+               leftIdentity.fileIndexHigh == rightIdentity.fileIndexHigh &&
+               leftIdentity.fileIndexLow == rightIdentity.fileIndexLow;
     } catch (...) {
         return false;
     }

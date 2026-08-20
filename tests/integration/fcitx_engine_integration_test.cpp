@@ -771,7 +771,7 @@ int wmain(int argc, wchar_t** argv) {
         const std::filesystem::path stderrPath =
             std::filesystem::temp_directory_path() /
             (L"fcitx5-engine-late-" + std::to_wstring(GetCurrentProcessId()) + L".log");
-        SetEnvironmentVariableW(L"FCITX5_TEST_DISPATCH_DELAY_MS", L"800");
+        SetEnvironmentVariableW(L"FCITX5_TEST_DISPATCH_DELAY_MS", L"3200");
         Process late;
         const bool lateStarted =
             startEngine(argv[1], 3, safeMode, 0U, late, stderrPath.c_str());
@@ -783,8 +783,9 @@ int wmain(int argc, wchar_t** argv) {
         fcitx::windows::ipc::PipeClient lateClient(
             fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
             fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
-        // The first dispatcher task sleeps 800 ms while the client deadline is
-        // 100 ms, so this request must time out at the client.
+        // The first dispatcher task sleeps longer than the widened first-context
+        // deadline, so even a cold-context request must time out at the client
+        // and be dropped before touching Fcitx state.
         const std::uint64_t lateContextId = 0x4C4154454B4559ULL;
         const bool lateFirst = lateClient.processKey(lateContextId, 'N', 0, result);
         if (lateFirst) {
@@ -793,7 +794,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         // Give the stalled task time to reach its deadline check and be
         // dropped, then verify the engine still serves keys normally.
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(3500));
         const bool lateSecond = lateClient.processKey(lateContextId, 'N', 0, result);
         if (!lateSecond || !result.handled || result.preedit != L"n") {
             std::wcerr << L"engine unhealthy after dropped late key: ipc=" << lateSecond
