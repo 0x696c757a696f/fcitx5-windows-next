@@ -286,6 +286,7 @@ constexpr int kCornerRadius = 123;
 constexpr int kShadow = 124;
 constexpr int kThemeLibrary = 125;
 constexpr int kThemeDetail = 126;
+constexpr int kPackageDetail = 127;
 constexpr int kNavGeneral = 130;
 constexpr int kNavAppearance = 131;
 constexpr int kNavTheme = 132;
@@ -483,6 +484,30 @@ std::wstring themeListLabel(const ThemeRow& theme, const Strings& strings) {
     if (!theme.version.empty())
         label += L"  " + theme.version;
     return label;
+}
+
+std::wstring jsonStringOrNull(const nlohmann::json& object, const char* key) {
+    return object.contains(key) && !object.at(key).is_null()
+               ? widen(object.at(key).get<std::string>())
+               : std::wstring{};
+}
+
+std::wstring jsonArraySummary(const nlohmann::json& array, std::wstring_view empty) {
+    if (!array.is_array() || array.empty())
+        return std::wstring(empty);
+    std::wstring output;
+    for (const auto& item : array) {
+        if (!output.empty())
+            output += L", ";
+        if (item.is_string()) {
+            output += widen(item.get<std::string>());
+        } else if (item.is_object() && item.contains("id") && item.at("id").is_string()) {
+            output += widen(item.at("id").get<std::string>());
+            if (item.contains("version") && item.at("version").is_string())
+                output += L" " + widen(item.at("version").get<std::string>());
+        }
+    }
+    return output.empty() ? std::wstring(empty) : output;
 }
 
 class ConfigWindow final : public CWindowImpl<ConfigWindow> {
@@ -917,6 +942,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const int packageListHeight = (std::max)(220, logicalHeight - 300);
         const int packageButtonY = (std::max)(488, logicalHeight - 162);
         const int packageStatusY = (std::max)(542, logicalHeight - 108);
+        const int packageListWidth = (std::max)(300, contentWidth / 2 - 18);
+        const int packageDetailX = 250 + packageListWidth + 18;
 
         moveControl(kPageTitle, 238, 26, contentWidth, 38);
         moveControl(kStartup, 250, 104, (std::min)(contentWidth, 520), 32);
@@ -953,7 +980,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         moveControl(kDiagnostics, 436, 106, 170, 36);
         moveControl(kRepair, 250, 106, 170, 36);
         moveControl(kPackagesTitle, 250, 88, 300, 28);
-        moveControl(kPackages, 250, 122, contentWidth, packageListHeight);
+        moveControl(kPackages, 250, 122, packageListWidth, packageListHeight);
+        moveControl(kPackageDetail, packageDetailX, 122, (std::max)(260, contentWidth - packageListWidth - 18),
+                    packageListHeight);
         moveControl(kPackageRefresh, 250, packageButtonY, 150, 34);
         moveControl(kPackageInstall, 414, packageButtonY, 160, 34);
         moveControl(kPackageToggle, 588, packageButtonY, 160, 34);
@@ -1071,6 +1100,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         add(L"STATIC", get("packages.title"), 0, 250, 88, 300, 28, kPackagesTitle);
         add(L"LISTBOX", L"", WS_BORDER | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY, 250, 122, 700, 350,
             kPackages);
+        add(L"EDIT", L"", WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL, 570, 122, 380,
+            350, kPackageDetail);
         add(L"BUTTON", get("packages.refresh"), WS_TABSTOP, 250, 488, 150, 34, kPackageRefresh);
         add(L"BUTTON", get("packages.install_update"), WS_TABSTOP, 414, 488, 160, 34,
             kPackageInstall);
@@ -1125,7 +1156,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                              kCornerRadius,    kCornerRadiusLabel, kShadow,
                              kPreview,         kRestart,
                              kDiagnostics,     kRepair,         kStatus,           kPackages,
-                             kPackageRefresh,  kPackageInstall, kPackageToggle,    kPackageRemove,
+                             kPackageDetail,   kPackageRefresh, kPackageInstall, kPackageToggle,    kPackageRemove,
                              kPackagesTitle,   kSaveStatus})
             show(id, false);
         const bool general = page == kNavGeneral;
@@ -1151,8 +1182,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             show(id, diagnostics);
         for (const int id : {kRepair})
             show(id, repair);
-        for (const int id : {kPackages, kPackageRefresh, kPackageInstall, kPackageToggle,
-                             kPackageRemove, kPackagesTitle})
+        for (const int id : {kPackages, kPackageDetail, kPackageRefresh, kPackageInstall,
+                             kPackageToggle, kPackageRemove, kPackagesTitle})
             show(id, packages);
         show(kStatus, diagnostics || repair || packages);
         setSaveStatus(dirty ? get("status.unsaved") : L"");
@@ -1439,10 +1470,83 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         if (!packages_.empty())
             SendMessageW(control(kPackages), LB_SETCURSEL, 0, 0);
         updatePackageActions();
+        updatePackageDetail();
         if (!refreshed)
             setStatus(get("packages.online_error"));
         else if (!repositoryAvailable_)
             setStatus(get("packages.online_unavailable"));
+    }
+
+    void updatePackageDetail() {
+        const int selected = selectedPackage();
+        if (selected < 0) {
+            ::SetWindowTextW(control(kPackageDetail), L"");
+            return;
+        }
+        const auto& package = packages_[static_cast<std::size_t>(selected)];
+        std::wstring detail = L"ID: " + package.id + L"\r\n";
+        detail += localeValue(strings_, "packages.detail.type", L"Type") + L": " +
+                  packageTypeLabel(package, strings_) + L"\r\n";
+        if (!package.summary.empty())
+            detail += L"\r\n" + package.summary + L"\r\n";
+        std::wstring output;
+        if (!runControl({L"--packages-detail", package.id}, output)) {
+            detail += L"\r\n" + localeValue(strings_, "packages.detail_limited",
+                                             L"Detailed package metadata is unavailable.");
+            ::SetWindowTextW(control(kPackageDetail), detail.c_str());
+            return;
+        }
+        try {
+            const auto document = nlohmann::json::parse(narrow(output));
+            const auto available = jsonStringOrNull(document, "available_version");
+            const auto installed = jsonStringOrNull(document, "installed_version");
+            const auto state = jsonStringOrNull(document, "state");
+            const auto manifest = jsonStringOrNull(document, "manifest_sha256");
+            const auto sourceCommit = jsonStringOrNull(document, "source_commit");
+            detail += L"\r\n" + localeValue(strings_, "packages.detail.repository", L"Repository") +
+                      L": ";
+            detail += document.at("repository_available").get<bool>()
+                          ? localeValue(strings_, "packages.detail.available", L"available")
+                          : localeValue(strings_, "packages.detail.unavailable", L"unavailable");
+            if (!available.empty())
+                detail += L"\r\n" + localeValue(strings_, "packages.detail.available_version",
+                                                 L"Available") +
+                          L": " + available;
+            if (!installed.empty())
+                detail += L"\r\n" + localeValue(strings_, "packages.detail.installed_version",
+                                                 L"Installed") +
+                          L": " + installed;
+            if (!state.empty())
+                detail += L"\r\n" + localeValue(strings_, "packages.detail.state", L"State") +
+                          L": " + state;
+            detail += L"\r\n" + localeValue(strings_, "packages.detail.permissions",
+                                             L"Permissions") +
+                      L": " +
+                      jsonArraySummary(document.at("permissions"),
+                                       localeValue(strings_, "packages.detail.none", L"none"));
+            detail += L"\r\n" + localeValue(strings_, "packages.detail.dependencies",
+                                             L"Dependencies") +
+                      L": " +
+                      jsonArraySummary(document.at("dependencies"),
+                                       localeValue(strings_, "packages.detail.none", L"none"));
+            detail += L"\r\n" + localeValue(strings_, "packages.detail.config_surface",
+                                             L"Config surface") +
+                      L": " +
+                      jsonArraySummary(document.at("config_surface"),
+                                       localeValue(strings_, "packages.detail.none", L"none"));
+            if (!sourceCommit.empty())
+                detail += L"\r\n" + localeValue(strings_, "packages.detail.source_commit",
+                                                 L"Source commit") +
+                          L": " + sourceCommit;
+            if (!manifest.empty())
+                detail += L"\r\n" + localeValue(strings_, "packages.detail.manifest",
+                                                 L"Manifest SHA-256") +
+                          L": " + manifest;
+        } catch (const nlohmann::json::exception&) {
+            detail += L"\r\n" + localeValue(strings_, "packages.detail_limited",
+                                             L"Detailed package metadata is unavailable.");
+        }
+        ::SetWindowTextW(control(kPackageDetail), detail.c_str());
     }
 
     void updatePackageActions() {
@@ -1747,6 +1851,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     }
     LRESULT onPackageSelection(WORD, WORD, HWND, BOOL&) {
         updatePackageActions();
+        updatePackageDetail();
         return 0;
     }
     LRESULT onThemeSelection(WORD, WORD, HWND, BOOL&) {
