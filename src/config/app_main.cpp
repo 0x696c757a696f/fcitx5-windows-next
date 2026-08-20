@@ -284,6 +284,8 @@ constexpr int kScrollCellWidth = 121;
 constexpr int kFontSize = 122;
 constexpr int kCornerRadius = 123;
 constexpr int kShadow = 124;
+constexpr int kThemeLibrary = 125;
+constexpr int kThemeDetail = 126;
 constexpr int kNavGeneral = 130;
 constexpr int kNavAppearance = 131;
 constexpr int kNavTheme = 132;
@@ -303,6 +305,7 @@ constexpr int kMaxWidthLabel = 208;
 constexpr int kScrollCellWidthLabel = 209;
 constexpr int kFontSizeLabel = 210;
 constexpr int kCornerRadiusLabel = 211;
+constexpr int kThemeLibraryLabel = 212;
 
 // Transient notices ("保存成功" / 命令错误 / 重启完成 / 修复已开始) are
 // cleared automatically a few seconds after they appear.
@@ -325,6 +328,15 @@ struct InputMethodRow {
     std::wstring name;
     std::wstring nativeName;
     bool selected{};
+};
+
+struct ThemeRow {
+    std::wstring id;
+    std::wstring source;
+    std::wstring name;
+    std::wstring version;
+    std::wstring license;
+    std::wstring description;
 };
 
 bool parseInputMethods(std::wstring_view output, std::vector<InputMethodRow>& rows) {
@@ -391,6 +403,33 @@ bool parsePackages(std::wstring_view output, std::vector<PackageRow>& rows,
     }
 }
 
+bool parseThemes(std::wstring_view output, std::vector<ThemeRow>& rows) {
+    try {
+        const auto document = nlohmann::json::parse(narrow(output));
+        if (!document.is_object() || document.size() != 2U || document.at("format_version") != 1 ||
+            !document.at("themes").is_array() || document.at("themes").size() > 1024U)
+            return false;
+        rows.clear();
+        for (const auto& item : document.at("themes")) {
+            if (!item.is_object() || item.size() != 6U)
+                return false;
+            ThemeRow row;
+            row.id = widen(item.at("id").get<std::string>());
+            row.source = widen(item.at("source").get<std::string>());
+            row.name = widen(item.at("name").get<std::string>());
+            row.version = widen(item.at("version").get<std::string>());
+            row.license = widen(item.at("license").get<std::string>());
+            row.description = widen(item.at("description").get<std::string>());
+            if (row.id.empty() || row.source.empty() || row.name.empty())
+                return false;
+            rows.push_back(std::move(row));
+        }
+        return true;
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+}
+
 std::wstring localeValue(const Strings& strings, const char* key,
                          std::wstring_view fallback = {}) {
     const auto iterator = strings.find(key);
@@ -426,6 +465,23 @@ std::wstring packageListLabel(const PackageRow& package, const Strings& strings)
         label += L"  " + localeValue(strings, "packages.disabled", L"(disabled)");
     if (package.state == L"bundled")
         label += L"  " + localeValue(strings, "packages.bundled", L"(bundled)");
+    return label;
+}
+
+std::wstring themeSourceLabel(const ThemeRow& theme, const Strings& strings) {
+    if (theme.source == L"builtin")
+        return localeValue(strings, "theme.source.builtin", L"Built-in");
+    if (theme.source == L"user")
+        return localeValue(strings, "theme.source.user", L"User");
+    if (theme.source == L"package")
+        return localeValue(strings, "theme.source.package", L"Package");
+    return theme.source;
+}
+
+std::wstring themeListLabel(const ThemeRow& theme, const Strings& strings) {
+    std::wstring label = L"[" + themeSourceLabel(theme, strings) + L"] " + theme.name;
+    if (!theme.version.empty())
+        label += L"  " + theme.version;
     return label;
 }
 
@@ -599,6 +655,19 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             if (!notify(kTheme, CBN_SELCHANGE))
                 return false;
         }
+        const LRESULT themeLibraryCount = SendMessageW(control(kThemeLibrary), LB_GETCOUNT, 0, 0);
+        if (themeLibraryCount <= 0)
+            return false;
+        for (LRESULT index = 0; index < themeLibraryCount; ++index) {
+            SendMessageW(control(kThemeLibrary), LB_SETCURSEL, index, 0);
+            if (!notify(kThemeLibrary, LBN_SELCHANGE))
+                return false;
+        }
+        std::array<wchar_t, 512> themeDetail{};
+        ::GetWindowTextW(control(kThemeDetail), themeDetail.data(),
+                         static_cast<int>(themeDetail.size()));
+        if (std::wstring_view(themeDetail.data()).find(L"ID:") == std::wstring::npos)
+            return false;
         for (const wchar_t* font : {L"", L"Microsoft YaHei", L"思源黑体"}) {
             ::SetWindowTextW(control(kFont), font);
             if (!notify(kFont, EN_KILLFOCUS))
@@ -693,10 +762,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     COMMAND_ID_HANDLER(kPackageRemove, onPackageRemove)
     COMMAND_ID_HANDLER(kPackageToggle, onPackageToggle)
     COMMAND_HANDLER(kPackages, LBN_SELCHANGE, onPackageSelection)
+    COMMAND_HANDLER(kThemeLibrary, LBN_SELCHANGE, onThemeLibrarySelection)
     COMMAND_HANDLER(kInputMethod, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kStartup, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kAppearance, CBN_SELCHANGE, onDirty)
-    COMMAND_HANDLER(kTheme, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kTheme, CBN_SELCHANGE, onThemeSelection)
     COMMAND_HANDLER(kPageSize, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kMaxWidth, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kScrollCellWidth, CBN_SELCHANGE, onDirty)
@@ -739,6 +809,12 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         SendMessageW(combo, CB_GETLBTEXT, static_cast<WPARAM>(selected),
                      reinterpret_cast<LPARAM>(text.data()));
         return std::wstring(text.data());
+    }
+    [[nodiscard]] std::wstring selectedThemeId() const {
+        const LRESULT selected = SendMessageW(control(kTheme), CB_GETCURSEL, 0, 0);
+        return selected == CB_ERR || static_cast<std::size_t>(selected) >= themes_.size()
+                   ? L"builtin:default"
+                   : themes_[static_cast<std::size_t>(selected)].id;
     }
     void selectComboText(int id, std::wstring_view value) const {
         const HWND combo = control(id);
@@ -850,8 +926,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         moveControl(kAppearance, 420, 100, (std::min)(contentWidth - 170, 380), 150);
         moveControl(kThemeLabel, 250, 106, 150, 24);
         moveControl(kTheme, 420, 100, (std::min)(contentWidth - 170, 380), 150);
-        moveControl(kFontLabel, 250, 162, 150, 24);
-        moveControl(kFont, 420, 156, (std::min)(contentWidth - 170, 380), 30);
+        moveControl(kFontLabel, 250, 148, 150, 24);
+        moveControl(kFont, 420, 142, (std::min)(contentWidth - 170, 380), 30);
+        moveControl(kThemeLibraryLabel, 250, 196, 220, 24);
+        moveControl(kThemeLibrary, 250, 224, (std::min)(300, contentWidth / 2 - 20), 210);
+        moveControl(kThemeDetail, 570, 224, (std::max)(260, contentWidth - 320), 210);
         moveControl(kLayoutLabel, 250, 162, 150, 24);
         moveControl(kVertical, 420, 156, 120, 28);
         moveControl(kHorizontal, 550, 156, 140, 28);
@@ -923,9 +1002,14 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         SendMessageW(control(kTheme), CB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(get("theme.default")));
         SendMessageW(control(kTheme), CB_SETCURSEL, 0, 0);
-        add(L"STATIC", get("font.label"), 0, 250, 162, 150, 24, kFontLabel);
-        add(L"EDIT", L"Microsoft YaHei", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 420, 156, 330, 30,
+        add(L"STATIC", get("font.label"), 0, 250, 148, 150, 24, kFontLabel);
+        add(L"EDIT", L"Microsoft YaHei", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 420, 142, 330, 30,
             kFont);
+        add(L"STATIC", get("theme.library"), 0, 250, 196, 220, 24, kThemeLibraryLabel);
+        add(L"LISTBOX", L"", WS_BORDER | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY, 250, 224, 300,
+            210, kThemeLibrary);
+        add(L"EDIT", L"", WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL, 570, 224, 380,
+            210, kThemeDetail);
         add(L"STATIC", get("candidate.layout"), 0, 250, 162, 150, 24, kLayoutLabel);
         add(L"BUTTON", get("candidate.vertical"), BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 420,
             156, 120, 28, kVertical);
@@ -1033,7 +1117,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         };
         for (const int id : {kStartup,         kInputMethod,    kInputMethodLabel, kAppearance,
                              kAppearanceLabel, kTheme,          kThemeLabel,       kFont,
-                             kFontLabel,       kVertical,       kHorizontal,       kLayoutLabel,
+                             kFontLabel,       kThemeLibrary,   kThemeLibraryLabel, kThemeDetail,
+                             kVertical,       kHorizontal,       kLayoutLabel,
                              kScrollMode,      kPageSize,       kPageSizeLabel,    kApply,
                              kMaxWidth,        kMaxWidthLabel,  kScrollCellWidth,
                              kScrollCellWidthLabel, kFontSize,  kFontSizeLabel,
@@ -1056,7 +1141,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                              kScrollCellWidth, kScrollCellWidthLabel, kFontSize, kFontSizeLabel,
                              kCornerRadius, kCornerRadiusLabel, kShadow})
             show(id, appearance);
-        for (const int id : {kTheme, kThemeLabel, kFont, kFontLabel, kPreview})
+        for (const int id : {kTheme, kThemeLabel, kFont, kFontLabel, kThemeLibrary,
+                             kThemeLibraryLabel, kThemeDetail, kPreview})
             show(id, theme);
         show(kApply, general || appearance || theme);
         show(kSaveStatus, general || appearance || theme);
@@ -1084,6 +1170,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     void loadState() {
         std::wstring output;
         Strings presentation;
+        std::wstring selectedTheme = L"builtin:default";
         if (runControl({L"--get-presentation"}, output) &&
             parseFlatJson(narrow(output), presentation)) {
             const auto mode = presentation.find("appearance_mode");
@@ -1098,6 +1185,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             const auto candidateFont = presentation.find("candidate_font");
             if (candidateFont != presentation.end())
                 ::SetWindowTextW(control(kFont), candidateFont->second.c_str());
+            const auto theme = presentation.find("theme");
+            if (theme != presentation.end() && !theme->second.empty())
+                selectedTheme = theme->second;
             const auto scrollMode = presentation.find("scroll_mode");
             if (scrollMode != presentation.end())
                 SendMessageW(control(kScrollMode), BM_SETCHECK,
@@ -1124,6 +1214,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 SendMessageW(control(kShadow), BM_SETCHECK,
                              shadow->second == L"true" ? BST_CHECKED : BST_UNCHECKED, 0);
         }
+        refreshThemes(selectedTheme);
         if (runControl({L"--get-startup"}, output))
             SendMessageW(control(kStartup), BM_SETCHECK,
                          output.find(L"\"enabled\":true") != std::wstring::npos ? BST_CHECKED
@@ -1181,6 +1272,97 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         ::SetWindowTextW(control(kStatus),
                          runControl({L"--status"}, output) ? output.c_str() : get("error.command"));
     }
+    void selectThemeById(std::wstring_view id) {
+        if (themes_.empty())
+            return;
+        int selected = 0;
+        for (std::size_t index = 0; index < themes_.size(); ++index) {
+            if (themes_[index].id == id) {
+                selected = static_cast<int>(index);
+                break;
+            }
+        }
+        SendMessageW(control(kTheme), CB_SETCURSEL, selected, 0);
+        SendMessageW(control(kThemeLibrary), LB_SETCURSEL, selected, 0);
+        updateThemeDetail();
+    }
+    std::wstring basicThemeDetail(const ThemeRow& theme) const {
+        std::wstring detail = L"ID: " + theme.id + L"\r\n";
+        detail += localeValue(strings_, "theme.detail.source", L"Source") + L": " +
+                  themeSourceLabel(theme, strings_) + L"\r\n";
+        if (!theme.version.empty())
+            detail += localeValue(strings_, "theme.detail.version", L"Version") + L": " +
+                      theme.version + L"\r\n";
+        if (!theme.license.empty())
+            detail += localeValue(strings_, "theme.detail.license", L"License") + L": " +
+                      theme.license + L"\r\n";
+        if (!theme.description.empty())
+            detail += L"\r\n" + theme.description + L"\r\n";
+        return detail;
+    }
+    void updateThemeDetail() {
+        const LRESULT selected = SendMessageW(control(kThemeLibrary), LB_GETCURSEL, 0, 0);
+        if (selected == LB_ERR || static_cast<std::size_t>(selected) >= themes_.size()) {
+            ::SetWindowTextW(control(kThemeDetail), L"");
+            return;
+        }
+        const auto& theme = themes_[static_cast<std::size_t>(selected)];
+        std::wstring detail = basicThemeDetail(theme);
+        std::wstring output;
+        if (runControl({L"--themes-detail", theme.id}, output)) {
+            try {
+                const auto document = nlohmann::json::parse(narrow(output));
+                const bool light = document.at("has_light_branch").get<bool>();
+                const bool dark = document.at("has_dark_branch").get<bool>();
+                const auto editableFields = document.at("editable_fields").size();
+                const auto& security = document.at("security");
+                detail += L"\r\n" + localeValue(strings_, "theme.detail.branches", L"Branches") +
+                          L": ";
+                detail += light ? localeValue(strings_, "theme.detail.light", L"light")
+                                : localeValue(strings_, "theme.detail.no_light", L"no light");
+                detail += L", ";
+                detail += dark ? localeValue(strings_, "theme.detail.dark", L"dark")
+                               : localeValue(strings_, "theme.detail.no_dark", L"no dark");
+                detail += L"\r\n" +
+                          localeValue(strings_, "theme.detail.editable_fields",
+                                      L"Editable fields") +
+                          L": " + std::to_wstring(editableFields);
+                detail += L"\r\n" + localeValue(strings_, "theme.detail.security", L"Security") +
+                          L": ";
+                detail += security.at("script_allowed").get<bool>() ? L"script" : L"no script";
+                detail += L", ";
+                detail += security.at("network_allowed").get<bool>() ? L"network" : L"no network";
+                detail += L", ";
+                detail += widen(security.at("path_scope").get<std::string>());
+            } catch (const nlohmann::json::exception&) {
+                detail += L"\r\n" + localeValue(strings_, "theme.detail_limited",
+                                                 L"Detailed theme metadata is unavailable.");
+            }
+        } else {
+            detail += L"\r\n" + localeValue(strings_, "theme.detail_limited",
+                                             L"Detailed theme metadata is unavailable.");
+        }
+        ::SetWindowTextW(control(kThemeDetail), detail.c_str());
+    }
+    void refreshThemes(std::wstring_view selectedTheme) {
+        std::wstring output;
+        std::vector<ThemeRow> rows;
+        if (!runControl({L"--themes-list"}, output) || !parseThemes(output, rows) ||
+            rows.empty()) {
+            rows = {{L"builtin:default", L"builtin", get("theme.default"), L"", L"", L""}};
+        }
+        themes_ = std::move(rows);
+        SendMessageW(control(kTheme), CB_RESETCONTENT, 0, 0);
+        SendMessageW(control(kThemeLibrary), LB_RESETCONTENT, 0, 0);
+        for (const auto& theme : themes_) {
+            const std::wstring label = themeListLabel(theme, strings_);
+            SendMessageW(control(kTheme), CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(label.c_str()));
+            SendMessageW(control(kThemeLibrary), LB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(label.c_str()));
+        }
+        selectThemeById(selectedTheme.empty() ? L"builtin:default" : selectedTheme);
+    }
     void restart() {
         std::wstring output;
         setStatus(runControl({L"--restart-engine"}, output) ? get("restart.done")
@@ -1211,7 +1393,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const bool ok =
             !font.empty() && !maxWidth.empty() && !scrollCellWidth.empty() &&
             !fontSize.empty() && !cornerRadius.empty() &&
-            runControl({L"--set-presentation", mode, L"builtin:default", orientation,
+            runControl({L"--set-presentation", mode, selectedThemeId(), orientation,
                         SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) == BST_CHECKED
                             ? L"enabled"
                             : L"disabled",
@@ -1567,6 +1749,25 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         updatePackageActions();
         return 0;
     }
+    LRESULT onThemeSelection(WORD, WORD, HWND, BOOL&) {
+        const LRESULT selected = SendMessageW(control(kTheme), CB_GETCURSEL, 0, 0);
+        if (selected != CB_ERR && static_cast<std::size_t>(selected) < themes_.size()) {
+            SendMessageW(control(kThemeLibrary), LB_SETCURSEL, selected, 0);
+            updateThemeDetail();
+        }
+        presentationDirty_ = true;
+        setSaveStatus(get("status.unsaved"));
+        return 0;
+    }
+    LRESULT onThemeLibrarySelection(WORD, WORD, HWND, BOOL&) {
+        const LRESULT selected = SendMessageW(control(kThemeLibrary), LB_GETCURSEL, 0, 0);
+        if (selected != LB_ERR && static_cast<std::size_t>(selected) < themes_.size())
+            SendMessageW(control(kTheme), CB_SETCURSEL, selected, 0);
+        updateThemeDetail();
+        presentationDirty_ = true;
+        setSaveStatus(get("status.unsaved"));
+        return 0;
+    }
     // Updating a STATIC control with SetWindowTextW only repaints the new
     // text's bounding box. When the new text is shorter than the previous one
     // (for example "设置已安全保存" -> "有未应用的更改"), the tail of the old
@@ -1634,6 +1835,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     HANDLE previewProcess_{};
     std::vector<PackageRow> packages_;
     std::vector<InputMethodRow> inputMethods_;
+    std::vector<ThemeRow> themes_;
     int selectedPage_{kNavGeneral};
     bool generalDirty_{};
     bool presentationDirty_{};
