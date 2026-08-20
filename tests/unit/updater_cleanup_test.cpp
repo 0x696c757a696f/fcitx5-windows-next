@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,17 @@ DWORD run_updater(const std::filesystem::path& updater,
   return exitCode;
 }
 
+void write_text(const std::filesystem::path& path, std::string_view text) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output << text;
+}
+
+std::string read_text(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(input), {}};
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -54,6 +66,72 @@ int wmain(int argc, wchar_t** argv) {
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
   std::filesystem::create_directories(root);
+
+  const auto registeredTsf = root / L"tsf" / L"x64" / L"fcitx5-tsf.dll";
+  const auto incomingTsf = root / L"staging" / L"fcitx5-tsf.dll";
+  write_text(registeredTsf, "old-tsf");
+  write_text(incomingTsf, "new-tsf");
+  const DWORD tsfInstall =
+      run_updater(updater, {L"--install-tsf-dll", registeredTsf.wstring(),
+                            incomingTsf.wstring(), L"00000042"});
+  if (tsfInstall != 0 || read_text(registeredTsf) != "new-tsf") {
+    std::cerr << "updater TSF DLL install failed (exit=" << tsfInstall << ")\n";
+    return 1;
+  }
+  const DWORD maliciousTsfInstall =
+      run_updater(updater, {L"--install-tsf-dll", root.wstring(), incomingTsf.wstring(),
+                            L"00000042"});
+  if (maliciousTsfInstall == 0) {
+    std::cerr << "updater accepted invalid TSF registered path\n";
+    return 1;
+  }
+  const auto staleOldTsf = root / L"tsf" / L"x64" / L"fcitx5-tsf.old.00000041.test.dll";
+  const auto unrelatedDll = root / L"tsf" / L"x64" / L"not-owned.dll";
+  write_text(staleOldTsf, "stale");
+  write_text(unrelatedDll, "keep");
+  const DWORD tsfCleanup =
+      run_updater(updater, {L"--cleanup-old-tsf-dlls", (root / L"tsf" / L"x64").wstring()});
+  if (tsfCleanup != 0 || std::filesystem::exists(staleOldTsf) ||
+      !std::filesystem::exists(unrelatedDll)) {
+    std::cerr << "updater old TSF cleanup failed (exit=" << tsfCleanup << ")\n";
+    return 1;
+  }
+  const DWORD missingGeneration =
+      run_updater(updater, {L"--publish-generation", root.wstring(), L"00000042", L"build-42"});
+  if (missingGeneration == 0) {
+    std::cerr << "updater published a missing runtime generation\n";
+    return 1;
+  }
+  std::filesystem::create_directories(root / L"runtime" / L"00000042");
+  const DWORD publishGeneration =
+      run_updater(updater, {L"--publish-generation", root.wstring(), L"00000042", L"build-42"});
+  const DWORD generationStatus =
+      run_updater(updater, {L"--generation-status", root.wstring()});
+  if (publishGeneration != 0 || generationStatus != 0) {
+    std::cerr << "updater runtime generation publication failed (publish="
+              << publishGeneration << ", status=" << generationStatus << ")\n";
+    return 1;
+  }
+  const auto runtimePayload = root / L"runtime-payload";
+  write_text(runtimePayload / L"bin" / L"fcitx5-engine.exe", "engine-43");
+  write_text(runtimePayload / L"bin" / L"fcitx5-launcher.exe", "launcher-43");
+  write_text(runtimePayload / L"bin" / L"fcitx5-ui.exe", "ui-43");
+  write_text(runtimePayload / L"lib" / L"fcitx5" / L"addon.dll", "addon-43");
+  write_text(runtimePayload / L"share" / L"fcitx5" / L"profile", "share-43");
+  write_text(runtimePayload / L"tsf" / L"x64" / L"fcitx5-tsf.dll", "tsf-x64-43");
+  write_text(runtimePayload / L"tsf" / L"x86" / L"fcitx5-tsf.dll", "tsf-x86-43");
+  const DWORD activateRuntime =
+      run_updater(updater, {L"--activate-runtime-generation", root.wstring(),
+                            runtimePayload.wstring(), L"00000043", L"build-43"});
+  if (activateRuntime != 0 ||
+      read_text(root / L"runtime" / L"00000043" / L"bin" / L"fcitx5-engine.exe") !=
+          "engine-43" ||
+      read_text(root / L"tsf" / L"x64" / L"fcitx5-tsf.dll") != "tsf-x64-43" ||
+      read_text(root / L"tsf" / L"x64" / L"fcitx5-tsf.generation") != "00000043\n") {
+    std::cerr << "updater runtime generation activation failed (exit="
+              << activateRuntime << ")\n";
+    return 1;
+  }
 
   try {
     fcitx::update::write_update_owner(root, fcitx::update::UpdateOwner::builtin);

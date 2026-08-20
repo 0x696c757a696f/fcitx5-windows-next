@@ -7,6 +7,7 @@ namespace fcitx::windows::ui {
 LayoutResult layout(const LayoutInput& input) {
     LayoutResult result;
     if (input.scrollMode && !input.items.empty()) {
+        const float preferredScrollCellWidth = std::max(40.0F, input.scrollCellWidth);
         if (input.orientation == Orientation::vertical) {
             const std::size_t rowsPerColumn =
                 std::clamp<std::size_t>(input.scrollColumns, 1U, 9U);
@@ -25,6 +26,8 @@ LayoutResult layout(const LayoutInput& input) {
                 rowHeight = std::max(rowHeight, item.height);
             const float workWidth = std::max(0.0F, input.workArea.right - input.workArea.left);
             const float workHeight = std::max(0.0F, input.workArea.bottom - input.workArea.top);
+            const float targetWidth =
+                std::min(workWidth, input.maxWidth > 0.0F ? input.maxWidth : workWidth);
             const auto buildColumnWidths = [&](std::size_t count) {
                 std::vector<float> widths(count, 0.0F);
                 for (std::size_t column = 0; column < count; ++column) {
@@ -34,6 +37,8 @@ LayoutResult layout(const LayoutInput& input) {
                             break;
                         widths[column] = std::max(widths[column], input.items[index].width);
                     }
+                    widths[column] =
+                        std::clamp(widths[column], 40.0F, preferredScrollCellWidth);
                 }
                 return widths;
             };
@@ -47,20 +52,23 @@ LayoutResult layout(const LayoutInput& input) {
                 return columnsWidth + columnGaps + input.paddingX * 2.0F;
             };
             auto columnWidths = buildColumnWidths(shownColumns);
-            // Vertical scroll is column-major. Keep each visible column at its
-            // natural width so candidate text is not squeezed into half-glyphs
-            // just because the ordinary one-line maxWidth is smaller than a
-            // six-column viewport. If six natural columns cannot fit on the
-            // monitor, reduce the visible column count before falling back to
-            // clipping a single oversized column.
-            while (shownColumns > 1U && naturalWidth(columnWidths) > workWidth) {
+            // Vertical scroll is column-major. Match fcitx5-macos' dedicated
+            // scroll cell policy: cells have a bounded width, long candidates
+            // are ellipsized by the renderer, and the grid never grows wider
+            // than the configured candidate max width unless the work area is
+            // smaller. If the bounded six-column viewport still cannot fit,
+            // reduce visible columns before clipping a single column.
+            while (shownColumns > 1U && naturalWidth(columnWidths) > targetWidth) {
                 --shownColumns;
                 columnWidths = buildColumnWidths(shownColumns);
             }
             const std::size_t firstVisible = firstColumn * rowsPerColumn;
             const std::size_t end =
                 std::min(input.items.size(), (firstColumn + shownColumns) * rowsPerColumn);
-            const float width = std::min(naturalWidth(columnWidths), workWidth);
+            const float width = std::min(naturalWidth(columnWidths), targetWidth);
+            if (shownColumns == 1U && width < naturalWidth(columnWidths)) {
+                columnWidths[0] = std::max(1.0F, width - input.paddingX * 2.0F);
+            }
             const float height =
                 std::min(input.paddingY * 2.0F + rowHeight * static_cast<float>(rowsPerColumn) +
                              input.rowGap * static_cast<float>(rowsPerColumn - 1U),

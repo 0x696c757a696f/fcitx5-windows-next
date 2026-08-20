@@ -59,6 +59,8 @@ int wmain(int argc, wchar_t** argv) {
     std::vector<std::unique_ptr<fcitx::windows::ipc::PipeClient>> clients;
     clients.reserve(clientCount);
     bool connected = ready;
+    std::size_t failedIndex = clientCount;
+    DWORD failureError = ERROR_SUCCESS;
     for (std::size_t index = 0; index < clientCount; ++index) {
         auto client = std::make_unique<fcitx::windows::ipc::PipeClient>(
             pipeName, fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
@@ -66,14 +68,21 @@ int wmain(int argc, wchar_t** argv) {
         const auto key = static_cast<std::uint32_t>('A' + (index % 26U));
         if (!client->processKey(index + 1, key, 0, result) || !result.handled) {
             connected = false;
+            failedIndex = index;
+            failureError = GetLastError();
             break;
         }
         clients.push_back(std::move(client));
     }
     if (!connected || clients.size() != clientCount) {
         clients.clear();
+        DWORD engineExitCode = STILL_ACTIVE;
+        GetExitCodeProcess(process.hProcess, &engineExitCode);
         std::cerr << "concurrent IPC stress failed for " << clientCount
-                  << " clients (connection setup)\n";
+                  << " clients (connection setup, ready=" << ready
+                  << ", failed_index=" << failedIndex
+                  << ", last_error=" << failureError
+                  << ", engine_exit=" << engineExitCode << ")\n";
         TerminateProcess(process.hProcess, 2);
         WaitForSingleObject(process.hProcess, 1000);
         CloseHandle(process.hProcess);

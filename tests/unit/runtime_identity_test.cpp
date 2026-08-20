@@ -4,6 +4,8 @@
 #include <Windows.h>
 #include <sddl.h>
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 
 int main() {
@@ -40,17 +42,85 @@ int main() {
         std::cerr << "test namespace validation failed\n";
         return 1;
     }
+    if (!SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", nullptr) ||
+        currentRuntimeGeneration() != L"current" ||
+        !SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", L"../bad") ||
+        currentRuntimeGeneration() != L"current" ||
+        !SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", L"00000042") ||
+        currentRuntimeGeneration() != L"00000042") {
+        std::cerr << "runtime generation validation failed\n";
+        return 1;
+    }
     const std::wstring isolatedEndpoint = makeLocalEndpointName(identity, L"engine");
     const std::wstring isolatedObject = makeLocalObjectName(identity, L"candidate-42");
     SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", nullptr);
+    SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", nullptr);
+    const auto generationRoot =
+        std::filesystem::temp_directory_path() /
+        (L"fcitx5-runtime-identity-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code cleanupError;
+    std::filesystem::remove_all(generationRoot, cleanupError);
+    std::filesystem::create_directories(generationRoot / L"tsf" / L"x64");
+    std::filesystem::create_directories(generationRoot / L"runtime" / L"00000041" / L"bin");
+    {
+        std::ofstream portable(generationRoot / L"portable.flag", std::ios::binary);
+        portable << "portable\n";
+    }
+    {
+        std::ofstream current(generationRoot / L"current.json", std::ios::binary);
+        current << "{\n"
+                << "  \"format_version\": 1,\n"
+                << "  \"current_generation\": \"00000042\",\n"
+                << "  \"previous_generation\": \"00000041\",\n"
+                << "  \"build_id\": \"build-42\"\n"
+                << "}\n";
+    }
+    {
+        std::ofstream sidecar(generationRoot / L"tsf" / L"x64" / L"fcitx5-tsf.generation",
+                              std::ios::binary);
+        sidecar << "00000044\n";
+    }
+    const auto tsfModule = generationRoot / L"tsf" / L"x64" / L"fcitx5-tsf.dll";
+    const auto runtimeModule = generationRoot / L"runtime" / L"00000041" /
+                               L"fcitx5-engine.exe";
+    const auto runtimeBinModule = generationRoot / L"runtime" / L"00000041" / L"bin" /
+                                  L"fcitx5-engine.exe";
+    if (currentRuntimeGenerationFromInstallRoot(generationRoot.wstring()) != L"00000042" ||
+        currentRuntimeGenerationForModule(tsfModule.wstring()) != L"00000044" ||
+        currentRuntimeGenerationForModule(runtimeModule.wstring()) != L"00000041" ||
+        currentRuntimeGenerationForModule(runtimeBinModule.wstring()) != L"00000041" ||
+        installationRootForModule(runtimeBinModule.wstring()) != generationRoot ||
+        portableDataRootForModule(runtimeBinModule.wstring()) != generationRoot / L"data") {
+        std::filesystem::remove_all(generationRoot, cleanupError);
+        std::cerr << "installed runtime generation discovery failed\n";
+        return 1;
+    }
+    if (!SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", L"00000043") ||
+        currentRuntimeGenerationForModule(tsfModule.wstring()) != L"00000043" ||
+        currentRuntimeGenerationFromInstallRoot(generationRoot.wstring()) != L"00000043") {
+        std::filesystem::remove_all(generationRoot, cleanupError);
+        std::cerr << "explicit runtime generation override failed\n";
+        return 1;
+    }
+    SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", nullptr);
+    std::filesystem::remove_all(generationRoot, cleanupError);
     if (isolatedEndpoint.find(L".Test.contract-42.engine") == std::wstring::npos ||
-        isolatedObject.find(L".Test.contract-42.candidate-42") == std::wstring::npos) {
+        isolatedObject.find(L".Test.contract-42.candidate-42") == std::wstring::npos ||
+        isolatedEndpoint.find(L".Generation.00000042.") == std::wstring::npos ||
+        isolatedObject.find(L".Generation.00000042.") == std::wstring::npos) {
         std::cerr << "test namespace isolation was not applied\n";
         return 1;
     }
     const std::wstring endpoint = makeLocalEndpointName(identity, L"engine");
+    const std::wstring generation41 = makeLocalEndpointName(identity, L"00000041", L"engine");
+    const std::wstring generation42 = makeLocalEndpointName(identity, L"00000042", L"engine");
     if (endpoint.find(identity.userSid) == std::wstring::npos ||
         endpoint.find(std::to_wstring(identity.sessionId)) == std::wstring::npos ||
+        endpoint.find(L".Generation.current.engine") == std::wstring::npos ||
+        generation41 == generation42 ||
+        generation41.find(L".Generation.00000041.engine") == std::wstring::npos ||
+        generation42.find(L".Generation.00000042.engine") == std::wstring::npos ||
+        !makeLocalEndpointName(identity, L"../bad", L"engine").empty() ||
         !makeLocalEndpointName(identity, L"../bad").empty() ||
         !makeLocalObjectName(identity, L"../bad").empty()) {
         std::cerr << "endpoint namespace validation failed\n";

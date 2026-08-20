@@ -319,6 +319,14 @@ int wmain(int argc, wchar_t** argv) {
         !identity.mayUseUserEngine()) {
         return 4;
     }
+    for (int index = 1; index < argc; ++index) {
+        if (std::wstring_view(argv[index]) == L"--generation" && index + 1 < argc) {
+            const std::wstring generation = argv[++index];
+            if (!SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", generation.c_str()) ||
+                fcitx::windows::platform::currentRuntimeGeneration() != generation)
+                return 1;
+        }
+    }
     std::wstring pipeName =
         fcitx::windows::platform::makeLocalEndpointName(identity, L"engine");
     std::wstring readyEventName;
@@ -344,9 +352,12 @@ int wmain(int argc, wchar_t** argv) {
             readyEventName = argv[++index];
         } else if (argument == L"--stop-event" && index + 1 < argc) {
             stopEventName = argv[++index];
+        } else if (argument == L"--generation" && index + 1 < argc) {
+            ++index;
         } else {
             std::wcerr << L"Usage: fcitx5-mock-engine [--test-once|--test-clients N] [--pipe NAME] "
-                          L"[--ready-event NAME] [--stop-event NAME]\n";
+                          L"[--ready-event NAME] [--stop-event NAME] "
+                          L"[--generation GENERATION]\n";
             return 1;
         }
     }

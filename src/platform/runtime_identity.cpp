@@ -8,6 +8,10 @@
 #include <array>
 #include <cstdint>
 #include <cwctype>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <vector>
 
 namespace fcitx::windows::platform {
@@ -96,6 +100,131 @@ bool validChannel(std::wstring_view channel) {
     });
 }
 
+bool validGeneration(std::wstring_view generation) {
+    if (generation.empty() || generation.size() > 32)
+        return false;
+    return std::all_of(generation.begin(), generation.end(), [](wchar_t value) {
+        return (value >= L'a' && value <= L'z') || (value >= L'0' && value <= L'9') ||
+               value == L'-' || value == L'_';
+    });
+}
+
+std::wstring environmentGeneration() {
+    std::array<wchar_t, 34> value{};
+    const DWORD length = GetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", value.data(),
+                                                  static_cast<DWORD>(value.size()));
+    if (length == 0 || length >= value.size())
+        return {};
+    const std::wstring_view candidate(value.data(), length);
+    return validGeneration(candidate) ? std::wstring(candidate) : std::wstring{};
+}
+
+std::string readSmallTextFile(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size > 64U * 1024U)
+        return {};
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return {};
+    std::string bytes(std::istreambuf_iterator<char>(input), {});
+    return (input.good() || input.eof()) ? bytes : std::string{};
+}
+
+std::wstring widenAscii(std::string_view value) {
+    std::wstring result;
+    result.reserve(value.size());
+    for (const unsigned char character : value) {
+        if (character > 0x7fU)
+            return {};
+        result.push_back(static_cast<wchar_t>(character));
+    }
+    return result;
+}
+
+std::wstring parsePlainGeneration(std::string_view bytes) {
+    while (!bytes.empty() &&
+           (bytes.back() == '\n' || bytes.back() == '\r' || bytes.back() == ' ' ||
+            bytes.back() == '\t')) {
+        bytes.remove_suffix(1);
+    }
+    while (!bytes.empty() &&
+           (bytes.front() == '\n' || bytes.front() == '\r' || bytes.front() == ' ' ||
+            bytes.front() == '\t')) {
+        bytes.remove_prefix(1);
+    }
+    const std::wstring candidate = widenAscii(bytes);
+    return validGeneration(candidate) ? candidate : std::wstring{};
+}
+
+std::wstring parseCurrentGeneration(std::string_view json) {
+    constexpr std::string_view key = "\"current_generation\"";
+    const std::size_t keyPosition = json.find(key);
+    if (keyPosition == std::string_view::npos)
+        return {};
+    const std::size_t colon = json.find(':', keyPosition + key.size());
+    if (colon == std::string_view::npos)
+        return {};
+    std::size_t quote = colon + 1;
+    while (quote < json.size() &&
+           (json[quote] == ' ' || json[quote] == '\t' || json[quote] == '\r' ||
+            json[quote] == '\n')) {
+        ++quote;
+    }
+    if (quote >= json.size() || json[quote] != '"')
+        return {};
+    const std::size_t begin = quote + 1;
+    const std::size_t end = json.find('"', begin);
+    if (end == std::string_view::npos || end == begin)
+        return {};
+    const std::wstring candidate = widenAscii(json.substr(begin, end - begin));
+    return validGeneration(candidate) ? candidate : std::wstring{};
+}
+
+std::wstring leafLower(const std::filesystem::path& path) {
+    std::wstring leaf = path.filename().wstring();
+    std::transform(leaf.begin(), leaf.end(), leaf.begin(),
+                   [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
+    return leaf;
+}
+
+std::filesystem::path installRootForModule(const std::filesystem::path& modulePath) {
+    const auto directory = modulePath.parent_path();
+    if (directory.empty())
+        return {};
+    const auto parentName = leafLower(directory);
+    const auto grandParentName = leafLower(directory.parent_path());
+    if ((parentName == L"x64" || parentName == L"x86") && grandParentName == L"tsf") {
+        return directory.parent_path().parent_path();
+    }
+    if (parentName == L"bin" && validGeneration(directory.parent_path().filename().wstring()) &&
+        leafLower(directory.parent_path().parent_path()) == L"runtime") {
+        return directory.parent_path().parent_path().parent_path();
+    }
+    if (parentName == L"bin" || parentName == L"management") {
+        return directory.parent_path();
+    }
+    if (validGeneration(directory.filename().wstring()) && grandParentName == L"runtime") {
+        return directory.parent_path().parent_path();
+    }
+    return {};
+}
+
+std::wstring runtimeGenerationForRuntimeModule(const std::filesystem::path& modulePath) {
+    const auto directory = modulePath.parent_path();
+    if (directory.empty())
+        return {};
+    if (leafLower(directory) == L"bin" &&
+        validGeneration(directory.parent_path().filename().wstring()) &&
+        leafLower(directory.parent_path().parent_path()) == L"runtime") {
+        return directory.parent_path().filename().wstring();
+    }
+    if (leafLower(directory.parent_path()) != L"runtime")
+        return {};
+    const auto generation = directory.filename().wstring();
+    return validGeneration(generation) ? generation : std::wstring{};
+}
+
 std::wstring normalized(std::wstring_view input) {
     if (input.empty() || input.size() >= 32768)
         return {};
@@ -169,26 +298,117 @@ std::wstring localTestNamespace() {
     return validChannel(candidate) ? std::wstring(candidate) : std::wstring{};
 }
 
+std::wstring currentRuntimeGeneration() {
+    if (const std::wstring generation = environmentGeneration(); !generation.empty())
+        return generation;
+    std::wstring path(32'768, L'\0');
+    const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (size > 0 && size < path.size()) {
+        path.resize(size);
+        if (const std::wstring generation = currentRuntimeGenerationForModule(path);
+            !generation.empty()) {
+            return generation;
+        }
+    }
+    return L"current";
+}
+
+std::wstring currentRuntimeGenerationForModule(std::wstring_view modulePath) {
+    if (const std::wstring generation = environmentGeneration(); !generation.empty())
+        return generation;
+    const std::filesystem::path module{std::wstring(modulePath)};
+    if (module.empty())
+        return {};
+    if (const std::wstring generation = runtimeGenerationForRuntimeModule(module);
+        !generation.empty()) {
+        return generation;
+    }
+    if (const std::wstring generation =
+            parsePlainGeneration(readSmallTextFile(module.parent_path() /
+                                                   L"fcitx5-tsf.generation"));
+        !generation.empty()) {
+        return generation;
+    }
+    const auto root = installRootForModule(module);
+    return root.empty() ? std::wstring{} : currentRuntimeGenerationFromInstallRoot(root.wstring());
+}
+
+std::wstring currentRuntimeGenerationFromInstallRoot(std::wstring_view installRoot) {
+    if (const std::wstring generation = environmentGeneration(); !generation.empty())
+        return generation;
+    const std::filesystem::path root{std::wstring(installRoot)};
+    if (root.empty())
+        return {};
+    return parseCurrentGeneration(readSmallTextFile(root / L"current.json"));
+}
+
+std::filesystem::path installationRootForModule(std::wstring_view modulePath) {
+    try {
+        const std::filesystem::path module{std::wstring(modulePath)};
+        if (module.empty())
+            return {};
+        return installRootForModule(module);
+    } catch (...) {
+        return {};
+    }
+}
+
+std::filesystem::path portableDataRootForModule(std::wstring_view modulePath) {
+    try {
+        const std::filesystem::path module{std::wstring(modulePath)};
+        if (module.empty())
+            return {};
+        const auto root = installRootForModule(module);
+        if (!root.empty() && std::filesystem::exists(root / L"portable.flag"))
+            return root / L"data";
+        const auto directory = module.parent_path();
+        if (!directory.empty() && std::filesystem::exists(directory / L"portable.flag"))
+            return directory / L"data";
+        if (!directory.empty() &&
+            std::filesystem::exists(directory.parent_path() / L"portable.flag")) {
+            return directory.parent_path() / L"data";
+        }
+        return {};
+    } catch (...) {
+        return {};
+    }
+}
+
 std::wstring makeLocalEndpointName(const RuntimeIdentity& identity, std::wstring_view channel) {
-    if (identity.userSid.empty() || identity.sessionId == 0 || !validChannel(channel))
+    return makeLocalEndpointName(identity, currentRuntimeGeneration(), channel);
+}
+
+std::wstring makeLocalEndpointName(const RuntimeIdentity& identity,
+                                   std::wstring_view generation,
+                                   std::wstring_view channel) {
+    if (identity.userSid.empty() || identity.sessionId == 0 || !validGeneration(generation) ||
+        !validChannel(channel))
         return {};
     const std::wstring testNamespace = localTestNamespace();
     const std::wstring namespacePart =
         testNamespace.empty() ? std::wstring{} : L".Test." + testNamespace;
     return L"\\\\.\\pipe\\" + std::wstring(kReleaseIdentity.pipe_prefix) + L"." + identity.userSid +
-           L".Session." + std::to_wstring(identity.sessionId) + namespacePart + L"." +
-           std::wstring(channel);
+           L".Session." + std::to_wstring(identity.sessionId) + L".Generation." +
+           std::wstring(generation) + namespacePart + L"." + std::wstring(channel);
 }
 
 std::wstring makeLocalObjectName(const RuntimeIdentity& identity, std::wstring_view channel) {
-    if (identity.userSid.empty() || identity.sessionId == 0 || !validChannel(channel))
+    return makeLocalObjectName(identity, currentRuntimeGeneration(), channel);
+}
+
+std::wstring makeLocalObjectName(const RuntimeIdentity& identity,
+                                 std::wstring_view generation,
+                                 std::wstring_view channel) {
+    if (identity.userSid.empty() || identity.sessionId == 0 || !validGeneration(generation) ||
+        !validChannel(channel))
         return {};
     const std::wstring testNamespace = localTestNamespace();
     const std::wstring namespacePart =
         testNamespace.empty() ? std::wstring{} : L".Test." + testNamespace;
     return L"Local\\" + std::wstring(kReleaseIdentity.local_object_prefix) + L"." +
            identity.userSid + L".Session." + std::to_wstring(identity.sessionId) +
-           namespacePart + L"." + std::wstring(channel);
+           L".Generation." + std::wstring(generation) + namespacePart + L"." +
+           std::wstring(channel);
 }
 
 bool pathsReferToSameFile(std::wstring_view left, std::wstring_view right) noexcept {

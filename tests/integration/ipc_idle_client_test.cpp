@@ -58,6 +58,8 @@ int wmain(int argc, wchar_t** argv) {
     std::vector<std::unique_ptr<fcitx::windows::ipc::PipeClient>> idleClients;
     idleClients.reserve(idleCount);
     bool idleOk = ready;
+    std::size_t failedIdleIndex = idleCount;
+    DWORD failureError = ERROR_SUCCESS;
     for (std::size_t index = 0; index < idleCount; ++index) {
         fcitx::windows::ipc::KeyResult result;
         const auto key = static_cast<std::uint32_t>('Z' - (index % 26U));
@@ -65,6 +67,8 @@ int wmain(int argc, wchar_t** argv) {
             pipeName, fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
         if (!client->processKey(0x40000000ULL + index, key, 0, result) || !result.handled) {
             idleOk = false;
+            failedIdleIndex = index;
+            failureError = GetLastError();
             break;
         }
         idleClients.push_back(std::move(client));
@@ -102,6 +106,12 @@ int wmain(int argc, wchar_t** argv) {
     GetExitCodeProcess(process.hProcess, &engineExitCode);
     CloseHandle(process.hProcess);
     if (engineExitCode != 0) exitResult = 1;
-    if (exitResult != 0) std::cerr << "idle-client IPC stress failed\n";
+    if (exitResult != 0)
+        std::cerr << "idle-client IPC stress failed (ready=" << ready
+                  << ", idle_ok=" << idleOk
+                  << ", failed_idle_index=" << failedIdleIndex
+                  << ", last_error=" << failureError
+                  << ", active_succeeded=" << succeeded.load()
+                  << ", engine_exit=" << engineExitCode << ")\n";
     return exitResult;
 }

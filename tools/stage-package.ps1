@@ -3,6 +3,7 @@ param(
   [string] $Version = '0.1.0',
   [ValidateSet('stable', 'beta', 'nightly')]
   [string] $Channel = 'stable',
+  [string] $Generation = '',
   [switch] $SkipInstaller
 )
 
@@ -11,11 +12,18 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $outRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'out/package'))
 $core = Join-Path $repoRoot 'out/stage/fcitx5'
-$x64 = Join-Path $repoRoot 'out/build/windows-x64-dev/Release'
-$x86 = Join-Path $repoRoot 'out/build/windows-x86-dev/Release'
+$x64 = Join-Path $repoRoot 'out/build/windows-x64-release/Release'
+$x86 = Join-Path $repoRoot 'out/build/windows-x86-release/Release'
 $work = Join-Path $outRoot ('stage-' + [guid]::NewGuid().ToString('N'))
 $root = Join-Path $work 'Fcitx5'
 $artifacts = Join-Path $outRoot 'artifacts'
+$sourceCommit = (git -C $repoRoot rev-parse HEAD).Trim()
+if ([string]::IsNullOrWhiteSpace($Generation)) {
+  $Generation = (git -C $repoRoot rev-parse --short=12 HEAD).Trim().ToLowerInvariant()
+}
+if ($Generation -notmatch '^[a-z0-9_-]{1,32}$') {
+  throw "Invalid release generation '$Generation'. Use 1-32 chars: lowercase letters, digits, '_' or '-'."
+}
 
 $required = @(
   (Join-Path $core 'bin/fcitx5-engine.exe'),
@@ -61,6 +69,10 @@ New-Item -ItemType Directory -Force -Path (Join-Path $root 'tsf/x64'),
   (Join-Path $root 'security') | Out-Null
 Copy-Item -LiteralPath (Join-Path $x64 'fcitx5-tsf.dll') -Destination (Join-Path $root 'tsf/x64')
 Copy-Item -LiteralPath (Join-Path $x86 'fcitx5-tsf.dll') -Destination (Join-Path $root 'tsf/x86')
+[IO.File]::WriteAllText((Join-Path $root 'tsf/x64/fcitx5-tsf.generation'),
+  "$Generation`n", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $root 'tsf/x86/fcitx5-tsf.generation'),
+  "$Generation`n", [Text.UTF8Encoding]::new($false))
 Copy-Item -Path (Join-Path $repoRoot 'locales/*') -Destination (Join-Path $bin 'locales')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'resources/themes/default') `
   -Destination (Join-Path $root 'themes') -Recurse
@@ -68,6 +80,24 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'security/trusted-keys.template.json
   -Destination (Join-Path $root 'security/trusted-keys.json')
 [IO.File]::WriteAllText((Join-Path $root 'portable.flag'), "portable`n",
   [Text.UTF8Encoding]::new($false))
+
+$runtimeRoot = Join-Path $root (Join-Path 'runtime' $Generation)
+New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+foreach ($name in @('bin', 'lib', 'share', 'themes', 'data')) {
+  $source = Join-Path $root $name
+  if (Test-Path -LiteralPath $source) {
+    Copy-Item -LiteralPath $source -Destination $runtimeRoot -Recurse
+  }
+}
+Copy-Item -LiteralPath (Join-Path $root 'portable.flag') -Destination $runtimeRoot -Force
+$currentGeneration = [ordered]@{
+  format_version = 1
+  current_generation = $Generation
+  previous_generation = ''
+  build_id = $sourceCommit
+}
+[IO.File]::WriteAllText((Join-Path $root 'current.json'),
+  (($currentGeneration | ConvertTo-Json -Depth 3) + "`n"), [Text.UTF8Encoding]::new($false))
 
 $files = Get-ChildItem -LiteralPath $root -File -Recurse | Sort-Object FullName | ForEach-Object {
   [ordered]@{
@@ -81,7 +111,8 @@ $manifest = [ordered]@{
   product = 'fcitx5-windows-next'
   version = $Version
   channel = $Channel
-  source_commit = (git -C $repoRoot rev-parse HEAD).Trim()
+  release_generation = $Generation
+  source_commit = $sourceCommit
   source_tree_clean = @((git -C $repoRoot status --porcelain=v1 --untracked-files=all)).Count -eq 0
   architecture = 'x64-with-x86-tsf'
   files = @($files)
@@ -101,6 +132,7 @@ if (-not $SkipInstaller) {
   $installerOutput = Join-Path $work 'installer-output'
   New-Item -ItemType Directory -Force -Path $installerOutput | Out-Null
   & $iscc "/DProductVersion=$Version" "/DReleaseChannel=$Channel" `
+    "/DReleaseGeneration=$Generation" `
     "/DStageDir=$root" "/DArtifactDir=$installerOutput" `
     (Join-Path $repoRoot 'installer/fcitx5-windows.iss')
   if ($LASTEXITCODE -ne 0) { throw 'Inno Setup package build failed.' }

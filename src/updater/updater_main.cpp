@@ -31,6 +31,11 @@ int usage() {
                 L"  fcitx5-updater --health ROOT CHANNEL\n"
                 L"  fcitx5-updater --rollback ROOT CHANNEL CORE_PACKAGE_ID KEYRING\n"
                 L"  fcitx5-updater --cleanup-previous ROOT CHANNEL CORE_PACKAGE_ID\n"
+                L"  fcitx5-updater --install-tsf-dll REGISTERED_DLL NEW_DLL GENERATION\n"
+                L"  fcitx5-updater --cleanup-old-tsf-dlls TSF_ARCH_DIR\n"
+                L"  fcitx5-updater --activate-runtime-generation ROOT VERIFIED_PAYLOAD GENERATION BUILD_ID\n"
+                L"  fcitx5-updater --publish-generation ROOT GENERATION BUILD_ID\n"
+                L"  fcitx5-updater --generation-status ROOT\n"
                 L"  fcitx5-updater --status ROOT CHANNEL\n";
   return 1;
 }
@@ -116,6 +121,48 @@ int wmain(int argc, wchar_t** argv) {
         std::error_code ignored;
         std::filesystem::remove_all(target, ignored);
       }
+      return 0;
+    }
+    if (argc == 5 && std::wstring_view(argv[1]) == L"--install-tsf-dll") {
+      const auto result = fcitx::update::install_tsf_dll_generation(argv[2], argv[3],
+                                                                    std::filesystem::path(argv[4]).string());
+      std::cout << "tsf_installed=true\nold_renamed="
+                << (result.old_dll_renamed ? "true" : "false")
+                << "\nold_cleanup_pending="
+                << (result.old_cleanup_pending ? "true" : "false")
+                << "\nold_cleanup_scheduled_for_reboot="
+                << (result.old_cleanup_scheduled_for_reboot ? "true" : "false") << '\n';
+      return 0;
+    }
+    if (argc == 3 && std::wstring_view(argv[1]) == L"--cleanup-old-tsf-dlls") {
+      const auto pending = fcitx::update::cleanup_old_tsf_dlls(argv[2]);
+      std::cout << "pending_old_tsf_dlls=" << pending.size() << '\n';
+      return pending.empty() ? 0 : 3;
+    }
+    if (argc == 6 && std::wstring_view(argv[1]) == L"--activate-runtime-generation") {
+      const auto result = fcitx::update::install_runtime_generation(
+          argv[2], argv[3], std::filesystem::path(argv[4]).string(),
+          std::filesystem::path(argv[5]).string());
+      std::cout << "runtime_installed=" << (result.runtime_installed ? "true" : "false")
+                << "\ntsf_x64_installed="
+                << (result.tsf_x64_installed ? "true" : "false")
+                << "\ntsf_x86_installed="
+                << (result.tsf_x86_installed ? "true" : "false")
+                << "\ncurrent_published="
+                << (result.current_published ? "true" : "false") << '\n';
+      return 0;
+    }
+    if (argc == 5 && std::wstring_view(argv[1]) == L"--publish-generation") {
+      fcitx::update::publish_runtime_generation(
+          argv[2], std::filesystem::path(argv[3]).string(),
+          std::filesystem::path(argv[4]).string());
+      return 0;
+    }
+    if (argc == 3 && std::wstring_view(argv[1]) == L"--generation-status") {
+      const auto state = fcitx::update::read_runtime_generation_state(argv[2]);
+      std::cout << "current_generation=" << state.current_generation
+                << "\nprevious_generation=" << state.previous_generation
+                << "\nbuild_id=" << state.build_id << '\n';
       return 0;
     }
     if (argc == 4 && std::wstring_view(argv[1]) == L"--status") {

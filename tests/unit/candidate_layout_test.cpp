@@ -92,13 +92,29 @@ int main() {
     verticalScroll.orientation = Orientation::vertical;
     verticalScroll.scrollColumns = 6;
     verticalScroll.maxWidth = 720;
+    verticalScroll.scrollCellWidth = 96;
     verticalScroll.selected = 6;
+    verticalScroll.items.assign(60, Size{48, 34});
     const auto firstColumns = layout(verticalScroll);
+    const float fixedCellWidth = 96.0F * 6.0F + 8.0F * 2.0F + 8.0F * 5.0F;
     if (firstColumns.items.size() != 36U || firstColumns.itemIndices.front() != 0U ||
         firstColumns.itemIndices.back() != 35U ||
-        std::abs((firstColumns.window.right - firstColumns.window.left) -
-                 (120.0F * 6.0F + 8.0F * 2.0F + 8.0F * 5.0F)) > 0.01F) {
-        std::cerr << "vertical scroll layout squeezed or dropped six candidate columns\n";
+        firstColumns.window.right - firstColumns.window.left >= fixedCellWidth - 0.01F) {
+        std::cerr << "vertical scroll layout treated the bounded cell width as a fixed width\n";
+        return 1;
+    }
+    for (const auto& item : firstColumns.items) {
+        if (std::abs((item.right - item.left) - 48.0F) > 0.01F) {
+            std::cerr << "vertical scroll cells did not preserve compact natural width\n";
+            return 1;
+        }
+    }
+    verticalScroll.items.assign(60, Size{420, 34});
+    const auto longCandidateColumns = layout(verticalScroll);
+    if (longCandidateColumns.items.size() != 36U ||
+        longCandidateColumns.window.right - longCandidateColumns.window.left >
+            verticalScroll.maxWidth + 0.01F) {
+        std::cerr << "long vertical scroll candidates widened the grid instead of ellipsizing\n";
         return 1;
     }
     verticalScroll.selected = 58;

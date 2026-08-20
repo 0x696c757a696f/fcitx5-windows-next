@@ -1,6 +1,7 @@
 #include "fcitx_runtime.h"
 #include "candidate_navigation.h"
 #include "config_model.h"
+#include "runtime_identity.h"
 #include <fcitx5_windows/release_identity.h>
 
 #include <fcitx-utils/capabilityflags.h>
@@ -45,22 +46,18 @@ struct EngineConfig {
     bool scrollMode{};
 };
 
-std::filesystem::path executableDirectory() {
-    std::wstring path(32'768, L'\0');
-    const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (size == 0 || size >= path.size())
-        return {};
-    path.resize(size);
-    return std::filesystem::path(path).parent_path();
-}
-
 std::filesystem::path localDataDirectory() {
-    const auto executable = executableDirectory();
-    if (!executable.empty() && std::filesystem::exists(executable / L"portable.flag"))
-        return executable / L"data";
-    if (!executable.empty() &&
-        std::filesystem::exists(executable.parent_path() / L"portable.flag"))
-        return executable.parent_path() / L"data";
+    std::wstring modulePath(32'768, L'\0');
+    const DWORD size =
+        GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (size > 0 && size < modulePath.size()) {
+        modulePath.resize(size);
+        if (const auto portableData =
+                fcitx::windows::platform::portableDataRootForModule(modulePath);
+            !portableData.empty()) {
+            return portableData;
+        }
+    }
     PWSTR path = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &path)))
         return {};
@@ -150,12 +147,15 @@ bool setupEnvironment() {
         return false;
     modulePath.resize(size);
     const auto root = std::filesystem::path(modulePath).parent_path().parent_path();
-    if (!getEnvironment("FCITX_USER_DATA_ROOT") &&
-        std::filesystem::exists(root / "portable.flag")) {
-        const auto portableData = utf8Path(root / "data");
-        if (portableData.empty())
-            return false;
-        setEnvironment("FCITX_USER_DATA_ROOT", portableData.c_str());
+    if (!getEnvironment("FCITX_USER_DATA_ROOT")) {
+        const auto portableRoot =
+            fcitx::windows::platform::portableDataRootForModule(modulePath);
+        if (!portableRoot.empty()) {
+            const auto portableData = utf8Path(portableRoot);
+            if (portableData.empty())
+                return false;
+            setEnvironment("FCITX_USER_DATA_ROOT", portableData.c_str());
+        }
     }
     using SetDefaultDirectories = BOOL(WINAPI*)(DWORD);
     using AddDirectory = DLL_DIRECTORY_COOKIE(WINAPI*)(PCWSTR);

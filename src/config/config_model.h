@@ -45,6 +45,7 @@ struct Config {
     std::optional<Orientation> orientation;
     std::optional<bool> scrollMode;
     std::optional<double> maxWidth;
+    std::optional<double> scrollCellWidth;
     std::optional<double> opacity;
     std::optional<int> candidatePageSize;
     std::vector<std::string> enabledInputMethods;

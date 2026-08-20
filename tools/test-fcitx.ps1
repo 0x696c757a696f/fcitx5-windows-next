@@ -37,19 +37,21 @@ try {
 }
 
 $testDataParent = [IO.Path]::GetFullPath((Join-Path $repoRoot 'out/test-data'))
-$testDataRoot = Join-Path $testDataParent ('fcitx-engine-' + [guid]::NewGuid().ToString('N'))
 $previousUserDataRoot = [Environment]::GetEnvironmentVariable('FCITX_USER_DATA_ROOT', 'Process')
 $previousLuaMarker = [Environment]::GetEnvironmentVariable('FCITX_LUA_TEST_MARKER', 'Process')
-New-Item -ItemType Directory -Path $testDataRoot | Out-Null
-[Environment]::SetEnvironmentVariable('FCITX_USER_DATA_ROOT', $testDataRoot, 'Process')
+$testRoots = @()
 try {
-  $luaExtensionDirectory = Join-Path $testDataRoot 'Fcitx5/lua/imeapi/extensions'
-  $luaMarker = Join-Path $testDataRoot 'fcitx5-lua.marker'
-  New-Item -ItemType Directory -Force -Path $luaExtensionDirectory | Out-Null
-  Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/fcitx5-lua/functional.lua') `
-    -Destination $luaExtensionDirectory -Force
-  [Environment]::SetEnvironmentVariable('FCITX_LUA_TEST_MARKER', $luaMarker, 'Process')
   foreach ($architecture in @('x64', 'x86')) {
+    $testDataRoot = Join-Path $testDataParent ('fcitx-engine-' + [guid]::NewGuid().ToString('N'))
+    $testRoots += $testDataRoot
+    New-Item -ItemType Directory -Path $testDataRoot | Out-Null
+    [Environment]::SetEnvironmentVariable('FCITX_USER_DATA_ROOT', $testDataRoot, 'Process')
+    $luaExtensionDirectory = Join-Path $testDataRoot 'Fcitx5/lua/imeapi/extensions'
+    $luaMarker = Join-Path $testDataRoot 'fcitx5-lua.marker'
+    New-Item -ItemType Directory -Force -Path $luaExtensionDirectory | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/fcitx5-lua/functional.lua') `
+      -Destination $luaExtensionDirectory -Force
+    [Environment]::SetEnvironmentVariable('FCITX_LUA_TEST_MARKER', $luaMarker, 'Process')
     & $cmake --preset "windows-$architecture-dev"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
@@ -72,12 +74,22 @@ try {
     & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
       $engine --safe-mode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if (-not (Test-Path -LiteralPath $luaMarker -PathType Leaf) -or
+        (Get-Content -LiteralPath $luaMarker -Raw) -ne "fcitx5-lua-ok`n") {
+      throw "fcitx5-lua did not execute the isolated functional extension for $architecture."
+    }
   }
-  if (-not (Test-Path -LiteralPath $luaMarker -PathType Leaf) -or
-      (Get-Content -LiteralPath $luaMarker -Raw) -ne "fcitx5-lua-ok`n") {
-    throw 'fcitx5-lua did not execute the isolated functional extension.'
-  }
-  $rimeUserDirectory = Join-Path $testDataRoot 'Fcitx5/rime'
+  $rimeTestDataRoot = Join-Path $testDataParent ('fcitx-engine-' + [guid]::NewGuid().ToString('N'))
+  $testRoots += $rimeTestDataRoot
+  New-Item -ItemType Directory -Path $rimeTestDataRoot | Out-Null
+  [Environment]::SetEnvironmentVariable('FCITX_USER_DATA_ROOT', $rimeTestDataRoot, 'Process')
+  $luaExtensionDirectory = Join-Path $rimeTestDataRoot 'Fcitx5/lua/imeapi/extensions'
+  $rimeUserDirectory = Join-Path $rimeTestDataRoot 'Fcitx5/rime'
+  New-Item -ItemType Directory -Force -Path $luaExtensionDirectory, $rimeUserDirectory | Out-Null
+  Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/fcitx5-lua/functional.lua') `
+    -Destination $luaExtensionDirectory -Force
+  $rimeLuaMarker = Join-Path $rimeTestDataRoot 'fcitx5-lua.marker'
+  [Environment]::SetEnvironmentVariable('FCITX_LUA_TEST_MARKER', $rimeLuaMarker, 'Process')
   New-Item -ItemType Directory -Force -Path $rimeUserDirectory | Out-Null
   Get-ChildItem -LiteralPath (Join-Path $repoRoot 'tests/fixtures/rime-lua') -File |
     Copy-Item -Destination $rimeUserDirectory -Force
@@ -95,7 +107,7 @@ try {
       throw "Rime did not deploy required artifact: $required"
     }
   }
-  if (-not (Get-ChildItem -LiteralPath $testDataRoot -Force | Select-Object -First 1)) {
+  if (-not (Get-ChildItem -LiteralPath $rimeTestDataRoot -Force | Select-Object -First 1)) {
     throw 'Fcitx did not consume FCITX_USER_DATA_ROOT; isolated test data is empty.'
   }
 } finally {
@@ -103,13 +115,15 @@ try {
     'FCITX_USER_DATA_ROOT', $previousUserDataRoot, 'Process')
   [Environment]::SetEnvironmentVariable(
     'FCITX_LUA_TEST_MARKER', $previousLuaMarker, 'Process')
-  $resolvedTestRoot = [IO.Path]::GetFullPath($testDataRoot)
-  $testPrefix = $testDataParent.TrimEnd('\') + '\'
-  if (-not $resolvedTestRoot.StartsWith($testPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to remove unexpected test data root: $resolvedTestRoot"
-  }
-  if (Test-Path -LiteralPath $resolvedTestRoot) {
-    Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+  foreach ($testRoot in $testRoots) {
+    $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
+    $testPrefix = $testDataParent.TrimEnd('\') + '\'
+    if (-not $resolvedTestRoot.StartsWith($testPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "Refusing to remove unexpected test data root: $resolvedTestRoot"
+    }
+    if (Test-Path -LiteralPath $resolvedTestRoot) {
+      Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+    }
   }
 }
 

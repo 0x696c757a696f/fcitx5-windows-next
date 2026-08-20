@@ -38,6 +38,7 @@ struct LayoutInput {
     std::size_t scrollColumns{6};
     std::size_t scrollVisibleRows{6};
     std::size_t selected{};
+    float scrollCellWidth{96};
 };
 
 struct LayoutResult {

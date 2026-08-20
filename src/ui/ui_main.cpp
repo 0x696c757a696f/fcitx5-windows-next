@@ -171,13 +171,16 @@ int runCandidateSelectionTest(int argumentCount, wchar_t** arguments) {
 }
 
 std::filesystem::path localDataDirectory() {
-    const auto executable = executableDirectory();
-    if (!executable.empty() && std::filesystem::exists(executable / L"portable.flag")) {
-        return executable / L"data";
-    }
-    if (!executable.empty() &&
-        std::filesystem::exists(executable.parent_path() / L"portable.flag")) {
-        return executable.parent_path() / L"data";
+    std::wstring modulePath(32'768, L'\0');
+    const DWORD size =
+        GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (size > 0 && size < modulePath.size()) {
+        modulePath.resize(size);
+        if (const auto portableData =
+                fcitx::windows::platform::portableDataRootForModule(modulePath);
+            !portableData.empty()) {
+            return portableData;
+        }
     }
     PWSTR path = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &path)))
@@ -396,6 +399,69 @@ class CandidateWindow final {
         return true;
     }
 
+    [[nodiscard]] bool runScrollExpansionSelfTest() {
+        const auto runCase = [&](fcitx::windows::config::Orientation orientation) {
+            dismissPresentation();
+            visualConfig_.scrollMode = true;
+            visualConfig_.orientation = orientation;
+            fcitx::windows::protocol::KeyResponse response;
+            response.metadata.engineEpoch = 1;
+            response.metadata.contextId =
+                orientation == fcitx::windows::config::Orientation::horizontal ? 41 : 42;
+            response.metadata.compositionId =
+                orientation == fcitx::windows::config::Orientation::horizontal ? 410 : 420;
+            response.metadata.revision = 1;
+            response.selectedCandidate = 0;
+            response.candidatePage = 0;
+            response.candidatePageSize = 5;
+            response.candidateBulk = true;
+            response.candidateEnd = true;
+            response.candidateVisibility = 1;
+            response.caret = {true, 100, 100, 102, 124, 96};
+            for (std::size_t index = 0; index < 30U; ++index) {
+                response.candidates.push_back(
+                    {index + 1U, index < 5U ? std::to_string(index + 1U) : std::string{},
+                     "候选" + std::to_string(index + 1U), {}});
+            }
+            response.candidateTotal = static_cast<std::uint32_t>(response.candidates.size());
+            update(response);
+            if (scrollMode_ || itemRects_.size() != response.candidatePageSize ||
+                visibleIndices_.size() != response.candidatePageSize) {
+                std::cerr << "bulk first page expanded before scroll navigation: orientation="
+                          << (orientation == fcitx::windows::config::Orientation::horizontal
+                                  ? "horizontal"
+                                  : "vertical")
+                          << " scroll=" << scrollMode_ << " rects=" << itemRects_.size()
+                          << " visible=" << visibleIndices_.size() << '\n';
+                return false;
+            }
+            response.metadata.revision = 2;
+            response.selectedCandidate = response.candidatePageSize;
+            response.candidatePage = 1;
+            for (std::size_t index = 0; index < response.candidates.size(); ++index) {
+                response.candidates[index].labelUtf8 =
+                    index >= response.candidatePageSize &&
+                            index < response.candidatePageSize * 2U
+                        ? std::to_string(index - response.candidatePageSize + 1U)
+                        : std::string{};
+            }
+            update(response);
+            if (!scrollMode_ || itemRects_.size() <= response.candidatePageSize ||
+                visibleIndices_.size() <= response.candidatePageSize) {
+                std::cerr << "bulk scroll navigation did not expand viewport: orientation="
+                          << (orientation == fcitx::windows::config::Orientation::horizontal
+                                  ? "horizontal"
+                                  : "vertical")
+                          << " scroll=" << scrollMode_ << " rects=" << itemRects_.size()
+                          << " visible=" << visibleIndices_.size() << '\n';
+                return false;
+            }
+            return true;
+        };
+        return runCase(fcitx::windows::config::Orientation::horizontal) &&
+               runCase(fcitx::windows::config::Orientation::vertical);
+    }
+
     // Refresh only the visual configuration and text formats, without
     // reflowing the current model. Used from update(): the caller continues to
     // rebuild the candidate list with the new config, so calling reflow here
@@ -512,11 +578,11 @@ class CandidateWindow final {
                     std::max(labelColumnWidth, metrics.widthIncludingTrailingWhitespace);
             }
         }
+        const bool horizontalLayout =
+            visualConfig_.orientation.value_or(fcitx::windows::config::Orientation::vertical) ==
+            fcitx::windows::config::Orientation::horizontal;
         if (scrollMode_ && itemRects_.size() > scrollColumns_) {
             borderBrush->SetOpacity(0.55F);
-            const bool horizontalLayout =
-                visualConfig_.orientation.value_or(fcitx::windows::config::Orientation::vertical) ==
-                fcitx::windows::config::Orientation::horizontal;
             if (horizontalLayout) {
                 for (std::size_t row = scrollColumns_; row < itemRects_.size();
                      row += scrollColumns_) {
@@ -603,14 +669,17 @@ class CandidateWindow final {
             // The label column has a fixed width across every row so the
             // candidate text starts at the same x in all rows (the selected
             // row included), keeping the Chinese text columns aligned.
+            const float effectiveLabelColumnWidth =
+                scrollMode_ && candidate.label.empty() && !horizontalLayout ? 0.0F
+                                                                            : labelColumnWidth;
             if (!candidate.label.empty())
                 drawTextAt(bounds.left, candidate.label, labelFormat_.Get(),
                            selected ? selectedLabelBrush.Get() : labelBrush.Get(), nullptr,
                            false);
             float textWidth = 0.0F;
-            drawTextAt(bounds.left + labelColumnWidth, candidate.text, textFormat_.Get(),
+            drawTextAt(bounds.left + effectiveLabelColumnWidth, candidate.text, textFormat_.Get(),
                        selected ? selectedTextBrush.Get() : textBrush.Get(), &textWidth, false);
-            drawTextAt(bounds.left + labelColumnWidth + textWidth + 4.0F, candidate.comment,
+            drawTextAt(bounds.left + effectiveLabelColumnWidth + textWidth + 4.0F, candidate.comment,
                        annotationFormat_.Get(),
                        selected ? selectedCommentBrush.Get() : commentBrush.Get(), nullptr, true);
             fallbackTop += 32.0F;
@@ -713,7 +782,11 @@ class CandidateWindow final {
         const bool scrollEligible = visualConfig_.scrollMode.value_or(false) &&
                                     response.candidateBulk && response.candidatePageSize > 0U &&
                                     current.candidates.size() > response.candidatePageSize;
-        scrollExpanded_ = scrollEligible;
+        const bool focusBeyondFirstPage =
+            selected_ && *selected_ >= static_cast<std::size_t>(response.candidatePageSize);
+        scrollExpanded_ =
+            scrollEligible &&
+            (scrollExpanded_ || response.candidatePage > 0U || focusBeyondFirstPage);
         scrollMode_ = scrollEligible && scrollExpanded_;
         scrollColumns_ = std::clamp<std::size_t>(response.candidatePageSize, 1U, 9U);
         const std::size_t ordinaryCount =
@@ -803,6 +876,27 @@ class CandidateWindow final {
             static_cast<float>(visualConfig_.geometry.itemPaddingY.value_or(4.0) * scale);
         selectionInflateX_ = itemPaddingX * 0.65F;
         selectionInflateY_ = itemPaddingY * 0.55F;
+        const bool horizontalPresentation =
+            visualConfig_.orientation.value_or(config::Orientation::vertical) ==
+            config::Orientation::horizontal;
+        float scrollLabelColumnWidth = 0.0F;
+        if (scrollMode_ && horizontalPresentation) {
+            for (const auto candidateIndex : renderIndices_) {
+                const auto& candidate = candidates_[candidateIndex];
+                if (candidate.label.empty())
+                    continue;
+                ComPtr<IDWriteTextLayout> labelLayout;
+                DWRITE_TEXT_METRICS metrics{};
+                if (writeFactory_ && labelFormat_ &&
+                    SUCCEEDED(writeFactory_->CreateTextLayout(
+                        candidate.label.data(), static_cast<UINT32>(candidate.label.size()),
+                        labelFormat_.Get(), 4096.0F, 512.0F, &labelLayout)) &&
+                    SUCCEEDED(labelLayout->GetMetrics(&metrics))) {
+                    scrollLabelColumnWidth = (std::max)(
+                        scrollLabelColumnWidth, metrics.widthIncludingTrailingWhitespace);
+                }
+            }
+        }
         std::vector<ui::Size> items;
         items.reserve(renderIndices_.size());
         for (const auto candidateIndex : renderIndices_) {
@@ -824,6 +918,8 @@ class CandidateWindow final {
                 height = (std::max)(height, metrics.height);
                 return true;
             };
+            if (scrollMode_ && horizontalPresentation && candidate.label.empty())
+                width += scrollLabelColumnWidth;
             if (measure(candidate.label, labelFormat_.Get()) &&
                 measure(candidate.text, textFormat_.Get()) &&
                 measure(candidate.comment, annotationFormat_.Get())) {
@@ -832,11 +928,8 @@ class CandidateWindow final {
                 items.push_back({336 * scale, 32 * scale});
             }
         }
-        const ui::LayoutInput input{
-            visualConfig_.orientation.value_or(config::Orientation::vertical) ==
-                    config::Orientation::horizontal
-                ? ui::Orientation::horizontal
-                : ui::Orientation::vertical,
+        ui::LayoutInput input{
+            horizontalPresentation ? ui::Orientation::horizontal : ui::Orientation::vertical,
             std::move(items),
             {static_cast<float>(lastCaret_.left), static_cast<float>(lastCaret_.top)},
             static_cast<float>((std::max)(1, lastCaret_.bottom - lastCaret_.top)),
@@ -854,6 +947,8 @@ class CandidateWindow final {
             scrollColumns_,
             6U,
             selected_.value_or(0U)};
+        input.scrollCellWidth =
+            static_cast<float>(visualConfig_.scrollCellWidth.value_or(96.0) * scale);
         const auto layout = ui::layout(input);
         placement_ = layout.placement;
         const LONG left = static_cast<LONG>(layout.window.left);
@@ -1273,6 +1368,20 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     enableDpiAwareness();
     int argumentCount = 0;
     wchar_t** argumentValues = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (argumentValues) {
+        for (int index = 1; index < argumentCount; ++index) {
+            if (std::wstring_view(argumentValues[index]) == L"--generation" &&
+                index + 1 < argumentCount) {
+                const std::wstring generation = argumentValues[++index];
+                if (!SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION",
+                                             generation.c_str()) ||
+                    fcitx::windows::platform::currentRuntimeGeneration() != generation) {
+                    LocalFree(argumentValues);
+                    return 1;
+                }
+            }
+        }
+    }
     if (argumentValues && argumentCount > 1 &&
         std::wstring_view(argumentValues[1]) == L"--candidate-select-test") {
         const int result = runCandidateSelectionTest(argumentCount, argumentValues);
@@ -1284,11 +1393,13 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     const bool selfTest = arguments.find(L"--self-test") != std::wstring_view::npos;
     const bool interactionSelfTest =
         arguments.find(L"--interaction-self-test") != std::wstring_view::npos;
+    const bool scrollExpansionSelfTest =
+        arguments.find(L"--scroll-expansion-self-test") != std::wstring_view::npos;
     const bool reloadTest = arguments.find(L"--reload-test") != std::wstring_view::npos;
     const bool simulateDeviceLoss =
         arguments.find(L"--simulate-device-loss") != std::wstring_view::npos;
     const bool scrollDemo = arguments.find(L"--scroll-demo") != std::wstring_view::npos;
-    const bool demo = interactionSelfTest || scrollDemo ||
+    const bool demo = interactionSelfTest || scrollExpansionSelfTest || scrollDemo ||
                       arguments.find(L"--demo") != std::wstring_view::npos;
     const bool testOnce = arguments.find(L"--test-once") != std::wstring_view::npos;
     const bool safeMode = arguments.find(L"--safe-mode") != std::wstring_view::npos;
@@ -1299,6 +1410,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         window.showSyntheticPreview(scrollDemo);
     if (interactionSelfTest)
         return window.runInteractionSelfTest() ? 0 : 2;
+    if (scrollExpansionSelfTest)
+        return window.runScrollExpansionSelfTest() ? 0 : 2;
     if (simulateDeviceLoss) {
         window.simulateDeviceLossForTest();
         if (!window.paintOnce())

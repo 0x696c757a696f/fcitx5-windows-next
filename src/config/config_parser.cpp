@@ -186,14 +186,16 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
 
         if (const auto* candidate = root["candidate"].as_table()) {
             if (!allowed(*candidate,
-                         {"orientation", "page_size", "scroll_mode", "max_width_dip", "opacity",
-                          "geometry", "label", "colors"},
+                         {"orientation", "page_size", "scroll_mode", "max_width_dip",
+                          "scroll_cell_width_dip", "opacity", "geometry", "label", "colors"},
                          "candidate.", error))
                 return false;
             std::optional<std::string> orientation;
             if (!optionalValue(*candidate, "orientation", orientation, error) ||
                 !optionalValue(*candidate, "page_size", output.candidatePageSize, error) ||
                 !optionalValue(*candidate, "max_width_dip", output.maxWidth, error) ||
+                !optionalValue(*candidate, "scroll_cell_width_dip", output.scrollCellWidth,
+                               error) ||
                 !optionalValue(*candidate, "scroll_mode", output.scrollMode, error) ||
                 !optionalValue(*candidate, "opacity", output.opacity, error))
                 return false;
@@ -207,6 +209,8 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
             }
             if (!ranged(output.candidatePageSize, 1, 9, "candidate.page_size", error) ||
                 !ranged(output.maxWidth, 160, 2048, "candidate.max_width_dip", error) ||
+                !ranged(output.scrollCellWidth, 40, 160, "candidate.scroll_cell_width_dip",
+                        error) ||
                 !ranged(output.opacity, 0.2, 1.0, "candidate.opacity", error))
                 return false;
 
@@ -383,6 +387,8 @@ page_size = 5
 scroll_mode = true
 # 候选窗最大宽度，单位 DIP，范围 160–2048。
 max_width_dip = 860.0
+# 卷轴模式单个候选格子的目标宽度，单位 DIP，范围 40–160；长候选会省略。
+scroll_cell_width_dip = 96.0
 # 整体不透明度，范围 0.20–1.00。
 opacity = 1.0
 
@@ -586,6 +592,7 @@ Config mergeConfig(const Config& base, const Config& overrideConfig) {
     mergeOptional(result.orientation, overrideConfig.orientation);
     mergeOptional(result.scrollMode, overrideConfig.scrollMode);
     mergeOptional(result.maxWidth, overrideConfig.maxWidth);
+    mergeOptional(result.scrollCellWidth, overrideConfig.scrollCellWidth);
     mergeOptional(result.opacity, overrideConfig.opacity);
     mergeOptional(result.geometry.paddingX, overrideConfig.geometry.paddingX);
     mergeOptional(result.geometry.paddingY, overrideConfig.geometry.paddingY);

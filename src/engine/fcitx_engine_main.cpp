@@ -473,6 +473,14 @@ int wmain(int argc, wchar_t** argv) {
         fcitx::windows::engine::FcitxRuntime runtime;
         return runtime.initialize(false) && runtime.setDefaultInputMethod(id) ? 0 : 5;
     }
+    for (int index = 1; index < argc; ++index) {
+        if (std::wstring_view(argv[index]) == L"--generation" && index + 1 < argc) {
+            const std::wstring generation = argv[++index];
+            if (!SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", generation.c_str()) ||
+                fcitx::windows::platform::currentRuntimeGeneration() != generation)
+                return 1;
+        }
+    }
     fcitx::windows::platform::RuntimeIdentity identity;
     if (!fcitx::windows::platform::queryCurrentIdentity(identity) || !identity.mayUseUserEngine()) {
         return 4;
@@ -500,9 +508,12 @@ int wmain(int argc, wchar_t** argv) {
             readyEventName = argv[++index];
         } else if (argument == L"--stop-event" && index + 1 < argc) {
             stopEventName = argv[++index];
+        } else if (argument == L"--generation" && index + 1 < argc) {
+            ++index;
         } else {
             std::wcerr << L"Usage: fcitx5-engine [--test-once|--test-clients N] "
-                          L"[--pipe NAME] [--ready-event NAME] [--stop-event NAME]\n";
+                          L"[--pipe NAME] [--ready-event NAME] [--stop-event NAME] "
+                          L"[--generation GENERATION]\n";
             return 1;
         }
     }

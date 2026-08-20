@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <new>
@@ -704,6 +706,112 @@ EngineProcess startEngine(const wchar_t* executable) {
     return {process.hProcess, ready};
 }
 
+struct EnvironmentOverride {
+    std::wstring name;
+    std::wstring previous;
+    bool hadPrevious{};
+
+    explicit EnvironmentOverride(std::wstring variable, std::wstring value)
+        : name(std::move(variable)) {
+        previous.assign(32768, L'\0');
+        const DWORD length =
+            GetEnvironmentVariableW(name.c_str(), previous.data(),
+                                    static_cast<DWORD>(previous.size()));
+        if (length != 0 && length < previous.size()) {
+            hadPrevious = true;
+            previous.resize(length);
+        } else {
+            previous.clear();
+        }
+        SetEnvironmentVariableW(name.c_str(), value.c_str());
+    }
+
+    ~EnvironmentOverride() {
+        SetEnvironmentVariableW(name.c_str(), hadPrevious ? previous.c_str() : nullptr);
+    }
+
+    EnvironmentOverride(const EnvironmentOverride&) = delete;
+    EnvironmentOverride& operator=(const EnvironmentOverride&) = delete;
+};
+
+std::filesystem::path tempLocalAppDataRoot() {
+    std::wstring temporaryPath(32768, L'\0');
+    const DWORD length = GetTempPathW(static_cast<DWORD>(temporaryPath.size()),
+                                     temporaryPath.data());
+    if (length == 0 || length >= temporaryPath.size()) return {};
+    temporaryPath.resize(length);
+    return std::filesystem::path(temporaryPath) /
+           (L"fcitx5-tsf-key-guard-" + std::to_wstring(GetCurrentProcessId()));
+}
+
+int exerciseGuardFailOpen(const wchar_t* dllPath) {
+    const auto localAppData = tempLocalAppDataRoot();
+    if (localAppData.empty()) {
+        std::cerr << "temporary LOCALAPPDATA unavailable\n";
+        return 1;
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(localAppData, ignored);
+    const auto recovery = localAppData / L"Fcitx5" / L"recovery";
+    std::filesystem::create_directories(recovery, ignored);
+    {
+        std::ofstream marker(recovery / L"tsf-activation-disabled.v1", std::ios::binary);
+        marker << "format_version=1\nreason=test_guard\n";
+    }
+    EnvironmentOverride dataRootOverride(L"FCITX5_TEST_DATA_ROOT",
+                                         (localAppData / L"Fcitx5").wstring());
+    HMODULE module = LoadLibraryExW(dllPath, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                                        LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!module) {
+        std::cerr << "guard TSF DLL load failed: " << GetLastError() << '\n';
+        std::filesystem::remove_all(localAppData, ignored);
+        return 1;
+    }
+    using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**);
+    const auto getClassObject =
+        reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
+    ComPtr<IClassFactory> factory;
+    ComPtr<ITfTextInputProcessorEx> service;
+    ComPtr<ITfKeyEventSink> keySink;
+    TestThreadManager threadManager;
+    BOOL testEaten = TRUE;
+    BOOL keyEaten = TRUE;
+    TestContext context;
+    HRESULT result = getClassObject
+                         ? getClassObject(fcitx::windows::tsf::kTextServiceClsid,
+                                          IID_PPV_ARGS(&factory))
+                         : HRESULT_FROM_WIN32(GetLastError());
+    if (SUCCEEDED(result))
+        result = factory->CreateInstance(nullptr, IID_PPV_ARGS(&service));
+    if (SUCCEEDED(result))
+        result = service.As(&keySink);
+    if (SUCCEEDED(result))
+        result = service->ActivateEx(&threadManager, 1, 0);
+    const HRESULT testResult = SUCCEEDED(result)
+                                   ? keySink->OnTestKeyDown(&context, 'N', 0, &testEaten)
+                                   : result;
+    const HRESULT keyResult = SUCCEEDED(result)
+                                  ? keySink->OnKeyDown(&context, 'N', 0, &keyEaten)
+                                  : result;
+    const bool pass = SUCCEEDED(result) && SUCCEEDED(testResult) && SUCCEEDED(keyResult) &&
+                      !threadManager.lifecycleSinksAdvised() && !testEaten && !keyEaten &&
+                      context.text().empty();
+    if (service) (void)service->Deactivate();
+    keySink.Reset();
+    service.Reset();
+    factory.Reset();
+    FreeLibrary(module);
+    std::filesystem::remove_all(localAppData, ignored);
+    if (!pass) {
+        std::cerr << "TSF activation guard did not fail open: activate=0x" << std::hex
+                  << result << ", test=0x" << testResult << ", key=0x" << keyResult
+                  << ", lifecycle=" << threadManager.lifecycleSinksAdvised()
+                  << ", testEaten=" << testEaten << ", keyEaten=" << keyEaten << '\n';
+        return 1;
+    }
+    return 0;
+}
+
 int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
     HMODULE module = LoadLibraryExW(dllPath, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
                                                         LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -915,9 +1023,10 @@ int wmain(int argc, wchar_t** argv) {
     if (!SetEnvironmentVariableW(L"FCITX5_TEST_ENGINE_PATH", argv[2])) return 1;
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(initialized)) return 1;
+    int result = exerciseGuardFailOpen(argv[1]);
     EngineProcess engine = startEngine(argv[2]);
     if (!engine.process) std::cerr << "mock engine process unavailable\n";
-    int result = engine.process && engine.ready ? exercise(argv[1], engine.process) : 1;
+    if (result == 0) result = engine.process && engine.ready ? exercise(argv[1], engine.process) : 1;
     if (engine.process) {
         if (WaitForSingleObject(engine.process, 2000) != WAIT_OBJECT_0) {
             TerminateProcess(engine.process, 2);

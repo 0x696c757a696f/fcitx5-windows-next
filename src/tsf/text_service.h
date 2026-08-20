@@ -96,6 +96,7 @@ private:
     std::uint64_t activeContextId_{};
     std::string activeInputMethod_;
     bool imeActive_{};
+    bool guardFailOpen_{};
     HANDLE notificationEvent_{};
     HANDLE notificationWait_{};
     HWND notificationWindow_{};

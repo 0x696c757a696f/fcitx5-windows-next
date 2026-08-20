@@ -14,6 +14,8 @@ int wmain(int argc, wchar_t** argv) {
             readyEventName = argv[++index];
         } else if (argument == L"--stop-event" && index + 1 < argc) {
             stopEventName = argv[++index];
+        } else if (argument == L"--generation" && index + 1 < argc) {
+            ++index;
         } else if (argument == L"--safe-mode") {
             safeMode = true;
         } else {

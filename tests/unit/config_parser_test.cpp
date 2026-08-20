@@ -102,11 +102,14 @@ int main() {
         config.appearanceMode != AppearanceMode::dark ||
         config.orientation != Orientation::horizontal || config.scrollMode != true ||
         !config.candidatePageSize || *config.candidatePageSize != 6 ||
-        config.maxWidth != 860.0 || !config.colors.empty() || !config.candidateFont.families ||
+        config.maxWidth != 860.0 || config.scrollCellWidth != 96.0 || !config.colors.empty() ||
+        !config.candidateFont.families ||
         config.candidateFont.families->front() != "Microsoft YaHei") {
         std::cerr << "typed presentation update failed: " << error.message << '\n';
         return 1;
     }
+    if (parseConfig("format_version=1\n[candidate]\nscroll_cell_width_dip=39\n", config, error))
+        return 1;
     if (updatePresentationToml(defaults, "invalid", "builtin:default", "vertical", "disabled", "5",
                                "system", updated, error))
         return 1;

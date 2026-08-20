@@ -27,6 +27,9 @@
 #ifndef ArtifactDir
   #error ArtifactDir must be passed to ISCC
 #endif
+#ifndef ReleaseGeneration
+  #define ReleaseGeneration "current"
+#endif
 
 [Setup]
 AppId={#InstallerAppId}
@@ -43,12 +46,14 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\bin\fcitx5-config.exe
 ChangesEnvironment=no
-CloseApplications=yes
+CloseApplications=no
 RestartApplications=no
 SetupLogging=yes
 
 [Files]
-Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "portable.flag"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "portable.flag,tsf\x64\fcitx5-tsf.dll,tsf\x64\fcitx5-tsf.generation,tsf\x86\fcitx5-tsf.dll,tsf\x86\fcitx5-tsf.generation"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageDir}\tsf\x64\fcitx5-tsf.dll"; DestDir: "{tmp}\Fcitx5Tsf\x64"; Flags: deleteafterinstall
+Source: "{#StageDir}\tsf\x86\fcitx5-tsf.dll"; DestDir: "{tmp}\Fcitx5Tsf\x86"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{group}\Fcitx5 Settings"; Filename: "{app}\bin\fcitx5-config.exe"
@@ -58,6 +63,8 @@ Name: "{autodesktop}\Fcitx5 Settings"; Filename: "{app}\bin\fcitx5-config.exe"; 
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Run]
+Filename: "{app}\bin\fcitx5-updater.exe"; Parameters: "--install-tsf-dll ""{app}\tsf\x64\fcitx5-tsf.dll"" ""{tmp}\Fcitx5Tsf\x64\fcitx5-tsf.dll"" ""{#ReleaseGeneration}"""; Flags: runhidden waituntilterminated
+Filename: "{app}\bin\fcitx5-updater.exe"; Parameters: "--install-tsf-dll ""{app}\tsf\x86\fcitx5-tsf.dll"" ""{tmp}\Fcitx5Tsf\x86\fcitx5-tsf.dll"" ""{#ReleaseGeneration}"""; Flags: runhidden waituntilterminated; Check: IsWin64
 Filename: "{app}\bin\fcitx5-register.exe"; Parameters: "--register --dll ""{app}\tsf\x64\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated
 Filename: "{app}\bin\fcitx5-register-x86.exe"; Parameters: "--register --dll ""{app}\tsf\x86\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; Check: IsWin64
 Filename: "{app}\bin\fcitx5-control.exe"; Parameters: "--set-startup enabled"; Flags: runhidden waituntilterminated runasoriginaluser

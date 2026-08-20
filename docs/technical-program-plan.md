@@ -54,6 +54,38 @@ Engine dispatcher 的队列语义必须作为 contract 管理：同一 connectio
 且尚未执行的任务必须 DROP；已超时但可能执行过的 key 不重试，避免双提交或双翻页。
 性能优化不能改变这些 order/deadline/drop 语义。
 
+## 更新与 generation draining
+
+`fcitx5-tsf.dll` 更新不得靠强杀或强制关闭所有加载 TSF DLL 的宿主进程解决。TSF DLL 是
+宿主内组件，可能被 Word、浏览器、编辑器、Explorer、游戏和企业软件长期加载；产品不注入、
+不远程 `FreeLibrary`，也不把 Restart Manager 关闭宿主作为默认升级路径。
+
+采用 ADR 0005 的 deployment-level generation side-by-side draining：
+
+- 同一 generation 内组件严格同版，IPC protocol 可以 breaking change；
+- 更新事务允许多个完整 generation 暂时并存，但每个 generation 使用独立 runtime 目录和
+  generation-specific IPC endpoint；
+- TSF 文件更新使用 `rename-old -> install-new -> delayed cleanup`：旧宿主继续使用
+  `fcitx5-tsf.old.<generation>.<id>.dll`，新宿主从注册路径加载新的 `fcitx5-tsf.dll`；
+- 当前 `fcitx5-tsf.dll` 旁必须有 `fcitx5-tsf.generation` sidecar，DLL 优先读取该文件确定
+  自身 generation，再 fallback 到安装根 `current.json`；避免更新窗口中新 DLL 读旧 current
+  或旧 DLL 读新 current；
+- 旧 TSF 和旧 Engine/UI/runtime 成组自然 drain，不要求新 Engine 理解旧 protocol；
+- IPC/local object 名包含 `.Generation.<generation>`；launcher/engine/UI/TSF 都按 generation
+  路由，旧 TSF 从 `fcitx5-tsf.old.<generation>...dll` 解析 generation；
+- `current.json` 记录 active/previous runtime generation 和 build id；只有
+  `runtime\<generation>` 存在时 updater 才能发布为 current；
+- named-pipe 连接遇到 `ERROR_PIPE_BUSY` 时只允许在已有 absolute deadline 内等待可用实例；
+  超过 deadline 必须 fail-open，不得无限阻塞宿主输入线程；
+- 旧 DLL/旧 runtime 删除失败时记录 pending cleanup，后续 launcher/updater 重试，最终可用
+  `MoveFileEx(..., NULL, MOVEFILE_DELAY_UNTIL_REBOOT)` 延迟删除。
+- 每个 TSF generation 还有用户级 activation guard：激活失败或上次激活未收尾时，TSF 在
+  宿主内 fail-open，不注册 key sink、不连接 engine、不吃键；`fcitx5-control` 暴露状态和
+  reset，repair 可清除。这个 guard 不是 Windows 安全模式。
+
+这精确定义 v1.7 的版本原则：**磁盘上不保留永久 runtime protocol compatibility；更新期间
+允许多个完整 generation 暂时并存并由 IPC generation 隔离。**
+
 ## 设置生效语义
 
 - `Live`：安全、可逆的视觉或低风险设置立即生效并持久化；

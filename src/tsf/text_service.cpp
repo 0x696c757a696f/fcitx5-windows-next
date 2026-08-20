@@ -2,6 +2,7 @@
 
 #include "input_profiles.h"
 #include "input_scope_policy.h"
+#include "activation_guard.h"
 #include "module.h"
 #include "pipe_security.h"
 
@@ -41,6 +42,24 @@ std::wstring modulePath() {
     return path;
 }
 
+std::wstring tsfRuntimeGeneration(const std::filesystem::path& dllPath = modulePath()) {
+    const auto name = dllPath.filename().wstring();
+    constexpr std::wstring_view prefix = L"fcitx5-tsf.old.";
+    constexpr std::wstring_view suffix = L".dll";
+    if (name.size() > prefix.size() + suffix.size() && name.starts_with(prefix) &&
+        name.ends_with(suffix)) {
+        const auto begin = prefix.size();
+        const auto end = name.find(L'.', begin);
+        if (end != std::wstring::npos && end > begin)
+            return name.substr(begin, end - begin);
+    }
+    if (const auto generation = platform::currentRuntimeGenerationForModule(dllPath.wstring());
+        !generation.empty()) {
+        return generation;
+    }
+    return L"current";
+}
+
 std::wstring expectedEnginePath() {
 #if defined(FCITX_DEVELOPMENT_PEER_EXCEPTION)
     if (!platform::localTestNamespace().empty()) {
@@ -57,6 +76,12 @@ std::wstring expectedEnginePath() {
 #endif
     const std::filesystem::path dll(modulePath());
     if (dll.empty()) return {};
+    const auto generation = tsfRuntimeGeneration(dll);
+    const auto runtimeEngine =
+        dll.parent_path().parent_path().parent_path() / L"runtime" / generation / L"bin" /
+        L"fcitx5-engine.exe";
+    if (std::filesystem::exists(runtimeEngine))
+        return runtimeEngine.wstring();
     const auto sibling = dll.parent_path() / L"fcitx5-engine.exe";
     if (std::filesystem::exists(sibling)) return sibling.wstring();
     const auto packaged = dll.parent_path().parent_path().parent_path() / L"bin" /
@@ -107,7 +132,7 @@ bool rangeText(TfEditCookie editCookie, ITfRange* range, std::wstring& output) n
 std::wstring engineEndpoint() {
     platform::RuntimeIdentity identity;
     return platform::queryCurrentIdentity(identity)
-               ? platform::makeLocalEndpointName(identity, L"engine")
+               ? platform::makeLocalEndpointName(identity, tsfRuntimeGeneration(), L"engine")
                : std::wstring{};
 }
 
@@ -493,7 +518,8 @@ std::uint64_t currentKeyboardLayout() noexcept {
 } // namespace
 
 TextService::TextService()
-    : client_(engineEndpoint(), ipc::PeerPolicy::exact(expectedEnginePath())) {
+    : client_(engineEndpoint(), ipc::PeerPolicy::exact(expectedEnginePath()),
+              tsfRuntimeGeneration()) {
     moduleAddRef();
 }
 
@@ -679,15 +705,27 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
     if (threadManager_) {
         return E_UNEXPECTED;
     }
+    auto activationAttempt =
+        ActivationAttempt::begin(defaultActivationGuardDataRoot());
+    if (activationAttempt.failOpen()) {
+        guardFailOpen_ = true;
+        return S_OK;
+    }
+    const auto failOpenActivation = [&](std::string_view reason) noexcept -> HRESULT {
+        activationAttempt.disableAndFinish(reason);
+        (void)Deactivate();
+        guardFailOpen_ = true;
+        return S_OK;
+    };
     Microsoft::WRL::ComPtr<ITfKeystrokeMgr> keystrokeManager;
     HRESULT result = threadManager->QueryInterface(IID_PPV_ARGS(&keystrokeManager));
     if (FAILED(result)) {
-        return result;
+        return failOpenActivation("keystroke_manager_unavailable");
     }
     Microsoft::WRL::ComPtr<ITfSource> source;
     result = threadManager->QueryInterface(IID_PPV_ARGS(&source));
     if (FAILED(result)) {
-        return result;
+        return failOpenActivation("source_unavailable");
     }
     threadManager_ = threadManager;
     (void)threadManager_.As(&uiElementManager_);
@@ -699,7 +737,7 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
         threadManager_.Reset();
         uiElementManager_.Reset();
         clientId_ = TF_CLIENTID_NULL;
-        return result;
+        return failOpenActivation("thread_manager_sink_failed");
     }
     result = source->AdviseSink(IID_ITfThreadFocusSink,
                                 static_cast<ITfThreadFocusSink*>(this),
@@ -710,7 +748,7 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
         threadManager_.Reset();
         uiElementManager_.Reset();
         clientId_ = TF_CLIENTID_NULL;
-        return result;
+        return failOpenActivation("thread_focus_sink_failed");
     }
     result = source->AdviseSink(IID_ITfActiveLanguageProfileNotifySink,
                                 static_cast<ITfActiveLanguageProfileNotifySink*>(this),
@@ -724,7 +762,7 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
         threadManager_.Reset();
         uiElementManager_.Reset();
         clientId_ = TF_CLIENTID_NULL;
-        return result;
+        return failOpenActivation("active_profile_sink_failed");
     }
     result = keystrokeManager->AdviseKeyEventSink(clientId_, this, TRUE);
     if (FAILED(result)) {
@@ -737,11 +775,13 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
         threadManager_.Reset();
         uiElementManager_.Reset();
         clientId_ = TF_CLIENTID_NULL;
+        return failOpenActivation("key_event_sink_failed");
     }
     if (SUCCEEDED(result) && !initializeCandidateNotification()) {
-        (void)Deactivate();
-        return E_FAIL;
+        return failOpenActivation("candidate_notification_failed");
     }
+    activationAttempt.finish();
+    guardFailOpen_ = false;
     return result;
 }
 
@@ -782,6 +822,7 @@ HRESULT TextService::Deactivate() noexcept {
     uiElementManager_.Reset();
     threadManager_.Reset();
     clientId_ = TF_CLIENTID_NULL;
+    guardFailOpen_ = false;
     return result;
 }
 
@@ -878,6 +919,10 @@ HRESULT TextService::OnTestKeyDown(ITfContext* context, WPARAM virtualKey,
     if (!eaten) {
         return E_POINTER;
     }
+    if (guardFailOpen_) {
+        *eaten = FALSE;
+        return S_OK;
+    }
     bool sensitive = false;
     protocol::CaretRect ignored;
     if (context && clientId_ != TF_CLIENTID_NULL) {
@@ -906,6 +951,9 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
         return E_POINTER;
     }
     *eaten = FALSE;
+    if (guardFailOpen_) {
+        return S_OK;
+    }
     const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
     const bool rightAlt = (GetKeyState(VK_RMENU) & 0x8000) != 0;
     const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 ||
@@ -1040,6 +1088,9 @@ HRESULT TextService::OnKeyUp(ITfContext* context, WPARAM virtualKey,
         return E_POINTER;
     }
     *eaten = FALSE;
+    if (guardFailOpen_) {
+        return S_OK;
+    }
     const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
     const bool rightAlt = (GetKeyState(VK_RMENU) & 0x8000) != 0;
     const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 ||

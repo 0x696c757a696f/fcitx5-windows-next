@@ -52,7 +52,8 @@ class PipeClient final {
 public:
     PipeClient();
     explicit PipeClient(std::wstring pipeName,
-                        PeerPolicy peerPolicy = PeerPolicy::development());
+                        PeerPolicy peerPolicy = PeerPolicy::development(),
+                        std::wstring launcherGeneration = {});
     ~PipeClient();
 
     PipeClient(const PipeClient&) = delete;
@@ -103,6 +104,7 @@ private:
                                          KeyResult& result) noexcept;
 
     std::wstring pipeName_;
+    std::wstring launcherGeneration_;
     PeerPolicy peerPolicy_;
     platform::RuntimeIdentity identity_;
     HANDLE pipe_{INVALID_HANDLE_VALUE};

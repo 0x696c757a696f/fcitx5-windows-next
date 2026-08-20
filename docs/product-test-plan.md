@@ -86,6 +86,9 @@ actual menu item rectangles.
 | INST-001 | silent install | exact x64/x86 registrations and startup owner are present |
 | INST-002 | rerun same installer | repair restores owned files/registration without rebuilding |
 | INST-003 | silent uninstall | service stops, profiles/files are removed, declared user data is retained |
+| INST-004 | upgrade while old `fcitx5-tsf.dll` is loaded by a host | old DLL is renamed, new DLL is installed at the registered path, old host is not killed, cleanup is retried or scheduled |
+| INST-005 | mixed-generation TSF clients during upgrade drain | old TSF routes only to its old generation IPC/runtime, new TSF routes only to the new generation, no protocol compatibility shim is required; `current.json` advances only to an existing runtime generation |
+| INST-006 | stale/broken TSF activation after update | TSF activation returns success but fail-opens, no key sink is advised, host keys pass through, Control reports and resets the guard |
 | PORT-001 | extract, run, move, run | data root follows the moved tree and system drive is not used as fallback |
 
 ## Phase and component cases
@@ -94,7 +97,7 @@ actual menu item rectangles.
 |---|---|---|---|
 | Reference baseline | pinned source/commit/license and keep/refactor/reject record | missing/unpinned/unknown-license reference | PR |
 | Build/toolchain | x64+x86 warnings-as-errors, analysis, UTF-8/LF, declared dependencies | missing tool, cache removal, undeclared IDE/manual step | PR |
-| TSF/COM | register, activate, TestKey/KeyDown, composition and commit | duplicate TestKey, orphan KeyUp, sync termination, sensitive scope, missing engine | PR + Stable |
+| TSF/COM | register, activate, TestKey/KeyDown, composition and commit | duplicate TestKey, orphan KeyUp, sync termination, sensitive scope, missing engine, stale activation guard, in-use DLL upgrade drain | PR + Stable |
 | IPC | legal codec round-trip, multi-client, correct peer | truncation, oversized/unknown enum/version, wrong peer, timeout, late/stale response | PR + Nightly |
 | Launcher | normal start, warm ready, restart, stop/resume | immediate crash loop, Updating/Uninstalling/UserStopped demand start, secure desktop/session 0 | PR + Stable |
 | Fcitx engine | Pinyin and Rime preedit/candidate/commit; two contexts; x86+x64 clients | restart epoch, stale context/revision, UI absent, burst/key-repeat backlog | Nightly |
@@ -103,7 +106,7 @@ actual menu item rectangles.
 | Config/TOML | sparse override merge/reset, all enum/range boundaries, atomic write and reload | unknown/duplicate/wrong type/version, NaN/Inf, over-limit, interrupted/read-only/full-disk write | PR + Nightly |
 | Package repository | trusted signed index/package, dependency resolution, install/update/state/remove/rollback | bad/revoked key, hash mismatch, downgrade/cycle, offline/TLS error, interrupted transaction | PR + Nightly + Stable |
 | Archive/filesystem | declared files extract inside staging | traversal, absolute/UNC/ADS, case collision, symlink/reparse, zip bomb, undeclared file | PR + Nightly |
-| Deployment/update | atomic activation, health mark, one previous-known-good, owner-aware update | activation/health failure, external owner, rollback and cleanup interruption | PR + Stable |
+| Deployment/update | atomic activation, health mark, one previous-known-good, owner-aware update, generation-specific IPC/runtime drain | activation/health failure, external owner, rollback, cleanup interruption, locked old TSF DLL | PR + Stable |
 | Security/privacy | input processes have no network import; structured operational diagnostics | raw key/preedit/candidate/commit logging, unsafe DLL path, hook/injection/memory-access capability | PR + Stable |
 | Distribution | same-artifact promotion, hashes, SBOM, provenance, system metadata | dirty/untagged source, unsigned bytes, empty keyring, artifact/hash lineage mismatch | Stable |
 

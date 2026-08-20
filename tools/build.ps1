@@ -89,6 +89,9 @@ function Get-Architectures {
 }
 
 function Get-PresetName([string] $TargetArchitecture) {
+  if ($Command -eq 'package' -and $Configuration -eq 'Release') {
+    return "windows-$TargetArchitecture-release"
+  }
   return "windows-$TargetArchitecture-dev"
 }
 

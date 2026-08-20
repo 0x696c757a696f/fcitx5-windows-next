@@ -53,15 +53,20 @@ bool utf8OffsetToWide(std::string_view input, std::uint32_t offset,
 } // namespace
 
 PipeClient::PipeClient()
-    : peerPolicy_(PeerPolicy::development()) {
+    : launcherGeneration_(platform::currentRuntimeGeneration()),
+      peerPolicy_(PeerPolicy::development()) {
     if (platform::queryCurrentIdentity(identity_)) {
         pipeName_ = platform::makeLocalEndpointName(identity_, L"engine");
         sessionId_ = identity_.sessionId;
     }
 }
 
-PipeClient::PipeClient(std::wstring pipeName, PeerPolicy peerPolicy)
-    : pipeName_(std::move(pipeName)), peerPolicy_(std::move(peerPolicy)) {
+PipeClient::PipeClient(std::wstring pipeName, PeerPolicy peerPolicy,
+                       std::wstring launcherGeneration)
+    : pipeName_(std::move(pipeName)),
+      launcherGeneration_(launcherGeneration.empty() ? platform::currentRuntimeGeneration()
+                                                     : std::move(launcherGeneration)),
+      peerPolicy_(std::move(peerPolicy)) {
     if (platform::queryCurrentIdentity(identity_)) {
         sessionId_ = identity_.sessionId;
     }
@@ -88,10 +93,19 @@ bool PipeClient::connect(std::uint64_t deadline) noexcept {
         !identity_.mayUseUserEngine()) {
         return false;
     }
-    pipe_ = CreateFileW(pipeName_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-                        FILE_FLAG_OVERLAPPED, nullptr);
-    if (pipe_ == INVALID_HANDLE_VALUE) {
-        return false;
+    for (;;) {
+        pipe_ = CreateFileW(pipeName_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                            OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        if (pipe_ != INVALID_HANDLE_VALUE) {
+            break;
+        }
+        const DWORD error = GetLastError();
+        const DWORD wait = remainingMilliseconds(deadline);
+        if (error != ERROR_PIPE_BUSY || wait == 0 ||
+            !WaitNamedPipeW(pipeName_.c_str(), wait)) {
+            SetLastError(error);
+            return false;
+        }
     }
     if (!verifyPipeServer(pipe_, identity_, peerPolicy_)) {
         disconnect();
@@ -277,7 +291,8 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
             GetTickCount64() + (newContext ? kContextStartDeadlineMilliseconds
                                            : kInputDeadlineMilliseconds);
         if (!connect(deadline)) {
-            (void)requestLauncherStart(identity_, deadline, PeerPolicy::development());
+            (void)requestLauncherStart(identity_, launcherGeneration_, deadline,
+                                       PeerPolicy::development());
         }
         if (!connect(deadline) || !handshake(deadline)) {
             disconnect();

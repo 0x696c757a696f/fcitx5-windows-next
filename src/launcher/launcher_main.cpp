@@ -121,7 +121,8 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
     if (!stopEvent)
         return false;
     std::wstring command = quote(enginePath) + L" --ready-event " + quote(readyEventName) +
-                           L" --stop-event " + quote(stopEventName);
+                           L" --stop-event " + quote(stopEventName) + L" --generation " +
+                           quote(platform::currentRuntimeGeneration());
     if (safeMode)
         command += L" --safe-mode";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
@@ -148,7 +149,8 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
 
 bool launchUi(const std::wstring& uiPath, bool safeMode, HANDLE job, UiProcess& output) {
     std::wstring command =
-        quote(uiPath) + L" --parent-pid " + std::to_wstring(GetCurrentProcessId());
+        quote(uiPath) + L" --parent-pid " + std::to_wstring(GetCurrentProcessId()) +
+        L" --generation " + quote(platform::currentRuntimeGeneration());
     if (safeMode)
         command += L" --safe-mode";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
@@ -292,20 +294,37 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
             stopEventName = argv[++index];
         } else if (argument == L"--state-file" && index + 1 < argc) {
             stateFilePath = argv[++index];
+        } else if (argument == L"--generation" && index + 1 < argc) {
+            const std::wstring generation = argv[++index];
+            if (!SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", generation.c_str()) ||
+                platform::currentRuntimeGeneration() != generation)
+                return 1;
         } else {
             std::wcerr << L"Usage: fcitx5-launcher [--background] | "
                           L"--tray-self-test | "
                           L"--engine ABSOLUTE_PATH [--ui ABSOLUTE_PATH] "
                           L"[--no-warmup] "
                           L"[--engine-ready-event NAME] [--ready-event NAME] "
-                          L"[--stop-event NAME] [--state-file ABSOLUTE_PATH]\n";
+                          L"[--stop-event NAME] [--state-file ABSOLUTE_PATH] "
+                          L"[--generation GENERATION]\n";
             return 1;
         }
     }
     if (enginePath.empty() && installedDefaults) {
         const auto directory = executableDirectory();
-        enginePath = (directory / L"fcitx5-engine.exe").wstring();
-        uiPath = (directory / L"fcitx5-ui.exe").wstring();
+        const auto generation = platform::currentRuntimeGeneration();
+        const auto installedRoot = directory.filename() == L"bin" ? directory.parent_path()
+                                                                  : directory;
+        const auto generationBin = installedRoot / L"runtime" / generation / L"bin";
+        const auto generationEngine = generationBin / L"fcitx5-engine.exe";
+        const auto generationUi = generationBin / L"fcitx5-ui.exe";
+        if (std::filesystem::exists(generationEngine) && std::filesystem::exists(generationUi)) {
+            enginePath = generationEngine.wstring();
+            uiPath = generationUi.wstring();
+        } else {
+            enginePath = (directory / L"fcitx5-engine.exe").wstring();
+            uiPath = (directory / L"fcitx5-ui.exe").wstring();
+        }
     }
     if (!absoluteWindowsPath(enginePath) ||
         GetFileAttributesW(enginePath.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -320,13 +339,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         !platform::PipeSecurity::create(identity, security))
         return 4;
     const std::wstring endpoint = platform::makeLocalEndpointName(identity, L"launcher");
-    const std::wstring objectPrefix =
-        L"Local\\" + std::wstring(kReleaseIdentity.local_object_prefix);
-    const std::wstring mutexName = objectPrefix + L".Launcher." + identity.userSid + L".Session." +
-                                   std::to_wstring(identity.sessionId) +
-                                   (platform::localTestNamespace().empty()
-                                        ? std::wstring{}
-                                        : L".Test." + platform::localTestNamespace());
+    const std::wstring mutexName = platform::makeLocalObjectName(identity, L"launcher");
     HANDLE mutex = CreateMutexW(security.attributes(), FALSE, mutexName.c_str());
     if (!mutex)
         return 2;
@@ -355,8 +368,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         return 2;
     }
     const std::wstring readyEventName = externalReadyEvent.empty()
-                                            ? objectPrefix + L".Engine.Ready." + identity.userSid +
-                                                  L".Session." + std::to_wstring(identity.sessionId)
+                                            ? platform::makeLocalObjectName(identity, L"engine-ready")
                                             : externalReadyEvent;
     HANDLE engineReady = CreateEventW(security.attributes(), TRUE, FALSE, readyEventName.c_str());
     HANDLE launcherReady =
@@ -489,9 +501,9 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
             const auto decision = state.requestStart();
             if (decision.disposition == launcher::StartDisposition::start) {
                 ResetEvent(engineReady);
-                const std::wstring engineStopEventName = objectPrefix + L".Engine.Stop." +
-                                                         std::to_wstring(GetCurrentProcessId()) +
-                                                         L"." + std::to_wstring(++engineGeneration);
+                const std::wstring engineStopEventName =
+                    platform::makeLocalObjectName(
+                        identity, L"engine-stop-" + std::to_wstring(++engineGeneration));
                 if (!launchEngine(enginePath, readyEventName, engineStopEventName,
                                   decision.safeMode, job, security.attributes(), engine)) {
                     state.engineExited(0);
@@ -606,9 +618,10 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
                             decision = state.requestStart();
                             if (decision.disposition == launcher::StartDisposition::start &&
                                 !launchEngine(enginePath, readyEventName,
-                                              objectPrefix + L".Engine.Stop." +
-                                                  std::to_wstring(GetCurrentProcessId()) + L"." +
-                                                  std::to_wstring(++engineGeneration),
+                                              platform::makeLocalObjectName(
+                                                  identity,
+                                                  L"engine-stop-" +
+                                                      std::to_wstring(++engineGeneration)),
                                               decision.safeMode, job, security.attributes(),
                                               engine)) {
                                 state.engineExited(0);

@@ -43,6 +43,9 @@
 
 - 横向卷轴显示 `candidate.page_size × 6 行`；纵向卷轴显示 `6 列 × candidate.page_size 行`。
 - `candidate.page_size` 在设置里显示为“每行/每列候选数”：横向表示每行候选数，纵向表示每列候选数，范围 1–9。
+- `candidate.scroll_cell_width_dip` 控制卷轴模式单个候选格子的目标宽度（默认 96 DIP，范围
+  40–160）。这对应 fcitx5-macos webpanel 的 `ScrollCellWidth` 思路：卷轴格子宽度有边界，长候选
+  用 DWrite 单行省略显示，不能把整张候选窗撑成超宽横幅，也不能把短候选压成半个字形。
 - 横向六行视口在内部移动时保持稳定；只有高亮跨过六行边界时才翻屏，最后不足六行时向前回填以保持窗口高度。纵向按列分组，最后一列不足时仍只显示该列。
 - 末行/末列不足 N 个时，不存在的数字标签不会选择越界候选。
 - 边界语义：越界且有更多页 → 翻屏（新屏第 1 排，列/行首规则如上）；无更多页 → 高亮停在末尾/原位，不回跳第 1 行。
@@ -91,11 +94,13 @@
 ### 3.2 UI —— `src/ui/ui_main.cpp` / `src/ui/candidate_layout.cpp`
 
 - **scrollEligible**：`scroll_mode && candidateBulk && candidatePageSize > 0`；
-- **scrollExpanded**：`scrollEligible` 后立即展开。用户开启卷轴模式时，候选窗不再退回普通单行/单列分页。
-- **scrollMode_ = scrollEligible && scrollExpanded_**：横向按 `candidatePageSize × 6 行` 网格渲染；纵向按 `6 列 × candidatePageSize 行` 网格渲染；UI 只渲染 engine snapshot 的 label。
-- **对齐**：paint 前遍历可见候选测最宽 label → `labelColumnWidth`；`drawTextAt(text, bounds.left + labelColumnWidth)`；comment 起点再 +4px。
+- **scrollExpanded**：第一页不立即展开；只有同一 composition 已展开过、`candidatePage > 0`，或全局高亮 `selectedCandidate >= candidatePageSize` 时才展开。这样普通打字仍是普通一行/一列候选，继续按滚动/翻页键后才进入卷轴视口。
+- **scrollMode_ = scrollEligible && scrollExpanded_**：展开后横向按 `candidatePageSize × 6 行` 网格渲染；纵向按 `6 列 × candidatePageSize 行` 网格渲染；UI 只渲染 engine snapshot 的 label。
+- **对齐**：paint 前遍历可见候选测最宽 label → `labelColumnWidth`；`drawTextAt(text, bounds.left + labelColumnWidth)`；comment 起点再 +4px。横向卷轴里，无 label 的非高亮行也预留同一 label 起点，保证候选文字和 `1. 2. 3.` 那一行按列对齐；纵向卷轴里，非当前列不预留 label，避免短候选被挤成窄条。
 - **视口跟随**：按六行分组计算 viewport；组内移动不改变 `firstVisible`，末屏向前回填，避免窗口高度变化。
 - **宽度**：横向 scroll 布局按普通候选行测宽，避免无意义拉长；纵向 scroll 是列主序，优先保留每列自然宽度，最多 6 列，只有超过工作区宽度时才减少可见列或裁剪单个超宽列。
+- **卷轴 cell 绘制（2026-08-20 修正）**：`scroll_cell_width_dip`
+  是单个候选格子的最大 viewport 宽度，不是固定宽度；短候选按自然宽度收缩，长候选在该上限内省略。label、text、comment 都走单行 DWrite trimming；长词省略，短词完整显示。
 
 ### 3.3 键路由（TSF 层，前期已定）
 

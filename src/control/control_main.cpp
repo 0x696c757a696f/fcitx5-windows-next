@@ -1,4 +1,5 @@
 #include "config_model.h"
+#include "activation_guard.h"
 #include "deployment_core.h"
 #include "fcitx5_windows/release_identity.h"
 #include "fcitx5_windows/version.h"
@@ -379,12 +380,15 @@ std::string typeName(fcitx::package::PackageType type) {
 }
 
 fs::path defaultDataRoot() {
-    const fs::path executable = executableDirectory();
-    if (!executable.empty() && fs::exists(executable / L"portable.flag")) {
-        return executable / L"data";
-    }
-    if (!executable.empty() && fs::exists(executable.parent_path() / L"portable.flag")) {
-        return executable.parent_path() / L"data";
+    std::wstring modulePath(32768, L'\0');
+    const DWORD size = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (size > 0 && size < modulePath.size()) {
+        modulePath.resize(size);
+        if (const auto portableData =
+                fcitx::windows::platform::portableDataRootForModule(modulePath);
+            !portableData.empty()) {
+            return portableData;
+        }
     }
     PWSTR localAppData = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &localAppData)))
@@ -720,7 +724,7 @@ void usage() {
                   L"--packages-list|--packages-refresh [HTTPS_BASE]|"
                   L"--packages-install ID|--packages-update ID|"
                   L"--packages-state ID enabled|disabled|--packages-remove ID|"
-                  L"--packages-repair|--schema|--version\n";
+                  L"--packages-repair|--get-tsf-guard|--reset-tsf-guard|--schema|--version\n";
 }
 
 } // namespace
@@ -745,7 +749,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (arguments.size() == 1 && arguments[0] == L"--schema") {
         std::cout
-            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","packages_list","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
+            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","packages_list","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
             << '\n';
         return 0;
     }
@@ -763,6 +767,23 @@ int wmain(int argc, wchar_t** argv) {
     if (dataRoot.empty()) {
         std::cerr << "unable to resolve the user data directory\n";
         return 5;
+    }
+    if (arguments.size() == 1 && arguments[0] == L"--get-tsf-guard") {
+        const auto status = fcitx::windows::tsf::activationGuardStatus(dataRoot);
+        std::cout << "{\"format_version\":1,\"disabled\":"
+                  << (status.disabled ? "true" : "false")
+                  << ",\"reason\":" << jsonString(status.reason)
+                  << ",\"marker_path\":" << jsonString(narrow(status.markerPath.wstring()))
+                  << "}\n";
+        return 0;
+    }
+    if (arguments.size() == 1 && arguments[0] == L"--reset-tsf-guard") {
+        if (!fcitx::windows::tsf::clearActivationGuard(dataRoot)) {
+            std::cerr << "unable to clear TSF activation guard\n";
+            return 5;
+        }
+        std::cout << "{\"format_version\":1,\"tsf_guard\":\"enabled\"}\n";
+        return 0;
     }
     try {
         if (arguments.size() == 1 && arguments[0] == L"--get-input-methods") {
@@ -899,6 +920,7 @@ int wmain(int argc, wchar_t** argv) {
             ParseError error;
             configValid = validateConfig(configPath, text, error);
         }
+        const auto tsfGuard = fcitx::windows::tsf::activationGuardStatus(dataRoot);
         std::cout << "{\"format_version\":1,\"launcher_reachable\":"
                   << (reachable ? "true" : "false") << ",\"launcher_state\":"
                   << (reachable ? std::to_string(response.launcherState) : "null")
@@ -912,7 +934,11 @@ int wmain(int argc, wchar_t** argv) {
                   << (reachable ? jsonString(response.currentInputMethodNativeName) : "null")
                   << ",\"current_input_method_short_label\":"
                   << (reachable ? jsonString(response.currentInputMethodShortLabel) : "null")
-                  << ",\"config_valid\":" << (configValid ? "true" : "false") << ",\"data_root\":\""
+                  << ",\"config_valid\":" << (configValid ? "true" : "false")
+                  << ",\"tsf_guard_disabled\":"
+                  << (tsfGuard.disabled ? "true" : "false")
+                  << ",\"tsf_guard_reason\":" << jsonString(tsfGuard.reason)
+                  << ",\"data_root\":\""
                   << narrow(dataRoot.generic_wstring()) << "\",\"update_owner\":\""
                   << fcitx::update::owner_name(fcitx::update::read_update_owner(installationRoot()))
                   << "\"}\n";

@@ -60,9 +60,18 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
                          std::uint64_t absoluteDeadlineMilliseconds,
                          const PeerPolicy& peerPolicy, protocol::LauncherCommand command,
                          protocol::LauncherResponse& response) noexcept {
+    return sendLauncherCommand(identity, platform::currentRuntimeGeneration(),
+                               absoluteDeadlineMilliseconds, peerPolicy, command, response);
+}
+
+bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
+                         std::wstring_view generation,
+                         std::uint64_t absoluteDeadlineMilliseconds,
+                         const PeerPolicy& peerPolicy, protocol::LauncherCommand command,
+                         protocol::LauncherResponse& response) noexcept {
     response = {};
     if (!identity.mayUseUserEngine() || remaining(absoluteDeadlineMilliseconds) == 0) return false;
-    const std::wstring endpoint = platform::makeLocalEndpointName(identity, L"launcher");
+    const std::wstring endpoint = platform::makeLocalEndpointName(identity, generation, L"launcher");
     HANDLE pipe = CreateFileW(endpoint.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                               OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) return false;
@@ -128,8 +137,16 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
 bool requestLauncherStart(const platform::RuntimeIdentity& identity,
                           std::uint64_t absoluteDeadlineMilliseconds,
                           const PeerPolicy& peerPolicy) noexcept {
+    return requestLauncherStart(identity, platform::currentRuntimeGeneration(),
+                                absoluteDeadlineMilliseconds, peerPolicy);
+}
+
+bool requestLauncherStart(const platform::RuntimeIdentity& identity,
+                          std::wstring_view generation,
+                          std::uint64_t absoluteDeadlineMilliseconds,
+                          const PeerPolicy& peerPolicy) noexcept {
     protocol::LauncherResponse response;
-    return sendLauncherCommand(identity, absoluteDeadlineMilliseconds, peerPolicy,
+    return sendLauncherCommand(identity, generation, absoluteDeadlineMilliseconds, peerPolicy,
                                protocol::LauncherCommand::startDemand, response) &&
            response.status == protocol::Status::ok;
 }

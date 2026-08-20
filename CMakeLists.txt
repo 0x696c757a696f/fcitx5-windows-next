@@ -184,6 +184,14 @@ if(FCITX_DEVELOPMENT_PEER_EXCEPTION)
 endif()
 fcitx_apply_project_options(fcitx5_ipc_client)
 
+add_library(fcitx5_tsf_activation_guard STATIC src/tsf/activation_guard.cpp)
+add_library(fcitx5::tsf_activation_guard ALIAS fcitx5_tsf_activation_guard)
+target_compile_features(fcitx5_tsf_activation_guard PUBLIC cxx_std_20)
+target_include_directories(
+  fcitx5_tsf_activation_guard PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
+target_link_libraries(fcitx5_tsf_activation_guard PUBLIC fcitx5::release_identity shell32)
+fcitx_apply_project_options(fcitx5_tsf_activation_guard)
+
 add_executable(fcitx5_mock_engine src/engine/mock_engine_main.cpp)
 set_target_properties(fcitx5_mock_engine PROPERTIES OUTPUT_NAME "fcitx5-mock-engine")
 target_link_libraries(
@@ -213,7 +221,7 @@ target_link_libraries(
   fcitx5_control
   PRIVATE fcitx5::windows_common fcitx5::config fcitx5::protocol
           fcitx5::ipc_client fcitx5::platform fcitx5::package_core
-          fcitx5::deployment_core shell32 ole32)
+          fcitx5::deployment_core fcitx5::tsf_activation_guard shell32 ole32)
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
@@ -287,7 +295,9 @@ add_library(
 set_target_properties(fcitx5_tsf PROPERTIES PREFIX "" OUTPUT_NAME "fcitx5-tsf")
 target_include_directories(fcitx5_tsf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
 target_link_libraries(
-  fcitx5_tsf PRIVATE fcitx5::release_identity fcitx5::ipc_client uuid ole32 oleaut32 advapi32)
+  fcitx5_tsf
+  PRIVATE fcitx5::release_identity fcitx5::ipc_client fcitx5::tsf_activation_guard uuid ole32
+          oleaut32 advapi32)
 if(FCITX_DEVELOPMENT_PEER_EXCEPTION)
   target_compile_definitions(fcitx5_tsf PRIVATE FCITX_DEVELOPMENT_PEER_EXCEPTION=1)
 endif()
@@ -491,6 +501,9 @@ if(BUILD_TESTING)
   add_test(NAME candidate-ui-interaction-contract
            COMMAND fcitx5_ui --interaction-self-test)
   set_tests_properties(candidate-ui-interaction-contract PROPERTIES TIMEOUT 5)
+  add_test(NAME candidate-ui-scroll-expansion-contract
+           COMMAND fcitx5_ui --scroll-expansion-self-test)
+  set_tests_properties(candidate-ui-scroll-expansion-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-live-config-reflow
            COMMAND fcitx5_ui --self-test --reload-test)
 
@@ -523,6 +536,13 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_candidate_ui_element_test)
   fcitx_apply_binary_hardening(fcitx5_candidate_ui_element_test)
   add_test(NAME tsf-uiless-candidate-contract COMMAND fcitx5_candidate_ui_element_test)
+
+  add_executable(fcitx5_tsf_activation_guard_test tests/unit/tsf_activation_guard_test.cpp)
+  target_link_libraries(
+    fcitx5_tsf_activation_guard_test PRIVATE fcitx5::tsf_activation_guard)
+  fcitx_apply_project_options(fcitx5_tsf_activation_guard_test)
+  fcitx_apply_binary_hardening(fcitx5_tsf_activation_guard_test)
+  add_test(NAME tsf-activation-guard-contract COMMAND fcitx5_tsf_activation_guard_test)
 
   add_executable(fcitx5_runtime_identity_test tests/unit/runtime_identity_test.cpp)
   target_link_libraries(fcitx5_runtime_identity_test PRIVATE fcitx5::platform)
@@ -560,6 +580,15 @@ if(BUILD_TESTING)
   add_test(NAME ipc-idle-client
            COMMAND fcitx5_ipc_idle_client_test $<TARGET_FILE:fcitx5_mock_engine>)
   set_tests_properties(ipc-idle-client PROPERTIES TIMEOUT 30)
+
+  add_executable(fcitx5_ipc_generation_routing_test
+                 tests/integration/ipc_generation_routing_test.cpp)
+  target_link_libraries(fcitx5_ipc_generation_routing_test PRIVATE fcitx5::ipc_client)
+  fcitx_apply_project_options(fcitx5_ipc_generation_routing_test)
+  fcitx_apply_binary_hardening(fcitx5_ipc_generation_routing_test)
+  add_test(NAME ipc-generation-routing
+           COMMAND fcitx5_ipc_generation_routing_test $<TARGET_FILE:fcitx5_mock_engine>)
+  set_tests_properties(ipc-generation-routing PROPERTIES TIMEOUT 30)
 
   add_executable(fcitx5_ipc_late_response_test
                  tests/integration/ipc_late_response_test.cpp)

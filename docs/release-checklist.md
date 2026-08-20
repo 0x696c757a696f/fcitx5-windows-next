@@ -10,6 +10,11 @@
 - [ ] Interactive desktop gate passed against the exact staged lineage and
       `out/evidence/desktop-verification.json` records tray, Config Apply behavior, real Notepad
       commit, engine restart and engine-absent fail-open.
+- [ ] In-use TSF upgrade evidence proves `rename-old -> install-new -> delayed cleanup` and
+      generation-specific IPC routing; the upgrade does not forcibly close or inject into TSF host
+      applications.
+- [ ] TSF activation guard evidence proves stale/broken activation fail-opens, Control reports the
+      marker, reset clears it, and ordinary host typing works without logoff/reboot/Safe Mode.
 - [ ] Product-function inventory in `docs/ssdlc-verification-matrix.md` has no unowned or
       implicitly-passed row; settings persistence, real/preview renderer parity, long typing,
       scroll candidates, tray recovery and every bundled engine/addon have current evidence.
