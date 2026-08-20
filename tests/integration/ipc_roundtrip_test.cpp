@@ -88,7 +88,9 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(stalledPipe);
         CloseHandle(releaseEvent);
 
-        if (processed || elapsed > 250 || stalledResult.handled || !serverAcceptedRequest) {
+        if (processed ||
+            elapsed > fcitx::windows::ipc::kContextStartDeadlineMilliseconds + 500 ||
+            stalledResult.handled || !serverAcceptedRequest) {
             std::cerr << "stalled engine did not fail open within the bound\n";
             return 1;
         }

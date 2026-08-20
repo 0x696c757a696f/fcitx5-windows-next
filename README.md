@@ -65,7 +65,8 @@ Subject to v1.7 re-acceptance, the repository currently includes:
 - versioned IPC with deadline/fail-open behavior;
 - launcher lifecycle, tray status and crash-loop recovery;
 - Fcitx engine integration and candidate model contracts;
-- D2D/DWrite candidate UI with horizontal/vertical and scroll-mode behavior;
+- D2D/DWrite candidate UI with horizontal/vertical, scroll-mode behavior,
+  configurable opacity, and inline-or-panel preedit display;
 - WTL configuration app with startup, presentation, input-method and package
   surfaces;
 - signed package repository primitives for addons, input data, themes,

@@ -299,7 +299,7 @@ add_library(
   src/tsf/registration.cpp
   src/tsf/text_service.cpp
   src/tsf/fcitx5-tsf.def
-  resources/windows/app.rc)
+  resources/windows/tsf.rc)
 set_target_properties(fcitx5_tsf PROPERTIES PREFIX "" OUTPUT_NAME "fcitx5-tsf")
 target_include_directories(fcitx5_tsf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
 target_link_libraries(
@@ -376,14 +376,24 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_release_identity_test)
   add_test(NAME release-identity-contract COMMAND fcitx5_release_identity_test)
 
+  add_executable(fcitx5_brand_resource_test tests/unit/brand_resource_test.cpp)
+  fcitx_apply_project_options(fcitx5_brand_resource_test)
+  fcitx_apply_binary_hardening(fcitx5_brand_resource_test)
+  add_test(NAME brand-resource-contract
+           COMMAND fcitx5_brand_resource_test "${CMAKE_CURRENT_SOURCE_DIR}")
+
   add_executable(fcitx5_package_core_test tests/unit/package_core_test.cpp)
   target_include_directories(
     fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_MINIZ_SOURCE_DIR}")
+  target_include_directories(
+    fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
   target_link_libraries(
     fcitx5_package_core_test PRIVATE fcitx5::package_core fcitx5_miniz bcrypt)
   fcitx_apply_project_options(fcitx5_package_core_test)
   fcitx_apply_binary_hardening(fcitx5_package_core_test)
-  add_test(NAME package-core-contract COMMAND fcitx5_package_core_test)
+  add_test(NAME package-core-contract
+           COMMAND fcitx5_package_core_test
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/package_path_corpus.json")
 
   add_executable(
     fcitx5_control_package_integration_test
@@ -408,6 +418,12 @@ if(BUILD_TESTING)
   add_test(NAME control-schema COMMAND fcitx5_control --schema)
   add_test(NAME control-startup-query COMMAND fcitx5_control --get-startup)
   add_test(NAME register-version COMMAND fcitx5_register --version)
+  add_executable(fcitx5_register_artifact_test tests/unit/register_artifact_test.cpp)
+  add_dependencies(fcitx5_register_artifact_test fcitx5_register)
+  fcitx_apply_project_options(fcitx5_register_artifact_test)
+  fcitx_apply_binary_hardening(fcitx5_register_artifact_test)
+  add_test(NAME register-artifact-validation
+           COMMAND fcitx5_register_artifact_test $<TARGET_FILE:fcitx5_register>)
   add_test(NAME package-version COMMAND fcitx5_package --version)
   add_executable(fcitx5_deployment_core_test tests/unit/deployment_core_test.cpp)
   target_link_libraries(fcitx5_deployment_core_test PRIVATE fcitx5::deployment_core)
@@ -455,6 +471,10 @@ if(BUILD_TESTING)
   add_test(NAME config-ui-i18n-check COMMAND fcitx5_config_app --check-i18n)
   add_test(NAME config-ui-resource-check COMMAND fcitx5_config_app --check-resources)
   add_test(NAME config-ui-behavior-contract COMMAND fcitx5_config_app --ui-contract-test)
+  add_test(NAME config-ui-visual-contract
+           COMMAND fcitx5_config_app --ui-visual-contract-test)
+  add_test(NAME config-ui-live-preview-contract
+           COMMAND fcitx5_config_app --ui-live-preview-contract-test)
   add_test(NAME config-ui-interaction-coverage
            COMMAND fcitx5_config_app --ui-interaction-test)
 
@@ -519,6 +539,12 @@ if(BUILD_TESTING)
   add_test(NAME candidate-ui-scroll-expansion-contract
            COMMAND fcitx5_ui --scroll-expansion-self-test)
   set_tests_properties(candidate-ui-scroll-expansion-contract PROPERTIES TIMEOUT 5)
+  add_test(NAME candidate-ui-locale-contract
+           COMMAND fcitx5_ui --locale-self-test --safe-mode)
+  set_tests_properties(candidate-ui-locale-contract PROPERTIES TIMEOUT 5)
+  add_test(NAME candidate-ui-ux-contract
+           COMMAND fcitx5_ui --candidate-ux-self-test --safe-mode)
+  set_tests_properties(candidate-ui-ux-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-live-config-reflow
            COMMAND fcitx5_ui --self-test --reload-test)
 
@@ -560,7 +586,7 @@ if(BUILD_TESTING)
   add_test(NAME tsf-activation-guard-contract COMMAND fcitx5_tsf_activation_guard_test)
 
   add_executable(fcitx5_runtime_identity_test tests/unit/runtime_identity_test.cpp)
-  target_link_libraries(fcitx5_runtime_identity_test PRIVATE fcitx5::platform)
+  target_link_libraries(fcitx5_runtime_identity_test PRIVATE fcitx5::ipc_client)
   fcitx_apply_project_options(fcitx5_runtime_identity_test)
   fcitx_apply_binary_hardening(fcitx5_runtime_identity_test)
   add_test(NAME runtime-identity-contract COMMAND fcitx5_runtime_identity_test)
@@ -703,6 +729,9 @@ if(FCITX_BUILD_FUZZERS)
   fcitx_apply_binary_hardening(fcitx5_package_fuzz)
   if(BUILD_TESTING)
     add_test(NAME package-manifest-path-fuzz-smoke COMMAND fcitx5_package_fuzz)
+    add_test(NAME package-path-corpus-fuzz-smoke
+             COMMAND fcitx5_package_fuzz
+                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/package_path_corpus.json")
   endif()
 endif()
 

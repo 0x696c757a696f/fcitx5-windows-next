@@ -187,25 +187,39 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
         if (const auto* candidate = root["candidate"].as_table()) {
             if (!allowed(*candidate,
                          {"orientation", "page_size", "scroll_mode", "max_width_dip",
-                          "scroll_cell_width_dip", "opacity", "geometry", "label", "colors"},
+                          "scroll_cell_width_dip", "opacity", "preedit_mode", "geometry",
+                          "label", "colors"},
                          "candidate.", error))
                 return false;
             std::optional<std::string> orientation;
+            std::optional<std::string> preeditMode;
             if (!optionalValue(*candidate, "orientation", orientation, error) ||
                 !optionalValue(*candidate, "page_size", output.candidatePageSize, error) ||
                 !optionalValue(*candidate, "max_width_dip", output.maxWidth, error) ||
                 !optionalValue(*candidate, "scroll_cell_width_dip", output.scrollCellWidth,
                                error) ||
                 !optionalValue(*candidate, "scroll_mode", output.scrollMode, error) ||
-                !optionalValue(*candidate, "opacity", output.opacity, error))
+                !optionalValue(*candidate, "opacity", output.opacity, error) ||
+                !optionalValue(*candidate, "preedit_mode", preeditMode, error))
                 return false;
             if (orientation) {
-                if (*orientation == "vertical")
+                if (*orientation == "automatic")
+                    output.orientation = Orientation::automatic;
+                else if (*orientation == "vertical")
                     output.orientation = Orientation::vertical;
                 else if (*orientation == "horizontal")
                     output.orientation = Orientation::horizontal;
                 else
-                    return setError(error, "candidate.orientation must be vertical or horizontal");
+                    return setError(error,
+                                    "candidate.orientation must be automatic, vertical, or horizontal");
+            }
+            if (preeditMode) {
+                if (*preeditMode == "inline")
+                    output.preeditMode = PreeditMode::inline_;
+                else if (*preeditMode == "panel")
+                    output.preeditMode = PreeditMode::panel;
+                else
+                    return setError(error, "candidate.preedit_mode must be inline or panel");
             }
             if (!ranged(output.candidatePageSize, 1, 9, "candidate.page_size", error) ||
                 !ranged(output.maxWidth, 160, 2048, "candidate.max_width_dip", error) ||
@@ -378,8 +392,8 @@ mode = "system"
 theme = "builtin:default"
 
 [candidate]
-# vertical（纵向，默认）或 horizontal（横向）。
-orientation = "vertical"
+# automatic（默认）、vertical（纵向）或 horizontal（横向）。
+orientation = "automatic"
 # 横向时表示每行候选数；纵向时表示每列候选数。范围 1–9。
 page_size = 5
 # 卷轴模式：引擎提供 BulkCandidateList 时，方向键/PageUp/PageDown/Home/End
@@ -391,6 +405,8 @@ max_width_dip = 860.0
 scroll_cell_width_dip = 96.0
 # 整体不透明度，范围 0.20–1.00。
 opacity = 1.0
+# 预编辑显示位置：inline 表示应用内 TSF composition；panel 表示候选窗顶部。
+preedit_mode = "inline"
 
 [input_methods]
 # 启用的输入法（有序，顺序即切换顺序）。可用的 id 见 --get-input-methods。
@@ -527,11 +543,14 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
                             std::string_view scrollCellWidthDip,
                             std::string_view candidateFontSizeDip,
                             std::string_view cornerRadiusDip,
-                            std::string_view shadow) noexcept {
+                            std::string_view shadow,
+                            std::string_view opacity,
+                            std::string_view preeditMode) noexcept {
     output.clear();
     error = {};
     if ((appearanceMode != "system" && appearanceMode != "light" && appearanceMode != "dark") ||
-        (orientation != "vertical" && orientation != "horizontal") ||
+        (orientation != "automatic" && orientation != "vertical" &&
+         orientation != "horizontal") ||
         (scrollMode != "enabled" && scrollMode != "disabled") || theme.empty() ||
         theme.size() > 128 || candidatePageSize.empty() || candidatePageSize.size() > 2U ||
         candidateFont.empty() || candidateFont.size() > 128) {
@@ -564,11 +583,14 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
     double scrollCellWidth = 0.0;
     double candidateFontSize = 0.0;
     double cornerRadius = 0.0;
+    double parsedOpacity = 0.0;
     if (!parseDip(maxWidthDip, 160.0, 2048.0, maxWidth) ||
         !parseDip(scrollCellWidthDip, 40.0, 160.0, scrollCellWidth) ||
         !parseDip(candidateFontSizeDip, 8.0, 72.0, candidateFontSize) ||
         !parseDip(cornerRadiusDip, 0.0, 64.0, cornerRadius) ||
-        (!shadow.empty() && shadow != "enabled" && shadow != "disabled")) {
+        !parseDip(opacity, 0.2, 1.0, parsedOpacity) ||
+        (!shadow.empty() && shadow != "enabled" && shadow != "disabled") ||
+        (!preeditMode.empty() && preeditMode != "inline" && preeditMode != "panel")) {
         return setError(error, "invalid presentation setting");
     }
     try {
@@ -588,6 +610,10 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
             candidate.insert_or_assign("max_width_dip", maxWidth);
         if (!scrollCellWidthDip.empty())
             candidate.insert_or_assign("scroll_cell_width_dip", scrollCellWidth);
+        if (!opacity.empty())
+            candidate.insert_or_assign("opacity", parsedOpacity);
+        if (!preeditMode.empty())
+            candidate.insert_or_assign("preedit_mode", preeditMode);
         if (!cornerRadiusDip.empty() || !shadow.empty()) {
             if (!candidate["geometry"].as_table())
                 candidate.insert_or_assign("geometry", toml::table{});
@@ -630,6 +656,52 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
     }
 }
 
+bool resetPresentationToml(std::string_view source, std::string& output,
+                           ParseError& error) noexcept {
+    output.clear();
+    error = {};
+    try {
+        toml::table root = toml::parse(source.empty() ? "format_version = 1\n" : source);
+        root.erase("appearance");
+        if (auto* candidate = root["candidate"].as_table()) {
+            for (const std::string_view key : {"orientation", "page_size", "scroll_mode",
+                                               "max_width_dip", "scroll_cell_width_dip",
+                                               "opacity", "preedit_mode"}) {
+                candidate->erase(key);
+            }
+            if (auto* geometry = (*candidate)["geometry"].as_table()) {
+                geometry->erase("corner_radius_dip");
+                geometry->erase("shadow");
+                if (geometry->empty())
+                    candidate->erase("geometry");
+            }
+            if (candidate->empty())
+                root.erase("candidate");
+        }
+        if (auto* fonts = root["fonts"].as_table()) {
+            fonts->erase("candidate");
+            if (fonts->empty())
+                root.erase("fonts");
+        }
+        std::ostringstream stream;
+        stream << "# Fcitx5 for Windows 用户配置。UTF-8（无 BOM）、LF。\n"
+                  "# Appearance Reset 删除外观 override；未写出的字段继续继承当前主题/默认值。\n"
+               << toml::toml_formatter(root) << '\n';
+        Config validated;
+        if (!parseConfig(stream.str(), validated, error))
+            return false;
+        output = stream.str();
+        return true;
+    } catch (const toml::parse_error& exception) {
+        error.message = exception.description();
+        error.line = exception.source().begin.line;
+        error.column = exception.source().begin.column;
+        return false;
+    } catch (...) {
+        return setError(error, "unexpected presentation reset error");
+    }
+}
+
 Config mergeConfig(const Config& base, const Config& overrideConfig) {
     Config result = base;
     mergeOptional(result.appearanceMode, overrideConfig.appearanceMode);
@@ -639,6 +711,8 @@ Config mergeConfig(const Config& base, const Config& overrideConfig) {
     mergeOptional(result.maxWidth, overrideConfig.maxWidth);
     mergeOptional(result.scrollCellWidth, overrideConfig.scrollCellWidth);
     mergeOptional(result.opacity, overrideConfig.opacity);
+    mergeOptional(result.preeditMode, overrideConfig.preeditMode);
+    mergeOptional(result.candidatePageSize, overrideConfig.candidatePageSize);
     mergeOptional(result.geometry.paddingX, overrideConfig.geometry.paddingX);
     mergeOptional(result.geometry.paddingY, overrideConfig.geometry.paddingY);
     mergeOptional(result.geometry.itemPaddingX, overrideConfig.geometry.itemPaddingX);

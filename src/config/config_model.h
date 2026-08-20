@@ -10,8 +10,9 @@
 namespace fcitx::windows::config {
 
 enum class AppearanceMode { system, light, dark };
-enum class Orientation { vertical, horizontal };
+enum class Orientation { automatic, vertical, horizontal };
 enum class LabelStyle { plain, dot, paren, bracket, circled };
+enum class PreeditMode { inline_, panel };
 
 struct Geometry {
     std::optional<double> paddingX;
@@ -47,6 +48,7 @@ struct Config {
     std::optional<double> maxWidth;
     std::optional<double> scrollCellWidth;
     std::optional<double> opacity;
+    std::optional<PreeditMode> preeditMode;
     std::optional<int> candidatePageSize;
     std::vector<std::string> enabledInputMethods;
     std::optional<std::string> defaultInputMethod;
@@ -90,7 +92,11 @@ struct Theme {
                                           std::string_view scrollCellWidthDip = {},
                                           std::string_view candidateFontSizeDip = {},
                                           std::string_view cornerRadiusDip = {},
-                                          std::string_view shadow = {}) noexcept;
+                                          std::string_view shadow = {},
+                                          std::string_view opacity = {},
+                                          std::string_view preeditMode = {}) noexcept;
+[[nodiscard]] bool resetPresentationToml(std::string_view source, std::string& output,
+                                         ParseError& error) noexcept;
 [[nodiscard]] bool parseTheme(std::string_view text, Theme& output, ParseError& error) noexcept;
 [[nodiscard]] Config mergeConfig(const Config& base, const Config& overrideConfig);
 [[nodiscard]] Config resolveTheme(const Theme& theme, bool dark, const Config& userOverride);

@@ -37,6 +37,10 @@ bool launchAndWait(const fs::path& executable, const std::wstring& arguments, DW
     const DWORD wait = WaitForSingleObject(process.hProcess, 60'000);
     const bool success = wait == WAIT_OBJECT_0 &&
                          GetExitCodeProcess(process.hProcess, &exitCode) != FALSE;
+    if (wait == WAIT_TIMEOUT) {
+        TerminateProcess(process.hProcess, ERROR_TIMEOUT);
+        WaitForSingleObject(process.hProcess, 5000);
+    }
     CloseHandle(process.hProcess);
     return success;
 }
@@ -106,6 +110,11 @@ int elevateRegistration(const fs::path& executable, bool unregister) {
     DWORD exitCode = 13;
     if (wait == WAIT_OBJECT_0)
         GetExitCodeProcess(info.hProcess, &exitCode);
+    else if (wait == WAIT_TIMEOUT) {
+        TerminateProcess(info.hProcess, ERROR_TIMEOUT);
+        WaitForSingleObject(info.hProcess, 5000);
+        exitCode = ERROR_TIMEOUT;
+    }
     CloseHandle(info.hProcess);
     return static_cast<int>(exitCode);
 }

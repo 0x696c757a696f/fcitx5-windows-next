@@ -15,6 +15,15 @@ namespace {
 namespace fs = std::filesystem;
 using RegisterFunction = HRESULT(STDAPICALLTYPE*)();
 
+fs::path executablePath() {
+    std::wstring value(32'768, L'\0');
+    const DWORD size = GetModuleFileNameW(nullptr, value.data(), static_cast<DWORD>(value.size()));
+    if (size == 0 || size >= value.size())
+        return {};
+    value.resize(size);
+    return value;
+}
+
 std::wstring guidString(REFGUID guid) {
     std::array<wchar_t, 40> buffer{};
     return StringFromGUID2(guid, buffer.data(), static_cast<int>(buffer.size())) == 0
@@ -67,6 +76,47 @@ bool samePath(const fs::path& first, const fs::path& second) {
                                           normalizedSecond.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
+std::wstring currentArchitecture() {
+#if defined(_WIN64)
+    return L"x64";
+#else
+    return L"x86";
+#endif
+}
+
+std::wstring pairedArchitecture() {
+#if defined(_WIN64)
+    return L"x86";
+#else
+    return L"x64";
+#endif
+}
+
+bool validateProductArtifact(const fs::path& dll, std::wstring& error) {
+    error.clear();
+    const fs::path executable = executablePath();
+    if (executable.empty() || executable.parent_path().filename() != L"bin") {
+        error = L"register helper is not running from the product bin directory";
+        return false;
+    }
+    const fs::path root = executable.parent_path().parent_path();
+    const fs::path expectedDll = root / L"tsf" / currentArchitecture() / L"fcitx5-tsf.dll";
+    const fs::path pairedDll = root / L"tsf" / pairedArchitecture() / L"fcitx5-tsf.dll";
+    if (!fs::is_regular_file(expectedDll)) {
+        error = L"current architecture TSF DLL is missing from the product artifact";
+        return false;
+    }
+    if (!fs::is_regular_file(pairedDll)) {
+        error = L"paired architecture TSF DLL is missing from the product artifact";
+        return false;
+    }
+    if (!samePath(dll, expectedDll)) {
+        error = L"TSF DLL path does not belong to this product artifact";
+        return false;
+    }
+    return true;
+}
+
 HRESULT invokeRegistration(const fs::path& dll, const char* exportName) {
     SetDllDirectoryW(L"");
     HMODULE module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -79,7 +129,8 @@ HRESULT invokeRegistration(const fs::path& dll, const char* exportName) {
 
 void usage() {
     std::wcerr << L"Usage: fcitx5-register "
-                  L"--register|--unregister|--repair|--status --dll ABSOLUTE_PATH\n";
+                  L"--register|--unregister|--repair|--status|--validate-artifact "
+                  L"--dll ABSOLUTE_PATH\n";
 }
 
 } // namespace
@@ -98,6 +149,15 @@ int wmain(int argc, wchar_t** argv) {
     if (!dll.is_absolute() || dll.filename() != L"fcitx5-tsf.dll") {
         std::wcerr << L"The TSF DLL must be an absolute path ending in fcitx5-tsf.dll.\n";
         return 2;
+    }
+    std::wstring validationError;
+    if (!validateProductArtifact(dll, validationError)) {
+        std::wcerr << validationError << L'\n';
+        return 2;
+    }
+    if (operation == L"--validate-artifact") {
+        std::cout << "artifact_valid\n";
+        return 0;
     }
     if (operation == L"--status") {
         const std::wstring actual = registeredPath();

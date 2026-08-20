@@ -154,7 +154,26 @@ std::vector<std::uint8_t> handle(std::span<const std::uint8_t> requestBytes,
             request.metadata.compositionId, request.metadata.revision + 1};
         response.status = protocol::Status::ok;
         response.caret = request.caret;
-        if (compositionTest && request.virtualKey == 'N') {
+        if (request.inputMethodUtf8 == "mozc")
+            response.contentLocaleUtf8 = "ja-JP";
+        else if (request.inputMethodUtf8 == "hangul")
+            response.contentLocaleUtf8 = "ko-KR";
+        else if (!request.inputMethodUtf8.empty())
+            response.contentLocaleUtf8 = "zh-CN";
+        if (compositionTest && request.virtualKey == 'D') {
+            if (!request.surroundingTextValid) return {};
+            response.handled = true;
+            response.deleteSurroundingText = true;
+            response.deleteSurroundingOffset = -1;
+            response.deleteSurroundingSize = 1;
+        } else if (compositionTest && request.virtualKey == 'F') {
+            response.handled = true;
+            response.forwardKey = true;
+            response.forwardKeySym = 0x66;
+            response.forwardKeyCode = static_cast<std::int32_t>(request.scanCode);
+            response.forwardKeyRelease =
+                (request.keyFlags & protocol::kKeyFlagRelease) != 0;
+        } else if (compositionTest && request.virtualKey == 'N') {
             if (request.scanCode == 0 || request.keyboardLayout == 0 ||
                 (!request.inputMethodUtf8.empty() && request.inputMethodUtf8 != "mozc") ||
                 !request.surroundingTextValid) return {};

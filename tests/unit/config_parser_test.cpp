@@ -9,7 +9,7 @@ int main() {
     Config config;
     ParseError error;
     const auto defaults = defaultConfigToml();
-    if (!parseConfig(defaults, config, error) || config.orientation != Orientation::vertical ||
+    if (!parseConfig(defaults, config, error) || config.orientation != Orientation::automatic ||
         config.appearanceMode != AppearanceMode::system || !config.colors.empty()) {
         std::cerr << "annotated default config rejected: " << error.message << '\n';
         return 1;
@@ -34,6 +34,11 @@ int main() {
     if (!parseConfig("format_version = 1\n[candidate]\norientation = 'horizontal'\n", config,
                      error) ||
         config.orientation != Orientation::horizontal) {
+        return 1;
+    }
+    if (!parseConfig("format_version = 1\n[candidate]\norientation = 'automatic'\n", config,
+                     error) ||
+        config.orientation != Orientation::automatic) {
         return 1;
     }
     if (!parseConfig("format_version = 1\n[candidate]\npage_size = 7\n", config, error) ||
@@ -78,9 +83,11 @@ int main() {
     }
     Config userOverride;
     userOverride.orientation = Orientation::horizontal;
+    userOverride.candidatePageSize = 6;
     userOverride.colors["candidate_text"] = "#112233FF";
     const auto darkResolved = resolveTheme(theme, true, userOverride);
     if (darkResolved.orientation != Orientation::horizontal ||
+        darkResolved.candidatePageSize != 6 ||
         darkResolved.colors.at("candidate_text") != "#112233FF" ||
         darkResolved.colors.at("background") != "#242629F7") {
         std::cerr << "theme/user merge order failed\n";
@@ -98,17 +105,31 @@ int main() {
     std::string updated;
     if (!updatePresentationToml(defaults, "dark", "builtin:default", "horizontal", "enabled", "6",
                                 "Microsoft YaHei", updated, error, "720", "88", "20", "16",
-                                "disabled") ||
+                                "disabled", "0.95", "panel") ||
         !updated.starts_with("# Fcitx5 for Windows") || !parseConfig(updated, config, error) ||
         config.appearanceMode != AppearanceMode::dark ||
         config.orientation != Orientation::horizontal || config.scrollMode != true ||
         !config.candidatePageSize || *config.candidatePageSize != 6 ||
         config.maxWidth != 720.0 || config.scrollCellWidth != 88.0 || !config.colors.empty() ||
+        config.opacity != 0.95 || config.preeditMode != PreeditMode::panel ||
         !config.candidateFont.families ||
         config.candidateFont.families->front() != "Microsoft YaHei" ||
         config.candidateFont.size != 20.0 || config.geometry.cornerRadius != 16.0 ||
         config.geometry.shadow != false) {
         std::cerr << "typed presentation update failed: " << error.message << '\n';
+        return 1;
+    }
+    std::string reset;
+    if (!resetPresentationToml(updated, reset, error) || !parseConfig(reset, config, error) ||
+        config.appearanceMode || config.theme || config.orientation || config.candidatePageSize ||
+        config.scrollMode || config.maxWidth || config.scrollCellWidth || config.opacity ||
+        config.preeditMode || config.candidateFont.families || config.candidateFont.size ||
+        config.geometry.cornerRadius || config.geometry.shadow ||
+        reset.find("[appearance]") != std::string::npos ||
+        reset.find("[fonts.candidate]") != std::string::npos ||
+        reset.find("max_width_dip") != std::string::npos) {
+        std::cerr << "presentation reset did not remove sparse overrides: " << error.message
+                  << '\n';
         return 1;
     }
     if (parseConfig("format_version=1\n[candidate]\nscroll_cell_width_dip=39\n", config, error))
@@ -136,6 +157,14 @@ int main() {
     if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
                                "system", updated, error, "720", "96", "18", "12",
                                "maybe"))
+        return 1;
+    if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
+                               "system", updated, error, "720", "96", "18", "12",
+                               "enabled", "0.1", "inline"))
+        return 1;
+    if (updatePresentationToml(defaults, "system", "builtin:default", "vertical", "enabled", "6",
+                               "system", updated, error, "720", "96", "18", "12",
+                               "enabled", "0.9", "floating"))
         return 1;
     return 0;
 }

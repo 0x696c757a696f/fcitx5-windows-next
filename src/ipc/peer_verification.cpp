@@ -32,8 +32,10 @@ bool verifyPipeServer(HANDLE pipe, const platform::RuntimeIdentity& clientIdenti
         return false;
 #endif
     }
-    return !policy.expectedExecutablePath.empty() &&
-           platform::pathsReferToSameFile(server.executablePath, policy.expectedExecutablePath);
+    platform::ExecutableFileIdentity expected;
+    return !policy.expectedExecutablePath.empty() && server.executableFileVerified &&
+           platform::queryExecutableFileIdentity(policy.expectedExecutablePath, expected) &&
+           platform::executableFilesMatch(server.executableFile, expected);
 }
 
 bool verifyPipeClient(HANDLE pipe, const platform::RuntimeIdentity& serverIdentity,

@@ -9,9 +9,11 @@
 #include <fcitx5_windows/release_identity.h>
 
 #include <OleAuto.h>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <new>
 #include <string>
@@ -31,6 +33,12 @@ struct SurroundingTextSnapshot {
     std::string textUtf8;
     std::uint32_t cursor{};
     std::uint32_t anchor{};
+};
+
+struct LogicalKeyText {
+    std::string utf8;
+    std::wstring wide;
+    bool deadKey{};
 };
 
 std::wstring modulePath() {
@@ -324,6 +332,119 @@ bool queryContext(ITfContext* context, TfClientId clientId, protocol::CaretRect*
     return SUCCEEDED(requestResult) && SUCCEEDED(sessionResult);
 }
 
+class DeleteSurroundingTextSession final : public ITfEditSession {
+public:
+    DeleteSurroundingTextSession(ITfContext* context, std::int32_t offset,
+                                 std::uint32_t size)
+        : context_(context), offset_(offset), size_(size) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID interfaceId, void** object) noexcept override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualIID(interfaceId, IID_IUnknown) ||
+            IsEqualIID(interfaceId, IID_ITfEditSession)) {
+            *object = static_cast<ITfEditSession*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override {
+        return referenceCount_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() noexcept override {
+        const ULONG remaining = referenceCount_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE DoEditSession(TfEditCookie editCookie) noexcept override {
+        if (size_ == 0) {
+            applied_ = true;
+            return S_OK;
+        }
+        const auto maxLong = static_cast<std::int64_t>((std::numeric_limits<LONG>::max)());
+        const auto minLong = static_cast<std::int64_t>((std::numeric_limits<LONG>::min)());
+        const std::int64_t startDelta = offset_;
+        const std::int64_t endDelta = startDelta + static_cast<std::int64_t>(size_);
+        if (startDelta < minLong || startDelta > maxLong ||
+            endDelta < minLong || endDelta > maxLong || endDelta < startDelta) {
+            return E_INVALIDARG;
+        }
+
+        TF_SELECTION selection{};
+        ULONG fetched = 0;
+        HRESULT result = context_->GetSelection(editCookie, TF_DEFAULT_SELECTION, 1,
+                                                &selection, &fetched);
+        if (FAILED(result) || fetched != 1 || !selection.range) {
+            return FAILED(result) ? result : E_FAIL;
+        }
+        Microsoft::WRL::ComPtr<ITfRange> range;
+        range.Attach(selection.range);
+        result = range->Collapse(editCookie, TF_ANCHOR_END);
+        if (FAILED(result)) return result;
+
+        const auto shiftStart = [&](std::int64_t count) noexcept -> HRESULT {
+            LONG shifted = 0;
+            const auto requested = static_cast<LONG>(count);
+            const HRESULT shiftResult = range->ShiftStart(editCookie, requested, &shifted,
+                                                          nullptr);
+            if (FAILED(shiftResult)) return shiftResult;
+            return shifted == requested ? S_OK : E_FAIL;
+        };
+        const auto shiftEnd = [&](std::int64_t count) noexcept -> HRESULT {
+            LONG shifted = 0;
+            const auto requested = static_cast<LONG>(count);
+            const HRESULT shiftResult = range->ShiftEnd(editCookie, requested, &shifted,
+                                                        nullptr);
+            if (FAILED(shiftResult)) return shiftResult;
+            return shifted == requested ? S_OK : E_FAIL;
+        };
+
+        if (endDelta > 0) {
+            result = shiftEnd(endDelta);
+            if (FAILED(result)) return result;
+        }
+        if (startDelta != 0) {
+            result = shiftStart(startDelta);
+            if (FAILED(result)) return result;
+        }
+        if (endDelta < 0) {
+            result = shiftEnd(endDelta);
+            if (FAILED(result)) return result;
+        }
+        result = range->SetText(editCookie, 0, nullptr, 0);
+        applied_ = SUCCEEDED(result);
+        return result;
+    }
+
+    [[nodiscard]] bool applied() const noexcept { return applied_; }
+
+private:
+    ~DeleteSurroundingTextSession() = default;
+
+    std::atomic<ULONG> referenceCount_{1};
+    Microsoft::WRL::ComPtr<ITfContext> context_;
+    std::int32_t offset_{};
+    std::uint32_t size_{};
+    bool applied_{};
+};
+
+bool applyDeleteSurroundingText(ITfContext* context, TfClientId clientId,
+                                std::int32_t offset, std::uint32_t size) noexcept {
+    auto* session = new (std::nothrow) DeleteSurroundingTextSession(context, offset, size);
+    if (!session) return false;
+    HRESULT sessionResult = E_FAIL;
+    const HRESULT requestResult = context->RequestEditSession(
+        clientId, session, TF_ES_SYNC | TF_ES_READWRITE, &sessionResult);
+    const bool applied = SUCCEEDED(requestResult) && SUCCEEDED(sessionResult) &&
+                         session->applied();
+    session->Release();
+    return applied;
+}
+
 class CompositionEditSession final : public ITfEditSession {
 public:
     CompositionEditSession(ITfContext* context, ITfCompositionSink* sink,
@@ -468,30 +589,57 @@ bool applyTextUpdate(ITfContext* context, TfClientId clientId, ITfCompositionSin
     return applied;
 }
 
-bool translatePrintableKey(WPARAM virtualKey, LPARAM keyData,
-                           std::wstring& text) noexcept {
-    text.clear();
-    if (!((virtualKey >= 'A' && virtualKey <= 'Z') ||
-          (virtualKey >= '0' && virtualKey <= '9'))) {
-        return false;
-    }
+LogicalKeyText logicalKeyText(WPARAM virtualKey, LPARAM keyData) noexcept {
+    LogicalKeyText result;
     BYTE keyboardState[256]{};
     if (!GetKeyboardState(keyboardState))
-        return false;
+        return result;
     const HKL layout = GetKeyboardLayout(0);
     UINT scanCode = static_cast<UINT>((static_cast<std::uintptr_t>(keyData) >> 16U) & 0xffU);
     if (scanCode == 0)
         scanCode = MapVirtualKeyExW(static_cast<UINT>(virtualKey), MAPVK_VK_TO_VSC, layout);
     wchar_t buffer[8]{};
+    constexpr UINT kDoNotChangeKeyboardState = 0x4;
     const int count = ToUnicodeEx(static_cast<UINT>(virtualKey), scanCode, keyboardState,
-                                  buffer, static_cast<int>(std::size(buffer)), 0, layout);
-    if (count <= 0 || count > static_cast<int>(std::size(buffer)))
-        return false;
-    try {
-        text.assign(buffer, static_cast<std::size_t>(count));
+                                  buffer, static_cast<int>(std::size(buffer)),
+                                  kDoNotChangeKeyboardState, layout);
+    result.deadKey = count < 0;
+    const int length = count < 0 ? -count : count;
+    if (length <= 0 || length > static_cast<int>(std::size(buffer)))
+        return result;
+    result.wide.assign(buffer, static_cast<std::size_t>(length));
+    if (std::all_of(result.wide.begin(), result.wide.end(), [](wchar_t value) {
+            return (value < 0x20 && value != L' ') || value == 0x7f;
+        })) {
+        result.wide.clear();
+        return result;
+    }
+    result.utf8 = utf8FromWide(result.wide);
+    return result;
+}
+
+bool mayProduceTextFallback(WPARAM virtualKey) noexcept {
+    if ((virtualKey >= 'A' && virtualKey <= 'Z') ||
+        (virtualKey >= '0' && virtualKey <= '9')) {
         return true;
-    } catch (...) {
-        text.clear();
+    }
+    switch (virtualKey) {
+    case VK_SPACE:
+    case VK_OEM_1:
+    case VK_OEM_PLUS:
+    case VK_OEM_COMMA:
+    case VK_OEM_MINUS:
+    case VK_OEM_PERIOD:
+    case VK_OEM_2:
+    case VK_OEM_3:
+    case VK_OEM_4:
+    case VK_OEM_5:
+    case VK_OEM_6:
+    case VK_OEM_7:
+    case VK_OEM_8:
+    case VK_OEM_102:
+        return true;
+    default:
         return false;
     }
 }
@@ -861,7 +1009,7 @@ void TextService::dismissForFocusLoss(ITfContext* context) noexcept {
 }
 
 bool TextService::shouldRouteToEngine(WPARAM virtualKey, bool alt, bool rightAlt,
-                                      bool win) const noexcept {
+                                      bool win, bool hasLogicalText) const noexcept {
     // In the idle state the host editor owns navigation, Enter, Backspace,
     // punctuation and ordinary shortcuts. Route only keys that can start real
     // IME input or explicit IME hotkeys; once preedit/candidates exist, Fcitx
@@ -881,7 +1029,9 @@ bool TextService::shouldRouteToEngine(WPARAM virtualKey, bool alt, bool rightAlt
         return false;
     }
     if (!activeImeState) {
-        if ((virtualKey >= 'A' && virtualKey <= 'Z') && !ctrl && !alt)
+        if (hasLogicalText && !ctrl && !alt)
+            return true;
+        if (hasLogicalText && rightAlt)
             return true;
         if (virtualKey == VK_SPACE && ctrl && !alt)
             return true;
@@ -916,7 +1066,7 @@ HRESULT TextService::OnSetFocus(BOOL foreground) noexcept {
 }
 
 HRESULT TextService::OnTestKeyDown(ITfContext* context, WPARAM virtualKey,
-                                   LPARAM /*keyData*/, BOOL* eaten) noexcept {
+                                   LPARAM keyData, BOOL* eaten) noexcept {
     if (!eaten) {
         return E_POINTER;
     }
@@ -933,7 +1083,13 @@ HRESULT TextService::OnTestKeyDown(ITfContext* context, WPARAM virtualKey,
     const bool rightAlt = (GetKeyState(VK_RMENU) & 0x8000) != 0;
     const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 ||
                      (GetKeyState(VK_RWIN) & 0x8000) != 0;
-    *eaten = !sensitive && shouldRouteToEngine(virtualKey, alt, rightAlt, win) ? TRUE : FALSE;
+    const auto logical = logicalKeyText(virtualKey, keyData);
+    const bool textCapable =
+        !logical.utf8.empty() || logical.deadKey || mayProduceTextFallback(virtualKey);
+    *eaten = !sensitive &&
+                      shouldRouteToEngine(virtualKey, alt, rightAlt, win, textCapable)
+                  ? TRUE
+                  : FALSE;
     return S_OK;
 }
 
@@ -959,7 +1115,10 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
     const bool rightAlt = (GetKeyState(VK_RMENU) & 0x8000) != 0;
     const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 ||
                      (GetKeyState(VK_RWIN) & 0x8000) != 0;
-    if (!context || !shouldRouteToEngine(virtualKey, alt, rightAlt, win) ||
+    const auto logical = logicalKeyText(virtualKey, keyData);
+    const bool textCapable =
+        !logical.utf8.empty() || logical.deadKey || mayProduceTextFallback(virtualKey);
+    if (!context || !shouldRouteToEngine(virtualKey, alt, rightAlt, win, textCapable) ||
         clientId_ == TF_CLIENTID_NULL) {
         return S_OK;
     }
@@ -999,6 +1158,8 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
             keyFlags |= protocol::kKeyFlagAlt;
         if ((GetKeyState(VK_RMENU) & 0x8000) != 0)
             keyFlags |= protocol::kKeyFlagAltGr;
+        if (logical.deadKey)
+            keyFlags |= protocol::kKeyFlagDeadKey;
         if ((GetKeyState(VK_LWIN) & 0x8000) != 0 ||
             (GetKeyState(VK_RWIN) & 0x8000) != 0)
             keyFlags |= protocol::kKeyFlagSuper;
@@ -1008,7 +1169,7 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
         const bool engineResponded = client_.processKey(
             contextId, static_cast<std::uint32_t>(virtualKey), keyFlags, keyResult, caret,
             popupAllowed, scanCodeFromKeyData(virtualKey, keyData), extendedFromKeyData(keyData),
-            currentKeyboardLayout(), {}, activeInputMethod_, surrounding.valid,
+            currentKeyboardLayout(), logical.utf8, activeInputMethod_, surrounding.valid,
             surrounding.textUtf8, surrounding.cursor, surrounding.anchor);
         if (!engineResponded) {
             if (candidateUiElementId_ != TF_INVALID_UIELEMENTID && uiElementManager_) {
@@ -1016,17 +1177,33 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
                 candidateUiElementId_ = TF_INVALID_UIELEMENTID;
                 candidateUiElement_.Reset();
             }
-            std::wstring fallback;
-            if (translatePrintableKey(virtualKey, keyData, fallback)) {
+            if (!logical.deadKey && !logical.wide.empty()) {
                 *eaten = applyTextUpdate(context, clientId_, this,
                                          std::addressof(composition_),
-                                         std::move(fallback), {}, 0)
+                                         logical.wide, {}, 0)
                              ? TRUE
                              : FALSE;
             }
             return S_OK;
         }
         if (!keyResult.handled) {
+            return S_OK;
+        }
+        bool textOperationApplied = false;
+        if (keyResult.deleteSurroundingText) {
+            textOperationApplied = applyDeleteSurroundingText(
+                context, clientId_, keyResult.deleteSurroundingOffset,
+                keyResult.deleteSurroundingSize);
+            if (!textOperationApplied && keyResult.commit.empty() &&
+                keyResult.preedit.empty()) {
+                *eaten = FALSE;
+                return S_OK;
+            }
+        }
+        if (keyResult.forwardKey && keyResult.commit.empty() &&
+            keyResult.preedit.empty() && !keyResult.deleteSurroundingText &&
+            keyResult.candidateVisibility == 0) {
+            *eaten = FALSE;
             return S_OK;
         }
         imeActive_ = keyResult.candidateVisibility != 0 || !keyResult.preedit.empty();
@@ -1071,11 +1248,11 @@ HRESULT TextService::OnKeyDown(ITfContext* context, WPARAM virtualKey, LPARAM ke
             *eaten = TRUE;
             return S_OK;
         }
-        *eaten = applyTextUpdate(context, clientId_, this, std::addressof(composition_),
-                                 std::move(keyResult.commit), std::move(keyResult.preedit),
-                                 keyResult.preeditCaretUtf16)
-                     ? TRUE
-                     : FALSE;
+        textOperationApplied =
+            applyTextUpdate(context, clientId_, this, std::addressof(composition_),
+                            std::move(keyResult.commit), std::move(keyResult.preedit),
+                            keyResult.preeditCaretUtf16) || textOperationApplied;
+        *eaten = textOperationApplied ? TRUE : FALSE;
         return S_OK;
     } catch (...) {
         client_.disconnect();
@@ -1096,7 +1273,7 @@ HRESULT TextService::OnKeyUp(ITfContext* context, WPARAM virtualKey,
     const bool rightAlt = (GetKeyState(VK_RMENU) & 0x8000) != 0;
     const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 ||
                      (GetKeyState(VK_RWIN) & 0x8000) != 0;
-    if (!context || !shouldRouteToEngine(virtualKey, alt, rightAlt, win) ||
+    if (!context || !shouldRouteToEngine(virtualKey, alt, rightAlt, win, false) ||
         clientId_ == TF_CLIENTID_NULL || keyEventBusy_) {
         return S_OK;
     }

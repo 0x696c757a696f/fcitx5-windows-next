@@ -21,6 +21,7 @@ struct ReleaseIdentity {
   const wchar_t* data_directory;
   const wchar_t* registry_value;
   const wchar_t* installer_app_id;
+  const wchar_t* settings_app_user_model_id;
 };
 
 inline constexpr std::array<ReleaseIdentity, 3> kReleaseIdentities{{
@@ -30,21 +31,21 @@ inline constexpr std::array<ReleaseIdentity, 3> kReleaseIdentities{{
      {0x8fdc6a8e, 0x5d64, 0x4d4b, {0x9f, 0x50, 0x5c, 0x12, 0x18, 0xc0, 0xa6, 0x11}},
      L"Fcitx5 for Windows Next", L"Fcitx5WindowsNext.stable.v2",
      L"Fcitx5WindowsNext.Stable", L"Fcitx5", L"Fcitx5-Stable",
-     L"{A57DA7F2-9343-4FD4-8D29-CB68B77B82B1}"},
+     L"{A57DA7F2-9343-4FD4-8D29-CB68B77B82B1}", L"Fcitx5.Windows.Settings"},
     {ReleaseChannel::beta, "beta",
      {0xe4a7e415, 0x6b10, 0x4c9c, {0xa7, 0xd3, 0xee, 0xa0, 0x4f, 0xf1, 0xb5, 0x02}},
      {0xd75e6b19, 0xab5c, 0x43aa, {0x9c, 0x42, 0x63, 0x45, 0xd1, 0x9c, 0x1b, 0x03}},
      {0x8fdc6a8e, 0x5d64, 0x4d4b, {0x9f, 0x50, 0x5c, 0x12, 0x18, 0xc0, 0xa6, 0x12}},
      L"Fcitx5 for Windows Next Beta", L"Fcitx5WindowsNext.beta.v2",
      L"Fcitx5WindowsNext.Beta", L"Fcitx5-Beta", L"Fcitx5-Beta",
-     L"{61C768CC-19D8-4314-9ADE-CA5E70A836B2}"},
+     L"{61C768CC-19D8-4314-9ADE-CA5E70A836B2}", L"Fcitx5.Windows.Settings.Beta"},
     {ReleaseChannel::nightly, "nightly",
      {0xf2c959b8, 0x3ed4, 0x4a5a, {0xb1, 0xc6, 0x52, 0xc5, 0x9d, 0xe4, 0xc7, 0x04}},
      {0x0f9a9e42, 0x2771, 0x4f84, {0x9d, 0x7b, 0x8c, 0x19, 0x02, 0x36, 0xd8, 0x05}},
      {0x8fdc6a8e, 0x5d64, 0x4d4b, {0x9f, 0x50, 0x5c, 0x12, 0x18, 0xc0, 0xa6, 0x13}},
      L"Fcitx5 for Windows Next Nightly", L"Fcitx5WindowsNext.nightly.v2",
      L"Fcitx5WindowsNext.Nightly", L"Fcitx5-Nightly", L"Fcitx5-Nightly",
-     L"{50F78015-B016-4F62-8D37-A376505333C3}"},
+     L"{50F78015-B016-4F62-8D37-A376505333C3}", L"Fcitx5.Windows.Settings.Nightly"},
 }};
 
 inline constexpr ReleaseIdentity kReleaseIdentity =

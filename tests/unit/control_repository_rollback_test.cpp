@@ -10,10 +10,13 @@
 #include <bcrypt.h>
 #include <wincrypt.h>
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -115,9 +118,14 @@ std::string index_json(std::string_view channel, std::uint64_t sequence) {
          "\"dependencies\":[]}]}";
 }
 
-DWORD run_control(const fs::path& control, const fs::path& dataRoot, std::string& output) {
+DWORD run_control(const fs::path& control, const fs::path& dataRoot,
+                  std::span<const std::wstring> arguments, std::string& output) {
   std::wstring command = L"\"" + control.wstring() + L"\" --data-root \"" + dataRoot.wstring() +
-                         L"\" --packages-list";
+                         L"\"";
+  for (const auto& argument : arguments) {
+    command += L" ";
+    command += argument;
+  }
   std::vector<wchar_t> mutableCommand(command.begin(), command.end());
   mutableCommand.push_back(L'\0');
   SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
@@ -152,8 +160,38 @@ DWORD run_control(const fs::path& control, const fs::path& dataRoot, std::string
   return exitCode;
 }
 
+DWORD run_packages_list(const fs::path& control, const fs::path& dataRoot, std::string& output) {
+  const std::array arguments{std::wstring(L"--packages-list")};
+  return run_control(control, dataRoot, arguments, output);
+}
+
+DWORD run_packages_repair(const fs::path& control, const fs::path& dataRoot, std::string& output) {
+  const std::array arguments{std::wstring(L"--packages-repair")};
+  return run_control(control, dataRoot, arguments, output);
+}
+
 bool repository_available(std::string_view output) {
   return output.find("repository_available\":true") != std::string_view::npos;
+}
+
+void write_repository(const fs::path& dataRoot, const SigningFixture& signer,
+                      std::string_view channel, std::uint64_t sequence) {
+  const auto index = index_json(channel, sequence);
+  write_bytes(dataRoot / "repository/index.json", index);
+  const auto signature = signer.sign(index);
+  write_bytes(dataRoot / "repository/index.sig",
+              std::string_view(reinterpret_cast<const char*>(signature.data()),
+                               signature.size()));
+}
+
+void write_sequence(const fs::path& dataRoot, std::string_view text) {
+  write_bytes(dataRoot / "repository/sequence-stable.json", text);
+}
+
+bool sequence_contains(const fs::path& dataRoot, std::string_view text) {
+  std::ifstream input(dataRoot / "repository/sequence-stable.json", std::ios::binary);
+  const std::string bytes{std::istreambuf_iterator<char>(input), {}};
+  return bytes.find(text) != std::string::npos;
 }
 
 } // namespace
@@ -181,69 +219,116 @@ int wmain(int argc, wchar_t** argv) {
         base64(signer.public_blob()) + "\"}\n  ]\n}\n";
     write_bytes(keyringPath, keyring);
 
-    // Channel binding: a stable build must refuse a signed beta index.
-    const auto beta_index = index_json("beta", 10U);
-    write_bytes(dataRoot / "repository/index.json", beta_index);
-    const auto beta_sig = signer.sign(beta_index);
-    write_bytes(dataRoot / "repository/index.sig",
-                std::string_view(reinterpret_cast<const char*>(beta_sig.data()),
-                                 beta_sig.size()));
+    // First-run with no repository cache and no sequence state is allowed to
+    // report offline/unavailable rather than fail as corrupt established state.
     std::string output;
-    (void)run_control(control, dataRoot, output);
+    if (run_packages_list(control, dataRoot, output) != 0 || repository_available(output)) {
+      std::cerr << "empty first-run repository state did not report cleanly unavailable\n";
+      return 1;
+    }
+
+    // Channel binding: a stable build must refuse a signed beta index.
+    write_repository(dataRoot, signer, "beta", 10U);
+    output.clear();
+    (void)run_packages_list(control, dataRoot, output);
     if (repository_available(output)) {
       std::cerr << "beta index was accepted by a stable build\n";
       return 1;
     }
 
-    // Anti-rollback: sequence 3 is older than the accepted maximum 5.
-    const auto old_index = index_json("stable", 3U);
-    write_bytes(dataRoot / "repository/index.json", old_index);
-    const auto old_sig = signer.sign(old_index);
-    write_bytes(dataRoot / "repository/index.sig",
-                std::string_view(reinterpret_cast<const char*>(old_sig.data()),
-                                 old_sig.size()));
-    write_bytes(dataRoot / "repository/sequence-stable.json",
-                "format_version=1\nchannel=stable\nmax_release_sequence=5\n");
+    // Explicit repair/reset drops an invalid cached repository and returns to
+    // the first-run unavailable state instead of accepting the wrong channel.
     output.clear();
-    (void)run_control(control, dataRoot, output);
-    if (repository_available(output)) {
-      std::cerr << "stale repository index (sequence 3 < accepted 5) was accepted\n";
+    if (run_packages_repair(control, dataRoot, output) != 0 ||
+        output.find("\"repository_sequence_state\":\"reset\"") == std::string::npos) {
+      std::cerr << "explicit repair did not reset invalid repository state\n";
+      return 1;
+    }
+    output.clear();
+    if (run_packages_list(control, dataRoot, output) != 0 || repository_available(output)) {
+      std::cerr << "reset invalid repository cache was still available\n";
       return 1;
     }
 
-    // Mature cache without sequence state fails closed instead of pretending it
-    // was never initialized.
+    // Explicit repair can also rebuild missing sequence state from a valid,
+    // signed, channel-bound cache.
+    write_repository(dataRoot, signer, "stable", 8U);
+    output.clear();
+    if (run_packages_list(control, dataRoot, output) != 0 || repository_available(output)) {
+      std::cerr << "established cache with missing sequence state was accepted before repair\n";
+      return 1;
+    }
+    output.clear();
+    if (run_packages_repair(control, dataRoot, output) != 0 ||
+        output.find("\"repository_sequence_state\":\"repaired\"") == std::string::npos ||
+        !sequence_contains(dataRoot, "max_release_sequence=8\n")) {
+      std::cerr << "explicit repair did not rebuild accepted sequence state\n";
+      return 1;
+    }
+
+    // Interrupted atomic write simulation: an orphaned temporary file from an
+    // incomplete publication must not replace or poison the committed state.
+    write_bytes(dataRoot / "repository/sequence-stable.json.new",
+                "format_version=1\nchannel=stable\nmax_release_sequence=0\n");
+    output.clear();
+    if (run_packages_list(control, dataRoot, output) != 0 || !repository_available(output)) {
+      std::cerr << "orphaned sequence temp file affected committed state\n";
+      return 1;
+    }
+
+    // Anti-rollback: sequence 3 is older than the accepted maximum 8.
+    write_repository(dataRoot, signer, "stable", 3U);
+    write_sequence(dataRoot, "format_version=1\nchannel=stable\nmax_release_sequence=8\n");
+    output.clear();
+    (void)run_packages_list(control, dataRoot, output);
+    if (repository_available(output)) {
+      std::cerr << "stale repository index (sequence 3 < accepted 8) was accepted\n";
+      return 1;
+    }
+
+    // Once a high sequence has been accepted, deleting the sequence state must
+    // not silently turn the stale cache into a first-run sequence zero.
     fs::remove(dataRoot / "repository/sequence-stable.json", ignored);
     output.clear();
-    (void)run_control(control, dataRoot, output);
+    (void)run_packages_list(control, dataRoot, output);
     if (repository_available(output)) {
       std::cerr << "repository cache with missing sequence state was accepted\n";
       return 1;
     }
 
-    // Corrupt sequence state also fails closed and requires explicit repair.
-    write_bytes(dataRoot / "repository/sequence-stable.json",
-                "format_version=1\nchannel=stable\nmax_release_sequence=not-a-number\n");
+    // Truncated sequence state also fails closed.
+    write_sequence(dataRoot, "format_version=1\nchannel=stable\nmax_release_sequence=");
     output.clear();
-    (void)run_control(control, dataRoot, output);
+    (void)run_packages_list(control, dataRoot, output);
+    if (repository_available(output)) {
+      std::cerr << "repository cache with truncated sequence state was accepted\n";
+      return 1;
+    }
+
+    // Corrupt sequence state also fails closed.
+    write_sequence(dataRoot, "format_version=1\nchannel=stable\nmax_release_sequence=not-a-number\n");
+    output.clear();
+    (void)run_packages_list(control, dataRoot, output);
     if (repository_available(output)) {
       std::cerr << "repository cache with corrupt sequence state was accepted\n";
       return 1;
     }
 
-    // A newer sequence is accepted.
-    const auto fresh_index = index_json("stable", 6U);
-    write_bytes(dataRoot / "repository/index.json", fresh_index);
-    const auto fresh_sig = signer.sign(fresh_index);
-    write_bytes(dataRoot / "repository/index.sig",
-                std::string_view(reinterpret_cast<const char*>(fresh_sig.data()),
-                                 fresh_sig.size()));
-    write_bytes(dataRoot / "repository/sequence-stable.json",
-                "format_version=1\nchannel=stable\nmax_release_sequence=6\n");
+    // A valid newer cache can be explicitly repaired after corruption.
+    write_repository(dataRoot, signer, "stable", 9U);
     output.clear();
-    (void)run_control(control, dataRoot, output);
+    if (run_packages_repair(control, dataRoot, output) != 0 ||
+        output.find("\"repository_sequence_state\":\"repaired\"") == std::string::npos ||
+        !sequence_contains(dataRoot, "max_release_sequence=9\n")) {
+      std::cerr << "explicit repair did not recover from corrupt sequence state\n";
+      return 1;
+    }
+
+    // A newer sequence is accepted after state repair.
+    output.clear();
+    (void)run_packages_list(control, dataRoot, output);
     if (!repository_available(output)) {
-      std::cerr << "fresh repository index (sequence 6) was rejected\n";
+      std::cerr << "fresh repository index (sequence 9) was rejected\n";
       return 1;
     }
   } catch (const std::exception& error) {

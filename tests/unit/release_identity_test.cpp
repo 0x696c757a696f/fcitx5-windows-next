@@ -25,14 +25,17 @@ int main() {
   std::set<std::wstring> tray_icons;
   std::set<std::wstring> pipes;
   std::set<std::wstring> app_ids;
+  std::set<std::wstring> settings_app_ids;
   for (const auto& identity : kReleaseIdentities) {
     if (identity.channel_name.empty() || !identity.service_description || !identity.pipe_prefix ||
         !identity.data_directory || !identity.registry_value || !identity.installer_app_id ||
+        !identity.settings_app_user_model_id ||
         !clsids.emplace(guid_text(identity.text_service_clsid)).second ||
         !profiles.emplace(guid_text(identity.language_profile_guid)).second ||
         !tray_icons.emplace(guid_text(identity.notification_icon_guid)).second ||
         !pipes.emplace(identity.pipe_prefix).second ||
-        !app_ids.emplace(identity.installer_app_id).second) {
+        !app_ids.emplace(identity.installer_app_id).second ||
+        !settings_app_ids.emplace(identity.settings_app_user_model_id).second) {
       std::cerr << "release identities are incomplete or collide\n";
       return 1;
     }

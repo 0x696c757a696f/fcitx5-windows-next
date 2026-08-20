@@ -74,7 +74,7 @@ inline constexpr GUID kRimeProfileGuid = rimeProfileGuid();
 
 inline constexpr std::array<InputProfile, 1> kInputProfiles{{
     {"zh-cn-fcitx5", "zh-CN", MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED),
-     kLanguageProfileGuid, L"Fcitx5 for Windows Next", "", true},
+     kLanguageProfileGuid, L"Fcitx5", "", true},
 }};
 
 constexpr const InputProfile* profileForGuid(REFGUID guid) noexcept {

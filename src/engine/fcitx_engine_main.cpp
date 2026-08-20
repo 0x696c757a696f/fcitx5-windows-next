@@ -148,6 +148,7 @@ protocol::KeyResponse makeStateResponse(
     response.forwardKeyRelease = runtimeResult.forwardKeyRelease;
     response.caret = runtimeResult.caret;
     response.popupAllowed = runtimeResult.popupAllowed;
+    response.contentLocaleUtf8 = runtimeResult.contentLocaleUtf8;
     return response;
 }
 

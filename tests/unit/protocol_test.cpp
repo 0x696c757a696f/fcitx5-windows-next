@@ -21,7 +21,7 @@ int main() {
     using namespace fcitx::windows::protocol;
 
     const KeyRequest input{Metadata{42, 0, 99, 3, 7, 11, 13},
-                           static_cast<std::uint32_t>('A'), 0,
+                           static_cast<std::uint32_t>('A'), kKeyFlagDeadKey,
                            0x1e, false, true, 0x04090409ULL, "a",
                            "pinyin",
                            true, "你a", 2, 2,
@@ -77,6 +77,7 @@ int main() {
     responseInput.forwardKeyRelease = true;
     responseInput.caret = input.caret;
     responseInput.popupAllowed = false;
+    responseInput.contentLocaleUtf8 = "ja-JP";
     const auto responseBytes = encode(responseInput);
     KeyResponse responseOutput;
     if (!expect(decodeFrame(responseBytes, frame) && decode(frame, responseOutput),
@@ -97,6 +98,7 @@ int main() {
                     responseOutput.forwardKeyCode == 28 &&
                     responseOutput.forwardKeyRelease &&
                     !responseOutput.popupAllowed &&
+                    responseOutput.contentLocaleUtf8 == responseInput.contentLocaleUtf8 &&
                     responseOutput.caret == responseInput.caret,
                 "roundtrip changed response")) {
         return 1;
@@ -216,7 +218,7 @@ int main() {
         const Metadata requestMetadata{iteration, 0, random() | 1U, 1U, random() | 1U,
                                        random(), random()};
         const KeyRequest propertyInput{requestMetadata, static_cast<std::uint32_t>(random()),
-                                       static_cast<std::uint32_t>(random()),
+                                       static_cast<std::uint32_t>(random()) & kKnownKeyFlags,
                                        static_cast<std::uint32_t>(random() & 0xffU),
                                        (random() & 1U) != 0,
                                        (random() & 1U) != 0,
@@ -246,13 +248,14 @@ int main() {
 
         std::string commit(static_cast<std::size_t>(random() % (kMaxCommitUtf8 + 1)), '\0');
         for (char& value : commit) value = static_cast<char>(random());
-        const KeyResponse propertyResponse{
+        KeyResponse propertyResponse{
             Metadata{iteration + 20'000, iteration, requestMetadata.engineEpoch,
                      requestMetadata.sessionId, requestMetadata.contextId,
                      requestMetadata.compositionId, requestMetadata.revision},
             static_cast<Status>(random() %
                                 (static_cast<std::uint32_t>(Status::accessDenied) + 1U)),
             (random() & 1U) != 0, commit, "preedit", 3};
+        propertyResponse.contentLocaleUtf8 = (iteration & 1U) != 0 ? "ja-JP" : "en-US";
         KeyResponse propertyResponseOutput;
         if (!expect(decodeFrame(encode(propertyResponse), frame) &&
                         decode(frame, propertyResponseOutput) &&
@@ -264,7 +267,9 @@ int main() {
                         propertyResponseOutput.preeditCaretUtf8 ==
                             propertyResponse.preeditCaretUtf8 &&
                         propertyResponseOutput.popupAllowed ==
-                            propertyResponse.popupAllowed,
+                            propertyResponse.popupAllowed &&
+                        propertyResponseOutput.contentLocaleUtf8 ==
+                            propertyResponse.contentLocaleUtf8,
                     "key response property roundtrip failed")) return 1;
     }
 
@@ -286,6 +291,11 @@ int main() {
                                 false, {}, 0, 0};
     if (!expect(encode(oversizedLogical).empty(),
                 "oversize logical key text encoded")) return 1;
+    KeyRequest unknownKeyFlag{Metadata{93, 0, 1, 1, 1, 0, 0}, 'A',
+                              kKnownKeyFlags << 1U, 0, false, true, 0,
+                              {}, {}, false, {}, 0, 0};
+    if (!expect(encode(unknownKeyFlag).empty(),
+                "unknown key flag encoded")) return 1;
     KeyRequest oversizedInputMethod{Metadata{90, 0, 1, 1, 1, 0, 0}, 'A', 0,
                                     0, false, true, 0, {},
                                     std::string(kMaxInputMethodIdUtf8 + 1, 'x'),
@@ -319,6 +329,12 @@ int main() {
                 "out-of-range preedit caret encoded")) {
         return 1;
     }
+    KeyResponse invalidLocale{Metadata{1, 1, 1, 1, 1, 0, 0}, Status::ok, true};
+    invalidLocale.contentLocaleUtf8 = "../bad";
+    if (!expect(encode(invalidLocale).empty(), "invalid content locale encoded")) return 1;
+    KeyResponse oversizedLocale{Metadata{1, 1, 1, 1, 1, 0, 0}, Status::ok, true};
+    oversizedLocale.contentLocaleUtf8 = std::string(kMaxLocaleUtf8 + 1, 'x');
+    if (!expect(encode(oversizedLocale).empty(), "oversize content locale encoded")) return 1;
 
     auto invalidType = bytes;
     invalidType[6] = 0xffU;

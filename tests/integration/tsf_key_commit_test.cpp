@@ -864,6 +864,22 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
             BOOL preeditTestEaten = FALSE;
             BOOL duplicatePreeditTestEaten = FALSE;
             BOOL preeditEaten = FALSE;
+            TestContext deleteContext;
+            deleteContext.setDocumentText(L"abc", 2);
+            BOOL deleteTestEaten = FALSE;
+            BOOL deleteEaten = FALSE;
+            const HRESULT deleteTest =
+                keySink->OnTestKeyDown(&deleteContext, 'D', 0, &deleteTestEaten);
+            const HRESULT deleteResult =
+                keySink->OnKeyDown(&deleteContext, 'D', 0, &deleteEaten);
+            const bool deleteSurroundingApplied = deleteContext.text() == L"ac";
+            TestContext forwardContext;
+            BOOL forwardTestEaten = TRUE;
+            BOOL forwardEaten = TRUE;
+            const HRESULT forwardTest =
+                keySink->OnTestKeyDown(&forwardContext, 'F', 0, &forwardTestEaten);
+            const HRESULT forwardResult =
+                keySink->OnKeyDown(&forwardContext, 'F', 0, &forwardEaten);
             const HRESULT preeditTest =
                 keySink->OnTestKeyDown(&context, 'N', 0, &preeditTestEaten);
             const HRESULT duplicatePreeditTest =
@@ -891,9 +907,9 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
             const HRESULT commitResult =
                 keySink->OnKeyDown(&context, VK_SPACE, 0, &commitEaten);
             const bool committedChinese = context.text() == L"\x4f60";
-            // Idle editor/navigation keys belong to the host application. Fcitx
-            // only receives keys that start or continue real IME state, plus
-            // explicit IME hotkeys.
+            // Idle editor/navigation keys belong to the host application.
+            // Printable punctuation may start IME/QuickPhrase handling; pure
+            // navigation/editing keys still fail open to the host.
             BOOL punctuationTestEaten = FALSE;
             BOOL enterTestEaten = TRUE;
             BOOL leftTestEaten = TRUE;
@@ -934,12 +950,16 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                 SUCCEEDED(modifierTest) && SUCCEEDED(liveKeyUp) &&
                 SUCCEEDED(resumedPreeditTest) && SUCCEEDED(resumedPreeditResult) &&
                 SUCCEEDED(duplicateCommitTest) && SUCCEEDED(commitResult) &&
+                SUCCEEDED(deleteTest) && SUCCEEDED(deleteResult) &&
+                SUCCEEDED(forwardTest) && SUCCEEDED(forwardResult) &&
                 SUCCEEDED(orphanTest) && SUCCEEDED(fallbackResult) &&
                 SUCCEEDED(orphanKeyUp) && engineStopped && committedChinese &&
                 preeditTestEaten && duplicatePreeditTestEaten && preeditEaten &&
                 resumedPreeditTestEaten && resumedPreeditEaten &&
                 commitTestEaten && duplicateCommitTestEaten && commitEaten &&
-                !punctuationTestEaten && !enterTestEaten && !leftTestEaten &&
+                deleteTestEaten && deleteEaten && deleteSurroundingApplied &&
+                forwardTestEaten && !forwardEaten && forwardContext.text().empty() &&
+                punctuationTestEaten && !enterTestEaten && !leftTestEaten &&
                 !backspaceTestEaten && !modifierTestEaten && !liveKeyUpEaten &&
                 orphanTestEaten && fallbackEaten && !orphanKeyUpEaten &&
                 context.text() == L"a" && context.compositionEnded() &&
@@ -957,6 +977,10 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                           << ", resumedPreedit=0x" << resumedPreeditResult
                           << ", commitTest=0x" << commitTest
                           << ", duplicateCommitTest=0x" << duplicateCommitTest
+                          << ", deleteTest=0x" << deleteTest
+                          << ", delete=0x" << deleteResult
+                          << ", forwardTest=0x" << forwardTest
+                          << ", forward=0x" << forwardResult
                           << ", punctuationTest=0x" << punctuationTest
                           << ", enterTest=0x" << enterTest
                           << ", leftTest=0x" << leftTest
@@ -974,6 +998,11 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
                           << ", commitEaten=" << commitEaten
                           << ", commitTestEaten=" << commitTestEaten
                           << ", duplicateCommitTestEaten=" << duplicateCommitTestEaten
+                          << ", deleteTestEaten=" << deleteTestEaten
+                          << ", deleteEaten=" << deleteEaten
+                          << ", deleteApplied=" << deleteSurroundingApplied
+                          << ", forwardTestEaten=" << forwardTestEaten
+                          << ", forwardEaten=" << forwardEaten
                           << ", punctuationTestEaten=" << punctuationTestEaten
                           << ", enterTestEaten=" << enterTestEaten
                           << ", leftTestEaten=" << leftTestEaten

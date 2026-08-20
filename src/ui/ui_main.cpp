@@ -17,9 +17,11 @@
 #include <dwrite.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <charconv>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -36,6 +38,8 @@
 namespace {
 
 using Microsoft::WRL::ComPtr;
+namespace config = fcitx::windows::config;
+namespace ui = fcitx::windows::ui;
 constexpr UINT kSnapshotMessage = WM_APP + 1;
 constexpr UINT_PTR kFocusWatchTimer = 1;
 constexpr UINT_PTR kClickGuardTimer = 2;
@@ -60,6 +64,40 @@ std::wstring defaultDwriteLocale() {
     if (length > 1 && length <= static_cast<int>(locale.size()))
         return locale.data();
     return L"en-US";
+}
+
+bool validContentLocale(std::string_view locale) {
+    if (locale.empty() || locale.size() > fcitx::windows::protocol::kMaxLocaleUtf8)
+        return false;
+    bool hasLetter = false;
+    for (const unsigned char character : locale) {
+        const bool letter = (character >= 'A' && character <= 'Z') ||
+                            (character >= 'a' && character <= 'z');
+        hasLetter = hasLetter || letter;
+        if (!letter && (character < '0' || character > '9') && character != '-')
+            return false;
+    }
+    return hasLetter;
+}
+
+std::wstring contentLocaleOrFallback(std::string_view locale) {
+    if (!validContentLocale(locale))
+        return defaultDwriteLocale();
+    std::wstring result;
+    result.reserve(locale.size());
+    for (const unsigned char character : locale) {
+        result.push_back(static_cast<wchar_t>(character));
+    }
+    return result;
+}
+
+bool localePrefersCompactHorizontal(std::string_view locale) noexcept {
+    if (locale.size() < 2)
+        return false;
+    const char first = static_cast<char>(std::tolower(static_cast<unsigned char>(locale[0])));
+    const char second = static_cast<char>(std::tolower(static_cast<unsigned char>(locale[1])));
+    return (first == 'z' && second == 'h') || (first == 'j' && second == 'a') ||
+           (first == 'k' && second == 'o');
 }
 
 struct CandidateVisual {
@@ -550,6 +588,163 @@ class CandidateWindow final {
                runCase(fcitx::windows::config::Orientation::vertical);
     }
 
+    [[nodiscard]] bool runLocaleSelfTest() {
+        fcitx::windows::protocol::KeyResponse response;
+        response.metadata.engineEpoch = 1;
+        response.metadata.contextId = 51;
+        response.metadata.compositionId = 510;
+        response.metadata.revision = 1;
+        response.status = fcitx::windows::protocol::Status::ok;
+        response.handled = true;
+        response.preeditUtf8 = "かな";
+        response.preeditCaretUtf8 = static_cast<std::uint32_t>(response.preeditUtf8.size());
+        response.contentLocaleUtf8 = "ja-JP";
+        response.candidates = {{1, "1", "かな", "kana"}};
+        response.selectedCandidate = 0;
+        response.candidateTotal = 1;
+        response.candidateVisibility = 1;
+        response.candidatePageSize = 1;
+        response.candidateEnd = true;
+        response.caret = {true, 100, 100, 102, 124, 96};
+        update(response);
+        if (CompareStringOrdinal(dwriteLocale_.c_str(), -1, L"ja-JP", -1, TRUE) !=
+            CSTR_EQUAL) {
+            std::cerr << "candidate locale did not switch to ja-JP\n";
+            return false;
+        }
+        reloadVisualConfig();
+        if (CompareStringOrdinal(dwriteLocale_.c_str(), -1, L"ja-JP", -1, TRUE) !=
+            CSTR_EQUAL) {
+            std::cerr << "candidate locale was lost during config reflow\n";
+            return false;
+        }
+        response.metadata.revision = 2;
+        response.contentLocaleUtf8 = "en-US";
+        response.candidates = {{1, "1", "alpha", "latin"}};
+        update(response);
+        if (CompareStringOrdinal(dwriteLocale_.c_str(), -1, L"en-US", -1, TRUE) !=
+            CSTR_EQUAL) {
+            std::cerr << "candidate locale did not switch to en-US\n";
+            return false;
+        }
+        response.metadata.revision = 3;
+        response.contentLocaleUtf8 = "../bad";
+        update(response);
+        if (CompareStringOrdinal(dwriteLocale_.c_str(), -1, L"../bad", -1, TRUE) ==
+            CSTR_EQUAL) {
+            std::cerr << "invalid candidate locale was applied\n";
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool runCandidateUxSelfTest() {
+        const auto makeResponse = [](std::uint64_t composition, std::uint64_t revision,
+                                     std::string locale,
+                                     std::vector<fcitx::windows::protocol::CandidateRecord>
+                                         candidates,
+                                     LONG caretLeft = 100) {
+            fcitx::windows::protocol::KeyResponse response;
+            response.metadata.engineEpoch = 1;
+            response.metadata.contextId = 80;
+            response.metadata.compositionId = composition;
+            response.metadata.revision = revision;
+            response.status = fcitx::windows::protocol::Status::ok;
+            response.handled = true;
+            response.preeditUtf8 = "ni";
+            response.contentLocaleUtf8 = std::move(locale);
+            response.candidates = std::move(candidates);
+            response.selectedCandidate = 0;
+            response.candidatePageSize =
+                static_cast<std::uint32_t>(std::max<std::size_t>(1U, response.candidates.size()));
+            response.candidateTotal = static_cast<std::uint32_t>(response.candidates.size());
+            response.candidateEnd = true;
+            response.candidateVisibility = 1;
+            response.caret = {true, caretLeft, 100, caretLeft + 2, 124, 96};
+            response.popupAllowed = true;
+            return response;
+        };
+        const auto width = [&] {
+            RECT rect{};
+            GetWindowRect(window_, &rect);
+            return rect.right - rect.left;
+        };
+        visualConfig_.scrollMode = false;
+        visualConfig_.orientation = config::Orientation::automatic;
+        update(makeResponse(800, 1, "zh-CN",
+                            {{1, "1", "你", ""}, {2, "2", "好", ""},
+                             {3, "3", "中文", ""}}));
+        if (resolvedPresentationOrientation_ != ui::Orientation::horizontal) {
+            std::cerr << "REG-CAND-AUTO-001: compact CJK candidates did not choose horizontal\n";
+            return false;
+        }
+        update(makeResponse(800, 2, "zh-CN",
+                            {{1, "1", "你", "moderately long but stable annotation"},
+                             {2, "2", "好", ""}, {3, "3", "中文", ""}}));
+        if (resolvedPresentationOrientation_ != ui::Orientation::horizontal) {
+            std::cerr << "REG-CAND-AUTO-001: auto layout flipped inside one composition\n";
+            return false;
+        }
+        update(makeResponse(801, 1, "zh-CN",
+                            {{1, "1", "你", "very long annotation should prefer vertical"},
+                             {2, "2", "好", ""}}));
+        if (resolvedPresentationOrientation_ != ui::Orientation::vertical) {
+            std::cerr << "REG-CAND-AUTO-001: long annotation did not choose vertical\n";
+            return false;
+        }
+        update(makeResponse(802, 1, "en-US",
+                            {{1, "1", "alpha", ""}, {2, "2", "beta", ""}}));
+        if (resolvedPresentationOrientation_ != ui::Orientation::vertical) {
+            std::cerr << "REG-CAND-AUTO-001: non-CJK candidates did not choose vertical\n";
+            return false;
+        }
+        const LONG edgeCaret = GetSystemMetrics(SM_CXSCREEN) - 8;
+        update(makeResponse(803, 1, "zh-CN",
+                            {{1, "1", "你", ""}, {2, "2", "好", ""},
+                             {3, "3", "中文", ""}},
+                            edgeCaret));
+        if (resolvedPresentationOrientation_ != ui::Orientation::vertical) {
+            std::cerr << "REG-CAND-AUTO-001: edge-of-screen auto layout did not choose vertical\n";
+            return false;
+        }
+        visualConfig_.orientation = config::Orientation::horizontal;
+        update(makeResponse(804, 1, "en-US", {{1, "1", "alpha", ""}, {2, "2", "beta", ""}}));
+        if (resolvedPresentationOrientation_ != ui::Orientation::horizontal) {
+            std::cerr << "REG-CAND-AUTO-001: explicit horizontal override lost precedence\n";
+            return false;
+        }
+        visualConfig_.orientation = config::Orientation::vertical;
+        update(makeResponse(805, 1, "zh-CN", {{1, "1", "你", ""}, {2, "2", "好", ""}}));
+        if (resolvedPresentationOrientation_ != ui::Orientation::vertical) {
+            std::cerr << "REG-CAND-AUTO-001: explicit vertical override lost precedence\n";
+            return false;
+        }
+
+        visualConfig_.orientation = config::Orientation::vertical;
+        auto longCandidates = std::vector<fcitx::windows::protocol::CandidateRecord>{
+            {1, "1", "这是一个非常非常长的候选词条", ""},
+            {2, "2", "另一个非常非常长的候选词条", ""}};
+        auto shortCandidates = std::vector<fcitx::windows::protocol::CandidateRecord>{
+            {1, "1", "短", ""}, {2, "2", "小", ""}};
+        update(makeResponse(806, 1, "zh-CN", longCandidates));
+        const LONG longWidth = width();
+        update(makeResponse(806, 2, "zh-CN", shortCandidates));
+        const LONG stableShortWidth = width();
+        update(makeResponse(806, 3, "zh-CN", longCandidates));
+        const LONG secondLongWidth = width();
+        update(makeResponse(807, 1, "zh-CN", shortCandidates));
+        const LONG resetShortWidth = width();
+        if (stableShortWidth + 1 < longWidth || secondLongWidth + 1 < longWidth ||
+            resetShortWidth >= longWidth - 4) {
+            std::cerr << "REG-CAND-STABLE-001: width hysteresis/reset failed: long="
+                      << longWidth << " stableShort=" << stableShortWidth
+                      << " secondLong=" << secondLongWidth << " resetShort=" << resetShortWidth
+                      << '\n';
+            return false;
+        }
+        return true;
+    }
+
     // Refresh only the visual configuration and text formats, without
     // reflowing the current model. Used from update(): the caller continues to
     // rebuild the candidate list with the new config, so calling reflow here
@@ -563,6 +758,19 @@ class CandidateWindow final {
         const auto opacity = visualConfig_.opacity.value_or(1.0);
         SetLayeredWindowAttributes(
             window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
+        (void)createDeviceResources();
+    }
+
+    void applyContentLocale(std::string_view locale) {
+        contentLocaleUtf8_ = validContentLocale(locale) ? std::string(locale) : std::string{};
+        const std::wstring next = contentLocaleOrFallback(contentLocaleUtf8_);
+        if (CompareStringOrdinal(dwriteLocale_.c_str(), -1, next.c_str(), -1, TRUE) ==
+            CSTR_EQUAL)
+            return;
+        dwriteLocale_ = next;
+        textFormat_.Reset();
+        labelFormat_.Reset();
+        annotationFormat_.Reset();
         (void)createDeviceResources();
     }
 
@@ -681,8 +889,7 @@ class CandidateWindow final {
             }
         }
         const bool horizontalLayout =
-            visualConfig_.orientation.value_or(fcitx::windows::config::Orientation::vertical) ==
-            fcitx::windows::config::Orientation::horizontal;
+            resolvedPresentationOrientation_ == fcitx::windows::ui::Orientation::horizontal;
         if (scrollMode_ && itemRects_.size() > scrollColumns_) {
             borderBrush->SetOpacity(0.55F);
             if (horizontalLayout) {
@@ -816,21 +1023,7 @@ class CandidateWindow final {
 
     void update(const fcitx::windows::protocol::KeyResponse& response) {
         using namespace fcitx::windows;
-        // Re-read the visual config when the file changed. The launcher may
-        // start this process before the config window saves a new orientation,
-        // and the HWND_BROADCAST reload message can race with window creation;
-        // comparing the file's last write time keeps the candidate window in
-        // sync with the saved config on every snapshot without per-key IO cost.
-        if (!safeMode_) {
-            const auto data = localDataDirectory();
-            const auto path = data / L"config.toml";
-            std::error_code error;
-            const auto written = std::filesystem::last_write_time(path, error);
-            if (!error && written != configWriteTime_) {
-                configWriteTime_ = written;
-                refreshVisualConfig();
-            }
-        }
+        applyContentLocale(response.contentLocaleUtf8);
         candidate::Snapshot snapshot;
         snapshot.engineEpoch = response.metadata.engineEpoch;
         snapshot.contextId = response.metadata.contextId;
@@ -891,6 +1084,8 @@ class CandidateWindow final {
             placement_ = ui::Placement::unlocked;
             compositionId_ = current.compositionId;
             scrollExpanded_ = false;
+            compositionAutoOrientation_.reset();
+            compositionStableWidth_ = 0.0F;
         }
         const bool scrollEligible = visualConfig_.scrollMode.value_or(false) &&
                                     response.candidateBulk && response.candidatePageSize > 0U &&
@@ -993,9 +1188,17 @@ class CandidateWindow final {
             static_cast<float>(visualConfig_.geometry.itemPaddingY.value_or(4.0) * scale);
         selectionInflateX_ = itemPaddingX * 0.65F;
         selectionInflateY_ = itemPaddingY * 0.55F;
-        const bool horizontalPresentation =
-            visualConfig_.orientation.value_or(config::Orientation::vertical) ==
-            config::Orientation::horizontal;
+        const auto configuredOrientation =
+            visualConfig_.orientation.value_or(config::Orientation::automatic);
+        bool horizontalPresentation = configuredOrientation == config::Orientation::horizontal;
+        if (configuredOrientation == config::Orientation::automatic) {
+            horizontalPresentation =
+                resolveAutomaticPresentation(monitorInfo.rcWork, scale,
+                                             response.candidatePageSize) ==
+                ui::Orientation::horizontal;
+        }
+        resolvedPresentationOrientation_ =
+            horizontalPresentation ? ui::Orientation::horizontal : ui::Orientation::vertical;
         float scrollLabelColumnWidth = 0.0F;
         if (scrollMode_ && horizontalPresentation) {
             for (const auto candidateIndex : renderIndices_) {
@@ -1058,6 +1261,22 @@ class CandidateWindow final {
                 preeditPanelWidth = metrics.widthIncludingTrailingWhitespace + itemPaddingX * 2.0F;
             }
         }
+        if (configuredOrientation == config::Orientation::automatic && horizontalPresentation) {
+            float horizontalNaturalWidth = inputHorizontalNaturalWidth(
+                items, static_cast<float>(visualConfig_.geometry.paddingX.value_or(8.0) * scale),
+                static_cast<float>(visualConfig_.geometry.columnGap.value_or(8.0) * scale),
+                preeditPanelWidth);
+            const float workWidth =
+                static_cast<float>((std::max)(0L, monitorInfo.rcWork.right - monitorInfo.rcWork.left));
+            const float hardLimit =
+                std::min(static_cast<float>(visualConfig_.maxWidth.value_or(720.0) * scale),
+                         workWidth);
+            if (horizontalNaturalWidth > hardLimit + 0.5F) {
+                horizontalPresentation = false;
+                resolvedPresentationOrientation_ = ui::Orientation::vertical;
+                compositionAutoOrientation_ = ui::Orientation::vertical;
+            }
+        }
         ui::LayoutInput input{
             horizontalPresentation ? ui::Orientation::horizontal : ui::Orientation::vertical,
             std::move(items),
@@ -1085,9 +1304,16 @@ class CandidateWindow final {
             preeditPanelHeight > 0.0F ? preeditPanelHeight + input.rowGap : 0.0F;
         const float workWidth = (std::max)(0.0F, input.workArea.right - input.workArea.left);
         const float workHeight = (std::max)(0.0F, input.workArea.bottom - input.workArea.top);
-        float windowWidth =
+        const float measuredWindowWidth =
             std::min({std::max(layout.window.right - layout.window.left, preeditPanelWidth),
                       input.maxWidth, workWidth});
+        if (compositionStableWidth_ > std::min(input.maxWidth, workWidth))
+            compositionStableWidth_ = std::min(input.maxWidth, workWidth);
+        float windowWidth =
+            compositionStableWidth_ > 0.0F && measuredWindowWidth < compositionStableWidth_
+                ? compositionStableWidth_
+                : measuredWindowWidth;
+        compositionStableWidth_ = (std::max)(compositionStableWidth_, windowWidth);
         float windowHeight =
             std::min(layout.window.bottom - layout.window.top + preeditBlock, workHeight);
         float windowLeft =
@@ -1167,6 +1393,7 @@ class CandidateWindow final {
                 : 0U;
         response.caret = lastCaret_;
         response.popupAllowed = current.popupAllowed;
+        response.contentLocaleUtf8 = contentLocaleUtf8_;
         response.candidates.reserve(current.candidates.size());
         for (const auto& item : current.candidates) {
             response.candidates.push_back(
@@ -1197,6 +1424,9 @@ class CandidateWindow final {
         preeditDividerY_ = 0.0F;
         selected_.reset();
         compositionId_ = 0;
+        compositionAutoOrientation_.reset();
+        compositionStableWidth_ = 0.0F;
+        resolvedPresentationOrientation_ = ui::Orientation::vertical;
         targetForegroundWindow_ = nullptr;
         targetForegroundProcessId_ = 0;
     }
@@ -1246,6 +1476,40 @@ class CandidateWindow final {
     }
 
   private:
+    static float inputHorizontalNaturalWidth(std::span<const ui::Size> items, float paddingX,
+                                             float columnGap, float preeditWidth) noexcept {
+        float width = 0.0F;
+        for (const auto& item : items) {
+            if (width > 0.0F)
+                width += columnGap;
+            width += item.width;
+        }
+        return (std::max)(width + paddingX * 2.0F, preeditWidth);
+    }
+
+    [[nodiscard]] ui::Orientation resolveAutomaticPresentation(const RECT& workArea, float scale,
+                                                               std::uint32_t pageSize) {
+        if (compositionAutoOrientation_)
+            return *compositionAutoOrientation_;
+        bool hasLongAnnotation = false;
+        bool compactCandidates = !candidates_.empty();
+        for (const auto& candidate : candidates_) {
+            hasLongAnnotation = hasLongAnnotation || candidate.comment.size() > 18U;
+            compactCandidates = compactCandidates && candidate.text.size() <= 6U &&
+                                candidate.comment.size() <= 18U;
+        }
+        const float nearRightThreshold = 360.0F * scale;
+        const bool edgeConstrained =
+            static_cast<float>(workArea.right - lastCaret_.left) < nearRightThreshold;
+        const bool compactCjk =
+            localePrefersCompactHorizontal(contentLocaleUtf8_) && compactCandidates &&
+            candidates_.size() <= std::max<std::size_t>(1U, pageSize == 0 ? 9U : pageSize);
+        compositionAutoOrientation_ =
+            compactCjk && !hasLongAnnotation && !edgeConstrained ? ui::Orientation::horizontal
+                                                                 : ui::Orientation::vertical;
+        return *compositionAutoOrientation_;
+    }
+
     static LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam,
                                             LPARAM lparam) {
         CandidateWindow* self = nullptr;
@@ -1361,7 +1625,6 @@ class CandidateWindow final {
                     break;
             }
         }
-        const std::wstring dwriteLocale = defaultDwriteLocale();
         const auto createFormat = [&](const fcitx::windows::config::Font& font, double scale,
                                       ComPtr<IDWriteTextFormat>& format) {
             if (format)
@@ -1382,7 +1645,7 @@ class CandidateWindow final {
                     static_cast<float>(
                         font.size.value_or(visualConfig_.candidateFont.size.value_or(16.0)) *
                         scale * fontDpiScale_),
-                    dwriteLocale.c_str(), &format)))
+                    dwriteLocale_.c_str(), &format)))
                 return false;
             // Single line with ellipsis trimming: a label/comment longer than
             // the remaining row width must not wrap onto the candidate row
@@ -1434,6 +1697,10 @@ class CandidateWindow final {
     fcitx::windows::candidate::CandidateModel model_;
     fcitx::windows::protocol::CaretRect lastCaret_;
     fcitx::windows::ui::Placement placement_{fcitx::windows::ui::Placement::unlocked};
+    fcitx::windows::ui::Orientation resolvedPresentationOrientation_{
+        fcitx::windows::ui::Orientation::vertical};
+    std::optional<fcitx::windows::ui::Orientation> compositionAutoOrientation_;
+    float compositionStableWidth_{};
     std::uint64_t compositionId_{};
     bool safeMode_{};
     bool scrollMode_{};
@@ -1455,7 +1722,8 @@ class CandidateWindow final {
     bool interactionTest_{};
     std::optional<fcitx::windows::ui::CandidateSelectionIntent> capturedTestIntent_;
     std::unique_ptr<fcitx::windows::ipc::PipeClient> candidateClient_;
-    std::filesystem::file_time_type configWriteTime_{};
+    std::wstring dwriteLocale_{defaultDwriteLocale()};
+    std::string contentLocaleUtf8_;
 };
 
 bool readExact(HANDLE pipe, void* destination, std::size_t size) {
@@ -1568,16 +1836,22 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         arguments.find(L"--uiless-presentation-self-test") != std::wstring_view::npos;
     const bool scrollExpansionSelfTest =
         arguments.find(L"--scroll-expansion-self-test") != std::wstring_view::npos;
+    const bool localeSelfTest =
+        arguments.find(L"--locale-self-test") != std::wstring_view::npos;
+    const bool candidateUxSelfTest =
+        arguments.find(L"--candidate-ux-self-test") != std::wstring_view::npos;
     const bool reloadTest = arguments.find(L"--reload-test") != std::wstring_view::npos;
     const bool simulateDeviceLoss =
         arguments.find(L"--simulate-device-loss") != std::wstring_view::npos;
     const bool scrollDemo = arguments.find(L"--scroll-demo") != std::wstring_view::npos;
-    const bool demo = interactionSelfTest || scrollExpansionSelfTest || scrollDemo ||
+    const bool demo = interactionSelfTest || scrollExpansionSelfTest || localeSelfTest ||
+                      candidateUxSelfTest || scrollDemo ||
                       arguments.find(L"--demo") != std::wstring_view::npos;
     const bool testOnce = arguments.find(L"--test-once") != std::wstring_view::npos;
     const bool safeMode = arguments.find(L"--safe-mode") != std::wstring_view::npos;
     CandidateWindow window;
-    if (!window.create(instance, demo, safeMode, interactionSelfTest) || !window.paintOnce())
+    if (!window.create(instance, demo, safeMode, interactionSelfTest || candidateUxSelfTest) ||
+        !window.paintOnce())
         return 1;
     if (demo)
         window.showSyntheticPreview(scrollDemo);
@@ -1587,6 +1861,10 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         return window.runUilessPresentationSelfTest() ? 0 : 2;
     if (scrollExpansionSelfTest)
         return window.runScrollExpansionSelfTest() ? 0 : 2;
+    if (localeSelfTest)
+        return window.runLocaleSelfTest() ? 0 : 2;
+    if (candidateUxSelfTest)
+        return window.runCandidateUxSelfTest() ? 0 : 2;
     if (simulateDeviceLoss) {
         window.simulateDeviceLossForTest();
         if (!window.paintOnce())

@@ -1,4 +1,5 @@
 #include "pipe_security.h"
+#include "peer_verification.h"
 #include "runtime_identity.h"
 
 #include <Windows.h>
@@ -202,6 +203,12 @@ int main() {
         std::cerr << "path identity comparison failed\n";
         return 1;
     }
+    ExecutableFileIdentity currentExecutable;
+    if (!queryExecutableFileIdentity(identity.executablePath, currentExecutable) ||
+        !executablePathsMatch(identity.executablePath, identity.executablePath)) {
+        std::cerr << "current executable identity comparison failed\n";
+        return 1;
+    }
     const auto identityRoot =
         std::filesystem::temp_directory_path() /
         (L"fcitx5-peer-identity-" + std::to_wstring(GetCurrentProcessId()));
@@ -210,20 +217,95 @@ int main() {
     const auto original = identityRoot / L"peer.exe";
     const auto hardlink = identityRoot / L"peer-hardlink.exe";
     const auto copy = identityRoot / L"peer-copy.exe";
+    const auto symlink = identityRoot / L"peer-symlink.exe";
     {
         std::ofstream output(original, std::ios::binary);
         output << "peer identity fixture\n";
     }
     std::filesystem::copy_file(original, copy);
+    if (!executablePathsMatch(original.wstring(), original.wstring()) ||
+        executablePathsMatch(original.wstring(), copy.wstring())) {
+        std::filesystem::remove_all(identityRoot, cleanupError);
+        std::cerr << "REG-PEER-ID-001 executable identity did not distinguish a copied peer\n";
+        return 1;
+    }
     if (!CreateHardLinkW(hardlink.c_str(), original.c_str(), nullptr)) {
         std::filesystem::remove_all(identityRoot, cleanupError);
         std::cerr << "hardlink fixture creation failed\n";
         return 1;
     }
     if (!pathsReferToSameFile(original.wstring(), hardlink.wstring()) ||
-        pathsReferToSameFile(original.wstring(), copy.wstring())) {
+        pathsReferToSameFile(original.wstring(), copy.wstring()) ||
+        executablePathsMatch(original.wstring(), hardlink.wstring())) {
         std::filesystem::remove_all(identityRoot, cleanupError);
         std::cerr << "REG-PEER-ID-001 handle file identity comparison failed\n";
+        return 1;
+    }
+    if (CreateSymbolicLinkW(symlink.c_str(), original.c_str(),
+                            SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) ||
+        CreateSymbolicLinkW(symlink.c_str(), original.c_str(), 0)) {
+        if (!pathsReferToSameFile(original.wstring(), symlink.wstring()) ||
+            executablePathsMatch(original.wstring(), symlink.wstring())) {
+            std::filesystem::remove_all(identityRoot, cleanupError);
+            std::cerr << "REG-PEER-ID-001 reparse executable identity comparison failed\n";
+            return 1;
+        }
+    }
+
+    const std::wstring peerPipeName =
+        L"\\\\.\\pipe\\Fcitx5WindowsNext.PeerIdentity.Unit." +
+        std::to_wstring(GetCurrentProcessId());
+    HANDLE peerPipe = CreateNamedPipeW(peerPipeName.c_str(), PIPE_ACCESS_DUPLEX,
+                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
+                                       4096, 4096, 0, nullptr);
+    HANDLE peerClient = CreateFileW(peerPipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                                    nullptr, OPEN_EXISTING, 0, nullptr);
+    const bool peerConnected =
+        peerPipe != INVALID_HANDLE_VALUE && peerClient != INVALID_HANDLE_VALUE &&
+        (ConnectNamedPipe(peerPipe, nullptr) != FALSE ||
+         GetLastError() == ERROR_PIPE_CONNECTED);
+    const auto executableCopy = identityRoot / L"runtime-identity-copy.exe";
+    std::filesystem::copy_file(identity.executablePath, executableCopy,
+                               std::filesystem::copy_options::overwrite_existing);
+    const auto executableSymlink = identityRoot / L"runtime-identity-symlink.exe";
+    const bool executableSymlinkCreated =
+        CreateSymbolicLinkW(executableSymlink.c_str(), identity.executablePath.c_str(),
+                            SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) ||
+        CreateSymbolicLinkW(executableSymlink.c_str(), identity.executablePath.c_str(), 0);
+    const bool exactPeerAccepted =
+        peerConnected &&
+        fcitx::windows::ipc::verifyPipeServer(
+            peerClient, identity,
+            fcitx::windows::ipc::PeerPolicy::exact(identity.executablePath));
+    const bool copyPeerAccepted =
+        peerConnected &&
+        fcitx::windows::ipc::verifyPipeServer(
+            peerClient, identity,
+            fcitx::windows::ipc::PeerPolicy::exact(executableCopy.wstring()));
+    const bool symlinkPeerAccepted =
+        executableSymlinkCreated && peerConnected &&
+        fcitx::windows::ipc::verifyPipeServer(
+            peerClient, identity,
+            fcitx::windows::ipc::PeerPolicy::exact(executableSymlink.wstring()));
+    const auto executableHardlink = identityRoot / L"runtime-identity-hardlink.exe";
+    const bool executableHardlinkCreated =
+        CreateHardLinkW(executableHardlink.c_str(), identity.executablePath.c_str(), nullptr) !=
+        FALSE;
+    const bool hardlinkPeerAccepted =
+        executableHardlinkCreated && peerConnected &&
+        fcitx::windows::ipc::verifyPipeServer(
+            peerClient, identity,
+            fcitx::windows::ipc::PeerPolicy::exact(executableHardlink.wstring()));
+    if (peerClient != INVALID_HANDLE_VALUE)
+        CloseHandle(peerClient);
+    if (peerPipe != INVALID_HANDLE_VALUE) {
+        DisconnectNamedPipe(peerPipe);
+        CloseHandle(peerPipe);
+    }
+    if (!exactPeerAccepted || copyPeerAccepted || symlinkPeerAccepted ||
+        hardlinkPeerAccepted) {
+        std::filesystem::remove_all(identityRoot, cleanupError);
+        std::cerr << "REG-PEER-ID-001 exact peer executable verification failed\n";
         return 1;
     }
     std::filesystem::remove_all(identityRoot, cleanupError);

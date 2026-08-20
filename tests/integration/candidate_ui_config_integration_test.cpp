@@ -286,7 +286,8 @@ int wmain(int argc, wchar_t** argv) {
            "vertical candidate preview has an invalid size");
 
     expect(run_process(control, {L"--set-presentation", L"dark", L"builtin:default",
-                                 L"horizontal", L"enabled", L"6", L"Microsoft YaHei"}) == 0,
+                                 L"horizontal", L"enabled", L"6", L"Microsoft YaHei", L"720",
+                                 L"96", L"18", L"12", L"enabled", L"0.95", L"panel"}) == 0,
            "live horizontal presentation save failed");
     static_cast<void>(wait_for_size_change(window, vertical));
     const RECT horizontal = wait_for_stable_size(window);
@@ -300,7 +301,8 @@ int wmain(int argc, wchar_t** argv) {
     candidate.close_window(window);
 
     expect(run_process(control, {L"--set-presentation", L"dark", L"builtin:default",
-                                 L"horizontal", L"enabled", L"6", L"Microsoft YaHei"}) == 0,
+                                 L"horizontal", L"enabled", L"6", L"Microsoft YaHei", L"720",
+                                 L"96", L"18", L"12", L"enabled", L"0.95", L"panel"}) == 0,
            "scroll-demo horizontal presentation save failed");
     ChildProcess scroll_candidate(ui, {L"--demo", L"--scroll-demo"});
     const HWND scroll_window = wait_for_window(scroll_candidate);
@@ -328,6 +330,9 @@ int wmain(int argc, wchar_t** argv) {
     expect(saved_config.scrollMode == true, "scroll mode was not persisted");
     expect(saved_config.candidatePageSize && *saved_config.candidatePageSize == 6,
            "candidate page size was not persisted");
+    expect(saved_config.opacity == 0.95, "candidate opacity was not persisted");
+    expect(saved_config.preeditMode == fcitx::windows::config::PreeditMode::panel,
+           "candidate preedit mode was not persisted");
     expect(saved_config.candidateFont.families &&
                !saved_config.candidateFont.families->empty() &&
                saved_config.candidateFont.families->front() == "Microsoft YaHei",

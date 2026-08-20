@@ -133,7 +133,7 @@ package parser 都不加载 Fcitx addon，也不把 addon schema 硬编码进 Wi
 
 | 阶段 | 交付 | 验证 |
 | --- | --- | --- |
-| Now | control 暴露 theme list/detail；Config Theme 页消费主题库并显示安全详情；package detail 暴露 config surface；外观常用字段可 round-trip | unit + integration + schema + package gate |
+| Now | control 暴露 theme list/detail；Config Theme 页消费主题库并显示安全详情；package detail 暴露 config surface；外观常用字段、透明度、预编辑显示位置可 round-trip | unit + integration + schema + package gate |
 | Phase 6 polish | Config 外观页重排、主题库页、生产 renderer preview、高 DPI 视觉证据 | config UI contract + visual smoke + real DPI matrix |
 | Phase 7 | theme package 安装/启用/禁用/回滚；importer staging | package transaction + importer hostile corpus |
 | Advanced R1 | addon descriptor inventory read-only 浏览；typed config metadata 后续由 engine instance 暴露 | control contract + unknown option fallback |
@@ -150,7 +150,9 @@ package parser 都不加载 Fcitx addon，也不把 addon schema 硬编码进 Wi
 - `fcitx5-control --packages-detail ID`：返回 permissions、dependencies、manifest SHA、source commit 和 config surface；
 - `fcitx5-control --addons-list`：返回 Fcitx addon descriptor inventory，标明
   `typed_config = not_available`，只浏览 addon id/category/configurable/library，不加载 addon DLL；
-- Config 外观页已暴露候选宽度、滚动单元宽度、字号、圆角、阴影等常用字段。
+- Config 外观页已暴露候选宽度、滚动单元宽度、字号、圆角、阴影、透明度等常用字段；
+- `candidate.preedit_mode` 支持 `inline`（默认，应用内 TSF composition）和 `panel`
+  （候选窗顶部显示 preedit），对齐 Weasel/Squirrel 这类输入法的可选预编辑显示策略。
 
 下一步不应该从“继续加硬编码控件”开始，而应该补嵌入式 renderer preview seam 和 importer staging。
 当前 Preview 按钮已经启动生产 `fcitx5-ui.exe --demo` 并读取真实 visual config/theme；后续若要做

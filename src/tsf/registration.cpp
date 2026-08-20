@@ -171,7 +171,7 @@ HRESULT unregisterProfiles() {
     if (FAILED(result)) {
         return result;
     }
-    for (const auto& profile : loadInputProfiles()) {
+    for (const auto& profile : loadRegistrableInputProfiles()) {
         const HRESULT profileResult =
             unregisterProfileIfPresent(profiles, profile.language, profile.guid);
         if (FAILED(profileResult) && SUCCEEDED(result))

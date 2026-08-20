@@ -156,6 +156,28 @@ bool contains_reparse_component(const std::filesystem::path& path) {
   return false;
 }
 
+struct OrdinalIgnoreCaseLess {
+  bool operator()(const std::wstring& left, const std::wstring& right) const noexcept {
+    return CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(),
+                                static_cast<int>(right.size()), TRUE) == CSTR_LESS_THAN;
+  }
+};
+
+std::wstring utf8_path_to_windows_key(std::string_view value) {
+  const auto input_size = static_cast<int>(value.size());
+  const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                                           input_size, nullptr, 0);
+  if (required <= 0) {
+    fail("invalid_manifest", "file path is not valid UTF-8");
+  }
+  std::wstring result(static_cast<std::size_t>(required), L'\0');
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), input_size,
+                          result.data(), required) != required) {
+    fail("invalid_manifest", "file path conversion failed");
+  }
+  return result;
+}
+
 std::string read_file_bounded(const std::filesystem::path& path, std::size_t maximum) {
   std::error_code error;
   const auto size = std::filesystem::file_size(path, error);
@@ -320,6 +342,7 @@ Manifest parse_manifest(std::string_view bytes) {
     fail("invalid_manifest", "files must be a non-empty bounded array");
   }
   std::set<std::string, std::less<>> file_paths;
+  std::set<std::wstring, OrdinalIgnoreCaseLess> windows_file_paths;
   std::uint64_t total_size = 0;
   for (const auto& file : files) {
     require_object_keys(file, {"path", "size", "sha256"});
@@ -333,7 +356,8 @@ Manifest parse_manifest(std::string_view bytes) {
     if (!is_safe_relative_package_path(parsed.path) || !is_hex_digest(parsed.sha256) ||
         parsed.size > kMaximumFileBytes ||
         total_size > kMaximumPayloadBytes - parsed.size ||
-        !file_paths.emplace(parsed.path).second) {
+        !file_paths.emplace(parsed.path).second ||
+        !windows_file_paths.emplace(utf8_path_to_windows_key(parsed.path)).second) {
       fail("invalid_manifest", "file entry violates path, hash or resource limits");
     }
     total_size += parsed.size;

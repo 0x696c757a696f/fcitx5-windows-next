@@ -1,6 +1,7 @@
 #include "fcitx_runtime.h"
 #include "candidate_navigation.h"
 #include "config_model.h"
+#include "key_event.h"
 #include "runtime_identity.h"
 #include <fcitx5_windows/release_identity.h>
 
@@ -105,8 +106,10 @@ EngineConfig readEngineConfig() {
     config.defaultInputMethod = parsed.defaultInputMethod;
     config.hotkeyToggle = parsed.hotkeyToggleInputMethod;
     config.hotkeyNext = parsed.hotkeyNextInputMethod;
-    config.orientation =
-        parsed.orientation.value_or(config::Orientation::vertical);
+    const auto parsedOrientation = parsed.orientation.value_or(config::Orientation::vertical);
+    config.orientation = parsedOrientation == config::Orientation::automatic
+                             ? config::Orientation::vertical
+                             : parsedOrientation;
     config.candidatePageSize = parsed.candidatePageSize;
     config.scrollMode = parsed.scrollMode.value_or(false);
     if (config.enabled.empty())
@@ -269,104 +272,6 @@ class EngineInputContext final : public InputContext {
     bool surroundingTextValid_{};
 };
 
-Key keyFromRequest(const protocol::KeyRequest& request) {
-    KeyStates states;
-    if ((request.keyFlags & protocol::kKeyFlagShift) != 0)
-        states |= KeyState::Shift;
-    if ((request.keyFlags & protocol::kKeyFlagControl) != 0)
-        states |= KeyState::Ctrl;
-    if ((request.keyFlags & protocol::kKeyFlagAlt) != 0)
-        states |= KeyState::Alt;
-    if ((request.keyFlags & protocol::kKeyFlagSuper) != 0)
-        states |= KeyState::Super;
-    const auto vk = request.virtualKey;
-    switch (vk) {
-    case VK_BACK:
-        return Key(FcitxKey_BackSpace, states);
-    case VK_RETURN:
-        return Key(FcitxKey_Return, states);
-    case VK_SPACE:
-        return Key(FcitxKey_space, states);
-    case VK_ESCAPE:
-        return Key(FcitxKey_Escape, states);
-    case VK_SHIFT:
-        // Modifier key events carry the engine hotkeys Ctrl+Shift / Alt+Shift
-        // (matched by keySym on the Shift key itself); Fcitx also tracks the
-        // modifier release from key-up events.
-        return Key(FcitxKey_Shift_L, states);
-    case VK_CONTROL:
-        return Key(FcitxKey_Control_L, states);
-    case VK_MENU:
-        return Key(FcitxKey_Alt_L, states);
-    case VK_LEFT:
-        return Key(FcitxKey_Left, states);
-    case VK_RIGHT:
-        return Key(FcitxKey_Right, states);
-    case VK_UP:
-        return Key(FcitxKey_Up, states);
-    case VK_DOWN:
-        return Key(FcitxKey_Down, states);
-    case VK_PRIOR:
-        return Key(FcitxKey_Page_Up, states);
-    case VK_NEXT:
-        return Key(FcitxKey_Page_Down, states);
-    case VK_HOME:
-        // Scroll-mode row start (fcitx5-macos ScrollConfig rowStart).
-        return Key(FcitxKey_Home, states);
-    case VK_END:
-        // Scroll-mode row end (fcitx5-macos ScrollConfig rowEnd).
-        return Key(FcitxKey_End, states);
-    case VK_OEM_PLUS:
-        // Laptop-friendly next page: '=' without Shift, '+' with Shift.
-        return (request.keyFlags & protocol::kKeyFlagShift) != 0
-                   ? Key(FcitxKey_plus, states)
-                   : Key(FcitxKey_equal, states);
-    case VK_OEM_MINUS:
-        // Laptop-friendly previous page: '-' without Shift, '_' with Shift.
-        return (request.keyFlags & protocol::kKeyFlagShift) != 0
-                   ? Key(FcitxKey_underscore, states)
-                   : Key(FcitxKey_minus, states);
-    case VK_OEM_COMMA:
-        // Comma/period page keys: ',' previous page, '.' next page (Shift
-        // variants '<' '>' are punctuation passthrough for Fcitx to decide).
-        return (request.keyFlags & protocol::kKeyFlagShift) != 0
-                   ? Key(FcitxKey_less, states)
-                   : Key(FcitxKey_comma, states);
-    case VK_OEM_PERIOD:
-        return (request.keyFlags & protocol::kKeyFlagShift) != 0
-                   ? Key(FcitxKey_greater, states)
-                   : Key(FcitxKey_period, states);
-    case VK_OEM_1:
-        // Semicolon/apostrophe select the 2nd/3rd candidate; shifted variants
-        // ':' '"' keep their punctuation meaning.
-        return (request.keyFlags & protocol::kKeyFlagShift) != 0
-                   ? Key(FcitxKey_colon, states)
-                   : Key(FcitxKey_semicolon, states);
-    case VK_OEM_7:
-        return (request.keyFlags & protocol::kKeyFlagShift) != 0
-                   ? Key(FcitxKey_quotedbl, states)
-                   : Key(FcitxKey_apostrophe, states);
-    case VK_OEM_4:
-        // Bracket page keys: '[' previous page, ']' next page.
-        return (request.keyFlags & protocol::kKeyFlagShift) != 0
-                   ? Key(FcitxKey_braceleft, states)
-                   : Key(FcitxKey_bracketleft, states);
-    case VK_OEM_6:
-        return (request.keyFlags & protocol::kKeyFlagShift) != 0
-                   ? Key(FcitxKey_braceright, states)
-                   : Key(FcitxKey_bracketright, states);
-    default:
-        break;
-    }
-    if (vk >= 'A' && vk <= 'Z') {
-        return Key(static_cast<KeySym>(FcitxKey_a + (vk - 'A')), states);
-    }
-    if (vk >= '0' && vk <= '9') {
-        return Key(static_cast<KeySym>(FcitxKey_0 + (vk - '0')), states);
-    }
-    return Key::fromKeyCode(static_cast<int>(vk), states);
-}
-
 std::pair<std::string, std::uint32_t> readPreedit(EngineInputContext& context) {
     const auto& client = context.inputPanel().clientPreedit();
     const auto& server = context.inputPanel().preedit();
@@ -377,6 +282,19 @@ std::pair<std::string, std::uint32_t> readPreedit(EngineInputContext& context) {
         cursor = static_cast<int>(text.size());
     cursor = std::clamp(cursor, 0, static_cast<int>(text.size()));
     return {std::move(text), static_cast<std::uint32_t>(cursor)};
+}
+
+bool warmupHasNoUserState(EngineInputContext& context) {
+    if (!context.takeCommit().empty() ||
+        context.takeDeleteSurroundingText() ||
+        context.takeForwardKey()) {
+        return false;
+    }
+    if (const auto [preedit, caret] = readPreedit(context); !preedit.empty() || caret != 0) {
+        return false;
+    }
+    const auto candidateList = context.inputPanel().candidateList();
+    return !candidateList || candidateList->empty();
 }
 
 std::size_t utf8CharacterEnd(std::string_view text, std::size_t offset) noexcept {
@@ -574,6 +492,20 @@ class FcitxRuntime::Impl final {
             instance->eventDispatcher().dispatchPending();
     }
 
+    static std::string contentLocaleForInputMethod(std::string_view id) {
+        if (id.find("mozc") != std::string_view::npos)
+            return "ja-JP";
+        if (id.find("hangul") != std::string_view::npos)
+            return "ko-KR";
+        if (id.find("keyboard-us") != std::string_view::npos)
+            return "en-US";
+        if (id.find("rime") != std::string_view::npos ||
+            id.find("pinyin") != std::string_view::npos ||
+            id.find("libime") != std::string_view::npos)
+            return "zh-CN";
+        return {};
+    }
+
     RuntimeResult collectResult(const ClientContextKey& key,
                                 EngineInputContext& context, bool handled) {
         dispatchPendingEvents();
@@ -581,6 +513,9 @@ class FcitxRuntime::Impl final {
         output.handled = handled;
         if (const auto policy = popupAllowed.find(key); policy != popupAllowed.end())
             output.popupAllowed = policy->second;
+        output.contentLocaleUtf8 =
+            contentLocaleForInputMethod(instance ? instance->inputMethod(&context)
+                                                 : std::string{});
         output.commitUtf8 = context.takeCommit();
         auto [preedit, caretOffset] = readPreedit(context);
         output.preeditUtf8 = std::move(preedit);
@@ -734,11 +669,14 @@ bool FcitxRuntime::initialize(bool safeMode) {
             (void)impl_->instance->inputMethodEngine(id);
             impl_->instance->setCurrentInputMethod(impl_->warmupContext.get(), id, true);
             impl_->dispatchPendingEvents();
+            if (!warmupHasNoUserState(*impl_->warmupContext))
+                return false;
             impl_->warmupContext->reset();
-            (void)impl_->warmupContext->takeCommit();
         }
         impl_->instance->setCurrentInputMethod(impl_->warmupContext.get(), selected, true);
         impl_->dispatchPendingEvents();
+        if (!warmupHasNoUserState(*impl_->warmupContext))
+            return false;
         impl_->focused = impl_->warmupContext.get();
         return true;
     } catch (...) {

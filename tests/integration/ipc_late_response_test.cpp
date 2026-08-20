@@ -98,6 +98,8 @@ HANDLE createPipe(const std::wstring& name) {
 int wmain(int argc, wchar_t** argv) {
     using namespace fcitx::windows;
     if (argc != 2) return 1;
+    constexpr DWORD kContextStartSlackMilliseconds =
+        ipc::kContextStartDeadlineMilliseconds + 1000;
     platform::RuntimeIdentity identity;
     if (!platform::queryCurrentIdentity(identity)) return 1;
     std::wstring executablePath(32768, L'\0');
@@ -184,7 +186,8 @@ int wmain(int argc, wchar_t** argv) {
                 protocol::Status::ok, true, connectionIndex == 0 ? "late" : "a"};
             if (connectionIndex == 0) {
                 SetEvent(keyReceived);
-                if (WaitForSingleObject(releaseLate, 2000) != WAIT_OBJECT_0) {
+                if (WaitForSingleObject(releaseLate, kContextStartSlackMilliseconds) !=
+                    WAIT_OBJECT_0) {
                     CloseHandle(pipe);
                     serverError.store(14);
                     return;
@@ -215,10 +218,10 @@ int wmain(int argc, wchar_t** argv) {
             result = 1;
         }
         SetEvent(releaseLate);
-        if (WaitForSingleObject(secondReady, 2000) != WAIT_OBJECT_0 ||
+        if (WaitForSingleObject(secondReady, kContextStartSlackMilliseconds) != WAIT_OBJECT_0 ||
             client.processKey(9, 'A', 0, keyResult) || keyResult.handled ||
             WaitForSingleObject(abruptKeyReceived, 2000) != WAIT_OBJECT_0 ||
-            WaitForSingleObject(thirdReady, 2000) != WAIT_OBJECT_0 ||
+            WaitForSingleObject(thirdReady, kContextStartSlackMilliseconds) != WAIT_OBJECT_0 ||
             !client.processKey(9, 'A', 0, keyResult) || !keyResult.handled ||
             keyResult.commit != L"a") {
             result = 1;

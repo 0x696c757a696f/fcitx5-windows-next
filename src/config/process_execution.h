@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@ namespace fcitx::windows::config {
 [[nodiscard]] bool runExecutable(const std::filesystem::path& executable,
                                  const std::vector<std::wstring>& arguments,
                                  std::wstring& output,
-                                 unsigned timeoutMilliseconds = 120'000);
+                                 unsigned timeoutMilliseconds = 120'000,
+                                 std::size_t maxOutputBytes = 2U * 1024U * 1024U);
 
 } // namespace fcitx::windows::config

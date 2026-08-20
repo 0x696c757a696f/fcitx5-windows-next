@@ -476,11 +476,14 @@ int wmain(int argc, wchar_t** argv) {
     publish_package_fixture(temporary.path(), data_root, signer, "1.0.0", 1U,
                             initial_payload);
 
+    std::string install_output;
     const DWORD install_exit =
-        run_process(control, {L"--data-root", data_root.wstring(), L"--packages-install",
-                              L"fcitx5-rime"});
+        run_process_capture(control, {L"--data-root", data_root.wstring(), L"--packages-install",
+                                      L"fcitx5-rime"},
+                            install_output);
     expect(install_exit == 0,
-           "package install must succeed when the launcher service is not running");
+           "package install must succeed when the launcher service is not running: " +
+               install_output);
     const auto installed = fcitx::package::read_lockfile(data_root / L"packages");
     expect(installed.size() == 1U && installed.front().id == "fcitx5-rime" &&
                installed.front().version == "1.0.0" && installed.front().state == "installed",

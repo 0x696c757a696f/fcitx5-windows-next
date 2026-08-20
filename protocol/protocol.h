@@ -9,7 +9,7 @@
 namespace fcitx::windows::protocol {
 
 inline constexpr std::uint32_t kMagic = 0x34574346U; // "FCW4"
-inline constexpr std::uint16_t kVersion = 12;
+inline constexpr std::uint16_t kVersion = 14;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kMaxHotFrameSize = 256U * 1024U;
 inline constexpr std::size_t kMaxControlFrameSize = 1024U * 1024U;
@@ -21,6 +21,7 @@ inline constexpr std::size_t kMaxCandidateFieldUtf8 = 4096;
 inline constexpr std::size_t kMaxLogicalKeyUtf8 = 64;
 inline constexpr std::size_t kMaxInputMethodIdUtf8 = 64;
 inline constexpr std::size_t kMaxInputMethodNameUtf8 = 128;
+inline constexpr std::size_t kMaxLocaleUtf8 = 35;
 inline constexpr std::size_t kMaxSurroundingTextUtf8 = 16U * 1024U;
 
 enum class MessageType : std::uint16_t {
@@ -100,7 +101,15 @@ enum KeyFlag : std::uint32_t {
     // first-class bit prevents non-US layouts from looking like generic
     // Ctrl+Alt shortcuts at the protocol boundary.
     kKeyFlagAltGr = 1U << 5U,
+    // ToUnicodeEx reported a dead key. The logical text, when present, is the
+    // dead key's display character and must not be treated as host fallback
+    // commit text.
+    kKeyFlagDeadKey = 1U << 6U,
 };
+
+inline constexpr std::uint32_t kKnownKeyFlags =
+    kKeyFlagShift | kKeyFlagControl | kKeyFlagAlt | kKeyFlagSuper |
+    kKeyFlagRelease | kKeyFlagAltGr | kKeyFlagDeadKey;
 
 struct KeyRequest {
     Metadata metadata;
@@ -153,6 +162,7 @@ struct KeyResponse {
     bool forwardKeyRelease{};
     CaretRect caret;
     bool popupAllowed{true};
+    std::string contentLocaleUtf8;
 };
 
 struct CandidateSelectRequest {

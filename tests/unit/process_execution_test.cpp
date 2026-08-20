@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -69,6 +70,80 @@ int wmain() {
         if (!ok || output.size() < 1024 * 1024) {
             std::wcerr << L"1 MiB output failed: ok=" << ok
                        << L" bytes=" << output.size() << L'\n';
+            return 1;
+        }
+    }
+
+    // Output above the configured retention limit is drained but not retained
+    // unboundedly.
+    {
+        std::wstring output;
+        const bool ok = fcitx::windows::config::runExecutable(
+            powershell, {L"-NoProfile", L"-Command",
+                         L"1..4000 | ForEach-Object { 'y' * 60 }"},
+            output, 30'000, 4096);
+        if (!ok || output.size() > 4096) {
+            std::wcerr << L"bounded output failed: ok=" << ok
+                       << L" bytes=" << output.size() << L'\n';
+            return 1;
+        }
+    }
+
+    // Non-zero exit is reported as failure while still returning captured
+    // output for diagnostics.
+    {
+        std::wstring output;
+        const bool ok = fcitx::windows::config::runExecutable(
+            powershell, {L"-NoProfile", L"-Command", L"Write-Output nope; exit 7"},
+            output, 30'000);
+        if (ok || output.find(L"nope") == std::wstring::npos) {
+            std::wcerr << L"non-zero exit contract failed: ok=" << ok
+                       << L" output=" << output << L'\n';
+            return 1;
+        }
+    }
+
+    // Invalid UTF-8/binary-ish output must not crash or make a successful child
+    // look like a process failure.
+    {
+        std::wstring output;
+        const bool ok = fcitx::windows::config::runExecutable(
+            powershell, {L"-NoProfile", L"-Command",
+                         L"$s=[Console]::OpenStandardOutput();"
+                         L"$b=[byte[]](0xff,0xfe,0x61);$s.Write($b,0,$b.Length)"},
+            output, 30'000);
+        if (!ok || output.empty()) {
+            std::wcerr << L"binary-ish output contract failed: ok=" << ok
+                       << L" length=" << output.size() << L'\n';
+            return 1;
+        }
+    }
+
+    // Timeout must contain the process tree: a grandchild that would write a
+    // marker after the timeout should be killed with the job.
+    {
+        const auto marker = std::filesystem::temp_directory_path() /
+                            (L"fcitx5-process-tree-" +
+                             std::to_wstring(GetCurrentProcessId()) + L".txt");
+        DeleteFileW(marker.c_str());
+        std::wstring command =
+            L"$m='" + marker.wstring() + L"';"
+            L"Start-Process -WindowStyle Hidden -FilePath '" + powershell.wstring() +
+            L"' -ArgumentList '-NoProfile','-Command',"
+            L"'Start-Sleep -Milliseconds 1500; Set-Content -LiteralPath \"' + $m + '\" -Value survived';"
+            L"Start-Sleep -Seconds 10";
+        std::wstring output;
+        const auto begin = GetTickCount64();
+        const bool ok = fcitx::windows::config::runExecutable(
+            powershell, {L"-NoProfile", L"-Command", command}, output, 500);
+        const auto elapsed = GetTickCount64() - begin;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2200));
+        const bool markerExists = std::filesystem::exists(marker);
+        DeleteFileW(marker.c_str());
+        if (ok || elapsed > 7000 || markerExists) {
+            std::wcerr << L"timeout/process-tree containment failed: ok=" << ok
+                       << L" elapsed=" << elapsed << L" marker=" << markerExists
+                       << L'\n';
             return 1;
         }
     }

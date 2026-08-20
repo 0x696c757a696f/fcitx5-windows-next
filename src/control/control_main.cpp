@@ -151,45 +151,10 @@ fs::path installationRoot() {
     return directory.filename() == L"bin" ? directory.parent_path() : directory;
 }
 
-std::wstring quoteArgument(std::wstring_view value) {
-    std::wstring result = L"\"";
-    unsigned slashes = 0;
-    for (const auto character : value) {
-        if (character == L'\\') {
-            ++slashes;
-            continue;
-        }
-        if (character == L'\"')
-            result.append(slashes + 1U, L'\\');
-        else
-            result.append(slashes, L'\\');
-        slashes = 0;
-        result.push_back(character);
-    }
-    result.append(slashes * 2U, L'\\');
-    result.push_back(L'\"');
-    return result;
-}
-
 bool runProcess(const fs::path& executable, const std::vector<std::wstring>& arguments,
-                DWORD timeout = 120000U) {
-    std::wstring command = quoteArgument(executable.wstring());
-    for (const auto& argument : arguments)
-        command += L" " + quoteArgument(argument);
-    STARTUPINFOW startup{sizeof(startup)};
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE,
-                        CREATE_NO_WINDOW, nullptr, executable.parent_path().c_str(), &startup,
-                        &process))
-        return false;
-    const DWORD wait = WaitForSingleObject(process.hProcess, timeout);
-    if (wait == WAIT_TIMEOUT)
-        TerminateProcess(process.hProcess, ERROR_TIMEOUT);
-    DWORD code = 1;
-    GetExitCodeProcess(process.hProcess, &code);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    return wait == WAIT_OBJECT_0 && code == 0;
+                 DWORD timeout = 120000U) {
+    std::wstring ignoredOutput;
+    return fcitx::windows::config::runExecutable(executable, arguments, ignoredOutput, timeout);
 }
 
 struct RepositoryFiles {
@@ -218,26 +183,6 @@ struct SequenceState {
     std::uint64_t maximum{};
 };
 
-std::optional<std::string_view> lineValue(std::string_view text, std::string_view key) {
-    const std::string marker = std::string(key) + "=";
-    std::size_t position = 0;
-    while (position <= text.size()) {
-        const std::size_t lineEnd = text.find('\n', position);
-        std::string_view line =
-            lineEnd == std::string_view::npos
-                ? text.substr(position)
-                : text.substr(position, lineEnd - position);
-        if (!line.empty() && line.back() == '\r')
-            line.remove_suffix(1);
-        if (line.starts_with(marker))
-            return line.substr(marker.size());
-        if (lineEnd == std::string_view::npos)
-            break;
-        position = lineEnd + 1;
-    }
-    return std::nullopt;
-}
-
 bool parseUnsigned(std::string_view value, std::uint64_t& output) {
     if (value.empty() ||
         !std::all_of(value.begin(), value.end(),
@@ -251,18 +196,35 @@ bool parseUnsigned(std::string_view value, std::uint64_t& output) {
     }
 }
 
+constexpr std::uintmax_t kMaximumSequenceStateBytes = 1024U;
+
 SequenceState readSequenceState(const fs::path& dataRoot, std::string_view channel) {
-    std::string text;
-    if (!readUtf8(repositorySequencePath(dataRoot, channel), text))
+    const auto path = repositorySequencePath(dataRoot, channel);
+    std::error_code error;
+    if (!fs::exists(path, error))
         return {};
-    std::uint64_t maximum = 0;
-    const auto format = lineValue(text, "format_version");
-    const auto storedChannel = lineValue(text, "channel");
-    const auto storedMaximum = lineValue(text, "max_release_sequence");
-    if (!format || *format != "1" || !storedChannel || *storedChannel != channel ||
-        !storedMaximum || !parseUnsigned(*storedMaximum, maximum)) {
+    const auto size = fs::file_size(path, error);
+    if (error || size == 0U || size > kMaximumSequenceStateBytes)
         return {.present = true, .valid = false, .maximum = 0};
-    }
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return {.present = true, .valid = false, .maximum = 0};
+    std::string text{std::istreambuf_iterator<char>(input), {}};
+    if ((!input.good() && !input.eof()) ||
+        text.size() != static_cast<std::size_t>(size))
+        return {.present = true, .valid = false, .maximum = 0};
+    const std::string prefix =
+        "format_version=1\nchannel=" + std::string(channel) + "\nmax_release_sequence=";
+    if (!text.starts_with(prefix) || text.back() != '\n')
+        return {.present = true, .valid = false, .maximum = 0};
+    const auto maximumText = std::string_view(text).substr(prefix.size());
+    const auto maximumLine = maximumText.substr(0, maximumText.size() - 1U);
+    if (maximumLine.find('\n') != std::string_view::npos ||
+        maximumLine.find('\r') != std::string_view::npos)
+        return {.present = true, .valid = false, .maximum = 0};
+    std::uint64_t maximum = 0;
+    if (!parseUnsigned(maximumLine, maximum))
+        return {.present = true, .valid = false, .maximum = 0};
     return {.present = true, .valid = true, .maximum = maximum};
 }
 
@@ -285,17 +247,34 @@ std::uint64_t readMaxSequence(const fs::path& dataRoot, std::string_view channel
 void writeMaxSequence(const fs::path& dataRoot, std::string_view channel,
                       std::uint64_t maximum) {
     const auto path = repositorySequencePath(dataRoot, channel);
-    const auto incoming = fs::path(path.wstring() + L".new");
     std::error_code ignored;
     fs::create_directories(path.parent_path(), ignored);
-    fs::remove(incoming, ignored);
-    std::ofstream output(incoming, std::ios::binary | std::ios::trunc);
-    output << "format_version=1\n"
-           << "channel=" << channel << '\n'
-           << "max_release_sequence=" << maximum << '\n';
-    output.close();
-    if (!output || !MoveFileExW(incoming.c_str(), path.c_str(),
-                                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    GUID identifier{};
+    std::array<wchar_t, 40> identifierText{};
+    if (FAILED(CoCreateGuid(&identifier)) ||
+        StringFromGUID2(identifier, identifierText.data(),
+                        static_cast<int>(identifierText.size())) == 0) {
+        throw fcitx::package::PackageError(
+            "io_error", "repository sequence state publication failed");
+    }
+    const auto incoming = fs::path(path.wstring() + L"." + identifierText.data() + L".tmp");
+    const std::string text = "format_version=1\nchannel=" + std::string(channel) +
+                             "\nmax_release_sequence=" + std::to_string(maximum) + "\n";
+    HANDLE file = CreateFileW(incoming.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        throw fcitx::package::PackageError(
+            "io_error", "repository sequence state publication failed");
+    }
+    DWORD written = 0;
+    const bool writeOk =
+        text.size() <= MAXDWORD &&
+        WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) &&
+        written == text.size() && FlushFileBuffers(file);
+    CloseHandle(file);
+    if (!writeOk ||
+        !MoveFileExW(incoming.c_str(), path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         fs::remove(incoming, ignored);
         throw fcitx::package::PackageError(
             "io_error", "repository sequence state publication failed");
@@ -375,6 +354,33 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
         throw fcitx::package::PackageError("io_error", "repository cache publication failed");
     }
     writeMaxSequence(dataRoot, repository.channel, maximum);
+}
+
+std::string repairRepositorySequenceState(
+    const fs::path& dataRoot, std::span<const fcitx::package::TrustedKey> trustedKeys) {
+    const auto files = repositoryFiles(dataRoot);
+    const auto channel = fcitx::windows::kReleaseIdentity.channel_name;
+    std::error_code ignored;
+    if (!fs::exists(files.index) && !fs::exists(files.signature)) {
+        fs::remove(repositorySequencePath(dataRoot, channel), ignored);
+        return "reset";
+    }
+    try {
+        std::string index;
+        if (!readUtf8(files.index, index))
+            throw fcitx::package::PackageError("repository_unavailable",
+                                               "repository cache is unavailable");
+        const auto signature = readBinary(files.signature, 16U * 1024U);
+        const auto repository =
+            fcitx::package::verify_repository_index(index, signature, trustedKeys, channel);
+        writeMaxSequence(dataRoot, repository.channel, indexMaxSequence(repository));
+        return "repaired";
+    } catch (const fcitx::package::PackageError&) {
+        fs::remove(files.index, ignored);
+        fs::remove(files.signature, ignored);
+        fs::remove(repositorySequencePath(dataRoot, channel), ignored);
+        return "reset";
+    }
 }
 
 std::string typeName(fcitx::package::PackageType type) {
@@ -670,6 +676,7 @@ std::string themeEditableFieldsJson() {
         "candidate.max_width_dip",
         "candidate.scroll_cell_width_dip",
         "candidate.opacity",
+        "candidate.preedit_mode",
         "candidate.geometry.padding_x_dip",
         "candidate.geometry.padding_y_dip",
         "candidate.geometry.item_padding_x_dip",
@@ -1166,12 +1173,12 @@ bool setStartup(bool enabled) {
 void usage() {
     std::wcerr << L"Usage: fcitx5-control [--data-root PATH] "
                   L"--status|--restart-engine|--validate-config FILE|--apply-config FILE|"
-                  L"--reset-config|--get-startup|--set-startup enabled|disabled|"
+                  L"--reset-config|--reset-presentation|--get-startup|--set-startup enabled|disabled|"
                   L"--get-presentation|"
                   L"--get-input-methods|--set-input-method ID|--shutdown|"
                   L"--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT "
                   L"[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP "
-                  L"FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW]|"
+                  L"FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW OPACITY PREEDIT_MODE]|"
                   L"--themes-list|--themes-detail ID|"
                   L"--addons-list|"
                   L"--packages-list|--packages-detail ID|--packages-refresh [HTTPS_BASE]|"
@@ -1202,7 +1209,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (arguments.size() == 1 && arguments[0] == L"--schema") {
         std::cout
-            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","themes_list","themes_detail","addons_list","packages_list","packages_detail","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
+            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","reset_presentation","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","themes_list","themes_detail","addons_list","packages_list","packages_detail","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
             << '\n';
         return 0;
     }
@@ -1315,10 +1322,12 @@ int wmain(int argc, wchar_t** argv) {
             return 0;
         }
         if (arguments.size() == 1 && arguments[0] == L"--packages-repair") {
-            fcitx::package::verify_installed_packages(
-                dataRoot / L"packages",
-                fcitx::package::read_trusted_keys(repositoryFiles(dataRoot).keyring));
-            std::cout << "{\"format_version\":1,\"repair\":\"verified\"}\n";
+            const auto trustedKeys = fcitx::package::read_trusted_keys(
+                repositoryFiles(dataRoot).keyring);
+            fcitx::package::verify_installed_packages(dataRoot / L"packages", trustedKeys);
+            const auto sequenceState = repairRepositorySequenceState(dataRoot, trustedKeys);
+            std::cout << "{\"format_version\":1,\"repair\":\"verified\","
+                      << "\"repository_sequence_state\":" << jsonString(sequenceState) << "}\n";
             return 0;
         }
     } catch (const fcitx::package::PackageError& error) {
@@ -1327,13 +1336,18 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (arguments.size() == 1 && arguments[0] == L"--get-presentation") {
         const fs::path configPath = dataRoot / L"config.toml";
-        std::string text = fcitx::windows::config::defaultConfigToml();
+        std::string text;
         if (fs::exists(configPath) && !readUtf8(configPath, text))
             return 5;
-        Config config;
         ParseError error;
-        if (!fcitx::windows::config::parseConfig(text, config, error))
+        Config defaults;
+        if (!fcitx::windows::config::parseConfig(
+                fcitx::windows::config::defaultConfigToml(), defaults, error))
             return 3;
+        Config user;
+        if (!text.empty() && !fcitx::windows::config::parseConfig(text, user, error))
+            return 3;
+        const Config config = fcitx::windows::config::mergeConfig(defaults, user);
         const char* mode =
             !config.appearanceMode ||
                     *config.appearanceMode == fcitx::windows::config::AppearanceMode::system
@@ -1343,17 +1357,23 @@ int wmain(int argc, wchar_t** argv) {
                        : "dark");
         const char* orientation =
             !config.orientation ||
-                    *config.orientation == fcitx::windows::config::Orientation::vertical
-                ? "vertical"
-                : "horizontal";
+                    *config.orientation == fcitx::windows::config::Orientation::automatic
+                ? "automatic"
+            : *config.orientation == fcitx::windows::config::Orientation::vertical ? "vertical"
+                                                                                   : "horizontal";
         const std::string theme = config.theme.value_or("builtin:default");
         const bool scrollMode = config.scrollMode.value_or(false);
         const int pageSize = config.candidatePageSize.value_or(5);
         const double maxWidth = config.maxWidth.value_or(860.0);
         const double scrollCellWidth = config.scrollCellWidth.value_or(96.0);
+        const double opacity = config.opacity.value_or(1.0);
         const double fontSize = config.candidateFont.size.value_or(18.0);
         const double cornerRadius = config.geometry.cornerRadius.value_or(12.0);
         const bool shadow = config.geometry.shadow.value_or(true);
+        const char* preeditMode =
+            config.preeditMode && *config.preeditMode == fcitx::windows::config::PreeditMode::panel
+                ? "panel"
+                : "inline";
         const std::string font =
             config.candidateFont.families && !config.candidateFont.families->empty()
                 ? config.candidateFont.families->front()
@@ -1371,11 +1391,14 @@ int wmain(int argc, wchar_t** argv) {
                   << jsonString(std::to_string(static_cast<int>(fontSize)))
                   << ",\"candidate_corner_radius_dip\":"
                   << jsonString(std::to_string(static_cast<int>(cornerRadius)))
+                  << ",\"candidate_opacity\":" << jsonString(std::to_string(opacity))
+                  << ",\"candidate_preedit_mode\":" << jsonString(preeditMode)
                   << ",\"candidate_shadow\":" << (shadow ? "true" : "false")
                   << ",\"scroll_mode\":" << (scrollMode ? "true" : "false") << "}\n";
         return 0;
     }
-    if ((arguments.size() == 7 || arguments.size() == 9 || arguments.size() == 12) &&
+    if ((arguments.size() == 7 || arguments.size() == 9 || arguments.size() == 12 ||
+         arguments.size() == 14) &&
         arguments[0] == L"--set-presentation") {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string source = fcitx::windows::config::defaultConfigToml();
@@ -1388,9 +1411,11 @@ int wmain(int argc, wchar_t** argv) {
                 narrow(arguments[4]), narrow(arguments[5]), narrow(arguments[6]), updated,
                 error, arguments.size() >= 9 ? narrow(arguments[7]) : std::string{},
                 arguments.size() >= 9 ? narrow(arguments[8]) : std::string{},
-                arguments.size() == 12 ? narrow(arguments[9]) : std::string{},
-                arguments.size() == 12 ? narrow(arguments[10]) : std::string{},
-                arguments.size() == 12 ? narrow(arguments[11]) : std::string{})) {
+                arguments.size() >= 12 ? narrow(arguments[9]) : std::string{},
+                arguments.size() >= 12 ? narrow(arguments[10]) : std::string{},
+                arguments.size() >= 12 ? narrow(arguments[11]) : std::string{},
+                arguments.size() == 14 ? narrow(arguments[12]) : std::string{},
+                arguments.size() == 14 ? narrow(arguments[13]) : std::string{})) {
             std::cerr << "invalid presentation at " << error.line << ':' << error.column << ": "
                       << error.message << '\n';
             return 3;
@@ -1453,6 +1478,20 @@ int wmain(int argc, wchar_t** argv) {
                                  fcitx::windows::config::defaultConfigToml())
                    ? 0
                    : 5;
+    }
+    if (arguments.size() == 1 && arguments[0] == L"--reset-presentation") {
+        const fs::path configPath = dataRoot / L"config.toml";
+        std::string source = "format_version = 1\n";
+        if (fs::exists(configPath) && !readUtf8(configPath, source))
+            return 5;
+        std::string updated;
+        ParseError error;
+        if (!fcitx::windows::config::resetPresentationToml(source, updated, error)) {
+            std::cerr << "invalid presentation reset at " << error.line << ':' << error.column
+                      << ": " << error.message << '\n';
+            return 3;
+        }
+        return writeVisualConfig(configPath, updated) ? 0 : 5;
     }
     if (arguments.size() == 2 &&
         (arguments[0] == L"--validate-config" || arguments[0] == L"--apply-config")) {

@@ -1,6 +1,8 @@
 #include "fcitx5_windows/version.h"
 #include "process_execution.h"
 
+#include <fcitx5_windows/release_identity.h>
+
 #include <Windows.h>
 #include <CommCtrl.h>
 #include <shellapi.h>
@@ -15,6 +17,7 @@ extern CAppModule _Module;
 
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <array>
 #include <string>
 #include <string_view>
@@ -59,6 +62,18 @@ void enableNativeWindowEffects(HWND window) noexcept {
         (void)setAttribute(window, kTextColor, &kDarkText, sizeof(kDarkText));
     }
     FreeLibrary(dwm);
+}
+
+void setCurrentProcessAppUserModelId(const wchar_t* appId) noexcept {
+    const HMODULE shell = LoadLibraryW(L"shell32.dll");
+    if (!shell)
+        return;
+    using SetAppId = HRESULT(WINAPI*)(PCWSTR);
+    const auto setAppId =
+        reinterpret_cast<SetAppId>(GetProcAddress(shell, "SetCurrentProcessExplicitAppUserModelID"));
+    if (setAppId && appId && *appId)
+        (void)setAppId(appId);
+    FreeLibrary(shell);
 }
 
 std::wstring widen(std::string_view value) {
@@ -287,12 +302,17 @@ constexpr int kShadow = 124;
 constexpr int kThemeLibrary = 125;
 constexpr int kThemeDetail = 126;
 constexpr int kPackageDetail = 127;
+constexpr int kOpacity = 128;
+constexpr int kPreeditMode = 129;
 constexpr int kNavGeneral = 130;
 constexpr int kNavAppearance = 131;
 constexpr int kNavTheme = 132;
 constexpr int kNavDiagnostics = 133;
 constexpr int kNavRepair = 134;
 constexpr int kNavPackages = 135;
+constexpr int kAppearanceAdvanced = 136;
+constexpr int kResetAppearance = 137;
+constexpr int kAutomatic = 138;
 constexpr int kPageTitle = 140;
 constexpr int kInputMethodLabel = 200;
 constexpr int kAppearanceLabel = 201;
@@ -307,11 +327,57 @@ constexpr int kScrollCellWidthLabel = 209;
 constexpr int kFontSizeLabel = 210;
 constexpr int kCornerRadiusLabel = 211;
 constexpr int kThemeLibraryLabel = 212;
+constexpr int kOpacityLabel = 213;
+constexpr int kPreeditModeLabel = 214;
 
 // Transient notices ("保存成功" / 命令错误 / 重启完成 / 修复已开始) are
 // cleared automatically a few seconds after they appear.
 constexpr UINT_PTR kStatusTimerId = 0x4A44U;
 constexpr UINT kStatusTimeoutMs = 3000;
+
+struct DesignTokens {
+    int navigationWidth{204};
+    int contentLeft{238};
+    int rowHeight{34};
+    int controlHeight{30};
+    int hitTarget{34};
+    float cornerRadius{14.0F};
+    float focusStroke{1.0F};
+    float animationBudgetMs{120.0F};
+    COLORREF appBackground{RGB(247, 248, 250)};
+    COLORREF navigationBackground{RGB(233, 235, 239)};
+    COLORREF surface{RGB(255, 255, 255)};
+    COLORREF text{RGB(48, 50, 54)};
+    COLORREF subtleText{RGB(63, 66, 71)};
+    COLORREF accent{RGB(0, 122, 82)};
+    COLORREF focus{RGB(0, 95, 184)};
+};
+
+bool highContrastEnabled() noexcept {
+    HIGHCONTRASTW contrast{};
+    contrast.cbSize = sizeof(contrast);
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
+           (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+}
+
+DesignTokens designTokens() noexcept {
+    DesignTokens tokens;
+    if (highContrastEnabled()) {
+        tokens.appBackground = GetSysColor(COLOR_WINDOW);
+        tokens.navigationBackground = GetSysColor(COLOR_WINDOW);
+        tokens.surface = GetSysColor(COLOR_WINDOW);
+        tokens.text = GetSysColor(COLOR_WINDOWTEXT);
+        tokens.subtleText = GetSysColor(COLOR_WINDOWTEXT);
+        tokens.accent = GetSysColor(COLOR_HIGHLIGHT);
+        tokens.focus = GetSysColor(COLOR_HIGHLIGHT);
+    }
+    return tokens;
+}
+
+D2D1::ColorF d2dColor(COLORREF color) noexcept {
+    return D2D1::ColorF(GetRValue(color) / 255.0F, GetGValue(color) / 255.0F,
+                        GetBValue(color) / 255.0F);
+}
 
 struct PackageRow {
     std::wstring id;
@@ -533,24 +599,25 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     }
 
     [[nodiscard]] bool verifyUiContract() {
+        livePreviewContractTest_ = true;
         const auto hasVisibleStyle = [&](int id) {
             const HWND child = control(id);
             return child &&
                    (::GetWindowLongPtrW(child, GWL_STYLE) &
                     static_cast<LONG_PTR>(WS_VISIBLE)) != 0;
         };
-        const auto pageMatches = [&](int page, bool apply, bool details) {
+        const auto pageMatches = [&](int page, bool apply, bool saveStatus, bool details) {
             showPage(page);
             return hasVisibleStyle(kApply) == apply &&
-                   hasVisibleStyle(kSaveStatus) == apply &&
+                   hasVisibleStyle(kSaveStatus) == saveStatus &&
                    hasVisibleStyle(kStatus) == details;
         };
-        if (!pageMatches(kNavGeneral, true, false) ||
-            !pageMatches(kNavAppearance, true, false) ||
-            !pageMatches(kNavTheme, true, false) ||
-            !pageMatches(kNavDiagnostics, false, true) ||
-            !pageMatches(kNavRepair, false, true) ||
-            !pageMatches(kNavPackages, false, true)) {
+        if (!pageMatches(kNavGeneral, true, true, false) ||
+            !pageMatches(kNavAppearance, false, true, false) ||
+            !pageMatches(kNavTheme, false, false, true) ||
+            !pageMatches(kNavDiagnostics, false, false, true) ||
+            !pageMatches(kNavRepair, false, false, true) ||
+            !pageMatches(kNavPackages, false, false, true)) {
             return false;
         }
         const fs::path directory = executableDirectory();
@@ -570,7 +637,150 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         (void)onDirty(0, kHorizontal, control(kHorizontal), handled);
         std::array<wchar_t, 128> status{};
         ::GetWindowTextW(control(kSaveStatus), status.data(), static_cast<int>(status.size()));
-        return status[0] != L'\0' && std::wstring_view(status.data()) == get("status.unsaved");
+        return status[0] != L'\0' && std::wstring_view(status.data()) == get("status.saved");
+    }
+
+    [[nodiscard]] bool verifyVisualContract() {
+        const auto tokens = designTokens();
+        if (tokens.navigationWidth <= 0 || tokens.rowHeight < 32 ||
+            tokens.hitTarget < 32 || tokens.cornerRadius <= 0.0F ||
+            tokens.animationBudgetMs > 150.0F) {
+            return false;
+        }
+        const auto textOf = [&](int id) {
+            std::array<wchar_t, 128> text{};
+            ::GetWindowTextW(control(id), text.data(), static_cast<int>(text.size()));
+            return std::wstring(text.data());
+        };
+        if (textOf(kNavGeneral) != get("nav.general") ||
+            textOf(kNavAppearance) != get("nav.appearance") ||
+            textOf(kNavTheme) != get("nav.theme") ||
+            textOf(kNavDiagnostics) != get("nav.diagnostics") ||
+            textOf(kNavRepair) != get("nav.repair") ||
+            textOf(kNavPackages) != get("nav.packages") ||
+            textOf(kNavTheme) == L"Theme" || textOf(kNavRepair) == L"Repair") {
+            return false;
+        }
+        for (int id = kNavGeneral; id <= kNavPackages; ++id) {
+            const auto style = ::GetWindowLongPtrW(control(id), GWL_STYLE);
+            if ((style & WS_TABSTOP) == 0 || (style & BS_OWNERDRAW) == 0 ||
+                textOf(id).empty()) {
+                return false;
+            }
+        }
+        const auto visible = [&](int id) {
+            const HWND child = control(id);
+            return child &&
+                   (::GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE) != 0;
+        };
+        showPage(kNavAppearance);
+        if (!visible(kAppearance) || !visible(kTheme) || !visible(kPreview) ||
+            !visible(kResetAppearance) || visible(kApply) || visible(kMaxWidth) ||
+            visible(kScrollCellWidth) || visible(kOpacity) || visible(kPreeditMode)) {
+            return false;
+        }
+        showPage(kNavTheme);
+        if (!visible(kStatus) || visible(kApply) || visible(kTheme)) {
+            return false;
+        }
+        showPage(kNavRepair);
+        if (!visible(kRestart) || !visible(kDiagnostics) || !visible(kRepair) ||
+            !visible(kStatus)) {
+            return false;
+        }
+        showPage(kNavDiagnostics);
+        if (!visible(kPackages) || !visible(kPackageRefresh) || !visible(kPackageInstall)) {
+            return false;
+        }
+        for (const UINT dpi : {96U, 120U, 144U, 192U}) {
+            dpi_ = dpi;
+            layoutControls();
+            RECT rectangle{};
+            if (!::GetWindowRect(control(kNavGeneral), &rectangle) ||
+                rectangle.right <= rectangle.left ||
+                rectangle.bottom <= rectangle.top) {
+                return false;
+            }
+        }
+        dpi_ = windowDpi();
+        layoutControls();
+        return true;
+    }
+
+    [[nodiscard]] bool verifyLivePreviewContract() {
+        livePreviewContractTest_ = true;
+        previewLaunchCount_ = 0;
+        liveApplyCount_ = 0;
+        resetApplyCount_ = 0;
+        forceLiveApplyFailure_ = false;
+        appearanceAdvanced_ = false;
+        SendMessageW(control(kAppearanceAdvanced), BM_SETCHECK, BST_UNCHECKED, 0);
+        showPage(kNavAppearance);
+        if (previewLaunchCount_ != 1 || !previewActiveForContract_ || visible(kApply) ||
+            visible(kMaxWidth) || visible(kScrollCellWidth) || visible(kOpacity) ||
+            visible(kPreeditMode)) {
+            std::cerr << "live preview default surface failed: launches="
+                      << previewLaunchCount_ << " active=" << previewActiveForContract_
+                      << " apply=" << visible(kApply) << " max=" << visible(kMaxWidth)
+                      << " scrollCell=" << visible(kScrollCellWidth) << '\n';
+            return false;
+        }
+        for (const int id : {kAppearance, kTheme, kFont, kAutomatic, kPageSize, kFontSize,
+                             kAppearanceAdvanced, kPreview, kResetAppearance}) {
+            const HWND child = control(id);
+            if (!child || (::GetWindowLongPtrW(child, GWL_STYLE) & WS_TABSTOP) == 0) {
+                std::cerr << "live preview tabstop missing for " << id << '\n';
+                return false;
+            }
+        }
+        const auto notify = [&](int id, int notification) {
+            SendMessageW(WM_COMMAND, MAKEWPARAM(id, notification),
+                         reinterpret_cast<LPARAM>(control(id)));
+        };
+        const auto statusIs = [&](const char* key) {
+            std::array<wchar_t, 128> status{};
+            ::GetWindowTextW(control(kSaveStatus), status.data(),
+                             static_cast<int>(status.size()));
+            return std::wstring_view(status.data()) == get(key);
+        };
+        SendMessageW(control(kAppearance), CB_SETCURSEL, 1, 0);
+        notify(kAppearance, CBN_SELCHANGE);
+        SendMessageW(control(kFontSize), CB_SETCURSEL, 2, 0);
+        notify(kFontSize, CBN_SELCHANGE);
+        SendMessageW(control(kHorizontal), BM_CLICK, 0, 0);
+        if (liveApplyCount_ != 3 || previewLaunchCount_ != 1 ||
+            presentationDirty_ || !statusIs("status.saved")) {
+            std::cerr << "live apply did not save without relaunch: applies="
+                      << liveApplyCount_ << " launches=" << previewLaunchCount_
+                      << " dirty=" << presentationDirty_ << '\n';
+            return false;
+        }
+        SendMessageW(control(kAppearanceAdvanced), BM_CLICK, 0, 0);
+        if (!appearanceAdvanced_ || !visible(kMaxWidth) || !visible(kScrollCellWidth) ||
+            !visible(kOpacity) || !visible(kPreeditMode)) {
+            std::cerr << "advanced appearance controls did not expand\n";
+            return false;
+        }
+        forceLiveApplyFailure_ = true;
+        ::SetWindowTextW(control(kFont), L"");
+        notify(kFont, EN_KILLFOCUS);
+        if (!presentationDirty_ || !statusIs("error.command") || previewLaunchCount_ != 1) {
+            std::cerr << "invalid live apply did not fail safe\n";
+            return false;
+        }
+        forceLiveApplyFailure_ = false;
+        SendMessageW(control(kResetAppearance), BM_CLICK, 0, 0);
+        if (resetApplyCount_ != 1 || presentationDirty_ || !statusIs("status.saved") ||
+            previewLaunchCount_ != 1) {
+            std::cerr << "appearance reset did not save without relaunch: resets="
+                      << resetApplyCount_ << " dirty=" << presentationDirty_
+                      << " launches=" << previewLaunchCount_ << '\n';
+            return false;
+        }
+        BOOL handled = FALSE;
+        (void)onVisualSystemChanged(WM_SYSCOLORCHANGE, 0, 0, handled);
+        (void)onVisualSystemChanged(WM_THEMECHANGED, 0, 0, handled);
+        return designTokens().hitTarget >= 32;
     }
 
     [[nodiscard]] bool verifyInteractionCoverage() {
@@ -646,13 +856,16 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             if (!notify(kAppearance, CBN_SELCHANGE))
                 return false;
         }
-        if (appearanceCount != 3 || !click(kVertical) || !click(kHorizontal))
+        if (appearanceCount != 3 || !click(kAutomatic) || !click(kVertical) ||
+            !click(kHorizontal))
             return false;
         if (!click(kVertical))
             return false;
         if (!click(kScrollMode))
             return false;
         if (!click(kScrollMode))
+            return false;
+        if (!click(kAppearanceAdvanced))
             return false;
         for (const int combo : {kPageSize, kMaxWidth, kScrollCellWidth, kFontSize,
                                 kCornerRadius}) {
@@ -669,10 +882,20 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             return false;
         if (!click(kShadow))
             return false;
-        if (!statusIs("status.unsaved") || !click(kApply) || !statusIs("status.saved"))
+        if (!statusIs("status.saved") || !click(kResetAppearance) ||
+            !statusIs("status.saved"))
             return false;
 
         if (!click(kNavTheme))
+            return false;
+        std::array<wchar_t, 256> shortcutsText{};
+        ::GetWindowTextW(control(kStatus), shortcutsText.data(),
+                         static_cast<int>(shortcutsText.size()));
+        if (std::wstring_view(shortcutsText.data()).find(get("nav.theme")) ==
+            std::wstring_view::npos) {
+            return false;
+        }
+        if (!click(kNavAppearance))
             return false;
         const LRESULT themeCount = SendMessageW(control(kTheme), CB_GETCOUNT, 0, 0);
         for (LRESULT index = 0; index < themeCount; ++index) {
@@ -698,13 +921,12 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             if (!notify(kFont, EN_KILLFOCUS))
                 return false;
         }
-        if (themeCount <= 0 || !click(kPreview) || !click(kApply) ||
-            !statusIs("status.saved"))
+        if (themeCount <= 0 || !click(kPreview) || !statusIs("status.saved"))
             return false;
 
-        if (!click(kNavDiagnostics) || !click(kRestart) || !click(kDiagnostics) ||
-            !click(kNavRepair) || !click(kRepair) || !click(kNavPackages) ||
-            !click(kPackageRefresh))
+        if (!click(kNavDiagnostics) || !click(kPackageRefresh) ||
+            !click(kNavRepair) || !click(kRestart) || !click(kDiagnostics) ||
+            !click(kRepair) || !click(kNavPackages) || !click(kPackageRefresh))
             return false;
 
         // Exercise each package action through a synthetic managed row. Production package
@@ -744,10 +966,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             return false;
 
         constexpr unsigned long long expected =
-            kCoveredGeneralApply | kCoveredAppearanceApply | kCoveredThemeApply |
+            kCoveredGeneralApply |
             kCoveredRestart | kCoveredDiagnostics | kCoveredRepair | kCoveredPreview |
             kCoveredPackageRefresh | kCoveredPackageInstall | kCoveredPackageUpdate |
-            kCoveredPackageDisable | kCoveredPackageEnable | kCoveredPackageRemove;
+            kCoveredPackageDisable | kCoveredPackageEnable | kCoveredPackageRemove |
+            kCoveredAppearanceReset | kCoveredAppearanceAdvanced;
         if (actionCoverage_ != expected)
             return false;
 
@@ -771,6 +994,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     MESSAGE_HANDLER(WM_SIZE, onSize)
     MESSAGE_HANDLER(WM_GETMINMAXINFO, onGetMinMaxInfo)
     MESSAGE_HANDLER(WM_DPICHANGED, onDpiChanged)
+    MESSAGE_HANDLER(WM_SETTINGCHANGE, onVisualSystemChanged)
+    MESSAGE_HANDLER(WM_THEMECHANGED, onVisualSystemChanged)
+    MESSAGE_HANDLER(WM_SYSCOLORCHANGE, onVisualSystemChanged)
     MESSAGE_HANDLER(WM_PAINT, onPaint)
     MESSAGE_HANDLER(WM_DRAWITEM, onDrawItem)
     MESSAGE_HANDLER(WM_CTLCOLORSTATIC, onColorStatic)
@@ -782,6 +1008,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     COMMAND_ID_HANDLER(kDiagnostics, onDiagnostics)
     COMMAND_ID_HANDLER(kRepair, onRepair)
     COMMAND_ID_HANDLER(kPreview, onPreview)
+    COMMAND_ID_HANDLER(kResetAppearance, onResetAppearance)
+    COMMAND_HANDLER(kAppearanceAdvanced, BN_CLICKED, onAppearanceAdvanced)
     COMMAND_ID_HANDLER(kPackageRefresh, onPackageRefresh)
     COMMAND_ID_HANDLER(kPackageInstall, onPackageInstall)
     COMMAND_ID_HANDLER(kPackageRemove, onPackageRemove)
@@ -797,6 +1025,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     COMMAND_HANDLER(kScrollCellWidth, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kFontSize, CBN_SELCHANGE, onDirty)
     COMMAND_HANDLER(kCornerRadius, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kOpacity, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kPreeditMode, CBN_SELCHANGE, onDirty)
+    COMMAND_HANDLER(kAutomatic, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kVertical, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kHorizontal, BN_CLICKED, onDirty)
     COMMAND_HANDLER(kScrollMode, BN_CLICKED, onDirty)
@@ -807,7 +1038,6 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
   private:
     static constexpr unsigned long long kCoveredGeneralApply = 1ULL << 0U;
     static constexpr unsigned long long kCoveredAppearanceApply = 1ULL << 1U;
-    static constexpr unsigned long long kCoveredThemeApply = 1ULL << 2U;
     static constexpr unsigned long long kCoveredRestart = 1ULL << 3U;
     static constexpr unsigned long long kCoveredDiagnostics = 1ULL << 4U;
     static constexpr unsigned long long kCoveredRepair = 1ULL << 5U;
@@ -818,6 +1048,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     static constexpr unsigned long long kCoveredPackageDisable = 1ULL << 10U;
     static constexpr unsigned long long kCoveredPackageEnable = 1ULL << 11U;
     static constexpr unsigned long long kCoveredPackageRemove = 1ULL << 12U;
+    static constexpr unsigned long long kCoveredAppearanceReset = 1ULL << 13U;
+    static constexpr unsigned long long kCoveredAppearanceAdvanced = 1ULL << 14U;
 
     void cover(unsigned long long action) noexcept { actionCoverage_ |= action; }
     const wchar_t* get(const char* key) const {
@@ -855,6 +1087,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 return;
             }
         }
+    }
+    [[nodiscard]] bool visible(int id) const {
+        const HWND child = control(id);
+        return child &&
+               (::GetWindowLongPtrW(child, GWL_STYLE) & static_cast<LONG_PTR>(WS_VISIBLE)) != 0;
     }
     [[nodiscard]] int scale(int value) const noexcept {
         return MulDiv(value, static_cast<int>(dpi_), 96);
@@ -944,6 +1181,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const int packageStatusY = (std::max)(542, logicalHeight - 108);
         const int packageListWidth = (std::max)(300, contentWidth / 2 - 18);
         const int packageDetailX = 250 + packageListWidth + 18;
+        const int appearanceSideWidth = (std::max)(180, (std::min)(contentWidth - 470, 260));
 
         moveControl(kPageTitle, 238, 26, contentWidth, 38);
         moveControl(kStartup, 250, 104, (std::min)(contentWidth, 520), 32);
@@ -951,16 +1189,17 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         moveControl(kInputMethod, 420, 152, (std::min)(contentWidth - 170, 380), 140);
         moveControl(kAppearanceLabel, 250, 106, 150, 24);
         moveControl(kAppearance, 420, 100, (std::min)(contentWidth - 170, 380), 150);
-        moveControl(kThemeLabel, 250, 106, 150, 24);
-        moveControl(kTheme, 420, 100, (std::min)(contentWidth - 170, 380), 150);
-        moveControl(kFontLabel, 250, 148, 150, 24);
-        moveControl(kFont, 420, 142, (std::min)(contentWidth - 170, 380), 30);
-        moveControl(kThemeLibraryLabel, 250, 196, 220, 24);
-        moveControl(kThemeLibrary, 250, 224, (std::min)(300, contentWidth / 2 - 20), 210);
-        moveControl(kThemeDetail, 570, 224, (std::max)(260, contentWidth - 320), 210);
+        moveControl(kThemeLabel, 560, 106, 140, 24);
+        moveControl(kTheme, 710, 100, appearanceSideWidth, 150);
+        moveControl(kFontLabel, 560, 148, 140, 24);
+        moveControl(kFont, 710, 142, appearanceSideWidth, 30);
+        moveControl(kThemeLibraryLabel, 560, 196, 220, 24);
+        moveControl(kThemeLibrary, 560, 224, (std::min)(200, contentWidth / 3), 210);
+        moveControl(kThemeDetail, 780, 224, (std::max)(200, contentWidth - 540), 210);
         moveControl(kLayoutLabel, 250, 162, 150, 24);
-        moveControl(kVertical, 420, 156, 120, 28);
-        moveControl(kHorizontal, 550, 156, 140, 28);
+        moveControl(kAutomatic, 420, 156, 90, 28);
+        moveControl(kVertical, 520, 156, 120, 28);
+        moveControl(kHorizontal, 650, 156, 140, 28);
         moveControl(kScrollMode, 420, 204, (std::min)(contentWidth - 170, 420), 28);
         moveControl(kPageSizeLabel, 250, 236, 150, 24);
         moveControl(kPageSize, 420, 230, 120, 180);
@@ -972,10 +1211,19 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         moveControl(kFontSize, 420, 338, 120, 180);
         moveControl(kCornerRadiusLabel, 250, 380, 150, 24);
         moveControl(kCornerRadius, 420, 374, 120, 180);
-        moveControl(kShadow, 420, 416, (std::min)(contentWidth - 170, 280), 28);
-        moveControl(kApply, 650, 460, 120, 36);
-        moveControl(kPreview, 250, 460, 160, 36);
-        moveControl(kSaveStatus, 420, 468, (std::min)(contentWidth - 170, 320), 24);
+        moveControl(kOpacityLabel, 560, 380, 150, 24);
+        moveControl(kOpacity, 710, 374, 120, 180);
+        moveControl(kPreeditModeLabel, 250, 416, 150, 24);
+        moveControl(kPreeditMode, 420, 410, (std::min)(contentWidth - 170, 260), 180);
+        moveControl(kShadow, 420, 448, (std::min)(contentWidth - 170, 280), 28);
+        const int appearanceAdvancedY = appearanceAdvanced_ ? 496 : 416;
+        const int appearanceActionY = appearanceAdvanced_ ? 540 : 460;
+        moveControl(kAppearanceAdvanced, 250, appearanceAdvancedY, 240, 28);
+        moveControl(kApply, 650, appearanceActionY, 120, 36);
+        moveControl(kPreview, 250, appearanceActionY, 160, 36);
+        moveControl(kResetAppearance, 780, appearanceActionY, 150, 36);
+        moveControl(kSaveStatus, 420, appearanceActionY + 8,
+                    (std::min)(contentWidth - 170, 320), 24);
         moveControl(kRestart, 250, 106, 170, 36);
         moveControl(kDiagnostics, 436, 106, 170, 36);
         moveControl(kRepair, 250, 106, 170, 36);
@@ -1040,7 +1288,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         add(L"EDIT", L"", WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL, 570, 224, 380,
             210, kThemeDetail);
         add(L"STATIC", get("candidate.layout"), 0, 250, 162, 150, 24, kLayoutLabel);
-        add(L"BUTTON", get("candidate.vertical"), BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 420,
+        add(L"BUTTON", get("candidate.automatic"), BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
+            420, 156, 90, 28, kAutomatic);
+        add(L"BUTTON", get("candidate.vertical"), BS_AUTORADIOBUTTON | WS_TABSTOP, 520,
             156, 120, 28, kVertical);
         add(L"BUTTON", get("candidate.horizontal"), BS_AUTORADIOBUTTON | WS_TABSTOP, 550, 156, 140,
             28, kHorizontal);
@@ -1084,13 +1334,31 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                          reinterpret_cast<LPARAM>(value));
         }
         SendMessageW(control(kCornerRadius), CB_SETCURSEL, 2, 0);
-        add(L"BUTTON", get("candidate.shadow"), BS_AUTOCHECKBOX | WS_TABSTOP, 420, 416, 260,
+        add(L"STATIC", get("candidate.opacity"), 0, 560, 380, 150, 24, kOpacityLabel);
+        add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, 710, 374, 120, 180, kOpacity);
+        for (const wchar_t* value : {L"1.00", L"0.95", L"0.90", L"0.85", L"0.75"}) {
+            SendMessageW(control(kOpacity), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value));
+        }
+        SendMessageW(control(kOpacity), CB_SETCURSEL, 0, 0);
+        add(L"STATIC", get("candidate.preedit_mode"), 0, 250, 416, 150, 24,
+            kPreeditModeLabel);
+        add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, 420, 410, 260, 180,
+            kPreeditMode);
+        for (const wchar_t* item : {get("preedit.inline"), get("preedit.panel")}) {
+            SendMessageW(control(kPreeditMode), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
+        }
+        SendMessageW(control(kPreeditMode), CB_SETCURSEL, 0, 0);
+        add(L"BUTTON", get("candidate.shadow"), BS_AUTOCHECKBOX | WS_TABSTOP, 420, 448, 260,
             28, kShadow);
         SendMessageW(control(kShadow), BM_SETCHECK, BST_CHECKED, 0);
-        SendMessageW(control(kVertical), BM_SETCHECK, BST_CHECKED, 0);
+        SendMessageW(control(kAutomatic), BM_SETCHECK, BST_CHECKED, 0);
+        add(L"BUTTON", get("appearance.more"), BS_AUTOCHECKBOX | WS_TABSTOP, 250, 416, 240, 28,
+            kAppearanceAdvanced);
         add(L"BUTTON", get("action.apply"), BS_DEFPUSHBUTTON | WS_TABSTOP, 650, 264, 120, 36,
             kApply);
         add(L"BUTTON", get("action.preview"), WS_TABSTOP, 250, 264, 160, 36, kPreview);
+        add(L"BUTTON", get("action.reset_appearance"), WS_TABSTOP, 780, 264, 150, 36,
+            kResetAppearance);
         add(L"STATIC", L"", SS_LEFT, 420, 272, 210, 24, kSaveStatus);
         add(L"BUTTON", get("action.restart"), WS_TABSTOP, 250, 106, 170, 36, kRestart);
         add(L"BUTTON", get("action.diagnostics"), WS_TABSTOP, 436, 106, 170, 36, kDiagnostics);
@@ -1140,6 +1408,16 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         InvalidateRect(nullptr, TRUE);
         return 0;
     }
+    LRESULT onVisualSystemChanged(UINT, WPARAM, LPARAM, BOOL&) {
+        if (target_) {
+            target_->Release();
+            target_ = nullptr;
+        }
+        layoutControls();
+        refreshStatusControls();
+        InvalidateRect(nullptr, TRUE);
+        return 0;
+    }
     void showPage(int page) {
         selectedPage_ = page;
         const auto show = [&](int id, bool visible) {
@@ -1149,43 +1427,55 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         for (const int id : {kStartup,         kInputMethod,    kInputMethodLabel, kAppearance,
                              kAppearanceLabel, kTheme,          kThemeLabel,       kFont,
                              kFontLabel,       kThemeLibrary,   kThemeLibraryLabel, kThemeDetail,
-                             kVertical,       kHorizontal,       kLayoutLabel,
+                             kAutomatic,      kVertical,       kHorizontal,       kLayoutLabel,
                              kScrollMode,      kPageSize,       kPageSizeLabel,    kApply,
                              kMaxWidth,        kMaxWidthLabel,  kScrollCellWidth,
                              kScrollCellWidthLabel, kFontSize,  kFontSizeLabel,
                              kCornerRadius,    kCornerRadiusLabel, kShadow,
-                             kPreview,         kRestart,
+                             kOpacity,         kOpacityLabel,   kPreeditMode,      kPreeditModeLabel,
+                             kAppearanceAdvanced, kPreview,     kResetAppearance,  kRestart,
                              kDiagnostics,     kRepair,         kStatus,           kPackages,
                              kPackageDetail,   kPackageRefresh, kPackageInstall, kPackageToggle,    kPackageRemove,
                              kPackagesTitle,   kSaveStatus})
             show(id, false);
         const bool general = page == kNavGeneral;
         const bool appearance = page == kNavAppearance;
-        const bool theme = page == kNavTheme;
-        const bool diagnostics = page == kNavDiagnostics;
-        const bool repair = page == kNavRepair;
+        const bool shortcuts = page == kNavTheme;
+        const bool updates = page == kNavDiagnostics;
+        const bool diagnosticsRepair = page == kNavRepair;
         const bool packages = page == kNavPackages;
         for (const int id : {kStartup, kInputMethod, kInputMethodLabel})
             show(id, general);
-        for (const int id : {kAppearance, kAppearanceLabel, kVertical, kHorizontal, kLayoutLabel,
-                             kScrollMode, kPageSize, kPageSizeLabel, kMaxWidth, kMaxWidthLabel,
-                             kScrollCellWidth, kScrollCellWidthLabel, kFontSize, kFontSizeLabel,
-                             kCornerRadius, kCornerRadiusLabel, kShadow})
+        for (const int id : {kAppearance, kAppearanceLabel, kAutomatic, kVertical, kHorizontal,
+                             kLayoutLabel,
+                             kScrollMode, kPageSize, kPageSizeLabel, kFontSize, kFontSizeLabel,
+                             kTheme, kThemeLabel, kFont, kFontLabel, kThemeLibrary,
+                             kThemeLibraryLabel, kThemeDetail, kAppearanceAdvanced, kPreview,
+                             kResetAppearance})
             show(id, appearance);
-        for (const int id : {kTheme, kThemeLabel, kFont, kFontLabel, kThemeLibrary,
-                             kThemeLibraryLabel, kThemeDetail, kPreview})
-            show(id, theme);
-        show(kApply, general || appearance || theme);
-        show(kSaveStatus, general || appearance || theme);
+        for (const int id : {kMaxWidth, kMaxWidthLabel, kScrollCellWidth, kScrollCellWidthLabel,
+                             kCornerRadius, kCornerRadiusLabel, kOpacity, kOpacityLabel,
+                             kPreeditMode, kPreeditModeLabel, kShadow})
+            show(id, appearance && appearanceAdvanced_);
+        show(kApply, general);
+        show(kSaveStatus, general || appearance);
         const bool dirty = general ? generalDirty_ : presentationDirty_;
         for (const int id : {kRestart, kDiagnostics})
-            show(id, diagnostics);
+            show(id, diagnosticsRepair);
         for (const int id : {kRepair})
-            show(id, repair);
+            show(id, diagnosticsRepair);
         for (const int id : {kPackages, kPackageDetail, kPackageRefresh, kPackageInstall,
                              kPackageToggle, kPackageRemove, kPackagesTitle})
-            show(id, packages);
-        show(kStatus, diagnostics || repair || packages);
+            show(id, packages || updates);
+        show(kStatus, shortcuts || diagnosticsRepair || packages || updates);
+        if (shortcuts)
+            ::SetWindowTextW(control(kStatus), get("shortcuts.placeholder"));
+        else if (updates || packages)
+            ::SetWindowTextW(control(kStatus), L"");
+        if (diagnosticsRepair)
+            refreshStatusControls();
+        ::SetWindowTextW(control(kPackagesTitle),
+                         updates ? get("updates.title") : get("packages.title"));
         setSaveStatus(dirty ? get("status.unsaved") : L"");
         ::SetWindowTextW(control(kPageTitle), page == kNavGeneral       ? get("nav.general")
                                               : page == kNavAppearance  ? get("nav.appearance")
@@ -1197,6 +1487,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         for (int id = kNavGeneral; id <= kNavPackages; ++id)
             ::InvalidateRect(control(id), nullptr, TRUE);
         InvalidateRect(nullptr, TRUE);
+        if (appearance) {
+            ensureProductionPreview();
+        } else {
+            stopProductionPreview();
+        }
     }
     void loadState() {
         std::wstring output;
@@ -1209,9 +1504,16 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 SendMessageW(control(kAppearance), CB_SETCURSEL,
                              mode->second == L"light" ? 1 : (mode->second == L"dark" ? 2 : 0), 0);
             const auto orientation = presentation.find("orientation");
-            if (orientation != presentation.end() && orientation->second == L"horizontal") {
-                SendMessageW(control(kVertical), BM_SETCHECK, BST_UNCHECKED, 0);
-                SendMessageW(control(kHorizontal), BM_SETCHECK, BST_CHECKED, 0);
+            if (orientation != presentation.end()) {
+                SendMessageW(control(kAutomatic), BM_SETCHECK,
+                             orientation->second == L"automatic" ? BST_CHECKED : BST_UNCHECKED,
+                             0);
+                SendMessageW(control(kVertical), BM_SETCHECK,
+                             orientation->second == L"vertical" ? BST_CHECKED : BST_UNCHECKED,
+                             0);
+                SendMessageW(control(kHorizontal), BM_SETCHECK,
+                             orientation->second == L"horizontal" ? BST_CHECKED : BST_UNCHECKED,
+                             0);
             }
             const auto candidateFont = presentation.find("candidate_font");
             if (candidateFont != presentation.end())
@@ -1240,6 +1542,18 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             const auto cornerRadius = presentation.find("candidate_corner_radius_dip");
             if (cornerRadius != presentation.end())
                 selectComboText(kCornerRadius, cornerRadius->second);
+            const auto opacity = presentation.find("candidate_opacity");
+            if (opacity != presentation.end()) {
+                std::wstring value = opacity->second.substr(0, 4);
+                if (value == L"1.0")
+                    value = L"1.00";
+                selectComboText(kOpacity, value);
+            }
+            const auto preeditMode = presentation.find("candidate_preedit_mode");
+            if (preeditMode != presentation.end()) {
+                SendMessageW(control(kPreeditMode), CB_SETCURSEL,
+                             preeditMode->second == L"panel" ? 1 : 0, 0);
+            }
             const auto shadow = presentation.find("candidate_shadow");
             if (shadow != presentation.end())
                 SendMessageW(control(kShadow), BM_SETCHECK,
@@ -1400,12 +1714,18 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                                                             : get("error.command"));
     }
     bool applyPresentation() {
+        if (interactionTest_ || livePreviewContractTest_) {
+            ++liveApplyCount_;
+            return !forceLiveApplyFailure_;
+        }
         const auto modeIndex = SendMessageW(control(kAppearance), CB_GETCURSEL, 0, 0);
         const wchar_t* const mode =
             modeIndex == 1 ? L"light" : (modeIndex == 2 ? L"dark" : L"system");
         const wchar_t* const orientation =
-            SendMessageW(control(kHorizontal), BM_GETCHECK, 0, 0) == BST_CHECKED ? L"horizontal"
-                                                                                 : L"vertical";
+            SendMessageW(control(kHorizontal), BM_GETCHECK, 0, 0) == BST_CHECKED
+                ? L"horizontal"
+            : SendMessageW(control(kVertical), BM_GETCHECK, 0, 0) == BST_CHECKED ? L"vertical"
+                                                                                 : L"automatic";
         const auto pageSizeIndex = SendMessageW(control(kPageSize), CB_GETCURSEL, 0, 0);
         if (pageSizeIndex == CB_ERR || pageSizeIndex < 0 || pageSizeIndex > 8)
             return false;
@@ -1414,6 +1734,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const std::wstring scrollCellWidth = comboText(kScrollCellWidth);
         const std::wstring fontSize = comboText(kFontSize);
         const std::wstring cornerRadius = comboText(kCornerRadius);
+        const std::wstring opacity = comboText(kOpacity);
+        const auto preeditModeIndex = SendMessageW(control(kPreeditMode), CB_GETCURSEL, 0, 0);
+        const wchar_t* const preeditMode = preeditModeIndex == 1 ? L"panel" : L"inline";
         const wchar_t* const shadow =
             SendMessageW(control(kShadow), BM_GETCHECK, 0, 0) == BST_CHECKED ? L"enabled"
                                                                              : L"disabled";
@@ -1423,15 +1746,37 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         std::wstring output;
         const bool ok =
             !font.empty() && !maxWidth.empty() && !scrollCellWidth.empty() &&
-            !fontSize.empty() && !cornerRadius.empty() &&
+            !fontSize.empty() && !cornerRadius.empty() && !opacity.empty() &&
             runControl({L"--set-presentation", mode, selectedThemeId(), orientation,
                         SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) == BST_CHECKED
                             ? L"enabled"
                             : L"disabled",
                         pageSize, font, maxWidth, scrollCellWidth, fontSize, cornerRadius,
-                        shadow},
+                        shadow, opacity, preeditMode},
                        output);
         return ok;
+    }
+    bool resetPresentation() {
+        if (interactionTest_ || livePreviewContractTest_) {
+            ++resetApplyCount_;
+            return !forceLiveApplyFailure_;
+        }
+        std::wstring output;
+        const bool ok = runControl({L"--reset-presentation"}, output);
+        if (ok)
+            loadState();
+        return ok;
+    }
+    void liveApplyPresentation() {
+        const bool ok = applyPresentation();
+        if (ok) {
+            presentationDirty_ = false;
+            setSaveStatus(get("status.saved"));
+            (void)ensureProductionPreview();
+        } else {
+            presentationDirty_ = true;
+            setSaveStatus(get("error.command"));
+        }
     }
     void repair() {
         const fs::path directory = executableDirectory();
@@ -1615,17 +1960,40 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         refreshPackages(false);
     }
 
-    void preview() {
+    void stopProductionPreview() {
         if (previewProcess_) {
             if (WaitForSingleObject(previewProcess_, 0) == WAIT_TIMEOUT)
                 TerminateProcess(previewProcess_, 0);
             CloseHandle(previewProcess_);
             previewProcess_ = nullptr;
         }
+        previewActiveForContract_ = false;
+    }
+
+    bool previewProcessRunning() {
+        if (!previewProcess_)
+            return false;
+        if (WaitForSingleObject(previewProcess_, 0) == WAIT_TIMEOUT)
+            return true;
+        CloseHandle(previewProcess_);
+        previewProcess_ = nullptr;
+        return false;
+    }
+
+    bool ensureProductionPreview() {
+        if (interactionTest_ || livePreviewContractTest_ || !::IsWindowVisible(m_hWnd)) {
+            if (!previewActiveForContract_) {
+                ++previewLaunchCount_;
+                previewActiveForContract_ = true;
+            }
+            return true;
+        }
+        if (previewProcessRunning())
+            return true;
         const fs::path executable = executableDirectory() / L"fcitx5-ui.exe";
         if (!fs::exists(executable)) {
             setStatus(get("error.command"));
-            return;
+            return false;
         }
         std::wstring command = quote(executable.wstring()) + L" --demo --parent-pid " +
                                std::to_wstring(GetCurrentProcessId());
@@ -1635,10 +2003,17 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr,
                             executable.parent_path().c_str(), &startup, &process)) {
             setStatus(get("error.command"));
-            return;
+            return false;
         }
         CloseHandle(process.hThread);
         previewProcess_ = process.hProcess;
+        ++previewLaunchCount_;
+        return true;
+    }
+
+    void preview() {
+        stopProductionPreview();
+        (void)ensureProductionPreview();
     }
 
     LRESULT onPaint(UINT, WPARAM, LPARAM, BOOL&) {
@@ -1660,15 +2035,29 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 target_->SetDpi(96.0f, 96.0f);
         }
         if (target_) {
+            const auto tokens = designTokens();
             target_->BeginDraw();
-            target_->Clear(D2D1::ColorF(0xF7F8FA));
+            target_->Clear(d2dColor(tokens.appBackground));
             ID2D1SolidColorBrush* brush = nullptr;
-            target_->CreateSolidColorBrush(D2D1::ColorF(0xE9EBEF), &brush);
+            target_->CreateSolidColorBrush(d2dColor(tokens.navigationBackground), &brush);
             if (brush) {
-                target_->FillRectangle(D2D1::RectF(0, 0, 204, 650), brush);
-                brush->SetColor(D2D1::ColorF(0xFFFFFF));
+                RECT client{};
+                GetClientRect(&client);
+                target_->FillRectangle(
+                    D2D1::RectF(0, 0, static_cast<float>(scale(tokens.navigationWidth)),
+                                static_cast<float>(client.bottom)), brush);
+                brush->SetColor(d2dColor(tokens.surface));
+                const int cardRight =
+                    (std::max)(scale(986), static_cast<int>(client.right) - scale(24));
+                const int cardBottom =
+                    (std::max)(scale(610), static_cast<int>(client.bottom) - scale(40));
                 target_->FillRoundedRectangle(
-                    D2D1::RoundedRect(D2D1::RectF(220, 74, 986, 610), 14, 14), brush);
+                    D2D1::RoundedRect(D2D1::RectF(static_cast<float>(scale(220)),
+                                                  static_cast<float>(scale(74)),
+                                                  static_cast<float>(cardRight),
+                                                  static_cast<float>(cardBottom)),
+                                      tokens.cornerRadius, tokens.cornerRadius),
+                    brush);
                 brush->Release();
             }
             if (target_->EndDraw() == D2DERR_RECREATE_TARGET) {
@@ -1691,8 +2080,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
         if (!item || item->CtlID < kNavGeneral || item->CtlID > kNavPackages)
             return FALSE;
+        const auto tokens = designTokens();
         const bool selected = static_cast<int>(item->CtlID) == selectedPage_;
-        HBRUSH background = CreateSolidBrush(selected ? RGB(255, 255, 255) : RGB(233, 235, 239));
+        HBRUSH background =
+            CreateSolidBrush(selected ? tokens.surface : tokens.navigationBackground);
         HPEN pen = CreatePen(PS_NULL, 0, 0);
         const HGDIOBJ oldBrush = SelectObject(item->hDC, background);
         const HGDIOBJ oldPen = SelectObject(item->hDC, pen);
@@ -1703,7 +2094,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         DeleteObject(background);
         DeleteObject(pen);
         SetBkMode(item->hDC, TRANSPARENT);
-        SetTextColor(item->hDC, selected ? RGB(0, 122, 82) : RGB(63, 66, 71));
+        SetTextColor(item->hDC, selected ? tokens.accent : tokens.subtleText);
         RECT text = item->rcItem;
         text.left += 16;
         wchar_t label[128]{};
@@ -1714,9 +2105,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         return TRUE;
     }
     LRESULT onColorStatic(UINT, WPARAM wparam, LPARAM, BOOL&) {
+        const auto tokens = designTokens();
         const HDC dc = reinterpret_cast<HDC>(wparam);
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(48, 50, 54));
+        SetTextColor(dc, tokens.text);
         return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
     }
     LRESULT onDestroy(UINT, WPARAM, LPARAM, BOOL&) {
@@ -1746,9 +2138,6 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             } else if (selectedPage_ == kNavAppearance) {
                 cover(kCoveredAppearanceApply);
                 presentationDirty_ = false;
-            } else if (selectedPage_ == kNavTheme) {
-                cover(kCoveredThemeApply);
-                presentationDirty_ = false;
             }
             setSaveStatus(get("status.saved"));
             return 0;
@@ -1760,7 +2149,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             ok = startupSaved && inputMethodSaved;
             if (ok)
                 generalDirty_ = false;
-        } else if (selectedPage_ == kNavAppearance || selectedPage_ == kNavTheme) {
+        } else if (selectedPage_ == kNavAppearance) {
             ok = applyPresentation();
             if (ok)
                 presentationDirty_ = false;
@@ -1802,9 +2191,26 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     LRESULT onPreview(WORD, WORD, HWND, BOOL&) {
         if (interactionTest_) {
             cover(kCoveredPreview);
-            return 0;
         }
         preview();
+        return 0;
+    }
+    LRESULT onResetAppearance(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_)
+            cover(kCoveredAppearanceReset);
+        const bool ok = resetPresentation();
+        presentationDirty_ = !ok;
+        setSaveStatus(ok ? get("status.saved") : get("error.command"));
+        if (ok)
+            (void)ensureProductionPreview();
+        return 0;
+    }
+    LRESULT onAppearanceAdvanced(WORD, WORD, HWND, BOOL&) {
+        if (interactionTest_)
+            cover(kCoveredAppearanceAdvanced);
+        appearanceAdvanced_ =
+            SendMessageW(control(kAppearanceAdvanced), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        showPage(kNavAppearance);
         return 0;
     }
     LRESULT onPackageRefresh(WORD, WORD, HWND, BOOL&) {
@@ -1861,7 +2267,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             updateThemeDetail();
         }
         presentationDirty_ = true;
-        setSaveStatus(get("status.unsaved"));
+        liveApplyPresentation();
         return 0;
     }
     LRESULT onThemeLibrarySelection(WORD, WORD, HWND, BOOL&) {
@@ -1870,7 +2276,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             SendMessageW(control(kTheme), CB_SETCURSEL, selected, 0);
         updateThemeDetail();
         presentationDirty_ = true;
-        setSaveStatus(get("status.unsaved"));
+        liveApplyPresentation();
         return 0;
     }
     // Updating a STATIC control with SetWindowTextW only repaints the new
@@ -1923,11 +2329,13 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         return 0;
     }
     LRESULT onDirty(WORD, WORD id, HWND, BOOL&) {
-        if (id == kStartup || id == kInputMethod)
+        if (id == kStartup || id == kInputMethod) {
             generalDirty_ = true;
-        else
+            setSaveStatus(get("status.unsaved"));
+        } else {
             presentationDirty_ = true;
-        setSaveStatus(get("status.unsaved"));
+            liveApplyPresentation();
+        }
         return 0;
     }
 
@@ -1944,9 +2352,16 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     int selectedPage_{kNavGeneral};
     bool generalDirty_{};
     bool presentationDirty_{};
+    bool appearanceAdvanced_{};
     bool repositoryAvailable_{};
     bool interactionTest_{};
+    bool livePreviewContractTest_{};
+    bool previewActiveForContract_{};
+    bool forceLiveApplyFailure_{};
     unsigned long long actionCoverage_{};
+    unsigned previewLaunchCount_{};
+    unsigned liveApplyCount_{};
+    unsigned resetApplyCount_{};
     UINT dpi_{96};
 };
 
@@ -1957,6 +2372,7 @@ CAppModule _Module;
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR commandLine,
                     _In_ int showCommand) {
     enableDpiAwareness();
+    setCurrentProcessAppUserModelId(fcitx::windows::kReleaseIdentity.settings_app_user_model_id);
     const std::wstring_view command(commandLine);
     if (command == L"--check-i18n")
         return checkI18n() ? 0 : 2;
@@ -1966,8 +2382,11 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         return checkI18n() && checkResources() ? 0 : 2;
     const bool uiContractTest = command == L"--ui-contract-test";
     const bool uiInteractionTest = command == L"--ui-interaction-test";
+    const bool uiVisualContractTest = command == L"--ui-visual-contract-test";
+    const bool uiLivePreviewContractTest = command == L"--ui-live-preview-contract-test";
     const bool showDiagnostics = command == L"--diagnostics";
-    if (!command.empty() && !uiContractTest && !uiInteractionTest && !showDiagnostics)
+    if (!command.empty() && !uiContractTest && !uiInteractionTest &&
+        !uiVisualContractTest && !uiLivePreviewContractTest && !showDiagnostics)
         return 1;
     const LANGID language = GetUserDefaultUILanguage();
     const wchar_t* locale = PRIMARYLANGID(language) == LANG_CHINESE ? L"zh-CN.json" : L"en-US.json";
@@ -1991,16 +2410,20 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     enableNativeWindowEffects(window);
     window.resizeToDefaultClient();
     window.CenterWindow();
-    if (uiContractTest || uiInteractionTest) {
-        const bool passed = uiContractTest ? window.verifyUiContract()
-                                           : window.verifyInteractionCoverage();
+    if (uiContractTest || uiInteractionTest || uiVisualContractTest ||
+        uiLivePreviewContractTest) {
+        const bool passed = uiContractTest         ? window.verifyUiContract()
+                            : uiVisualContractTest ? window.verifyVisualContract()
+                            : uiLivePreviewContractTest
+                                ? window.verifyLivePreviewContract()
+                                : window.verifyInteractionCoverage();
         window.DestroyWindow();
         _Module.RemoveMessageLoop();
         _Module.Term();
         return passed ? 0 : 5;
     }
     if (showDiagnostics)
-        window.selectPage(kNavDiagnostics);
+        window.selectPage(kNavRepair);
     window.ShowWindow(showCommand);
     const int result = loop.Run();
     _Module.RemoveMessageLoop();

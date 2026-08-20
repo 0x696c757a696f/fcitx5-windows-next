@@ -67,13 +67,9 @@ Filename: "{app}\bin\fcitx5-updater.exe"; Parameters: "--install-tsf-dll ""{app}
 Filename: "{app}\bin\fcitx5-updater.exe"; Parameters: "--install-tsf-dll ""{app}\tsf\x86\fcitx5-tsf.dll"" ""{tmp}\Fcitx5Tsf\x86\fcitx5-tsf.dll"" ""{#ReleaseGeneration}"""; Flags: runhidden waituntilterminated; Check: IsWin64
 Filename: "{app}\bin\fcitx5-register.exe"; Parameters: "--register --dll ""{app}\tsf\x64\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated
 Filename: "{app}\bin\fcitx5-register-x86.exe"; Parameters: "--register --dll ""{app}\tsf\x86\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; Check: IsWin64
-Filename: "{app}\bin\fcitx5-control.exe"; Parameters: "--set-startup enabled"; Flags: runhidden waituntilterminated runasoriginaluser
-Filename: "{app}\bin\fcitx5-launcher.exe"; Parameters: "--background"; Flags: runhidden nowait runasoriginaluser
-Filename: "{app}\bin\fcitx5-config.exe"; Description: "Open Fcitx5 settings"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\bin\fcitx5-config.exe"; Description: "Open Fcitx5 settings"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
-Filename: "{app}\bin\fcitx5-control.exe"; Parameters: "--shutdown"; Flags: runhidden waituntilterminated; RunOnceId: "stop-user-service"
-Filename: "{app}\bin\fcitx5-control.exe"; Parameters: "--set-startup disabled"; Flags: runhidden waituntilterminated; RunOnceId: "remove-user-startup"
 Filename: "{app}\bin\fcitx5-register-x86.exe"; Parameters: "--unregister --dll ""{app}\tsf\x86\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; Check: IsWin64; RunOnceId: "unregister-x86-tsf"
 Filename: "{app}\bin\fcitx5-register.exe"; Parameters: "--unregister --dll ""{app}\tsf\x64\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; RunOnceId: "unregister-x64-tsf"
 
@@ -90,5 +86,8 @@ begin
       RaiseException('Invalid UPDATEOWNER value');
     SaveStringToFile(ExpandConstant('{app}\update-owner.json'),
       '{"format_version":1,"update_owner":"' + Owner + '"}' + #10, False);
+    SaveStringToFile(ExpandConstant('{app}\install-ownership.json'),
+      '{"format_version":1,"machine_artifacts":"installer","system_registration":"register-helper","per_user_startup":"user-plane","per_user_session":"user-plane","per_user_config":"user-plane"}' + #10,
+      False);
   end;
 end;

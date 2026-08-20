@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "policy": "docs/package-path-policy.md",
+  "path_cases": [
+    {"path": "bin/addon.dll", "accepted": true, "reason": "normal package-relative payload path"},
+    {"path": "share/themes/default/theme.toml", "accepted": true, "reason": "nested package-relative payload path"},
+    {"path": "", "accepted": false, "reason": "empty path"},
+    {"path": "../addon.dll", "accepted": false, "reason": "parent traversal"},
+    {"path": "bin/../addon.dll", "accepted": false, "reason": "parent traversal component"},
+    {"path": "./addon.dll", "accepted": false, "reason": "dot component"},
+    {"path": "bin//addon.dll", "accepted": false, "reason": "empty component"},
+    {"path": "/bin/addon.dll", "accepted": false, "reason": "absolute root"},
+    {"path": "C:/addon.dll", "accepted": false, "reason": "drive path"},
+    {"path": "//server/share/addon.dll", "accepted": false, "reason": "UNC path"},
+    {"path": "bin\\addon.dll", "accepted": false, "reason": "backslash separator"},
+    {"path": "bin/addon.dll:evil", "accepted": false, "reason": "alternate data stream"},
+    {"path": "bin/addon.dll.", "accepted": false, "reason": "trailing dot"},
+    {"path": "bin/addon.dll ", "accepted": false, "reason": "trailing space"},
+    {"path": "bin/CON", "accepted": false, "reason": "DOS device component"},
+    {"path": "bin/con.txt", "accepted": false, "reason": "DOS device component with extension"},
+    {"path": "bin/PRN", "accepted": false, "reason": "DOS device component uppercase"},
+    {"path": "bin/AUX.dat", "accepted": false, "reason": "DOS device component with extension"},
+    {"path": "bin/NUL", "accepted": false, "reason": "DOS device component"},
+    {"path": "bin/COM1", "accepted": false, "reason": "COM device component"},
+    {"path": "bin/COM9.log", "accepted": false, "reason": "COM device component with extension"},
+    {"path": "bin/LPT1", "accepted": false, "reason": "LPT device component"},
+    {"path": "bin/LPT9.log", "accepted": false, "reason": "LPT device component with extension"},
+    {"path": "bin/bad\u0001name.dll", "accepted": false, "reason": "control character"}
+  ],
+  "case_collision_sets": [
+    {
+      "paths": ["payload/bin/addon.dll", "payload/BIN/ADDON.DLL"],
+      "accepted": false,
+      "reason": "archive entries collide on Windows ordinal ignore-case lookup"
+    },
+    {
+      "paths": ["bin/addon.dll", "BIN/ADDON.DLL"],
+      "accepted": false,
+      "reason": "manifest paths collide on Windows ordinal ignore-case lookup"
+    }
+  ]
+}

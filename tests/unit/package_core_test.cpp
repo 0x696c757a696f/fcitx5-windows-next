@@ -8,12 +8,14 @@
 #include <fstream>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <miniz.h>
+#include <nlohmann/json.hpp>
 
 namespace {
 
@@ -201,11 +203,38 @@ void create_archive(const std::filesystem::path& path,
   }
 }
 
+void run_path_corpus(const std::filesystem::path& corpus_path) {
+  std::ifstream input(corpus_path, std::ios::binary);
+  if (!input) {
+    throw std::runtime_error("package path corpus is missing");
+  }
+  const std::string bytes((std::istreambuf_iterator<char>(input)),
+                          std::istreambuf_iterator<char>());
+  const auto document = nlohmann::json::parse(bytes);
+  expect(document.at("version").get<int>() == 1, "unexpected package path corpus version");
+  std::size_t case_count = 0;
+  for (const auto& item : document.at("path_cases")) {
+    const auto path = item.at("path").get<std::string>();
+    const auto accepted = item.at("accepted").get<bool>();
+    if (fcitx::package::is_safe_relative_package_path(path) != accepted) {
+      throw std::runtime_error("package path corpus mismatch: " + path);
+    }
+    ++case_count;
+  }
+  expect(case_count >= 20U, "package path corpus is incomplete");
+  expect(!document.at("case_collision_sets").empty(),
+         "package path corpus lacks case-collision fixtures");
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if (argc != 2) {
+      throw std::runtime_error("package path corpus argument required");
+    }
     using namespace fcitx::package;
+    run_path_corpus(argv[1]);
     expect(is_safe_relative_package_path("bin/addon.dll"), "valid package path rejected");
     expect(!is_safe_relative_package_path("../addon.dll"), "parent traversal accepted");
     expect(!is_safe_relative_package_path("C:/addon.dll"), "drive path accepted");
@@ -256,10 +285,29 @@ int main() {
     traversal.replace(traversal.find("bin/addon.dll"), std::string_view("bin/addon.dll").size(),
                       "../addon.dll");
     expect_error("invalid_manifest", [&] { static_cast<void>(parse_manifest(traversal)); });
+    auto manifest_case_collision = manifest_bytes;
+    const auto file_array_end = manifest_case_collision.find("}],\n  \"key_id\"");
+    expect(file_array_end != std::string::npos, "manifest fixture shape changed");
+    manifest_case_collision.insert(
+        file_array_end + 1,
+        ", {\"path\": \"BIN/ADDON.DLL\", \"size\": " +
+            std::to_string(file_bytes.size()) + ", \"sha256\": \"" + file_hash + "\"}");
+    expect_error("invalid_manifest",
+                 [&] { static_cast<void>(parse_manifest(manifest_case_collision)); });
 
     write_bytes(payload / "bin/undeclared.dll", "unexpected");
     expect_error("payload_mismatch", [&] { verify_payload(manifest, payload); });
     std::filesystem::remove(payload / "bin/undeclared.dll");
+    const auto symlink_path = payload / "bin/symlink.dll";
+    if (CreateSymbolicLinkW(symlink_path.c_str(), (payload / "bin/addon.dll").c_str(), 0)) {
+      expect_error("unsafe_payload", [&] { verify_payload(manifest, payload); });
+      std::filesystem::remove(symlink_path);
+    } else {
+      const DWORD error = GetLastError();
+      if (error != ERROR_PRIVILEGE_NOT_HELD && error != ERROR_INVALID_PARAMETER) {
+        throw std::runtime_error("unexpected symlink fixture failure");
+      }
+    }
 
     const auto install = temporary.path() / "program";
     SigningFixture signer;
@@ -386,6 +434,16 @@ int main() {
                     {"payload/../escape.dll", as_bytes("escape")}});
     expect_error("unsafe_archive_path", [&] {
       static_cast<void>(stage_verified_archive(malicious_path, install, "tx-traversal",
+                                                std::span(&trusted, 1U)));
+    });
+    const auto collision_path = temporary.path() / "case-collision.fcpkg";
+    create_archive(collision_path,
+                   {{"manifest.json", as_bytes(manifest_bytes)},
+                    {"manifest.sig", signature},
+                    {"payload/bin/addon.dll", as_bytes(file_bytes)},
+                    {"payload/BIN/ADDON.DLL", as_bytes(file_bytes)}});
+    expect_error("unsafe_archive_path", [&] {
+      static_cast<void>(stage_verified_archive(collision_path, install, "tx-case",
                                                 std::span(&trusted, 1U)));
     });
 

@@ -46,6 +46,7 @@ struct RuntimeResult {
     bool forwardKeyRelease{};
     protocol::CaretRect caret;
     bool popupAllowed{true};
+    std::string contentLocaleUtf8;
 };
 
 struct InputMethodInfo {

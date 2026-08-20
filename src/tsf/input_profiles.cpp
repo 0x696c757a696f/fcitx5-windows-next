@@ -4,21 +4,16 @@
 
 #include <objbase.h>
 
-#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
-#include <sstream>
 
 namespace fcitx::windows::tsf {
 namespace {
 
-constexpr std::string_view kDynamicProfileFile = "tsf-profiles.tsv";
 constexpr std::string_view kDynamicProfileLedger = "tsf-profile-ledger.tsv";
-constexpr std::size_t kMaxProfileIdentifierUtf8 = 64;
 
 std::wstring wideFromUtf8(std::string_view input) {
     if (input.empty()) return {};
@@ -58,23 +53,9 @@ std::filesystem::path profileDataDirectory() {
     return std::filesystem::path(localAppData) / kReleaseIdentity.data_directory;
 }
 
-std::filesystem::path profileSurfacePath() {
-    const auto directory = profileDataDirectory();
-    return directory.empty() ? std::filesystem::path{} : directory / kDynamicProfileFile;
-}
-
 std::filesystem::path profileLedgerPath() {
     const auto directory = profileDataDirectory();
     return directory.empty() ? std::filesystem::path{} : directory / kDynamicProfileLedger;
-}
-
-bool validIdentifier(std::string_view value) noexcept {
-    return !value.empty() && value.size() <= kMaxProfileIdentifierUtf8 &&
-           std::all_of(value.begin(), value.end(), [](unsigned char ch) {
-               return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                      (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' ||
-                      ch == '.' || ch == '+';
-           });
 }
 
 std::vector<std::string> splitTsvLine(const std::string& line) {
@@ -98,10 +79,6 @@ std::wstring guidString(REFGUID guid) {
 
 std::string guidUtf8(REFGUID guid) {
     return utf8FromWide(guidString(guid));
-}
-
-bool equalRuntimeGuid(REFGUID left, REFGUID right) noexcept {
-    return equalGuid(left, right);
 }
 
 bool parseGuid(std::string_view text, GUID& guid) noexcept {
@@ -132,13 +109,6 @@ std::uint64_t hashProfile(std::string_view id, std::uint64_t salt) noexcept {
     return hash;
 }
 
-LANGID languageFromBcp47(std::string_view bcp47) {
-    const auto wide = wideFromUtf8(bcp47);
-    if (wide.empty()) return 0;
-    const LCID locale = LocaleNameToLCID(wide.c_str(), 0);
-    return locale == 0 ? 0 : LANGIDFROMLCID(locale);
-}
-
 RuntimeInputProfile runtimeProfileFromBuiltin(const InputProfile& profile) {
     return RuntimeInputProfile{profile.id,
                                profile.bcp47,
@@ -148,37 +118,6 @@ RuntimeInputProfile runtimeProfileFromBuiltin(const InputProfile& profile) {
                                profile.engine,
                                profile.candidates,
                                false};
-}
-
-bool appendDynamicProfile(std::vector<RuntimeInputProfile>& profiles,
-                          std::vector<RuntimeInputProfile>& dynamicProfiles,
-                          const std::vector<std::string>& fields) {
-    if (fields.size() < 4) return false;
-    const std::string& id = fields[0];
-    const std::string& bcp47 = fields[1];
-    const std::string& engine = fields[2];
-    if (!validIdentifier(id) || !validIdentifier(engine) || bcp47.empty() ||
-        bcp47.size() > 35) {
-        return false;
-    }
-    const LANGID language = languageFromBcp47(bcp47);
-    if (language == 0) return false;
-    std::wstring description = wideFromUtf8(fields[3]);
-    if (description.empty()) {
-        description = L"Fcitx5 " + wideFromUtf8(engine);
-    }
-    if (description.empty()) return false;
-    RuntimeInputProfile profile{id, bcp47, language, deterministicProfileGuid(id),
-                                description, engine, true, true};
-    const auto duplicate = [&](const RuntimeInputProfile& existing) {
-        return existing.id == profile.id || equalRuntimeGuid(existing.guid, profile.guid);
-    };
-    if (std::any_of(profiles.begin(), profiles.end(), duplicate) ||
-        std::any_of(dynamicProfiles.begin(), dynamicProfiles.end(), duplicate)) {
-        return false;
-    }
-    dynamicProfiles.push_back(std::move(profile));
-    return true;
 }
 
 } // namespace
@@ -199,26 +138,7 @@ GUID deterministicProfileGuid(std::string_view profileId) noexcept {
 }
 
 std::vector<RuntimeInputProfile> loadInputProfiles() {
-    std::vector<RuntimeInputProfile> profiles;
-    profiles.reserve(kInputProfiles.size());
-    for (const auto& profile : kInputProfiles) {
-        profiles.push_back(runtimeProfileFromBuiltin(profile));
-    }
-
-    const auto path = profileSurfacePath();
-    if (path.empty()) return profiles;
-    std::ifstream file(path);
-    if (!file) return profiles;
-
-    std::vector<RuntimeInputProfile> dynamicProfiles;
-    std::string line;
-    while (std::getline(file, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        (void)appendDynamicProfile(profiles, dynamicProfiles, splitTsvLine(line));
-    }
-    profiles.insert(profiles.end(), std::make_move_iterator(dynamicProfiles.begin()),
-                    std::make_move_iterator(dynamicProfiles.end()));
-    return profiles;
+    return loadRegistrableInputProfiles();
 }
 
 std::vector<RuntimeInputProfile> loadRegistrableInputProfiles() {
@@ -233,11 +153,6 @@ std::vector<RuntimeInputProfile> loadRegistrableInputProfiles() {
 std::optional<std::string> inputMethodForProfileGuid(REFGUID guid) {
     if (const InputProfile* profile = profileForGuid(guid)) {
         return profile->engine;
-    }
-    for (const auto& profile : loadInputProfiles()) {
-        if (profile.dynamic && equalRuntimeGuid(profile.guid, guid)) {
-            return profile.engine;
-        }
     }
     return std::nullopt;
 }

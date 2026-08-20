@@ -269,11 +269,19 @@ bool validKeyResponsePayload(const KeyResponse& message) noexcept {
                        }) &&
            message.commitUtf8.size() <= kMaxCommitUtf8 &&
            message.preeditUtf8.size() <= kMaxPreeditUtf8 &&
-           message.preeditCaretUtf8 <= message.preeditUtf8.size();
+           message.preeditCaretUtf8 <= message.preeditUtf8.size() &&
+           message.contentLocaleUtf8.size() <= kMaxLocaleUtf8 &&
+           std::all_of(message.contentLocaleUtf8.begin(), message.contentLocaleUtf8.end(),
+                       [](unsigned char character) {
+                           return (character >= 'A' && character <= 'Z') ||
+                                  (character >= 'a' && character <= 'z') ||
+                                  (character >= '0' && character <= '9') || character == '-';
+                       });
 }
 
 bool validKeyRequestPayload(const KeyRequest& message) noexcept {
-    return message.scanCode <= 0xffU &&
+    return (message.keyFlags & ~kKnownKeyFlags) == 0 &&
+           message.scanCode <= 0xffU &&
            message.logicalTextUtf8.size() <= kMaxLogicalKeyUtf8 &&
            message.inputMethodUtf8.size() <= kMaxInputMethodIdUtf8 &&
            validSurroundingText(message) &&
@@ -435,6 +443,7 @@ std::vector<std::uint8_t> encode(const KeyResponse& message) {
     writer.appendI32(message.caret.bottom);
     writer.appendU32(message.caret.dpi);
     writer.appendU8(message.popupAllowed ? 1U : 0U);
+    writer.appendString(message.contentLocaleUtf8);
     for (const auto& candidate : message.candidates) {
         writer.appendU64(candidate.id);
         writer.appendString(candidate.labelUtf8);
@@ -632,7 +641,8 @@ bool decode(const FrameView& frame, KeyResponse& message) noexcept {
             !reader.readU8(caretValid) || caretValid > 1 || !reader.readI32(message.caret.left) ||
             !reader.readI32(message.caret.top) || !reader.readI32(message.caret.right) ||
             !reader.readI32(message.caret.bottom) || !reader.readU32(message.caret.dpi) ||
-            !reader.readU8(popupAllowed) || popupAllowed > 1) {
+            !reader.readU8(popupAllowed) || popupAllowed > 1 ||
+            !reader.readString(message.contentLocaleUtf8)) {
             return false;
         }
         message.caret.valid = caretValid != 0;

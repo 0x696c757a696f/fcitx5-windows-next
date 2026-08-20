@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.28)
 
 project(fcitx5-windows-native-engine VERSION 0.1.0 LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -23,6 +25,27 @@ endif()
 
 find_package(Fcitx5Core 5.1.14 REQUIRED CONFIG)
 
+set(FCITX_NATIVE_RUNTIME_DLLS)
+foreach(prefix IN LISTS CMAKE_PREFIX_PATH)
+  if(EXISTS "${prefix}/bin")
+    file(GLOB FCITX_NATIVE_PREFIX_DLLS CONFIGURE_DEPENDS "${prefix}/bin/*.dll")
+    list(APPEND FCITX_NATIVE_RUNTIME_DLLS ${FCITX_NATIVE_PREFIX_DLLS})
+  endif()
+endforeach()
+list(REMOVE_DUPLICATES FCITX_NATIVE_RUNTIME_DLLS)
+
+function(fcitx_stage_native_runtime target)
+  if(WIN32 AND FCITX_NATIVE_RUNTIME_DLLS)
+    add_custom_command(
+      TARGET ${target}
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FCITX_NATIVE_RUNTIME_DLLS}
+              "$<TARGET_FILE_DIR:${target}>"
+      COMMAND_EXPAND_LISTS
+      COMMENT "Staging native engine runtime DLLs for ${target}")
+  endif()
+endfunction()
+
 set(REPOSITORY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 configure_file(
   "${REPOSITORY_ROOT}/cmake/release_identity.h.in"
@@ -36,6 +59,7 @@ add_executable(
   "${REPOSITORY_ROOT}/src/platform/pipe_security.cpp"
   "${REPOSITORY_ROOT}/src/ipc/peer_verification.cpp"
   "${REPOSITORY_ROOT}/src/config/config_parser.cpp"
+  "${REPOSITORY_ROOT}/src/engine/key_event.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_runtime.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_dispatcher.cpp"
   "${REPOSITORY_ROOT}/src/engine/presentation_publisher.cpp"
@@ -61,6 +85,7 @@ target_include_directories(
   fcitx5_engine
   SYSTEM PRIVATE "${REPOSITORY_ROOT}/third_party/tomlplusplus/include")
 target_link_libraries(fcitx5_engine PRIVATE Fcitx5::Core advapi32 user32)
+fcitx_stage_native_runtime(fcitx5_engine)
 
 # Platform keyboard layer following the same design used by Fcitx5 Android:
 # keep keyboard-us as the first group item while letting the OS handle keys.
@@ -81,3 +106,19 @@ endif()
 install(TARGETS fcitx5_engine RUNTIME DESTINATION bin)
 install(TARGETS windowskeyboard RUNTIME DESTINATION lib/fcitx5 LIBRARY DESTINATION lib/fcitx5)
 install(FILES windowskeyboard.conf DESTINATION share/fcitx5/addon)
+
+if(BUILD_TESTING)
+  add_executable(
+    fcitx5_key_event_test
+    "${REPOSITORY_ROOT}/src/engine/key_event.cpp"
+    "${REPOSITORY_ROOT}/tests/unit/key_event_test.cpp")
+  target_compile_definitions(
+    fcitx5_key_event_test PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(fcitx5_key_event_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  target_include_directories(
+    fcitx5_key_event_test
+    PRIVATE "${REPOSITORY_ROOT}/protocol" "${REPOSITORY_ROOT}/src/engine")
+  target_link_libraries(fcitx5_key_event_test PRIVATE Fcitx5::Core user32)
+  fcitx_stage_native_runtime(fcitx5_key_event_test)
+  add_test(NAME key-event-contract COMMAND fcitx5_key_event_test)
+endif()

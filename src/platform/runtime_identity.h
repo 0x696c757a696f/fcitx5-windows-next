@@ -8,11 +8,22 @@
 
 namespace fcitx::windows::platform {
 
+struct ExecutableFileIdentity {
+    DWORD volumeSerialNumber{};
+    DWORD fileIndexHigh{};
+    DWORD fileIndexLow{};
+    DWORD numberOfLinks{};
+    bool containsReparsePoint{};
+    std::wstring finalPath;
+};
+
 struct ProcessIdentity {
     DWORD processId{};
     DWORD sessionId{};
     std::wstring userSid;
     std::wstring executablePath;
+    ExecutableFileIdentity executableFile;
+    bool executableFileVerified{};
     bool serviceAccount{};
 };
 
@@ -50,6 +61,12 @@ struct RuntimeIdentity : ProcessIdentity {
 [[nodiscard]] std::wstring makeLocalObjectName(const RuntimeIdentity& identity,
                                                std::wstring_view generation,
                                                std::wstring_view channel);
+[[nodiscard]] bool queryExecutableFileIdentity(
+    std::wstring_view path, ExecutableFileIdentity& output) noexcept;
+[[nodiscard]] bool executableFilesMatch(const ExecutableFileIdentity& left,
+                                        const ExecutableFileIdentity& right) noexcept;
+[[nodiscard]] bool executablePathsMatch(std::wstring_view left,
+                                        std::wstring_view right) noexcept;
 [[nodiscard]] bool pathsReferToSameFile(std::wstring_view left,
                                        std::wstring_view right) noexcept;
 

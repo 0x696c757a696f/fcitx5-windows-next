@@ -354,12 +354,6 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         CloseHandle(mutex);
         return 2;
     }
-    UiProcess ui;
-    if (!uiPath.empty() && !launchUi(uiPath, false, job, ui)) {
-        CloseHandle(job);
-        CloseHandle(mutex);
-        return 5;
-    }
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobLimits{};
     jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &jobLimits,
@@ -367,6 +361,12 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         CloseHandle(job);
         CloseHandle(mutex);
         return 2;
+    }
+    UiProcess ui;
+    if (!uiPath.empty() && !launchUi(uiPath, false, job, ui)) {
+        CloseHandle(job);
+        CloseHandle(mutex);
+        return 5;
     }
     const std::wstring readyEventName = externalReadyEvent.empty()
                                             ? platform::makeLocalObjectName(identity, L"engine-ready")
@@ -424,8 +424,6 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
     SystemClock clock;
     launcher::LauncherStateMachine state(clock, initialSnapshot);
     launcher::TrayIcon tray;
-    if (installedDefaults)
-        (void)tray.create(instance, executableDirectory());
     EngineProcess engine;
     bool restartDesired = warmup;
     bool running = true;

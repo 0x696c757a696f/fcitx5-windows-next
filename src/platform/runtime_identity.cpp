@@ -228,13 +228,13 @@ std::wstring runtimeGenerationForRuntimeModule(const std::filesystem::path& modu
     return validGeneration(generation) ? generation : std::wstring{};
 }
 
-struct FileIdentity {
+struct BasicFileIdentity {
     DWORD volumeSerialNumber{};
     DWORD fileIndexHigh{};
     DWORD fileIndexLow{};
 };
 
-bool queryFileIdentity(std::wstring_view path, FileIdentity& identity) {
+bool queryFileIdentity(std::wstring_view path, BasicFileIdentity& identity) {
     identity = {};
     if (path.empty() || path.size() >= 32768)
         return false;
@@ -252,6 +252,18 @@ bool queryFileIdentity(std::wstring_view path, FileIdentity& identity) {
     identity.fileIndexHigh = information.nFileIndexHigh;
     identity.fileIndexLow = information.nFileIndexLow;
     return true;
+}
+
+bool pathIsReparsePoint(const std::filesystem::path& source) {
+    const DWORD attributes = GetFileAttributesW(source.c_str());
+    return attributes == INVALID_FILE_ATTRIBUTES ||
+           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+}
+
+bool sameFinalPath(std::wstring_view left, std::wstring_view right) noexcept {
+    return !left.empty() && !right.empty() &&
+           CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(),
+                                static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
 }
 
 } // namespace
@@ -276,6 +288,8 @@ bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
             !processPath(process.get(), result.executablePath)) {
             return false;
         }
+        result.executableFileVerified =
+            queryExecutableFileIdentity(result.executablePath, result.executableFile);
         output = std::move(result);
         return true;
     } catch (...) {
@@ -426,12 +440,71 @@ std::wstring makeLocalObjectName(const RuntimeIdentity& identity,
 
 bool pathsReferToSameFile(std::wstring_view left, std::wstring_view right) noexcept {
     try {
-        FileIdentity leftIdentity;
-        FileIdentity rightIdentity;
+        BasicFileIdentity leftIdentity;
+        BasicFileIdentity rightIdentity;
         return queryFileIdentity(left, leftIdentity) && queryFileIdentity(right, rightIdentity) &&
                leftIdentity.volumeSerialNumber == rightIdentity.volumeSerialNumber &&
                leftIdentity.fileIndexHigh == rightIdentity.fileIndexHigh &&
                leftIdentity.fileIndexLow == rightIdentity.fileIndexLow;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool queryExecutableFileIdentity(std::wstring_view path,
+                                 ExecutableFileIdentity& output) noexcept {
+    output = {};
+    try {
+        if (path.empty() || path.size() >= 32768)
+            return false;
+        const std::wstring source(path);
+        Handle file(CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+        if (!file)
+            return false;
+        BY_HANDLE_FILE_INFORMATION information{};
+        if (!GetFileInformationByHandle(file.get(), &information))
+            return false;
+        std::wstring finalPath(32768, L'\0');
+        DWORD finalPathLength = GetFinalPathNameByHandleW(
+            file.get(), finalPath.data(), static_cast<DWORD>(finalPath.size()),
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (finalPathLength == 0 || finalPathLength >= finalPath.size())
+            return false;
+        finalPath.resize(finalPathLength);
+        ExecutableFileIdentity result;
+        result.volumeSerialNumber = information.dwVolumeSerialNumber;
+        result.fileIndexHigh = information.nFileIndexHigh;
+        result.fileIndexLow = information.nFileIndexLow;
+        result.numberOfLinks = information.nNumberOfLinks;
+        result.containsReparsePoint = pathIsReparsePoint(std::filesystem::path(source));
+        result.finalPath = std::move(finalPath);
+        output = std::move(result);
+        return true;
+    } catch (...) {
+        output = {};
+        return false;
+    }
+}
+
+bool executableFilesMatch(const ExecutableFileIdentity& left,
+                          const ExecutableFileIdentity& right) noexcept {
+    return !left.containsReparsePoint && !right.containsReparsePoint &&
+           left.numberOfLinks == 1 && right.numberOfLinks == 1 &&
+           left.volumeSerialNumber == right.volumeSerialNumber &&
+           left.fileIndexHigh == right.fileIndexHigh &&
+           left.fileIndexLow == right.fileIndexLow &&
+           sameFinalPath(left.finalPath, right.finalPath);
+}
+
+bool executablePathsMatch(std::wstring_view left, std::wstring_view right) noexcept {
+    try {
+        ExecutableFileIdentity leftIdentity;
+        ExecutableFileIdentity rightIdentity;
+        return queryExecutableFileIdentity(left, leftIdentity) &&
+               queryExecutableFileIdentity(right, rightIdentity) &&
+               executableFilesMatch(leftIdentity, rightIdentity);
     } catch (...) {
         return false;
     }

@@ -4,6 +4,7 @@
 #include <Windows.h>
 
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 
 namespace {
@@ -127,6 +128,40 @@ int main() {
                      restoredCrash.consecutiveStartupCrashes() == 2 &&
                      restoredCrash.requestStart().disposition == StartDisposition::backoff,
                  "restored crash ledger did not enforce backoff")) {
+        DeleteFileW(statePath.c_str());
+        return 1;
+    }
+    LauncherSnapshot persistedSafeMode{
+        LauncherState::safeMode, LauncherStateMachine::kSafeModeCrashThreshold, 0};
+    if (!require(store.save(persistedSafeMode), "SafeMode ledger save failed") ||
+        !require(store.load(loadedSnapshot) == LoadStateResult::loaded &&
+                     loadedSnapshot.state == LauncherState::safeMode &&
+                     loadedSnapshot.consecutiveStartupCrashes >=
+                         LauncherStateMachine::kSafeModeCrashThreshold,
+                 "SafeMode ledger did not survive reload")) {
+        DeleteFileW(statePath.c_str());
+        return 1;
+    }
+    LauncherStateMachine restoredSafeMode(clock, loadedSnapshot);
+    if (!require(restoredSafeMode.requestStart().safeMode,
+                 "persisted SafeMode did not affect launcher restart")) {
+        DeleteFileW(statePath.c_str());
+        return 1;
+    }
+    {
+        std::ofstream corrupt(statePath, std::ios::binary | std::ios::trunc);
+        corrupt << "format_version=2\nstate=safe-mode\nconsecutive_startup_crashes=";
+    }
+    if (!require(store.load(loadedSnapshot) == LoadStateResult::invalid,
+                 "corrupt launcher ledger was not rejected")) {
+        DeleteFileW(statePath.c_str());
+        return 1;
+    }
+    LauncherStateMachine failSafeAfterCorruption(
+        clock, LauncherSnapshot{.state = LauncherState::userStopped});
+    if (!require(failSafeAfterCorruption.requestStart().disposition ==
+                     StartDisposition::suppressed,
+                 "corrupt launcher ledger did not fail safely")) {
         DeleteFileW(statePath.c_str());
         return 1;
     }

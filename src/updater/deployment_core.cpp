@@ -193,9 +193,11 @@ void publish_runtime_directory(const std::filesystem::path& verified_payload_roo
       std::filesystem::remove_all(temporary, ignored);
       return;
     }
-    if (!MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
+    if (!MoveFileExW(temporary.c_str(), destination.c_str(), 0)) {
+      const DWORD error = GetLastError();
       std::filesystem::remove_all(temporary, ignored);
-      throw std::runtime_error("runtime generation publication failed");
+      throw std::runtime_error("runtime generation publication failed: " +
+                               std::to_string(error));
     }
   } catch (...) {
     std::filesystem::remove_all(temporary, ignored);

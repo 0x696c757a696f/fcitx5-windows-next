@@ -190,6 +190,8 @@ void TrayIcon::removeIcon() noexcept {
 
 void TrayIcon::update(LauncherState launcherState, EngineState engineState,
                       const protocol::EngineStatusResponse& inputMethodStatus) {
+    if (!window_)
+        return;
     if (launcherState_ == launcherState && engineState_ == engineState &&
         inputMethodStatus_.currentInputMethodId == inputMethodStatus.currentInputMethodId &&
         inputMethodStatus_.currentInputMethodName == inputMethodStatus.currentInputMethodName &&
