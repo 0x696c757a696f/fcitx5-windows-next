@@ -5,8 +5,9 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use fcitx5_package_core::{
-    is_safe_relative_package_path, parse_manifest, parse_trusted_keys, upsert_installed_lock_entry,
-    validate_manifest_compatibility, HexDigest32, PackageId, TrustAlgorithm,
+    is_safe_relative_package_path, parse_manifest, parse_signature_envelope, parse_trusted_keys,
+    upsert_installed_lock_entry, validate_manifest_compatibility, verify_signature_envelope,
+    HexDigest32, PackageId, SignedObject, TrustAlgorithm,
 };
 
 fn main() {
@@ -26,6 +27,46 @@ fn run() -> Result<(), Box<dyn Error>> {
         match arg.as_str() {
             "--version" => {
                 println!("fcitx5-package-core {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--validate-manifest" => {
+                let path = args.next().ok_or("--validate-manifest requires MANIFEST")?;
+                let manifest = parse_manifest(&read_bounded_text(path, 1024 * 1024)?)?;
+                print_manifest(&manifest, false);
+                return Ok(());
+            }
+            "--validate-keyring" => {
+                let path = args.next().ok_or("--validate-keyring requires KEYRING")?;
+                let keys = parse_trusted_keys(&read_bounded_text(path, 1024 * 1024)?)?;
+                if keys.is_empty() {
+                    return Err("trusted keyring is empty".into());
+                }
+                println!("keys={}", keys.len());
+                return Ok(());
+            }
+            "--verify-manifest-v2" => {
+                let manifest_path = args
+                    .next()
+                    .ok_or("--verify-manifest-v2 requires MANIFEST")?;
+                let signature_path = args
+                    .next()
+                    .ok_or("--verify-manifest-v2 requires SIG_JSON")?;
+                let keyring_path = args.next().ok_or("--verify-manifest-v2 requires KEYRING")?;
+                let manifest_bytes = read_bounded_bytes(manifest_path, 1024 * 1024)?;
+                let manifest_text = std::str::from_utf8(&manifest_bytes)?;
+                let manifest = parse_manifest(manifest_text)?;
+                let signature = read_bounded_text(signature_path, 1024 * 1024)?;
+                let envelope = parse_signature_envelope(&signature, SignedObject::PackageManifest)?;
+                let keyring = read_bounded_text(keyring_path, 1024 * 1024)?;
+                let keys = parse_trusted_keys(&keyring)?;
+                verify_signature_envelope(
+                    &manifest_bytes,
+                    &envelope,
+                    &keys,
+                    SignedObject::PackageManifest,
+                    manifest.key_id(),
+                )?;
+                println!("manifest_signature=verified");
                 return Ok(());
             }
             "--self-check" => self_check = true,
@@ -101,6 +142,36 @@ fn self_check_trusted_keys(path: &PathBuf) -> Result<(), Box<dyn Error>> {
         "official ML-DSA-65 trusted public key is missing",
     )?;
     Ok(())
+}
+
+fn read_bounded_text(
+    path: impl AsRef<std::path::Path>,
+    maximum: u64,
+) -> Result<String, Box<dyn Error>> {
+    Ok(String::from_utf8(read_bounded_bytes(path, maximum)?)?)
+}
+
+fn read_bounded_bytes(
+    path: impl AsRef<std::path::Path>,
+    maximum: u64,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let path = path.as_ref();
+    let metadata = std::fs::metadata(path)?;
+    ensure(metadata.len() <= maximum, "input is missing or too large")?;
+    Ok(std::fs::read(path)?)
+}
+
+fn print_manifest(manifest: &fcitx5_package_core::Manifest, verified: bool) {
+    println!("id={}", manifest.id().as_str());
+    println!("version={}", manifest.version());
+    println!("source_commit={}", manifest.source_commit());
+    println!("license={}", manifest.license());
+    println!("key_id={}", manifest.key_id().as_str());
+    println!(
+        "signature_verified={}",
+        if verified { "true" } else { "false" }
+    );
+    println!("permissions={}", manifest.permissions().join(","));
 }
 
 fn ensure(condition: bool, message: &'static str) -> Result<(), Box<dyn Error>> {
@@ -276,7 +347,7 @@ fn read_u32(image: &[u8], offset: usize) -> Result<u32, Box<dyn Error>> {
 
 fn print_usage() {
     println!(
-        "Usage: fcitx5-package-core --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]"
+        "Usage:\n  fcitx5-package-core --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package-core --validate-manifest MANIFEST\n  fcitx5-package-core --validate-keyring KEYRING\n  fcitx5-package-core --verify-manifest-v2 MANIFEST SIG_JSON KEYRING"
     );
 }
 

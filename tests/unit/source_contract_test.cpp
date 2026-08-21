@@ -174,9 +174,13 @@ int main(int argc, char** argv) {
         rustPackageCoreBuild.find("miniz.c") == std::string::npos ||
         rustPackageCoreMiniz.find("mz_zip_reader_extract_to_mem") == std::string::npos ||
         rustPackageCoreBinary.find("--self-check") == std::string::npos ||
+        rustPackageCoreBinary.find("--validate-manifest") == std::string::npos ||
+        rustPackageCoreBinary.find("--validate-keyring") == std::string::npos ||
+        rustPackageCoreBinary.find("--verify-manifest-v2") == std::string::npos ||
         rustPackageCoreBinary.find("--audit-self-pe") == std::string::npos ||
         rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
+        rustPackageCoreBinary.find("verify_signature_envelope") == std::string::npos ||
         cmakeSource.find("rust-package-core-artifact-smoke") == std::string::npos ||
         cmakeSource.find("rust-package-core-packaged-artifact-smoke") == std::string::npos ||
         cmakeSource.find("CARGO_TARGET_DIR") == std::string::npos ||
