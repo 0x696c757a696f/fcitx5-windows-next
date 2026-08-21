@@ -598,6 +598,7 @@ if(BUILD_TESTING)
 
   find_program(FCITX_CARGO_EXECUTABLE cargo)
   if(FCITX_CARGO_EXECUTABLE)
+    find_program(FCITX_PWSH_EXECUTABLE pwsh powershell)
     set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
     set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
     set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
@@ -641,6 +642,29 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/security/trusted-keys.template.json")
     set_tests_properties(
       rust-package-core-artifact-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(FCITX_PWSH_EXECUTABLE)
+      add_custom_target(
+        fcitx5_rust_package_core_packaged_artifact_smoke
+        COMMAND
+          "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+          "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+          "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-rust-package-core-artifact.ps1"
+          -CargoExecutable "${FCITX_CARGO_EXECUTABLE}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Running Rust package-core packaged artifact smoke")
+      add_test(
+        NAME rust-package-core-packaged-artifact-smoke
+        COMMAND
+          "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+          "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+          "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-rust-package-core-artifact.ps1"
+          -CargoExecutable "${FCITX_CARGO_EXECUTABLE}")
+      set_tests_properties(
+        rust-package-core-packaged-artifact-smoke PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
   else()
     message(STATUS "Cargo was not found; Rust R1 package-core tests are not registered.")
   endif()

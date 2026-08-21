@@ -133,6 +133,8 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/src/main.rs");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
+    const auto rustPackageCoreArtifactSmoke =
+        read_text(sourceRoot / "tools/test-rust-package-core-artifact.ps1");
     const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
     if (rustToolchain.find("channel = \"1.78.0\"") == std::string::npos ||
         rustToolchain.find("aarch64-pc-windows-msvc") == std::string::npos ||
@@ -163,7 +165,11 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
         cmakeSource.find("rust-package-core-artifact-smoke") == std::string::npos ||
+        cmakeSource.find("rust-package-core-packaged-artifact-smoke") == std::string::npos ||
         cmakeSource.find("CARGO_TARGET_DIR") == std::string::npos ||
+        rustPackageCoreArtifactSmoke.find("fcitx5-package-core-smoke.zip") ==
+            std::string::npos ||
+        rustPackageCoreArtifactSmoke.find("--audit-self-pe") == std::string::npos ||
         dependencyCheck.find("Cargo.lock contains untracked third-party crate sources") ==
             std::string::npos ||
         dependencyInventory.find("\"rust-crate-blake3\"") ==
