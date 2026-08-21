@@ -166,6 +166,9 @@ int main(int argc, char** argv) {
         rustPackageCore.find("stage_verified_payload_tree") == std::string::npos ||
         rustPackageCore.find("path_contains_reparse_component") == std::string::npos ||
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
+        rustPackageCore.find("read_installed_lockfile") == std::string::npos ||
+        rustPackageCore.find("write_installed_lockfile_atomic") == std::string::npos ||
+        rustPackageCore.find("activate_staged_payload_tree") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
         rustPackageCore.find("stage_validated_archive_zip") == std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||

@@ -241,6 +241,64 @@ mod miniz_archive_adapter {
     }
 }
 
+#[cfg(windows)]
+mod win32_fs_adapter {
+    #![allow(unsafe_code)]
+
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    unsafe extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    pub fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
+        let mut source_wide: Vec<u16> = source.as_os_str().encode_wide().collect();
+        let mut destination_wide: Vec<u16> = destination.as_os_str().encode_wide().collect();
+        source_wide.push(0);
+        destination_wide.push(0);
+        let ok = unsafe {
+            MoveFileExW(
+                source_wide.as_ptr(),
+                destination_wide.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn publish_directory(source: &Path, destination: &Path) -> io::Result<()> {
+        let mut source_wide: Vec<u16> = source.as_os_str().encode_wide().collect();
+        let mut destination_wide: Vec<u16> = destination.as_os_str().encode_wide().collect();
+        source_wide.push(0);
+        destination_wide.push(0);
+        let ok = unsafe {
+            MoveFileExW(
+                source_wide.as_ptr(),
+                destination_wide.as_ptr(),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct PackageId(String);
 
@@ -2205,6 +2263,169 @@ fn lockfile_error(message: impl Into<String>) -> LockfileError {
     }
 }
 
+#[cfg(windows)]
+pub fn read_installed_lockfile(
+    install_root: impl AsRef<Path>,
+) -> Result<Vec<LockEntry>, LockfileError> {
+    let lock_path = install_root.as_ref().join("packages.lock");
+    if !lock_path.exists() {
+        return Ok(Vec::new());
+    }
+    let bytes = fs::read_to_string(lock_path)
+        .map_err(|_| lockfile_error("packages.lock is not strict JSON"))?;
+    parse_lockfile(&bytes)
+}
+
+#[cfg(windows)]
+pub fn write_installed_lockfile_atomic(
+    install_root: impl AsRef<Path>,
+    entries: &[LockEntry],
+) -> Result<(), StagingError> {
+    let install_root = install_root.as_ref();
+    fs::create_dir_all(install_root).map_err(staging_io_error)?;
+    let temporary = install_root.join("packages.lock.new");
+    let lock_path = install_root.join("packages.lock");
+    fs::write(&temporary, lockfile_to_json(entries)).map_err(staging_io_error)?;
+    win32_fs_adapter::replace_file(&temporary, &lock_path).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        staging_error(
+            "activation_failed",
+            format!("unable to atomically publish packages.lock: {error}"),
+        )
+    })
+}
+
+#[cfg(windows)]
+pub fn activate_staged_payload_tree(
+    staged_root: impl AsRef<Path>,
+    install_root: impl AsRef<Path>,
+) -> Result<(), StagingError> {
+    let staged_root = staged_root.as_ref();
+    let install_root = install_root.as_ref();
+    if path_contains_reparse_component(staged_root).map_err(staging_io_error)?
+        || path_contains_reparse_component(install_root).map_err(staging_io_error)?
+    {
+        return Err(staging_error(
+            "unsafe_path",
+            "activation path contains a reparse point",
+        ));
+    }
+    let manifest_bytes = fs::read(staged_root.join("manifest.json")).map_err(staging_io_error)?;
+    if manifest_bytes.len() > MAX_MANIFEST_BYTES {
+        return Err(staging_error(
+            "invalid_manifest",
+            "manifest size is outside the accepted range",
+        ));
+    }
+    let manifest_text = std::str::from_utf8(&manifest_bytes)
+        .map_err(|_| staging_error("invalid_manifest", "manifest is not valid UTF-8"))?;
+    let manifest = parse_manifest(manifest_text).map_err(staging_from_manifest_error)?;
+    if fs::metadata(staged_root.join("manifest.sig"))
+        .map_err(staging_io_error)?
+        .len()
+        > MAX_SIGNATURE_BYTES
+    {
+        return Err(staging_error(
+            "invalid_signature",
+            "manifest signature is outside its resource budget",
+        ));
+    }
+    verify_payload_root(&manifest, staged_root.join("payload"))?;
+    let active_before = read_installed_lockfile(install_root)
+        .map_err(|error| staging_error(error.code, error.message))?;
+    for dependency in manifest.dependencies() {
+        let installed = active_before.iter().any(|entry| {
+            entry.id() == dependency.id()
+                && entry.version() == dependency.version()
+                && !matches!(
+                    entry.state(),
+                    PackageLifecycleState::Disabled
+                        | PackageLifecycleState::PendingRemove
+                        | PackageLifecycleState::Broken
+                        | PackageLifecycleState::Quarantined
+                )
+        });
+        if !installed {
+            return Err(staging_error(
+                "resolution_failed",
+                "an exact active dependency is unavailable at activation time",
+            ));
+        }
+    }
+
+    let versions = install_root.join("versions").join(manifest.id().as_str());
+    fs::create_dir_all(&versions).map_err(staging_io_error)?;
+    let destination = versions.join(manifest.version());
+    if destination.exists() {
+        verify_payload_root(&manifest, &destination)?;
+    } else {
+        win32_fs_adapter::publish_directory(&staged_root.join("payload"), &destination).map_err(
+            |_| staging_error("activation_failed", "unable to publish version directory"),
+        )?;
+    }
+
+    let metadata = install_root.join("manifests").join(manifest.id().as_str());
+    fs::create_dir_all(&metadata).map_err(staging_io_error)?;
+    fs::write(
+        metadata.join(format!("{}.json", manifest.version())),
+        &manifest_bytes,
+    )
+    .map_err(staging_io_error)?;
+    fs::copy(
+        staged_root.join("manifest.sig"),
+        metadata.join(format!("{}.sig", manifest.version())),
+    )
+    .map_err(staging_io_error)?;
+
+    let mut lock = active_before;
+    upsert_installed_lock_entry(
+        &mut lock,
+        manifest.id().clone(),
+        manifest.version().to_owned(),
+        sha256_digest(&manifest_bytes),
+    )
+    .map_err(|error| staging_error(error.code, error.message))?;
+    write_installed_lockfile_atomic(install_root, &lock)?;
+    let _ = fs::remove_dir_all(staged_root);
+    Ok(())
+}
+
+fn lockfile_to_json(entries: &[LockEntry]) -> String {
+    let mut output = String::from("{\n  \"format_version\": 1,\n  \"packages\": [");
+    for (index, entry) in entries.iter().enumerate() {
+        if index != 0 {
+            output.push(',');
+        }
+        output.push_str("\n    {\"id\": \"");
+        output.push_str(entry.id().as_str());
+        output.push_str("\", \"version\": \"");
+        output.push_str(&json_escape(entry.version()));
+        output.push_str("\", \"manifest_sha256\": \"");
+        output.push_str(entry.manifest_sha256().as_str());
+        output.push_str("\", \"state\": \"");
+        output.push_str(entry.state().as_str());
+        output.push_str("\"}");
+    }
+    output.push_str("\n  ]\n}\n");
+    output
+}
+
+fn json_escape(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            c if c < ' ' => output.push_str(&format!("\\u{:04x}", c as u32)),
+            c => output.push(c),
+        }
+    }
+    output
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LifecycleError {
     code: &'static str,
@@ -4059,6 +4280,88 @@ mod tests {
                 .code(),
             "invalid_archive"
         );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn activation_publishes_payload_metadata_and_lockfile_like_cpp() {
+        let hello_blake3 = blake3_digest(b"hello");
+        let hello_sha256 = sha256_digest(b"hello");
+        let manifest_text = manifest_v2(
+            "fcitx5-rime",
+            "1.0.0",
+            hello_blake3.as_str(),
+            5,
+            "official-2026-mldsa65",
+            Some(hello_sha256.as_str()),
+        );
+        let temp = std::env::temp_dir().join(format!(
+            "fcitx5-package-core-activate-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("temp should create");
+        let archive = temp.join("valid.fcpkg");
+        write_store_zip_for_test(
+            &archive,
+            &[
+                ("manifest.json", manifest_text.as_bytes()),
+                ("manifest.sig", b"signature"),
+                ("payload/bin/addon.dll", b"hello"),
+            ],
+        );
+        let install_root = temp.join("install");
+        let staged = stage_validated_archive_zip(&archive, &install_root, "tx-activate")
+            .expect("archive should stage");
+        activate_staged_payload_tree(&staged, &install_root)
+            .expect("staged payload should activate");
+        assert!(install_root
+            .join("versions/fcitx5-rime/1.0.0/bin/addon.dll")
+            .exists());
+        assert!(install_root
+            .join("manifests/fcitx5-rime/1.0.0.json")
+            .exists());
+        assert!(install_root
+            .join("manifests/fcitx5-rime/1.0.0.sig")
+            .exists());
+        let lock = read_installed_lockfile(&install_root).expect("lockfile should parse");
+        assert_eq!(lock.len(), 1);
+        assert_eq!(lock[0].id().as_str(), "fcitx5-rime");
+        assert_eq!(lock[0].version(), "1.0.0");
+        assert_eq!(lock[0].state(), &PackageLifecycleState::Installed);
+
+        let bad_manifest = manifest_v2(
+            "fcitx5-rime",
+            "1.1.0",
+            hello_blake3.as_str(),
+            5,
+            "official-2026-mldsa65",
+            Some(hello_sha256.as_str()),
+        );
+        let bad_archive = temp.join("bad.fcpkg");
+        write_store_zip_for_test(
+            &bad_archive,
+            &[
+                ("manifest.json", bad_manifest.as_bytes()),
+                ("manifest.sig", b"signature"),
+                ("payload/bin/addon.dll", b"hello"),
+            ],
+        );
+        let bad_staged = stage_validated_archive_zip(&bad_archive, &install_root, "tx-bad")
+            .expect("bad archive should stage before tamper");
+        std::fs::write(bad_staged.join("payload/bin/addon.dll"), b"tampered")
+            .expect("tamper should write");
+        assert_eq!(
+            activate_staged_payload_tree(&bad_staged, &install_root)
+                .expect_err("tampered staged payload should fail")
+                .code(),
+            "payload_mismatch"
+        );
+        let lock_after_failure =
+            read_installed_lockfile(&install_root).expect("lockfile should still parse");
+        assert_eq!(lock_after_failure.len(), 1);
+        assert_eq!(lock_after_failure[0].version(), "1.0.0");
         let _ = std::fs::remove_dir_all(&temp);
     }
 
