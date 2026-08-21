@@ -129,6 +129,8 @@ int main(int argc, char** argv) {
     const auto cargoLock = read_text(sourceRoot / "Cargo.lock");
     const auto rustPackageCore =
         read_text(sourceRoot / "rust/package-core/src/lib.rs");
+    const auto rustPackageCoreBuild =
+        read_text(sourceRoot / "rust/package-core/build.rs");
     const auto rustPackageCoreBinary =
         read_text(sourceRoot / "rust/package-core/src/main.rs");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
@@ -136,11 +138,13 @@ int main(int argc, char** argv) {
     const auto rustPackageCoreArtifactSmoke =
         read_text(sourceRoot / "tools/test-rust-package-core-artifact.ps1");
     const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
-    if (rustToolchain.find("channel = \"1.78.0\"") == std::string::npos ||
+    if (rustToolchain.find("channel = \"1.98.0\"") == std::string::npos ||
         rustToolchain.find("aarch64-pc-windows-msvc") == std::string::npos ||
         cargoManifest.find("\"rust/package-core\"") == std::string::npos ||
         cargoLock.find("name = \"fcitx5-package-core\"") == std::string::npos ||
-        rustPackageCore.find("#![forbid(unsafe_code)]") == std::string::npos ||
+        rustPackageCore.find("#![deny(unsafe_code)]") == std::string::npos ||
+        rustPackageCore.find("mod mldsa_verify_adapter") == std::string::npos ||
+        rustPackageCore.find("unsafe extern \"C\"") == std::string::npos ||
         rustPackageCore.find("include_str!(\"../../../tests/fixtures/package_path_corpus.json\")") ==
             std::string::npos ||
         rustPackageCore.find("SafeRelativePackagePath") == std::string::npos ||
@@ -148,6 +152,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("parse_manifest") == std::string::npos ||
         rustPackageCore.find("parse_trusted_keys") == std::string::npos ||
         rustPackageCore.find("parse_signature_envelope") == std::string::npos ||
+        rustPackageCore.find("verify_signature_envelope") == std::string::npos ||
+        rustPackageCore.find("verify_mldsa65_signature") == std::string::npos ||
         rustPackageCore.find("resolve_exact_dependencies") == std::string::npos ||
         rustPackageCore.find("verify_payload_inventory") == std::string::npos ||
         rustPackageCore.find("verify_payload_digests") == std::string::npos ||
@@ -160,6 +166,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
+        rustPackageCoreBuild.find("mldsa_native.c") == std::string::npos ||
+        rustPackageCoreBuild.find("fcitx5_mldsa65_config.h") == std::string::npos ||
         rustPackageCoreBinary.find("--self-check") == std::string::npos ||
         rustPackageCoreBinary.find("--audit-self-pe") == std::string::npos ||
         rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
@@ -167,10 +175,14 @@ int main(int argc, char** argv) {
         cmakeSource.find("rust-package-core-artifact-smoke") == std::string::npos ||
         cmakeSource.find("rust-package-core-packaged-artifact-smoke") == std::string::npos ||
         cmakeSource.find("CARGO_TARGET_DIR") == std::string::npos ||
+        cmakeSource.find("FCITX_RUST_TARGET") == std::string::npos ||
         rustPackageCoreArtifactSmoke.find("fcitx5-package-core-smoke.zip") ==
             std::string::npos ||
+        rustPackageCoreArtifactSmoke.find("CargoTarget") == std::string::npos ||
         rustPackageCoreArtifactSmoke.find("--audit-self-pe") == std::string::npos ||
         dependencyCheck.find("Cargo.lock contains untracked third-party crate sources") ==
+            std::string::npos ||
+        dependencyCheck.find("arrayref' -and $version -eq '0.3.10'") ==
             std::string::npos ||
         dependencyInventory.find("\"rust-crate-blake3\"") ==
             std::string::npos) {

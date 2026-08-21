@@ -602,23 +602,39 @@ if(BUILD_TESTING)
     set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
     set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
     set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
+    set(FCITX_CMAKE_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
+    if(NOT FCITX_CMAKE_PLATFORM)
+      set(FCITX_CMAKE_PLATFORM "${CMAKE_GENERATOR_PLATFORM}")
+    endif()
+    if(FCITX_CMAKE_PLATFORM MATCHES "^[Ww]in32$" OR CMAKE_SIZEOF_VOID_P EQUAL 4)
+      set(FCITX_RUST_TARGET "i686-pc-windows-msvc")
+    elseif(FCITX_CMAKE_PLATFORM MATCHES "^[Aa][Rr][Mm]64$" OR
+           CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$")
+      set(FCITX_RUST_TARGET "aarch64-pc-windows-msvc")
+    else()
+      set(FCITX_RUST_TARGET "x86_64-pc-windows-msvc")
+    endif()
     add_custom_target(
       fcitx5_rust_package_core_test
       COMMAND
         "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
         "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --target
+        "${FCITX_RUST_TARGET}"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      DEPENDS fcitx5_pqc_fixture_signer
       COMMENT "Running Rust package-core differential corpus")
     add_custom_target(
       fcitx5_rust_package_core_artifact_smoke
       COMMAND
         "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
         "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --bin
-        fcitx5-package-core -- --self-check --audit-self-pe --trusted-keys
+        fcitx5-package-core --target "${FCITX_RUST_TARGET}" -- --self-check --audit-self-pe --trusted-keys
         "${CMAKE_CURRENT_SOURCE_DIR}/security/trusted-keys.template.json"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       COMMENT "Running Rust package-core artifact smoke")
@@ -627,8 +643,10 @@ if(BUILD_TESTING)
       COMMAND
         "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
         "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core)
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --target
+        "${FCITX_RUST_TARGET}")
     set_tests_properties(
       rust-package-core-differential PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(
@@ -636,9 +654,10 @@ if(BUILD_TESTING)
       COMMAND
         "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
         "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --bin
-        fcitx5-package-core -- --self-check --audit-self-pe --trusted-keys
+        fcitx5-package-core --target "${FCITX_RUST_TARGET}" -- --self-check --audit-self-pe --trusted-keys
         "${CMAKE_CURRENT_SOURCE_DIR}/security/trusted-keys.template.json")
     set_tests_properties(
       rust-package-core-artifact-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -648,9 +667,10 @@ if(BUILD_TESTING)
         COMMAND
           "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
           "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+          "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
           "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-rust-package-core-artifact.ps1"
-          -CargoExecutable "${FCITX_CARGO_EXECUTABLE}"
+          -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         COMMENT "Running Rust package-core packaged artifact smoke")
       add_test(
@@ -658,9 +678,10 @@ if(BUILD_TESTING)
         COMMAND
           "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
           "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+          "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
           "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-rust-package-core-artifact.ps1"
-          -CargoExecutable "${FCITX_CARGO_EXECUTABLE}")
+          -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}")
       set_tests_properties(
         rust-package-core-packaged-artifact-smoke PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

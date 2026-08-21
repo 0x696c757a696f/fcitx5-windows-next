@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::collections::BTreeSet;
@@ -25,8 +25,44 @@ const SUPPORTED_CORE_API: &str = "1";
 const SUPPORTED_ADDON_ABI: &str = "1";
 const SIGNATURE_ENVELOPE_CANONICALIZATION: &str = "fcitx5-windows-next-json-v1";
 const MLDSA65_PUBLIC_KEY_BYTES: usize = 1952;
+const MLDSA65_SIGNATURE_BYTES: usize = 3309;
 const SLHDSA_SHA2_128S_PUBLIC_KEY_BYTES: usize = 32;
 const RSA_PUBLIC_MAGIC: u32 = 0x3141_5352;
+
+#[cfg(windows)]
+mod mldsa_verify_adapter {
+    #![allow(unsafe_code)]
+
+    use std::ffi::c_int;
+
+    unsafe extern "C" {
+        fn fcitx5_mldsa65_verify(
+            signature: *const u8,
+            message: *const u8,
+            message_len: usize,
+            context: *const u8,
+            context_len: usize,
+            public_key: *const u8,
+        ) -> c_int;
+    }
+
+    pub fn verify(signature: &[u8], message: &[u8], public_key: &[u8]) -> bool {
+        if signature.is_empty() || message.is_empty() || public_key.is_empty() {
+            return false;
+        }
+        let status = unsafe {
+            fcitx5_mldsa65_verify(
+                signature.as_ptr(),
+                message.as_ptr(),
+                message.len(),
+                std::ptr::null(),
+                0,
+                public_key.as_ptr(),
+            )
+        };
+        status == 0
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct PackageId(String);
@@ -233,13 +269,13 @@ fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
 
     let mut state = INITIAL_STATE;
     let mut block = [0_u8; 64];
-    let mut chunks = bytes.chunks_exact(64);
-    for chunk in &mut chunks {
-        block.copy_from_slice(chunk);
+    let block_count = bytes.len() / 64;
+    for index in 0..block_count {
+        block.copy_from_slice(&bytes[index * 64..index * 64 + 64]);
         sha256_compress(&mut state, &block, &ROUND_CONSTANTS);
     }
 
-    let remainder = chunks.remainder();
+    let remainder = &bytes[block_count * 64..];
     block = [0_u8; 64];
     block[..remainder.len()].copy_from_slice(remainder);
     block[remainder.len()] = 0x80;
@@ -1179,6 +1215,109 @@ fn require_signature_string(
 fn signature_error(message: impl Into<String>) -> SignatureEnvelopeError {
     SignatureEnvelopeError {
         code: "invalid_signature",
+        message: message.into(),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignatureVerificationError {
+    code: &'static str,
+    message: String,
+}
+
+impl SignatureVerificationError {
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+}
+
+impl fmt::Display for SignatureVerificationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SignatureVerificationError {}
+
+#[cfg(windows)]
+pub fn verify_mldsa65_signature(
+    object_bytes: &[u8],
+    signature: &[u8],
+    key: &TrustedKey,
+) -> Result<(), SignatureVerificationError> {
+    if key.revoked() {
+        return Err(signature_verification_error(
+            "revoked_key",
+            "ML-DSA key is revoked",
+        ));
+    }
+    if key.algorithm() != &TrustAlgorithm::Mldsa65
+        || key.public_key().len() != MLDSA65_PUBLIC_KEY_BYTES
+        || signature.len() != MLDSA65_SIGNATURE_BYTES
+        || object_bytes.is_empty()
+    {
+        return Err(signature_verification_error(
+            "invalid_signature",
+            "ML-DSA signature identity is incomplete",
+        ));
+    }
+    if !mldsa_verify_adapter::verify(signature, object_bytes, key.public_key()) {
+        return Err(signature_verification_error(
+            "invalid_signature",
+            "ML-DSA-65 signature verification failed",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn verify_signature_envelope(
+    object_bytes: &[u8],
+    envelope: &SignatureEnvelope,
+    trusted_keys: &[TrustedKey],
+    expected_object: SignedObject,
+    expected_key_id: &PackageId,
+) -> Result<(), SignatureVerificationError> {
+    if envelope.format_version() != 2
+        || envelope.signed_object() != &expected_object
+        || envelope.canonicalization() != SIGNATURE_ENVELOPE_CANONICALIZATION
+    {
+        return Err(signature_verification_error(
+            "invalid_signature",
+            "signature envelope binding is invalid",
+        ));
+    }
+    for entry in envelope.signatures() {
+        if entry.algorithm() != &TrustAlgorithm::Mldsa65 {
+            continue;
+        }
+        if entry.key_id() != expected_key_id {
+            return Err(signature_verification_error(
+                "untrusted_key",
+                "ML-DSA signature key id does not match signed metadata",
+            ));
+        }
+        let trusted_key = trusted_keys
+            .iter()
+            .find(|candidate| candidate.id() == entry.key_id())
+            .ok_or_else(|| {
+                signature_verification_error("untrusted_key", "ML-DSA signature key is not trusted")
+            })?;
+        verify_mldsa65_signature(object_bytes, entry.signature(), trusted_key)?;
+        return Ok(());
+    }
+    Err(signature_verification_error(
+        "invalid_signature",
+        "signature envelope has no required ML-DSA signature",
+    ))
+}
+
+fn signature_verification_error(
+    code: &'static str,
+    message: impl Into<String>,
+) -> SignatureVerificationError {
+    SignatureVerificationError {
+        code,
         message: message.into(),
     }
 }
@@ -2524,16 +2663,13 @@ fn is_ascii_token(value: &str, extra: &str) -> bool {
 }
 
 fn decode_base64(value: &str) -> Result<Vec<u8>, ()> {
-    if value.is_empty() || value.len() % 4 != 0 {
+    if value.is_empty() || !value.len().is_multiple_of(4) {
         return Err(());
     }
     let mut output = Vec::with_capacity(value.len() / 4 * 3);
-    let chunks = value.as_bytes().chunks_exact(4);
-    if !chunks.remainder().is_empty() {
-        return Err(());
-    }
     let chunk_count = value.len() / 4;
-    for (index, chunk) in value.as_bytes().chunks_exact(4).enumerate() {
+    for index in 0..chunk_count {
+        let chunk = &value.as_bytes()[index * 4..index * 4 + 4];
         let last = index + 1 == chunk_count;
         let a = base64_value(chunk[0]).ok_or(())?;
         let b = base64_value(chunk[1]).ok_or(())?;
@@ -3133,6 +3269,93 @@ mod tests {
         assert_signature_error(&malformed, SignedObject::PackageManifest);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn mldsa65_signature_verification_matches_cpp_fixture() {
+        let Some(signer) = pqc_fixture_signer_path() else {
+            eprintln!("skipping ML-DSA Rust verification fixture: signer binary not built");
+            return;
+        };
+        let key_id =
+            PackageId::parse("official-test-2026-mldsa65").expect("fixture key id should parse");
+        let temp =
+            std::env::temp_dir().join(format!("fcitx5-package-core-mldsa-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("fixture temp should create");
+        let object_path = temp.join("manifest.json");
+        let signature_path = temp.join("manifest.sig.json");
+        let keyring_path = temp.join("trusted-keys.json");
+        let object =
+            br#"{"format_version":2,"id":"fcitx5-rime","key_id":"official-test-2026-mldsa65"}"#;
+        std::fs::write(&object_path, object).expect("fixture object should write");
+        let output = std::process::Command::new(&signer)
+            .arg("--sign")
+            .arg("package-manifest")
+            .arg(&object_path)
+            .arg(&signature_path)
+            .arg(&keyring_path)
+            .arg(key_id.as_str())
+            .output()
+            .expect("fixture signer should run");
+        assert!(
+            output.status.success(),
+            "fixture signer failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let keyring = std::fs::read_to_string(&keyring_path).expect("keyring should read");
+        let mut keys = parse_trusted_keys(&keyring).expect("fixture keyring should parse");
+        let envelope_text =
+            std::fs::read_to_string(&signature_path).expect("signature envelope should read");
+        let envelope = parse_signature_envelope(&envelope_text, SignedObject::PackageManifest)
+            .expect("fixture envelope should parse");
+        verify_signature_envelope(
+            object,
+            &envelope,
+            &keys,
+            SignedObject::PackageManifest,
+            &key_id,
+        )
+        .expect("fixture ML-DSA signature should verify");
+        assert_eq!(
+            verify_signature_envelope(
+                b"tampered",
+                &envelope,
+                &keys,
+                SignedObject::PackageManifest,
+                &key_id,
+            )
+            .expect_err("tampered object should fail")
+            .code(),
+            "invalid_signature"
+        );
+        keys[0].revoked = true;
+        assert_eq!(
+            verify_signature_envelope(
+                object,
+                &envelope,
+                &keys,
+                SignedObject::PackageManifest,
+                &key_id,
+            )
+            .expect_err("revoked key should fail")
+            .code(),
+            "revoked_key"
+        );
+        assert_eq!(
+            verify_signature_envelope(
+                object,
+                &envelope,
+                &[],
+                SignedObject::PackageManifest,
+                &key_id,
+            )
+            .expect_err("untrusted key should fail")
+            .code(),
+            "untrusted_key"
+        );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
     #[test]
     fn dependency_resolution_matches_cpp_exact_ordering() {
         let rime = parse_manifest(&manifest_v1("fcitx5-rime", "1.0.0", &"a".repeat(64), 12))
@@ -3656,6 +3879,19 @@ mod tests {
              \"signatures\":[{}]}}",
             entries.join(",")
         )
+    }
+
+    #[cfg(windows)]
+    fn pqc_fixture_signer_path() -> Option<std::path::PathBuf> {
+        [
+            "out/build/windows-x64-dev/Debug/fcitx5-pqc-fixture-signer.exe",
+            "out/build/windows-x86-dev/Debug/fcitx5-pqc-fixture-signer.exe",
+            "out/build/windows-x64-release/Release/fcitx5-pqc-fixture-signer.exe",
+            "out/build/windows-x86-release/Release/fcitx5-pqc-fixture-signer.exe",
+        ]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|path| path.is_file())
     }
 
     fn assert_keyring_error(keyring: &str) {

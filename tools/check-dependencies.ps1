@@ -44,13 +44,24 @@ if (Test-Path -LiteralPath $cargoLockPath -PathType Leaf) {
     '(?ms)\[\[package\]\]\s+name = "([^"]+)".*?(?=\n\[\[package\]\]|\z)'
   )
   $untrackedCargoPackages = [System.Collections.Generic.List[string]]::new()
+  $blockedCargoPackages = [System.Collections.Generic.List[string]]::new()
   foreach ($match in $cargoPackageMatches) {
     $name = $match.Groups[1].Value
     $packageBlock = $match.Value
+    $version = ''
+    if ($packageBlock -match '(?m)^\s*version\s*=\s*"([^"]+)"\s*$') {
+      $version = $Matches[1]
+    }
+    if ($name -eq 'arrayref' -and $version -eq '0.3.10') {
+      $blockedCargoPackages.Add("$name $version")
+    }
     $isRegistryCrate = $packageBlock -match '(?m)^\s*source\s*=\s*"registry\+https://github\.com/rust-lang/crates\.io-index"\s*$'
     if ($isRegistryCrate -and $allowedCargoPackages -notcontains $name) {
       $untrackedCargoPackages.Add($name)
     }
+  }
+  if ($blockedCargoPackages.Count -gt 0) {
+    throw "Cargo.lock contains blocked crate versions from a RustSec/crates.io incident:`n$($blockedCargoPackages -join "`n")"
   }
   if ($untrackedCargoPackages.Count -gt 0) {
     throw "Cargo.lock contains untracked third-party crate sources; add Cargo dependency inventory/SBOM/license review:`n$($untrackedCargoPackages -join "`n")"

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-  [string] $CargoExecutable = 'cargo'
+  [string] $CargoExecutable = 'cargo',
+  [string] $CargoTarget = ''
 )
 
 Set-StrictMode -Version Latest
@@ -52,12 +53,21 @@ function Test-NoPrivateKeyMaterial {
 }
 
 New-Item -ItemType Directory -Force -Path $outRoot | Out-Null
-& $CargoExecutable build --locked --manifest-path (Join-Path $repoRoot 'Cargo.toml') `
-  -p fcitx5-package-core --bin fcitx5-package-core
+if ([string]::IsNullOrWhiteSpace($CargoTarget)) {
+  & $CargoExecutable build --locked --manifest-path (Join-Path $repoRoot 'Cargo.toml') `
+    -p fcitx5-package-core --bin fcitx5-package-core
+} else {
+  & $CargoExecutable build --locked --manifest-path (Join-Path $repoRoot 'Cargo.toml') `
+    -p fcitx5-package-core --bin fcitx5-package-core --target $CargoTarget
+}
 if ($LASTEXITCODE -ne 0) { throw 'Rust package-core build failed.' }
 
 $targetRoot = Get-CargoTargetRoot
-$rustExe = Join-Path $targetRoot 'debug/fcitx5-package-core.exe'
+if ([string]::IsNullOrWhiteSpace($CargoTarget)) {
+  $rustExe = Join-Path $targetRoot 'debug/fcitx5-package-core.exe'
+} else {
+  $rustExe = Join-Path $targetRoot (Join-Path $CargoTarget 'debug/fcitx5-package-core.exe')
+}
 if (-not (Test-Path -LiteralPath $rustExe -PathType Leaf)) {
   throw "Missing Rust package-core binary: $rustExe"
 }
