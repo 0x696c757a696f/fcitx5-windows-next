@@ -14,6 +14,12 @@
 #include <utility>
 #include <vector>
 
+#define MLD_CONFIG_FILE "fcitx5_mldsa65_test_config.h"
+extern "C" {
+#include <mldsa/mldsa_native.h>
+}
+#undef MLD_CONFIG_FILE
+
 #include <miniz.h>
 #include <nlohmann/json.hpp>
 
@@ -88,6 +94,44 @@ std::string make_manifest(std::string_view id, std::string_view version,
          "}\n";
 }
 
+std::string make_manifest_v2(std::string_view id, std::string_view version,
+                             std::string_view blake3_hash, std::uint64_t file_size,
+                             std::string_view key_id,
+                             std::string_view sha256_hash = {}) {
+  std::string hashes =
+      "{\"blake3\":\"" + std::string(blake3_hash) + "\"";
+  if (!sha256_hash.empty()) {
+    hashes += ",\"sha256\":\"" + std::string(sha256_hash) + "\"";
+  }
+  hashes += "}";
+  return "{\n"
+         "  \"format_version\": 2,\n"
+         "  \"id\": \"" +
+         std::string(id) +
+         "\",\n"
+         "  \"version\": \"" +
+         std::string(version) +
+         "\",\n"
+         "  \"type\": \"addon\",\n"
+#if defined(_WIN64)
+         "  \"architecture\": \"x64\",\n"
+#else
+         "  \"architecture\": \"x86\",\n"
+#endif
+         "  \"min_os\": \"6.1-sp1\",\n"
+         "  \"core_api\": \"1\",\n"
+         "  \"addon_abi\": \"1\",\n"
+         "  \"dependencies\": [],\n"
+         "  \"license\": \"MIT\",\n"
+         "  \"source_commit\": \"0123456789abcdef\",\n"
+         "  \"permissions\": [\"native-code\", \"input-data\"],\n"
+         "  \"payload\": [{\"path\": \"bin/addon.dll\", \"size\": " +
+         std::to_string(file_size) + ", \"hashes\": " + hashes +
+         "}],\n"
+         "  \"key_id\": \"" + std::string(key_id) + "\"\n"
+         "}\n";
+}
+
 void write_bytes(const std::filesystem::path& path, std::string_view bytes) {
   std::filesystem::create_directories(path.parent_path());
   std::ofstream output(path, std::ios::binary);
@@ -152,6 +196,49 @@ class SigningFixture final {
  private:
   BCRYPT_ALG_HANDLE algorithm_{};
   BCRYPT_KEY_HANDLE key_{};
+};
+
+class MldsaSigningFixture final {
+ public:
+  explicit MldsaSigningFixture(std::byte seed_fill) {
+    seed_.fill(static_cast<std::uint8_t>(std::to_integer<unsigned int>(seed_fill)));
+    if (fcitx5_mldsa65_test_keypair_internal(public_key_.data(), secret_key_.data(),
+                                             seed_.data()) != 0) {
+      throw std::runtime_error("ML-DSA fixture key generation failed");
+    }
+    public_key_bytes_.assign(reinterpret_cast<const std::byte*>(public_key_.data()),
+                             reinterpret_cast<const std::byte*>(
+                                 public_key_.data() + public_key_.size()));
+  }
+
+  [[nodiscard]] const std::vector<std::byte>& public_key() const noexcept {
+    return public_key_bytes_;
+  }
+
+  [[nodiscard]] std::vector<std::byte> sign(std::string_view bytes) const {
+    std::vector<std::byte> result(MLDSA65_BYTES);
+    std::array<std::uint8_t, MLDSA65_RNDBYTES> randomness{};
+    std::array<std::uint8_t, MLD_DOMAIN_SEPARATION_MAX_BYTES> prefix{};
+    const auto prefix_size = fcitx5_mldsa65_test_prepare_domain_separation_prefix(
+        prefix.data(), nullptr, 0U, nullptr, 0U, MLD_PREHASH_NONE);
+    if (prefix_size == 0U) {
+      throw std::runtime_error("ML-DSA fixture prefix preparation failed");
+    }
+    randomness.fill(0x7BU);
+    if (fcitx5_mldsa65_test_signature_internal(
+            reinterpret_cast<std::uint8_t*>(result.data()),
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), prefix.data(),
+            prefix_size, randomness.data(), secret_key_.data(), 0) != 0) {
+      throw std::runtime_error("ML-DSA fixture signing failed");
+    }
+    return result;
+  }
+
+ private:
+  std::array<std::uint8_t, MLDSA65_SEEDBYTES> seed_{};
+  std::vector<std::uint8_t> public_key_ = std::vector<std::uint8_t>(MLDSA65_PUBLICKEYBYTES);
+  std::vector<std::uint8_t> secret_key_ = std::vector<std::uint8_t>(MLDSA65_SECRETKEYBYTES);
+  std::vector<std::byte> public_key_bytes_;
 };
 
 using ArchiveEntry = std::pair<std::string, std::vector<std::byte>>;
@@ -258,6 +345,7 @@ int main(int argc, char** argv) {
     constexpr std::string_view file_bytes = "verified addon fixture\n";
     write_bytes(payload / "bin/addon.dll", file_bytes);
     const auto file_hash = hex_sha256(sha256(std::as_bytes(std::span(file_bytes))));
+    const auto file_blake3 = hex_blake3(blake3(std::as_bytes(std::span(file_bytes))));
     const auto manifest_bytes = make_manifest("fcitx5-rime", "1.0.0", file_hash,
                                               static_cast<std::uint64_t>(file_bytes.size()));
     const auto manifest = parse_manifest(manifest_bytes);
@@ -309,11 +397,51 @@ int main(int argc, char** argv) {
       }
     }
 
+    const auto manifest_v2_blake3_only =
+        make_manifest_v2("fcitx5-rime", "2.0.0", file_blake3,
+                         static_cast<std::uint64_t>(file_bytes.size()), "release-2026");
+    const auto parsed_v2_blake3_only = parse_manifest(manifest_v2_blake3_only);
+    expect(parsed_v2_blake3_only.format_version == kManifestV2FormatVersion &&
+               parsed_v2_blake3_only.files.front().blake3 == file_blake3 &&
+               parsed_v2_blake3_only.files.front().sha256.empty(),
+           "v2 BLAKE3-only manifest parsing failed");
+    verify_payload(parsed_v2_blake3_only, payload);
+
+    const auto manifest_v2_dual_hash =
+        make_manifest_v2("fcitx5-rime", "2.0.1", file_blake3,
+                         static_cast<std::uint64_t>(file_bytes.size()), "release-2026",
+                         file_hash);
+    const auto parsed_v2_dual_hash = parse_manifest(manifest_v2_dual_hash);
+    expect(parsed_v2_dual_hash.files.front().blake3 == file_blake3 &&
+               parsed_v2_dual_hash.files.front().sha256 == file_hash,
+           "v2 dual-hash manifest parsing failed");
+    verify_payload(parsed_v2_dual_hash, payload);
+
+    auto manifest_v2_missing_blake3 = manifest_v2_dual_hash;
+    manifest_v2_missing_blake3.replace(manifest_v2_missing_blake3.find("\"blake3\""),
+                                       std::strlen("\"blake3\""), "\"b3\"");
+    expect_error("invalid_manifest",
+                 [&] { static_cast<void>(parse_manifest(manifest_v2_missing_blake3)); });
+    auto manifest_v2_bad_sha256 = manifest_v2_dual_hash;
+    manifest_v2_bad_sha256.replace(manifest_v2_bad_sha256.find(file_hash), file_hash.size(),
+                                   std::string(64U, '0'));
+    expect_error("payload_mismatch", [&] {
+      verify_payload(parse_manifest(manifest_v2_bad_sha256), payload);
+    });
+
     const auto install = temporary.path() / "program";
     SigningFixture signer;
     TrustedKey trusted{"release-2026", signer.public_blob(), false};
     const auto signature = signer.sign(manifest_bytes);
     SigningFixture old_signer;
+    const auto v2_signature = signer.sign(manifest_v2_dual_hash);
+    const auto corrupt_v2_payload = temporary.path() / "source-v2-corrupt";
+    write_bytes(corrupt_v2_payload / "bin/addon.dll", "corrupted v2 payload\n");
+    expect_error("payload_mismatch", [&] {
+      static_cast<void>(stage_verified_payload(parsed_v2_dual_hash, manifest_v2_dual_hash,
+                                               corrupt_v2_payload, install, "tx-v2-corrupt",
+                                               v2_signature, trusted));
+    });
     const auto keyring_path = temporary.path() / "trusted-keys.json";
     const auto keyring_bytes =
         "{\n  \"format_version\": 1,\n  \"keys\": [\n"
@@ -329,6 +457,134 @@ int main(int argc, char** argv) {
     expect(parsed_keys.size() == 2U && !parsed_keys.front().revoked &&
                parsed_keys.back().revoked,
            "trusted key rotation/revocation state mismatch");
+    const auto mldsa = std::vector<std::byte>(1952U, std::byte{0x41});
+    const auto slhdsa = std::vector<std::byte>(32U, std::byte{0x42});
+    const auto pqc_keyring_path = temporary.path() / "trusted-keys-v2.json";
+    const auto pqc_keyring_bytes =
+        "{\n"
+        "  \"format_version\": 2,\n"
+        "  \"policy\": {\"official_required_signatures\":[\"mldsa65\"],"
+        "\"compatibility_hashes\":[\"sha256\"],\"default_payload_hash\":\"blake3\"},\n"
+        "  \"keys\": [\n"
+        "    {\"key_id\":\"official-2026-mldsa65\",\"algorithm\":\"mldsa65\","
+        "\"status\":\"trusted\",\"public_key_base64\":\"" +
+        base64(mldsa) +
+        "\",\"scope\":[\"repository\",\"package\"],\"channels\":[\"stable\"]},\n"
+        "    {\"key_id\":\"official-2026-mldsa65-revoked\",\"algorithm\":\"mldsa65\","
+        "\"status\":\"revoked\",\"public_key_base64\":\"" +
+        base64(mldsa) +
+        "\",\"scope\":[\"repository\",\"package\"],\"channels\":[\"stable\"]},\n"
+        "    {\"key_id\":\"official-2026-slh-dsa-recovery\","
+        "\"algorithm\":\"slhdsa-sha2-128s\",\"status\":\"trusted\","
+        "\"public_key_base64\":\"" +
+        base64(slhdsa) + "\",\"scope\":[\"repository\"],\"channels\":[\"stable\"]}\n"
+        "  ]\n"
+        "}\n";
+    write_bytes(pqc_keyring_path, pqc_keyring_bytes);
+    const auto pqc_keys = read_trusted_keys(pqc_keyring_path);
+    expect(pqc_keys.size() == 3U && pqc_keys[0].algorithm == "mldsa65" &&
+               pqc_keys[0].public_key.size() == 1952U && pqc_keys[1].revoked &&
+               pqc_keys[2].algorithm == "slhdsa-sha2-128s" &&
+               pqc_keys[2].public_key.size() == 32U,
+           "PQC trusted keyring v2 parsing failed");
+    auto bad_pqc = pqc_keyring_bytes;
+    bad_pqc.replace(bad_pqc.find(base64(mldsa)), base64(mldsa).size(), base64(slhdsa));
+    write_bytes(pqc_keyring_path, bad_pqc);
+    expect_error("invalid_keyring", [&] { static_cast<void>(read_trusted_keys(pqc_keyring_path)); });
+    auto duplicate_pqc = pqc_keyring_bytes;
+    duplicate_pqc.replace(duplicate_pqc.find("official-2026-mldsa65-revoked"),
+                          std::string_view("official-2026-mldsa65-revoked").size(),
+                          "official-2026-mldsa65");
+    write_bytes(pqc_keyring_path, duplicate_pqc);
+    expect_error("invalid_keyring", [&] { static_cast<void>(read_trusted_keys(pqc_keyring_path)); });
+    auto unsupported_required = pqc_keyring_bytes;
+    unsupported_required.replace(unsupported_required.find("\"mldsa65\""),
+                                 std::string_view("\"mldsa65\"").size(), "\"ed25519\"");
+    write_bytes(pqc_keyring_path, unsupported_required);
+    expect_error("invalid_keyring", [&] { static_cast<void>(read_trusted_keys(pqc_keyring_path)); });
+
+    const auto mldsa_signature = std::vector<std::byte>(3309U, std::byte{0x43});
+    const auto slhdsa_signature = std::vector<std::byte>(7856U, std::byte{0x44});
+    const auto index_envelope_bytes =
+        "{\n"
+        "  \"format_version\": 2,\n"
+        "  \"signed_object\": \"repository-index\",\n"
+        "  \"canonicalization\": \"fcitx5-windows-next-json-v1\",\n"
+        "  \"signatures\": [\n"
+        "    {\"key_id\":\"official-2026-mldsa65\",\"algorithm\":\"mldsa65\","
+        "\"signature_base64\":\"" +
+        base64(mldsa_signature) + "\"},\n"
+        "    {\"key_id\":\"official-2026-slh-dsa-recovery\","
+        "\"algorithm\":\"slhdsa-sha2-128s\",\"signature_base64\":\"" +
+        base64(slhdsa_signature) + "\"}\n"
+        "  ]\n"
+        "}\n";
+    const auto index_envelope_path = temporary.path() / "index.sig.json";
+    write_bytes(index_envelope_path, index_envelope_bytes);
+    const auto index_envelope =
+        read_signature_envelope(index_envelope_path, "repository-index");
+    expect(index_envelope.format_version == 2U &&
+               index_envelope.signed_object == "repository-index" &&
+               index_envelope.canonicalization == "fcitx5-windows-next-json-v1" &&
+               index_envelope.signatures.size() == 2U &&
+               index_envelope.signatures.front().algorithm == "mldsa65" &&
+               index_envelope.signatures.front().signature.size() == mldsa_signature.size(),
+           "repository signature envelope parsing failed");
+
+    const auto manifest_envelope_bytes =
+        "{\n"
+        "  \"format_version\": 2,\n"
+        "  \"signed_object\": \"package-manifest\",\n"
+        "  \"canonicalization\": \"fcitx5-windows-next-json-v1\",\n"
+        "  \"signatures\": [\n"
+        "    {\"key_id\":\"official-2026-mldsa65\",\"algorithm\":\"mldsa65\","
+        "\"signature_base64\":\"" +
+        base64(mldsa_signature) + "\"}\n"
+        "  ]\n"
+        "}\n";
+    const auto manifest_envelope_path = temporary.path() / "manifest.sig.json";
+    write_bytes(manifest_envelope_path, manifest_envelope_bytes);
+    const auto manifest_envelope =
+        read_signature_envelope(manifest_envelope_path, "package-manifest");
+    expect(manifest_envelope.signed_object == "package-manifest" &&
+               manifest_envelope.signatures.size() == 1U,
+           "manifest signature envelope parsing failed");
+    expect_error("invalid_signature", [&] {
+      static_cast<void>(parse_signature_envelope(index_envelope_bytes, "package-manifest"));
+    });
+    auto missing_mldsa_signature = manifest_envelope_bytes;
+    missing_mldsa_signature.replace(missing_mldsa_signature.find("official-2026-mldsa65"),
+                                    std::string_view("official-2026-mldsa65").size(),
+                                    "official-2026-slh-dsa-recovery");
+    missing_mldsa_signature.replace(missing_mldsa_signature.find("\"mldsa65\""),
+                                    std::string_view("\"mldsa65\"").size(),
+                                    "\"slhdsa-sha2-128s\"");
+    expect_error("invalid_signature", [&] {
+      static_cast<void>(
+          parse_signature_envelope(missing_mldsa_signature, "package-manifest"));
+    });
+    auto unsupported_signature_algorithm = manifest_envelope_bytes;
+    unsupported_signature_algorithm.replace(unsupported_signature_algorithm.find("\"mldsa65\""),
+                                            std::string_view("\"mldsa65\"").size(),
+                                            "\"ed25519\"");
+    expect_error("invalid_signature", [&] {
+      static_cast<void>(
+          parse_signature_envelope(unsupported_signature_algorithm, "package-manifest"));
+    });
+    auto duplicate_signature_key = index_envelope_bytes;
+    duplicate_signature_key.replace(duplicate_signature_key.find("official-2026-slh-dsa-recovery"),
+                                    std::string_view("official-2026-slh-dsa-recovery").size(),
+                                    "official-2026-mldsa65");
+    expect_error("invalid_signature", [&] {
+      static_cast<void>(parse_signature_envelope(duplicate_signature_key, "repository-index"));
+    });
+    auto malformed_signature_base64 = manifest_envelope_bytes;
+    malformed_signature_base64.replace(malformed_signature_base64.find(base64(mldsa_signature)),
+                                       base64(mldsa_signature).size(), "not base64!");
+    expect_error("invalid_signature", [&] {
+      static_cast<void>(
+          parse_signature_envelope(malformed_signature_base64, "package-manifest"));
+    });
     const auto repository_bytes =
         "{\"format_version\":1,\"channel\":\"stable\","
         "\"generated_at\":\"2026-08-17T00:00:00Z\",\"key_id\":\"release-2026\","
@@ -358,6 +614,121 @@ int main(int argc, char** argv) {
     expect_error("invalid_repository", [&] {
       static_cast<void>(verify_repository_index(repository_beta, beta_signature,
                                                 std::span(&trusted, 1U), "stable"));
+    });
+
+    MldsaSigningFixture mldsa_signer{std::byte{0x11}};
+    MldsaSigningFixture other_mldsa_signer{std::byte{0x22}};
+    TrustedKey mldsa_trusted{"official-2026-mldsa65", "mldsa65",
+                             mldsa_signer.public_key(), false};
+    TrustedKey other_mldsa_trusted{"official-2026-mldsa65-other", "mldsa65",
+                                   other_mldsa_signer.public_key(), false};
+    const auto mldsa_repository_bytes =
+        "{\"format_version\":1,\"channel\":\"stable\","
+        "\"generated_at\":\"2026-08-17T00:00:00Z\",\"key_id\":\"official-2026-mldsa65\","
+        "\"packages\":[{\"id\":\"fcitx5-rime\",\"title\":\"Rime\","
+        "\"summary\":\"Rime input engine\",\"version\":\"1.0.0\","
+        "\"release_sequence\":1,\"type\":\"addon\",\"architecture\":\"x64\","
+        "\"download_url\":\"https://packages.example.invalid/fcitx5-rime.fcpkg\","
+        "\"sha256\":\"" + file_hash + "\",\"dependencies\":[]}]}";
+    const auto mldsa_repository_signature = mldsa_signer.sign(mldsa_repository_bytes);
+    const auto mldsa_repository_envelope_bytes =
+        "{"
+        "\"format_version\":2,"
+        "\"signed_object\":\"repository-index\","
+        "\"canonicalization\":\"fcitx5-windows-next-json-v1\","
+        "\"signatures\":[{\"key_id\":\"official-2026-mldsa65\","
+        "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
+        base64(mldsa_repository_signature) + "\"}]}";
+    const auto mldsa_repository =
+        verify_repository_index(mldsa_repository_bytes,
+                                parse_signature_envelope(mldsa_repository_envelope_bytes,
+                                                         "repository-index"),
+                                std::span(&mldsa_trusted, 1U), "stable");
+    expect(mldsa_repository.packages.size() == 1U,
+           "ML-DSA repository signature did not verify");
+    auto bad_mldsa_repository_signature = mldsa_repository_signature;
+    bad_mldsa_repository_signature.front() ^= std::byte{0x01};
+    const auto bad_mldsa_repository_envelope_bytes =
+        "{"
+        "\"format_version\":2,"
+        "\"signed_object\":\"repository-index\","
+        "\"canonicalization\":\"fcitx5-windows-next-json-v1\","
+        "\"signatures\":[{\"key_id\":\"official-2026-mldsa65\","
+        "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
+        base64(bad_mldsa_repository_signature) + "\"}]}";
+    expect_error("invalid_signature", [&] {
+      static_cast<void>(verify_repository_index(
+          mldsa_repository_bytes,
+          parse_signature_envelope(bad_mldsa_repository_envelope_bytes, "repository-index"),
+          std::span(&mldsa_trusted, 1U), "stable"));
+    });
+    auto revoked_mldsa = mldsa_trusted;
+    revoked_mldsa.revoked = true;
+    expect_error("revoked_key", [&] {
+      static_cast<void>(verify_repository_index(
+          mldsa_repository_bytes,
+          parse_signature_envelope(mldsa_repository_envelope_bytes, "repository-index"),
+          std::span(&revoked_mldsa, 1U), "stable"));
+    });
+    const auto wrong_key_repository_envelope_bytes =
+        "{"
+        "\"format_version\":2,"
+        "\"signed_object\":\"repository-index\","
+        "\"canonicalization\":\"fcitx5-windows-next-json-v1\","
+        "\"signatures\":[{\"key_id\":\"official-2026-mldsa65-other\","
+        "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
+        base64(other_mldsa_signer.sign(mldsa_repository_bytes)) + "\"}]}";
+    expect_error("untrusted_key", [&] {
+      static_cast<void>(verify_repository_index(
+          mldsa_repository_bytes,
+          parse_signature_envelope(wrong_key_repository_envelope_bytes, "repository-index"),
+          std::span(&other_mldsa_trusted, 1U), "stable"));
+    });
+    auto mldsa_repository_beta = mldsa_repository_bytes;
+    mldsa_repository_beta.replace(mldsa_repository_beta.find("\"channel\":\"stable\""),
+                                  std::strlen("\"channel\":\"stable\""),
+                                  "\"channel\":\"beta\"");
+    const auto mldsa_beta_signature = mldsa_signer.sign(mldsa_repository_beta);
+    const auto mldsa_beta_envelope_bytes =
+        "{"
+        "\"format_version\":2,"
+        "\"signed_object\":\"repository-index\","
+        "\"canonicalization\":\"fcitx5-windows-next-json-v1\","
+        "\"signatures\":[{\"key_id\":\"official-2026-mldsa65\","
+        "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
+        base64(mldsa_beta_signature) + "\"}]}";
+    expect_error("invalid_repository", [&] {
+      static_cast<void>(verify_repository_index(
+          mldsa_repository_beta,
+          parse_signature_envelope(mldsa_beta_envelope_bytes, "repository-index"),
+          std::span(&mldsa_trusted, 1U), "stable"));
+    });
+
+    auto mldsa_manifest_bytes = manifest_bytes;
+    mldsa_manifest_bytes.replace(mldsa_manifest_bytes.find("\"key_id\": \"release-2026\""),
+                                 std::strlen("\"key_id\": \"release-2026\""),
+                                 "\"key_id\": \"official-2026-mldsa65\"");
+    const auto mldsa_manifest_signature = mldsa_signer.sign(mldsa_manifest_bytes);
+    const auto mldsa_manifest_envelope_bytes =
+        "{"
+        "\"format_version\":2,"
+        "\"signed_object\":\"package-manifest\","
+        "\"canonicalization\":\"fcitx5-windows-next-json-v1\","
+        "\"signatures\":[{\"key_id\":\"official-2026-mldsa65\","
+        "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
+        base64(mldsa_manifest_signature) + "\"}]}";
+    verify_manifest_signature_envelope(
+        mldsa_manifest_bytes,
+        parse_signature_envelope(mldsa_manifest_envelope_bytes, "package-manifest"),
+        std::span(&mldsa_trusted, 1U));
+    auto tampered_mldsa_manifest = mldsa_manifest_bytes;
+    tampered_mldsa_manifest.replace(tampered_mldsa_manifest.find("fcitx5-rime"),
+                                    std::strlen("fcitx5-rime"), "fcitx5-lime");
+    expect_error("invalid_signature", [&] {
+      verify_manifest_signature_envelope(
+          tampered_mldsa_manifest,
+          parse_signature_envelope(mldsa_manifest_envelope_bytes, "package-manifest"),
+          std::span(&mldsa_trusted, 1U));
     });
     const auto staged = stage_verified_payload(manifest, manifest_bytes, payload, install, "tx-one",
                                                signature, trusted);

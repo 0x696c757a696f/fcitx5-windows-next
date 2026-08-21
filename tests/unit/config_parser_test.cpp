@@ -10,7 +10,8 @@ int main() {
     ParseError error;
     const auto defaults = defaultConfigToml();
     if (!parseConfig(defaults, config, error) || config.orientation != Orientation::automatic ||
-        config.appearanceMode != AppearanceMode::system || !config.colors.empty()) {
+        config.appearanceMode != AppearanceMode::system ||
+        config.uiLanguage != UiLanguage::system || !config.colors.empty()) {
         std::cerr << "annotated default config rejected: " << error.message << '\n';
         return 1;
     }
@@ -24,6 +25,7 @@ int main() {
         "format_version = 1\n[candidate.colors]\nbackground = 'red'\n",
         "format_version = 1\n[fonts.candidate]\nfamilies = []\n",
         "format_version = 1\n[appearance]\ntheme = '../escape'\n",
+        "format_version = 1\n[ui]\nlanguage = 'fr-FR'\n",
         "format_version = 1\nformat_version = 1\n"};
     for (const auto invalid : invalidCases) {
         if (parseConfig(invalid, config, error)) {
@@ -39,6 +41,11 @@ int main() {
     if (!parseConfig("format_version = 1\n[candidate]\norientation = 'automatic'\n", config,
                      error) ||
         config.orientation != Orientation::automatic) {
+        return 1;
+    }
+    if (!parseConfig("format_version = 1\n[ui]\nlanguage = 'zh-CN'\n", config, error) ||
+        config.uiLanguage != UiLanguage::zhCN) {
+        std::cerr << "valid ui.language rejected: " << error.message << '\n';
         return 1;
     }
     if (!parseConfig("format_version = 1\n[candidate]\npage_size = 7\n", config, error) ||
@@ -106,7 +113,7 @@ int main() {
     if (!updatePresentationToml(defaults, "dark", "builtin:default", "horizontal", "enabled", "6",
                                 "Microsoft YaHei", updated, error, "720", "88", "20", "16",
                                 "disabled", "0.95", "panel") ||
-        !updated.starts_with("# Fcitx5 for Windows") || !parseConfig(updated, config, error) ||
+        !updated.starts_with("# Fcitx5 for Windows Next") || !parseConfig(updated, config, error) ||
         config.appearanceMode != AppearanceMode::dark ||
         config.orientation != Orientation::horizontal || config.scrollMode != true ||
         !config.candidatePageSize || *config.candidatePageSize != 6 ||

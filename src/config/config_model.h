@@ -13,6 +13,7 @@ enum class AppearanceMode { system, light, dark };
 enum class Orientation { automatic, vertical, horizontal };
 enum class LabelStyle { plain, dot, paren, bracket, circled };
 enum class PreeditMode { inline_, panel };
+enum class UiLanguage { system, enUS, zhCN };
 
 struct Geometry {
     std::optional<double> paddingX;
@@ -41,6 +42,7 @@ struct Font {
 };
 
 struct Config {
+    std::optional<UiLanguage> uiLanguage;
     std::optional<AppearanceMode> appearanceMode;
     std::optional<std::string> theme;
     std::optional<Orientation> orientation;

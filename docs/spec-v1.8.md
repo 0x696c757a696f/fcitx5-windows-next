@@ -1,4 +1,4 @@
-**Fcitx5 for Windows**
+**Fcitx5 for Windows Next**
 
 **工程规格、架构约束与轻量 SSDLC / DevSecOps**
 
@@ -194,7 +194,7 @@ Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整
 
 ## 1.1 产品定义
 
-Fcitx5 for Windows 是一个通用 Windows 平台前端与发行层。Windows 平台只负责 TSF、候选 UI、配置/安装/更新/包管理和系统集成；输入算法尽量复用 Fcitx5 upstream 及其 addon。
+Fcitx5 for Windows Next 是一个通用 Windows 平台前端与发行层。Windows 平台只负责 TSF、候选 UI、配置/安装/更新/包管理和系统集成；输入算法尽量复用 Fcitx5 upstream 及其 addon。
 
 ## 1.2 平台支持矩阵
 
@@ -227,7 +227,7 @@ Fcitx5 for Windows 是一个通用 Windows 平台前端与发行层。Windows �
 
 ## 1.4 产品差异化与平台价值验收
 
-Fcitx5 for Windows 的长期价值不是“另一个 Rime Windows 壳”，而是**一个 Windows frontend 承载多个输入引擎，并共享候选 UI、主题与通用 addon 能力**。
+Fcitx5 for Windows Next 的长期价值不是“另一个 Rime Windows 壳”，而是**一个 Windows frontend 承载多个输入引擎，并共享候选 UI、主题与通用 addon 能力**。
 
 - Rime 是一等公民，但不得成为架构中心或唯一成功标准。
 - 在公开 1.0 前，必须至少证明两个真实 engine/input method 共用同一 TSF frontend 与 Candidate UI，其中至少一个不是 Rime；第二个 engine 不得要求重写 Windows frontend、renderer、theme/config/package 基础设施。
@@ -237,38 +237,38 @@ Fcitx5 for Windows 的长期价值不是“另一个 Rime Windows 壳”，而�
 
 # 2. 总体架构与进程边界
 
-Windows Application  
-│  
-│ TSF  
-▼  
-┌───────────────────────┐  
-│ fcitx5-tsf.dll │ x86 / x64  
-│ COM / TSF / IPC only │ no network, no addon  
-└──────────┬────────────┘  
-│ versioned local IPC  
-▼  
-┌───────────────────────┐  
-│ fcitx5-engine.exe │ native OS architecture  
-│ Fcitx5 + libime │  
-│ addons + InputContext │  
-└──────┬─────────┬──────┘  
-│ │  
-│ └──────────────► addons  
-▼  
-┌───────────────────────┐  
-│ fcitx5-ui.exe │  
-│ C++ / Win32 / D2D / DWrite │  
-└───────────────────────┘  
-  
-Management plane  
-┌───────────────────────┐  
-│ fcitx5-config.exe │ C++ / WTL  
-└──────────┬────────────┘  
-▼  
-┌───────────────────────┐  
-│ fcitx5-package.exe │ C++ current → Rust R1 / verify/resolve/stage/activate  
-└──────┬─────────┬──────┘  
-│ └────► deployer / provider adapters  
+Windows Application
+│
+│ TSF
+▼
+┌───────────────────────┐
+│ fcitx5-tsf.dll │ x86 / x64
+│ COM / TSF / IPC only │ no network, no addon
+└──────────┬────────────┘
+│ versioned local IPC
+▼
+┌───────────────────────┐
+│ fcitx5-engine.exe │ native OS architecture
+│ Fcitx5 + libime │
+│ addons + InputContext │
+└──────┬─────────┬──────┘
+│ │
+│ └──────────────► addons
+▼
+┌───────────────────────┐
+│ fcitx5-ui.exe │
+│ C++ / Win32 / D2D / DWrite │
+└───────────────────────┘
+
+Management plane
+┌───────────────────────┐
+│ fcitx5-config.exe │ C++ / WTL
+└──────────┬────────────┘
+▼
+┌───────────────────────┐
+│ fcitx5-package.exe │ C++ current → Rust R1 / verify/resolve/stage/activate
+└──────┬─────────┬──────┘
+│ └────► deployer / provider adapters
 └──────────────► updater / repositories
 
 ## 2.1 信任边界
@@ -320,13 +320,13 @@ Config(WTL) → typed Control API → Package/Updater/Repair
 
 - 禁止把 C++ exception、SEH 可恢复异常或未验证 IPC 数据穿出 COM/TSF 边界。
 
-HRESULT SomeTsfEntry(...) noexcept {  
-try {  
-return SomeTsfEntryImpl(...);  
-} catch (...) {  
-ResetLocalStateWithoutInputLogging();  
-return E_FAIL;  
-}  
+HRESULT SomeTsfEntry(...) noexcept {
+try {
+return SomeTsfEntryImpl(...);
+} catch (...) {
+ResetLocalStateWithoutInputLogging();
+return E_FAIL;
+}
 }
 
 ## 3.3 32/64 位与进程模型
@@ -359,18 +359,18 @@ Windows TSF frontend 与 Linux/Wayland/DBus frontend 的关键差异是：TSF DL
 
 ## 4.1 InputContext 是状态中心
 
-ITfContext A → Fcitx InputContext A  
-ITfContext B → Fcitx InputContext B  
-  
-ContextState = {  
-engine_epoch,  
-session_id,  
-context_id,  
-generation,  
-composition_id,  
-revision,  
-focus_state,  
-input_mode  
+ITfContext A → Fcitx InputContext A
+ITfContext B → Fcitx InputContext B
+
+ContextState = {
+engine_epoch,
+session_id,
+context_id,
+generation,
+composition_id,
+revision,
+focus_state,
+input_mode
 }
 
 | **禁止　不得使用 CurrentWindow / CurrentComposition / CurrentCandidate 这种单全局状态模型。多个应用、多个 context、RDP/多 session 都会让这种模型失效。** |
@@ -378,18 +378,18 @@ input_mode
 
 ## 4.2 IPC 协议最低字段
 
-Header {  
-magic  
-protocol_version  
-message_type  
-payload_length  
-request_id  
-engine_epoch  
-session_id  
-context_id  
-composition_id  
-revision  
-}  
+Header {
+magic
+protocol_version
+message_type
+payload_length
+request_id
+engine_epoch
+session_id
+context_id
+composition_id
+revision
+}
 Payload { validated structured data }
 
 **协议版本规则：** client/server 必须使用当前相同协议版本。版本不一致直接拒绝连接并要求同版组件；不得增加旧版本 decoder、兼容 shim、双写/双读协议或自动 migration。协议 breaking change 时直接删除旧协议代码并同步升级所有项目内组件。
@@ -414,14 +414,14 @@ Payload { validated structured data }
 
 ## 4.3 Fcitx 调用线程模型
 
-Many TSF clients  
-↓  
-IPC dispatcher  
-↓  
-Fcitx event queue  
-↓  
-Single authoritative Fcitx event loop  
-↓  
+Many TSF clients
+↓
+IPC dispatcher
+↓
+Fcitx event queue
+↓
+Single authoritative Fcitx event loop
+↓
 InputContext A/B/C/...
 
 | **原因　不要让 Word、Chrome、VS Code 的多个 IPC 线程同时直接调用同一个 Fcitx instance。并发只存在于边缘，核心状态统一进入 Fcitx 自己的事件循环。** |
@@ -429,16 +429,16 @@ InputContext A/B/C/...
 
 ## 4.4 故障恢复
 
-engine crash  
-↓  
-invalidate engine_epoch  
-↓  
-cancel/end current composition safely  
-↓  
-hide candidate UI  
-↓  
-restart engine  
-↓  
+engine crash
+↓
+invalidate engine_epoch
+↓
+cancel/end current composition safely
+↓
+hide candidate UI
+↓
+restart engine
+↓
 next key starts a new session
 
 - 不要恢复半截 composition。
@@ -451,11 +451,11 @@ next key starts a new session
 
 现有参考实现暴露了三类真实问题：gaboolic/fcitx5-windows 的早期 pipe 协议字段不足且同步阻塞；WindInput 已实现 overlapped I/O、timeout、circuit breaker 与 stale-response 处理；Moqi 使用 seq_num 解决同步响应与异步通知交错；windows-chewing-tsf 则提供 SID/ACL 与 server 身份校验思路。IPC v2 必须吸收这些经验。
 
-> Header {  
-> magic; protocol_version;  
-> message_type; payload_length; request_id; response_to;  
-> engine_epoch; session_id; context_id; composition_id; revision;  
-> }  
+> Header {
+> magic; protocol_version;
+> message_type; payload_length; request_id; response_to;
+> engine_epoch; session_id; context_id; composition_id; revision;
+> }
 > Payload { validated structured data }
 
 强制要求：
@@ -474,10 +474,10 @@ next key starts a new session
 
 fcitx5-engine.exe 是 per-user / per-session 进程，不设计成 Session 0 Windows Service。推荐一个极小的 fcitx5-launcher.exe 负责启动、监督、预热和状态机；TSF 只负责快速连接、按需请求启动和安全失败。
 
-> LauncherState =  
-> Normal \| UserStopped \| Updating \| Uninstalling \|  
-> CrashBackoff \| SafeMode  
->   
+> LauncherState =
+> Normal \| UserStopped \| Updating \| Uninstalling \|
+> CrashBackoff \| SafeMode
+>
 > TSF connect -> launcher/engine ready ? use : bounded start request -> retry -> fail-open
 
 - 登录后可预启动并 warm-up Fcitx/addon/词典缓存，降低第一键冷启动成本；warm-up 走内部初始化，不伪造真实用户输入。
@@ -498,20 +498,20 @@ fcitx5-engine.exe 是 per-user / per-session 进程，不设计成 Session 0 Win
 
 ## 5.1 CandidateModel 与 Renderer 分离
 
-CandidateModel  
-├─ preedit  
-├─ aux_up / aux_down  
-├─ candidates\[\]  
-│ ├─ id  
-│ ├─ label  
-│ ├─ text  
-│ └─ comment  
-├─ selected  
-├─ page  
-├─ total  
-└─ visibility  
-│  
-├─ Direct2D Renderer  
+CandidateModel
+├─ preedit
+├─ aux_up / aux_down
+├─ candidates\[\]
+│ ├─ id
+│ ├─ label
+│ ├─ text
+│ └─ comment
+├─ selected
+├─ page
+├─ total
+└─ visibility
+│
+├─ Direct2D Renderer
 └─ TSF UILess UIElement
 
 - **Engine/Fcitx 是 authoritative candidate state 的唯一 owner。** `fcitx5-ui.exe` 与 TSF UIElement 只持有带 `engine_epoch/context_id/composition_id/revision` 的 immutable snapshot/cache；不得在 renderer/TSF 侧形成第二套 selected/page/candidate 真相。点击或键盘选择只作为 intent 发回 engine，由 engine 产生新的 snapshot 或 commit。
@@ -538,11 +538,11 @@ Candidate renderer 的内存安全主要通过**进程隔离 + RAII + smart COM 
 
 ## 5.3 皮肤包
 
-theme-package/  
-├─ manifest.json  
-├─ theme.toml  
-├─ assets/  
-├─ light/  
+theme-package/
+├─ manifest.json
+├─ theme.toml
+├─ assets/
+├─ light/
 └─ dark/
 
 - 允许字体、DIP 尺寸、padding、margin、radius、border、shadow、background、nine-patch、横/竖排、highlight、label/comment、light/dark、简单动画。
@@ -971,7 +971,7 @@ BrandIcon
 
 #### A. Product / Taskbar / Start Menu：Penguin-first
 
-`fcitx5-config.exe`、开始菜单入口、任务栏、安装器品牌页使用统一的 **Fcitx5 for Windows Product Icon**。默认品牌方向冻结为 **Penguin-first / 小企鹅优先**：使用简化、原创、几何化的小企鹅 silhouette 作为核心识别，不再以抽象 `F5`、键盘、Windows 窗格或语言字符作为默认主标识。
+`fcitx5-config.exe`、开始菜单入口、任务栏、安装器品牌页使用统一的 **Fcitx5 for Windows Next Product Icon**。默认品牌方向冻结为 **Penguin-first / 小企鹅优先**：使用简化、原创、几何化的小企鹅 silhouette 作为核心识别，不再以抽象 `F5`、键盘、Windows 窗格或语言字符作为默认主标识。
 
 若采用/改编上游 Fcitx 已有企鹅资产，必须先确认许可证与品牌使用条件；否则设计原创企鹅，不直接复制 Tux 或第三方吉祥物。
 
@@ -1004,8 +1004,8 @@ Windows 语言栏/输入法切换器只显示一个固定的 **Fcitx5 TSF Icon**
 
 ```text
 Windows 输入法选择器 / TSF profile:  Fcitx5
-开始菜单 / Settings 应用:           Fcitx5 for Windows
-Config 窗口标题:                    Fcitx5 for Windows
+开始菜单 / Settings 应用:           Fcitx5 for Windows Next
+Config 窗口标题:                    Fcitx5 for Windows Next
 候选/内部状态:                      需要时显示当前 Fcitx input method 名称，但不改变 Windows profile 名称
 ```
 
@@ -1184,17 +1184,17 @@ DirectWrite/Windows fallback
 
 ## 6.1 平台边界
 
-Fcitx5 Core  
-│  
-┌──────────────┼──────────────┐  
-│ │ │  
-libime Rime Lua / Mozc / ...  
-│  
-inputmethod-data  
-──────────────── Platform boundary ────────────────  
-Linux macOS Windows  
-X11/Wayland macOS frontend TSF frontend  
-Linux UI macOS UI Windows D2D UI  
+Fcitx5 Core
+│
+┌──────────────┼──────────────┐
+│ │ │
+libime Rime Lua / Mozc / ...
+│
+inputmethod-data
+──────────────── Platform boundary ────────────────
+Linux macOS Windows
+X11/Wayland macOS frontend TSF frontend
+Linux UI macOS UI Windows D2D UI
 config tools macOS config Windows WTL config
 
 - 尽量复用 Input Method / Module addon；Frontend / UI / OS integration 平台化。
@@ -1263,22 +1263,22 @@ Package core 处理网络、archive、manifest、路径与事务状态，属于�
 
 ## 7.3 更新事务
 
-Resolve  
-↓  
-Download  
-↓  
-Verify signed manifest + SHA-256 + code signature  
-↓  
-Stage to new version directory  
-↓  
-Compatibility check  
-↓  
-Atomic activation  
-↓  
-Restart engine / re-register when needed  
-↓  
-Health check  
-├─ pass → Commit + mark previous-known-good  
+Resolve
+↓
+Download
+↓
+Verify signed manifest + SHA-256 + code signature
+↓
+Stage to new version directory
+↓
+Compatibility check
+↓
+Atomic activation
+↓
+Restart engine / re-register when needed
+↓
+Health check
+├─ pass → Commit + mark previous-known-good
 └─ fail → Discard staged build / keep current active
 
 - 使用版本目录，避免原地覆盖仍被宿主进程加载的 DLL。
@@ -1364,14 +1364,14 @@ Fcitx5/
 | **语义　Windows 输入法不可能做到真正“零注册绿色版”。Portable 仅意味着程序与用户数据可放在同一目录、可注销后搬走；使用期间仍需注册 TSF。** |
 |-------------------------------------------------------------------------------------------------------------------------------------------|
 
-Fcitx5-Portable/  
-├─ bin/  
-├─ tsf/x86/  
-├─ tsf/x64/  
-├─ plugins/  
-├─ themes/  
-├─ locales/  
-├─ data/  
+Fcitx5-Portable/
+├─ bin/
+├─ tsf/x86/
+├─ tsf/x64/
+├─ plugins/
+├─ themes/
+├─ locales/
+├─ data/
 └─ portable.flag
 
 - portable.flag 只改变路径解析，不分叉业务代码。
@@ -1398,14 +1398,14 @@ Fcitx5-Portable/
 
 ## 9.1 配置器 i18n
 
-locales/  
-├─ en-US.json  
-├─ zh-CN.json  
-├─ zh-TW.json  
-├─ ja-JP.json  
-├─ ko-KR.json  
-└─ ...  
-  
+locales/
+├─ en-US.json
+├─ zh-CN.json
+├─ zh-TW.json
+├─ ja-JP.json
+├─ ko-KR.json
+└─ ...
+
 UI code: i18n("plugin.install")
 
 - 翻译文件外置，翻译者不需要懂 C++/WTL。

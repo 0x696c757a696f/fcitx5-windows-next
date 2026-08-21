@@ -31,10 +31,70 @@ foreach ($item in $manifest.artifacts) {
 $portableEntry = @($manifest.artifacts | Where-Object name -Like '*-portable.zip')
 if ($portableEntry.Count -ne 1) { throw 'Exactly one portable archive is required.' }
 $smokeRoot = Join-Path $artifacts ('portable-smoke-' + [guid]::NewGuid().ToString('N'))
+
+function Stop-PortableSmokeProcesses {
+  param([Parameter(Mandatory)] [string] $Root)
+  $resolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+  $allowedNames = @(
+    'fcitx5-launcher.exe',
+    'fcitx5-ui.exe',
+    'fcitx5-engine.exe',
+    'fcitx5-config.exe',
+    'fcitx5-control.exe'
+  )
+  Get-CimInstance Win32_Process |
+    Where-Object {
+      $_.ExecutablePath -and
+      $allowedNames -contains [IO.Path]::GetFileName($_.ExecutablePath) -and
+      [IO.Path]::GetFullPath($_.ExecutablePath).StartsWith(
+        $resolvedRoot, [StringComparison]::OrdinalIgnoreCase)
+    } |
+    ForEach-Object {
+      try {
+        $process = Get-Process -Id $_.ProcessId -ErrorAction Stop
+        Stop-Process -InputObject $process -Force -ErrorAction Stop
+      } catch {
+        Write-Warning "Failed to stop release portable smoke process $($_.ProcessId): $($_.Exception.Message)"
+      }
+    }
+}
+
+function Test-ArtifactDirectoryWritable {
+  $probe = Join-Path $artifacts ('.release-smoke-write-probe-' + [guid]::NewGuid().ToString('N'))
+  [IO.File]::WriteAllText($probe, "probe`n", [Text.UTF8Encoding]::new($false))
+  Remove-Item -LiteralPath $probe -Force
+}
+
+function Test-NoPrivateKeyMaterial {
+  param([Parameter(Mandatory)] [string] $Root)
+  $securityRoot = Join-Path $Root 'security'
+  if (-not (Test-Path -LiteralPath $securityRoot -PathType Container)) {
+    throw 'Portable package is missing security trusted-key directory.'
+  }
+  $keyringPath = Join-Path $securityRoot 'trusted-keys.json'
+  if (-not (Test-Path -LiteralPath $keyringPath -PathType Leaf)) {
+    throw 'Portable package is missing trusted-keys.json.'
+  }
+  $keyring = Get-Content -LiteralPath $keyringPath -Raw | ConvertFrom-Json
+  if ($keyring.format_version -ne 2) { throw 'Release package must carry v2 public trusted keys.' }
+  $rawSecurityJson = Get-ChildItem -LiteralPath $securityRoot -File -Recurse |
+    Where-Object Extension -eq '.json' |
+    ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }
+  foreach ($marker in @('private_key', 'secret_key', 'seed_base64',
+                        'private_key_base64', 'secret_key_base64')) {
+    foreach ($content in $rawSecurityJson) {
+      if ($content.IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        throw "Private signing material marker found in release security metadata: $marker"
+      }
+    }
+  }
+}
+
 try {
   Expand-Archive -LiteralPath (Join-Path $artifacts $portableEntry[0].name) `
     -DestinationPath $smokeRoot
   $portableRoot = Join-Path $smokeRoot 'Fcitx5'
+  Test-NoPrivateKeyMaterial -Root $portableRoot
   $stageManifest = Get-Content -LiteralPath (Join-Path $portableRoot 'manifest.json') -Raw |
     ConvertFrom-Json
   foreach ($file in $stageManifest.files) {
@@ -50,12 +110,14 @@ try {
   & (Join-Path $portableRoot 'bin/fcitx5-control.exe') --schema
   if ($LASTEXITCODE -ne 0) { throw 'Signed portable Control smoke failed.' }
 } finally {
+  Stop-PortableSmokeProcesses -Root $smokeRoot
   $resolved = [IO.Path]::GetFullPath($smokeRoot)
   if ($resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
       (Test-Path -LiteralPath $resolved)) {
     Remove-Item -LiteralPath $resolved -Recurse -Force
   }
 }
+Test-ArtifactDirectoryWritable
 $sbomPath = @($manifest.artifacts | Where-Object name -Like '*.spdx.json')
 if ($sbomPath.Count -ne 1) { throw 'Exactly one SPDX SBOM is required.' }
 $sbom = Get-Content -LiteralPath (Join-Path $artifacts $sbomPath[0].name) -Raw | ConvertFrom-Json

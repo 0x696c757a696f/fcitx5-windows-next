@@ -1,40 +1,20 @@
-# Current Task — REG-BRAND-001 Penguin-first product/TSF identity
+# RUST-R1-01 Rust workspace + package core/path model
 
-**Mode:** CHANGE
-**Task ID:** `REG-BRAND-001`
-**Prerequisite:** 004 single profile identity complete; 016 resource/visual system available
+**State:** CURRENT
+**Canonical task:** `docs/tasks/rust/R1-01-PACKAGE-CORE.md`
 
-## Goal
+## Gate
 
-Ship one coherent Fcitx5 for Windows visual identity: an original or license-cleared simplified penguin family, with a dedicated micro-penguin TSF glyph and stable user-visible names.
+Start only after the C++ package/path/signature semantics and hostile-path corpus remain green, and after release intent selects Rust R1 work explicitly.
 
-## Specification references
+## Can prepare now
 
-- §5.6.4A Product/TSF icons
-- §9 single profile
-- Phase 6
-- `REG-BRAND-001`
+- Keep the package/path corpus frozen and documented.
+- Inventory C++ package-core behavior that Rust must match.
+- Prepare dependency/SBOM/license review criteria for future Cargo dependencies.
 
-## Required behavior / implementation contract
+## Must not do before gate opens
 
-- Product/Start/Config icon uses Penguin-first identity; no abstract F5/keyboard/Windows-pane default replacement.
-- TSF picker icon uses a manually simplified language-neutral micro-penguin for 16/20/24px instead of shrinking a detailed master.
-- Do not embed language characters, flags, Rime/Mozc logos, or dynamic engine state into TSF identity.
-- Windows profile name stays `Fcitx5`; Config/Start label stays `Fcitx5 for Windows`.
-- Use one resource manifest and stable AppUserModelID.
-- Candidate/launcher/engine/background helpers stay out of taskbar/Alt+Tab; no default extra tray icon.
-
-## Required validation
-
-- `REG-BRAND-001` at common DPI/Light/Dark/High Contrast.
-- ICO contains required sizes and shell picker remains recognizable.
-- Switch internal engines and confirm TSF name/icon identity does not change.
-- Taskbar/Alt+Tab surface test for background processes.
-
-## Done when
-
-- No default blank EXE icon remains on visible product surfaces.
-- Product and micro TSF icons are recognizably the same family.
-- Brand asset licensing/originality is documented.
-
-After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.
+- Do not create a permanent C++/Rust runtime selector.
+- Do not reinterpret Windows package path policy.
+- Do not add Rust workspace/toolchain files as drive-by refactoring unless this real target starts.

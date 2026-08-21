@@ -7,6 +7,6 @@ $packageArgs = @{
   checksumType64 = 'sha256'
   silentArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /UPDATEOWNER=chocolatey'
   validExitCodes = @(0)
-  softwareName = 'Fcitx5 for Windows*'
+  softwareName = 'Fcitx5 for Windows Next*'
 }
 Install-ChocolateyPackage @packageArgs

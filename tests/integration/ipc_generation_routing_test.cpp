@@ -90,15 +90,33 @@ int wmain(int argc, wchar_t** argv) {
 
     EngineProcess gen41 = start_engine(argv[1], L"00000041", suffix);
     EngineProcess gen42 = start_engine(argv[1], L"00000042", suffix);
-    bool ok = gen41.process && gen42.process &&
-              send_key(identity, L"00000041", argv[1], 4101, 'A') &&
-              send_key(identity, L"00000042", argv[1], 4201, 'B') &&
-              stop_engine(gen41) && stop_engine(gen42);
+    int stage = 0;
+    bool ok = true;
+    if (!gen41.process) {
+        ok = false;
+        stage = 1;
+    } else if (!gen42.process) {
+        ok = false;
+        stage = 2;
+    } else if (!send_key(identity, L"00000041", argv[1], 4101, 'A')) {
+        ok = false;
+        stage = 3;
+    } else if (!send_key(identity, L"00000042", argv[1], 4201, 'B')) {
+        ok = false;
+        stage = 4;
+    } else if (!stop_engine(gen41)) {
+        ok = false;
+        stage = 5;
+    } else if (!stop_engine(gen42)) {
+        ok = false;
+        stage = 6;
+    }
     if (gen41.process) ok = stop_engine(gen41) && ok;
     if (gen42.process) ok = stop_engine(gen42) && ok;
     SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", nullptr);
     if (!ok) {
-        std::cerr << "generation-specific IPC routing failed\n";
+        std::cerr << "generation-specific IPC routing failed at stage " << stage
+                  << ", last Win32 error " << GetLastError() << '\n';
         return 1;
     }
     return 0;

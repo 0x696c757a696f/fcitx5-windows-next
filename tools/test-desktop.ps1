@@ -203,7 +203,7 @@ function Wait-LauncherState([int] $LauncherState, [int] $EngineState,
 
 function Invoke-TrayMenuItem([int] $Index) {
   $owner = [Fcitx5Desktop.NativeMethods]::FindWindow(
-    'Fcitx5WindowsNext.LauncherTray', 'Fcitx5 for Windows')
+    'Fcitx5WindowsNext.LauncherTray', 'Fcitx5 for Windows Next')
   if ($owner -eq [IntPtr]::Zero) { throw 'Tray owner window disappeared.' }
   # Drive the documented notification callback instead of guessing a taskbar coordinate.
   # Explorer may display an overflow icon while refusing Shell_NotifyIconGetRect.
@@ -333,7 +333,7 @@ try {
   $deadline = [Environment]::TickCount64 + 5000
   do {
     $trayWindow = [Fcitx5Desktop.NativeMethods]::FindWindow(
-      'Fcitx5WindowsNext.LauncherTray', 'Fcitx5 for Windows')
+      'Fcitx5WindowsNext.LauncherTray', 'Fcitx5 for Windows Next')
     if ($trayWindow -ne [IntPtr]::Zero) {
       $identifier = [Fcitx5Desktop.NotifyIconIdentifier]::new()
       $identifier.Size = [Runtime.InteropServices.Marshal]::SizeOf($identifier)

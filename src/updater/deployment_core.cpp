@@ -152,12 +152,7 @@ void copy_optional_file(const std::filesystem::path& source,
 
 void stage_runtime_payload(const std::filesystem::path& verified_payload_root,
                            const std::filesystem::path& destination) {
-  if (!std::filesystem::is_directory(verified_payload_root) ||
-      !std::filesystem::is_regular_file(verified_payload_root / L"bin" /
-                                        L"fcitx5-engine.exe") ||
-      !std::filesystem::is_regular_file(verified_payload_root / L"bin" /
-                                        L"fcitx5-launcher.exe") ||
-      !std::filesystem::is_regular_file(verified_payload_root / L"bin" / L"fcitx5-ui.exe")) {
+  if (!std::filesystem::is_directory(verified_payload_root)) {
     throw std::runtime_error("runtime generation payload is incomplete");
   }
   copy_directory_tree(verified_payload_root / L"bin", destination / L"bin");
@@ -174,6 +169,17 @@ bool runtime_payload_complete(const std::filesystem::path& root) {
          std::filesystem::is_regular_file(root / L"bin" / L"fcitx5-ui.exe") &&
          std::filesystem::is_directory(root / L"lib") &&
          std::filesystem::is_directory(root / L"share");
+}
+
+void validate_runtime_generation_payload(const std::filesystem::path& verified_payload_root) {
+  if (!std::filesystem::is_directory(verified_payload_root) ||
+      !runtime_payload_complete(verified_payload_root) ||
+      !std::filesystem::is_regular_file(verified_payload_root / L"tsf" / L"x64" /
+                                        L"fcitx5-tsf.dll") ||
+      !std::filesystem::is_regular_file(verified_payload_root / L"tsf" / L"x86" /
+                                        L"fcitx5-tsf.dll")) {
+    throw std::runtime_error("runtime generation payload is incomplete");
+  }
 }
 
 void publish_runtime_directory(const std::filesystem::path& verified_payload_root,
@@ -434,16 +440,13 @@ RuntimeGenerationInstallResult install_runtime_generation(
       contains_reparse_component(verified_payload_root)) {
     throw std::invalid_argument("runtime generation install inputs are invalid");
   }
+  validate_runtime_generation_payload(verified_payload_root);
   RuntimeGenerationInstallResult result;
   result.generation_directory = runtime_generation_directory(root, generation);
   publish_runtime_directory(verified_payload_root, result.generation_directory);
   result.runtime_installed = true;
   const auto incomingX64 = verified_payload_root / L"tsf" / L"x64" / L"fcitx5-tsf.dll";
   const auto incomingX86 = verified_payload_root / L"tsf" / L"x86" / L"fcitx5-tsf.dll";
-  if (!std::filesystem::is_regular_file(incomingX64) ||
-      !std::filesystem::is_regular_file(incomingX86)) {
-    throw std::runtime_error("runtime generation TSF payload is incomplete");
-  }
   result.tsf_x64 = install_tsf_dll_generation(root / L"tsf" / L"x64" / L"fcitx5-tsf.dll",
                                               incomingX64, generation);
   result.tsf_x64_installed = true;

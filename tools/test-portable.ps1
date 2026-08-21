@@ -14,6 +14,45 @@ $second = Join-Path $smokeRoot 'location-b'
 $configMarker = $null
 $dictionaryMarker = "# irreplaceable-rime-user-data`n"
 New-Item -ItemType Directory -Path $first, $second -Force | Out-Null
+
+function Stop-PortableSmokeProcesses {
+  param([Parameter(Mandatory)] [string] $Root)
+  $resolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+  $allowedNames = @(
+    'Start Fcitx5.exe',
+    'Fcitx5 Settings.exe',
+    'Unregister Fcitx5.exe',
+    'fcitx5-launcher.exe',
+    'fcitx5-ui.exe',
+    'fcitx5-engine.exe',
+    'fcitx5-config.exe',
+    'fcitx5-control.exe'
+  )
+  Get-CimInstance Win32_Process |
+    Where-Object {
+      $_.ExecutablePath -and
+      $allowedNames -contains [IO.Path]::GetFileName($_.ExecutablePath) -and
+      [IO.Path]::GetFullPath($_.ExecutablePath).StartsWith(
+        $resolvedRoot, [StringComparison]::OrdinalIgnoreCase)
+    } |
+    ForEach-Object {
+      try {
+        $process = Get-Process -Id $_.ProcessId -ErrorAction Stop
+        Stop-Process -InputObject $process -Force -ErrorAction Stop
+      } catch {
+        Write-Warning "Failed to stop portable smoke process $($_.ProcessId): $($_.Exception.Message)"
+      }
+    }
+}
+
+function Test-PackageOutputWritable {
+  $packageRoot = Join-Path $outRoot 'package'
+  if (-not (Test-Path -LiteralPath $packageRoot -PathType Container)) { return }
+  $probe = Join-Path $packageRoot ('.portable-smoke-write-probe-' + [guid]::NewGuid().ToString('N'))
+  [IO.File]::WriteAllText($probe, "probe`n", [Text.UTF8Encoding]::new($false))
+  Remove-Item -LiteralPath $probe -Force
+}
+
 try {
   Expand-Archive -LiteralPath $zip -DestinationPath $first
   $app = Join-Path $first 'Fcitx5'
@@ -109,6 +148,7 @@ try {
   }
   Write-Host 'Portable ZIP self-test, move, and user-data-preserving upgrade tests passed.'
 } finally {
+  Stop-PortableSmokeProcesses -Root $smokeRoot
   $resolved = [IO.Path]::GetFullPath($smokeRoot)
   $prefix = $outRoot.TrimEnd('\') + '\portable-smoke-'
   if ($resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
@@ -116,3 +156,4 @@ try {
     Remove-Item -LiteralPath $resolved -Recurse -Force
   }
 }
+Test-PackageOutputWritable

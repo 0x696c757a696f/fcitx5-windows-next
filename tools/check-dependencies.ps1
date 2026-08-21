@@ -26,6 +26,14 @@ if ($untrackedDependencyDirectives.Count -gt 0) {
   throw "Network/build dependency directives require a pinned inventory record:`n$($untrackedDependencyDirectives -join "`n")"
 }
 
+$cargoLockPath = Join-Path $repoRoot 'Cargo.lock'
+if (Test-Path -LiteralPath $cargoLockPath -PathType Leaf) {
+  $cargoLock = Get-Content -LiteralPath $cargoLockPath -Raw
+  if ($cargoLock -match '(?m)^\s*source\s*=') {
+    throw 'Cargo.lock contains third-party crate sources; add Cargo dependency inventory/SBOM/license review before release.'
+  }
+}
+
 if ($manifest.packages.Count -ne 0) {
   Write-Host "SCA baseline: $($manifest.packages.Count) declared dependencies require external advisory review."
 } else {

@@ -3,8 +3,8 @@
   <metadata>
     <id>fcitx5-windows</id>
     <version>@VERSION@</version>
-    <title>Fcitx5 for Windows</title>
-    <authors>Fcitx5 for Windows contributors</authors>
+    <title>Fcitx5 for Windows Next</title>
+    <authors>Fcitx5 for Windows Next contributors</authors>
     <projectUrl>https://github.com/fcitx/fcitx5-windows</projectUrl>
     <license type="expression">GPL-3.0-or-later</license>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>

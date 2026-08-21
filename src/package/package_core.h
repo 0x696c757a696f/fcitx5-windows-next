@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <utility>
 
 namespace fcitx::package {
 
@@ -23,6 +24,7 @@ namespace fcitx::package {
                                   std::string_view extra) noexcept;
 
 inline constexpr std::uint32_t kManifestFormatVersion = 1;
+inline constexpr std::uint32_t kManifestV2FormatVersion = 2;
 inline constexpr std::size_t kMaximumManifestBytes = 1024U * 1024U;
 inline constexpr std::size_t kMaximumFileCount = 4096U;
 inline constexpr std::uint64_t kMaximumFileBytes = 64ULL * 1024ULL * 1024ULL;
@@ -57,6 +59,7 @@ struct FileEntry {
   std::string path;
   std::uint64_t size{};
   std::string sha256;
+  std::string blake3;
 };
 
 struct Manifest {
@@ -78,8 +81,40 @@ struct Manifest {
 
 struct TrustedKey {
   std::string id;
+  std::string algorithm{"rsa-2048-sha256"};
+  std::vector<std::byte> public_key;
   std::vector<std::byte> rsa_public_blob;
   bool revoked{};
+
+  TrustedKey() = default;
+  TrustedKey(std::string key_id, std::vector<std::byte> rsa_blob, bool is_revoked)
+      : id(std::move(key_id)),
+        algorithm("rsa-2048-sha256"),
+        public_key(rsa_blob),
+        rsa_public_blob(std::move(rsa_blob)),
+        revoked(is_revoked) {}
+  TrustedKey(std::string key_id, std::string key_algorithm, std::vector<std::byte> key_bytes,
+             bool is_revoked)
+      : id(std::move(key_id)),
+        algorithm(std::move(key_algorithm)),
+        public_key(std::move(key_bytes)),
+        revoked(is_revoked) {
+    if (algorithm == "rsa-2048-sha256")
+      rsa_public_blob = public_key;
+  }
+};
+
+struct SignatureEnvelopeEntry {
+  std::string key_id;
+  std::string algorithm;
+  std::vector<std::byte> signature;
+};
+
+struct SignatureEnvelope {
+  std::uint32_t format_version{};
+  std::string signed_object;
+  std::string canonicalization;
+  std::vector<SignatureEnvelopeEntry> signatures;
 };
 
 struct LockEntry {
@@ -118,11 +153,26 @@ void validate_manifest_compatibility(const Manifest& manifest,
 [[nodiscard]] std::array<std::byte, 32> sha256(std::span<const std::byte> bytes);
 [[nodiscard]] std::array<std::byte, 32> sha256_file(const std::filesystem::path& path);
 [[nodiscard]] std::string hex_sha256(std::span<const std::byte> digest);
+[[nodiscard]] std::array<std::byte, 32> blake3(std::span<const std::byte> bytes);
+[[nodiscard]] std::array<std::byte, 32> blake3_file(const std::filesystem::path& path);
+[[nodiscard]] std::string hex_blake3(std::span<const std::byte> digest);
 [[nodiscard]] std::vector<std::byte> decode_base64(std::string_view encoded);
+[[nodiscard]] SignatureEnvelope parse_signature_envelope(
+    std::string_view bytes, std::string_view expected_object);
+[[nodiscard]] SignatureEnvelope read_signature_envelope(
+    const std::filesystem::path& path, std::string_view expected_object);
 
 void verify_manifest_signature(std::string_view manifest_bytes,
                                std::span<const std::byte> signature,
                                const TrustedKey& key);
+void verify_signature_envelope(std::string_view object_bytes,
+                               const SignatureEnvelope& envelope,
+                               std::span<const TrustedKey> trusted_keys,
+                               std::string_view expected_object,
+                               std::string_view expected_key_id);
+void verify_manifest_signature_envelope(std::string_view manifest_bytes,
+                                        const SignatureEnvelope& envelope,
+                                        std::span<const TrustedKey> trusted_keys);
 void verify_payload(const Manifest& manifest, const std::filesystem::path& payload_root);
 
 [[nodiscard]] std::vector<std::string> resolve_exact_dependencies(
@@ -146,6 +196,9 @@ void activate_staged_package(const std::filesystem::path& staged_root,
 [[nodiscard]] std::vector<TrustedKey> read_trusted_keys(const std::filesystem::path& path);
 [[nodiscard]] RepositoryIndex verify_repository_index(
     std::string_view index_bytes, std::span<const std::byte> signature,
+    std::span<const TrustedKey> trusted_keys, std::string_view expectedChannel);
+[[nodiscard]] RepositoryIndex verify_repository_index(
+    std::string_view index_bytes, const SignatureEnvelope& envelope,
     std::span<const TrustedKey> trusted_keys, std::string_view expectedChannel);
 [[nodiscard]] const RepositoryEntry* find_repository_package(
     const RepositoryIndex& index, std::string_view package_id,

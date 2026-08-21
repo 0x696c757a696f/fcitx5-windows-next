@@ -51,6 +51,8 @@ int usage() {
                 L"  fcitx5-package --state INSTALL_ROOT PACKAGE_ID STATE\n"
                 L"  fcitx5-package --list INSTALL_ROOT\n"
                 L"  fcitx5-package --verify-repository INDEX SIGNATURE KEYRING\n"
+                L"  fcitx5-package --verify-repository-v2 INDEX SIG_JSON KEYRING [CHANNEL]\n"
+                L"  fcitx5-package --verify-manifest-v2 MANIFEST SIG_JSON KEYRING\n"
                 L"  fcitx5-package --mark-remove INSTALL_ROOT PACKAGE_ID\n"
                 L"  fcitx5-package --finalize-remove INSTALL_ROOT PACKAGE_ID\n";
   return 1;
@@ -119,6 +121,30 @@ int wmain(int argc, wchar_t** argv) {
                   << entry.architecture << '\t' << entry.sha256 << '\t' << entry.download_url
                   << '\t' << entry.title << '\n';
       }
+      return 0;
+    }
+    if ((argc == 5 || argc == 6) && std::wstring_view(argv[1]) == L"--verify-repository-v2") {
+      const auto index_bytes = read_file(argv[2], kMaximumManifestBytes);
+      const auto envelope =
+          read_signature_envelope(argv[3], "repository-index");
+      const std::string expectedChannel =
+          argc == 6 ? std::filesystem::path(argv[5]).string()
+                    : std::string(fcitx::windows::kReleaseIdentity.channel_name);
+      const auto index = verify_repository_index(index_bytes, envelope, read_trusted_keys(argv[4]),
+                                                 expectedChannel);
+      for (const auto& entry : index.packages) {
+        std::cout << entry.id << '\t' << entry.version << '\t' << entry.release_sequence << '\t'
+                  << entry.architecture << '\t' << entry.sha256 << '\t' << entry.download_url
+                  << '\t' << entry.title << '\n';
+      }
+      return 0;
+    }
+    if (argc == 5 && std::wstring_view(argv[1]) == L"--verify-manifest-v2") {
+      verify_manifest_signature_envelope(
+          read_file(argv[2], kMaximumManifestBytes),
+          read_signature_envelope(argv[3], "package-manifest"),
+          read_trusted_keys(argv[4]));
+      std::cout << "manifest_signature=verified\n";
       return 0;
     }
     if (argc == 4 && std::wstring_view(argv[1]) == L"--mark-remove") {

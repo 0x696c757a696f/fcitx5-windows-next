@@ -15,6 +15,22 @@
       "sha256": "F0446D863F9C19926AD9483C523FDC42E42B8D4A6A431D27E09D49C79A140D9A",
       "output": "downloads/miniz-3.1.2.zip",
       "extract": "miniz-3.1.2"
+    },
+    {
+      "name": "mldsa-native",
+      "version": "2.0.0",
+      "url": "https://github.com/pq-code-package/mldsa-native/archive/refs/tags/v2.0.0.zip",
+      "sha256": "C201A7A8467AFA5B072CA3007CF91EBB55DD027A8F1DC876ADCAE3A6CCC8B158",
+      "output": "downloads/mldsa-native-2.0.0.zip",
+      "extract": "mldsa-native-2.0.0"
+    },
+    {
+      "name": "blake3",
+      "version": "1.8.7",
+      "url": "https://github.com/BLAKE3-team/BLAKE3/archive/refs/tags/1.8.7.zip",
+      "sha256": "F937AA426584FDC59DEA1ED4ABF8140970B38699FF81CE15EB29454A9D3C124F",
+      "output": "downloads/blake3-1.8.7.zip",
+      "extract": "blake3-1.8.7"
     }
   ]
 }

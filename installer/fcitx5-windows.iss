@@ -1,4 +1,4 @@
-#define ProductName "Fcitx5 for Windows"
+#define ProductName "Fcitx5 for Windows Next"
 #ifndef ProductVersion
   #define ProductVersion "0.1.0"
 #endif

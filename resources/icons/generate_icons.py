@@ -1,4 +1,4 @@
-"""Generate deterministic original Fcitx5 for Windows penguin icons.
+"""Generate deterministic original Fcitx5 for Windows Next penguin icons.
 
 The artwork is geometric and source-controlled so builds do not depend on
 fonts, online assets, or third-party trademark/logo files.  The product icon

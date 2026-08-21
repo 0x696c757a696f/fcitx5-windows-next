@@ -2,8 +2,8 @@
 PackageIdentifier: Fcitx.Fcitx5Windows
 PackageVersion: "@VERSION@"
 PackageLocale: en-US
-Publisher: Fcitx5 for Windows contributors
-PackageName: Fcitx5 for Windows
+Publisher: Fcitx5 for Windows Next contributors
+PackageName: Fcitx5 for Windows Next
 License: GPL-3.0-or-later
 ShortDescription: Native Fcitx5 input platform for Windows
 InstallerType: inno

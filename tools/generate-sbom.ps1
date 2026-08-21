@@ -23,7 +23,7 @@ $packages = @(
     filesAnalyzed = $true
     licenseConcluded = 'GPL-3.0-or-later'
     licenseDeclared = 'GPL-3.0-or-later'
-    supplier = 'Organization: Fcitx5 for Windows contributors'
+    supplier = 'Organization: Fcitx5 for Windows Next contributors'
   }
 )
 foreach ($dependency in $inventory.packages) {

@@ -115,7 +115,22 @@ bool runtime_generation_install_contract(const std::filesystem::path& root) {
     (void)fcitx::update::install_runtime_generation(root, badPayload, "00000043", "build-43");
   } catch (const std::exception&) { refusedBad = true; }
   state = fcitx::update::read_runtime_generation_state(root);
-  return refusedBad && state.current_generation == "00000042" &&
+  if (!refusedBad || state.current_generation != "00000042" ||
+      std::filesystem::exists(root / L"runtime" / L"00000043")) {
+    return false;
+  }
+  const auto badTsfPayload = root / L"bad-tsf-payload";
+  write_runtime_payload(badTsfPayload, "bad-tsf");
+  std::filesystem::remove(badTsfPayload / L"tsf" / L"x86" / L"fcitx5-tsf.dll");
+  bool refusedBadTsf = false;
+  try {
+    (void)fcitx::update::install_runtime_generation(root, badTsfPayload, "00000043",
+                                                    "build-43");
+  } catch (const std::exception&) { refusedBadTsf = true; }
+  state = fcitx::update::read_runtime_generation_state(root);
+  return refusedBadTsf && state.current_generation == "00000042" &&
+         state.previous_generation == "00000041" &&
+         read_text(root / L"tsf" / L"x64" / L"fcitx5-tsf.dll") == "payload-42-x64" &&
          !std::filesystem::exists(root / L"runtime" / L"00000043");
 }
 

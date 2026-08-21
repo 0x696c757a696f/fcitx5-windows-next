@@ -65,12 +65,8 @@ bool https_url(std::string_view value) {
   });
 }
 
-}  // namespace
-
-RepositoryIndex verify_repository_index(std::string_view index_bytes,
-                                        std::span<const std::byte> signature,
-                                        std::span<const TrustedKey> trusted_keys,
-                                        std::string_view expectedChannel) {
+RepositoryIndex parse_repository_index(std::string_view index_bytes,
+                                       std::string_view expectedChannel) {
   if (index_bytes.empty() || index_bytes.size() > kMaximumManifestBytes) {
     repository_fail("repository index exceeds its resource budget");
   }
@@ -97,11 +93,6 @@ RepositoryIndex verify_repository_index(std::string_view index_bytes,
   if (result.channel != expectedChannel || !token(result.key_id, "-_.")) {
     repository_fail("repository identity is invalid or channel mismatch");
   }
-  const auto key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
-    return candidate.id == result.key_id;
-  });
-  if (key == trusted_keys.end()) throw PackageError("untrusted_key", "repository key is not trusted");
-  verify_manifest_signature(index_bytes, signature, *key);
 
   const auto& packages = document["packages"];
   if (!packages.is_array() || packages.size() > 4096U) repository_fail("package catalog is invalid");
@@ -144,6 +135,31 @@ RepositoryIndex verify_repository_index(std::string_view index_bytes,
     result.packages.push_back(std::move(entry));
   }
   std::ranges::sort(result.packages, {}, &RepositoryEntry::id);
+  return result;
+}
+
+}  // namespace
+
+RepositoryIndex verify_repository_index(std::string_view index_bytes,
+                                        std::span<const std::byte> signature,
+                                        std::span<const TrustedKey> trusted_keys,
+                                        std::string_view expectedChannel) {
+  auto result = parse_repository_index(index_bytes, expectedChannel);
+  const auto key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
+    return candidate.id == result.key_id;
+  });
+  if (key == trusted_keys.end()) throw PackageError("untrusted_key", "repository key is not trusted");
+  verify_manifest_signature(index_bytes, signature, *key);
+  return result;
+}
+
+RepositoryIndex verify_repository_index(std::string_view index_bytes,
+                                        const SignatureEnvelope& envelope,
+                                        std::span<const TrustedKey> trusted_keys,
+                                        std::string_view expectedChannel) {
+  auto result = parse_repository_index(index_bytes, expectedChannel);
+  verify_signature_envelope(index_bytes, envelope, trusted_keys, "repository-index",
+                            result.key_id);
   return result;
 }
 

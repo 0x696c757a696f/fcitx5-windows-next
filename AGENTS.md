@@ -1,4 +1,4 @@
-# Fcitx5 for Windows — Codex Queue Rules
+# Fcitx5 for Windows Next — Codex Queue Rules
 
 This repository is an authorized open-source Windows input-method project. Work only in this repository and in public documentation/reference code needed by the currently selected task.
 
@@ -31,11 +31,12 @@ Implement the smallest correct vertical slice that satisfies the current task. N
 Do not perform unrelated cleanup, framework migration, dependency churn, naming changes, or future tasks.
 
 Architecture defaults:
-- TSF DLL stays C++/Win32/COM/TSF and minimal.
-- Fcitx-facing Engine stays C++.
-- Candidate renderer stays C++/Win32/D2D/DWrite.
-- Config keeps WTL/Win32 hosting plus the product-specific D2D/DWrite settings layer.
-- Rust starts only in tasks explicitly marked `RUST-R1` or `RUST-R2`.
+- Fcitx-facing Engine stays C++ as the long-term Fcitx5 island.
+- Everything else that is owned by this Windows product should move toward Rust when an explicit gated task exists and the relevant C++ behavior corpus is frozen.
+- TSF DLL currently stays C++/Win32/COM/TSF and minimal as the shipping stable baseline, but it is not permanently exempt from Rust. Rust TSF work requires an explicitly gated TSF Rust PoC task with panic/COM/host-matrix evidence before cutover.
+- Candidate renderer currently stays C++/Win32/D2D/DWrite until UX/layout/UILess contracts are frozen; future Candidate Rust migration should use IPC/differential tests, not C++ FFI.
+- Config currently keeps WTL/Win32 hosting plus the product-specific D2D/DWrite settings layer until the Settings operation model is frozen; future Config Rust migration should consume the typed Control/config/package boundaries.
+- Rust starts only in tasks explicitly marked `RUST-R1`, `RUST-R2`, or a later explicitly gated Rust PoC/migration task.
 - Do not create a permanent old/new protocol dual stack.
 
 ## Testing

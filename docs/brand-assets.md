@@ -1,4 +1,4 @@
-# Fcitx5 for Windows brand assets
+# Fcitx5 for Windows Next brand assets
 
 The default product and TSF picker icons are original geometric artwork generated from `resources/icons/generate_icons.py`.
 

@@ -124,6 +124,43 @@ int main(int argc, char** argv) {
         packageCorpus.find("COM9.log") == std::string::npos) {
         return fail("REG-PKG-WINPATH-001: package path policy must have shared hostile Windows corpus and collision/link guards");
     }
+    const auto rustToolchain = read_text(sourceRoot / "rust-toolchain.toml");
+    const auto cargoManifest = read_text(sourceRoot / "Cargo.toml");
+    const auto cargoLock = read_text(sourceRoot / "Cargo.lock");
+    const auto rustPackageCore =
+        read_text(sourceRoot / "rust/package-core/src/lib.rs");
+    const auto rustPackageCoreBinary =
+        read_text(sourceRoot / "rust/package-core/src/main.rs");
+    const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
+    const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
+    if (rustToolchain.find("channel = \"1.78.0\"") == std::string::npos ||
+        rustToolchain.find("aarch64-pc-windows-msvc") == std::string::npos ||
+        cargoManifest.find("\"rust/package-core\"") == std::string::npos ||
+        cargoLock.find("name = \"fcitx5-package-core\"") == std::string::npos ||
+        rustPackageCore.find("#![forbid(unsafe_code)]") == std::string::npos ||
+        rustPackageCore.find("include_str!(\"../../../tests/fixtures/package_path_corpus.json\")") ==
+            std::string::npos ||
+        rustPackageCore.find("SafeRelativePackagePath") == std::string::npos ||
+        rustPackageCore.find("PackageId") == std::string::npos ||
+        rustPackageCore.find("parse_manifest") == std::string::npos ||
+        rustPackageCore.find("parse_trusted_keys") == std::string::npos ||
+        rustPackageCore.find("parse_signature_envelope") == std::string::npos ||
+        rustPackageCore.find("resolve_exact_dependencies") == std::string::npos ||
+        rustPackageCore.find("verify_payload_inventory") == std::string::npos ||
+        rustPackageCore.find("verify_payload_digests") == std::string::npos ||
+        rustPackageCore.find("parse_lockfile") == std::string::npos ||
+        rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
+        rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
+        rustPackageCoreBinary.find("--self-check") == std::string::npos ||
+        rustPackageCoreBinary.find("--audit-self-pe") == std::string::npos ||
+        rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
+        rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
+        cmakeSource.find("rust-package-core-artifact-smoke") == std::string::npos ||
+        cmakeSource.find("CARGO_TARGET_DIR") == std::string::npos ||
+        dependencyCheck.find("Cargo.lock contains third-party crate sources") ==
+            std::string::npos) {
+        return fail("RUST-R1-01: Rust package-core workspace must be pinned, locked, safe, and consume the frozen package path corpus");
+    }
     const auto configSource = read_text(sourceRoot / "src/config/app_main.cpp");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     if (configSource.find("struct DesignTokens") == std::string::npos ||
@@ -145,7 +182,40 @@ int main(int argc, char** argv) {
         englishLocale.find("\"updates.title\": \"Updates\"") == std::string::npos) {
         return fail("REG-CONFIG-VISUAL-001: Config must use task navigation and shared design tokens");
     }
-    const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
+    if (configSource.find("confirmDialog(") == std::string::npos ||
+        configSource.find("MessageBoxW") == std::string::npos ||
+        configSource.find("std::wstring(get(\"app.title\")) + L\" — \"") ==
+            std::string::npos ||
+        configSource.find("dialog.reset_appearance.body") == std::string::npos ||
+        configSource.find("dialog.remove_package.body") == std::string::npos ||
+        configSource.find("dialog.repair.body") == std::string::npos ||
+        configSource.find("dialog.trust_failure.body") == std::string::npos ||
+        englishLocale.find("\"dialog.language_restart.body\"") == std::string::npos ||
+        englishLocale.find("\"dialog.button.cancel\"") == std::string::npos) {
+        return fail("CONFIG-UX-007: Settings destructive/trust dialogs must use localized title/body/button keys");
+    }
+    const auto portableSmoke = read_text(sourceRoot / "tools/test-portable.ps1");
+    const auto releaseSmoke = read_text(sourceRoot / "tools/test-release-artifacts.ps1");
+    const auto trustedKeyTemplate = read_text(sourceRoot / "security/trusted-keys.template.json");
+    if (portableSmoke.find("function Stop-PortableSmokeProcesses") == std::string::npos ||
+        portableSmoke.find("Get-CimInstance Win32_Process") == std::string::npos ||
+        portableSmoke.find("Test-PackageOutputWritable") == std::string::npos ||
+        portableSmoke.find("Remove-Item -LiteralPath $resolved -Recurse -Force") ==
+            std::string::npos ||
+        releaseSmoke.find("function Stop-PortableSmokeProcesses") == std::string::npos ||
+        releaseSmoke.find("Test-ArtifactDirectoryWritable") == std::string::npos ||
+        releaseSmoke.find("Test-NoPrivateKeyMaterial") == std::string::npos ||
+        releaseSmoke.find("private_key_base64") == std::string::npos ||
+        trustedKeyTemplate.find("\"official_required_signatures\": [\"mldsa65\"]") ==
+            std::string::npos ||
+        trustedKeyTemplate.find("\"key_id\": \"official-2026-mldsa65\"") ==
+            std::string::npos ||
+        trustedKeyTemplate.find("\"public_key_base64\"") == std::string::npos ||
+        trustedKeyTemplate.find("private_key") != std::string::npos ||
+        trustedKeyTemplate.find("secret_key") != std::string::npos ||
+        trustedKeyTemplate.find("seed_base64") != std::string::npos) {
+        return fail("CONFIG-UX-008: portable/package smoke must clean started processes and prove output remains writable");
+    }
     const auto resourceHeader = read_text(sourceRoot / "resources/windows/resource.h");
     const auto appRc = read_text(sourceRoot / "resources/windows/app.rc");
     const auto tsfRc = read_text(sourceRoot / "resources/windows/tsf.rc");

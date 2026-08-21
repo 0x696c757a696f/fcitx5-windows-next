@@ -961,13 +961,20 @@ void printPackages(const fs::path& dataRoot) {
     }
     fcitx::package::RepositoryIndex repository;
     bool repositoryAvailable = false;
+    std::string repositoryError;
     try {
         repository = loadRepository(dataRoot);
         repositoryAvailable = true;
-    } catch (const fcitx::package::PackageError&) {
+    } catch (const fcitx::package::PackageError& error) {
+        repositoryError = error.code();
+        if (repositoryError == "invalid_file" && !fs::exists(repositoryFiles(dataRoot).keyring))
+            repositoryError = "missing_key";
     }
     std::cout << "{\"format_version\":1,\"repository_available\":"
-              << (repositoryAvailable ? "true" : "false") << ",\"packages\":[";
+              << (repositoryAvailable ? "true" : "false")
+              << ",\"repository_error\":"
+              << (repositoryError.empty() ? "null" : jsonString(repositoryError))
+              << ",\"packages\":[";
     bool first = true;
     std::set<std::string> emitted;
     if (repositoryAvailable) {
@@ -1018,7 +1025,7 @@ void printPackages(const fs::path& dataRoot) {
         first = false;
         std::cout << "{\"id\":" << jsonString(id)
                   << ",\"title\":" << jsonString(component.title)
-                  << ",\"summary\":\"Bundled with Fcitx5 for Windows\","
+                  << ",\"summary\":\"Bundled with Fcitx5 for Windows Next\","
                      "\"type\":\"addon\",\"available_version\":null,"
                      "\"installed_version\":"
                   << jsonString(std::string(fcitx::windows::version()))
@@ -1045,12 +1052,16 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
     fcitx::package::RepositoryIndex repository;
     const fcitx::package::RepositoryEntry* repositoryEntry = nullptr;
     bool repositoryAvailable = false;
+    std::string repositoryError;
     try {
         repository = loadRepository(dataRoot);
         repositoryAvailable = true;
         repositoryEntry = fcitx::package::find_repository_package(repository, packageId,
                                                                   nativeArchitecture());
-    } catch (const fcitx::package::PackageError&) {
+    } catch (const fcitx::package::PackageError& error) {
+        repositoryError = error.code();
+        if (repositoryError == "invalid_file" && !fs::exists(repositoryFiles(dataRoot).keyring))
+            repositoryError = "missing_key";
     }
 
     const fs::path installRoot = installationRoot();
@@ -1071,7 +1082,7 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
                                                : "addon";
     const std::string title = repositoryEntry ? repositoryEntry->title : std::string(packageId);
     const std::string summary = repositoryEntry ? repositoryEntry->summary
-                                : bundledNow ? "Bundled with Fcitx5 for Windows"
+                                : bundledNow ? "Bundled with Fcitx5 for Windows Next"
                                              : "";
     const std::string available = repositoryEntry ? repositoryEntry->version : "";
     const std::string installedVersion = active != installed.end()
@@ -1088,6 +1099,8 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
                                                        : fcitx::package::PackageType::addon);
     std::cout << "{\"format_version\":1,\"repository_available\":"
               << (repositoryAvailable ? "true" : "false")
+              << ",\"repository_error\":"
+              << (repositoryError.empty() ? "null" : jsonString(repositoryError))
               << ",\"id\":" << jsonString(packageId)
               << ",\"title\":" << jsonString(title)
               << ",\"summary\":" << jsonString(summary)

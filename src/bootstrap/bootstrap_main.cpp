@@ -120,9 +120,9 @@ int elevateRegistration(const fs::path& executable, bool unregister) {
 }
 
 void errorBox(std::wstring_view detail) {
-    const std::wstring message = L"Fcitx5 for Windows could not complete the operation.\n\n" +
+    const std::wstring message = L"Fcitx5 for Windows Next could not complete the operation.\n\n" +
                                  std::wstring(detail);
-    MessageBoxW(nullptr, message.c_str(), L"Fcitx5 for Windows", MB_OK | MB_ICONERROR);
+    MessageBoxW(nullptr, message.c_str(), L"Fcitx5 for Windows Next", MB_OK | MB_ICONERROR);
 }
 
 enum class Action { start, settings, unregister };
@@ -146,7 +146,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
     const int argc = __argc;
     wchar_t** argv = __wargv;
     if (argc == 2 && std::wstring_view(argv[1]) == L"--version") {
-        MessageBoxA(nullptr, fcitx::windows::version().data(), "Fcitx5 for Windows",
+        MessageBoxA(nullptr, fcitx::windows::version().data(), "Fcitx5 for Windows Next",
                     MB_OK | MB_ICONINFORMATION);
         return 0;
     }
@@ -174,7 +174,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
         }
         MessageBoxW(nullptr,
                     L"Fcitx5 registration and background service were repaired successfully.",
-                    L"Fcitx5 for Windows", MB_OK | MB_ICONINFORMATION);
+                    L"Fcitx5 for Windows Next", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
 
@@ -203,7 +203,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
             return result;
         }
         MessageBoxW(nullptr, L"Fcitx5 has been unregistered. The portable files can now be removed.",
-                    L"Fcitx5 for Windows", MB_OK | MB_ICONINFORMATION);
+                    L"Fcitx5 for Windows Next", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
 
@@ -221,6 +221,6 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
     MessageBoxW(nullptr,
                 L"Fcitx5 is running. Select it from the Windows input indicator (Win+Space).\n\n"
                 L"Use 'Fcitx5 Settings.exe' in this folder to configure it.",
-                L"Fcitx5 for Windows", MB_OK | MB_ICONINFORMATION);
+                L"Fcitx5 for Windows Next", MB_OK | MB_ICONINFORMATION);
     return 0;
 }

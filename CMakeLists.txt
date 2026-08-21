@@ -33,6 +33,24 @@ if(NOT EXISTS "${FCITX_MINIZ_SOURCE_DIR}/miniz.c" OR
           "Pinned miniz sources are missing. Run tools/prepare-package-dependencies.ps1.")
 endif()
 
+set(FCITX_MLDSA_NATIVE_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/mldsa-native-2.0.0/mldsa-native-2.0.0"
+    CACHE PATH "Path to the pinned mldsa-native 2.0.0 sources")
+if(NOT EXISTS "${FCITX_MLDSA_NATIVE_SOURCE_DIR}/mldsa/mldsa_native.c" OR
+   NOT EXISTS "${FCITX_MLDSA_NATIVE_SOURCE_DIR}/mldsa/mldsa_native.h")
+  message(FATAL_ERROR
+          "Pinned mldsa-native sources are missing. Run tools/prepare-package-dependencies.ps1.")
+endif()
+
+set(FCITX_BLAKE3_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/blake3-1.8.7/BLAKE3-1.8.7/c"
+    CACHE PATH "Path to the pinned BLAKE3 1.8.7 C sources")
+if(NOT EXISTS "${FCITX_BLAKE3_SOURCE_DIR}/blake3.c" OR
+   NOT EXISTS "${FCITX_BLAKE3_SOURCE_DIR}/blake3.h")
+  message(FATAL_ERROR
+          "Pinned BLAKE3 sources are missing. Run tools/prepare-package-dependencies.ps1.")
+endif()
+
 option(FCITX_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
 option(FCITX_ENABLE_MSVC_ANALYZE "Run MSVC static analysis" OFF)
 option(FCITX_BUILD_BENCHMARKS "Build repeatable microbenchmarks" ON)
@@ -100,6 +118,36 @@ if(MSVC)
 endif()
 
 add_library(
+  fcitx5_mldsa65_verify STATIC
+  "${FCITX_MLDSA_NATIVE_SOURCE_DIR}/mldsa/mldsa_native.c")
+target_include_directories(
+  fcitx5_mldsa65_verify
+  SYSTEM PUBLIC "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
+target_include_directories(
+  fcitx5_mldsa65_verify
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/package")
+target_compile_definitions(
+  fcitx5_mldsa65_verify
+  PRIVATE MLD_CONFIG_FILE=\"fcitx5_mldsa65_config.h\")
+if(MSVC)
+  target_compile_options(fcitx5_mldsa65_verify PRIVATE /W3 /sdl)
+endif()
+
+add_library(
+  fcitx5_blake3 STATIC
+  "${FCITX_BLAKE3_SOURCE_DIR}/blake3.c"
+  "${FCITX_BLAKE3_SOURCE_DIR}/blake3_dispatch.c"
+  "${FCITX_BLAKE3_SOURCE_DIR}/blake3_portable.c")
+target_include_directories(fcitx5_blake3 SYSTEM PUBLIC "${FCITX_BLAKE3_SOURCE_DIR}")
+target_compile_definitions(
+  fcitx5_blake3
+  PRIVATE BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512
+          BLAKE3_USE_NEON=0)
+if(MSVC)
+  target_compile_options(fcitx5_blake3 PRIVATE /W3 /sdl /wd4244)
+endif()
+
+add_library(
   fcitx5_package_core STATIC
   src/package/package_core.cpp
   src/package/package_archive.cpp
@@ -110,7 +158,14 @@ target_include_directories(
   fcitx5_package_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/package")
 target_include_directories(
   fcitx5_package_core SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
-target_link_libraries(fcitx5_package_core PUBLIC bcrypt crypt32 PRIVATE fcitx5_miniz)
+target_include_directories(
+  fcitx5_package_core SYSTEM PRIVATE "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
+target_include_directories(
+  fcitx5_package_core SYSTEM PRIVATE "${FCITX_BLAKE3_SOURCE_DIR}")
+target_link_libraries(
+  fcitx5_package_core
+  PUBLIC bcrypt crypt32
+  PRIVATE fcitx5_miniz fcitx5_mldsa65_verify fcitx5_blake3)
 fcitx_apply_project_options(fcitx5_package_core)
 if(MSVC)
   target_compile_options(fcitx5_package_core PRIVATE /external:W0 /analyze:external-)
@@ -244,6 +299,7 @@ target_link_libraries(
           dwrite shell32 user32 comctl32)
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+target_include_directories(fcitx5_config_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
 if(MSVC)
   target_compile_options(fcitx5_config_app PRIVATE /external:W0 /analyze:external-)
 endif()
@@ -382,18 +438,50 @@ if(BUILD_TESTING)
   add_test(NAME brand-resource-contract
            COMMAND fcitx5_brand_resource_test "${CMAKE_CURRENT_SOURCE_DIR}")
 
+  add_library(
+    fcitx5_mldsa65_test_sign STATIC
+    "${FCITX_MLDSA_NATIVE_SOURCE_DIR}/mldsa/mldsa_native.c")
+  target_include_directories(
+    fcitx5_mldsa65_test_sign
+    SYSTEM PUBLIC "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
+  target_include_directories(
+    fcitx5_mldsa65_test_sign
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+  target_compile_definitions(
+    fcitx5_mldsa65_test_sign
+    PRIVATE MLD_CONFIG_FILE=\"fcitx5_mldsa65_test_config.h\")
+  if(MSVC)
+    target_compile_options(fcitx5_mldsa65_test_sign PRIVATE /W3 /sdl)
+  endif()
+
   add_executable(fcitx5_package_core_test tests/unit/package_core_test.cpp)
   target_include_directories(
     fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_MINIZ_SOURCE_DIR}")
   target_include_directories(
     fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+  target_include_directories(
+    fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
+  target_include_directories(
+    fcitx5_package_core_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
   target_link_libraries(
-    fcitx5_package_core_test PRIVATE fcitx5::package_core fcitx5_miniz bcrypt)
+    fcitx5_package_core_test
+    PRIVATE fcitx5::package_core fcitx5_miniz fcitx5_mldsa65_test_sign bcrypt)
   fcitx_apply_project_options(fcitx5_package_core_test)
   fcitx_apply_binary_hardening(fcitx5_package_core_test)
   add_test(NAME package-core-contract
            COMMAND fcitx5_package_core_test
                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/package_path_corpus.json")
+
+  add_executable(fcitx5_pqc_fixture_signer tests/support/pqc_fixture_signer.cpp)
+  set_target_properties(fcitx5_pqc_fixture_signer PROPERTIES
+                        OUTPUT_NAME "fcitx5-pqc-fixture-signer")
+  target_include_directories(
+    fcitx5_pqc_fixture_signer SYSTEM PRIVATE "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
+  target_include_directories(
+    fcitx5_pqc_fixture_signer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+  target_link_libraries(fcitx5_pqc_fixture_signer PRIVATE fcitx5_mldsa65_test_sign crypt32)
+  fcitx_apply_project_options(fcitx5_pqc_fixture_signer)
+  fcitx_apply_binary_hardening(fcitx5_pqc_fixture_signer)
 
   add_executable(
     fcitx5_control_package_integration_test
@@ -507,6 +595,55 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_source_contract_test)
   fcitx_apply_binary_hardening(fcitx5_source_contract_test)
   add_test(NAME source-contract COMMAND fcitx5_source_contract_test "${CMAKE_CURRENT_SOURCE_DIR}")
+
+  find_program(FCITX_CARGO_EXECUTABLE cargo)
+  if(FCITX_CARGO_EXECUTABLE)
+    set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
+    set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
+    set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
+    add_custom_target(
+      fcitx5_rust_package_core_test
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      COMMENT "Running Rust package-core differential corpus")
+    add_custom_target(
+      fcitx5_rust_package_core_artifact_smoke
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --bin
+        fcitx5-package-core -- --self-check --audit-self-pe --trusted-keys
+        "${CMAKE_CURRENT_SOURCE_DIR}/security/trusted-keys.template.json"
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      COMMENT "Running Rust package-core artifact smoke")
+    add_test(
+      NAME rust-package-core-differential
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core)
+    set_tests_properties(
+      rust-package-core-differential PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-package-core-artifact-smoke
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --bin
+        fcitx5-package-core -- --self-check --audit-self-pe --trusted-keys
+        "${CMAKE_CURRENT_SOURCE_DIR}/security/trusted-keys.template.json")
+    set_tests_properties(
+      rust-package-core-artifact-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  else()
+    message(STATUS "Cargo was not found; Rust R1 package-core tests are not registered.")
+  endif()
 
   add_executable(fcitx5_candidate_layout_test tests/unit/candidate_layout_test.cpp)
   target_link_libraries(fcitx5_candidate_layout_test PRIVATE fcitx5::candidate_layout)

@@ -17,6 +17,13 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#define MLD_CONFIG_FILE "fcitx5_mldsa65_config.h"
+extern "C" {
+#include <blake3.h>
+#include <mldsa/mldsa_native.h>
+}
+#undef MLD_CONFIG_FILE
+
 #include <nlohmann/json.hpp>
 
 namespace fcitx::package {
@@ -29,6 +36,10 @@ constexpr std::size_t kMaximumVersionBytes = 64U;
 constexpr std::size_t kMaximumMetadataBytes = 256U;
 constexpr std::size_t kMaximumDependencyCount = 256U;
 constexpr std::size_t kMaximumPermissionCount = 32U;
+constexpr std::string_view kSignatureEnvelopeCanonicalization =
+    "fcitx5-windows-next-json-v1";
+constexpr std::size_t kMldsa65PublicKeyBytes = MLDSA65_PUBLICKEYBYTES;
+constexpr std::size_t kMldsa65SignatureBytes = MLDSA65_BYTES;
 
 class AlgorithmHandle final {
  public:
@@ -121,6 +132,40 @@ std::string require_string(const Json& object, std::string_view key, std::size_t
   if ((!allow_empty && result.empty()) || result.size() > maximum ||
       result.find('\0') != std::string::npos) {
     fail("invalid_manifest", std::string(key) + " has an invalid length");
+  }
+  return result;
+}
+
+void require_signature_object_keys(const Json& object,
+                                   std::initializer_list<std::string_view> required) {
+  if (!object.is_object()) {
+    fail("invalid_signature", "signature envelope entry must be a JSON object");
+  }
+  std::set<std::string, std::less<>> allowed;
+  for (const auto key : required) {
+    allowed.emplace(key);
+    if (!object.contains(key)) {
+      fail("invalid_signature", "signature envelope is missing required key: " +
+                                    std::string(key));
+    }
+  }
+  for (const auto& [key, unused] : object.items()) {
+    static_cast<void>(unused);
+    if (!allowed.contains(key)) {
+      fail("invalid_signature", "signature envelope has unknown key: " + key);
+    }
+  }
+}
+
+std::string require_signature_string(const Json& object, std::string_view key,
+                                     std::size_t maximum) {
+  const auto& value = object.at(key);
+  if (!value.is_string()) {
+    fail("invalid_signature", std::string(key) + " must be a string");
+  }
+  auto result = value.get<std::string>();
+  if (result.empty() || result.size() > maximum || result.find('\0') != std::string::npos) {
+    fail("invalid_signature", std::string(key) + " has an invalid length");
   }
   return result;
 }
@@ -279,14 +324,25 @@ Manifest parse_manifest(std::string_view bytes) {
   require_object_keys(document,
                       {"format_version", "id", "version", "type", "architecture", "min_os",
                        "core_api", "addon_abi", "dependencies", "license", "source_commit",
-                       "permissions", "files", "key_id"});
-  if (!document["format_version"].is_number_unsigned() ||
-      document["format_version"].get<std::uint32_t>() != kManifestFormatVersion) {
-    fail("unsupported_manifest", "format_version must be exactly 1");
+                       "permissions", "key_id"},
+                      {"files", "payload"});
+  if (!document["format_version"].is_number_unsigned()) {
+    fail("unsupported_manifest", "format_version must be numeric");
+  }
+  const auto format_version = document["format_version"].get<std::uint32_t>();
+  if (format_version != kManifestFormatVersion &&
+      format_version != kManifestV2FormatVersion) {
+    fail("unsupported_manifest", "format_version is unsupported");
+  }
+  if ((format_version == kManifestFormatVersion &&
+       (!document.contains("files") || document.contains("payload"))) ||
+      (format_version == kManifestV2FormatVersion &&
+       (!document.contains("payload") || document.contains("files")))) {
+    fail("invalid_manifest", "manifest payload schema does not match format version");
   }
 
   Manifest result;
-  result.format_version = kManifestFormatVersion;
+  result.format_version = format_version;
   result.id = require_string(document, "id", kMaximumIdBytes);
   result.version = require_string(document, "version", kMaximumVersionBytes);
   result.type = parse_type(require_string(document, "type", 32U));
@@ -337,7 +393,8 @@ Manifest parse_manifest(std::string_view bytes) {
     result.permissions.push_back(std::move(parsed));
   }
 
-  const auto& files = document["files"];
+  const auto& files = format_version == kManifestFormatVersion ? document["files"]
+                                                               : document["payload"];
   if (!files.is_array() || files.empty() || files.size() > kMaximumFileCount) {
     fail("invalid_manifest", "files must be a non-empty bounded array");
   }
@@ -345,15 +402,32 @@ Manifest parse_manifest(std::string_view bytes) {
   std::set<std::wstring, OrdinalIgnoreCaseLess> windows_file_paths;
   std::uint64_t total_size = 0;
   for (const auto& file : files) {
-    require_object_keys(file, {"path", "size", "sha256"});
+    if (format_version == kManifestFormatVersion) {
+      require_object_keys(file, {"path", "size", "sha256"});
+    } else {
+      require_object_keys(file, {"path", "size", "hashes"});
+    }
     FileEntry parsed;
     parsed.path = require_string(file, "path", 512U);
-    parsed.sha256 = require_string(file, "sha256", 64U);
+    if (format_version == kManifestFormatVersion) {
+      parsed.sha256 = require_string(file, "sha256", 64U);
+    } else {
+      const auto& hashes = file["hashes"];
+      require_object_keys(hashes, {"blake3"}, {"sha256"});
+      parsed.blake3 = require_string(hashes, "blake3", 64U);
+      if (hashes.contains("sha256")) {
+        parsed.sha256 = require_string(hashes, "sha256", 64U);
+      }
+    }
     if (!file["size"].is_number_unsigned()) {
       fail("invalid_manifest", "file size must be an unsigned integer");
     }
     parsed.size = file["size"].get<std::uint64_t>();
-    if (!is_safe_relative_package_path(parsed.path) || !is_hex_digest(parsed.sha256) ||
+    if (!is_safe_relative_package_path(parsed.path) ||
+        (format_version == kManifestFormatVersion && !is_hex_digest(parsed.sha256)) ||
+        (format_version == kManifestV2FormatVersion &&
+         (!is_hex_digest(parsed.blake3) ||
+          (!parsed.sha256.empty() && !is_hex_digest(parsed.sha256)))) ||
         parsed.size > kMaximumFileBytes ||
         total_size > kMaximumPayloadBytes - parsed.size ||
         !file_paths.emplace(parsed.path).second ||
@@ -463,6 +537,25 @@ std::string hex_sha256(std::span<const std::byte> digest) {
   return result;
 }
 
+std::array<std::byte, 32> blake3(std::span<const std::byte> bytes) {
+  blake3_hasher hasher{};
+  blake3_hasher_init(&hasher);
+  blake3_hasher_update(&hasher, bytes.data(), bytes.size());
+  std::array<std::byte, 32> result{};
+  blake3_hasher_finalize(&hasher, reinterpret_cast<std::uint8_t*>(result.data()),
+                         result.size());
+  return result;
+}
+
+std::array<std::byte, 32> blake3_file(const std::filesystem::path& path) {
+  const auto bytes = read_file_bounded(path, kMaximumFileBytes);
+  return blake3(std::as_bytes(std::span(bytes)));
+}
+
+std::string hex_blake3(std::span<const std::byte> digest) {
+  return hex_sha256(digest);
+}
+
 std::vector<std::byte> decode_base64(std::string_view encoded) {
   if (encoded.empty() || encoded.size() > 16384U) {
     fail("invalid_signature", "base64 value is empty or too large");
@@ -482,6 +575,77 @@ std::vector<std::byte> decode_base64(std::string_view encoded) {
   }
   result.resize(output_size);
   return result;
+}
+
+SignatureEnvelope parse_signature_envelope(std::string_view bytes,
+                                           std::string_view expected_object) {
+  if (bytes.empty() || bytes.size() > kMaximumManifestBytes ||
+      (expected_object != "repository-index" && expected_object != "package-manifest")) {
+    fail("invalid_signature", "signature envelope identity is invalid");
+  }
+
+  Json document;
+  try {
+    document = Json::parse(bytes);
+  } catch (const Json::exception&) {
+    fail("invalid_signature", "signature envelope is not strict JSON");
+  }
+
+  require_signature_object_keys(document,
+                                {"format_version", "signed_object", "canonicalization",
+                                 "signatures"});
+  if (!document["format_version"].is_number_unsigned() ||
+      document["format_version"].get<std::uint32_t>() != 2U) {
+    fail("invalid_signature", "signature envelope format version is unsupported");
+  }
+
+  SignatureEnvelope result;
+  result.format_version = 2U;
+  result.signed_object = require_signature_string(document, "signed_object", 64U);
+  result.canonicalization = require_signature_string(document, "canonicalization", 64U);
+  if (result.signed_object != expected_object ||
+      (result.signed_object != "repository-index" &&
+       result.signed_object != "package-manifest") ||
+      result.canonicalization != kSignatureEnvelopeCanonicalization) {
+    fail("invalid_signature", "signature envelope object binding is invalid");
+  }
+
+  const auto& signatures = document["signatures"];
+  if (!signatures.is_array() || signatures.empty() || signatures.size() > 16U) {
+    fail("invalid_signature", "signature envelope signatures array is invalid");
+  }
+
+  std::set<std::string, std::less<>> key_ids;
+  bool has_required_mldsa65 = false;
+  for (const auto& item : signatures) {
+    require_signature_object_keys(item, {"key_id", "algorithm", "signature_base64"});
+    auto key_id = require_signature_string(item, "key_id", kMaximumIdBytes);
+    auto algorithm = require_signature_string(item, "algorithm", 32U);
+    if (!is_lower_package_id(key_id) || !key_ids.emplace(key_id).second) {
+      fail("invalid_signature", "signature envelope key id is invalid or duplicated");
+    }
+    if (algorithm != "mldsa65" && algorithm != "slhdsa-sha2-128s") {
+      fail("invalid_signature", "signature envelope requires an unsupported algorithm");
+    }
+    if (algorithm == "mldsa65") {
+      has_required_mldsa65 = true;
+    }
+    auto signature = decode_base64(
+        require_signature_string(item, "signature_base64", 16384U));
+    result.signatures.push_back(SignatureEnvelopeEntry{
+        std::move(key_id), std::move(algorithm), std::move(signature)});
+  }
+
+  if (!has_required_mldsa65) {
+    fail("invalid_signature", "signature envelope is missing required ML-DSA-65 signature");
+  }
+  return result;
+}
+
+SignatureEnvelope read_signature_envelope(const std::filesystem::path& path,
+                                          std::string_view expected_object) {
+  return parse_signature_envelope(read_file_bounded(path, kMaximumManifestBytes),
+                                  expected_object);
 }
 
 void verify_manifest_signature(std::string_view manifest_bytes,
@@ -518,6 +682,66 @@ void verify_manifest_signature(std::string_view manifest_bytes,
   }
 }
 
+void verify_mldsa65_signature(std::string_view object_bytes,
+                              std::span<const std::byte> signature,
+                              const TrustedKey& key) {
+  if (key.revoked) {
+    fail("revoked_key", "ML-DSA key is revoked");
+  }
+  if (key.algorithm != "mldsa65" || key.public_key.size() != kMldsa65PublicKeyBytes ||
+      signature.size() != kMldsa65SignatureBytes || object_bytes.empty()) {
+    fail("invalid_signature", "ML-DSA signature identity is incomplete");
+  }
+  const auto* message = reinterpret_cast<const std::uint8_t*>(object_bytes.data());
+  const auto* signature_bytes = reinterpret_cast<const std::uint8_t*>(signature.data());
+  const auto* public_key = reinterpret_cast<const std::uint8_t*>(key.public_key.data());
+  if (fcitx5_mldsa65_verify(signature_bytes, message, object_bytes.size(), nullptr, 0U,
+                            public_key) != 0) {
+    fail("invalid_signature", "ML-DSA-65 signature verification failed");
+  }
+}
+
+void verify_signature_envelope(std::string_view object_bytes,
+                               const SignatureEnvelope& envelope,
+                               std::span<const TrustedKey> trusted_keys,
+                               std::string_view expected_object,
+                               std::string_view expected_key_id) {
+  if (envelope.format_version != 2U || envelope.signed_object != expected_object ||
+      envelope.canonicalization != kSignatureEnvelopeCanonicalization ||
+      !is_lower_package_id(expected_key_id)) {
+    fail("invalid_signature", "signature envelope binding is invalid");
+  }
+  bool saw_required_key = false;
+  for (const auto& entry : envelope.signatures) {
+    if (entry.algorithm != "mldsa65") {
+      continue;
+    }
+    if (entry.key_id != expected_key_id) {
+      fail("untrusted_key", "ML-DSA signature key id does not match signed metadata");
+    }
+    saw_required_key = true;
+    const auto trusted_key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
+      return candidate.id == entry.key_id;
+    });
+    if (trusted_key == trusted_keys.end()) {
+      fail("untrusted_key", "ML-DSA signature key is not trusted");
+    }
+    verify_mldsa65_signature(object_bytes, std::span(entry.signature), *trusted_key);
+    return;
+  }
+  if (!saw_required_key) {
+    fail("invalid_signature", "signature envelope has no required ML-DSA signature");
+  }
+}
+
+void verify_manifest_signature_envelope(std::string_view manifest_bytes,
+                                        const SignatureEnvelope& envelope,
+                                        std::span<const TrustedKey> trusted_keys) {
+  const auto manifest = parse_manifest(manifest_bytes);
+  verify_signature_envelope(manifest_bytes, envelope, trusted_keys, "package-manifest",
+                            manifest.key_id);
+}
+
 void verify_payload(const Manifest& manifest, const std::filesystem::path& payload_root) {
   if (!std::filesystem::is_directory(payload_root) ||
       path_contains_reparse_point(payload_root)) {
@@ -528,9 +752,20 @@ void verify_payload(const Manifest& manifest, const std::filesystem::path& paylo
     expected.emplace(file.path);
     const auto path = payload_root / std::filesystem::path(file.path);
     if (path_contains_reparse_point(path) || !std::filesystem::is_regular_file(path) ||
-        std::filesystem::file_size(path) != file.size ||
-        hex_sha256(sha256_file(path)) != file.sha256) {
+        std::filesystem::file_size(path) != file.size) {
       fail("payload_mismatch", "payload file does not match manifest: " + file.path);
+    }
+    if (manifest.format_version == kManifestFormatVersion) {
+      if (hex_sha256(sha256_file(path)) != file.sha256) {
+        fail("payload_mismatch", "payload file does not match manifest: " + file.path);
+      }
+    } else if (manifest.format_version == kManifestV2FormatVersion) {
+      if (hex_blake3(blake3_file(path)) != file.blake3 ||
+          (!file.sha256.empty() && hex_sha256(sha256_file(path)) != file.sha256)) {
+        fail("payload_mismatch", "payload file does not match manifest: " + file.path);
+      }
+    } else {
+      fail("invalid_manifest", "payload verifier does not support manifest version");
     }
   }
   std::error_code error;
@@ -750,36 +985,84 @@ std::vector<TrustedKey> read_trusted_keys(const std::filesystem::path& path) {
   } catch (const Json::exception&) {
     fail("invalid_keyring", "trusted key file is not strict JSON");
   }
-  require_object_keys(document, {"format_version", "keys"});
-  if (!document["format_version"].is_number_unsigned() ||
-      document["format_version"].get<std::uint32_t>() != 1U ||
-      !document["keys"].is_array() ||
-      document["keys"].size() > 64U) {
+  if (!document.is_object() || !document.contains("format_version") ||
+      !document["format_version"].is_number_unsigned()) {
+    fail("invalid_keyring", "trusted key file schema is invalid");
+  }
+  const auto format_version = document["format_version"].get<std::uint32_t>();
+  if (format_version == 1U) {
+    require_object_keys(document, {"format_version", "keys"});
+  } else if (format_version == 2U) {
+    require_object_keys(document, {"format_version", "policy", "keys"});
+    const auto& policy = document["policy"];
+    require_object_keys(policy, {"official_required_signatures", "compatibility_hashes",
+                                 "default_payload_hash"});
+    if (!policy["official_required_signatures"].is_array() ||
+        policy["official_required_signatures"].size() > 8U ||
+        !policy["compatibility_hashes"].is_array() ||
+        policy["compatibility_hashes"].size() > 8U ||
+        require_string(policy, "default_payload_hash", 32U) != "blake3") {
+      fail("invalid_keyring", "trusted key policy is invalid");
+    }
+    for (const auto& algorithm : policy["official_required_signatures"]) {
+      if (!algorithm.is_string())
+        fail("invalid_keyring", "trusted key policy algorithm is invalid");
+      const auto value = algorithm.get<std::string>();
+      if (value != "mldsa65" && value != "slhdsa-sha2-128s") {
+        fail("invalid_keyring", "trusted key policy requires unsupported algorithm");
+      }
+    }
+  } else {
+    fail("invalid_keyring", "trusted key format version is unsupported");
+  }
+  if (!document["keys"].is_array() || document["keys"].size() > 64U) {
     fail("invalid_keyring", "trusted key file schema is invalid");
   }
   std::vector<TrustedKey> result;
   std::set<std::string, std::less<>> ids;
   for (const auto& item : document["keys"]) {
-    require_object_keys(item, {"key_id", "algorithm", "status", "public_key_base64"});
+    if (format_version == 1U) {
+      require_object_keys(item, {"key_id", "algorithm", "status", "public_key_base64"});
+    } else {
+      require_object_keys(item, {"key_id", "algorithm", "status", "public_key_base64",
+                                 "scope", "channels"});
+      if (!item["scope"].is_array() || item["scope"].empty() || item["scope"].size() > 8U ||
+          !item["channels"].is_array() || item["channels"].empty() ||
+          item["channels"].size() > 16U) {
+        fail("invalid_keyring", "trusted key scope/channel policy is invalid");
+      }
+    }
     auto id = require_string(item, "key_id", kMaximumIdBytes);
     const auto algorithm = require_string(item, "algorithm", 32U);
     const auto status = require_string(item, "status", 16U);
     const auto public_key = require_string(item, "public_key_base64", 16384U);
-    if (!is_lower_package_id(id) || algorithm != "rsa-2048-sha256" ||
-        (status != "trusted" && status != "revoked") || !ids.emplace(id).second) {
+    if (!is_lower_package_id(id) || (status != "trusted" && status != "revoked") ||
+        !ids.emplace(id).second) {
       fail("invalid_keyring", "trusted key record is invalid");
     }
     auto blob = decode_base64(public_key);
-    if (blob.size() < sizeof(BCRYPT_RSAKEY_BLOB)) {
-      fail("invalid_keyring", "RSA public key blob is truncated");
+    if (algorithm == "rsa-2048-sha256") {
+      if (blob.size() < sizeof(BCRYPT_RSAKEY_BLOB)) {
+        fail("invalid_keyring", "RSA public key blob is truncated");
+      }
+      BCRYPT_RSAKEY_BLOB header{};
+      std::memcpy(&header, blob.data(), sizeof(header));
+      if (header.Magic != BCRYPT_RSAPUBLIC_MAGIC || header.BitLength < 2048U ||
+          header.BitLength > 4096U) {
+        fail("invalid_keyring", "RSA public key strength or representation is invalid");
+      }
+    } else if (format_version == 2U && algorithm == "mldsa65") {
+      if (blob.size() != 1952U) {
+        fail("invalid_keyring", "ML-DSA-65 public key length is invalid");
+      }
+    } else if (format_version == 2U && algorithm == "slhdsa-sha2-128s") {
+      if (blob.size() != 32U) {
+        fail("invalid_keyring", "SLH-DSA public key length is invalid");
+      }
+    } else {
+      fail("invalid_keyring", "trusted key algorithm is unsupported");
     }
-    BCRYPT_RSAKEY_BLOB header{};
-    std::memcpy(&header, blob.data(), sizeof(header));
-    if (header.Magic != BCRYPT_RSAPUBLIC_MAGIC || header.BitLength < 2048U ||
-        header.BitLength > 4096U) {
-      fail("invalid_keyring", "RSA public key strength or representation is invalid");
-    }
-    result.push_back(TrustedKey{std::move(id), std::move(blob), status == "revoked"});
+    result.push_back(TrustedKey{std::move(id), algorithm, std::move(blob), status == "revoked"});
   }
   return result;
 }

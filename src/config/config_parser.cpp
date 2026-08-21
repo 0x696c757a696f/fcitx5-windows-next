@@ -151,13 +151,33 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
         return setError(error, "config.toml exceeds 256 KiB");
     try {
         const toml::table root = toml::parse(text);
-        if (!allowed(root, {"format_version", "appearance", "candidate", "input_methods",
+        if (!allowed(root, {"format_version", "ui", "appearance", "candidate", "input_methods",
                             "hotkeys", "fonts"},
                      "", error))
             return false;
         const auto version = root["format_version"].value<std::int64_t>();
         if (!version || *version != 1)
             return setError(error, "format_version must be exactly 1");
+
+        if (const auto* ui = root["ui"].as_table()) {
+            if (!allowed(*ui, {"language"}, "ui.", error))
+                return false;
+            std::optional<std::string> language;
+            if (!optionalValue(*ui, "language", language, error))
+                return false;
+            if (language) {
+                if (*language == "system")
+                    output.uiLanguage = UiLanguage::system;
+                else if (*language == "en-US")
+                    output.uiLanguage = UiLanguage::enUS;
+                else if (*language == "zh-CN")
+                    output.uiLanguage = UiLanguage::zhCN;
+                else
+                    return setError(error, "ui.language must be system, en-US, or zh-CN");
+            }
+        } else if (root.contains("ui")) {
+            return setError(error, "ui must be a table");
+        }
 
         if (const auto* appearance = root["appearance"].as_table()) {
             if (!allowed(*appearance, {"mode", "theme"}, "appearance.", error))
@@ -381,9 +401,13 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
 }
 
 std::string defaultConfigToml() {
-    return R"(# Fcitx5 for Windows 用户配置。保存为 UTF-8（无 BOM）和 LF。
+    return R"(# Fcitx5 for Windows Next 用户配置。保存为 UTF-8（无 BOM）和 LF。
 # 未写出的字段会继承当前主题；Reset 会删除 override，而不是复制默认值。
 format_version = 1
+
+[ui]
+# system 跟随 Windows 显示语言；也可固定为 en-US 或 zh-CN。
+language = "system"
 
 [appearance]
 # system 跟随 Windows；也可选 light 或 dark。此设置实时生效。
@@ -637,7 +661,7 @@ bool updatePresentationToml(std::string_view source, std::string_view appearance
             candidateFonts.insert_or_assign("size_dip", candidateFontSize);
 
         std::ostringstream stream;
-        stream << "# Fcitx5 for Windows 用户配置。UTF-8（无 BOM）、LF。\n"
+        stream << "# Fcitx5 for Windows Next 用户配置。UTF-8（无 BOM）、LF。\n"
                   "# 此文件由 typed Control API 写入；可手工编辑，但未知字段会被严格拒绝。\n"
                   "# appearance 控制明暗与主题；candidate 控制候选布局；fonts 控制字体 fallback。\n"
                << toml::toml_formatter(root) << '\n';
@@ -684,7 +708,7 @@ bool resetPresentationToml(std::string_view source, std::string& output,
                 root.erase("fonts");
         }
         std::ostringstream stream;
-        stream << "# Fcitx5 for Windows 用户配置。UTF-8（无 BOM）、LF。\n"
+        stream << "# Fcitx5 for Windows Next 用户配置。UTF-8（无 BOM）、LF。\n"
                   "# Appearance Reset 删除外观 override；未写出的字段继续继承当前主题/默认值。\n"
                << toml::toml_formatter(root) << '\n';
         Config validated;
@@ -704,6 +728,7 @@ bool resetPresentationToml(std::string_view source, std::string& output,
 
 Config mergeConfig(const Config& base, const Config& overrideConfig) {
     Config result = base;
+    mergeOptional(result.uiLanguage, overrideConfig.uiLanguage);
     mergeOptional(result.appearanceMode, overrideConfig.appearanceMode);
     mergeOptional(result.theme, overrideConfig.theme);
     mergeOptional(result.orientation, overrideConfig.orientation);

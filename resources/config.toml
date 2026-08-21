@@ -1,6 +1,10 @@
-# Fcitx5 for Windows 用户配置。保存为 UTF-8（无 BOM）和 LF。
+# Fcitx5 for Windows Next 用户配置。保存为 UTF-8（无 BOM）和 LF。
 # 未写出的字段会继承当前主题；Reset 会删除 override，而不是复制默认值。
 format_version = 1
+
+[ui]
+# system 跟随 Windows 显示语言；也可固定为 en-US 或 zh-CN。
+language = "system"
 
 [appearance]
 # system 跟随 Windows；也可选 light 或 dark。此设置实时生效。

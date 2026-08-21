@@ -1,0 +1,15 @@
+[package]
+name = "fcitx5-package-core"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "fcitx5-package-core"
+path = "src/main.rs"
+
+[dependencies]
