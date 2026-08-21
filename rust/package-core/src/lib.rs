@@ -21,6 +21,8 @@ const MAX_PERMISSION_COUNT: usize = 32;
 const MAX_FILE_COUNT: usize = 4096;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const SUPPORTED_CORE_API: &str = "1";
 const SUPPORTED_ADDON_ABI: &str = "1";
 const SIGNATURE_ENVELOPE_CANONICALIZATION: &str = "fcitx5-windows-next-json-v1";
@@ -61,6 +63,181 @@ mod mldsa_verify_adapter {
             )
         };
         status == 0
+    }
+}
+
+#[cfg(windows)]
+mod miniz_archive_adapter {
+    #![allow(unsafe_code)]
+
+    use super::{archive_error, ArchiveEntry, ArchiveError, MAX_ARCHIVE_BYTES};
+    use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    #[repr(C)]
+    struct Fcitx5MinizEntry {
+        name: [c_char; 512],
+        uncompressed_size: u64,
+        directory: c_uint,
+        encrypted: c_uint,
+        supported: c_uint,
+        unix_symlink: c_uint,
+    }
+
+    unsafe extern "C" {
+        fn fcitx5_miniz_open_utf16(
+            path: *const u16,
+            maximum_archive_bytes: u64,
+            out_archive: *mut *mut c_void,
+        ) -> c_int;
+        fn fcitx5_miniz_close(archive: *mut c_void);
+        fn fcitx5_miniz_num_files(archive: *mut c_void) -> c_uint;
+        fn fcitx5_miniz_stat(
+            archive: *mut c_void,
+            index: c_uint,
+            out_entry: *mut Fcitx5MinizEntry,
+        ) -> c_int;
+        fn fcitx5_miniz_locate(
+            archive: *mut c_void,
+            name: *const c_char,
+            out_index: *mut c_uint,
+        ) -> c_int;
+        fn fcitx5_miniz_validate(archive: *mut c_void, index: c_uint) -> c_int;
+        fn fcitx5_miniz_extract(
+            archive: *mut c_void,
+            index: c_uint,
+            output: *mut u8,
+            output_size: usize,
+        ) -> c_int;
+    }
+
+    pub struct ZipArchive {
+        handle: *mut c_void,
+    }
+
+    impl ZipArchive {
+        pub fn open(path: &Path) -> Result<Self, ArchiveError> {
+            let mut wide_path: Vec<u16> = path.as_os_str().encode_wide().collect();
+            if wide_path.is_empty() {
+                return Err(archive_error(
+                    "invalid_archive",
+                    "unable to open package archive",
+                ));
+            }
+            wide_path.push(0);
+            let mut handle = std::ptr::null_mut();
+            let opened = unsafe {
+                fcitx5_miniz_open_utf16(wide_path.as_ptr(), MAX_ARCHIVE_BYTES, &mut handle)
+            };
+            if opened == 0 || handle.is_null() {
+                return Err(archive_error(
+                    "invalid_archive",
+                    "ZIP central directory is invalid",
+                ));
+            }
+            Ok(Self { handle })
+        }
+
+        pub fn len(&self) -> usize {
+            unsafe { fcitx5_miniz_num_files(self.handle) as usize }
+        }
+
+        pub fn stat(&self, index: usize) -> Result<ArchiveEntry, ArchiveError> {
+            let mut raw = Fcitx5MinizEntry {
+                name: [0; 512],
+                uncompressed_size: 0,
+                directory: 0,
+                encrypted: 0,
+                supported: 0,
+                unix_symlink: 0,
+            };
+            let ok = unsafe { fcitx5_miniz_stat(self.handle, index as c_uint, &mut raw) };
+            if ok == 0 {
+                return Err(archive_error(
+                    "invalid_archive",
+                    "archive entry metadata is invalid",
+                ));
+            }
+            let name = unsafe { CStr::from_ptr(raw.name.as_ptr()) }
+                .to_str()
+                .map_err(|_| {
+                    archive_error("unsafe_archive_path", "archive path is not valid UTF-8")
+                })?
+                .to_owned();
+            Ok(ArchiveEntry {
+                name,
+                uncompressed_size: raw.uncompressed_size,
+                directory: raw.directory != 0,
+                encrypted: raw.encrypted != 0,
+                supported: raw.supported != 0,
+                unix_symlink: raw.unix_symlink != 0,
+            })
+        }
+
+        pub fn locate(&self, name: &str) -> Result<usize, ArchiveError> {
+            let name = CString::new(name).map_err(|_| {
+                archive_error("unsafe_archive_path", "archive path contains a NUL byte")
+            })?;
+            let mut index = 0;
+            let ok = unsafe { fcitx5_miniz_locate(self.handle, name.as_ptr(), &mut index) };
+            if ok == 0 {
+                return Err(archive_error(
+                    "invalid_archive",
+                    "required archive entry is missing",
+                ));
+            }
+            Ok(index as usize)
+        }
+
+        pub fn validate(&self, index: usize) -> Result<(), ArchiveError> {
+            let ok = unsafe { fcitx5_miniz_validate(self.handle, index as c_uint) };
+            if ok == 0 {
+                return Err(archive_error(
+                    "invalid_archive",
+                    "archive entry integrity validation failed",
+                ));
+            }
+            Ok(())
+        }
+
+        pub fn extract(&self, index: usize, maximum_size: u64) -> Result<Vec<u8>, ArchiveError> {
+            let entry = self.stat(index)?;
+            if entry.directory
+                || entry.encrypted
+                || !entry.supported
+                || entry.unix_symlink
+                || entry.uncompressed_size > maximum_size
+                || entry.uncompressed_size > usize::MAX as u64
+            {
+                return Err(archive_error(
+                    "invalid_archive",
+                    "archive entry violates type or size constraints",
+                ));
+            }
+            let mut output = vec![0_u8; entry.uncompressed_size as usize];
+            let ok = unsafe {
+                fcitx5_miniz_extract(
+                    self.handle,
+                    index as c_uint,
+                    output.as_mut_ptr(),
+                    output.len(),
+                )
+            };
+            if ok == 0 {
+                return Err(archive_error(
+                    "invalid_archive",
+                    "archive entry failed integrity validation",
+                ));
+            }
+            Ok(output)
+        }
+    }
+
+    impl Drop for ZipArchive {
+        fn drop(&mut self) {
+            unsafe { fcitx5_miniz_close(self.handle) };
+        }
     }
 }
 
@@ -2329,11 +2506,137 @@ pub fn validate_archive_inventory(
     Ok(())
 }
 
+#[cfg(windows)]
+pub fn stage_validated_archive_zip(
+    archive_path: impl AsRef<Path>,
+    install_root: impl AsRef<Path>,
+    transaction_id: &str,
+) -> Result<PathBuf, StagingError> {
+    PackageId::parse(transaction_id)
+        .map_err(|_| staging_error("unsafe_path", "transaction id or install root is unsafe"))?;
+    let archive_path = archive_path.as_ref();
+    let install_root = install_root.as_ref();
+    if path_contains_reparse_component(archive_path).map_err(staging_io_error)?
+        || path_contains_reparse_component(install_root).map_err(staging_io_error)?
+    {
+        return Err(staging_error(
+            "unsafe_path",
+            "transaction id or install root is unsafe",
+        ));
+    }
+
+    let archive = miniz_archive_adapter::ZipArchive::open(archive_path)
+        .map_err(staging_from_archive_error)?;
+    let entries = read_zip_inventory(&archive).map_err(staging_from_archive_error)?;
+    let manifest_bytes = archive
+        .extract(
+            archive
+                .locate("manifest.json")
+                .map_err(staging_from_archive_error)?,
+            MAX_MANIFEST_BYTES as u64,
+        )
+        .map_err(staging_from_archive_error)?;
+    let signature = archive
+        .extract(
+            archive
+                .locate("manifest.sig")
+                .map_err(staging_from_archive_error)?,
+            MAX_SIGNATURE_BYTES,
+        )
+        .map_err(staging_from_archive_error)?;
+    let manifest_text = std::str::from_utf8(&manifest_bytes)
+        .map_err(|_| staging_error("invalid_manifest", "manifest is not valid UTF-8"))?;
+    let manifest = parse_manifest(manifest_text).map_err(staging_from_manifest_error)?;
+    validate_manifest_compatibility(&manifest, current_runtime_architecture())
+        .map_err(staging_from_compatibility_error)?;
+    validate_archive_inventory(&manifest, &entries).map_err(staging_from_archive_error)?;
+    for index in 0..archive.len() {
+        archive
+            .validate(index)
+            .map_err(staging_from_archive_error)?;
+    }
+
+    let staging_root = install_root.join("staging");
+    fs::create_dir_all(&staging_root).map_err(staging_io_error)?;
+    let extraction = staging_root.join(format!("{transaction_id}.extract"));
+    let staged = staging_root.join(transaction_id);
+    if extraction.exists() || staged.exists() {
+        return Err(staging_error(
+            "transaction_exists",
+            "staging transaction already exists",
+        ));
+    }
+
+    let result = (|| {
+        fs::create_dir_all(extraction.join("payload")).map_err(staging_io_error)?;
+        fs::write(extraction.join("manifest.json"), &manifest_bytes).map_err(staging_io_error)?;
+        fs::write(extraction.join("manifest.sig"), &signature).map_err(staging_io_error)?;
+        for file in manifest.files() {
+            let archive_name = format!("payload/{}", file.path().as_str());
+            let contents = archive
+                .extract(
+                    archive
+                        .locate(&archive_name)
+                        .map_err(staging_from_archive_error)?,
+                    file.size(),
+                )
+                .map_err(staging_from_archive_error)?;
+            let destination = join_package_path(&extraction.join("payload"), file.path());
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(staging_io_error)?;
+            }
+            fs::write(destination, contents).map_err(staging_io_error)?;
+        }
+        verify_payload_root(&manifest, extraction.join("payload"))?;
+        fs::rename(&extraction, &staged).map_err(staging_io_error)?;
+        Ok(staged.clone())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&extraction);
+        let _ = fs::remove_dir_all(&staged);
+    }
+    result
+}
+
+#[cfg(windows)]
+fn read_zip_inventory(
+    archive: &miniz_archive_adapter::ZipArchive,
+) -> Result<Vec<ArchiveEntry>, ArchiveError> {
+    let mut entries = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        entries.push(archive.stat(index)?);
+    }
+    Ok(entries)
+}
+
+#[cfg(all(windows, target_pointer_width = "64"))]
+fn current_runtime_architecture() -> &'static str {
+    "x64"
+}
+
+#[cfg(all(windows, not(target_pointer_width = "64")))]
+fn current_runtime_architecture() -> &'static str {
+    "x86"
+}
+
 fn archive_error(code: &'static str, message: impl Into<String>) -> ArchiveError {
     ArchiveError {
         code,
         message: message.into(),
     }
+}
+
+fn staging_from_archive_error(error: ArchiveError) -> StagingError {
+    staging_error(error.code, error.message)
+}
+
+fn staging_from_manifest_error(error: ManifestError) -> StagingError {
+    staging_error(error.code, error.message)
+}
+
+fn staging_from_compatibility_error(error: CompatibilityError) -> StagingError {
+    staging_error(error.code, error.message)
 }
 
 fn manifest_error(code: &'static str, message: impl Into<String>) -> ManifestError {
@@ -3672,6 +3975,93 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn archive_zip_staging_matches_cpp_extraction_policy() {
+        let hello_blake3 = blake3_digest(b"hello");
+        let hello_sha256 = sha256_digest(b"hello");
+        let manifest_text = manifest_v2(
+            "fcitx5-rime",
+            "1.0.0",
+            hello_blake3.as_str(),
+            5,
+            "official-2026-mldsa65",
+            Some(hello_sha256.as_str()),
+        );
+        let temp =
+            std::env::temp_dir().join(format!("fcitx5-package-core-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("temp should create");
+        let valid_archive = temp.join("valid.fcpkg");
+        write_store_zip_for_test(
+            &valid_archive,
+            &[
+                ("manifest.json", manifest_text.as_bytes()),
+                ("manifest.sig", b"signature"),
+                ("payload/bin/addon.dll", b"hello"),
+            ],
+        );
+        let install_root = temp.join("install");
+        let staged = stage_validated_archive_zip(&valid_archive, &install_root, "tx-zip")
+            .expect("ZIP archive should stage");
+        assert_eq!(
+            std::fs::read(staged.join("payload/bin/addon.dll")).expect("payload should read"),
+            b"hello"
+        );
+        assert!(staged.join("manifest.json").exists());
+        assert!(staged.join("manifest.sig").exists());
+
+        let traversal_archive = temp.join("traversal.fcpkg");
+        write_store_zip_for_test(
+            &traversal_archive,
+            &[
+                ("manifest.json", manifest_text.as_bytes()),
+                ("manifest.sig", b"signature"),
+                ("payload/bin/addon.dll", b"hello"),
+                ("payload/../escape.dll", b"escape"),
+            ],
+        );
+        assert_eq!(
+            stage_validated_archive_zip(&traversal_archive, &install_root, "tx-traversal")
+                .expect_err("traversal archive should fail")
+                .code(),
+            "unsafe_archive_path"
+        );
+
+        let collision_archive = temp.join("collision.fcpkg");
+        write_store_zip_for_test(
+            &collision_archive,
+            &[
+                ("manifest.json", manifest_text.as_bytes()),
+                ("manifest.sig", b"signature"),
+                ("payload/bin/addon.dll", b"hello"),
+                ("payload/BIN/ADDON.DLL", b"hello"),
+            ],
+        );
+        assert_eq!(
+            stage_validated_archive_zip(&collision_archive, &install_root, "tx-collision")
+                .expect_err("case-collision archive should fail")
+                .code(),
+            "unsafe_archive_path"
+        );
+
+        let missing_archive = temp.join("missing.fcpkg");
+        write_store_zip_for_test(
+            &missing_archive,
+            &[
+                ("manifest.json", manifest_text.as_bytes()),
+                ("manifest.sig", b"signature"),
+            ],
+        );
+        assert_eq!(
+            stage_validated_archive_zip(&missing_archive, &install_root, "tx-missing")
+                .expect_err("missing payload archive should fail")
+                .code(),
+            "invalid_archive"
+        );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
     #[test]
     fn lifecycle_state_machine_matches_cpp_lock_rules() {
         let rime = parse_manifest(&manifest_v1("fcitx5-rime", "1.0.0", &"a".repeat(64), 12))
@@ -4004,6 +4394,84 @@ mod tests {
             }
         }
         output
+    }
+
+    #[cfg(windows)]
+    fn write_store_zip_for_test(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        let mut archive = Vec::new();
+        let mut central_directory = Vec::new();
+        for (name, contents) in entries {
+            let offset = archive.len() as u32;
+            let name_bytes = name.as_bytes();
+            let crc = crc32_for_test(contents);
+            push_u32_le(&mut archive, 0x0403_4b50);
+            push_u16_le(&mut archive, 20);
+            push_u16_le(&mut archive, 0);
+            push_u16_le(&mut archive, 0);
+            push_u16_le(&mut archive, 0);
+            push_u16_le(&mut archive, 0);
+            push_u32_le(&mut archive, crc);
+            push_u32_le(&mut archive, contents.len() as u32);
+            push_u32_le(&mut archive, contents.len() as u32);
+            push_u16_le(&mut archive, name_bytes.len() as u16);
+            push_u16_le(&mut archive, 0);
+            archive.extend_from_slice(name_bytes);
+            archive.extend_from_slice(contents);
+
+            push_u32_le(&mut central_directory, 0x0201_4b50);
+            push_u16_le(&mut central_directory, 20);
+            push_u16_le(&mut central_directory, 20);
+            push_u16_le(&mut central_directory, 0);
+            push_u16_le(&mut central_directory, 0);
+            push_u16_le(&mut central_directory, 0);
+            push_u16_le(&mut central_directory, 0);
+            push_u32_le(&mut central_directory, crc);
+            push_u32_le(&mut central_directory, contents.len() as u32);
+            push_u32_le(&mut central_directory, contents.len() as u32);
+            push_u16_le(&mut central_directory, name_bytes.len() as u16);
+            push_u16_le(&mut central_directory, 0);
+            push_u16_le(&mut central_directory, 0);
+            push_u16_le(&mut central_directory, 0);
+            push_u16_le(&mut central_directory, 0);
+            push_u32_le(&mut central_directory, 0);
+            push_u32_le(&mut central_directory, offset);
+            central_directory.extend_from_slice(name_bytes);
+        }
+        let central_offset = archive.len() as u32;
+        let central_size = central_directory.len() as u32;
+        archive.extend_from_slice(&central_directory);
+        push_u32_le(&mut archive, 0x0605_4b50);
+        push_u16_le(&mut archive, 0);
+        push_u16_le(&mut archive, 0);
+        push_u16_le(&mut archive, entries.len() as u16);
+        push_u16_le(&mut archive, entries.len() as u16);
+        push_u32_le(&mut archive, central_size);
+        push_u32_le(&mut archive, central_offset);
+        push_u16_le(&mut archive, 0);
+        std::fs::write(path, archive).expect("ZIP fixture should write");
+    }
+
+    #[cfg(windows)]
+    fn crc32_for_test(bytes: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffff_u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                let mask = 0_u32.wrapping_sub(crc & 1);
+                crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+            }
+        }
+        !crc
+    }
+
+    #[cfg(windows)]
+    fn push_u16_le(output: &mut Vec<u8>, value: u16) {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+
+    #[cfg(windows)]
+    fn push_u32_le(output: &mut Vec<u8>, value: u32) {
+        output.extend_from_slice(&value.to_le_bytes());
     }
 
     fn parse_path_cases(corpus: &str) -> Vec<(String, bool)> {

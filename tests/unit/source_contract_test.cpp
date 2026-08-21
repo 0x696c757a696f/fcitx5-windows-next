@@ -131,6 +131,8 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/src/lib.rs");
     const auto rustPackageCoreBuild =
         read_text(sourceRoot / "rust/package-core/build.rs");
+    const auto rustPackageCoreMiniz =
+        read_text(sourceRoot / "rust/package-core/c/miniz_archive.c");
     const auto rustPackageCoreBinary =
         read_text(sourceRoot / "rust/package-core/src/main.rs");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
@@ -165,9 +167,12 @@ int main(int argc, char** argv) {
         rustPackageCore.find("path_contains_reparse_component") == std::string::npos ||
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
+        rustPackageCore.find("stage_validated_archive_zip") == std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
         rustPackageCoreBuild.find("mldsa_native.c") == std::string::npos ||
         rustPackageCoreBuild.find("fcitx5_mldsa65_config.h") == std::string::npos ||
+        rustPackageCoreBuild.find("miniz.c") == std::string::npos ||
+        rustPackageCoreMiniz.find("mz_zip_reader_extract_to_mem") == std::string::npos ||
         rustPackageCoreBinary.find("--self-check") == std::string::npos ||
         rustPackageCoreBinary.find("--audit-self-pe") == std::string::npos ||
         rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
@@ -176,6 +181,7 @@ int main(int argc, char** argv) {
         cmakeSource.find("rust-package-core-packaged-artifact-smoke") == std::string::npos ||
         cmakeSource.find("CARGO_TARGET_DIR") == std::string::npos ||
         cmakeSource.find("FCITX_RUST_TARGET") == std::string::npos ||
+        cmakeSource.find("FCITX_MINIZ_SOURCE_DIR") == std::string::npos ||
         rustPackageCoreArtifactSmoke.find("fcitx5-package-core-smoke.zip") ==
             std::string::npos ||
         rustPackageCoreArtifactSmoke.find("CargoTarget") == std::string::npos ||

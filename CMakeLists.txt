@@ -620,6 +620,7 @@ if(BUILD_TESTING)
         "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
         "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+        "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --target
         "${FCITX_RUST_TARGET}"
@@ -632,6 +633,7 @@ if(BUILD_TESTING)
         "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
         "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+        "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --bin
         fcitx5-package-core --target "${FCITX_RUST_TARGET}" -- --self-check --audit-self-pe --trusted-keys
@@ -644,6 +646,7 @@ if(BUILD_TESTING)
         "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
         "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+        "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --target
         "${FCITX_RUST_TARGET}")
@@ -655,6 +658,7 @@ if(BUILD_TESTING)
         "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
         "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+        "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --bin
         fcitx5-package-core --target "${FCITX_RUST_TARGET}" -- --self-check --audit-self-pe --trusted-keys
@@ -668,6 +672,7 @@ if(BUILD_TESTING)
           "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
           "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
           "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+          "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
           "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-rust-package-core-artifact.ps1"
           -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
@@ -679,6 +684,7 @@ if(BUILD_TESTING)
           "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
           "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
           "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+          "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
           "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-rust-package-core-artifact.ps1"
           -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}")
