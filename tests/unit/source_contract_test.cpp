@@ -152,6 +152,9 @@ int main(int argc, char** argv) {
         rustPackageCore.find("sha256_digest") == std::string::npos ||
         rustPackageCore.find("blake3_digest") == std::string::npos ||
         rustPackageCore.find("verify_payload_bytes") == std::string::npos ||
+        rustPackageCore.find("verify_payload_root") == std::string::npos ||
+        rustPackageCore.find("stage_verified_payload_tree") == std::string::npos ||
+        rustPackageCore.find("path_contains_reparse_component") == std::string::npos ||
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||

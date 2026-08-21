@@ -3,6 +3,11 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::fs;
+use std::io;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+use std::path::{Component, Path, PathBuf};
 
 const MANIFEST_FORMAT_VERSION_V1: u64 = 1;
 const MANIFEST_FORMAT_VERSION_V2: u64 = 2;
@@ -1347,6 +1352,247 @@ fn payload_error(message: impl Into<String>) -> PayloadError {
     PayloadError {
         code: "payload_mismatch",
         message: message.into(),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StagingError {
+    code: &'static str,
+    message: String,
+}
+
+impl StagingError {
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+}
+
+impl fmt::Display for StagingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for StagingError {}
+
+#[cfg(windows)]
+pub fn verify_payload_root(
+    manifest: &Manifest,
+    payload_root: impl AsRef<Path>,
+) -> Result<(), StagingError> {
+    let payload_root = payload_root.as_ref();
+    let observed = read_payload_bytes_from_root(manifest, payload_root)?;
+    verify_payload_bytes(manifest, &observed).map_err(staging_from_payload_error)?;
+    reject_undeclared_payload_files(manifest, payload_root)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn stage_verified_payload_tree(
+    manifest: &Manifest,
+    manifest_bytes: &[u8],
+    payload_root: impl AsRef<Path>,
+    install_root: impl AsRef<Path>,
+    transaction_id: &str,
+    signature: &[u8],
+) -> Result<PathBuf, StagingError> {
+    PackageId::parse(transaction_id)
+        .map_err(|_| staging_error("unsafe_path", "transaction id or install root is unsafe"))?;
+    let payload_root = payload_root.as_ref();
+    let install_root = install_root.as_ref();
+    if path_contains_reparse_component(install_root).map_err(staging_io_error)? {
+        return Err(staging_error(
+            "unsafe_path",
+            "transaction id or install root is unsafe",
+        ));
+    }
+    verify_payload_root(manifest, payload_root)?;
+
+    let staging_root = install_root.join("staging");
+    fs::create_dir_all(&staging_root).map_err(staging_io_error)?;
+    let staged = staging_root.join(transaction_id);
+    if staged.exists() {
+        return Err(staging_error(
+            "transaction_exists",
+            "staging transaction already exists",
+        ));
+    }
+
+    let result = (|| {
+        fs::create_dir_all(staged.join("payload")).map_err(staging_io_error)?;
+        for file in manifest.files() {
+            let source = join_package_path(payload_root, file.path());
+            let destination = join_package_path(&staged.join("payload"), file.path());
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(staging_io_error)?;
+            }
+            fs::copy(source, destination).map_err(staging_io_error)?;
+        }
+        fs::write(staged.join("manifest.json"), manifest_bytes).map_err(staging_io_error)?;
+        fs::write(staged.join("manifest.sig"), signature).map_err(staging_io_error)?;
+        verify_payload_root(manifest, staged.join("payload"))?;
+        Ok(staged.clone())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staged);
+    }
+    result
+}
+
+#[cfg(windows)]
+fn read_payload_bytes_from_root(
+    manifest: &Manifest,
+    payload_root: &Path,
+) -> Result<Vec<PayloadBytesEntry>, StagingError> {
+    if !payload_root.is_dir()
+        || path_contains_reparse_component(payload_root).map_err(staging_io_error)?
+    {
+        return Err(staging_error(
+            "unsafe_payload",
+            "payload root is missing or contains a reparse point",
+        ));
+    }
+
+    let mut observed = Vec::with_capacity(manifest.files().len());
+    for file in manifest.files() {
+        let path = join_package_path(payload_root, file.path());
+        if path_contains_reparse_component(&path).map_err(staging_io_error)? {
+            return Err(staging_error(
+                "unsafe_payload",
+                "payload contains a reparse point",
+            ));
+        }
+        let metadata = fs::metadata(&path).map_err(|_| {
+            staging_error("payload_mismatch", "payload file does not match manifest")
+        })?;
+        if !metadata.is_file() || metadata.len() != file.size() {
+            return Err(staging_error(
+                "payload_mismatch",
+                "payload file does not match manifest",
+            ));
+        }
+        let bytes = fs::read(&path).map_err(staging_io_error)?;
+        observed.push(PayloadBytesEntry::new(file.path().clone(), bytes));
+    }
+    Ok(observed)
+}
+
+#[cfg(windows)]
+fn reject_undeclared_payload_files(
+    manifest: &Manifest,
+    payload_root: &Path,
+) -> Result<(), StagingError> {
+    let expected = manifest
+        .files()
+        .iter()
+        .map(|file| file.path().as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    reject_undeclared_payload_files_in(payload_root, payload_root, &expected)
+}
+
+#[cfg(windows)]
+fn reject_undeclared_payload_files_in(
+    payload_root: &Path,
+    directory: &Path,
+    expected: &BTreeSet<String>,
+) -> Result<(), StagingError> {
+    for entry in fs::read_dir(directory).map_err(|_| {
+        staging_error(
+            "unsafe_payload",
+            "payload directory cannot be enumerated safely",
+        )
+    })? {
+        let entry = entry.map_err(|_| {
+            staging_error(
+                "unsafe_payload",
+                "payload directory cannot be enumerated safely",
+            )
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(staging_io_error)?;
+        if metadata_has_reparse_point(&metadata) {
+            return Err(staging_error(
+                "unsafe_payload",
+                "payload contains a reparse point",
+            ));
+        }
+        if metadata.is_dir() {
+            reject_undeclared_payload_files_in(payload_root, &path, expected)?;
+        } else if metadata.is_file() {
+            let relative = relative_package_path(payload_root, &path).ok_or_else(|| {
+                staging_error("payload_mismatch", "payload contains an undeclared file")
+            })?;
+            if !expected.contains(&relative) {
+                return Err(staging_error(
+                    "payload_mismatch",
+                    "payload contains an undeclared file",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn join_package_path(root: &Path, relative: &SafeRelativePackagePath) -> PathBuf {
+    let mut path = root.to_path_buf();
+    for component in relative.as_str().split('/') {
+        path.push(component);
+    }
+    path
+}
+
+#[cfg(windows)]
+fn relative_package_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut components = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(value) => components.push(value.to_str()?),
+            _ => return None,
+        }
+    }
+    let joined = components.join("/");
+    is_safe_relative_package_path(&joined).then_some(joined)
+}
+
+#[cfg(windows)]
+fn path_contains_reparse_component(path: &Path) -> io::Result<bool> {
+    for ancestor in path.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata_has_reparse_point(&metadata) => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(windows)]
+fn metadata_has_reparse_point(metadata: &fs::Metadata) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+fn staging_error(code: &'static str, message: impl Into<String>) -> StagingError {
+    StagingError {
+        code,
+        message: message.into(),
+    }
+}
+
+fn staging_io_error(error: io::Error) -> StagingError {
+    staging_error("io_error", error.to_string())
+}
+
+fn staging_from_payload_error(error: PayloadError) -> StagingError {
+    StagingError {
+        code: error.code,
+        message: error.message,
     }
 }
 
@@ -3156,6 +3402,51 @@ mod tests {
                 ArchiveEntry::file("payload/bin/addon.dll", 12).with_unix_symlink(),
             ],
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn payload_staging_matches_cpp_filesystem_adapter_policy() {
+        let hello_blake3 = blake3_digest(b"hello");
+        let hello_sha256 = sha256_digest(b"hello");
+        let manifest = parse_manifest(&manifest_v2(
+            "fcitx5-rime",
+            "1.0.0",
+            hello_blake3.as_str(),
+            5,
+            "official-2026-mldsa65",
+            Some(hello_sha256.as_str()),
+        ))
+        .expect("manifest should parse");
+        let temp =
+            std::env::temp_dir().join(format!("fcitx5-package-core-stage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join("payload/bin")).expect("payload root should create");
+        std::fs::write(temp.join("payload/bin/addon.dll"), b"hello")
+            .expect("payload file should write");
+        verify_payload_root(&manifest, temp.join("payload")).expect("payload root should verify");
+        let install_root = temp.join("install");
+        let staged = stage_verified_payload_tree(
+            &manifest,
+            br#"{"format_version":2,"id":"fcitx5-rime"}"#,
+            temp.join("payload"),
+            &install_root,
+            "tx-one",
+            b"signature",
+        )
+        .expect("payload should stage");
+        assert!(staged.join("payload/bin/addon.dll").exists());
+        assert!(staged.join("manifest.json").exists());
+        assert!(staged.join("manifest.sig").exists());
+        std::fs::write(temp.join("payload/bin/undeclared.dll"), b"oops")
+            .expect("undeclared file should write");
+        assert_eq!(
+            verify_payload_root(&manifest, temp.join("payload"))
+                .expect_err("undeclared file should fail")
+                .code(),
+            "payload_mismatch"
+        );
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
