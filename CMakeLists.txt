@@ -384,11 +384,38 @@ target_link_libraries(fcitx5_bootstrap PRIVATE fcitx5::windows_common shell32 us
 fcitx_apply_project_options(fcitx5_bootstrap)
 fcitx_apply_binary_hardening(fcitx5_bootstrap)
 
-add_executable(fcitx5_package src/package/package_main.cpp)
-set_target_properties(fcitx5_package PROPERTIES OUTPUT_NAME "fcitx5-package")
-target_link_libraries(fcitx5_package PRIVATE fcitx5::windows_common fcitx5::package_core)
-fcitx_apply_project_options(fcitx5_package)
-fcitx_apply_binary_hardening(fcitx5_package)
+find_program(FCITX_CARGO_EXECUTABLE cargo REQUIRED)
+find_program(FCITX_PWSH_EXECUTABLE pwsh powershell REQUIRED)
+set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
+set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
+set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
+set(FCITX_CMAKE_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
+if(NOT FCITX_CMAKE_PLATFORM)
+  set(FCITX_CMAKE_PLATFORM "${CMAKE_GENERATOR_PLATFORM}")
+endif()
+if(FCITX_CMAKE_PLATFORM MATCHES "^[Ww]in32$" OR CMAKE_SIZEOF_VOID_P EQUAL 4)
+  set(FCITX_RUST_TARGET "i686-pc-windows-msvc")
+elseif(FCITX_CMAKE_PLATFORM MATCHES "^[Aa][Rr][Mm]64$" OR
+       CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$")
+  set(FCITX_RUST_TARGET "aarch64-pc-windows-msvc")
+else()
+  set(FCITX_RUST_TARGET "x86_64-pc-windows-msvc")
+endif()
+
+add_custom_target(
+  fcitx5_package ALL
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-package.exe"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+    "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-package-cli.ps1"
+    -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
+    -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-package CLI")
 
 add_executable(fcitx5_downloader src/package/downloader_main.cpp)
 set_target_properties(fcitx5_downloader PROPERTIES OUTPUT_NAME "fcitx5-downloader")
@@ -512,7 +539,8 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_register_artifact_test)
   add_test(NAME register-artifact-validation
            COMMAND fcitx5_register_artifact_test $<TARGET_FILE:fcitx5_register>)
-  add_test(NAME package-version COMMAND fcitx5_package --version)
+  add_test(NAME package-version
+           COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-package.exe" --version)
   add_executable(fcitx5_deployment_core_test tests/unit/deployment_core_test.cpp)
   target_link_libraries(fcitx5_deployment_core_test PRIVATE fcitx5::deployment_core)
   fcitx_apply_project_options(fcitx5_deployment_core_test)

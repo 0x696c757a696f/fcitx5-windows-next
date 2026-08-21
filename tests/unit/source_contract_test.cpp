@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
         packageCorpus.find("COM9.log") == std::string::npos) {
         return fail("REG-PKG-WINPATH-001: package path policy must have shared hostile Windows corpus and collision/link guards");
     }
+    const auto rustPackageCliBuild = read_text(sourceRoot / "tools/build-rust-package-cli.ps1");
     const auto rustToolchain = read_text(sourceRoot / "rust-toolchain.toml");
     const auto cargoManifest = read_text(sourceRoot / "Cargo.toml");
     const auto cargoLock = read_text(sourceRoot / "Cargo.lock");
@@ -189,8 +190,12 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
         rustPackageCoreBinary.find("verify_signature_envelope") == std::string::npos ||
+        rustPackageCliBuild.find("fcitx5-package.exe") == std::string::npos ||
+        rustPackageCliBuild.find("fcitx5-package-core.exe") == std::string::npos ||
+        rustPackageCliBuild.find("--bin fcitx5-package-core") == std::string::npos ||
         cmakeSource.find("rust-package-core-artifact-smoke") == std::string::npos ||
         cmakeSource.find("rust-package-core-packaged-artifact-smoke") == std::string::npos ||
+        cmakeSource.find("Building Rust fcitx5-package CLI") == std::string::npos ||
         cmakeSource.find("CARGO_TARGET_DIR") == std::string::npos ||
         cmakeSource.find("FCITX_RUST_TARGET") == std::string::npos ||
         cmakeSource.find("FCITX_MINIZ_SOURCE_DIR") == std::string::npos ||

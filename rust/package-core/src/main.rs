@@ -17,7 +17,7 @@ use fcitx5_package_core::{
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("fcitx5-package-core: {error}");
+        eprintln!("fcitx5-package: {error}");
         std::process::exit(1);
     }
 }
@@ -31,7 +31,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--version" => {
-                println!("fcitx5-package-core {}", env!("CARGO_PKG_VERSION"));
+                println!("fcitx5-package {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             "--validate-manifest" => {
@@ -523,7 +523,7 @@ fn read_u32(image: &[u8], offset: usize) -> Result<u32, Box<dyn Error>> {
 
 fn print_usage() {
     println!(
-        "Usage:\n  fcitx5-package-core --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package-core --validate-manifest MANIFEST\n  fcitx5-package-core --validate-keyring KEYRING\n  fcitx5-package-core --install ARCHIVE INSTALL_ROOT TRANSACTION_ID KEYRING\n  fcitx5-package-core --repair INSTALL_ROOT KEYRING\n  fcitx5-package-core --verify-repository INDEX SIGNATURE KEYRING [CHANNEL]\n  fcitx5-package-core --verify-repository-v2 INDEX SIG_JSON KEYRING [CHANNEL]\n  fcitx5-package-core --verify-manifest-v2 MANIFEST SIG_JSON KEYRING\n  fcitx5-package-core --list INSTALL_ROOT\n  fcitx5-package-core --state INSTALL_ROOT PACKAGE_ID STATE\n  fcitx5-package-core --mark-remove INSTALL_ROOT PACKAGE_ID\n  fcitx5-package-core --finalize-remove INSTALL_ROOT PACKAGE_ID"
+        "Usage:\n  fcitx5-package --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package --validate-manifest MANIFEST\n  fcitx5-package --validate-keyring KEYRING\n  fcitx5-package --install ARCHIVE INSTALL_ROOT TRANSACTION_ID KEYRING\n  fcitx5-package --repair INSTALL_ROOT KEYRING\n  fcitx5-package --verify-repository INDEX SIGNATURE KEYRING [CHANNEL]\n  fcitx5-package --verify-repository-v2 INDEX SIG_JSON KEYRING [CHANNEL]\n  fcitx5-package --verify-manifest-v2 MANIFEST SIG_JSON KEYRING\n  fcitx5-package --list INSTALL_ROOT\n  fcitx5-package --state INSTALL_ROOT PACKAGE_ID STATE\n  fcitx5-package --mark-remove INSTALL_ROOT PACKAGE_ID\n  fcitx5-package --finalize-remove INSTALL_ROOT PACKAGE_ID"
     );
 }
 
