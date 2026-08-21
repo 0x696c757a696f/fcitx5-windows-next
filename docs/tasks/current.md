@@ -1,20 +1,18 @@
-# RUST-R1-01 Rust workspace + package core/path model
+# RUST-R1-02 Rust repository metadata / anti-rollback model
 
-**State:** CURRENT
-**Canonical task:** `docs/tasks/rust/R1-01-PACKAGE-CORE.md`
+**State:** FUTURE-GATED
+**Canonical task:** `docs/tasks/rust/R1-02-REPOSITORY.md`
 
 ## Gate
 
-Start only after the C++ package/path/signature semantics and hostile-path corpus remain green, and after release intent selects Rust R1 work explicitly.
+Start only after `RUST-R1-01` is complete and repository-state semantics remain green.
 
 ## Can prepare now
 
-- Keep the package/path corpus frozen and documented.
-- Inventory C++ package-core behavior that Rust must match.
-- Prepare dependency/SBOM/license review criteria for future Cargo dependencies.
+- Keep repository rollback/channel/signature fixtures visible and documented.
+- Identify the exact C++ repository-state API boundary for future differential tests.
 
 ## Must not do before gate opens
 
-- Do not create a permanent C++/Rust runtime selector.
-- Do not reinterpret Windows package path policy.
-- Do not add Rust workspace/toolchain files as drive-by refactoring unless this real target starts.
+- Do not merge downloader/network behavior into repository metadata work.
+- Do not change rollback policy while preparing Rust migration.
