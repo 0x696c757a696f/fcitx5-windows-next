@@ -5,9 +5,11 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use fcitx5_package_core::{
-    is_safe_relative_package_path, parse_manifest, parse_signature_envelope, parse_trusted_keys,
+    finalize_installed_package_removal, is_safe_relative_package_path,
+    mark_installed_package_for_removal, parse_manifest, parse_signature_envelope,
+    parse_trusted_keys, read_installed_lockfile, set_installed_package_state,
     upsert_installed_lock_entry, validate_manifest_compatibility, verify_signature_envelope,
-    HexDigest32, PackageId, SignedObject, TrustAlgorithm,
+    HexDigest32, PackageId, PackageLifecycleState, SignedObject, TrustAlgorithm,
 };
 
 fn main() {
@@ -67,6 +69,41 @@ fn run() -> Result<(), Box<dyn Error>> {
                     manifest.key_id(),
                 )?;
                 println!("manifest_signature=verified");
+                return Ok(());
+            }
+            "--list" => {
+                let install_root = args.next().ok_or("--list requires INSTALL_ROOT")?;
+                for entry in read_installed_lockfile(install_root)? {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        entry.id().as_str(),
+                        entry.version(),
+                        entry.state().as_str(),
+                        entry.manifest_sha256().as_str()
+                    );
+                }
+                return Ok(());
+            }
+            "--state" => {
+                let install_root = args.next().ok_or("--state requires INSTALL_ROOT")?;
+                let package_id = args.next().ok_or("--state requires PACKAGE_ID")?;
+                let state = args.next().ok_or("--state requires STATE")?;
+                let state = parse_cli_lifecycle_state(&state)?;
+                set_installed_package_state(install_root, &package_id, state)?;
+                return Ok(());
+            }
+            "--mark-remove" => {
+                let install_root = args.next().ok_or("--mark-remove requires INSTALL_ROOT")?;
+                let package_id = args.next().ok_or("--mark-remove requires PACKAGE_ID")?;
+                mark_installed_package_for_removal(install_root, &package_id)?;
+                return Ok(());
+            }
+            "--finalize-remove" => {
+                let install_root = args
+                    .next()
+                    .ok_or("--finalize-remove requires INSTALL_ROOT")?;
+                let package_id = args.next().ok_or("--finalize-remove requires PACKAGE_ID")?;
+                finalize_installed_package_removal(install_root, &package_id)?;
                 return Ok(());
             }
             "--self-check" => self_check = true,
@@ -172,6 +209,19 @@ fn print_manifest(manifest: &fcitx5_package_core::Manifest, verified: bool) {
         if verified { "true" } else { "false" }
     );
     println!("permissions={}", manifest.permissions().join(","));
+}
+
+fn parse_cli_lifecycle_state(value: &str) -> Result<PackageLifecycleState, Box<dyn Error>> {
+    match value {
+        "installed" => Ok(PackageLifecycleState::Installed),
+        "enabled" => Ok(PackageLifecycleState::Enabled),
+        "disabled" => Ok(PackageLifecycleState::Disabled),
+        "pending_update" => Ok(PackageLifecycleState::PendingUpdate),
+        "pending_remove" => Ok(PackageLifecycleState::PendingRemove),
+        "broken" => Ok(PackageLifecycleState::Broken),
+        "quarantined" => Ok(PackageLifecycleState::Quarantined),
+        _ => Err("package lifecycle state is invalid".into()),
+    }
 }
 
 fn ensure(condition: bool, message: &'static str) -> Result<(), Box<dyn Error>> {
@@ -347,7 +397,7 @@ fn read_u32(image: &[u8], offset: usize) -> Result<u32, Box<dyn Error>> {
 
 fn print_usage() {
     println!(
-        "Usage:\n  fcitx5-package-core --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package-core --validate-manifest MANIFEST\n  fcitx5-package-core --validate-keyring KEYRING\n  fcitx5-package-core --verify-manifest-v2 MANIFEST SIG_JSON KEYRING"
+        "Usage:\n  fcitx5-package-core --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package-core --validate-manifest MANIFEST\n  fcitx5-package-core --validate-keyring KEYRING\n  fcitx5-package-core --verify-manifest-v2 MANIFEST SIG_JSON KEYRING\n  fcitx5-package-core --list INSTALL_ROOT\n  fcitx5-package-core --state INSTALL_ROOT PACKAGE_ID STATE\n  fcitx5-package-core --mark-remove INSTALL_ROOT PACKAGE_ID\n  fcitx5-package-core --finalize-remove INSTALL_ROOT PACKAGE_ID"
     );
 }
 

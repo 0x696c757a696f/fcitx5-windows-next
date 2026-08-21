@@ -169,6 +169,9 @@ int main(int argc, char** argv) {
         rustPackageCore.find("read_installed_lockfile") == std::string::npos ||
         rustPackageCore.find("write_installed_lockfile_atomic") == std::string::npos ||
         rustPackageCore.find("activate_staged_payload_tree") == std::string::npos ||
+        rustPackageCore.find("set_installed_package_state") == std::string::npos ||
+        rustPackageCore.find("mark_installed_package_for_removal") == std::string::npos ||
+        rustPackageCore.find("finalize_installed_package_removal") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
         rustPackageCore.find("stage_validated_archive_zip") == std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
@@ -180,6 +183,8 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("--validate-manifest") == std::string::npos ||
         rustPackageCoreBinary.find("--validate-keyring") == std::string::npos ||
         rustPackageCoreBinary.find("--verify-manifest-v2") == std::string::npos ||
+        rustPackageCoreBinary.find("--mark-remove") == std::string::npos ||
+        rustPackageCoreBinary.find("--finalize-remove") == std::string::npos ||
         rustPackageCoreBinary.find("--audit-self-pe") == std::string::npos ||
         rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||

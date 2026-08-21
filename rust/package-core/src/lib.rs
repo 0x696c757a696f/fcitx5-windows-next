@@ -2390,6 +2390,89 @@ pub fn activate_staged_payload_tree(
     Ok(())
 }
 
+#[cfg(windows)]
+pub fn set_installed_package_state(
+    install_root: impl AsRef<Path>,
+    package_id: &str,
+    state: PackageLifecycleState,
+) -> Result<(), LifecycleError> {
+    let install_root = install_root.as_ref();
+    let mut lock = read_installed_lockfile(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
+    set_package_state_entries(&mut lock, package_id, state)?;
+    write_installed_lockfile_atomic(install_root, &lock)
+        .map_err(|error| lifecycle_error(error.code, error.message))
+}
+
+#[cfg(windows)]
+pub fn mark_installed_package_for_removal(
+    install_root: impl AsRef<Path>,
+    package_id: &str,
+) -> Result<(), LifecycleError> {
+    let install_root = install_root.as_ref();
+    let mut lock = read_installed_lockfile(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
+    let manifests = read_installed_manifests(install_root, &lock)?;
+    mark_package_for_removal_entries(&mut lock, &manifests, package_id)?;
+    write_installed_lockfile_atomic(install_root, &lock)
+        .map_err(|error| lifecycle_error(error.code, error.message))
+}
+
+#[cfg(windows)]
+pub fn finalize_installed_package_removal(
+    install_root: impl AsRef<Path>,
+    package_id: &str,
+) -> Result<(), LifecycleError> {
+    let install_root = install_root.as_ref();
+    let mut lock = read_installed_lockfile(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
+    finalize_package_removal_entries(&mut lock, package_id)?;
+    write_installed_lockfile_atomic(install_root, &lock)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
+    let package_id = PackageId::parse(package_id).map_err(|_| {
+        lifecycle_error("invalid_state", "package id or lifecycle state is invalid")
+    })?;
+    fs::remove_dir_all(install_root.join("versions").join(package_id.as_str())).map_err(|_| {
+        lifecycle_error(
+            "remove_pending",
+            "package deactivated but payload cleanup must be retried",
+        )
+    })?;
+    fs::remove_dir_all(install_root.join("manifests").join(package_id.as_str())).map_err(|_| {
+        lifecycle_error(
+            "remove_pending",
+            "package deactivated but metadata cleanup must be retried",
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn read_installed_manifests(
+    install_root: &Path,
+    lock: &[LockEntry],
+) -> Result<Vec<Manifest>, LifecycleError> {
+    let mut manifests = Vec::new();
+    for entry in lock {
+        let path = install_root
+            .join("manifests")
+            .join(entry.id().as_str())
+            .join(format!("{}.json", entry.version()));
+        let bytes = fs::read_to_string(path)
+            .map_err(|_| lifecycle_error("package_not_found", "package manifest is unavailable"))?;
+        let manifest = parse_manifest(&bytes)
+            .map_err(|_| lifecycle_error("package_not_found", "package manifest is unavailable"))?;
+        if manifest.id() != entry.id() || manifest.version() != entry.version() {
+            return Err(lifecycle_error(
+                "package_not_found",
+                "package manifest is unavailable",
+            ));
+        }
+        manifests.push(manifest);
+    }
+    Ok(manifests)
+}
+
 fn lockfile_to_json(entries: &[LockEntry]) -> String {
     let mut output = String::from("{\n  \"format_version\": 1,\n  \"packages\": [");
     for (index, entry) in entries.iter().enumerate() {
