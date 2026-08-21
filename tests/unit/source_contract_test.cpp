@@ -148,6 +148,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("resolve_exact_dependencies") == std::string::npos ||
         rustPackageCore.find("verify_payload_inventory") == std::string::npos ||
         rustPackageCore.find("verify_payload_digests") == std::string::npos ||
+        rustPackageCore.find("sha256_digest") == std::string::npos ||
+        rustPackageCore.find("verify_payload_sha256_bytes") == std::string::npos ||
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
