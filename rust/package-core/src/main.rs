@@ -5,11 +5,14 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use fcitx5_package_core::{
-    finalize_installed_package_removal, is_safe_relative_package_path,
-    mark_installed_package_for_removal, parse_manifest, parse_signature_envelope,
-    parse_trusted_keys, read_installed_lockfile, set_installed_package_state,
-    upsert_installed_lock_entry, validate_manifest_compatibility, verify_signature_envelope,
-    HexDigest32, PackageId, PackageLifecycleState, SignedObject, TrustAlgorithm,
+    activate_staged_payload_tree, finalize_installed_package_removal,
+    is_safe_relative_package_path, mark_installed_package_for_removal, parse_manifest,
+    parse_signature_envelope, parse_trusted_keys, read_installed_lockfile,
+    set_installed_package_state, sha256_digest, stage_validated_archive_zip,
+    upsert_installed_lock_entry, validate_manifest_compatibility, verify_manifest_signature,
+    verify_payload_root, verify_repository_index, verify_repository_index_envelope,
+    verify_signature_envelope, HexDigest32, PackageId, PackageLifecycleState, RepositoryIndex,
+    SignedObject, TrustAlgorithm, TrustedKey,
 };
 
 fn main() {
@@ -69,6 +72,65 @@ fn run() -> Result<(), Box<dyn Error>> {
                     manifest.key_id(),
                 )?;
                 println!("manifest_signature=verified");
+                return Ok(());
+            }
+            "--install" => {
+                let archive_path = args.next().ok_or("--install requires ARCHIVE")?;
+                let install_root = args.next().ok_or("--install requires INSTALL_ROOT")?;
+                let transaction_id = args.next().ok_or("--install requires TRANSACTION_ID")?;
+                let keyring_path = args.next().ok_or("--install requires KEYRING")?;
+                let keys = read_trusted_keys(keyring_path)?;
+                let staged = stage_validated_archive_zip(
+                    archive_path,
+                    &install_root,
+                    &transaction_id,
+                    &keys,
+                )?;
+                let manifest_bytes = read_bounded_bytes(staged.join("manifest.json"), 1024 * 1024)?;
+                let manifest_text = std::str::from_utf8(&manifest_bytes)?;
+                let manifest = parse_manifest(manifest_text)?;
+                activate_staged_payload_tree(&staged, install_root, &keys)?;
+                print_manifest(&manifest, true);
+                return Ok(());
+            }
+            "--repair" => {
+                let install_root = args.next().ok_or("--repair requires INSTALL_ROOT")?;
+                let keyring_path = args.next().ok_or("--repair requires KEYRING")?;
+                let keys = read_trusted_keys(keyring_path)?;
+                verify_installed_packages(&PathBuf::from(install_root), &keys)?;
+                println!("repair=verified");
+                return Ok(());
+            }
+            "--verify-repository" => {
+                let index_path = args.next().ok_or("--verify-repository requires INDEX")?;
+                let signature_path = args
+                    .next()
+                    .ok_or("--verify-repository requires SIGNATURE")?;
+                let keyring_path = args.next().ok_or("--verify-repository requires KEYRING")?;
+                let channel = args.next().unwrap_or_else(|| "stable".to_owned());
+                let index_bytes = read_bounded_bytes(index_path, 1024 * 1024)?;
+                let signature = read_bounded_bytes(signature_path, 16 * 1024)?;
+                let keys = read_trusted_keys(keyring_path)?;
+                let index = verify_repository_index(&index_bytes, &signature, &keys, &channel)?;
+                print_repository_index(&index);
+                return Ok(());
+            }
+            "--verify-repository-v2" => {
+                let index_path = args.next().ok_or("--verify-repository-v2 requires INDEX")?;
+                let signature_path = args
+                    .next()
+                    .ok_or("--verify-repository-v2 requires SIG_JSON")?;
+                let keyring_path = args
+                    .next()
+                    .ok_or("--verify-repository-v2 requires KEYRING")?;
+                let channel = args.next().unwrap_or_else(|| "stable".to_owned());
+                let index_bytes = read_bounded_bytes(index_path, 1024 * 1024)?;
+                let signature = read_bounded_text(signature_path, 1024 * 1024)?;
+                let envelope = parse_signature_envelope(&signature, SignedObject::RepositoryIndex)?;
+                let keys = read_trusted_keys(keyring_path)?;
+                let index =
+                    verify_repository_index_envelope(&index_bytes, &envelope, &keys, &channel)?;
+                print_repository_index(&index);
                 return Ok(());
             }
             "--list" => {
@@ -167,8 +229,7 @@ fn self_check_core() -> Result<(), Box<dyn Error>> {
 }
 
 fn self_check_trusted_keys(path: &PathBuf) -> Result<(), Box<dyn Error>> {
-    let bytes = std::fs::read_to_string(path)?;
-    let keys = parse_trusted_keys(&bytes)?;
+    let keys = read_trusted_keys(path)?;
     ensure(
         keys.iter().any(|key| {
             key.id().as_str() == "official-2026-mldsa65"
@@ -178,6 +239,56 @@ fn self_check_trusted_keys(path: &PathBuf) -> Result<(), Box<dyn Error>> {
         }),
         "official ML-DSA-65 trusted public key is missing",
     )?;
+    Ok(())
+}
+
+fn read_trusted_keys(path: impl AsRef<std::path::Path>) -> Result<Vec<TrustedKey>, Box<dyn Error>> {
+    let keyring = read_bounded_text(path, 1024 * 1024)?;
+    let keys = parse_trusted_keys(&keyring)?;
+    if keys.is_empty() {
+        return Err("trusted keyring is empty".into());
+    }
+    Ok(keys)
+}
+
+fn verify_installed_packages(
+    install_root: &std::path::Path,
+    trusted_keys: &[TrustedKey],
+) -> Result<(), Box<dyn Error>> {
+    for entry in read_installed_lockfile(install_root)? {
+        let manifest_path = install_root
+            .join("manifests")
+            .join(entry.id().as_str())
+            .join(format!("{}.json", entry.version()));
+        let signature_path = install_root
+            .join("manifests")
+            .join(entry.id().as_str())
+            .join(format!("{}.sig", entry.version()));
+        let manifest_bytes = read_bounded_bytes(&manifest_path, 1024 * 1024)?;
+        ensure(
+            sha256_digest(&manifest_bytes) == *entry.manifest_sha256(),
+            "installed manifest hash differs from packages.lock",
+        )?;
+        let manifest_text = std::str::from_utf8(&manifest_bytes)?;
+        let manifest = parse_manifest(manifest_text)?;
+        ensure(
+            manifest.id() == entry.id() && manifest.version() == entry.version(),
+            "installed manifest identity differs from packages.lock",
+        )?;
+        let trusted_key = trusted_keys
+            .iter()
+            .find(|candidate| candidate.id() == manifest.key_id())
+            .ok_or("installed manifest key is no longer trusted")?;
+        let signature = read_bounded_bytes(signature_path, 16 * 1024)?;
+        verify_manifest_signature(&manifest_bytes, &signature, trusted_key)?;
+        verify_payload_root(
+            &manifest,
+            install_root
+                .join("versions")
+                .join(entry.id().as_str())
+                .join(entry.version()),
+        )?;
+    }
     Ok(())
 }
 
@@ -209,6 +320,21 @@ fn print_manifest(manifest: &fcitx5_package_core::Manifest, verified: bool) {
         if verified { "true" } else { "false" }
     );
     println!("permissions={}", manifest.permissions().join(","));
+}
+
+fn print_repository_index(index: &RepositoryIndex) {
+    for entry in index.packages() {
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            entry.id(),
+            entry.version(),
+            entry.release_sequence(),
+            entry.architecture(),
+            entry.sha256().as_str(),
+            entry.download_url(),
+            entry.title()
+        );
+    }
 }
 
 fn parse_cli_lifecycle_state(value: &str) -> Result<PackageLifecycleState, Box<dyn Error>> {
@@ -397,7 +523,7 @@ fn read_u32(image: &[u8], offset: usize) -> Result<u32, Box<dyn Error>> {
 
 fn print_usage() {
     println!(
-        "Usage:\n  fcitx5-package-core --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package-core --validate-manifest MANIFEST\n  fcitx5-package-core --validate-keyring KEYRING\n  fcitx5-package-core --verify-manifest-v2 MANIFEST SIG_JSON KEYRING\n  fcitx5-package-core --list INSTALL_ROOT\n  fcitx5-package-core --state INSTALL_ROOT PACKAGE_ID STATE\n  fcitx5-package-core --mark-remove INSTALL_ROOT PACKAGE_ID\n  fcitx5-package-core --finalize-remove INSTALL_ROOT PACKAGE_ID"
+        "Usage:\n  fcitx5-package-core --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package-core --validate-manifest MANIFEST\n  fcitx5-package-core --validate-keyring KEYRING\n  fcitx5-package-core --install ARCHIVE INSTALL_ROOT TRANSACTION_ID KEYRING\n  fcitx5-package-core --repair INSTALL_ROOT KEYRING\n  fcitx5-package-core --verify-repository INDEX SIGNATURE KEYRING [CHANNEL]\n  fcitx5-package-core --verify-repository-v2 INDEX SIG_JSON KEYRING [CHANNEL]\n  fcitx5-package-core --verify-manifest-v2 MANIFEST SIG_JSON KEYRING\n  fcitx5-package-core --list INSTALL_ROOT\n  fcitx5-package-core --state INSTALL_ROOT PACKAGE_ID STATE\n  fcitx5-package-core --mark-remove INSTALL_ROOT PACKAGE_ID\n  fcitx5-package-core --finalize-remove INSTALL_ROOT PACKAGE_ID"
     );
 }
 

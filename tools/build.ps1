@@ -149,6 +149,12 @@ try {
   New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
   $env:TEMP = $buildTempRoot
   $env:TMP = $buildTempRoot
+  $rustToolchainBin = Join-Path $repoRoot 'out/toolchains/rust/rustup-home/toolchains/1.98.0-x86_64-pc-windows-msvc/bin'
+  if (Test-Path -LiteralPath (Join-Path $rustToolchainBin 'cargo.exe') -PathType Leaf) {
+    $env:PATH = "$rustToolchainBin;$env:PATH"
+    $env:RUSTUP_HOME = Join-Path $repoRoot 'out/toolchains/rust/rustup-home'
+    $env:CARGO_HOME = Join-Path $repoRoot 'out/toolchains/rust/cargo-home'
+  }
   switch ($Command) {
     'bootstrap' {
       $cmake = Get-CMakeCommand

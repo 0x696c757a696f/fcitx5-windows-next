@@ -2,6 +2,10 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    if cfg!(target_os = "windows") {
+        println!("cargo:rustc-link-lib=bcrypt");
+    }
+
     let repo_root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"))
         .ancestors()
         .nth(2)

@@ -67,6 +67,230 @@ mod mldsa_verify_adapter {
 }
 
 #[cfg(windows)]
+mod rsa_verify_adapter {
+    #![allow(unsafe_code)]
+
+    use std::ffi::{c_int, c_void};
+
+    unsafe extern "system" {
+        fn BCryptOpenAlgorithmProvider(
+            ph_algorithm: *mut *mut c_void,
+            psz_alg_id: *const u16,
+            psz_implementation: *const u16,
+            dw_flags: u32,
+        ) -> c_int;
+        fn BCryptCloseAlgorithmProvider(h_algorithm: *mut c_void, dw_flags: u32) -> c_int;
+        fn BCryptImportKeyPair(
+            h_algorithm: *mut c_void,
+            h_import_key: *mut c_void,
+            psz_blob_type: *const u16,
+            ph_key: *mut *mut c_void,
+            pb_input: *mut u8,
+            cb_input: u32,
+            dw_flags: u32,
+        ) -> c_int;
+        fn BCryptDestroyKey(h_key: *mut c_void) -> c_int;
+        fn BCryptVerifySignature(
+            h_key: *mut c_void,
+            p_padding_info: *const c_void,
+            pb_hash: *const u8,
+            cb_hash: u32,
+            pb_signature: *const u8,
+            cb_signature: u32,
+            dw_flags: u32,
+        ) -> c_int;
+    }
+
+    const BCRYPT_RSA_ALGORITHM: &[u16] = &[b'R' as u16, b'S' as u16, b'A' as u16, 0];
+    const BCRYPT_RSAPUBLIC_BLOB: &[u16] = &[
+        b'R' as u16,
+        b'S' as u16,
+        b'A' as u16,
+        b'P' as u16,
+        b'U' as u16,
+        b'B' as u16,
+        b'L' as u16,
+        b'I' as u16,
+        b'C' as u16,
+        b'B' as u16,
+        b'L' as u16,
+        b'O' as u16,
+        b'B' as u16,
+        0,
+    ];
+    const BCRYPT_SHA256_ALGORITHM: &[u16] = &[
+        b'S' as u16,
+        b'H' as u16,
+        b'A' as u16,
+        b'2' as u16,
+        b'5' as u16,
+        b'6' as u16,
+        0,
+    ];
+    const BCRYPT_PAD_PKCS1: u32 = 0x0000_0002;
+
+    #[repr(C)]
+    struct BcryptPkcs1PaddingInfo {
+        psz_alg_id: *const u16,
+    }
+
+    pub fn verify(signature: &[u8], message: &[u8], public_key: &[u8]) -> bool {
+        if signature.is_empty() || message.is_empty() || public_key.is_empty() {
+            return false;
+        }
+        let mut algorithm = std::ptr::null_mut();
+        let opened = unsafe {
+            BCryptOpenAlgorithmProvider(
+                &mut algorithm,
+                BCRYPT_RSA_ALGORITHM.as_ptr(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        if opened != 0 || algorithm.is_null() {
+            return false;
+        }
+        let mut key = std::ptr::null_mut();
+        let imported = unsafe {
+            BCryptImportKeyPair(
+                algorithm,
+                std::ptr::null_mut(),
+                BCRYPT_RSAPUBLIC_BLOB.as_ptr(),
+                &mut key,
+                public_key.as_ptr() as *mut u8,
+                public_key.len() as u32,
+                0,
+            )
+        };
+        if imported != 0 || key.is_null() {
+            let _ = unsafe { BCryptCloseAlgorithmProvider(algorithm, 0) };
+            return false;
+        }
+        let hash = super::sha256_bytes(message);
+        let padding = BcryptPkcs1PaddingInfo {
+            psz_alg_id: BCRYPT_SHA256_ALGORITHM.as_ptr(),
+        };
+        let status = unsafe {
+            BCryptVerifySignature(
+                key,
+                &padding as *const _ as *const c_void,
+                hash.as_ptr(),
+                hash.len() as u32,
+                signature.as_ptr(),
+                signature.len() as u32,
+                BCRYPT_PAD_PKCS1,
+            )
+        };
+        let _ = unsafe { BCryptDestroyKey(key) };
+        let _ = unsafe { BCryptCloseAlgorithmProvider(algorithm, 0) };
+        status == 0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryDependency {
+    id: String,
+    version: String,
+}
+
+impl RepositoryDependency {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryEntry {
+    id: String,
+    title: String,
+    summary: String,
+    version: String,
+    release_sequence: u64,
+    package_type: PackageType,
+    architecture: String,
+    download_url: String,
+    sha256: HexDigest32,
+    dependencies: Vec<RepositoryDependency>,
+}
+
+impl RepositoryEntry {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn release_sequence(&self) -> u64 {
+        self.release_sequence
+    }
+
+    pub fn package_type(&self) -> &PackageType {
+        &self.package_type
+    }
+
+    pub fn architecture(&self) -> &str {
+        &self.architecture
+    }
+
+    pub fn download_url(&self) -> &str {
+        &self.download_url
+    }
+
+    pub fn sha256(&self) -> &HexDigest32 {
+        &self.sha256
+    }
+
+    pub fn dependencies(&self) -> &[RepositoryDependency] {
+        &self.dependencies
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryIndex {
+    format_version: u64,
+    channel: String,
+    generated_at: String,
+    key_id: String,
+    packages: Vec<RepositoryEntry>,
+}
+
+impl RepositoryIndex {
+    pub fn format_version(&self) -> u64 {
+        self.format_version
+    }
+
+    pub fn channel(&self) -> &str {
+        &self.channel
+    }
+
+    pub fn generated_at(&self) -> &str {
+        &self.generated_at
+    }
+
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    pub fn packages(&self) -> &[RepositoryEntry] {
+        &self.packages
+    }
+}
+
+#[cfg(windows)]
 mod miniz_archive_adapter {
     #![allow(unsafe_code)]
 
@@ -1506,6 +1730,36 @@ pub fn verify_mldsa65_signature(
 }
 
 #[cfg(windows)]
+pub fn verify_manifest_signature(
+    object_bytes: &[u8],
+    signature: &[u8],
+    key: &TrustedKey,
+) -> Result<(), SignatureVerificationError> {
+    if key.revoked() {
+        return Err(signature_verification_error(
+            "revoked_key",
+            "manifest key is revoked",
+        ));
+    }
+    if key.algorithm() != &TrustAlgorithm::Rsa2048Sha256
+        || key.public_key().is_empty()
+        || signature.is_empty()
+    {
+        return Err(signature_verification_error(
+            "invalid_signature",
+            "signature identity is incomplete",
+        ));
+    }
+    if !rsa_verify_adapter::verify(signature, object_bytes, key.public_key()) {
+        return Err(signature_verification_error(
+            "invalid_signature",
+            "manifest signature verification failed",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 pub fn verify_signature_envelope(
     object_bytes: &[u8],
     envelope: &SignatureEnvelope,
@@ -1555,6 +1809,302 @@ fn signature_verification_error(
         code,
         message: message.into(),
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryError {
+    code: &'static str,
+    message: String,
+}
+
+impl RepositoryError {
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+}
+
+impl fmt::Display for RepositoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RepositoryError {}
+
+fn repository_error(message: impl Into<String>) -> RepositoryError {
+    RepositoryError {
+        code: "invalid_repository",
+        message: message.into(),
+    }
+}
+
+fn repository_verify_error(code: &'static str, message: impl Into<String>) -> RepositoryError {
+    RepositoryError {
+        code,
+        message: message.into(),
+    }
+}
+
+fn is_https_repository_url(value: &str) -> bool {
+    value.starts_with("https://")
+        && value.len() <= 2048
+        && !value.contains('@')
+        && !value.contains('#')
+        && !value.contains('\\')
+        && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+}
+
+fn parse_repository_package_type(value: &str) -> Result<PackageType, RepositoryError> {
+    match value {
+        "core" => Ok(PackageType::Core),
+        "addon" => Ok(PackageType::Addon),
+        "inputmethod-data" => Ok(PackageType::InputMethodData),
+        "theme" => Ok(PackageType::Theme),
+        "translation" => Ok(PackageType::Translation),
+        _ => Err(repository_error("repository package type is unsupported")),
+    }
+}
+
+fn repository_require_object_keys(
+    object: &[(String, JsonValue)],
+    required: &[&str],
+) -> Result<(), RepositoryError> {
+    for key in required {
+        if !object_contains(object, key) {
+            return Err(repository_error(format!("missing required key: {key}")));
+        }
+    }
+    for (key, _) in object {
+        if !required.iter().any(|allowed| *allowed == key) {
+            return Err(repository_error(format!("unknown key: {key}")));
+        }
+    }
+    Ok(())
+}
+
+fn repository_require_string(
+    object: &[(String, JsonValue)],
+    key: &str,
+    maximum: usize,
+    allow_empty: bool,
+) -> Result<String, RepositoryError> {
+    let value = object_get(object, key)
+        .and_then(JsonValue::as_string)
+        .ok_or_else(|| repository_error(format!("{key} must be a string")))?;
+    if (!allow_empty && value.is_empty()) || value.len() > maximum || value.contains('\0') {
+        return Err(repository_error(format!("{key} has an invalid length")));
+    }
+    Ok(value.to_owned())
+}
+
+fn repository_require_unsigned(
+    object: &[(String, JsonValue)],
+    key: &str,
+) -> Result<u64, RepositoryError> {
+    object_get(object, key)
+        .and_then(JsonValue::as_number)
+        .ok_or_else(|| repository_error(format!("{key} must be an unsigned integer")))
+}
+
+fn repository_require_array<'a>(
+    object: &'a [(String, JsonValue)],
+    key: &str,
+) -> Result<&'a [JsonValue], RepositoryError> {
+    object_get(object, key)
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| repository_error(format!("{key} must be an array")))
+}
+
+fn parse_repository_dependencies(
+    values: &[JsonValue],
+) -> Result<Vec<RepositoryDependency>, RepositoryError> {
+    if values.len() > MAX_DEPENDENCY_COUNT {
+        return Err(repository_error("repository dependency list is invalid"));
+    }
+    let mut ids = BTreeSet::new();
+    let mut result = Vec::new();
+    for value in values {
+        let object = value
+            .as_object()
+            .ok_or_else(|| repository_error("expected a JSON object"))?;
+        repository_require_object_keys(object, &["id", "version"])?;
+        let id = repository_require_string(object, "id", MAX_PACKAGE_ID_BYTES, false)?;
+        let version = repository_require_string(object, "version", MAX_VERSION_BYTES, false)?;
+        if !is_ascii_token(&id, "-_.")
+            || !is_ascii_token(&version, ".+-_")
+            || !ids.insert(id.clone())
+        {
+            return Err(repository_error(
+                "repository dependency is invalid or duplicated",
+            ));
+        }
+        result.push(RepositoryDependency { id, version });
+    }
+    Ok(result)
+}
+
+pub fn parse_repository_index(
+    bytes: &str,
+    expected_channel: &str,
+) -> Result<RepositoryIndex, RepositoryError> {
+    if bytes.is_empty() || bytes.len() > MAX_MANIFEST_BYTES {
+        return Err(repository_error(
+            "repository index exceeds its resource budget",
+        ));
+    }
+    let document = JsonParser::new(bytes)
+        .parse()
+        .map_err(|_| repository_error("repository index is not strict JSON"))?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| repository_error("expected a JSON object"))?;
+    repository_require_object_keys(
+        object,
+        &[
+            "format_version",
+            "channel",
+            "generated_at",
+            "key_id",
+            "packages",
+        ],
+    )?;
+    let format_version = repository_require_unsigned(object, "format_version")?;
+    if format_version != 1 {
+        return Err(repository_error(
+            "repository format_version must be exactly 1",
+        ));
+    }
+    let channel = repository_require_string(object, "channel", 16, false)?;
+    let generated_at = repository_require_string(object, "generated_at", 64, false)?;
+    let key_id = repository_require_string(object, "key_id", MAX_PACKAGE_ID_BYTES, false)?;
+    if channel != expected_channel || !is_ascii_token(&key_id, "-_.") {
+        return Err(repository_error(
+            "repository identity is invalid or channel mismatch",
+        ));
+    }
+
+    let packages = repository_require_array(object, "packages")?;
+    if packages.len() > MAX_FILE_COUNT {
+        return Err(repository_error("package catalog is invalid"));
+    }
+    let mut identities = BTreeSet::new();
+    let mut parsed = Vec::new();
+    for value in packages {
+        let item = value
+            .as_object()
+            .ok_or_else(|| repository_error("expected a JSON object"))?;
+        repository_require_object_keys(
+            item,
+            &[
+                "id",
+                "title",
+                "summary",
+                "version",
+                "release_sequence",
+                "type",
+                "architecture",
+                "download_url",
+                "sha256",
+                "dependencies",
+            ],
+        )?;
+        let id = repository_require_string(item, "id", MAX_PACKAGE_ID_BYTES, false)?;
+        let title = repository_require_string(item, "title", 128, false)?;
+        let summary = repository_require_string(item, "summary", 512, true)?;
+        let version = repository_require_string(item, "version", MAX_VERSION_BYTES, false)?;
+        let release_sequence = repository_require_unsigned(item, "release_sequence")?;
+        let package_type =
+            parse_repository_package_type(&repository_require_string(item, "type", 32, false)?)?;
+        let architecture = repository_require_string(item, "architecture", 8, false)?;
+        let download_url = repository_require_string(item, "download_url", 2048, false)?;
+        let sha256 = HexDigest32::parse(&repository_require_string(item, "sha256", 64, false)?)
+            .map_err(|_| repository_error("repository sha256 digest is invalid"))?;
+        let dependencies =
+            parse_repository_dependencies(repository_require_array(item, "dependencies")?)?;
+        if !is_ascii_token(&id, "-_.")
+            || !is_ascii_token(&version, ".+-_")
+            || !matches!(architecture.as_str(), "any" | "x86" | "x64")
+            || !is_https_repository_url(&download_url)
+            || release_sequence == 0
+            || !identities.insert((id.clone(), architecture.clone()))
+        {
+            return Err(repository_error(
+                "repository package record is invalid or duplicated",
+            ));
+        }
+        parsed.push(RepositoryEntry {
+            id,
+            title,
+            summary,
+            version,
+            release_sequence,
+            package_type,
+            architecture,
+            download_url,
+            sha256,
+            dependencies,
+        });
+    }
+    parsed.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(RepositoryIndex {
+        format_version,
+        channel,
+        generated_at,
+        key_id,
+        packages: parsed,
+    })
+}
+
+pub fn verify_repository_index(
+    index_bytes: &[u8],
+    signature: &[u8],
+    trusted_keys: &[TrustedKey],
+    expected_channel: &str,
+) -> Result<RepositoryIndex, RepositoryError> {
+    let index_text = std::str::from_utf8(index_bytes)
+        .map_err(|_| repository_error("repository index is not strict JSON"))?;
+    let result = parse_repository_index(index_text, expected_channel)?;
+    let trusted_key = trusted_keys
+        .iter()
+        .find(|candidate| candidate.id().as_str() == result.key_id())
+        .ok_or_else(|| repository_verify_error("untrusted_key", "repository key is not trusted"))?;
+    verify_manifest_signature(index_bytes, signature, trusted_key)
+        .map_err(|error| repository_verify_error(error.code(), error.to_string()))?;
+    Ok(result)
+}
+
+pub fn verify_repository_index_envelope(
+    index_bytes: &[u8],
+    envelope: &SignatureEnvelope,
+    trusted_keys: &[TrustedKey],
+    expected_channel: &str,
+) -> Result<RepositoryIndex, RepositoryError> {
+    let index_text = std::str::from_utf8(index_bytes)
+        .map_err(|_| repository_error("repository index is not strict JSON"))?;
+    let result = parse_repository_index(index_text, expected_channel)?;
+    let key_id = PackageId::parse(result.key_id()).map_err(|_| {
+        repository_verify_error("invalid_signature", "signature envelope binding is invalid")
+    })?;
+    verify_signature_envelope(
+        index_bytes,
+        envelope,
+        trusted_keys,
+        SignedObject::RepositoryIndex,
+        &key_id,
+    )
+    .map_err(|error| repository_verify_error(error.code(), error.to_string()))?;
+    Ok(result)
+}
+
+pub fn find_repository_package<'a>(
+    index: &'a RepositoryIndex,
+    package_id: &str,
+    architecture: &str,
+) -> Option<&'a RepositoryEntry> {
+    index.packages.iter().find(|entry| {
+        entry.id == package_id
+            && (entry.architecture == "any" || entry.architecture == architecture)
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2299,6 +2849,7 @@ pub fn write_installed_lockfile_atomic(
 pub fn activate_staged_payload_tree(
     staged_root: impl AsRef<Path>,
     install_root: impl AsRef<Path>,
+    trusted_keys: &[TrustedKey],
 ) -> Result<(), StagingError> {
     let staged_root = staged_root.as_ref();
     let install_root = install_root.as_ref();
@@ -2320,6 +2871,10 @@ pub fn activate_staged_payload_tree(
     let manifest_text = std::str::from_utf8(&manifest_bytes)
         .map_err(|_| staging_error("invalid_manifest", "manifest is not valid UTF-8"))?;
     let manifest = parse_manifest(manifest_text).map_err(staging_from_manifest_error)?;
+    let trusted_key = trusted_keys
+        .iter()
+        .find(|candidate| candidate.id() == manifest.key_id())
+        .ok_or_else(|| staging_error("untrusted_key", "manifest key is not trusted"))?;
     if fs::metadata(staged_root.join("manifest.sig"))
         .map_err(staging_io_error)?
         .len()
@@ -2330,6 +2885,9 @@ pub fn activate_staged_payload_tree(
             "manifest signature is outside its resource budget",
         ));
     }
+    let signature = fs::read(staged_root.join("manifest.sig")).map_err(staging_io_error)?;
+    verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+        .map_err(|error| staging_error(error.code, error.message))?;
     verify_payload_root(&manifest, staged_root.join("payload"))?;
     let active_before = read_installed_lockfile(install_root)
         .map_err(|error| staging_error(error.code, error.message))?;
@@ -2371,9 +2929,9 @@ pub fn activate_staged_payload_tree(
         &manifest_bytes,
     )
     .map_err(staging_io_error)?;
-    fs::copy(
-        staged_root.join("manifest.sig"),
+    fs::write(
         metadata.join(format!("{}.sig", manifest.version())),
+        &signature,
     )
     .map_err(staging_io_error)?;
 
@@ -2815,6 +3373,7 @@ pub fn stage_validated_archive_zip(
     archive_path: impl AsRef<Path>,
     install_root: impl AsRef<Path>,
     transaction_id: &str,
+    trusted_keys: &[TrustedKey],
 ) -> Result<PathBuf, StagingError> {
     PackageId::parse(transaction_id)
         .map_err(|_| staging_error("unsafe_path", "transaction id or install root is unsafe"))?;
@@ -2851,6 +3410,12 @@ pub fn stage_validated_archive_zip(
     let manifest_text = std::str::from_utf8(&manifest_bytes)
         .map_err(|_| staging_error("invalid_manifest", "manifest is not valid UTF-8"))?;
     let manifest = parse_manifest(manifest_text).map_err(staging_from_manifest_error)?;
+    let trusted_key = trusted_keys
+        .iter()
+        .find(|candidate| candidate.id() == manifest.key_id())
+        .ok_or_else(|| staging_error("untrusted_key", "manifest key is not trusted"))?;
+    verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+        .map_err(|error| staging_error(error.code, error.message))?;
     validate_manifest_compatibility(&manifest, current_runtime_architecture())
         .map_err(staging_from_compatibility_error)?;
     validate_archive_inventory(&manifest, &entries).map_err(staging_from_archive_error)?;
@@ -3590,6 +4155,190 @@ mod tests {
 
     const CORPUS: &str = include_str!("../../../tests/fixtures/package_path_corpus.json");
 
+    #[cfg(windows)]
+    mod rsa_signing_fixture {
+        #![allow(unsafe_code)]
+
+        use std::ffi::{c_int, c_void};
+
+        unsafe extern "system" {
+            fn BCryptOpenAlgorithmProvider(
+                ph_algorithm: *mut *mut c_void,
+                psz_alg_id: *const u16,
+                psz_implementation: *const u16,
+                dw_flags: u32,
+            ) -> c_int;
+            fn BCryptCloseAlgorithmProvider(h_algorithm: *mut c_void, dw_flags: u32) -> c_int;
+            fn BCryptGenerateKeyPair(
+                h_algorithm: *mut c_void,
+                ph_key: *mut *mut c_void,
+                dw_length: u32,
+                dw_flags: u32,
+            ) -> c_int;
+            fn BCryptFinalizeKeyPair(h_key: *mut c_void, dw_flags: u32) -> c_int;
+            fn BCryptDestroyKey(h_key: *mut c_void) -> c_int;
+            fn BCryptExportKey(
+                h_key: *mut c_void,
+                h_export_key: *mut c_void,
+                psz_blob_type: *const u16,
+                pb_output: *mut u8,
+                cb_output: u32,
+                pcb_result: *mut u32,
+                dw_flags: u32,
+            ) -> c_int;
+            fn BCryptSignHash(
+                h_key: *mut c_void,
+                p_padding_info: *const c_void,
+                pb_input: *const u8,
+                cb_input: u32,
+                pb_output: *mut u8,
+                cb_output: u32,
+                pcb_result: *mut u32,
+                dw_flags: u32,
+            ) -> c_int;
+        }
+
+        const BCRYPT_RSA_ALGORITHM: &[u16] = &[b'R' as u16, b'S' as u16, b'A' as u16, 0];
+        const BCRYPT_RSAPUBLIC_BLOB: &[u16] = &[
+            b'R' as u16,
+            b'S' as u16,
+            b'A' as u16,
+            b'P' as u16,
+            b'U' as u16,
+            b'B' as u16,
+            b'L' as u16,
+            b'I' as u16,
+            b'C' as u16,
+            b'B' as u16,
+            b'L' as u16,
+            b'O' as u16,
+            b'B' as u16,
+            0,
+        ];
+        const BCRYPT_SHA256_ALGORITHM: &[u16] = &[
+            b'S' as u16,
+            b'H' as u16,
+            b'A' as u16,
+            b'2' as u16,
+            b'5' as u16,
+            b'6' as u16,
+            0,
+        ];
+        const BCRYPT_PAD_PKCS1: u32 = 0x0000_0002;
+
+        #[repr(C)]
+        struct BcryptPkcs1PaddingInfo {
+            psz_alg_id: *const u16,
+        }
+
+        pub struct RsaSigningFixture {
+            algorithm: *mut c_void,
+            key: *mut c_void,
+        }
+
+        impl RsaSigningFixture {
+            pub fn new() -> Self {
+                let mut algorithm = std::ptr::null_mut();
+                let opened = unsafe {
+                    BCryptOpenAlgorithmProvider(
+                        &mut algorithm,
+                        BCRYPT_RSA_ALGORITHM.as_ptr(),
+                        std::ptr::null(),
+                        0,
+                    )
+                };
+                assert_eq!(opened, 0, "RSA algorithm provider should open");
+                let mut key = std::ptr::null_mut();
+                let generated = unsafe { BCryptGenerateKeyPair(algorithm, &mut key, 2048, 0) };
+                assert_eq!(generated, 0, "RSA key pair should generate");
+                let finalized = unsafe { BCryptFinalizeKeyPair(key, 0) };
+                assert_eq!(finalized, 0, "RSA key pair should finalize");
+                Self { algorithm, key }
+            }
+
+            pub fn public_blob(&self) -> Vec<u8> {
+                let mut size = 0_u32;
+                let exported_size = unsafe {
+                    BCryptExportKey(
+                        self.key,
+                        std::ptr::null_mut(),
+                        BCRYPT_RSAPUBLIC_BLOB.as_ptr(),
+                        std::ptr::null_mut(),
+                        0,
+                        &mut size,
+                        0,
+                    )
+                };
+                assert_eq!(exported_size, 0, "RSA public key sizing should succeed");
+                let mut blob = vec![0_u8; size as usize];
+                let exported = unsafe {
+                    BCryptExportKey(
+                        self.key,
+                        std::ptr::null_mut(),
+                        BCRYPT_RSAPUBLIC_BLOB.as_ptr(),
+                        blob.as_mut_ptr(),
+                        blob.len() as u32,
+                        &mut size,
+                        0,
+                    )
+                };
+                assert_eq!(exported, 0, "RSA public key export should succeed");
+                blob.truncate(size as usize);
+                blob
+            }
+
+            pub fn sign(&self, message: &[u8]) -> Vec<u8> {
+                let hash = super::sha256_bytes(message);
+                let padding = BcryptPkcs1PaddingInfo {
+                    psz_alg_id: BCRYPT_SHA256_ALGORITHM.as_ptr(),
+                };
+                let mut size = 0_u32;
+                let sized = unsafe {
+                    BCryptSignHash(
+                        self.key,
+                        &padding as *const _ as *const c_void,
+                        hash.as_ptr(),
+                        hash.len() as u32,
+                        std::ptr::null_mut(),
+                        0,
+                        &mut size,
+                        BCRYPT_PAD_PKCS1,
+                    )
+                };
+                assert_eq!(sized, 0, "RSA signature sizing should succeed");
+                let mut signature = vec![0_u8; size as usize];
+                let signed = unsafe {
+                    BCryptSignHash(
+                        self.key,
+                        &padding as *const _ as *const c_void,
+                        hash.as_ptr(),
+                        hash.len() as u32,
+                        signature.as_mut_ptr(),
+                        signature.len() as u32,
+                        &mut size,
+                        BCRYPT_PAD_PKCS1,
+                    )
+                };
+                assert_eq!(signed, 0, "RSA signature generation should succeed");
+                signature.truncate(size as usize);
+                signature
+            }
+        }
+
+        impl Drop for RsaSigningFixture {
+            fn drop(&mut self) {
+                unsafe {
+                    if !self.key.is_null() {
+                        let _ = BCryptDestroyKey(self.key);
+                    }
+                    if !self.algorithm.is_null() {
+                        let _ = BCryptCloseAlgorithmProvider(self.algorithm, 0);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn package_path_corpus_matches_frozen_cpp_policy() {
         let cases = parse_path_cases(CORPUS);
@@ -3874,6 +4623,191 @@ mod tests {
 
         let malformed = manifest.replace(&base64_for_test(&mldsa_signature), "not base64!");
         assert_signature_error(&malformed, SignedObject::PackageManifest);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repository_index_v1_matches_cpp_schema() {
+        let signer = rsa_signing_fixture::RsaSigningFixture::new();
+        let trusted = rsa_trusted_key("release-2026", signer.public_blob());
+        let repository = format!(
+            "{{\"format_version\":1,\"channel\":\"stable\",\"generated_at\":\"2026-08-17T00:00:00Z\",\
+             \"key_id\":\"release-2026\",\"packages\":[{{\"id\":\"fcitx5-rime\",\
+             \"title\":\"Rime\",\"summary\":\"Rime input engine\",\"version\":\"1.0.0\",\
+             \"release_sequence\":1,\"type\":\"addon\",\"architecture\":\"x64\",\
+             \"download_url\":\"https://packages.example.invalid/fcitx5-rime.fcpkg\",\
+             \"sha256\":\"{}\",\"dependencies\":[]}}]}}",
+            "a".repeat(64)
+        );
+        let signature = signer.sign(repository.as_bytes());
+        let parsed = verify_repository_index(
+            repository.as_bytes(),
+            &signature,
+            std::slice::from_ref(&trusted),
+            "stable",
+        )
+        .expect("repository index should verify");
+        assert_eq!(parsed.format_version(), 1);
+        assert_eq!(parsed.channel(), "stable");
+        assert_eq!(
+            find_repository_package(&parsed, "fcitx5-rime", "x64")
+                .expect("repository package should resolve")
+                .version(),
+            "1.0.0"
+        );
+
+        let tampered = repository.replacen("Rime input", "Fake input", 1);
+        assert_eq!(
+            verify_repository_index(
+                tampered.as_bytes(),
+                &signature,
+                std::slice::from_ref(&trusted),
+                "stable",
+            )
+            .expect_err("tampered repository should fail")
+            .code(),
+            "invalid_signature"
+        );
+
+        let wrong_key = rsa_signing_fixture::RsaSigningFixture::new();
+        let wrong_trusted = rsa_trusted_key("release-2026-other", wrong_key.public_blob());
+        let wrong_signature = wrong_key.sign(repository.as_bytes());
+        assert_eq!(
+            verify_repository_index(
+                repository.as_bytes(),
+                &wrong_signature,
+                std::slice::from_ref(&wrong_trusted),
+                "stable",
+            )
+            .expect_err("wrong trusted key should fail")
+            .code(),
+            "untrusted_key"
+        );
+
+        let mut revoked = trusted.clone();
+        revoked.revoked = true;
+        assert_eq!(
+            verify_repository_index(
+                repository.as_bytes(),
+                &signature,
+                std::slice::from_ref(&revoked),
+                "stable",
+            )
+            .expect_err("revoked key should fail")
+            .code(),
+            "revoked_key"
+        );
+
+        let beta_repository = repository.replace("\"channel\":\"stable\"", "\"channel\":\"beta\"");
+        let beta_signature = signer.sign(beta_repository.as_bytes());
+        assert_eq!(
+            verify_repository_index(
+                beta_repository.as_bytes(),
+                &beta_signature,
+                std::slice::from_ref(&trusted),
+                "stable",
+            )
+            .expect_err("wrong channel should fail")
+            .code(),
+            "invalid_repository"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repository_index_v2_matches_cpp_schema() {
+        let Some(signer) = pqc_fixture_signer_path() else {
+            eprintln!("skipping repository v2 Rust verification fixture: signer binary not built");
+            return;
+        };
+        let temp = std::env::temp_dir().join(format!(
+            "fcitx5-package-core-repository-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("fixture temp should create");
+        let repository = br#"{"format_version":1,"channel":"stable","generated_at":"2026-08-17T00:00:00Z","key_id":"official-2026-mldsa65","packages":[{"id":"fcitx5-rime","title":"Rime","summary":"Rime input engine","version":"1.0.0","release_sequence":1,"type":"addon","architecture":"x64","download_url":"https://packages.example.invalid/fcitx5-rime.fcpkg","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","dependencies":[]}]}"#;
+        let repository_path = temp.join("repository.json");
+        let signature_path = temp.join("repository.sig.json");
+        let keyring_path = temp.join("trusted-keys.json");
+        std::fs::write(&repository_path, repository).expect("repository should write");
+        let output = std::process::Command::new(&signer)
+            .arg("--sign")
+            .arg("repository-index")
+            .arg(&repository_path)
+            .arg(&signature_path)
+            .arg(&keyring_path)
+            .arg("official-2026-mldsa65")
+            .output()
+            .expect("fixture signer should run");
+        assert!(
+            output.status.success(),
+            "fixture signer failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let keyring = std::fs::read_to_string(&keyring_path).expect("keyring should read");
+        let keys = parse_trusted_keys(&keyring).expect("fixture keyring should parse");
+        let envelope_text =
+            std::fs::read_to_string(&signature_path).expect("signature envelope should read");
+        let envelope = parse_signature_envelope(&envelope_text, SignedObject::RepositoryIndex)
+            .expect("fixture repository envelope should parse");
+        let parsed = verify_repository_index_envelope(repository, &envelope, &keys, "stable")
+            .expect("repository v2 should verify");
+        assert_eq!(parsed.key_id(), "official-2026-mldsa65");
+        assert!(find_repository_package(&parsed, "fcitx5-rime", "x64").is_some());
+
+        assert_eq!(
+            verify_repository_index_envelope(b"tampered", &envelope, &keys, "stable")
+                .expect_err("tampered repository should fail")
+                .code(),
+            "invalid_signature"
+        );
+        let mut revoked_keys = keys.clone();
+        revoked_keys[0].revoked = true;
+        assert_eq!(
+            verify_repository_index_envelope(repository, &envelope, &revoked_keys, "stable")
+                .expect_err("revoked repository key should fail")
+                .code(),
+            "revoked_key"
+        );
+        assert_eq!(
+            verify_repository_index_envelope(repository, &envelope, &[], "stable")
+                .expect_err("untrusted repository key should fail")
+                .code(),
+            "untrusted_key"
+        );
+        let beta_repository = repository
+            .iter()
+            .copied()
+            .collect::<Vec<u8>>()
+            .into_iter()
+            .collect::<Vec<u8>>();
+        let mut beta_text = String::from_utf8(beta_repository).expect("repository should be UTF-8");
+        beta_text = beta_text.replace("\"channel\":\"stable\"", "\"channel\":\"beta\"");
+        let beta_path = temp.join("repository-beta.json");
+        std::fs::write(&beta_path, beta_text.as_bytes()).expect("beta repository should write");
+        let beta_signature = std::process::Command::new(&signer)
+            .arg("--sign")
+            .arg("repository-index")
+            .arg(&beta_path)
+            .arg(&signature_path)
+            .arg(&keyring_path)
+            .arg("official-2026-mldsa65")
+            .output()
+            .expect("fixture signer should run");
+        assert!(beta_signature.status.success(), "fixture signer failed");
+        let beta_envelope_text =
+            std::fs::read_to_string(&signature_path).expect("signature envelope should read");
+        let beta_envelope =
+            parse_signature_envelope(&beta_envelope_text, SignedObject::RepositoryIndex)
+                .expect("fixture repository envelope should parse");
+        assert_eq!(
+            verify_repository_index_envelope(beta_text.as_bytes(), &beta_envelope, &keys, "stable")
+                .expect_err("wrong channel should fail")
+                .code(),
+            "invalid_repository"
+        );
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[cfg(windows)]
@@ -4284,12 +5218,14 @@ mod tests {
     fn archive_zip_staging_matches_cpp_extraction_policy() {
         let hello_blake3 = blake3_digest(b"hello");
         let hello_sha256 = sha256_digest(b"hello");
+        let signer = rsa_signing_fixture::RsaSigningFixture::new();
+        let trusted = rsa_trusted_key("release-2026", signer.public_blob());
         let manifest_text = manifest_v2(
             "fcitx5-rime",
             "1.0.0",
             hello_blake3.as_str(),
             5,
-            "official-2026-mldsa65",
+            "release-2026",
             Some(hello_sha256.as_str()),
         );
         let temp =
@@ -4301,13 +5237,18 @@ mod tests {
             &valid_archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", b"signature"),
+                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
                 ("payload/bin/addon.dll", b"hello"),
             ],
         );
         let install_root = temp.join("install");
-        let staged = stage_validated_archive_zip(&valid_archive, &install_root, "tx-zip")
-            .expect("ZIP archive should stage");
+        let staged = stage_validated_archive_zip(
+            &valid_archive,
+            &install_root,
+            "tx-zip",
+            std::slice::from_ref(&trusted),
+        )
+        .expect("ZIP archive should stage");
         assert_eq!(
             std::fs::read(staged.join("payload/bin/addon.dll")).expect("payload should read"),
             b"hello"
@@ -4320,15 +5261,20 @@ mod tests {
             &traversal_archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", b"signature"),
+                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
                 ("payload/bin/addon.dll", b"hello"),
                 ("payload/../escape.dll", b"escape"),
             ],
         );
         assert_eq!(
-            stage_validated_archive_zip(&traversal_archive, &install_root, "tx-traversal")
-                .expect_err("traversal archive should fail")
-                .code(),
+            stage_validated_archive_zip(
+                &traversal_archive,
+                &install_root,
+                "tx-traversal",
+                std::slice::from_ref(&trusted),
+            )
+            .expect_err("traversal archive should fail")
+            .code(),
             "unsafe_archive_path"
         );
 
@@ -4337,15 +5283,20 @@ mod tests {
             &collision_archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", b"signature"),
+                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
                 ("payload/bin/addon.dll", b"hello"),
                 ("payload/BIN/ADDON.DLL", b"hello"),
             ],
         );
         assert_eq!(
-            stage_validated_archive_zip(&collision_archive, &install_root, "tx-collision")
-                .expect_err("case-collision archive should fail")
-                .code(),
+            stage_validated_archive_zip(
+                &collision_archive,
+                &install_root,
+                "tx-collision",
+                std::slice::from_ref(&trusted),
+            )
+            .expect_err("case-collision archive should fail")
+            .code(),
             "unsafe_archive_path"
         );
 
@@ -4354,13 +5305,18 @@ mod tests {
             &missing_archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", b"signature"),
+                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
             ],
         );
         assert_eq!(
-            stage_validated_archive_zip(&missing_archive, &install_root, "tx-missing")
-                .expect_err("missing payload archive should fail")
-                .code(),
+            stage_validated_archive_zip(
+                &missing_archive,
+                &install_root,
+                "tx-missing",
+                std::slice::from_ref(&trusted),
+            )
+            .expect_err("missing payload archive should fail")
+            .code(),
             "invalid_archive"
         );
         let _ = std::fs::remove_dir_all(&temp);
@@ -4371,12 +5327,14 @@ mod tests {
     fn activation_publishes_payload_metadata_and_lockfile_like_cpp() {
         let hello_blake3 = blake3_digest(b"hello");
         let hello_sha256 = sha256_digest(b"hello");
+        let signer = rsa_signing_fixture::RsaSigningFixture::new();
+        let trusted = rsa_trusted_key("release-2026", signer.public_blob());
         let manifest_text = manifest_v2(
             "fcitx5-rime",
             "1.0.0",
             hello_blake3.as_str(),
             5,
-            "official-2026-mldsa65",
+            "release-2026",
             Some(hello_sha256.as_str()),
         );
         let temp = std::env::temp_dir().join(format!(
@@ -4390,14 +5348,19 @@ mod tests {
             &archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", b"signature"),
+                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
                 ("payload/bin/addon.dll", b"hello"),
             ],
         );
         let install_root = temp.join("install");
-        let staged = stage_validated_archive_zip(&archive, &install_root, "tx-activate")
-            .expect("archive should stage");
-        activate_staged_payload_tree(&staged, &install_root)
+        let staged = stage_validated_archive_zip(
+            &archive,
+            &install_root,
+            "tx-activate",
+            std::slice::from_ref(&trusted),
+        )
+        .expect("archive should stage");
+        activate_staged_payload_tree(&staged, &install_root, std::slice::from_ref(&trusted))
             .expect("staged payload should activate");
         assert!(install_root
             .join("versions/fcitx5-rime/1.0.0/bin/addon.dll")
@@ -4419,7 +5382,7 @@ mod tests {
             "1.1.0",
             hello_blake3.as_str(),
             5,
-            "official-2026-mldsa65",
+            "release-2026",
             Some(hello_sha256.as_str()),
         );
         let bad_archive = temp.join("bad.fcpkg");
@@ -4427,18 +5390,27 @@ mod tests {
             &bad_archive,
             &[
                 ("manifest.json", bad_manifest.as_bytes()),
-                ("manifest.sig", b"signature"),
+                ("manifest.sig", &signer.sign(bad_manifest.as_bytes())),
                 ("payload/bin/addon.dll", b"hello"),
             ],
         );
-        let bad_staged = stage_validated_archive_zip(&bad_archive, &install_root, "tx-bad")
-            .expect("bad archive should stage before tamper");
+        let bad_staged = stage_validated_archive_zip(
+            &bad_archive,
+            &install_root,
+            "tx-bad",
+            std::slice::from_ref(&trusted),
+        )
+        .expect("bad archive should stage before tamper");
         std::fs::write(bad_staged.join("payload/bin/addon.dll"), b"tampered")
             .expect("tamper should write");
         assert_eq!(
-            activate_staged_payload_tree(&bad_staged, &install_root)
-                .expect_err("tampered staged payload should fail")
-                .code(),
+            activate_staged_payload_tree(
+                &bad_staged,
+                &install_root,
+                std::slice::from_ref(&trusted),
+            )
+            .expect_err("tampered staged payload should fail")
+            .code(),
             "payload_mismatch"
         );
         let lock_after_failure =
@@ -4581,6 +5553,16 @@ mod tests {
              \"files\":[{{\"path\":\"bin/addon.dll\",\"size\":{size},\"sha256\":\"{sha256}\"}}],\
              \"key_id\":\"release-2026\"}}"
         )
+    }
+
+    #[cfg(windows)]
+    fn rsa_trusted_key(id: &str, public_key: Vec<u8>) -> TrustedKey {
+        TrustedKey {
+            id: PackageId::parse(id).expect("RSA fixture key id should be valid"),
+            algorithm: TrustAlgorithm::Rsa2048Sha256,
+            public_key,
+            revoked: false,
+        }
     }
 
     fn manifest_v2(
