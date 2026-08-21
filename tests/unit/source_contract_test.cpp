@@ -132,6 +132,7 @@ int main(int argc, char** argv) {
     const auto rustPackageCoreBinary =
         read_text(sourceRoot / "rust/package-core/src/main.rs");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
+    const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
     const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
     if (rustToolchain.find("channel = \"1.78.0\"") == std::string::npos ||
         rustToolchain.find("aarch64-pc-windows-msvc") == std::string::npos ||
@@ -149,7 +150,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("verify_payload_inventory") == std::string::npos ||
         rustPackageCore.find("verify_payload_digests") == std::string::npos ||
         rustPackageCore.find("sha256_digest") == std::string::npos ||
-        rustPackageCore.find("verify_payload_sha256_bytes") == std::string::npos ||
+        rustPackageCore.find("blake3_digest") == std::string::npos ||
+        rustPackageCore.find("verify_payload_bytes") == std::string::npos ||
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
@@ -159,7 +161,9 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
         cmakeSource.find("rust-package-core-artifact-smoke") == std::string::npos ||
         cmakeSource.find("CARGO_TARGET_DIR") == std::string::npos ||
-        dependencyCheck.find("Cargo.lock contains third-party crate sources") ==
+        dependencyCheck.find("Cargo.lock contains untracked third-party crate sources") ==
+            std::string::npos ||
+        dependencyInventory.find("\"rust-crate-blake3\"") ==
             std::string::npos) {
         return fail("RUST-R1-01: Rust package-core workspace must be pinned, locked, safe, and consume the frozen package path corpus");
     }

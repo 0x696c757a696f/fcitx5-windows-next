@@ -13,3 +13,4 @@ name = "fcitx5-package-core"
 path = "src/main.rs"
 
 [dependencies]
+blake3 = { version = "=1.5.5", default-features = false, features = ["pure"] }

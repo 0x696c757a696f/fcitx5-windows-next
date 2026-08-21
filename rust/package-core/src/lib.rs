@@ -204,6 +204,10 @@ pub fn sha256_digest(bytes: &[u8]) -> HexDigest32 {
     HexDigest32(hex_lower(&sha256_bytes(bytes)))
 }
 
+pub fn blake3_digest(bytes: &[u8]) -> HexDigest32 {
+    HexDigest32(blake3::hash(bytes).to_hex().to_string())
+}
+
 fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
     const INITIAL_STATE: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
@@ -1382,7 +1386,7 @@ impl PayloadBytesEntry {
     }
 }
 
-pub fn verify_payload_sha256_bytes(
+pub fn verify_payload_bytes(
     manifest: &Manifest,
     observed: &[PayloadBytesEntry],
 ) -> Result<(), PayloadError> {
@@ -1392,18 +1396,8 @@ pub fn verify_payload_sha256_bytes(
             entry.path.clone(),
             u64::try_from(entry.bytes.len())
                 .map_err(|_| payload_error("payload file does not match manifest"))?,
-            None,
+            Some(blake3_digest(&entry.bytes)),
             Some(sha256_digest(&entry.bytes)),
-        ));
-    }
-    if manifest.format_version() == MANIFEST_FORMAT_VERSION_V2
-        && manifest
-            .files()
-            .iter()
-            .any(|file| file.hashes().sha256().is_none())
-    {
-        return Err(payload_error(
-            "payload manifest does not include SHA-256 compatibility hashes",
         ));
     }
     verify_payload_digests(manifest, &digests)
@@ -2664,6 +2658,18 @@ mod tests {
     }
 
     #[test]
+    fn blake3_digest_matches_known_answers() {
+        assert_eq!(
+            blake3_digest(b"").as_str(),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        );
+        assert_eq!(
+            blake3_digest(b"abc").as_str(),
+            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+        );
+    }
+
+    #[test]
     fn manifest_v1_matches_cpp_golden_shape() {
         let manifest = parse_manifest(&manifest_v1("fcitx5-rime", "1.0.0", &"a".repeat(64), 12))
             .expect("valid v1 manifest should parse");
@@ -3017,13 +3023,14 @@ mod tests {
             SafeRelativePackagePath::parse("bin/addon.dll").expect("path should parse"),
             b"hello".to_vec(),
         );
-        verify_payload_sha256_bytes(&manifest_v1, &[observed])
+        verify_payload_bytes(&manifest_v1, &[observed])
             .expect("v1 payload bytes should hash to manifest SHA-256");
 
+        let hello_blake3 = blake3_digest(b"hello").as_str().to_owned();
         let manifest_v2_with_sha = parse_manifest(&manifest_v2(
             "fcitx5-rime",
             "1.0.0",
-            &"b".repeat(64),
+            &hello_blake3,
             5,
             "official-2026-mldsa65",
             Some(hello_sha256),
@@ -3033,17 +3040,19 @@ mod tests {
             SafeRelativePackagePath::parse("bin/addon.dll").expect("path should parse"),
             b"hello".to_vec(),
         );
-        assert_payload_digest_error_for_bytes(&manifest_v2_with_sha, &[observed.clone()]);
+        verify_payload_bytes(&manifest_v2_with_sha, &[observed.clone()])
+            .expect("v2 payload bytes should hash to manifest BLAKE3 and SHA-256");
         let manifest_v2_without_sha = parse_manifest(&manifest_v2(
             "fcitx5-rime",
             "1.0.0",
-            &"b".repeat(64),
+            &hello_blake3,
             5,
             "official-2026-mldsa65",
             None,
         ))
         .expect("manifest should parse");
-        assert_payload_digest_error_for_bytes(&manifest_v2_without_sha, &[observed]);
+        verify_payload_bytes(&manifest_v2_without_sha, &[observed])
+            .expect("v2 payload bytes should accept required BLAKE3 without optional SHA-256");
 
         let wrong = PayloadBytesEntry::new(
             SafeRelativePackagePath::parse("bin/addon.dll").expect("path should parse"),
@@ -3405,7 +3414,7 @@ mod tests {
 
     fn assert_payload_digest_error_for_bytes(manifest: &Manifest, observed: &[PayloadBytesEntry]) {
         assert_eq!(
-            verify_payload_sha256_bytes(manifest, observed)
+            verify_payload_bytes(manifest, observed)
                 .expect_err("payload bytes should be rejected")
                 .code(),
             "payload_mismatch"

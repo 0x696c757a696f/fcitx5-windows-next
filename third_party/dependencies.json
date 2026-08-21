@@ -84,6 +84,54 @@
       "version": "3.1.2",
       "source": "https://github.com/richgel999/miniz/releases/tag/3.1.2",
       "license": "MIT"
+    },
+    {
+      "name": "rust-crate-arrayref",
+      "version": "0.3.9",
+      "source": "https://github.com/droundy/arrayref",
+      "license": "BSD-2-Clause"
+    },
+    {
+      "name": "rust-crate-arrayvec",
+      "version": "0.7.8",
+      "source": "https://github.com/bluss/arrayvec",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-blake3",
+      "version": "1.5.5",
+      "source": "https://github.com/BLAKE3-team/BLAKE3",
+      "license": "CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "name": "rust-crate-cc",
+      "version": "1.4.4",
+      "source": "https://github.com/rust-lang/cc-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-cfg-if",
+      "version": "1.0.4",
+      "source": "https://github.com/rust-lang/cfg-if",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-constant-time-eq",
+      "version": "0.3.1",
+      "source": "https://github.com/cesarb/constant_time_eq",
+      "license": "CC0-1.0 OR MIT-0 OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-find-msvc-tools",
+      "version": "0.1.11",
+      "source": "https://github.com/rust-lang/cc-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-shlex",
+      "version": "2.0.1",
+      "source": "https://github.com/comex/rust-shlex",
+      "license": "MIT OR Apache-2.0"
     }
   ]
 }

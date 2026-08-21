@@ -29,8 +29,31 @@ if ($untrackedDependencyDirectives.Count -gt 0) {
 $cargoLockPath = Join-Path $repoRoot 'Cargo.lock'
 if (Test-Path -LiteralPath $cargoLockPath -PathType Leaf) {
   $cargoLock = Get-Content -LiteralPath $cargoLockPath -Raw
-  if ($cargoLock -match '(?m)^\s*source\s*=') {
-    throw 'Cargo.lock contains third-party crate sources; add Cargo dependency inventory/SBOM/license review before release.'
+  $allowedCargoPackages = @(
+    'arrayref',
+    'arrayvec',
+    'blake3',
+    'cc',
+    'cfg-if',
+    'constant_time_eq',
+    'find-msvc-tools',
+    'shlex'
+  )
+  $cargoPackageMatches = [regex]::Matches(
+    $cargoLock,
+    '(?ms)\[\[package\]\]\s+name = "([^"]+)".*?(?=\n\[\[package\]\]|\z)'
+  )
+  $untrackedCargoPackages = [System.Collections.Generic.List[string]]::new()
+  foreach ($match in $cargoPackageMatches) {
+    $name = $match.Groups[1].Value
+    $packageBlock = $match.Value
+    $isRegistryCrate = $packageBlock -match '(?m)^\s*source\s*=\s*"registry\+https://github\.com/rust-lang/crates\.io-index"\s*$'
+    if ($isRegistryCrate -and $allowedCargoPackages -notcontains $name) {
+      $untrackedCargoPackages.Add($name)
+    }
+  }
+  if ($untrackedCargoPackages.Count -gt 0) {
+    throw "Cargo.lock contains untracked third-party crate sources; add Cargo dependency inventory/SBOM/license review:`n$($untrackedCargoPackages -join "`n")"
   }
 }
 
