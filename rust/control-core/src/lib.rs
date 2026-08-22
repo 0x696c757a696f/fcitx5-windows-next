@@ -83,6 +83,9 @@ const CONTROL_CONFIG_ACTION_RESET_CONFIG: u32 = 3;
 const CONTROL_CONFIG_ACTION_RESET_PRESENTATION: u32 = 4;
 const CONTROL_CONFIG_ACTION_GET_PRESENTATION: u32 = 5;
 const CONTROL_CONFIG_ACTION_SET_PRESENTATION: u32 = 6;
+const CONTROL_ENGINE_ACTION_UNKNOWN: u32 = 0;
+const CONTROL_ENGINE_ACTION_GET_INPUT_METHODS: u32 = 1;
+const CONTROL_ENGINE_ACTION_SET_INPUT_METHOD: u32 = 2;
 const CONTROL_PACKAGE_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_PACKAGE_ACTION_PACKAGES_LIST: u32 = 1;
 const CONTROL_PACKAGE_ACTION_THEMES_LIST: u32 = 2;
@@ -914,6 +917,18 @@ fn config_action(command: &[u16], argc: usize) -> u32 {
     }
 }
 
+fn engine_management_action(command: &[u16], argc: usize) -> u32 {
+    match argc {
+        1 if ascii_utf16_eq(command, b"--get-input-methods") => {
+            CONTROL_ENGINE_ACTION_GET_INPUT_METHODS
+        }
+        2 if ascii_utf16_eq(command, b"--set-input-method") => {
+            CONTROL_ENGINE_ACTION_SET_INPUT_METHOD
+        }
+        _ => CONTROL_ENGINE_ACTION_UNKNOWN,
+    }
+}
+
 fn ascii_utf16_eq(value: &[u16], ascii: &[u8]) -> bool {
     value.len() == ascii.len()
         && value
@@ -1343,6 +1358,22 @@ pub unsafe extern "C" fn fcitx5_control_config_action_utf16(
 
 /// # Safety
 ///
+/// `command` must remain valid for the duration of the call. No pointer is
+/// retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_engine_management_action_utf16(
+    command: Fcitx5ControlUtf16,
+    argc: usize,
+) -> u32 {
+    if command.ptr.is_null() {
+        return CONTROL_ENGINE_ACTION_UNKNOWN;
+    }
+    let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
+    engine_management_action(command, argc)
+}
+
+/// # Safety
+///
 /// `command` and `state` must remain valid for the duration of the call when
 /// their pointers are non-null. No pointer is retained.
 #[no_mangle]
@@ -1606,6 +1637,28 @@ mod tests {
             CONTROL_CONFIG_ACTION_UNKNOWN
         );
         assert_eq!(config_action(&validate, 1), CONTROL_CONFIG_ACTION_UNKNOWN);
+    }
+
+    #[test]
+    fn engine_management_actions_are_typed_control_commands() {
+        let get = wide("--get-input-methods");
+        let set = wide("--set-input-method");
+        assert_eq!(
+            engine_management_action(&get, 1),
+            CONTROL_ENGINE_ACTION_GET_INPUT_METHODS
+        );
+        assert_eq!(
+            engine_management_action(&set, 2),
+            CONTROL_ENGINE_ACTION_SET_INPUT_METHOD
+        );
+        assert_eq!(
+            engine_management_action(&set, 1),
+            CONTROL_ENGINE_ACTION_UNKNOWN
+        );
+        assert_eq!(
+            engine_management_action(&get, 2),
+            CONTROL_ENGINE_ACTION_UNKNOWN
+        );
     }
 
     #[test]

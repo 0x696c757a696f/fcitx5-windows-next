@@ -183,6 +183,8 @@ int fcitx5_control_launcher_action_sequence(std::uint32_t action,
 int fcitx5_control_package_repair_json_utf8(const Fcitx5ControlPackageRepair* repair,
                                             char** out_ptr, std::size_t* out_len);
 std::uint32_t fcitx5_control_config_action_utf16(Fcitx5ControlUtf16 command, std::size_t argc);
+std::uint32_t fcitx5_control_engine_management_action_utf16(Fcitx5ControlUtf16 command,
+                                                            std::size_t argc);
 std::uint32_t fcitx5_control_package_action_utf16(Fcitx5ControlUtf16 command, std::size_t argc,
                                                   Fcitx5ControlUtf16 state);
 int fcitx5_control_addons_json_utf8(const Fcitx5ControlAddonDescriptor* addons,
@@ -216,6 +218,8 @@ constexpr std::uint32_t kConfigActionResetConfig = 3;
 constexpr std::uint32_t kConfigActionResetPresentation = 4;
 constexpr std::uint32_t kConfigActionGetPresentation = 5;
 constexpr std::uint32_t kConfigActionSetPresentation = 6;
+constexpr std::uint32_t kEngineActionGetInputMethods = 1;
+constexpr std::uint32_t kEngineActionSetInputMethod = 2;
 constexpr std::uint32_t kPackageActionPackagesList = 1;
 constexpr std::uint32_t kPackageActionThemesList = 2;
 constexpr std::uint32_t kPackageActionThemesDetail = 3;
@@ -336,6 +340,10 @@ std::string packageRepairJson(const Fcitx5ControlPackageRepair& repair) {
 
 std::uint32_t configAction(std::wstring_view command, std::size_t argc) {
     return fcitx5_control_config_action_utf16({command.data(), command.size()}, argc);
+}
+
+std::uint32_t engineManagementAction(std::wstring_view command, std::size_t argc) {
+    return fcitx5_control_engine_management_action_utf16({command.data(), command.size()}, argc);
 }
 
 std::uint32_t packageAction(const std::vector<std::wstring_view>& arguments) {
@@ -1451,14 +1459,16 @@ int wmain(int argc, wchar_t** argv) {
         return 0;
     }
     try {
-        if (arguments.size() == 1 && arguments[0] == L"--get-input-methods") {
+        const std::uint32_t engineAction =
+            arguments.empty() ? 0 : engineManagementAction(arguments[0], arguments.size());
+        if (engineAction == kEngineActionGetInputMethods) {
             std::string output;
             if (!runEngineManagement({L"--list-input-methods"}, output))
                 return 4;
             std::cout << output;
             return 0;
         }
-        if (arguments.size() == 2 && arguments[0] == L"--set-input-method") {
+        if (engineAction == kEngineActionSetInputMethod) {
             const std::string id = narrow(arguments[1]);
             if (id.empty() || !validInputMethodId(arguments[1]))
                 return 2;
