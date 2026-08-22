@@ -706,6 +706,33 @@ EngineProcess startEngine(const wchar_t* executable) {
     return {process.hProcess, ready};
 }
 
+bool verifyBehaviorCorpus(const wchar_t* corpusPath) {
+    std::ifstream file(corpusPath, std::ios::binary);
+    if (!file) {
+        std::cerr << "could not open TSF behavior corpus\n";
+        return false;
+    }
+    const std::string corpus((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+    const char* required[] = {
+        "\"format_version\": 1",
+        "\"activate_advises_sinks\"",
+        "\"key_down_commit_applies_text\"",
+        "\"key_down_preedit_starts_composition\"",
+        "\"key_up_routes_release_without_eating\"",
+        "\"engine_timeout_fails_open\"",
+        "\"malformed_ipc_fails_open\"",
+        "\"deactivate_unadvises_sinks_and_clears_composition\"",
+    };
+    for (const char* marker : required) {
+        if (corpus.find(marker) == std::string::npos) {
+            std::cerr << "TSF behavior corpus missing marker: " << marker << '\n';
+            return false;
+        }
+    }
+    return true;
+}
+
 struct EnvironmentOverride {
     std::wstring name;
     std::wstring previous;
@@ -1043,10 +1070,11 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 3) {
-        std::cerr << "TSF DLL and mock engine arguments required\n";
+    if (argc != 4) {
+        std::cerr << "TSF DLL, mock engine, and behavior corpus arguments required\n";
         return 1;
     }
+    if (!verifyBehaviorCorpus(argv[3])) return 1;
     const std::wstring testNamespace = L"tsf-" + std::to_wstring(GetCurrentProcessId());
     if (!SetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", testNamespace.c_str())) return 1;
     if (!SetEnvironmentVariableW(L"FCITX5_TEST_ENGINE_PATH", argv[2])) return 1;

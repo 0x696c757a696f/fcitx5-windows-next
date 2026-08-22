@@ -1197,7 +1197,8 @@ if(BUILD_TESTING)
   add_test(NAME tsf-key-commit-e2e
            COMMAND fcitx5_tsf_key_commit_test
                    $<TARGET_FILE:fcitx5_tsf>
-                   $<TARGET_FILE:fcitx5_mock_engine>)
+                   $<TARGET_FILE:fcitx5_mock_engine>
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/tsf_behavior_corpus.json")
 
   # Interactive desktop E2E. It is built with the test suite but intentionally
   # not registered with CTest because it requires installed TSF registration

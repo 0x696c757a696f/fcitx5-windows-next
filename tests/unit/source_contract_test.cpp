@@ -484,6 +484,8 @@ int main(int argc, char** argv) {
     const auto rustTsfPocSource = read_text(sourceRoot / "rust/tsf-poc/src/lib.rs");
     const auto rustTsfPocSmoke =
         read_text(sourceRoot / "tests/unit/rust_tsf_poc_export_smoke.cpp");
+    const auto tsfKeyCommitTest =
+        read_text(sourceRoot / "tests/integration/tsf_key_commit_test.cpp");
     const auto rustTsfPocCorpus =
         read_text(sourceRoot / "tests/fixtures/tsf_behavior_corpus.json");
     if (cmakeSource.find("fcitx5_tsf_poc_rustdll") == std::string::npos ||
@@ -524,6 +526,15 @@ int main(int argc, char** argv) {
         rustTsfPocCorpus.find("\"deactivate_unadvises_sinks_and_clears_composition\"") ==
             std::string::npos) {
         return fail("RUST-R3-TSF-POC: Rust TSF PoC must stay isolated, panic-contained, and non-authoritative");
+    }
+    if (cmakeSource.find("tsf_behavior_corpus.json") == std::string::npos ||
+        tsfKeyCommitTest.find("verifyBehaviorCorpus") == std::string::npos ||
+        tsfKeyCommitTest.find("TSF behavior corpus missing marker") == std::string::npos ||
+        tsfKeyCommitTest.find("\\\"key_down_commit_applies_text\\\"") ==
+            std::string::npos ||
+        tsfKeyCommitTest.find("\\\"deactivate_unadvises_sinks_and_clears_composition\\\"") ==
+            std::string::npos) {
+        return fail("RUST-R3-TSF-POC: C++ TSF baseline must consume the shared behavior corpus before differential cutover");
     }
     if (rustTsfPocManifest.find("fcitx5-package-core") != std::string::npos ||
         rustTsfPocManifest.find("fcitx5-control-core") != std::string::npos ||
