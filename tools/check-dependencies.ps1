@@ -29,16 +29,11 @@ if ($untrackedDependencyDirectives.Count -gt 0) {
 $cargoLockPath = Join-Path $repoRoot 'Cargo.lock'
 if (Test-Path -LiteralPath $cargoLockPath -PathType Leaf) {
   $cargoLock = Get-Content -LiteralPath $cargoLockPath -Raw
-  $allowedCargoPackages = @(
-    'arrayref',
-    'arrayvec',
-    'blake3',
-    'cc',
-    'cfg-if',
-    'constant_time_eq',
-    'find-msvc-tools',
-    'shlex'
-  )
+  $allowedCargoPackages = @($manifest.packages |
+    Where-Object { $_.name -like 'rust-crate-*' } |
+    ForEach-Object { ([string] $_.name).Substring('rust-crate-'.Length) })
+  $allowedCargoPackages += @($allowedCargoPackages |
+    ForEach-Object { ([string] $_).Replace('-', '_') })
   $cargoPackageMatches = [regex]::Matches(
     $cargoLock,
     '(?ms)\[\[package\]\]\s+name = "([^"]+)".*?(?=\n\[\[package\]\]|\z)'

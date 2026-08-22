@@ -132,6 +132,96 @@
       "version": "2.0.1",
       "source": "https://github.com/comex/rust-shlex",
       "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-proc-macro2",
+      "version": "1.0.107",
+      "source": "https://github.com/dtolnay/proc-macro2",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-quote",
+      "version": "1.0.47",
+      "source": "https://github.com/dtolnay/quote",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-syn",
+      "version": "2.0.119",
+      "source": "https://github.com/dtolnay/syn",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-unicode-ident",
+      "version": "1.0.24",
+      "source": "https://github.com/dtolnay/unicode-ident",
+      "license": "(MIT OR Apache-2.0) AND Unicode-3.0"
+    },
+    {
+      "name": "rust-crate-windows",
+      "version": "0.62.2",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-collections",
+      "version": "0.3.2",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-core",
+      "version": "0.62.2",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-future",
+      "version": "0.3.2",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-implement",
+      "version": "0.60.2",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-interface",
+      "version": "0.59.3",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-link",
+      "version": "0.2.1",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-numerics",
+      "version": "0.3.1",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-result",
+      "version": "0.4.1",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-strings",
+      "version": "0.5.1",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-threading",
+      "version": "0.2.1",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
     }
   ]
 }
