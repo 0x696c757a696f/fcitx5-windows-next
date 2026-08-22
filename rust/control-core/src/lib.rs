@@ -137,6 +137,14 @@ const CONTROL_RESTART_ENGINE_COMMANDS: &[u32] = &[
 ];
 const CONTROL_SHUTDOWN_COMMANDS: &[u32] = &[LAUNCHER_COMMAND_SHUTDOWN];
 
+pub fn control_schema_json() -> &'static str {
+    CONTROL_SCHEMA_JSON
+}
+
+pub fn control_usage_text() -> &'static str {
+    CONTROL_USAGE_TEXT
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Fcitx5ControlUtf16 {

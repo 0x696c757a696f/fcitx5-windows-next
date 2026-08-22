@@ -248,6 +248,7 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "tests/integration/candidate_ui_config_integration_test.cpp");
     const auto configQaSource = read_text(sourceRoot / "rust/config-qa/src/main.rs");
     const auto configPocSource = read_text(sourceRoot / "rust/config-poc/src/main.rs");
+    const auto configPocManifest = read_text(sourceRoot / "rust/config-poc/Cargo.toml");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
@@ -363,6 +364,18 @@ int main(int argc, char** argv) {
         configPocSource.find("layout_rects_non_overlapping") == std::string::npos ||
         configPocSource.find("addon_action_row_rects") == std::string::npos ||
         configPocSource.find("settings_operation_state_machine") == std::string::npos ||
+        configPocManifest.find("fcitx5-control-core") == std::string::npos ||
+        configPocManifest.find("fcitx5-package-core") == std::string::npos ||
+        configPocSource.find("control_schema_json") == std::string::npos ||
+        configPocSource.find("parse_manifest") == std::string::npos ||
+        configPocSource.find("parse_repository_index") == std::string::npos ||
+        configPocSource.find("parse_trusted_keys") == std::string::npos ||
+        configPocSource.find("parse_lockfile") == std::string::npos ||
+        configPocSource.find("set_package_state_entries") == std::string::npos ||
+        configPocSource.find("mark_package_for_removal_entries") == std::string::npos ||
+        configPocSource.find("finalize_package_removal_entries") == std::string::npos ||
+        configPocSource.find("typed_control_schema_consumed") == std::string::npos ||
+        configPocSource.find("package_core_lifecycle_remove_checked") == std::string::npos ||
         configPocSource.find("package_action_state_machine") == std::string::npos ||
         configPocSource.find("signed_repository_required_for_install") == std::string::npos ||
         configPocSource.find("unconfigured_repository_install_blocked") == std::string::npos ||

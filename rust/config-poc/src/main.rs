@@ -2,6 +2,13 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use fcitx5_control_core::{control_schema_json, control_usage_text};
+use fcitx5_package_core::{
+    finalize_package_removal_entries, find_repository_package, mark_package_for_removal_entries,
+    parse_lockfile, parse_manifest, parse_repository_index, parse_trusted_keys,
+    set_package_state_entries, validate_manifest_compatibility, PackageLifecycleState,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PageId {
     InputMethods,
@@ -172,6 +179,23 @@ struct OperationEvidence {
     no_unsafe_commands_for_package_actions: bool,
 }
 
+#[derive(Clone, Debug)]
+struct BoundaryEvidence {
+    typed_control_schema_consumed: bool,
+    typed_control_package_commands_present: bool,
+    typed_control_diagnostics_commands_present: bool,
+    typed_control_package_network_owner: bool,
+    package_core_manifest_parsed: bool,
+    package_core_manifest_compatible: bool,
+    package_core_repository_index_parsed: bool,
+    package_core_repository_entry_found: bool,
+    package_core_trusted_keyring_parsed: bool,
+    package_core_repository_key_trusted: bool,
+    package_core_lockfile_parsed: bool,
+    package_core_lifecycle_disable_enable_checked: bool,
+    package_core_lifecycle_remove_checked: bool,
+}
+
 fn main() {
     let mut args = env::args_os().skip(1);
     let mut self_check = false;
@@ -231,7 +255,8 @@ fn run_self_check() -> Result<String, String> {
     validate_model(&model)?;
     let layout = validate_layout(&model)?;
     let operations = validate_operations()?;
-    Ok(render_report(&model, &layout, &operations))
+    let boundaries = validate_typed_boundaries()?;
+    Ok(render_report(&model, &layout, &operations, &boundaries))
 }
 
 fn frozen_settings_model() -> ConfigPocModel {
@@ -1129,10 +1154,138 @@ fn refresh_updates(repository: RepositoryTrustState) -> Result<(), String> {
     }
 }
 
+fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
+    let schema = control_schema_json();
+    let usage = control_usage_text();
+    let typed_control_package_commands_present = [
+        "\"packages_list\"",
+        "\"packages_detail\"",
+        "\"packages_refresh\"",
+        "\"packages_install\"",
+        "\"packages_update\"",
+        "\"packages_state\"",
+        "\"packages_remove\"",
+        "\"packages_repair\"",
+    ]
+    .iter()
+    .all(|marker| schema.contains(marker))
+        && usage.contains("--packages-install ID")
+        && usage.contains("--packages-state ID enabled|disabled")
+        && usage.contains("--packages-remove ID");
+    let typed_control_diagnostics_commands_present =
+        schema.contains("\"diagnostics_plan\"") && usage.contains("--diagnostics-plan");
+    let typed_control_package_network_owner =
+        schema.contains("\"package_network_owner\":\"fcitx5-downloader.exe\"");
+    if !typed_control_package_commands_present
+        || !typed_control_diagnostics_commands_present
+        || !typed_control_package_network_owner
+    {
+        return Err("Config PoC typed Control command boundary is incomplete".to_owned());
+    }
+
+    let trusted_keys =
+        parse_trusted_keys(include_str!("../../../security/trusted-keys.template.json"))
+            .map_err(|error| format!("trusted keyring parse failed: {error}"))?;
+    let trusted_key = trusted_keys
+        .iter()
+        .find(|key| key.id().as_str() == "official-2026-mldsa65" && !key.revoked())
+        .ok_or_else(|| "official trusted key is unavailable to Config PoC".to_owned())?;
+
+    let manifest = parse_manifest(CONFIG_POC_PACKAGE_MANIFEST_JSON)
+        .map_err(|error| format!("manifest parse failed: {error}"))?;
+    validate_manifest_compatibility(&manifest, "x64")
+        .map_err(|error| format!("manifest compatibility failed: {error}"))?;
+    if manifest.id().as_str() != "fcitx5-rime"
+        || manifest.package_type().as_str() != "addon"
+        || manifest.key_id().as_str() != trusted_key.id().as_str()
+    {
+        return Err("Config PoC manifest identity does not match package UI state".to_owned());
+    }
+
+    let repository = parse_repository_index(CONFIG_POC_REPOSITORY_INDEX_JSON, "stable")
+        .map_err(|error| format!("repository parse failed: {error}"))?;
+    let entry = find_repository_package(&repository, "fcitx5-rime", "x64")
+        .ok_or_else(|| "repository entry for fcitx5-rime x64 is missing".to_owned())?;
+    if repository.key_id() != trusted_key.id().as_str()
+        || entry.package_type().as_str() != "addon"
+        || entry.version() != "1.1.0"
+    {
+        return Err("Config PoC repository package state is not trusted/typed".to_owned());
+    }
+
+    let mut lock = parse_lockfile(CONFIG_POC_LOCKFILE_JSON)
+        .map_err(|error| format!("lockfile parse failed: {error}"))?;
+    set_package_state_entries(&mut lock, "fcitx5-rime", PackageLifecycleState::Disabled)
+        .map_err(|error| format!("disable lifecycle failed: {error}"))?;
+    if lock
+        .iter()
+        .find(|entry| entry.id().as_str() == "fcitx5-rime")
+        .map(|entry| entry.state())
+        != Some(&PackageLifecycleState::Disabled)
+    {
+        return Err("Config PoC disable state did not use package-core lockfile state".to_owned());
+    }
+    set_package_state_entries(&mut lock, "fcitx5-rime", PackageLifecycleState::Enabled)
+        .map_err(|error| format!("enable lifecycle failed: {error}"))?;
+    mark_package_for_removal_entries(&mut lock, std::slice::from_ref(&manifest), "fcitx5-rime")
+        .map_err(|error| format!("mark-remove lifecycle failed: {error}"))?;
+    finalize_package_removal_entries(&mut lock, "fcitx5-rime")
+        .map_err(|error| format!("finalize-remove lifecycle failed: {error}"))?;
+    if lock
+        .iter()
+        .any(|entry| entry.id().as_str() == "fcitx5-rime")
+    {
+        return Err("Config PoC finalize-remove did not remove lockfile entry".to_owned());
+    }
+
+    Ok(BoundaryEvidence {
+        typed_control_schema_consumed: true,
+        typed_control_package_commands_present: true,
+        typed_control_diagnostics_commands_present: true,
+        typed_control_package_network_owner: true,
+        package_core_manifest_parsed: true,
+        package_core_manifest_compatible: true,
+        package_core_repository_index_parsed: true,
+        package_core_repository_entry_found: true,
+        package_core_trusted_keyring_parsed: true,
+        package_core_repository_key_trusted: true,
+        package_core_lockfile_parsed: true,
+        package_core_lifecycle_disable_enable_checked: true,
+        package_core_lifecycle_remove_checked: true,
+    })
+}
+
+const CONFIG_POC_PACKAGE_MANIFEST_JSON: &str = concat!(
+    r#"{"format_version":2,"id":"fcitx5-rime","version":"1.0.0","type":"addon","#,
+    r#""architecture":"x64","min_os":"10.0.17763","core_api":"1","addon_abi":"1","#,
+    r#""dependencies":[],"license":"LGPL-2.1-or-later","source_commit":"0123456789abcdef","#,
+    r#""permissions":["native-addon"],"key_id":"official-2026-mldsa65","payload":["#,
+    r#"{"path":"bin/addon.dll","size":1,"hashes":{"blake3":"#,
+    r#""0000000000000000000000000000000000000000000000000000000000000000","#,
+    r#""sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}"#,
+    r#"]}"#
+);
+
+const CONFIG_POC_REPOSITORY_INDEX_JSON: &str = concat!(
+    r#"{"format_version":1,"channel":"stable","generated_at":"2026-08-22T00:00:00Z","#,
+    r#""key_id":"official-2026-mldsa65","packages":[{"id":"fcitx5-rime","title":"Rime","#,
+    r#""summary":"Rime input method","version":"1.1.0","release_sequence":2,"type":"addon","#,
+    r#""architecture":"x64","download_url":"https://packages.example.invalid/fcitx5-rime.fcpkg","#,
+    r#""sha256":"0000000000000000000000000000000000000000000000000000000000000000","#,
+    r#""dependencies":[]}]}"#
+);
+
+const CONFIG_POC_LOCKFILE_JSON: &str = concat!(
+    r#"{"format_version":1,"packages":[{"id":"fcitx5-rime","version":"1.0.0","#,
+    r#""manifest_sha256":"0000000000000000000000000000000000000000000000000000000000000000","#,
+    r#""state":"enabled"}]}"#
+);
+
 fn render_report(
     model: &ConfigPocModel,
     layout: &LayoutEvidence,
     operations: &OperationEvidence,
+    boundaries: &BoundaryEvidence,
 ) -> String {
     let pages = model
         .pages
@@ -1153,7 +1306,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         json_escape(model.product_name),
         model.no_shell_out,
         pages,
@@ -1169,6 +1322,19 @@ fn render_report(
         layout.candidate_preview_rect.width,
         layout.candidate_preview_rect.height,
         operations.setting_transition_count,
+        boundaries.typed_control_schema_consumed,
+        boundaries.typed_control_package_commands_present,
+        boundaries.typed_control_diagnostics_commands_present,
+        boundaries.typed_control_package_network_owner,
+        boundaries.package_core_manifest_parsed,
+        boundaries.package_core_manifest_compatible,
+        boundaries.package_core_repository_index_parsed,
+        boundaries.package_core_repository_entry_found,
+        boundaries.package_core_trusted_keyring_parsed,
+        boundaries.package_core_repository_key_trusted,
+        boundaries.package_core_lockfile_parsed,
+        boundaries.package_core_lifecycle_disable_enable_checked,
+        boundaries.package_core_lifecycle_remove_checked,
         operations.signed_repository_required_for_install,
         operations.unconfigured_repository_install_blocked,
         operations.addon_install_transition_checked,
@@ -1232,6 +1398,19 @@ mod tests {
         assert!(report.contains("\"addon_action_row_rects\":50"));
         assert!(report.contains("\"settings_operation_state_machine\":true"));
         assert!(report.contains("\"setting_transition_count\":4"));
+        assert!(report.contains("\"typed_control_schema_consumed\":true"));
+        assert!(report.contains("\"typed_control_package_commands_present\":true"));
+        assert!(report.contains("\"typed_control_diagnostics_commands_present\":true"));
+        assert!(report.contains("\"typed_control_package_network_owner\":true"));
+        assert!(report.contains("\"package_core_manifest_parsed\":true"));
+        assert!(report.contains("\"package_core_manifest_compatible\":true"));
+        assert!(report.contains("\"package_core_repository_index_parsed\":true"));
+        assert!(report.contains("\"package_core_repository_entry_found\":true"));
+        assert!(report.contains("\"package_core_trusted_keyring_parsed\":true"));
+        assert!(report.contains("\"package_core_repository_key_trusted\":true"));
+        assert!(report.contains("\"package_core_lockfile_parsed\":true"));
+        assert!(report.contains("\"package_core_lifecycle_disable_enable_checked\":true"));
+        assert!(report.contains("\"package_core_lifecycle_remove_checked\":true"));
         assert!(report.contains("\"package_action_state_machine\":true"));
         assert!(report.contains("\"signed_repository_required_for_install\":true"));
         assert!(report.contains("\"unconfigured_repository_install_blocked\":true"));

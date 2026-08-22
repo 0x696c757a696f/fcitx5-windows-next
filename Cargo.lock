@@ -56,6 +56,10 @@ version = "0.1.0"
 [[package]]
 name = "fcitx5-config-poc"
 version = "0.1.0"
+dependencies = [
+ "fcitx5-control-core",
+ "fcitx5-package-core",
+]
 
 [[package]]
 name = "fcitx5-config-qa"

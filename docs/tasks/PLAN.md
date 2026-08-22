@@ -59,7 +59,7 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 | R2-02 | RUST-R2-02 | COMPLETED / ADR-SPLIT-ADAPTERS | 008 green | completed/RUST-R2-02.md |
 | R2-03 | RUST-R2-03 | COMPLETED | R2-02; 012 register/bootstrap contract | completed/RUST-R2-03.md |
 | R3-01 | RUST-R3-CANDIDATE-POC | MANUAL-PENDING / AUTOMATED-POC-GREEN | Candidate UX/layout/UILess contracts frozen; R1/R2 not blocked; user explicitly opened R3 gate | completed/RUST-R3-CANDIDATE-POC.md |
-| R3-02 | RUST-R3-CONFIG-POC | CURRENT / INITIAL-POC-GREEN / VIEW-MODEL-SELF-CHECK-GREEN / LAYOUT-NONOVERLAP-SELF-CHECK-GREEN / OPERATION-STATE-MACHINE-GREEN | Settings operation model and typed Control/config/package boundaries frozen; R1/R2 not blocked | current.md |
+| R3-02 | RUST-R3-CONFIG-POC | CURRENT / INITIAL-POC-GREEN / VIEW-MODEL-SELF-CHECK-GREEN / LAYOUT-NONOVERLAP-SELF-CHECK-GREEN / OPERATION-STATE-MACHINE-GREEN / TYPED-BOUNDARY-CONSUMPTION-GREEN | Settings operation model and typed Control/config/package boundaries frozen; R1/R2 not blocked | current.md |
 | R3-03 | RUST-R3-TSF-POC | FUTURE-GATED | TSF C++ behavior corpus frozen; host matrix evidence available; Candidate/Config Rust decision not blocking | queue/46-RUST-R3-TSF-POC.md |
 | REL-01 | RELEASE-01 | FUTURE-GATED | All stabilization tasks + required external evidence + intended R1/R2 cutovers | release/REL-01-RELEASE-GATE.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED | All stabilization tasks + required external evidence + intended R1/R2 cutovers | release/REL-01-RELEASE-GATE.md |
