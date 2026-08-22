@@ -8,6 +8,7 @@ fn main() {
     let mut args = env::args_os().skip(1);
     let mut self_check = false;
     let mut window_smoke = false;
+    let mut demo_snapshot = false;
     let mut report: Option<PathBuf> = None;
     let mut screenshot: Option<PathBuf> = None;
 
@@ -16,6 +17,8 @@ fn main() {
             self_check = true;
         } else if arg == "--window-smoke" {
             window_smoke = true;
+        } else if arg == "--demo-snapshot" {
+            demo_snapshot = true;
         } else if arg == "--report" {
             let Some(path) = args.next() else {
                 eprintln!("--report requires a path");
@@ -42,7 +45,7 @@ fn main() {
     let result = if self_check {
         fcitx5_candidate_core::run_candidate_poc_self_check()
     } else {
-        run_window_smoke(screenshot.as_deref())
+        run_window_smoke(screenshot.as_deref(), demo_snapshot)
     };
 
     match result {
@@ -75,12 +78,12 @@ fn write_report(path: &Path, output: &str) {
 }
 
 #[cfg(windows)]
-fn run_window_smoke(screenshot: Option<&Path>) -> Result<String, String> {
-    window_smoke::run(screenshot)
+fn run_window_smoke(screenshot: Option<&Path>, demo_snapshot: bool) -> Result<String, String> {
+    window_smoke::run(screenshot, demo_snapshot)
 }
 
 #[cfg(not(windows))]
-fn run_window_smoke(_screenshot: Option<&Path>) -> Result<String, String> {
+fn run_window_smoke(_screenshot: Option<&Path>, _demo_snapshot: bool) -> Result<String, String> {
     Err("window smoke is only available on Windows".to_owned())
 }
 
@@ -91,6 +94,7 @@ mod window_smoke {
     use std::fs;
     use std::path::Path;
     use std::ptr::{null, null_mut};
+    use std::sync::OnceLock;
 
     type Bool = i32;
     type Dword = u32;
@@ -237,6 +241,9 @@ mod window_smoke {
         data4: [0x81, 0x0c, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71],
     };
 
+    static WINDOW_TEXT: OnceLock<Vec<Vec<u16>>> = OnceLock::new();
+    static WINDOW_VERTICAL: OnceLock<bool> = OnceLock::new();
+
     #[link(name = "user32")]
     extern "system" {
         fn BeginPaint(hwnd: Hwnd, paint: *mut PaintStruct) -> Hdc;
@@ -335,43 +342,111 @@ mod window_smoke {
         path: String,
     }
 
-    pub fn run(screenshot: Option<&Path>) -> Result<String, String> {
-        let layout = layout(&LayoutInput {
-            orientation: Orientation::Horizontal,
-            items: vec![
-                Size {
-                    width: 92.0,
-                    height: 34.0,
-                },
-                Size {
-                    width: 164.0,
-                    height: 34.0,
-                },
-                Size {
-                    width: 130.0,
-                    height: 34.0,
-                },
-            ],
-            caret: Point { x: 180.0, y: 360.0 },
-            caret_height: 24.0,
-            work_area: CoreRect {
-                left: 0.0,
-                top: 0.0,
-                right: 1920.0,
-                bottom: 1080.0,
-            },
-            max_width: 720.0,
-            padding_x: 8.0,
-            padding_y: 6.0,
-            row_gap: 2.0,
-            column_gap: 8.0,
-            selected: 0,
-            ..LayoutInput::default()
-        });
+    struct InspectionSpec<'a> {
+        expected_width: i32,
+        expected_height: i32,
+        title: &'a [u16],
+        screenshot: Option<&'a Path>,
+        snapshot_name: &'a str,
+        orientation_name: &'a str,
+        candidate_count: usize,
+        expects_emoji: bool,
+    }
+
+    pub fn run(screenshot: Option<&Path>, demo_snapshot: bool) -> Result<String, String> {
+        let (
+            layout,
+            title,
+            text_lines,
+            snapshot_name,
+            orientation_name,
+            emoji_candidate_render_path,
+        ) = if demo_snapshot {
+            (
+                layout(&LayoutInput {
+                    orientation: Orientation::Vertical,
+                    items: vec![
+                        Size {
+                            width: 110.0,
+                            height: 34.0,
+                        },
+                        Size {
+                            width: 86.0,
+                            height: 34.0,
+                        },
+                        Size {
+                            width: 110.0,
+                            height: 34.0,
+                        },
+                    ],
+                    caret: Point { x: 100.0, y: 100.0 },
+                    caret_height: 24.0,
+                    work_area: CoreRect {
+                        left: 0.0,
+                        top: 0.0,
+                        right: 1920.0,
+                        bottom: 1080.0,
+                    },
+                    max_width: 720.0,
+                    padding_x: 8.0,
+                    padding_y: 6.0,
+                    row_gap: 2.0,
+                    column_gap: 8.0,
+                    selected: 0,
+                    ..LayoutInput::default()
+                }),
+                wide("Fcitx5 Candidate Demo"),
+                vec![wide("1. 输入法"), wide("2. 输入"), wide("3. 中文")],
+                "demo-snapshot",
+                "vertical",
+                false,
+            )
+        } else {
+            (
+                layout(&LayoutInput {
+                    orientation: Orientation::Horizontal,
+                    items: vec![
+                        Size {
+                            width: 92.0,
+                            height: 34.0,
+                        },
+                        Size {
+                            width: 164.0,
+                            height: 34.0,
+                        },
+                        Size {
+                            width: 130.0,
+                            height: 34.0,
+                        },
+                    ],
+                    caret: Point { x: 180.0, y: 360.0 },
+                    caret_height: 24.0,
+                    work_area: CoreRect {
+                        left: 0.0,
+                        top: 0.0,
+                        right: 1920.0,
+                        bottom: 1080.0,
+                    },
+                    max_width: 720.0,
+                    padding_x: 8.0,
+                    padding_y: 6.0,
+                    row_gap: 2.0,
+                    column_gap: 8.0,
+                    selected: 0,
+                    ..LayoutInput::default()
+                }),
+                wide("Fcitx5 Candidate PoC - 1 😀 emoji"),
+                vec![wide("1  😀  emoji"), wide("2  候选  text fallback")],
+                "emoji-window",
+                "horizontal",
+                true,
+            )
+        };
         let width = ((layout.window.right - layout.window.left).ceil() as i32).max(1);
         let height = ((layout.window.bottom - layout.window.top).ceil() as i32).max(1);
         let class_name = wide("Fcitx5CandidateRustPoc");
-        let title = wide("Fcitx5 Candidate PoC - 1 😀 emoji");
+        let _ = WINDOW_TEXT.set(text_lines);
+        let _ = WINDOW_VERTICAL.set(demo_snapshot);
 
         let instance = unsafe { GetModuleHandleW(null()) };
         let window_class = WndClassW {
@@ -409,20 +484,26 @@ mod window_smoke {
         if hwnd.is_null() {
             return Err("CreateWindowExW failed for Rust Candidate PoC".to_owned());
         }
-        let result = inspect_window(hwnd, width, height, &title, screenshot);
+        let result = inspect_window(
+            hwnd,
+            InspectionSpec {
+                expected_width: width,
+                expected_height: height,
+                title: &title,
+                screenshot,
+                snapshot_name,
+                orientation_name,
+                candidate_count: WINDOW_TEXT.get().map_or(0, Vec::len),
+                expects_emoji: emoji_candidate_render_path,
+            },
+        );
         unsafe {
             DestroyWindow(hwnd);
         }
         result
     }
 
-    fn inspect_window(
-        hwnd: Hwnd,
-        expected_width: i32,
-        expected_height: i32,
-        title: &[u16],
-        screenshot: Option<&Path>,
-    ) -> Result<String, String> {
+    fn inspect_window(hwnd: Hwnd, spec: InspectionSpec<'_>) -> Result<String, String> {
         unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             UpdateWindow(hwnd);
@@ -437,25 +518,33 @@ mod window_smoke {
         }
         let actual_width = rect.right - rect.left;
         let actual_height = rect.bottom - rect.top;
-        if (actual_width - expected_width).abs() > 2 || (actual_height - expected_height).abs() > 2
+        if (actual_width - spec.expected_width).abs() > 2
+            || (actual_height - spec.expected_height).abs() > 2
         {
             return Err(format!(
-                "Rust Candidate PoC window size mismatch: got {actual_width}x{actual_height}, expected {expected_width}x{expected_height}"
+                "Rust Candidate PoC window size mismatch: got {actual_width}x{actual_height}, expected {}x{}",
+                spec.expected_width, spec.expected_height
             ));
         }
 
         let mut text = [0u16; 128];
         let title_length = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
-        if title_length <= 0 || !text.starts_with(&title[..title.len().saturating_sub(1)]) {
+        if title_length <= 0 || !text.starts_with(&spec.title[..spec.title.len().saturating_sub(1)])
+        {
             return Err("Rust Candidate PoC accessibility title was not readable".to_owned());
         }
         let accessible_name = accessible_name(hwnd)?;
-        if !accessible_name.contains("Fcitx5 Candidate PoC") || !accessible_name.contains("emoji") {
+        if !accessible_name.contains("Fcitx5 Candidate") {
             return Err(format!(
                 "Rust Candidate PoC MSAA accessible name mismatch: {accessible_name}"
             ));
         }
-        let capture = if let Some(path) = screenshot {
+        if spec.expects_emoji && !accessible_name.contains("emoji") {
+            return Err(format!(
+                "Rust Candidate PoC MSAA accessible name missing emoji path: {accessible_name}"
+            ));
+        }
+        let capture = if let Some(path) = spec.screenshot {
             Some(capture_window(hwnd, actual_width, actual_height, path)?)
         } else {
             None
@@ -477,8 +566,16 @@ mod window_smoke {
             },
         );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n{}  \"emoji_candidate_render_path\":true,\n  \"result\":\"PASS\"\n}}",
-            rect.left, rect.top, rect.right, rect.bottom, capture_json
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"candidate_count\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
+            json_escape(spec.snapshot_name),
+            json_escape(spec.orientation_name),
+            spec.candidate_count,
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom,
+            capture_json,
+            if spec.expects_emoji { "true" } else { "false" }
         ))
     }
 
@@ -726,21 +823,32 @@ mod window_smoke {
                         SetBkMode(hdc, TRANSPARENT);
                         SetTextColor(hdc, COLORREF_TEXT);
                     }
-                    let text = wide("1  😀  emoji    2  候选  text fallback");
-                    let mut text_rect = Rect {
-                        left: 12,
-                        top: 0,
-                        right: 512,
-                        bottom: 46,
-                    };
+                    if let Some(lines) = WINDOW_TEXT.get() {
+                        let vertical = WINDOW_VERTICAL.get().copied().unwrap_or(false);
+                        for (index, text) in lines.iter().enumerate() {
+                            let (left, top, right, bottom) = if vertical {
+                                (12, 6 + (index as i32 * 36), 512, 40 + (index as i32 * 36))
+                            } else {
+                                (12 + (index as i32 * 124), 0, 132 + (index as i32 * 124), 46)
+                            };
+                            let mut text_rect = Rect {
+                                left,
+                                top,
+                                right,
+                                bottom,
+                            };
+                            unsafe {
+                                DrawTextW(
+                                    hdc,
+                                    text.as_ptr(),
+                                    (text.len() - 1) as i32,
+                                    &mut text_rect,
+                                    DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+                                );
+                            }
+                        }
+                    }
                     unsafe {
-                        DrawTextW(
-                            hdc,
-                            text.as_ptr(),
-                            (text.len() - 1) as i32,
-                            &mut text_rect,
-                            DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-                        );
                         EndPaint(hwnd, &paint);
                     }
                 }

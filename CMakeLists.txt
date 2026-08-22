@@ -179,6 +179,8 @@ add_dependencies(fcitx5_control_core_rust fcitx5_control_core_rustlib)
 
 set(FCITX_RUST_CANDIDATE_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_candidate_core.lib")
+set(FCITX_RUST_CANDIDATE_POC_EXE
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5-candidate-poc.exe")
 add_custom_target(
   fcitx5_candidate_core_rustlib
   COMMAND
@@ -193,6 +195,16 @@ add_library(fcitx5_candidate_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_candidate_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}")
 add_dependencies(fcitx5_candidate_core_rust fcitx5_candidate_core_rustlib)
+add_custom_target(
+  fcitx5_candidate_poc_rustbin
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+    fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-candidate-poc executable")
 
 add_library(fcitx5_candidate_model STATIC src/candidate/candidate_model.cpp)
 add_library(fcitx5::candidate_model ALIAS fcitx5_candidate_model)
@@ -847,6 +859,20 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-window-smoke.bmp")
     set_tests_properties(
       rust-candidate-poc-window-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-candidate-poc-demo-snapshot
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
+        --demo-snapshot --report
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-demo-snapshot.json" --screenshot
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-demo-snapshot.bmp")
+    set_tests_properties(
+      rust-candidate-poc-demo-snapshot PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(FCITX_PWSH_EXECUTABLE)
       add_custom_target(
         fcitx5_rust_package_core_packaged_artifact_smoke
@@ -922,7 +948,8 @@ if(BUILD_TESTING)
     fcitx5_candidate_ui_config_integration_test
     tests/integration/candidate_ui_config_integration_test.cpp)
   add_dependencies(
-    fcitx5_candidate_ui_config_integration_test fcitx5_ui fcitx5_control)
+    fcitx5_candidate_ui_config_integration_test fcitx5_ui fcitx5_control
+    fcitx5_candidate_poc_rustbin)
   target_link_libraries(
     fcitx5_candidate_ui_config_integration_test PRIVATE fcitx5::config user32)
   fcitx_apply_project_options(fcitx5_candidate_ui_config_integration_test)
@@ -931,7 +958,7 @@ if(BUILD_TESTING)
     NAME candidate-ui-live-presentation-contract
     COMMAND fcitx5_candidate_ui_config_integration_test
             "$<TARGET_FILE:fcitx5_ui>" "$<TARGET_FILE:fcitx5_control>"
-            "$<TARGET_FILE_DIR:fcitx5_ui>/resources")
+            "$<TARGET_FILE_DIR:fcitx5_ui>/resources" "${FCITX_RUST_CANDIDATE_POC_EXE}")
   set_tests_properties(candidate-ui-live-presentation-contract PROPERTIES TIMEOUT 30)
 
   add_executable(

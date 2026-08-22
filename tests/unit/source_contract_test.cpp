@@ -244,6 +244,8 @@ int main(int argc, char** argv) {
     const auto candidatePocBinary =
         read_text(sourceRoot / "rust/candidate-core/src/bin/candidate_poc.rs");
     const auto candidateUiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
+    const auto candidateIntegrationSource =
+        read_text(sourceRoot / "tests/integration/candidate_ui_config_integration_test.cpp");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
@@ -272,11 +274,20 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("get_acc_name") == std::string::npos ||
         candidatePocBinary.find("msaa_accessible_name_readable") == std::string::npos ||
         candidatePocBinary.find("--screenshot") == std::string::npos ||
+        candidatePocBinary.find("--demo-snapshot") == std::string::npos ||
+        candidatePocBinary.find("snapshot_name") == std::string::npos ||
+        candidatePocBinary.find("candidate_count") == std::string::npos ||
         candidatePocBinary.find("GetDIBits") == std::string::npos ||
         candidatePocBinary.find("visual_non_background_pixels") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-contract") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-window-smoke") == std::string::npos ||
+        cmakeSource.find("rust-candidate-poc-demo-snapshot") == std::string::npos ||
+        cmakeSource.find("fcitx5_candidate_poc_rustbin") == std::string::npos ||
         cmakeSource.find("candidate-poc-window-smoke.bmp") == std::string::npos ||
+        candidateIntegrationSource.find("rust-candidate-demo.json") == std::string::npos ||
+        candidateIntegrationSource.find("demo-snapshot") == std::string::npos ||
+        candidateIntegrationSource.find("Rust/C++ candidate demo width diverged") ==
+            std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||

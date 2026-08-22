@@ -242,22 +242,42 @@ std::string size_text(const RECT& rectangle) {
 std::string read_text(const fs::path& path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
-    throw std::runtime_error("saved presentation config is missing");
+    throw std::runtime_error("expected text artifact is missing: " + path.string());
   }
   return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+int json_int_field(const std::string& text, std::string_view field) {
+  const std::string needle = "\"" + std::string(field) + "\":";
+  const auto marker = text.find(needle);
+  if (marker == std::string::npos) {
+    throw std::runtime_error("missing JSON field: " + std::string(field));
+  }
+  const auto start = marker + needle.size();
+  const auto end = text.find_first_not_of("-0123456789", start);
+  return std::stoi(text.substr(start, end == std::string::npos ? end : end - start));
+}
+
+void expect_contains(const std::string& text, std::string_view needle,
+                     std::string_view message) {
+  if (text.find(needle) == std::string::npos) {
+    throw std::runtime_error(std::string(message));
+  }
 }
 
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
   try {
-    expect(argc == 4, "expected UI, Control, and renderer resource paths");
+    expect(argc == 5, "expected UI, Control, renderer resource, and Rust PoC paths");
     const fs::path ui_source = argv[1];
     const fs::path control_source = argv[2];
     const fs::path resources_source = argv[3];
+    const fs::path rust_candidate_poc = argv[4];
     expect(fs::is_regular_file(ui_source), "candidate UI executable is missing");
     expect(fs::is_regular_file(control_source), "Control executable is missing");
     expect(fs::is_directory(resources_source), "candidate renderer resources are missing");
+    expect(fs::is_regular_file(rust_candidate_poc), "Rust Candidate PoC executable is missing");
 
     TemporaryDirectory temporary;
     const auto root = temporary.path() / L"Fcitx5";
@@ -284,6 +304,35 @@ int wmain(int argc, wchar_t** argv) {
     const LONG vertical_height = vertical.bottom - vertical.top;
     expect(vertical_width > 0 && vertical_height > 0,
            "vertical candidate preview has an invalid size");
+
+    const auto rust_demo_report = temporary.path() / L"rust-candidate-demo.json";
+    const auto rust_demo_screenshot = temporary.path() / L"rust-candidate-demo.bmp";
+    expect(run_process(rust_candidate_poc,
+                       {L"--window-smoke", L"--demo-snapshot", L"--report",
+                        rust_demo_report.wstring(), L"--screenshot",
+                        rust_demo_screenshot.wstring()}) == 0,
+           "Rust candidate demo snapshot smoke failed");
+    const auto rust_demo = read_text(rust_demo_report);
+    expect_contains(rust_demo, "\"snapshot_name\":\"demo-snapshot\"",
+                    "Rust candidate demo snapshot report used the wrong snapshot");
+    expect_contains(rust_demo, "\"orientation\":\"vertical\"",
+                    "Rust candidate demo snapshot did not use vertical orientation");
+    expect_contains(rust_demo, "\"candidate_count\":3",
+                    "Rust candidate demo snapshot did not use the C++ demo candidate count");
+    expect_contains(rust_demo, "\"screenshot_written\":true",
+                    "Rust candidate demo snapshot did not write screenshot evidence");
+    expect_contains(rust_demo, "\"msaa_accessible_name_readable\":true",
+                    "Rust candidate demo snapshot did not prove accessibility name");
+    const int rust_demo_width =
+        json_int_field(rust_demo, "window_right") - json_int_field(rust_demo, "window_left");
+    const int rust_demo_height =
+        json_int_field(rust_demo, "window_bottom") - json_int_field(rust_demo, "window_top");
+    expect(rust_demo_width > 0 && rust_demo_height > 0,
+           "Rust candidate demo snapshot has invalid geometry");
+    expect(rust_demo_width <= vertical_width * 3 && rust_demo_width * 3 >= vertical_width,
+           "Rust/C++ candidate demo width diverged beyond allowed PoC tolerance");
+    expect(rust_demo_height <= vertical_height * 3 && rust_demo_height * 3 >= vertical_height,
+           "Rust/C++ candidate demo height diverged beyond allowed PoC tolerance");
 
     expect(run_process(control, {L"--set-presentation", L"dark", L"builtin:default",
                                  L"horizontal", L"enabled", L"6", L"Microsoft YaHei", L"720",
