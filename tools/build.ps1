@@ -149,12 +149,13 @@ try {
   New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
   $env:TEMP = $buildTempRoot
   $env:TMP = $buildTempRoot
-  $rustToolchainBin = Join-Path $repoRoot 'out/toolchains/rust/rustup-home/toolchains/1.98.0-x86_64-pc-windows-msvc/bin'
-  if (Test-Path -LiteralPath (Join-Path $rustToolchainBin 'cargo.exe') -PathType Leaf) {
-    $env:PATH = "$rustToolchainBin;$env:PATH"
-    $env:RUSTUP_HOME = Join-Path $repoRoot 'out/toolchains/rust/rustup-home'
-    $env:CARGO_HOME = Join-Path $repoRoot 'out/toolchains/rust/cargo-home'
-  }
+  $env:RUSTUP_HOME = Join-Path $repoRoot 'out/toolchains/rust/rustup-home'
+  $env:CARGO_HOME = Join-Path $repoRoot 'out/toolchains/rust/cargo-home'
+  $env:RUSTUP_INIT_SKIP_PATH_CHECK = 'yes'
+  $env:RUSTUP_IO_THREADS = '1'
+  & (Join-Path $PSScriptRoot 'prepare-rust.ps1')
+  $rustToolchainBin = Join-Path $env:RUSTUP_HOME 'toolchains/1.98.0-x86_64-pc-windows-msvc/bin'
+  $env:PATH = "$rustToolchainBin;$env:PATH"
   switch ($Command) {
     'bootstrap' {
       $cmake = Get-CMakeCommand
