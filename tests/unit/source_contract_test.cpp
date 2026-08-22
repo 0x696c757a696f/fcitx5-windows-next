@@ -504,6 +504,13 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("DllCanUnloadNow") == std::string::npos ||
         rustTsfPocSource.find("TsfPocBehaviorState") == std::string::npos ||
         rustTsfPocSource.find("tsf_behavior_corpus_report") == std::string::npos ||
+        rustTsfPocSource.find("tsf_behavior_differential_report") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
+        rustTsfPocSource.find("\"rust_case_passes\"") == std::string::npos ||
+        rustTsfPocSource.find("\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\"") ==
+            std::string::npos ||
+        rustTsfPocSource.find("\"full_host_differential_pending\":true") ==
+            std::string::npos ||
         rustTsfPocSource.find("engine_timeout_fails_open") == std::string::npos ||
         rustTsfPocSource.find("malformed_ipc_fails_open") == std::string::npos ||
         rustTsfPocSource.find("cxx_tsf_remains_authoritative:true") == std::string::npos ||
@@ -513,6 +520,10 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("process_injection:false") == std::string::npos ||
         rustTsfPocSmoke.find("CLASS_E_CLASSNOTAVAILABLE") == std::string::npos ||
         rustTsfPocSmoke.find("factory should create an empty ITfTextInputProcessorEx") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
+        rustTsfPocSmoke.find("\\\"rust_case_passes\\\":7") == std::string::npos ||
+        rustTsfPocSmoke.find("\\\"cpp_baseline_consumes_same_corpus\\\":true") ==
             std::string::npos ||
         rustTsfPocCorpus.find("\"format_version\": 1") == std::string::npos ||
         rustTsfPocCorpus.find("\"activate_advises_sinks\"") == std::string::npos ||

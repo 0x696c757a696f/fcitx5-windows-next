@@ -6,6 +6,7 @@ use std::ffi::c_void;
 use std::panic::{catch_unwind, UnwindSafe};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::OnceLock;
 use windows::Win32::Foundation::{CLASS_E_CLASSNOTAVAILABLE, E_POINTER, E_UNEXPECTED, S_OK};
 use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_NOINTERFACE, LPARAM, S_FALSE, WPARAM};
 use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl};
@@ -23,6 +24,16 @@ pub const FCITX5_TEXT_SERVICE_CLSID: GUID = GUID::from_u128(0x3a21b9e2_4f47_4c36
 static MODULE_REFERENCES: AtomicI32 = AtomicI32::new(0);
 const TSF_BEHAVIOR_CORPUS_JSON: &str =
     include_str!("../../../tests/fixtures/tsf_behavior_corpus.json");
+const REQUIRED_TSF_BEHAVIOR_CASES: &[&str] = &[
+    "activate_advises_sinks",
+    "key_down_commit_applies_text",
+    "key_down_preedit_starts_composition",
+    "key_up_routes_release_without_eating",
+    "engine_timeout_fails_open",
+    "malformed_ipc_fails_open",
+    "deactivate_unadvises_sinks_and_clears_composition",
+];
+static BEHAVIOR_REPORT: OnceLock<String> = OnceLock::new();
 
 pub fn panic_to_hresult<F>(operation: F) -> HRESULT
 where
@@ -177,22 +188,113 @@ fn corpus_has_case(corpus: &str, id: &str) -> bool {
 }
 
 pub fn tsf_behavior_corpus_report() -> String {
-    const REQUIRED_CASES: &[&str] = &[
-        "activate_advises_sinks",
-        "key_down_commit_applies_text",
-        "key_down_preedit_starts_composition",
-        "key_up_routes_release_without_eating",
-        "engine_timeout_fails_open",
-        "malformed_ipc_fails_open",
-        "deactivate_unadvises_sinks_and_clears_composition",
-    ];
-    let all_cases_present = REQUIRED_CASES
+    let all_cases_present = REQUIRED_TSF_BEHAVIOR_CASES
         .iter()
         .all(|case_id| corpus_has_case(TSF_BEHAVIOR_CORPUS_JSON, case_id));
     format!(
         "{{\"format_version\":1,\"corpus\":\"tsf_behavior_corpus.json\",\"case_count\":{},\"all_cases_present\":{},\"panic_boundary\":\"catch_unwind\",\"timeout_fail_open\":true,\"malformed_ipc_fail_open\":true,\"shipping_cxx_authoritative\":true}}",
-        REQUIRED_CASES.len(),
+        REQUIRED_TSF_BEHAVIOR_CASES.len(),
         if all_cases_present { "true" } else { "false" }
+    )
+}
+
+fn evaluate_behavior_case(case_id: &str) -> bool {
+    let mut state = TsfPocBehaviorState::default();
+    match case_id {
+        "activate_advises_sinks" => {
+            state.activate();
+            state.active
+                && state.thread_manager_sink_advised
+                && state.thread_focus_sink_advised
+                && state.key_sink_advised
+                && !state.eaten
+        }
+        "key_down_commit_applies_text" => {
+            state.activate();
+            state.key_down(EngineResult::ok(true, "你", ""));
+            state.active
+                && state.eaten
+                && state.commit == "你"
+                && state.preedit.is_empty()
+                && !state.composition_active
+                && !state.fail_open
+        }
+        "key_down_preedit_starts_composition" => {
+            state.activate();
+            state.key_down(EngineResult::ok(true, "", "ni"));
+            state.active
+                && state.eaten
+                && state.commit.is_empty()
+                && state.preedit == "ni"
+                && state.composition_active
+                && !state.fail_open
+        }
+        "key_up_routes_release_without_eating" => {
+            state.activate();
+            state.key_up();
+            state.active && state.release_routed && !state.eaten && !state.fail_open
+        }
+        "engine_timeout_fails_open" => {
+            state.activate();
+            state.key_down(EngineResult::timeout());
+            state.active
+                && !state.eaten
+                && state.commit.is_empty()
+                && state.preedit.is_empty()
+                && !state.composition_active
+                && state.fail_open
+        }
+        "malformed_ipc_fails_open" => {
+            state.activate();
+            state.key_down(EngineResult::malformed());
+            state.active
+                && !state.eaten
+                && state.commit.is_empty()
+                && state.preedit.is_empty()
+                && !state.composition_active
+                && state.fail_open
+        }
+        "deactivate_unadvises_sinks_and_clears_composition" => {
+            state.activate();
+            state.key_down(EngineResult::ok(true, "", "ni"));
+            state.deactivate();
+            !state.active
+                && !state.thread_manager_sink_advised
+                && !state.thread_focus_sink_advised
+                && !state.key_sink_advised
+                && !state.composition_active
+                && !state.eaten
+                && state.commit.is_empty()
+                && state.preedit.is_empty()
+        }
+        _ => false,
+    }
+}
+
+pub fn tsf_behavior_differential_report() -> String {
+    let mut passed = 0usize;
+    let mut case_results = String::new();
+    for (index, case_id) in REQUIRED_TSF_BEHAVIOR_CASES.iter().enumerate() {
+        let corpus_present = corpus_has_case(TSF_BEHAVIOR_CORPUS_JSON, case_id);
+        let rust_passed = corpus_present && evaluate_behavior_case(case_id);
+        if rust_passed {
+            passed += 1;
+        }
+        if index != 0 {
+            case_results.push(',');
+        }
+        case_results.push_str(&format!(
+            "{{\"id\":\"{}\",\"corpus_present\":{},\"rust_passed\":{}}}",
+            case_id,
+            if corpus_present { "true" } else { "false" },
+            if rust_passed { "true" } else { "false" }
+        ));
+    }
+    format!(
+        "{{\"format_version\":1,\"corpus\":\"tsf_behavior_corpus.json\",\"case_count\":{},\"rust_case_passes\":{},\"case_results\":[{}],\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"cpp_baseline_consumes_same_corpus\":true,\"shipping_cxx_authoritative\":true,\"full_host_differential_pending\":true,\"report_export\":\"panic_contained\"}}",
+        REQUIRED_TSF_BEHAVIOR_CASES.len(),
+        passed,
+        case_results
     )
 }
 
@@ -493,6 +595,34 @@ pub unsafe extern "system" fn DllGetClassObject(
     panic_to_hresult(|| unsafe { dll_get_class_object_impl(class_id, interface_id, object) })
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// `length` is optional. When non-null it must point to writable process-local
+/// memory. The returned pointer is owned by this module and remains valid until
+/// the DLL is unloaded.
+pub unsafe extern "system" fn Fcitx5TsfPocBehaviorReport(length: *mut usize) -> *const u8 {
+    match catch_unwind(|| {
+        let report = BEHAVIOR_REPORT.get_or_init(tsf_behavior_differential_report);
+        if !length.is_null() {
+            unsafe {
+                *length = report.len();
+            }
+        }
+        report.as_ptr()
+    }) {
+        Ok(pointer) => pointer,
+        Err(_) => {
+            if !length.is_null() {
+                unsafe {
+                    *length = 0;
+                }
+            }
+            std::ptr::null()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,6 +713,31 @@ mod tests {
         assert!(report.contains(r#""malformed_ipc_fail_open":true"#));
         assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("key_down_commit_applies_text"));
         assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("deactivate_unadvises_sinks"));
+    }
+
+    #[test]
+    fn behavior_differential_report_lists_every_case_result() {
+        let report = tsf_behavior_differential_report();
+        assert!(report.contains(r#""case_count":7"#));
+        assert!(report.contains(r#""rust_case_passes":7"#));
+        assert!(report.contains(r#""cpp_baseline_ctest":"tsf-key-commit-e2e""#));
+        assert!(report.contains(r#""cpp_baseline_consumes_same_corpus":true"#));
+        assert!(report.contains(r#""full_host_differential_pending":true"#));
+        for case_id in REQUIRED_TSF_BEHAVIOR_CASES {
+            assert!(report.contains(case_id));
+        }
+    }
+
+    #[test]
+    fn behavior_report_export_is_panic_contained_and_length_delimited() {
+        let mut length = 0usize;
+        let pointer = unsafe { Fcitx5TsfPocBehaviorReport(&mut length) };
+        assert!(!pointer.is_null());
+        assert!(length > 0);
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
+        let report = std::str::from_utf8(bytes).expect("behavior report must be UTF-8 JSON");
+        assert!(report.contains(r#""report_export":"panic_contained""#));
+        assert!(report.contains(r#""rust_case_passes":7"#));
     }
 
     #[test]

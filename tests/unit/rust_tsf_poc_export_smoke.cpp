@@ -4,6 +4,7 @@
 #include <objbase.h>
 
 #include <iostream>
+#include <string>
 
 namespace {
 
@@ -31,12 +32,30 @@ int wmain(int argc, wchar_t** argv) {
     }
     using GetClassObject = HRESULT(__stdcall*)(REFCLSID, REFIID, void**);
     using CanUnloadNow = HRESULT(__stdcall*)();
+    using BehaviorReport = const char*(__stdcall*)(size_t*);
     const auto getClassObject =
         reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
     const auto canUnloadNow =
         reinterpret_cast<CanUnloadNow>(GetProcAddress(module, "DllCanUnloadNow"));
-    if (!getClassObject || !canUnloadNow) {
+    const auto behaviorReport = reinterpret_cast<BehaviorReport>(
+        GetProcAddress(module, "Fcitx5TsfPocBehaviorReport"));
+    if (!getClassObject || !canUnloadNow || !behaviorReport) {
         std::cerr << "Rust TSF PoC exports missing\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    size_t reportLength = 0;
+    const char* reportBytes = behaviorReport(&reportLength);
+    const std::string report =
+        reportBytes && reportLength > 0 ? std::string(reportBytes, reportLength) : std::string();
+    if (report.find("\"corpus\":\"tsf_behavior_corpus.json\"") == std::string::npos ||
+        report.find("\"case_count\":7") == std::string::npos ||
+        report.find("\"rust_case_passes\":7") == std::string::npos ||
+        report.find("\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\"") == std::string::npos ||
+        report.find("\"cpp_baseline_consumes_same_corpus\":true") == std::string::npos ||
+        report.find("\"full_host_differential_pending\":true") == std::string::npos ||
+        report.find("\"report_export\":\"panic_contained\"") == std::string::npos) {
+        std::cerr << "Rust TSF PoC behavior report should expose same-corpus case results\n";
         FreeLibrary(module);
         return 1;
     }
