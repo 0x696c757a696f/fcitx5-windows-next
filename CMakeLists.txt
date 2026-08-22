@@ -835,6 +835,17 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-report.json")
     set_tests_properties(
       rust-candidate-poc-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-candidate-poc-window-smoke
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke --report
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-window-smoke.json")
+    set_tests_properties(
+      rust-candidate-poc-window-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(FCITX_PWSH_EXECUTABLE)
       add_custom_target(
         fcitx5_rust_package_core_packaged_artifact_smoke

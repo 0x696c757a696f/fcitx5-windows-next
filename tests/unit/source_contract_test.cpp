@@ -263,7 +263,11 @@ int main(int argc, char** argv) {
         candidateLayoutSource.find("process_injection") == std::string::npos ||
         candidatePocManifest.find("name = \"fcitx5-candidate-poc\"") == std::string::npos ||
         candidatePocBinary.find("--self-check") == std::string::npos ||
+        candidatePocBinary.find("--window-smoke") == std::string::npos ||
+        candidatePocBinary.find("CreateWindowExW") == std::string::npos ||
+        candidatePocBinary.find("WS_EX_NOACTIVATE") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-contract") == std::string::npos ||
+        cmakeSource.find("rust-candidate-poc-window-smoke") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||
