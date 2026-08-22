@@ -3222,7 +3222,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const auto visualConfig = currentPreviewVisualConfig(mode);
         const bool verticalLayout = !automatic && vertical;
         const float previewTop = 148.0F;
-        const float previewBottom = 260.0F;
+        const float previewBottom = 266.0F;
         const float previewLeft = 288.0F;
         const float previewRight = rowRight;
         const float radius =
@@ -3288,14 +3288,13 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             std::wstring_view comment;
         };
         const std::array verticalCandidates{
-            PreviewCandidate{L"1", L"输入法", L"shūrùfǎ"},
-            PreviewCandidate{L"2", L"输入", L"shūrù"},
-            PreviewCandidate{L"3", L"中文", L"zhōngwén"},
+            PreviewCandidate{L"1.", L"输入法", L"shūrùfǎ"},
+            PreviewCandidate{L"2.", L"中文", L"zhōngwén"},
+            PreviewCandidate{L"3.", L"😀", L"emoji"},
         };
         const std::array horizontalCandidates{
-            PreviewCandidate{L"1", L"输入法", L"shūrùfǎ"},
-            PreviewCandidate{L"2", L"输入", L"shūrù"},
-            PreviewCandidate{L"3", L"中文", L"zhōngwén"},
+            PreviewCandidate{L"1.", L"输入法", L"shūrùfǎ"},
+            PreviewCandidate{L"2.", L"🎉", L"emoji"},
         };
         const auto drawProductionLayoutPreview = [&](const auto& candidates,
                                                      fcitx::windows::ui::Orientation orientation) {
@@ -3316,7 +3315,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                     measureTextWidth(candidate.comment, previewCommentSize,
                                      DWRITE_FONT_WEIGHT_NORMAL, fontFamily);
                 const float textHeight =
-                    (std::max)({previewLabelSize, previewTextSize, previewCommentSize});
+                    (std::max)({previewLabelSize, previewTextSize, previewCommentSize}) * 1.35F;
                 itemSizes.push_back({labelWidth + textWidth + commentWidth + itemPaddingX * 2.0F,
                                      textHeight + itemPaddingY * 2.0F});
             }

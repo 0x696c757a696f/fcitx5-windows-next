@@ -29,7 +29,7 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 | 013 | STAB-CAND-LOCALE-013 | COMPLETED | 004 single profile metadata contract should be available | completed/013-STAB-CAND-LOCALE-013.md |
 | 014 | REG-PKG-WINPATH-001 | COMPLETED | previous eligible task | completed/014-REG-PKG-WINPATH-001.md |
 | 015 | STAB-HOST-MATRIX-015 | MANUAL-PENDING | previous eligible task | completed/015-STAB-HOST-MATRIX-015.md |
-| 016 | REG-CONFIG-VISUAL-001 | COMPLETED / AFTER-SCREENSHOT-PENDING | Core stabilization 003–014 should be green; 015 may be MANUAL-PENDING per PLAN | completed/016-REG-CONFIG-VISUAL-001.md |
+| 016 | REG-CONFIG-VISUAL-001 | COMPLETED / EMBEDDED-EMOJI-PREVIEW-GREEN / AFTER-SCREENSHOT-PENDING | Core stabilization 003–014 should be green; 015 may be MANUAL-PENDING per PLAN | completed/016-REG-CONFIG-VISUAL-001.md |
 | 017 | REG-CONFIG-LIVE-001 | COMPLETED / REVERIFIED-AFTER-016 | 016 visual component system complete | completed/017-REG-CONFIG-LIVE-001.md |
 | 018 | REG-CAND-UX | COMPLETED | 013 locale metadata available; 017 can consume the new Auto setting | completed/018-REG-CAND-UX.md |
 | 019 | REG-BRAND-001 | MANUAL-PENDING | 004 single profile identity complete; 016 resource/visual system available | completed/019-REG-BRAND-001.md |
@@ -58,7 +58,7 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 | R2-01 | RUST-R2-01 | COMPLETED | 007 launcher C++ contract green; 020 generation model if launcher supervises drains | completed/RUST-R2-01.md |
 | R2-02 | RUST-R2-02 | COMPLETED / ADR-SPLIT-ADAPTERS | 008 green | completed/RUST-R2-02.md |
 | R2-03 | RUST-R2-03 | COMPLETED | R2-02; 012 register/bootstrap contract | completed/RUST-R2-03.md |
-| R3-01 | RUST-R3-CANDIDATE-POC | MANUAL-PENDING / AUTOMATED-POC-GREEN | Candidate UX/layout/UILess contracts frozen; R1/R2 not blocked; user explicitly opened R3 gate | completed/RUST-R3-CANDIDATE-POC.md |
+| R3-01 | RUST-R3-CANDIDATE-POC | MANUAL-PENDING / AUTOMATED-POC-GREEN / CONFIG-EMBEDDED-EMOJI-PREVIEW-GREEN | Candidate UX/layout/UILess contracts frozen; R1/R2 not blocked; user explicitly opened R3 gate | completed/RUST-R3-CANDIDATE-POC.md |
 | R3-02 | RUST-R3-CONFIG-POC | COMPLETED / AUTOMATED-POC-GREEN | Settings operation model and typed Control/config/package boundaries frozen; R1/R2 not blocked | completed/RUST-R3-CONFIG-POC.md |
 | R3-03 | RUST-R3-TSF-POC | CURRENT / USER-GATE-OVERRIDE / ACTIVATABLE-EMPTY-TIP-GREEN / BEHAVIOR-CORPUS-GREEN / CPP-BASELINE-CORPUS-GREEN / RUST-BEHAVIOR-ABI-REPORT-GREEN / ARTIFACT-AUDIT-GREEN / COM-FAIL-OPEN-GREEN / REFERENCE-REFRESH-GREEN / REFERENCE-CORPUS-GREEN / SERVICE-LIFECYCLE-STATE-GREEN / PROFILE-IDENTITY-ABI-GREEN / IPC-BOUNDARY-GREEN / COMPOSITION-TRANSCRIPT-GREEN / ARM64-BUILD-ENV-PREFLIGHT-GREEN / ARM64-LOCAL-TOOLCHAIN-MISSING / DIFFERENTIAL-SUMMARY-GREEN / PRODUCT-DECISION-RECORDED / MANUAL-DIFFERENTIAL-PENDING | User explicitly allowed opening this PoC gate before full manual host matrix evidence; C++ TSF remains shipping authoritative and full differential/real-host evidence remains MANUAL-PENDING | queue/46-RUST-R3-TSF-POC.md |
 | REL-01 | RELEASE-01 | FUTURE-GATED | All stabilization tasks + required external evidence + intended R1/R2 cutovers | release/REL-01-RELEASE-GATE.md |
