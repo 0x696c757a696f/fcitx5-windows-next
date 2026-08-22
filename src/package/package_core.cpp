@@ -27,6 +27,19 @@ extern "C" {
 #include <nlohmann/json.hpp>
 
 extern "C" {
+struct Fcitx5ByteSlice {
+  const std::uint8_t* data;
+  std::size_t len;
+};
+
+struct Fcitx5TrustedKeyNative {
+  Fcitx5ByteSlice id;
+  Fcitx5ByteSlice algorithm;
+  Fcitx5ByteSlice public_key;
+  Fcitx5ByteSlice rsa_public_blob;
+  std::uint8_t revoked;
+};
+
 struct Fcitx5PackageLifecycleResult {
   int status;
   std::uint8_t error_code[64];
@@ -42,6 +55,9 @@ Fcitx5PackageLifecycleResult fcitx5_package_mark_remove_utf16(
 Fcitx5PackageLifecycleResult fcitx5_package_finalize_remove_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len);
+Fcitx5PackageLifecycleResult fcitx5_package_verify_installed_utf16(
+    const wchar_t* install_root, std::size_t install_root_len,
+    const Fcitx5TrustedKeyNative* trusted_keys, std::size_t trusted_key_count);
 }
 
 namespace fcitx::package {
@@ -115,6 +131,14 @@ std::string ffi_string(std::span<const std::uint8_t> bytes) {
   const auto end = std::ranges::find(bytes, std::uint8_t{0});
   return {reinterpret_cast<const char*>(bytes.data()),
           static_cast<std::size_t>(end - bytes.begin())};
+}
+
+Fcitx5ByteSlice ffi_slice(std::string_view value) {
+  return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
+}
+
+Fcitx5ByteSlice ffi_slice(std::span<const std::byte> value) {
+  return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
 
 void require_lifecycle_ok(const Fcitx5PackageLifecycleResult& result) {
@@ -1112,29 +1136,22 @@ std::vector<TrustedKey> read_trusted_keys(const std::filesystem::path& path) {
 
 void verify_installed_packages(const std::filesystem::path& install_root,
                                std::span<const TrustedKey> trusted_keys) {
-  for (const auto& entry : read_lockfile(install_root)) {
-    const auto metadata = install_root / "manifests" / std::filesystem::path(entry.id);
-    const auto manifest_path = metadata / std::filesystem::path(entry.version + ".json");
-    const auto signature_path = metadata / std::filesystem::path(entry.version + ".sig");
-    const auto manifest_bytes = read_file_bounded(manifest_path, kMaximumManifestBytes);
-    if (hex_sha256(sha256(std::as_bytes(std::span(manifest_bytes)))) != entry.manifest_sha256) {
-      fail("repair_failed", "installed manifest hash differs from packages.lock");
-    }
-    const auto manifest = parse_manifest(manifest_bytes);
-    if (manifest.id != entry.id || manifest.version != entry.version) {
-      fail("repair_failed", "installed manifest identity differs from packages.lock");
-    }
-    const auto key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
-      return candidate.id == manifest.key_id;
+  std::vector<Fcitx5TrustedKeyNative> key_views;
+  key_views.reserve(trusted_keys.size());
+  for (const auto& key : trusted_keys) {
+    key_views.push_back(Fcitx5TrustedKeyNative{
+        ffi_slice(key.id),
+        ffi_slice(key.algorithm),
+        ffi_slice(std::span<const std::byte>(key.public_key.data(), key.public_key.size())),
+        ffi_slice(std::span<const std::byte>(key.rsa_public_blob.data(),
+                                             key.rsa_public_blob.size())),
+        key.revoked ? std::uint8_t{1} : std::uint8_t{0},
     });
-    if (key == trusted_keys.end()) {
-      fail("untrusted_key", "installed manifest key is no longer trusted");
-    }
-    const auto signature = read_file_bounded(signature_path, 16U * 1024U);
-    verify_manifest_signature(manifest_bytes, std::as_bytes(std::span(signature)), *key);
-    verify_payload(manifest, install_root / "versions" / std::filesystem::path(entry.id) /
-                                 std::filesystem::path(entry.version));
   }
+  const std::wstring root = native_path_string(install_root);
+  require_lifecycle_ok(fcitx5_package_verify_installed_utf16(
+      root.data(), root.size(), key_views.empty() ? nullptr : key_views.data(),
+      key_views.size()));
 }
 
 void set_package_state(const std::filesystem::path& install_root, std::string_view package_id,

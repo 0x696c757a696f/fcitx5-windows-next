@@ -5411,6 +5411,220 @@ fn lifecycle_error(code: &'static str, message: impl Into<String>) -> LifecycleE
     }
 }
 
+#[cfg(windows)]
+fn read_repair_file_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, LifecycleError> {
+    let size = fs::metadata(path)
+        .map_err(|_| {
+            lifecycle_error(
+                "invalid_file",
+                "file is missing or exceeds its resource budget",
+            )
+        })?
+        .len();
+    if size > maximum {
+        return Err(lifecycle_error(
+            "invalid_file",
+            "file is missing or exceeds its resource budget",
+        ));
+    }
+    let bytes =
+        fs::read(path).map_err(|_| lifecycle_error("io_error", "unable to read complete file"))?;
+    if bytes.len() as u64 != size {
+        return Err(lifecycle_error("io_error", "unable to read complete file"));
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+pub fn verify_installed_packages_for_repair(
+    install_root: impl AsRef<Path>,
+    trusted_keys: &[TrustedKey],
+) -> Result<(), LifecycleError> {
+    let install_root = install_root.as_ref();
+    for entry in read_installed_lockfile(install_root)
+        .map_err(|error| lifecycle_error(error.code(), error.to_string()))?
+    {
+        let metadata = install_root.join("manifests").join(entry.id().as_str());
+        let manifest_path = metadata.join(format!("{}.json", entry.version()));
+        let signature_path = metadata.join(format!("{}.sig", entry.version()));
+        let manifest_bytes = read_repair_file_bounded(&manifest_path, MAX_MANIFEST_BYTES as u64)?;
+        if sha256_digest(&manifest_bytes) != *entry.manifest_sha256() {
+            return Err(lifecycle_error(
+                "repair_failed",
+                "installed manifest hash differs from packages.lock",
+            ));
+        }
+        let manifest_text = std::str::from_utf8(&manifest_bytes)
+            .map_err(|_| lifecycle_error("invalid_manifest", "manifest is not valid UTF-8"))?;
+        let manifest = parse_manifest(manifest_text)
+            .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+        if manifest.id() != entry.id() || manifest.version() != entry.version() {
+            return Err(lifecycle_error(
+                "repair_failed",
+                "installed manifest identity differs from packages.lock",
+            ));
+        }
+        let trusted_key = trusted_keys
+            .iter()
+            .find(|candidate| candidate.id() == manifest.key_id())
+            .ok_or_else(|| {
+                lifecycle_error(
+                    "untrusted_key",
+                    "installed manifest key is no longer trusted",
+                )
+            })?;
+        let signature = read_repair_file_bounded(&signature_path, MAX_SIGNATURE_BYTES)?;
+        verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+            .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+        verify_payload_root(
+            &manifest,
+            install_root
+                .join("versions")
+                .join(entry.id().as_str())
+                .join(entry.version()),
+        )
+        .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+mod repair_ffi {
+    #![allow(unsafe_code)]
+
+    use super::{verify_installed_packages_for_repair, PackageId, TrustAlgorithm, TrustedKey};
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::path::PathBuf;
+    use std::slice;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5ByteSlice {
+        pub data: *const u8,
+        pub len: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5TrustedKey {
+        pub id: Fcitx5ByteSlice,
+        pub algorithm: Fcitx5ByteSlice,
+        pub public_key: Fcitx5ByteSlice,
+        pub rsa_public_blob: Fcitx5ByteSlice,
+        pub revoked: u8,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageRepairResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+    }
+
+    fn write_ascii<const N: usize>(buffer: &mut [u8; N], value: &str) {
+        buffer.fill(0);
+        let bytes = value.as_bytes();
+        let length = bytes.len().min(N.saturating_sub(1));
+        buffer[..length].copy_from_slice(&bytes[..length]);
+    }
+
+    fn ok_result() -> Fcitx5PackageRepairResult {
+        Fcitx5PackageRepairResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+        }
+    }
+
+    fn error_result(code: &str, message: &str) -> Fcitx5PackageRepairResult {
+        let mut result = ok_result();
+        result.status = 1;
+        write_ascii(&mut result.error_code, code);
+        write_ascii(&mut result.error_message, message);
+        result
+    }
+
+    fn path_from_utf16(ptr: *const u16, len: usize) -> Option<PathBuf> {
+        if ptr.is_null() {
+            return None;
+        }
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
+        Some(PathBuf::from(OsString::from_wide(slice)))
+    }
+
+    fn slice_from_raw<'a>(slice: Fcitx5ByteSlice) -> Option<&'a [u8]> {
+        if slice.len == 0 {
+            return Some(&[]);
+        }
+        if slice.data.is_null() {
+            return None;
+        }
+        Some(unsafe { slice::from_raw_parts(slice.data, slice.len) })
+    }
+
+    fn string_from_raw(slice: Fcitx5ByteSlice) -> Option<String> {
+        std::str::from_utf8(slice_from_raw(slice)?)
+            .ok()
+            .map(ToOwned::to_owned)
+    }
+
+    fn algorithm_from_str(value: &str) -> Option<TrustAlgorithm> {
+        match value {
+            "rsa-2048-sha256" => Some(TrustAlgorithm::Rsa2048Sha256),
+            "mldsa65" => Some(TrustAlgorithm::Mldsa65),
+            "slhdsa-sha2-128s" => Some(TrustAlgorithm::SlhdsaSha2_128s),
+            _ => None,
+        }
+    }
+
+    fn key_from_raw(raw: &Fcitx5TrustedKey) -> Option<TrustedKey> {
+        let id = PackageId::parse(&string_from_raw(raw.id)?).ok()?;
+        let algorithm = algorithm_from_str(&string_from_raw(raw.algorithm)?)?;
+        let public_key = slice_from_raw(raw.public_key)?.to_vec();
+        Some(TrustedKey {
+            id,
+            algorithm,
+            public_key,
+            revoked: raw.revoked != 0,
+        })
+    }
+
+    fn trusted_keys_from_raw(
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+    ) -> Option<Vec<TrustedKey>> {
+        if trusted_key_count == 0 {
+            return Some(Vec::new());
+        }
+        if trusted_keys.is_null() {
+            return None;
+        }
+        let raw = unsafe { slice::from_raw_parts(trusted_keys, trusted_key_count) };
+        raw.iter().map(key_from_raw).collect()
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_verify_installed_utf16(
+        install_root: *const u16,
+        install_root_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+    ) -> Fcitx5PackageRepairResult {
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return error_result("invalid_file", "install root path is invalid");
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return error_result("invalid_keyring", "trusted key set is invalid");
+        };
+        match verify_installed_packages_for_repair(install_root, &trusted_keys) {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArchiveEntry {
     name: String,
