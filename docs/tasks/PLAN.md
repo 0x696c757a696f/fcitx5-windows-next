@@ -55,8 +55,8 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 | R1-04 | RUST-R1-04 | COMPLETED | 008 process execution semantics + R1-01 | completed/RUST-R1-04.md |
 | R1-05 | RUST-R1-05 | COMPLETED / ADR-KEPT-CXX | 011/012 installer semantics + R1-03 | completed/RUST-R1-05.md |
 | R2-01 | RUST-R2-01 | COMPLETED | 007 launcher C++ contract green; 020 generation model if launcher supervises drains | completed/RUST-R2-01.md |
-| R2-02 | RUST-R2-02 | CURRENT | 008 green | current.md |
-| R2-03 | RUST-R2-03 | FUTURE-GATED | R2-02; 012 register/bootstrap contract | queue/43-RUST-R2-03.md |
+| R2-02 | RUST-R2-02 | COMPLETED / ADR-SPLIT-ADAPTERS | 008 green | completed/RUST-R2-02.md |
+| R2-03 | RUST-R2-03 | CURRENT / JUSTIFICATION-GATED | R2-02; 012 register/bootstrap contract | current.md |
 | R3-01 | RUST-R3-CANDIDATE-POC | FUTURE-GATED | Candidate UX/layout/UILess contracts frozen; R1/R2 not blocked | queue/44-RUST-R3-CANDIDATE-POC.md |
 | R3-02 | RUST-R3-CONFIG-POC | FUTURE-GATED | Settings operation model and typed Control/config/package boundaries frozen; R1/R2 not blocked | queue/45-RUST-R3-CONFIG-POC.md |
 | R3-03 | RUST-R3-TSF-POC | FUTURE-GATED | TSF C++ behavior corpus frozen; host matrix evidence available; Candidate/Config Rust decision not blocking | queue/46-RUST-R3-TSF-POC.md |

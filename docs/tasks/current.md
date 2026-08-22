@@ -1,35 +1,34 @@
-# Current Task — RUST-R2-02 Rust Control + process-execution boundary
+# Current Task — RUST-R2-03 Rust diagnostics/repair model where justified
 
 **Mode:** CHANGE
-**Task ID:** `RUST-R2-02`
-**Prerequisite:** 008 green
+**Task ID:** `RUST-R2-03`
+**Prerequisite:** R2-02; 012 register/bootstrap contract
 
 ## Goal
 
-Migrate Control CLI/shared process execution to Rust after the authoritative C++ drain/timeout/cancel semantics are frozen.
+Move diagnostics/repair data modeling to Rust only where it benefits from typed parsing/state handling; keep Windows registration/bootstrap system calls in the minimal C++ layer unless evidence says otherwise.
 
 ## Specification references
 
 - Rust R2 matrix
-- Control/process sections
-- `REG-PROC-PIPE-001` / `REG-RUST-DIFF-001`
+- Diagnostics/Repair sections
+- Register/bootstrap Keep-C++ decision
 
 ## Required behavior / implementation contract
 
-- Preserve exact exit/result/output-limit/cancel/process-tree semantics.
-- Use safe typed command construction; no generic shell interpolation.
-- Keep Config calling the typed Control API rather than duplicating business logic.
+- Diagnostics never exposes live input text/history.
+- Reuse authoritative package/control/registration owners; do not create shadow state.
+- Do not migrate thin register/bootstrap simply for language consistency.
 
 ## Required validation
 
-- 64 KiB/1 MiB/>limit/hung/early-close/nonzero/invalid-output differential corpus.
-- Packaged Config→Control smoke.
-- PE/license/SBOM checks.
+- Good/bad health fixtures.
+- Repair dry-run/plan/result schema tests.
+- Config diagnostics integration smoke.
 
 ## Done when
 
-- Rust Control/process execution is authoritative.
-- No wait-before-drain regression.
-- No permanent C++/Rust selector.
+- Only justified management logic migrates.
+- System-side C++ helpers remain minimal and authoritative where specified.
 
 After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.
