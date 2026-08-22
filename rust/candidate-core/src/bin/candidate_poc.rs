@@ -92,11 +92,14 @@ mod window_smoke {
     type Hinstance = *mut c_void;
     type Hmenu = *mut c_void;
     type Hwnd = *mut c_void;
+    type Hresult = i32;
     type Lparam = isize;
     type Lresult = isize;
     type Uint = u32;
     type Wparam = usize;
 
+    const CHILDID_SELF: i32 = 0;
+    const COINIT_APARTMENTTHREADED: Dword = 0x2;
     const COLORREF_BACKGROUND: Dword = 0x00F8_F6F2;
     const COLORREF_TEXT: Dword = 0x0022_2222;
     const CS_HREDRAW: Uint = 0x0002;
@@ -104,8 +107,10 @@ mod window_smoke {
     const DT_LEFT: Uint = 0x0000;
     const DT_SINGLELINE: Uint = 0x0020;
     const DT_VCENTER: Uint = 0x0004;
+    const OBJID_WINDOW: Dword = 0;
     const SW_SHOWNOACTIVATE: i32 = 4;
     const TRANSPARENT: i32 = 1;
+    const VT_I4: u16 = 3;
     const WM_DESTROY: Uint = 0x0002;
     const WM_PAINT: Uint = 0x000F;
     const WS_EX_NOACTIVATE: Dword = 0x0800_0000;
@@ -147,6 +152,55 @@ mod window_smoke {
         lpsz_class_name: *const u16,
     }
 
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Variant {
+        vt: u16,
+        reserved1: u16,
+        reserved2: u16,
+        reserved3: u16,
+        data1: isize,
+        data2: isize,
+    }
+
+    #[repr(C)]
+    struct IAccessible {
+        vtable: *const IAccessibleVtable,
+    }
+
+    #[repr(C)]
+    struct IAccessibleVtable {
+        query_interface:
+            unsafe extern "system" fn(*mut IAccessible, *const Guid, *mut *mut c_void) -> Hresult,
+        add_ref: unsafe extern "system" fn(*mut IAccessible) -> u32,
+        release: unsafe extern "system" fn(*mut IAccessible) -> u32,
+        get_type_info_count: usize,
+        get_type_info: usize,
+        get_ids_of_names: usize,
+        invoke: usize,
+        get_acc_parent: usize,
+        get_acc_child_count: usize,
+        get_acc_child: usize,
+        get_acc_name:
+            unsafe extern "system" fn(*mut IAccessible, Variant, *mut *mut u16) -> Hresult,
+    }
+
+    const IID_IACCESSIBLE: Guid = Guid {
+        data1: 0x618736e0,
+        data2: 0x3c3d,
+        data3: 0x11cf,
+        data4: [0x81, 0x0c, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71],
+    };
+
     #[link(name = "user32")]
     extern "system" {
         fn BeginPaint(hwnd: Hwnd, paint: *mut PaintStruct) -> Hdc;
@@ -183,6 +237,28 @@ mod window_smoke {
     extern "system" {
         fn CreateSolidBrush(color: Dword) -> Hbrush;
         fn DeleteObject(object: *mut c_void) -> Bool;
+    }
+
+    #[link(name = "ole32")]
+    extern "system" {
+        fn CoInitializeEx(reserved: *mut c_void, coinit: Dword) -> Hresult;
+        fn CoUninitialize();
+    }
+
+    #[link(name = "oleacc")]
+    extern "system" {
+        fn AccessibleObjectFromWindow(
+            hwnd: Hwnd,
+            object_id: Dword,
+            iid: *const Guid,
+            object: *mut *mut c_void,
+        ) -> Hresult;
+    }
+
+    #[link(name = "oleaut32")]
+    extern "system" {
+        fn SysFreeString(value: *mut u16);
+        fn SysStringLen(value: *const u16) -> u32;
     }
 
     #[link(name = "kernel32")]
@@ -303,10 +379,71 @@ mod window_smoke {
         if title_length <= 0 || !text.starts_with(&title[..title.len().saturating_sub(1)]) {
             return Err("Rust Candidate PoC accessibility title was not readable".to_owned());
         }
+        let accessible_name = accessible_name(hwnd)?;
+        if !accessible_name.contains("Fcitx5 Candidate PoC") || !accessible_name.contains("emoji") {
+            return Err(format!(
+                "Rust Candidate PoC MSAA accessible name mismatch: {accessible_name}"
+            ));
+        }
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"emoji_candidate_render_path\":true,\n  \"result\":\"PASS\"\n}}",
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"emoji_candidate_render_path\":true,\n  \"result\":\"PASS\"\n}}",
             rect.left, rect.top, rect.right, rect.bottom
         ))
+    }
+
+    fn accessible_name(hwnd: Hwnd) -> Result<String, String> {
+        let init_result = unsafe { CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED) };
+        let should_uninitialize = init_result >= 0;
+        let mut object: *mut c_void = null_mut();
+        let result = unsafe {
+            AccessibleObjectFromWindow(hwnd, OBJID_WINDOW, &IID_IACCESSIBLE, &mut object)
+        };
+        if result < 0 || object.is_null() {
+            if should_uninitialize {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+            return Err(format!(
+                "AccessibleObjectFromWindow failed for Rust Candidate PoC: HRESULT 0x{:08x}",
+                result as u32
+            ));
+        }
+
+        let accessible = object.cast::<IAccessible>();
+        let variant = Variant {
+            vt: VT_I4,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+            data1: CHILDID_SELF as isize,
+            data2: 0,
+        };
+        let mut name: *mut u16 = null_mut();
+        let name_result =
+            unsafe { ((*(*accessible).vtable).get_acc_name)(accessible, variant, &mut name) };
+        let release = unsafe { (*(*accessible).vtable).release };
+        unsafe {
+            release(accessible);
+        }
+        if should_uninitialize {
+            unsafe {
+                CoUninitialize();
+            }
+        }
+        if name_result < 0 || name.is_null() {
+            return Err(format!(
+                "IAccessible::get_accName failed for Rust Candidate PoC: HRESULT 0x{:08x}",
+                name_result as u32
+            ));
+        }
+        let length = unsafe { SysStringLen(name) } as usize;
+        let value = unsafe { std::slice::from_raw_parts(name, length) };
+        let string = String::from_utf16_lossy(value);
+        unsafe {
+            SysFreeString(name);
+        }
+        Ok(string)
     }
 
     unsafe extern "system" fn window_proc(

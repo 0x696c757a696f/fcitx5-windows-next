@@ -266,6 +266,9 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("--window-smoke") == std::string::npos ||
         candidatePocBinary.find("CreateWindowExW") == std::string::npos ||
         candidatePocBinary.find("WS_EX_NOACTIVATE") == std::string::npos ||
+        candidatePocBinary.find("AccessibleObjectFromWindow") == std::string::npos ||
+        candidatePocBinary.find("get_acc_name") == std::string::npos ||
+        candidatePocBinary.find("msaa_accessible_name_readable") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-contract") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-window-smoke") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
