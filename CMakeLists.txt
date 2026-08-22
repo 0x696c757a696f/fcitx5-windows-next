@@ -160,6 +160,23 @@ set_target_properties(
   PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_PROCESS_EXECUTION_CORE_STATICLIB}")
 add_dependencies(fcitx5_process_execution_core_rust fcitx5_process_execution_core_rustlib)
 
+set(FCITX_RUST_CONTROL_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_control_core.lib")
+add_custom_target(
+  fcitx5_control_core_rustlib
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-control-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-control-core staticlib")
+add_library(fcitx5_control_core_rust STATIC IMPORTED GLOBAL)
+set_target_properties(fcitx5_control_core_rust
+                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CONTROL_CORE_STATICLIB}")
+add_dependencies(fcitx5_control_core_rust fcitx5_control_core_rustlib)
+
 add_library(fcitx5_candidate_model STATIC src/candidate/candidate_model.cpp)
 add_library(fcitx5::candidate_model ALIAS fcitx5_candidate_model)
 target_compile_features(fcitx5_candidate_model PUBLIC cxx_std_20)
@@ -346,9 +363,9 @@ target_link_libraries(
   PRIVATE fcitx5::windows_common fcitx5::config fcitx5::protocol
           fcitx5::ipc_client fcitx5::platform fcitx5::package_core
           fcitx5::deployment_core fcitx5::tsf_activation_guard
-          fcitx5_package_core_rust
+          fcitx5_package_core_rust fcitx5_control_core_rust
           fcitx5::process_execution shell32 ole32 ws2_32 userenv ntdll)
-add_dependencies(fcitx5_control fcitx5_package_core_rustlib)
+add_dependencies(fcitx5_control fcitx5_package_core_rustlib fcitx5_control_core_rustlib)
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 

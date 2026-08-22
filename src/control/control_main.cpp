@@ -55,6 +55,17 @@ int fcitx5_repository_sequence_state_write_utf16(const wchar_t* data_root,
                                                  const wchar_t* channel,
                                                  std::size_t channel_len,
                                                  std::uint64_t maximum);
+
+struct Fcitx5ControlUtf16 {
+    const wchar_t* ptr;
+    std::size_t len;
+};
+int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
+                                       Fcitx5ControlUtf16 registry_value,
+                                       std::uint8_t* out_enabled);
+int fcitx5_control_startup_set_utf16(Fcitx5ControlUtf16 executable_directory,
+                                     Fcitx5ControlUtf16 registry_value,
+                                     std::uint8_t enabled);
 }
 
 namespace {
@@ -1094,60 +1105,28 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
               << "}\n";
 }
 
-std::wstring startupCommand() {
-    const fs::path launcher = executableDirectory() / L"fcitx5-launcher.exe";
-    return L"\"" + launcher.wstring() + L"\" --background";
+Fcitx5ControlUtf16 nativeView(std::wstring_view value) noexcept {
+    return {value.data(), value.size()};
 }
 
 bool queryStartup(bool& enabled) {
-    enabled = false;
-    HKEY key = nullptr;
-    constexpr wchar_t path[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
-        return true;
-    DWORD type = 0;
-    DWORD bytes = 0;
-    const LSTATUS sizeResult = RegQueryValueExW(
-        key, fcitx::windows::kReleaseIdentity.registry_value, nullptr, &type, nullptr, &bytes);
-    if (sizeResult == ERROR_FILE_NOT_FOUND) {
-        RegCloseKey(key);
-        return true;
-    }
-    if (sizeResult != ERROR_SUCCESS || type != REG_SZ || bytes < sizeof(wchar_t) ||
-        bytes > 64U * 1024U) {
-        RegCloseKey(key);
+    const std::wstring directory = executableDirectory().wstring();
+    const std::wstring registryValue = fcitx::windows::kReleaseIdentity.registry_value;
+    std::uint8_t rustEnabled = 0;
+    if (fcitx5_control_startup_query_utf16(nativeView(directory), nativeView(registryValue),
+                                           &rustEnabled) != 0) {
+        enabled = false;
         return false;
     }
-    std::wstring value(bytes / sizeof(wchar_t), L'\0');
-    const LSTATUS readResult =
-        RegQueryValueExW(key, fcitx::windows::kReleaseIdentity.registry_value, nullptr, &type,
-                         reinterpret_cast<BYTE*>(value.data()), &bytes);
-    RegCloseKey(key);
-    while (!value.empty() && value.back() == L'\0')
-        value.pop_back();
-    enabled = readResult == ERROR_SUCCESS && value == startupCommand();
-    return readResult == ERROR_SUCCESS;
+    enabled = rustEnabled != 0;
+    return true;
 }
 
 bool setStartup(bool enabled) {
-    constexpr wchar_t path[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, path, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
-                        nullptr) != ERROR_SUCCESS)
-        return false;
-    LSTATUS result = ERROR_SUCCESS;
-    if (enabled) {
-        const std::wstring command = startupCommand();
-        result = RegSetValueExW(key, fcitx::windows::kReleaseIdentity.registry_value, 0, REG_SZ,
-                                reinterpret_cast<const BYTE*>(command.c_str()),
-                                static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
-    } else {
-        result = RegDeleteValueW(key, fcitx::windows::kReleaseIdentity.registry_value);
-        if (result == ERROR_FILE_NOT_FOUND)
-            result = ERROR_SUCCESS;
-    }
-    RegCloseKey(key);
-    return result == ERROR_SUCCESS;
+    const std::wstring directory = executableDirectory().wstring();
+    const std::wstring registryValue = fcitx::windows::kReleaseIdentity.registry_value;
+    return fcitx5_control_startup_set_utf16(nativeView(directory), nativeView(registryValue),
+                                           enabled ? 1 : 0) == 0;
 }
 
 void usage() {

@@ -1,0 +1,355 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
+use std::ffi::{c_void, OsString};
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::path::PathBuf;
+use std::ptr::null_mut;
+
+type Dword = u32;
+type Lstatus = i32;
+type Hkey = *mut c_void;
+
+const ERROR_SUCCESS: Lstatus = 0;
+const ERROR_FILE_NOT_FOUND: Lstatus = 2;
+const KEY_QUERY_VALUE: Dword = 0x0001;
+const KEY_SET_VALUE: Dword = 0x0002;
+const REG_SZ: Dword = 1;
+const HKEY_CURRENT_USER: Hkey = 0x8000_0001_usize as Hkey;
+const RUN_KEY: &[u16] = &[
+    b'S' as u16,
+    b'o' as u16,
+    b'f' as u16,
+    b't' as u16,
+    b'w' as u16,
+    b'a' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b'\\' as u16,
+    b'M' as u16,
+    b'i' as u16,
+    b'c' as u16,
+    b'r' as u16,
+    b'o' as u16,
+    b's' as u16,
+    b'o' as u16,
+    b'f' as u16,
+    b't' as u16,
+    b'\\' as u16,
+    b'W' as u16,
+    b'i' as u16,
+    b'n' as u16,
+    b'd' as u16,
+    b'o' as u16,
+    b'w' as u16,
+    b's' as u16,
+    b'\\' as u16,
+    b'C' as u16,
+    b'u' as u16,
+    b'r' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b'n' as u16,
+    b't' as u16,
+    b'V' as u16,
+    b'e' as u16,
+    b'r' as u16,
+    b's' as u16,
+    b'i' as u16,
+    b'o' as u16,
+    b'n' as u16,
+    b'\\' as u16,
+    b'R' as u16,
+    b'u' as u16,
+    b'n' as u16,
+    0,
+];
+
+#[repr(C)]
+pub struct Fcitx5ControlUtf16 {
+    ptr: *const u16,
+    len: usize,
+}
+
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn RegOpenKeyExW(
+        h_key: Hkey,
+        sub_key: *const u16,
+        options: Dword,
+        sam_desired: Dword,
+        result: *mut Hkey,
+    ) -> Lstatus;
+    fn RegCreateKeyExW(
+        h_key: Hkey,
+        sub_key: *const u16,
+        reserved: Dword,
+        class: *mut u16,
+        options: Dword,
+        sam_desired: Dword,
+        security_attributes: *mut c_void,
+        result: *mut Hkey,
+        disposition: *mut Dword,
+    ) -> Lstatus;
+    fn RegQueryValueExW(
+        h_key: Hkey,
+        value_name: *const u16,
+        reserved: *mut Dword,
+        value_type: *mut Dword,
+        data: *mut u8,
+        data_size: *mut Dword,
+    ) -> Lstatus;
+    fn RegSetValueExW(
+        h_key: Hkey,
+        value_name: *const u16,
+        reserved: Dword,
+        value_type: Dword,
+        data: *const u8,
+        data_size: Dword,
+    ) -> Lstatus;
+    fn RegDeleteValueW(h_key: Hkey, value_name: *const u16) -> Lstatus;
+    fn RegCloseKey(h_key: Hkey) -> Lstatus;
+}
+
+struct RegistryKey(Hkey);
+
+impl RegistryKey {
+    fn get(&self) -> Hkey {
+        self.0
+    }
+}
+
+impl Drop for RegistryKey {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = RegCloseKey(self.0);
+        }
+    }
+}
+
+fn string_from_utf16(value: Fcitx5ControlUtf16) -> Option<OsString> {
+    if value.ptr.is_null() {
+        return None;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
+    Some(OsString::from_wide(slice))
+}
+
+fn wide_z(value: &std::ffi::OsStr) -> Vec<u16> {
+    let mut wide: Vec<u16> = value.encode_wide().collect();
+    wide.push(0);
+    wide
+}
+
+fn quote(value: &std::ffi::OsStr) -> OsString {
+    let wide: Vec<u16> = value.encode_wide().collect();
+    let mut result = Vec::with_capacity(wide.len() + 2);
+    result.push(b'"' as u16);
+    let mut backslashes = 0_usize;
+    for character in wide {
+        if character == b'\\' as u16 {
+            backslashes += 1;
+        } else if character == b'"' as u16 {
+            result.extend(std::iter::repeat_n(b'\\' as u16, backslashes + 1));
+            backslashes = 0;
+            result.push(character);
+        } else {
+            result.extend(std::iter::repeat_n(b'\\' as u16, backslashes));
+            backslashes = 0;
+            result.push(character);
+        }
+    }
+    result.extend(std::iter::repeat_n(b'\\' as u16, backslashes * 2));
+    result.push(b'"' as u16);
+    OsString::from_wide(&result)
+}
+
+fn startup_command(executable_directory: OsString) -> Vec<u16> {
+    let launcher = PathBuf::from(executable_directory).join("fcitx5-launcher.exe");
+    let mut command = quote(launcher.as_os_str());
+    command.push(" --background");
+    wide_z(&command)
+}
+
+fn query_startup(executable_directory: OsString, registry_value: OsString) -> Result<bool, ()> {
+    let expected = startup_command(executable_directory);
+    let value_name = wide_z(&registry_value);
+    let mut raw_key = null_mut();
+    let open_result = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            RUN_KEY.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut raw_key,
+        )
+    };
+    if open_result != ERROR_SUCCESS {
+        return Ok(false);
+    }
+    let key = RegistryKey(raw_key);
+    let mut value_type = 0_u32;
+    let mut bytes = 0_u32;
+    let size_result = unsafe {
+        RegQueryValueExW(
+            key.get(),
+            value_name.as_ptr(),
+            null_mut(),
+            &mut value_type,
+            null_mut(),
+            &mut bytes,
+        )
+    };
+    if size_result == ERROR_FILE_NOT_FOUND {
+        return Ok(false);
+    }
+    if size_result != ERROR_SUCCESS || value_type != REG_SZ || !(2..=64 * 1024).contains(&bytes) {
+        return Err(());
+    }
+    let mut value = vec![0_u16; (bytes as usize).div_ceil(2)];
+    let read_result = unsafe {
+        RegQueryValueExW(
+            key.get(),
+            value_name.as_ptr(),
+            null_mut(),
+            &mut value_type,
+            value.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    while value.last().copied() == Some(0) {
+        value.pop();
+    }
+    let mut expected_trimmed = expected;
+    while expected_trimmed.last().copied() == Some(0) {
+        expected_trimmed.pop();
+    }
+    if read_result != ERROR_SUCCESS {
+        return Err(());
+    }
+    Ok(value == expected_trimmed)
+}
+
+fn set_startup(
+    executable_directory: OsString,
+    registry_value: OsString,
+    enabled: bool,
+) -> Result<(), ()> {
+    let value_name = wide_z(&registry_value);
+    let mut raw_key = null_mut();
+    let create_result = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            RUN_KEY.as_ptr(),
+            0,
+            null_mut(),
+            0,
+            KEY_SET_VALUE,
+            null_mut(),
+            &mut raw_key,
+            null_mut(),
+        )
+    };
+    if create_result != ERROR_SUCCESS {
+        return Err(());
+    }
+    let key = RegistryKey(raw_key);
+    let result = if enabled {
+        let command = startup_command(executable_directory);
+        unsafe {
+            RegSetValueExW(
+                key.get(),
+                value_name.as_ptr(),
+                0,
+                REG_SZ,
+                command.as_ptr().cast(),
+                (command.len() * 2) as Dword,
+            )
+        }
+    } else {
+        let delete_result = unsafe { RegDeleteValueW(key.get(), value_name.as_ptr()) };
+        if delete_result == ERROR_FILE_NOT_FOUND {
+            ERROR_SUCCESS
+        } else {
+            delete_result
+        }
+    };
+    if result == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// # Safety
+///
+/// UTF-16 slices must remain valid for the duration of the call. `out_enabled`
+/// must point to writable storage. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_startup_query_utf16(
+    executable_directory: Fcitx5ControlUtf16,
+    registry_value: Fcitx5ControlUtf16,
+    out_enabled: *mut u8,
+) -> i32 {
+    if out_enabled.is_null() {
+        return 1;
+    }
+    let Some(executable_directory) = string_from_utf16(executable_directory) else {
+        return 1;
+    };
+    let Some(registry_value) = string_from_utf16(registry_value) else {
+        return 1;
+    };
+    match query_startup(executable_directory, registry_value) {
+        Ok(enabled) => {
+            unsafe {
+                *out_enabled = u8::from(enabled);
+            }
+            0
+        }
+        Err(()) => 1,
+    }
+}
+
+/// # Safety
+///
+/// UTF-16 slices must remain valid for the duration of the call. No pointer is
+/// retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_startup_set_utf16(
+    executable_directory: Fcitx5ControlUtf16,
+    registry_value: Fcitx5ControlUtf16,
+    enabled: u8,
+) -> i32 {
+    let Some(executable_directory) = string_from_utf16(executable_directory) else {
+        return 1;
+    };
+    let Some(registry_value) = string_from_utf16(registry_value) else {
+        return 1;
+    };
+    match set_startup(executable_directory, registry_value, enabled != 0) {
+        Ok(()) => 0,
+        Err(()) => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wide(value: &str) -> Vec<u16> {
+        OsString::from(value).encode_wide().collect()
+    }
+
+    #[test]
+    fn startup_command_quotes_launcher_path() {
+        let command = startup_command(OsString::from(r"C:\Program Files\Fcitx5\bin"));
+        let mut trimmed = command;
+        while trimmed.last().copied() == Some(0) {
+            trimmed.pop();
+        }
+        assert_eq!(
+            trimmed,
+            wide(r#""C:\Program Files\Fcitx5\bin\fcitx5-launcher.exe" --background"#)
+        );
+    }
+}
