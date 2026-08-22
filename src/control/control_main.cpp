@@ -66,6 +66,7 @@ int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
 int fcitx5_control_startup_set_utf16(Fcitx5ControlUtf16 executable_directory,
                                      Fcitx5ControlUtf16 registry_value,
                                      std::uint8_t enabled);
+int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 }
 
 namespace {
@@ -1109,6 +1110,16 @@ Fcitx5ControlUtf16 nativeView(std::wstring_view value) noexcept {
     return {value.data(), value.size()};
 }
 
+bool printControlSchema() {
+    const char* schema = nullptr;
+    std::size_t schemaLength = 0;
+    if (fcitx5_control_schema_json_utf8(&schema, &schemaLength) != 0 || schema == nullptr)
+        return false;
+    std::cout.write(schema, static_cast<std::streamsize>(schemaLength));
+    std::cout << '\n';
+    return std::cout.good();
+}
+
 bool queryStartup(bool& enabled) {
     const std::wstring directory = executableDirectory().wstring();
     const std::wstring registryValue = fcitx::windows::kReleaseIdentity.registry_value;
@@ -1167,10 +1178,7 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
     if (arguments.size() == 1 && arguments[0] == L"--schema") {
-        std::cout
-            << R"({"format_version":1,"commands":["status","restart_engine","shutdown","validate_config","apply_config","reset_config","reset_presentation","get_startup","set_startup","get_presentation","set_presentation","get_input_methods","set_input_method","themes_list","themes_detail","addons_list","packages_list","packages_detail","packages_refresh","packages_install","packages_update","packages_state","packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"})"
-            << '\n';
-        return 0;
+        return printControlSchema() ? 0 : 5;
     }
     if (arguments.size() == 1 && arguments[0] == L"--get-startup") {
         bool enabled = false;

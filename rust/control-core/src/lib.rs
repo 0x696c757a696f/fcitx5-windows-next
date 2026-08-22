@@ -63,6 +63,16 @@ const RUN_KEY: &[u16] = &[
     b'n' as u16,
     0,
 ];
+const CONTROL_SCHEMA_JSON: &str = concat!(
+    r#"{"format_version":1,"commands":["#,
+    r#""status","restart_engine","shutdown","validate_config","apply_config","#,
+    r#""reset_config","reset_presentation","get_startup","set_startup","#,
+    r#""get_presentation","set_presentation","get_input_methods","set_input_method","#,
+    r#""themes_list","themes_detail","addons_list","packages_list","packages_detail","#,
+    r#""packages_refresh","packages_install","packages_update","packages_state","#,
+    r#""packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"#,
+    r#""sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"}"#
+);
 
 #[repr(C)]
 pub struct Fcitx5ControlUtf16 {
@@ -332,6 +342,25 @@ pub unsafe extern "C" fn fcitx5_control_startup_set_utf16(
     }
 }
 
+/// # Safety
+///
+/// `out_ptr` and `out_len` must point to writable storage. The returned pointer
+/// is process-static UTF-8 data and must not be freed by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_schema_json_utf8(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return 1;
+    }
+    unsafe {
+        *out_ptr = CONTROL_SCHEMA_JSON.as_ptr();
+        *out_len = CONTROL_SCHEMA_JSON.len();
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,5 +380,14 @@ mod tests {
             trimmed,
             wide(r#""C:\Program Files\Fcitx5\bin\fcitx5-launcher.exe" --background"#)
         );
+    }
+
+    #[test]
+    fn schema_documents_typed_control_commands() {
+        assert!(CONTROL_SCHEMA_JSON.contains(r#""format_version":1"#));
+        assert!(CONTROL_SCHEMA_JSON.contains(r#""set_presentation""#));
+        assert!(CONTROL_SCHEMA_JSON.contains(r#""packages_repair""#));
+        assert!(CONTROL_SCHEMA_JSON.contains(r#""package_network_owner":"fcitx5-downloader.exe""#));
+        assert!(!CONTROL_SCHEMA_JSON.contains("sensitive_input\":true"));
     }
 }

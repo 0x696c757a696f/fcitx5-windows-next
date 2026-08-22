@@ -307,8 +307,9 @@ int main(int argc, char** argv) {
         return fail("REG-BRAND-001: product/TSF penguin icons and Settings AppUserModelID must be wired");
     }
     const auto configParserSource = read_text(sourceRoot / "src/config/config_parser.cpp");
+    const auto rustControlCoreSource = read_text(sourceRoot / "rust/control-core/src/lib.rs");
     if (controlSource.find("--reset-presentation") == std::string::npos ||
-        controlSource.find("reset_presentation") == std::string::npos ||
+        rustControlCoreSource.find("reset_presentation") == std::string::npos ||
         configParserSource.find("resetPresentationToml") == std::string::npos ||
         configParserSource.find("root.erase(\"appearance\")") == std::string::npos ||
         configParserSource.find("orientation = \"automatic\"") == std::string::npos) {
