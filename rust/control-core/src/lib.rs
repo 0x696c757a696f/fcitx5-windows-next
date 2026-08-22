@@ -212,6 +212,26 @@ pub struct Fcitx5ControlPackagesList {
     package_count: usize,
 }
 
+#[repr(C)]
+pub struct Fcitx5ControlPackageDetail {
+    repository_available: u8,
+    repository_error: Fcitx5ControlUtf8,
+    id: Fcitx5ControlUtf8,
+    title: Fcitx5ControlUtf8,
+    summary: Fcitx5ControlUtf8,
+    package_type: Fcitx5ControlUtf8,
+    available_version: Fcitx5ControlUtf8,
+    installed_version: Fcitx5ControlUtf8,
+    state: Fcitx5ControlUtf8,
+    bundled: u8,
+    update_available: u8,
+    manifest_sha256: Fcitx5ControlUtf8,
+    source_commit: Fcitx5ControlUtf8,
+    dependencies_json: Fcitx5ControlUtf8,
+    permissions_json: Fcitx5ControlUtf8,
+    config_surface_json: Fcitx5ControlUtf8,
+}
+
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn RegOpenKeyExW(
@@ -779,6 +799,99 @@ fn packages_list_json(list: &Fcitx5ControlPackagesList) -> Option<Vec<u8>> {
     Some(output)
 }
 
+fn push_json_nullable_string(
+    output: &mut Vec<u8>,
+    name: &[u8],
+    value: Fcitx5ControlUtf8,
+) -> Option<()> {
+    output.extend_from_slice(name);
+    output.push(b':');
+    let value = utf8_slice(value)?;
+    if value.is_empty() {
+        output.extend_from_slice(b"null");
+    } else {
+        output.extend_from_slice(&json_string(value)?);
+    }
+    Some(())
+}
+
+fn push_json_raw_field(output: &mut Vec<u8>, name: &[u8], value: Fcitx5ControlUtf8) -> Option<()> {
+    output.extend_from_slice(name);
+    output.push(b':');
+    let value = utf8_slice(value)?;
+    if value.is_empty() {
+        return None;
+    }
+    output.extend_from_slice(value);
+    Some(())
+}
+
+fn package_detail_json(detail: &Fcitx5ControlPackageDetail) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1,"repository_available":"#);
+    output.extend_from_slice(if detail.repository_available != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.push(b',');
+    push_json_nullable_string(
+        &mut output,
+        b"\"repository_error\"",
+        detail.repository_error,
+    )?;
+    output.push(b',');
+    push_json_string_field(&mut output, b"\"id\"", utf8_slice(detail.id)?)?;
+    output.push(b',');
+    push_json_string_field(&mut output, b"\"title\"", utf8_slice(detail.title)?)?;
+    output.push(b',');
+    push_json_string_field(&mut output, b"\"summary\"", utf8_slice(detail.summary)?)?;
+    output.push(b',');
+    push_json_string_field(&mut output, b"\"type\"", utf8_slice(detail.package_type)?)?;
+    output.push(b',');
+    push_json_nullable_string(
+        &mut output,
+        b"\"available_version\"",
+        detail.available_version,
+    )?;
+    output.push(b',');
+    push_json_nullable_string(
+        &mut output,
+        b"\"installed_version\"",
+        detail.installed_version,
+    )?;
+    output.push(b',');
+    push_json_nullable_string(&mut output, b"\"state\"", detail.state)?;
+    output.extend_from_slice(b",\"bundled\":");
+    output.extend_from_slice(if detail.bundled != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.extend_from_slice(b",\"update_available\":");
+    output.extend_from_slice(if detail.update_available != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.push(b',');
+    push_json_nullable_string(&mut output, b"\"manifest_sha256\"", detail.manifest_sha256)?;
+    output.push(b',');
+    push_json_nullable_string(&mut output, b"\"source_commit\"", detail.source_commit)?;
+    output.push(b',');
+    push_json_raw_field(&mut output, b"\"dependencies\"", detail.dependencies_json)?;
+    output.push(b',');
+    push_json_raw_field(&mut output, b"\"permissions\"", detail.permissions_json)?;
+    output.push(b',');
+    push_json_raw_field(
+        &mut output,
+        b"\"config_surface\"",
+        detail.config_surface_json,
+    )?;
+    output.push(b'}');
+    Some(output)
+}
+
 fn config_file_action(command: &[u16]) -> u32 {
     if ascii_utf16_eq(command, b"--validate-config") {
         CONTROL_CONFIG_FILE_ACTION_VALIDATE
@@ -1337,6 +1450,29 @@ pub unsafe extern "C" fn fcitx5_control_packages_list_json_utf8(
 
 /// # Safety
 ///
+/// All UTF-8 slices inside `detail` must remain valid for the duration of the
+/// call. Raw JSON fields must contain valid JSON fragments produced by the
+/// existing package/config-surface serializers. `out_ptr` and `out_len` must
+/// point to writable storage. Any returned buffer must be freed with
+/// `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_detail_json_utf8(
+    detail: *const Fcitx5ControlPackageDetail,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if detail.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let detail = unsafe { &*detail };
+    match package_detail_json(detail) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -1761,6 +1897,128 @@ mod tests {
         assert!(text.contains(r#""repository_error":"missing_key""#));
         assert!(text.contains(r#""available_version":null"#));
         assert!(text.contains(r#""state":null"#));
+    }
+
+    #[test]
+    fn package_detail_json_preserves_control_contract() {
+        let deps = br#"[{"id":"dep","version":"1"}]"#;
+        let permissions = br#"["input-data"]"#;
+        let surfaces =
+            br#"[{"kind":"fcitx-addon","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"}]"#;
+        let detail = Fcitx5ControlPackageDetail {
+            repository_available: 1,
+            repository_error: Fcitx5ControlUtf8 {
+                ptr: b"".as_ptr(),
+                len: 0,
+            },
+            id: Fcitx5ControlUtf8 {
+                ptr: b"fcitx5-rime".as_ptr(),
+                len: 11,
+            },
+            title: Fcitx5ControlUtf8 {
+                ptr: b"Rime".as_ptr(),
+                len: 4,
+            },
+            summary: Fcitx5ControlUtf8 {
+                ptr: b"Rime input method".as_ptr(),
+                len: 17,
+            },
+            package_type: Fcitx5ControlUtf8 {
+                ptr: b"addon".as_ptr(),
+                len: 5,
+            },
+            available_version: Fcitx5ControlUtf8 {
+                ptr: b"1.2.3".as_ptr(),
+                len: 5,
+            },
+            installed_version: Fcitx5ControlUtf8 {
+                ptr: b"1.0.0".as_ptr(),
+                len: 5,
+            },
+            state: Fcitx5ControlUtf8 {
+                ptr: b"enabled".as_ptr(),
+                len: 7,
+            },
+            bundled: 0,
+            update_available: 1,
+            manifest_sha256: Fcitx5ControlUtf8 {
+                ptr: b"abc".as_ptr(),
+                len: 3,
+            },
+            source_commit: Fcitx5ControlUtf8 {
+                ptr: b"def".as_ptr(),
+                len: 3,
+            },
+            dependencies_json: Fcitx5ControlUtf8 {
+                ptr: deps.as_ptr(),
+                len: deps.len(),
+            },
+            permissions_json: Fcitx5ControlUtf8 {
+                ptr: permissions.as_ptr(),
+                len: permissions.len(),
+            },
+            config_surface_json: Fcitx5ControlUtf8 {
+                ptr: surfaces.as_ptr(),
+                len: surfaces.len(),
+            },
+        };
+        let json = package_detail_json(&detail).expect("package detail should format");
+        let text = String::from_utf8(json).expect("package detail JSON should be UTF-8");
+        assert!(text.starts_with(r#"{"format_version":1,"repository_available":true"#));
+        assert!(text.contains(r#""repository_error":null"#));
+        assert!(text.contains(r#""update_available":true"#));
+        assert!(text.contains(r#""manifest_sha256":"abc""#));
+        assert!(text.contains(r#""dependencies":[{"id":"dep","version":"1"}]"#));
+        assert!(text.contains(r#""permissions":["input-data"]"#));
+        assert!(text.contains(r#""config_surface":[{"kind":"fcitx-addon""#));
+    }
+
+    #[test]
+    fn package_detail_json_preserves_nullable_fields() {
+        let empty = Fcitx5ControlUtf8 {
+            ptr: b"".as_ptr(),
+            len: 0,
+        };
+        let array = Fcitx5ControlUtf8 {
+            ptr: b"[]".as_ptr(),
+            len: 2,
+        };
+        let detail = Fcitx5ControlPackageDetail {
+            repository_available: 0,
+            repository_error: Fcitx5ControlUtf8 {
+                ptr: b"missing_key".as_ptr(),
+                len: 11,
+            },
+            id: Fcitx5ControlUtf8 {
+                ptr: b"bundled".as_ptr(),
+                len: 7,
+            },
+            title: Fcitx5ControlUtf8 {
+                ptr: b"bundled".as_ptr(),
+                len: 7,
+            },
+            summary: empty,
+            package_type: Fcitx5ControlUtf8 {
+                ptr: b"addon".as_ptr(),
+                len: 5,
+            },
+            available_version: empty,
+            installed_version: empty,
+            state: empty,
+            bundled: 1,
+            update_available: 0,
+            manifest_sha256: empty,
+            source_commit: empty,
+            dependencies_json: array,
+            permissions_json: array,
+            config_surface_json: array,
+        };
+        let json = package_detail_json(&detail).expect("package detail should format");
+        let text = String::from_utf8(json).expect("package detail JSON should be UTF-8");
+        assert!(text.contains(r#""repository_error":"missing_key""#));
+        assert!(text.contains(r#""available_version":null"#));
+        assert!(text.contains(r#""manifest_sha256":null"#));
+        assert!(text.contains(r#""bundled":true"#));
     }
 
     #[test]

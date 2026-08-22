@@ -141,6 +141,24 @@ struct Fcitx5ControlPackagesList {
     const Fcitx5ControlPackageSummary* packages;
     std::size_t packageCount;
 };
+struct Fcitx5ControlPackageDetail {
+    std::uint8_t repositoryAvailable;
+    Fcitx5ControlUtf8 repositoryError;
+    Fcitx5ControlUtf8 id;
+    Fcitx5ControlUtf8 title;
+    Fcitx5ControlUtf8 summary;
+    Fcitx5ControlUtf8 type;
+    Fcitx5ControlUtf8 availableVersion;
+    Fcitx5ControlUtf8 installedVersion;
+    Fcitx5ControlUtf8 state;
+    std::uint8_t bundled;
+    std::uint8_t updateAvailable;
+    Fcitx5ControlUtf8 manifestSha256;
+    Fcitx5ControlUtf8 sourceCommit;
+    Fcitx5ControlUtf8 dependenciesJson;
+    Fcitx5ControlUtf8 permissionsJson;
+    Fcitx5ControlUtf8 configSurfaceJson;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -177,6 +195,8 @@ int fcitx5_control_theme_detail_json_utf8(const Fcitx5ControlThemeDetail* detail
                                           char** out_ptr, std::size_t* out_len);
 int fcitx5_control_packages_list_json_utf8(const Fcitx5ControlPackagesList* list,
                                            char** out_ptr, std::size_t* out_len);
+int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
+                                            char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -1124,6 +1144,14 @@ std::string packagesListJson(bool repositoryAvailable, std::string_view reposito
     return takeRustUtf8(bytes, length);
 }
 
+std::string packageDetailJson(const Fcitx5ControlPackageDetail& detail) {
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_package_detail_json_utf8(&detail, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
 void printPackages(const fs::path& dataRoot) {
     const auto root = dataRoot / L"packages";
     const auto installed = fcitx::package::read_lockfile(root);
@@ -1277,34 +1305,35 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
     const auto typeValue = manifest ? manifest->type
                                     : (repositoryEntry ? repositoryEntry->type
                                                        : fcitx::package::PackageType::addon);
-    std::cout << "{\"format_version\":1,\"repository_available\":"
-              << (repositoryAvailable ? "true" : "false")
-              << ",\"repository_error\":"
-              << (repositoryError.empty() ? "null" : jsonString(repositoryError))
-              << ",\"id\":" << jsonString(packageId)
-              << ",\"title\":" << jsonString(title)
-              << ",\"summary\":" << jsonString(summary)
-              << ",\"type\":" << jsonString(type)
-              << ",\"available_version\":"
-              << (available.empty() ? "null" : jsonString(available))
-              << ",\"installed_version\":"
-              << (installedVersion.empty() ? "null" : jsonString(installedVersion))
-              << ",\"state\":" << (state.empty() ? "null" : jsonString(state))
-              << ",\"bundled\":" << (bundledNow ? "true" : "false")
-              << ",\"update_available\":" << (update ? "true" : "false")
-              << ",\"manifest_sha256\":"
-              << (active != installed.end() ? jsonString(active->manifest_sha256) : "null")
-              << ",\"source_commit\":"
-              << (manifest ? jsonString(manifest->source_commit) : "null")
-              << ",\"dependencies\":"
-              << (manifest ? jsonDependencies(manifest->dependencies)
-                           : (repositoryEntry ? jsonDependencies(repositoryEntry->dependencies)
-                                              : "[]"))
-              << ",\"permissions\":"
-              << (manifest ? jsonStringArray(manifest->permissions) : "[]")
-              << ",\"config_surface\":"
-              << configSurfaceJson(manifest ? &*manifest : nullptr, typeValue, packageId)
-              << "}\n";
+    const std::string dependencies =
+        manifest ? jsonDependencies(manifest->dependencies)
+                 : (repositoryEntry ? jsonDependencies(repositoryEntry->dependencies) : "[]");
+    const std::string permissions =
+        manifest ? jsonStringArray(manifest->permissions) : "[]";
+    const std::string configSurface =
+        configSurfaceJson(manifest ? &*manifest : nullptr, typeValue, packageId);
+    const std::string packageIdText{packageId};
+    const std::string manifestSha256 =
+        active != installed.end() ? active->manifest_sha256 : std::string{};
+    const std::string sourceCommit = manifest ? manifest->source_commit : std::string{};
+    const Fcitx5ControlPackageDetail detail{
+        repositoryAvailable ? std::uint8_t{1} : std::uint8_t{0},
+        utf8View(repositoryError),
+        utf8View(packageIdText),
+        utf8View(title),
+        utf8View(summary),
+        utf8View(type),
+        utf8View(available),
+        utf8View(installedVersion),
+        utf8View(state),
+        bundledNow ? std::uint8_t{1} : std::uint8_t{0},
+        update ? std::uint8_t{1} : std::uint8_t{0},
+        utf8View(manifestSha256),
+        utf8View(sourceCommit),
+        utf8View(dependencies),
+        utf8View(permissions),
+        utf8View(configSurface)};
+    std::cout << packageDetailJson(detail) << '\n';
 }
 
 Fcitx5ControlUtf16 nativeView(std::wstring_view value) noexcept {
