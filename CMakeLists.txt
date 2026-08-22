@@ -748,6 +748,17 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_BINARY_DIR}/config-poc-report.json")
   set_tests_properties(rust-config-poc-contract PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(
+    NAME rust-config-poc-window-smoke
+    COMMAND
+      "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+      "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+      "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --target
+      "${FCITX_RUST_TARGET}" -- --window-smoke --report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-poc-window-smoke.json")
+  set_tests_properties(rust-config-poc-window-smoke PROPERTIES
+                       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
   add_executable(fcitx5_protocol_test tests/unit/protocol_test.cpp)
   target_link_libraries(fcitx5_protocol_test PRIVATE fcitx5::protocol)

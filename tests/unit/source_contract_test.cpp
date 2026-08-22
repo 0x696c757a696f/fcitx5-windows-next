@@ -349,6 +349,11 @@ int main(int argc, char** argv) {
         configQaSource.find("assert_preview_matches_candidate_theme") == std::string::npos ||
         configQaSource.find("shared_theme_pixels") == std::string::npos ||
         configPocSource.find("fcitx5-config-poc") == std::string::npos ||
+        configPocSource.find("--window-smoke") == std::string::npos ||
+        configPocSource.find("CreateWindowExW") == std::string::npos ||
+        configPocSource.find("rust-config-poc-window-smoke") == std::string::npos ||
+        cmakeSource.find("rust-config-poc-window-smoke") == std::string::npos ||
+        cmakeSource.find("config-poc-window-smoke.json") == std::string::npos ||
         configPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
         configPocSource.find("candidate_preview_embedded") == std::string::npos ||
         configPocSource.find("candidate_preview_current_theme") == std::string::npos ||

@@ -199,11 +199,14 @@ struct BoundaryEvidence {
 fn main() {
     let mut args = env::args_os().skip(1);
     let mut self_check = false;
+    let mut window_smoke = false;
     let mut report: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         if arg == "--self-check" {
             self_check = true;
+        } else if arg == "--window-smoke" {
+            window_smoke = true;
         } else if arg == "--report" {
             let Some(path) = args.next() else {
                 eprintln!("--report requires a path");
@@ -216,12 +219,18 @@ fn main() {
         }
     }
 
-    if !self_check {
-        eprintln!("usage: fcitx5-config-poc --self-check [--report PATH]");
+    if self_check == window_smoke {
+        eprintln!("usage: fcitx5-config-poc (--self-check | --window-smoke) [--report PATH]");
         std::process::exit(2);
     }
 
-    match run_self_check() {
+    let result = if self_check {
+        run_self_check()
+    } else {
+        run_window_smoke()
+    };
+
+    match result {
         Ok(output) => {
             if let Some(path) = report {
                 write_report(&path, &output);
@@ -257,6 +266,72 @@ fn run_self_check() -> Result<String, String> {
     let operations = validate_operations()?;
     let boundaries = validate_typed_boundaries()?;
     Ok(render_report(&model, &layout, &operations, &boundaries))
+}
+
+fn run_window_smoke() -> Result<String, String> {
+    let model = frozen_settings_model();
+    validate_model(&model)?;
+    let layout = validate_layout(&model)?;
+    let _operations = validate_operations()?;
+    let _boundaries = validate_typed_boundaries()?;
+    let window = create_config_window_smoke(model.product_name, layout.minimum_window_dip)?;
+    if !window.visible || !window.title_readable {
+        return Err("Rust Config PoC window was not visible/readable".to_owned());
+    }
+    if window.width < layout.minimum_window_dip.width
+        || window.height < layout.minimum_window_dip.height
+    {
+        return Err("Rust Config PoC window is smaller than the modeled minimum".to_owned());
+    }
+    Ok(format!(
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-window-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"hwnd_created\":true,\n  \"visible\":{},\n  \"title_readable\":{},\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"window_width\":{},\n  \"window_height\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
+        json_escape(model.product_name),
+        window.visible,
+        window.title_readable,
+        window.left,
+        window.top,
+        window.right,
+        window.bottom,
+        window.width,
+        window.height,
+        layout.minimum_window_dip.width,
+        layout.minimum_window_dip.height,
+        layout.candidate_preview_embedded_in_config_content,
+        layout.candidate_preview_rect.x,
+        layout.candidate_preview_rect.y,
+        layout.candidate_preview_rect.width,
+        layout.candidate_preview_rect.height,
+        layout.layout_rects_inside_window,
+        layout.layout_rects_non_overlapping
+    ))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WindowSmokeEvidence {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    width: i32,
+    height: i32,
+    visible: bool,
+    title_readable: bool,
+}
+
+#[cfg(windows)]
+fn create_config_window_smoke(
+    title: &str,
+    minimum_window_dip: Size,
+) -> Result<WindowSmokeEvidence, String> {
+    win32_window_smoke::create(title, minimum_window_dip)
+}
+
+#[cfg(not(windows))]
+fn create_config_window_smoke(
+    _title: &str,
+    _minimum_window_dip: Size,
+) -> Result<WindowSmokeEvidence, String> {
+    Err("Rust Config PoC window smoke requires Windows".to_owned())
 }
 
 fn frozen_settings_model() -> ConfigPocModel {
@@ -1375,6 +1450,172 @@ fn json_escape(value: &str) -> String {
         }
     }
     escaped
+}
+
+#[cfg(windows)]
+mod win32_window_smoke {
+    use std::ffi::c_void;
+    use std::ptr::{null, null_mut};
+
+    use super::{Size, WindowSmokeEvidence};
+
+    type Hinstance = *mut c_void;
+    type Hwnd = *mut c_void;
+    type Hicon = *mut c_void;
+    type Hcursor = *mut c_void;
+    type Hbrush = *mut c_void;
+    type Lpcwstr = *const u16;
+    type Lparam = isize;
+    type Lresult = isize;
+    type Wparam = usize;
+
+    const CS_HREDRAW: u32 = 0x0002;
+    const CS_VREDRAW: u32 = 0x0001;
+    const CW_USEDEFAULT: i32 = 0x8000_0000_u32 as i32;
+    const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
+    const WS_VISIBLE: u32 = 0x1000_0000;
+    const SW_SHOWNORMAL: i32 = 1;
+
+    #[repr(C)]
+    struct WndClassW {
+        style: u32,
+        lpfn_wnd_proc: Option<unsafe extern "system" fn(Hwnd, u32, Wparam, Lparam) -> Lresult>,
+        cb_cls_extra: i32,
+        cb_wnd_extra: i32,
+        h_instance: Hinstance,
+        h_icon: Hicon,
+        h_cursor: Hcursor,
+        hbr_background: Hbrush,
+        lpsz_menu_name: Lpcwstr,
+        lpsz_class_name: Lpcwstr,
+    }
+
+    #[repr(C)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn RegisterClassW(window_class: *const WndClassW) -> u16;
+        fn CreateWindowExW(
+            ex_style: u32,
+            class_name: Lpcwstr,
+            window_name: Lpcwstr,
+            style: u32,
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+            parent: Hwnd,
+            menu: *mut c_void,
+            instance: Hinstance,
+            param: *mut c_void,
+        ) -> Hwnd;
+        fn DefWindowProcW(hwnd: Hwnd, message: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
+        fn DestroyWindow(hwnd: Hwnd) -> i32;
+        fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
+        fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
+        fn IsWindowVisible(hwnd: Hwnd) -> i32;
+        fn ShowWindow(hwnd: Hwnd, command_show: i32) -> i32;
+        fn UpdateWindow(hwnd: Hwnd) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleW(module_name: Lpcwstr) -> Hinstance;
+    }
+
+    pub fn create(title: &str, minimum_window_dip: Size) -> Result<WindowSmokeEvidence, String> {
+        let class_name = to_wide("Fcitx5ConfigPocWindow");
+        let title = to_wide(title);
+        let instance = unsafe { GetModuleHandleW(null()) };
+        if instance.is_null() {
+            return Err("GetModuleHandleW failed for Rust Config PoC".to_owned());
+        }
+        let window_class = WndClassW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfn_wnd_proc: Some(window_proc),
+            cb_cls_extra: 0,
+            cb_wnd_extra: 0,
+            h_instance: instance,
+            h_icon: null_mut(),
+            h_cursor: null_mut(),
+            hbr_background: null_mut(),
+            lpsz_menu_name: null(),
+            lpsz_class_name: class_name.as_ptr(),
+        };
+        let atom = unsafe { RegisterClassW(&window_class) };
+        if atom == 0 {
+            return Err("RegisterClassW failed for Rust Config PoC".to_owned());
+        }
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                title.as_ptr(),
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                minimum_window_dip.width,
+                minimum_window_dip.height,
+                null_mut(),
+                null_mut(),
+                instance,
+                null_mut(),
+            )
+        };
+        if hwnd.is_null() {
+            return Err("CreateWindowExW failed for Rust Config PoC".to_owned());
+        }
+        unsafe {
+            ShowWindow(hwnd, SW_SHOWNORMAL);
+            UpdateWindow(hwnd);
+        }
+        let mut rect = Rect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+            unsafe {
+                DestroyWindow(hwnd);
+            }
+            return Err("GetWindowRect failed for Rust Config PoC".to_owned());
+        }
+        let visible = unsafe { IsWindowVisible(hwnd) } != 0;
+        let title_readable = unsafe { GetWindowTextLengthW(hwnd) } > 0;
+        unsafe {
+            DestroyWindow(hwnd);
+        }
+        Ok(WindowSmokeEvidence {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top,
+            visible,
+            title_readable,
+        })
+    }
+
+    unsafe extern "system" fn window_proc(
+        hwnd: Hwnd,
+        message: u32,
+        wparam: Wparam,
+        lparam: Lparam,
+    ) -> Lresult {
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+
+    fn to_wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
 }
 
 #[cfg(test)]
