@@ -101,6 +101,17 @@ struct Fcitx5ControlTsfGuard {
 struct Fcitx5ControlPackageRepair {
     Fcitx5ControlUtf8 repositorySequenceState;
 };
+struct Fcitx5ControlAddonDescriptor {
+    Fcitx5ControlUtf8 id;
+    Fcitx5ControlUtf8 name;
+    Fcitx5ControlUtf8 category;
+    Fcitx5ControlUtf8 library;
+    Fcitx5ControlUtf8 type;
+    Fcitx5ControlUtf8 version;
+    std::uint8_t configurable;
+    std::uint8_t onDemand;
+    std::uint8_t libraryPresent;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -127,6 +138,9 @@ int fcitx5_control_package_repair_json_utf8(const Fcitx5ControlPackageRepair* re
 std::uint32_t fcitx5_control_config_file_action_utf16(Fcitx5ControlUtf16 command);
 std::uint32_t fcitx5_control_package_action_utf16(Fcitx5ControlUtf16 command, std::size_t argc,
                                                   Fcitx5ControlUtf16 state);
+int fcitx5_control_addons_json_utf8(const Fcitx5ControlAddonDescriptor* addons,
+                                    std::size_t addon_count, char** out_ptr,
+                                    std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -700,28 +714,32 @@ std::vector<AddonDescriptor> listAddonDescriptors() {
     return result;
 }
 
+std::string addonsJson(const std::vector<AddonDescriptor>& addons) {
+    std::vector<Fcitx5ControlAddonDescriptor> views;
+    views.reserve(addons.size());
+    for (const auto& addon : addons) {
+        views.push_back(Fcitx5ControlAddonDescriptor{
+            utf8View(addon.id),
+            utf8View(addon.name),
+            utf8View(addon.category),
+            utf8View(addon.library),
+            utf8View(addon.type),
+            utf8View(addon.version),
+            addon.configurable ? std::uint8_t{1} : std::uint8_t{0},
+            addon.onDemand ? std::uint8_t{1} : std::uint8_t{0},
+            addon.libraryPresent ? std::uint8_t{1} : std::uint8_t{0}});
+    }
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const auto* data = views.empty() ? nullptr : views.data();
+    if (fcitx5_control_addons_json_utf8(data, views.size(), &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
 void printAddons() {
     const auto addons = listAddonDescriptors();
-    std::cout << "{\"format_version\":1,\"surface\":\"descriptor-inventory\","
-                 "\"typed_config\":\"not_available\",\"addons\":[";
-    bool first = true;
-    for (const auto& addon : addons) {
-        if (!first)
-            std::cout << ',';
-        first = false;
-        std::cout << "{\"id\":" << jsonString(addon.id)
-                  << ",\"name\":" << jsonString(addon.name)
-                  << ",\"category\":" << jsonString(addon.category)
-                  << ",\"library\":" << jsonString(addon.library)
-                  << ",\"type\":" << jsonString(addon.type)
-                  << ",\"version\":"
-                  << (addon.version.empty() ? "null" : jsonString(addon.version))
-                  << ",\"configurable\":" << (addon.configurable ? "true" : "false")
-                  << ",\"on_demand\":" << (addon.onDemand ? "true" : "false")
-                  << ",\"library_present\":" << (addon.libraryPresent ? "true" : "false")
-                  << '}';
-    }
-    std::cout << "]}\n";
+    std::cout << addonsJson(addons) << '\n';
 }
 
 std::optional<ThemeRecord> loadThemeRecord(const fs::path& path, std::string id,

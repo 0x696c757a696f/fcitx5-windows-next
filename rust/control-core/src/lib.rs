@@ -161,6 +161,19 @@ pub struct Fcitx5ControlPackageRepair {
     repository_sequence_state: Fcitx5ControlUtf8,
 }
 
+#[repr(C)]
+pub struct Fcitx5ControlAddonDescriptor {
+    id: Fcitx5ControlUtf8,
+    name: Fcitx5ControlUtf8,
+    category: Fcitx5ControlUtf8,
+    library: Fcitx5ControlUtf8,
+    addon_type: Fcitx5ControlUtf8,
+    version: Fcitx5ControlUtf8,
+    configurable: u8,
+    on_demand: u8,
+    library_present: u8,
+}
+
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn RegOpenKeyExW(
@@ -505,6 +518,56 @@ fn package_repair_json(repair: &Fcitx5ControlPackageRepair) -> Option<Vec<u8>> {
         utf8_slice(repair.repository_sequence_state)?,
     )?;
     output.push(b'}');
+    Some(output)
+}
+
+fn addons_json(addons: &[Fcitx5ControlAddonDescriptor]) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    output.extend_from_slice(
+        br#"{"format_version":1,"surface":"descriptor-inventory","typed_config":"not_available","addons":["#,
+    );
+    for (index, addon) in addons.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.push(b'{');
+        push_json_string_field(&mut output, b"\"id\"", utf8_slice(addon.id)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"name\"", utf8_slice(addon.name)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"category\"", utf8_slice(addon.category)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"library\"", utf8_slice(addon.library)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"type\"", utf8_slice(addon.addon_type)?)?;
+        output.extend_from_slice(b",\"version\":");
+        let version = utf8_slice(addon.version)?;
+        if version.is_empty() {
+            output.extend_from_slice(b"null");
+        } else {
+            output.extend_from_slice(&json_string(version)?);
+        }
+        output.extend_from_slice(b",\"configurable\":");
+        output.extend_from_slice(if addon.configurable != 0 {
+            b"true"
+        } else {
+            b"false"
+        });
+        output.extend_from_slice(b",\"on_demand\":");
+        output.extend_from_slice(if addon.on_demand != 0 {
+            b"true"
+        } else {
+            b"false"
+        });
+        output.extend_from_slice(b",\"library_present\":");
+        output.extend_from_slice(if addon.library_present != 0 {
+            b"true"
+        } else {
+            b"false"
+        });
+        output.push(b'}');
+    }
+    output.extend_from_slice(b"]}");
     Some(output)
 }
 
@@ -968,6 +1031,34 @@ pub unsafe extern "C" fn fcitx5_control_package_action_utf16(
 
 /// # Safety
 ///
+/// `addons` must either be null with `addon_count == 0` or point to
+/// `addon_count` valid descriptors. All UTF-8 slices inside descriptors must
+/// remain valid for the duration of the call. `out_ptr` and `out_len` must
+/// point to writable storage. Any returned buffer must be freed with
+/// `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_addons_json_utf8(
+    addons: *const Fcitx5ControlAddonDescriptor,
+    addon_count: usize,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if addons.is_null() && addon_count != 0 {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let addons = if addon_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(addons, addon_count) }
+    };
+    match addons_json(addons) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -1129,6 +1220,96 @@ mod tests {
         assert_eq!(
             package_action(&packages_list, 2, None),
             CONTROL_PACKAGE_ACTION_UNKNOWN
+        );
+    }
+
+    #[test]
+    fn addons_json_preserves_control_contract() {
+        let id = b"pinyin";
+        let name = "拼音".as_bytes();
+        let category = b"InputMethod";
+        let library = b"pinyin";
+        let addon_type = b"SharedLibrary";
+        let version = b"5.1";
+        let empty_version = b"";
+        let addons = [
+            Fcitx5ControlAddonDescriptor {
+                id: Fcitx5ControlUtf8 {
+                    ptr: id.as_ptr(),
+                    len: id.len(),
+                },
+                name: Fcitx5ControlUtf8 {
+                    ptr: name.as_ptr(),
+                    len: name.len(),
+                },
+                category: Fcitx5ControlUtf8 {
+                    ptr: category.as_ptr(),
+                    len: category.len(),
+                },
+                library: Fcitx5ControlUtf8 {
+                    ptr: library.as_ptr(),
+                    len: library.len(),
+                },
+                addon_type: Fcitx5ControlUtf8 {
+                    ptr: addon_type.as_ptr(),
+                    len: addon_type.len(),
+                },
+                version: Fcitx5ControlUtf8 {
+                    ptr: version.as_ptr(),
+                    len: version.len(),
+                },
+                configurable: 1,
+                on_demand: 0,
+                library_present: 1,
+            },
+            Fcitx5ControlAddonDescriptor {
+                id: Fcitx5ControlUtf8 {
+                    ptr: b"test".as_ptr(),
+                    len: 4,
+                },
+                name: Fcitx5ControlUtf8 {
+                    ptr: b"Test".as_ptr(),
+                    len: 4,
+                },
+                category: Fcitx5ControlUtf8 {
+                    ptr: b"Module".as_ptr(),
+                    len: 6,
+                },
+                library: Fcitx5ControlUtf8 {
+                    ptr: b"".as_ptr(),
+                    len: 0,
+                },
+                addon_type: Fcitx5ControlUtf8 {
+                    ptr: b"Static".as_ptr(),
+                    len: 6,
+                },
+                version: Fcitx5ControlUtf8 {
+                    ptr: empty_version.as_ptr(),
+                    len: empty_version.len(),
+                },
+                configurable: 0,
+                on_demand: 1,
+                library_present: 0,
+            },
+        ];
+        let json = addons_json(&addons).expect("addons should format");
+        let text = String::from_utf8(json).expect("addons JSON should be UTF-8");
+        assert!(text.starts_with(
+            r#"{"format_version":1,"surface":"descriptor-inventory","typed_config":"not_available","addons":["#
+        ));
+        assert!(text.contains(r#""name":"拼音""#));
+        assert!(text.contains(r#""version":"5.1""#));
+        assert!(text.contains(r#""version":null"#));
+        assert!(text.contains(r#""on_demand":true"#));
+    }
+
+    #[test]
+    fn empty_addons_json_preserves_control_contract() {
+        assert_eq!(
+            addons_json(&[]).as_deref(),
+            Some(
+                &br#"{"format_version":1,"surface":"descriptor-inventory","typed_config":"not_available","addons":[]}"#[..]
+            )
         );
     }
 
