@@ -1,9 +1,35 @@
 # Windows Chewing TSF 全面工程复盘
 
-状态：v1.6 Phase 0 主教材审阅；行为/工程模式参考，不作为源码依赖  
-审阅日期：2026-08-18  
-固定版本：[`342ead0c0b445ec376fbd6ffb3b105e78c499419`](https://github.com/chewing/windows-chewing-tsf/tree/342ead0c0b445ec376fbd6ffb3b105e78c499419)  
+状态：v1.6 Phase 0 主教材审阅；行为/工程模式参考，不作为源码依赖
+审阅日期：2026-08-18
+固定版本：[`342ead0c0b445ec376fbd6ffb3b105e78c499419`](https://github.com/chewing/windows-chewing-tsf/tree/342ead0c0b445ec376fbd6ffb3b105e78c499419)
 许可证：GPL-3.0-or-later；本项目只重建通用行为和测试，不复制其实现代码。
+
+## RUST-R3-TSF-POC refresh
+
+审阅日期：2026-08-22
+固定版本：[`a6cf2c55ca1009d6aeac894760a59ba459ec676d`](https://codeberg.org/chewing/windows-chewing-tsf/src/commit/a6cf2c55ca1009d6aeac894760a59ba459ec676d)
+读取范围：`tip/src/com.rs`、`tip/src/text_service/mod.rs`、`tip/src/text_service/edit_session.rs`、`tip/src/text_service/key_event.rs`、`tip/src/text_service/ui_elements/candidate_list.rs`、`crates/chewing_tip_core/src/ipc/messages.rs`、`crates/chewing_tip_core/src/ipc/values.rs`、`Cargo.toml`。
+许可证处理：GPL-3.0-or-later；本项目只记录行为、测试场景和边界设计，不复制非平凡源码。
+
+R3 Rust TSF PoC 中应采用的行为/测试场景：
+
+- Rust `windows-rs` TSF DLL 可以直接实现 `ITfTextInputProcessorEx`、key/thread/focus/composition sinks、display attribute provider 和 `ITfCandidateListUIElement`，不需要 C++ FFI 作为长期依赖。
+- `Activate` 内部初始化失败时应记录错误并让宿主 fail-open；不能让 TSF manager 因一次失败后无法重新初始化。当前 PoC 用 panic-to-HRESULT 和 key callback fail-open smoke 覆盖第一层，后续差分需要覆盖真实 sink advise/unadvise 路径。
+- `Deactivate` 必须结束 candidate UIElement、unadvise thread/key/compartment/function sinks，并释放 thread manager 相关状态；这应成为 Rust PoC 的 COM refcount/sink cleanup 差分项。
+- `OnTestKeyDown`、`OnKeyDown`、`OnTestKeyUp`、`OnKeyUp` 分离成 typed IPC messages 是正确方向，但本项目必须保留现有 versioned binary IPC、epoch/context/composition/revision、peer identity 和 deadline，不采用 Chewing 的 JSON/varlink wire format。
+- UILess `BeginUIElement` 返回 `show=false` 时仍保留 candidate metadata 和 keyboard selection semantics；这应进入 Candidate/TSF 共享 corpus，不能只测试 popup 可见性。
+- composition commit + preedit update 尽量在同一个 edit session 内完成，减少 Cicero/host 状态撕裂；这应进入 Rust TSF composition differential。
+- key callback 期间的 document/focus change 需要重入保护；不能按进程名写宽 quirk，必须有 host-matrix regression。
+
+R3 Rust TSF PoC 中明确不采用：
+
+- 不复制 GPL 源码，不把 Chewing-specific engine/config/update model 移入本项目。
+- 不采用 release `panic = "abort"` 作为宿主进程安全策略；本项目 TSF DLL 的 COM 回调仍必须捕获 panic 并返回 HRESULT/fail-open。
+- 不引入 IMM32 patch/quirk 作为默认路径；只有真实 host evidence 和单独 gate 才能加入窄兼容修复。
+- 不用 Chewing 的 JSON/varlink IPC 替换本项目已冻结的 TSF ↔ Engine protocol。
+
+`EasyIME/libIME2` 对照版本 [`717b1901a417667405399cfbf25b25664efcf0e4`](https://github.com/EasyIME/libIME2/tree/717b1901a417667405399cfbf25b25664efcf0e4) 仅作为 secondary TSF framework reference。可借鉴 sink RAII、edit-session/composition helper、compartment/preserved-key 病例；不可作为本项目 Rust TSF 或 out-of-process UI 架构底座，因为它的候选窗/engine 抽象更偏宿主进程内框架。
 
 ## 结论
 
