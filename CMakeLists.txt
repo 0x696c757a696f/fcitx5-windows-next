@@ -873,6 +873,20 @@ if(BUILD_TESTING)
     set_tests_properties(
       rust-candidate-poc-demo-snapshot PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-candidate-poc-dpi-smoke
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
+        --dpi-scale 1.50 --report
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-dpi-smoke.json" --screenshot
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-dpi-smoke.bmp")
+    set_tests_properties(
+      rust-candidate-poc-dpi-smoke PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(FCITX_PWSH_EXECUTABLE)
       add_custom_target(
         fcitx5_rust_package_core_packaged_artifact_smoke

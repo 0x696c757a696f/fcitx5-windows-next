@@ -275,13 +275,16 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("msaa_accessible_name_readable") == std::string::npos ||
         candidatePocBinary.find("--screenshot") == std::string::npos ||
         candidatePocBinary.find("--demo-snapshot") == std::string::npos ||
+        candidatePocBinary.find("--dpi-scale") == std::string::npos ||
         candidatePocBinary.find("snapshot_name") == std::string::npos ||
         candidatePocBinary.find("candidate_count") == std::string::npos ||
+        candidatePocBinary.find("dpi_scale") == std::string::npos ||
         candidatePocBinary.find("GetDIBits") == std::string::npos ||
         candidatePocBinary.find("visual_non_background_pixels") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-contract") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-window-smoke") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-demo-snapshot") == std::string::npos ||
+        cmakeSource.find("rust-candidate-poc-dpi-smoke") == std::string::npos ||
         cmakeSource.find("fcitx5_candidate_poc_rustbin") == std::string::npos ||
         cmakeSource.find("candidate-poc-window-smoke.bmp") == std::string::npos ||
         candidateIntegrationSource.find("rust-candidate-demo.json") == std::string::npos ||

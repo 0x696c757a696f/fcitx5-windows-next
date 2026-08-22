@@ -9,6 +9,7 @@ fn main() {
     let mut self_check = false;
     let mut window_smoke = false;
     let mut demo_snapshot = false;
+    let mut dpi_scale = 1.0_f32;
     let mut report: Option<PathBuf> = None;
     let mut screenshot: Option<PathBuf> = None;
 
@@ -19,6 +20,17 @@ fn main() {
             window_smoke = true;
         } else if arg == "--demo-snapshot" {
             demo_snapshot = true;
+        } else if arg == "--dpi-scale" {
+            let Some(value) = args.next() else {
+                eprintln!("--dpi-scale requires a value");
+                std::process::exit(2);
+            };
+            let parsed = value.to_string_lossy().parse::<f32>().unwrap_or(0.0);
+            if !(0.5..=4.0).contains(&parsed) || !parsed.is_finite() {
+                eprintln!("--dpi-scale must be a finite value from 0.5 through 4.0");
+                std::process::exit(2);
+            }
+            dpi_scale = parsed;
         } else if arg == "--report" {
             let Some(path) = args.next() else {
                 eprintln!("--report requires a path");
@@ -38,14 +50,16 @@ fn main() {
     }
 
     if self_check == window_smoke {
-        eprintln!("usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--report PATH]");
+        eprintln!(
+            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
+        );
         std::process::exit(2);
     }
 
     let result = if self_check {
         fcitx5_candidate_core::run_candidate_poc_self_check()
     } else {
-        run_window_smoke(screenshot.as_deref(), demo_snapshot)
+        run_window_smoke(screenshot.as_deref(), demo_snapshot, dpi_scale)
     };
 
     match result {
@@ -78,12 +92,20 @@ fn write_report(path: &Path, output: &str) {
 }
 
 #[cfg(windows)]
-fn run_window_smoke(screenshot: Option<&Path>, demo_snapshot: bool) -> Result<String, String> {
-    window_smoke::run(screenshot, demo_snapshot)
+fn run_window_smoke(
+    screenshot: Option<&Path>,
+    demo_snapshot: bool,
+    dpi_scale: f32,
+) -> Result<String, String> {
+    window_smoke::run(screenshot, demo_snapshot, dpi_scale)
 }
 
 #[cfg(not(windows))]
-fn run_window_smoke(_screenshot: Option<&Path>, _demo_snapshot: bool) -> Result<String, String> {
+fn run_window_smoke(
+    _screenshot: Option<&Path>,
+    _demo_snapshot: bool,
+    _dpi_scale: f32,
+) -> Result<String, String> {
     Err("window smoke is only available on Windows".to_owned())
 }
 
@@ -243,6 +265,7 @@ mod window_smoke {
 
     static WINDOW_TEXT: OnceLock<Vec<Vec<u16>>> = OnceLock::new();
     static WINDOW_VERTICAL: OnceLock<bool> = OnceLock::new();
+    static WINDOW_SCALE: OnceLock<f32> = OnceLock::new();
 
     #[link(name = "user32")]
     extern "system" {
@@ -350,10 +373,20 @@ mod window_smoke {
         snapshot_name: &'a str,
         orientation_name: &'a str,
         candidate_count: usize,
+        dpi_scale: f32,
         expects_emoji: bool,
     }
 
-    pub fn run(screenshot: Option<&Path>, demo_snapshot: bool) -> Result<String, String> {
+    pub fn run(
+        screenshot: Option<&Path>,
+        demo_snapshot: bool,
+        dpi_scale: f32,
+    ) -> Result<String, String> {
+        if !(0.5..=4.0).contains(&dpi_scale) || !dpi_scale.is_finite() {
+            return Err(
+                "Rust Candidate PoC DPI scale must be finite and within 0.5..=4.0".to_owned(),
+            );
+        }
         let (
             layout,
             title,
@@ -367,31 +400,31 @@ mod window_smoke {
                     orientation: Orientation::Vertical,
                     items: vec![
                         Size {
-                            width: 110.0,
-                            height: 34.0,
+                            width: 110.0 * dpi_scale,
+                            height: 34.0 * dpi_scale,
                         },
                         Size {
-                            width: 86.0,
-                            height: 34.0,
+                            width: 86.0 * dpi_scale,
+                            height: 34.0 * dpi_scale,
                         },
                         Size {
-                            width: 110.0,
-                            height: 34.0,
+                            width: 110.0 * dpi_scale,
+                            height: 34.0 * dpi_scale,
                         },
                     ],
                     caret: Point { x: 100.0, y: 100.0 },
-                    caret_height: 24.0,
+                    caret_height: 24.0 * dpi_scale,
                     work_area: CoreRect {
                         left: 0.0,
                         top: 0.0,
                         right: 1920.0,
                         bottom: 1080.0,
                     },
-                    max_width: 720.0,
-                    padding_x: 8.0,
-                    padding_y: 6.0,
-                    row_gap: 2.0,
-                    column_gap: 8.0,
+                    max_width: 720.0 * dpi_scale,
+                    padding_x: 8.0 * dpi_scale,
+                    padding_y: 6.0 * dpi_scale,
+                    row_gap: 2.0 * dpi_scale,
+                    column_gap: 8.0 * dpi_scale,
                     selected: 0,
                     ..LayoutInput::default()
                 }),
@@ -407,31 +440,31 @@ mod window_smoke {
                     orientation: Orientation::Horizontal,
                     items: vec![
                         Size {
-                            width: 92.0,
-                            height: 34.0,
+                            width: 92.0 * dpi_scale,
+                            height: 34.0 * dpi_scale,
                         },
                         Size {
-                            width: 164.0,
-                            height: 34.0,
+                            width: 164.0 * dpi_scale,
+                            height: 34.0 * dpi_scale,
                         },
                         Size {
-                            width: 130.0,
-                            height: 34.0,
+                            width: 130.0 * dpi_scale,
+                            height: 34.0 * dpi_scale,
                         },
                     ],
                     caret: Point { x: 180.0, y: 360.0 },
-                    caret_height: 24.0,
+                    caret_height: 24.0 * dpi_scale,
                     work_area: CoreRect {
                         left: 0.0,
                         top: 0.0,
                         right: 1920.0,
                         bottom: 1080.0,
                     },
-                    max_width: 720.0,
-                    padding_x: 8.0,
-                    padding_y: 6.0,
-                    row_gap: 2.0,
-                    column_gap: 8.0,
+                    max_width: 720.0 * dpi_scale,
+                    padding_x: 8.0 * dpi_scale,
+                    padding_y: 6.0 * dpi_scale,
+                    row_gap: 2.0 * dpi_scale,
+                    column_gap: 8.0 * dpi_scale,
                     selected: 0,
                     ..LayoutInput::default()
                 }),
@@ -447,6 +480,7 @@ mod window_smoke {
         let class_name = wide("Fcitx5CandidateRustPoc");
         let _ = WINDOW_TEXT.set(text_lines);
         let _ = WINDOW_VERTICAL.set(demo_snapshot);
+        let _ = WINDOW_SCALE.set(dpi_scale);
 
         let instance = unsafe { GetModuleHandleW(null()) };
         let window_class = WndClassW {
@@ -494,6 +528,7 @@ mod window_smoke {
                 snapshot_name,
                 orientation_name,
                 candidate_count: WINDOW_TEXT.get().map_or(0, Vec::len),
+                dpi_scale,
                 expects_emoji: emoji_candidate_render_path,
             },
         );
@@ -566,10 +601,11 @@ mod window_smoke {
             },
         );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"candidate_count\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"candidate_count\":{},\n  \"dpi_scale\":{:.2},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
             json_escape(spec.snapshot_name),
             json_escape(spec.orientation_name),
             spec.candidate_count,
+            spec.dpi_scale,
             rect.left,
             rect.top,
             rect.right,
@@ -825,11 +861,22 @@ mod window_smoke {
                     }
                     if let Some(lines) = WINDOW_TEXT.get() {
                         let vertical = WINDOW_VERTICAL.get().copied().unwrap_or(false);
+                        let scale = WINDOW_SCALE.get().copied().unwrap_or(1.0);
                         for (index, text) in lines.iter().enumerate() {
                             let (left, top, right, bottom) = if vertical {
-                                (12, 6 + (index as i32 * 36), 512, 40 + (index as i32 * 36))
+                                (
+                                    scale_px(12.0, scale),
+                                    scale_px(6.0 + (index as f32 * 36.0), scale),
+                                    scale_px(512.0, scale),
+                                    scale_px(40.0 + (index as f32 * 36.0), scale),
+                                )
                             } else {
-                                (12 + (index as i32 * 124), 0, 132 + (index as i32 * 124), 46)
+                                (
+                                    scale_px(12.0 + (index as f32 * 124.0), scale),
+                                    0,
+                                    scale_px(132.0 + (index as f32 * 124.0), scale),
+                                    scale_px(46.0, scale),
+                                )
                             };
                             let mut text_rect = Rect {
                                 left,
@@ -857,6 +904,10 @@ mod window_smoke {
             WM_DESTROY => 0,
             _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
         }
+    }
+
+    fn scale_px(value: f32, scale: f32) -> i32 {
+        (value * scale).round() as i32
     }
 
     fn wide(value: &str) -> Vec<u16> {
