@@ -885,10 +885,13 @@ class CandidateWindow final {
             FAILED(renderTarget_->CreateSolidColorBrush(borderColor, &borderBrush)) ||
             FAILED(renderTarget_->CreateSolidColorBrush(preeditColor, &preeditBrush)))
             return false;
+        constexpr D2D1_DRAW_TEXT_OPTIONS kDrawTextOptions =
+            static_cast<D2D1_DRAW_TEXT_OPTIONS>(
+                static_cast<UINT32>(D2D1_DRAW_TEXT_OPTIONS_CLIP) | 0x4U);
         if (!preeditPanel_.empty()) {
             renderTarget_->DrawTextW(preeditPanel_.data(), static_cast<UINT32>(preeditPanel_.size()),
                                      textFormat_.Get(), preeditPanelRect_, preeditBrush.Get(),
-                                     D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                                     kDrawTextOptions);
             borderBrush->SetOpacity(0.45F);
             renderTarget_->DrawLine(D2D1::Point2F(preeditPanelRect_.left, preeditDividerY_),
                                     D2D1::Point2F(preeditPanelRect_.right, preeditDividerY_),
@@ -1002,7 +1005,7 @@ class CandidateWindow final {
                 // the remaining row width must not wrap onto the candidate
                 // row below and visually overlap it.
                 renderTarget_->DrawTextW(value.data(), static_cast<UINT32>(value.size()), format,
-                                         segment, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                                         segment, brush, kDrawTextOptions);
             };
             const auto& segments = renderSegments[local];
             if (!candidate.label.empty())

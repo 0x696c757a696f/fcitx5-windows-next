@@ -255,6 +255,8 @@ int main(int argc, char** argv) {
         configSource.find("#include \"candidate_layout.h\"") == std::string::npos ||
         configSource.find("fcitx::windows::ui::layout(input)") == std::string::npos ||
         candidateUiSource.find("fcitx5_candidate_render_segments") == std::string::npos ||
+        candidateUiSource.find("kDrawTextOptions") == std::string::npos ||
+        candidateUiSource.find("0x4U") == std::string::npos ||
         candidateLayoutSource.find("fcitx5_candidate_render_segments") == std::string::npos ||
         candidateLayoutSource.find("run_candidate_poc_self_check") == std::string::npos ||
         candidateLayoutSource.find("cpp_ffi") == std::string::npos ||
@@ -269,8 +271,12 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("AccessibleObjectFromWindow") == std::string::npos ||
         candidatePocBinary.find("get_acc_name") == std::string::npos ||
         candidatePocBinary.find("msaa_accessible_name_readable") == std::string::npos ||
+        candidatePocBinary.find("--screenshot") == std::string::npos ||
+        candidatePocBinary.find("GetDIBits") == std::string::npos ||
+        candidatePocBinary.find("visual_non_background_pixels") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-contract") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-window-smoke") == std::string::npos ||
+        cmakeSource.find("candidate-poc-window-smoke.bmp") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||

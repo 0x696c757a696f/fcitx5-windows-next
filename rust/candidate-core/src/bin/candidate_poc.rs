@@ -9,6 +9,7 @@ fn main() {
     let mut self_check = false;
     let mut window_smoke = false;
     let mut report: Option<PathBuf> = None;
+    let mut screenshot: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         if arg == "--self-check" {
@@ -21,6 +22,12 @@ fn main() {
                 std::process::exit(2);
             };
             report = Some(PathBuf::from(path));
+        } else if arg == "--screenshot" {
+            let Some(path) = args.next() else {
+                eprintln!("--screenshot requires a path");
+                std::process::exit(2);
+            };
+            screenshot = Some(PathBuf::from(path));
         } else {
             eprintln!("unknown argument: {}", arg.to_string_lossy());
             std::process::exit(2);
@@ -35,7 +42,7 @@ fn main() {
     let result = if self_check {
         fcitx5_candidate_core::run_candidate_poc_self_check()
     } else {
-        run_window_smoke()
+        run_window_smoke(screenshot.as_deref())
     };
 
     match result {
@@ -68,12 +75,12 @@ fn write_report(path: &Path, output: &str) {
 }
 
 #[cfg(windows)]
-fn run_window_smoke() -> Result<String, String> {
-    window_smoke::run()
+fn run_window_smoke(screenshot: Option<&Path>) -> Result<String, String> {
+    window_smoke::run(screenshot)
 }
 
 #[cfg(not(windows))]
-fn run_window_smoke() -> Result<String, String> {
+fn run_window_smoke(_screenshot: Option<&Path>) -> Result<String, String> {
     Err("window smoke is only available on Windows".to_owned())
 }
 
@@ -81,13 +88,17 @@ fn run_window_smoke() -> Result<String, String> {
 mod window_smoke {
     use fcitx5_candidate_core::{layout, LayoutInput, Orientation, Point, Rect as CoreRect, Size};
     use std::ffi::c_void;
+    use std::fs;
+    use std::path::Path;
     use std::ptr::{null, null_mut};
 
     type Bool = i32;
     type Dword = u32;
     type Hbrush = *mut c_void;
+    type Hbitmap = *mut c_void;
     type Hcursor = *mut c_void;
     type Hdc = *mut c_void;
+    type Hgdobj = *mut c_void;
     type Hicon = *mut c_void;
     type Hinstance = *mut c_void;
     type Hmenu = *mut c_void;
@@ -99,6 +110,7 @@ mod window_smoke {
     type Wparam = usize;
 
     const CHILDID_SELF: i32 = 0;
+    const BI_RGB: Dword = 0;
     const COINIT_APARTMENTTHREADED: Dword = 0x2;
     const COLORREF_BACKGROUND: Dword = 0x00F8_F6F2;
     const COLORREF_TEXT: Dword = 0x0022_2222;
@@ -107,7 +119,9 @@ mod window_smoke {
     const DT_LEFT: Uint = 0x0000;
     const DT_SINGLELINE: Uint = 0x0020;
     const DT_VCENTER: Uint = 0x0004;
+    const DIB_RGB_COLORS: Uint = 0;
     const OBJID_WINDOW: Dword = 0;
+    const SRCCOPY: Dword = 0x00CC_0020;
     const SW_SHOWNOACTIVATE: i32 = 4;
     const TRANSPARENT: i32 = 1;
     const VT_I4: u16 = 3;
@@ -136,6 +150,28 @@ mod window_smoke {
         f_restore: Bool,
         f_inc_update: Bool,
         rgb_reserved: [u8; 32],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct BitmapInfoHeader {
+        bi_size: Dword,
+        bi_width: i32,
+        bi_height: i32,
+        bi_planes: u16,
+        bi_bit_count: u16,
+        bi_compression: Dword,
+        bi_size_image: Dword,
+        bi_x_pels_per_meter: i32,
+        bi_y_pels_per_meter: i32,
+        bi_clr_used: Dword,
+        bi_clr_important: Dword,
+    }
+
+    #[repr(C)]
+    struct BitmapInfo {
+        bmi_header: BitmapInfoHeader,
+        bmi_colors: [Dword; 1],
     }
 
     #[repr(C)]
@@ -223,9 +259,11 @@ mod window_smoke {
         fn DrawTextW(hdc: Hdc, text: *const u16, count: i32, rect: *mut Rect, format: Uint) -> i32;
         fn EndPaint(hwnd: Hwnd, paint: *const PaintStruct) -> Bool;
         fn FillRect(hdc: Hdc, rect: *const Rect, brush: Hbrush) -> i32;
+        fn GetWindowDC(hwnd: Hwnd) -> Hdc;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
         fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
         fn IsWindowVisible(hwnd: Hwnd) -> Bool;
+        fn ReleaseDC(hwnd: Hwnd, hdc: Hdc) -> i32;
         fn RegisterClassW(class: *const WndClassW) -> u16;
         fn SetBkMode(hdc: Hdc, mode: i32) -> i32;
         fn SetTextColor(hdc: Hdc, color: Dword) -> Dword;
@@ -235,8 +273,32 @@ mod window_smoke {
 
     #[link(name = "gdi32")]
     extern "system" {
+        fn BitBlt(
+            dest: Hdc,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            src: Hdc,
+            x1: i32,
+            y1: i32,
+            rop: Dword,
+        ) -> Bool;
+        fn CreateCompatibleBitmap(hdc: Hdc, cx: i32, cy: i32) -> Hbitmap;
+        fn CreateCompatibleDC(hdc: Hdc) -> Hdc;
         fn CreateSolidBrush(color: Dword) -> Hbrush;
+        fn DeleteDC(hdc: Hdc) -> Bool;
         fn DeleteObject(object: *mut c_void) -> Bool;
+        fn GetDIBits(
+            hdc: Hdc,
+            bitmap: Hbitmap,
+            start: Uint,
+            lines: Uint,
+            bits: *mut c_void,
+            info: *mut BitmapInfo,
+            usage: Uint,
+        ) -> i32;
+        fn SelectObject(hdc: Hdc, object: Hgdobj) -> Hgdobj;
     }
 
     #[link(name = "ole32")]
@@ -266,7 +328,14 @@ mod window_smoke {
         fn GetModuleHandleW(module_name: *const u16) -> Hinstance;
     }
 
-    pub fn run() -> Result<String, String> {
+    struct CaptureEvidence {
+        bytes: usize,
+        non_background_pixels: usize,
+        checksum: u64,
+        path: String,
+    }
+
+    pub fn run(screenshot: Option<&Path>) -> Result<String, String> {
         let layout = layout(&LayoutInput {
             orientation: Orientation::Horizontal,
             items: vec![
@@ -340,7 +409,7 @@ mod window_smoke {
         if hwnd.is_null() {
             return Err("CreateWindowExW failed for Rust Candidate PoC".to_owned());
         }
-        let result = inspect_window(hwnd, width, height, &title);
+        let result = inspect_window(hwnd, width, height, &title, screenshot);
         unsafe {
             DestroyWindow(hwnd);
         }
@@ -352,6 +421,7 @@ mod window_smoke {
         expected_width: i32,
         expected_height: i32,
         title: &[u16],
+        screenshot: Option<&Path>,
     ) -> Result<String, String> {
         unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -385,10 +455,191 @@ mod window_smoke {
                 "Rust Candidate PoC MSAA accessible name mismatch: {accessible_name}"
             ));
         }
+        let capture = if let Some(path) = screenshot {
+            Some(capture_window(hwnd, actual_width, actual_height, path)?)
+        } else {
+            None
+        };
+        let capture_json = capture.as_ref().map_or_else(
+            || {
+                String::from(
+                    "  \"screenshot_written\":false,\n  \"visual_non_background_pixels\":0,\n  \"visual_checksum\":0,\n",
+                )
+            },
+            |capture| {
+                format!(
+                    "  \"screenshot_written\":true,\n  \"screenshot_path\":\"{}\",\n  \"screenshot_bytes\":{},\n  \"visual_non_background_pixels\":{},\n  \"visual_checksum\":{},\n",
+                    json_escape(&capture.path),
+                    capture.bytes,
+                    capture.non_background_pixels,
+                    capture.checksum
+                )
+            },
+        );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"emoji_candidate_render_path\":true,\n  \"result\":\"PASS\"\n}}",
-            rect.left, rect.top, rect.right, rect.bottom
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n{}  \"emoji_candidate_render_path\":true,\n  \"result\":\"PASS\"\n}}",
+            rect.left, rect.top, rect.right, rect.bottom, capture_json
         ))
+    }
+
+    fn capture_window(
+        hwnd: Hwnd,
+        width: i32,
+        height: i32,
+        path: &Path,
+    ) -> Result<CaptureEvidence, String> {
+        if width <= 0 || height <= 0 {
+            return Err("cannot capture an empty Rust Candidate PoC window".to_owned());
+        }
+        let window_dc = unsafe { GetWindowDC(hwnd) };
+        if window_dc.is_null() {
+            return Err("GetWindowDC failed for Rust Candidate PoC".to_owned());
+        }
+        let memory_dc = unsafe { CreateCompatibleDC(window_dc) };
+        if memory_dc.is_null() {
+            unsafe {
+                ReleaseDC(hwnd, window_dc);
+            }
+            return Err("CreateCompatibleDC failed for Rust Candidate PoC".to_owned());
+        }
+        let bitmap = unsafe { CreateCompatibleBitmap(window_dc, width, height) };
+        if bitmap.is_null() {
+            unsafe {
+                DeleteDC(memory_dc);
+                ReleaseDC(hwnd, window_dc);
+            }
+            return Err("CreateCompatibleBitmap failed for Rust Candidate PoC".to_owned());
+        }
+        let old_object = unsafe { SelectObject(memory_dc, bitmap.cast()) };
+        let copied = unsafe { BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY) };
+        if copied == 0 {
+            unsafe {
+                SelectObject(memory_dc, old_object);
+                DeleteObject(bitmap);
+                DeleteDC(memory_dc);
+                ReleaseDC(hwnd, window_dc);
+            }
+            return Err("BitBlt failed for Rust Candidate PoC".to_owned());
+        }
+
+        let bytes_per_pixel = 4usize;
+        let pixel_bytes = width as usize * height as usize * bytes_per_pixel;
+        let mut pixels = vec![0u8; pixel_bytes];
+        let mut info = BitmapInfo {
+            bmi_header: BitmapInfoHeader {
+                bi_size: std::mem::size_of::<BitmapInfoHeader>() as Dword,
+                bi_width: width,
+                bi_height: -height,
+                bi_planes: 1,
+                bi_bit_count: 32,
+                bi_compression: BI_RGB,
+                bi_size_image: pixel_bytes as Dword,
+                bi_x_pels_per_meter: 0,
+                bi_y_pels_per_meter: 0,
+                bi_clr_used: 0,
+                bi_clr_important: 0,
+            },
+            bmi_colors: [0],
+        };
+        let lines = unsafe {
+            GetDIBits(
+                memory_dc,
+                bitmap,
+                0,
+                height as Uint,
+                pixels.as_mut_ptr().cast(),
+                &mut info,
+                DIB_RGB_COLORS,
+            )
+        };
+        unsafe {
+            SelectObject(memory_dc, old_object);
+            DeleteObject(bitmap);
+            DeleteDC(memory_dc);
+            ReleaseDC(hwnd, window_dc);
+        }
+        if lines != height {
+            return Err("GetDIBits failed for Rust Candidate PoC".to_owned());
+        }
+
+        let non_background_pixels = pixels
+            .chunks_exact(bytes_per_pixel)
+            .filter(|pixel| {
+                let blue = pixel[0] as i16;
+                let green = pixel[1] as i16;
+                let red = pixel[2] as i16;
+                (red - 0xF2).abs() > 8 || (green - 0xF6).abs() > 8 || (blue - 0xF8).abs() > 8
+            })
+            .count();
+        if non_background_pixels < 8 {
+            return Err("Rust Candidate PoC screenshot did not contain visible text".to_owned());
+        }
+        let checksum = fnv1a64(&pixels);
+        write_bmp(path, width, height, &pixels)?;
+        let metadata = fs::metadata(path)
+            .map_err(|error| format!("Rust Candidate PoC screenshot metadata failed: {error}"))?;
+        Ok(CaptureEvidence {
+            bytes: metadata.len() as usize,
+            non_background_pixels,
+            checksum,
+            path: path.display().to_string(),
+        })
+    }
+
+    fn write_bmp(path: &Path, width: i32, height: i32, pixels: &[u8]) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create screenshot directory: {error}"))?;
+        }
+        let header_size = 14usize + 40usize;
+        let file_size = header_size + pixels.len();
+        let mut bytes = Vec::with_capacity(file_size);
+        bytes.extend_from_slice(b"BM");
+        bytes.extend_from_slice(&(file_size as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&(header_size as u32).to_le_bytes());
+        bytes.extend_from_slice(&40u32.to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&(-height).to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&32u16.to_le_bytes());
+        bytes.extend_from_slice(&BI_RGB.to_le_bytes());
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(pixels);
+        fs::write(path, bytes)
+            .map_err(|error| format!("failed to write Rust Candidate PoC screenshot: {error}"))
+    }
+
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        hash
+    }
+
+    fn json_escape(value: &str) -> String {
+        let mut escaped = String::new();
+        for character in value.chars() {
+            match character {
+                '"' => escaped.push_str("\\\""),
+                '\\' => escaped.push_str("\\\\"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                character if character < ' ' => {
+                    escaped.push_str(&format!("\\u{:04x}", character as u32));
+                }
+                character => escaped.push(character),
+            }
+        }
+        escaped
     }
 
     fn accessible_name(hwnd: Hwnd) -> Result<String, String> {
