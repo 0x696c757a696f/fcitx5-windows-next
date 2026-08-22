@@ -2,6 +2,7 @@
 
 **Mode:** CHANGE
 **Task ID:** `REG-BRAND-001`
+**State:** MANUAL-PENDING
 **Prerequisite:** 004 single profile identity complete; 016 resource/visual system available
 
 ## Goal
@@ -36,5 +37,9 @@ Ship one coherent Fcitx5 for Windows Next visual identity: an original or licens
 - No default blank EXE icon remains on visible product surfaces.
 - Product and micro TSF icons are recognizably the same family.
 - Brand asset licensing/originality is documented.
+
+## Manual pending evidence
+
+Automated prep is recorded in `docs/tasks/status.md`. Remaining required validation is manual/real-shell evidence: common DPI Light/Dark/High Contrast visual review, TSF picker recognizability, internal engine switch identity invariance, and taskbar/Alt+Tab surface observation for background helpers.
 
 After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.

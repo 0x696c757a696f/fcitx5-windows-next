@@ -28,11 +28,11 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 | 012 | STAB-REGISTER-BOOTSTRAP-012 | COMPLETED | 011 ownership model should be known before final installer E2E | completed/012-STAB-REGISTER-BOOTSTRAP-012.md |
 | 013 | STAB-CAND-LOCALE-013 | COMPLETED | 004 single profile metadata contract should be available | completed/013-STAB-CAND-LOCALE-013.md |
 | 014 | REG-PKG-WINPATH-001 | COMPLETED | previous eligible task | completed/014-REG-PKG-WINPATH-001.md |
-| 015 | STAB-HOST-MATRIX-015 | QUEUED | previous eligible task | queue/15-STAB-HOST-MATRIX-015.md |
+| 015 | STAB-HOST-MATRIX-015 | MANUAL-PENDING | previous eligible task | completed/015-STAB-HOST-MATRIX-015.md |
 | 016 | REG-CONFIG-VISUAL-001 | COMPLETED / AFTER-SCREENSHOT-PENDING | Core stabilization 003–014 should be green; 015 may be MANUAL-PENDING per PLAN | completed/016-REG-CONFIG-VISUAL-001.md |
 | 017 | REG-CONFIG-LIVE-001 | COMPLETED / REVERIFIED-AFTER-016 | 016 visual component system complete | completed/017-REG-CONFIG-LIVE-001.md |
 | 018 | REG-CAND-UX | COMPLETED | 013 locale metadata available; 017 can consume the new Auto setting | completed/018-REG-CAND-UX.md |
-| 019 | REG-BRAND-001 | MANUAL-PENDING | 004 single profile identity complete; 016 resource/visual system available | queue/19-REG-BRAND-001.md |
+| 019 | REG-BRAND-001 | MANUAL-PENDING | 004 single profile identity complete; 016 resource/visual system available | completed/019-REG-BRAND-001.md |
 | 020 | REG-UPDATE-TSF | COMPLETED | 009 repository state + 012 installer/registration semantics + 014 package path corpus should be stable | completed/020-REG-UPDATE-TSF.md |
 | 021 | CONFIG-UX-001 | COMPLETED | 016/017/018 green; user explicitly queued Settings UX follow-up | completed/021-CONFIG-UX-001.md |
 | 022 | CONFIG-UX-002 | COMPLETED | 021 | completed/022-CONFIG-UX-002.md |
