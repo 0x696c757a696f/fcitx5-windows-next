@@ -150,6 +150,12 @@ mod window_smoke {
     const SRCCOPY: Dword = 0x00CC_0020;
     const SW_SHOWNOACTIVATE: i32 = 4;
     const TRANSPARENT: i32 = 1;
+    const CLSCTX_INPROC_SERVER: Dword = 0x1;
+    const UIA_CONTROL_TYPE_PROPERTY_ID: i32 = 30003;
+    const UIA_NAME_PROPERTY_ID: i32 = 30005;
+    const UIA_WINDOW_CONTROL_TYPE_ID: i32 = 50032;
+    const UIA_PANE_CONTROL_TYPE_ID: i32 = 50033;
+    const VT_BSTR: u16 = 8;
     const VT_I4: u16 = 3;
     const WM_DESTROY: Uint = 0x0002;
     const WM_PAINT: Uint = 0x000F;
@@ -256,6 +262,61 @@ mod window_smoke {
             unsafe extern "system" fn(*mut IAccessible, Variant, *mut *mut u16) -> Hresult,
     }
 
+    #[repr(C)]
+    struct IUIAutomation {
+        vtable: *const IUIAutomationVtable,
+    }
+
+    #[repr(C)]
+    struct IUIAutomationVtable {
+        query_interface: usize,
+        add_ref: usize,
+        release: unsafe extern "system" fn(*mut IUIAutomation) -> u32,
+        compare_elements: usize,
+        compare_runtime_ids: usize,
+        get_root_element: usize,
+        element_from_handle: unsafe extern "system" fn(
+            *mut IUIAutomation,
+            Hwnd,
+            *mut *mut IUIAutomationElement,
+        ) -> Hresult,
+    }
+
+    #[repr(C)]
+    struct IUIAutomationElement {
+        vtable: *const IUIAutomationElementVtable,
+    }
+
+    #[repr(C)]
+    struct IUIAutomationElementVtable {
+        query_interface: usize,
+        add_ref: usize,
+        release: unsafe extern "system" fn(*mut IUIAutomationElement) -> u32,
+        set_focus: usize,
+        get_runtime_id: usize,
+        find_first: usize,
+        find_all: usize,
+        find_first_build_cache: usize,
+        find_all_build_cache: usize,
+        build_updated_cache: usize,
+        get_current_property_value:
+            unsafe extern "system" fn(*mut IUIAutomationElement, i32, *mut Variant) -> Hresult,
+    }
+
+    const CLSID_CUIAUTOMATION: Guid = Guid {
+        data1: 0xff48dba4,
+        data2: 0x60ef,
+        data3: 0x4201,
+        data4: [0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e],
+    };
+
+    const IID_IUIAUTOMATION: Guid = Guid {
+        data1: 0x30cbe57d,
+        data2: 0xd9d0,
+        data3: 0x452a,
+        data4: [0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee],
+    };
+
     const IID_IACCESSIBLE: Guid = Guid {
         data1: 0x618736e0,
         data2: 0x3c3d,
@@ -333,6 +394,13 @@ mod window_smoke {
 
     #[link(name = "ole32")]
     extern "system" {
+        fn CoCreateInstance(
+            clsid: *const Guid,
+            outer: *mut c_void,
+            context: Dword,
+            iid: *const Guid,
+            object: *mut *mut c_void,
+        ) -> Hresult;
         fn CoInitializeEx(reserved: *mut c_void, coinit: Dword) -> Hresult;
         fn CoUninitialize();
     }
@@ -579,6 +647,21 @@ mod window_smoke {
                 "Rust Candidate PoC MSAA accessible name missing emoji path: {accessible_name}"
             ));
         }
+        let uia = uia_window_evidence(hwnd)?;
+        if !uia.name.contains("Fcitx5 Candidate") {
+            return Err(format!(
+                "Rust Candidate PoC UIA name mismatch: {}",
+                uia.name
+            ));
+        }
+        if uia.control_type != UIA_WINDOW_CONTROL_TYPE_ID
+            && uia.control_type != UIA_PANE_CONTROL_TYPE_ID
+        {
+            return Err(format!(
+                "Rust Candidate PoC UIA control type mismatch: {}",
+                uia.control_type
+            ));
+        }
         let capture = if let Some(path) = spec.screenshot {
             Some(capture_window(hwnd, actual_width, actual_height, path)?)
         } else {
@@ -601,7 +684,7 @@ mod window_smoke {
             },
         );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"candidate_count\":{},\n  \"dpi_scale\":{:.2},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"candidate_count\":{},\n  \"dpi_scale\":{:.2},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
             json_escape(spec.snapshot_name),
             json_escape(spec.orientation_name),
             spec.candidate_count,
@@ -610,6 +693,7 @@ mod window_smoke {
             rect.top,
             rect.right,
             rect.bottom,
+            uia.control_type,
             capture_json,
             if spec.expects_emoji { "true" } else { "false" }
         ))
@@ -828,6 +912,129 @@ mod window_smoke {
             SysFreeString(name);
         }
         Ok(string)
+    }
+
+    struct UiaEvidence {
+        name: String,
+        control_type: i32,
+    }
+
+    fn uia_window_evidence(hwnd: Hwnd) -> Result<UiaEvidence, String> {
+        let init_result = unsafe { CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED) };
+        let should_uninitialize = init_result >= 0;
+        if init_result < 0 && init_result as u32 != 0x80010106 {
+            return Err(format!(
+                "CoInitializeEx failed before Rust Candidate PoC UIA check: HRESULT 0x{:08x}",
+                init_result as u32
+            ));
+        }
+
+        let mut automation_object: *mut c_void = null_mut();
+        let create_result = unsafe {
+            CoCreateInstance(
+                &CLSID_CUIAUTOMATION,
+                null_mut(),
+                CLSCTX_INPROC_SERVER,
+                &IID_IUIAUTOMATION,
+                &mut automation_object,
+            )
+        };
+        if create_result < 0 || automation_object.is_null() {
+            if should_uninitialize {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+            return Err(format!(
+                "CoCreateInstance(CUIAutomation) failed for Rust Candidate PoC: HRESULT 0x{:08x}",
+                create_result as u32
+            ));
+        }
+
+        let automation = automation_object.cast::<IUIAutomation>();
+        let mut element: *mut IUIAutomationElement = null_mut();
+        let element_result = unsafe {
+            ((*(*automation).vtable).element_from_handle)(automation, hwnd, &mut element)
+        };
+        unsafe {
+            ((*(*automation).vtable).release)(automation);
+        }
+        if element_result < 0 || element.is_null() {
+            if should_uninitialize {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+            return Err(format!(
+                "IUIAutomation::ElementFromHandle failed for Rust Candidate PoC: HRESULT 0x{:08x}",
+                element_result as u32
+            ));
+        }
+
+        let name_result = uia_bstr_property(element, UIA_NAME_PROPERTY_ID);
+        let control_type_result = uia_i4_property(element, UIA_CONTROL_TYPE_PROPERTY_ID);
+        unsafe {
+            ((*(*element).vtable).release)(element);
+        }
+        if should_uninitialize {
+            unsafe {
+                CoUninitialize();
+            }
+        }
+
+        Ok(UiaEvidence {
+            name: name_result?,
+            control_type: control_type_result?,
+        })
+    }
+
+    fn empty_variant() -> Variant {
+        Variant {
+            vt: 0,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+            data1: 0,
+            data2: 0,
+        }
+    }
+
+    fn uia_bstr_property(
+        element: *mut IUIAutomationElement,
+        property: i32,
+    ) -> Result<String, String> {
+        let mut value = empty_variant();
+        let result = unsafe {
+            ((*(*element).vtable).get_current_property_value)(element, property, &mut value)
+        };
+        if result < 0 || value.vt != VT_BSTR || value.data1 == 0 {
+            return Err(format!(
+                "IUIAutomationElement::GetCurrentPropertyValue({property}) failed for Rust Candidate PoC: HRESULT 0x{:08x}, vt {}",
+                result as u32, value.vt
+            ));
+        }
+        let bstr = value.data1 as *mut u16;
+        let length = unsafe { SysStringLen(bstr) } as usize;
+        let slice = unsafe { std::slice::from_raw_parts(bstr, length) };
+        let string = String::from_utf16_lossy(slice);
+        unsafe {
+            SysFreeString(bstr);
+        }
+        Ok(string)
+    }
+
+    fn uia_i4_property(element: *mut IUIAutomationElement, property: i32) -> Result<i32, String> {
+        let mut value = empty_variant();
+        let result = unsafe {
+            ((*(*element).vtable).get_current_property_value)(element, property, &mut value)
+        };
+        if result < 0 || value.vt != VT_I4 {
+            return Err(format!(
+                "IUIAutomationElement::GetCurrentPropertyValue({property}) failed for Rust Candidate PoC: HRESULT 0x{:08x}, vt {}",
+                result as u32, value.vt
+            ));
+        }
+        Ok(value.data1 as i32)
     }
 
     unsafe extern "system" fn window_proc(

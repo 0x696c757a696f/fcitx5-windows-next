@@ -273,6 +273,9 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("AccessibleObjectFromWindow") == std::string::npos ||
         candidatePocBinary.find("get_acc_name") == std::string::npos ||
         candidatePocBinary.find("msaa_accessible_name_readable") == std::string::npos ||
+        candidatePocBinary.find("IUIAutomation") == std::string::npos ||
+        candidatePocBinary.find("uia_name_readable") == std::string::npos ||
+        candidatePocBinary.find("uia_control_type") == std::string::npos ||
         candidatePocBinary.find("--screenshot") == std::string::npos ||
         candidatePocBinary.find("--demo-snapshot") == std::string::npos ||
         candidatePocBinary.find("--dpi-scale") == std::string::npos ||
