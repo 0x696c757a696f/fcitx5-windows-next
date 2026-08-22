@@ -42,6 +42,7 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 | 026 | CONFIG-UX-006 | COMPLETED | 021; TRUST tasks may be required for official online repository enablement | completed/026-CONFIG-UX-006.md |
 | 027 | CONFIG-UX-007 | COMPLETED | 021 | completed/027-CONFIG-UX-007.md |
 | 028 | CONFIG-UX-008 | COMPLETED | package smoke follow-up | completed/028-CONFIG-UX-008.md |
+| 036 | CONFIG-QA-001 | COMPLETED | user requested software-test style Settings verification before Rust Config PoC | completed/036-CONFIG-QA-001.md |
 | 029 | TRUST-001 | COMPLETED | user selected PQC-first repository trust design | completed/029-TRUST-001.md |
 | 030 | TRUST-002 | COMPLETED | 029 | completed/030-TRUST-002.md |
 | 031 | TRUST-003 | COMPLETED | 029/030 + verifier implementation decision | completed/031-TRUST-003.md |

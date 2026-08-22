@@ -1,0 +1,10 @@
+[package]
+name = "fcitx5-config-qa"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[[bin]]
+name = "fcitx5-config-qa"
+path = "src/main.rs"
