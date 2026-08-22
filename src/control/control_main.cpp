@@ -124,6 +124,7 @@ int fcitx5_control_launcher_action_sequence(std::uint32_t action,
                                             std::size_t* out_len);
 int fcitx5_control_package_repair_json_utf8(const Fcitx5ControlPackageRepair* repair,
                                             char** out_ptr, std::size_t* out_len);
+std::uint32_t fcitx5_control_config_file_action_utf16(Fcitx5ControlUtf16 command);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -137,6 +138,8 @@ constexpr wchar_t kVisualConfigChangedMessage[] =
     L"Fcitx5WindowsNext.VisualConfigChanged.v1";
 constexpr std::uint32_t kLauncherActionRestartEngine = 1;
 constexpr std::uint32_t kLauncherActionShutdown = 2;
+constexpr std::uint32_t kConfigFileActionValidate = 1;
+constexpr std::uint32_t kConfigFileActionApply = 2;
 
 std::string narrow(std::wstring_view value) {
     if (value.empty())
@@ -242,6 +245,10 @@ std::string packageRepairJson(const Fcitx5ControlPackageRepair& repair) {
     if (fcitx5_control_package_repair_json_utf8(&repair, &bytes, &length) != 0)
         return {};
     return takeRustUtf8(bytes, length);
+}
+
+std::uint32_t configFileAction(std::wstring_view command) {
+    return fcitx5_control_config_file_action_utf16({command.data(), command.size()});
 }
 
 bool readUtf8(const fs::path& path, std::string& text) {
@@ -1592,8 +1599,10 @@ int wmain(int argc, wchar_t** argv) {
         }
         return writeVisualConfig(configPath, updated) ? 0 : 5;
     }
+    const std::uint32_t configAction =
+        arguments.empty() ? 0 : configFileAction(arguments[0]);
     if (arguments.size() == 2 &&
-        (arguments[0] == L"--validate-config" || arguments[0] == L"--apply-config")) {
+        (configAction == kConfigFileActionValidate || configAction == kConfigFileActionApply)) {
         std::string text;
         ParseError error;
         if (!validateConfig(fs::path(arguments[1]), text, error)) {
@@ -1601,7 +1610,7 @@ int wmain(int argc, wchar_t** argv) {
                       << error.message << '\n';
             return 3;
         }
-        if (arguments[0] == L"--validate-config")
+        if (configAction == kConfigFileActionValidate)
             return 0;
         return writeVisualConfig(dataRoot / L"config.toml", text) ? 0 : 5;
     }

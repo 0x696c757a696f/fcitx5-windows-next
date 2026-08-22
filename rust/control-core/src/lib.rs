@@ -76,6 +76,9 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
 const CONTROL_TSF_GUARD_RESET_JSON: &str = r#"{"format_version":1,"tsf_guard":"enabled"}"#;
 const CONTROL_LAUNCHER_ACTION_RESTART_ENGINE: u32 = 1;
 const CONTROL_LAUNCHER_ACTION_SHUTDOWN: u32 = 2;
+const CONTROL_CONFIG_FILE_ACTION_UNKNOWN: u32 = 0;
+const CONTROL_CONFIG_FILE_ACTION_VALIDATE: u32 = 1;
+const CONTROL_CONFIG_FILE_ACTION_APPLY: u32 = 2;
 const LAUNCHER_COMMAND_START_DEMAND: u32 = 1;
 const LAUNCHER_COMMAND_USER_STOP: u32 = 2;
 const LAUNCHER_COMMAND_RESUME: u32 = 3;
@@ -493,6 +496,51 @@ fn package_repair_json(repair: &Fcitx5ControlPackageRepair) -> Option<Vec<u8>> {
     Some(output)
 }
 
+fn config_file_action(command: &[u16]) -> u32 {
+    const VALIDATE: &[u16] = &[
+        b'-' as u16,
+        b'-' as u16,
+        b'v' as u16,
+        b'a' as u16,
+        b'l' as u16,
+        b'i' as u16,
+        b'd' as u16,
+        b'a' as u16,
+        b't' as u16,
+        b'e' as u16,
+        b'-' as u16,
+        b'c' as u16,
+        b'o' as u16,
+        b'n' as u16,
+        b'f' as u16,
+        b'i' as u16,
+        b'g' as u16,
+    ];
+    const APPLY: &[u16] = &[
+        b'-' as u16,
+        b'-' as u16,
+        b'a' as u16,
+        b'p' as u16,
+        b'p' as u16,
+        b'l' as u16,
+        b'y' as u16,
+        b'-' as u16,
+        b'c' as u16,
+        b'o' as u16,
+        b'n' as u16,
+        b'f' as u16,
+        b'i' as u16,
+        b'g' as u16,
+    ];
+    if command == VALIDATE {
+        CONTROL_CONFIG_FILE_ACTION_VALIDATE
+    } else if command == APPLY {
+        CONTROL_CONFIG_FILE_ACTION_APPLY
+    } else {
+        CONTROL_CONFIG_FILE_ACTION_UNKNOWN
+    }
+}
+
 fn startup_command(executable_directory: OsString) -> Vec<u16> {
     let launcher = PathBuf::from(executable_directory).join("fcitx5-launcher.exe");
     let mut command = quote(launcher.as_os_str());
@@ -863,6 +911,21 @@ pub unsafe extern "C" fn fcitx5_control_package_repair_json_utf8(
 
 /// # Safety
 ///
+/// `command` must remain valid for the duration of the call. No pointer is
+/// retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_config_file_action_utf16(
+    command: Fcitx5ControlUtf16,
+) -> u32 {
+    if command.ptr.is_null() {
+        return CONTROL_CONFIG_FILE_ACTION_UNKNOWN;
+    }
+    let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
+    config_file_action(command)
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -940,6 +1003,22 @@ mod tests {
         assert_eq!(
             json.as_slice(),
             br#"{"format_version":1,"repair":"verified","repository_sequence_state":"repaired"}"#
+        );
+    }
+
+    #[test]
+    fn config_file_actions_are_typed_control_commands() {
+        let validate = wide("--validate-config");
+        let apply = wide("--apply-config");
+        let reset = wide("--reset-config");
+        assert_eq!(
+            config_file_action(&validate),
+            CONTROL_CONFIG_FILE_ACTION_VALIDATE
+        );
+        assert_eq!(config_file_action(&apply), CONTROL_CONFIG_FILE_ACTION_APPLY);
+        assert_eq!(
+            config_file_action(&reset),
+            CONTROL_CONFIG_FILE_ACTION_UNKNOWN
         );
     }
 
