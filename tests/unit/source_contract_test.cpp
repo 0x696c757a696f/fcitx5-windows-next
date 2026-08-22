@@ -362,6 +362,14 @@ int main(int argc, char** argv) {
         configPocSource.find("layout_rects_inside_window") == std::string::npos ||
         configPocSource.find("layout_rects_non_overlapping") == std::string::npos ||
         configPocSource.find("addon_action_row_rects") == std::string::npos ||
+        configPocSource.find("settings_operation_state_machine") == std::string::npos ||
+        configPocSource.find("package_action_state_machine") == std::string::npos ||
+        configPocSource.find("signed_repository_required_for_install") == std::string::npos ||
+        configPocSource.find("unconfigured_repository_install_blocked") == std::string::npos ||
+        configPocSource.find("RepositoryTrustState::TrustedSignedMetadata") ==
+            std::string::npos ||
+        configPocSource.find("no_unsafe_commands_for_package_actions") == std::string::npos ||
+        configPocSource.find("localized_operation_errors") == std::string::npos ||
         configPocSource.find("SelectCandidateFont") == std::string::npos ||
         configPocSource.find("ToggleAdvancedAppearance") == std::string::npos ||
         configPocSource.find("InstallAddon") == std::string::npos ||

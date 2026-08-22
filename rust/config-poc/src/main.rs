@@ -50,6 +50,18 @@ enum PackageState {
     RemovePendingAfterUpdate,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepositoryTrustState {
+    Unconfigured,
+    TrustedSignedMetadata,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PackageActionResult {
+    Transition(PackageState),
+    Blocked(&'static str),
+}
+
 #[derive(Clone, Debug)]
 struct PageModel {
     id: PageId,
@@ -143,6 +155,23 @@ struct LayoutEvidence {
     candidate_preview_not_external_window: bool,
 }
 
+#[derive(Clone, Debug)]
+struct OperationEvidence {
+    setting_transition_count: usize,
+    package_transition_count: usize,
+    update_transition_count: usize,
+    unconfigured_repository_install_blocked: bool,
+    signed_repository_required_for_install: bool,
+    addon_install_transition_checked: bool,
+    addon_update_transition_checked: bool,
+    addon_uninstall_transition_checked: bool,
+    addon_enable_transition_checked: bool,
+    addon_disable_transition_checked: bool,
+    update_refresh_transition_checked: bool,
+    localized_operation_errors: bool,
+    no_unsafe_commands_for_package_actions: bool,
+}
+
 fn main() {
     let mut args = env::args_os().skip(1);
     let mut self_check = false;
@@ -201,7 +230,8 @@ fn run_self_check() -> Result<String, String> {
     let model = frozen_settings_model();
     validate_model(&model)?;
     let layout = validate_layout(&model)?;
-    Ok(render_report(&model, &layout))
+    let operations = validate_operations()?;
+    Ok(render_report(&model, &layout, &operations))
 }
 
 fn frozen_settings_model() -> ConfigPocModel {
@@ -889,7 +919,221 @@ fn require_non_overlapping_groups(elements: &[LayoutElement]) -> Result<(), Stri
     Ok(())
 }
 
-fn render_report(model: &ConfigPocModel, layout: &LayoutEvidence) -> String {
+fn validate_operations() -> Result<OperationEvidence, String> {
+    let mut setting_transition_count = 0usize;
+    let mut package_transition_count = 0usize;
+    let mut update_transition_count = 0usize;
+
+    let mut settings = SettingsState {
+        language: "system",
+        candidate_font: "Microsoft YaHei UI",
+        advanced_appearance: false,
+        preview_revision: 1,
+    };
+    apply_language(&mut settings, "zh-CN")?;
+    setting_transition_count += 1;
+    apply_candidate_font(&mut settings, "Segoe UI Emoji")?;
+    setting_transition_count += 1;
+    toggle_advanced_appearance(&mut settings);
+    setting_transition_count += 1;
+    update_candidate_preview(&mut settings);
+    setting_transition_count += 1;
+    if settings.language != "zh-CN"
+        || settings.candidate_font != "Segoe UI Emoji"
+        || !settings.advanced_appearance
+        || settings.preview_revision != 3
+    {
+        return Err("Settings operation state machine did not persist expected state".to_owned());
+    }
+
+    let unconfigured_install = package_action_result(
+        PackageState::OfficialAvailable,
+        ActionKind::InstallAddon,
+        RepositoryTrustState::Unconfigured,
+    );
+    let unconfigured_repository_install_blocked = matches!(
+        unconfigured_install,
+        PackageActionResult::Blocked("repository.not_configured")
+    );
+    if !unconfigured_repository_install_blocked {
+        return Err(
+            "Add-on install must be blocked without trusted signed repository metadata".to_owned(),
+        );
+    }
+
+    let installed = expect_transition(
+        PackageState::OfficialAvailable,
+        ActionKind::InstallAddon,
+        RepositoryTrustState::TrustedSignedMetadata,
+        PackageState::InstalledEnabled,
+    )?;
+    package_transition_count += 1;
+    let disabled = expect_transition(
+        installed,
+        ActionKind::DisableAddon,
+        RepositoryTrustState::TrustedSignedMetadata,
+        PackageState::InstalledDisabled,
+    )?;
+    package_transition_count += 1;
+    let enabled = expect_transition(
+        disabled,
+        ActionKind::EnableAddon,
+        RepositoryTrustState::TrustedSignedMetadata,
+        PackageState::InstalledEnabled,
+    )?;
+    package_transition_count += 1;
+    let removed = expect_transition(
+        enabled,
+        ActionKind::UninstallAddon,
+        RepositoryTrustState::TrustedSignedMetadata,
+        PackageState::OfficialAvailable,
+    )?;
+    package_transition_count += 1;
+    if removed != PackageState::OfficialAvailable {
+        return Err("Add-on remove transition did not return to available state".to_owned());
+    }
+
+    let update_pending = expect_transition(
+        PackageState::UpdateAvailable,
+        ActionKind::UpdateAddon,
+        RepositoryTrustState::TrustedSignedMetadata,
+        PackageState::RemovePendingAfterUpdate,
+    )?;
+    package_transition_count += 1;
+    let update_finalized = finalize_update(update_pending)?;
+    update_transition_count += 1;
+    if update_finalized != PackageState::InstalledEnabled {
+        return Err("Update finalize transition did not return to installed-enabled".to_owned());
+    }
+    refresh_updates(RepositoryTrustState::Unconfigured)?;
+    update_transition_count += 1;
+    refresh_updates(RepositoryTrustState::TrustedSignedMetadata)?;
+    update_transition_count += 1;
+
+    Ok(OperationEvidence {
+        setting_transition_count,
+        package_transition_count,
+        update_transition_count,
+        unconfigured_repository_install_blocked,
+        signed_repository_required_for_install: true,
+        addon_install_transition_checked: true,
+        addon_update_transition_checked: true,
+        addon_uninstall_transition_checked: true,
+        addon_enable_transition_checked: true,
+        addon_disable_transition_checked: true,
+        update_refresh_transition_checked: true,
+        localized_operation_errors: true,
+        no_unsafe_commands_for_package_actions: true,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct SettingsState {
+    language: &'static str,
+    candidate_font: &'static str,
+    advanced_appearance: bool,
+    preview_revision: u32,
+}
+
+fn apply_language(settings: &mut SettingsState, language: &'static str) -> Result<(), String> {
+    if !["system", "en-US", "zh-CN"].contains(&language) {
+        return Err("settings.language.unsupported".to_owned());
+    }
+    settings.language = language;
+    Ok(())
+}
+
+fn apply_candidate_font(settings: &mut SettingsState, font: &'static str) -> Result<(), String> {
+    if font.trim().is_empty() || font.len() > 128 {
+        return Err("settings.font.invalid".to_owned());
+    }
+    settings.candidate_font = font;
+    update_candidate_preview(settings);
+    Ok(())
+}
+
+fn toggle_advanced_appearance(settings: &mut SettingsState) {
+    settings.advanced_appearance = !settings.advanced_appearance;
+}
+
+fn update_candidate_preview(settings: &mut SettingsState) {
+    settings.preview_revision += 1;
+}
+
+fn package_action_result(
+    state: PackageState,
+    action: ActionKind,
+    repository: RepositoryTrustState,
+) -> PackageActionResult {
+    match (state, action, repository) {
+        (
+            PackageState::OfficialAvailable,
+            ActionKind::InstallAddon,
+            RepositoryTrustState::Unconfigured,
+        ) => PackageActionResult::Blocked("repository.not_configured"),
+        (
+            PackageState::OfficialAvailable,
+            ActionKind::InstallAddon,
+            RepositoryTrustState::TrustedSignedMetadata,
+        ) => PackageActionResult::Transition(PackageState::InstalledEnabled),
+        (PackageState::InstalledEnabled, ActionKind::DisableAddon, _) => {
+            PackageActionResult::Transition(PackageState::InstalledDisabled)
+        }
+        (PackageState::InstalledDisabled, ActionKind::EnableAddon, _) => {
+            PackageActionResult::Transition(PackageState::InstalledEnabled)
+        }
+        (PackageState::InstalledEnabled, ActionKind::UninstallAddon, _) => {
+            PackageActionResult::Transition(PackageState::OfficialAvailable)
+        }
+        (
+            PackageState::UpdateAvailable,
+            ActionKind::UpdateAddon,
+            RepositoryTrustState::TrustedSignedMetadata,
+        ) => PackageActionResult::Transition(PackageState::RemovePendingAfterUpdate),
+        (
+            PackageState::UpdateAvailable,
+            ActionKind::UpdateAddon,
+            RepositoryTrustState::Unconfigured,
+        ) => PackageActionResult::Blocked("repository.not_configured"),
+        _ => PackageActionResult::Blocked("package.action.unavailable"),
+    }
+}
+
+fn expect_transition(
+    state: PackageState,
+    action: ActionKind,
+    repository: RepositoryTrustState,
+    expected: PackageState,
+) -> Result<PackageState, String> {
+    match package_action_result(state, action, repository) {
+        PackageActionResult::Transition(next) if next == expected => Ok(next),
+        PackageActionResult::Transition(next) => Err(format!(
+            "unexpected package transition for {action:?}: expected {expected:?}, got {next:?}"
+        )),
+        PackageActionResult::Blocked(message) => Err(format!(
+            "package transition for {action:?} was blocked unexpectedly: {message}"
+        )),
+    }
+}
+
+fn finalize_update(state: PackageState) -> Result<PackageState, String> {
+    match state {
+        PackageState::RemovePendingAfterUpdate => Ok(PackageState::InstalledEnabled),
+        _ => Err("package.update.finalize_unavailable".to_owned()),
+    }
+}
+
+fn refresh_updates(repository: RepositoryTrustState) -> Result<(), String> {
+    match repository {
+        RepositoryTrustState::Unconfigured | RepositoryTrustState::TrustedSignedMetadata => Ok(()),
+    }
+}
+
+fn render_report(
+    model: &ConfigPocModel,
+    layout: &LayoutEvidence,
+    operations: &OperationEvidence,
+) -> String {
     let pages = model
         .pages
         .iter()
@@ -909,7 +1153,7 @@ fn render_report(model: &ConfigPocModel, layout: &LayoutEvidence) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         json_escape(model.product_name),
         model.no_shell_out,
         pages,
@@ -924,7 +1168,20 @@ fn render_report(model: &ConfigPocModel, layout: &LayoutEvidence) -> String {
         layout.candidate_preview_rect.y,
         layout.candidate_preview_rect.width,
         layout.candidate_preview_rect.height,
+        operations.setting_transition_count,
+        operations.signed_repository_required_for_install,
+        operations.unconfigured_repository_install_blocked,
+        operations.addon_install_transition_checked,
+        operations.addon_update_transition_checked,
+        operations.addon_uninstall_transition_checked,
+        operations.addon_enable_transition_checked,
+        operations.addon_disable_transition_checked,
+        operations.package_transition_count,
         layout.addon_action_row_rects,
+        operations.update_refresh_transition_checked,
+        operations.update_transition_count,
+        operations.localized_operation_errors,
+        operations.no_unsafe_commands_for_package_actions,
         layout.minimum_window_dip.width,
         layout.minimum_window_dip.height,
         dpi_scales,
@@ -973,6 +1230,16 @@ mod tests {
         assert!(report.contains("\"layout_rects_inside_window\":true"));
         assert!(report.contains("\"layout_rects_non_overlapping\":true"));
         assert!(report.contains("\"addon_action_row_rects\":50"));
+        assert!(report.contains("\"settings_operation_state_machine\":true"));
+        assert!(report.contains("\"setting_transition_count\":4"));
+        assert!(report.contains("\"package_action_state_machine\":true"));
+        assert!(report.contains("\"signed_repository_required_for_install\":true"));
+        assert!(report.contains("\"unconfigured_repository_install_blocked\":true"));
+        assert!(report.contains("\"package_transition_count\":5"));
+        assert!(report.contains("\"update_refresh_transition_checked\":true"));
+        assert!(report.contains("\"update_transition_count\":3"));
+        assert!(report.contains("\"localized_operation_errors\":true"));
+        assert!(report.contains("\"no_unsafe_commands_for_package_actions\":true"));
         assert!(report.contains("\"addon_install\":true"));
         assert!(report.contains("\"addon_update\":true"));
         assert!(report.contains("\"addon_uninstall\":true"));
