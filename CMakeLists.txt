@@ -737,6 +737,17 @@ if(BUILD_TESTING)
       --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
       "${CMAKE_CURRENT_BINARY_DIR}/config-ui-preview-fidelity-qa")
   set_tests_properties(config-ui-preview-fidelity-qa PROPERTIES TIMEOUT 30)
+  add_test(
+    NAME rust-config-poc-contract
+    COMMAND
+      "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+      "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+      "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --target
+      "${FCITX_RUST_TARGET}" -- --self-check --report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-poc-report.json")
+  set_tests_properties(rust-config-poc-contract PROPERTIES
+                       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
   add_executable(fcitx5_protocol_test tests/unit/protocol_test.cpp)
   target_link_libraries(fcitx5_protocol_test PRIVATE fcitx5::protocol)

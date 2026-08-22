@@ -1,25 +1,25 @@
-# Current Task — RUST-R3-CANDIDATE-POC Rust Candidate UI differential PoC
+# Current Task — RUST-R3-CONFIG-POC Rust Settings/Config differential PoC
 
-**State:** CURRENT / HEADLESS-POC-GREEN / WINDOW-A11Y-VISUAL-SMOKE-GREEN / UIA-SMOKE-GREEN / LAYOUT-NONOVERLAP-GREEN / LAYOUT-DRIVEN-PAINT-GREEN / DIFFERENTIAL-LAYOUT-PAINT-GREEN / DEMO-DIFFERENTIAL-GREEN / SCROLL-DEMO-DIFFERENTIAL-GREEN / HOST-SNAPSHOT-GREEN / CPP-VISUAL-SNAPSHOT-GREEN / CONFIG-EMBEDDED-PREVIEW-GREEN / CONFIG-THEME-FIDELITY-GREEN / CONFIG-PREVIEW-QA-GREEN / DPI-WINDOW-SMOKE-GREEN / GUI-DIFFERENTIAL-PENDING
+**State:** CURRENT / INITIAL-POC-GREEN / VIEW-MODEL-SELF-CHECK-GREEN
 
 ## Gate
 
-Start only after Candidate UX/layout/UILess contracts are frozen and green for the current C++ UI.
+Start only after the Settings operation model, typed config model, package UI states, localization/dialog behavior, and Control/package/update boundaries are frozen.
 
 ## Scope
 
-- Build an isolated Rust Candidate UI PoC as an out-of-process executable.
-- Reuse the versioned IPC/model contract; do not use C++ FFI.
-- Model context, composition, revision, epoch, candidate selection, paging, UILess policy, DPI, locale, emoji/color-font, and layout stability with Rust strong types.
-- Compare C++ UI and Rust UI against the same mock-engine snapshots and golden layout/interaction corpus.
+- Build an isolated Rust Settings/Config PoC as a normal user-facing EXE.
+- Consume typed config/control/package boundaries; do not duplicate business logic or shell out to unsafe commands.
+- Preserve product UI/UX rules: no overlap at supported DPI/minimum size, localized dialogs, language selector, live Candidate preview, font selection, advanced appearance controls, input-method list, add-ons/update states, and diagnostics actions.
+- Prefer Rust domain models for settings, validation, package actions, and UI state.
 
 ## Must not do
 
-- Do not replace the shipping C++ Candidate UI during the PoC.
-- Do not change the Candidate IPC/model semantics while migrating language.
-- Do not add hooks, `SendInput`, injection, anti-cheat bypass, or external attack behavior.
+- Do not replace the shipping Config app during the PoC.
+- Do not fake online plugin availability without signed trusted repository metadata.
+- Do not regress accessibility, localization, package safety, or existing typed Control behavior.
 
 ## Done when
 
-- Rust Candidate PoC has differential, accessibility, DPI, layout, and host evidence.
-- A later cutover task can decide whether to replace the C++ implementation and delete the old authoritative path.
+- Rust Config PoC matches the frozen operation/visual contracts and records package/update/settings evidence.
+- A later cutover task can decide whether to replace the WTL/D2D implementation and delete the old authoritative path.

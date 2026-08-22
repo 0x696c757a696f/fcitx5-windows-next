@@ -247,6 +247,7 @@ int main(int argc, char** argv) {
     const auto candidateIntegrationSource =
         read_text(sourceRoot / "tests/integration/candidate_ui_config_integration_test.cpp");
     const auto configQaSource = read_text(sourceRoot / "rust/config-qa/src/main.rs");
+    const auto configPocSource = read_text(sourceRoot / "rust/config-poc/src/main.rs");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
@@ -346,6 +347,19 @@ int main(int argc, char** argv) {
         configQaSource.find("selected_green_bbox") == std::string::npos ||
         configQaSource.find("assert_preview_matches_candidate_theme") == std::string::npos ||
         configQaSource.find("shared_theme_pixels") == std::string::npos ||
+        configPocSource.find("fcitx5-config-poc") == std::string::npos ||
+        configPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
+        configPocSource.find("candidate_preview_embedded") == std::string::npos ||
+        configPocSource.find("candidate_preview_current_theme") == std::string::npos ||
+        configPocSource.find("candidate_preview_not_external_window") == std::string::npos ||
+        configPocSource.find("SelectCandidateFont") == std::string::npos ||
+        configPocSource.find("ToggleAdvancedAppearance") == std::string::npos ||
+        configPocSource.find("InstallAddon") == std::string::npos ||
+        configPocSource.find("UpdateAddon") == std::string::npos ||
+        configPocSource.find("UninstallAddon") == std::string::npos ||
+        configPocSource.find("EnableAddon") == std::string::npos ||
+        configPocSource.find("DisableAddon") == std::string::npos ||
+        cmakeSource.find("rust-config-poc-contract") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||

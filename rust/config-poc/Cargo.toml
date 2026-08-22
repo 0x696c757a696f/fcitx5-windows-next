@@ -1,0 +1,10 @@
+[package]
+name = "fcitx5-config-poc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fcitx5-config-poc"
+path = "src/main.rs"
+
+[dependencies]

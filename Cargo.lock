@@ -54,6 +54,10 @@ name = "fcitx5-candidate-core"
 version = "0.1.0"
 
 [[package]]
+name = "fcitx5-config-poc"
+version = "0.1.0"
+
+[[package]]
 name = "fcitx5-config-qa"
 version = "0.1.0"
 

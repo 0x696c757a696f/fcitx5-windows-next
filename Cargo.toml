@@ -6,5 +6,6 @@ members = [
   "rust/control-core",
   "rust/process-execution-core",
   "rust/config-qa",
+  "rust/config-poc",
   "rust/candidate-core",
 ]
