@@ -22,6 +22,10 @@ use windows_core::{implement, ComObject, IUnknown, Interface, Ref, Result, BOOL,
 // Stable channel CLSID from cmake/release_identity.h.in.
 // This PoC deliberately does not register or replace the shipping C++ TSF.
 pub const FCITX5_TEXT_SERVICE_CLSID: GUID = GUID::from_u128(0x3a21b9e2_4f47_4c36_8bfa_91d7d3b3e901);
+pub const FCITX5_LANGUAGE_PROFILE_GUID: GUID =
+    GUID::from_u128(0x6c2ac726_7703_4b65_89af_a77e9e0da102);
+const FCITX5_PRODUCT_DISPLAY_NAME: &str = "Fcitx5 for Windows Next";
+const FCITX5_PROFILE_DISPLAY_NAME: &str = "Fcitx5";
 static MODULE_REFERENCES: AtomicI32 = AtomicI32::new(0);
 const TSF_BEHAVIOR_CORPUS_JSON: &str =
     include_str!("../../../tests/fixtures/tsf_behavior_corpus.json");
@@ -38,6 +42,7 @@ const REQUIRED_TSF_BEHAVIOR_CASES: &[&str] = &[
     "single_edit_session_commit_preedit_update",
 ];
 static BEHAVIOR_REPORT: OnceLock<String> = OnceLock::new();
+static PROFILE_IDENTITY_REPORT: OnceLock<String> = OnceLock::new();
 
 pub fn panic_to_hresult<F>(operation: F) -> HRESULT
 where
@@ -73,6 +78,13 @@ pub fn rust_tsf_poc_policy_report() -> &'static str {
         "fcitx_core_link:false;",
         "package_update_link:false;",
         "config_gui_link:false"
+    )
+}
+
+pub fn tsf_profile_identity_report() -> String {
+    format!(
+        "{{\"format_version\":1,\"product_display_name\":\"{}\",\"profile_display_name\":\"{}\",\"text_service_clsid\":\"3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901\",\"language_profile_guid\":\"6c2ac726-7703-4b65-89af-a77e9e0da102\",\"windows_profile_count\":1,\"dynamic_profile_registration\":false,\"shipping_cxx_authoritative\":true,\"rust_poc_registers_profile\":false,\"release_identity_source\":\"cmake/release_identity.h.in\"}}",
+        FCITX5_PRODUCT_DISPLAY_NAME, FCITX5_PROFILE_DISPLAY_NAME
     )
 }
 
@@ -737,6 +749,34 @@ pub unsafe extern "system" fn Fcitx5TsfPocBehaviorReport(length: *mut usize) -> 
 #[no_mangle]
 /// # Safety
 ///
+/// `length` is optional. When non-null it must point to writable process-local
+/// memory. The returned pointer is owned by this module and remains valid until
+/// the DLL is unloaded.
+pub unsafe extern "system" fn Fcitx5TsfPocProfileIdentityReport(length: *mut usize) -> *const u8 {
+    match catch_unwind(|| {
+        let report = PROFILE_IDENTITY_REPORT.get_or_init(tsf_profile_identity_report);
+        if !length.is_null() {
+            unsafe {
+                *length = report.len();
+            }
+        }
+        report.as_ptr()
+    }) {
+        Ok(pointer) => pointer,
+        Err(_) => {
+            if !length.is_null() {
+                unsafe {
+                    *length = 0;
+                }
+            }
+            std::ptr::null()
+        }
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
 /// Test-only PoC export used by the artifact smoke to prove that a forced
 /// internal panic is converted to `HRESULT` across the DLL ABI.
 pub unsafe extern "system" fn Fcitx5TsfPocForcedFailureForTest() -> HRESULT {
@@ -1022,6 +1062,31 @@ mod tests {
         assert_eq!(
             FCITX5_TEXT_SERVICE_CLSID,
             GUID::from_u128(0x3a21b9e2_4f47_4c36_8bfa_91d7d3b3e901)
+        );
+        assert_eq!(
+            FCITX5_LANGUAGE_PROFILE_GUID,
+            GUID::from_u128(0x6c2ac726_7703_4b65_89af_a77e9e0da102)
+        );
+        let report = tsf_profile_identity_report();
+        assert!(report.contains("\"product_display_name\":\"Fcitx5 for Windows Next\""));
+        assert!(report.contains("\"profile_display_name\":\"Fcitx5\""));
+        assert!(report.contains("\"windows_profile_count\":1"));
+        assert!(report.contains("\"dynamic_profile_registration\":false"));
+        assert!(report.contains("\"shipping_cxx_authoritative\":true"));
+        assert!(report.contains("\"rust_poc_registers_profile\":false"));
+    }
+
+    #[test]
+    fn profile_identity_export_is_panic_contained_and_length_delimited() {
+        let mut length = 0usize;
+        let pointer = unsafe { Fcitx5TsfPocProfileIdentityReport(&mut length) };
+        assert!(!pointer.is_null());
+        assert!(length > 0);
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
+        let report = std::str::from_utf8(bytes).expect("profile identity report should be utf8");
+        assert!(report.contains("\"text_service_clsid\":\"3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901\""));
+        assert!(
+            report.contains("\"language_profile_guid\":\"6c2ac726-7703-4b65-89af-a77e9e0da102\"")
         );
     }
 

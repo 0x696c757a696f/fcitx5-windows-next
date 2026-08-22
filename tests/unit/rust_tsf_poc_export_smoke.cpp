@@ -33,6 +33,7 @@ int wmain(int argc, wchar_t** argv) {
     using GetClassObject = HRESULT(__stdcall*)(REFCLSID, REFIID, void**);
     using CanUnloadNow = HRESULT(__stdcall*)();
     using BehaviorReport = const char*(__stdcall*)(size_t*);
+    using ProfileIdentityReport = const char*(__stdcall*)(size_t*);
     using ForcedFailure = HRESULT(__stdcall*)();
     const auto getClassObject =
         reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
@@ -40,9 +41,12 @@ int wmain(int argc, wchar_t** argv) {
         reinterpret_cast<CanUnloadNow>(GetProcAddress(module, "DllCanUnloadNow"));
     const auto behaviorReport = reinterpret_cast<BehaviorReport>(
         GetProcAddress(module, "Fcitx5TsfPocBehaviorReport"));
+    const auto profileIdentityReport = reinterpret_cast<ProfileIdentityReport>(
+        GetProcAddress(module, "Fcitx5TsfPocProfileIdentityReport"));
     const auto forcedFailure = reinterpret_cast<ForcedFailure>(
         GetProcAddress(module, "Fcitx5TsfPocForcedFailureForTest"));
-    if (!getClassObject || !canUnloadNow || !behaviorReport || !forcedFailure) {
+    if (!getClassObject || !canUnloadNow || !behaviorReport || !profileIdentityReport ||
+        !forcedFailure) {
         std::cerr << "Rust TSF PoC exports missing\n";
         FreeLibrary(module);
         return 1;
@@ -69,6 +73,30 @@ int wmain(int argc, wchar_t** argv) {
         report.find("\"full_host_differential_pending\":true") == std::string::npos ||
         report.find("\"report_export\":\"panic_contained\"") == std::string::npos) {
         std::cerr << "Rust TSF PoC behavior report should expose same-corpus case results\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    size_t profileReportLength = 0;
+    const char* profileReportBytes = profileIdentityReport(&profileReportLength);
+    const std::string profileReport = profileReportBytes && profileReportLength > 0
+                                          ? std::string(profileReportBytes, profileReportLength)
+                                          : std::string();
+    if (profileReport.find("\"product_display_name\":\"Fcitx5 for Windows Next\"") ==
+            std::string::npos ||
+        profileReport.find("\"profile_display_name\":\"Fcitx5\"") == std::string::npos ||
+        profileReport.find(
+            "\"text_service_clsid\":\"3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901\"") ==
+            std::string::npos ||
+        profileReport.find(
+            "\"language_profile_guid\":\"6c2ac726-7703-4b65-89af-a77e9e0da102\"") ==
+            std::string::npos ||
+        profileReport.find("\"windows_profile_count\":1") == std::string::npos ||
+        profileReport.find("\"dynamic_profile_registration\":false") == std::string::npos ||
+        profileReport.find("\"rust_poc_registers_profile\":false") == std::string::npos ||
+        profileReport.find("\"shipping_cxx_authoritative\":true") == std::string::npos ||
+        profileReport.find("\"release_identity_source\":\"cmake/release_identity.h.in\"") ==
+            std::string::npos) {
+        std::cerr << "Rust TSF PoC profile identity report should match stable release identity\n";
         FreeLibrary(module);
         return 1;
     }

@@ -514,6 +514,20 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("tsf_behavior_corpus_report") == std::string::npos ||
         rustTsfPocSource.find("tsf_behavior_differential_report") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5TsfPocProfileIdentityReport") == std::string::npos ||
+        rustTsfPocSource.find("tsf_profile_identity_report") == std::string::npos ||
+        rustTsfPocSource.find("product_display_name") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
+        rustTsfPocSource.find("profile_display_name") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5") == std::string::npos ||
+        rustTsfPocSource.find("text_service_clsid") == std::string::npos ||
+        rustTsfPocSource.find("3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901") ==
+            std::string::npos ||
+        rustTsfPocSource.find("language_profile_guid") == std::string::npos ||
+        rustTsfPocSource.find("6c2ac726-7703-4b65-89af-a77e9e0da102") ==
+            std::string::npos ||
+        rustTsfPocSource.find("dynamic_profile_registration") == std::string::npos ||
+        rustTsfPocSource.find("rust_poc_registers_profile") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5TsfPocForcedFailureForTest") == std::string::npos ||
         rustTsfPocSource.find("\"rust_case_passes\"") == std::string::npos ||
         rustTsfPocSource.find("\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\"") ==
@@ -537,6 +551,9 @@ int main(int argc, char** argv) {
         rustTsfPocSmoke.find("factory should create an empty ITfTextInputProcessorEx") ==
             std::string::npos ||
         rustTsfPocSmoke.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
+        rustTsfPocSmoke.find("Fcitx5TsfPocProfileIdentityReport") == std::string::npos ||
+        rustTsfPocSmoke.find("profile identity report should match stable release identity") ==
+            std::string::npos ||
         rustTsfPocSmoke.find("Fcitx5TsfPocForcedFailureForTest") == std::string::npos ||
         rustTsfPocSmoke.find("forced internal failure should convert panic to HRESULT") ==
             std::string::npos ||
