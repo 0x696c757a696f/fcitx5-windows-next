@@ -506,6 +506,11 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("DllGetClassObject") == std::string::npos ||
         rustTsfPocSource.find("DllCanUnloadNow") == std::string::npos ||
         rustTsfPocSource.find("TsfPocBehaviorState") == std::string::npos ||
+        rustTsfPocSource.find("state: RefCell<TsfPocBehaviorState>") ==
+            std::string::npos ||
+        rustTsfPocSource.find("service_lifecycle_callbacks_mutate_and_cleanup_domain_state") ==
+            std::string::npos ||
+        rustTsfPocSource.find("fail_open_key_down_for_test") == std::string::npos ||
         rustTsfPocSource.find("tsf_behavior_corpus_report") == std::string::npos ||
         rustTsfPocSource.find("tsf_behavior_differential_report") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||

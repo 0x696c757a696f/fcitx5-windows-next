@@ -2,6 +2,7 @@
 #![allow(linker_messages)]
 #![allow(non_snake_case)]
 
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::panic::{catch_unwind, UnwindSafe};
 use std::ptr::null_mut;
@@ -413,12 +414,41 @@ impl IClassFactory_Impl for Fcitx5TsfClassFactory_Impl {
     ITfKeyEventSink
 )]
 #[derive(Default)]
-struct Fcitx5TsfService;
+struct Fcitx5TsfService {
+    state: RefCell<TsfPocBehaviorState>,
+}
 
 impl Fcitx5TsfService {
     fn new() -> Self {
         module_add_ref();
-        Self
+        Self {
+            state: RefCell::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn lifecycle_state_for_test(&self) -> TsfPocBehaviorState {
+        self.state.borrow().clone()
+    }
+
+    #[cfg(test)]
+    fn activate_for_test(&self) {
+        self.state.borrow_mut().activate();
+    }
+
+    #[cfg(test)]
+    fn deactivate_for_test(&self) {
+        self.state.borrow_mut().deactivate();
+    }
+
+    #[cfg(test)]
+    fn fail_open_key_down_for_test(&self) {
+        self.state.borrow_mut().key_down(EngineResult::malformed());
+    }
+
+    #[cfg(test)]
+    fn fail_open_key_up_for_test(&self) {
+        self.state.borrow_mut().key_up();
     }
 }
 
@@ -430,10 +460,12 @@ impl Drop for Fcitx5TsfService {
 
 impl ITfTextInputProcessor_Impl for Fcitx5TsfService_Impl {
     fn Activate(&self, _thread_manager: Ref<ITfThreadMgr>, _client_id: u32) -> Result<()> {
+        self.state.borrow_mut().activate();
         Ok(())
     }
 
     fn Deactivate(&self) -> Result<()> {
+        self.state.borrow_mut().deactivate();
         Ok(())
     }
 }
@@ -514,10 +546,12 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
         _wparam: WPARAM,
         _lparam: LPARAM,
     ) -> Result<BOOL> {
+        self.state.borrow_mut().key_down(EngineResult::malformed());
         Ok(BOOL(0))
     }
 
     fn OnKeyUp(&self, _context: Ref<ITfContext>, _wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+        self.state.borrow_mut().key_up();
         Ok(BOOL(0))
     }
 
@@ -832,6 +866,38 @@ mod tests {
     #[test]
     fn forced_failure_export_converts_panic_to_hresult() {
         assert_eq!(unsafe { Fcitx5TsfPocForcedFailureForTest() }, E_UNEXPECTED);
+    }
+
+    #[test]
+    fn service_lifecycle_callbacks_mutate_and_cleanup_domain_state() {
+        let service = Fcitx5TsfService::new();
+        service.activate_for_test();
+        let activated = service.lifecycle_state_for_test();
+        assert!(activated.active);
+        assert!(activated.thread_manager_sink_advised);
+        assert!(activated.thread_focus_sink_advised);
+        assert!(activated.key_sink_advised);
+
+        service.fail_open_key_down_for_test();
+        let after_key_down = service.lifecycle_state_for_test();
+        assert!(after_key_down.fail_open);
+        assert!(!after_key_down.eaten);
+        assert!(!after_key_down.composition_active);
+
+        service.fail_open_key_up_for_test();
+        let after_key_up = service.lifecycle_state_for_test();
+        assert!(after_key_up.release_routed);
+        assert!(!after_key_up.eaten);
+
+        service.deactivate_for_test();
+        let deactivated = service.lifecycle_state_for_test();
+        assert!(!deactivated.active);
+        assert!(!deactivated.thread_manager_sink_advised);
+        assert!(!deactivated.thread_focus_sink_advised);
+        assert!(!deactivated.key_sink_advised);
+        assert!(!deactivated.composition_active);
+        assert_eq!(deactivated.commit, "");
+        assert_eq!(deactivated.preedit, "");
     }
 
     #[test]
