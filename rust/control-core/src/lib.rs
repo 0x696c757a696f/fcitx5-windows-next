@@ -79,6 +79,18 @@ const CONTROL_LAUNCHER_ACTION_SHUTDOWN: u32 = 2;
 const CONTROL_CONFIG_FILE_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_CONFIG_FILE_ACTION_VALIDATE: u32 = 1;
 const CONTROL_CONFIG_FILE_ACTION_APPLY: u32 = 2;
+const CONTROL_PACKAGE_ACTION_UNKNOWN: u32 = 0;
+const CONTROL_PACKAGE_ACTION_PACKAGES_LIST: u32 = 1;
+const CONTROL_PACKAGE_ACTION_THEMES_LIST: u32 = 2;
+const CONTROL_PACKAGE_ACTION_THEMES_DETAIL: u32 = 3;
+const CONTROL_PACKAGE_ACTION_ADDONS_LIST: u32 = 4;
+const CONTROL_PACKAGE_ACTION_PACKAGES_DETAIL: u32 = 5;
+const CONTROL_PACKAGE_ACTION_PACKAGES_REFRESH: u32 = 6;
+const CONTROL_PACKAGE_ACTION_PACKAGES_INSTALL: u32 = 7;
+const CONTROL_PACKAGE_ACTION_PACKAGES_UPDATE: u32 = 8;
+const CONTROL_PACKAGE_ACTION_PACKAGES_STATE: u32 = 9;
+const CONTROL_PACKAGE_ACTION_PACKAGES_REMOVE: u32 = 10;
+const CONTROL_PACKAGE_ACTION_PACKAGES_REPAIR: u32 = 11;
 const LAUNCHER_COMMAND_START_DEMAND: u32 = 1;
 const LAUNCHER_COMMAND_USER_STOP: u32 = 2;
 const LAUNCHER_COMMAND_RESUME: u32 = 3;
@@ -497,47 +509,55 @@ fn package_repair_json(repair: &Fcitx5ControlPackageRepair) -> Option<Vec<u8>> {
 }
 
 fn config_file_action(command: &[u16]) -> u32 {
-    const VALIDATE: &[u16] = &[
-        b'-' as u16,
-        b'-' as u16,
-        b'v' as u16,
-        b'a' as u16,
-        b'l' as u16,
-        b'i' as u16,
-        b'd' as u16,
-        b'a' as u16,
-        b't' as u16,
-        b'e' as u16,
-        b'-' as u16,
-        b'c' as u16,
-        b'o' as u16,
-        b'n' as u16,
-        b'f' as u16,
-        b'i' as u16,
-        b'g' as u16,
-    ];
-    const APPLY: &[u16] = &[
-        b'-' as u16,
-        b'-' as u16,
-        b'a' as u16,
-        b'p' as u16,
-        b'p' as u16,
-        b'l' as u16,
-        b'y' as u16,
-        b'-' as u16,
-        b'c' as u16,
-        b'o' as u16,
-        b'n' as u16,
-        b'f' as u16,
-        b'i' as u16,
-        b'g' as u16,
-    ];
-    if command == VALIDATE {
+    if ascii_utf16_eq(command, b"--validate-config") {
         CONTROL_CONFIG_FILE_ACTION_VALIDATE
-    } else if command == APPLY {
+    } else if ascii_utf16_eq(command, b"--apply-config") {
         CONTROL_CONFIG_FILE_ACTION_APPLY
     } else {
         CONTROL_CONFIG_FILE_ACTION_UNKNOWN
+    }
+}
+
+fn ascii_utf16_eq(value: &[u16], ascii: &[u8]) -> bool {
+    value.len() == ascii.len()
+        && value
+            .iter()
+            .zip(ascii)
+            .all(|(left, right)| *left == u16::from(*right))
+}
+
+fn package_action(command: &[u16], argc: usize, state: Option<&[u16]>) -> u32 {
+    match argc {
+        1 if ascii_utf16_eq(command, b"--packages-list") => CONTROL_PACKAGE_ACTION_PACKAGES_LIST,
+        1 if ascii_utf16_eq(command, b"--themes-list") => CONTROL_PACKAGE_ACTION_THEMES_LIST,
+        1 if ascii_utf16_eq(command, b"--addons-list") => CONTROL_PACKAGE_ACTION_ADDONS_LIST,
+        1 if ascii_utf16_eq(command, b"--packages-repair") => {
+            CONTROL_PACKAGE_ACTION_PACKAGES_REPAIR
+        }
+        1 | 2 if ascii_utf16_eq(command, b"--packages-refresh") => {
+            CONTROL_PACKAGE_ACTION_PACKAGES_REFRESH
+        }
+        2 if ascii_utf16_eq(command, b"--themes-detail") => CONTROL_PACKAGE_ACTION_THEMES_DETAIL,
+        2 if ascii_utf16_eq(command, b"--packages-detail") => {
+            CONTROL_PACKAGE_ACTION_PACKAGES_DETAIL
+        }
+        2 if ascii_utf16_eq(command, b"--packages-install") => {
+            CONTROL_PACKAGE_ACTION_PACKAGES_INSTALL
+        }
+        2 if ascii_utf16_eq(command, b"--packages-update") => {
+            CONTROL_PACKAGE_ACTION_PACKAGES_UPDATE
+        }
+        2 if ascii_utf16_eq(command, b"--packages-remove") => {
+            CONTROL_PACKAGE_ACTION_PACKAGES_REMOVE
+        }
+        3 if ascii_utf16_eq(command, b"--packages-state")
+            && state.is_some_and(|value| {
+                ascii_utf16_eq(value, b"enabled") || ascii_utf16_eq(value, b"disabled")
+            }) =>
+        {
+            CONTROL_PACKAGE_ACTION_PACKAGES_STATE
+        }
+        _ => CONTROL_PACKAGE_ACTION_UNKNOWN,
     }
 }
 
@@ -926,6 +946,28 @@ pub unsafe extern "C" fn fcitx5_control_config_file_action_utf16(
 
 /// # Safety
 ///
+/// `command` and `state` must remain valid for the duration of the call when
+/// their pointers are non-null. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_action_utf16(
+    command: Fcitx5ControlUtf16,
+    argc: usize,
+    state: Fcitx5ControlUtf16,
+) -> u32 {
+    if command.ptr.is_null() {
+        return CONTROL_PACKAGE_ACTION_UNKNOWN;
+    }
+    let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
+    let state = if state.ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { std::slice::from_raw_parts(state.ptr, state.len) })
+    };
+    package_action(command, argc, state)
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -1019,6 +1061,74 @@ mod tests {
         assert_eq!(
             config_file_action(&reset),
             CONTROL_CONFIG_FILE_ACTION_UNKNOWN
+        );
+    }
+
+    #[test]
+    fn package_actions_are_typed_control_commands() {
+        let packages_list = wide("--packages-list");
+        let themes_detail = wide("--themes-detail");
+        let addons_list = wide("--addons-list");
+        let packages_refresh = wide("--packages-refresh");
+        let packages_install = wide("--packages-install");
+        let packages_update = wide("--packages-update");
+        let packages_state = wide("--packages-state");
+        let packages_remove = wide("--packages-remove");
+        let packages_repair = wide("--packages-repair");
+        let enabled = wide("enabled");
+        let disabled = wide("disabled");
+        let broken = wide("broken");
+        assert_eq!(
+            package_action(&packages_list, 1, None),
+            CONTROL_PACKAGE_ACTION_PACKAGES_LIST
+        );
+        assert_eq!(
+            package_action(&themes_detail, 2, None),
+            CONTROL_PACKAGE_ACTION_THEMES_DETAIL
+        );
+        assert_eq!(
+            package_action(&addons_list, 1, None),
+            CONTROL_PACKAGE_ACTION_ADDONS_LIST
+        );
+        assert_eq!(
+            package_action(&packages_refresh, 1, None),
+            CONTROL_PACKAGE_ACTION_PACKAGES_REFRESH
+        );
+        assert_eq!(
+            package_action(&packages_refresh, 2, None),
+            CONTROL_PACKAGE_ACTION_PACKAGES_REFRESH
+        );
+        assert_eq!(
+            package_action(&packages_install, 2, None),
+            CONTROL_PACKAGE_ACTION_PACKAGES_INSTALL
+        );
+        assert_eq!(
+            package_action(&packages_update, 2, None),
+            CONTROL_PACKAGE_ACTION_PACKAGES_UPDATE
+        );
+        assert_eq!(
+            package_action(&packages_state, 3, Some(&enabled)),
+            CONTROL_PACKAGE_ACTION_PACKAGES_STATE
+        );
+        assert_eq!(
+            package_action(&packages_state, 3, Some(&disabled)),
+            CONTROL_PACKAGE_ACTION_PACKAGES_STATE
+        );
+        assert_eq!(
+            package_action(&packages_state, 3, Some(&broken)),
+            CONTROL_PACKAGE_ACTION_UNKNOWN
+        );
+        assert_eq!(
+            package_action(&packages_remove, 2, None),
+            CONTROL_PACKAGE_ACTION_PACKAGES_REMOVE
+        );
+        assert_eq!(
+            package_action(&packages_repair, 1, None),
+            CONTROL_PACKAGE_ACTION_PACKAGES_REPAIR
+        );
+        assert_eq!(
+            package_action(&packages_list, 2, None),
+            CONTROL_PACKAGE_ACTION_UNKNOWN
         );
     }
 

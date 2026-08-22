@@ -125,6 +125,8 @@ int fcitx5_control_launcher_action_sequence(std::uint32_t action,
 int fcitx5_control_package_repair_json_utf8(const Fcitx5ControlPackageRepair* repair,
                                             char** out_ptr, std::size_t* out_len);
 std::uint32_t fcitx5_control_config_file_action_utf16(Fcitx5ControlUtf16 command);
+std::uint32_t fcitx5_control_package_action_utf16(Fcitx5ControlUtf16 command, std::size_t argc,
+                                                  Fcitx5ControlUtf16 state);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -140,6 +142,17 @@ constexpr std::uint32_t kLauncherActionRestartEngine = 1;
 constexpr std::uint32_t kLauncherActionShutdown = 2;
 constexpr std::uint32_t kConfigFileActionValidate = 1;
 constexpr std::uint32_t kConfigFileActionApply = 2;
+constexpr std::uint32_t kPackageActionPackagesList = 1;
+constexpr std::uint32_t kPackageActionThemesList = 2;
+constexpr std::uint32_t kPackageActionThemesDetail = 3;
+constexpr std::uint32_t kPackageActionAddonsList = 4;
+constexpr std::uint32_t kPackageActionPackagesDetail = 5;
+constexpr std::uint32_t kPackageActionPackagesRefresh = 6;
+constexpr std::uint32_t kPackageActionPackagesInstall = 7;
+constexpr std::uint32_t kPackageActionPackagesUpdate = 8;
+constexpr std::uint32_t kPackageActionPackagesState = 9;
+constexpr std::uint32_t kPackageActionPackagesRemove = 10;
+constexpr std::uint32_t kPackageActionPackagesRepair = 11;
 
 std::string narrow(std::wstring_view value) {
     if (value.empty())
@@ -249,6 +262,17 @@ std::string packageRepairJson(const Fcitx5ControlPackageRepair& repair) {
 
 std::uint32_t configFileAction(std::wstring_view command) {
     return fcitx5_control_config_file_action_utf16({command.data(), command.size()});
+}
+
+std::uint32_t packageAction(const std::vector<std::wstring_view>& arguments) {
+    if (arguments.empty())
+        return 0;
+    const std::wstring_view command(arguments[0]);
+    const std::wstring_view state = arguments.size() >= 3 ? std::wstring_view(arguments[2])
+                                                          : std::wstring_view{};
+    return fcitx5_control_package_action_utf16(
+        {command.data(), command.size()}, arguments.size(),
+        state.empty() ? Fcitx5ControlUtf16{nullptr, 0} : Fcitx5ControlUtf16{state.data(), state.size()});
 }
 
 bool readUtf8(const fs::path& path, std::string& text) {
@@ -1375,28 +1399,28 @@ int wmain(int argc, wchar_t** argv) {
                        ? 0
                        : 4;
         }
-        if (arguments.size() == 1 && arguments[0] == L"--packages-list") {
+        const std::uint32_t packageCommand = packageAction(arguments);
+        if (packageCommand == kPackageActionPackagesList) {
             printPackages(dataRoot);
             return 0;
         }
-        if (arguments.size() == 1 && arguments[0] == L"--themes-list") {
+        if (packageCommand == kPackageActionThemesList) {
             printThemes(dataRoot);
             return 0;
         }
-        if (arguments.size() == 2 && arguments[0] == L"--themes-detail") {
+        if (packageCommand == kPackageActionThemesDetail) {
             printThemeDetail(dataRoot, narrow(arguments[1]));
             return 0;
         }
-        if (arguments.size() == 1 && arguments[0] == L"--addons-list") {
+        if (packageCommand == kPackageActionAddonsList) {
             printAddons();
             return 0;
         }
-        if (arguments.size() == 2 && arguments[0] == L"--packages-detail") {
+        if (packageCommand == kPackageActionPackagesDetail) {
             printPackageDetail(dataRoot, narrow(arguments[1]));
             return 0;
         }
-        if ((arguments.size() == 1 || arguments.size() == 2) &&
-            arguments[0] == L"--packages-refresh") {
+        if (packageCommand == kPackageActionPackagesRefresh) {
             const auto defaultBase =
                 widen(std::string("https://packages.fcitx5-windows.org/v1/") +
                       std::string(fcitx::windows::kReleaseIdentity.channel_name));
@@ -1405,8 +1429,8 @@ int wmain(int argc, wchar_t** argv) {
             printPackages(dataRoot);
             return 0;
         }
-        if (arguments.size() == 2 &&
-            (arguments[0] == L"--packages-install" || arguments[0] == L"--packages-update")) {
+        if (packageCommand == kPackageActionPackagesInstall ||
+            packageCommand == kPackageActionPackagesUpdate) {
             const auto repository = loadRepository(dataRoot);
             std::set<std::string> visiting;
             installRepositoryPackage(dataRoot, repository, narrow(arguments[1]), visiting);
@@ -1414,14 +1438,13 @@ int wmain(int argc, wchar_t** argv) {
             printPackages(dataRoot);
             return 0;
         }
-        if (arguments.size() == 3 && arguments[0] == L"--packages-state" &&
-            (arguments[2] == L"enabled" || arguments[2] == L"disabled")) {
+        if (packageCommand == kPackageActionPackagesState) {
             fcitx::package::set_package_state(dataRoot / L"packages", narrow(arguments[1]),
                                               narrow(arguments[2]));
             requestEngineReload();
             return 0;
         }
-        if (arguments.size() == 2 && arguments[0] == L"--packages-remove") {
+        if (packageCommand == kPackageActionPackagesRemove) {
             const auto id = narrow(arguments[1]);
             fcitx::package::mark_package_for_removal(dataRoot / L"packages", id);
             requestEngineReload();
@@ -1429,7 +1452,7 @@ int wmain(int argc, wchar_t** argv) {
             printPackages(dataRoot);
             return 0;
         }
-        if (arguments.size() == 1 && arguments[0] == L"--packages-repair") {
+        if (packageCommand == kPackageActionPackagesRepair) {
             const auto trustedKeys = fcitx::package::read_trusted_keys(
                 repositoryFiles(dataRoot).keyring);
             fcitx::package::verify_installed_packages(dataRoot / L"packages", trustedKeys);
