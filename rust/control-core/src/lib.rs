@@ -231,6 +231,12 @@ pub struct Fcitx5ControlPackagesList {
 }
 
 #[repr(C)]
+pub struct Fcitx5ControlPackageDependency {
+    id: Fcitx5ControlUtf8,
+    version: Fcitx5ControlUtf8,
+}
+
+#[repr(C)]
 pub struct Fcitx5ControlPackageDetail {
     repository_available: u8,
     repository_error: Fcitx5ControlUtf8,
@@ -842,6 +848,54 @@ fn push_json_raw_field(output: &mut Vec<u8>, name: &[u8], value: Fcitx5ControlUt
     }
     output.extend_from_slice(value);
     Some(())
+}
+
+fn string_array_json(values: &[Fcitx5ControlUtf8]) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    output.push(b'[');
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.extend_from_slice(&json_string(utf8_slice(*value)?)?);
+    }
+    output.push(b']');
+    Some(output)
+}
+
+fn package_dependencies_json(dependencies: &[Fcitx5ControlPackageDependency]) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    output.push(b'[');
+    for (index, dependency) in dependencies.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.extend_from_slice(b"{");
+        push_json_string_field(&mut output, b"\"id\"", utf8_slice(dependency.id)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"version\"", utf8_slice(dependency.version)?)?;
+        output.push(b'}');
+    }
+    output.push(b']');
+    Some(output)
+}
+
+fn config_surfaces_json(owner: Fcitx5ControlUtf8, kinds: &[Fcitx5ControlUtf8]) -> Option<Vec<u8>> {
+    let owner = utf8_slice(owner)?;
+    let mut output = Vec::new();
+    output.push(b'[');
+    for (index, kind) in kinds.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.extend_from_slice(b"{");
+        push_json_string_field(&mut output, b"\"kind\"", utf8_slice(*kind)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"owner\"", owner)?;
+        output.extend_from_slice(br#","schema":"generic-fcitx-config-v1"}"#);
+    }
+    output.push(b']');
+    Some(output)
 }
 
 fn package_detail_json(detail: &Fcitx5ControlPackageDetail) -> Option<Vec<u8>> {
@@ -1551,6 +1605,89 @@ pub unsafe extern "C" fn fcitx5_control_packages_list_json_utf8(
 
 /// # Safety
 ///
+/// `dependencies` must either be null with `dependency_count == 0` or point to
+/// `dependency_count` valid dependency records. All UTF-8 slices inside records
+/// must remain valid for the duration of the call. `out_ptr` and `out_len` must
+/// point to writable storage. Any returned buffer must be freed with
+/// `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_dependencies_json_utf8(
+    dependencies: *const Fcitx5ControlPackageDependency,
+    dependency_count: usize,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if dependencies.is_null() && dependency_count != 0 {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let dependencies = if dependency_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(dependencies, dependency_count) }
+    };
+    match package_dependencies_json(dependencies) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
+/// `values` must either be null with `value_count == 0` or point to
+/// `value_count` valid UTF-8 slices. The slices must remain valid for the
+/// duration of the call. `out_ptr` and `out_len` must point to writable storage.
+/// Any returned buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_string_array_json_utf8(
+    values: *const Fcitx5ControlUtf8,
+    value_count: usize,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if values.is_null() && value_count != 0 {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let values = if value_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(values, value_count) }
+    };
+    match string_array_json(values) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
+/// `kinds` must either be null with `kind_count == 0` or point to `kind_count`
+/// valid UTF-8 slices. `owner` and all `kinds` slices must remain valid for the
+/// duration of the call. `out_ptr` and `out_len` must point to writable storage.
+/// Any returned buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_config_surfaces_json_utf8(
+    owner: Fcitx5ControlUtf8,
+    kinds: *const Fcitx5ControlUtf8,
+    kind_count: usize,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if kinds.is_null() && kind_count != 0 {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let kinds = if kind_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(kinds, kind_count) }
+    };
+    match config_surfaces_json(owner, kinds) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -2098,6 +2235,79 @@ mod tests {
         assert!(text.contains(r#""repository_error":"missing_key""#));
         assert!(text.contains(r#""available_version":null"#));
         assert!(text.contains(r#""state":null"#));
+    }
+
+    #[test]
+    fn package_dependencies_json_preserves_control_contract() {
+        let dependencies = [
+            Fcitx5ControlPackageDependency {
+                id: Fcitx5ControlUtf8 {
+                    ptr: b"dep-one".as_ptr(),
+                    len: 7,
+                },
+                version: Fcitx5ControlUtf8 {
+                    ptr: b"1.0".as_ptr(),
+                    len: 3,
+                },
+            },
+            Fcitx5ControlPackageDependency {
+                id: Fcitx5ControlUtf8 {
+                    ptr: b"dep\"two".as_ptr(),
+                    len: 7,
+                },
+                version: Fcitx5ControlUtf8 {
+                    ptr: b"2\\0".as_ptr(),
+                    len: 3,
+                },
+            },
+        ];
+        let json = package_dependencies_json(&dependencies).expect("dependencies should format");
+        let text = String::from_utf8(json).expect("dependency JSON should be UTF-8");
+        assert_eq!(
+            text,
+            r#"[{"id":"dep-one","version":"1.0"},{"id":"dep\"two","version":"2\\0"}]"#
+        );
+    }
+
+    #[test]
+    fn string_array_json_preserves_control_contract() {
+        let values = [
+            Fcitx5ControlUtf8 {
+                ptr: b"input-data".as_ptr(),
+                len: 10,
+            },
+            Fcitx5ControlUtf8 {
+                ptr: b"quotes\"ok".as_ptr(),
+                len: 9,
+            },
+        ];
+        let json = string_array_json(&values).expect("string array should format");
+        let text = String::from_utf8(json).expect("string array JSON should be UTF-8");
+        assert_eq!(text, r#"["input-data","quotes\"ok"]"#);
+    }
+
+    #[test]
+    fn config_surfaces_json_preserves_control_contract() {
+        let owner = Fcitx5ControlUtf8 {
+            ptr: b"fcitx5-rime".as_ptr(),
+            len: 11,
+        };
+        let kinds = [
+            Fcitx5ControlUtf8 {
+                ptr: b"fcitx-addon".as_ptr(),
+                len: 11,
+            },
+            Fcitx5ControlUtf8 {
+                ptr: b"rime-data".as_ptr(),
+                len: 9,
+            },
+        ];
+        let json = config_surfaces_json(owner, &kinds).expect("surfaces should format");
+        let text = String::from_utf8(json).expect("surfaces JSON should be UTF-8");
+        assert_eq!(
+            text,
+            r#"[{"kind":"fcitx-addon","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"},{"kind":"rime-data","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"}]"#
+        );
     }
 
     #[test]

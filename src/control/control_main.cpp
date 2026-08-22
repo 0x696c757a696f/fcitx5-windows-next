@@ -141,6 +141,10 @@ struct Fcitx5ControlPackagesList {
     const Fcitx5ControlPackageSummary* packages;
     std::size_t packageCount;
 };
+struct Fcitx5ControlPackageDependency {
+    Fcitx5ControlUtf8 id;
+    Fcitx5ControlUtf8 version;
+};
 struct Fcitx5ControlPackageDetail {
     std::uint8_t repositoryAvailable;
     Fcitx5ControlUtf8 repositoryError;
@@ -167,8 +171,6 @@ int fcitx5_control_startup_set_utf16(Fcitx5ControlUtf16 executable_directory,
                                      std::uint8_t enabled);
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
-int fcitx5_control_json_string_utf8(Fcitx5ControlUtf8 value, char** out_ptr,
-                                    std::size_t* out_len);
 int fcitx5_control_presentation_json_utf8(const Fcitx5ControlPresentation* presentation,
                                           char** out_ptr, std::size_t* out_len);
 int fcitx5_control_status_json_utf8(const Fcitx5ControlStatus* status, char** out_ptr,
@@ -199,6 +201,16 @@ int fcitx5_control_theme_detail_json_utf8(const Fcitx5ControlThemeDetail* detail
                                           char** out_ptr, std::size_t* out_len);
 int fcitx5_control_packages_list_json_utf8(const Fcitx5ControlPackagesList* list,
                                            char** out_ptr, std::size_t* out_len);
+int fcitx5_control_package_dependencies_json_utf8(
+    const Fcitx5ControlPackageDependency* dependencies, std::size_t dependency_count,
+    char** out_ptr, std::size_t* out_len);
+int fcitx5_control_string_array_json_utf8(const Fcitx5ControlUtf8* values,
+                                          std::size_t value_count, char** out_ptr,
+                                          std::size_t* out_len);
+int fcitx5_control_config_surfaces_json_utf8(Fcitx5ControlUtf8 owner,
+                                             const Fcitx5ControlUtf8* kinds,
+                                             std::size_t kind_count, char** out_ptr,
+                                             std::size_t* out_len);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -272,21 +284,6 @@ std::wstring widen(std::string_view value) {
                                static_cast<int>(value.size()), result.data(), count) == count
                ? result
                : std::wstring{};
-}
-
-std::string jsonString(std::string_view value) {
-    char* escaped = nullptr;
-    std::size_t escapedLength = 0;
-    if (fcitx5_control_json_string_utf8({value.data(), value.size()}, &escaped,
-                                        &escapedLength) != 0) {
-        return {};
-    }
-    std::string result;
-    if (escaped && escapedLength > 0) {
-        result.assign(escaped, escapedLength);
-    }
-    fcitx5_control_utf8_free(escaped, escapedLength);
-    return result;
 }
 
 Fcitx5ControlUtf8 utf8View(std::string_view value) noexcept {
@@ -617,30 +614,31 @@ std::string typeName(fcitx::package::PackageType type) {
 }
 
 std::string jsonDependencies(std::span<const fcitx::package::Dependency> dependencies) {
-    std::string output = "[";
-    bool first = true;
+    std::vector<Fcitx5ControlPackageDependency> views;
+    views.reserve(dependencies.size());
     for (const auto& dependency : dependencies) {
-        if (!first)
-            output += ',';
-        first = false;
-        output += "{\"id\":" + jsonString(dependency.id) +
-                  ",\"version\":" + jsonString(dependency.version) + '}';
+        views.push_back({utf8View(dependency.id), utf8View(dependency.version)});
     }
-    output += ']';
-    return output;
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const auto* data = views.empty() ? nullptr : views.data();
+    if (fcitx5_control_package_dependencies_json_utf8(data, views.size(), &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
 }
 
 std::string jsonStringArray(std::span<const std::string> values) {
-    std::string output = "[";
-    bool first = true;
+    std::vector<Fcitx5ControlUtf8> views;
+    views.reserve(values.size());
     for (const auto& value : values) {
-        if (!first)
-            output += ',';
-        first = false;
-        output += jsonString(value);
+        views.push_back(utf8View(value));
     }
-    output += ']';
-    return output;
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const auto* data = views.empty() ? nullptr : views.data();
+    if (fcitx5_control_string_array_json_utf8(data, views.size(), &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
 }
 
 std::string installedManifestBytes(const fs::path& packageRoot,
@@ -682,18 +680,18 @@ std::string configSurfaceJson(const fcitx::package::Manifest* manifest,
                 surfaces.emplace("theme");
         }
     }
-    std::string output = "[";
-    bool first = true;
+    std::vector<Fcitx5ControlUtf8> views;
+    views.reserve(surfaces.size());
     for (const auto& surface : surfaces) {
-        if (!first)
-            output += ',';
-        first = false;
-        output += "{\"kind\":" + jsonString(surface) +
-                  ",\"owner\":" + jsonString(packageId) +
-                  ",\"schema\":\"generic-fcitx-config-v1\"}";
+        views.push_back(utf8View(surface));
     }
-    output += ']';
-    return output;
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const auto* data = views.empty() ? nullptr : views.data();
+    if (fcitx5_control_config_surfaces_json_utf8(utf8View(packageId), data, views.size(), &bytes,
+                                                 &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
 }
 
 struct ThemeRecord {
