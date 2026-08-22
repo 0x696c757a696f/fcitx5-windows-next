@@ -493,6 +493,11 @@ int main(int argc, char** argv) {
     const auto rustTsfPocArtifactAudit =
         read_text(sourceRoot / "tests/unit/rust_tsf_poc_artifact_audit.cpp");
     const auto buildScript = read_text(sourceRoot / "tools/build.ps1");
+    const auto cmakePresets = read_text(sourceRoot / "CMakePresets.json");
+    const auto coreWorkflow = read_text(sourceRoot / ".github/workflows/core.yml");
+    const auto releaseWorkflow = read_text(sourceRoot / ".github/workflows/release.yml");
+    const auto fastToolchainScript =
+        read_text(sourceRoot / "tools/prepare-fast-toolchain.ps1");
     const auto tsfKeyCommitTest =
         read_text(sourceRoot / "tests/integration/tsf_key_commit_test.cpp");
     const auto rustTsfPocCorpus =
@@ -635,6 +640,25 @@ int main(int argc, char** argv) {
         buildScript.find("Microsoft.VisualStudio.Component.VC.Tools.ARM64") ==
             std::string::npos ||
         buildScript.find("amd64_arm64") == std::string::npos ||
+        buildScript.find("Assert-FastWindowsToolchain") == std::string::npos ||
+        buildScript.find("clang-cl") == std::string::npos ||
+        buildScript.find("lld-link") == std::string::npos ||
+        buildScript.find("ninja") == std::string::npos ||
+        buildScript.find("CMAKE_C_COMPILER_LAUNCHER=sccache") == std::string::npos ||
+        cmakePresets.find("\"generator\": \"Ninja Multi-Config\"") == std::string::npos ||
+        cmakePresets.find("\"CMAKE_C_COMPILER\": \"clang-cl\"") == std::string::npos ||
+        cmakePresets.find("\"CMAKE_CXX_COMPILER\": \"clang-cl\"") == std::string::npos ||
+        cmakePresets.find("\"CMAKE_LINKER\": \"lld-link\"") == std::string::npos ||
+        cmakePresets.find("\"FCITX_TARGET_ARCH\": \"arm64\"") == std::string::npos ||
+        cmakeSource.find("FCITX_COMPILER_IS_CLANG_CL") == std::string::npos ||
+        cmakeSource.find("FCITX_EFFECTIVE_TARGET_ARCH") == std::string::npos ||
+        coreWorkflow.find("Prepare fast Windows toolchain") == std::string::npos ||
+        releaseWorkflow.find("Prepare fast Windows toolchain") == std::string::npos ||
+        fastToolchainScript.find("choco") == std::string::npos ||
+        fastToolchainScript.find("llvm") == std::string::npos ||
+        fastToolchainScript.find("ninja") == std::string::npos ||
+        fastToolchainScript.find("clang-cl") == std::string::npos ||
+        fastToolchainScript.find("lld-link") == std::string::npos ||
         buildScript.find("vcvarsall.bat") ==
             std::string::npos) {
         return fail("RUST-R3-TSF-POC: Rust TSF PoC must stay isolated, panic-contained, and non-authoritative");

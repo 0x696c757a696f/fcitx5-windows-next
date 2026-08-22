@@ -57,6 +57,20 @@ option(FCITX_BUILD_BENCHMARKS "Build repeatable microbenchmarks" ON)
 option(FCITX_BUILD_FUZZERS "Build security-boundary fuzz harnesses" ON)
 option(FCITX_DEVELOPMENT_PEER_EXCEPTION
        "Allow explicitly marked same-user/session peers in development builds" OFF)
+set(FCITX_TARGET_ARCH
+    ""
+    CACHE STRING "Windows target architecture: x64, x86, or arm64")
+set_property(CACHE FCITX_TARGET_ARCH PROPERTY STRINGS "" x64 x86 arm64)
+
+set(FCITX_COMPILER_IS_CLANG_CL OFF)
+set(FCITX_COMPILER_IS_MSVC_CL OFF)
+if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  set(FCITX_COMPILER_IS_CLANG_CL ON)
+  message(STATUS "Default Windows toolchain: ClangCL / LLVM lld-link")
+elseif(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  set(FCITX_COMPILER_IS_MSVC_CL ON)
+  message(STATUS "Windows toolchain: MSVC cl/link compatibility path")
+endif()
 
 find_program(
   FCITX_CARGO_EXECUTABLE cargo
@@ -67,14 +81,25 @@ find_program(FCITX_PWSH_EXECUTABLE pwsh powershell REQUIRED)
 set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
 set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
 set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
-set(FCITX_CMAKE_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
-if(NOT FCITX_CMAKE_PLATFORM)
-  set(FCITX_CMAKE_PLATFORM "${CMAKE_GENERATOR_PLATFORM}")
+set(FCITX_EFFECTIVE_TARGET_ARCH "${FCITX_TARGET_ARCH}")
+if(NOT FCITX_EFFECTIVE_TARGET_ARCH)
+  set(FCITX_CMAKE_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
+  if(NOT FCITX_CMAKE_PLATFORM)
+    set(FCITX_CMAKE_PLATFORM "${CMAKE_GENERATOR_PLATFORM}")
+  endif()
+  if(FCITX_CMAKE_PLATFORM MATCHES "^[Ww]in32$" OR CMAKE_SIZEOF_VOID_P EQUAL 4)
+    set(FCITX_EFFECTIVE_TARGET_ARCH "x86")
+  elseif(FCITX_CMAKE_PLATFORM MATCHES "^[Aa][Rr][Mm]64$" OR
+         CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$")
+    set(FCITX_EFFECTIVE_TARGET_ARCH "arm64")
+  else()
+    set(FCITX_EFFECTIVE_TARGET_ARCH "x64")
+  endif()
 endif()
-if(FCITX_CMAKE_PLATFORM MATCHES "^[Ww]in32$" OR CMAKE_SIZEOF_VOID_P EQUAL 4)
+message(STATUS "Fcitx Windows target architecture: ${FCITX_EFFECTIVE_TARGET_ARCH}")
+if(FCITX_EFFECTIVE_TARGET_ARCH STREQUAL "x86")
   set(FCITX_RUST_TARGET "i686-pc-windows-msvc")
-elseif(FCITX_CMAKE_PLATFORM MATCHES "^[Aa][Rr][Mm]64$" OR
-       CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$")
+elseif(FCITX_EFFECTIVE_TARGET_ARCH STREQUAL "arm64")
   set(FCITX_RUST_TARGET "aarch64-pc-windows-msvc")
 else()
   set(FCITX_RUST_TARGET "x86_64-pc-windows-msvc")
@@ -234,7 +259,10 @@ add_library(fcitx5_miniz STATIC "${FCITX_MINIZ_SOURCE_DIR}/miniz.c")
 target_include_directories(fcitx5_miniz SYSTEM PUBLIC "${FCITX_MINIZ_SOURCE_DIR}")
 target_compile_definitions(fcitx5_miniz PRIVATE MINIZ_NO_ZLIB_APIS)
 if(MSVC)
-  target_compile_options(fcitx5_miniz PRIVATE /W3 /sdl)
+  target_compile_options(fcitx5_miniz PRIVATE /W3)
+  if(FCITX_COMPILER_IS_MSVC_CL)
+    target_compile_options(fcitx5_miniz PRIVATE /sdl)
+  endif()
 endif()
 
 add_library(
@@ -250,7 +278,10 @@ target_compile_definitions(
   fcitx5_mldsa65_verify
   PRIVATE MLD_CONFIG_FILE=\"fcitx5_mldsa65_config.h\")
 if(MSVC)
-  target_compile_options(fcitx5_mldsa65_verify PRIVATE /W3 /sdl)
+  target_compile_options(fcitx5_mldsa65_verify PRIVATE /W3)
+  if(FCITX_COMPILER_IS_MSVC_CL)
+    target_compile_options(fcitx5_mldsa65_verify PRIVATE /sdl)
+  endif()
 endif()
 
 add_library(
@@ -264,7 +295,10 @@ target_compile_definitions(
   PRIVATE BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512
           BLAKE3_USE_NEON=0)
 if(MSVC)
-  target_compile_options(fcitx5_blake3 PRIVATE /W3 /sdl /wd4244)
+  target_compile_options(fcitx5_blake3 PRIVATE /W3 /wd4244)
+  if(FCITX_COMPILER_IS_MSVC_CL)
+    target_compile_options(fcitx5_blake3 PRIVATE /sdl)
+  endif()
 endif()
 
 add_library(
@@ -287,7 +321,7 @@ target_link_libraries(
   PUBLIC bcrypt crypt32
   PRIVATE fcitx5_miniz fcitx5_mldsa65_verify fcitx5_blake3)
 fcitx_apply_project_options(fcitx5_package_core)
-if(MSVC)
+if(FCITX_COMPILER_IS_MSVC_CL)
   target_compile_options(fcitx5_package_core PRIVATE /external:W0 /analyze:external-)
 endif()
 
@@ -302,7 +336,7 @@ target_link_libraries(
          ws2_32 userenv ntdll bcrypt crypt32 ole32)
 add_dependencies(fcitx5_deployment_core fcitx5_package_core_rustlib)
 fcitx_apply_project_options(fcitx5_deployment_core)
-if(MSVC)
+if(FCITX_COMPILER_IS_MSVC_CL)
   target_compile_options(fcitx5_deployment_core PRIVATE /external:W0 /analyze:external-)
 endif()
 
@@ -317,7 +351,7 @@ target_include_directories(
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tomlplusplus/include")
 target_compile_definitions(fcitx5_config PRIVATE TOML_EXCEPTIONS=1)
 fcitx_apply_project_options(fcitx5_config)
-if(MSVC)
+if(FCITX_COMPILER_IS_MSVC_CL)
   target_compile_options(fcitx5_config PRIVATE /external:W0 /analyze:external-)
 endif()
 
@@ -428,7 +462,7 @@ target_link_libraries(
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
-if(MSVC)
+if(FCITX_COMPILER_IS_MSVC_CL)
   target_compile_options(fcitx5_config_app PRIVATE /external:W0 /analyze:external-)
 endif()
 fcitx_apply_project_options(fcitx5_config_app)
@@ -626,7 +660,10 @@ if(BUILD_TESTING)
     fcitx5_mldsa65_test_sign
     PRIVATE MLD_CONFIG_FILE=\"fcitx5_mldsa65_test_config.h\")
   if(MSVC)
-    target_compile_options(fcitx5_mldsa65_test_sign PRIVATE /W3 /sdl)
+    target_compile_options(fcitx5_mldsa65_test_sign PRIVATE /W3)
+    if(FCITX_COMPILER_IS_MSVC_CL)
+      target_compile_options(fcitx5_mldsa65_test_sign PRIVATE /sdl)
+    endif()
   endif()
 
   add_executable(fcitx5_package_core_test tests/unit/package_core_test.cpp)
@@ -810,18 +847,6 @@ if(BUILD_TESTING)
     set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
     set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
     set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
-    set(FCITX_CMAKE_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
-    if(NOT FCITX_CMAKE_PLATFORM)
-      set(FCITX_CMAKE_PLATFORM "${CMAKE_GENERATOR_PLATFORM}")
-    endif()
-    if(FCITX_CMAKE_PLATFORM MATCHES "^[Ww]in32$" OR CMAKE_SIZEOF_VOID_P EQUAL 4)
-      set(FCITX_RUST_TARGET "i686-pc-windows-msvc")
-    elseif(FCITX_CMAKE_PLATFORM MATCHES "^[Aa][Rr][Mm]64$" OR
-           CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$")
-      set(FCITX_RUST_TARGET "aarch64-pc-windows-msvc")
-    else()
-      set(FCITX_RUST_TARGET "x86_64-pc-windows-msvc")
-    endif()
     add_custom_target(
       fcitx5_rust_package_core_test
       COMMAND

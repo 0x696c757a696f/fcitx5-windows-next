@@ -9,9 +9,12 @@
     {
       "name": "windows-base",
       "hidden": true,
-      "generator": "Visual Studio 17 2022",
+      "generator": "Ninja Multi-Config",
       "cacheVariables": {
         "BUILD_TESTING": "ON",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_LINKER": "lld-link",
         "FCITX_WARNINGS_AS_ERRORS": "ON",
         "FCITX_RELEASE_CHANNEL": "stable"
       }
@@ -20,8 +23,10 @@
       "name": "windows-x64-dev",
       "displayName": "Windows x64 development",
       "inherits": "windows-base",
-      "architecture": "x64",
       "cacheVariables": {
+        "CMAKE_C_FLAGS_INIT": "--target=x86_64-pc-windows-msvc",
+        "CMAKE_CXX_FLAGS_INIT": "--target=x86_64-pc-windows-msvc",
+        "FCITX_TARGET_ARCH": "x64",
         "FCITX_DEVELOPMENT_PEER_EXCEPTION": "ON"
       },
       "binaryDir": "${sourceDir}/out/build/windows-x64-dev"
@@ -30,8 +35,10 @@
       "name": "windows-x86-dev",
       "displayName": "Windows x86 development",
       "inherits": "windows-base",
-      "architecture": "Win32",
       "cacheVariables": {
+        "CMAKE_C_FLAGS_INIT": "--target=i686-pc-windows-msvc",
+        "CMAKE_CXX_FLAGS_INIT": "--target=i686-pc-windows-msvc",
+        "FCITX_TARGET_ARCH": "x86",
         "FCITX_DEVELOPMENT_PEER_EXCEPTION": "ON"
       },
       "binaryDir": "${sourceDir}/out/build/windows-x86-dev"
@@ -40,9 +47,11 @@
       "name": "windows-x64-release",
       "displayName": "Windows x64 release-validation",
       "inherits": "windows-base",
-      "architecture": "x64",
       "cacheVariables": {
         "BUILD_TESTING": "OFF",
+        "CMAKE_C_FLAGS_INIT": "--target=x86_64-pc-windows-msvc",
+        "CMAKE_CXX_FLAGS_INIT": "--target=x86_64-pc-windows-msvc",
+        "FCITX_TARGET_ARCH": "x64",
         "FCITX_DEVELOPMENT_PEER_EXCEPTION": "OFF"
       },
       "binaryDir": "${sourceDir}/out/build/windows-x64-release"
@@ -51,9 +60,11 @@
       "name": "windows-x86-release",
       "displayName": "Windows x86 release-validation",
       "inherits": "windows-base",
-      "architecture": "Win32",
       "cacheVariables": {
         "BUILD_TESTING": "OFF",
+        "CMAKE_C_FLAGS_INIT": "--target=i686-pc-windows-msvc",
+        "CMAKE_CXX_FLAGS_INIT": "--target=i686-pc-windows-msvc",
+        "FCITX_TARGET_ARCH": "x86",
         "FCITX_DEVELOPMENT_PEER_EXCEPTION": "OFF"
       },
       "binaryDir": "${sourceDir}/out/build/windows-x86-release"
@@ -62,8 +73,10 @@
       "name": "windows-arm64-dev",
       "displayName": "Windows ARM64 development",
       "inherits": "windows-base",
-      "architecture": "ARM64",
       "cacheVariables": {
+        "CMAKE_C_FLAGS_INIT": "--target=aarch64-pc-windows-msvc",
+        "CMAKE_CXX_FLAGS_INIT": "--target=aarch64-pc-windows-msvc",
+        "FCITX_TARGET_ARCH": "arm64",
         "FCITX_DEVELOPMENT_PEER_EXCEPTION": "ON"
       },
       "binaryDir": "${sourceDir}/out/build/windows-arm64-dev"
@@ -72,9 +85,11 @@
       "name": "windows-arm64-release",
       "displayName": "Windows ARM64 release-validation",
       "inherits": "windows-base",
-      "architecture": "ARM64",
       "cacheVariables": {
         "BUILD_TESTING": "OFF",
+        "CMAKE_C_FLAGS_INIT": "--target=aarch64-pc-windows-msvc",
+        "CMAKE_CXX_FLAGS_INIT": "--target=aarch64-pc-windows-msvc",
+        "FCITX_TARGET_ARCH": "arm64",
         "FCITX_DEVELOPMENT_PEER_EXCEPTION": "OFF"
       },
       "binaryDir": "${sourceDir}/out/build/windows-arm64-release"

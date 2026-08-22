@@ -57,6 +57,10 @@ jobs:
         with:
           version: v0.17.0
 
+      - name: Prepare fast Windows toolchain
+        shell: pwsh
+        run: ./tools/prepare-fast-toolchain.ps1 -InstallForCI
+
       - name: Configure CI compiler cache
         shell: pwsh
         run: ./tools/configure-ci-cache.ps1
