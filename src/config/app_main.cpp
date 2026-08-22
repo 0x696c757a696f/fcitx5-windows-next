@@ -2763,59 +2763,24 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     }
 
     void stopProductionPreview() {
-        if (previewProcess_) {
-            if (WaitForSingleObject(previewProcess_, 0) == WAIT_TIMEOUT)
-                TerminateProcess(previewProcess_, 0);
-            CloseHandle(previewProcess_);
-            previewProcess_ = nullptr;
-        }
         previewActiveForContract_ = false;
     }
 
-    bool previewProcessRunning() {
-        if (!previewProcess_)
-            return false;
-        if (WaitForSingleObject(previewProcess_, 0) == WAIT_TIMEOUT)
-            return true;
-        CloseHandle(previewProcess_);
-        previewProcess_ = nullptr;
-        return false;
-    }
-
     bool ensureProductionPreview() {
-        if (interactionTest_ || livePreviewContractTest_ || !::IsWindowVisible(m_hWnd)) {
-            if (!previewActiveForContract_) {
-                ++previewLaunchCount_;
-                previewActiveForContract_ = true;
-            }
-            return true;
+        if (!previewActiveForContract_) {
+            ++previewLaunchCount_;
+            previewActiveForContract_ = true;
         }
-        if (previewProcessRunning())
-            return true;
-        const fs::path executable = executableDirectory() / L"fcitx5-ui.exe";
-        if (!fs::exists(executable)) {
-            setStatus(get("error.command"));
-            return false;
-        }
-        std::wstring command = quote(executable.wstring()) + L" --demo --parent-pid " +
-                               std::to_wstring(GetCurrentProcessId());
-        STARTUPINFOW startup{};
-        startup.cb = sizeof(startup);
-        PROCESS_INFORMATION process{};
-        if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr,
-                            executable.parent_path().c_str(), &startup, &process)) {
-            setStatus(get("error.command"));
-            return false;
-        }
-        CloseHandle(process.hThread);
-        previewProcess_ = process.hProcess;
-        ++previewLaunchCount_;
+        InvalidateRect(nullptr, FALSE);
         return true;
     }
 
     void preview() {
-        stopProductionPreview();
-        (void)ensureProductionPreview();
+        const bool ok = applyPresentation();
+        presentationDirty_ = !ok;
+        setSaveStatus(ok ? get("status.saved") : get("error.command"));
+        if (ok)
+            (void)ensureProductionPreview();
     }
 
     bool ensureDWrite() {
@@ -3080,17 +3045,28 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                  DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
     }
     void drawCandidateEntry(ID2D1SolidColorBrush* brush, std::wstring_view label,
-                            std::wstring_view text, float left, float top, float right,
-                            float textSize, COLORREF labelText, COLORREF candidateText,
-                            std::wstring_view family, float labelColumnWidth) {
+                            std::wstring_view text, std::wstring_view comment,
+                            const fcitx::windows::ui::RenderItemSegments& segments,
+                            float textSize, float commentSize, COLORREF labelText,
+                            COLORREF candidateText, COLORREF commentText,
+                            std::wstring_view family) {
         brush->SetColor(d2dColor(labelText));
-        drawText(brush, label, left, top, left + labelColumnWidth, top + 28, textSize,
+        drawText(brush, label, segments.label.left, segments.label.top, segments.label.right,
+                 segments.label.bottom, textSize,
                  DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
                  DWRITE_PARAGRAPH_ALIGNMENT_CENTER, family);
         brush->SetColor(d2dColor(candidateText));
-        drawText(brush, text, left + labelColumnWidth, top, right, top + 28, textSize,
+        drawText(brush, text, segments.text.left, segments.text.top, segments.text.right,
+                 segments.text.bottom, textSize,
                  DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
                  DWRITE_PARAGRAPH_ALIGNMENT_CENTER, family);
+        if (segments.drawComment && !comment.empty()) {
+            brush->SetColor(d2dColor(commentText));
+            drawText(brush, comment, segments.comment.left, segments.comment.top,
+                     segments.comment.right, segments.comment.bottom, commentSize,
+                     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
+                     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, family);
+        }
     }
     void drawCandidatePreview(ID2D1SolidColorBrush* brush, bool automatic, bool vertical,
                               LRESULT mode, float rowRight) {
@@ -3106,6 +3082,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const std::wstring fontFamily = comboText(kFont).empty() ? L"Segoe UI" : comboText(kFont);
         const float textSize = selectedCandidateTextSize();
         const float previewTextSize = (std::min)(22.0F, textSize);
+        const float previewCommentSize = (std::max)(10.0F, previewTextSize * 0.82F);
         const COLORREF surface =
             darkMode ? RGB(35, 37, 42) : (lightMode ? RGB(252, 253, 255) : RGB(246, 249, 252));
         const COLORREF border = darkMode ? RGB(85, 91, 102) : RGB(226, 230, 236);
@@ -3113,6 +3090,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const COLORREF subtleText = darkMode ? RGB(196, 204, 216) : designTokens().subtleText;
         const COLORREF pillFill = darkMode ? RGB(56, 63, 72) : RGB(234, 239, 246);
         const COLORREF labelText = darkMode ? RGB(115, 235, 176) : designTokens().accent;
+        const COLORREF selectionFill =
+            darkMode ? RGB(78, 92, 115) : RGB(221, 235, 255);
         const auto colorWithAlpha = [](COLORREF color, float alpha) {
             return D2D1::ColorF(GetRValue(color) / 255.0F, GetGValue(color) / 255.0F,
                                 GetBValue(color) / 255.0F, alpha);
@@ -3146,35 +3125,33 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         struct PreviewCandidate {
             std::wstring_view label;
             std::wstring_view text;
+            std::wstring_view comment;
         };
         const std::array verticalCandidates{
-            PreviewCandidate{L"1", L"你好"},
-            PreviewCandidate{L"2", L"fcitx"},
-            PreviewCandidate{L"3", L"😀 🎉 ⌨️"},
+            PreviewCandidate{L"1", L"输入法", L"shūrùfǎ"},
+            PreviewCandidate{L"2", L"输入", L"shūrù"},
+            PreviewCandidate{L"3", L"中文", L"zhōngwén"},
         };
         const std::array horizontalCandidates{
-            PreviewCandidate{L"1", L"你好"},    PreviewCandidate{L"2", L"输入法"},
-            PreviewCandidate{L"3", L"fcitx"},   PreviewCandidate{L"4", L"Windows"},
-            PreviewCandidate{L"5", L"😀🎉⌨️"},
+            PreviewCandidate{L"1", L"输入法", L"shūrùfǎ"},
+            PreviewCandidate{L"2", L"输入", L"shūrù"},
+            PreviewCandidate{L"3", L"中文", L"zhōngwén"},
         };
         const auto drawProductionLayoutPreview = [&](const auto& candidates,
                                                      fcitx::windows::ui::Orientation orientation) {
             std::vector<fcitx::windows::ui::Size> itemSizes;
             itemSizes.reserve(candidates.size());
-            float labelColumnWidth = 0.0F;
             for (const auto& candidate : candidates) {
-                labelColumnWidth =
-                    (std::max)(labelColumnWidth,
-                               measureTextWidth(candidate.label, previewTextSize,
-                                                DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily));
-            }
-            labelColumnWidth += 8.0F;
-            for (const auto& candidate : candidates) {
-                itemSizes.push_back(
-                    {labelColumnWidth +
-                         measureTextWidth(candidate.text, previewTextSize,
-                                          DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
-                     28.0F});
+                const float labelWidth =
+                    measureTextWidth(candidate.label, previewTextSize,
+                                     DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily);
+                const float textWidth =
+                    measureTextWidth(candidate.text, previewTextSize,
+                                     DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily);
+                const float commentWidth =
+                    measureTextWidth(candidate.comment, previewCommentSize,
+                                     DWRITE_FONT_WEIGHT_NORMAL, fontFamily);
+                itemSizes.push_back({labelWidth + textWidth + commentWidth + 36.0F, 28.0F});
             }
             fcitx::windows::ui::LayoutInput input{
                 orientation,
@@ -3190,15 +3167,41 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 12.0F,
                 fcitx::windows::ui::Placement::below};
             const auto layout = fcitx::windows::ui::layout(input);
+            std::vector<fcitx::windows::ui::RenderItemInput> renderInputs;
+            renderInputs.reserve(layout.items.size());
             for (std::size_t local = 0; local < layout.items.size(); ++local) {
                 const auto sourceIndex = layout.itemIndices[local];
                 if (sourceIndex >= candidates.size())
                     continue;
+                const auto& candidate = candidates[sourceIndex];
+                const auto& rectangle = layout.items[local];
+                renderInputs.push_back({
+                    rectangle,
+                    measureTextWidth(candidate.label, previewTextSize,
+                                     DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
+                    measureTextWidth(candidate.text, previewTextSize,
+                                     DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
+                    measureTextWidth(candidate.comment, previewCommentSize,
+                                     DWRITE_FONT_WEIGHT_NORMAL, fontFamily),
+                    !candidate.label.empty(),
+                });
+            }
+            const auto renderSegments =
+                fcitx::windows::ui::renderSegments(orientation, false, renderInputs);
+            for (std::size_t local = 0; local < layout.items.size(); ++local) {
+                const auto sourceIndex = layout.itemIndices[local];
+                if (sourceIndex >= candidates.size() || local >= renderSegments.size())
+                    continue;
                 const auto& rectangle = layout.items[local];
                 const auto& candidate = candidates[sourceIndex];
-                drawCandidateEntry(brush, candidate.label, candidate.text, rectangle.left,
-                                   rectangle.top, rectangle.right, previewTextSize, labelText,
-                                   primaryText, fontFamily, labelColumnWidth);
+                if (sourceIndex == 0) {
+                    brush->SetColor(d2dColor(selectionFill));
+                    fillRound(brush, rectangle.left - 4.0F, rectangle.top - 2.0F,
+                              rectangle.right + 4.0F, rectangle.bottom + 2.0F, radius);
+                }
+                drawCandidateEntry(brush, candidate.label, candidate.text, candidate.comment,
+                                   renderSegments[local], previewTextSize, previewCommentSize,
+                                   labelText, primaryText, subtleText, fontFamily);
             }
         };
         if (verticalLayout) {
@@ -3804,11 +3807,6 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     LRESULT onDestroy(UINT, WPARAM, LPARAM, BOOL&) {
         if (statusTimer_)
             ::KillTimer(m_hWnd, statusTimer_);
-        if (previewProcess_) {
-            if (WaitForSingleObject(previewProcess_, 0) == WAIT_TIMEOUT)
-                TerminateProcess(previewProcess_, 0);
-            CloseHandle(previewProcess_);
-        }
         if (font_)
             DeleteObject(font_);
         if (titleFont_)
@@ -4053,7 +4051,6 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     ID2D1HwndRenderTarget* target_{};
     IDWriteFactory* writeFactory_{};
     UINT_PTR statusTimer_{};
-    HANDLE previewProcess_{};
     std::vector<ModernHitTarget> modernHits_;
     std::vector<PackageRow> packages_;
     std::vector<InputMethodRow> inputMethods_;

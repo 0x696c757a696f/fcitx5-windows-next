@@ -52,6 +52,24 @@ struct LayoutResult {
     Placement placement{Placement::below};
 };
 
+struct RenderItemInput {
+    Rect bounds{};
+    float labelWidth{};
+    float textWidth{};
+    float commentWidth{};
+    bool hasLabel{};
+};
+
+struct RenderItemSegments {
+    Rect label{};
+    Rect text{};
+    Rect comment{};
+    bool drawComment{};
+};
+
 [[nodiscard]] LayoutResult layout(const LayoutInput& input);
+[[nodiscard]] std::vector<RenderItemSegments> renderSegments(Orientation orientation,
+                                                             bool scrollMode,
+                                                             const std::vector<RenderItemInput>& items);
 
 } // namespace fcitx::windows::ui

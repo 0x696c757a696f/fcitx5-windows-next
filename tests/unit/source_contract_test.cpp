@@ -253,9 +253,11 @@ int main(int argc, char** argv) {
         configSource.find("--ui-live-preview-contract-test") == std::string::npos ||
         configSource.find("ensureProductionPreview()") == std::string::npos ||
         configSource.find("fcitx5-ui.exe") == std::string::npos ||
-        configSource.find("--demo --parent-pid") == std::string::npos ||
         configSource.find("#include \"candidate_layout.h\"") == std::string::npos ||
         configSource.find("fcitx::windows::ui::layout(input)") == std::string::npos ||
+        configSource.find("fcitx::windows::ui::renderSegments") == std::string::npos ||
+        configSource.find("shūrùfǎ") == std::string::npos ||
+        configSource.find("zhōngwén") == std::string::npos ||
         candidateUiSource.find("fcitx5_candidate_render_segments") == std::string::npos ||
         candidateUiSource.find("kDrawTextOptions") == std::string::npos ||
         candidateUiSource.find("0x4U") == std::string::npos ||
@@ -308,6 +310,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         englishLocale.find("\"updates.title\": \"Updates\"") == std::string::npos) {
         return fail("REG-CONFIG-VISUAL-001: Config must use task navigation and shared design tokens");
+    }
+    if (configSource.find("--demo --parent-pid") != std::string::npos ||
+        configSource.find("previewProcess_") != std::string::npos ||
+        configSource.find("previewProcessRunning") != std::string::npos) {
+        return fail("REG-CONFIG-LIVE-001: Config candidate preview must be embedded, not an external demo window");
     }
     if (configSource.find("confirmDialog(") == std::string::npos ||
         configSource.find("MessageBoxW") == std::string::npos ||

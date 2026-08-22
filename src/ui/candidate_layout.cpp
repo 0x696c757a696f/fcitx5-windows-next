@@ -49,6 +49,21 @@ struct Fcitx5CandidateLayoutOutput {
     std::size_t itemCount{};
 };
 
+struct Fcitx5CandidateRenderItemInput {
+    Fcitx5CandidateLayoutRect bounds{};
+    float labelWidth{};
+    float textWidth{};
+    float commentWidth{};
+    std::uint8_t hasLabel{};
+};
+
+struct Fcitx5CandidateRenderItemOutput {
+    Fcitx5CandidateLayoutRect label{};
+    Fcitx5CandidateLayoutRect text{};
+    Fcitx5CandidateLayoutRect comment{};
+    std::uint8_t drawComment{};
+};
+
 extern "C" int fcitx5_candidate_layout_run(const Fcitx5CandidateLayoutInput* input,
                                             const Fcitx5CandidateLayoutSize* items,
                                             std::size_t itemCount,
@@ -56,6 +71,12 @@ extern "C" int fcitx5_candidate_layout_run(const Fcitx5CandidateLayoutInput* inp
                                             std::size_t* outItemIndices,
                                             std::size_t outCapacity,
                                             Fcitx5CandidateLayoutOutput* output);
+extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemInput* items,
+                                                 std::size_t itemCount,
+                                                 std::uint8_t horizontal,
+                                                 std::uint8_t scrollMode,
+                                                 Fcitx5CandidateRenderItemOutput* outItems,
+                                                 float* outLabelColumnWidth);
 
 [[nodiscard]] std::uint32_t toRust(fcitx::windows::ui::Orientation value) noexcept {
     return value == fcitx::windows::ui::Orientation::horizontal ? 1U : 0U;
@@ -137,6 +158,44 @@ LayoutResult layout(const LayoutInput& input) {
     for (std::size_t index = 0; index < rustOutput.itemCount; ++index) {
         result.items.push_back(rectFromRust(outItems[index]));
         result.itemIndices.push_back(outItemIndices[index]);
+    }
+    return result;
+}
+
+std::vector<RenderItemSegments> renderSegments(Orientation orientation, bool scrollMode,
+                                               const std::vector<RenderItemInput>& items) {
+    std::vector<Fcitx5CandidateRenderItemInput> rustInputs;
+    rustInputs.reserve(items.size());
+    for (const auto& item : items) {
+        rustInputs.push_back({
+            {item.bounds.left, item.bounds.top, item.bounds.right, item.bounds.bottom},
+            item.labelWidth,
+            item.textWidth,
+            item.commentWidth,
+            static_cast<std::uint8_t>(item.hasLabel ? 1U : 0U),
+        });
+    }
+
+    std::vector<Fcitx5CandidateRenderItemOutput> rustOutputs(items.size());
+    float labelColumnWidth = 0.0F;
+    if (!items.empty() &&
+        fcitx5_candidate_render_segments(
+            rustInputs.data(), rustInputs.size(),
+            static_cast<std::uint8_t>(orientation == Orientation::horizontal ? 1U : 0U),
+            static_cast<std::uint8_t>(scrollMode ? 1U : 0U), rustOutputs.data(),
+            &labelColumnWidth) != 0) {
+        return {};
+    }
+
+    std::vector<RenderItemSegments> result;
+    result.reserve(rustOutputs.size());
+    for (const auto& output : rustOutputs) {
+        result.push_back({
+            rectFromRust(output.label),
+            rectFromRust(output.text),
+            rectFromRust(output.comment),
+            output.drawComment != 0,
+        });
     }
     return result;
 }
