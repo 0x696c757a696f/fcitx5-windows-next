@@ -10,6 +10,7 @@ fn main() {
     let mut window_smoke = false;
     let mut demo_snapshot = false;
     let mut scroll_demo_snapshot = false;
+    let mut host_snapshot: Option<String> = None;
     let mut dpi_scale = 1.0_f32;
     let mut report: Option<PathBuf> = None;
     let mut screenshot: Option<PathBuf> = None;
@@ -23,6 +24,12 @@ fn main() {
             demo_snapshot = true;
         } else if arg == "--scroll-demo-snapshot" {
             scroll_demo_snapshot = true;
+        } else if arg == "--host-snapshot" {
+            let Some(host) = args.next() else {
+                eprintln!("--host-snapshot requires a mock host name");
+                std::process::exit(2);
+            };
+            host_snapshot = Some(host.to_string_lossy().into_owned());
         } else if arg == "--dpi-scale" {
             let Some(value) = args.next() else {
                 eprintln!("--dpi-scale requires a value");
@@ -54,12 +61,15 @@ fn main() {
 
     if self_check == window_smoke {
         eprintln!(
-            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot | --scroll-demo-snapshot] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
+            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot | --scroll-demo-snapshot | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
         );
         std::process::exit(2);
     }
-    if demo_snapshot && scroll_demo_snapshot {
-        eprintln!("--demo-snapshot and --scroll-demo-snapshot are mutually exclusive");
+    let mode_count = usize::from(demo_snapshot)
+        + usize::from(scroll_demo_snapshot)
+        + usize::from(host_snapshot.is_some());
+    if mode_count > 1 {
+        eprintln!("snapshot modes are mutually exclusive");
         std::process::exit(2);
     }
 
@@ -70,6 +80,7 @@ fn main() {
             screenshot.as_deref(),
             demo_snapshot,
             scroll_demo_snapshot,
+            host_snapshot.as_deref(),
             dpi_scale,
         )
     };
@@ -108,9 +119,16 @@ fn run_window_smoke(
     screenshot: Option<&Path>,
     demo_snapshot: bool,
     scroll_demo_snapshot: bool,
+    host_snapshot: Option<&str>,
     dpi_scale: f32,
 ) -> Result<String, String> {
-    window_smoke::run(screenshot, demo_snapshot, scroll_demo_snapshot, dpi_scale)
+    window_smoke::run(
+        screenshot,
+        demo_snapshot,
+        scroll_demo_snapshot,
+        host_snapshot,
+        dpi_scale,
+    )
 }
 
 #[cfg(not(windows))]
@@ -118,6 +136,7 @@ fn run_window_smoke(
     _screenshot: Option<&Path>,
     _demo_snapshot: bool,
     _scroll_demo_snapshot: bool,
+    _host_snapshot: Option<&str>,
     _dpi_scale: f32,
 ) -> Result<String, String> {
     Err("window smoke is only available on Windows".to_owned())
@@ -125,7 +144,10 @@ fn run_window_smoke(
 
 #[cfg(windows)]
 mod window_smoke {
-    use fcitx5_candidate_core::{layout, LayoutInput, Orientation, Point, Rect as CoreRect, Size};
+    use fcitx5_candidate_core::{
+        candidate_poc_scenarios, layout, LayoutInput, Orientation, PocCandidate, PocScenario,
+        Point, Rect as CoreRect, Size,
+    };
     use std::ffi::c_void;
     use std::fs;
     use std::path::Path;
@@ -455,6 +477,9 @@ mod window_smoke {
         screenshot: Option<&'a Path>,
         snapshot_name: &'a str,
         orientation_name: &'a str,
+        host_name: &'a str,
+        locale_name: &'a str,
+        popup_allowed: bool,
         candidate_count: usize,
         dpi_scale: f32,
         scroll_mode: bool,
@@ -465,6 +490,7 @@ mod window_smoke {
         screenshot: Option<&Path>,
         demo_snapshot: bool,
         scroll_demo_snapshot: bool,
+        host_snapshot: Option<&str>,
         dpi_scale: f32,
     ) -> Result<String, String> {
         if !(0.5..=4.0).contains(&dpi_scale) || !dpi_scale.is_finite() {
@@ -478,6 +504,10 @@ mod window_smoke {
             text_lines,
             snapshot_name,
             orientation_name,
+            host_name,
+            locale_name,
+            popup_allowed,
+            effective_dpi_scale,
             scroll_mode,
             columns,
             emoji_candidate_render_path,
@@ -521,9 +551,68 @@ mod window_smoke {
                 text_lines,
                 "scroll-demo-snapshot",
                 "horizontal",
+                "demo-scroll",
+                "zh-CN",
+                true,
+                dpi_scale,
                 true,
                 6,
                 false,
+            )
+        } else if let Some(host) = host_snapshot {
+            let scenario = host_snapshot_scenario(host)?;
+            let orientation = scenario.expected_orientation;
+            let item_sizes = scenario
+                .candidates
+                .iter()
+                .map(|candidate| host_candidate_size(candidate, scenario.dpi_scale))
+                .collect();
+            let text_lines = scenario
+                .candidates
+                .iter()
+                .map(|candidate| {
+                    wide(
+                        format!(
+                            "{} {} {}",
+                            candidate.label, candidate.text, candidate.comment
+                        )
+                        .trim(),
+                    )
+                })
+                .collect();
+            (
+                layout(&LayoutInput {
+                    orientation,
+                    items: item_sizes,
+                    caret: scenario.caret,
+                    caret_height: 24.0 * scenario.dpi_scale,
+                    work_area: scenario.work_area,
+                    max_width: 720.0 * scenario.dpi_scale,
+                    padding_x: 8.0 * scenario.dpi_scale,
+                    padding_y: 6.0 * scenario.dpi_scale,
+                    row_gap: 2.0 * scenario.dpi_scale,
+                    column_gap: 8.0 * scenario.dpi_scale,
+                    selected: scenario.selected,
+                    ..LayoutInput::default()
+                }),
+                wide(&format!("Fcitx5 Candidate Host - {}", scenario.host)),
+                text_lines,
+                "host-snapshot",
+                orientation_to_name(orientation),
+                scenario.host,
+                scenario.locale,
+                scenario.popup_allowed,
+                scenario.dpi_scale,
+                false,
+                if orientation == Orientation::Horizontal {
+                    scenario.candidates.len().max(1)
+                } else {
+                    1
+                },
+                scenario
+                    .candidates
+                    .iter()
+                    .any(|candidate| contains_non_bmp_or_zwj(&candidate.text)),
             )
         } else if demo_snapshot {
             (
@@ -563,6 +652,10 @@ mod window_smoke {
                 vec![wide("1. 输入法"), wide("2. 输入"), wide("3. 中文")],
                 "demo-snapshot",
                 "vertical",
+                "demo",
+                "zh-CN",
+                true,
+                dpi_scale,
                 false,
                 1,
                 false,
@@ -605,6 +698,10 @@ mod window_smoke {
                 vec![wide("1  😀  emoji"), wide("2  候选  text fallback")],
                 "emoji-window",
                 "horizontal",
+                "emoji-smoke",
+                "zh-CN",
+                true,
+                dpi_scale,
                 false,
                 3,
                 true,
@@ -614,9 +711,9 @@ mod window_smoke {
         let height = ((layout.window.bottom - layout.window.top).ceil() as i32).max(1);
         let class_name = wide("Fcitx5CandidateRustPoc");
         let _ = WINDOW_TEXT.set(text_lines);
-        let _ = WINDOW_VERTICAL.set(demo_snapshot);
+        let _ = WINDOW_VERTICAL.set(orientation_name == "vertical");
         let _ = WINDOW_COLUMNS.set(columns);
-        let _ = WINDOW_SCALE.set(dpi_scale);
+        let _ = WINDOW_SCALE.set(effective_dpi_scale);
 
         let instance = unsafe { GetModuleHandleW(null()) };
         let window_class = WndClassW {
@@ -663,8 +760,11 @@ mod window_smoke {
                 screenshot,
                 snapshot_name,
                 orientation_name,
+                host_name,
+                locale_name,
+                popup_allowed,
                 candidate_count: WINDOW_TEXT.get().map_or(0, Vec::len),
-                dpi_scale,
+                dpi_scale: effective_dpi_scale,
                 scroll_mode,
                 expects_emoji: emoji_candidate_render_path,
             },
@@ -753,9 +853,12 @@ mod window_smoke {
             },
         );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"candidate_count\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"host\":\"{}\",\n  \"locale\":\"{}\",\n  \"popup_allowed\":{},\n  \"candidate_count\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
             json_escape(spec.snapshot_name),
             json_escape(spec.orientation_name),
+            json_escape(spec.host_name),
+            json_escape(spec.locale_name),
+            if spec.popup_allowed { "true" } else { "false" },
             spec.candidate_count,
             spec.dpi_scale,
             if spec.scroll_mode { "true" } else { "false" },
@@ -1192,6 +1295,44 @@ mod window_smoke {
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn host_snapshot_scenario(host: &str) -> Result<PocScenario, String> {
+        let scenario = candidate_poc_scenarios()
+            .into_iter()
+            .find(|scenario| scenario.host == host)
+            .ok_or_else(|| format!("unknown Candidate PoC mock host: {host}"))?;
+        if !scenario.popup_allowed {
+            return Err(format!(
+                "{host} is a UILess mock host; use --self-check for popup-suppressed host evidence"
+            ));
+        }
+        Ok(scenario)
+    }
+
+    fn host_candidate_size(candidate: &PocCandidate, scale: f32) -> Size {
+        let text_units = candidate.text.chars().count().max(1) as f32;
+        let comment_units = candidate.comment.chars().count() as f32;
+        let label_units = candidate.label.chars().count() as f32;
+        Size {
+            width: ((label_units * 14.0) + (text_units * 26.0) + (comment_units * 7.0) + 20.0)
+                .clamp(56.0, 260.0)
+                * scale,
+            height: 34.0 * scale,
+        }
+    }
+
+    fn orientation_to_name(orientation: Orientation) -> &'static str {
+        match orientation {
+            Orientation::Horizontal => "horizontal",
+            Orientation::Vertical => "vertical",
+        }
+    }
+
+    fn contains_non_bmp_or_zwj(value: &str) -> bool {
+        value.chars().any(|character| {
+            character == '\u{200d}' || character == '\u{fe0f}' || character as u32 > 0xffff
+        })
     }
 
     fn scroll_demo_text() -> Vec<Vec<u16>> {

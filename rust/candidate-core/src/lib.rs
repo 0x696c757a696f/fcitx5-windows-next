@@ -1231,7 +1231,7 @@ pub fn run_candidate_poc_self_check() -> Result<String, String> {
     Ok(render_candidate_poc_report(&evidence))
 }
 
-fn candidate_poc_scenarios() -> Vec<PocScenario> {
+pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
     let work_area = Rect {
         left: 0.0,
         top: 0.0,

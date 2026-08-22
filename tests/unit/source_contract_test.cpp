@@ -289,8 +289,12 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("--screenshot") == std::string::npos ||
         candidatePocBinary.find("--demo-snapshot") == std::string::npos ||
         candidatePocBinary.find("--scroll-demo-snapshot") == std::string::npos ||
+        candidatePocBinary.find("--host-snapshot") == std::string::npos ||
+        candidatePocBinary.find("host_snapshot_scenario") == std::string::npos ||
         candidatePocBinary.find("--dpi-scale") == std::string::npos ||
         candidatePocBinary.find("snapshot_name") == std::string::npos ||
+        candidatePocBinary.find("host_name") == std::string::npos ||
+        candidatePocBinary.find("locale_name") == std::string::npos ||
         candidatePocBinary.find("candidate_count") == std::string::npos ||
         candidatePocBinary.find("dpi_scale") == std::string::npos ||
         candidatePocBinary.find("scroll_mode") == std::string::npos ||
@@ -300,6 +304,10 @@ int main(int argc, char** argv) {
         cmakeSource.find("rust-candidate-poc-window-smoke") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-demo-snapshot") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-scroll-demo-snapshot") == std::string::npos ||
+        cmakeSource.find("rust-candidate-poc-host-snapshot") == std::string::npos ||
+        cmakeSource.find("mock-word") == std::string::npos ||
+        cmakeSource.find("candidate-poc-host-${FCITX_CANDIDATE_HOST_SNAPSHOT}.bmp") ==
+            std::string::npos ||
         cmakeSource.find("rust-candidate-poc-dpi-smoke") == std::string::npos ||
         cmakeSource.find("fcitx5_candidate_poc_rustbin") == std::string::npos ||
         cmakeSource.find("candidate-poc-window-smoke.bmp") == std::string::npos ||

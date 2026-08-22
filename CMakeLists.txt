@@ -899,6 +899,23 @@ if(BUILD_TESTING)
     set_tests_properties(
       rust-candidate-poc-scroll-demo-snapshot PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    foreach(FCITX_CANDIDATE_HOST_SNAPSHOT mock-notepad mock-word mock-chromium mock-emoji-host)
+      add_test(
+        NAME "rust-candidate-poc-host-snapshot-${FCITX_CANDIDATE_HOST_SNAPSHOT}"
+        COMMAND
+          "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+          "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+          "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+          fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
+          --host-snapshot "${FCITX_CANDIDATE_HOST_SNAPSHOT}" --report
+          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-host-${FCITX_CANDIDATE_HOST_SNAPSHOT}.json"
+          --screenshot
+          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-host-${FCITX_CANDIDATE_HOST_SNAPSHOT}.bmp")
+      set_tests_properties(
+        "rust-candidate-poc-host-snapshot-${FCITX_CANDIDATE_HOST_SNAPSHOT}" PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endforeach()
     add_test(
       NAME rust-candidate-poc-dpi-smoke
       COMMAND
