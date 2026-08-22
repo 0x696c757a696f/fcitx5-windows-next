@@ -484,7 +484,51 @@ int wmain(int argc, wchar_t** argv) {
     expect(horizontal_scroll_width <= horizontal_width + 6,
            "horizontal scroll mode became wider than the ordinary candidate row: ordinary " +
                size_text(horizontal) + ", scroll " + size_text(horizontal_scroll));
+    const auto cpp_scroll_screenshot = temporary.path() / L"cpp-candidate-scroll-demo.bmp";
+    const CaptureEvidence cpp_scroll = capture_window(scroll_window, cpp_scroll_screenshot);
+    expect(cpp_scroll.bytes > 0 && cpp_scroll.non_background_pixels > 0 &&
+               cpp_scroll.checksum != 0,
+           "C++ candidate scroll-demo screenshot evidence is invalid");
     scroll_candidate.close_window(scroll_window);
+
+    const auto rust_scroll_report = temporary.path() / L"rust-candidate-scroll-demo.json";
+    const auto rust_scroll_screenshot = temporary.path() / L"rust-candidate-scroll-demo.bmp";
+    expect(run_process(rust_candidate_poc,
+                       {L"--window-smoke", L"--scroll-demo-snapshot", L"--report",
+                        rust_scroll_report.wstring(), L"--screenshot",
+                        rust_scroll_screenshot.wstring()}) == 0,
+           "Rust candidate scroll-demo snapshot smoke failed");
+    const auto rust_scroll = read_text(rust_scroll_report);
+    expect_contains(rust_scroll, "\"snapshot_name\":\"scroll-demo-snapshot\"",
+                    "Rust candidate scroll-demo report used the wrong snapshot");
+    expect_contains(rust_scroll, "\"orientation\":\"horizontal\"",
+                    "Rust candidate scroll-demo snapshot did not use horizontal orientation");
+    expect_contains(rust_scroll, "\"scroll_mode\":true",
+                    "Rust candidate scroll-demo snapshot did not enable scroll mode");
+    expect_contains(rust_scroll, "\"candidate_count\":60",
+                    "Rust candidate scroll-demo snapshot did not use the C++ scroll candidate count");
+    expect_contains(rust_scroll, "\"screenshot_written\":true",
+                    "Rust candidate scroll-demo snapshot did not write screenshot evidence");
+    expect_contains(rust_scroll, "\"msaa_accessible_name_readable\":true",
+                    "Rust candidate scroll-demo snapshot did not prove accessibility name");
+    expect_contains(rust_scroll, "\"uia_name_readable\":true",
+                    "Rust candidate scroll-demo snapshot did not prove UIA name");
+    expect(json_u64_field(rust_scroll, "visual_non_background_pixels") > 0,
+           "Rust candidate scroll-demo screenshot did not contain visible content");
+    expect(json_u64_field(rust_scroll, "visual_checksum") != 0,
+           "Rust candidate scroll-demo checksum is invalid");
+    const int rust_scroll_width =
+        json_int_field(rust_scroll, "window_right") - json_int_field(rust_scroll, "window_left");
+    const int rust_scroll_height =
+        json_int_field(rust_scroll, "window_bottom") - json_int_field(rust_scroll, "window_top");
+    expect(rust_scroll_width > 0 && rust_scroll_height > rust_demo_height,
+           "Rust candidate scroll-demo snapshot did not expand beyond the vertical demo height");
+    expect(rust_scroll_width <= horizontal_scroll_width * 3 &&
+               rust_scroll_width * 3 >= horizontal_scroll_width,
+           "Rust/C++ candidate scroll-demo width diverged beyond allowed PoC tolerance");
+    expect(rust_scroll_height <= horizontal_scroll_height * 3 &&
+               rust_scroll_height * 3 >= horizontal_scroll_height,
+           "Rust/C++ candidate scroll-demo height diverged beyond allowed PoC tolerance");
 
     const auto saved = read_text(root / L"data/config.toml");
     fcitx::windows::config::Config saved_config;

@@ -288,25 +288,33 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("uia_control_type") == std::string::npos ||
         candidatePocBinary.find("--screenshot") == std::string::npos ||
         candidatePocBinary.find("--demo-snapshot") == std::string::npos ||
+        candidatePocBinary.find("--scroll-demo-snapshot") == std::string::npos ||
         candidatePocBinary.find("--dpi-scale") == std::string::npos ||
         candidatePocBinary.find("snapshot_name") == std::string::npos ||
         candidatePocBinary.find("candidate_count") == std::string::npos ||
         candidatePocBinary.find("dpi_scale") == std::string::npos ||
+        candidatePocBinary.find("scroll_mode") == std::string::npos ||
         candidatePocBinary.find("GetDIBits") == std::string::npos ||
         candidatePocBinary.find("visual_non_background_pixels") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-contract") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-window-smoke") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-demo-snapshot") == std::string::npos ||
+        cmakeSource.find("rust-candidate-poc-scroll-demo-snapshot") == std::string::npos ||
         cmakeSource.find("rust-candidate-poc-dpi-smoke") == std::string::npos ||
         cmakeSource.find("fcitx5_candidate_poc_rustbin") == std::string::npos ||
         cmakeSource.find("candidate-poc-window-smoke.bmp") == std::string::npos ||
         cmakeSource.find("config-ui-preview-fidelity-qa") == std::string::npos ||
         candidateIntegrationSource.find("cpp-candidate-demo.bmp") == std::string::npos ||
+        candidateIntegrationSource.find("cpp-candidate-scroll-demo.bmp") == std::string::npos ||
         candidateIntegrationSource.find("capture_window") == std::string::npos ||
         candidateIntegrationSource.find("visual_non_background_pixels") == std::string::npos ||
         candidateIntegrationSource.find("rust-candidate-demo.json") == std::string::npos ||
+        candidateIntegrationSource.find("rust-candidate-scroll-demo.json") == std::string::npos ||
         candidateIntegrationSource.find("demo-snapshot") == std::string::npos ||
+        candidateIntegrationSource.find("scroll-demo-snapshot") == std::string::npos ||
         candidateIntegrationSource.find("Rust/C++ candidate demo width diverged") ==
+            std::string::npos ||
+        candidateIntegrationSource.find("Rust/C++ candidate scroll-demo width diverged") ==
             std::string::npos ||
         configQaSource.find("--candidate-ui-exe") == std::string::npos ||
         configQaSource.find("candidate-ui-demo-reference.bmp") == std::string::npos ||

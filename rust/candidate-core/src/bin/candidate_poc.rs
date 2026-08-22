@@ -9,6 +9,7 @@ fn main() {
     let mut self_check = false;
     let mut window_smoke = false;
     let mut demo_snapshot = false;
+    let mut scroll_demo_snapshot = false;
     let mut dpi_scale = 1.0_f32;
     let mut report: Option<PathBuf> = None;
     let mut screenshot: Option<PathBuf> = None;
@@ -20,6 +21,8 @@ fn main() {
             window_smoke = true;
         } else if arg == "--demo-snapshot" {
             demo_snapshot = true;
+        } else if arg == "--scroll-demo-snapshot" {
+            scroll_demo_snapshot = true;
         } else if arg == "--dpi-scale" {
             let Some(value) = args.next() else {
                 eprintln!("--dpi-scale requires a value");
@@ -51,15 +54,24 @@ fn main() {
 
     if self_check == window_smoke {
         eprintln!(
-            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
+            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot | --scroll-demo-snapshot] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
         );
+        std::process::exit(2);
+    }
+    if demo_snapshot && scroll_demo_snapshot {
+        eprintln!("--demo-snapshot and --scroll-demo-snapshot are mutually exclusive");
         std::process::exit(2);
     }
 
     let result = if self_check {
         fcitx5_candidate_core::run_candidate_poc_self_check()
     } else {
-        run_window_smoke(screenshot.as_deref(), demo_snapshot, dpi_scale)
+        run_window_smoke(
+            screenshot.as_deref(),
+            demo_snapshot,
+            scroll_demo_snapshot,
+            dpi_scale,
+        )
     };
 
     match result {
@@ -95,15 +107,17 @@ fn write_report(path: &Path, output: &str) {
 fn run_window_smoke(
     screenshot: Option<&Path>,
     demo_snapshot: bool,
+    scroll_demo_snapshot: bool,
     dpi_scale: f32,
 ) -> Result<String, String> {
-    window_smoke::run(screenshot, demo_snapshot, dpi_scale)
+    window_smoke::run(screenshot, demo_snapshot, scroll_demo_snapshot, dpi_scale)
 }
 
 #[cfg(not(windows))]
 fn run_window_smoke(
     _screenshot: Option<&Path>,
     _demo_snapshot: bool,
+    _scroll_demo_snapshot: bool,
     _dpi_scale: f32,
 ) -> Result<String, String> {
     Err("window smoke is only available on Windows".to_owned())
@@ -326,6 +340,7 @@ mod window_smoke {
 
     static WINDOW_TEXT: OnceLock<Vec<Vec<u16>>> = OnceLock::new();
     static WINDOW_VERTICAL: OnceLock<bool> = OnceLock::new();
+    static WINDOW_COLUMNS: OnceLock<usize> = OnceLock::new();
     static WINDOW_SCALE: OnceLock<f32> = OnceLock::new();
 
     #[link(name = "user32")]
@@ -442,12 +457,14 @@ mod window_smoke {
         orientation_name: &'a str,
         candidate_count: usize,
         dpi_scale: f32,
+        scroll_mode: bool,
         expects_emoji: bool,
     }
 
     pub fn run(
         screenshot: Option<&Path>,
         demo_snapshot: bool,
+        scroll_demo_snapshot: bool,
         dpi_scale: f32,
     ) -> Result<String, String> {
         if !(0.5..=4.0).contains(&dpi_scale) || !dpi_scale.is_finite() {
@@ -461,8 +478,54 @@ mod window_smoke {
             text_lines,
             snapshot_name,
             orientation_name,
+            scroll_mode,
+            columns,
             emoji_candidate_render_path,
-        ) = if demo_snapshot {
+        ) = if scroll_demo_snapshot {
+            let items = (0..60)
+                .map(|index| Size {
+                    width: if index < 42 {
+                        56.0 * dpi_scale
+                    } else {
+                        96.0 * dpi_scale
+                    },
+                    height: 34.0 * dpi_scale,
+                })
+                .collect();
+            let text_lines = scroll_demo_text();
+            (
+                layout(&LayoutInput {
+                    orientation: Orientation::Horizontal,
+                    items,
+                    caret: Point { x: 100.0, y: 100.0 },
+                    caret_height: 24.0 * dpi_scale,
+                    work_area: CoreRect {
+                        left: 0.0,
+                        top: 0.0,
+                        right: 1920.0,
+                        bottom: 1080.0,
+                    },
+                    max_width: 720.0 * dpi_scale,
+                    padding_x: 8.0 * dpi_scale,
+                    padding_y: 6.0 * dpi_scale,
+                    row_gap: 2.0 * dpi_scale,
+                    column_gap: 8.0 * dpi_scale,
+                    scroll_mode: true,
+                    scroll_columns: 6,
+                    scroll_visible_rows: 6,
+                    selected: 18,
+                    scroll_cell_width: 96.0 * dpi_scale,
+                    ..LayoutInput::default()
+                }),
+                wide("Fcitx5 Candidate Scroll Demo"),
+                text_lines,
+                "scroll-demo-snapshot",
+                "horizontal",
+                true,
+                6,
+                false,
+            )
+        } else if demo_snapshot {
             (
                 layout(&LayoutInput {
                     orientation: Orientation::Vertical,
@@ -500,6 +563,8 @@ mod window_smoke {
                 vec![wide("1. 输入法"), wide("2. 输入"), wide("3. 中文")],
                 "demo-snapshot",
                 "vertical",
+                false,
+                1,
                 false,
             )
         } else {
@@ -540,6 +605,8 @@ mod window_smoke {
                 vec![wide("1  😀  emoji"), wide("2  候选  text fallback")],
                 "emoji-window",
                 "horizontal",
+                false,
+                3,
                 true,
             )
         };
@@ -548,6 +615,7 @@ mod window_smoke {
         let class_name = wide("Fcitx5CandidateRustPoc");
         let _ = WINDOW_TEXT.set(text_lines);
         let _ = WINDOW_VERTICAL.set(demo_snapshot);
+        let _ = WINDOW_COLUMNS.set(columns);
         let _ = WINDOW_SCALE.set(dpi_scale);
 
         let instance = unsafe { GetModuleHandleW(null()) };
@@ -597,6 +665,7 @@ mod window_smoke {
                 orientation_name,
                 candidate_count: WINDOW_TEXT.get().map_or(0, Vec::len),
                 dpi_scale,
+                scroll_mode,
                 expects_emoji: emoji_candidate_render_path,
             },
         );
@@ -684,11 +753,12 @@ mod window_smoke {
             },
         );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"candidate_count\":{},\n  \"dpi_scale\":{:.2},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"candidate_count\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
             json_escape(spec.snapshot_name),
             json_escape(spec.orientation_name),
             spec.candidate_count,
             spec.dpi_scale,
+            if spec.scroll_mode { "true" } else { "false" },
             rect.left,
             rect.top,
             rect.right,
@@ -1068,6 +1138,7 @@ mod window_smoke {
                     }
                     if let Some(lines) = WINDOW_TEXT.get() {
                         let vertical = WINDOW_VERTICAL.get().copied().unwrap_or(false);
+                        let columns = WINDOW_COLUMNS.get().copied().unwrap_or(1).max(1);
                         let scale = WINDOW_SCALE.get().copied().unwrap_or(1.0);
                         for (index, text) in lines.iter().enumerate() {
                             let (left, top, right, bottom) = if vertical {
@@ -1078,11 +1149,13 @@ mod window_smoke {
                                     scale_px(40.0 + (index as f32 * 36.0), scale),
                                 )
                             } else {
+                                let row = index / columns;
+                                let column = index % columns;
                                 (
-                                    scale_px(12.0 + (index as f32 * 124.0), scale),
-                                    0,
-                                    scale_px(132.0 + (index as f32 * 124.0), scale),
-                                    scale_px(46.0, scale),
+                                    scale_px(12.0 + (column as f32 * 104.0), scale),
+                                    scale_px(4.0 + (row as f32 * 36.0), scale),
+                                    scale_px(108.0 + (column as f32 * 104.0), scale),
+                                    scale_px(38.0 + (row as f32 * 36.0), scale),
                                 )
                             };
                             let mut text_rect = Rect {
@@ -1119,5 +1192,28 @@ mod window_smoke {
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn scroll_demo_text() -> Vec<Vec<u16>> {
+        const WORDS: [&str; 42] = [
+            "我", "哦", "窝", "沃", "握", "卧", "涡", "蜗", "渥", "幄", "斡", "龌", "喔", "莴",
+            "倭", "硪", "挝", "肟", "偓", "涴", "踒", "猧", "婐", "捰", "瓁", "馧", "焥", "腛",
+            "濣", "瞃", "擭", "雘", "臒", "檴", "嚄", "濩", "获", "惑", "豁", "霍", "藿", "镬",
+        ];
+        (0..60)
+            .map(|index| {
+                let text = if index < WORDS.len() {
+                    WORDS[index].to_owned()
+                } else {
+                    format!("候选{}", index + 1)
+                };
+                let label = if (18..24).contains(&index) {
+                    format!("{} ", index - 17)
+                } else {
+                    String::new()
+                };
+                wide(&format!("{label}{text}"))
+            })
+            .collect()
     }
 }
