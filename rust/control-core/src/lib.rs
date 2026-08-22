@@ -74,6 +74,18 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
     r#""sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"}"#
 );
 const CONTROL_TSF_GUARD_RESET_JSON: &str = r#"{"format_version":1,"tsf_guard":"enabled"}"#;
+const CONTROL_LAUNCHER_ACTION_RESTART_ENGINE: u32 = 1;
+const CONTROL_LAUNCHER_ACTION_SHUTDOWN: u32 = 2;
+const LAUNCHER_COMMAND_START_DEMAND: u32 = 1;
+const LAUNCHER_COMMAND_USER_STOP: u32 = 2;
+const LAUNCHER_COMMAND_RESUME: u32 = 3;
+const LAUNCHER_COMMAND_SHUTDOWN: u32 = 9;
+const CONTROL_RESTART_ENGINE_COMMANDS: &[u32] = &[
+    LAUNCHER_COMMAND_USER_STOP,
+    LAUNCHER_COMMAND_RESUME,
+    LAUNCHER_COMMAND_START_DEMAND,
+];
+const CONTROL_SHUTDOWN_COMMANDS: &[u32] = &[LAUNCHER_COMMAND_SHUTDOWN];
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -456,6 +468,14 @@ fn startup_json(enabled: bool) -> Vec<u8> {
     output
 }
 
+fn launcher_action_sequence(action: u32) -> Option<&'static [u32]> {
+    match action {
+        CONTROL_LAUNCHER_ACTION_RESTART_ENGINE => Some(CONTROL_RESTART_ENGINE_COMMANDS),
+        CONTROL_LAUNCHER_ACTION_SHUTDOWN => Some(CONTROL_SHUTDOWN_COMMANDS),
+        _ => None,
+    }
+}
+
 fn startup_command(executable_directory: OsString) -> Vec<u16> {
     let launcher = PathBuf::from(executable_directory).join("fcitx5-launcher.exe");
     let mut command = quote(launcher.as_os_str());
@@ -782,6 +802,29 @@ pub unsafe extern "C" fn fcitx5_control_startup_json_utf8(
 
 /// # Safety
 ///
+/// `out_ptr` and `out_len` must point to writable storage. The returned pointer
+/// is process-static command data and must not be freed by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_launcher_action_sequence(
+    action: u32,
+    out_ptr: *mut *const u32,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return 1;
+    }
+    let Some(commands) = launcher_action_sequence(action) else {
+        return 1;
+    };
+    unsafe {
+        *out_ptr = commands.as_ptr();
+        *out_len = commands.len();
+    }
+    0
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -825,6 +868,25 @@ mod tests {
             startup_json(false).as_slice(),
             br#"{"format_version":1,"enabled":false}"#
         );
+    }
+
+    #[test]
+    fn launcher_action_sequences_are_typed_control_commands() {
+        assert_eq!(
+            launcher_action_sequence(CONTROL_LAUNCHER_ACTION_RESTART_ENGINE),
+            Some(
+                &[
+                    LAUNCHER_COMMAND_USER_STOP,
+                    LAUNCHER_COMMAND_RESUME,
+                    LAUNCHER_COMMAND_START_DEMAND
+                ][..]
+            )
+        );
+        assert_eq!(
+            launcher_action_sequence(CONTROL_LAUNCHER_ACTION_SHUTDOWN),
+            Some(&[LAUNCHER_COMMAND_SHUTDOWN][..])
+        );
+        assert_eq!(launcher_action_sequence(99), None);
     }
 
     #[test]

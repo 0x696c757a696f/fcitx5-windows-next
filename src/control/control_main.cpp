@@ -116,6 +116,9 @@ int fcitx5_control_tsf_guard_json_utf8(const Fcitx5ControlTsfGuard* status, char
                                        std::size_t* out_len);
 int fcitx5_control_tsf_guard_reset_json_utf8(const char** out_ptr, std::size_t* out_len);
 int fcitx5_control_startup_json_utf8(std::uint8_t enabled, char** out_ptr, std::size_t* out_len);
+int fcitx5_control_launcher_action_sequence(std::uint32_t action,
+                                            const std::uint32_t** out_ptr,
+                                            std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -127,6 +130,8 @@ using fcitx::windows::config::ParseError;
 
 constexpr wchar_t kVisualConfigChangedMessage[] =
     L"Fcitx5WindowsNext.VisualConfigChanged.v1";
+constexpr std::uint32_t kLauncherActionRestartEngine = 1;
+constexpr std::uint32_t kLauncherActionShutdown = 2;
 
 std::string narrow(std::wstring_view value) {
     if (value.empty())
@@ -888,6 +893,39 @@ bool launcherCommand(fcitx::windows::protocol::LauncherCommand command,
                                                     command, response);
 }
 
+std::optional<fcitx::windows::protocol::LauncherCommand>
+launcherCommandFromRust(std::uint32_t command) {
+    using fcitx::windows::protocol::LauncherCommand;
+    switch (command) {
+    case static_cast<std::uint32_t>(LauncherCommand::startDemand):
+        return LauncherCommand::startDemand;
+    case static_cast<std::uint32_t>(LauncherCommand::userStop):
+        return LauncherCommand::userStop;
+    case static_cast<std::uint32_t>(LauncherCommand::resume):
+        return LauncherCommand::resume;
+    case static_cast<std::uint32_t>(LauncherCommand::shutdown):
+        return LauncherCommand::shutdown;
+    default:
+        return std::nullopt;
+    }
+}
+
+bool runLauncherAction(std::uint32_t action) {
+    const std::uint32_t* commands = nullptr;
+    std::size_t commandCount = 0;
+    if (fcitx5_control_launcher_action_sequence(action, &commands, &commandCount) != 0 ||
+        commands == nullptr || commandCount == 0) {
+        return false;
+    }
+    fcitx::windows::protocol::LauncherResponse response;
+    for (std::size_t index = 0; index < commandCount; ++index) {
+        const auto command = launcherCommandFromRust(commands[index]);
+        if (!command || !launcherCommand(*command, response))
+            return false;
+    }
+    return true;
+}
+
 bool runEngineManagement(const std::vector<std::wstring>& arguments, std::string& output) {
     fcitx::windows::protocol::LauncherResponse response;
     const bool launcherReachable =
@@ -1512,20 +1550,14 @@ int wmain(int argc, wchar_t** argv) {
         return configValid ? 0 : 3;
     }
     if (arguments.size() == 1 && arguments[0] == L"--restart-engine") {
-        fcitx::windows::protocol::LauncherResponse response;
-        if (!launcherCommand(fcitx::windows::protocol::LauncherCommand::userStop, response) ||
-            !launcherCommand(fcitx::windows::protocol::LauncherCommand::resume, response) ||
-            !launcherCommand(fcitx::windows::protocol::LauncherCommand::startDemand, response)) {
+        if (!runLauncherAction(kLauncherActionRestartEngine)) {
             std::cerr << "launcher unavailable or restart rejected\n";
             return 4;
         }
         return 0;
     }
     if (arguments.size() == 1 && arguments[0] == L"--shutdown") {
-        fcitx::windows::protocol::LauncherResponse response;
-        return launcherCommand(fcitx::windows::protocol::LauncherCommand::shutdown, response)
-                   ? 0
-                   : 4;
+        return runLauncherAction(kLauncherActionShutdown) ? 0 : 4;
     }
     if (arguments.size() == 1 && arguments[0] == L"--reset-config") {
         return writeVisualConfig(dataRoot / L"config.toml",
