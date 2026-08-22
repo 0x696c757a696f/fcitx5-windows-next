@@ -99,7 +99,66 @@ function Get-BuildDirectory([string] $TargetArchitecture) {
   return Join-Path $repoRoot "out/build/$(Get-PresetName $TargetArchitecture)"
 }
 
+function Get-VsWherePath {
+  $path = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    throw 'vswhere.exe is required to locate the Visual Studio C++ toolchain.'
+  }
+  return $path
+}
+
+function Get-VcVarsArgument([string] $TargetArchitecture) {
+  switch ($TargetArchitecture) {
+    'x64' { return 'amd64' }
+    'x86' { return 'amd64_x86' }
+    'arm64' { return 'amd64_arm64' }
+    default { throw "Unsupported architecture for Visual Studio environment: $TargetArchitecture" }
+  }
+}
+
+function Import-MsvcEnvironment([string] $TargetArchitecture) {
+  $vswhere = Get-VsWherePath
+  $requires = @('Microsoft.VisualStudio.Component.VC.Tools.x86.x64')
+  if ($TargetArchitecture -eq 'arm64') {
+    $requires += 'Microsoft.VisualStudio.Component.VC.Tools.ARM64'
+  }
+
+  $vswhereArguments = @('-latest', '-products', '*')
+  foreach ($component in $requires) {
+    $vswhereArguments += @('-requires', $component)
+  }
+  $vswhereArguments += @('-property', 'installationPath')
+
+  $installationPath = (& $vswhere @vswhereArguments | Select-Object -First 1)
+  if ([string]::IsNullOrWhiteSpace($installationPath)) {
+    throw "Visual Studio C++ toolchain missing for $TargetArchitecture. Install components: $($requires -join ', ')."
+  }
+
+  $vcvars = Join-Path $installationPath 'VC/Auxiliary/Build/vcvarsall.bat'
+  if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) {
+    throw "vcvarsall.bat not found under Visual Studio installation: $installationPath"
+  }
+
+  $vcvarsArgument = Get-VcVarsArgument $TargetArchitecture
+  $command = "`"$vcvars`" $vcvarsArgument >nul && set"
+  $environmentLines = & $env:ComSpec /d /s /c $command
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to import Visual Studio environment for $TargetArchitecture using $vcvarsArgument."
+  }
+
+  foreach ($line in $environmentLines) {
+    $separator = $line.IndexOf('=')
+    if ($separator -le 0) {
+      continue
+    }
+    $name = $line.Substring(0, $separator)
+    $value = $line.Substring($separator + 1)
+    [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+  }
+}
+
 function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze) {
+  Import-MsvcEnvironment $TargetArchitecture
   & (Join-Path $PSScriptRoot 'prepare-wtl.ps1')
   & (Join-Path $PSScriptRoot 'prepare-package-dependencies.ps1')
   $cmake = Get-CMakeCommand

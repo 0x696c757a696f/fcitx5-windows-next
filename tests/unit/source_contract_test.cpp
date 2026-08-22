@@ -486,6 +486,7 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "tests/unit/rust_tsf_poc_export_smoke.cpp");
     const auto rustTsfPocArtifactAudit =
         read_text(sourceRoot / "tests/unit/rust_tsf_poc_artifact_audit.cpp");
+    const auto buildScript = read_text(sourceRoot / "tools/build.ps1");
     const auto tsfKeyCommitTest =
         read_text(sourceRoot / "tests/integration/tsf_key_commit_test.cpp");
     const auto rustTsfPocCorpus =
@@ -613,6 +614,12 @@ int main(int argc, char** argv) {
         rustTsfPocCorpus.find("\"key_busy_focus_change_does_not_clear_composition\"") ==
             std::string::npos ||
         rustTsfPocCorpus.find("\"single_edit_session_commit_preedit_update\"") ==
+            std::string::npos ||
+        buildScript.find("Import-MsvcEnvironment") == std::string::npos ||
+        buildScript.find("Microsoft.VisualStudio.Component.VC.Tools.ARM64") ==
+            std::string::npos ||
+        buildScript.find("amd64_arm64") == std::string::npos ||
+        buildScript.find("vcvarsall.bat") ==
             std::string::npos) {
         return fail("RUST-R3-TSF-POC: Rust TSF PoC must stay isolated, panic-contained, and non-authoritative");
     }
