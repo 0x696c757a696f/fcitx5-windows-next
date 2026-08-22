@@ -361,6 +361,26 @@ pub unsafe extern "C" fn fcitx5_control_schema_json_utf8(
     0
 }
 
+/// # Safety
+///
+/// `id` must remain valid for the duration of the call. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_input_method_id_valid_utf16(id: Fcitx5ControlUtf16) -> u8 {
+    if id.ptr.is_null() {
+        return 0;
+    }
+    let value = unsafe { std::slice::from_raw_parts(id.ptr, id.len) };
+    if value.is_empty() || value.len() > 64 {
+        return 0;
+    }
+    u8::from(value.iter().all(|character| {
+        (*character >= b'a' as u16 && *character <= b'z' as u16)
+            || (*character >= b'0' as u16 && *character <= b'9' as u16)
+            || *character == b'-' as u16
+            || *character == b'_' as u16
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +409,43 @@ mod tests {
         assert!(CONTROL_SCHEMA_JSON.contains(r#""packages_repair""#));
         assert!(CONTROL_SCHEMA_JSON.contains(r#""package_network_owner":"fcitx5-downloader.exe""#));
         assert!(!CONTROL_SCHEMA_JSON.contains("sensitive_input\":true"));
+    }
+
+    #[test]
+    fn input_method_ids_are_bounded_lowercase_ascii_tokens() {
+        let valid = wide("rime-luna_pinyin");
+        let upper = wide("Rime");
+        let empty: Vec<u16> = Vec::new();
+        let long = wide(&"a".repeat(65));
+        unsafe {
+            assert_eq!(
+                fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 {
+                    ptr: valid.as_ptr(),
+                    len: valid.len()
+                }),
+                1
+            );
+            assert_eq!(
+                fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 {
+                    ptr: upper.as_ptr(),
+                    len: upper.len()
+                }),
+                0
+            );
+            assert_eq!(
+                fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 {
+                    ptr: empty.as_ptr(),
+                    len: empty.len()
+                }),
+                0
+            );
+            assert_eq!(
+                fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 {
+                    ptr: long.as_ptr(),
+                    len: long.len()
+                }),
+                0
+            );
+        }
     }
 }

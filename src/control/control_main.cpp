@@ -67,6 +67,7 @@ int fcitx5_control_startup_set_utf16(Fcitx5ControlUtf16 executable_directory,
                                      Fcitx5ControlUtf16 registry_value,
                                      std::uint8_t enabled);
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
+std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
 }
 
 namespace {
@@ -1120,6 +1121,10 @@ bool printControlSchema() {
     return std::cout.good();
 }
 
+bool validInputMethodId(std::wstring_view value) noexcept {
+    return fcitx5_control_input_method_id_valid_utf16(nativeView(value)) != 0;
+}
+
 bool queryStartup(bool& enabled) {
     const std::wstring directory = executableDirectory().wstring();
     const std::wstring registryValue = fcitx::windows::kReleaseIdentity.registry_value;
@@ -1222,11 +1227,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (arguments.size() == 2 && arguments[0] == L"--set-input-method") {
             const std::string id = narrow(arguments[1]);
-            if (id.empty() || id.size() > 64U ||
-                !std::ranges::all_of(id, [](unsigned char value) {
-                    return (value >= 'a' && value <= 'z') ||
-                           (value >= '0' && value <= '9') || value == '-' || value == '_';
-                }))
+            if (id.empty() || !validInputMethodId(arguments[1]))
                 return 2;
             std::string ignored;
             return runEngineManagement({L"--set-input-method", std::wstring(arguments[1])},
