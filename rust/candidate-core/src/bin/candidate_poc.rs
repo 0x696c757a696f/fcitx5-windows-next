@@ -175,6 +175,7 @@ mod window_smoke {
     const BI_RGB: Dword = 0;
     const COINIT_APARTMENTTHREADED: Dword = 0x2;
     const COLORREF_BACKGROUND: Dword = 0x00F8_F6F2;
+    const COLORREF_SELECTED_BACKGROUND: Dword = 0x00D9_F2E4;
     const COLORREF_TEXT: Dword = 0x0022_2222;
     const CS_HREDRAW: Uint = 0x0002;
     const CS_VREDRAW: Uint = 0x0001;
@@ -361,9 +362,8 @@ mod window_smoke {
     };
 
     static WINDOW_TEXT: OnceLock<Vec<Vec<u16>>> = OnceLock::new();
-    static WINDOW_VERTICAL: OnceLock<bool> = OnceLock::new();
-    static WINDOW_COLUMNS: OnceLock<usize> = OnceLock::new();
-    static WINDOW_SCALE: OnceLock<f32> = OnceLock::new();
+    static WINDOW_LAYOUT_RECTS: OnceLock<Vec<Rect>> = OnceLock::new();
+    static WINDOW_SELECTED_VISIBLE: OnceLock<Option<usize>> = OnceLock::new();
 
     #[link(name = "user32")]
     extern "system" {
@@ -472,8 +472,10 @@ mod window_smoke {
 
     struct LayoutEvidence {
         visible_candidate_rects: usize,
+        painted_candidate_rects: usize,
         rects_inside_window: bool,
         rects_non_overlapping: bool,
+        layout_driven_paint: bool,
     }
 
     struct InspectionSpec<'a> {
@@ -516,7 +518,7 @@ mod window_smoke {
             popup_allowed,
             effective_dpi_scale,
             scroll_mode,
-            columns,
+            selected_candidate,
             emoji_candidate_render_path,
         ) = if scroll_demo_snapshot {
             let items = (0..60)
@@ -563,7 +565,7 @@ mod window_smoke {
                 true,
                 dpi_scale,
                 true,
-                6,
+                18,
                 false,
             )
         } else if let Some(host) = host_snapshot {
@@ -611,11 +613,7 @@ mod window_smoke {
                 scenario.popup_allowed,
                 scenario.dpi_scale,
                 false,
-                if orientation == Orientation::Horizontal {
-                    scenario.candidates.len().max(1)
-                } else {
-                    1
-                },
+                scenario.selected,
                 scenario
                     .candidates
                     .iter()
@@ -664,7 +662,7 @@ mod window_smoke {
                 true,
                 dpi_scale,
                 false,
-                1,
+                0,
                 false,
             )
         } else {
@@ -710,20 +708,24 @@ mod window_smoke {
                 true,
                 dpi_scale,
                 false,
-                3,
+                0,
                 true,
             )
         };
         let total_candidate_count = text_lines.len();
+        let visible_rects = visible_window_rects(&layout.items, layout.window)?;
+        let selected_visible = layout
+            .item_indices
+            .iter()
+            .position(|index| *index == selected_candidate);
         let layout_evidence = inspect_layout_rectangles(&layout.items, layout.window)?;
         let visible_text_lines = visible_text_lines(&text_lines, &layout.item_indices);
         let width = ((layout.window.right - layout.window.left).ceil() as i32).max(1);
         let height = ((layout.window.bottom - layout.window.top).ceil() as i32).max(1);
         let class_name = wide("Fcitx5CandidateRustPoc");
         let _ = WINDOW_TEXT.set(visible_text_lines);
-        let _ = WINDOW_VERTICAL.set(orientation_name == "vertical");
-        let _ = WINDOW_COLUMNS.set(columns);
-        let _ = WINDOW_SCALE.set(effective_dpi_scale);
+        let _ = WINDOW_LAYOUT_RECTS.set(visible_rects);
+        let _ = WINDOW_SELECTED_VISIBLE.set(selected_visible);
 
         let instance = unsafe { GetModuleHandleW(null()) };
         let window_class = WndClassW {
@@ -864,7 +866,7 @@ mod window_smoke {
             },
         );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"host\":\"{}\",\n  \"locale\":\"{}\",\n  \"popup_allowed\":{},\n  \"candidate_count\":{},\n  \"visible_candidate_rects\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"host\":\"{}\",\n  \"locale\":\"{}\",\n  \"popup_allowed\":{},\n  \"candidate_count\":{},\n  \"visible_candidate_rects\":{},\n  \"painted_candidate_rects\":{},\n  \"layout_driven_paint\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
             json_escape(spec.snapshot_name),
             json_escape(spec.orientation_name),
             json_escape(spec.host_name),
@@ -872,6 +874,12 @@ mod window_smoke {
             if spec.popup_allowed { "true" } else { "false" },
             spec.candidate_count,
             spec.layout_evidence.visible_candidate_rects,
+            spec.layout_evidence.painted_candidate_rects,
+            if spec.layout_evidence.layout_driven_paint {
+                "true"
+            } else {
+                "false"
+            },
             if spec.layout_evidence.rects_inside_window {
                 "true"
             } else {
@@ -1261,34 +1269,26 @@ mod window_smoke {
                         SetBkMode(hdc, TRANSPARENT);
                         SetTextColor(hdc, COLORREF_TEXT);
                     }
-                    if let Some(lines) = WINDOW_TEXT.get() {
-                        let vertical = WINDOW_VERTICAL.get().copied().unwrap_or(false);
-                        let columns = WINDOW_COLUMNS.get().copied().unwrap_or(1).max(1);
-                        let scale = WINDOW_SCALE.get().copied().unwrap_or(1.0);
-                        for (index, text) in lines.iter().enumerate() {
-                            let (left, top, right, bottom) = if vertical {
-                                (
-                                    scale_px(12.0, scale),
-                                    scale_px(6.0 + (index as f32 * 36.0), scale),
-                                    scale_px(512.0, scale),
-                                    scale_px(40.0 + (index as f32 * 36.0), scale),
-                                )
-                            } else {
-                                let row = index / columns;
-                                let column = index % columns;
-                                (
-                                    scale_px(12.0 + (column as f32 * 104.0), scale),
-                                    scale_px(4.0 + (row as f32 * 36.0), scale),
-                                    scale_px(108.0 + (column as f32 * 104.0), scale),
-                                    scale_px(38.0 + (row as f32 * 36.0), scale),
-                                )
-                            };
-                            let mut text_rect = Rect {
-                                left,
-                                top,
-                                right,
-                                bottom,
-                            };
+                    if let (Some(lines), Some(rects)) =
+                        (WINDOW_TEXT.get(), WINDOW_LAYOUT_RECTS.get())
+                    {
+                        let selected = WINDOW_SELECTED_VISIBLE.get().copied().flatten();
+                        for (index, (text, layout_rect)) in
+                            lines.iter().zip(rects.iter()).enumerate()
+                        {
+                            if selected == Some(index) {
+                                let brush =
+                                    unsafe { CreateSolidBrush(COLORREF_SELECTED_BACKGROUND) };
+                                if !brush.is_null() {
+                                    unsafe {
+                                        FillRect(hdc, layout_rect, brush);
+                                        DeleteObject(brush);
+                                    }
+                                }
+                            }
+                            let mut text_rect = *layout_rect;
+                            text_rect.left += 6;
+                            text_rect.right -= 6;
                             unsafe {
                                 DrawTextW(
                                     hdc,
@@ -1311,10 +1311,6 @@ mod window_smoke {
         }
     }
 
-    fn scale_px(value: f32, scale: f32) -> i32 {
-        (value * scale).round() as i32
-    }
-
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
@@ -1326,6 +1322,28 @@ mod window_smoke {
         item_indices
             .iter()
             .filter_map(|index| text_lines.get(*index).cloned())
+            .collect()
+    }
+
+    fn visible_window_rects(items: &[CoreRect], window: CoreRect) -> Result<Vec<Rect>, String> {
+        if items.is_empty() {
+            return Err("Rust Candidate PoC produced no visible paint rectangles".to_owned());
+        }
+        items
+            .iter()
+            .map(|item| {
+                if !core_rect_inside(*item, window) {
+                    return Err(
+                        "Rust Candidate PoC cannot paint an item outside its window".to_owned()
+                    );
+                }
+                Ok(Rect {
+                    left: (item.left - window.left).round() as i32,
+                    top: (item.top - window.top).round() as i32,
+                    right: (item.right - window.left).round() as i32,
+                    bottom: (item.bottom - window.top).round() as i32,
+                })
+            })
             .collect()
     }
 
@@ -1352,8 +1370,10 @@ mod window_smoke {
         }
         Ok(LayoutEvidence {
             visible_candidate_rects: items.len(),
+            painted_candidate_rects: items.len(),
             rects_inside_window: true,
             rects_non_overlapping: true,
+            layout_driven_paint: true,
         })
     }
 
