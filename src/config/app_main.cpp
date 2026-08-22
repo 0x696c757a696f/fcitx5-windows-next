@@ -1,13 +1,16 @@
 #include "fcitx5_windows/version.h"
 #include "candidate_layout.h"
+#include "config_model.h"
 #include "process_execution.h"
 #include "resource.h"
 
 #include <fcitx5_windows/release_identity.h>
+#include "runtime_identity.h"
 
 #include <Windows.h>
 #include <CommCtrl.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <d2d1.h>
 #include <dwrite.h>
 
@@ -23,6 +26,7 @@ extern CAppModule _Module;
 #include <fstream>
 #include <iostream>
 #include <array>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -281,6 +285,56 @@ fs::path executableDirectory() {
     return fs::path(path).parent_path();
 }
 
+fs::path installationRoot() {
+    const auto directory = executableDirectory();
+    return directory.filename() == L"bin" ? directory.parent_path() : directory;
+}
+
+std::optional<std::string> readBoundedFile(const fs::path& path, std::size_t maximum) {
+    std::error_code error;
+    const auto size = fs::file_size(path, error);
+    if (error || size > maximum)
+        return std::nullopt;
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream)
+        return std::nullopt;
+    std::string contents(static_cast<std::size_t>(size), '\0');
+    if (size != 0 && !stream.read(contents.data(), static_cast<std::streamsize>(size)))
+        return std::nullopt;
+    return contents;
+}
+
+bool systemUsesDarkAppearance() noexcept {
+    DWORD light = 1;
+    DWORD size = sizeof(light);
+    if (RegGetValueW(
+            HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size) != ERROR_SUCCESS)
+        return false;
+    return light == 0;
+}
+
+fs::path localDataDirectory() {
+    std::wstring modulePath(32768, L'\0');
+    const DWORD size =
+        GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (size > 0 && size < modulePath.size()) {
+        modulePath.resize(size);
+        if (const auto portableData =
+                fcitx::windows::platform::portableDataRootForModule(modulePath);
+            !portableData.empty()) {
+            return portableData;
+        }
+    }
+    PWSTR localAppData = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr,
+                                    &localAppData)))
+        return {};
+    fs::path result(localAppData);
+    CoTaskMemFree(localAppData);
+    return result / fcitx::windows::kReleaseIdentity.data_directory;
+}
+
 std::wstring quote(std::wstring_view value) {
     std::wstring result = L"\"";
     unsigned backslashes = 0;
@@ -530,6 +584,23 @@ DesignTokens designTokens() noexcept {
 D2D1::ColorF d2dColor(COLORREF color) noexcept {
     return D2D1::ColorF(GetRValue(color) / 255.0F, GetGValue(color) / 255.0F,
                         GetBValue(color) / 255.0F);
+}
+
+D2D1::ColorF parseD2DColor(const fcitx::windows::config::Config& config, std::string_view name,
+                           D2D1::ColorF fallback) {
+    const auto found = config.colors.find(std::string(name));
+    if (found == config.colors.end())
+        return fallback;
+    const auto& text = found->second;
+    const auto component = [&](std::size_t offset) {
+        return static_cast<float>(std::stoul(text.substr(offset, 2), nullptr, 16)) / 255.0F;
+    };
+    try {
+        return D2D1::ColorF(component(1), component(3), component(5),
+                            text.size() == 9 ? component(7) : 1.0F);
+    } catch (...) {
+        return fallback;
+    }
 }
 
 struct PackageRow {
@@ -3036,32 +3107,110 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                sample.find(L"🎉") != std::wstring_view::npos &&
                sample.find(L"⌨️") != std::wstring_view::npos;
     }
-    void drawPreviewPill(ID2D1SolidColorBrush* brush, std::wstring_view label, float left,
-                         float top, float right, COLORREF fill, COLORREF text) {
-        brush->SetColor(d2dColor(fill));
-        fillRound(brush, left, top, right, top + 22, 11);
-        brush->SetColor(d2dColor(text));
-        drawText(brush, label, left + 10, top + 3, right - 10, top + 20, 11,
-                 DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+    [[nodiscard]] fcitx::windows::config::Config currentPreviewVisualConfig(LRESULT mode) const {
+        using namespace fcitx::windows::config;
+        Config defaults;
+        ParseError error;
+        if (!parseConfig(defaultConfigToml(), defaults, error))
+            return {};
+
+        Config user;
+        const auto dataRoot = localDataDirectory();
+        if (!dataRoot.empty()) {
+            if (const auto text = readBoundedFile(dataRoot / L"config.toml", 256U * 1024U)) {
+                Config parsed;
+                if (parseConfig(*text, parsed, error))
+                    user = std::move(parsed);
+            }
+        }
+
+        user.appearanceMode = mode == 1 ? AppearanceMode::light
+                              : mode == 2 ? AppearanceMode::dark
+                                          : AppearanceMode::system;
+        const std::string themeId = narrow(selectedThemeId());
+        user.theme = themeId.empty() ? "builtin:default" : themeId;
+        user.orientation =
+            SendMessageW(control(kHorizontal), BM_GETCHECK, 0, 0) == BST_CHECKED
+                ? Orientation::horizontal
+            : SendMessageW(control(kVertical), BM_GETCHECK, 0, 0) == BST_CHECKED
+                ? Orientation::vertical
+                : Orientation::automatic;
+        user.scrollMode = SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        user.opacity = selectedPreviewOpacity();
+        user.geometry.cornerRadius = selectedPreviewCornerRadius();
+        const std::wstring font = comboText(kFont);
+        if (!font.empty())
+            user.candidateFont.families = std::vector<std::string>{narrow(font)};
+        user.candidateFont.size = selectedCandidateTextSize();
+
+        const bool dark = *user.appearanceMode == AppearanceMode::dark ||
+                          (*user.appearanceMode == AppearanceMode::system &&
+                           systemUsesDarkAppearance());
+        fs::path themePath;
+        if (*user.theme == "builtin:default") {
+            themePath = installationRoot() / L"resources" / L"themes" / L"default" /
+                        L"theme.toml";
+        } else if (!dataRoot.empty()) {
+            const std::wstring wideTheme = widen(*user.theme);
+            if (!wideTheme.empty())
+                themePath = dataRoot / L"themes" / wideTheme / L"theme.toml";
+        }
+        if (!themePath.empty()) {
+            if (const auto text = readBoundedFile(themePath, 512U * 1024U)) {
+                Theme theme;
+                if (parseTheme(*text, theme, error) &&
+                    (*user.theme == "builtin:default" || theme.id == *user.theme)) {
+                    return mergeConfig(defaults, resolveTheme(theme, dark, user));
+                }
+            }
+        }
+        return mergeConfig(defaults, user);
+    }
+    [[nodiscard]] std::wstring previewFontFamily(
+        const fcitx::windows::config::Config& visualConfig,
+        const fcitx::windows::config::Font& font) const {
+        std::wstring family = L"Segoe UI";
+        if (visualConfig.candidateFont.families) {
+            for (const auto& candidate : *visualConfig.candidateFont.families) {
+                const std::wstring candidateFamily = widen(candidate);
+                if (candidate != "system" && candidate != "inherit" &&
+                    !candidateFamily.empty()) {
+                    family = candidateFamily;
+                    break;
+                }
+            }
+        }
+        if (font.families) {
+            for (const auto& candidate : *font.families) {
+                const std::wstring candidateFamily = widen(candidate);
+                if (candidate != "system" && candidate != "inherit" &&
+                    !candidateFamily.empty()) {
+                    family = candidateFamily;
+                    break;
+                }
+            }
+        }
+        return family;
     }
     void drawCandidateEntry(ID2D1SolidColorBrush* brush, std::wstring_view label,
                             std::wstring_view text, std::wstring_view comment,
                             const fcitx::windows::ui::RenderItemSegments& segments,
-                            float textSize, float commentSize, COLORREF labelText,
-                            COLORREF candidateText, COLORREF commentText,
+                            float labelSize, float textSize, float commentSize,
+                            D2D1::ColorF labelText, D2D1::ColorF candidateText,
+                            D2D1::ColorF commentText,
                             std::wstring_view family) {
-        brush->SetColor(d2dColor(labelText));
+        brush->SetColor(labelText);
         drawText(brush, label, segments.label.left, segments.label.top, segments.label.right,
-                 segments.label.bottom, textSize,
+                 segments.label.bottom, labelSize,
                  DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
                  DWRITE_PARAGRAPH_ALIGNMENT_CENTER, family);
-        brush->SetColor(d2dColor(candidateText));
+        brush->SetColor(candidateText);
         drawText(brush, text, segments.text.left, segments.text.top, segments.text.right,
                  segments.text.bottom, textSize,
                  DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
                  DWRITE_PARAGRAPH_ALIGNMENT_CENTER, family);
         if (segments.drawComment && !comment.empty()) {
-            brush->SetColor(d2dColor(commentText));
+            brush->SetColor(commentText);
             drawText(brush, comment, segments.comment.left, segments.comment.top,
                      segments.comment.right, segments.comment.bottom, commentSize,
                      DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
@@ -3070,57 +3219,68 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     }
     void drawCandidatePreview(ID2D1SolidColorBrush* brush, bool automatic, bool vertical,
                               LRESULT mode, float rowRight) {
-        const bool darkMode = mode == 2;
-        const bool lightMode = mode == 1;
+        const auto visualConfig = currentPreviewVisualConfig(mode);
         const bool verticalLayout = !automatic && vertical;
         const float previewTop = 148.0F;
         const float previewBottom = 260.0F;
         const float previewLeft = 288.0F;
         const float previewRight = rowRight;
-        const float radius = selectedPreviewCornerRadius();
-        const float opacity = selectedPreviewOpacity();
-        const std::wstring fontFamily = comboText(kFont).empty() ? L"Segoe UI" : comboText(kFont);
-        const float textSize = selectedCandidateTextSize();
-        const float previewTextSize = (std::min)(22.0F, textSize);
-        const float previewCommentSize = (std::max)(10.0F, previewTextSize * 0.82F);
-        const COLORREF surface =
-            darkMode ? RGB(35, 37, 42) : (lightMode ? RGB(252, 253, 255) : RGB(246, 249, 252));
-        const COLORREF border = darkMode ? RGB(85, 91, 102) : RGB(226, 230, 236);
-        const COLORREF primaryText = darkMode ? RGB(248, 250, 252) : designTokens().text;
-        const COLORREF subtleText = darkMode ? RGB(196, 204, 216) : designTokens().subtleText;
-        const COLORREF pillFill = darkMode ? RGB(56, 63, 72) : RGB(234, 239, 246);
-        const COLORREF labelText = darkMode ? RGB(115, 235, 176) : designTokens().accent;
-        const COLORREF selectionFill =
-            darkMode ? RGB(78, 92, 115) : RGB(221, 235, 255);
-        const auto colorWithAlpha = [](COLORREF color, float alpha) {
-            return D2D1::ColorF(GetRValue(color) / 255.0F, GetGValue(color) / 255.0F,
-                                GetBValue(color) / 255.0F, alpha);
+        const float radius =
+            static_cast<float>(visualConfig.geometry.cornerRadius.value_or(8.0));
+        const float opacity =
+            static_cast<float>(std::clamp(visualConfig.opacity.value_or(1.0), 0.2, 1.0));
+        const std::wstring fontFamily = previewFontFamily(visualConfig, visualConfig.candidateFont);
+        const float previewTextSize =
+            static_cast<float>(visualConfig.candidateFont.size.value_or(16.0));
+        const float previewLabelSize = static_cast<float>(
+            previewTextSize * visualConfig.label.fontScale.value_or(0.85));
+        const float previewCommentSize = static_cast<float>(
+            visualConfig.annotationFont.size.value_or(previewTextSize) *
+            visualConfig.annotationFont.scale.value_or(0.85));
+        HIGHCONTRASTW contrast{};
+        contrast.cbSize = sizeof(contrast);
+        const bool highContrast =
+            SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
+            (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+        const auto withOpacity = [opacity](D2D1::ColorF color) {
+            color.a *= opacity;
+            return color;
         };
+        const auto foreground =
+            highContrast ? d2dColor(GetSysColor(COLOR_WINDOWTEXT))
+                         : parseD2DColor(visualConfig, "candidate_text",
+                                         D2D1::ColorF(0.13F, 0.13F, 0.14F));
+        const auto surface =
+            highContrast ? d2dColor(GetSysColor(COLOR_WINDOW))
+                         : parseD2DColor(visualConfig, "background",
+                                         D2D1::ColorF(0.97F, 0.98F, 0.98F));
+        const auto selectionFill =
+            highContrast ? d2dColor(GetSysColor(COLOR_HIGHLIGHT))
+                         : parseD2DColor(visualConfig, "selected_background",
+                                         D2D1::ColorF(0.82F, 0.89F, 0.99F));
+        const auto selectedText =
+            highContrast ? d2dColor(GetSysColor(COLOR_HIGHLIGHTTEXT))
+                         : parseD2DColor(visualConfig, "selected_candidate_text",
+                                         D2D1::ColorF(0.09F, 0.31F, 0.65F));
+        const auto labelText =
+            highContrast ? foreground : parseD2DColor(visualConfig, "label_text", foreground);
+        const auto commentText =
+            highContrast ? foreground : parseD2DColor(visualConfig, "comment_text", foreground);
+        const auto selectedLabelText =
+            highContrast ? selectedText
+                         : parseD2DColor(visualConfig, "selected_label_text", selectedText);
+        const auto selectedCommentText =
+            highContrast ? selectedText
+                         : parseD2DColor(visualConfig, "selected_comment_text", selectedText);
+        const auto border =
+            highContrast ? foreground
+                         : parseD2DColor(visualConfig, "border",
+                                         D2D1::ColorF(0.82F, 0.82F, 0.82F));
 
-        brush->SetColor(colorWithAlpha(surface, opacity));
+        brush->SetColor(withOpacity(surface));
         fillRound(brush, previewLeft, previewTop, previewRight, previewBottom, radius);
-        brush->SetColor(d2dColor(border));
+        brush->SetColor(withOpacity(border));
         strokeRound(brush, previewLeft, previewTop, previewRight, previewBottom, radius);
-
-        const wchar_t* const modeLabel =
-            darkMode ? modernText(L"Dark", L"深色")
-                     : (lightMode ? modernText(L"Light", L"浅色")
-                                  : modernText(L"System", L"系统"));
-        const wchar_t* const layoutLabel =
-            automatic ? modernText(L"Auto · horizontal", L"自动 · 横排")
-            : verticalLayout ? modernText(L"Vertical", L"竖排")
-                             : modernText(L"Horizontal", L"横排");
-        drawPreviewPill(brush, modeLabel, previewRight - 216.0F, previewTop + 12.0F,
-                        previewRight - 132.0F, pillFill, primaryText);
-        drawPreviewPill(brush, layoutLabel, previewRight - 124.0F, previewTop + 12.0F,
-                        previewRight - 18.0F, pillFill, primaryText);
-
-        brush->SetColor(d2dColor(subtleText));
-        const float preeditY = previewTop + 14.0F;
-        drawText(brush, L"ni hao 😊  ，。！？", previewLeft + 28.0F, preeditY,
-                 previewRight - 232.0F, preeditY + 26.0F, 13,
-                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
-                 DWRITE_PARAGRAPH_ALIGNMENT_CENTER, fontFamily);
 
         struct PreviewCandidate {
             std::wstring_view label;
@@ -3141,9 +3301,13 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                                                      fcitx::windows::ui::Orientation orientation) {
             std::vector<fcitx::windows::ui::Size> itemSizes;
             itemSizes.reserve(candidates.size());
+            const float itemPaddingX =
+                static_cast<float>(visualConfig.geometry.itemPaddingX.value_or(6.0));
+            const float itemPaddingY =
+                static_cast<float>(visualConfig.geometry.itemPaddingY.value_or(4.0));
             for (const auto& candidate : candidates) {
                 const float labelWidth =
-                    measureTextWidth(candidate.label, previewTextSize,
+                    measureTextWidth(candidate.label, previewLabelSize,
                                      DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily);
                 const float textWidth =
                     measureTextWidth(candidate.text, previewTextSize,
@@ -3151,20 +3315,24 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 const float commentWidth =
                     measureTextWidth(candidate.comment, previewCommentSize,
                                      DWRITE_FONT_WEIGHT_NORMAL, fontFamily);
-                itemSizes.push_back({labelWidth + textWidth + commentWidth + 36.0F, 28.0F});
+                const float textHeight =
+                    (std::max)({previewLabelSize, previewTextSize, previewCommentSize});
+                itemSizes.push_back({labelWidth + textWidth + commentWidth + itemPaddingX * 2.0F,
+                                     textHeight + itemPaddingY * 2.0F});
             }
             fcitx::windows::ui::LayoutInput input{
                 orientation,
                 std::move(itemSizes),
-                {previewLeft + 28.0F, previewTop + 44.0F},
+                {previewLeft + 16.0F, previewTop + 16.0F},
                 0.0F,
-                {previewLeft + 28.0F, previewTop + 44.0F, previewRight - 18.0F,
-                 previewBottom - 10.0F},
-                previewRight - previewLeft - 46.0F,
-                0.0F,
-                0.0F,
-                4.0F,
-                12.0F,
+                {previewLeft + 16.0F, previewTop + 16.0F, previewRight - 16.0F,
+                 previewBottom - 16.0F},
+                (std::min)(previewRight - previewLeft - 32.0F,
+                           static_cast<float>(visualConfig.maxWidth.value_or(720.0))),
+                static_cast<float>(visualConfig.geometry.paddingX.value_or(8.0)),
+                static_cast<float>(visualConfig.geometry.paddingY.value_or(6.0)),
+                static_cast<float>(visualConfig.geometry.rowGap.value_or(2.0)),
+                static_cast<float>(visualConfig.geometry.columnGap.value_or(8.0)),
                 fcitx::windows::ui::Placement::below};
             const auto layout = fcitx::windows::ui::layout(input);
             std::vector<fcitx::windows::ui::RenderItemInput> renderInputs;
@@ -3175,9 +3343,15 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                     continue;
                 const auto& candidate = candidates[sourceIndex];
                 const auto& rectangle = layout.items[local];
+                const fcitx::windows::ui::Rect content{
+                    rectangle.left + itemPaddingX,
+                    rectangle.top + itemPaddingY,
+                    rectangle.right - itemPaddingX,
+                    rectangle.bottom - itemPaddingY,
+                };
                 renderInputs.push_back({
-                    rectangle,
-                    measureTextWidth(candidate.label, previewTextSize,
+                    content,
+                    measureTextWidth(candidate.label, previewLabelSize,
                                      DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
                     measureTextWidth(candidate.text, previewTextSize,
                                      DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
@@ -3195,13 +3369,20 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 const auto& rectangle = layout.items[local];
                 const auto& candidate = candidates[sourceIndex];
                 if (sourceIndex == 0) {
-                    brush->SetColor(d2dColor(selectionFill));
-                    fillRound(brush, rectangle.left - 4.0F, rectangle.top - 2.0F,
-                              rectangle.right + 4.0F, rectangle.bottom + 2.0F, radius);
+                    brush->SetColor(withOpacity(selectionFill));
+                    fillRound(brush, rectangle.left + itemPaddingX * 0.35F,
+                              rectangle.top + itemPaddingY * 0.45F,
+                              rectangle.right - itemPaddingX * 0.35F,
+                              rectangle.bottom - itemPaddingY * 0.45F, radius);
                 }
                 drawCandidateEntry(brush, candidate.label, candidate.text, candidate.comment,
-                                   renderSegments[local], previewTextSize, previewCommentSize,
-                                   labelText, primaryText, subtleText, fontFamily);
+                                   renderSegments[local], previewLabelSize, previewTextSize,
+                                   previewCommentSize,
+                                   withOpacity(sourceIndex == 0 ? selectedLabelText : labelText),
+                                   withOpacity(sourceIndex == 0 ? selectedText : foreground),
+                                   withOpacity(sourceIndex == 0 ? selectedCommentText
+                                                               : commentText),
+                                   fontFamily);
             }
         };
         if (verticalLayout) {

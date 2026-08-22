@@ -254,10 +254,17 @@ int main(int argc, char** argv) {
         configSource.find("ensureProductionPreview()") == std::string::npos ||
         configSource.find("fcitx5-ui.exe") == std::string::npos ||
         configSource.find("#include \"candidate_layout.h\"") == std::string::npos ||
+        configSource.find("#include \"config_model.h\"") == std::string::npos ||
         configSource.find("fcitx::windows::ui::layout(input)") == std::string::npos ||
         configSource.find("fcitx::windows::ui::renderSegments") == std::string::npos ||
         configSource.find("shūrùfǎ") == std::string::npos ||
         configSource.find("zhōngwén") == std::string::npos ||
+        configSource.find("currentPreviewVisualConfig") == std::string::npos ||
+        configSource.find("parseTheme") == std::string::npos ||
+        configSource.find("resolveTheme") == std::string::npos ||
+        configSource.find("parseD2DColor") == std::string::npos ||
+        configSource.find("resources\" / L\"themes\" / L\"default\"") == std::string::npos ||
+        cmakeSource.find("fcitx5::config") == std::string::npos ||
         candidateUiSource.find("fcitx5_candidate_render_segments") == std::string::npos ||
         candidateUiSource.find("kDrawTextOptions") == std::string::npos ||
         candidateUiSource.find("0x4U") == std::string::npos ||
@@ -313,7 +320,9 @@ int main(int argc, char** argv) {
     }
     if (configSource.find("--demo --parent-pid") != std::string::npos ||
         configSource.find("previewProcess_") != std::string::npos ||
-        configSource.find("previewProcessRunning") != std::string::npos) {
+        configSource.find("previewProcessRunning") != std::string::npos ||
+        configSource.find("drawPreviewPill") != std::string::npos ||
+        configSource.find("drawText(brush, L\"ni hao") != std::string::npos) {
         return fail("REG-CONFIG-LIVE-001: Config candidate preview must be embedded, not an external demo window");
     }
     if (configSource.find("confirmDialog(") == std::string::npos ||

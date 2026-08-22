@@ -408,8 +408,9 @@ add_executable(
 set_target_properties(fcitx5_config_app PROPERTIES OUTPUT_NAME "fcitx5-config")
 target_link_libraries(
   fcitx5_config_app
-  PRIVATE fcitx5::windows_common fcitx5::release_identity fcitx5::process_execution d2d1
-          dwrite shell32 user32 comctl32)
+  PRIVATE fcitx5::windows_common fcitx5::release_identity fcitx5::config
+          fcitx5::process_execution fcitx5::platform d2d1 dwrite shell32 user32 comctl32
+          advapi32 ole32)
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
