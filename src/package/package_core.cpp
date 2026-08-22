@@ -46,6 +46,10 @@ struct Fcitx5PackageLifecycleResult {
   std::uint8_t error_message[512];
 };
 
+struct Fcitx5RepositorySequenceRepairResult {
+  std::uint8_t repaired;
+};
+
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -58,6 +62,11 @@ Fcitx5PackageLifecycleResult fcitx5_package_finalize_remove_utf16(
 Fcitx5PackageLifecycleResult fcitx5_package_verify_installed_utf16(
     const wchar_t* install_root, std::size_t install_root_len,
     const Fcitx5TrustedKeyNative* trusted_keys, std::size_t trusted_key_count);
+Fcitx5RepositorySequenceRepairResult fcitx5_repository_sequence_repair_utf16(
+    const wchar_t* data_root, std::size_t data_root_len, const wchar_t* index_path,
+    std::size_t index_path_len, const wchar_t* signature_path, std::size_t signature_path_len,
+    const Fcitx5TrustedKeyNative* trusted_keys, std::size_t trusted_key_count,
+    const std::uint8_t* channel, std::size_t channel_len);
 }
 
 namespace fcitx::package {
@@ -139,6 +148,23 @@ Fcitx5ByteSlice ffi_slice(std::string_view value) {
 
 Fcitx5ByteSlice ffi_slice(std::span<const std::byte> value) {
   return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
+}
+
+std::vector<Fcitx5TrustedKeyNative> rust_trusted_key_views(
+    std::span<const TrustedKey> trusted_keys) {
+  std::vector<Fcitx5TrustedKeyNative> key_views;
+  key_views.reserve(trusted_keys.size());
+  for (const auto& key : trusted_keys) {
+    key_views.push_back(Fcitx5TrustedKeyNative{
+        ffi_slice(key.id),
+        ffi_slice(key.algorithm),
+        ffi_slice(std::span<const std::byte>(key.public_key.data(), key.public_key.size())),
+        ffi_slice(std::span<const std::byte>(key.rsa_public_blob.data(),
+                                             key.rsa_public_blob.size())),
+        key.revoked ? std::uint8_t{1} : std::uint8_t{0},
+    });
+  }
+  return key_views;
 }
 
 void require_lifecycle_ok(const Fcitx5PackageLifecycleResult& result) {
@@ -1136,22 +1162,27 @@ std::vector<TrustedKey> read_trusted_keys(const std::filesystem::path& path) {
 
 void verify_installed_packages(const std::filesystem::path& install_root,
                                std::span<const TrustedKey> trusted_keys) {
-  std::vector<Fcitx5TrustedKeyNative> key_views;
-  key_views.reserve(trusted_keys.size());
-  for (const auto& key : trusted_keys) {
-    key_views.push_back(Fcitx5TrustedKeyNative{
-        ffi_slice(key.id),
-        ffi_slice(key.algorithm),
-        ffi_slice(std::span<const std::byte>(key.public_key.data(), key.public_key.size())),
-        ffi_slice(std::span<const std::byte>(key.rsa_public_blob.data(),
-                                             key.rsa_public_blob.size())),
-        key.revoked ? std::uint8_t{1} : std::uint8_t{0},
-    });
-  }
+  const auto key_views = rust_trusted_key_views(trusted_keys);
   const std::wstring root = native_path_string(install_root);
   require_lifecycle_ok(fcitx5_package_verify_installed_utf16(
       root.data(), root.size(), key_views.empty() ? nullptr : key_views.data(),
       key_views.size()));
+}
+
+std::string repair_repository_sequence_state(const std::filesystem::path& data_root,
+                                             const std::filesystem::path& index_path,
+                                             const std::filesystem::path& signature_path,
+                                             std::span<const TrustedKey> trusted_keys,
+                                             std::string_view channel) {
+  const auto key_views = rust_trusted_key_views(trusted_keys);
+  const std::wstring root = native_path_string(data_root);
+  const std::wstring index = native_path_string(index_path);
+  const std::wstring signature = native_path_string(signature_path);
+  const auto result = fcitx5_repository_sequence_repair_utf16(
+      root.data(), root.size(), index.data(), index.size(), signature.data(), signature.size(),
+      key_views.empty() ? nullptr : key_views.data(), key_views.size(),
+      reinterpret_cast<const std::uint8_t*>(channel.data()), channel.size());
+  return result.repaired != 0 ? "repaired" : "reset";
 }
 
 void set_package_state(const std::filesystem::path& install_root, std::string_view package_id,

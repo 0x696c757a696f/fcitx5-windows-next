@@ -5489,6 +5489,49 @@ pub fn verify_installed_packages_for_repair(
 }
 
 #[cfg(windows)]
+pub fn repair_repository_sequence_state_for_repair(
+    data_root: impl AsRef<Path>,
+    index_path: impl AsRef<Path>,
+    signature_path: impl AsRef<Path>,
+    trusted_keys: &[TrustedKey],
+    channel: &str,
+) -> &'static str {
+    let data_root = data_root.as_ref();
+    let index_path = index_path.as_ref();
+    let signature_path = signature_path.as_ref();
+    let sequence_path = repository_sequence_state_path(data_root, channel);
+    let reset = || {
+        let _ = fs::remove_file(index_path);
+        let _ = fs::remove_file(signature_path);
+        let _ = fs::remove_file(&sequence_path);
+        "reset"
+    };
+    if !index_path.exists() && !signature_path.exists() {
+        let _ = fs::remove_file(&sequence_path);
+        return "reset";
+    }
+    let Ok(index) = read_repair_file_bounded(index_path, MAX_MANIFEST_BYTES as u64) else {
+        return reset();
+    };
+    let Ok(signature) = read_repair_file_bounded(signature_path, MAX_SIGNATURE_BYTES) else {
+        return reset();
+    };
+    let Ok(repository) = verify_repository_index(&index, &signature, trusted_keys, channel) else {
+        return reset();
+    };
+    let maximum = repository
+        .packages()
+        .iter()
+        .map(|entry| entry.release_sequence())
+        .max()
+        .unwrap_or(0);
+    if write_repository_sequence_state(data_root, repository.channel(), maximum).is_err() {
+        return reset();
+    }
+    "repaired"
+}
+
+#[cfg(windows)]
 mod repair_ffi {
     #![allow(unsafe_code)]
 
@@ -5521,6 +5564,12 @@ mod repair_ffi {
         pub status: i32,
         pub error_code: [u8; 64],
         pub error_message: [u8; 512],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RepositorySequenceRepairResult {
+        pub repaired: u8,
     }
 
     fn write_ascii<const N: usize>(buffer: &mut [u8; N], value: &str) {
@@ -5621,6 +5670,48 @@ mod repair_ffi {
         match verify_installed_packages_for_repair(install_root, &trusted_keys) {
             Ok(()) => ok_result(),
             Err(error) => error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_sequence_repair_utf16(
+        data_root: *const u16,
+        data_root_len: usize,
+        index_path: *const u16,
+        index_path_len: usize,
+        signature_path: *const u16,
+        signature_path_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+        channel: *const u8,
+        channel_len: usize,
+    ) -> Fcitx5RepositorySequenceRepairResult {
+        let Some(data_root) = path_from_utf16(data_root, data_root_len) else {
+            return Fcitx5RepositorySequenceRepairResult { repaired: 0 };
+        };
+        let Some(index_path) = path_from_utf16(index_path, index_path_len) else {
+            return Fcitx5RepositorySequenceRepairResult { repaired: 0 };
+        };
+        let Some(signature_path) = path_from_utf16(signature_path, signature_path_len) else {
+            return Fcitx5RepositorySequenceRepairResult { repaired: 0 };
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return Fcitx5RepositorySequenceRepairResult { repaired: 0 };
+        };
+        let Some(channel) = string_from_raw(Fcitx5ByteSlice {
+            data: channel,
+            len: channel_len,
+        }) else {
+            return Fcitx5RepositorySequenceRepairResult { repaired: 0 };
+        };
+        Fcitx5RepositorySequenceRepairResult {
+            repaired: (super::repair_repository_sequence_state_for_repair(
+                data_root,
+                index_path,
+                signature_path,
+                &trusted_keys,
+                &channel,
+            ) == "repaired") as u8,
         }
     }
 }

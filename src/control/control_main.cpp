@@ -574,27 +574,8 @@ std::string repairRepositorySequenceState(
     const fs::path& dataRoot, std::span<const fcitx::package::TrustedKey> trustedKeys) {
     const auto files = repositoryFiles(dataRoot);
     const auto channel = fcitx::windows::kReleaseIdentity.channel_name;
-    std::error_code ignored;
-    if (!fs::exists(files.index) && !fs::exists(files.signature)) {
-        fs::remove(repositorySequencePath(dataRoot, channel), ignored);
-        return "reset";
-    }
-    try {
-        std::string index;
-        if (!readUtf8(files.index, index))
-            throw fcitx::package::PackageError("repository_unavailable",
-                                               "repository cache is unavailable");
-        const auto signature = readBinary(files.signature, 16U * 1024U);
-        const auto repository =
-            fcitx::package::verify_repository_index(index, signature, trustedKeys, channel);
-        writeMaxSequence(dataRoot, repository.channel, indexMaxSequence(repository));
-        return "repaired";
-    } catch (const fcitx::package::PackageError&) {
-        fs::remove(files.index, ignored);
-        fs::remove(files.signature, ignored);
-        fs::remove(repositorySequencePath(dataRoot, channel), ignored);
-        return "reset";
-    }
+    return fcitx::package::repair_repository_sequence_state(dataRoot, files.index, files.signature,
+                                                            trustedKeys, channel);
 }
 
 std::string typeName(fcitx::package::PackageType type) {

@@ -205,6 +205,10 @@ void activate_staged_package(const std::filesystem::path& staged_root,
     std::string_view architecture) noexcept;
 void verify_installed_packages(const std::filesystem::path& install_root,
                                std::span<const TrustedKey> trusted_keys);
+[[nodiscard]] std::string repair_repository_sequence_state(
+    const std::filesystem::path& data_root, const std::filesystem::path& index_path,
+    const std::filesystem::path& signature_path, std::span<const TrustedKey> trusted_keys,
+    std::string_view channel);
 void set_package_state(const std::filesystem::path& install_root, std::string_view package_id,
                        std::string_view state);
 void mark_package_for_removal(const std::filesystem::path& install_root,
