@@ -529,6 +529,11 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("EditSessionTranscript") == std::string::npos ||
         rustTsfPocSource.find("begin_edit_session") == std::string::npos ||
         rustTsfPocSource.find("update_preedit_start_composition") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5TsfPocDifferentialSummaryReport") ==
+            std::string::npos ||
+        rustTsfPocSource.find("tsf_differential_summary_report") == std::string::npos ||
+        rustTsfPocSource.find("arm64_artifact_pending") == std::string::npos ||
+        rustTsfPocSource.find("product_decision") == std::string::npos ||
         rustTsfPocSource.find("product_display_name") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
         rustTsfPocSource.find("profile_display_name") == std::string::npos ||
@@ -576,6 +581,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustTsfPocSmoke.find(
             "composition transcript should preserve single edit-session operation order") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find("Fcitx5TsfPocDifferentialSummaryReport") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find(
+            "differential summary should list green and pending evidence") ==
             std::string::npos ||
         rustTsfPocSmoke.find("Fcitx5TsfPocForcedFailureForTest") == std::string::npos ||
         rustTsfPocSmoke.find("forced internal failure should convert panic to HRESULT") ==

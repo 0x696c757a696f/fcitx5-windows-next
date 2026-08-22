@@ -45,6 +45,7 @@ static BEHAVIOR_REPORT: OnceLock<String> = OnceLock::new();
 static PROFILE_IDENTITY_REPORT: OnceLock<String> = OnceLock::new();
 static IPC_BOUNDARY_REPORT: OnceLock<String> = OnceLock::new();
 static COMPOSITION_TRANSCRIPT_REPORT: OnceLock<String> = OnceLock::new();
+static DIFFERENTIAL_SUMMARY_REPORT: OnceLock<String> = OnceLock::new();
 
 pub fn panic_to_hresult<F>(operation: F) -> HRESULT
 where
@@ -147,6 +148,18 @@ pub fn tsf_composition_transcript_report() -> String {
         transcript.commit,
         transcript.preedit,
         transcript.composition_active
+    )
+}
+
+pub fn tsf_differential_summary_report() -> String {
+    format!(
+        "{{\"format_version\":1,\"component\":\"fcitx5-tsf-poc\",\"shipping_cxx_authoritative\":true,\"same_corpus_case_count\":{},\"same_corpus_rust_passes\":{},\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"abi_reports\":{{\"behavior\":true,\"profile_identity\":true,\"ipc_boundary\":true,\"composition_transcript\":true}},\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\",\"x64_x86_export_smoke_required\":true,\"arm64_artifact_pending\":true,\"real_host_matrix_pending\":true,\"product_decision\":\"pending\"}}",
+        REQUIRED_TSF_BEHAVIOR_CASES.len(),
+        REQUIRED_TSF_BEHAVIOR_CASES
+            .iter()
+            .filter(|case_id| corpus_has_case(TSF_BEHAVIOR_CORPUS_JSON, case_id)
+                && evaluate_behavior_case(case_id))
+            .count()
     )
 }
 
@@ -981,6 +994,36 @@ pub unsafe extern "system" fn Fcitx5TsfPocCompositionTranscriptReport(
 #[no_mangle]
 /// # Safety
 ///
+/// `length` is optional. When non-null it must point to writable process-local
+/// memory. The returned pointer is owned by this module and remains valid until
+/// the DLL is unloaded.
+pub unsafe extern "system" fn Fcitx5TsfPocDifferentialSummaryReport(
+    length: *mut usize,
+) -> *const u8 {
+    match catch_unwind(|| {
+        let report = DIFFERENTIAL_SUMMARY_REPORT.get_or_init(tsf_differential_summary_report);
+        if !length.is_null() {
+            unsafe {
+                *length = report.len();
+            }
+        }
+        report.as_ptr()
+    }) {
+        Ok(pointer) => pointer,
+        Err(_) => {
+            if !length.is_null() {
+                unsafe {
+                    *length = 0;
+                }
+            }
+            std::ptr::null()
+        }
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
 /// Test-only PoC export used by the artifact smoke to prove that a forced
 /// internal panic is converted to `HRESULT` across the DLL ABI.
 pub unsafe extern "system" fn Fcitx5TsfPocForcedFailureForTest() -> HRESULT {
@@ -1410,6 +1453,26 @@ mod tests {
         assert!(report.contains("\"preedit_text\":\"hao\""));
         assert!(report.contains("\"composition_active_after\":true"));
         assert!(report.contains("\"host_differential_pending\":true"));
+    }
+
+    #[test]
+    fn differential_summary_export_lists_green_and_pending_evidence() {
+        let mut length = 0usize;
+        let pointer = unsafe { Fcitx5TsfPocDifferentialSummaryReport(&mut length) };
+        assert!(!pointer.is_null());
+        assert!(length > 0);
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
+        let report = std::str::from_utf8(bytes).expect("differential summary should be utf8");
+        assert!(report.contains("\"component\":\"fcitx5-tsf-poc\""));
+        assert!(report.contains("\"same_corpus_case_count\":10"));
+        assert!(report.contains("\"same_corpus_rust_passes\":10"));
+        assert!(report.contains("\"profile_identity\":true"));
+        assert!(report.contains("\"ipc_boundary\":true"));
+        assert!(report.contains("\"composition_transcript\":true"));
+        assert!(report.contains("\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\""));
+        assert!(report.contains("\"arm64_artifact_pending\":true"));
+        assert!(report.contains("\"real_host_matrix_pending\":true"));
+        assert!(report.contains("\"product_decision\":\"pending\""));
     }
 
     #[test]

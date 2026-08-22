@@ -36,6 +36,7 @@ int wmain(int argc, wchar_t** argv) {
     using ProfileIdentityReport = const char*(__stdcall*)(size_t*);
     using IpcBoundaryReport = const char*(__stdcall*)(size_t*);
     using CompositionTranscriptReport = const char*(__stdcall*)(size_t*);
+    using DifferentialSummaryReport = const char*(__stdcall*)(size_t*);
     using ForcedFailure = HRESULT(__stdcall*)();
     const auto getClassObject =
         reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
@@ -49,10 +50,13 @@ int wmain(int argc, wchar_t** argv) {
         GetProcAddress(module, "Fcitx5TsfPocIpcBoundaryReport"));
     const auto compositionTranscriptReport = reinterpret_cast<CompositionTranscriptReport>(
         GetProcAddress(module, "Fcitx5TsfPocCompositionTranscriptReport"));
+    const auto differentialSummaryReport = reinterpret_cast<DifferentialSummaryReport>(
+        GetProcAddress(module, "Fcitx5TsfPocDifferentialSummaryReport"));
     const auto forcedFailure = reinterpret_cast<ForcedFailure>(
         GetProcAddress(module, "Fcitx5TsfPocForcedFailureForTest"));
     if (!getClassObject || !canUnloadNow || !behaviorReport || !profileIdentityReport ||
-        !ipcBoundaryReport || !compositionTranscriptReport || !forcedFailure) {
+        !ipcBoundaryReport || !compositionTranscriptReport || !differentialSummaryReport ||
+        !forcedFailure) {
         std::cerr << "Rust TSF PoC exports missing\n";
         FreeLibrary(module);
         return 1;
@@ -139,6 +143,27 @@ int wmain(int argc, wchar_t** argv) {
         compositionReport.find("\"host_differential_pending\":true") == std::string::npos ||
         compositionReport.find("\"shipping_cxx_authoritative\":true") == std::string::npos) {
         std::cerr << "Rust TSF PoC composition transcript should preserve single edit-session operation order\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    size_t summaryReportLength = 0;
+    const char* summaryReportBytes = differentialSummaryReport(&summaryReportLength);
+    const std::string summaryReport =
+        summaryReportBytes && summaryReportLength > 0
+            ? std::string(summaryReportBytes, summaryReportLength)
+            : std::string();
+    if (summaryReport.find("\"component\":\"fcitx5-tsf-poc\"") == std::string::npos ||
+        summaryReport.find("\"same_corpus_case_count\":10") == std::string::npos ||
+        summaryReport.find("\"same_corpus_rust_passes\":10") == std::string::npos ||
+        summaryReport.find("\"profile_identity\":true") == std::string::npos ||
+        summaryReport.find("\"ipc_boundary\":true") == std::string::npos ||
+        summaryReport.find("\"composition_transcript\":true") == std::string::npos ||
+        summaryReport.find("\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\"") ==
+            std::string::npos ||
+        summaryReport.find("\"arm64_artifact_pending\":true") == std::string::npos ||
+        summaryReport.find("\"real_host_matrix_pending\":true") == std::string::npos ||
+        summaryReport.find("\"product_decision\":\"pending\"") == std::string::npos) {
+        std::cerr << "Rust TSF PoC differential summary should list green and pending evidence\n";
         FreeLibrary(module);
         return 1;
     }
