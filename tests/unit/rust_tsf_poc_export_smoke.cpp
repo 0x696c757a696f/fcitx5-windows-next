@@ -57,8 +57,13 @@ int wmain(int argc, wchar_t** argv) {
     const std::string report =
         reportBytes && reportLength > 0 ? std::string(reportBytes, reportLength) : std::string();
     if (report.find("\"corpus\":\"tsf_behavior_corpus.json\"") == std::string::npos ||
-        report.find("\"case_count\":7") == std::string::npos ||
-        report.find("\"rust_case_passes\":7") == std::string::npos ||
+        report.find("\"case_count\":10") == std::string::npos ||
+        report.find("\"rust_case_passes\":10") == std::string::npos ||
+        report.find("\"uiless_candidate_show_false_preserves_metadata\"") ==
+            std::string::npos ||
+        report.find("\"key_busy_focus_change_does_not_clear_composition\"") ==
+            std::string::npos ||
+        report.find("\"single_edit_session_commit_preedit_update\"") == std::string::npos ||
         report.find("\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\"") == std::string::npos ||
         report.find("\"cpp_baseline_consumes_same_corpus\":true") == std::string::npos ||
         report.find("\"full_host_differential_pending\":true") == std::string::npos ||

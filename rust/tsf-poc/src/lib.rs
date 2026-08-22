@@ -32,6 +32,9 @@ const REQUIRED_TSF_BEHAVIOR_CASES: &[&str] = &[
     "engine_timeout_fails_open",
     "malformed_ipc_fails_open",
     "deactivate_unadvises_sinks_and_clears_composition",
+    "uiless_candidate_show_false_preserves_metadata",
+    "key_busy_focus_change_does_not_clear_composition",
+    "single_edit_session_commit_preedit_update",
 ];
 static BEHAVIOR_REPORT: OnceLock<String> = OnceLock::new();
 
@@ -126,6 +129,13 @@ pub struct TsfPocBehaviorState {
     release_routed: bool,
     fail_open: bool,
     eaten: bool,
+    candidate_metadata_available: bool,
+    candidate_popup_visible: bool,
+    uiless_candidate_mode: bool,
+    selected_candidate: usize,
+    key_busy: bool,
+    focus_change_deferred: bool,
+    single_edit_session: bool,
     commit: String,
     preedit: String,
 }
@@ -147,6 +157,11 @@ impl TsfPocBehaviorState {
         self.composition_active = false;
         self.release_routed = false;
         self.eaten = false;
+        self.candidate_metadata_available = false;
+        self.candidate_popup_visible = false;
+        self.uiless_candidate_mode = false;
+        self.focus_change_deferred = false;
+        self.single_edit_session = false;
         self.commit.clear();
         self.preedit.clear();
     }
@@ -179,6 +194,37 @@ impl TsfPocBehaviorState {
     pub fn key_up(&mut self) {
         self.eaten = false;
         self.release_routed = self.active;
+    }
+
+    pub fn candidate_begin_ui_element(&mut self, should_show: bool) {
+        if !self.active {
+            return;
+        }
+        self.candidate_metadata_available = true;
+        self.candidate_popup_visible = should_show;
+        self.uiless_candidate_mode = !should_show;
+        self.selected_candidate = 0;
+    }
+
+    pub fn begin_key_callback(&mut self) {
+        self.key_busy = true;
+    }
+
+    pub fn end_key_callback(&mut self) {
+        self.key_busy = false;
+    }
+
+    pub fn focus_change(&mut self) {
+        if self.key_busy {
+            self.focus_change_deferred = true;
+        } else {
+            self.composition_active = false;
+        }
+    }
+
+    pub fn single_edit_session_update(&mut self, engine_result: EngineResult<'_>) {
+        self.single_edit_session = true;
+        self.key_down(engine_result);
     }
 }
 
@@ -266,6 +312,37 @@ fn evaluate_behavior_case(case_id: &str) -> bool {
                 && !state.eaten
                 && state.commit.is_empty()
                 && state.preedit.is_empty()
+        }
+        "uiless_candidate_show_false_preserves_metadata" => {
+            state.activate();
+            state.candidate_begin_ui_element(false);
+            state.active
+                && state.candidate_metadata_available
+                && !state.candidate_popup_visible
+                && state.uiless_candidate_mode
+                && state.selected_candidate == 0
+        }
+        "key_busy_focus_change_does_not_clear_composition" => {
+            state.activate();
+            state.key_down(EngineResult::ok(true, "", "ni"));
+            state.begin_key_callback();
+            state.focus_change();
+            state.end_key_callback();
+            state.active
+                && state.composition_active
+                && state.focus_change_deferred
+                && state.preedit == "ni"
+                && !state.fail_open
+        }
+        "single_edit_session_commit_preedit_update" => {
+            state.activate();
+            state.single_edit_session_update(EngineResult::ok(true, "你", "hao"));
+            state.active
+                && state.eaten
+                && state.commit == "你"
+                && state.preedit == "hao"
+                && state.composition_active
+                && state.single_edit_session
         }
         _ => false,
     }
@@ -716,19 +793,22 @@ mod tests {
     fn behavior_corpus_has_required_tsf_lifecycle_cases() {
         let report = tsf_behavior_corpus_report();
         assert!(report.contains(r#""corpus":"tsf_behavior_corpus.json""#));
-        assert!(report.contains(r#""case_count":7"#));
+        assert!(report.contains(r#""case_count":10"#));
         assert!(report.contains(r#""all_cases_present":true"#));
         assert!(report.contains(r#""timeout_fail_open":true"#));
         assert!(report.contains(r#""malformed_ipc_fail_open":true"#));
         assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("key_down_commit_applies_text"));
         assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("deactivate_unadvises_sinks"));
+        assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("uiless_candidate_show_false"));
+        assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("key_busy_focus_change"));
+        assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("single_edit_session_commit_preedit"));
     }
 
     #[test]
     fn behavior_differential_report_lists_every_case_result() {
         let report = tsf_behavior_differential_report();
-        assert!(report.contains(r#""case_count":7"#));
-        assert!(report.contains(r#""rust_case_passes":7"#));
+        assert!(report.contains(r#""case_count":10"#));
+        assert!(report.contains(r#""rust_case_passes":10"#));
         assert!(report.contains(r#""cpp_baseline_ctest":"tsf-key-commit-e2e""#));
         assert!(report.contains(r#""cpp_baseline_consumes_same_corpus":true"#));
         assert!(report.contains(r#""full_host_differential_pending":true"#));
@@ -746,7 +826,7 @@ mod tests {
         let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
         let report = std::str::from_utf8(bytes).expect("behavior report must be UTF-8 JSON");
         assert!(report.contains(r#""report_export":"panic_contained""#));
-        assert!(report.contains(r#""rust_case_passes":7"#));
+        assert!(report.contains(r#""rust_case_passes":10"#));
     }
 
     #[test]
@@ -833,6 +913,42 @@ mod tests {
         assert!(!state.eaten);
         assert_eq!(state.commit, "");
         assert_eq!(state.preedit, "");
+    }
+
+    #[test]
+    fn behavior_model_preserves_uiless_candidate_metadata() {
+        let mut state = TsfPocBehaviorState::default();
+        state.activate();
+        state.candidate_begin_ui_element(false);
+        assert!(state.candidate_metadata_available);
+        assert!(!state.candidate_popup_visible);
+        assert!(state.uiless_candidate_mode);
+        assert_eq!(state.selected_candidate, 0);
+    }
+
+    #[test]
+    fn behavior_model_defers_focus_change_during_key_callback() {
+        let mut state = TsfPocBehaviorState::default();
+        state.activate();
+        state.key_down(EngineResult::ok(true, "", "ni"));
+        state.begin_key_callback();
+        state.focus_change();
+        state.end_key_callback();
+        assert!(state.composition_active);
+        assert!(state.focus_change_deferred);
+        assert_eq!(state.preedit, "ni");
+    }
+
+    #[test]
+    fn behavior_model_uses_single_edit_session_for_commit_preedit() {
+        let mut state = TsfPocBehaviorState::default();
+        state.activate();
+        state.single_edit_session_update(EngineResult::ok(true, "你", "hao"));
+        assert!(state.single_edit_session);
+        assert!(state.eaten);
+        assert_eq!(state.commit, "你");
+        assert_eq!(state.preedit, "hao");
+        assert!(state.composition_active);
     }
 
     #[test]

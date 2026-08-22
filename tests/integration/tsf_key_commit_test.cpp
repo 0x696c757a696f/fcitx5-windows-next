@@ -723,6 +723,9 @@ bool verifyBehaviorCorpus(const wchar_t* corpusPath) {
         "\"engine_timeout_fails_open\"",
         "\"malformed_ipc_fails_open\"",
         "\"deactivate_unadvises_sinks_and_clears_composition\"",
+        "\"uiless_candidate_show_false_preserves_metadata\"",
+        "\"key_busy_focus_change_does_not_clear_composition\"",
+        "\"single_edit_session_commit_preedit_update\"",
     };
     for (const char* marker : required) {
         if (corpus.find(marker) == std::string::npos) {

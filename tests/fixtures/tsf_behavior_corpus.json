@@ -105,6 +105,55 @@
         "composition_active": false,
         "eaten": false
       }
+    },
+    {
+      "id": "uiless_candidate_show_false_preserves_metadata",
+      "source_reference": "windows-chewing-tsf:a6cf2c55 tip/src/text_service/ui_elements/candidate_list.rs",
+      "operations": ["activate", "candidate_begin_ui_element_show_false"],
+      "expected": {
+        "active": true,
+        "candidate_metadata_available": true,
+        "candidate_popup_visible": false,
+        "uiless_candidate_mode": true,
+        "selected_candidate": 0
+      }
+    },
+    {
+      "id": "key_busy_focus_change_does_not_clear_composition",
+      "source_reference": "windows-chewing-tsf:a6cf2c55 tip/src/text_service/mod.rs",
+      "operations": ["activate", "key_down", "begin_key_callback", "focus_change", "end_key_callback"],
+      "engine_result": {
+        "status": "ok",
+        "handled": true,
+        "commit": "",
+        "preedit": "ni"
+      },
+      "expected": {
+        "active": true,
+        "composition_active": true,
+        "focus_change_deferred": true,
+        "preedit": "ni",
+        "fail_open": false
+      }
+    },
+    {
+      "id": "single_edit_session_commit_preedit_update",
+      "source_reference": "windows-chewing-tsf:a6cf2c55 tip/src/text_service/edit_session.rs",
+      "operations": ["activate", "single_edit_session_update"],
+      "engine_result": {
+        "status": "ok",
+        "handled": true,
+        "commit": "你",
+        "preedit": "hao"
+      },
+      "expected": {
+        "active": true,
+        "eaten": true,
+        "commit": "你",
+        "preedit": "hao",
+        "composition_active": true,
+        "single_edit_session": true
+      }
     }
   ]
 }

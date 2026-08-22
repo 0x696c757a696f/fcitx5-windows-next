@@ -517,6 +517,12 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustTsfPocSource.find("engine_timeout_fails_open") == std::string::npos ||
         rustTsfPocSource.find("malformed_ipc_fails_open") == std::string::npos ||
+        rustTsfPocSource.find("uiless_candidate_show_false_preserves_metadata") ==
+            std::string::npos ||
+        rustTsfPocSource.find("key_busy_focus_change_does_not_clear_composition") ==
+            std::string::npos ||
+        rustTsfPocSource.find("single_edit_session_commit_preedit_update") ==
+            std::string::npos ||
         rustTsfPocSource.find("cxx_tsf_remains_authoritative:true") == std::string::npos ||
         rustTsfPocSource.find("bounded_ipc_client:not-linked") == std::string::npos ||
         rustTsfPocSource.find("send_input:false") == std::string::npos ||
@@ -531,7 +537,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustTsfPocSmoke.find("key callbacks should fail open on unexpected COM state") ==
             std::string::npos ||
-        rustTsfPocSmoke.find("\\\"rust_case_passes\\\":7") == std::string::npos ||
+        rustTsfPocSmoke.find("\\\"rust_case_passes\\\":10") == std::string::npos ||
+        rustTsfPocSmoke.find("\\\"uiless_candidate_show_false_preserves_metadata\\\"") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find("\\\"key_busy_focus_change_does_not_clear_composition\\\"") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find("\\\"single_edit_session_commit_preedit_update\\\"") ==
+            std::string::npos ||
         rustTsfPocSmoke.find("\\\"cpp_baseline_consumes_same_corpus\\\":true") ==
             std::string::npos ||
         rustTsfPocArtifactAudit.find("parsePe") == std::string::npos ||
@@ -551,6 +563,12 @@ int main(int argc, char** argv) {
         rustTsfPocCorpus.find("\"engine_timeout_fails_open\"") == std::string::npos ||
         rustTsfPocCorpus.find("\"malformed_ipc_fails_open\"") == std::string::npos ||
         rustTsfPocCorpus.find("\"deactivate_unadvises_sinks_and_clears_composition\"") ==
+            std::string::npos ||
+        rustTsfPocCorpus.find("\"uiless_candidate_show_false_preserves_metadata\"") ==
+            std::string::npos ||
+        rustTsfPocCorpus.find("\"key_busy_focus_change_does_not_clear_composition\"") ==
+            std::string::npos ||
+        rustTsfPocCorpus.find("\"single_edit_session_commit_preedit_update\"") ==
             std::string::npos) {
         return fail("RUST-R3-TSF-POC: Rust TSF PoC must stay isolated, panic-contained, and non-authoritative");
     }
@@ -560,6 +578,12 @@ int main(int argc, char** argv) {
         tsfKeyCommitTest.find("\\\"key_down_commit_applies_text\\\"") ==
             std::string::npos ||
         tsfKeyCommitTest.find("\\\"deactivate_unadvises_sinks_and_clears_composition\\\"") ==
+            std::string::npos ||
+        tsfKeyCommitTest.find("\\\"uiless_candidate_show_false_preserves_metadata\\\"") ==
+            std::string::npos ||
+        tsfKeyCommitTest.find("\\\"key_busy_focus_change_does_not_clear_composition\\\"") ==
+            std::string::npos ||
+        tsfKeyCommitTest.find("\\\"single_edit_session_commit_preedit_update\\\"") ==
             std::string::npos) {
         return fail("RUST-R3-TSF-POC: C++ TSF baseline must consume the shared behavior corpus before differential cutover");
     }
