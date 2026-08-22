@@ -516,6 +516,12 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5TsfPocProfileIdentityReport") == std::string::npos ||
         rustTsfPocSource.find("tsf_profile_identity_report") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5TsfPocIpcBoundaryReport") == std::string::npos ||
+        rustTsfPocSource.find("tsf_ipc_boundary_report") == std::string::npos ||
+        rustTsfPocSource.find("BoundedIpcClient") == std::string::npos ||
+        rustTsfPocSource.find("GenerationMismatch") == std::string::npos ||
+        rustTsfPocSource.find("generation_mismatch_fails_open") == std::string::npos ||
+        rustTsfPocSource.find("host_blocking_call") == std::string::npos ||
         rustTsfPocSource.find("product_display_name") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
         rustTsfPocSource.find("profile_display_name") == std::string::npos ||
@@ -553,6 +559,11 @@ int main(int argc, char** argv) {
         rustTsfPocSmoke.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
         rustTsfPocSmoke.find("Fcitx5TsfPocProfileIdentityReport") == std::string::npos ||
         rustTsfPocSmoke.find("profile identity report should match stable release identity") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find("Fcitx5TsfPocIpcBoundaryReport") == std::string::npos ||
+        rustTsfPocSmoke.find("generation_mismatch_fails_open") == std::string::npos ||
+        rustTsfPocSmoke.find(
+            "IPC boundary report should fail open for slow or invalid engine replies") ==
             std::string::npos ||
         rustTsfPocSmoke.find("Fcitx5TsfPocForcedFailureForTest") == std::string::npos ||
         rustTsfPocSmoke.find("forced internal failure should convert panic to HRESULT") ==

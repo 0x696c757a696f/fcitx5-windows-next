@@ -34,6 +34,7 @@ int wmain(int argc, wchar_t** argv) {
     using CanUnloadNow = HRESULT(__stdcall*)();
     using BehaviorReport = const char*(__stdcall*)(size_t*);
     using ProfileIdentityReport = const char*(__stdcall*)(size_t*);
+    using IpcBoundaryReport = const char*(__stdcall*)(size_t*);
     using ForcedFailure = HRESULT(__stdcall*)();
     const auto getClassObject =
         reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
@@ -43,10 +44,12 @@ int wmain(int argc, wchar_t** argv) {
         GetProcAddress(module, "Fcitx5TsfPocBehaviorReport"));
     const auto profileIdentityReport = reinterpret_cast<ProfileIdentityReport>(
         GetProcAddress(module, "Fcitx5TsfPocProfileIdentityReport"));
+    const auto ipcBoundaryReport = reinterpret_cast<IpcBoundaryReport>(
+        GetProcAddress(module, "Fcitx5TsfPocIpcBoundaryReport"));
     const auto forcedFailure = reinterpret_cast<ForcedFailure>(
         GetProcAddress(module, "Fcitx5TsfPocForcedFailureForTest"));
     if (!getClassObject || !canUnloadNow || !behaviorReport || !profileIdentityReport ||
-        !forcedFailure) {
+        !ipcBoundaryReport || !forcedFailure) {
         std::cerr << "Rust TSF PoC exports missing\n";
         FreeLibrary(module);
         return 1;
@@ -97,6 +100,23 @@ int wmain(int argc, wchar_t** argv) {
         profileReport.find("\"release_identity_source\":\"cmake/release_identity.h.in\"") ==
             std::string::npos) {
         std::cerr << "Rust TSF PoC profile identity report should match stable release identity\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    size_t ipcReportLength = 0;
+    const char* ipcReportBytes = ipcBoundaryReport(&ipcReportLength);
+    const std::string ipcReport =
+        ipcReportBytes && ipcReportLength > 0 ? std::string(ipcReportBytes, ipcReportLength)
+                                              : std::string();
+    if (ipcReport.find("\"bounded_ipc_client_model\":true") == std::string::npos ||
+        ipcReport.find("\"timeout_fails_open\":true") == std::string::npos ||
+        ipcReport.find("\"malformed_fails_open\":true") == std::string::npos ||
+        ipcReport.find("\"generation_mismatch_fails_open\":true") == std::string::npos ||
+        ipcReport.find("\"network_imports\":false") == std::string::npos ||
+        ipcReport.find("\"external_engine_link\":false") == std::string::npos ||
+        ipcReport.find("\"host_blocking_call\":false") == std::string::npos ||
+        ipcReport.find("\"shipping_cxx_authoritative\":true") == std::string::npos) {
+        std::cerr << "Rust TSF PoC IPC boundary report should fail open for slow or invalid engine replies\n";
         FreeLibrary(module);
         return 1;
     }

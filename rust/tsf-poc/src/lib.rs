@@ -43,6 +43,7 @@ const REQUIRED_TSF_BEHAVIOR_CASES: &[&str] = &[
 ];
 static BEHAVIOR_REPORT: OnceLock<String> = OnceLock::new();
 static PROFILE_IDENTITY_REPORT: OnceLock<String> = OnceLock::new();
+static IPC_BOUNDARY_REPORT: OnceLock<String> = OnceLock::new();
 
 pub fn panic_to_hresult<F>(operation: F) -> HRESULT
 where
@@ -88,11 +89,60 @@ pub fn tsf_profile_identity_report() -> String {
     )
 }
 
+pub fn tsf_ipc_boundary_report() -> String {
+    let client = BoundedIpcClient::new(7, 25);
+    let ok = client.key_down(IpcProbe {
+        generation: 7,
+        elapsed_ms: 4,
+        well_formed: true,
+        handled: true,
+        commit: "你",
+        preedit: "",
+    });
+    let timeout = client.key_down(IpcProbe {
+        generation: 7,
+        elapsed_ms: 26,
+        well_formed: true,
+        handled: true,
+        commit: "你",
+        preedit: "",
+    });
+    let malformed = client.key_down(IpcProbe {
+        generation: 7,
+        elapsed_ms: 4,
+        well_formed: false,
+        handled: true,
+        commit: "你",
+        preedit: "",
+    });
+    let generation_mismatch = client.key_down(IpcProbe {
+        generation: 6,
+        elapsed_ms: 4,
+        well_formed: true,
+        handled: true,
+        commit: "你",
+        preedit: "",
+    });
+    let ok_passed = ok.status == EngineStatus::Ok && ok.handled && ok.commit == "你";
+    let timeout_passed = timeout.status == EngineStatus::Timeout && !timeout.handled;
+    let malformed_passed = malformed.status == EngineStatus::Malformed && !malformed.handled;
+    let generation_mismatch_passed = generation_mismatch.status == EngineStatus::GenerationMismatch
+        && !generation_mismatch.handled;
+    format!(
+        "{{\"format_version\":1,\"bounded_ipc_client_model\":true,\"timeout_ms\":25,\"expected_generation\":7,\"cases\":{{\"ok\":{},\"timeout_fails_open\":{},\"malformed_fails_open\":{},\"generation_mismatch_fails_open\":{}}},\"network_imports\":false,\"external_engine_link\":false,\"host_blocking_call\":false,\"shipping_cxx_authoritative\":true}}",
+        ok_passed,
+        timeout_passed,
+        malformed_passed,
+        generation_mismatch_passed
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EngineStatus {
     Ok,
     Timeout,
     Malformed,
+    GenerationMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,6 +179,53 @@ impl<'a> EngineResult<'a> {
             commit: "",
             preedit: "",
         }
+    }
+
+    pub const fn generation_mismatch() -> Self {
+        Self {
+            status: EngineStatus::GenerationMismatch,
+            handled: false,
+            commit: "",
+            preedit: "",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundedIpcClient {
+    expected_generation: u64,
+    timeout_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IpcProbe<'a> {
+    generation: u64,
+    elapsed_ms: u32,
+    well_formed: bool,
+    handled: bool,
+    commit: &'a str,
+    preedit: &'a str,
+}
+
+impl BoundedIpcClient {
+    pub const fn new(expected_generation: u64, timeout_ms: u32) -> Self {
+        Self {
+            expected_generation,
+            timeout_ms,
+        }
+    }
+
+    pub fn key_down<'a>(&self, probe: IpcProbe<'a>) -> EngineResult<'a> {
+        if probe.elapsed_ms > self.timeout_ms {
+            return EngineResult::timeout();
+        }
+        if !probe.well_formed {
+            return EngineResult::malformed();
+        }
+        if probe.generation != self.expected_generation {
+            return EngineResult::generation_mismatch();
+        }
+        EngineResult::ok(probe.handled, probe.commit, probe.preedit)
     }
 }
 
@@ -196,7 +293,7 @@ impl TsfPocBehaviorState {
                     || !engine_result.commit.is_empty()
                     || !engine_result.preedit.is_empty();
             }
-            EngineStatus::Timeout | EngineStatus::Malformed => {
+            EngineStatus::Timeout | EngineStatus::Malformed | EngineStatus::GenerationMismatch => {
                 self.fail_open = true;
                 self.composition_active = false;
                 self.eaten = false;
@@ -777,6 +874,34 @@ pub unsafe extern "system" fn Fcitx5TsfPocProfileIdentityReport(length: *mut usi
 #[no_mangle]
 /// # Safety
 ///
+/// `length` is optional. When non-null it must point to writable process-local
+/// memory. The returned pointer is owned by this module and remains valid until
+/// the DLL is unloaded.
+pub unsafe extern "system" fn Fcitx5TsfPocIpcBoundaryReport(length: *mut usize) -> *const u8 {
+    match catch_unwind(|| {
+        let report = IPC_BOUNDARY_REPORT.get_or_init(tsf_ipc_boundary_report);
+        if !length.is_null() {
+            unsafe {
+                *length = report.len();
+            }
+        }
+        report.as_ptr()
+    }) {
+        Ok(pointer) => pointer,
+        Err(_) => {
+            if !length.is_null() {
+                unsafe {
+                    *length = 0;
+                }
+            }
+            std::ptr::null()
+        }
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
 /// Test-only PoC export used by the artifact smoke to prove that a forced
 /// internal panic is converted to `HRESULT` across the DLL ABI.
 pub unsafe extern "system" fn Fcitx5TsfPocForcedFailureForTest() -> HRESULT {
@@ -1002,6 +1127,15 @@ mod tests {
         assert_eq!(malformed_state.commit, "");
         assert_eq!(malformed_state.preedit, "");
         assert!(!malformed_state.composition_active);
+
+        let mut generation_state = TsfPocBehaviorState::default();
+        generation_state.activate();
+        generation_state.key_down(EngineResult::generation_mismatch());
+        assert!(generation_state.fail_open);
+        assert!(!generation_state.eaten);
+        assert_eq!(generation_state.commit, "");
+        assert_eq!(generation_state.preedit, "");
+        assert!(!generation_state.composition_active);
     }
 
     #[test]
@@ -1088,6 +1222,78 @@ mod tests {
         assert!(
             report.contains("\"language_profile_guid\":\"6c2ac726-7703-4b65-89af-a77e9e0da102\"")
         );
+    }
+
+    #[test]
+    fn bounded_ipc_client_fails_open_on_untrusted_or_slow_replies() {
+        let client = BoundedIpcClient::new(42, 30);
+        let ok = client.key_down(IpcProbe {
+            generation: 42,
+            elapsed_ms: 5,
+            well_formed: true,
+            handled: true,
+            commit: "",
+            preedit: "ni",
+        });
+        assert_eq!(ok.status, EngineStatus::Ok);
+        assert_eq!(ok.preedit, "ni");
+
+        assert_eq!(
+            client
+                .key_down(IpcProbe {
+                    generation: 42,
+                    elapsed_ms: 31,
+                    well_formed: true,
+                    handled: true,
+                    commit: "你",
+                    preedit: "",
+                })
+                .status,
+            EngineStatus::Timeout
+        );
+        assert_eq!(
+            client
+                .key_down(IpcProbe {
+                    generation: 42,
+                    elapsed_ms: 5,
+                    well_formed: false,
+                    handled: true,
+                    commit: "你",
+                    preedit: "",
+                })
+                .status,
+            EngineStatus::Malformed
+        );
+        assert_eq!(
+            client
+                .key_down(IpcProbe {
+                    generation: 41,
+                    elapsed_ms: 5,
+                    well_formed: true,
+                    handled: true,
+                    commit: "你",
+                    preedit: "",
+                })
+                .status,
+            EngineStatus::GenerationMismatch
+        );
+    }
+
+    #[test]
+    fn ipc_boundary_export_is_panic_contained_and_length_delimited() {
+        let mut length = 0usize;
+        let pointer = unsafe { Fcitx5TsfPocIpcBoundaryReport(&mut length) };
+        assert!(!pointer.is_null());
+        assert!(length > 0);
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
+        let report = std::str::from_utf8(bytes).expect("ipc boundary report should be utf8");
+        assert!(report.contains("\"bounded_ipc_client_model\":true"));
+        assert!(report.contains("\"timeout_fails_open\":true"));
+        assert!(report.contains("\"malformed_fails_open\":true"));
+        assert!(report.contains("\"generation_mismatch_fails_open\":true"));
+        assert!(report.contains("\"network_imports\":false"));
+        assert!(report.contains("\"external_engine_link\":false"));
+        assert!(report.contains("\"host_blocking_call\":false"));
     }
 
     #[test]
