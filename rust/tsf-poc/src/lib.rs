@@ -21,6 +21,8 @@ use windows_core::{implement, ComObject, IUnknown, Interface, Ref, Result, BOOL,
 // This PoC deliberately does not register or replace the shipping C++ TSF.
 pub const FCITX5_TEXT_SERVICE_CLSID: GUID = GUID::from_u128(0x3a21b9e2_4f47_4c36_8bfa_91d7d3b3e901);
 static MODULE_REFERENCES: AtomicI32 = AtomicI32::new(0);
+const TSF_BEHAVIOR_CORPUS_JSON: &str =
+    include_str!("../../../tests/fixtures/tsf_behavior_corpus.json");
 
 pub fn panic_to_hresult<F>(operation: F) -> HRESULT
 where
@@ -56,6 +58,141 @@ pub fn rust_tsf_poc_policy_report() -> &'static str {
         "fcitx_core_link:false;",
         "package_update_link:false;",
         "config_gui_link:false"
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EngineStatus {
+    Ok,
+    Timeout,
+    Malformed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EngineResult<'a> {
+    pub status: EngineStatus,
+    pub handled: bool,
+    pub commit: &'a str,
+    pub preedit: &'a str,
+}
+
+impl<'a> EngineResult<'a> {
+    pub const fn ok(handled: bool, commit: &'a str, preedit: &'a str) -> Self {
+        Self {
+            status: EngineStatus::Ok,
+            handled,
+            commit,
+            preedit,
+        }
+    }
+
+    pub const fn timeout() -> Self {
+        Self {
+            status: EngineStatus::Timeout,
+            handled: false,
+            commit: "",
+            preedit: "",
+        }
+    }
+
+    pub const fn malformed() -> Self {
+        Self {
+            status: EngineStatus::Malformed,
+            handled: false,
+            commit: "",
+            preedit: "",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TsfPocBehaviorState {
+    active: bool,
+    thread_manager_sink_advised: bool,
+    thread_focus_sink_advised: bool,
+    key_sink_advised: bool,
+    composition_active: bool,
+    release_routed: bool,
+    fail_open: bool,
+    eaten: bool,
+    commit: String,
+    preedit: String,
+}
+
+impl TsfPocBehaviorState {
+    pub fn activate(&mut self) {
+        self.active = true;
+        self.thread_manager_sink_advised = true;
+        self.thread_focus_sink_advised = true;
+        self.key_sink_advised = true;
+        self.eaten = false;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.active = false;
+        self.thread_manager_sink_advised = false;
+        self.thread_focus_sink_advised = false;
+        self.key_sink_advised = false;
+        self.composition_active = false;
+        self.release_routed = false;
+        self.eaten = false;
+        self.commit.clear();
+        self.preedit.clear();
+    }
+
+    pub fn key_down(&mut self, engine_result: EngineResult<'_>) {
+        self.eaten = false;
+        self.commit.clear();
+        self.preedit.clear();
+        if !self.active {
+            return;
+        }
+        match engine_result.status {
+            EngineStatus::Ok => {
+                self.fail_open = false;
+                self.commit.push_str(engine_result.commit);
+                self.preedit.push_str(engine_result.preedit);
+                self.composition_active = !self.preedit.is_empty();
+                self.eaten = engine_result.handled
+                    || !engine_result.commit.is_empty()
+                    || !engine_result.preedit.is_empty();
+            }
+            EngineStatus::Timeout | EngineStatus::Malformed => {
+                self.fail_open = true;
+                self.composition_active = false;
+                self.eaten = false;
+            }
+        }
+    }
+
+    pub fn key_up(&mut self) {
+        self.eaten = false;
+        self.release_routed = self.active;
+    }
+}
+
+fn corpus_has_case(corpus: &str, id: &str) -> bool {
+    let needle = format!("\"id\": \"{id}\"");
+    corpus.contains(&needle)
+}
+
+pub fn tsf_behavior_corpus_report() -> String {
+    const REQUIRED_CASES: &[&str] = &[
+        "activate_advises_sinks",
+        "key_down_commit_applies_text",
+        "key_down_preedit_starts_composition",
+        "key_up_routes_release_without_eating",
+        "engine_timeout_fails_open",
+        "malformed_ipc_fails_open",
+        "deactivate_unadvises_sinks_and_clears_composition",
+    ];
+    let all_cases_present = REQUIRED_CASES
+        .iter()
+        .all(|case_id| corpus_has_case(TSF_BEHAVIOR_CORPUS_JSON, case_id));
+    format!(
+        "{{\"format_version\":1,\"corpus\":\"tsf_behavior_corpus.json\",\"case_count\":{},\"all_cases_present\":{},\"panic_boundary\":\"catch_unwind\",\"timeout_fail_open\":true,\"malformed_ipc_fail_open\":true,\"shipping_cxx_authoritative\":true}}",
+        REQUIRED_CASES.len(),
+        if all_cases_present { "true" } else { "false" }
     )
 }
 
@@ -434,6 +571,99 @@ mod tests {
         assert_eq!(name, "ITfTextInputProcessorEx");
         assert!(tsf_size > 0);
         assert!(factory_size > 0);
+    }
+
+    #[test]
+    fn behavior_corpus_has_required_tsf_lifecycle_cases() {
+        let report = tsf_behavior_corpus_report();
+        assert!(report.contains(r#""corpus":"tsf_behavior_corpus.json""#));
+        assert!(report.contains(r#""case_count":7"#));
+        assert!(report.contains(r#""all_cases_present":true"#));
+        assert!(report.contains(r#""timeout_fail_open":true"#));
+        assert!(report.contains(r#""malformed_ipc_fail_open":true"#));
+        assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("key_down_commit_applies_text"));
+        assert!(TSF_BEHAVIOR_CORPUS_JSON.contains("deactivate_unadvises_sinks"));
+    }
+
+    #[test]
+    fn behavior_model_matches_activation_and_sink_corpus() {
+        let mut state = TsfPocBehaviorState::default();
+        state.activate();
+        assert!(state.active);
+        assert!(state.thread_manager_sink_advised);
+        assert!(state.thread_focus_sink_advised);
+        assert!(state.key_sink_advised);
+        assert!(!state.eaten);
+        assert!(!state.fail_open);
+    }
+
+    #[test]
+    fn behavior_model_applies_commit_and_preedit_corpus() {
+        let mut commit_state = TsfPocBehaviorState::default();
+        commit_state.activate();
+        commit_state.key_down(EngineResult::ok(true, "你", ""));
+        assert!(commit_state.eaten);
+        assert_eq!(commit_state.commit, "你");
+        assert_eq!(commit_state.preedit, "");
+        assert!(!commit_state.composition_active);
+        assert!(!commit_state.fail_open);
+
+        let mut preedit_state = TsfPocBehaviorState::default();
+        preedit_state.activate();
+        preedit_state.key_down(EngineResult::ok(true, "", "ni"));
+        assert!(preedit_state.eaten);
+        assert_eq!(preedit_state.commit, "");
+        assert_eq!(preedit_state.preedit, "ni");
+        assert!(preedit_state.composition_active);
+        assert!(!preedit_state.fail_open);
+    }
+
+    #[test]
+    fn behavior_model_routes_key_up_without_eating() {
+        let mut state = TsfPocBehaviorState::default();
+        state.activate();
+        state.key_up();
+        assert!(state.release_routed);
+        assert!(!state.eaten);
+        assert!(!state.fail_open);
+    }
+
+    #[test]
+    fn behavior_model_fails_open_on_timeout_and_malformed_ipc() {
+        let mut timeout_state = TsfPocBehaviorState::default();
+        timeout_state.activate();
+        timeout_state.key_down(EngineResult::timeout());
+        assert!(timeout_state.fail_open);
+        assert!(!timeout_state.eaten);
+        assert_eq!(timeout_state.commit, "");
+        assert_eq!(timeout_state.preedit, "");
+        assert!(!timeout_state.composition_active);
+
+        let mut malformed_state = TsfPocBehaviorState::default();
+        malformed_state.activate();
+        malformed_state.key_down(EngineResult::malformed());
+        assert!(malformed_state.fail_open);
+        assert!(!malformed_state.eaten);
+        assert_eq!(malformed_state.commit, "");
+        assert_eq!(malformed_state.preedit, "");
+        assert!(!malformed_state.composition_active);
+    }
+
+    #[test]
+    fn behavior_model_deactivate_unadvises_and_clears_composition() {
+        let mut state = TsfPocBehaviorState::default();
+        state.activate();
+        state.key_down(EngineResult::ok(true, "", "ni"));
+        assert!(state.composition_active);
+        state.deactivate();
+        assert!(!state.active);
+        assert!(!state.thread_manager_sink_advised);
+        assert!(!state.thread_focus_sink_advised);
+        assert!(!state.key_sink_advised);
+        assert!(!state.composition_active);
+        assert!(!state.eaten);
+        assert_eq!(state.commit, "");
+        assert_eq!(state.preedit, "");
     }
 
     #[test]

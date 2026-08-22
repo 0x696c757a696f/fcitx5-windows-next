@@ -1,0 +1,110 @@
+{
+  "format_version": 1,
+  "component": "RUST-R3-TSF-POC",
+  "cases": [
+    {
+      "id": "activate_advises_sinks",
+      "operations": ["activate"],
+      "expected": {
+        "active": true,
+        "thread_manager_sink_advised": true,
+        "thread_focus_sink_advised": true,
+        "key_sink_advised": true,
+        "eaten": false
+      }
+    },
+    {
+      "id": "key_down_commit_applies_text",
+      "operations": ["activate", "key_down"],
+      "engine_result": {
+        "status": "ok",
+        "handled": true,
+        "commit": "你",
+        "preedit": ""
+      },
+      "expected": {
+        "active": true,
+        "eaten": true,
+        "commit": "你",
+        "composition_active": false,
+        "fail_open": false
+      }
+    },
+    {
+      "id": "key_down_preedit_starts_composition",
+      "operations": ["activate", "key_down"],
+      "engine_result": {
+        "status": "ok",
+        "handled": true,
+        "commit": "",
+        "preedit": "ni"
+      },
+      "expected": {
+        "active": true,
+        "eaten": true,
+        "commit": "",
+        "preedit": "ni",
+        "composition_active": true,
+        "fail_open": false
+      }
+    },
+    {
+      "id": "key_up_routes_release_without_eating",
+      "operations": ["activate", "key_up"],
+      "expected": {
+        "active": true,
+        "release_routed": true,
+        "eaten": false,
+        "fail_open": false
+      }
+    },
+    {
+      "id": "engine_timeout_fails_open",
+      "operations": ["activate", "key_down"],
+      "engine_result": {
+        "status": "timeout"
+      },
+      "expected": {
+        "active": true,
+        "eaten": false,
+        "commit": "",
+        "preedit": "",
+        "composition_active": false,
+        "fail_open": true
+      }
+    },
+    {
+      "id": "malformed_ipc_fails_open",
+      "operations": ["activate", "key_down"],
+      "engine_result": {
+        "status": "malformed"
+      },
+      "expected": {
+        "active": true,
+        "eaten": false,
+        "commit": "",
+        "preedit": "",
+        "composition_active": false,
+        "fail_open": true
+      }
+    },
+    {
+      "id": "deactivate_unadvises_sinks_and_clears_composition",
+      "operations": ["activate", "key_down", "deactivate"],
+      "engine_result": {
+        "status": "ok",
+        "handled": true,
+        "commit": "",
+        "preedit": "ni"
+      },
+      "expected": {
+        "active": false,
+        "thread_manager_sink_advised": false,
+        "thread_focus_sink_advised": false,
+        "key_sink_advised": false,
+        "composition_active": false,
+        "eaten": false
+      }
+    }
+  ]
+}

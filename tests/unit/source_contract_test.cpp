@@ -484,6 +484,8 @@ int main(int argc, char** argv) {
     const auto rustTsfPocSource = read_text(sourceRoot / "rust/tsf-poc/src/lib.rs");
     const auto rustTsfPocSmoke =
         read_text(sourceRoot / "tests/unit/rust_tsf_poc_export_smoke.cpp");
+    const auto rustTsfPocCorpus =
+        read_text(sourceRoot / "tests/fixtures/tsf_behavior_corpus.json");
     if (cmakeSource.find("fcitx5_tsf_poc_rustdll") == std::string::npos ||
         cmakeSource.find("rust-tsf-poc-unit") == std::string::npos ||
         cmakeSource.find("rust-tsf-poc-export-smoke") == std::string::npos ||
@@ -498,6 +500,10 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("panic_to_hresult") == std::string::npos ||
         rustTsfPocSource.find("DllGetClassObject") == std::string::npos ||
         rustTsfPocSource.find("DllCanUnloadNow") == std::string::npos ||
+        rustTsfPocSource.find("TsfPocBehaviorState") == std::string::npos ||
+        rustTsfPocSource.find("tsf_behavior_corpus_report") == std::string::npos ||
+        rustTsfPocSource.find("engine_timeout_fails_open") == std::string::npos ||
+        rustTsfPocSource.find("malformed_ipc_fails_open") == std::string::npos ||
         rustTsfPocSource.find("cxx_tsf_remains_authoritative:true") == std::string::npos ||
         rustTsfPocSource.find("bounded_ipc_client:not-linked") == std::string::npos ||
         rustTsfPocSource.find("send_input:false") == std::string::npos ||
@@ -505,6 +511,17 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("process_injection:false") == std::string::npos ||
         rustTsfPocSmoke.find("CLASS_E_CLASSNOTAVAILABLE") == std::string::npos ||
         rustTsfPocSmoke.find("factory should create an empty ITfTextInputProcessorEx") ==
+            std::string::npos ||
+        rustTsfPocCorpus.find("\"format_version\": 1") == std::string::npos ||
+        rustTsfPocCorpus.find("\"activate_advises_sinks\"") == std::string::npos ||
+        rustTsfPocCorpus.find("\"key_down_commit_applies_text\"") == std::string::npos ||
+        rustTsfPocCorpus.find("\"key_down_preedit_starts_composition\"") ==
+            std::string::npos ||
+        rustTsfPocCorpus.find("\"key_up_routes_release_without_eating\"") ==
+            std::string::npos ||
+        rustTsfPocCorpus.find("\"engine_timeout_fails_open\"") == std::string::npos ||
+        rustTsfPocCorpus.find("\"malformed_ipc_fails_open\"") == std::string::npos ||
+        rustTsfPocCorpus.find("\"deactivate_unadvises_sinks_and_clears_composition\"") ==
             std::string::npos) {
         return fail("RUST-R3-TSF-POC: Rust TSF PoC must stay isolated, panic-contained, and non-authoritative");
     }
