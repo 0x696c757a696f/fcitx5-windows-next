@@ -13,7 +13,7 @@ $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $repoPrefix = $repoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) +
   [IO.Path]::DirectorySeparatorChar
 if (-not $outputRoot.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-  throw "Refusing to write Rust package CLI outside repository: $outputRoot"
+  throw "Refusing to write Rust provider CLI outside repository: $outputRoot"
 }
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
@@ -24,9 +24,9 @@ $env:Path = (($env:Path -split [IO.Path]::PathSeparator) |
   }) -join [IO.Path]::PathSeparator
 
 & $CargoExecutable build --locked --manifest-path (Join-Path $repoRoot 'Cargo.toml') `
-  -p fcitx5-package-core --bin fcitx5-package-core --target $CargoTarget
+  -p fcitx5-package-core --bin fcitx5-provider --target $CargoTarget
 if ($LASTEXITCODE -ne 0) {
-  throw 'Rust fcitx5-package CLI build failed.'
+  throw 'Rust fcitx5-provider CLI build failed.'
 }
 
 $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
@@ -34,9 +34,9 @@ $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
 } else {
   [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
 }
-$rustExe = Join-Path $targetRoot (Join-Path $CargoTarget 'debug/fcitx5-package-core.exe')
+$rustExe = Join-Path $targetRoot (Join-Path $CargoTarget 'debug/fcitx5-provider.exe')
 if (-not (Test-Path -LiteralPath $rustExe -PathType Leaf)) {
-  throw "Missing Rust package CLI binary: $rustExe"
+  throw "Missing Rust provider CLI binary: $rustExe"
 }
 
-Copy-Item -LiteralPath $rustExe -Destination (Join-Path $outputRoot 'fcitx5-package.exe') -Force
+Copy-Item -LiteralPath $rustExe -Destination (Join-Path $outputRoot 'fcitx5-provider.exe') -Force

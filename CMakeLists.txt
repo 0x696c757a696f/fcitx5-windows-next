@@ -171,18 +171,16 @@ if(MSVC)
   target_compile_options(fcitx5_package_core PRIVATE /external:W0 /analyze:external-)
 endif()
 
-add_library(fcitx5_provider_policy STATIC src/package/provider_policy.cpp)
-add_library(fcitx5::provider_policy ALIAS fcitx5_provider_policy)
-target_include_directories(
-  fcitx5_provider_policy PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/package")
-target_link_libraries(fcitx5_provider_policy PUBLIC fcitx5::package_core)
-fcitx_apply_project_options(fcitx5_provider_policy)
-
 add_library(fcitx5_deployment_core STATIC src/updater/deployment_core.cpp)
 add_library(fcitx5::deployment_core ALIAS fcitx5_deployment_core)
 target_compile_features(fcitx5_deployment_core PUBLIC cxx_std_20)
 target_include_directories(fcitx5_deployment_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/updater")
 target_include_directories(fcitx5_deployment_core SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+target_link_libraries(
+  fcitx5_deployment_core
+  PUBLIC fcitx5_package_core_rust
+         ws2_32 userenv ntdll bcrypt crypt32 ole32)
+add_dependencies(fcitx5_deployment_core fcitx5_package_core_rustlib)
 fcitx_apply_project_options(fcitx5_deployment_core)
 if(MSVC)
   target_compile_options(fcitx5_deployment_core PRIVATE /external:W0 /analyze:external-)
@@ -284,7 +282,9 @@ target_link_libraries(
   PRIVATE fcitx5::windows_common fcitx5::config fcitx5::protocol
           fcitx5::ipc_client fcitx5::platform fcitx5::package_core
           fcitx5::deployment_core fcitx5::tsf_activation_guard
-          fcitx5::process_execution shell32 ole32)
+          fcitx5_package_core_rust
+          fcitx5::process_execution shell32 ole32 ws2_32 userenv ntdll)
+add_dependencies(fcitx5_control fcitx5_package_core_rustlib)
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
@@ -417,6 +417,25 @@ add_custom_target(
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-package CLI")
 
+set(FCITX_RUST_PACKAGE_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_package_core.lib")
+add_custom_target(
+  fcitx5_package_core_rustlib
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+    "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-package-core staticlib")
+add_library(fcitx5_package_core_rust STATIC IMPORTED GLOBAL)
+set_target_properties(fcitx5_package_core_rust PROPERTIES
+                      IMPORTED_LOCATION "${FCITX_RUST_PACKAGE_CORE_STATICLIB}")
+add_dependencies(fcitx5_package_core_rust fcitx5_package_core_rustlib)
+
 add_executable(fcitx5_downloader src/package/downloader_main.cpp)
 set_target_properties(fcitx5_downloader PROPERTIES OUTPUT_NAME "fcitx5-downloader")
 target_link_libraries(
@@ -431,12 +450,20 @@ target_link_libraries(
 fcitx_apply_project_options(fcitx5_deployer)
 fcitx_apply_binary_hardening(fcitx5_deployer)
 
-add_executable(fcitx5_provider src/package/provider_main.cpp)
-set_target_properties(fcitx5_provider PROPERTIES OUTPUT_NAME "fcitx5-provider")
-target_link_libraries(
-  fcitx5_provider PRIVATE fcitx5::windows_common fcitx5::provider_policy advapi32)
-fcitx_apply_project_options(fcitx5_provider)
-fcitx_apply_binary_hardening(fcitx5_provider)
+add_custom_target(
+  fcitx5_provider ALL
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-provider.exe"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+    "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-provider-cli.ps1"
+    -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
+    -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-provider CLI")
 
 add_executable(fcitx5_updater src/updater/updater_main.cpp)
 set_target_properties(fcitx5_updater PROPERTIES OUTPUT_NAME "fcitx5-updater")
@@ -551,7 +578,11 @@ if(BUILD_TESTING)
   add_test(NAME downloader-boundary-smoke COMMAND fcitx5_downloader --self-test)
   add_test(NAME deployer-version COMMAND fcitx5_deployer --version)
   add_test(NAME deployer-boundary-smoke COMMAND fcitx5_deployer --self-test)
-  add_test(NAME provider-version COMMAND fcitx5_provider --version)
+  add_test(NAME provider-version
+           COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-provider.exe" --version)
+  add_test(NAME provider-boundary-smoke
+           COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-provider.exe" --self-test
+                   --audit-self-pe)
 
   add_executable(fcitx5_updater_cleanup_test tests/unit/updater_cleanup_test.cpp)
   target_link_libraries(fcitx5_updater_cleanup_test PRIVATE fcitx5::deployment_core)
@@ -574,11 +605,6 @@ if(BUILD_TESTING)
   add_test(NAME control-repository-rollback
            COMMAND fcitx5_control_repository_rollback_test "$<TARGET_FILE:fcitx5_control>")
 
-  add_executable(fcitx5_provider_policy_test tests/unit/provider_policy_test.cpp)
-  target_link_libraries(fcitx5_provider_policy_test PRIVATE fcitx5::provider_policy)
-  fcitx_apply_project_options(fcitx5_provider_policy_test)
-  fcitx_apply_binary_hardening(fcitx5_provider_policy_test)
-  add_test(NAME provider-policy-contract COMMAND fcitx5_provider_policy_test)
   add_test(NAME control-config-roundtrip
            COMMAND fcitx5_control --data-root
                    "${CMAKE_CURRENT_BINARY_DIR}/control-test-data"

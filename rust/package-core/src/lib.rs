@@ -6,6 +6,8 @@ use std::fmt;
 use std::fs;
 use std::io;
 #[cfg(windows)]
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+#[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -523,6 +525,913 @@ mod win32_fs_adapter {
     }
 }
 
+#[cfg(windows)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositorySequenceState {
+    pub present: bool,
+    pub valid: bool,
+    pub maximum: u64,
+}
+
+#[cfg(windows)]
+impl RepositorySequenceState {
+    pub fn never_initialized() -> Self {
+        Self {
+            present: false,
+            valid: false,
+            maximum: 0,
+        }
+    }
+}
+
+#[cfg(windows)]
+fn repository_sequence_state_path(data_root: impl AsRef<Path>, channel: &str) -> PathBuf {
+    data_root
+        .as_ref()
+        .join("repository")
+        .join(format!("sequence-{channel}.json"))
+}
+
+#[cfg(windows)]
+fn parse_repository_sequence_state(bytes: &[u8], channel: &str) -> RepositorySequenceState {
+    if bytes.is_empty() || bytes.len() > 1024 {
+        return RepositorySequenceState {
+            present: true,
+            valid: false,
+            maximum: 0,
+        };
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return RepositorySequenceState {
+            present: true,
+            valid: false,
+            maximum: 0,
+        };
+    };
+    let prefix = format!("format_version=1\nchannel={channel}\nmax_release_sequence=");
+    if !text.starts_with(&prefix) || !text.ends_with('\n') {
+        return RepositorySequenceState {
+            present: true,
+            valid: false,
+            maximum: 0,
+        };
+    }
+    let maximum_line = &text[prefix.len()..text.len() - 1];
+    if maximum_line.contains('\n')
+        || maximum_line.contains('\r')
+        || maximum_line.is_empty()
+        || !maximum_line
+            .chars()
+            .all(|character| character.is_ascii_digit())
+    {
+        return RepositorySequenceState {
+            present: true,
+            valid: false,
+            maximum: 0,
+        };
+    }
+    let Ok(maximum) = maximum_line.parse::<u64>() else {
+        return RepositorySequenceState {
+            present: true,
+            valid: false,
+            maximum: 0,
+        };
+    };
+    RepositorySequenceState {
+        present: true,
+        valid: true,
+        maximum,
+    }
+}
+
+#[cfg(windows)]
+pub fn read_repository_sequence_state(
+    data_root: impl AsRef<Path>,
+    channel: &str,
+) -> RepositorySequenceState {
+    let path = repository_sequence_state_path(data_root, channel);
+    let Ok(metadata) = fs::metadata(&path) else {
+        return RepositorySequenceState::never_initialized();
+    };
+    let size = metadata.len();
+    if size == 0 || size > 1024 {
+        return RepositorySequenceState {
+            present: true,
+            valid: false,
+            maximum: 0,
+        };
+    }
+    let Ok(bytes) = fs::read(&path) else {
+        return RepositorySequenceState {
+            present: true,
+            valid: false,
+            maximum: 0,
+        };
+    };
+    if bytes.len() as u64 != size {
+        return RepositorySequenceState {
+            present: true,
+            valid: false,
+            maximum: 0,
+        };
+    }
+    parse_repository_sequence_state(&bytes, channel)
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub fn write_repository_sequence_state(
+    data_root: impl AsRef<Path>,
+    channel: &str,
+    maximum: u64,
+) -> io::Result<()> {
+    let path = repository_sequence_state_path(data_root, channel);
+    fs::create_dir_all(path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "repository sequence state path is invalid",
+        )
+    })?)?;
+    let temporary = {
+        #[repr(C)]
+        struct Guid {
+            data1: u32,
+            data2: u16,
+            data3: u16,
+            data4: [u8; 8],
+        }
+        unsafe extern "system" {
+            fn CoCreateGuid(guid: *mut Guid) -> i32;
+            fn StringFromGUID2(source: *const Guid, destination: *mut u16, length: i32) -> i32;
+        }
+        let mut source_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        let mut guid_text = [0u16; 40];
+        let mut value = Guid {
+            data1: 0,
+            data2: 0,
+            data3: 0,
+            data4: [0; 8],
+        };
+        let created = unsafe { CoCreateGuid(&mut value) };
+        if created != 0 {
+            return Err(io::Error::other("CoCreateGuid failed"));
+        }
+        let copied =
+            unsafe { StringFromGUID2(&value, guid_text.as_mut_ptr(), guid_text.len() as i32) };
+        if copied <= 0 {
+            return Err(io::Error::other("StringFromGUID2 failed"));
+        }
+        source_wide.push('.' as u16);
+        source_wide.extend_from_slice(&guid_text[..(copied as usize).saturating_sub(1)]);
+        source_wide.push('.' as u16);
+        source_wide.extend("tmp".encode_utf16());
+        PathBuf::from(std::ffi::OsString::from_wide(&source_wide))
+    };
+    let text = format!("format_version=1\nchannel={channel}\nmax_release_sequence={maximum}\n");
+    fs::write(&temporary, text)?;
+    win32_fs_adapter::replace_file(&temporary, &path).inspect_err(|_error| {
+        let _ = fs::remove_file(&temporary);
+    })
+}
+
+#[cfg(windows)]
+mod repository_sequence_state_ffi {
+    #![allow(unsafe_code)]
+
+    use super::{read_repository_sequence_state, write_repository_sequence_state};
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::path::PathBuf;
+    use std::slice;
+
+    #[repr(C)]
+    pub struct Fcitx5RepositorySequenceState {
+        pub present: u8,
+        pub valid: u8,
+        pub reserved: [u8; 6],
+        pub maximum: u64,
+    }
+
+    fn path_from_utf16(ptr: *const u16, len: usize) -> Option<PathBuf> {
+        if ptr.is_null() {
+            return None;
+        }
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
+        Some(PathBuf::from(OsString::from_wide(slice)))
+    }
+
+    fn string_from_utf16(ptr: *const u16, len: usize) -> Option<String> {
+        if ptr.is_null() {
+            return None;
+        }
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
+        String::from_utf16(slice).ok()
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_sequence_state_read_utf16(
+        data_root: *const u16,
+        data_root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+        out_state: *mut Fcitx5RepositorySequenceState,
+    ) -> i32 {
+        if out_state.is_null() {
+            return 1;
+        }
+        let Some(data_root) = path_from_utf16(data_root, data_root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        let state = read_repository_sequence_state(&data_root, &channel);
+        unsafe {
+            *out_state = Fcitx5RepositorySequenceState {
+                present: state.present as u8,
+                valid: state.valid as u8,
+                reserved: [0; 6],
+                maximum: state.maximum,
+            };
+        }
+        0
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_sequence_state_write_utf16(
+        data_root: *const u16,
+        data_root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+        maximum: u64,
+    ) -> i32 {
+        let Some(data_root) = path_from_utf16(data_root, data_root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        match write_repository_sequence_state(&data_root, &channel, maximum) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderTrust {
+    Official,
+    Unverified,
+}
+
+impl ProviderTrust {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Official => "official",
+            Self::Unverified => "unverified",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlumPlan {
+    script: PathBuf,
+    working_directory: PathBuf,
+    rime_user_directory: PathBuf,
+    download_cache_directory: PathBuf,
+    package_spec: String,
+    trust: ProviderTrust,
+}
+
+impl PlumPlan {
+    pub fn script(&self) -> &Path {
+        &self.script
+    }
+
+    pub fn working_directory(&self) -> &Path {
+        &self.working_directory
+    }
+
+    pub fn rime_user_directory(&self) -> &Path {
+        &self.rime_user_directory
+    }
+
+    pub fn download_cache_directory(&self) -> &Path {
+        &self.download_cache_directory
+    }
+
+    pub fn package_spec(&self) -> &str {
+        &self.package_spec
+    }
+
+    pub fn trust(&self) -> ProviderTrust {
+        self.trust
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderError {
+    code: &'static str,
+    message: String,
+}
+
+impl ProviderError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+}
+
+impl fmt::Display for ProviderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProviderError {}
+
+fn provider_error(code: &'static str, message: impl Into<String>) -> ProviderError {
+    ProviderError::new(code, message)
+}
+
+fn contains_cmd_metacharacters(path: &Path) -> bool {
+    path.as_os_str().encode_wide().any(|character| {
+        matches!(
+            character,
+            0x25 | 0x21 | 0x3f | 0x26 | 0x7c | 0x3c | 0x3e | 0x5e | 0x22
+        )
+    })
+}
+
+fn valid_provider_package_spec(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 256
+        && !value.contains("..")
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/' | b'@' | b':')
+        })
+}
+
+fn classify_provider_source(value: &str) -> ProviderTrust {
+    if matches!(value, ":preset" | ":extra" | ":all")
+        || !value.contains('/')
+        || value.starts_with("rime/")
+    {
+        ProviderTrust::Official
+    } else {
+        ProviderTrust::Unverified
+    }
+}
+
+pub fn make_plum_plan(
+    provider_root: impl AsRef<Path>,
+    rime_user_directory: impl AsRef<Path>,
+    download_cache_directory: impl AsRef<Path>,
+    package_spec: &str,
+) -> Result<PlumPlan, ProviderError> {
+    let provider_root = provider_root.as_ref();
+    let rime_user_directory = rime_user_directory.as_ref();
+    let download_cache_directory = download_cache_directory.as_ref();
+    if !provider_root.is_absolute()
+        || !rime_user_directory.is_absolute()
+        || !download_cache_directory.is_absolute()
+        || provider_root.parent().is_none()
+        || rime_user_directory.parent().is_none()
+        || download_cache_directory.parent().is_none()
+        || contains_cmd_metacharacters(provider_root)
+        || contains_cmd_metacharacters(rime_user_directory)
+        || contains_cmd_metacharacters(download_cache_directory)
+        || path_contains_reparse_component(provider_root).map_err(|_| {
+            provider_error(
+                "invalid_provider_request",
+                "Plum requires explicit safe provider, Rime user and cache paths",
+            )
+        })?
+        || path_contains_reparse_component(rime_user_directory).map_err(|_| {
+            provider_error(
+                "invalid_provider_request",
+                "Plum requires explicit safe provider, Rime user and cache paths",
+            )
+        })?
+        || path_contains_reparse_component(download_cache_directory).map_err(|_| {
+            provider_error(
+                "invalid_provider_request",
+                "Plum requires explicit safe provider, Rime user and cache paths",
+            )
+        })?
+        || !valid_provider_package_spec(package_spec)
+    {
+        return Err(provider_error(
+            "invalid_provider_request",
+            "Plum requires explicit safe provider, Rime user and cache paths",
+        ));
+    }
+    let script = provider_root.join("rime-install.bat");
+    if !script.is_file()
+        || path_contains_reparse_component(&script).map_err(|_| {
+            provider_error(
+                "invalid_provider_request",
+                "pinned Plum entry point is missing or unsafe",
+            )
+        })?
+    {
+        return Err(provider_error(
+            "invalid_provider_request",
+            "pinned Plum entry point is missing or unsafe",
+        ));
+    }
+    Ok(PlumPlan {
+        script,
+        working_directory: provider_root.to_path_buf(),
+        rime_user_directory: rime_user_directory.to_path_buf(),
+        download_cache_directory: download_cache_directory.to_path_buf(),
+        package_spec: package_spec.to_owned(),
+        trust: classify_provider_source(package_spec),
+    })
+}
+
+#[cfg(windows)]
+pub fn run_plum_provider(
+    plan: &PlumPlan,
+    allow_unverified: bool,
+    timeout: std::time::Duration,
+) -> Result<i32, ProviderError> {
+    if provider_process_adapter::is_current_process_elevated() {
+        return Err(provider_error(
+            "privilege_boundary",
+            "Plum provider refuses elevation",
+        ));
+    }
+    if plan.trust == ProviderTrust::Unverified && !allow_unverified {
+        return Err(provider_error(
+            "trust_confirmation_required",
+            "third-party Rime source requires explicit confirmation",
+        ));
+    }
+    let command_processor = provider_process_adapter::system_cmd_exe()
+        .map_err(|_| provider_error("provider_failed", "System32 path is unavailable"))?;
+    provider_process_adapter::run_pinned_cmd(
+        &command_processor,
+        &plan.script,
+        &plan.working_directory,
+        &plan.rime_user_directory,
+        &plan.download_cache_directory,
+        &plan.package_spec,
+        timeout,
+    )
+    .map_err(|error| match error.kind() {
+        ProviderProcessErrorKind::Timeout => provider_error("provider_failed", "Plum timed out"),
+        ProviderProcessErrorKind::Launch => {
+            provider_error("provider_failed", "Plum process launch failed")
+        }
+    })
+}
+
+enum ProviderProcessErrorKind {
+    Launch,
+    Timeout,
+}
+
+struct ProviderProcessError {
+    kind: ProviderProcessErrorKind,
+}
+
+impl ProviderProcessError {
+    fn launch() -> Self {
+        Self {
+            kind: ProviderProcessErrorKind::Launch,
+        }
+    }
+
+    fn timeout() -> Self {
+        Self {
+            kind: ProviderProcessErrorKind::Timeout,
+        }
+    }
+
+    fn kind(&self) -> &ProviderProcessErrorKind {
+        &self.kind
+    }
+}
+
+#[cfg(windows)]
+mod provider_process_adapter {
+    #![allow(unsafe_code)]
+
+    use super::ProviderProcessError;
+    use std::ffi::c_void;
+    use std::io;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    type Handle = *mut c_void;
+
+    const FALSE: i32 = 0;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_ELEVATION_CLASS: u32 = 20;
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_TIMEOUT: u32 = 0x0000_0102;
+    const MAX_PATH: usize = 260;
+
+    #[repr(C)]
+    struct StartupInfoW {
+        cb: u32,
+        lp_reserved: *mut u16,
+        lp_desktop: *mut u16,
+        lp_title: *mut u16,
+        dw_x: u32,
+        dw_y: u32,
+        dw_x_size: u32,
+        dw_y_size: u32,
+        dw_x_count_chars: u32,
+        dw_y_count_chars: u32,
+        dw_fill_attribute: u32,
+        dw_flags: u32,
+        w_show_window: u16,
+        cb_reserved2: u16,
+        lp_reserved2: *mut u8,
+        h_std_input: Handle,
+        h_std_output: Handle,
+        h_std_error: Handle,
+    }
+
+    #[repr(C)]
+    struct ProcessInformation {
+        h_process: Handle,
+        h_thread: Handle,
+        dw_process_id: u32,
+        dw_thread_id: u32,
+    }
+
+    #[repr(C)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    #[repr(C)]
+    struct JobObjectBasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    struct JobObjectExtendedLimitInformation {
+        basic_limit_information: JobObjectBasicLimitInformation,
+        io_info: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    #[repr(C)]
+    struct TokenElevation {
+        token_is_elevated: u32,
+    }
+
+    unsafe extern "system" {
+        fn CreateProcessW(
+            application_name: *const u16,
+            command_line: *mut u16,
+            process_attributes: *mut c_void,
+            thread_attributes: *mut c_void,
+            inherit_handles: i32,
+            creation_flags: u32,
+            environment: *mut c_void,
+            current_directory: *const u16,
+            startup_info: *mut StartupInfoW,
+            process_information: *mut ProcessInformation,
+        ) -> i32;
+        fn CreateJobObjectW(attributes: *mut c_void, name: *const u16) -> Handle;
+        fn SetInformationJobObject(
+            job: Handle,
+            info_class: i32,
+            job_object_information: *mut c_void,
+            job_object_information_length: u32,
+        ) -> i32;
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> i32;
+        fn ResumeThread(thread: Handle) -> u32;
+        fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
+        fn TerminateJobObject(job: Handle, exit_code: u32) -> i32;
+        fn TerminateProcess(process: Handle, exit_code: u32) -> i32;
+        fn GetExitCodeProcess(process: Handle, exit_code: *mut u32) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+        fn GetCurrentProcess() -> Handle;
+        fn OpenProcessToken(process: Handle, desired_access: u32, token: *mut Handle) -> i32;
+        fn GetTokenInformation(
+            token: Handle,
+            token_information_class: u32,
+            token_information: *mut c_void,
+            token_information_length: u32,
+            return_length: *mut u32,
+        ) -> i32;
+        fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+    }
+
+    struct OwnedHandle(Handle);
+
+    impl OwnedHandle {
+        fn new(handle: Handle) -> Option<Self> {
+            (!handle.is_null()).then_some(Self(handle))
+        }
+
+        fn raw(&self) -> Handle {
+            self.0
+        }
+    }
+
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    pub fn is_current_process_elevated() -> bool {
+        let mut token = std::ptr::null_mut();
+        let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+        let Some(token) = OwnedHandle::new(token) else {
+            return true;
+        };
+        if opened == FALSE {
+            return true;
+        }
+        let mut elevation = TokenElevation {
+            token_is_elevated: 0,
+        };
+        let mut returned = 0_u32;
+        let ok = unsafe {
+            GetTokenInformation(
+                token.raw(),
+                TOKEN_ELEVATION_CLASS,
+                &mut elevation as *mut _ as *mut c_void,
+                std::mem::size_of::<TokenElevation>() as u32,
+                &mut returned,
+            )
+        };
+        ok != FALSE && elevation.token_is_elevated != 0
+    }
+
+    pub fn system_cmd_exe() -> io::Result<PathBuf> {
+        let mut buffer = vec![0_u16; MAX_PATH];
+        let copied = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+        if copied == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buffer.truncate(copied as usize);
+        Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)).join("cmd.exe"))
+    }
+
+    pub fn run_pinned_cmd(
+        command_processor: &Path,
+        script: &Path,
+        working_directory: &Path,
+        rime_user_directory: &Path,
+        download_cache_directory: &Path,
+        package_spec: &str,
+        timeout: Duration,
+    ) -> Result<i32, ProviderProcessError> {
+        let job = create_kill_on_close_job()?;
+        let mut command_processor_wide = wide_null(command_processor);
+        let mut command_line = pinned_cmd_line(command_processor, script, package_spec);
+        let mut current_directory = wide_null(working_directory);
+        let mut environment = environment_block(rime_user_directory, download_cache_directory);
+        let mut startup = StartupInfoW {
+            cb: std::mem::size_of::<StartupInfoW>() as u32,
+            lp_reserved: std::ptr::null_mut(),
+            lp_desktop: std::ptr::null_mut(),
+            lp_title: std::ptr::null_mut(),
+            dw_x: 0,
+            dw_y: 0,
+            dw_x_size: 0,
+            dw_y_size: 0,
+            dw_x_count_chars: 0,
+            dw_y_count_chars: 0,
+            dw_fill_attribute: 0,
+            dw_flags: 0,
+            w_show_window: 0,
+            cb_reserved2: 0,
+            lp_reserved2: std::ptr::null_mut(),
+            h_std_input: std::ptr::null_mut(),
+            h_std_output: std::ptr::null_mut(),
+            h_std_error: std::ptr::null_mut(),
+        };
+        let mut process = ProcessInformation {
+            h_process: std::ptr::null_mut(),
+            h_thread: std::ptr::null_mut(),
+            dw_process_id: 0,
+            dw_thread_id: 0,
+        };
+        let created = unsafe {
+            CreateProcessW(
+                command_processor_wide.as_mut_ptr(),
+                command_line.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                FALSE,
+                CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                environment.as_mut_ptr() as *mut c_void,
+                current_directory.as_mut_ptr(),
+                &mut startup,
+                &mut process,
+            )
+        };
+        if created == FALSE {
+            return Err(ProviderProcessError::launch());
+        }
+        let process_handle =
+            OwnedHandle::new(process.h_process).ok_or_else(ProviderProcessError::launch)?;
+        let thread_handle =
+            OwnedHandle::new(process.h_thread).ok_or_else(ProviderProcessError::launch)?;
+        let assigned = unsafe { AssignProcessToJobObject(job.raw(), process_handle.raw()) };
+        if assigned == FALSE {
+            unsafe {
+                let _ = TerminateProcess(process_handle.raw(), 2);
+            }
+            return Err(ProviderProcessError::launch());
+        }
+        let resumed = unsafe { ResumeThread(thread_handle.raw()) };
+        if resumed == u32::MAX {
+            unsafe {
+                let _ = TerminateJobObject(job.raw(), 2);
+            }
+            return Err(ProviderProcessError::launch());
+        }
+        let timeout_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        match unsafe { WaitForSingleObject(process_handle.raw(), timeout_ms) } {
+            WAIT_OBJECT_0 => {
+                let mut exit_code = 1_u32;
+                let ok = unsafe { GetExitCodeProcess(process_handle.raw(), &mut exit_code) };
+                if ok == FALSE {
+                    return Err(ProviderProcessError::launch());
+                }
+                Ok(exit_code as i32)
+            }
+            WAIT_TIMEOUT => {
+                unsafe {
+                    let _ = TerminateJobObject(job.raw(), 2);
+                    let _ = WaitForSingleObject(process_handle.raw(), 5000);
+                }
+                Err(ProviderProcessError::timeout())
+            }
+            _ => Err(ProviderProcessError::launch()),
+        }
+    }
+
+    fn create_kill_on_close_job() -> Result<OwnedHandle, ProviderProcessError> {
+        let raw = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
+        let job = OwnedHandle::new(raw).ok_or_else(ProviderProcessError::launch)?;
+        let mut limits = JobObjectExtendedLimitInformation {
+            basic_limit_information: JobObjectBasicLimitInformation {
+                per_process_user_time_limit: 0,
+                per_job_user_time_limit: 0,
+                limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                minimum_working_set_size: 0,
+                maximum_working_set_size: 0,
+                active_process_limit: 0,
+                affinity: 0,
+                priority_class: 0,
+                scheduling_class: 0,
+            },
+            io_info: IoCounters {
+                read_operation_count: 0,
+                write_operation_count: 0,
+                other_operation_count: 0,
+                read_transfer_count: 0,
+                write_transfer_count: 0,
+                other_transfer_count: 0,
+            },
+            process_memory_limit: 0,
+            job_memory_limit: 0,
+            peak_process_memory_used: 0,
+            peak_job_memory_used: 0,
+        };
+        let ok = unsafe {
+            SetInformationJobObject(
+                job.raw(),
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                &mut limits as *mut _ as *mut c_void,
+                std::mem::size_of::<JobObjectExtendedLimitInformation>() as u32,
+            )
+        };
+        if ok == FALSE {
+            Err(ProviderProcessError::launch())
+        } else {
+            Ok(job)
+        }
+    }
+
+    fn wide_null(path: &Path) -> Vec<u16> {
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        wide.push(0);
+        wide
+    }
+
+    fn push_wide_literal(output: &mut Vec<u16>, value: &str) {
+        output.extend(value.encode_utf16());
+    }
+
+    fn push_quoted_path(output: &mut Vec<u16>, path: &Path) {
+        output.push('"' as u16);
+        output.extend(path.as_os_str().encode_wide());
+        output.push('"' as u16);
+    }
+
+    fn pinned_cmd_line(command_processor: &Path, script: &Path, package_spec: &str) -> Vec<u16> {
+        let mut output = Vec::new();
+        push_quoted_path(&mut output, command_processor);
+        push_wide_literal(&mut output, " /d /s /c \"");
+        push_quoted_path(&mut output, script);
+        output.push(' ' as u16);
+        output.extend(package_spec.encode_utf16());
+        output.push('"' as u16);
+        output.push(0);
+        output
+    }
+
+    fn environment_block(rime_user_directory: &Path, download_cache_directory: &Path) -> Vec<u16> {
+        let override_keys = ["rime_dir", "rime_frontend", "download_cache_dir"];
+        let mut pairs: Vec<(String, Vec<u16>)> = std::env::vars_os()
+            .filter_map(|(key, value)| {
+                let key = key.to_string_lossy().into_owned();
+                if override_keys
+                    .iter()
+                    .any(|candidate| key.eq_ignore_ascii_case(candidate))
+                {
+                    return None;
+                }
+                let mut encoded = Vec::new();
+                encoded.extend(key.encode_utf16());
+                encoded.push('=' as u16);
+                encoded.extend(value.encode_wide());
+                Some((key.to_ascii_uppercase(), encoded))
+            })
+            .collect();
+        pairs.push((
+            "RIME_DIR".to_owned(),
+            env_pair("rime_dir", rime_user_directory),
+        ));
+        pairs.push((
+            "RIME_FRONTEND".to_owned(),
+            env_pair_literal("rime_frontend", "fcitx5-rime"),
+        ));
+        pairs.push((
+            "DOWNLOAD_CACHE_DIR".to_owned(),
+            env_pair("download_cache_dir", download_cache_directory),
+        ));
+        pairs.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut block = Vec::new();
+        for (_key, mut encoded) in pairs {
+            block.append(&mut encoded);
+            block.push(0);
+        }
+        block.push(0);
+        block
+    }
+
+    fn env_pair(name: &str, path: &Path) -> Vec<u16> {
+        let mut output = Vec::new();
+        output.extend(name.encode_utf16());
+        output.push('=' as u16);
+        output.extend(path.as_os_str().encode_wide());
+        output
+    }
+
+    fn env_pair_literal(name: &str, value: &str) -> Vec<u16> {
+        let mut output = Vec::new();
+        output.extend(name.encode_utf16());
+        output.push('=' as u16);
+        output.extend(value.encode_utf16());
+        output
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct PackageId(String);
 
@@ -917,6 +1826,18 @@ pub enum PackageType {
     InputMethodData,
     Theme,
     Translation,
+}
+
+impl PackageType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Addon => "addon",
+            Self::InputMethodData => "inputmethod-data",
+            Self::Theme => "theme",
+            Self::Translation => "translation",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2105,6 +3026,1151 @@ pub fn find_repository_package<'a>(
         entry.id == package_id
             && (entry.architecture == "any" || entry.architecture == architecture)
     })
+}
+
+#[cfg(windows)]
+mod repository_ffi {
+    #![allow(unsafe_code)]
+
+    use super::{
+        parse_signature_envelope, verify_repository_index, verify_repository_index_envelope,
+        PackageId, RepositoryEntry, RepositoryIndex, SignedObject, TrustAlgorithm, TrustedKey,
+    };
+    use std::fmt::Write as _;
+    use std::slice;
+
+    const ERROR_CODE_BYTES: usize = 64;
+    const ERROR_MESSAGE_BYTES: usize = 512;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5ByteSlice {
+        pub data: *const u8,
+        pub len: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5TrustedKey {
+        pub id: Fcitx5ByteSlice,
+        pub algorithm: Fcitx5ByteSlice,
+        pub public_key: Fcitx5ByteSlice,
+        pub rsa_public_blob: Fcitx5ByteSlice,
+        pub revoked: u8,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RepositoryBlob {
+        pub data: *mut u8,
+        pub len: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RepositoryResult {
+        pub status: i32,
+        pub error_code: [u8; ERROR_CODE_BYTES],
+        pub error_message: [u8; ERROR_MESSAGE_BYTES],
+        pub blob: Fcitx5RepositoryBlob,
+    }
+
+    fn empty_result() -> Fcitx5RepositoryResult {
+        Fcitx5RepositoryResult {
+            status: 0,
+            error_code: [0; ERROR_CODE_BYTES],
+            error_message: [0; ERROR_MESSAGE_BYTES],
+            blob: Fcitx5RepositoryBlob {
+                data: std::ptr::null_mut(),
+                len: 0,
+            },
+        }
+    }
+
+    fn write_c_string(buffer: &mut [u8], value: &str) {
+        if buffer.is_empty() {
+            return;
+        }
+        let bytes = value.as_bytes();
+        let copy_len = bytes.len().min(buffer.len() - 1);
+        buffer[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        buffer[copy_len] = 0;
+    }
+
+    fn error_result(code: &str, message: impl Into<String>) -> Fcitx5RepositoryResult {
+        let mut result = empty_result();
+        result.status = 1;
+        write_c_string(&mut result.error_code, code);
+        write_c_string(&mut result.error_message, &message.into());
+        result
+    }
+
+    fn blob_result(bytes: Vec<u8>) -> Fcitx5RepositoryResult {
+        let mut result = empty_result();
+        let mut bytes = bytes;
+        result.blob = Fcitx5RepositoryBlob {
+            data: bytes.as_mut_ptr(),
+            len: bytes.len(),
+        };
+        std::mem::forget(bytes);
+        result
+    }
+
+    fn slice_from_raw<'a>(slice: Fcitx5ByteSlice) -> Option<&'a [u8]> {
+        if slice.len == 0 {
+            return Some(&[]);
+        }
+        if slice.data.is_null() {
+            return None;
+        }
+        Some(unsafe { slice::from_raw_parts(slice.data, slice.len) })
+    }
+
+    fn string_from_raw(slice: Fcitx5ByteSlice) -> Option<String> {
+        let bytes = slice_from_raw(slice)?;
+        std::str::from_utf8(bytes)
+            .ok()
+            .map(|value| value.to_owned())
+    }
+
+    fn algorithm_from_str(value: &str) -> Option<TrustAlgorithm> {
+        match value {
+            "rsa-2048-sha256" => Some(TrustAlgorithm::Rsa2048Sha256),
+            "mldsa65" => Some(TrustAlgorithm::Mldsa65),
+            "slhdsa-sha2-128s" => Some(TrustAlgorithm::SlhdsaSha2_128s),
+            _ => None,
+        }
+    }
+
+    fn key_from_raw(raw: &Fcitx5TrustedKey) -> Option<TrustedKey> {
+        let id = PackageId::parse(&string_from_raw(raw.id)?).ok()?;
+        let algorithm = algorithm_from_str(&string_from_raw(raw.algorithm)?)?;
+        let public_key = slice_from_raw(raw.public_key)?.to_vec();
+        Some(TrustedKey {
+            id,
+            algorithm,
+            public_key,
+            revoked: raw.revoked != 0,
+        })
+    }
+
+    fn trusted_keys_from_raw(
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+    ) -> Option<Vec<TrustedKey>> {
+        if trusted_key_count == 0 {
+            return Some(Vec::new());
+        }
+        if trusted_keys.is_null() && trusted_key_count != 0 {
+            return None;
+        }
+        let raw = unsafe { slice::from_raw_parts(trusted_keys, trusted_key_count) };
+        raw.iter().map(key_from_raw).collect()
+    }
+
+    fn json_escape(text: &str, output: &mut String) {
+        for character in text.chars() {
+            match character {
+                '\\' => output.push_str("\\\\"),
+                '"' => output.push_str("\\\""),
+                '\u{08}' => output.push_str("\\b"),
+                '\u{0C}' => output.push_str("\\f"),
+                '\n' => output.push_str("\\n"),
+                '\r' => output.push_str("\\r"),
+                '\t' => output.push_str("\\t"),
+                character if character <= '\u{1F}' => {
+                    let _ = write!(output, "\\u{:04x}", character as u32);
+                }
+                character => output.push(character),
+            }
+        }
+    }
+
+    fn repository_index_to_json(index: &RepositoryIndex) -> String {
+        let mut output = String::new();
+        output.push('{');
+        output.push_str("\"format_version\":1");
+        output.push_str(",\"channel\":\"");
+        json_escape(index.channel(), &mut output);
+        output.push('"');
+        output.push_str(",\"generated_at\":\"");
+        json_escape(index.generated_at(), &mut output);
+        output.push('"');
+        output.push_str(",\"key_id\":\"");
+        json_escape(index.key_id(), &mut output);
+        output.push('"');
+        output.push_str(",\"packages\":[");
+        for (package_index, package) in index.packages().iter().enumerate() {
+            if package_index != 0 {
+                output.push(',');
+            }
+            repository_entry_to_json(package, &mut output);
+        }
+        output.push_str("]}");
+        output
+    }
+
+    fn repository_entry_to_json(entry: &RepositoryEntry, output: &mut String) {
+        output.push('{');
+        output.push_str("\"id\":\"");
+        json_escape(entry.id(), output);
+        output.push_str("\",\"title\":\"");
+        json_escape(entry.title(), output);
+        output.push_str("\",\"summary\":\"");
+        json_escape(entry.summary(), output);
+        output.push_str("\",\"version\":\"");
+        json_escape(entry.version(), output);
+        let _ = write!(
+            output,
+            "\",\"release_sequence\":{}",
+            entry.release_sequence()
+        );
+        output.push_str(",\"type\":\"");
+        output.push_str(entry.package_type().as_str());
+        output.push_str("\",\"architecture\":\"");
+        json_escape(entry.architecture(), output);
+        output.push_str("\",\"download_url\":\"");
+        json_escape(entry.download_url(), output);
+        output.push_str("\",\"sha256\":\"");
+        json_escape(entry.sha256().as_str(), output);
+        output.push_str("\",\"dependencies\":[");
+        for (dependency_index, dependency) in entry.dependencies().iter().enumerate() {
+            if dependency_index != 0 {
+                output.push(',');
+            }
+            output.push_str("{\"id\":\"");
+            json_escape(dependency.id(), output);
+            output.push_str("\",\"version\":\"");
+            json_escape(dependency.version(), output);
+            output.push_str("\"}");
+        }
+        output.push_str("]}");
+    }
+
+    fn repository_result(
+        result: Result<RepositoryIndex, super::RepositoryError>,
+    ) -> Fcitx5RepositoryResult {
+        match result {
+            Ok(index) => blob_result(repository_index_to_json(&index).into_bytes()),
+            Err(error) => error_result(error.code(), error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_blob_free(data: *mut u8, len: usize) {
+        if !data.is_null() && len != 0 {
+            unsafe {
+                drop(Vec::from_raw_parts(data, len, len));
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_verify_index_utf8(
+        index_data: *const u8,
+        index_len: usize,
+        signature_data: *const u8,
+        signature_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+        expected_channel: *const u8,
+        expected_channel_len: usize,
+    ) -> Fcitx5RepositoryResult {
+        let Some(index_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: index_data,
+            len: index_len,
+        }) else {
+            return error_result("invalid_repository", "repository index is not strict JSON");
+        };
+        let Some(signature_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: signature_data,
+            len: signature_len,
+        }) else {
+            return error_result("invalid_signature", "repository signature is invalid");
+        };
+        let Some(expected_channel) = string_from_raw(Fcitx5ByteSlice {
+            data: expected_channel,
+            len: expected_channel_len,
+        }) else {
+            return error_result("invalid_repository", "repository identity is invalid");
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return error_result(
+                "invalid_repository",
+                "trusted repository key set is invalid",
+            );
+        };
+        repository_result(verify_repository_index(
+            index_bytes,
+            signature_bytes,
+            &trusted_keys,
+            &expected_channel,
+        ))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_verify_index_envelope_utf8(
+        index_data: *const u8,
+        index_len: usize,
+        envelope_data: *const u8,
+        envelope_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+        expected_channel: *const u8,
+        expected_channel_len: usize,
+    ) -> Fcitx5RepositoryResult {
+        let Some(index_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: index_data,
+            len: index_len,
+        }) else {
+            return error_result("invalid_repository", "repository index is not strict JSON");
+        };
+        let Some(envelope_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: envelope_data,
+            len: envelope_len,
+        }) else {
+            return error_result("invalid_signature", "signature envelope is invalid");
+        };
+        let Some(expected_channel) = string_from_raw(Fcitx5ByteSlice {
+            data: expected_channel,
+            len: expected_channel_len,
+        }) else {
+            return error_result("invalid_repository", "repository identity is invalid");
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return error_result(
+                "invalid_repository",
+                "trusted repository key set is invalid",
+            );
+        };
+        let Ok(envelope_text) = std::str::from_utf8(envelope_bytes) else {
+            return error_result("invalid_signature", "signature envelope is invalid UTF-8");
+        };
+        let Ok(envelope) = parse_signature_envelope(envelope_text, SignedObject::RepositoryIndex)
+        else {
+            return error_result("invalid_signature", "signature envelope is invalid");
+        };
+        repository_result(verify_repository_index_envelope(
+            index_bytes,
+            &envelope,
+            &trusted_keys,
+            &expected_channel,
+        ))
+    }
+}
+
+#[cfg(windows)]
+mod deployment_ffi {
+    #![allow(unsafe_code)]
+
+    use super::win32_fs_adapter;
+    use super::{JsonParser, JsonValue};
+    use std::ffi::OsString;
+    use std::fs;
+    use std::os::windows::ffi::OsStringExt;
+    use std::path::{Path, PathBuf};
+    use std::slice;
+
+    #[repr(u32)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum Fcitx5UpdateOwner {
+        Builtin = 0,
+        Chocolatey = 1,
+        Winget = 2,
+        Enterprise = 3,
+        Manual = 4,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5DeploymentState {
+        pub format_version: u32,
+        pub channel: [u8; 65],
+        pub owner: u32,
+        pub current: [u8; 65],
+        pub previous: [u8; 65],
+        pub pending: [u8; 65],
+        pub healthy: u8,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5GenerationState {
+        pub format_version: u32,
+        pub current_generation: [u8; 33],
+        pub previous_generation: [u8; 33],
+        pub build_id: [u8; 65],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5StringResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub value: [u8; 65],
+    }
+
+    fn write_ascii<const N: usize>(buffer: &mut [u8; N], value: &str) -> bool {
+        if value.len() >= N {
+            return false;
+        }
+        buffer.fill(0);
+        buffer[..value.len()].copy_from_slice(value.as_bytes());
+        true
+    }
+
+    fn result_ok() -> Fcitx5StringResult {
+        Fcitx5StringResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            value: [0; 65],
+        }
+    }
+
+    fn result_err(code: &str, message: &str) -> Fcitx5StringResult {
+        let mut result = result_ok();
+        result.status = 1;
+        let _ = write_ascii(&mut result.error_code, code);
+        let _ = write_ascii(&mut result.error_message, message);
+        result
+    }
+
+    fn owner_name(owner: Fcitx5UpdateOwner) -> &'static str {
+        match owner {
+            Fcitx5UpdateOwner::Builtin => "builtin",
+            Fcitx5UpdateOwner::Chocolatey => "chocolatey",
+            Fcitx5UpdateOwner::Winget => "winget",
+            Fcitx5UpdateOwner::Enterprise => "enterprise",
+            Fcitx5UpdateOwner::Manual => "manual",
+        }
+    }
+
+    fn parse_owner(value: &str) -> Option<Fcitx5UpdateOwner> {
+        match value {
+            "builtin" => Some(Fcitx5UpdateOwner::Builtin),
+            "chocolatey" => Some(Fcitx5UpdateOwner::Chocolatey),
+            "winget" => Some(Fcitx5UpdateOwner::Winget),
+            "enterprise" => Some(Fcitx5UpdateOwner::Enterprise),
+            "manual" => Some(Fcitx5UpdateOwner::Manual),
+            _ => None,
+        }
+    }
+
+    fn token(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 64
+            && value.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_uppercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'-' | b'_' | b'+')
+            })
+    }
+
+    fn generation_token(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 32
+            && value.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+    }
+
+    fn path_from_utf16(ptr: *const u16, len: usize) -> Option<PathBuf> {
+        if ptr.is_null() && len != 0 {
+            return None;
+        }
+        if len == 0 {
+            return Some(PathBuf::new());
+        }
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
+        Some(PathBuf::from(OsString::from_wide(slice)))
+    }
+
+    fn string_from_utf16(ptr: *const u16, len: usize) -> Option<String> {
+        if ptr.is_null() && len != 0 {
+            return None;
+        }
+        if len == 0 {
+            return Some(String::new());
+        }
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
+        String::from_utf16(slice).ok()
+    }
+
+    fn state_path(root: &Path) -> PathBuf {
+        root.join("deployment.json")
+    }
+
+    fn update_owner_path(root: &Path) -> PathBuf {
+        root.join("update-owner.json")
+    }
+
+    fn publish_text(path: &Path, text: &str) -> Result<(), String> {
+        fs::create_dir_all(path.parent().ok_or("deployment path is invalid")?)
+            .map_err(|_| "deployment publication failed".to_owned())?;
+        let temporary = path.with_extension("json.new");
+        fs::write(&temporary, text).map_err(|_| "deployment publication failed".to_owned())?;
+        win32_fs_adapter::replace_file(&temporary, path).map_err(|_| {
+            let _ = fs::remove_file(&temporary);
+            "deployment publication failed".to_owned()
+        })?;
+        Ok(())
+    }
+
+    fn get_required_string(object: &[(String, JsonValue)], key: &str) -> Result<String, String> {
+        object
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .and_then(|(_, value)| value.as_string())
+            .map(|value| value.to_owned())
+            .ok_or_else(|| "deployment state schema is invalid".to_owned())
+    }
+
+    fn get_required_bool(object: &[(String, JsonValue)], key: &str) -> Result<bool, String> {
+        match object
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value)
+        {
+            Some(JsonValue::Bool(value)) => Ok(*value),
+            Some(_) => Err("deployment state schema is invalid".to_owned()),
+            None => Err("deployment state schema is invalid".to_owned()),
+        }
+    }
+
+    fn get_required_number(object: &[(String, JsonValue)], key: &str) -> Result<u64, String> {
+        object
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .and_then(|(_, value)| value.as_number())
+            .ok_or_else(|| "deployment state schema is invalid".to_owned())
+    }
+
+    fn parse_update_owner(bytes: &str) -> Result<Fcitx5UpdateOwner, String> {
+        let document = JsonParser::new(bytes)
+            .parse()
+            .map_err(|_| "update owner schema is invalid".to_owned())?;
+        let object = document
+            .as_object()
+            .ok_or_else(|| "update owner schema is invalid".to_owned())?;
+        if object.len() != 2
+            || get_required_number(object, "format_version")? != 1
+            || !object.iter().any(|(key, _)| key == "update_owner")
+        {
+            return Err("update owner schema is invalid".to_owned());
+        }
+        let owner = get_required_string(object, "update_owner")?;
+        parse_owner(&owner).ok_or_else(|| "unknown update owner".to_owned())
+    }
+
+    fn read_update_owner(root: &Path) -> Result<Fcitx5UpdateOwner, String> {
+        let path = update_owner_path(root);
+        if !path.exists() {
+            return Ok(Fcitx5UpdateOwner::Manual);
+        }
+        let bytes =
+            fs::read_to_string(&path).map_err(|_| "update owner schema is invalid".to_owned())?;
+        parse_update_owner(&bytes)
+    }
+
+    fn write_update_owner(root: &Path, owner: Fcitx5UpdateOwner) -> Result<(), String> {
+        let text = format!(
+            "{{\"format_version\":1,\"update_owner\":\"{}\"}}\n",
+            owner_name(owner)
+        );
+        publish_text(&update_owner_path(root), &text)
+    }
+
+    fn read_deployment_state(root: &Path, channel: &str) -> Result<Fcitx5DeploymentState, String> {
+        let path = state_path(root);
+        if !path.exists() {
+            let mut state = Fcitx5DeploymentState {
+                format_version: 1,
+                channel: [0; 65],
+                owner: Fcitx5UpdateOwner::Manual as u32,
+                current: [0; 65],
+                previous: [0; 65],
+                pending: [0; 65],
+                healthy: 0,
+            };
+            let owner = read_update_owner(root)?;
+            state.owner = owner as u32;
+            let _ = write_ascii(&mut state.channel, channel);
+            return Ok(state);
+        }
+        let bytes =
+            fs::read_to_string(&path).map_err(|_| "deployment state read failed".to_owned())?;
+        let document = JsonParser::new(&bytes)
+            .parse()
+            .map_err(|_| "deployment state schema is invalid".to_owned())?;
+        let object = document
+            .as_object()
+            .ok_or_else(|| "deployment state schema is invalid".to_owned())?;
+        let expected = [
+            "format_version",
+            "channel",
+            "update_owner",
+            "current",
+            "previous",
+            "pending",
+            "healthy",
+        ];
+        if object.len() != expected.len() {
+            return Err("deployment state schema is invalid".to_owned());
+        }
+        for key in expected {
+            if !object.iter().any(|(candidate, _)| candidate == key) {
+                return Err("deployment state schema is invalid".to_owned());
+            }
+        }
+        if get_required_number(object, "format_version")? != 1 {
+            return Err("deployment state schema is invalid".to_owned());
+        }
+        let channel_value = get_required_string(object, "channel")?;
+        let owner_value = parse_owner(&get_required_string(object, "update_owner")?)
+            .ok_or_else(|| "deployment state schema is invalid".to_owned())?;
+        let current = get_required_string(object, "current")?;
+        let previous = get_required_string(object, "previous")?;
+        let pending = get_required_string(object, "pending")?;
+        let healthy = get_required_bool(object, "healthy")?;
+        if channel_value != channel
+            || (!current.is_empty() && !token(&current))
+            || (!previous.is_empty() && !token(&previous))
+            || (!pending.is_empty() && !token(&pending))
+        {
+            return Err("deployment state identity is invalid".to_owned());
+        }
+        let mut result = Fcitx5DeploymentState {
+            format_version: 1,
+            channel: [0; 65],
+            owner: owner_value as u32,
+            current: [0; 65],
+            previous: [0; 65],
+            pending: [0; 65],
+            healthy: healthy as u8,
+        };
+        let _ = write_ascii(&mut result.channel, &channel_value);
+        let _ = write_ascii(&mut result.current, &current);
+        let _ = write_ascii(&mut result.previous, &previous);
+        let _ = write_ascii(&mut result.pending, &pending);
+        Ok(result)
+    }
+
+    fn write_deployment_state(root: &Path, state: &Fcitx5DeploymentState) -> Result<(), String> {
+        let channel = String::from_utf8(
+            state
+                .channel
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect(),
+        )
+        .map_err(|_| "deployment state schema is invalid".to_owned())?;
+        let current = String::from_utf8(
+            state
+                .current
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect(),
+        )
+        .map_err(|_| "deployment state schema is invalid".to_owned())?;
+        let previous = String::from_utf8(
+            state
+                .previous
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect(),
+        )
+        .map_err(|_| "deployment state schema is invalid".to_owned())?;
+        let pending = String::from_utf8(
+            state
+                .pending
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect(),
+        )
+        .map_err(|_| "deployment state schema is invalid".to_owned())?;
+        let owner = match state.owner {
+            0 => "builtin",
+            1 => "chocolatey",
+            2 => "winget",
+            3 => "enterprise",
+            4 => "manual",
+            _ => return Err("deployment state schema is invalid".to_owned()),
+        };
+        let text = format!(
+            "{{\"format_version\":1,\"channel\":\"{}\",\"update_owner\":\"{}\",\"current\":\"{}\",\"previous\":\"{}\",\"pending\":\"{}\",\"healthy\":{}}}\n",
+            channel, owner, current, previous, pending, if state.healthy != 0 { "true" } else { "false" }
+        );
+        publish_text(&state_path(root), &text)
+    }
+
+    fn begin_activation(
+        root: &Path,
+        channel: &str,
+        version: &str,
+        caller: Fcitx5UpdateOwner,
+    ) -> Result<(), String> {
+        if !token(version) {
+            return Err("release version is invalid".to_owned());
+        }
+        let mut state = read_deployment_state(root, channel)?;
+        let owner = read_update_owner(root)?;
+        if owner != caller || owner != Fcitx5UpdateOwner::Builtin {
+            return Err("builtin updater does not own Core updates".to_owned());
+        }
+        let current = state
+            .current
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != 0)
+            .collect::<Vec<_>>();
+        let pending = state
+            .pending
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != 0)
+            .collect::<Vec<_>>();
+        if !pending.is_empty() {
+            return Err("another activation is pending".to_owned());
+        }
+        let previous = state
+            .previous
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != 0)
+            .collect::<Vec<_>>();
+        let healthy = state.healthy != 0;
+        if healthy {
+            let _ = write_ascii(
+                &mut state.previous,
+                std::str::from_utf8(&current).unwrap_or(""),
+            );
+        } else {
+            state.previous = [0; 65];
+            let _ = write_ascii(
+                &mut state.previous,
+                std::str::from_utf8(&previous).unwrap_or(""),
+            );
+        }
+        let _ = write_ascii(&mut state.current, version);
+        let _ = write_ascii(&mut state.pending, version);
+        state.healthy = 0;
+        write_deployment_state(root, &state)
+    }
+
+    fn mark_current_healthy(root: &Path, channel: &str) -> Result<(), String> {
+        let mut state = read_deployment_state(root, channel)?;
+        let current_bytes = state
+            .current
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != 0)
+            .collect::<Vec<_>>();
+        let pending_bytes = state
+            .pending
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != 0)
+            .collect::<Vec<_>>();
+        let current = std::str::from_utf8(&current_bytes).unwrap_or("");
+        let pending = std::str::from_utf8(&pending_bytes).unwrap_or("");
+        if pending.is_empty() || pending != current {
+            return Err("no matching pending release".to_owned());
+        }
+        state.pending = [0; 65];
+        state.healthy = 1;
+        write_deployment_state(root, &state)
+    }
+
+    fn rollback_target(root: &Path, channel: &str) -> Result<String, String> {
+        let state = read_deployment_state(root, channel)?;
+        let previous_bytes = state
+            .previous
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != 0)
+            .collect::<Vec<_>>();
+        let current_bytes = state
+            .current
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != 0)
+            .collect::<Vec<_>>();
+        let previous = std::str::from_utf8(&previous_bytes).unwrap_or("");
+        let current = std::str::from_utf8(&current_bytes).unwrap_or("");
+        if previous.is_empty() || previous == current {
+            return Err("no previous-known-good release exists".to_owned());
+        }
+        Ok(previous.to_owned())
+    }
+
+    fn finish_rollback(root: &Path, channel: &str) -> Result<(), String> {
+        let mut state = read_deployment_state(root, channel)?;
+        let target = rollback_target(root, channel)?;
+        let _ = write_ascii(&mut state.current, &target);
+        state.previous = [0; 65];
+        state.pending = [0; 65];
+        state.healthy = 1;
+        write_deployment_state(root, &state)
+    }
+
+    fn clear_previous_known_good(root: &Path, channel: &str) -> Result<(), String> {
+        let mut state = read_deployment_state(root, channel)?;
+        if state.healthy == 0
+            || !state
+                .pending
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect::<Vec<_>>()
+                .is_empty()
+        {
+            return Err("deployment is not stable".to_owned());
+        }
+        state.previous = [0; 65];
+        write_deployment_state(root, &state)
+    }
+
+    fn runtime_state_path(root: &Path) -> PathBuf {
+        root.join("current.json")
+    }
+
+    fn read_runtime_generation_state(root: &Path) -> Result<Fcitx5GenerationState, String> {
+        let path = runtime_state_path(root);
+        if !path.exists() {
+            return Ok(Fcitx5GenerationState {
+                format_version: 1,
+                current_generation: [0; 33],
+                previous_generation: [0; 33],
+                build_id: [0; 65],
+            });
+        }
+        let bytes =
+            fs::read_to_string(&path).map_err(|_| "runtime generation read failed".to_owned())?;
+        let document = JsonParser::new(&bytes)
+            .parse()
+            .map_err(|_| "runtime generation schema is invalid".to_owned())?;
+        let object = document
+            .as_object()
+            .ok_or_else(|| "runtime generation schema is invalid".to_owned())?;
+        let expected = [
+            "format_version",
+            "current_generation",
+            "previous_generation",
+            "build_id",
+        ];
+        if object.len() != expected.len() {
+            return Err("runtime generation schema is invalid".to_owned());
+        }
+        for key in expected {
+            if !object.iter().any(|(candidate, _)| candidate == key) {
+                return Err("runtime generation schema is invalid".to_owned());
+            }
+        }
+        if get_required_number(object, "format_version")? != 1 {
+            return Err("runtime generation schema is invalid".to_owned());
+        }
+        let current_generation = get_required_string(object, "current_generation")?;
+        let previous_generation = get_required_string(object, "previous_generation")?;
+        let build_id = get_required_string(object, "build_id")?;
+        if (!current_generation.is_empty() && !generation_token(&current_generation))
+            || (!previous_generation.is_empty() && !generation_token(&previous_generation))
+            || (!build_id.is_empty() && !token(&build_id))
+        {
+            return Err("runtime generation identity is invalid".to_owned());
+        }
+        let mut result = Fcitx5GenerationState {
+            format_version: 1,
+            current_generation: [0; 33],
+            previous_generation: [0; 33],
+            build_id: [0; 65],
+        };
+        let _ = write_ascii(&mut result.current_generation, &current_generation);
+        let _ = write_ascii(&mut result.previous_generation, &previous_generation);
+        let _ = write_ascii(&mut result.build_id, &build_id);
+        Ok(result)
+    }
+
+    fn publish_runtime_generation(
+        root: &Path,
+        generation: &str,
+        build_id: &str,
+    ) -> Result<(), String> {
+        if !generation_token(generation) || !token(build_id) {
+            return Err("runtime generation publication identity is invalid".to_owned());
+        }
+        let generation_dir = root.join("runtime").join(generation);
+        if !generation_dir.is_dir() {
+            return Err("runtime generation directory is missing".to_owned());
+        }
+        let previous = read_runtime_generation_state(root)?;
+        let previous_generation = String::from_utf8(
+            previous
+                .current_generation
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect(),
+        )
+        .unwrap_or_default();
+        let text = format!(
+            "{{\"format_version\":1,\"current_generation\":\"{}\",\"previous_generation\":\"{}\",\"build_id\":\"{}\"}}\n",
+            generation, previous_generation, build_id
+        );
+        publish_text(&runtime_state_path(root), &text)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_write_update_owner_utf16(
+        root: *const u16,
+        root_len: usize,
+        owner: u32,
+    ) -> i32 {
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let owner = match owner {
+            0 => Fcitx5UpdateOwner::Builtin,
+            1 => Fcitx5UpdateOwner::Chocolatey,
+            2 => Fcitx5UpdateOwner::Winget,
+            3 => Fcitx5UpdateOwner::Enterprise,
+            4 => Fcitx5UpdateOwner::Manual,
+            _ => return 1,
+        };
+        match write_update_owner(&root, owner) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_read_update_owner_utf16(
+        root: *const u16,
+        root_len: usize,
+        out_owner: *mut u32,
+    ) -> i32 {
+        if out_owner.is_null() {
+            return 1;
+        }
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        match read_update_owner(&root) {
+            Ok(owner) => {
+                unsafe {
+                    *out_owner = owner as u32;
+                }
+                0
+            }
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_read_deployment_state_utf16(
+        root: *const u16,
+        root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+        out_state: *mut Fcitx5DeploymentState,
+    ) -> i32 {
+        if out_state.is_null() {
+            return 1;
+        }
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        match read_deployment_state(&root, &channel) {
+            Ok(state) => {
+                unsafe {
+                    *out_state = state;
+                }
+                0
+            }
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_begin_activation_utf16(
+        root: *const u16,
+        root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+        version: *const u16,
+        version_len: usize,
+        caller: u32,
+    ) -> i32 {
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        let Some(version) = string_from_utf16(version, version_len) else {
+            return 1;
+        };
+        let caller = match caller {
+            0 => Fcitx5UpdateOwner::Builtin,
+            1 => Fcitx5UpdateOwner::Chocolatey,
+            2 => Fcitx5UpdateOwner::Winget,
+            3 => Fcitx5UpdateOwner::Enterprise,
+            4 => Fcitx5UpdateOwner::Manual,
+            _ => return 1,
+        };
+        match begin_activation(&root, &channel, &version, caller) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_mark_current_healthy_utf16(
+        root: *const u16,
+        root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+    ) -> i32 {
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        match mark_current_healthy(&root, &channel) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_rollback_target_utf16(
+        root: *const u16,
+        root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+        out_target: *mut Fcitx5StringResult,
+    ) -> i32 {
+        if out_target.is_null() {
+            return 1;
+        }
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        match rollback_target(&root, &channel) {
+            Ok(value) => {
+                let mut result = result_ok();
+                let _ = write_ascii(&mut result.value, &value);
+                unsafe {
+                    *out_target = result;
+                }
+                0
+            }
+            Err(message) => {
+                unsafe {
+                    *out_target = result_err("rollback_failed", &message);
+                }
+                1
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_finish_rollback_utf16(
+        root: *const u16,
+        root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+    ) -> i32 {
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        match finish_rollback(&root, &channel) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_clear_previous_known_good_utf16(
+        root: *const u16,
+        root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+    ) -> i32 {
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        match clear_previous_known_good(&root, &channel) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_read_runtime_generation_state_utf16(
+        root: *const u16,
+        root_len: usize,
+        out_state: *mut Fcitx5GenerationState,
+    ) -> i32 {
+        if out_state.is_null() {
+            return 1;
+        }
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        match read_runtime_generation_state(&root) {
+            Ok(state) => {
+                unsafe {
+                    *out_state = state;
+                }
+                0
+            }
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_publish_runtime_generation_utf16(
+        root: *const u16,
+        root_len: usize,
+        generation: *const u16,
+        generation_len: usize,
+        build_id: *const u16,
+        build_id_len: usize,
+    ) -> i32 {
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(generation) = string_from_utf16(generation, generation_len) else {
+            return 1;
+        };
+        let Some(build_id) = string_from_utf16(build_id, build_id_len) else {
+            return 1;
+        };
+        match publish_runtime_generation(&root, &generation, &build_id) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3889,7 +5955,7 @@ enum JsonValue {
     Array(Vec<JsonValue>),
     String(String),
     Number(u64),
-    Bool,
+    Bool(bool),
     Null,
 }
 
@@ -3949,8 +6015,10 @@ impl<'a> JsonParser<'a> {
             Some(b'[') => self.parse_array(),
             Some(b'"') => self.parse_string().map(JsonValue::String),
             Some(b'0'..=b'9') => self.parse_number().map(JsonValue::Number),
-            Some(b't') => self.consume_literal("true").map(|()| JsonValue::Bool),
-            Some(b'f') => self.consume_literal("false").map(|()| JsonValue::Bool),
+            Some(b't') => self.consume_literal("true").map(|()| JsonValue::Bool(true)),
+            Some(b'f') => self
+                .consume_literal("false")
+                .map(|()| JsonValue::Bool(false)),
             Some(b'n') => self.consume_literal("null").map(|()| JsonValue::Null),
             _ => Err("manifest is not strict JSON".to_owned()),
         }
@@ -4384,6 +6452,76 @@ mod tests {
     }
 
     #[test]
+    fn provider_plum_policy_matches_frozen_cpp_boundary() {
+        let root =
+            std::env::temp_dir().join(format!("fcitx5-provider-policy-{}", std::process::id()));
+        let provider = root.join("plum");
+        let user = root.join("rime-user");
+        let cache = root.join("cache");
+        fs::create_dir_all(&provider).expect("provider fixture directory");
+        fs::create_dir_all(&user).expect("user fixture directory");
+        fs::create_dir_all(&cache).expect("cache fixture directory");
+        fs::write(provider.join("rime-install.bat"), b"@exit /b 0\r\n")
+            .expect("provider script fixture");
+
+        let official = make_plum_plan(&provider, &user, &cache, ":preset")
+            .expect("official preset should be accepted");
+        assert_eq!(official.trust(), ProviderTrust::Official);
+        assert_eq!(official.rime_user_directory(), user);
+        assert_eq!(official.download_cache_directory(), cache);
+
+        let community = make_plum_plan(&provider, &user, &cache, "someone/schema")
+            .expect("community source shape should parse");
+        assert_eq!(community.trust(), ProviderTrust::Unverified);
+
+        assert!(make_plum_plan(&provider, Path::new(""), &cache, ":preset").is_err());
+        assert!(make_plum_plan(&provider, &user, &cache, "repo & calc.exe").is_err());
+        assert!(make_plum_plan(&provider, &user, &cache, "../evil").is_err());
+
+        fs::remove_file(provider.join("rime-install.bat")).expect("remove script fixture");
+        assert!(make_plum_plan(&provider, &user, &cache, ":preset").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn provider_runner_propagates_nonzero_and_times_out_without_live_input_data() {
+        if provider_process_adapter::is_current_process_elevated() {
+            return;
+        }
+        let root =
+            std::env::temp_dir().join(format!("fcitx5-provider-runner-{}", std::process::id()));
+        let provider = root.join("plum");
+        let user = root.join("rime-user");
+        let cache = root.join("cache");
+        fs::create_dir_all(&provider).expect("provider fixture directory");
+        fs::create_dir_all(&user).expect("user fixture directory");
+        fs::create_dir_all(&cache).expect("cache fixture directory");
+
+        fs::write(provider.join("rime-install.bat"), b"@exit /b 7\r\n")
+            .expect("provider script fixture");
+        let plan = make_plum_plan(&provider, &user, &cache, ":preset")
+            .expect("nonzero provider plan should parse");
+        let exit = run_plum_provider(&plan, false, std::time::Duration::from_secs(10))
+            .expect("nonzero provider exit should propagate");
+        assert_eq!(exit, 7);
+
+        fs::write(
+            provider.join("rime-install.bat"),
+            b"@ping -n 6 127.0.0.1 >NUL\r\n@exit /b 0\r\n",
+        )
+        .expect("hung provider script fixture");
+        let plan = make_plum_plan(&provider, &user, &cache, ":preset")
+            .expect("timeout provider plan should parse");
+        let error = run_plum_provider(&plan, false, std::time::Duration::from_millis(100))
+            .expect_err("hung provider should time out");
+        assert_eq!(error.code(), "provider_failed");
+        assert!(error.to_string().contains("timed out"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn sha256_digest_matches_known_answers() {
         assert_eq!(
             sha256_digest(b"").as_str(),
@@ -4711,6 +6849,54 @@ mod tests {
             .code(),
             "invalid_repository"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repository_sequence_state_matches_cpp_semantics() {
+        let temp = std::env::temp_dir().join(format!(
+            "fcitx5-package-core-sequence-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("fixture temp should create");
+
+        let missing = read_repository_sequence_state(&temp, "stable");
+        assert!(!missing.present && !missing.valid && missing.maximum == 0);
+
+        let sequence_path = temp.join("repository/sequence-stable.json");
+        std::fs::create_dir_all(
+            sequence_path
+                .parent()
+                .expect("sequence parent should exist"),
+        )
+        .expect("sequence parent should create");
+        std::fs::write(
+            &sequence_path,
+            b"format_version=1\nchannel=stable\nmax_release_sequence=8",
+        )
+        .expect("truncated sequence should write");
+        let truncated = read_repository_sequence_state(&temp, "stable");
+        assert!(truncated.present && !truncated.valid && truncated.maximum == 0);
+
+        std::fs::write(
+            &sequence_path,
+            b"format_version=1\nchannel=stable\nmax_release_sequence=not-a-number\n",
+        )
+        .expect("corrupt sequence should write");
+        let corrupt = read_repository_sequence_state(&temp, "stable");
+        assert!(corrupt.present && !corrupt.valid && corrupt.maximum == 0);
+
+        write_repository_sequence_state(&temp, "stable", 9)
+            .expect("sequence state should publish atomically");
+        let repaired = read_repository_sequence_state(&temp, "stable");
+        assert!(repaired.present && repaired.valid && repaired.maximum == 9);
+        assert_eq!(
+            std::fs::read_to_string(&sequence_path).expect("sequence file should read"),
+            "format_version=1\nchannel=stable\nmax_release_sequence=9\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[cfg(windows)]

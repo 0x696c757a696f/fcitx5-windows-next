@@ -127,6 +127,8 @@ int main(int argc, char** argv) {
     const auto rustPackageCliBuild = read_text(sourceRoot / "tools/build-rust-package-cli.ps1");
     const auto rustToolchain = read_text(sourceRoot / "rust-toolchain.toml");
     const auto cargoManifest = read_text(sourceRoot / "Cargo.toml");
+    const auto rustPackageCoreManifest =
+        read_text(sourceRoot / "rust/package-core/Cargo.toml");
     const auto cargoLock = read_text(sourceRoot / "Cargo.lock");
     const auto rustPackageCore =
         read_text(sourceRoot / "rust/package-core/src/lib.rs");
@@ -210,6 +212,30 @@ int main(int argc, char** argv) {
         dependencyInventory.find("\"rust-crate-blake3\"") ==
             std::string::npos) {
         return fail("RUST-R1-01: Rust package-core workspace must be pinned, locked, safe, and consume the frozen package path corpus");
+    }
+    const auto rustProviderBuild = read_text(sourceRoot / "tools/build-rust-provider-cli.ps1");
+    const auto rustProviderBinary =
+        read_text(sourceRoot / "rust/package-core/src/provider_main.rs");
+    if (rustPackageCoreManifest.find("name = \"fcitx5-provider\"") == std::string::npos ||
+        rustPackageCore.find("pub struct PlumPlan") == std::string::npos ||
+        rustPackageCore.find("pub enum ProviderTrust") == std::string::npos ||
+        rustPackageCore.find("make_plum_plan") == std::string::npos ||
+        rustPackageCore.find("run_plum_provider") == std::string::npos ||
+        rustPackageCore.find("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE") == std::string::npos ||
+        rustPackageCore.find("CREATE_SUSPENDED") == std::string::npos ||
+        rustPackageCore.find("provider_runner_propagates_nonzero_and_times_out_without_live_input_data") ==
+            std::string::npos ||
+        rustProviderBinary.find("#![forbid(unsafe_code)]") == std::string::npos ||
+        rustProviderBinary.find("--allow-unverified") == std::string::npos ||
+        rustProviderBinary.find("--plum") == std::string::npos ||
+        rustProviderBinary.find("--audit-self-pe") == std::string::npos ||
+        rustProviderBuild.find("--bin fcitx5-provider") == std::string::npos ||
+        rustProviderBuild.find("fcitx5-provider.exe") == std::string::npos ||
+        cmakeSource.find("Building Rust fcitx5-provider CLI") == std::string::npos ||
+        cmakeSource.find("provider-boundary-smoke") == std::string::npos ||
+        cmakeSource.find("src/package/provider_main.cpp") != std::string::npos ||
+        cmakeSource.find("src/package/provider_policy.cpp") != std::string::npos) {
+        return fail("RUST-R1-04: provider policy/runner must be Rust authoritative, bounded, and covered by artifact smoke");
     }
     const auto configSource = read_text(sourceRoot / "src/config/app_main.cpp");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");

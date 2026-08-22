@@ -4,6 +4,8 @@ use std::path::PathBuf;
 fn main() {
     if cfg!(target_os = "windows") {
         println!("cargo:rustc-link-lib=bcrypt");
+        println!("cargo:rustc-link-lib=ole32");
+        println!("cargo:rustc-link-lib=advapi32");
     }
 
     let repo_root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"))

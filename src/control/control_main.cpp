@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -35,6 +36,26 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+struct RepositorySequenceStateNative {
+    std::uint8_t present{};
+    std::uint8_t valid{};
+    std::uint8_t reserved[6]{};
+    std::uint64_t maximum{};
+};
+static_assert(sizeof(RepositorySequenceStateNative) == 16U);
+static_assert(alignof(RepositorySequenceStateNative) == alignof(std::uint64_t));
+
+extern "C" {
+int fcitx5_repository_sequence_state_read_utf16(const wchar_t* data_root, std::size_t data_root_len,
+                                                const wchar_t* channel, std::size_t channel_len,
+                                                RepositorySequenceStateNative* out_state);
+int fcitx5_repository_sequence_state_write_utf16(const wchar_t* data_root,
+                                                 std::size_t data_root_len,
+                                                 const wchar_t* channel,
+                                                 std::size_t channel_len,
+                                                 std::uint64_t maximum);
+}
 
 namespace {
 
@@ -183,49 +204,17 @@ struct SequenceState {
     std::uint64_t maximum{};
 };
 
-bool parseUnsigned(std::string_view value, std::uint64_t& output) {
-    if (value.empty() ||
-        !std::all_of(value.begin(), value.end(),
-                     [](char character) { return character >= '0' && character <= '9'; }))
-        return false;
-    try {
-        output = std::stoull(std::string(value));
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-constexpr std::uintmax_t kMaximumSequenceStateBytes = 1024U;
-
 SequenceState readSequenceState(const fs::path& dataRoot, std::string_view channel) {
-    const auto path = repositorySequencePath(dataRoot, channel);
-    std::error_code error;
-    if (!fs::exists(path, error))
-        return {};
-    const auto size = fs::file_size(path, error);
-    if (error || size == 0U || size > kMaximumSequenceStateBytes)
+    RepositorySequenceStateNative native{};
+    const auto channelWide = widen(channel);
+    if (channelWide.empty() && !channel.empty())
         return {.present = true, .valid = false, .maximum = 0};
-    std::ifstream input(path, std::ios::binary);
-    if (!input)
+    if (fcitx5_repository_sequence_state_read_utf16(
+            dataRoot.c_str(), dataRoot.native().size(), channelWide.c_str(), channelWide.size(),
+            &native) != 0) {
         return {.present = true, .valid = false, .maximum = 0};
-    std::string text{std::istreambuf_iterator<char>(input), {}};
-    if ((!input.good() && !input.eof()) ||
-        text.size() != static_cast<std::size_t>(size))
-        return {.present = true, .valid = false, .maximum = 0};
-    const std::string prefix =
-        "format_version=1\nchannel=" + std::string(channel) + "\nmax_release_sequence=";
-    if (!text.starts_with(prefix) || text.back() != '\n')
-        return {.present = true, .valid = false, .maximum = 0};
-    const auto maximumText = std::string_view(text).substr(prefix.size());
-    const auto maximumLine = maximumText.substr(0, maximumText.size() - 1U);
-    if (maximumLine.find('\n') != std::string_view::npos ||
-        maximumLine.find('\r') != std::string_view::npos)
-        return {.present = true, .valid = false, .maximum = 0};
-    std::uint64_t maximum = 0;
-    if (!parseUnsigned(maximumLine, maximum))
-        return {.present = true, .valid = false, .maximum = 0};
-    return {.present = true, .valid = true, .maximum = maximum};
+    }
+    return {.present = native.present != 0, .valid = native.valid != 0, .maximum = native.maximum};
 }
 
 std::uint64_t readMaxSequence(const fs::path& dataRoot, std::string_view channel,
@@ -246,36 +235,14 @@ std::uint64_t readMaxSequence(const fs::path& dataRoot, std::string_view channel
 
 void writeMaxSequence(const fs::path& dataRoot, std::string_view channel,
                       std::uint64_t maximum) {
-    const auto path = repositorySequencePath(dataRoot, channel);
-    std::error_code ignored;
-    fs::create_directories(path.parent_path(), ignored);
-    GUID identifier{};
-    std::array<wchar_t, 40> identifierText{};
-    if (FAILED(CoCreateGuid(&identifier)) ||
-        StringFromGUID2(identifier, identifierText.data(),
-                        static_cast<int>(identifierText.size())) == 0) {
+    const auto channelWide = widen(channel);
+    if (channelWide.empty() && !channel.empty()) {
         throw fcitx::package::PackageError(
             "io_error", "repository sequence state publication failed");
     }
-    const auto incoming = fs::path(path.wstring() + L"." + identifierText.data() + L".tmp");
-    const std::string text = "format_version=1\nchannel=" + std::string(channel) +
-                             "\nmax_release_sequence=" + std::to_string(maximum) + "\n";
-    HANDLE file = CreateFileW(incoming.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        throw fcitx::package::PackageError(
-            "io_error", "repository sequence state publication failed");
-    }
-    DWORD written = 0;
-    const bool writeOk =
-        text.size() <= MAXDWORD &&
-        WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) &&
-        written == text.size() && FlushFileBuffers(file);
-    CloseHandle(file);
-    if (!writeOk ||
-        !MoveFileExW(incoming.c_str(), path.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        fs::remove(incoming, ignored);
+    if (fcitx5_repository_sequence_state_write_utf16(
+            dataRoot.c_str(), dataRoot.native().size(), channelWide.c_str(), channelWide.size(),
+            maximum) != 0) {
         throw fcitx::package::PackageError(
             "io_error", "repository sequence state publication failed");
     }

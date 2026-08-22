@@ -1,18 +1,22 @@
-# RUST-R1-02 Rust repository metadata / anti-rollback model
+# RUST-R1-05 Conditional Rust elevated deployer
 
-**State:** FUTURE-GATED
-**Canonical task:** `docs/tasks/rust/R1-02-REPOSITORY.md`
+**State:** FUTURE-GATED / DECISION-GATED
+**Canonical task:** `docs/tasks/rust/R1-05-DEPLOYER-CONDITIONAL.md`
 
 ## Gate
 
-Start only after `RUST-R1-01` is complete and repository-state semantics remain green.
+Start only after installer/register/bootstrap semantics are stable and Rust updater/deployer evidence justifies changing the privileged boundary.
 
 ## Can prepare now
 
-- Keep repository rollback/channel/signature fixtures visible and documented.
-- Identify the exact C++ repository-state API boundary for future differential tests.
+- Record the privilege-boundary operation list.
+- Prepare an ADR template for either Rust cutover or keep-minimal-C++ decision.
+
+## Prepared decision record
+
+- `docs/adr/0007-rust-r1-deployer-decision.md`
 
 ## Must not do before gate opens
 
-- Do not merge downloader/network behavior into repository metadata work.
-- Do not change rollback policy while preparing Rust migration.
+- Do not enlarge the elevated operation set.
+- Do not force Rust if Win7/installer/toolchain evidence is insufficient.

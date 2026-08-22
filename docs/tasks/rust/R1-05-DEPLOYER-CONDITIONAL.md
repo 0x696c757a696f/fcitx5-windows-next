@@ -32,4 +32,8 @@ Evaluate and, only if evidence supports it, migrate the minimal elevated deploye
 - Either a justified Rust cutover with all gates green, or an explicit ADR to keep the minimal C++ deployer.
 - No duplicated long-term business logic.
 
+## Prepared decision record
+
+- `docs/adr/0007-rust-r1-deployer-decision.md`
+
 After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.

@@ -5,7 +5,7 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 ## Advancement policy
 
 - `001` is archived as completed.
-- `R1-01` is the current task.
+- `R1-01` through `R1-04` are completed; `R1-05` is the current gated task.
 - After an automatable task is green, archive it, update `status.md`, copy the next eligible task into `current.md`, and continue.
 - Task `015` contains real-host evidence. Run everything reachable; unavailable cases become `MANUAL-PENDING`. Tasks `016–020` may continue because they are code/product work, but **final stabilization/release cannot be declared complete** until required real-host evidence is actually green.
 - Rust R1 starts only after its named C++ semantic/corpus prerequisites are green.
@@ -49,11 +49,11 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 | 033 | TRUST-005 | COMPLETED | 031/032 | completed/033-TRUST-005.md |
 | 034 | TRUST-006 | COMPLETED | 026 + 031 | completed/034-TRUST-006.md |
 | 035 | PLUGIN-LIFECYCLE-001 | MANUAL-PENDING | 026 + 031/033 where real online install is exercised | completed/035-PLUGIN-LIFECYCLE-001.md |
-| R1-01 | RUST-R1-01 | CURRENT | 014 corpus green; 009 repository-state semantics available where shared | current.md |
-| R1-02 | RUST-R1-02 | FUTURE-GATED | RUST-R1-01 + 009 complete | queue/37-RUST-R1-02.md |
-| R1-03 | RUST-R1-03 | FUTURE-GATED | 020 generation contract + R1-01/02 | queue/38-RUST-R1-03.md |
-| R1-04 | RUST-R1-04 | FUTURE-GATED | 008 process execution semantics + R1-01 | queue/39-RUST-R1-04.md |
-| R1-05 | RUST-R1-05 | FUTURE-GATED | 011/012 installer semantics + R1-03 | queue/40-RUST-R1-05.md |
+| R1-01 | RUST-R1-01 | COMPLETED | 014 corpus green; 009 repository-state semantics available where shared | current.md |
+| R1-02 | RUST-R1-02 | COMPLETED | RUST-R1-01 + 009 complete | completed/RUST-R1-02.md |
+| R1-03 | RUST-R1-03 | COMPLETED | 020 generation contract + R1-01/02 | completed/RUST-R1-03.md |
+| R1-04 | RUST-R1-04 | COMPLETED | 008 process execution semantics + R1-01 | completed/RUST-R1-04.md |
+| R1-05 | RUST-R1-05 | CURRENT / FUTURE-GATED / DECISION-GATED | 011/012 installer semantics + R1-03 | current.md |
 | R2-01 | RUST-R2-01 | FUTURE-GATED | 007 launcher C++ contract green; 020 generation model if launcher supervises drains | queue/41-RUST-R2-01.md |
 | R2-02 | RUST-R2-02 | FUTURE-GATED | 008 green | queue/42-RUST-R2-02.md |
 | R2-03 | RUST-R2-03 | FUTURE-GATED | R2-02; 012 register/bootstrap contract | queue/43-RUST-R2-03.md |

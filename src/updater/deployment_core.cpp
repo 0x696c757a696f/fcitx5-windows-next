@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <cstdint>
 #include <algorithm>
 #include <fstream>
 #include <iterator>
@@ -14,6 +15,67 @@ namespace fcitx::update {
 namespace {
 
 using Json = nlohmann::json;
+
+struct Fcitx5DeploymentState {
+  std::uint32_t format_version{};
+  std::uint8_t channel[65]{};
+  std::uint32_t owner{};
+  std::uint8_t current[65]{};
+  std::uint8_t previous[65]{};
+  std::uint8_t pending[65]{};
+  std::uint8_t healthy{};
+};
+
+struct Fcitx5GenerationState {
+  std::uint32_t format_version{};
+  std::uint8_t current_generation[33]{};
+  std::uint8_t previous_generation[33]{};
+  std::uint8_t build_id[65]{};
+};
+
+struct Fcitx5StringResult {
+  std::int32_t status{};
+  char error_code[64]{};
+  char error_message[512]{};
+  char value[65]{};
+};
+
+extern "C" {
+int fcitx5_update_write_update_owner_utf16(const std::uint16_t* root, std::size_t root_len,
+                                           std::uint32_t owner);
+int fcitx5_update_read_update_owner_utf16(const std::uint16_t* root, std::size_t root_len,
+                                          std::uint32_t* out_owner);
+int fcitx5_update_read_deployment_state_utf16(const std::uint16_t* root, std::size_t root_len,
+                                              const std::uint16_t* channel,
+                                              std::size_t channel_len,
+                                              Fcitx5DeploymentState* out_state);
+int fcitx5_update_begin_activation_utf16(const std::uint16_t* root, std::size_t root_len,
+                                         const std::uint16_t* channel,
+                                         std::size_t channel_len, const std::uint16_t* version,
+                                         std::size_t version_len, std::uint32_t caller);
+int fcitx5_update_mark_current_healthy_utf16(const std::uint16_t* root, std::size_t root_len,
+                                             const std::uint16_t* channel,
+                                             std::size_t channel_len);
+int fcitx5_update_rollback_target_utf16(const std::uint16_t* root, std::size_t root_len,
+                                        const std::uint16_t* channel,
+                                        std::size_t channel_len, Fcitx5StringResult* out_target);
+int fcitx5_update_finish_rollback_utf16(const std::uint16_t* root, std::size_t root_len,
+                                        const std::uint16_t* channel,
+                                        std::size_t channel_len);
+int fcitx5_update_clear_previous_known_good_utf16(const std::uint16_t* root,
+                                                  std::size_t root_len,
+                                                  const std::uint16_t* channel,
+                                                  std::size_t channel_len);
+int fcitx5_update_read_runtime_generation_state_utf16(const std::uint16_t* root,
+                                                      std::size_t root_len,
+                                                      Fcitx5GenerationState* out_state);
+int fcitx5_update_publish_runtime_generation_utf16(const std::uint16_t* root,
+                                                   std::size_t root_len,
+                                                   const std::uint16_t* generation,
+                                                   std::size_t generation_len,
+                                                   const std::uint16_t* build_id,
+                                                   std::size_t build_id_len);
+}
 
 bool token(std::string_view value) {
   return !value.empty() && value.size() <= 64U &&
@@ -39,6 +101,19 @@ std::wstring widen_ascii(std::string_view value) {
   result.reserve(value.size());
   for (const unsigned char character : value) result.push_back(static_cast<wchar_t>(character));
   return result;
+}
+
+[[nodiscard]] std::string bounded_ascii(const char* value, std::size_t maximum) {
+  const auto end = std::find(value, value + maximum, '\0');
+  return {value, end};
+}
+
+[[nodiscard]] const std::uint16_t* utf16_ptr(std::wstring_view value) {
+  return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
+[[nodiscard]] const std::uint16_t* utf16_ptr(const std::wstring& value) {
+  return reinterpret_cast<const std::uint16_t*>(value.c_str());
 }
 
 bool old_tsf_name(const std::filesystem::path& path) {
@@ -114,11 +189,11 @@ void restore_renamed_tsf(const std::filesystem::path& registered_dll_path,
                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 }
 
-std::filesystem::path state_path(const std::filesystem::path& root) {
+[[maybe_unused]] std::filesystem::path state_path(const std::filesystem::path& root) {
   return root / "deployment.json";
 }
 
-std::filesystem::path current_generation_path(const std::filesystem::path& root) {
+[[maybe_unused]] std::filesystem::path current_generation_path(const std::filesystem::path& root) {
   return root / "current.json";
 }
 
@@ -225,21 +300,21 @@ void publish(const std::filesystem::path& path, std::string_view bytes) {
   }
 }
 
-Json state_json(const DeploymentState& state) {
+[[maybe_unused]] Json state_json(const DeploymentState& state) {
   return {{"format_version", 1}, {"channel", state.channel},
           {"update_owner", owner_name(state.owner)}, {"current", state.current},
           {"previous", state.previous}, {"pending", state.pending},
           {"healthy", state.healthy}};
 }
 
-Json runtime_generation_json(const RuntimeGenerationState& state) {
+[[maybe_unused]] Json runtime_generation_json(const RuntimeGenerationState& state) {
   return {{"format_version", 1},
           {"current_generation", state.current_generation},
           {"previous_generation", state.previous_generation},
           {"build_id", state.build_id}};
 }
 
-void write_state(const std::filesystem::path& root, const DeploymentState& state) {
+[[maybe_unused]] void write_state(const std::filesystem::path& root, const DeploymentState& state) {
   publish(state_path(root), state_json(state).dump(2) + "\n");
 }
 
@@ -265,97 +340,109 @@ UpdateOwner parse_owner(std::string_view owner) {
   throw std::invalid_argument("unknown update owner");
 }
 
+UpdateOwner owner_from_value(std::uint32_t owner) {
+  switch (owner) {
+  case 0: return UpdateOwner::builtin;
+  case 1: return UpdateOwner::chocolatey;
+  case 2: return UpdateOwner::winget;
+  case 3: return UpdateOwner::enterprise;
+  case 4: return UpdateOwner::manual;
+  default: throw std::runtime_error("deployment state schema is invalid");
+  }
+}
+
 DeploymentState read_deployment_state(const std::filesystem::path& root,
                                       std::string_view channel) {
-  const auto path = state_path(root);
-  if (!std::filesystem::exists(path)) {
-    return {1, std::string(channel), read_update_owner(root), {}, {}, {}, false};
+  Fcitx5DeploymentState state{};
+  const auto channel_wide = widen_ascii(channel);
+  if (fcitx5_update_read_deployment_state_utf16(utf16_ptr(root), root.native().size(),
+                                                utf16_ptr(channel_wide), channel_wide.size(),
+                                                &state) != 0) {
+    throw std::runtime_error("deployment state read failed");
   }
-  std::ifstream input(path, std::ios::binary);
-  const std::string bytes(std::istreambuf_iterator<char>(input), {});
-  if (!input.good() && !input.eof()) throw std::runtime_error("deployment state read failed");
-  Json document = Json::parse(bytes);
-  static const std::set<std::string> expected{"format_version", "channel", "update_owner",
-                                               "current", "previous", "pending", "healthy"};
-  std::set<std::string> actual;
-  for (const auto& [key, value] : document.items()) { (void)value; actual.emplace(key); }
-  if (!document.is_object() || actual != expected || document.at("format_version") != 1 ||
-      !document.at("healthy").is_boolean()) throw std::runtime_error("deployment state schema is invalid");
-  DeploymentState result{1, document.at("channel").get<std::string>(),
-                         parse_owner(document.at("update_owner").get<std::string>()),
-                         document.at("current").get<std::string>(),
-                         document.at("previous").get<std::string>(),
-                         document.at("pending").get<std::string>(),
-                         document.at("healthy").get<bool>()};
-  if (result.channel != channel || (!result.current.empty() && !token(result.current)) ||
-      (!result.previous.empty() && !token(result.previous)) ||
-      (!result.pending.empty() && !token(result.pending))) {
-    throw std::runtime_error("deployment state identity is invalid");
-  }
-  return result;
+  return {state.format_version,
+          bounded_ascii(reinterpret_cast<const char*>(state.channel), std::size(state.channel)),
+          owner_from_value(state.owner),
+          bounded_ascii(reinterpret_cast<const char*>(state.current), std::size(state.current)),
+          bounded_ascii(reinterpret_cast<const char*>(state.previous), std::size(state.previous)),
+          bounded_ascii(reinterpret_cast<const char*>(state.pending), std::size(state.pending)),
+          state.healthy != 0};
 }
 
 void write_update_owner(const std::filesystem::path& root, UpdateOwner owner) {
-  publish(root / "update-owner.json",
-          Json{{"format_version", 1}, {"update_owner", owner_name(owner)}}.dump(2) + "\n");
+  if (fcitx5_update_write_update_owner_utf16(utf16_ptr(root), root.native().size(),
+                                             static_cast<std::uint32_t>(owner)) != 0) {
+    throw std::runtime_error("update owner publication failed");
+  }
 }
 
 UpdateOwner read_update_owner(const std::filesystem::path& root) {
-  const auto path = root / "update-owner.json";
-  if (!std::filesystem::exists(path)) return UpdateOwner::manual;
-  std::ifstream input(path, std::ios::binary);
-  Json document = Json::parse(input);
-  if (!document.is_object() || document.size() != 2U || document.at("format_version") != 1 ||
-      !document.contains("update_owner")) throw std::runtime_error("update owner schema is invalid");
-  return parse_owner(document.at("update_owner").get<std::string>());
+  std::uint32_t owner = static_cast<std::uint32_t>(UpdateOwner::manual);
+  if (fcitx5_update_read_update_owner_utf16(utf16_ptr(root), root.native().size(), &owner) != 0) {
+    throw std::runtime_error("update owner schema is invalid");
+  }
+  return owner_from_value(owner);
 }
 
 void begin_activation(const std::filesystem::path& root, std::string_view channel,
                       std::string_view version, UpdateOwner caller) {
   if (!token(version)) throw std::invalid_argument("release version is invalid");
-  auto state = read_deployment_state(root, channel);
-  state.owner = read_update_owner(root);
-  if (state.owner != caller || state.owner != UpdateOwner::builtin)
+  const auto state = read_deployment_state(root, channel);
+  const auto owner = read_update_owner(root);
+  if (owner != caller || owner != UpdateOwner::builtin)
     throw std::runtime_error("builtin updater does not own Core updates");
   if (!state.pending.empty()) throw std::runtime_error("another activation is pending");
-  state.previous = state.healthy ? state.current : state.previous;
-  state.current = std::string(version);
-  state.pending = state.current;
-  state.healthy = false;
-  write_state(root, state);
+  const auto channel_wide = widen_ascii(channel);
+  const auto version_wide = widen_ascii(version);
+  if (fcitx5_update_begin_activation_utf16(utf16_ptr(root), root.native().size(),
+                                           utf16_ptr(channel_wide), channel_wide.size(),
+                                           utf16_ptr(version_wide), version_wide.size(),
+                                           static_cast<std::uint32_t>(caller)) != 0) {
+    throw std::runtime_error("deployment activation failed");
+  }
 }
 
 void mark_current_healthy(const std::filesystem::path& root, std::string_view channel) {
-  auto state = read_deployment_state(root, channel);
+  const auto state = read_deployment_state(root, channel);
   if (state.pending.empty() || state.pending != state.current)
     throw std::runtime_error("no matching pending release");
-  state.pending.clear();
-  state.healthy = true;
-  write_state(root, state);
+  const auto channel_wide = widen_ascii(channel);
+  if (fcitx5_update_mark_current_healthy_utf16(utf16_ptr(root), root.native().size(),
+                                               utf16_ptr(channel_wide), channel_wide.size()) != 0) {
+    throw std::runtime_error("deployment health update failed");
+  }
 }
 
 std::string rollback_target(const std::filesystem::path& root, std::string_view channel) {
-  const auto state = read_deployment_state(root, channel);
-  if (state.previous.empty() || state.previous == state.current)
-    throw std::runtime_error("no previous-known-good release exists");
-  return state.previous;
+  Fcitx5StringResult result{};
+  const auto channel_wide = widen_ascii(channel);
+  if (fcitx5_update_rollback_target_utf16(utf16_ptr(root), root.native().size(),
+                                          utf16_ptr(channel_wide), channel_wide.size(),
+                                          &result) != 0) {
+    throw std::runtime_error(result.error_message[0] != '\0' ? result.error_message
+                                                             : "rollback target failed");
+  }
+  return bounded_ascii(result.value, std::size(result.value));
 }
 
 void finish_rollback(const std::filesystem::path& root, std::string_view channel) {
-  auto state = read_deployment_state(root, channel);
   const auto target = rollback_target(root, channel);
-  state.current = target;
-  state.previous.clear();
-  state.pending.clear();
-  state.healthy = true;
-  write_state(root, state);
+  const auto channel_wide = widen_ascii(channel);
+  if (fcitx5_update_finish_rollback_utf16(utf16_ptr(root), root.native().size(),
+                                          utf16_ptr(channel_wide), channel_wide.size()) != 0) {
+    throw std::runtime_error("rollback completion failed");
+  }
 }
 
 void clear_previous_known_good(const std::filesystem::path& root, std::string_view channel) {
-  auto state = read_deployment_state(root, channel);
+  const auto state = read_deployment_state(root, channel);
   if (!state.healthy || !state.pending.empty()) throw std::runtime_error("deployment is not stable");
-  state.previous.clear();
-  write_state(root, state);
+  const auto channel_wide = widen_ascii(channel);
+  if (fcitx5_update_clear_previous_known_good_utf16(utf16_ptr(root), root.native().size(),
+                                                    utf16_ptr(channel_wide),
+                                                    channel_wide.size()) != 0) {
+    throw std::runtime_error("previous-known-good cleanup failed");
+  }
 }
 
 TsfDllUpdateResult install_tsf_dll_generation(
@@ -459,28 +546,17 @@ RuntimeGenerationInstallResult install_runtime_generation(
 }
 
 RuntimeGenerationState read_runtime_generation_state(const std::filesystem::path& root) {
-  const auto path = current_generation_path(root);
-  if (!std::filesystem::exists(path)) return {};
-  std::ifstream input(path, std::ios::binary);
-  const std::string bytes(std::istreambuf_iterator<char>(input), {});
-  if (!input.good() && !input.eof()) throw std::runtime_error("runtime generation read failed");
-  Json document = Json::parse(bytes);
-  static const std::set<std::string> expected{"format_version", "current_generation",
-                                               "previous_generation", "build_id"};
-  std::set<std::string> actual;
-  for (const auto& [key, value] : document.items()) { (void)value; actual.emplace(key); }
-  if (!document.is_object() || actual != expected || document.at("format_version") != 1) {
-    throw std::runtime_error("runtime generation schema is invalid");
+  Fcitx5GenerationState state{};
+  if (fcitx5_update_read_runtime_generation_state_utf16(utf16_ptr(root), root.native().size(),
+                                                        &state) != 0) {
+    throw std::runtime_error("runtime generation read failed");
   }
-  RuntimeGenerationState result{1, document.at("current_generation").get<std::string>(),
-                                document.at("previous_generation").get<std::string>(),
-                                document.at("build_id").get<std::string>()};
-  if ((!result.current_generation.empty() && !generation_token(result.current_generation)) ||
-      (!result.previous_generation.empty() && !generation_token(result.previous_generation)) ||
-      (!result.build_id.empty() && !token(result.build_id))) {
-    throw std::runtime_error("runtime generation identity is invalid");
-  }
-  return result;
+  return {state.format_version,
+          bounded_ascii(reinterpret_cast<const char*>(state.current_generation),
+                        std::size(state.current_generation)),
+          bounded_ascii(reinterpret_cast<const char*>(state.previous_generation),
+                        std::size(state.previous_generation)),
+          bounded_ascii(reinterpret_cast<const char*>(state.build_id), std::size(state.build_id))};
 }
 
 void publish_runtime_generation(const std::filesystem::path& root,
@@ -491,11 +567,15 @@ void publish_runtime_generation(const std::filesystem::path& root,
   if (!std::filesystem::is_directory(runtime_generation_directory(root, generation))) {
     throw std::runtime_error("runtime generation directory is missing");
   }
-  const auto previous = read_runtime_generation_state(root);
-  RuntimeGenerationState next{1, std::string(generation), previous.current_generation,
-                              std::string(build_id)};
-  if (next.previous_generation == next.current_generation) next.previous_generation.clear();
-  publish(current_generation_path(root), runtime_generation_json(next).dump(2) + "\n");
+  const auto generation_wide = widen_ascii(generation);
+  const auto build_id_wide = widen_ascii(build_id);
+  if (fcitx5_update_publish_runtime_generation_utf16(utf16_ptr(root), root.native().size(),
+                                                     utf16_ptr(generation_wide),
+                                                     generation_wide.size(),
+                                                     utf16_ptr(build_id_wide),
+                                                     build_id_wide.size()) != 0) {
+    throw std::runtime_error("runtime generation publication failed");
+  }
 }
 
 }  // namespace fcitx::update

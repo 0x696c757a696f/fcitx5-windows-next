@@ -1,7 +1,17 @@
 #include "package_core.h"
 
+#include <Windows.h>
+#include <wincrypt.h>
+
 #include <algorithm>
-#include <set>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <ranges>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -14,128 +24,234 @@ using Json = nlohmann::json;
   throw PackageError("invalid_repository", std::move(message));
 }
 
-void exact_keys(const Json& object, std::initializer_list<std::string_view> keys) {
-  if (!object.is_object() || object.size() != keys.size()) repository_fail("object shape is invalid");
-  for (const auto key : keys) {
-    if (!object.contains(key)) repository_fail("required repository field is missing");
+[[nodiscard]] std::string json_string(std::string_view value) {
+  std::string result = "\"";
+  for (const unsigned char character : value) {
+    switch (character) {
+      case '\\':
+        result += "\\\\";
+        break;
+      case '"':
+        result += "\\\"";
+        break;
+      case '\b':
+        result += "\\b";
+        break;
+      case '\f':
+        result += "\\f";
+        break;
+      case '\n':
+        result += "\\n";
+        break;
+      case '\r':
+        result += "\\r";
+        break;
+      case '\t':
+        result += "\\t";
+        break;
+      default:
+        if (character < 0x20U) {
+          repository_fail("verified repository envelope contains a control character");
+        }
+        result.push_back(static_cast<char>(character));
+        break;
+    }
   }
-}
-
-std::string text(const Json& object, std::string_view key, std::size_t maximum,
-                 bool empty = false) {
-  const auto& value = object.at(key);
-  if (!value.is_string()) repository_fail("repository text field has the wrong type");
-  auto result = value.get<std::string>();
-  if ((!empty && result.empty()) || result.size() > maximum ||
-      result.find('\0') != std::string::npos) repository_fail("repository text field is invalid");
+  result.push_back('"');
   return result;
 }
 
-bool token(std::string_view value, std::string_view extra = {}) {
-  return !value.empty() && std::ranges::all_of(value, [extra](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= 'A' && character <= 'Z') ||
-           (character >= '0' && character <= '9') ||
-           extra.find(static_cast<char>(character)) != std::string_view::npos;
-  });
-}
-
-bool hex_digest(std::string_view value) {
-  return value.size() == 64U && std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= '0' && character <= '9') ||
-           (character >= 'a' && character <= 'f') ||
-           (character >= 'A' && character <= 'F');
-  });
-}
-
-PackageType package_type(std::string_view value) {
-  if (value == "core") return PackageType::core;
-  if (value == "addon") return PackageType::addon;
-  if (value == "inputmethod-data") return PackageType::input_method_data;
-  if (value == "theme") return PackageType::theme;
-  if (value == "translation") return PackageType::translation;
-  repository_fail("repository package type is unsupported");
-}
-
-bool https_url(std::string_view value) {
-  if (!value.starts_with("https://") || value.size() > 2048U || value.find('@') != value.npos ||
-      value.find('#') != value.npos || value.find('\\') != value.npos) return false;
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return character >= 0x21U && character <= 0x7eU;
-  });
-}
-
-RepositoryIndex parse_repository_index(std::string_view index_bytes,
-                                       std::string_view expectedChannel) {
-  if (index_bytes.empty() || index_bytes.size() > kMaximumManifestBytes) {
-    repository_fail("repository index exceeds its resource budget");
+[[nodiscard]] std::string base64(std::span<const std::byte> value) {
+  DWORD size = 0;
+  if (!CryptBinaryToStringA(reinterpret_cast<const BYTE*>(value.data()),
+                            static_cast<DWORD>(value.size()),
+                            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &size)) {
+    repository_fail("repository signature envelope encoding failed");
   }
+  std::string result(size, '\0');
+  if (!CryptBinaryToStringA(reinterpret_cast<const BYTE*>(value.data()),
+                            static_cast<DWORD>(value.size()),
+                            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, result.data(), &size)) {
+    repository_fail("repository signature envelope encoding failed");
+  }
+  result.resize(size);
+  return result;
+}
+
+struct RepositoryBlob {
+  std::uint8_t* data{};
+  std::size_t len{};
+};
+
+struct RepositoryResult {
+  int status{};
+  char error_code[64]{};
+  char error_message[512]{};
+  RepositoryBlob blob{};
+};
+
+struct FfiByteSlice {
+  const std::uint8_t* data{};
+  std::size_t len{};
+};
+
+struct FfiTrustedKey {
+  FfiByteSlice id{};
+  FfiByteSlice algorithm{};
+  FfiByteSlice public_key{};
+  FfiByteSlice rsa_public_blob{};
+  std::uint8_t revoked{};
+};
+
+extern "C" RepositoryResult fcitx5_repository_verify_index_utf8(
+    const std::uint8_t* index_data, std::size_t index_len, const std::uint8_t* signature_data,
+    std::size_t signature_len, const FfiTrustedKey* trusted_keys, std::size_t trusted_key_count,
+    const std::uint8_t* expected_channel, std::size_t expected_channel_len);
+extern "C" RepositoryResult fcitx5_repository_verify_index_envelope_utf8(
+    const std::uint8_t* index_data, std::size_t index_len, const std::uint8_t* envelope_data,
+    std::size_t envelope_len, const FfiTrustedKey* trusted_keys, std::size_t trusted_key_count,
+    const std::uint8_t* expected_channel, std::size_t expected_channel_len);
+extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len);
+
+struct RustTrustedKey {
+  std::string id;
+  std::string algorithm;
+  std::vector<std::byte> public_key;
+  std::vector<std::byte> rsa_public_blob;
+  bool revoked{};
+};
+
+[[nodiscard]] FfiByteSlice slice_of(const std::string& value) {
+  return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
+}
+
+[[nodiscard]] FfiByteSlice slice_of(std::span<const std::byte> value) {
+  return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
+}
+
+[[nodiscard]] FfiTrustedKey to_ffi(const TrustedKey& key) {
+  return {slice_of(key.id), slice_of(key.algorithm), slice_of(key.public_key),
+          slice_of(key.rsa_public_blob), static_cast<std::uint8_t>(key.revoked)};
+}
+
+[[nodiscard]] std::vector<FfiTrustedKey> to_ffi(std::span<const TrustedKey> keys) {
+  std::vector<FfiTrustedKey> result;
+  result.reserve(keys.size());
+  for (const auto& key : keys) {
+    result.push_back(to_ffi(key));
+  }
+  return result;
+}
+
+[[nodiscard]] RepositoryIndex parse_verified_repository_json(std::string_view bytes) {
   Json document;
   try {
-    document = Json::parse(index_bytes.begin(), index_bytes.end(), nullptr, true, true);
+    document = Json::parse(bytes.begin(), bytes.end(), nullptr, true, true);
   } catch (const Json::exception&) {
-    repository_fail("repository index is not strict JSON");
+    repository_fail("verified repository payload is not strict JSON");
   }
-  exact_keys(document, {"format_version", "channel", "generated_at", "key_id", "packages"});
-  if (!document["format_version"].is_number_unsigned() ||
-      document["format_version"].get<std::uint32_t>() != 1U) {
-    repository_fail("repository format_version must be exactly 1");
+  if (!document.is_object()) {
+    repository_fail("verified repository payload is malformed");
   }
   RepositoryIndex result;
-  result.format_version = 1U;
-  result.channel = text(document, "channel", 16U);
-  result.generated_at = text(document, "generated_at", 64U);
-  result.key_id = text(document, "key_id", 64U);
-  // The repository channel must match the release identity of this build, not
-  // merely be one of the three known names: a stable build must never accept
-  // a beta or nightly index (and vice versa), so a stale or misdirected index
-  // cannot steer a different channel's packages into this installation.
-  if (result.channel != expectedChannel || !token(result.key_id, "-_.")) {
-    repository_fail("repository identity is invalid or channel mismatch");
-  }
-
-  const auto& packages = document["packages"];
-  if (!packages.is_array() || packages.size() > 4096U) repository_fail("package catalog is invalid");
-  std::set<std::pair<std::string, std::string>> identities;
-  for (const auto& item : packages) {
-    exact_keys(item, {"id", "title", "summary", "version", "release_sequence", "type",
-                      "architecture", "download_url", "sha256", "dependencies"});
-    RepositoryEntry entry;
-    entry.id = text(item, "id", 64U);
-    entry.title = text(item, "title", 128U);
-    entry.summary = text(item, "summary", 512U, true);
-    entry.version = text(item, "version", 64U);
-    entry.type = package_type(text(item, "type", 32U));
-    entry.architecture = text(item, "architecture", 8U);
-    entry.download_url = text(item, "download_url", 2048U);
-    entry.sha256 = text(item, "sha256", 64U);
-    const auto& dependencies = item["dependencies"];
-    if (!dependencies.is_array() || dependencies.size() > 256U) {
-      repository_fail("repository dependency list is invalid");
-    }
-    std::set<std::string> dependency_ids;
-    for (const auto& dependency : dependencies) {
-      exact_keys(dependency, {"id", "version"});
-      Dependency parsed{text(dependency, "id", 64U), text(dependency, "version", 64U)};
-      if (!token(parsed.id, "-_.") || !token(parsed.version, ".+-_") ||
-          !dependency_ids.emplace(parsed.id).second) {
-        repository_fail("repository dependency is invalid or duplicated");
+  try {
+    result.format_version = document.at("format_version").get<std::uint32_t>();
+    result.channel = document.at("channel").get<std::string>();
+    result.generated_at = document.at("generated_at").get<std::string>();
+    result.key_id = document.at("key_id").get<std::string>();
+    const auto& packages = document.at("packages");
+    for (const auto& item : packages) {
+      RepositoryEntry entry;
+      entry.id = item.at("id").get<std::string>();
+      entry.title = item.at("title").get<std::string>();
+      entry.summary = item.at("summary").get<std::string>();
+      entry.version = item.at("version").get<std::string>();
+      entry.release_sequence = item.at("release_sequence").get<std::uint64_t>();
+      const auto type = item.at("type").get<std::string>();
+      if (type == "core") {
+        entry.type = PackageType::core;
+      } else if (type == "addon") {
+        entry.type = PackageType::addon;
+      } else if (type == "inputmethod-data") {
+        entry.type = PackageType::input_method_data;
+      } else if (type == "theme") {
+        entry.type = PackageType::theme;
+      } else if (type == "translation") {
+        entry.type = PackageType::translation;
+      } else {
+        repository_fail("verified repository payload has an unsupported package type");
       }
-      entry.dependencies.push_back(std::move(parsed));
+      entry.architecture = item.at("architecture").get<std::string>();
+      entry.download_url = item.at("download_url").get<std::string>();
+      entry.sha256 = item.at("sha256").get<std::string>();
+      for (const auto& dependency : item.at("dependencies")) {
+        Dependency parsed;
+        parsed.id = dependency.at("id").get<std::string>();
+        parsed.version = dependency.at("version").get<std::string>();
+        entry.dependencies.push_back(std::move(parsed));
+      }
+      result.packages.push_back(std::move(entry));
     }
-    if (!item["release_sequence"].is_number_unsigned()) repository_fail("release sequence is invalid");
-    entry.release_sequence = item["release_sequence"].get<std::uint64_t>();
-    if (!token(entry.id, "-_.") || !token(entry.version, ".+-_") ||
-        (entry.architecture != "any" && entry.architecture != "x86" &&
-         entry.architecture != "x64") || !https_url(entry.download_url) ||
-        !hex_digest(entry.sha256) || entry.release_sequence == 0U ||
-        !identities.emplace(entry.id, entry.architecture).second) {
-      repository_fail("repository package record is invalid or duplicated");
-    }
-    result.packages.push_back(std::move(entry));
+  } catch (const Json::exception&) {
+    repository_fail("verified repository payload is malformed");
   }
-  std::ranges::sort(result.packages, {}, &RepositoryEntry::id);
   return result;
+}
+
+[[nodiscard]] std::string serialize_signature_envelope(const SignatureEnvelope& envelope) {
+  std::string result = "{\"format_version\":" + std::to_string(envelope.format_version) +
+                       ",\"signed_object\":" + json_string(envelope.signed_object) +
+                       ",\"canonicalization\":" + json_string(envelope.canonicalization) +
+                       ",\"signatures\":[";
+  bool first = true;
+  for (const auto& signature : envelope.signatures) {
+    if (!first) {
+      result.push_back(',');
+    }
+    first = false;
+    result += "{\"key_id\":" + json_string(signature.key_id) + ",\"algorithm\":" +
+              json_string(signature.algorithm) + ",\"signature_base64\":" +
+              json_string(base64(std::as_bytes(std::span(signature.signature)))) + '}';
+  }
+  result += "]}";
+  return result;
+}
+
+[[nodiscard]] RepositoryIndex verify_repository_via_rust(std::string_view index_bytes,
+                                                         std::string_view signature_bytes,
+                                                         std::span<const TrustedKey> trusted_keys,
+                                                         std::string_view expected_channel) {
+  const auto ffi_keys = to_ffi(trusted_keys);
+  const auto result = fcitx5_repository_verify_index_utf8(
+      reinterpret_cast<const std::uint8_t*>(index_bytes.data()), index_bytes.size(),
+      reinterpret_cast<const std::uint8_t*>(signature_bytes.data()), signature_bytes.size(),
+      ffi_keys.data(), ffi_keys.size(), reinterpret_cast<const std::uint8_t*>(expected_channel.data()),
+      expected_channel.size());
+  if (result.status != 0) {
+    throw PackageError(result.error_code, result.error_message);
+  }
+  std::string verified_blob(reinterpret_cast<const char*>(result.blob.data), result.blob.len);
+  fcitx5_repository_blob_free(result.blob.data, result.blob.len);
+  return parse_verified_repository_json(verified_blob);
+}
+
+[[nodiscard]] RepositoryIndex verify_repository_via_rust(std::string_view index_bytes,
+                                                         const SignatureEnvelope& envelope,
+                                                         std::span<const TrustedKey> trusted_keys,
+                                                         std::string_view expected_channel) {
+  const auto envelope_bytes = serialize_signature_envelope(envelope);
+  const auto ffi_keys = to_ffi(trusted_keys);
+  const auto result = fcitx5_repository_verify_index_envelope_utf8(
+      reinterpret_cast<const std::uint8_t*>(index_bytes.data()), index_bytes.size(),
+      reinterpret_cast<const std::uint8_t*>(envelope_bytes.data()), envelope_bytes.size(),
+      ffi_keys.data(), ffi_keys.size(), reinterpret_cast<const std::uint8_t*>(expected_channel.data()),
+      expected_channel.size());
+  if (result.status != 0) {
+    throw PackageError(result.error_code, result.error_message);
+  }
+  std::string verified_blob(reinterpret_cast<const char*>(result.blob.data), result.blob.len);
+  fcitx5_repository_blob_free(result.blob.data, result.blob.len);
+  return parse_verified_repository_json(verified_blob);
 }
 
 }  // namespace
@@ -144,23 +260,17 @@ RepositoryIndex verify_repository_index(std::string_view index_bytes,
                                         std::span<const std::byte> signature,
                                         std::span<const TrustedKey> trusted_keys,
                                         std::string_view expectedChannel) {
-  auto result = parse_repository_index(index_bytes, expectedChannel);
-  const auto key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
-    return candidate.id == result.key_id;
-  });
-  if (key == trusted_keys.end()) throw PackageError("untrusted_key", "repository key is not trusted");
-  verify_manifest_signature(index_bytes, signature, *key);
-  return result;
+  return verify_repository_via_rust(index_bytes, std::string_view{
+                                                      reinterpret_cast<const char*>(signature.data()),
+                                                      signature.size()},
+                                    trusted_keys, expectedChannel);
 }
 
 RepositoryIndex verify_repository_index(std::string_view index_bytes,
                                         const SignatureEnvelope& envelope,
                                         std::span<const TrustedKey> trusted_keys,
                                         std::string_view expectedChannel) {
-  auto result = parse_repository_index(index_bytes, expectedChannel);
-  verify_signature_envelope(index_bytes, envelope, trusted_keys, "repository-index",
-                            result.key_id);
-  return result;
+  return verify_repository_via_rust(index_bytes, envelope, trusted_keys, expectedChannel);
 }
 
 const RepositoryEntry* find_repository_package(const RepositoryIndex& index,
