@@ -170,6 +170,7 @@ int fcitx5_control_startup_set_utf16(Fcitx5ControlUtf16 executable_directory,
                                      Fcitx5ControlUtf16 registry_value,
                                      std::uint8_t enabled);
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
+int fcitx5_control_usage_text_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
 int fcitx5_control_presentation_json_utf8(const Fcitx5ControlPresentation* presentation,
                                           char** out_ptr, std::size_t* out_len);
@@ -1383,6 +1384,15 @@ bool printControlSchema() {
     return std::cout.good();
 }
 
+bool printUsage() {
+    const char* usage = nullptr;
+    std::size_t usageLength = 0;
+    if (fcitx5_control_usage_text_utf8(&usage, &usageLength) != 0 || usage == nullptr)
+        return false;
+    std::cerr.write(usage, static_cast<std::streamsize>(usageLength));
+    return std::cerr.good();
+}
+
 bool validInputMethodId(std::wstring_view value) noexcept {
     return fcitx5_control_input_method_id_valid_utf16(nativeView(value)) != 0;
 }
@@ -1408,20 +1418,8 @@ bool setStartup(bool enabled) {
 }
 
 void usage() {
-    std::wcerr << L"Usage: fcitx5-control [--data-root PATH] "
-                  L"--status|--restart-engine|--validate-config FILE|--apply-config FILE|"
-                  L"--reset-config|--reset-presentation|--get-startup|--set-startup enabled|disabled|"
-                  L"--get-presentation|"
-                  L"--get-input-methods|--set-input-method ID|--shutdown|"
-                  L"--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT "
-                  L"[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP "
-                  L"FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW OPACITY PREEDIT_MODE]|"
-                  L"--themes-list|--themes-detail ID|"
-                  L"--addons-list|"
-                  L"--packages-list|--packages-detail ID|--packages-refresh [HTTPS_BASE]|"
-                  L"--packages-install ID|--packages-update ID|"
-                  L"--packages-state ID enabled|disabled|--packages-remove ID|"
-                  L"--packages-repair|--get-tsf-guard|--reset-tsf-guard|--schema|--version\n";
+    if (!printUsage())
+        std::cerr << "Usage: fcitx5-control --reset-presentation|--schema|--version\n";
 }
 
 } // namespace

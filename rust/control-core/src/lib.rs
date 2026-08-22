@@ -73,6 +73,22 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
     r#""packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"#,
     r#""sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"}"#
 );
+const CONTROL_USAGE_TEXT: &str = concat!(
+    "Usage: fcitx5-control [--data-root PATH] ",
+    "--status|--restart-engine|--validate-config FILE|--apply-config FILE|",
+    "--reset-config|--reset-presentation|--get-startup|--set-startup enabled|disabled|",
+    "--get-presentation|",
+    "--get-input-methods|--set-input-method ID|--shutdown|",
+    "--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT ",
+    "[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP ",
+    "FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW OPACITY PREEDIT_MODE]|",
+    "--themes-list|--themes-detail ID|",
+    "--addons-list|",
+    "--packages-list|--packages-detail ID|--packages-refresh [HTTPS_BASE]|",
+    "--packages-install ID|--packages-update ID|",
+    "--packages-state ID enabled|disabled|--packages-remove ID|",
+    "--packages-repair|--get-tsf-guard|--reset-tsf-guard|--schema|--version\n"
+);
 const CONTROL_TSF_GUARD_RESET_JSON: &str = r#"{"format_version":1,"tsf_guard":"enabled"}"#;
 const CONTROL_LAUNCHER_ACTION_RESTART_ENGINE: u32 = 1;
 const CONTROL_LAUNCHER_ACTION_SHUTDOWN: u32 = 2;
@@ -1245,6 +1261,25 @@ pub unsafe extern "C" fn fcitx5_control_schema_json_utf8(
     unsafe {
         *out_ptr = CONTROL_SCHEMA_JSON.as_ptr();
         *out_len = CONTROL_SCHEMA_JSON.len();
+    }
+    0
+}
+
+/// # Safety
+///
+/// `out_ptr` and `out_len` must point to writable storage. The returned pointer
+/// is process-static UTF-8 data and must not be freed by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_usage_text_utf8(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return 1;
+    }
+    unsafe {
+        *out_ptr = CONTROL_USAGE_TEXT.as_ptr();
+        *out_len = CONTROL_USAGE_TEXT.len();
     }
     0
 }
@@ -2439,6 +2474,14 @@ mod tests {
         assert!(CONTROL_SCHEMA_JSON.contains(r#""packages_repair""#));
         assert!(CONTROL_SCHEMA_JSON.contains(r#""package_network_owner":"fcitx5-downloader.exe""#));
         assert!(!CONTROL_SCHEMA_JSON.contains("sensitive_input\":true"));
+    }
+
+    #[test]
+    fn usage_documents_typed_control_commands() {
+        assert!(CONTROL_USAGE_TEXT.starts_with("Usage: fcitx5-control "));
+        assert!(CONTROL_USAGE_TEXT.contains("--packages-install ID"));
+        assert!(CONTROL_USAGE_TEXT.contains("--set-presentation MODE THEME ORIENTATION"));
+        assert!(CONTROL_USAGE_TEXT.ends_with("--schema|--version\n"));
     }
 
     #[test]
