@@ -3283,18 +3283,42 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         strokeRound(brush, previewLeft, previewTop, previewRight, previewBottom, radius);
 
         struct PreviewCandidate {
-            std::wstring_view label;
+            std::wstring label;
             std::wstring_view text;
-            std::wstring_view comment;
+            std::wstring comment;
+        };
+        const auto previewLabel = [&](std::wstring_view label) {
+            if (!visualConfig.label.visible.value_or(true) || label.empty())
+                return std::wstring{};
+            using fcitx::windows::config::LabelStyle;
+            switch (visualConfig.label.style.value_or(LabelStyle::dot)) {
+            case LabelStyle::plain:
+                return std::wstring(label) + L" ";
+            case LabelStyle::dot:
+                return std::wstring(label) + L". ";
+            case LabelStyle::paren:
+                return L"(" + std::wstring(label) + L") ";
+            case LabelStyle::bracket:
+                return L"[" + std::wstring(label) + L"] ";
+            case LabelStyle::circled:
+                if (label.size() == 1 && label[0] >= L'1' && label[0] <= L'9')
+                    return std::wstring(1, static_cast<wchar_t>(0x2460 + label[0] - L'1')) +
+                           L" ";
+                return std::wstring(label) + L" ";
+            }
+            return std::wstring(label) + L". ";
+        };
+        const auto previewComment = [](std::wstring_view comment) {
+            return comment.empty() ? std::wstring{} : L"  " + std::wstring(comment);
         };
         const std::array verticalCandidates{
-            PreviewCandidate{L"1.", L"输入法", L"shūrùfǎ"},
-            PreviewCandidate{L"2.", L"中文", L"zhōngwén"},
-            PreviewCandidate{L"3.", L"😀", L"emoji"},
+            PreviewCandidate{previewLabel(L"1"), L"输入法", previewComment(L"shūrùfǎ")},
+            PreviewCandidate{previewLabel(L"2"), L"中文", previewComment(L"zhōngwén")},
+            PreviewCandidate{previewLabel(L"3"), L"😀", previewComment(L"emoji")},
         };
         const std::array horizontalCandidates{
-            PreviewCandidate{L"1.", L"输入法", L"shūrùfǎ"},
-            PreviewCandidate{L"2.", L"🎉", L"emoji"},
+            PreviewCandidate{previewLabel(L"1"), L"输入法", previewComment(L"shūrùfǎ")},
+            PreviewCandidate{previewLabel(L"2"), L"🎉", previewComment(L"emoji")},
         };
         const auto drawProductionLayoutPreview = [&](const auto& candidates,
                                                      fcitx::windows::ui::Orientation orientation) {

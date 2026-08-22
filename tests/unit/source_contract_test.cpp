@@ -262,9 +262,11 @@ int main(int argc, char** argv) {
         configSource.find("fcitx::windows::ui::renderSegments") == std::string::npos ||
         configSource.find("shūrùfǎ") == std::string::npos ||
         configSource.find("zhōngwén") == std::string::npos ||
-        configSource.find("PreviewCandidate{L\"3.\", L\"😀\", L\"emoji\"}") ==
+        configSource.find("previewLabel(L\"3\")") ==
             std::string::npos ||
-        configSource.find("PreviewCandidate{L\"2.\", L\"🎉\", L\"emoji\"}") ==
+        configSource.find("previewComment(L\"emoji\")") ==
+            std::string::npos ||
+        configSource.find("PreviewCandidate{previewLabel(L\"2\"), L\"🎉\", previewComment(L\"emoji\")}") ==
             std::string::npos ||
         configSource.find("currentPreviewVisualConfig") == std::string::npos ||
         configSource.find("parseTheme") == std::string::npos ||
