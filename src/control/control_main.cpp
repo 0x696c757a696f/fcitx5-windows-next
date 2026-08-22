@@ -64,6 +64,21 @@ struct Fcitx5ControlUtf8 {
     const char* ptr;
     std::size_t len;
 };
+struct Fcitx5ControlPresentation {
+    Fcitx5ControlUtf8 appearanceMode;
+    Fcitx5ControlUtf8 theme;
+    Fcitx5ControlUtf8 orientation;
+    Fcitx5ControlUtf8 candidateFont;
+    Fcitx5ControlUtf8 candidatePageSize;
+    Fcitx5ControlUtf8 candidateMaxWidthDip;
+    Fcitx5ControlUtf8 candidateScrollCellWidthDip;
+    Fcitx5ControlUtf8 candidateFontSizeDip;
+    Fcitx5ControlUtf8 candidateCornerRadiusDip;
+    Fcitx5ControlUtf8 candidateOpacity;
+    Fcitx5ControlUtf8 candidatePreeditMode;
+    std::uint8_t candidateShadow;
+    std::uint8_t scrollMode;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -74,6 +89,8 @@ int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
 int fcitx5_control_json_string_utf8(Fcitx5ControlUtf8 value, char** out_ptr,
                                     std::size_t* out_len);
+int fcitx5_control_presentation_json_utf8(const Fcitx5ControlPresentation* presentation,
+                                          char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -129,6 +146,27 @@ std::string jsonString(std::string_view value) {
     }
     fcitx5_control_utf8_free(escaped, escapedLength);
     return result;
+}
+
+Fcitx5ControlUtf8 utf8View(std::string_view value) noexcept {
+    return {value.data(), value.size()};
+}
+
+std::string takeRustUtf8(char* bytes, std::size_t length) {
+    std::string result;
+    if (bytes && length > 0) {
+        result.assign(bytes, length);
+    }
+    fcitx5_control_utf8_free(bytes, length);
+    return result;
+}
+
+std::string presentationJson(const Fcitx5ControlPresentation& presentation) {
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_presentation_json_utf8(&presentation, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
 }
 
 bool readUtf8(const fs::path& path, std::string& text) {
@@ -1333,23 +1371,31 @@ int wmain(int argc, wchar_t** argv) {
             config.candidateFont.families && !config.candidateFont.families->empty()
                 ? config.candidateFont.families->front()
                 : "Microsoft YaHei";
-        std::cout << "{\"format_version\":1,\"appearance_mode\":" << jsonString(mode)
-                  << ",\"theme\":" << jsonString(theme)
-                  << ",\"orientation\":" << jsonString(orientation)
-                  << ",\"candidate_font\":" << jsonString(font)
-                  << ",\"candidate_page_size\":" << jsonString(std::to_string(pageSize))
-                  << ",\"candidate_max_width_dip\":"
-                  << jsonString(std::to_string(static_cast<int>(maxWidth)))
-                  << ",\"candidate_scroll_cell_width_dip\":"
-                  << jsonString(std::to_string(static_cast<int>(scrollCellWidth)))
-                  << ",\"candidate_font_size_dip\":"
-                  << jsonString(std::to_string(static_cast<int>(fontSize)))
-                  << ",\"candidate_corner_radius_dip\":"
-                  << jsonString(std::to_string(static_cast<int>(cornerRadius)))
-                  << ",\"candidate_opacity\":" << jsonString(std::to_string(opacity))
-                  << ",\"candidate_preedit_mode\":" << jsonString(preeditMode)
-                  << ",\"candidate_shadow\":" << (shadow ? "true" : "false")
-                  << ",\"scroll_mode\":" << (scrollMode ? "true" : "false") << "}\n";
+        const std::string pageSizeText = std::to_string(pageSize);
+        const std::string maxWidthText = std::to_string(static_cast<int>(maxWidth));
+        const std::string scrollCellWidthText =
+            std::to_string(static_cast<int>(scrollCellWidth));
+        const std::string fontSizeText = std::to_string(static_cast<int>(fontSize));
+        const std::string cornerRadiusText = std::to_string(static_cast<int>(cornerRadius));
+        const std::string opacityText = std::to_string(opacity);
+        const Fcitx5ControlPresentation presentation{
+            utf8View(mode),
+            utf8View(theme),
+            utf8View(orientation),
+            utf8View(font),
+            utf8View(pageSizeText),
+            utf8View(maxWidthText),
+            utf8View(scrollCellWidthText),
+            utf8View(fontSizeText),
+            utf8View(cornerRadiusText),
+            utf8View(opacityText),
+            utf8View(preeditMode),
+            static_cast<std::uint8_t>(shadow ? 1 : 0),
+            static_cast<std::uint8_t>(scrollMode ? 1 : 0)};
+        const std::string output = presentationJson(presentation);
+        if (output.empty())
+            return 5;
+        std::cout << output << '\n';
         return 0;
     }
     if ((arguments.size() == 7 || arguments.size() == 9 || arguments.size() == 12 ||

@@ -75,15 +75,34 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
 );
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Fcitx5ControlUtf16 {
     ptr: *const u16,
     len: usize,
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Fcitx5ControlUtf8 {
     ptr: *const u8,
     len: usize,
+}
+
+#[repr(C)]
+pub struct Fcitx5ControlPresentation {
+    appearance_mode: Fcitx5ControlUtf8,
+    theme: Fcitx5ControlUtf8,
+    orientation: Fcitx5ControlUtf8,
+    candidate_font: Fcitx5ControlUtf8,
+    candidate_page_size: Fcitx5ControlUtf8,
+    candidate_max_width_dip: Fcitx5ControlUtf8,
+    candidate_scroll_cell_width_dip: Fcitx5ControlUtf8,
+    candidate_font_size_dip: Fcitx5ControlUtf8,
+    candidate_corner_radius_dip: Fcitx5ControlUtf8,
+    candidate_opacity: Fcitx5ControlUtf8,
+    candidate_preedit_mode: Fcitx5ControlUtf8,
+    candidate_shadow: u8,
+    scroll_mode: u8,
 }
 
 #[link(name = "advapi32")]
@@ -199,6 +218,13 @@ fn json_string(value: &[u8]) -> Option<Vec<u8>> {
     Some(result)
 }
 
+fn utf8_slice(value: Fcitx5ControlUtf8) -> Option<&'static [u8]> {
+    if value.ptr.is_null() {
+        return None;
+    }
+    Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
+}
+
 fn boxed_utf8_result(value: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32 {
     if out_ptr.is_null() || out_len.is_null() {
         return 1;
@@ -212,6 +238,79 @@ fn boxed_utf8_result(value: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize)
         *out_len = len;
     }
     0
+}
+
+fn push_json_string_field(output: &mut Vec<u8>, name: &[u8], value: &[u8]) -> Option<()> {
+    output.extend_from_slice(name);
+    output.push(b':');
+    output.extend_from_slice(&json_string(value)?);
+    Some(())
+}
+
+fn presentation_json(presentation: &Fcitx5ControlPresentation) -> Option<Vec<u8>> {
+    let fields = [
+        (
+            b"\"appearance_mode\"".as_slice(),
+            utf8_slice(presentation.appearance_mode)?,
+        ),
+        (b"\"theme\"".as_slice(), utf8_slice(presentation.theme)?),
+        (
+            b"\"orientation\"".as_slice(),
+            utf8_slice(presentation.orientation)?,
+        ),
+        (
+            b"\"candidate_font\"".as_slice(),
+            utf8_slice(presentation.candidate_font)?,
+        ),
+        (
+            b"\"candidate_page_size\"".as_slice(),
+            utf8_slice(presentation.candidate_page_size)?,
+        ),
+        (
+            b"\"candidate_max_width_dip\"".as_slice(),
+            utf8_slice(presentation.candidate_max_width_dip)?,
+        ),
+        (
+            b"\"candidate_scroll_cell_width_dip\"".as_slice(),
+            utf8_slice(presentation.candidate_scroll_cell_width_dip)?,
+        ),
+        (
+            b"\"candidate_font_size_dip\"".as_slice(),
+            utf8_slice(presentation.candidate_font_size_dip)?,
+        ),
+        (
+            b"\"candidate_corner_radius_dip\"".as_slice(),
+            utf8_slice(presentation.candidate_corner_radius_dip)?,
+        ),
+        (
+            b"\"candidate_opacity\"".as_slice(),
+            utf8_slice(presentation.candidate_opacity)?,
+        ),
+        (
+            b"\"candidate_preedit_mode\"".as_slice(),
+            utf8_slice(presentation.candidate_preedit_mode)?,
+        ),
+    ];
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1"#);
+    for (name, value) in fields {
+        output.push(b',');
+        push_json_string_field(&mut output, name, value)?;
+    }
+    output.extend_from_slice(b",\"candidate_shadow\":");
+    output.extend_from_slice(if presentation.candidate_shadow != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.extend_from_slice(b",\"scroll_mode\":");
+    output.extend_from_slice(if presentation.scroll_mode != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.push(b'}');
+    Some(output)
 }
 
 fn startup_command(executable_directory: OsString) -> Vec<u16> {
@@ -445,6 +544,27 @@ pub unsafe extern "C" fn fcitx5_control_json_string_utf8(
 
 /// # Safety
 ///
+/// All UTF-8 slices inside `presentation` must remain valid for the duration of
+/// the call. `out_ptr` and `out_len` must point to writable storage. Any
+/// returned buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_presentation_json_utf8(
+    presentation: *const Fcitx5ControlPresentation,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if presentation.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let presentation = unsafe { &*presentation };
+    match presentation_json(presentation) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -537,5 +657,75 @@ mod tests {
             Some(&b"\"\xe4\xbc\x81\xe9\xb9\x85\""[..])
         );
         assert_eq!(json_string(&[0x01]), None);
+    }
+
+    #[test]
+    fn presentation_json_preserves_existing_control_contract() {
+        let mode = b"dark";
+        let theme = b"builtin:default";
+        let orientation = b"automatic";
+        let font = "微软雅黑".as_bytes();
+        let page = b"5";
+        let max_width = b"860";
+        let scroll_width = b"96";
+        let font_size = b"18";
+        let corner = b"12";
+        let opacity = b"1.000000";
+        let preedit = b"inline";
+        let presentation = Fcitx5ControlPresentation {
+            appearance_mode: Fcitx5ControlUtf8 {
+                ptr: mode.as_ptr(),
+                len: mode.len(),
+            },
+            theme: Fcitx5ControlUtf8 {
+                ptr: theme.as_ptr(),
+                len: theme.len(),
+            },
+            orientation: Fcitx5ControlUtf8 {
+                ptr: orientation.as_ptr(),
+                len: orientation.len(),
+            },
+            candidate_font: Fcitx5ControlUtf8 {
+                ptr: font.as_ptr(),
+                len: font.len(),
+            },
+            candidate_page_size: Fcitx5ControlUtf8 {
+                ptr: page.as_ptr(),
+                len: page.len(),
+            },
+            candidate_max_width_dip: Fcitx5ControlUtf8 {
+                ptr: max_width.as_ptr(),
+                len: max_width.len(),
+            },
+            candidate_scroll_cell_width_dip: Fcitx5ControlUtf8 {
+                ptr: scroll_width.as_ptr(),
+                len: scroll_width.len(),
+            },
+            candidate_font_size_dip: Fcitx5ControlUtf8 {
+                ptr: font_size.as_ptr(),
+                len: font_size.len(),
+            },
+            candidate_corner_radius_dip: Fcitx5ControlUtf8 {
+                ptr: corner.as_ptr(),
+                len: corner.len(),
+            },
+            candidate_opacity: Fcitx5ControlUtf8 {
+                ptr: opacity.as_ptr(),
+                len: opacity.len(),
+            },
+            candidate_preedit_mode: Fcitx5ControlUtf8 {
+                ptr: preedit.as_ptr(),
+                len: preedit.len(),
+            },
+            candidate_shadow: 1,
+            scroll_mode: 0,
+        };
+        let json = presentation_json(&presentation).expect("presentation should format");
+        let text = String::from_utf8(json).expect("presentation JSON should be UTF-8");
+        assert!(text.starts_with(r#"{"format_version":1"#));
+        assert!(text.contains(r#""candidate_font":"微软雅黑""#));
+        assert!(text.contains(r#""candidate_page_size":"5""#));
+        assert!(text.contains(r#""candidate_shadow":true"#));
+        assert!(text.contains(r#""scroll_mode":false"#));
     }
 }
