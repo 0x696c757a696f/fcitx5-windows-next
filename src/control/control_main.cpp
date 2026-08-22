@@ -115,6 +115,7 @@ int fcitx5_control_status_json_utf8(const Fcitx5ControlStatus* status, char** ou
 int fcitx5_control_tsf_guard_json_utf8(const Fcitx5ControlTsfGuard* status, char** out_ptr,
                                        std::size_t* out_len);
 int fcitx5_control_tsf_guard_reset_json_utf8(const char** out_ptr, std::size_t* out_len);
+int fcitx5_control_startup_json_utf8(std::uint8_t enabled, char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -215,6 +216,14 @@ std::string tsfGuardResetJson() {
     if (fcitx5_control_tsf_guard_reset_json_utf8(&bytes, &length) != 0 || !bytes)
         return {};
     return {bytes, length};
+}
+
+std::string startupJson(bool enabled) {
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_startup_json_utf8(enabled ? 1 : 0, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
 }
 
 bool readUtf8(const fs::path& path, std::string& text) {
@@ -1262,7 +1271,7 @@ int wmain(int argc, wchar_t** argv) {
         bool enabled = false;
         if (!queryStartup(enabled))
             return 5;
-        std::cout << "{\"format_version\":1,\"enabled\":" << (enabled ? "true" : "false") << "}\n";
+        std::cout << startupJson(enabled) << '\n';
         return 0;
     }
     if (arguments.size() == 2 && arguments[0] == L"--set-startup" &&

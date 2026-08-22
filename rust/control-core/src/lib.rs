@@ -448,6 +448,14 @@ fn tsf_guard_json(status: &Fcitx5ControlTsfGuard) -> Option<Vec<u8>> {
     Some(output)
 }
 
+fn startup_json(enabled: bool) -> Vec<u8> {
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1,"enabled":"#);
+    output.extend_from_slice(if enabled { b"true" } else { b"false" });
+    output.push(b'}');
+    output
+}
+
 fn startup_command(executable_directory: OsString) -> Vec<u16> {
     let launcher = PathBuf::from(executable_directory).join("fcitx5-launcher.exe");
     let mut command = quote(launcher.as_os_str());
@@ -761,6 +769,19 @@ pub unsafe extern "C" fn fcitx5_control_tsf_guard_reset_json_utf8(
 
 /// # Safety
 ///
+/// `out_ptr` and `out_len` must point to writable storage. Any returned buffer
+/// must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_startup_json_utf8(
+    enabled: u8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    boxed_utf8_result(startup_json(enabled != 0), out_ptr, out_len)
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -791,6 +812,18 @@ mod tests {
         assert_eq!(
             trimmed,
             wide(r#""C:\Program Files\Fcitx5\bin\fcitx5-launcher.exe" --background"#)
+        );
+    }
+
+    #[test]
+    fn startup_json_preserves_control_contract() {
+        assert_eq!(
+            startup_json(true).as_slice(),
+            br#"{"format_version":1,"enabled":true}"#
+        );
+        assert_eq!(
+            startup_json(false).as_slice(),
+            br#"{"format_version":1,"enabled":false}"#
         );
     }
 
