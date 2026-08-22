@@ -470,6 +470,12 @@ mod window_smoke {
         path: String,
     }
 
+    struct LayoutEvidence {
+        visible_candidate_rects: usize,
+        rects_inside_window: bool,
+        rects_non_overlapping: bool,
+    }
+
     struct InspectionSpec<'a> {
         expected_width: i32,
         expected_height: i32,
@@ -481,6 +487,7 @@ mod window_smoke {
         locale_name: &'a str,
         popup_allowed: bool,
         candidate_count: usize,
+        layout_evidence: LayoutEvidence,
         dpi_scale: f32,
         scroll_mode: bool,
         expects_emoji: bool,
@@ -707,10 +714,13 @@ mod window_smoke {
                 true,
             )
         };
+        let total_candidate_count = text_lines.len();
+        let layout_evidence = inspect_layout_rectangles(&layout.items, layout.window)?;
+        let visible_text_lines = visible_text_lines(&text_lines, &layout.item_indices);
         let width = ((layout.window.right - layout.window.left).ceil() as i32).max(1);
         let height = ((layout.window.bottom - layout.window.top).ceil() as i32).max(1);
         let class_name = wide("Fcitx5CandidateRustPoc");
-        let _ = WINDOW_TEXT.set(text_lines);
+        let _ = WINDOW_TEXT.set(visible_text_lines);
         let _ = WINDOW_VERTICAL.set(orientation_name == "vertical");
         let _ = WINDOW_COLUMNS.set(columns);
         let _ = WINDOW_SCALE.set(effective_dpi_scale);
@@ -763,7 +773,8 @@ mod window_smoke {
                 host_name,
                 locale_name,
                 popup_allowed,
-                candidate_count: WINDOW_TEXT.get().map_or(0, Vec::len),
+                candidate_count: total_candidate_count,
+                layout_evidence,
                 dpi_scale: effective_dpi_scale,
                 scroll_mode,
                 expects_emoji: emoji_candidate_render_path,
@@ -853,13 +864,24 @@ mod window_smoke {
             },
         );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"host\":\"{}\",\n  \"locale\":\"{}\",\n  \"popup_allowed\":{},\n  \"candidate_count\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"host\":\"{}\",\n  \"locale\":\"{}\",\n  \"popup_allowed\":{},\n  \"candidate_count\":{},\n  \"visible_candidate_rects\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
             json_escape(spec.snapshot_name),
             json_escape(spec.orientation_name),
             json_escape(spec.host_name),
             json_escape(spec.locale_name),
             if spec.popup_allowed { "true" } else { "false" },
             spec.candidate_count,
+            spec.layout_evidence.visible_candidate_rects,
+            if spec.layout_evidence.rects_inside_window {
+                "true"
+            } else {
+                "false"
+            },
+            if spec.layout_evidence.rects_non_overlapping {
+                "true"
+            } else {
+                "false"
+            },
             spec.dpi_scale,
             if spec.scroll_mode { "true" } else { "false" },
             rect.left,
@@ -1295,6 +1317,61 @@ mod window_smoke {
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn visible_text_lines(text_lines: &[Vec<u16>], item_indices: &[usize]) -> Vec<Vec<u16>> {
+        if item_indices.is_empty() {
+            return text_lines.to_vec();
+        }
+        item_indices
+            .iter()
+            .filter_map(|index| text_lines.get(*index).cloned())
+            .collect()
+    }
+
+    fn inspect_layout_rectangles(
+        items: &[CoreRect],
+        window: CoreRect,
+    ) -> Result<LayoutEvidence, String> {
+        if items.is_empty() {
+            return Err("Rust Candidate PoC produced no visible candidate rectangles".to_owned());
+        }
+        for (index, item) in items.iter().enumerate() {
+            if !core_rect_inside(*item, window) {
+                return Err(format!(
+                    "Rust Candidate PoC visible candidate {index} is outside the window"
+                ));
+            }
+            for (other_index, other) in items.iter().enumerate().skip(index + 1) {
+                if core_rects_overlap(*item, *other) {
+                    return Err(format!(
+                        "Rust Candidate PoC visible candidate rectangles overlap: {index} and {other_index}"
+                    ));
+                }
+            }
+        }
+        Ok(LayoutEvidence {
+            visible_candidate_rects: items.len(),
+            rects_inside_window: true,
+            rects_non_overlapping: true,
+        })
+    }
+
+    fn core_rect_inside(inner: CoreRect, outer: CoreRect) -> bool {
+        const EPSILON: f32 = 0.5;
+        inner.left + EPSILON >= outer.left
+            && inner.top + EPSILON >= outer.top
+            && inner.right <= outer.right + EPSILON
+            && inner.bottom <= outer.bottom + EPSILON
+            && inner.right > inner.left
+            && inner.bottom > inner.top
+    }
+
+    fn core_rects_overlap(left: CoreRect, right: CoreRect) -> bool {
+        left.left < right.right
+            && left.right > right.left
+            && left.top < right.bottom
+            && left.bottom > right.top
     }
 
     fn host_snapshot_scenario(host: &str) -> Result<PocScenario, String> {

@@ -296,6 +296,11 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("host_name") == std::string::npos ||
         candidatePocBinary.find("locale_name") == std::string::npos ||
         candidatePocBinary.find("candidate_count") == std::string::npos ||
+        candidatePocBinary.find("visible_candidate_rects") == std::string::npos ||
+        candidatePocBinary.find("layout_rects_inside_window") == std::string::npos ||
+        candidatePocBinary.find("layout_rects_non_overlapping") == std::string::npos ||
+        candidatePocBinary.find("inspect_layout_rectangles") == std::string::npos ||
+        candidatePocBinary.find("visible_text_lines") == std::string::npos ||
         candidatePocBinary.find("dpi_scale") == std::string::npos ||
         candidatePocBinary.find("scroll_mode") == std::string::npos ||
         candidatePocBinary.find("GetDIBits") == std::string::npos ||
