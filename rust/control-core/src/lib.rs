@@ -192,6 +192,26 @@ pub struct Fcitx5ControlThemeDetail {
     has_dark_branch: u8,
 }
 
+#[repr(C)]
+pub struct Fcitx5ControlPackageSummary {
+    id: Fcitx5ControlUtf8,
+    title: Fcitx5ControlUtf8,
+    summary: Fcitx5ControlUtf8,
+    package_type: Fcitx5ControlUtf8,
+    available_version: Fcitx5ControlUtf8,
+    installed_version: Fcitx5ControlUtf8,
+    state: Fcitx5ControlUtf8,
+    update_available: u8,
+}
+
+#[repr(C)]
+pub struct Fcitx5ControlPackagesList {
+    repository_available: u8,
+    repository_error: Fcitx5ControlUtf8,
+    packages: *const Fcitx5ControlPackageSummary,
+    package_count: usize,
+}
+
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn RegOpenKeyExW(
@@ -687,6 +707,75 @@ fn theme_detail_json(detail: &Fcitx5ControlThemeDetail) -> Option<Vec<u8>> {
     output.extend_from_slice(
         br#","security":{"script_allowed":false,"network_allowed":false,"unknown_fields":"reject","path_scope":"theme-directory"}}"#,
     );
+    Some(output)
+}
+
+fn packages_list_json(list: &Fcitx5ControlPackagesList) -> Option<Vec<u8>> {
+    if list.packages.is_null() && list.package_count != 0 {
+        return None;
+    }
+    let packages = if list.package_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(list.packages, list.package_count) }
+    };
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1,"repository_available":"#);
+    output.extend_from_slice(if list.repository_available != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.extend_from_slice(b",\"repository_error\":");
+    let repository_error = utf8_slice(list.repository_error)?;
+    if repository_error.is_empty() {
+        output.extend_from_slice(b"null");
+    } else {
+        output.extend_from_slice(&json_string(repository_error)?);
+    }
+    output.extend_from_slice(b",\"packages\":[");
+    for (index, package) in packages.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.push(b'{');
+        push_json_string_field(&mut output, b"\"id\"", utf8_slice(package.id)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"title\"", utf8_slice(package.title)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"summary\"", utf8_slice(package.summary)?)?;
+        output.push(b',');
+        push_json_string_field(&mut output, b"\"type\"", utf8_slice(package.package_type)?)?;
+        output.extend_from_slice(b",\"available_version\":");
+        let available = utf8_slice(package.available_version)?;
+        if available.is_empty() {
+            output.extend_from_slice(b"null");
+        } else {
+            output.extend_from_slice(&json_string(available)?);
+        }
+        output.extend_from_slice(b",\"installed_version\":");
+        let installed = utf8_slice(package.installed_version)?;
+        if installed.is_empty() {
+            output.extend_from_slice(b"null");
+        } else {
+            output.extend_from_slice(&json_string(installed)?);
+        }
+        output.extend_from_slice(b",\"state\":");
+        let state = utf8_slice(package.state)?;
+        if state.is_empty() {
+            output.extend_from_slice(b"null");
+        } else {
+            output.extend_from_slice(&json_string(state)?);
+        }
+        output.extend_from_slice(b",\"update_available\":");
+        output.extend_from_slice(if package.update_available != 0 {
+            b"true"
+        } else {
+            b"false"
+        });
+        output.push(b'}');
+    }
+    output.extend_from_slice(b"]}");
     Some(output)
 }
 
@@ -1227,6 +1316,27 @@ pub unsafe extern "C" fn fcitx5_control_theme_detail_json_utf8(
 
 /// # Safety
 ///
+/// All UTF-8 slices inside `list` and its rows must remain valid for the
+/// duration of the call. `out_ptr` and `out_len` must point to writable storage.
+/// Any returned buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_packages_list_json_utf8(
+    list: *const Fcitx5ControlPackagesList,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if list.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let list = unsafe { &*list };
+    match packages_list_json(list) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -1543,6 +1653,114 @@ mod tests {
         assert!(text.contains(
             r#""security":{"script_allowed":false,"network_allowed":false,"unknown_fields":"reject","path_scope":"theme-directory"}"#
         ));
+    }
+
+    #[test]
+    fn packages_list_json_preserves_control_contract() {
+        let id = b"fcitx5-rime";
+        let title = b"Rime";
+        let summary = b"Rime input method";
+        let package_type = b"addon";
+        let available = b"1.2.3";
+        let installed = b"1.0.0";
+        let state = b"enabled";
+        let package = Fcitx5ControlPackageSummary {
+            id: Fcitx5ControlUtf8 {
+                ptr: id.as_ptr(),
+                len: id.len(),
+            },
+            title: Fcitx5ControlUtf8 {
+                ptr: title.as_ptr(),
+                len: title.len(),
+            },
+            summary: Fcitx5ControlUtf8 {
+                ptr: summary.as_ptr(),
+                len: summary.len(),
+            },
+            package_type: Fcitx5ControlUtf8 {
+                ptr: package_type.as_ptr(),
+                len: package_type.len(),
+            },
+            available_version: Fcitx5ControlUtf8 {
+                ptr: available.as_ptr(),
+                len: available.len(),
+            },
+            installed_version: Fcitx5ControlUtf8 {
+                ptr: installed.as_ptr(),
+                len: installed.len(),
+            },
+            state: Fcitx5ControlUtf8 {
+                ptr: state.as_ptr(),
+                len: state.len(),
+            },
+            update_available: 1,
+        };
+        let list = Fcitx5ControlPackagesList {
+            repository_available: 1,
+            repository_error: Fcitx5ControlUtf8 {
+                ptr: b"".as_ptr(),
+                len: 0,
+            },
+            packages: &package,
+            package_count: 1,
+        };
+        let json = packages_list_json(&list).expect("packages list should format");
+        let text = String::from_utf8(json).expect("packages list JSON should be UTF-8");
+        assert_eq!(
+            text,
+            r#"{"format_version":1,"repository_available":true,"repository_error":null,"packages":[{"id":"fcitx5-rime","title":"Rime","summary":"Rime input method","type":"addon","available_version":"1.2.3","installed_version":"1.0.0","state":"enabled","update_available":true}]}"#
+        );
+    }
+
+    #[test]
+    fn packages_list_json_preserves_null_fields() {
+        let package = Fcitx5ControlPackageSummary {
+            id: Fcitx5ControlUtf8 {
+                ptr: b"orphan".as_ptr(),
+                len: 6,
+            },
+            title: Fcitx5ControlUtf8 {
+                ptr: b"orphan".as_ptr(),
+                len: 6,
+            },
+            summary: Fcitx5ControlUtf8 {
+                ptr: b"".as_ptr(),
+                len: 0,
+            },
+            package_type: Fcitx5ControlUtf8 {
+                ptr: b"unknown".as_ptr(),
+                len: 7,
+            },
+            available_version: Fcitx5ControlUtf8 {
+                ptr: b"".as_ptr(),
+                len: 0,
+            },
+            installed_version: Fcitx5ControlUtf8 {
+                ptr: b"1".as_ptr(),
+                len: 1,
+            },
+            state: Fcitx5ControlUtf8 {
+                ptr: b"".as_ptr(),
+                len: 0,
+            },
+            update_available: 0,
+        };
+        let error = b"missing_key";
+        let list = Fcitx5ControlPackagesList {
+            repository_available: 0,
+            repository_error: Fcitx5ControlUtf8 {
+                ptr: error.as_ptr(),
+                len: error.len(),
+            },
+            packages: &package,
+            package_count: 1,
+        };
+        let json = packages_list_json(&list).expect("packages list should format");
+        let text = String::from_utf8(json).expect("packages list JSON should be UTF-8");
+        assert!(text.contains(r#""repository_available":false"#));
+        assert!(text.contains(r#""repository_error":"missing_key""#));
+        assert!(text.contains(r#""available_version":null"#));
+        assert!(text.contains(r#""state":null"#));
     }
 
     #[test]

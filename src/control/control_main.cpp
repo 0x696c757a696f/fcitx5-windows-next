@@ -125,6 +125,22 @@ struct Fcitx5ControlThemeDetail {
     std::uint8_t hasLightBranch;
     std::uint8_t hasDarkBranch;
 };
+struct Fcitx5ControlPackageSummary {
+    Fcitx5ControlUtf8 id;
+    Fcitx5ControlUtf8 title;
+    Fcitx5ControlUtf8 summary;
+    Fcitx5ControlUtf8 type;
+    Fcitx5ControlUtf8 availableVersion;
+    Fcitx5ControlUtf8 installedVersion;
+    Fcitx5ControlUtf8 state;
+    std::uint8_t updateAvailable;
+};
+struct Fcitx5ControlPackagesList {
+    std::uint8_t repositoryAvailable;
+    Fcitx5ControlUtf8 repositoryError;
+    const Fcitx5ControlPackageSummary* packages;
+    std::size_t packageCount;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -159,6 +175,8 @@ int fcitx5_control_themes_json_utf8(const Fcitx5ControlThemeRecord* themes,
                                     std::size_t* out_len);
 int fcitx5_control_theme_detail_json_utf8(const Fcitx5ControlThemeDetail* detail,
                                           char** out_ptr, std::size_t* out_len);
+int fcitx5_control_packages_list_json_utf8(const Fcitx5ControlPackagesList* list,
+                                           char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -1070,6 +1088,42 @@ void requestEngineReload() {
     }
 }
 
+struct PackageSummaryRow {
+    std::string id;
+    std::string title;
+    std::string summary;
+    std::string type;
+    std::string availableVersion;
+    std::string installedVersion;
+    std::string state;
+    bool updateAvailable{};
+};
+
+std::string packagesListJson(bool repositoryAvailable, std::string_view repositoryError,
+                             const std::vector<PackageSummaryRow>& packages) {
+    std::vector<Fcitx5ControlPackageSummary> views;
+    views.reserve(packages.size());
+    for (const auto& package : packages) {
+        views.push_back(Fcitx5ControlPackageSummary{
+            utf8View(package.id),
+            utf8View(package.title),
+            utf8View(package.summary),
+            utf8View(package.type),
+            utf8View(package.availableVersion),
+            utf8View(package.installedVersion),
+            utf8View(package.state),
+            package.updateAvailable ? std::uint8_t{1} : std::uint8_t{0}});
+    }
+    const Fcitx5ControlPackagesList list{
+        repositoryAvailable ? std::uint8_t{1} : std::uint8_t{0}, utf8View(repositoryError),
+        views.empty() ? nullptr : views.data(), views.size()};
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_packages_list_json_utf8(&list, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
 void printPackages(const fs::path& dataRoot) {
     const auto root = dataRoot / L"packages";
     const auto installed = fcitx::package::read_lockfile(root);
@@ -1109,68 +1163,55 @@ void printPackages(const fs::path& dataRoot) {
         if (repositoryError == "invalid_file" && !fs::exists(repositoryFiles(dataRoot).keyring))
             repositoryError = "missing_key";
     }
-    std::cout << "{\"format_version\":1,\"repository_available\":"
-              << (repositoryAvailable ? "true" : "false")
-              << ",\"repository_error\":"
-              << (repositoryError.empty() ? "null" : jsonString(repositoryError))
-              << ",\"packages\":[";
-    bool first = true;
+    std::vector<PackageSummaryRow> packageRows;
     std::set<std::string> emitted;
     if (repositoryAvailable) {
         for (const auto& entry : repository.packages) {
             if (entry.architecture != "any" && entry.architecture != nativeArchitecture())
                 continue;
-            if (!first)
-                std::cout << ',';
-            first = false;
             const auto found = active.find(entry.id);
             const bool bundledNow = bundled.contains(entry.id);
             const bool update = found != active.end() && found->second.version != entry.version;
-            std::cout << "{\"id\":" << jsonString(entry.id)
-                      << ",\"title\":" << jsonString(entry.title)
-                      << ",\"summary\":" << jsonString(entry.summary)
-                      << ",\"type\":" << jsonString(typeName(entry.type))
-                      << ",\"available_version\":" << jsonString(entry.version)
-                      << ",\"installed_version\":"
-                      << (found != active.end()
-                              ? jsonString(found->second.version)
-                              : (bundledNow ? jsonString(std::string(fcitx::windows::version()))
-                                            : "null"))
-                      << ",\"state\":"
-                      << (found != active.end()
-                              ? jsonString(found->second.state)
-                              : (bundledNow ? "\"bundled\"" : "null"))
-                      << ",\"update_available\":" << (update ? "true" : "false") << '}';
+            packageRows.push_back(PackageSummaryRow{
+                entry.id,
+                entry.title,
+                entry.summary,
+                std::string(typeName(entry.type)),
+                entry.version,
+                found != active.end()
+                    ? found->second.version
+                    : (bundledNow ? std::string(fcitx::windows::version()) : std::string{}),
+                found != active.end() ? found->second.state
+                                      : (bundledNow ? std::string("bundled") : std::string{}),
+                update});
             emitted.emplace(entry.id);
         }
     }
     for (const auto& entry : installed) {
         if (emitted.contains(entry.id))
             continue;
-        if (!first)
-            std::cout << ',';
-        first = false;
-        std::cout << "{\"id\":" << jsonString(entry.id) << ",\"title\":" << jsonString(entry.id)
-                  << ",\"summary\":\"\",\"type\":\"unknown\","
-                     "\"available_version\":null,\"installed_version\":"
-                  << jsonString(entry.version) << ",\"state\":" << jsonString(entry.state)
-                  << ",\"update_available\":false}";
+        packageRows.push_back(PackageSummaryRow{entry.id,
+                                                entry.id,
+                                                "",
+                                                "unknown",
+                                                "",
+                                                entry.version,
+                                                entry.state,
+                                                false});
     }
     for (const auto& [id, component] : bundled) {
         if (emitted.contains(id) || active.contains(id))
             continue;
-        if (!first)
-            std::cout << ',';
-        first = false;
-        std::cout << "{\"id\":" << jsonString(id)
-                  << ",\"title\":" << jsonString(component.title)
-                  << ",\"summary\":\"Bundled with Fcitx5 for Windows Next\","
-                     "\"type\":\"addon\",\"available_version\":null,"
-                     "\"installed_version\":"
-                  << jsonString(std::string(fcitx::windows::version()))
-                  << ",\"state\":\"bundled\",\"update_available\":false}";
+        packageRows.push_back(PackageSummaryRow{id,
+                                                component.title,
+                                                "Bundled with Fcitx5 for Windows Next",
+                                                "addon",
+                                                "",
+                                                std::string(fcitx::windows::version()),
+                                                "bundled",
+                                                false});
     }
-    std::cout << "]}\n";
+    std::cout << packagesListJson(repositoryAvailable, repositoryError, packageRows) << '\n';
 }
 
 void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
