@@ -308,6 +308,14 @@ int main(int argc, char** argv) {
     }
     const auto configParserSource = read_text(sourceRoot / "src/config/config_parser.cpp");
     const auto rustControlCoreSource = read_text(sourceRoot / "rust/control-core/src/lib.rs");
+    if (rustControlCoreSource.find("diagnostics_plan_json") == std::string::npos ||
+        rustControlCoreSource.find("\"sensitive_input\":false") == std::string::npos ||
+        rustControlCoreSource.find("--diagnostics-plan") == std::string::npos ||
+        controlSource.find("diagnosticsPlanJson") == std::string::npos ||
+        controlSource.find("kRootActionDiagnosticsPlan") == std::string::npos ||
+        configSource.find("runControl({L\"--diagnostics-plan\"}") == std::string::npos) {
+        return fail("RUST-R2-03: Diagnostics must use Rust typed dry-run plan through Control and Config");
+    }
     if (controlSource.find("--reset-presentation") == std::string::npos ||
         rustControlCoreSource.find("reset_presentation") == std::string::npos ||
         configParserSource.find("resetPresentationToml") == std::string::npos ||

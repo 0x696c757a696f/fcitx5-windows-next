@@ -1,34 +1,12 @@
-# Current Task — RUST-R2-03 Rust diagnostics/repair model where justified
+# Current Task — none
 
-**Mode:** CHANGE
-**Task ID:** `RUST-R2-03`
-**Prerequisite:** R2-02; 012 register/bootstrap contract
+**State:** NO-ELIGIBLE-CURRENT
 
-## Goal
+RUST-R2-03 is archived as completed. Automatic queue advancement stops here because the next Rust tasks in `docs/tasks/PLAN.md` are `FUTURE-GATED` PoC gates:
 
-Move diagnostics/repair data modeling to Rust only where it benefits from typed parsing/state handling; keep Windows registration/bootstrap system calls in the minimal C++ layer unless evidence says otherwise.
+- `RUST-R3-CANDIDATE-POC`
+- `RUST-R3-CONFIG-POC`
+- `RUST-R3-TSF-POC`
+- `RELEASE-01`
 
-## Specification references
-
-- Rust R2 matrix
-- Diagnostics/Repair sections
-- Register/bootstrap Keep-C++ decision
-
-## Required behavior / implementation contract
-
-- Diagnostics never exposes live input text/history.
-- Reuse authoritative package/control/registration owners; do not create shadow state.
-- Do not migrate thin register/bootstrap simply for language consistency.
-
-## Required validation
-
-- Good/bad health fixtures.
-- Repair dry-run/plan/result schema tests.
-- Config diagnostics integration smoke.
-
-## Done when
-
-- Only justified management logic migrates.
-- System-side C++ helpers remain minimal and authoritative where specified.
-
-After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.
+Do not start these without their prerequisites/evidence being explicitly satisfied and the task copied into this file.

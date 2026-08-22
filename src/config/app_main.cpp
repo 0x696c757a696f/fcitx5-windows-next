@@ -2375,7 +2375,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     void refresh() {
         std::wstring output;
         ::SetWindowTextW(control(kStatus),
-                         runControl({L"--status"}, output) ? output.c_str() : get("error.command"));
+                         runControl({L"--diagnostics-plan"}, output) ? output.c_str()
+                                                                      : get("error.command"));
     }
     void selectThemeById(std::wstring_view id) {
         if (themes_.empty())

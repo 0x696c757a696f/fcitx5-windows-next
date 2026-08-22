@@ -65,7 +65,7 @@ const RUN_KEY: &[u16] = &[
 ];
 const CONTROL_SCHEMA_JSON: &str = concat!(
     r#"{"format_version":1,"commands":["#,
-    r#""status","restart_engine","shutdown","validate_config","apply_config","#,
+    r#""status","diagnostics_plan","restart_engine","shutdown","validate_config","apply_config","#,
     r#""reset_config","reset_presentation","get_startup","set_startup","#,
     r#""get_presentation","set_presentation","get_input_methods","set_input_method","#,
     r#""themes_list","themes_detail","addons_list","packages_list","packages_detail","#,
@@ -75,7 +75,7 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
 );
 const CONTROL_USAGE_TEXT: &str = concat!(
     "Usage: fcitx5-control [--data-root PATH] ",
-    "--status|--restart-engine|--validate-config FILE|--apply-config FILE|",
+    "--status|--diagnostics-plan|--restart-engine|--validate-config FILE|--apply-config FILE|",
     "--reset-config|--reset-presentation|--get-startup|--set-startup enabled|disabled|",
     "--get-presentation|",
     "--get-input-methods|--set-input-method ID|--shutdown|",
@@ -103,6 +103,7 @@ const CONTROL_ROOT_ACTION_RESET_TSF_GUARD: u32 = 7;
 const CONTROL_ROOT_ACTION_STATUS: u32 = 8;
 const CONTROL_ROOT_ACTION_RESTART_ENGINE: u32 = 9;
 const CONTROL_ROOT_ACTION_SHUTDOWN: u32 = 10;
+const CONTROL_ROOT_ACTION_DIAGNOSTICS_PLAN: u32 = 11;
 const CONTROL_CONFIG_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_CONFIG_ACTION_VALIDATE: u32 = 1;
 const CONTROL_CONFIG_ACTION_APPLY: u32 = 2;
@@ -571,6 +572,140 @@ fn status_json(status: &Fcitx5ControlStatus) -> Option<Vec<u8>> {
     Some(output)
 }
 
+fn push_diagnostics_check(
+    output: &mut Vec<u8>,
+    first: &mut bool,
+    id: &[u8],
+    state: &[u8],
+    detail: &[u8],
+    repair_action: Option<&[u8]>,
+) -> Option<()> {
+    if !*first {
+        output.push(b',');
+    }
+    *first = false;
+    output.push(b'{');
+    push_json_string_field(output, b"\"id\"", id)?;
+    output.push(b',');
+    push_json_string_field(output, b"\"state\"", state)?;
+    output.push(b',');
+    push_json_string_field(output, b"\"detail\"", detail)?;
+    output.extend_from_slice(b",\"repair_action\":");
+    if let Some(repair_action) = repair_action {
+        output.extend_from_slice(&json_string(repair_action)?);
+    } else {
+        output.extend_from_slice(b"null");
+    }
+    output.push(b'}');
+    Some(())
+}
+
+fn push_diagnostics_action(
+    output: &mut Vec<u8>,
+    first: &mut bool,
+    id: &[u8],
+    command: &[u8],
+) -> Option<()> {
+    if !*first {
+        output.push(b',');
+    }
+    *first = false;
+    output.push(b'{');
+    push_json_string_field(output, b"\"id\"", id)?;
+    output.extend_from_slice(b",\"kind\":\"control\",");
+    push_json_string_field(output, b"\"command\"", command)?;
+    output.extend_from_slice(b",\"destructive\":false}");
+    Some(())
+}
+
+fn diagnostics_plan_json(status: &Fcitx5ControlStatus) -> Option<Vec<u8>> {
+    let reachable = status.launcher_reachable != 0;
+    let config_valid = status.config_valid != 0;
+    let tsf_guard_disabled = status.tsf_guard_disabled != 0;
+    let overall = if !reachable || !config_valid {
+        b"error".as_slice()
+    } else if tsf_guard_disabled {
+        b"warning".as_slice()
+    } else {
+        b"ok".as_slice()
+    };
+    let mut output = Vec::new();
+    output.extend_from_slice(
+        br#"{"format_version":1,"surface":"diagnostics","sensitive_input":false,"overall":""#,
+    );
+    output.extend_from_slice(overall);
+    output.extend_from_slice(br#"","checks":["#);
+    let mut first_check = true;
+    push_diagnostics_check(
+        &mut output,
+        &mut first_check,
+        b"launcher",
+        if reachable { b"ok" } else { b"error" },
+        if reachable {
+            b"reachable"
+        } else {
+            b"unreachable"
+        },
+        (!reachable).then_some(b"restart_engine".as_slice()),
+    )?;
+    push_diagnostics_check(
+        &mut output,
+        &mut first_check,
+        b"config",
+        if config_valid { b"ok" } else { b"error" },
+        if config_valid {
+            b"valid"
+        } else {
+            b"invalid_config"
+        },
+        (!config_valid).then_some(b"validate_config".as_slice()),
+    )?;
+    push_diagnostics_check(
+        &mut output,
+        &mut first_check,
+        b"tsf_guard",
+        if tsf_guard_disabled {
+            b"warning"
+        } else {
+            b"ok"
+        },
+        if tsf_guard_disabled {
+            utf8_slice(status.tsf_guard_reason)?
+        } else {
+            b"enabled"
+        },
+        tsf_guard_disabled.then_some(b"reset_tsf_guard".as_slice()),
+    )?;
+    output.extend_from_slice(br#"],"repair":{"mode":"dry_run","result":"not_run","actions":["#);
+    let mut first_action = true;
+    if !reachable {
+        push_diagnostics_action(
+            &mut output,
+            &mut first_action,
+            b"restart_engine",
+            b"--restart-engine",
+        )?;
+    }
+    if !config_valid {
+        push_diagnostics_action(
+            &mut output,
+            &mut first_action,
+            b"validate_config",
+            b"--validate-config",
+        )?;
+    }
+    if tsf_guard_disabled {
+        push_diagnostics_action(
+            &mut output,
+            &mut first_action,
+            b"reset_tsf_guard",
+            b"--reset-tsf-guard",
+        )?;
+    }
+    output.extend_from_slice(b"]}}");
+    Some(output)
+}
+
 fn tsf_guard_json(status: &Fcitx5ControlTsfGuard) -> Option<Vec<u8>> {
     let mut output = Vec::new();
     output.extend_from_slice(br#"{"format_version":1,"disabled":"#);
@@ -1018,6 +1153,7 @@ fn root_action(command: &[u16], argc: usize, value: Option<&[u16]>) -> u32 {
         1 if ascii_utf16_eq(command, b"--get-tsf-guard") => CONTROL_ROOT_ACTION_GET_TSF_GUARD,
         1 if ascii_utf16_eq(command, b"--reset-tsf-guard") => CONTROL_ROOT_ACTION_RESET_TSF_GUARD,
         1 if ascii_utf16_eq(command, b"--status") => CONTROL_ROOT_ACTION_STATUS,
+        1 if ascii_utf16_eq(command, b"--diagnostics-plan") => CONTROL_ROOT_ACTION_DIAGNOSTICS_PLAN,
         1 if ascii_utf16_eq(command, b"--restart-engine") => CONTROL_ROOT_ACTION_RESTART_ENGINE,
         1 if ascii_utf16_eq(command, b"--shutdown") => CONTROL_ROOT_ACTION_SHUTDOWN,
         2 if ascii_utf16_eq(command, b"--set-startup")
@@ -1362,6 +1498,27 @@ pub unsafe extern "C" fn fcitx5_control_status_json_utf8(
     }
     let status = unsafe { &*status };
     match status_json(status) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
+/// All UTF-8 slices inside `status` must remain valid for the duration of the
+/// call. `out_ptr` and `out_len` must point to writable storage. Any returned
+/// buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_diagnostics_plan_json_utf8(
+    status: *const Fcitx5ControlStatus,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if status.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let status = unsafe { &*status };
+    match diagnostics_plan_json(status) {
         Some(json) => boxed_utf8_result(json, out_ptr, out_len),
         None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
     }
@@ -1803,6 +1960,7 @@ mod tests {
         let get_tsf_guard = wide("--get-tsf-guard");
         let reset_tsf_guard = wide("--reset-tsf-guard");
         let status = wide("--status");
+        let diagnostics_plan = wide("--diagnostics-plan");
         let restart_engine = wide("--restart-engine");
         let shutdown = wide("--shutdown");
         assert_eq!(root_action(&version, 1, None), CONTROL_ROOT_ACTION_VERSION);
@@ -1832,6 +1990,10 @@ mod tests {
             CONTROL_ROOT_ACTION_RESET_TSF_GUARD
         );
         assert_eq!(root_action(&status, 1, None), CONTROL_ROOT_ACTION_STATUS);
+        assert_eq!(
+            root_action(&diagnostics_plan, 1, None),
+            CONTROL_ROOT_ACTION_DIAGNOSTICS_PLAN
+        );
         assert_eq!(
             root_action(&restart_engine, 1, None),
             CONTROL_ROOT_ACTION_RESTART_ENGINE
@@ -2471,6 +2633,7 @@ mod tests {
     fn schema_documents_typed_control_commands() {
         assert!(CONTROL_SCHEMA_JSON.contains(r#""format_version":1"#));
         assert!(CONTROL_SCHEMA_JSON.contains(r#""set_presentation""#));
+        assert!(CONTROL_SCHEMA_JSON.contains(r#""diagnostics_plan""#));
         assert!(CONTROL_SCHEMA_JSON.contains(r#""packages_repair""#));
         assert!(CONTROL_SCHEMA_JSON.contains(r#""package_network_owner":"fcitx5-downloader.exe""#));
         assert!(!CONTROL_SCHEMA_JSON.contains("sensitive_input\":true"));
@@ -2479,6 +2642,7 @@ mod tests {
     #[test]
     fn usage_documents_typed_control_commands() {
         assert!(CONTROL_USAGE_TEXT.starts_with("Usage: fcitx5-control "));
+        assert!(CONTROL_USAGE_TEXT.contains("--diagnostics-plan"));
         assert!(CONTROL_USAGE_TEXT.contains("--packages-install ID"));
         assert!(CONTROL_USAGE_TEXT.contains("--set-presentation MODE THEME ORIENTATION"));
         assert!(CONTROL_USAGE_TEXT.ends_with("--schema|--version\n"));
@@ -2697,6 +2861,101 @@ mod tests {
         assert!(text.contains(r#""current_input_method_id":null"#));
         assert!(text.contains(r#""config_valid":false"#));
         assert!(text.contains(r#""data_root":"C:/Users/Test/Fcitx\\","#));
+    }
+
+    fn status_fixture<'a>(
+        launcher_reachable: bool,
+        config_valid: bool,
+        tsf_guard_disabled: bool,
+        tsf_guard_reason: &'a [u8],
+    ) -> Fcitx5ControlStatus {
+        let id = b"rime";
+        let name = b"Rime";
+        let native = "中州韵".as_bytes();
+        let label = "中".as_bytes();
+        let data_root = b"C:/Users/Test/Fcitx5";
+        let owner = b"builtin";
+        Fcitx5ControlStatus {
+            launcher_reachable: launcher_reachable as u8,
+            launcher_state: 2,
+            engine_state: 3,
+            current_input_method_id: Fcitx5ControlUtf8 {
+                ptr: id.as_ptr(),
+                len: id.len(),
+            },
+            current_input_method_name: Fcitx5ControlUtf8 {
+                ptr: name.as_ptr(),
+                len: name.len(),
+            },
+            current_input_method_native_name: Fcitx5ControlUtf8 {
+                ptr: native.as_ptr(),
+                len: native.len(),
+            },
+            current_input_method_short_label: Fcitx5ControlUtf8 {
+                ptr: label.as_ptr(),
+                len: label.len(),
+            },
+            config_valid: config_valid as u8,
+            tsf_guard_disabled: tsf_guard_disabled as u8,
+            tsf_guard_reason: Fcitx5ControlUtf8 {
+                ptr: tsf_guard_reason.as_ptr(),
+                len: tsf_guard_reason.len(),
+            },
+            data_root: Fcitx5ControlUtf8 {
+                ptr: data_root.as_ptr(),
+                len: data_root.len(),
+            },
+            update_owner: Fcitx5ControlUtf8 {
+                ptr: owner.as_ptr(),
+                len: owner.len(),
+            },
+        }
+    }
+
+    #[test]
+    fn diagnostics_plan_json_preserves_good_health_contract() {
+        let status = status_fixture(true, true, false, b"");
+        let json = diagnostics_plan_json(&status).expect("diagnostics plan should format");
+        let text = String::from_utf8(json).expect("diagnostics plan should be UTF-8");
+        assert_eq!(
+            text,
+            r#"{"format_version":1,"surface":"diagnostics","sensitive_input":false,"overall":"ok","checks":[{"id":"launcher","state":"ok","detail":"reachable","repair_action":null},{"id":"config","state":"ok","detail":"valid","repair_action":null},{"id":"tsf_guard","state":"ok","detail":"enabled","repair_action":null}],"repair":{"mode":"dry_run","result":"not_run","actions":[]}}"#
+        );
+    }
+
+    #[test]
+    fn diagnostics_plan_json_preserves_bad_health_repair_dry_run_contract() {
+        let reason = b"manual \"disable\"\\line\nnext";
+        let status = status_fixture(false, false, true, reason);
+        let json = diagnostics_plan_json(&status).expect("diagnostics plan should format");
+        let text = String::from_utf8(json).expect("diagnostics plan should be UTF-8");
+        assert!(text.contains(r#""surface":"diagnostics""#));
+        assert!(text.contains(r#""sensitive_input":false"#));
+        assert!(text.contains(r#""overall":"error""#));
+        assert!(text.contains(
+            r#"{"id":"launcher","state":"error","detail":"unreachable","repair_action":"restart_engine"}"#
+        ));
+        assert!(text.contains(
+            r#"{"id":"config","state":"error","detail":"invalid_config","repair_action":"validate_config"}"#
+        ));
+        assert!(text.contains(
+            r#"{"id":"tsf_guard","state":"warning","detail":"manual \"disable\"\\line\nnext","repair_action":"reset_tsf_guard"}"#
+        ));
+        assert!(text.contains(r#""repair":{"mode":"dry_run","result":"not_run","actions":["#));
+        assert!(text.contains(
+            r#"{"id":"restart_engine","kind":"control","command":"--restart-engine","destructive":false}"#
+        ));
+        assert!(text.contains(
+            r#"{"id":"validate_config","kind":"control","command":"--validate-config","destructive":false}"#
+        ));
+        assert!(text.contains(
+            r#"{"id":"reset_tsf_guard","kind":"control","command":"--reset-tsf-guard","destructive":false}"#
+        ));
+        assert!(!text.contains("raw_key"));
+        assert!(!text.contains("preedit"));
+        assert!(!text.contains("candidate"));
+        assert!(!text.contains("commit"));
+        assert!(!text.contains("user_dictionary"));
     }
 
     #[test]

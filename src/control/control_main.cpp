@@ -176,6 +176,8 @@ int fcitx5_control_presentation_json_utf8(const Fcitx5ControlPresentation* prese
                                           char** out_ptr, std::size_t* out_len);
 int fcitx5_control_status_json_utf8(const Fcitx5ControlStatus* status, char** out_ptr,
                                     std::size_t* out_len);
+int fcitx5_control_diagnostics_plan_json_utf8(const Fcitx5ControlStatus* status, char** out_ptr,
+                                              std::size_t* out_len);
 int fcitx5_control_tsf_guard_json_utf8(const Fcitx5ControlTsfGuard* status, char** out_ptr,
                                        std::size_t* out_len);
 int fcitx5_control_tsf_guard_reset_json_utf8(const char** out_ptr, std::size_t* out_len);
@@ -237,6 +239,7 @@ constexpr std::uint32_t kRootActionResetTsfGuard = 7;
 constexpr std::uint32_t kRootActionStatus = 8;
 constexpr std::uint32_t kRootActionRestartEngine = 9;
 constexpr std::uint32_t kRootActionShutdown = 10;
+constexpr std::uint32_t kRootActionDiagnosticsPlan = 11;
 constexpr std::uint32_t kConfigActionValidate = 1;
 constexpr std::uint32_t kConfigActionApply = 2;
 constexpr std::uint32_t kConfigActionResetConfig = 3;
@@ -312,6 +315,14 @@ std::string statusJson(const Fcitx5ControlStatus& status) {
     char* bytes = nullptr;
     std::size_t length = 0;
     if (fcitx5_control_status_json_utf8(&status, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
+std::string diagnosticsPlanJson(const Fcitx5ControlStatus& status) {
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_diagnostics_plan_json_utf8(&status, &bytes, &length) != 0)
         return {};
     return takeRustUtf8(bytes, length);
 }
@@ -1641,7 +1652,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         return writeVisualConfig(configPath, updated) ? 0 : 5;
     }
-    if (rootCommand == kRootActionStatus) {
+    if (rootCommand == kRootActionStatus || rootCommand == kRootActionDiagnosticsPlan) {
         fcitx::windows::protocol::LauncherResponse response;
         const bool reachable =
             launcherCommand(fcitx::windows::protocol::LauncherCommand::status, response);
@@ -1669,7 +1680,11 @@ int wmain(int argc, wchar_t** argv) {
             utf8View(tsfGuard.reason),
             utf8View(dataRootUtf8),
             utf8View(updateOwner)};
-        std::cout << statusJson(status) << '\n';
+        std::cout << (rootCommand == kRootActionDiagnosticsPlan ? diagnosticsPlanJson(status)
+                                                                 : statusJson(status))
+                  << '\n';
+        if (rootCommand == kRootActionDiagnosticsPlan)
+            return 0;
         return configValid ? 0 : 3;
     }
     if (rootCommand == kRootActionRestartEngine) {
