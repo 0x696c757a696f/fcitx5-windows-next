@@ -141,6 +141,11 @@ pub struct Fcitx5ControlTsfGuard {
     marker_path: Fcitx5ControlUtf8,
 }
 
+#[repr(C)]
+pub struct Fcitx5ControlPackageRepair {
+    repository_sequence_state: Fcitx5ControlUtf8,
+}
+
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn RegOpenKeyExW(
@@ -474,6 +479,18 @@ fn launcher_action_sequence(action: u32) -> Option<&'static [u32]> {
         CONTROL_LAUNCHER_ACTION_SHUTDOWN => Some(CONTROL_SHUTDOWN_COMMANDS),
         _ => None,
     }
+}
+
+fn package_repair_json(repair: &Fcitx5ControlPackageRepair) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1,"repair":"verified","#);
+    push_json_string_field(
+        &mut output,
+        b"\"repository_sequence_state\"",
+        utf8_slice(repair.repository_sequence_state)?,
+    )?;
+    output.push(b'}');
+    Some(output)
 }
 
 fn startup_command(executable_directory: OsString) -> Vec<u16> {
@@ -825,6 +842,27 @@ pub unsafe extern "C" fn fcitx5_control_launcher_action_sequence(
 
 /// # Safety
 ///
+/// All UTF-8 slices inside `repair` must remain valid for the duration of the
+/// call. `out_ptr` and `out_len` must point to writable storage. Any returned
+/// buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_repair_json_utf8(
+    repair: *const Fcitx5ControlPackageRepair,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if repair.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let repair = unsafe { &*repair };
+    match package_repair_json(repair) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -887,6 +925,22 @@ mod tests {
             Some(&[LAUNCHER_COMMAND_SHUTDOWN][..])
         );
         assert_eq!(launcher_action_sequence(99), None);
+    }
+
+    #[test]
+    fn package_repair_json_preserves_control_contract() {
+        let state = b"repaired";
+        let repair = Fcitx5ControlPackageRepair {
+            repository_sequence_state: Fcitx5ControlUtf8 {
+                ptr: state.as_ptr(),
+                len: state.len(),
+            },
+        };
+        let json = package_repair_json(&repair).expect("package repair should format");
+        assert_eq!(
+            json.as_slice(),
+            br#"{"format_version":1,"repair":"verified","repository_sequence_state":"repaired"}"#
+        );
     }
 
     #[test]

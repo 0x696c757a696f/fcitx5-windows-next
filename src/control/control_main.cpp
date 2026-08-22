@@ -98,6 +98,9 @@ struct Fcitx5ControlTsfGuard {
     Fcitx5ControlUtf8 reason;
     Fcitx5ControlUtf8 markerPath;
 };
+struct Fcitx5ControlPackageRepair {
+    Fcitx5ControlUtf8 repositorySequenceState;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -119,6 +122,8 @@ int fcitx5_control_startup_json_utf8(std::uint8_t enabled, char** out_ptr, std::
 int fcitx5_control_launcher_action_sequence(std::uint32_t action,
                                             const std::uint32_t** out_ptr,
                                             std::size_t* out_len);
+int fcitx5_control_package_repair_json_utf8(const Fcitx5ControlPackageRepair* repair,
+                                            char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -227,6 +232,14 @@ std::string startupJson(bool enabled) {
     char* bytes = nullptr;
     std::size_t length = 0;
     if (fcitx5_control_startup_json_utf8(enabled ? 1 : 0, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
+std::string packageRepairJson(const Fcitx5ControlPackageRepair& repair) {
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_package_repair_json_utf8(&repair, &bytes, &length) != 0)
         return {};
     return takeRustUtf8(bytes, length);
 }
@@ -1414,8 +1427,8 @@ int wmain(int argc, wchar_t** argv) {
                 repositoryFiles(dataRoot).keyring);
             fcitx::package::verify_installed_packages(dataRoot / L"packages", trustedKeys);
             const auto sequenceState = repairRepositorySequenceState(dataRoot, trustedKeys);
-            std::cout << "{\"format_version\":1,\"repair\":\"verified\","
-                      << "\"repository_sequence_state\":" << jsonString(sequenceState) << "}\n";
+            const Fcitx5ControlPackageRepair repair{utf8View(sequenceState)};
+            std::cout << packageRepairJson(repair) << '\n';
             return 0;
         }
     } catch (const fcitx::package::PackageError& error) {
