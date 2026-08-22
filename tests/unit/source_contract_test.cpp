@@ -352,6 +352,16 @@ int main(int argc, char** argv) {
         configPocSource.find("candidate_preview_embedded") == std::string::npos ||
         configPocSource.find("candidate_preview_current_theme") == std::string::npos ||
         configPocSource.find("candidate_preview_not_external_window") == std::string::npos ||
+        configPocSource.find("candidate_preview_rect") == std::string::npos ||
+        configPocSource.find("candidate_preview_embedded_in_config_content") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_uses_real_theme_contract") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_renderer_contract") == std::string::npos ||
+        configPocSource.find("checked_dpi_scale_percents") == std::string::npos ||
+        configPocSource.find("layout_rects_inside_window") == std::string::npos ||
+        configPocSource.find("layout_rects_non_overlapping") == std::string::npos ||
+        configPocSource.find("addon_action_row_rects") == std::string::npos ||
         configPocSource.find("SelectCandidateFont") == std::string::npos ||
         configPocSource.find("ToggleAdvancedAppearance") == std::string::npos ||
         configPocSource.find("InstallAddon") == std::string::npos ||

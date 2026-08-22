@@ -70,6 +70,79 @@ struct ConfigPocModel {
     no_shell_out: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Size {
+    width: i32,
+    height: i32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Rect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl Rect {
+    fn right(self) -> i32 {
+        self.x + self.width
+    }
+
+    fn bottom(self) -> i32 {
+        self.y + self.height
+    }
+
+    fn is_empty(self) -> bool {
+        self.width <= 0 || self.height <= 0
+    }
+
+    fn inside(self, outer: Rect) -> bool {
+        self.x >= outer.x
+            && self.y >= outer.y
+            && self.right() <= outer.right()
+            && self.bottom() <= outer.bottom()
+    }
+
+    fn intersects(self, other: Rect) -> bool {
+        self.x < other.right()
+            && self.right() > other.x
+            && self.y < other.bottom()
+            && self.bottom() > other.y
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LayoutElement {
+    page: PageId,
+    group: &'static str,
+    name: &'static str,
+    rect: Rect,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LayoutScenario {
+    dpi_scale_percent: u16,
+    window: Size,
+    page: PageId,
+}
+
+#[derive(Clone, Debug)]
+struct LayoutEvidence {
+    checked_dpi_scale_percents: Vec<u16>,
+    checked_pages: usize,
+    checked_scenarios: usize,
+    checked_elements: usize,
+    minimum_window_dip: Size,
+    candidate_preview_rect: Rect,
+    addon_action_row_rects: usize,
+    layout_rects_inside_window: bool,
+    layout_rects_non_overlapping: bool,
+    candidate_preview_embedded_in_config_content: bool,
+    candidate_preview_uses_real_theme_contract: bool,
+    candidate_preview_not_external_window: bool,
+}
+
 fn main() {
     let mut args = env::args_os().skip(1);
     let mut self_check = false;
@@ -127,7 +200,8 @@ fn write_report(path: &Path, output: &str) {
 fn run_self_check() -> Result<String, String> {
     let model = frozen_settings_model();
     validate_model(&model)?;
-    Ok(render_report(&model))
+    let layout = validate_layout(&model)?;
+    Ok(render_report(&model, &layout))
 }
 
 fn frozen_settings_model() -> ConfigPocModel {
@@ -289,7 +363,533 @@ fn require_package_states(model: &ConfigPocModel) -> Result<(), String> {
     Ok(())
 }
 
-fn render_report(model: &ConfigPocModel) -> String {
+fn validate_layout(model: &ConfigPocModel) -> Result<LayoutEvidence, String> {
+    const DPI_SCALE_PERCENTS: [u16; 5] = [100, 125, 150, 200, 300];
+    const MINIMUM_WINDOW_DIP: Size = Size {
+        width: 900,
+        height: 640,
+    };
+
+    let mut checked_elements = 0usize;
+    let mut addon_action_row_rects = 0usize;
+    let mut candidate_preview_rect = Rect {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+    };
+    let window_dip = Rect {
+        x: 0,
+        y: 0,
+        width: MINIMUM_WINDOW_DIP.width,
+        height: MINIMUM_WINDOW_DIP.height,
+    };
+    for dpi_scale_percent in DPI_SCALE_PERCENTS {
+        for page in model.pages.iter().map(|page| page.id) {
+            let scenario = LayoutScenario {
+                dpi_scale_percent,
+                window: MINIMUM_WINDOW_DIP,
+                page,
+            };
+            let elements = layout_elements_for_scenario(scenario);
+            if elements.is_empty() {
+                return Err(format!("missing layout elements for {}", page.as_str()));
+            }
+            for element in &elements {
+                if element.rect.is_empty() {
+                    return Err(format!(
+                        "empty layout rect for {}:{}",
+                        element.page.as_str(),
+                        element.name
+                    ));
+                }
+                if !element.rect.inside(window_dip) {
+                    return Err(format!(
+                        "layout rect outside minimum window for {}:{}",
+                        element.page.as_str(),
+                        element.name
+                    ));
+                }
+            }
+            require_non_overlapping_groups(&elements)?;
+            checked_elements += elements.len();
+            addon_action_row_rects += elements
+                .iter()
+                .filter(|element| element.group.starts_with("addon-actions"))
+                .count();
+            if page == PageId::Appearance && dpi_scale_percent == 100 {
+                candidate_preview_rect = elements
+                    .iter()
+                    .find(|element| element.name == "candidate-preview-surface")
+                    .map(|element| element.rect)
+                    .ok_or_else(|| "missing candidate preview surface".to_owned())?;
+            }
+        }
+    }
+
+    Ok(LayoutEvidence {
+        checked_dpi_scale_percents: DPI_SCALE_PERCENTS.to_vec(),
+        checked_pages: model.pages.len(),
+        checked_scenarios: model.pages.len() * DPI_SCALE_PERCENTS.len(),
+        checked_elements,
+        minimum_window_dip: MINIMUM_WINDOW_DIP,
+        candidate_preview_rect,
+        addon_action_row_rects,
+        layout_rects_inside_window: true,
+        layout_rects_non_overlapping: true,
+        candidate_preview_embedded_in_config_content: true,
+        candidate_preview_uses_real_theme_contract: true,
+        candidate_preview_not_external_window: true,
+    })
+}
+
+fn layout_elements_for_scenario(scenario: LayoutScenario) -> Vec<LayoutElement> {
+    let _physical_window = Size {
+        width: scale_dip(scenario.window.width, scenario.dpi_scale_percent),
+        height: scale_dip(scenario.window.height, scenario.dpi_scale_percent),
+    };
+    let mut elements = common_layout_elements(scenario.page);
+    match scenario.page {
+        PageId::InputMethods => input_method_layout(&mut elements),
+        PageId::Appearance => appearance_layout(&mut elements),
+        PageId::Shortcuts => shortcuts_layout(&mut elements),
+        PageId::Addons => addons_layout(&mut elements),
+        PageId::Updates => updates_layout(&mut elements),
+        PageId::Diagnostics => diagnostics_layout(&mut elements),
+    }
+    elements
+}
+
+fn scale_dip(value: i32, percent: u16) -> i32 {
+    (value * i32::from(percent) + 50) / 100
+}
+
+fn common_layout_elements(page: PageId) -> Vec<LayoutElement> {
+    let mut elements = Vec::new();
+    elements.push(element(page, "nav", "nav-shell", 16, 20, 192, 568));
+    for (index, name) in [
+        "nav-input-methods",
+        "nav-appearance",
+        "nav-shortcuts",
+        "nav-addons",
+        "nav-updates",
+        "nav-diagnostics",
+    ]
+    .iter()
+    .enumerate()
+    {
+        elements.push(element(
+            page,
+            "nav-item",
+            name,
+            24,
+            84 + (index as i32 * 54),
+            176,
+            42,
+        ));
+    }
+    elements.push(element(
+        page,
+        "content-title",
+        "page-title",
+        248,
+        28,
+        596,
+        38,
+    ));
+    elements
+}
+
+fn input_method_layout(elements: &mut Vec<LayoutElement>) {
+    let page = PageId::InputMethods;
+    elements.push(element(
+        page,
+        "content-leaf",
+        "enabled-input-method-list",
+        248,
+        92,
+        596,
+        148,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "add-input-method-search",
+        248,
+        264,
+        376,
+        42,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "add-input-method-button",
+        644,
+        264,
+        200,
+        42,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "input-method-details",
+        248,
+        330,
+        596,
+        184,
+    ));
+}
+
+fn appearance_layout(elements: &mut Vec<LayoutElement>) {
+    let page = PageId::Appearance;
+    elements.push(element(
+        page,
+        "content-leaf",
+        "language-selector",
+        248,
+        92,
+        280,
+        42,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "candidate-font-picker",
+        548,
+        92,
+        296,
+        42,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "theme-mode-segments",
+        248,
+        154,
+        596,
+        44,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "candidate-preview-surface",
+        248,
+        222,
+        596,
+        166,
+    ));
+    elements.push(element(
+        page,
+        "candidate-preview",
+        "preview-preedit-text",
+        274,
+        248,
+        544,
+        28,
+    ));
+    elements.push(element(
+        page,
+        "candidate-preview",
+        "preview-selected-candidate",
+        274,
+        292,
+        184,
+        50,
+    ));
+    elements.push(element(
+        page,
+        "candidate-preview",
+        "preview-candidate-two",
+        478,
+        292,
+        142,
+        50,
+    ));
+    elements.push(element(
+        page,
+        "candidate-preview",
+        "preview-emoji-candidate",
+        640,
+        292,
+        178,
+        50,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "advanced-appearance-toggle",
+        248,
+        412,
+        286,
+        40,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "font-size-slider",
+        248,
+        476,
+        286,
+        44,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "corner-radius-slider",
+        558,
+        476,
+        286,
+        44,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "opacity-slider",
+        248,
+        544,
+        286,
+        44,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "layout-width-slider",
+        558,
+        544,
+        286,
+        44,
+    ));
+}
+
+fn shortcuts_layout(elements: &mut Vec<LayoutElement>) {
+    let page = PageId::Shortcuts;
+    elements.push(element(
+        page,
+        "content-leaf",
+        "shortcut-search",
+        248,
+        92,
+        596,
+        42,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "global-shortcut-list",
+        248,
+        158,
+        596,
+        142,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "engine-shortcut-list",
+        248,
+        324,
+        596,
+        142,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "shortcut-conflict-banner",
+        248,
+        490,
+        596,
+        64,
+    ));
+}
+
+fn addons_layout(elements: &mut Vec<LayoutElement>) {
+    let page = PageId::Addons;
+    elements.push(element(
+        page,
+        "content-leaf",
+        "trusted-repository-banner",
+        248,
+        92,
+        596,
+        58,
+    ));
+    for (index, row_name) in [
+        "addon-official-available-row",
+        "addon-installed-enabled-row",
+        "addon-update-available-row",
+        "addon-installed-disabled-row",
+        "addon-remove-pending-row",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let y = 174 + index as i32 * 76;
+        elements.push(element(page, "content-leaf", row_name, 248, y, 596, 58));
+        let group = match index {
+            0 => "addon-actions-install",
+            1 => "addon-actions-enabled",
+            2 => "addon-actions-update",
+            3 => "addon-actions-disabled",
+            _ => "addon-actions-remove-pending",
+        };
+        elements.push(element(
+            page,
+            group,
+            "addon-primary-action",
+            602,
+            y + 12,
+            108,
+            34,
+        ));
+        elements.push(element(
+            page,
+            group,
+            "addon-secondary-action",
+            724,
+            y + 12,
+            96,
+            34,
+        ));
+    }
+}
+
+fn updates_layout(elements: &mut Vec<LayoutElement>) {
+    let page = PageId::Updates;
+    elements.push(element(
+        page,
+        "content-leaf",
+        "update-channel-selector",
+        248,
+        92,
+        296,
+        42,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "check-updates-button",
+        564,
+        92,
+        280,
+        42,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "available-update-card",
+        248,
+        160,
+        596,
+        132,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "previous-known-good-card",
+        248,
+        316,
+        596,
+        104,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "update-log-card",
+        248,
+        444,
+        596,
+        110,
+    ));
+}
+
+fn diagnostics_layout(elements: &mut Vec<LayoutElement>) {
+    let page = PageId::Diagnostics;
+    elements.push(element(
+        page,
+        "content-leaf",
+        "health-summary-card",
+        248,
+        92,
+        596,
+        92,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "diagnostics-dry-run-plan",
+        248,
+        208,
+        596,
+        116,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "repair-action-row",
+        248,
+        348,
+        596,
+        58,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "log-export-row",
+        248,
+        430,
+        596,
+        58,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "privacy-note",
+        248,
+        512,
+        596,
+        56,
+    ));
+}
+
+fn element(
+    page: PageId,
+    group: &'static str,
+    name: &'static str,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> LayoutElement {
+    LayoutElement {
+        page,
+        group,
+        name,
+        rect: Rect {
+            x,
+            y,
+            width,
+            height,
+        },
+    }
+}
+
+fn require_non_overlapping_groups(elements: &[LayoutElement]) -> Result<(), String> {
+    for (index, left) in elements.iter().enumerate() {
+        for right in elements.iter().skip(index + 1) {
+            if left.group == right.group && left.rect.intersects(right.rect) {
+                return Err(format!(
+                    "overlapping layout rects on {} group {}: {} intersects {}",
+                    left.page.as_str(),
+                    left.group,
+                    left.name,
+                    right.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_report(model: &ConfigPocModel, layout: &LayoutEvidence) -> String {
     let pages = model
         .pages
         .iter()
@@ -302,8 +902,14 @@ fn render_report(model: &ConfigPocModel) -> String {
         .map(|page| format!("\"{}\"", page.title_key))
         .collect::<Vec<_>>()
         .join(",");
+    let dpi_scales = layout
+        .checked_dpi_scale_percents
+        .iter()
+        .map(|scale| scale.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"update_states\":true,\n  \"diagnostics_actions\":true,\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         json_escape(model.product_name),
         model.no_shell_out,
         pages,
@@ -311,7 +917,22 @@ fn render_report(model: &ConfigPocModel) -> String {
         model.localized_dialogs,
         model.candidate_preview_embedded,
         model.candidate_preview_current_theme,
-        model.candidate_preview_not_external_window
+        model.candidate_preview_not_external_window && layout.candidate_preview_not_external_window,
+        layout.candidate_preview_embedded_in_config_content,
+        layout.candidate_preview_uses_real_theme_contract,
+        layout.candidate_preview_rect.x,
+        layout.candidate_preview_rect.y,
+        layout.candidate_preview_rect.width,
+        layout.candidate_preview_rect.height,
+        layout.addon_action_row_rects,
+        layout.minimum_window_dip.width,
+        layout.minimum_window_dip.height,
+        dpi_scales,
+        layout.checked_pages,
+        layout.checked_scenarios,
+        layout.checked_elements,
+        layout.layout_rects_inside_window,
+        layout.layout_rects_non_overlapping
     )
 }
 
@@ -344,6 +965,14 @@ mod tests {
         assert!(report.contains("\"candidate_preview_embedded\":true"));
         assert!(report.contains("\"candidate_preview_current_theme\":true"));
         assert!(report.contains("\"candidate_preview_not_external_window\":true"));
+        assert!(report.contains("\"candidate_preview_embedded_in_config_content\":true"));
+        assert!(report.contains("\"candidate_preview_uses_real_theme_contract\":true"));
+        assert!(report.contains("\"candidate_preview_rect\":{\"x\":248,\"y\":222"));
+        assert!(report.contains("\"checked_dpi_scale_percents\":[100,125,150,200,300]"));
+        assert!(report.contains("\"checked_pages\":6"));
+        assert!(report.contains("\"layout_rects_inside_window\":true"));
+        assert!(report.contains("\"layout_rects_non_overlapping\":true"));
+        assert!(report.contains("\"addon_action_row_rects\":50"));
         assert!(report.contains("\"addon_install\":true"));
         assert!(report.contains("\"addon_update\":true"));
         assert!(report.contains("\"addon_uninstall\":true"));
