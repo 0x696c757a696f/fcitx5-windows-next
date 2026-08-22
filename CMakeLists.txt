@@ -58,6 +58,28 @@ option(FCITX_BUILD_FUZZERS "Build security-boundary fuzz harnesses" ON)
 option(FCITX_DEVELOPMENT_PEER_EXCEPTION
        "Allow explicitly marked same-user/session peers in development builds" OFF)
 
+find_program(
+  FCITX_CARGO_EXECUTABLE cargo
+  PATHS "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home/bin"
+  NO_DEFAULT_PATH)
+find_program(FCITX_CARGO_EXECUTABLE cargo REQUIRED)
+find_program(FCITX_PWSH_EXECUTABLE pwsh powershell REQUIRED)
+set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
+set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
+set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
+set(FCITX_CMAKE_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
+if(NOT FCITX_CMAKE_PLATFORM)
+  set(FCITX_CMAKE_PLATFORM "${CMAKE_GENERATOR_PLATFORM}")
+endif()
+if(FCITX_CMAKE_PLATFORM MATCHES "^[Ww]in32$" OR CMAKE_SIZEOF_VOID_P EQUAL 4)
+  set(FCITX_RUST_TARGET "i686-pc-windows-msvc")
+elseif(FCITX_CMAKE_PLATFORM MATCHES "^[Aa][Rr][Mm]64$" OR
+       CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$")
+  set(FCITX_RUST_TARGET "aarch64-pc-windows-msvc")
+else()
+  set(FCITX_RUST_TARGET "x86_64-pc-windows-msvc")
+endif()
+
 set(FCITX_RELEASE_CHANNEL "stable" CACHE STRING "Release identity: stable, beta, or nightly")
 set_property(CACHE FCITX_RELEASE_CHANNEL PROPERTY STRINGS stable beta nightly)
 if(FCITX_RELEASE_CHANNEL STREQUAL "stable")
@@ -102,6 +124,23 @@ add_library(fcitx5::protocol ALIAS fcitx5_protocol)
 target_compile_features(fcitx5_protocol PUBLIC cxx_std_20)
 target_include_directories(fcitx5_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
 fcitx_apply_project_options(fcitx5_protocol)
+
+set(FCITX_RUST_LAUNCHER_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_launcher_core.lib")
+add_custom_target(
+  fcitx5_launcher_core_rustlib
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-launcher-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-launcher-core staticlib")
+add_library(fcitx5_launcher_core_rust STATIC IMPORTED GLOBAL)
+set_target_properties(fcitx5_launcher_core_rust
+                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}")
+add_dependencies(fcitx5_launcher_core_rust fcitx5_launcher_core_rustlib)
 
 add_library(fcitx5_candidate_model STATIC src/candidate/candidate_model.cpp)
 add_library(fcitx5::candidate_model ALIAS fcitx5_candidate_model)
@@ -227,7 +266,10 @@ target_compile_features(fcitx5_launcher_state PUBLIC cxx_std_20)
 target_include_directories(
   fcitx5_launcher_state PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/launcher")
 target_link_libraries(
-  fcitx5_launcher_state PUBLIC fcitx5::release_identity shell32 ole32)
+  fcitx5_launcher_state
+  PUBLIC fcitx5::release_identity fcitx5_launcher_core_rust shell32 ole32 ws2_32 userenv
+         ntdll bcrypt advapi32)
+add_dependencies(fcitx5_launcher_state fcitx5_launcher_core_rustlib)
 fcitx_apply_project_options(fcitx5_launcher_state)
 
 add_library(
@@ -383,24 +425,6 @@ set_target_properties(fcitx5_bootstrap PROPERTIES OUTPUT_NAME "fcitx5-bootstrap"
 target_link_libraries(fcitx5_bootstrap PRIVATE fcitx5::windows_common shell32 user32)
 fcitx_apply_project_options(fcitx5_bootstrap)
 fcitx_apply_binary_hardening(fcitx5_bootstrap)
-
-find_program(FCITX_CARGO_EXECUTABLE cargo REQUIRED)
-find_program(FCITX_PWSH_EXECUTABLE pwsh powershell REQUIRED)
-set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
-set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
-set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
-set(FCITX_CMAKE_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
-if(NOT FCITX_CMAKE_PLATFORM)
-  set(FCITX_CMAKE_PLATFORM "${CMAKE_GENERATOR_PLATFORM}")
-endif()
-if(FCITX_CMAKE_PLATFORM MATCHES "^[Ww]in32$" OR CMAKE_SIZEOF_VOID_P EQUAL 4)
-  set(FCITX_RUST_TARGET "i686-pc-windows-msvc")
-elseif(FCITX_CMAKE_PLATFORM MATCHES "^[Aa][Rr][Mm]64$" OR
-       CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$")
-  set(FCITX_RUST_TARGET "aarch64-pc-windows-msvc")
-else()
-  set(FCITX_RUST_TARGET "x86_64-pc-windows-msvc")
-endif()
 
 add_custom_target(
   fcitx5_package ALL

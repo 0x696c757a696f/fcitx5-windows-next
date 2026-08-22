@@ -1,22 +1,35 @@
-# RUST-R1-05 Conditional Rust elevated deployer
+# Current Task — RUST-R2-02 Rust Control + process-execution boundary
 
-**State:** FUTURE-GATED / DECISION-GATED
-**Canonical task:** `docs/tasks/rust/R1-05-DEPLOYER-CONDITIONAL.md`
+**Mode:** CHANGE
+**Task ID:** `RUST-R2-02`
+**Prerequisite:** 008 green
 
-## Gate
+## Goal
 
-Start only after installer/register/bootstrap semantics are stable and Rust updater/deployer evidence justifies changing the privileged boundary.
+Migrate Control CLI/shared process execution to Rust after the authoritative C++ drain/timeout/cancel semantics are frozen.
 
-## Can prepare now
+## Specification references
 
-- Record the privilege-boundary operation list.
-- Prepare an ADR template for either Rust cutover or keep-minimal-C++ decision.
+- Rust R2 matrix
+- Control/process sections
+- `REG-PROC-PIPE-001` / `REG-RUST-DIFF-001`
 
-## Prepared decision record
+## Required behavior / implementation contract
 
-- `docs/adr/0007-rust-r1-deployer-decision.md`
+- Preserve exact exit/result/output-limit/cancel/process-tree semantics.
+- Use safe typed command construction; no generic shell interpolation.
+- Keep Config calling the typed Control API rather than duplicating business logic.
 
-## Must not do before gate opens
+## Required validation
 
-- Do not enlarge the elevated operation set.
-- Do not force Rust if Win7/installer/toolchain evidence is insufficient.
+- 64 KiB/1 MiB/>limit/hung/early-close/nonzero/invalid-output differential corpus.
+- Packaged Config→Control smoke.
+- PE/license/SBOM checks.
+
+## Done when
+
+- Rust Control/process execution is authoritative.
+- No wait-before-drain regression.
+- No permanent C++/Rust selector.
+
+After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.

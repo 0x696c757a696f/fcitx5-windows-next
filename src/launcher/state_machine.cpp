@@ -1,7 +1,47 @@
 #include "state_machine.h"
 
-#include <algorithm>
-#include <limits>
+#include <cstdint>
+
+namespace {
+
+struct Fcitx5LauncherSnapshot {
+    std::uint32_t state;
+    std::uint32_t consecutiveStartupCrashes;
+    std::uint64_t nextStartAllowedMilliseconds;
+};
+
+struct Fcitx5LauncherMachine {
+    Fcitx5LauncherSnapshot snapshot;
+    std::uint32_t engineState;
+};
+
+struct Fcitx5LauncherStartDecision {
+    std::uint32_t disposition;
+    std::uint8_t safeMode;
+    std::uint8_t reserved[7];
+    std::uint64_t retryAfterMilliseconds;
+};
+
+extern "C" {
+int fcitx5_launcher_state_init(std::uint64_t now, Fcitx5LauncherSnapshot snapshot,
+                               Fcitx5LauncherMachine* output);
+std::uint8_t fcitx5_launcher_state_can_apply(std::uint32_t state, std::uint32_t command);
+std::uint32_t fcitx5_launcher_state_after(std::uint32_t state, std::uint32_t command);
+std::uint8_t fcitx5_launcher_state_apply(Fcitx5LauncherMachine* machine, std::uint32_t command);
+int fcitx5_launcher_state_request_start(Fcitx5LauncherMachine* machine, std::uint64_t now,
+                                        Fcitx5LauncherStartDecision* output);
+void fcitx5_launcher_state_engine_ready(Fcitx5LauncherMachine* machine);
+void fcitx5_launcher_state_engine_exited(Fcitx5LauncherMachine* machine,
+                                         std::uint64_t runtimeMilliseconds, std::uint64_t now);
+void fcitx5_launcher_state_engine_stopped_intentionally(Fcitx5LauncherMachine* machine);
+}
+
+Fcitx5LauncherSnapshot toRust(fcitx::windows::launcher::LauncherSnapshot snapshot) noexcept {
+    return {static_cast<std::uint32_t>(snapshot.state), snapshot.consecutiveStartupCrashes,
+            snapshot.nextStartAllowedMilliseconds};
+}
+
+} // namespace
 
 namespace fcitx::windows::launcher {
 
@@ -10,35 +50,19 @@ LauncherStateMachine::LauncherStateMachine(const Clock& clock,
     : LauncherStateMachine(clock, LauncherSnapshot{initialState, 0, 0}) {}
 
 LauncherStateMachine::LauncherStateMachine(const Clock& clock, LauncherSnapshot snapshot) noexcept
-    : clock_(clock),
-      state_(snapshot.state),
-      consecutiveStartupCrashes_(snapshot.consecutiveStartupCrashes),
-      nextStartAllowedMilliseconds_(snapshot.nextStartAllowedMilliseconds) {
-    if (state_ == LauncherState::crashBackoff) {
-        if (consecutiveStartupCrashes_ == 0)
-            consecutiveStartupCrashes_ = 1;
-        const auto now = clock_.nowMilliseconds();
-        if (nextStartAllowedMilliseconds_ == 0 ||
-            nextStartAllowedMilliseconds_ > now + kMaximumBackoffMilliseconds) {
-            nextStartAllowedMilliseconds_ = now + kInitialBackoffMilliseconds;
-        }
-    } else if (state_ == LauncherState::safeMode) {
-        if (consecutiveStartupCrashes_ < kSafeModeCrashThreshold)
-            consecutiveStartupCrashes_ = kSafeModeCrashThreshold;
-        nextStartAllowedMilliseconds_ = 0;
+    : clock_(clock) {
+    Fcitx5LauncherMachine machine{};
+    if (fcitx5_launcher_state_init(clock_.nowMilliseconds(), toRust(snapshot), &machine) == 0) {
+        state_ = static_cast<LauncherState>(machine.snapshot.state);
+        engineState_ = static_cast<EngineState>(machine.engineState);
+        consecutiveStartupCrashes_ = machine.snapshot.consecutiveStartupCrashes;
+        nextStartAllowedMilliseconds_ = machine.snapshot.nextStartAllowedMilliseconds;
     } else {
-        resetCrashAccounting();
+        state_ = LauncherState::userStopped;
+        engineState_ = EngineState::stopped;
+        consecutiveStartupCrashes_ = 0;
+        nextStartAllowedMilliseconds_ = 0;
     }
-}
-
-bool LauncherStateMachine::startSuppressed() const noexcept {
-    return state_ == LauncherState::userStopped || state_ == LauncherState::updating ||
-           state_ == LauncherState::uninstalling;
-}
-
-void LauncherStateMachine::resetCrashAccounting() noexcept {
-    consecutiveStartupCrashes_ = 0;
-    nextStartAllowedMilliseconds_ = 0;
 }
 
 LauncherSnapshot LauncherStateMachine::snapshot() const noexcept {
@@ -46,117 +70,61 @@ LauncherSnapshot LauncherStateMachine::snapshot() const noexcept {
 }
 
 bool LauncherStateMachine::apply(Command command) noexcept {
-    if (!canApply(command)) return false;
-    state_ = stateAfter(command);
-    switch (command) {
-    case Command::userStop:
-        engineState_ = EngineState::stopped;
-        return true;
-    case Command::resume:
-        resetCrashAccounting();
-        return true;
-    case Command::beginUpdate:
-        engineState_ = EngineState::stopped;
-        return true;
-    case Command::endUpdate:
-        resetCrashAccounting();
-        return true;
-    case Command::beginUninstall:
-        engineState_ = EngineState::stopped;
-        return true;
-    case Command::resetSafeMode:
-        resetCrashAccounting();
-        return true;
+    Fcitx5LauncherMachine machine{toRust(snapshot()), static_cast<std::uint32_t>(engineState_)};
+    if (!fcitx5_launcher_state_apply(&machine, static_cast<std::uint32_t>(command))) {
+        return false;
     }
-    return false;
+    state_ = static_cast<LauncherState>(machine.snapshot.state);
+    engineState_ = static_cast<EngineState>(machine.engineState);
+    consecutiveStartupCrashes_ = machine.snapshot.consecutiveStartupCrashes;
+    nextStartAllowedMilliseconds_ = machine.snapshot.nextStartAllowedMilliseconds;
+    return true;
 }
 
 bool LauncherStateMachine::canApply(Command command) const noexcept {
-    switch (command) {
-    case Command::userStop:
-    case Command::beginUpdate:
-        return state_ != LauncherState::uninstalling && state_ != LauncherState::updating;
-    case Command::resume:
-        return state_ == LauncherState::userStopped;
-    case Command::endUpdate:
-        return state_ == LauncherState::updating;
-    case Command::beginUninstall:
-        return state_ != LauncherState::uninstalling;
-    case Command::resetSafeMode:
-        return state_ == LauncherState::safeMode;
-    }
-    return false;
+    return fcitx5_launcher_state_can_apply(static_cast<std::uint32_t>(state_),
+                                           static_cast<std::uint32_t>(command)) != 0;
 }
 
 LauncherState LauncherStateMachine::stateAfter(Command command) const noexcept {
-    switch (command) {
-    case Command::userStop:
-        return LauncherState::userStopped;
-    case Command::beginUpdate:
-        return LauncherState::updating;
-    case Command::beginUninstall:
-        return LauncherState::uninstalling;
-    case Command::resume:
-    case Command::endUpdate:
-    case Command::resetSafeMode:
-        return LauncherState::normal;
-    }
-    return state_;
+    return static_cast<LauncherState>(fcitx5_launcher_state_after(
+        static_cast<std::uint32_t>(state_), static_cast<std::uint32_t>(command)));
 }
 
 StartDecision LauncherStateMachine::requestStart() noexcept {
-    if (startSuppressed()) return {StartDisposition::suppressed, false, 0};
-    if (engineState_ != EngineState::stopped) {
-        return {StartDisposition::alreadyActive, state_ == LauncherState::safeMode, 0};
+    Fcitx5LauncherMachine machine{toRust(snapshot()), static_cast<std::uint32_t>(engineState_)};
+    Fcitx5LauncherStartDecision rustDecision{};
+    if (fcitx5_launcher_state_request_start(&machine, clock_.nowMilliseconds(), &rustDecision) !=
+        0) {
+        return {};
     }
-    const auto now = clock_.nowMilliseconds();
-    if (state_ == LauncherState::crashBackoff && now < nextStartAllowedMilliseconds_) {
-        return {StartDisposition::backoff, false, nextStartAllowedMilliseconds_ - now};
-    }
-    if (state_ == LauncherState::crashBackoff) state_ = LauncherState::normal;
-    engineState_ = EngineState::starting;
-    return {StartDisposition::start, state_ == LauncherState::safeMode, 0};
+    state_ = static_cast<LauncherState>(machine.snapshot.state);
+    engineState_ = static_cast<EngineState>(machine.engineState);
+    consecutiveStartupCrashes_ = machine.snapshot.consecutiveStartupCrashes;
+    nextStartAllowedMilliseconds_ = machine.snapshot.nextStartAllowedMilliseconds;
+    return {static_cast<StartDisposition>(rustDecision.disposition), rustDecision.safeMode != 0,
+            rustDecision.retryAfterMilliseconds};
 }
 
 void LauncherStateMachine::engineReady() noexcept {
-    if (engineState_ == EngineState::starting) engineState_ = EngineState::ready;
+    Fcitx5LauncherMachine machine{toRust(snapshot()), static_cast<std::uint32_t>(engineState_)};
+    fcitx5_launcher_state_engine_ready(&machine);
+    engineState_ = static_cast<EngineState>(machine.engineState);
 }
 
 void LauncherStateMachine::engineExited(std::uint64_t runtimeMilliseconds) noexcept {
-    engineState_ = EngineState::stopped;
-    if (startSuppressed()) return;
-    if (runtimeMilliseconds >= kStableRuntimeMilliseconds) {
-        state_ = LauncherState::normal;
-        resetCrashAccounting();
-        return;
-    }
-    if (runtimeMilliseconds >= kStartupCrashWindowMilliseconds) {
-        state_ = LauncherState::normal;
-        consecutiveStartupCrashes_ = 0;
-        nextStartAllowedMilliseconds_ = 0;
-        return;
-    }
-    if (consecutiveStartupCrashes_ < std::numeric_limits<unsigned>::max()) {
-        ++consecutiveStartupCrashes_;
-    }
-    if (consecutiveStartupCrashes_ >= kSafeModeCrashThreshold) {
-        state_ = LauncherState::safeMode;
-        nextStartAllowedMilliseconds_ = 0;
-        return;
-    }
-    const unsigned shift = (std::min)(consecutiveStartupCrashes_ - 1, 16U);
-    const std::uint64_t delay =
-        (std::min)(kInitialBackoffMilliseconds << shift, kMaximumBackoffMilliseconds);
-    state_ = LauncherState::crashBackoff;
-    const auto now = clock_.nowMilliseconds();
-    nextStartAllowedMilliseconds_ =
-        now > std::numeric_limits<std::uint64_t>::max() - delay
-            ? std::numeric_limits<std::uint64_t>::max()
-            : now + delay;
+    Fcitx5LauncherMachine machine{toRust(snapshot()), static_cast<std::uint32_t>(engineState_)};
+    fcitx5_launcher_state_engine_exited(&machine, runtimeMilliseconds, clock_.nowMilliseconds());
+    state_ = static_cast<LauncherState>(machine.snapshot.state);
+    engineState_ = static_cast<EngineState>(machine.engineState);
+    consecutiveStartupCrashes_ = machine.snapshot.consecutiveStartupCrashes;
+    nextStartAllowedMilliseconds_ = machine.snapshot.nextStartAllowedMilliseconds;
 }
 
 void LauncherStateMachine::engineStoppedIntentionally() noexcept {
-    engineState_ = EngineState::stopped;
+    Fcitx5LauncherMachine machine{toRust(snapshot()), static_cast<std::uint32_t>(engineState_)};
+    fcitx5_launcher_state_engine_stopped_intentionally(&machine);
+    engineState_ = static_cast<EngineState>(machine.engineState);
 }
 
 } // namespace fcitx::windows::launcher
