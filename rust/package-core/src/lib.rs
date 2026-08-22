@@ -5072,6 +5072,139 @@ pub fn finalize_installed_package_removal(
 }
 
 #[cfg(windows)]
+mod lifecycle_ffi {
+    #![allow(unsafe_code)]
+
+    use super::{
+        finalize_installed_package_removal, mark_installed_package_for_removal,
+        set_installed_package_state, LifecycleError, PackageLifecycleState,
+    };
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::path::PathBuf;
+    use std::slice;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageLifecycleResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+    }
+
+    fn write_ascii<const N: usize>(buffer: &mut [u8; N], value: &str) {
+        buffer.fill(0);
+        let bytes = value.as_bytes();
+        let length = bytes.len().min(N.saturating_sub(1));
+        buffer[..length].copy_from_slice(&bytes[..length]);
+    }
+
+    fn ok_result() -> Fcitx5PackageLifecycleResult {
+        Fcitx5PackageLifecycleResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+        }
+    }
+
+    fn error_result(code: &str, message: &str) -> Fcitx5PackageLifecycleResult {
+        let mut result = ok_result();
+        result.status = 1;
+        write_ascii(&mut result.error_code, code);
+        write_ascii(&mut result.error_message, message);
+        result
+    }
+
+    fn lifecycle_result(result: Result<(), LifecycleError>) -> Fcitx5PackageLifecycleResult {
+        match result {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    fn path_from_utf16(ptr: *const u16, len: usize) -> Option<PathBuf> {
+        if ptr.is_null() {
+            return None;
+        }
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
+        Some(PathBuf::from(OsString::from_wide(slice)))
+    }
+
+    fn string_from_utf8(ptr: *const u8, len: usize) -> Option<String> {
+        if ptr.is_null() {
+            return None;
+        }
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
+        std::str::from_utf8(slice).ok().map(ToOwned::to_owned)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_set_state_utf16(
+        install_root: *const u16,
+        install_root_len: usize,
+        package_id: *const u8,
+        package_id_len: usize,
+        state: *const u8,
+        state_len: usize,
+    ) -> Fcitx5PackageLifecycleResult {
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return error_result("invalid_state", "package id or lifecycle state is invalid");
+        };
+        let Some(package_id) = string_from_utf8(package_id, package_id_len) else {
+            return error_result("invalid_state", "package id or lifecycle state is invalid");
+        };
+        let Some(state) = string_from_utf8(state, state_len)
+            .and_then(|value| PackageLifecycleState::parse(&value))
+        else {
+            return error_result("invalid_state", "package id or lifecycle state is invalid");
+        };
+        lifecycle_result(set_installed_package_state(
+            install_root,
+            &package_id,
+            state,
+        ))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_mark_remove_utf16(
+        install_root: *const u16,
+        install_root_len: usize,
+        package_id: *const u8,
+        package_id_len: usize,
+    ) -> Fcitx5PackageLifecycleResult {
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return error_result("invalid_state", "package id or lifecycle state is invalid");
+        };
+        let Some(package_id) = string_from_utf8(package_id, package_id_len) else {
+            return error_result("invalid_state", "package id or lifecycle state is invalid");
+        };
+        lifecycle_result(mark_installed_package_for_removal(
+            install_root,
+            &package_id,
+        ))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_finalize_remove_utf16(
+        install_root: *const u16,
+        install_root_len: usize,
+        package_id: *const u8,
+        package_id_len: usize,
+    ) -> Fcitx5PackageLifecycleResult {
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return error_result("invalid_state", "package id or lifecycle state is invalid");
+        };
+        let Some(package_id) = string_from_utf8(package_id, package_id_len) else {
+            return error_result("invalid_state", "package id or lifecycle state is invalid");
+        };
+        lifecycle_result(finalize_installed_package_removal(
+            install_root,
+            &package_id,
+        ))
+    }
+}
+
+#[cfg(windows)]
 fn read_installed_manifests(
     install_root: &Path,
     lock: &[LockEntry],

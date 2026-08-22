@@ -498,6 +498,10 @@ add_library(fcitx5_package_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_package_core_rust PROPERTIES
                       IMPORTED_LOCATION "${FCITX_RUST_PACKAGE_CORE_STATICLIB}")
 add_dependencies(fcitx5_package_core_rust fcitx5_package_core_rustlib)
+target_link_libraries(
+  fcitx5_package_core
+  PUBLIC fcitx5_package_core_rust ole32 advapi32 ws2_32 userenv ntdll)
+add_dependencies(fcitx5_package_core fcitx5_package_core_rustlib)
 
 add_executable(fcitx5_downloader src/package/downloader_main.cpp)
 set_target_properties(fcitx5_downloader PROPERTIES OUTPUT_NAME "fcitx5-downloader")

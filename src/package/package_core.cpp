@@ -26,6 +26,24 @@ extern "C" {
 
 #include <nlohmann/json.hpp>
 
+extern "C" {
+struct Fcitx5PackageLifecycleResult {
+  int status;
+  std::uint8_t error_code[64];
+  std::uint8_t error_message[512];
+};
+
+Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
+    const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
+    std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
+Fcitx5PackageLifecycleResult fcitx5_package_mark_remove_utf16(
+    const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
+    std::size_t package_id_len);
+Fcitx5PackageLifecycleResult fcitx5_package_finalize_remove_utf16(
+    const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
+    std::size_t package_id_len);
+}
+
 namespace fcitx::package {
 namespace {
 
@@ -91,6 +109,31 @@ class KeyHandle final {
 
 [[noreturn]] void fail(std::string code, std::string message) {
   throw PackageError(std::move(code), std::move(message));
+}
+
+std::string ffi_string(std::span<const std::uint8_t> bytes) {
+  const auto end = std::ranges::find(bytes, std::uint8_t{0});
+  return {reinterpret_cast<const char*>(bytes.data()),
+          static_cast<std::size_t>(end - bytes.begin())};
+}
+
+void require_lifecycle_ok(const Fcitx5PackageLifecycleResult& result) {
+  if (result.status == 0) {
+    return;
+  }
+  std::string code = ffi_string(result.error_code);
+  std::string message = ffi_string(result.error_message);
+  if (code.empty()) {
+    code = "lifecycle_failed";
+  }
+  if (message.empty()) {
+    message = "package lifecycle operation failed";
+  }
+  fail(std::move(code), std::move(message));
+}
+
+std::wstring native_path_string(const std::filesystem::path& path) {
+  return path.native();
 }
 
 void require_nt_success(NTSTATUS status, std::string_view operation) {
@@ -1096,63 +1139,26 @@ void verify_installed_packages(const std::filesystem::path& install_root,
 
 void set_package_state(const std::filesystem::path& install_root, std::string_view package_id,
                        std::string_view state) {
-  static constexpr std::array<std::string_view, 7> states{
-      "installed", "enabled", "disabled", "pending_update", "pending_remove", "broken",
-      "quarantined"};
-  if (!is_lower_package_id(package_id) || std::ranges::find(states, state) == states.end()) {
-    fail("invalid_state", "package id or lifecycle state is invalid");
-  }
-  auto lock = read_lockfile(install_root);
-  const auto entry = std::ranges::find_if(lock, [&](const LockEntry& item) {
-    return item.id == package_id;
-  });
-  if (entry == lock.end()) {
-    fail("package_not_found", "package is not installed");
-  }
-  entry->state = state;
-  write_lockfile_atomic(install_root, lock);
+  const std::wstring root = native_path_string(install_root);
+  require_lifecycle_ok(fcitx5_package_set_state_utf16(
+      root.data(), root.size(), reinterpret_cast<const std::uint8_t*>(package_id.data()),
+      package_id.size(), reinterpret_cast<const std::uint8_t*>(state.data()), state.size()));
 }
 
 void mark_package_for_removal(const std::filesystem::path& install_root,
                               std::string_view package_id) {
-  auto lock = read_lockfile(install_root);
-  const auto target = std::ranges::find_if(lock, [&](const LockEntry& item) {
-    return item.id == package_id;
-  });
-  if (target == lock.end()) fail("package_not_found", "package is not installed");
-  const auto manifest = parse_manifest(read_file_bounded(
-      install_root / "manifests" / target->id / (target->version + ".json"),
-      kMaximumManifestBytes));
-  if (manifest.type == PackageType::core) fail("protected_package", "core packages cannot be removed");
-  for (const auto& item : lock) {
-    if (item.id == package_id || item.state == "pending_remove") continue;
-    const auto dependent = parse_manifest(read_file_bounded(
-        install_root / "manifests" / item.id / (item.version + ".json"),
-        kMaximumManifestBytes));
-    if (std::ranges::any_of(dependent.dependencies, [&](const Dependency& dependency) {
-          return dependency.id == package_id;
-        })) fail("package_in_use", "another installed package depends on this package");
-  }
-  target->state = "pending_remove";
-  write_lockfile_atomic(install_root, lock);
+  const std::wstring root = native_path_string(install_root);
+  require_lifecycle_ok(fcitx5_package_mark_remove_utf16(
+      root.data(), root.size(), reinterpret_cast<const std::uint8_t*>(package_id.data()),
+      package_id.size()));
 }
 
 void finalize_package_removal(const std::filesystem::path& install_root,
                               std::string_view package_id) {
-  auto lock = read_lockfile(install_root);
-  const auto target = std::ranges::find_if(lock, [&](const LockEntry& item) {
-    return item.id == package_id;
-  });
-  if (target == lock.end() || target->state != "pending_remove") {
-    fail("invalid_state", "package is not pending removal");
-  }
-  lock.erase(target);
-  write_lockfile_atomic(install_root, lock);
-  std::error_code error;
-  std::filesystem::remove_all(install_root / "versions" / std::filesystem::path(package_id), error);
-  if (error) fail("remove_pending", "package deactivated but payload cleanup must be retried");
-  std::filesystem::remove_all(install_root / "manifests" / std::filesystem::path(package_id), error);
-  if (error) fail("remove_pending", "package deactivated but metadata cleanup must be retried");
+  const std::wstring root = native_path_string(install_root);
+  require_lifecycle_ok(fcitx5_package_finalize_remove_utf16(
+      root.data(), root.size(), reinterpret_cast<const std::uint8_t*>(package_id.data()),
+      package_id.size()));
 }
 
 void activate_installed_version(const std::filesystem::path& install_root,
