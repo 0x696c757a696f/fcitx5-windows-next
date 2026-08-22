@@ -182,7 +182,7 @@ int fcitx5_control_launcher_action_sequence(std::uint32_t action,
                                             std::size_t* out_len);
 int fcitx5_control_package_repair_json_utf8(const Fcitx5ControlPackageRepair* repair,
                                             char** out_ptr, std::size_t* out_len);
-std::uint32_t fcitx5_control_config_file_action_utf16(Fcitx5ControlUtf16 command);
+std::uint32_t fcitx5_control_config_action_utf16(Fcitx5ControlUtf16 command, std::size_t argc);
 std::uint32_t fcitx5_control_package_action_utf16(Fcitx5ControlUtf16 command, std::size_t argc,
                                                   Fcitx5ControlUtf16 state);
 int fcitx5_control_addons_json_utf8(const Fcitx5ControlAddonDescriptor* addons,
@@ -210,8 +210,12 @@ constexpr wchar_t kVisualConfigChangedMessage[] =
     L"Fcitx5WindowsNext.VisualConfigChanged.v1";
 constexpr std::uint32_t kLauncherActionRestartEngine = 1;
 constexpr std::uint32_t kLauncherActionShutdown = 2;
-constexpr std::uint32_t kConfigFileActionValidate = 1;
-constexpr std::uint32_t kConfigFileActionApply = 2;
+constexpr std::uint32_t kConfigActionValidate = 1;
+constexpr std::uint32_t kConfigActionApply = 2;
+constexpr std::uint32_t kConfigActionResetConfig = 3;
+constexpr std::uint32_t kConfigActionResetPresentation = 4;
+constexpr std::uint32_t kConfigActionGetPresentation = 5;
+constexpr std::uint32_t kConfigActionSetPresentation = 6;
 constexpr std::uint32_t kPackageActionPackagesList = 1;
 constexpr std::uint32_t kPackageActionThemesList = 2;
 constexpr std::uint32_t kPackageActionThemesDetail = 3;
@@ -330,8 +334,8 @@ std::string packageRepairJson(const Fcitx5ControlPackageRepair& repair) {
     return takeRustUtf8(bytes, length);
 }
 
-std::uint32_t configFileAction(std::wstring_view command) {
-    return fcitx5_control_config_file_action_utf16({command.data(), command.size()});
+std::uint32_t configAction(std::wstring_view command, std::size_t argc) {
+    return fcitx5_control_config_action_utf16({command.data(), command.size()}, argc);
 }
 
 std::uint32_t packageAction(const std::vector<std::wstring_view>& arguments) {
@@ -1530,7 +1534,9 @@ int wmain(int argc, wchar_t** argv) {
         std::cerr << error.code() << ": " << error.what() << '\n';
         return 6;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--get-presentation") {
+    const std::uint32_t controlConfigAction =
+        arguments.empty() ? 0 : configAction(arguments[0], arguments.size());
+    if (controlConfigAction == kConfigActionGetPresentation) {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string text;
         if (fs::exists(configPath) && !readUtf8(configPath, text))
@@ -1601,9 +1607,7 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << output << '\n';
         return 0;
     }
-    if ((arguments.size() == 7 || arguments.size() == 9 || arguments.size() == 12 ||
-         arguments.size() == 14) &&
-        arguments[0] == L"--set-presentation") {
+    if (controlConfigAction == kConfigActionSetPresentation) {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string source = fcitx::windows::config::defaultConfigToml();
         if (fs::exists(configPath) && !readUtf8(configPath, source))
@@ -1667,13 +1671,13 @@ int wmain(int argc, wchar_t** argv) {
     if (arguments.size() == 1 && arguments[0] == L"--shutdown") {
         return runLauncherAction(kLauncherActionShutdown) ? 0 : 4;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--reset-config") {
+    if (controlConfigAction == kConfigActionResetConfig) {
         return writeVisualConfig(dataRoot / L"config.toml",
                                  fcitx::windows::config::defaultConfigToml())
                    ? 0
                    : 5;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--reset-presentation") {
+    if (controlConfigAction == kConfigActionResetPresentation) {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string source = "format_version = 1\n";
         if (fs::exists(configPath) && !readUtf8(configPath, source))
@@ -1687,10 +1691,8 @@ int wmain(int argc, wchar_t** argv) {
         }
         return writeVisualConfig(configPath, updated) ? 0 : 5;
     }
-    const std::uint32_t configAction =
-        arguments.empty() ? 0 : configFileAction(arguments[0]);
-    if (arguments.size() == 2 &&
-        (configAction == kConfigFileActionValidate || configAction == kConfigFileActionApply)) {
+    if (controlConfigAction == kConfigActionValidate ||
+        controlConfigAction == kConfigActionApply) {
         std::string text;
         ParseError error;
         if (!validateConfig(fs::path(arguments[1]), text, error)) {
@@ -1698,7 +1700,7 @@ int wmain(int argc, wchar_t** argv) {
                       << error.message << '\n';
             return 3;
         }
-        if (configAction == kConfigFileActionValidate)
+        if (controlConfigAction == kConfigActionValidate)
             return 0;
         return writeVisualConfig(dataRoot / L"config.toml", text) ? 0 : 5;
     }

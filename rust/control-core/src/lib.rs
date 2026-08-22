@@ -76,9 +76,13 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
 const CONTROL_TSF_GUARD_RESET_JSON: &str = r#"{"format_version":1,"tsf_guard":"enabled"}"#;
 const CONTROL_LAUNCHER_ACTION_RESTART_ENGINE: u32 = 1;
 const CONTROL_LAUNCHER_ACTION_SHUTDOWN: u32 = 2;
-const CONTROL_CONFIG_FILE_ACTION_UNKNOWN: u32 = 0;
-const CONTROL_CONFIG_FILE_ACTION_VALIDATE: u32 = 1;
-const CONTROL_CONFIG_FILE_ACTION_APPLY: u32 = 2;
+const CONTROL_CONFIG_ACTION_UNKNOWN: u32 = 0;
+const CONTROL_CONFIG_ACTION_VALIDATE: u32 = 1;
+const CONTROL_CONFIG_ACTION_APPLY: u32 = 2;
+const CONTROL_CONFIG_ACTION_RESET_CONFIG: u32 = 3;
+const CONTROL_CONFIG_ACTION_RESET_PRESENTATION: u32 = 4;
+const CONTROL_CONFIG_ACTION_GET_PRESENTATION: u32 = 5;
+const CONTROL_CONFIG_ACTION_SET_PRESENTATION: u32 = 6;
 const CONTROL_PACKAGE_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_PACKAGE_ACTION_PACKAGES_LIST: u32 = 1;
 const CONTROL_PACKAGE_ACTION_THEMES_LIST: u32 = 2;
@@ -892,13 +896,21 @@ fn package_detail_json(detail: &Fcitx5ControlPackageDetail) -> Option<Vec<u8>> {
     Some(output)
 }
 
-fn config_file_action(command: &[u16]) -> u32 {
-    if ascii_utf16_eq(command, b"--validate-config") {
-        CONTROL_CONFIG_FILE_ACTION_VALIDATE
-    } else if ascii_utf16_eq(command, b"--apply-config") {
-        CONTROL_CONFIG_FILE_ACTION_APPLY
-    } else {
-        CONTROL_CONFIG_FILE_ACTION_UNKNOWN
+fn config_action(command: &[u16], argc: usize) -> u32 {
+    match argc {
+        1 if ascii_utf16_eq(command, b"--reset-config") => CONTROL_CONFIG_ACTION_RESET_CONFIG,
+        1 if ascii_utf16_eq(command, b"--reset-presentation") => {
+            CONTROL_CONFIG_ACTION_RESET_PRESENTATION
+        }
+        1 if ascii_utf16_eq(command, b"--get-presentation") => {
+            CONTROL_CONFIG_ACTION_GET_PRESENTATION
+        }
+        2 if ascii_utf16_eq(command, b"--validate-config") => CONTROL_CONFIG_ACTION_VALIDATE,
+        2 if ascii_utf16_eq(command, b"--apply-config") => CONTROL_CONFIG_ACTION_APPLY,
+        7 | 9 | 12 | 14 if ascii_utf16_eq(command, b"--set-presentation") => {
+            CONTROL_CONFIG_ACTION_SET_PRESENTATION
+        }
+        _ => CONTROL_CONFIG_ACTION_UNKNOWN,
     }
 }
 
@@ -1318,14 +1330,15 @@ pub unsafe extern "C" fn fcitx5_control_package_repair_json_utf8(
 /// `command` must remain valid for the duration of the call. No pointer is
 /// retained.
 #[no_mangle]
-pub unsafe extern "C" fn fcitx5_control_config_file_action_utf16(
+pub unsafe extern "C" fn fcitx5_control_config_action_utf16(
     command: Fcitx5ControlUtf16,
+    argc: usize,
 ) -> u32 {
     if command.ptr.is_null() {
-        return CONTROL_CONFIG_FILE_ACTION_UNKNOWN;
+        return CONTROL_CONFIG_ACTION_UNKNOWN;
     }
     let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
-    config_file_action(command)
+    config_action(command, argc)
 }
 
 /// # Safety
@@ -1554,19 +1567,45 @@ mod tests {
     }
 
     #[test]
-    fn config_file_actions_are_typed_control_commands() {
+    fn config_actions_are_typed_control_commands() {
         let validate = wide("--validate-config");
         let apply = wide("--apply-config");
         let reset = wide("--reset-config");
+        let reset_presentation = wide("--reset-presentation");
+        let get_presentation = wide("--get-presentation");
+        let set_presentation = wide("--set-presentation");
+        assert_eq!(config_action(&validate, 2), CONTROL_CONFIG_ACTION_VALIDATE);
+        assert_eq!(config_action(&apply, 2), CONTROL_CONFIG_ACTION_APPLY);
+        assert_eq!(config_action(&reset, 1), CONTROL_CONFIG_ACTION_RESET_CONFIG);
         assert_eq!(
-            config_file_action(&validate),
-            CONTROL_CONFIG_FILE_ACTION_VALIDATE
+            config_action(&reset_presentation, 1),
+            CONTROL_CONFIG_ACTION_RESET_PRESENTATION
         );
-        assert_eq!(config_file_action(&apply), CONTROL_CONFIG_FILE_ACTION_APPLY);
         assert_eq!(
-            config_file_action(&reset),
-            CONTROL_CONFIG_FILE_ACTION_UNKNOWN
+            config_action(&get_presentation, 1),
+            CONTROL_CONFIG_ACTION_GET_PRESENTATION
         );
+        assert_eq!(
+            config_action(&set_presentation, 7),
+            CONTROL_CONFIG_ACTION_SET_PRESENTATION
+        );
+        assert_eq!(
+            config_action(&set_presentation, 9),
+            CONTROL_CONFIG_ACTION_SET_PRESENTATION
+        );
+        assert_eq!(
+            config_action(&set_presentation, 12),
+            CONTROL_CONFIG_ACTION_SET_PRESENTATION
+        );
+        assert_eq!(
+            config_action(&set_presentation, 14),
+            CONTROL_CONFIG_ACTION_SET_PRESENTATION
+        );
+        assert_eq!(
+            config_action(&set_presentation, 8),
+            CONTROL_CONFIG_ACTION_UNKNOWN
+        );
+        assert_eq!(config_action(&validate, 1), CONTROL_CONFIG_ACTION_UNKNOWN);
     }
 
     #[test]
