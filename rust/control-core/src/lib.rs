@@ -80,6 +80,12 @@ pub struct Fcitx5ControlUtf16 {
     len: usize,
 }
 
+#[repr(C)]
+pub struct Fcitx5ControlUtf8 {
+    ptr: *const u8,
+    len: usize,
+}
+
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn RegOpenKeyExW(
@@ -171,6 +177,41 @@ fn quote(value: &std::ffi::OsStr) -> OsString {
     result.extend(std::iter::repeat_n(b'\\' as u16, backslashes * 2));
     result.push(b'"' as u16);
     OsString::from_wide(&result)
+}
+
+fn json_string(value: &[u8]) -> Option<Vec<u8>> {
+    let mut result = Vec::with_capacity(value.len() + 2);
+    result.push(b'"');
+    for byte in value {
+        match *byte {
+            b'\\' => result.extend_from_slice(b"\\\\"),
+            b'"' => result.extend_from_slice(br#"\""#),
+            b'\x08' => result.extend_from_slice(br#"\b"#),
+            b'\x0c' => result.extend_from_slice(br#"\f"#),
+            b'\n' => result.extend_from_slice(br#"\n"#),
+            b'\r' => result.extend_from_slice(br#"\r"#),
+            b'\t' => result.extend_from_slice(br#"\t"#),
+            0x00..=0x1f => return None,
+            other => result.push(other),
+        }
+    }
+    result.push(b'"');
+    Some(result)
+}
+
+fn boxed_utf8_result(value: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return 1;
+    }
+    let mut bytes = value.into_boxed_slice();
+    let ptr = bytes.as_mut_ptr();
+    let len = bytes.len();
+    std::mem::forget(bytes);
+    unsafe {
+        *out_ptr = ptr;
+        *out_len = len;
+    }
+    0
 }
 
 fn startup_command(executable_directory: OsString) -> Vec<u16> {
@@ -381,6 +422,41 @@ pub unsafe extern "C" fn fcitx5_control_input_method_id_valid_utf16(id: Fcitx5Co
     }))
 }
 
+/// # Safety
+///
+/// `value` must remain valid for the duration of the call. `out_ptr` and
+/// `out_len` must point to writable storage. Any returned buffer must be freed
+/// with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_json_string_utf8(
+    value: Fcitx5ControlUtf8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if value.ptr.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
+    match json_string(bytes) {
+        Some(escaped) => boxed_utf8_result(escaped, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
+/// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
+/// allocation function, or `ptr` must be null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_utf8_free(ptr: *mut u8, len: usize) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        drop(Vec::from_raw_parts(ptr, len, len));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,5 +523,19 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn json_string_matches_control_output_contract() {
+        assert_eq!(json_string(b"plain").as_deref(), Some(&b"\"plain\""[..]));
+        assert_eq!(
+            json_string(b"quote\"slash\\\n\t").as_deref(),
+            Some(&br#""quote\"slash\\\n\t""#[..])
+        );
+        assert_eq!(
+            json_string("企鹅".as_bytes()).as_deref(),
+            Some(&b"\"\xe4\xbc\x81\xe9\xb9\x85\""[..])
+        );
+        assert_eq!(json_string(&[0x01]), None);
     }
 }

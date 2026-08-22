@@ -60,6 +60,10 @@ struct Fcitx5ControlUtf16 {
     const wchar_t* ptr;
     std::size_t len;
 };
+struct Fcitx5ControlUtf8 {
+    const char* ptr;
+    std::size_t len;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -68,6 +72,9 @@ int fcitx5_control_startup_set_utf16(Fcitx5ControlUtf16 executable_directory,
                                      std::uint8_t enabled);
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
+int fcitx5_control_json_string_utf8(Fcitx5ControlUtf8 value, char** out_ptr,
+                                    std::size_t* out_len);
+void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
 namespace {
@@ -110,37 +117,17 @@ std::wstring widen(std::string_view value) {
 }
 
 std::string jsonString(std::string_view value) {
-    std::string result = "\"";
-    for (const unsigned char character : value) {
-        switch (character) {
-        case '\\':
-            result += "\\\\";
-            break;
-        case '"':
-            result += "\\\"";
-            break;
-        case '\b':
-            result += "\\b";
-            break;
-        case '\f':
-            result += "\\f";
-            break;
-        case '\n':
-            result += "\\n";
-            break;
-        case '\r':
-            result += "\\r";
-            break;
-        case '\t':
-            result += "\\t";
-            break;
-        default:
-            if (character < 0x20U)
-                return {};
-            result.push_back(static_cast<char>(character));
-        }
+    char* escaped = nullptr;
+    std::size_t escapedLength = 0;
+    if (fcitx5_control_json_string_utf8({value.data(), value.size()}, &escaped,
+                                        &escapedLength) != 0) {
+        return {};
     }
-    result.push_back('"');
+    std::string result;
+    if (escaped && escapedLength > 0) {
+        result.assign(escaped, escapedLength);
+    }
+    fcitx5_control_utf8_free(escaped, escapedLength);
     return result;
 }
 
