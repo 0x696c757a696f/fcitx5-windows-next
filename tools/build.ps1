@@ -99,6 +99,25 @@ function Get-BuildDirectory([string] $TargetArchitecture) {
   return Join-Path $repoRoot "out/build/$(Get-PresetName $TargetArchitecture)"
 }
 
+function Convert-ToCMakePath([string] $Path) {
+  return $Path.Replace('\', '/')
+}
+
+function Get-SccacheLauncherDirectory([string] $TargetArchitecture) {
+  $sccache = Get-Command sccache -ErrorAction SilentlyContinue
+  if (-not $sccache) {
+    throw 'FCITX_ENABLE_SCCACHE=1 requires sccache on PATH.'
+  }
+
+  # Visual Studio generators do not reliably honor CMAKE_*_COMPILER_LAUNCHER
+  # in all MSBuild paths. Provide a cl.exe shim backed by sccache as well, so
+  # MSBuild-native C/C++ compiles participate in the same compiler cache.
+  $launcherDirectory = Join-Path $buildTempRoot "sccache-msvc-$TargetArchitecture"
+  New-Item -ItemType Directory -Force -Path $launcherDirectory | Out-Null
+  Copy-Item -LiteralPath $sccache.Source -Destination (Join-Path $launcherDirectory 'cl.exe') -Force
+  return $launcherDirectory
+}
+
 function Get-VsWherePath {
   $path = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -164,7 +183,16 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
   $cmake = Get-CMakeCommand
   $preset = Get-PresetName $TargetArchitecture
   $analyzeValue = if ($Analyze) { 'ON' } else { 'OFF' }
-  Invoke-Native $cmake @('--preset', $preset, "-DFCITX_ENABLE_MSVC_ANALYZE=$analyzeValue")
+  $configureArguments = @('--preset', $preset, "-DFCITX_ENABLE_MSVC_ANALYZE=$analyzeValue")
+  if ($env:FCITX_ENABLE_SCCACHE -eq '1') {
+    $sccacheLauncherDirectory = Convert-ToCMakePath (Get-SccacheLauncherDirectory $TargetArchitecture)
+    $configureArguments += @(
+      '-DCMAKE_C_COMPILER_LAUNCHER=sccache',
+      '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache',
+      "-DCMAKE_VS_GLOBALS=CLToolExe=cl.exe;CLToolPath=$sccacheLauncherDirectory;TrackFileAccess=false;UseMultiToolTask=true"
+    )
+  }
+  Invoke-Native $cmake $configureArguments
   # Keep MSVC child-process pressure bounded. Unbounded --parallel can fail
   # nondeterministically with D8040 on constrained runners.
   Invoke-Native $cmake @('--build', (Get-BuildDirectory $TargetArchitecture), '--config',

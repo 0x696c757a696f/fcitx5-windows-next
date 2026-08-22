@@ -34,6 +34,29 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Restore Rust toolchain and target cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/toolchains/rust/rustup-home
+            out/toolchains/rust/cargo-home/registry
+            out/toolchains/rust/cargo-home/git
+            out/toolchains/rust/cargo-home/bin
+            out/toolchains/rust/target
+          key: ${{ runner.os }}-${{ matrix.architecture }}-rust-msvc-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust/**/Cargo.toml', 'tools/prepare-rust.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.architecture }}-rust-msvc-
+            ${{ runner.os }}-rust-msvc-
+
+      - name: Install sccache compiler cache
+        uses: Mozilla-Actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Configure CI compiler cache
+        shell: pwsh
+        run: ./tools/configure-ci-cache.ps1
+
       - name: Build, analyze, test, and run policy checks
         shell: pwsh
         run: |
@@ -50,4 +73,13 @@ jobs:
             ./tools/check-text-format.ps1
           } else {
             ./tools/verify-product.ps1 pr -Architecture ${{ matrix.architecture }}
+          }
+
+      - name: Show compiler cache stats
+        if: always()
+        shell: pwsh
+        run: |
+          $sccache = Get-Command sccache -ErrorAction SilentlyContinue
+          if ($sccache) {
+            & $sccache.Source --show-stats
           }

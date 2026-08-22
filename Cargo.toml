@@ -10,3 +10,17 @@ members = [
   "rust/candidate-core",
   "rust/tsf-poc",
 ]
+
+[profile.dev]
+opt-level = 0
+debug = 1
+codegen-units = 16
+lto = false
+incremental = true
+
+[profile.test]
+opt-level = 0
+debug = 1
+codegen-units = 16
+lto = false
+incremental = true
