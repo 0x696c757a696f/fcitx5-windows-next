@@ -174,6 +174,24 @@ pub struct Fcitx5ControlAddonDescriptor {
     library_present: u8,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Fcitx5ControlThemeRecord {
+    id: Fcitx5ControlUtf8,
+    source: Fcitx5ControlUtf8,
+    name: Fcitx5ControlUtf8,
+    version: Fcitx5ControlUtf8,
+    license: Fcitx5ControlUtf8,
+    description: Fcitx5ControlUtf8,
+}
+
+#[repr(C)]
+pub struct Fcitx5ControlThemeDetail {
+    theme: Fcitx5ControlThemeRecord,
+    has_light_branch: u8,
+    has_dark_branch: u8,
+}
+
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn RegOpenKeyExW(
@@ -568,6 +586,107 @@ fn addons_json(addons: &[Fcitx5ControlAddonDescriptor]) -> Option<Vec<u8>> {
         output.push(b'}');
     }
     output.extend_from_slice(b"]}");
+    Some(output)
+}
+
+fn push_theme_record(output: &mut Vec<u8>, theme: &Fcitx5ControlThemeRecord) -> Option<()> {
+    output.push(b'{');
+    push_json_string_field(output, b"\"id\"", utf8_slice(theme.id)?)?;
+    output.push(b',');
+    push_json_string_field(output, b"\"source\"", utf8_slice(theme.source)?)?;
+    output.push(b',');
+    push_json_string_field(output, b"\"name\"", utf8_slice(theme.name)?)?;
+    output.push(b',');
+    push_json_string_field(output, b"\"version\"", utf8_slice(theme.version)?)?;
+    output.push(b',');
+    push_json_string_field(output, b"\"license\"", utf8_slice(theme.license)?)?;
+    output.push(b',');
+    push_json_string_field(output, b"\"description\"", utf8_slice(theme.description)?)?;
+    output.push(b'}');
+    Some(())
+}
+
+fn themes_json(themes: &[Fcitx5ControlThemeRecord]) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1,"themes":["#);
+    for (index, theme) in themes.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        push_theme_record(&mut output, theme)?;
+    }
+    output.extend_from_slice(b"]}");
+    Some(output)
+}
+
+fn theme_editable_fields_json(output: &mut Vec<u8>) {
+    const FIELDS: &[&[u8]] = &[
+        b"appearance.mode",
+        b"candidate.orientation",
+        b"candidate.page_size",
+        b"candidate.scroll_mode",
+        b"candidate.max_width_dip",
+        b"candidate.scroll_cell_width_dip",
+        b"candidate.opacity",
+        b"candidate.preedit_mode",
+        b"candidate.geometry.padding_x_dip",
+        b"candidate.geometry.padding_y_dip",
+        b"candidate.geometry.item_padding_x_dip",
+        b"candidate.geometry.item_padding_y_dip",
+        b"candidate.geometry.row_gap_dip",
+        b"candidate.geometry.column_gap_dip",
+        b"candidate.geometry.border_width_dip",
+        b"candidate.geometry.corner_radius_dip",
+        b"candidate.geometry.shadow",
+        b"candidate.label.visible",
+        b"candidate.label.style",
+        b"candidate.label.font_scale",
+        b"candidate.label.gap_dip",
+        b"fonts.candidate.families",
+        b"fonts.candidate.size_dip",
+        b"fonts.candidate.weight",
+        b"fonts.annotation.scale",
+        b"candidate.colors.background",
+        b"candidate.colors.border",
+        b"candidate.colors.candidate_text",
+        b"candidate.colors.label_text",
+        b"candidate.colors.comment_text",
+        b"candidate.colors.selected_background",
+        b"candidate.colors.selected_candidate_text",
+        b"candidate.colors.selected_label_text",
+        b"candidate.colors.selected_comment_text",
+    ];
+    output.push(b'[');
+    for (index, field) in FIELDS.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.extend_from_slice(&json_string(field).expect("static editable field is JSON-safe"));
+    }
+    output.push(b']');
+}
+
+fn theme_detail_json(detail: &Fcitx5ControlThemeDetail) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1,"theme":"#);
+    push_theme_record(&mut output, &detail.theme)?;
+    output.extend_from_slice(b",\"has_light_branch\":");
+    output.extend_from_slice(if detail.has_light_branch != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.extend_from_slice(b",\"has_dark_branch\":");
+    output.extend_from_slice(if detail.has_dark_branch != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.extend_from_slice(b",\"editable_fields\":");
+    theme_editable_fields_json(&mut output);
+    output.extend_from_slice(
+        br#","security":{"script_allowed":false,"network_allowed":false,"unknown_fields":"reject","path_scope":"theme-directory"}}"#,
+    );
     Some(output)
 }
 
@@ -1059,6 +1178,55 @@ pub unsafe extern "C" fn fcitx5_control_addons_json_utf8(
 
 /// # Safety
 ///
+/// `themes` must either be null with `theme_count == 0` or point to
+/// `theme_count` valid records. All UTF-8 slices inside records must remain
+/// valid for the duration of the call. `out_ptr` and `out_len` must point to
+/// writable storage. Any returned buffer must be freed with
+/// `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_themes_json_utf8(
+    themes: *const Fcitx5ControlThemeRecord,
+    theme_count: usize,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if themes.is_null() && theme_count != 0 {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let themes = if theme_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(themes, theme_count) }
+    };
+    match themes_json(themes) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
+/// All UTF-8 slices inside `detail` must remain valid for the duration of the
+/// call. `out_ptr` and `out_len` must point to writable storage. Any returned
+/// buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_detail_json_utf8(
+    detail: *const Fcitx5ControlThemeDetail,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if detail.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let detail = unsafe { &*detail };
+    match theme_detail_json(detail) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -1311,6 +1479,70 @@ mod tests {
                 &br#"{"format_version":1,"surface":"descriptor-inventory","typed_config":"not_available","addons":[]}"#[..]
             )
         );
+    }
+
+    fn test_theme_record() -> Fcitx5ControlThemeRecord {
+        Fcitx5ControlThemeRecord {
+            id: Fcitx5ControlUtf8 {
+                ptr: b"builtin:default".as_ptr(),
+                len: 15,
+            },
+            source: Fcitx5ControlUtf8 {
+                ptr: b"builtin".as_ptr(),
+                len: 7,
+            },
+            name: Fcitx5ControlUtf8 {
+                ptr: "默认".as_bytes().as_ptr(),
+                len: "默认".len(),
+            },
+            version: Fcitx5ControlUtf8 {
+                ptr: b"1".as_ptr(),
+                len: 1,
+            },
+            license: Fcitx5ControlUtf8 {
+                ptr: b"MIT".as_ptr(),
+                len: 3,
+            },
+            description: Fcitx5ControlUtf8 {
+                ptr: b"default theme".as_ptr(),
+                len: 13,
+            },
+        }
+    }
+
+    #[test]
+    fn themes_json_preserves_control_contract() {
+        let theme = test_theme_record();
+        let json = themes_json(&[theme]).expect("themes should format");
+        let text = String::from_utf8(json).expect("themes JSON should be UTF-8");
+        assert_eq!(
+            text,
+            r#"{"format_version":1,"themes":[{"id":"builtin:default","source":"builtin","name":"默认","version":"1","license":"MIT","description":"default theme"}]}"#
+        );
+        assert_eq!(
+            themes_json(&[]).as_deref(),
+            Some(&br#"{"format_version":1,"themes":[]}"#[..])
+        );
+    }
+
+    #[test]
+    fn theme_detail_json_preserves_control_contract() {
+        let detail = Fcitx5ControlThemeDetail {
+            theme: test_theme_record(),
+            has_light_branch: 1,
+            has_dark_branch: 0,
+        };
+        let json = theme_detail_json(&detail).expect("theme detail should format");
+        let text = String::from_utf8(json).expect("theme detail JSON should be UTF-8");
+        assert!(text.starts_with(
+            r#"{"format_version":1,"theme":{"id":"builtin:default","source":"builtin""#
+        ));
+        assert!(text.contains(r#""has_light_branch":true"#));
+        assert!(text.contains(r#""has_dark_branch":false"#));
+        assert!(text.contains(r#""appearance.mode""#));
+        assert!(text.contains(
+            r#""security":{"script_allowed":false,"network_allowed":false,"unknown_fields":"reject","path_scope":"theme-directory"}"#
+        ));
     }
 
     #[test]

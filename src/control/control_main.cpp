@@ -112,6 +112,19 @@ struct Fcitx5ControlAddonDescriptor {
     std::uint8_t onDemand;
     std::uint8_t libraryPresent;
 };
+struct Fcitx5ControlThemeRecord {
+    Fcitx5ControlUtf8 id;
+    Fcitx5ControlUtf8 source;
+    Fcitx5ControlUtf8 name;
+    Fcitx5ControlUtf8 version;
+    Fcitx5ControlUtf8 license;
+    Fcitx5ControlUtf8 description;
+};
+struct Fcitx5ControlThemeDetail {
+    Fcitx5ControlThemeRecord theme;
+    std::uint8_t hasLightBranch;
+    std::uint8_t hasDarkBranch;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -141,6 +154,11 @@ std::uint32_t fcitx5_control_package_action_utf16(Fcitx5ControlUtf16 command, st
 int fcitx5_control_addons_json_utf8(const Fcitx5ControlAddonDescriptor* addons,
                                     std::size_t addon_count, char** out_ptr,
                                     std::size_t* out_len);
+int fcitx5_control_themes_json_utf8(const Fcitx5ControlThemeRecord* themes,
+                                    std::size_t theme_count, char** out_ptr,
+                                    std::size_t* out_len);
+int fcitx5_control_theme_detail_json_utf8(const Fcitx5ControlThemeDetail* detail,
+                                          char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -789,73 +807,39 @@ const ThemeRecord* findTheme(std::span<const ThemeRecord> themes, std::string_vi
     return found == themes.end() ? nullptr : &*found;
 }
 
-std::string themeRecordJson(const ThemeRecord& theme) {
-    return "{\"id\":" + jsonString(theme.id) + ",\"source\":" + jsonString(theme.source) +
-           ",\"name\":" + jsonString(theme.name) + ",\"version\":" +
-           jsonString(theme.version) + ",\"license\":" + jsonString(theme.license) +
-           ",\"description\":" + jsonString(theme.description) + '}';
+Fcitx5ControlThemeRecord themeView(const ThemeRecord& theme) {
+    return Fcitx5ControlThemeRecord{utf8View(theme.id),      utf8View(theme.source),
+                                    utf8View(theme.name),    utf8View(theme.version),
+                                    utf8View(theme.license), utf8View(theme.description)};
 }
 
-std::string themeEditableFieldsJson() {
-    static constexpr std::array fields{
-        "appearance.mode",
-        "candidate.orientation",
-        "candidate.page_size",
-        "candidate.scroll_mode",
-        "candidate.max_width_dip",
-        "candidate.scroll_cell_width_dip",
-        "candidate.opacity",
-        "candidate.preedit_mode",
-        "candidate.geometry.padding_x_dip",
-        "candidate.geometry.padding_y_dip",
-        "candidate.geometry.item_padding_x_dip",
-        "candidate.geometry.item_padding_y_dip",
-        "candidate.geometry.row_gap_dip",
-        "candidate.geometry.column_gap_dip",
-        "candidate.geometry.border_width_dip",
-        "candidate.geometry.corner_radius_dip",
-        "candidate.geometry.shadow",
-        "candidate.label.visible",
-        "candidate.label.style",
-        "candidate.label.font_scale",
-        "candidate.label.gap_dip",
-        "fonts.candidate.families",
-        "fonts.candidate.size_dip",
-        "fonts.candidate.weight",
-        "fonts.annotation.scale",
-        "candidate.colors.background",
-        "candidate.colors.border",
-        "candidate.colors.candidate_text",
-        "candidate.colors.label_text",
-        "candidate.colors.comment_text",
-        "candidate.colors.selected_background",
-        "candidate.colors.selected_candidate_text",
-        "candidate.colors.selected_label_text",
-        "candidate.colors.selected_comment_text",
-    };
-    std::string output = "[";
-    bool first = true;
-    for (const auto field : fields) {
-        if (!first)
-            output += ',';
-        first = false;
-        output += jsonString(field);
-    }
-    output += ']';
-    return output;
+std::string themesJson(const std::vector<ThemeRecord>& themes) {
+    std::vector<Fcitx5ControlThemeRecord> views;
+    views.reserve(themes.size());
+    for (const auto& theme : themes)
+        views.push_back(themeView(theme));
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const auto* data = views.empty() ? nullptr : views.data();
+    if (fcitx5_control_themes_json_utf8(data, views.size(), &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
+std::string themeDetailJson(const ThemeRecord& theme) {
+    const Fcitx5ControlThemeDetail detail{
+        themeView(theme), !theme.theme.light.colors.empty() ? std::uint8_t{1} : std::uint8_t{0},
+        !theme.theme.dark.colors.empty() ? std::uint8_t{1} : std::uint8_t{0}};
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_theme_detail_json_utf8(&detail, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
 }
 
 void printThemes(const fs::path& dataRoot) {
     const auto themes = listThemes(dataRoot);
-    std::cout << "{\"format_version\":1,\"themes\":[";
-    bool first = true;
-    for (const auto& theme : themes) {
-        if (!first)
-            std::cout << ',';
-        first = false;
-        std::cout << themeRecordJson(theme);
-    }
-    std::cout << "]}\n";
+    std::cout << themesJson(themes) << '\n';
 }
 
 void printThemeDetail(const fs::path& dataRoot, std::string_view id) {
@@ -865,14 +849,7 @@ void printThemeDetail(const fs::path& dataRoot, std::string_view id) {
     const auto* theme = findTheme(themes, id);
     if (!theme)
         throw fcitx::package::PackageError("theme_not_found", "theme is unknown");
-    std::cout << "{\"format_version\":1,\"theme\":" << themeRecordJson(*theme)
-              << ",\"has_light_branch\":"
-              << (!theme->theme.light.colors.empty() ? "true" : "false")
-              << ",\"has_dark_branch\":"
-              << (!theme->theme.dark.colors.empty() ? "true" : "false")
-              << ",\"editable_fields\":" << themeEditableFieldsJson()
-              << ",\"security\":{\"script_allowed\":false,\"network_allowed\":false,"
-                 "\"unknown_fields\":\"reject\",\"path_scope\":\"theme-directory\"}}\n";
+    std::cout << themeDetailJson(*theme) << '\n';
 }
 
 fs::path defaultDataRoot() {
