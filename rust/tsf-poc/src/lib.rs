@@ -623,6 +623,15 @@ pub unsafe extern "system" fn Fcitx5TsfPocBehaviorReport(length: *mut usize) -> 
     }
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// Test-only PoC export used by the artifact smoke to prove that a forced
+/// internal panic is converted to `HRESULT` across the DLL ABI.
+pub unsafe extern "system" fn Fcitx5TsfPocForcedFailureForTest() -> HRESULT {
+    panic_to_hresult(|| panic!("forced Rust TSF PoC ABI panic regression"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,6 +747,11 @@ mod tests {
         let report = std::str::from_utf8(bytes).expect("behavior report must be UTF-8 JSON");
         assert!(report.contains(r#""report_export":"panic_contained""#));
         assert!(report.contains(r#""rust_case_passes":7"#));
+    }
+
+    #[test]
+    fn forced_failure_export_converts_panic_to_hresult() {
+        assert_eq!(unsafe { Fcitx5TsfPocForcedFailureForTest() }, E_UNEXPECTED);
     }
 
     #[test]

@@ -33,14 +33,22 @@ int wmain(int argc, wchar_t** argv) {
     using GetClassObject = HRESULT(__stdcall*)(REFCLSID, REFIID, void**);
     using CanUnloadNow = HRESULT(__stdcall*)();
     using BehaviorReport = const char*(__stdcall*)(size_t*);
+    using ForcedFailure = HRESULT(__stdcall*)();
     const auto getClassObject =
         reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
     const auto canUnloadNow =
         reinterpret_cast<CanUnloadNow>(GetProcAddress(module, "DllCanUnloadNow"));
     const auto behaviorReport = reinterpret_cast<BehaviorReport>(
         GetProcAddress(module, "Fcitx5TsfPocBehaviorReport"));
-    if (!getClassObject || !canUnloadNow || !behaviorReport) {
+    const auto forcedFailure = reinterpret_cast<ForcedFailure>(
+        GetProcAddress(module, "Fcitx5TsfPocForcedFailureForTest"));
+    if (!getClassObject || !canUnloadNow || !behaviorReport || !forcedFailure) {
         std::cerr << "Rust TSF PoC exports missing\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    if (forcedFailure() != E_UNEXPECTED) {
+        std::cerr << "Rust TSF PoC forced internal failure should convert panic to HRESULT\n";
         FreeLibrary(module);
         return 1;
     }
@@ -121,6 +129,35 @@ int wmain(int argc, wchar_t** argv) {
         if (keySink) keySink->Release();
         if (threadSink) threadSink->Release();
         if (focusSink) focusSink->Release();
+        textService->Release();
+        factory->Release();
+        FreeLibrary(module);
+        return 1;
+    }
+    if (FAILED(textService->ActivateEx(nullptr, 42, TF_TMF_UIELEMENTENABLEDONLY)) ||
+        FAILED(textService->Deactivate())) {
+        std::cerr << "Rust TSF PoC should fail open for minimal ActivateEx/Deactivate callbacks\n";
+        keySink->Release();
+        threadSink->Release();
+        focusSink->Release();
+        textService->Release();
+        factory->Release();
+        FreeLibrary(module);
+        return 1;
+    }
+    BOOL testDownEaten = TRUE;
+    BOOL keyDownEaten = TRUE;
+    BOOL testUpEaten = TRUE;
+    BOOL keyUpEaten = TRUE;
+    if (FAILED(keySink->OnTestKeyDown(nullptr, 'A', 0, &testDownEaten)) ||
+        FAILED(keySink->OnKeyDown(nullptr, 'A', 0, &keyDownEaten)) ||
+        FAILED(keySink->OnTestKeyUp(nullptr, 'A', 0, &testUpEaten)) ||
+        FAILED(keySink->OnKeyUp(nullptr, 'A', 0, &keyUpEaten)) || testDownEaten ||
+        keyDownEaten || testUpEaten || keyUpEaten) {
+        std::cerr << "Rust TSF PoC key callbacks should fail open on unexpected COM state\n";
+        keySink->Release();
+        threadSink->Release();
+        focusSink->Release();
         textService->Release();
         factory->Release();
         FreeLibrary(module);

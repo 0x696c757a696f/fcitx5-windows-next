@@ -509,6 +509,7 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("tsf_behavior_corpus_report") == std::string::npos ||
         rustTsfPocSource.find("tsf_behavior_differential_report") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5TsfPocForcedFailureForTest") == std::string::npos ||
         rustTsfPocSource.find("\"rust_case_passes\"") == std::string::npos ||
         rustTsfPocSource.find("\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\"") ==
             std::string::npos ||
@@ -525,6 +526,11 @@ int main(int argc, char** argv) {
         rustTsfPocSmoke.find("factory should create an empty ITfTextInputProcessorEx") ==
             std::string::npos ||
         rustTsfPocSmoke.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
+        rustTsfPocSmoke.find("Fcitx5TsfPocForcedFailureForTest") == std::string::npos ||
+        rustTsfPocSmoke.find("forced internal failure should convert panic to HRESULT") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find("key callbacks should fail open on unexpected COM state") ==
+            std::string::npos ||
         rustTsfPocSmoke.find("\\\"rust_case_passes\\\":7") == std::string::npos ||
         rustTsfPocSmoke.find("\\\"cpp_baseline_consumes_same_corpus\\\":true") ==
             std::string::npos ||
