@@ -290,6 +290,9 @@ int main(int argc, char** argv) {
         cmakeSource.find("rust-candidate-poc-dpi-smoke") == std::string::npos ||
         cmakeSource.find("fcitx5_candidate_poc_rustbin") == std::string::npos ||
         cmakeSource.find("candidate-poc-window-smoke.bmp") == std::string::npos ||
+        candidateIntegrationSource.find("cpp-candidate-demo.bmp") == std::string::npos ||
+        candidateIntegrationSource.find("capture_window") == std::string::npos ||
+        candidateIntegrationSource.find("visual_non_background_pixels") == std::string::npos ||
         candidateIntegrationSource.find("rust-candidate-demo.json") == std::string::npos ||
         candidateIntegrationSource.find("demo-snapshot") == std::string::npos ||
         candidateIntegrationSource.find("Rust/C++ candidate demo width diverged") ==

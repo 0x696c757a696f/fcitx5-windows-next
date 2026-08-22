@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -239,6 +240,103 @@ std::string size_text(const RECT& rectangle) {
          std::to_string(rectangle.bottom - rectangle.top);
 }
 
+struct CaptureEvidence {
+  std::uint64_t checksum{};
+  std::size_t bytes{};
+  std::size_t non_background_pixels{};
+};
+
+CaptureEvidence capture_window(HWND window, const fs::path& path) {
+  const RECT rectangle = window_rectangle(window);
+  const int width = rectangle.right - rectangle.left;
+  const int height = rectangle.bottom - rectangle.top;
+  expect(width > 0 && height > 0, "cannot capture an empty candidate UI window");
+
+  HDC window_dc = GetWindowDC(window);
+  if (window_dc == nullptr) {
+    throw std::runtime_error("GetWindowDC failed for candidate UI screenshot");
+  }
+  HDC memory_dc = CreateCompatibleDC(window_dc);
+  if (memory_dc == nullptr) {
+    ReleaseDC(window, window_dc);
+    throw std::runtime_error("CreateCompatibleDC failed for candidate UI screenshot");
+  }
+  HBITMAP bitmap = CreateCompatibleBitmap(window_dc, width, height);
+  if (bitmap == nullptr) {
+    DeleteDC(memory_dc);
+    ReleaseDC(window, window_dc);
+    throw std::runtime_error("CreateCompatibleBitmap failed for candidate UI screenshot");
+  }
+  HGDIOBJ old_object = SelectObject(memory_dc, bitmap);
+  if (!BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY)) {
+    SelectObject(memory_dc, old_object);
+    DeleteObject(bitmap);
+    DeleteDC(memory_dc);
+    ReleaseDC(window, window_dc);
+    throw std::runtime_error("BitBlt failed for candidate UI screenshot");
+  }
+
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = width;
+  info.bmiHeader.biHeight = -height;
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  std::vector<std::uint32_t> pixels(static_cast<std::size_t>(width) *
+                                    static_cast<std::size_t>(height));
+  if (GetDIBits(memory_dc, bitmap, 0, static_cast<UINT>(height), pixels.data(), &info,
+                DIB_RGB_COLORS) == 0) {
+    SelectObject(memory_dc, old_object);
+    DeleteObject(bitmap);
+    DeleteDC(memory_dc);
+    ReleaseDC(window, window_dc);
+    throw std::runtime_error("GetDIBits failed for candidate UI screenshot");
+  }
+
+  SelectObject(memory_dc, old_object);
+  DeleteObject(bitmap);
+  DeleteDC(memory_dc);
+  ReleaseDC(window, window_dc);
+
+  const std::uint32_t background = pixels.empty() ? 0U : pixels.front();
+  std::size_t non_background = 0;
+  std::uint64_t checksum = 1469598103934665603ULL;
+  for (const auto pixel : pixels) {
+    if (pixel != background) {
+      ++non_background;
+    }
+    checksum ^= pixel;
+    checksum *= 1099511628211ULL;
+  }
+  expect(non_background > 0, "candidate UI screenshot did not contain visible content");
+
+  BITMAPFILEHEADER file_header{};
+  file_header.bfType = 0x4D42;
+  file_header.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+  file_header.bfSize =
+      file_header.bfOffBits + static_cast<DWORD>(pixels.size() * sizeof(std::uint32_t));
+
+  fs::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to open candidate UI screenshot artifact");
+  }
+  output.write(reinterpret_cast<const char*>(&file_header), sizeof(file_header));
+  output.write(reinterpret_cast<const char*>(&info.bmiHeader), sizeof(info.bmiHeader));
+  output.write(reinterpret_cast<const char*>(pixels.data()),
+               static_cast<std::streamsize>(pixels.size() * sizeof(std::uint32_t)));
+  if (!output) {
+    throw std::runtime_error("failed to write candidate UI screenshot artifact");
+  }
+
+  return CaptureEvidence{
+      checksum,
+      static_cast<std::size_t>(file_header.bfSize),
+      non_background,
+  };
+}
+
 std::string read_text(const fs::path& path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
@@ -256,6 +354,17 @@ int json_int_field(const std::string& text, std::string_view field) {
   const auto start = marker + needle.size();
   const auto end = text.find_first_not_of("-0123456789", start);
   return std::stoi(text.substr(start, end == std::string::npos ? end : end - start));
+}
+
+std::uint64_t json_u64_field(const std::string& text, std::string_view field) {
+  const std::string needle = "\"" + std::string(field) + "\":";
+  const auto marker = text.find(needle);
+  if (marker == std::string::npos) {
+    throw std::runtime_error("missing JSON field: " + std::string(field));
+  }
+  const auto start = marker + needle.size();
+  const auto end = text.find_first_not_of("0123456789", start);
+  return std::stoull(text.substr(start, end == std::string::npos ? end : end - start));
 }
 
 void expect_contains(const std::string& text, std::string_view needle,
@@ -304,6 +413,10 @@ int wmain(int argc, wchar_t** argv) {
     const LONG vertical_height = vertical.bottom - vertical.top;
     expect(vertical_width > 0 && vertical_height > 0,
            "vertical candidate preview has an invalid size");
+    const auto cpp_demo_screenshot = temporary.path() / L"cpp-candidate-demo.bmp";
+    const CaptureEvidence cpp_demo = capture_window(window, cpp_demo_screenshot);
+    expect(cpp_demo.bytes > 0 && cpp_demo.non_background_pixels > 0 && cpp_demo.checksum != 0,
+           "C++ candidate demo screenshot evidence is invalid");
 
     const auto rust_demo_report = temporary.path() / L"rust-candidate-demo.json";
     const auto rust_demo_screenshot = temporary.path() / L"rust-candidate-demo.bmp";
@@ -323,6 +436,12 @@ int wmain(int argc, wchar_t** argv) {
                     "Rust candidate demo snapshot did not write screenshot evidence");
     expect_contains(rust_demo, "\"msaa_accessible_name_readable\":true",
                     "Rust candidate demo snapshot did not prove accessibility name");
+    expect_contains(rust_demo, "\"uia_name_readable\":true",
+                    "Rust candidate demo snapshot did not prove UIA name");
+    expect(json_u64_field(rust_demo, "visual_non_background_pixels") > 0,
+           "Rust candidate demo snapshot screenshot did not contain visible content");
+    expect(json_u64_field(rust_demo, "visual_checksum") != 0,
+           "Rust candidate demo snapshot checksum is invalid");
     const int rust_demo_width =
         json_int_field(rust_demo, "window_right") - json_int_field(rust_demo, "window_left");
     const int rust_demo_height =
