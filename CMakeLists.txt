@@ -142,6 +142,24 @@ set_target_properties(fcitx5_launcher_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}")
 add_dependencies(fcitx5_launcher_core_rust fcitx5_launcher_core_rustlib)
 
+set(FCITX_RUST_PROCESS_EXECUTION_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_process_execution_core.lib")
+add_custom_target(
+  fcitx5_process_execution_core_rustlib
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-process-execution-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-process-execution-core staticlib")
+add_library(fcitx5_process_execution_core_rust STATIC IMPORTED GLOBAL)
+set_target_properties(
+  fcitx5_process_execution_core_rust
+  PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_PROCESS_EXECUTION_CORE_STATICLIB}")
+add_dependencies(fcitx5_process_execution_core_rust fcitx5_process_execution_core_rustlib)
+
 add_library(fcitx5_candidate_model STATIC src/candidate/candidate_model.cpp)
 add_library(fcitx5::candidate_model ALIAS fcitx5_candidate_model)
 target_compile_features(fcitx5_candidate_model PUBLIC cxx_std_20)
@@ -245,6 +263,10 @@ add_library(fcitx5::process_execution ALIAS fcitx5_process_execution)
 target_compile_features(fcitx5_process_execution PUBLIC cxx_std_20)
 target_include_directories(
   fcitx5_process_execution PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
+target_link_libraries(
+  fcitx5_process_execution
+  PUBLIC fcitx5_process_execution_core_rust ws2_32 userenv ntdll bcrypt advapi32)
+add_dependencies(fcitx5_process_execution fcitx5_process_execution_core_rustlib)
 fcitx_apply_project_options(fcitx5_process_execution)
 
 add_library(
