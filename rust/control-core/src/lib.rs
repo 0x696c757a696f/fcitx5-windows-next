@@ -73,6 +73,7 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
     r#""packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"#,
     r#""sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"}"#
 );
+const CONTROL_TSF_GUARD_RESET_JSON: &str = r#"{"format_version":1,"tsf_guard":"enabled"}"#;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -119,6 +120,13 @@ pub struct Fcitx5ControlStatus {
     tsf_guard_reason: Fcitx5ControlUtf8,
     data_root: Fcitx5ControlUtf8,
     update_owner: Fcitx5ControlUtf8,
+}
+
+#[repr(C)]
+pub struct Fcitx5ControlTsfGuard {
+    disabled: u8,
+    reason: Fcitx5ControlUtf8,
+    marker_path: Fcitx5ControlUtf8,
 }
 
 #[link(name = "advapi32")]
@@ -420,6 +428,26 @@ fn status_json(status: &Fcitx5ControlStatus) -> Option<Vec<u8>> {
     Some(output)
 }
 
+fn tsf_guard_json(status: &Fcitx5ControlTsfGuard) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1,"disabled":"#);
+    output.extend_from_slice(if status.disabled != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.push(b',');
+    push_json_string_field(&mut output, b"\"reason\"", utf8_slice(status.reason)?)?;
+    output.push(b',');
+    push_json_string_field(
+        &mut output,
+        b"\"marker_path\"",
+        utf8_slice(status.marker_path)?,
+    )?;
+    output.push(b'}');
+    Some(output)
+}
+
 fn startup_command(executable_directory: OsString) -> Vec<u16> {
     let launcher = PathBuf::from(executable_directory).join("fcitx5-launcher.exe");
     let mut command = quote(launcher.as_os_str());
@@ -693,6 +721,46 @@ pub unsafe extern "C" fn fcitx5_control_status_json_utf8(
 
 /// # Safety
 ///
+/// All UTF-8 slices inside `status` must remain valid for the duration of the
+/// call. `out_ptr` and `out_len` must point to writable storage. Any returned
+/// buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_tsf_guard_json_utf8(
+    status: *const Fcitx5ControlTsfGuard,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if status.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let status = unsafe { &*status };
+    match tsf_guard_json(status) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
+/// `out_ptr` and `out_len` must point to writable storage. The returned pointer
+/// is process-static UTF-8 data and must not be freed by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_tsf_guard_reset_json_utf8(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return 1;
+    }
+    unsafe {
+        *out_ptr = CONTROL_TSF_GUARD_RESET_JSON.as_ptr();
+        *out_len = CONTROL_TSF_GUARD_RESET_JSON.len();
+    }
+    0
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -948,5 +1016,32 @@ mod tests {
         assert!(text.contains(r#""current_input_method_id":null"#));
         assert!(text.contains(r#""config_valid":false"#));
         assert!(text.contains(r#""data_root":"C:/Users/Test/Fcitx\\","#));
+    }
+
+    #[test]
+    fn tsf_guard_json_preserves_control_contract() {
+        let reason = b"manual \"disable\"";
+        let marker = br#"C:/Users/Test/Fcitx5/tsf-guard.txt"#;
+        let status = Fcitx5ControlTsfGuard {
+            disabled: 1,
+            reason: Fcitx5ControlUtf8 {
+                ptr: reason.as_ptr(),
+                len: reason.len(),
+            },
+            marker_path: Fcitx5ControlUtf8 {
+                ptr: marker.as_ptr(),
+                len: marker.len(),
+            },
+        };
+        let json = tsf_guard_json(&status).expect("guard status should format");
+        let text = String::from_utf8(json).expect("guard JSON should be UTF-8");
+        assert_eq!(
+            text,
+            r#"{"format_version":1,"disabled":true,"reason":"manual \"disable\"","marker_path":"C:/Users/Test/Fcitx5/tsf-guard.txt"}"#
+        );
+        assert_eq!(
+            CONTROL_TSF_GUARD_RESET_JSON,
+            r#"{"format_version":1,"tsf_guard":"enabled"}"#
+        );
     }
 }

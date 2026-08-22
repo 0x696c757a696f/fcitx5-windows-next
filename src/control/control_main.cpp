@@ -93,6 +93,11 @@ struct Fcitx5ControlStatus {
     Fcitx5ControlUtf8 dataRoot;
     Fcitx5ControlUtf8 updateOwner;
 };
+struct Fcitx5ControlTsfGuard {
+    std::uint8_t disabled;
+    Fcitx5ControlUtf8 reason;
+    Fcitx5ControlUtf8 markerPath;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -107,6 +112,9 @@ int fcitx5_control_presentation_json_utf8(const Fcitx5ControlPresentation* prese
                                           char** out_ptr, std::size_t* out_len);
 int fcitx5_control_status_json_utf8(const Fcitx5ControlStatus* status, char** out_ptr,
                                     std::size_t* out_len);
+int fcitx5_control_tsf_guard_json_utf8(const Fcitx5ControlTsfGuard* status, char** out_ptr,
+                                       std::size_t* out_len);
+int fcitx5_control_tsf_guard_reset_json_utf8(const char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -191,6 +199,22 @@ std::string statusJson(const Fcitx5ControlStatus& status) {
     if (fcitx5_control_status_json_utf8(&status, &bytes, &length) != 0)
         return {};
     return takeRustUtf8(bytes, length);
+}
+
+std::string tsfGuardJson(const Fcitx5ControlTsfGuard& status) {
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_tsf_guard_json_utf8(&status, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
+std::string tsfGuardResetJson() {
+    const char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_tsf_guard_reset_json_utf8(&bytes, &length) != 0 || !bytes)
+        return {};
+    return {bytes, length};
 }
 
 bool readUtf8(const fs::path& path, std::string& text) {
@@ -1251,11 +1275,11 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (arguments.size() == 1 && arguments[0] == L"--get-tsf-guard") {
         const auto status = fcitx::windows::tsf::activationGuardStatus(dataRoot);
-        std::cout << "{\"format_version\":1,\"disabled\":"
-                  << (status.disabled ? "true" : "false")
-                  << ",\"reason\":" << jsonString(status.reason)
-                  << ",\"marker_path\":" << jsonString(narrow(status.markerPath.wstring()))
-                  << "}\n";
+        const std::string markerPath = narrow(status.markerPath.wstring());
+        const Fcitx5ControlTsfGuard guardStatus{
+            status.disabled ? std::uint8_t{1} : std::uint8_t{0}, utf8View(status.reason),
+            utf8View(markerPath)};
+        std::cout << tsfGuardJson(guardStatus) << '\n';
         return 0;
     }
     if (arguments.size() == 1 && arguments[0] == L"--reset-tsf-guard") {
@@ -1263,7 +1287,7 @@ int wmain(int argc, wchar_t** argv) {
             std::cerr << "unable to clear TSF activation guard\n";
             return 5;
         }
-        std::cout << "{\"format_version\":1,\"tsf_guard\":\"enabled\"}\n";
+        std::cout << tsfGuardResetJson() << '\n';
         return 0;
     }
     try {
