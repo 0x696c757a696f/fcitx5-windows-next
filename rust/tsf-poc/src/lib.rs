@@ -44,6 +44,7 @@ const REQUIRED_TSF_BEHAVIOR_CASES: &[&str] = &[
 static BEHAVIOR_REPORT: OnceLock<String> = OnceLock::new();
 static PROFILE_IDENTITY_REPORT: OnceLock<String> = OnceLock::new();
 static IPC_BOUNDARY_REPORT: OnceLock<String> = OnceLock::new();
+static COMPOSITION_TRANSCRIPT_REPORT: OnceLock<String> = OnceLock::new();
 
 pub fn panic_to_hresult<F>(operation: F) -> HRESULT
 where
@@ -137,6 +138,18 @@ pub fn tsf_ipc_boundary_report() -> String {
     )
 }
 
+pub fn tsf_composition_transcript_report() -> String {
+    let mut transcript = EditSessionTranscript::default();
+    transcript.apply_single_session(EngineResult::ok(true, "你", "hao"));
+    format!(
+        "{{\"format_version\":1,\"single_edit_session\":true,\"operation_order\":[{}],\"commit_text\":\"{}\",\"preedit_text\":\"{}\",\"composition_active_after\":{},\"shipping_cxx_authoritative\":true,\"host_differential_pending\":true}}",
+        transcript.operation_order_json(),
+        transcript.commit,
+        transcript.preedit,
+        transcript.composition_active
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EngineStatus {
     Ok,
@@ -226,6 +239,42 @@ impl BoundedIpcClient {
             return EngineResult::generation_mismatch();
         }
         EngineResult::ok(probe.handled, probe.commit, probe.preedit)
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EditSessionTranscript {
+    operations: Vec<&'static str>,
+    commit: String,
+    preedit: String,
+    composition_active: bool,
+}
+
+impl EditSessionTranscript {
+    pub fn apply_single_session(&mut self, engine_result: EngineResult<'_>) {
+        self.operations.push("begin_edit_session");
+        if !engine_result.commit.is_empty() {
+            self.commit.push_str(engine_result.commit);
+            self.operations.push("commit_text");
+        }
+        self.preedit.clear();
+        self.preedit.push_str(engine_result.preedit);
+        if self.preedit.is_empty() {
+            self.composition_active = false;
+            self.operations.push("clear_composition");
+        } else {
+            self.composition_active = true;
+            self.operations.push("update_preedit_start_composition");
+        }
+        self.operations.push("end_edit_session");
+    }
+
+    fn operation_order_json(&self) -> String {
+        self.operations
+            .iter()
+            .map(|operation| format!("\"{operation}\""))
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -902,6 +951,36 @@ pub unsafe extern "system" fn Fcitx5TsfPocIpcBoundaryReport(length: *mut usize) 
 #[no_mangle]
 /// # Safety
 ///
+/// `length` is optional. When non-null it must point to writable process-local
+/// memory. The returned pointer is owned by this module and remains valid until
+/// the DLL is unloaded.
+pub unsafe extern "system" fn Fcitx5TsfPocCompositionTranscriptReport(
+    length: *mut usize,
+) -> *const u8 {
+    match catch_unwind(|| {
+        let report = COMPOSITION_TRANSCRIPT_REPORT.get_or_init(tsf_composition_transcript_report);
+        if !length.is_null() {
+            unsafe {
+                *length = report.len();
+            }
+        }
+        report.as_ptr()
+    }) {
+        Ok(pointer) => pointer,
+        Err(_) => {
+            if !length.is_null() {
+                unsafe {
+                    *length = 0;
+                }
+            }
+            std::ptr::null()
+        }
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
 /// Test-only PoC export used by the artifact smoke to prove that a forced
 /// internal panic is converted to `HRESULT` across the DLL ABI.
 pub unsafe extern "system" fn Fcitx5TsfPocForcedFailureForTest() -> HRESULT {
@@ -1294,6 +1373,43 @@ mod tests {
         assert!(report.contains("\"network_imports\":false"));
         assert!(report.contains("\"external_engine_link\":false"));
         assert!(report.contains("\"host_blocking_call\":false"));
+    }
+
+    #[test]
+    fn edit_session_transcript_records_commit_before_preedit_in_one_session() {
+        let mut transcript = EditSessionTranscript::default();
+        transcript.apply_single_session(EngineResult::ok(true, "你", "hao"));
+        assert_eq!(
+            transcript.operations,
+            vec![
+                "begin_edit_session",
+                "commit_text",
+                "update_preedit_start_composition",
+                "end_edit_session"
+            ]
+        );
+        assert_eq!(transcript.commit, "你");
+        assert_eq!(transcript.preedit, "hao");
+        assert!(transcript.composition_active);
+    }
+
+    #[test]
+    fn composition_transcript_export_is_panic_contained_and_length_delimited() {
+        let mut length = 0usize;
+        let pointer = unsafe { Fcitx5TsfPocCompositionTranscriptReport(&mut length) };
+        assert!(!pointer.is_null());
+        assert!(length > 0);
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
+        let report =
+            std::str::from_utf8(bytes).expect("composition transcript report should be utf8");
+        assert!(report.contains("\"single_edit_session\":true"));
+        assert!(report.contains(
+            "\"operation_order\":[\"begin_edit_session\",\"commit_text\",\"update_preedit_start_composition\",\"end_edit_session\"]"
+        ));
+        assert!(report.contains("\"commit_text\":\"你\""));
+        assert!(report.contains("\"preedit_text\":\"hao\""));
+        assert!(report.contains("\"composition_active_after\":true"));
+        assert!(report.contains("\"host_differential_pending\":true"));
     }
 
     #[test]

@@ -522,6 +522,12 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("GenerationMismatch") == std::string::npos ||
         rustTsfPocSource.find("generation_mismatch_fails_open") == std::string::npos ||
         rustTsfPocSource.find("host_blocking_call") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5TsfPocCompositionTranscriptReport") ==
+            std::string::npos ||
+        rustTsfPocSource.find("tsf_composition_transcript_report") == std::string::npos ||
+        rustTsfPocSource.find("EditSessionTranscript") == std::string::npos ||
+        rustTsfPocSource.find("begin_edit_session") == std::string::npos ||
+        rustTsfPocSource.find("update_preedit_start_composition") == std::string::npos ||
         rustTsfPocSource.find("product_display_name") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
         rustTsfPocSource.find("profile_display_name") == std::string::npos ||
@@ -564,6 +570,11 @@ int main(int argc, char** argv) {
         rustTsfPocSmoke.find("generation_mismatch_fails_open") == std::string::npos ||
         rustTsfPocSmoke.find(
             "IPC boundary report should fail open for slow or invalid engine replies") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find("Fcitx5TsfPocCompositionTranscriptReport") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find(
+            "composition transcript should preserve single edit-session operation order") ==
             std::string::npos ||
         rustTsfPocSmoke.find("Fcitx5TsfPocForcedFailureForTest") == std::string::npos ||
         rustTsfPocSmoke.find("forced internal failure should convert panic to HRESULT") ==

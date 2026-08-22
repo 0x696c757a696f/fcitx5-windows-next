@@ -35,6 +35,7 @@ int wmain(int argc, wchar_t** argv) {
     using BehaviorReport = const char*(__stdcall*)(size_t*);
     using ProfileIdentityReport = const char*(__stdcall*)(size_t*);
     using IpcBoundaryReport = const char*(__stdcall*)(size_t*);
+    using CompositionTranscriptReport = const char*(__stdcall*)(size_t*);
     using ForcedFailure = HRESULT(__stdcall*)();
     const auto getClassObject =
         reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
@@ -46,10 +47,12 @@ int wmain(int argc, wchar_t** argv) {
         GetProcAddress(module, "Fcitx5TsfPocProfileIdentityReport"));
     const auto ipcBoundaryReport = reinterpret_cast<IpcBoundaryReport>(
         GetProcAddress(module, "Fcitx5TsfPocIpcBoundaryReport"));
+    const auto compositionTranscriptReport = reinterpret_cast<CompositionTranscriptReport>(
+        GetProcAddress(module, "Fcitx5TsfPocCompositionTranscriptReport"));
     const auto forcedFailure = reinterpret_cast<ForcedFailure>(
         GetProcAddress(module, "Fcitx5TsfPocForcedFailureForTest"));
     if (!getClassObject || !canUnloadNow || !behaviorReport || !profileIdentityReport ||
-        !ipcBoundaryReport || !forcedFailure) {
+        !ipcBoundaryReport || !compositionTranscriptReport || !forcedFailure) {
         std::cerr << "Rust TSF PoC exports missing\n";
         FreeLibrary(module);
         return 1;
@@ -117,6 +120,25 @@ int wmain(int argc, wchar_t** argv) {
         ipcReport.find("\"host_blocking_call\":false") == std::string::npos ||
         ipcReport.find("\"shipping_cxx_authoritative\":true") == std::string::npos) {
         std::cerr << "Rust TSF PoC IPC boundary report should fail open for slow or invalid engine replies\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    size_t compositionReportLength = 0;
+    const char* compositionReportBytes = compositionTranscriptReport(&compositionReportLength);
+    const std::string compositionReport =
+        compositionReportBytes && compositionReportLength > 0
+            ? std::string(compositionReportBytes, compositionReportLength)
+            : std::string();
+    if (compositionReport.find("\"single_edit_session\":true") == std::string::npos ||
+        compositionReport.find(
+            "\"operation_order\":[\"begin_edit_session\",\"commit_text\",\"update_preedit_start_composition\",\"end_edit_session\"]") ==
+            std::string::npos ||
+        compositionReport.find("\"commit_text\":\"你\"") == std::string::npos ||
+        compositionReport.find("\"preedit_text\":\"hao\"") == std::string::npos ||
+        compositionReport.find("\"composition_active_after\":true") == std::string::npos ||
+        compositionReport.find("\"host_differential_pending\":true") == std::string::npos ||
+        compositionReport.find("\"shipping_cxx_authoritative\":true") == std::string::npos) {
+        std::cerr << "Rust TSF PoC composition transcript should preserve single edit-session operation order\n";
         FreeLibrary(module);
         return 1;
     }
