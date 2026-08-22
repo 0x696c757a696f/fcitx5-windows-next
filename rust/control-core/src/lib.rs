@@ -76,6 +76,17 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
 const CONTROL_TSF_GUARD_RESET_JSON: &str = r#"{"format_version":1,"tsf_guard":"enabled"}"#;
 const CONTROL_LAUNCHER_ACTION_RESTART_ENGINE: u32 = 1;
 const CONTROL_LAUNCHER_ACTION_SHUTDOWN: u32 = 2;
+const CONTROL_ROOT_ACTION_UNKNOWN: u32 = 0;
+const CONTROL_ROOT_ACTION_VERSION: u32 = 1;
+const CONTROL_ROOT_ACTION_SCHEMA: u32 = 2;
+const CONTROL_ROOT_ACTION_GET_STARTUP: u32 = 3;
+const CONTROL_ROOT_ACTION_SET_STARTUP_ENABLED: u32 = 4;
+const CONTROL_ROOT_ACTION_SET_STARTUP_DISABLED: u32 = 5;
+const CONTROL_ROOT_ACTION_GET_TSF_GUARD: u32 = 6;
+const CONTROL_ROOT_ACTION_RESET_TSF_GUARD: u32 = 7;
+const CONTROL_ROOT_ACTION_STATUS: u32 = 8;
+const CONTROL_ROOT_ACTION_RESTART_ENGINE: u32 = 9;
+const CONTROL_ROOT_ACTION_SHUTDOWN: u32 = 10;
 const CONTROL_CONFIG_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_CONFIG_ACTION_VALIDATE: u32 = 1;
 const CONTROL_CONFIG_ACTION_APPLY: u32 = 2;
@@ -929,6 +940,30 @@ fn engine_management_action(command: &[u16], argc: usize) -> u32 {
     }
 }
 
+fn root_action(command: &[u16], argc: usize, value: Option<&[u16]>) -> u32 {
+    match argc {
+        1 if ascii_utf16_eq(command, b"--version") => CONTROL_ROOT_ACTION_VERSION,
+        1 if ascii_utf16_eq(command, b"--schema") => CONTROL_ROOT_ACTION_SCHEMA,
+        1 if ascii_utf16_eq(command, b"--get-startup") => CONTROL_ROOT_ACTION_GET_STARTUP,
+        1 if ascii_utf16_eq(command, b"--get-tsf-guard") => CONTROL_ROOT_ACTION_GET_TSF_GUARD,
+        1 if ascii_utf16_eq(command, b"--reset-tsf-guard") => CONTROL_ROOT_ACTION_RESET_TSF_GUARD,
+        1 if ascii_utf16_eq(command, b"--status") => CONTROL_ROOT_ACTION_STATUS,
+        1 if ascii_utf16_eq(command, b"--restart-engine") => CONTROL_ROOT_ACTION_RESTART_ENGINE,
+        1 if ascii_utf16_eq(command, b"--shutdown") => CONTROL_ROOT_ACTION_SHUTDOWN,
+        2 if ascii_utf16_eq(command, b"--set-startup")
+            && value.is_some_and(|value| ascii_utf16_eq(value, b"enabled")) =>
+        {
+            CONTROL_ROOT_ACTION_SET_STARTUP_ENABLED
+        }
+        2 if ascii_utf16_eq(command, b"--set-startup")
+            && value.is_some_and(|value| ascii_utf16_eq(value, b"disabled")) =>
+        {
+            CONTROL_ROOT_ACTION_SET_STARTUP_DISABLED
+        }
+        _ => CONTROL_ROOT_ACTION_UNKNOWN,
+    }
+}
+
 fn ascii_utf16_eq(value: &[u16], ascii: &[u8]) -> bool {
     value.len() == ascii.len()
         && value
@@ -1342,6 +1377,28 @@ pub unsafe extern "C" fn fcitx5_control_package_repair_json_utf8(
 
 /// # Safety
 ///
+/// `command` and `value` must remain valid for the duration of the call when
+/// their pointers are non-null. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_root_action_utf16(
+    command: Fcitx5ControlUtf16,
+    argc: usize,
+    value: Fcitx5ControlUtf16,
+) -> u32 {
+    if command.ptr.is_null() {
+        return CONTROL_ROOT_ACTION_UNKNOWN;
+    }
+    let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
+    let value = if value.ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
+    };
+    root_action(command, argc, value)
+}
+
+/// # Safety
+///
 /// `command` must remain valid for the duration of the call. No pointer is
 /// retained.
 #[no_mangle]
@@ -1560,6 +1617,58 @@ mod tests {
             startup_json(false).as_slice(),
             br#"{"format_version":1,"enabled":false}"#
         );
+    }
+
+    #[test]
+    fn root_actions_are_typed_control_commands() {
+        let version = wide("--version");
+        let schema = wide("--schema");
+        let get_startup = wide("--get-startup");
+        let set_startup = wide("--set-startup");
+        let enabled = wide("enabled");
+        let disabled = wide("disabled");
+        let broken = wide("broken");
+        let get_tsf_guard = wide("--get-tsf-guard");
+        let reset_tsf_guard = wide("--reset-tsf-guard");
+        let status = wide("--status");
+        let restart_engine = wide("--restart-engine");
+        let shutdown = wide("--shutdown");
+        assert_eq!(root_action(&version, 1, None), CONTROL_ROOT_ACTION_VERSION);
+        assert_eq!(root_action(&schema, 1, None), CONTROL_ROOT_ACTION_SCHEMA);
+        assert_eq!(
+            root_action(&get_startup, 1, None),
+            CONTROL_ROOT_ACTION_GET_STARTUP
+        );
+        assert_eq!(
+            root_action(&set_startup, 2, Some(&enabled)),
+            CONTROL_ROOT_ACTION_SET_STARTUP_ENABLED
+        );
+        assert_eq!(
+            root_action(&set_startup, 2, Some(&disabled)),
+            CONTROL_ROOT_ACTION_SET_STARTUP_DISABLED
+        );
+        assert_eq!(
+            root_action(&set_startup, 2, Some(&broken)),
+            CONTROL_ROOT_ACTION_UNKNOWN
+        );
+        assert_eq!(
+            root_action(&get_tsf_guard, 1, None),
+            CONTROL_ROOT_ACTION_GET_TSF_GUARD
+        );
+        assert_eq!(
+            root_action(&reset_tsf_guard, 1, None),
+            CONTROL_ROOT_ACTION_RESET_TSF_GUARD
+        );
+        assert_eq!(root_action(&status, 1, None), CONTROL_ROOT_ACTION_STATUS);
+        assert_eq!(
+            root_action(&restart_engine, 1, None),
+            CONTROL_ROOT_ACTION_RESTART_ENGINE
+        );
+        assert_eq!(
+            root_action(&shutdown, 1, None),
+            CONTROL_ROOT_ACTION_SHUTDOWN
+        );
+        assert_eq!(root_action(&shutdown, 2, None), CONTROL_ROOT_ACTION_UNKNOWN);
     }
 
     #[test]

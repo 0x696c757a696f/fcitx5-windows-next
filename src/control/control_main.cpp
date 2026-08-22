@@ -182,6 +182,8 @@ int fcitx5_control_launcher_action_sequence(std::uint32_t action,
                                             std::size_t* out_len);
 int fcitx5_control_package_repair_json_utf8(const Fcitx5ControlPackageRepair* repair,
                                             char** out_ptr, std::size_t* out_len);
+std::uint32_t fcitx5_control_root_action_utf16(Fcitx5ControlUtf16 command, std::size_t argc,
+                                               Fcitx5ControlUtf16 value);
 std::uint32_t fcitx5_control_config_action_utf16(Fcitx5ControlUtf16 command, std::size_t argc);
 std::uint32_t fcitx5_control_engine_management_action_utf16(Fcitx5ControlUtf16 command,
                                                             std::size_t argc);
@@ -212,6 +214,16 @@ constexpr wchar_t kVisualConfigChangedMessage[] =
     L"Fcitx5WindowsNext.VisualConfigChanged.v1";
 constexpr std::uint32_t kLauncherActionRestartEngine = 1;
 constexpr std::uint32_t kLauncherActionShutdown = 2;
+constexpr std::uint32_t kRootActionVersion = 1;
+constexpr std::uint32_t kRootActionSchema = 2;
+constexpr std::uint32_t kRootActionGetStartup = 3;
+constexpr std::uint32_t kRootActionSetStartupEnabled = 4;
+constexpr std::uint32_t kRootActionSetStartupDisabled = 5;
+constexpr std::uint32_t kRootActionGetTsfGuard = 6;
+constexpr std::uint32_t kRootActionResetTsfGuard = 7;
+constexpr std::uint32_t kRootActionStatus = 8;
+constexpr std::uint32_t kRootActionRestartEngine = 9;
+constexpr std::uint32_t kRootActionShutdown = 10;
 constexpr std::uint32_t kConfigActionValidate = 1;
 constexpr std::uint32_t kConfigActionApply = 2;
 constexpr std::uint32_t kConfigActionResetConfig = 3;
@@ -336,6 +348,17 @@ std::string packageRepairJson(const Fcitx5ControlPackageRepair& repair) {
     if (fcitx5_control_package_repair_json_utf8(&repair, &bytes, &length) != 0)
         return {};
     return takeRustUtf8(bytes, length);
+}
+
+std::uint32_t rootAction(const std::vector<std::wstring_view>& arguments) {
+    if (arguments.empty())
+        return 0;
+    const std::wstring_view command(arguments[0]);
+    const std::wstring_view value = arguments.size() >= 2 ? std::wstring_view(arguments[1])
+                                                          : std::wstring_view{};
+    return fcitx5_control_root_action_utf16(
+        {command.data(), command.size()}, arguments.size(),
+        value.empty() ? Fcitx5ControlUtf16{} : Fcitx5ControlUtf16{value.data(), value.size()});
 }
 
 std::uint32_t configAction(std::wstring_view command, std::size_t argc) {
@@ -1415,7 +1438,8 @@ int wmain(int argc, wchar_t** argv) {
         else
             arguments.push_back(argument);
     }
-    if (arguments.size() == 1 && arguments[0] == L"--version") {
+    const std::uint32_t rootCommand = rootAction(arguments);
+    if (rootCommand == kRootActionVersion) {
         std::cout << fcitx::windows::version() << '\n';
         return 0;
     }
@@ -1423,25 +1447,25 @@ int wmain(int argc, wchar_t** argv) {
         usage();
         return 2;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--schema") {
+    if (rootCommand == kRootActionSchema) {
         return printControlSchema() ? 0 : 5;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--get-startup") {
+    if (rootCommand == kRootActionGetStartup) {
         bool enabled = false;
         if (!queryStartup(enabled))
             return 5;
         std::cout << startupJson(enabled) << '\n';
         return 0;
     }
-    if (arguments.size() == 2 && arguments[0] == L"--set-startup" &&
-        (arguments[1] == L"enabled" || arguments[1] == L"disabled")) {
-        return setStartup(arguments[1] == L"enabled") ? 0 : 5;
+    if (rootCommand == kRootActionSetStartupEnabled ||
+        rootCommand == kRootActionSetStartupDisabled) {
+        return setStartup(rootCommand == kRootActionSetStartupEnabled) ? 0 : 5;
     }
     if (dataRoot.empty()) {
         std::cerr << "unable to resolve the user data directory\n";
         return 5;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--get-tsf-guard") {
+    if (rootCommand == kRootActionGetTsfGuard) {
         const auto status = fcitx::windows::tsf::activationGuardStatus(dataRoot);
         const std::string markerPath = narrow(status.markerPath.wstring());
         const Fcitx5ControlTsfGuard guardStatus{
@@ -1450,7 +1474,7 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << tsfGuardJson(guardStatus) << '\n';
         return 0;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--reset-tsf-guard") {
+    if (rootCommand == kRootActionResetTsfGuard) {
         if (!fcitx::windows::tsf::clearActivationGuard(dataRoot)) {
             std::cerr << "unable to clear TSF activation guard\n";
             return 5;
@@ -1640,7 +1664,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         return writeVisualConfig(configPath, updated) ? 0 : 5;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--status") {
+    if (rootCommand == kRootActionStatus) {
         fcitx::windows::protocol::LauncherResponse response;
         const bool reachable =
             launcherCommand(fcitx::windows::protocol::LauncherCommand::status, response);
@@ -1671,14 +1695,14 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << statusJson(status) << '\n';
         return configValid ? 0 : 3;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--restart-engine") {
+    if (rootCommand == kRootActionRestartEngine) {
         if (!runLauncherAction(kLauncherActionRestartEngine)) {
             std::cerr << "launcher unavailable or restart rejected\n";
             return 4;
         }
         return 0;
     }
-    if (arguments.size() == 1 && arguments[0] == L"--shutdown") {
+    if (rootCommand == kRootActionShutdown) {
         return runLauncherAction(kLauncherActionShutdown) ? 0 : 4;
     }
     if (controlConfigAction == kConfigActionResetConfig) {
