@@ -374,6 +374,21 @@ void expect_contains(const std::string& text, std::string_view needle,
   }
 }
 
+void expect_rust_layout_paint_evidence(const std::string& report,
+                                       int expected_visible_candidates,
+                                       std::string_view context) {
+  expect_contains(report, "\"layout_driven_paint\":true",
+                  std::string(context) + " did not prove layout-driven painting");
+  expect_contains(report, "\"layout_rects_inside_window\":true",
+                  std::string(context) + " did not prove candidate rects stay inside window");
+  expect_contains(report, "\"layout_rects_non_overlapping\":true",
+                  std::string(context) + " did not prove candidate rects are non-overlapping");
+  expect(json_int_field(report, "visible_candidate_rects") == expected_visible_candidates,
+         std::string(context) + " visible candidate rect count mismatch");
+  expect(json_int_field(report, "painted_candidate_rects") == expected_visible_candidates,
+         std::string(context) + " painted candidate rect count mismatch");
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -432,6 +447,7 @@ int wmain(int argc, wchar_t** argv) {
                     "Rust candidate demo snapshot did not use vertical orientation");
     expect_contains(rust_demo, "\"candidate_count\":3",
                     "Rust candidate demo snapshot did not use the C++ demo candidate count");
+    expect_rust_layout_paint_evidence(rust_demo, 3, "Rust candidate demo snapshot");
     expect_contains(rust_demo, "\"screenshot_written\":true",
                     "Rust candidate demo snapshot did not write screenshot evidence");
     expect_contains(rust_demo, "\"msaa_accessible_name_readable\":true",
@@ -507,6 +523,8 @@ int wmain(int argc, wchar_t** argv) {
                     "Rust candidate scroll-demo snapshot did not enable scroll mode");
     expect_contains(rust_scroll, "\"candidate_count\":60",
                     "Rust candidate scroll-demo snapshot did not use the C++ scroll candidate count");
+    expect_rust_layout_paint_evidence(rust_scroll, 36,
+                                      "Rust candidate scroll-demo snapshot");
     expect_contains(rust_scroll, "\"screenshot_written\":true",
                     "Rust candidate scroll-demo snapshot did not write screenshot evidence");
     expect_contains(rust_scroll, "\"msaa_accessible_name_readable\":true",

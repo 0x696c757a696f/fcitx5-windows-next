@@ -328,6 +328,12 @@ int main(int argc, char** argv) {
         candidateIntegrationSource.find("visual_non_background_pixels") == std::string::npos ||
         candidateIntegrationSource.find("rust-candidate-demo.json") == std::string::npos ||
         candidateIntegrationSource.find("rust-candidate-scroll-demo.json") == std::string::npos ||
+        candidateIntegrationSource.find("expect_rust_layout_paint_evidence") ==
+            std::string::npos ||
+        candidateIntegrationSource.find("layout_driven_paint") == std::string::npos ||
+        candidateIntegrationSource.find("layout_rects_inside_window") == std::string::npos ||
+        candidateIntegrationSource.find("layout_rects_non_overlapping") == std::string::npos ||
+        candidateIntegrationSource.find("painted_candidate_rects") == std::string::npos ||
         candidateIntegrationSource.find("demo-snapshot") == std::string::npos ||
         candidateIntegrationSource.find("scroll-demo-snapshot") == std::string::npos ||
         candidateIntegrationSource.find("Rust/C++ candidate demo width diverged") ==
