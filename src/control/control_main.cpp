@@ -79,6 +79,20 @@ struct Fcitx5ControlPresentation {
     std::uint8_t candidateShadow;
     std::uint8_t scrollMode;
 };
+struct Fcitx5ControlStatus {
+    std::uint8_t launcherReachable;
+    std::int32_t launcherState;
+    std::int32_t engineState;
+    Fcitx5ControlUtf8 currentInputMethodId;
+    Fcitx5ControlUtf8 currentInputMethodName;
+    Fcitx5ControlUtf8 currentInputMethodNativeName;
+    Fcitx5ControlUtf8 currentInputMethodShortLabel;
+    std::uint8_t configValid;
+    std::uint8_t tsfGuardDisabled;
+    Fcitx5ControlUtf8 tsfGuardReason;
+    Fcitx5ControlUtf8 dataRoot;
+    Fcitx5ControlUtf8 updateOwner;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -91,6 +105,8 @@ int fcitx5_control_json_string_utf8(Fcitx5ControlUtf8 value, char** out_ptr,
                                     std::size_t* out_len);
 int fcitx5_control_presentation_json_utf8(const Fcitx5ControlPresentation* presentation,
                                           char** out_ptr, std::size_t* out_len);
+int fcitx5_control_status_json_utf8(const Fcitx5ControlStatus* status, char** out_ptr,
+                                    std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -165,6 +181,14 @@ std::string presentationJson(const Fcitx5ControlPresentation& presentation) {
     char* bytes = nullptr;
     std::size_t length = 0;
     if (fcitx5_control_presentation_json_utf8(&presentation, &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
+std::string statusJson(const Fcitx5ControlStatus& status) {
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_status_json_utf8(&status, &bytes, &length) != 0)
         return {};
     return takeRustUtf8(bytes, length);
 }
@@ -1435,27 +1459,23 @@ int wmain(int argc, wchar_t** argv) {
             configValid = validateConfig(configPath, text, error);
         }
         const auto tsfGuard = fcitx::windows::tsf::activationGuardStatus(dataRoot);
-        std::cout << "{\"format_version\":1,\"launcher_reachable\":"
-                  << (reachable ? "true" : "false") << ",\"launcher_state\":"
-                  << (reachable ? std::to_string(response.launcherState) : "null")
-                  << ",\"engine_state\":"
-                  << (reachable ? std::to_string(response.engineState) : "null")
-                  << ",\"current_input_method_id\":"
-                  << (reachable ? jsonString(response.currentInputMethodId) : "null")
-                  << ",\"current_input_method_name\":"
-                  << (reachable ? jsonString(response.currentInputMethodName) : "null")
-                  << ",\"current_input_method_native_name\":"
-                  << (reachable ? jsonString(response.currentInputMethodNativeName) : "null")
-                  << ",\"current_input_method_short_label\":"
-                  << (reachable ? jsonString(response.currentInputMethodShortLabel) : "null")
-                  << ",\"config_valid\":" << (configValid ? "true" : "false")
-                  << ",\"tsf_guard_disabled\":"
-                  << (tsfGuard.disabled ? "true" : "false")
-                  << ",\"tsf_guard_reason\":" << jsonString(tsfGuard.reason)
-                  << ",\"data_root\":\""
-                  << narrow(dataRoot.generic_wstring()) << "\",\"update_owner\":\""
-                  << fcitx::update::owner_name(fcitx::update::read_update_owner(installationRoot()))
-                  << "\"}\n";
+        const std::string dataRootUtf8 = narrow(dataRoot.generic_wstring());
+        const std::string updateOwner{
+            fcitx::update::owner_name(fcitx::update::read_update_owner(installationRoot()))};
+        const Fcitx5ControlStatus status{
+            reachable ? std::uint8_t{1} : std::uint8_t{0},
+            static_cast<std::int32_t>(response.launcherState),
+            static_cast<std::int32_t>(response.engineState),
+            utf8View(response.currentInputMethodId),
+            utf8View(response.currentInputMethodName),
+            utf8View(response.currentInputMethodNativeName),
+            utf8View(response.currentInputMethodShortLabel),
+            configValid ? std::uint8_t{1} : std::uint8_t{0},
+            tsfGuard.disabled ? std::uint8_t{1} : std::uint8_t{0},
+            utf8View(tsfGuard.reason),
+            utf8View(dataRootUtf8),
+            utf8View(updateOwner)};
+        std::cout << statusJson(status) << '\n';
         return configValid ? 0 : 3;
     }
     if (arguments.size() == 1 && arguments[0] == L"--restart-engine") {

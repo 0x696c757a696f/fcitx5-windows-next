@@ -105,6 +105,22 @@ pub struct Fcitx5ControlPresentation {
     scroll_mode: u8,
 }
 
+#[repr(C)]
+pub struct Fcitx5ControlStatus {
+    launcher_reachable: u8,
+    launcher_state: i32,
+    engine_state: i32,
+    current_input_method_id: Fcitx5ControlUtf8,
+    current_input_method_name: Fcitx5ControlUtf8,
+    current_input_method_native_name: Fcitx5ControlUtf8,
+    current_input_method_short_label: Fcitx5ControlUtf8,
+    config_valid: u8,
+    tsf_guard_disabled: u8,
+    tsf_guard_reason: Fcitx5ControlUtf8,
+    data_root: Fcitx5ControlUtf8,
+    update_owner: Fcitx5ControlUtf8,
+}
+
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn RegOpenKeyExW(
@@ -247,6 +263,22 @@ fn push_json_string_field(output: &mut Vec<u8>, name: &[u8], value: &[u8]) -> Op
     Some(())
 }
 
+fn push_json_optional_reachable_string_field(
+    output: &mut Vec<u8>,
+    name: &[u8],
+    reachable: bool,
+    value: Fcitx5ControlUtf8,
+) -> Option<()> {
+    output.extend_from_slice(name);
+    output.push(b':');
+    if reachable {
+        output.extend_from_slice(&json_string(utf8_slice(value)?)?);
+    } else {
+        output.extend_from_slice(b"null");
+    }
+    Some(())
+}
+
 fn presentation_json(presentation: &Fcitx5ControlPresentation) -> Option<Vec<u8>> {
     let fields = [
         (
@@ -309,6 +341,81 @@ fn presentation_json(presentation: &Fcitx5ControlPresentation) -> Option<Vec<u8>
     } else {
         b"false"
     });
+    output.push(b'}');
+    Some(output)
+}
+
+fn status_json(status: &Fcitx5ControlStatus) -> Option<Vec<u8>> {
+    let reachable = status.launcher_reachable != 0;
+    let mut output = Vec::new();
+    output.extend_from_slice(br#"{"format_version":1,"launcher_reachable":"#);
+    output.extend_from_slice(if reachable { b"true" } else { b"false" });
+    output.extend_from_slice(b",\"launcher_state\":");
+    if reachable {
+        output.extend_from_slice(status.launcher_state.to_string().as_bytes());
+    } else {
+        output.extend_from_slice(b"null");
+    }
+    output.extend_from_slice(b",\"engine_state\":");
+    if reachable {
+        output.extend_from_slice(status.engine_state.to_string().as_bytes());
+    } else {
+        output.extend_from_slice(b"null");
+    }
+    output.push(b',');
+    push_json_optional_reachable_string_field(
+        &mut output,
+        b"\"current_input_method_id\"",
+        reachable,
+        status.current_input_method_id,
+    )?;
+    output.push(b',');
+    push_json_optional_reachable_string_field(
+        &mut output,
+        b"\"current_input_method_name\"",
+        reachable,
+        status.current_input_method_name,
+    )?;
+    output.push(b',');
+    push_json_optional_reachable_string_field(
+        &mut output,
+        b"\"current_input_method_native_name\"",
+        reachable,
+        status.current_input_method_native_name,
+    )?;
+    output.push(b',');
+    push_json_optional_reachable_string_field(
+        &mut output,
+        b"\"current_input_method_short_label\"",
+        reachable,
+        status.current_input_method_short_label,
+    )?;
+    output.extend_from_slice(b",\"config_valid\":");
+    output.extend_from_slice(if status.config_valid != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.extend_from_slice(b",\"tsf_guard_disabled\":");
+    output.extend_from_slice(if status.tsf_guard_disabled != 0 {
+        b"true"
+    } else {
+        b"false"
+    });
+    output.push(b',');
+    push_json_string_field(
+        &mut output,
+        b"\"tsf_guard_reason\"",
+        utf8_slice(status.tsf_guard_reason)?,
+    )?;
+    output.push(b',');
+    push_json_string_field(&mut output, b"\"data_root\"", utf8_slice(status.data_root)?)?;
+    output.push(b',');
+    push_json_string_field(
+        &mut output,
+        b"\"update_owner\"",
+        utf8_slice(status.update_owner)?,
+    )?;
     output.push(b'}');
     Some(output)
 }
@@ -565,6 +672,27 @@ pub unsafe extern "C" fn fcitx5_control_presentation_json_utf8(
 
 /// # Safety
 ///
+/// All UTF-8 slices inside `status` must remain valid for the duration of the
+/// call. `out_ptr` and `out_len` must point to writable storage. Any returned
+/// buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_status_json_utf8(
+    status: *const Fcitx5ControlStatus,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if status.is_null() {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let status = unsafe { &*status };
+    match status_json(status) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// `ptr` and `len` must be the exact buffer returned by a Control core UTF-8
 /// allocation function, or `ptr` must be null.
 #[no_mangle]
@@ -727,5 +855,98 @@ mod tests {
         assert!(text.contains(r#""candidate_page_size":"5""#));
         assert!(text.contains(r#""candidate_shadow":true"#));
         assert!(text.contains(r#""scroll_mode":false"#));
+    }
+
+    #[test]
+    fn status_json_preserves_reachable_control_contract() {
+        let id = b"rime";
+        let name = b"Rime";
+        let native = "中州韵".as_bytes();
+        let label = "中".as_bytes();
+        let reason = b"manual";
+        let data_root = b"C:/Users/Test/Fcitx5";
+        let owner = b"builtin";
+        let status = Fcitx5ControlStatus {
+            launcher_reachable: 1,
+            launcher_state: 2,
+            engine_state: 3,
+            current_input_method_id: Fcitx5ControlUtf8 {
+                ptr: id.as_ptr(),
+                len: id.len(),
+            },
+            current_input_method_name: Fcitx5ControlUtf8 {
+                ptr: name.as_ptr(),
+                len: name.len(),
+            },
+            current_input_method_native_name: Fcitx5ControlUtf8 {
+                ptr: native.as_ptr(),
+                len: native.len(),
+            },
+            current_input_method_short_label: Fcitx5ControlUtf8 {
+                ptr: label.as_ptr(),
+                len: label.len(),
+            },
+            config_valid: 1,
+            tsf_guard_disabled: 1,
+            tsf_guard_reason: Fcitx5ControlUtf8 {
+                ptr: reason.as_ptr(),
+                len: reason.len(),
+            },
+            data_root: Fcitx5ControlUtf8 {
+                ptr: data_root.as_ptr(),
+                len: data_root.len(),
+            },
+            update_owner: Fcitx5ControlUtf8 {
+                ptr: owner.as_ptr(),
+                len: owner.len(),
+            },
+        };
+        let json = status_json(&status).expect("status should format");
+        let text = String::from_utf8(json).expect("status JSON should be UTF-8");
+        assert_eq!(
+            text,
+            r#"{"format_version":1,"launcher_reachable":true,"launcher_state":2,"engine_state":3,"current_input_method_id":"rime","current_input_method_name":"Rime","current_input_method_native_name":"中州韵","current_input_method_short_label":"中","config_valid":true,"tsf_guard_disabled":true,"tsf_guard_reason":"manual","data_root":"C:/Users/Test/Fcitx5","update_owner":"builtin"}"#
+        );
+    }
+
+    #[test]
+    fn status_json_preserves_unreachable_null_fields() {
+        let reason = b"";
+        let data_root = br#"C:/Users/Test/Fcitx\"#;
+        let owner = b"none";
+        let empty = Fcitx5ControlUtf8 {
+            ptr: b"".as_ptr(),
+            len: 0,
+        };
+        let status = Fcitx5ControlStatus {
+            launcher_reachable: 0,
+            launcher_state: 9,
+            engine_state: 9,
+            current_input_method_id: empty,
+            current_input_method_name: empty,
+            current_input_method_native_name: empty,
+            current_input_method_short_label: empty,
+            config_valid: 0,
+            tsf_guard_disabled: 0,
+            tsf_guard_reason: Fcitx5ControlUtf8 {
+                ptr: reason.as_ptr(),
+                len: reason.len(),
+            },
+            data_root: Fcitx5ControlUtf8 {
+                ptr: data_root.as_ptr(),
+                len: data_root.len(),
+            },
+            update_owner: Fcitx5ControlUtf8 {
+                ptr: owner.as_ptr(),
+                len: owner.len(),
+            },
+        };
+        let json = status_json(&status).expect("status should format");
+        let text = String::from_utf8(json).expect("status JSON should be UTF-8");
+        assert!(text.contains(r#""launcher_reachable":false"#));
+        assert!(text.contains(r#""launcher_state":null"#));
+        assert!(text.contains(r#""current_input_method_id":null"#));
+        assert!(text.contains(r#""config_valid":false"#));
+        assert!(text.contains(r#""data_root":"C:/Users/Test/Fcitx\\","#));
     }
 }
