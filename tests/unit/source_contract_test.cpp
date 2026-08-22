@@ -480,6 +480,43 @@ int main(int argc, char** argv) {
         configParserSource.find("orientation = \"automatic\"") == std::string::npos) {
         return fail("REG-CONFIG-LIVE-001: Appearance reset must use typed sparse override removal");
     }
+    const auto rustTsfPocManifest = read_text(sourceRoot / "rust/tsf-poc/Cargo.toml");
+    const auto rustTsfPocSource = read_text(sourceRoot / "rust/tsf-poc/src/lib.rs");
+    const auto rustTsfPocSmoke =
+        read_text(sourceRoot / "tests/unit/rust_tsf_poc_export_smoke.cpp");
+    if (cmakeSource.find("fcitx5_tsf_poc_rustdll") == std::string::npos ||
+        cmakeSource.find("rust-tsf-poc-unit") == std::string::npos ||
+        cmakeSource.find("rust-tsf-poc-export-smoke") == std::string::npos ||
+        rustTsfPocManifest.find("windows = { version = \"0.62.2\"") == std::string::npos ||
+        rustTsfPocManifest.find("\"Win32_UI_TextServices\"") == std::string::npos ||
+        rustTsfPocSource.find("ITfTextInputProcessorEx") == std::string::npos ||
+        rustTsfPocSource.find("IClassFactory") == std::string::npos ||
+        rustTsfPocSource.find("activatable_empty_tip:true") == std::string::npos ||
+        rustTsfPocSource.find("Fcitx5TsfService") == std::string::npos ||
+        rustTsfPocSource.find("ITfKeyEventSink_Impl") == std::string::npos ||
+        rustTsfPocSource.find("catch_unwind") == std::string::npos ||
+        rustTsfPocSource.find("panic_to_hresult") == std::string::npos ||
+        rustTsfPocSource.find("DllGetClassObject") == std::string::npos ||
+        rustTsfPocSource.find("DllCanUnloadNow") == std::string::npos ||
+        rustTsfPocSource.find("cxx_tsf_remains_authoritative:true") == std::string::npos ||
+        rustTsfPocSource.find("bounded_ipc_client:not-linked") == std::string::npos ||
+        rustTsfPocSource.find("send_input:false") == std::string::npos ||
+        rustTsfPocSource.find("global_hooks:false") == std::string::npos ||
+        rustTsfPocSource.find("process_injection:false") == std::string::npos ||
+        rustTsfPocSmoke.find("CLASS_E_CLASSNOTAVAILABLE") == std::string::npos ||
+        rustTsfPocSmoke.find("factory should create an empty ITfTextInputProcessorEx") ==
+            std::string::npos) {
+        return fail("RUST-R3-TSF-POC: Rust TSF PoC must stay isolated, panic-contained, and non-authoritative");
+    }
+    if (rustTsfPocManifest.find("fcitx5-package-core") != std::string::npos ||
+        rustTsfPocManifest.find("fcitx5-control-core") != std::string::npos ||
+        rustTsfPocManifest.find("fcitx5-candidate-core") != std::string::npos ||
+        rustTsfPocSource.find("SendInput") != std::string::npos ||
+        rustTsfPocSource.find("SetWindowsHookEx") != std::string::npos ||
+        rustTsfPocSource.find("CreateRemoteThread") != std::string::npos ||
+        rustTsfPocSource.find("WriteProcessMemory") != std::string::npos) {
+        return fail("RUST-R3-TSF-POC: Rust TSF PoC must not link product control/package/candidate or prohibited host APIs");
+    }
     std::cout << "source-contract ok\n";
     return 0;
 }

@@ -8,4 +8,5 @@ members = [
   "rust/config-qa",
   "rust/config-poc",
   "rust/candidate-core",
+  "rust/tsf-poc",
 ]

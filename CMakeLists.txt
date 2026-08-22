@@ -206,6 +206,20 @@ add_custom_target(
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-candidate-poc executable")
 
+set(FCITX_RUST_TSF_POC_DLL
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_tsf_poc.dll")
+add_custom_target(
+  fcitx5_tsf_poc_rustdll
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-poc --lib --target
+    "${FCITX_RUST_TARGET}"
+  BYPRODUCTS "${FCITX_RUST_TSF_POC_DLL}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-tsf-poc DLL")
+
 add_library(fcitx5_candidate_model STATIC src/candidate/candidate_model.cpp)
 add_library(fcitx5::candidate_model ALIAS fcitx5_candidate_model)
 target_compile_features(fcitx5_candidate_model PUBLIC cxx_std_20)
@@ -1149,6 +1163,23 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_tsf_module_test)
   add_test(NAME tsf-module-activation
            COMMAND fcitx5_tsf_module_test $<TARGET_FILE:fcitx5_tsf>)
+
+  add_executable(fcitx5_rust_tsf_poc_export_smoke
+                 tests/unit/rust_tsf_poc_export_smoke.cpp)
+  add_dependencies(fcitx5_rust_tsf_poc_export_smoke fcitx5_tsf_poc_rustdll)
+  fcitx_apply_project_options(fcitx5_rust_tsf_poc_export_smoke)
+  fcitx_apply_binary_hardening(fcitx5_rust_tsf_poc_export_smoke)
+  add_test(NAME rust-tsf-poc-unit
+           COMMAND
+             "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+             "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+             "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+             "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-poc --target
+             "${FCITX_RUST_TARGET}")
+  set_tests_properties(rust-tsf-poc-unit PROPERTIES
+                       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(NAME rust-tsf-poc-export-smoke
+           COMMAND fcitx5_rust_tsf_poc_export_smoke "${FCITX_RUST_TSF_POC_DLL}")
 
   add_executable(fcitx5_input_scope_policy_test tests/unit/input_scope_policy_test.cpp)
   target_include_directories(
