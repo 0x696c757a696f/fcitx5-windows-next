@@ -25,6 +25,7 @@ const DIB_RGB_COLORS: Uint = 0;
 const PW_RENDERFULLCONTENT: Uint = 0x0000_0002;
 const SRCCOPY: Dword = 0x00CC_0020;
 const WM_COMMAND: Uint = 0x0111;
+const WM_CLOSE: Uint = 0x0010;
 
 const K_NAV_GENERAL: i32 = 130;
 const K_NAV_APPEARANCE: i32 = 131;
@@ -158,6 +159,25 @@ struct Page {
 struct Args {
     config_exe: PathBuf,
     out_dir: PathBuf,
+    candidate_ui_exe: Option<PathBuf>,
+}
+
+struct BitmapCapture {
+    width: i32,
+    height: i32,
+    pixels: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ImageStats {
+    bytes: usize,
+    non_background_pixels: usize,
+    checksum: u64,
+    selected_green_pixels: usize,
+    white_surface_pixels: usize,
+    dark_surface_pixels: usize,
+    dark_text_pixels: usize,
+    shared_theme_pixels: usize,
 }
 
 struct ProcessGuard {
@@ -181,26 +201,49 @@ fn main() {
 fn run() -> Result<(), String> {
     let args = parse_args()?;
     fs::create_dir_all(&args.out_dir).map_err(|error| format!("create output dir: {error}"))?;
+    let candidate_reference = match args.candidate_ui_exe.as_ref() {
+        Some(candidate_ui) => Some(capture_candidate_reference(candidate_ui, &args.out_dir)?),
+        None => None,
+    };
     let child = Command::new(&args.config_exe)
         .spawn()
         .map_err(|error| format!("launch {}: {error}", args.config_exe.display()))?;
-    let hwnd = wait_for_window(child.id(), Duration::from_secs(10))?;
+    let guard = ProcessGuard { child };
+    let hwnd = wait_for_window(guard.child.id(), Duration::from_secs(10))?;
     let mut report = String::new();
     report.push_str("# Config UI QA\n\n");
     report.push_str(&format!("- exe: `{}`\n", args.config_exe.display()));
-    report.push_str(&format!("- pid: `{}`\n\n", child.id()));
+    report.push_str(&format!("- pid: `{}`\n\n", guard.child.id()));
     report.push_str("| Page | Result | Screenshot |\n|---|---|---|\n");
     for page in PAGES {
         navigate(hwnd, page.id)?;
         thread::sleep(Duration::from_millis(200));
         verify_page(hwnd, page)?;
         let file_name = format!("config-{}.bmp", page.slug);
-        capture_window(hwnd, &args.out_dir.join(&file_name))?;
+        let capture = capture_window(hwnd)?;
+        write_bitmap(&capture, &args.out_dir.join(&file_name))?;
+        if page.id == K_NAV_APPEARANCE {
+            let preview = crop_config_preview(hwnd, &capture)?;
+            let preview_name = "config-appearance-candidate-preview.bmp";
+            write_bitmap(&preview, &args.out_dir.join(preview_name))?;
+            let preview_stats = image_stats(&preview);
+            if preview_stats.non_background_pixels < 128 {
+                return Err(
+                    "Config candidate preview crop did not contain visible rendering".to_string(),
+                );
+            }
+            if let Some(reference) = candidate_reference {
+                assert_preview_matches_candidate_theme(preview_stats, reference)?;
+                report.push_str(&format!(
+                    "| appearance-preview | ok: shared theme pixels {} | `{}` |\n",
+                    preview_stats.shared_theme_pixels, preview_name
+                ));
+            }
+        }
         report.push_str(&format!("| {} | ok | `{}` |\n", page.slug, file_name));
     }
     fs::write(args.out_dir.join("config-ui-qa.md"), report)
         .map_err(|error| format!("write report: {error}"))?;
-    let _guard = ProcessGuard { child };
     Ok(())
 }
 
@@ -208,11 +251,14 @@ fn parse_args() -> Result<Args, String> {
     let mut values = env::args_os().skip(1);
     let mut config_exe = None;
     let mut out_dir = None;
+    let mut candidate_ui_exe = None;
     while let Some(arg) = values.next() {
         if arg == "--config-exe" {
             config_exe = values.next().map(PathBuf::from);
         } else if arg == "--out" {
             out_dir = values.next().map(PathBuf::from);
+        } else if arg == "--candidate-ui-exe" {
+            candidate_ui_exe = values.next().map(PathBuf::from);
         } else {
             return Err(format!("unknown argument: {}", arg.to_string_lossy()));
         }
@@ -220,6 +266,7 @@ fn parse_args() -> Result<Args, String> {
     Ok(Args {
         config_exe: config_exe.ok_or("missing --config-exe")?,
         out_dir: out_dir.ok_or("missing --out")?,
+        candidate_ui_exe,
     })
 }
 
@@ -330,7 +377,7 @@ fn intersects(left: Rect, right: Rect) -> bool {
         && left.bottom > right.top
 }
 
-fn capture_window(hwnd: Hwnd, path: &Path) -> Result<(), String> {
+fn capture_window(hwnd: Hwnd) -> Result<BitmapCapture, String> {
     let mut rect = Rect::default();
     if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
         return Err("GetWindowRect failed".to_string());
@@ -365,7 +412,7 @@ fn capture_window(hwnd: Hwnd, path: &Path) -> Result<(), String> {
             BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY);
         }
     }
-    let result = write_bitmap(memory_dc, bitmap, width, height, path);
+    let result = capture_bitmap(memory_dc, bitmap, width, height);
     unsafe {
         SelectObject(memory_dc, previous);
         DeleteObject(bitmap.cast::<c_void>());
@@ -375,13 +422,178 @@ fn capture_window(hwnd: Hwnd, path: &Path) -> Result<(), String> {
     result
 }
 
-fn write_bitmap(
+fn capture_candidate_reference(candidate_ui: &Path, out_dir: &Path) -> Result<ImageStats, String> {
+    let child = Command::new(candidate_ui)
+        .arg("--demo")
+        .spawn()
+        .map_err(|error| format!("launch {} --demo: {error}", candidate_ui.display()))?;
+    let guard = ProcessGuard { child };
+    let hwnd = wait_for_window(guard.child.id(), Duration::from_secs(10))?;
+    thread::sleep(Duration::from_millis(300));
+    let capture = capture_window(hwnd)?;
+    write_bitmap(&capture, &out_dir.join("candidate-ui-demo-reference.bmp"))?;
+    unsafe {
+        SendMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+    let stats = image_stats(&capture);
+    if stats.non_background_pixels < 64 {
+        return Err(
+            "candidate UI reference screenshot did not contain visible content".to_string(),
+        );
+    }
+    Ok(stats)
+}
+
+fn crop_config_preview(_hwnd: Hwnd, capture: &BitmapCapture) -> Result<BitmapCapture, String> {
+    let selected = selected_green_bbox(capture)
+        .ok_or("Config appearance screenshot did not contain selected candidate theme color")?;
+    let preview = Rect {
+        left: selected.left - 80,
+        top: selected.top - 48,
+        right: selected.right + 520,
+        bottom: selected.bottom + 120,
+    };
+    crop_bitmap(capture, preview)
+}
+
+fn selected_green_bbox(capture: &BitmapCapture) -> Option<Rect> {
+    let mut bbox: Option<Rect> = None;
+    for y in 0..capture.height {
+        for x in 0..capture.width {
+            // Ignore the left navigation accent and the lower Appearance page controls; the
+            // embedded Candidate preview lives in the upper main content surface.
+            if x < 400 || y > 520 {
+                continue;
+            }
+            let offset = ((y as usize) * (capture.width as usize) + x as usize) * 4;
+            let b = capture.pixels[offset];
+            let g = capture.pixels[offset + 1];
+            let r = capture.pixels[offset + 2];
+            if r <= 32 && (145..=190).contains(&g) && (85..=135).contains(&b) {
+                bbox = Some(match bbox {
+                    Some(rect) => Rect {
+                        left: rect.left.min(x),
+                        top: rect.top.min(y),
+                        right: rect.right.max(x + 1),
+                        bottom: rect.bottom.max(y + 1),
+                    },
+                    None => Rect {
+                        left: x,
+                        top: y,
+                        right: x + 1,
+                        bottom: y + 1,
+                    },
+                });
+            }
+        }
+    }
+    bbox
+}
+
+fn crop_bitmap(capture: &BitmapCapture, rect: Rect) -> Result<BitmapCapture, String> {
+    let left = rect.left.clamp(0, capture.width);
+    let top = rect.top.clamp(0, capture.height);
+    let right = rect.right.clamp(left, capture.width);
+    let bottom = rect.bottom.clamp(top, capture.height);
+    let width = right - left;
+    let height = bottom - top;
+    if width <= 0 || height <= 0 {
+        return Err("Config preview crop has empty bounds".to_string());
+    }
+    let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
+    for row in 0..height {
+        let source = (((top + row) as usize) * (capture.width as usize) + left as usize) * 4;
+        let destination = (row as usize) * (width as usize) * 4;
+        let bytes = (width as usize) * 4;
+        pixels[destination..destination + bytes]
+            .copy_from_slice(&capture.pixels[source..source + bytes]);
+    }
+    Ok(BitmapCapture {
+        width,
+        height,
+        pixels,
+    })
+}
+
+fn image_stats(capture: &BitmapCapture) -> ImageStats {
+    let mut stats = ImageStats {
+        bytes: 14 + 40 + capture.pixels.len(),
+        checksum: 1469598103934665603,
+        ..ImageStats::default()
+    };
+    let (pixels, remainder) = capture.pixels.as_chunks::<4>();
+    debug_assert!(remainder.is_empty());
+    let background = pixels.first().unwrap_or(&[0, 0, 0, 0]);
+    for pixel in pixels {
+        let b = pixel[0];
+        let g = pixel[1];
+        let r = pixel[2];
+        if pixel != background {
+            stats.non_background_pixels += 1;
+        }
+        let value = u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
+        stats.checksum ^= u64::from(value);
+        stats.checksum = stats.checksum.wrapping_mul(1099511628211);
+        if r <= 32 && (145..=190).contains(&g) && (85..=135).contains(&b) {
+            stats.selected_green_pixels += 1;
+        }
+        if r >= 245 && g >= 245 && b >= 245 {
+            stats.white_surface_pixels += 1;
+        }
+        if (30..=46).contains(&r) && (30..=48).contains(&g) && (34..=54).contains(&b) {
+            stats.dark_surface_pixels += 1;
+        }
+        if (28..=60).contains(&r) && (28..=62).contains(&g) && (30..=66).contains(&b) {
+            stats.dark_text_pixels += 1;
+        }
+    }
+    stats.shared_theme_pixels = stats.selected_green_pixels
+        + stats.white_surface_pixels
+        + stats.dark_surface_pixels
+        + stats.dark_text_pixels;
+    stats
+}
+
+fn assert_preview_matches_candidate_theme(
+    preview: ImageStats,
+    reference: ImageStats,
+) -> Result<(), String> {
+    if reference.selected_green_pixels >= 20 && preview.selected_green_pixels < 10 {
+        return Err(format!(
+            "Config preview crop did not contain the candidate selected-background theme color: reference={}, preview={}",
+            reference.selected_green_pixels, preview.selected_green_pixels
+        ));
+    }
+    if reference.white_surface_pixels >= 20 && preview.white_surface_pixels < 20 {
+        return Err(format!(
+            "Config preview crop did not contain the candidate light surface theme color: reference={}, preview={}",
+            reference.white_surface_pixels, preview.white_surface_pixels
+        ));
+    }
+    if reference.dark_surface_pixels >= 20 && preview.dark_surface_pixels < 20 {
+        return Err(format!(
+            "Config preview crop did not contain the candidate dark surface theme color: reference={}, preview={}",
+            reference.dark_surface_pixels, preview.dark_surface_pixels
+        ));
+    }
+    if preview.shared_theme_pixels < 64 {
+        return Err(format!(
+            "Config preview crop did not share enough theme-colored pixels with candidate UI: reference={}, preview={}",
+            reference.shared_theme_pixels, preview.shared_theme_pixels
+        ));
+    }
+    if preview.bytes == 0 || preview.checksum == 0 {
+        return Err("Config preview crop evidence is empty".to_string());
+    }
+    Ok(())
+}
+
+fn capture_bitmap(
     hdc: Hdc,
     bitmap: Hbitmap,
     width: i32,
     height: i32,
-    path: &Path,
-) -> Result<(), String> {
+) -> Result<BitmapCapture, String> {
     let stride = (width as usize) * 4;
     let mut pixels = vec![0u8; stride * (height as usize)];
     let mut info = BitmapInfo {
@@ -414,8 +626,16 @@ fn write_bitmap(
     if lines != height {
         return Err("GetDIBits failed".to_string());
     }
+    Ok(BitmapCapture {
+        width,
+        height,
+        pixels,
+    })
+}
+
+fn write_bitmap(capture: &BitmapCapture, path: &Path) -> Result<(), String> {
     let pixel_offset = 14u32 + 40u32;
-    let file_size = pixel_offset + pixels.len() as u32;
+    let file_size = pixel_offset + capture.pixels.len() as u32;
     let mut file = fs::File::create(path).map_err(|error| format!("create bitmap: {error}"))?;
     file.write_all(b"BM").map_err(|error| error.to_string())?;
     file.write_all(&file_size.to_le_bytes())
@@ -425,9 +645,9 @@ fn write_bitmap(
         .map_err(|error| error.to_string())?;
     file.write_all(&(40u32).to_le_bytes())
         .map_err(|error| error.to_string())?;
-    file.write_all(&width.to_le_bytes())
+    file.write_all(&capture.width.to_le_bytes())
         .map_err(|error| error.to_string())?;
-    file.write_all(&(-height).to_le_bytes())
+    file.write_all(&(-capture.height).to_le_bytes())
         .map_err(|error| error.to_string())?;
     file.write_all(&(1u16).to_le_bytes())
         .map_err(|error| error.to_string())?;
@@ -435,11 +655,12 @@ fn write_bitmap(
         .map_err(|error| error.to_string())?;
     file.write_all(&BI_RGB.to_le_bytes())
         .map_err(|error| error.to_string())?;
-    file.write_all(&(pixels.len() as u32).to_le_bytes())
+    file.write_all(&(capture.pixels.len() as u32).to_le_bytes())
         .map_err(|error| error.to_string())?;
     file.write_all(&[0; 16])
         .map_err(|error| error.to_string())?;
-    file.write_all(&pixels).map_err(|error| error.to_string())?;
+    file.write_all(&capture.pixels)
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 

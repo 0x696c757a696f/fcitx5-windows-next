@@ -726,6 +726,17 @@ if(BUILD_TESTING)
            COMMAND fcitx5_config_app --ui-live-preview-contract-test)
   add_test(NAME config-ui-interaction-coverage
            COMMAND fcitx5_config_app --ui-interaction-test)
+  add_test(
+    NAME config-ui-preview-fidelity-qa
+    COMMAND
+      "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+      "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+      "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-qa --target
+      "${FCITX_RUST_TARGET}" -- --config-exe "$<TARGET_FILE:fcitx5_config_app>"
+      --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
+      "${CMAKE_CURRENT_BINARY_DIR}/config-ui-preview-fidelity-qa")
+  set_tests_properties(config-ui-preview-fidelity-qa PROPERTIES TIMEOUT 30)
 
   add_executable(fcitx5_protocol_test tests/unit/protocol_test.cpp)
   target_link_libraries(fcitx5_protocol_test PRIVATE fcitx5::protocol)
