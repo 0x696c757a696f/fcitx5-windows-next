@@ -1,4 +1,5 @@
 #include "fcitx5_windows/version.h"
+#include "candidate_layout.h"
 #include "process_execution.h"
 #include "resource.h"
 
@@ -2868,6 +2869,28 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                            logicalRect(left, top, right, bottom), brush, kDrawOptions);
         format->Release();
     }
+    [[nodiscard]] float measureTextWidth(std::wstring_view text, float size,
+                                         DWRITE_FONT_WEIGHT weight,
+                                         std::wstring_view family) {
+        if (!ensureDWrite() || text.empty())
+            return 0.0F;
+        IDWriteTextFormat* format = makeFormat(family, size, weight);
+        if (!format)
+            return 0.0F;
+        IDWriteTextLayout* layout = nullptr;
+        const HRESULT result = writeFactory_->CreateTextLayout(
+            text.data(), static_cast<UINT32>(text.size()), format, px(4096.0F), px(128.0F),
+            &layout);
+        format->Release();
+        if (FAILED(result) || !layout)
+            return 0.0F;
+        DWRITE_TEXT_METRICS metrics{};
+        const HRESULT metricsResult = layout->GetMetrics(&metrics);
+        layout->Release();
+        if (FAILED(metricsResult))
+            return 0.0F;
+        return metrics.widthIncludingTrailingWhitespace * 96.0F / static_cast<float>(dpi_);
+    }
     void fillRound(ID2D1SolidColorBrush* brush, float left, float top, float right, float bottom,
                    float radius) {
         target_->FillRoundedRectangle(
@@ -3058,16 +3081,14 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     }
     void drawCandidateEntry(ID2D1SolidColorBrush* brush, std::wstring_view label,
                             std::wstring_view text, float left, float top, float right,
-                            float textSize, COLORREF labelFill, COLORREF labelText,
-                            COLORREF candidateText, std::wstring_view family) {
-        const float labelRight = left + 22.0F;
-        brush->SetColor(d2dColor(labelFill));
-        fillRound(brush, left, top + 3, labelRight, top + 23, 10);
+                            float textSize, COLORREF labelText, COLORREF candidateText,
+                            std::wstring_view family, float labelColumnWidth) {
         brush->SetColor(d2dColor(labelText));
-        drawText(brush, label, left, top + 4, labelRight, top + 22, 10,
-                 DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+        drawText(brush, label, left, top, left + labelColumnWidth, top + 28, textSize,
+                 DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
+                 DWRITE_PARAGRAPH_ALIGNMENT_CENTER, family);
         brush->SetColor(d2dColor(candidateText));
-        drawText(brush, text, labelRight + 6, top, right, top + 28, textSize,
+        drawText(brush, text, left + labelColumnWidth, top, right, top + 28, textSize,
                  DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
                  DWRITE_PARAGRAPH_ALIGNMENT_CENTER, family);
     }
@@ -3091,7 +3112,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const COLORREF primaryText = darkMode ? RGB(248, 250, 252) : designTokens().text;
         const COLORREF subtleText = darkMode ? RGB(196, 204, 216) : designTokens().subtleText;
         const COLORREF pillFill = darkMode ? RGB(56, 63, 72) : RGB(234, 239, 246);
-        const COLORREF labelFill = darkMode ? RGB(0, 130, 88) : designTokens().accent;
+        const COLORREF labelText = darkMode ? RGB(115, 235, 176) : designTokens().accent;
         const auto colorWithAlpha = [](COLORREF color, float alpha) {
             return D2D1::ColorF(GetRValue(color) / 255.0F, GetGValue(color) / 255.0F,
                                 GetBValue(color) / 255.0F, alpha);
@@ -3122,35 +3143,70 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                  DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
                  DWRITE_PARAGRAPH_ALIGNMENT_CENTER, fontFamily);
 
+        struct PreviewCandidate {
+            std::wstring_view label;
+            std::wstring_view text;
+        };
+        const std::array verticalCandidates{
+            PreviewCandidate{L"1", L"你好"},
+            PreviewCandidate{L"2", L"fcitx"},
+            PreviewCandidate{L"3", L"😀 🎉 ⌨️"},
+        };
+        const std::array horizontalCandidates{
+            PreviewCandidate{L"1", L"你好"},    PreviewCandidate{L"2", L"输入法"},
+            PreviewCandidate{L"3", L"fcitx"},   PreviewCandidate{L"4", L"Windows"},
+            PreviewCandidate{L"5", L"😀🎉⌨️"},
+        };
+        const auto drawProductionLayoutPreview = [&](const auto& candidates,
+                                                     fcitx::windows::ui::Orientation orientation) {
+            std::vector<fcitx::windows::ui::Size> itemSizes;
+            itemSizes.reserve(candidates.size());
+            float labelColumnWidth = 0.0F;
+            for (const auto& candidate : candidates) {
+                labelColumnWidth =
+                    (std::max)(labelColumnWidth,
+                               measureTextWidth(candidate.label, previewTextSize,
+                                                DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily));
+            }
+            labelColumnWidth += 8.0F;
+            for (const auto& candidate : candidates) {
+                itemSizes.push_back(
+                    {labelColumnWidth +
+                         measureTextWidth(candidate.text, previewTextSize,
+                                          DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
+                     28.0F});
+            }
+            fcitx::windows::ui::LayoutInput input{
+                orientation,
+                std::move(itemSizes),
+                {previewLeft + 28.0F, previewTop + 44.0F},
+                0.0F,
+                {previewLeft + 28.0F, previewTop + 44.0F, previewRight - 18.0F,
+                 previewBottom - 10.0F},
+                previewRight - previewLeft - 46.0F,
+                0.0F,
+                0.0F,
+                4.0F,
+                12.0F,
+                fcitx::windows::ui::Placement::below};
+            const auto layout = fcitx::windows::ui::layout(input);
+            for (std::size_t local = 0; local < layout.items.size(); ++local) {
+                const auto sourceIndex = layout.itemIndices[local];
+                if (sourceIndex >= candidates.size())
+                    continue;
+                const auto& rectangle = layout.items[local];
+                const auto& candidate = candidates[sourceIndex];
+                drawCandidateEntry(brush, candidate.label, candidate.text, rectangle.left,
+                                   rectangle.top, rectangle.right, previewTextSize, labelText,
+                                   primaryText, fontFamily, labelColumnWidth);
+            }
+        };
         if (verticalLayout) {
-            drawCandidateEntry(brush, L"1", L"你好", previewLeft + 28.0F, previewTop + 44.0F,
-                               previewLeft + 150.0F, previewTextSize, labelFill,
-                               RGB(255, 255, 255), primaryText, fontFamily);
-            drawCandidateEntry(brush, L"2", L"fcitx", previewLeft + 28.0F, previewTop + 76.0F,
-                               previewLeft + 150.0F, previewTextSize, labelFill,
-                               RGB(255, 255, 255), primaryText, fontFamily);
-            drawCandidateEntry(brush, L"3", L"Windows", previewLeft + 176.0F,
-                               previewTop + 44.0F, previewLeft + 322.0F, previewTextSize,
-                               labelFill, RGB(255, 255, 255), primaryText, fontFamily);
-            drawCandidateEntry(brush, L"4", L"😀 🎉 ⌨️", previewLeft + 176.0F,
-                               previewTop + 76.0F, previewLeft + 342.0F, previewTextSize,
-                               labelFill, RGB(255, 255, 255), primaryText, fontFamily);
+            drawProductionLayoutPreview(verticalCandidates,
+                                        fcitx::windows::ui::Orientation::vertical);
         } else {
-            drawCandidateEntry(brush, L"1", L"你好", previewLeft + 28.0F, previewTop + 44.0F,
-                               previewLeft + 100.0F, previewTextSize, labelFill,
-                               RGB(255, 255, 255), primaryText, fontFamily);
-            drawCandidateEntry(brush, L"2", L"输入法", previewLeft + 112.0F,
-                               previewTop + 44.0F, previewLeft + 212.0F, previewTextSize,
-                               labelFill, RGB(255, 255, 255), primaryText, fontFamily);
-            drawCandidateEntry(brush, L"3", L"fcitx", previewLeft + 226.0F,
-                               previewTop + 44.0F, previewLeft + 308.0F, previewTextSize,
-                               labelFill, RGB(255, 255, 255), primaryText, fontFamily);
-            drawCandidateEntry(brush, L"4", L"Windows", previewLeft + 320.0F,
-                               previewTop + 44.0F, previewLeft + 432.0F, previewTextSize,
-                               labelFill, RGB(255, 255, 255), primaryText, fontFamily);
-            drawCandidateEntry(brush, L"5", L"😀🎉⌨️", previewLeft + 444.0F,
-                               previewTop + 44.0F, previewRight - 18.0F, previewTextSize,
-                               labelFill, RGB(255, 255, 255), primaryText, fontFamily);
+            drawProductionLayoutPreview(horizontalCandidates,
+                                        fcitx::windows::ui::Orientation::horizontal);
         }
     }
     void drawModernAdvancedAppearance(ID2D1SolidColorBrush* brush, float rowRight) {

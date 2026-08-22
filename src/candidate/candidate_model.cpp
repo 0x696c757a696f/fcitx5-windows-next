@@ -1,96 +1,134 @@
 #include "candidate_model.h"
 
-#include <algorithm>
+#include <cstdint>
 #include <utility>
 
-namespace fcitx::windows::candidate {
 namespace {
 
-bool validText(const std::string& value) noexcept {
-    return value.size() <= kMaxCandidateTextUtf8 &&
-           value.find('\0') == std::string::npos;
+struct Fcitx5CandidateUtf8 {
+    const std::uint8_t* ptr{};
+    std::size_t len{};
+};
+
+struct Fcitx5CandidateModelItem {
+    std::uint64_t id{};
+    Fcitx5CandidateUtf8 label{};
+    Fcitx5CandidateUtf8 text{};
+    Fcitx5CandidateUtf8 comment{};
+};
+
+struct Fcitx5CandidateModelSnapshot {
+    std::uint64_t engineEpoch{};
+    std::uint64_t contextId{};
+    std::uint64_t compositionId{};
+    std::uint64_t revision{};
+    Fcitx5CandidateUtf8 preedit{};
+    Fcitx5CandidateUtf8 auxiliaryUp{};
+    Fcitx5CandidateUtf8 auxiliaryDown{};
+    const Fcitx5CandidateModelItem* candidates{};
+    std::size_t candidateCount{};
+    std::size_t selected{};
+    std::uint8_t hasSelected{};
+    std::uint32_t page{};
+    std::uint32_t total{};
+    std::uint8_t visibility{};
+    std::uint8_t popupAllowed{};
+};
+
+extern "C" void* fcitx5_candidate_model_create();
+extern "C" void fcitx5_candidate_model_destroy(void* model);
+extern "C" void fcitx5_candidate_model_reset(void* model);
+extern "C" std::uint8_t fcitx5_candidate_model_validate(
+    const Fcitx5CandidateModelSnapshot* snapshot);
+extern "C" std::uint32_t fcitx5_candidate_model_apply(
+    void* model, const Fcitx5CandidateModelSnapshot* snapshot);
+
+[[nodiscard]] Fcitx5CandidateUtf8 toRust(std::string_view value) noexcept {
+    return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
+}
+
+[[nodiscard]] std::uint8_t toRust(fcitx::windows::candidate::Visibility visibility) noexcept {
+    switch (visibility) {
+    case fcitx::windows::candidate::Visibility::hidden:
+        return 0U;
+    case fcitx::windows::candidate::Visibility::composition:
+        return 1U;
+    case fcitx::windows::candidate::Visibility::prediction:
+        return 2U;
+    }
+    return 0U;
+}
+
+[[nodiscard]] Fcitx5CandidateModelSnapshot toRust(
+    const fcitx::windows::candidate::Snapshot& snapshot,
+    const std::vector<Fcitx5CandidateModelItem>& candidates) noexcept {
+    return {
+        snapshot.engineEpoch,
+        snapshot.contextId,
+        snapshot.compositionId,
+        snapshot.revision,
+        toRust(snapshot.preedit),
+        toRust(snapshot.auxiliaryUp),
+        toRust(snapshot.auxiliaryDown),
+        candidates.data(),
+        candidates.size(),
+        snapshot.selected.value_or(0U),
+        static_cast<std::uint8_t>(snapshot.selected ? 1U : 0U),
+        snapshot.page,
+        snapshot.total,
+        toRust(snapshot.visibility),
+        static_cast<std::uint8_t>(snapshot.popupAllowed ? 1U : 0U),
+    };
+}
+
+[[nodiscard]] std::vector<Fcitx5CandidateModelItem> itemsToRust(
+    const fcitx::windows::candidate::Snapshot& snapshot) {
+    std::vector<Fcitx5CandidateModelItem> result;
+    result.reserve(snapshot.candidates.size());
+    for (const auto& item : snapshot.candidates) {
+        result.push_back({
+            item.id,
+            toRust(item.label),
+            toRust(item.text),
+            toRust(item.comment),
+        });
+    }
+    return result;
 }
 
 } // namespace
 
+namespace fcitx::windows::candidate {
+
+CandidateModel::CandidateModel() : rustModel_(fcitx5_candidate_model_create()) {}
+
+CandidateModel::~CandidateModel() { fcitx5_candidate_model_destroy(rustModel_); }
+
 bool validate(const Snapshot& snapshot) noexcept {
-    if (snapshot.engineEpoch == 0 || snapshot.contextId == 0 || snapshot.revision == 0 ||
-        snapshot.candidates.size() > kMaxCandidates || !validText(snapshot.preedit) ||
-        !validText(snapshot.auxiliaryUp) || !validText(snapshot.auxiliaryDown)) {
-        return false;
-    }
-    if (snapshot.selected && *snapshot.selected >= snapshot.candidates.size()) return false;
-    if (snapshot.total < snapshot.candidates.size()) return false;
-    if (snapshot.visibility == Visibility::hidden && !snapshot.candidates.empty()) {
-        return false;
-    }
-    if (snapshot.visibility != Visibility::hidden && snapshot.compositionId == 0) return false;
-    return std::all_of(snapshot.candidates.begin(), snapshot.candidates.end(),
-                       [](const Item& item) {
-                           return item.id != 0 && validText(item.label) &&
-                                  validText(item.text) && validText(item.comment);
-                       });
+    const auto candidates = itemsToRust(snapshot);
+    const auto rustSnapshot = toRust(snapshot, candidates);
+    return fcitx5_candidate_model_validate(&rustSnapshot) != 0;
 }
 
 ApplyResult CandidateModel::apply(Snapshot snapshot) {
-    if (!validate(snapshot)) return ApplyResult::invalid;
-
-    if (engineEpoch_ != 0 && snapshot.engineEpoch < engineEpoch_)
+    const auto candidates = itemsToRust(snapshot);
+    const auto rustSnapshot = toRust(snapshot, candidates);
+    switch (fcitx5_candidate_model_apply(rustModel_, &rustSnapshot)) {
+    case 0U:
+        current_ = std::move(snapshot);
+        return ApplyResult::applied;
+    case 1U:
+        return ApplyResult::duplicate;
+    case 2U:
         return ApplyResult::stale;
-    if (engineEpoch_ == 0 || snapshot.engineEpoch > engineEpoch_) {
-        engineEpoch_ = snapshot.engineEpoch;
-        current_.reset();
-        freshness_.clear();
-        freshnessOrder_.clear();
+    default:
+        return ApplyResult::invalid;
     }
-
-    if (const auto found = freshness_.find(snapshot.contextId);
-        found != freshness_.end()) {
-        const auto& freshness = found->second;
-        if (snapshot.compositionId == freshness.compositionId &&
-            snapshot.revision == freshness.revision) {
-            return current_ && snapshot == *current_ ? ApplyResult::duplicate
-                                                     : ApplyResult::stale;
-        }
-        if (snapshot.compositionId == freshness.compositionId) {
-            if (snapshot.revision < freshness.revision) return ApplyResult::stale;
-        } else if (snapshot.compositionId == 0) {
-            if (snapshot.revision < freshness.revision) return ApplyResult::stale;
-        } else if (snapshot.compositionId <= freshness.latestCompositionId) {
-            return ApplyResult::stale;
-        }
-    }
-
-    rememberContext(snapshot.contextId, snapshot);
-    current_ = std::move(snapshot);
-    return ApplyResult::applied;
-}
-
-void CandidateModel::rememberContext(std::uint64_t contextId, const Snapshot& snapshot) {
-    auto [iterator, inserted] = freshness_.try_emplace(contextId);
-    if (inserted) {
-        freshnessOrder_.push_back(contextId);
-        while (freshness_.size() > kMaxTrackedContexts && !freshnessOrder_.empty()) {
-            const auto evicted = freshnessOrder_.front();
-            freshnessOrder_.pop_front();
-            if (evicted != contextId)
-                freshness_.erase(evicted);
-        }
-    }
-    auto& freshness = iterator->second;
-    freshness.compositionId = snapshot.compositionId;
-    if (snapshot.compositionId != 0 &&
-        snapshot.compositionId > freshness.latestCompositionId) {
-        freshness.latestCompositionId = snapshot.compositionId;
-    }
-    freshness.revision = snapshot.revision;
 }
 
 void CandidateModel::reset() noexcept {
+    fcitx5_candidate_model_reset(rustModel_);
     current_.reset();
-    engineEpoch_ = 0;
-    freshness_.clear();
-    freshnessOrder_.clear();
 }
 
 const std::optional<Snapshot>& CandidateModel::current() const noexcept { return current_; }

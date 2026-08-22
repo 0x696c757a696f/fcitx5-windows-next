@@ -106,6 +106,43 @@ struct CandidateVisual {
     std::wstring comment;
 };
 
+struct Fcitx5CandidateLayoutRect {
+    float left{};
+    float top{};
+    float right{};
+    float bottom{};
+};
+
+struct Fcitx5CandidateRenderItemInput {
+    Fcitx5CandidateLayoutRect bounds{};
+    float labelWidth{};
+    float textWidth{};
+    float commentWidth{};
+    std::uint8_t hasLabel{};
+};
+
+struct Fcitx5CandidateRenderItemOutput {
+    Fcitx5CandidateLayoutRect label{};
+    Fcitx5CandidateLayoutRect text{};
+    Fcitx5CandidateLayoutRect comment{};
+    std::uint8_t drawComment{};
+};
+
+extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemInput* items,
+                                                 std::size_t itemCount,
+                                                 std::uint8_t horizontalLayout,
+                                                 std::uint8_t scrollMode,
+                                                 Fcitx5CandidateRenderItemOutput* outItems,
+                                                 float* outLabelColumnWidth);
+
+[[nodiscard]] Fcitx5CandidateLayoutRect toRustRect(const D2D1_RECT_F& value) noexcept {
+    return {value.left, value.top, value.right, value.bottom};
+}
+
+[[nodiscard]] D2D1_RECT_F fromRustRect(const Fcitx5CandidateLayoutRect& value) noexcept {
+    return D2D1::RectF(value.left, value.top, value.right, value.bottom);
+}
+
 void enableDpiAwareness() {
     using SetContext = BOOL(WINAPI*)(HANDLE);
     const HMODULE user32 = GetModuleHandleW(L"user32.dll");
@@ -863,33 +900,54 @@ class CandidateWindow final {
         float fallbackTop = 8.0F;
         const std::size_t paintCount =
             visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
-        // Fixed label column width across all visible rows: the candidate text
-        // then starts at the same x in every row (selected row included) so the
-        // Chinese text columns align regardless of label width.
-        float labelColumnWidth = 0.0F;
+        const auto naturalTextWidth = [&](const std::wstring& value, IDWriteTextFormat* format,
+                                          float height) {
+            ComPtr<IDWriteTextLayout> layout;
+            DWRITE_TEXT_METRICS metrics{};
+            if (value.empty() || !format ||
+                FAILED(writeFactory_->CreateTextLayout(
+                    value.data(), static_cast<UINT32>(value.size()), format, 4096.0F,
+                    (std::max)(1.0F, height), &layout)) ||
+                FAILED(layout->GetMetrics(&metrics))) {
+                return 0.0F;
+            }
+            return metrics.widthIncludingTrailingWhitespace;
+        };
+        std::vector<Fcitx5CandidateRenderItemInput> renderInputs;
+        renderInputs.reserve(paintCount);
         for (std::size_t local = 0; local < paintCount; ++local) {
             const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
-            if (index >= lines.size())
-                continue;
-            const auto& label = lines[index].label;
-            if (label.empty())
-                continue;
             const D2D1_RECT_F bounds = itemRects_.size() == paintCount
                                            ? itemRects_[local]
                                            : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
-            ComPtr<IDWriteTextLayout> layout;
-            DWRITE_TEXT_METRICS metrics{};
-            if (SUCCEEDED(writeFactory_->CreateTextLayout(
-                    label.data(), static_cast<UINT32>(label.size()), labelFormat_.Get(),
-                    (std::max)(1.0F, bounds.right - bounds.left),
-                    (std::max)(1.0F, bounds.bottom - bounds.top), &layout)) &&
-                SUCCEEDED(layout->GetMetrics(&metrics))) {
-                labelColumnWidth =
-                    std::max(labelColumnWidth, metrics.widthIncludingTrailingWhitespace);
+            if (index >= lines.size()) {
+                renderInputs.push_back({toRustRect(bounds), 0.0F, 0.0F, 0.0F, 0U});
+                fallbackTop += 32.0F;
+                continue;
             }
+            const auto& candidate = lines[index];
+            const float height = bounds.bottom - bounds.top;
+            renderInputs.push_back(
+                {toRustRect(bounds),
+                 naturalTextWidth(candidate.label, labelFormat_.Get(), height),
+                 naturalTextWidth(candidate.text, textFormat_.Get(), height),
+                 naturalTextWidth(candidate.comment, annotationFormat_.Get(), height),
+                 static_cast<std::uint8_t>(candidate.label.empty() ? 0U : 1U)});
+            fallbackTop += 32.0F;
         }
+        fallbackTop = 8.0F;
         const bool horizontalLayout =
             resolvedPresentationOrientation_ == fcitx::windows::ui::Orientation::horizontal;
+        std::vector<Fcitx5CandidateRenderItemOutput> renderSegments(renderInputs.size());
+        float labelColumnWidth = 0.0F;
+        if (!renderInputs.empty()) {
+            (void)fcitx5_candidate_render_segments(
+                renderInputs.data(), renderInputs.size(),
+                static_cast<std::uint8_t>(horizontalLayout ? 1U : 0U),
+                static_cast<std::uint8_t>(scrollMode_ ? 1U : 0U), renderSegments.data(),
+                &labelColumnWidth);
+        }
+        (void)labelColumnWidth;
         if (scrollMode_ && itemRects_.size() > scrollColumns_) {
             borderBrush->SetOpacity(0.55F);
             if (horizontalLayout) {
@@ -935,62 +993,27 @@ class CandidateWindow final {
                 renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(selection, radius, radius),
                                                     selectionBrush.Get());
             }
-            const auto naturalTextWidth = [&](const std::wstring& value,
-                                              IDWriteTextFormat* format) {
-                ComPtr<IDWriteTextLayout> layout;
-                DWRITE_TEXT_METRICS metrics{};
-                if (value.empty() || !format ||
-                    FAILED(writeFactory_->CreateTextLayout(
-                        value.data(), static_cast<UINT32>(value.size()), format,
-                        4096.0F, (std::max)(1.0F, bounds.bottom - bounds.top), &layout)) ||
-                    FAILED(layout->GetMetrics(&metrics))) {
-                    return 0.0F;
-                }
-                return metrics.widthIncludingTrailingWhitespace;
-            };
-            const auto drawTextAt = [&](float x, const std::wstring& value,
-                                        IDWriteTextFormat* format, ID2D1Brush* brush,
-                                        float* widthOut, bool requireFullWidth) {
+            const auto drawTextInRect = [&](const D2D1_RECT_F& segment,
+                                            const std::wstring& value,
+                                            IDWriteTextFormat* format, ID2D1Brush* brush) {
                 if (value.empty())
                     return;
-                const float available = (std::max)(1.0F, bounds.right - x);
-                const float naturalWidth = naturalTextWidth(value, format);
-                if (requireFullWidth && naturalWidth > available + 2.0F)
-                    return;
-                ComPtr<IDWriteTextLayout> layout;
-                DWRITE_TEXT_METRICS metrics{};
-                if (FAILED(writeFactory_->CreateTextLayout(
-                        value.data(), static_cast<UINT32>(value.size()), format,
-                        available, (std::max)(1.0F, bounds.bottom - bounds.top), &layout)) ||
-                    FAILED(layout->GetMetrics(&metrics)))
-                    return;
-                const D2D1_RECT_F segment = D2D1::RectF(x, bounds.top, bounds.right, bounds.bottom);
                 // Clip instead of wrapping: a long label/comment that exceeds
                 // the remaining row width must not wrap onto the candidate
                 // row below and visually overlap it.
                 renderTarget_->DrawTextW(value.data(), static_cast<UINT32>(value.size()), format,
                                          segment, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
-                if (widthOut)
-                    *widthOut = naturalWidth > 0.0F
-                                    ? (std::min)(naturalWidth, available)
-                                    : metrics.widthIncludingTrailingWhitespace;
             };
-            // The label column has a fixed width across every row so the
-            // candidate text starts at the same x in all rows (the selected
-            // row included), keeping the Chinese text columns aligned.
-            const float effectiveLabelColumnWidth =
-                scrollMode_ && candidate.label.empty() && !horizontalLayout ? 0.0F
-                                                                            : labelColumnWidth;
+            const auto& segments = renderSegments[local];
             if (!candidate.label.empty())
-                drawTextAt(bounds.left, candidate.label, labelFormat_.Get(),
-                           selected ? selectedLabelBrush.Get() : labelBrush.Get(), nullptr,
-                           false);
-            float textWidth = 0.0F;
-            drawTextAt(bounds.left + effectiveLabelColumnWidth, candidate.text, textFormat_.Get(),
-                       selected ? selectedTextBrush.Get() : textBrush.Get(), &textWidth, false);
-            drawTextAt(bounds.left + effectiveLabelColumnWidth + textWidth + 4.0F, candidate.comment,
-                       annotationFormat_.Get(),
-                       selected ? selectedCommentBrush.Get() : commentBrush.Get(), nullptr, true);
+                drawTextInRect(fromRustRect(segments.label), candidate.label, labelFormat_.Get(),
+                               selected ? selectedLabelBrush.Get() : labelBrush.Get());
+            drawTextInRect(fromRustRect(segments.text), candidate.text, textFormat_.Get(),
+                           selected ? selectedTextBrush.Get() : textBrush.Get());
+            if (segments.drawComment != 0)
+                drawTextInRect(fromRustRect(segments.comment), candidate.comment,
+                               annotationFormat_.Get(),
+                               selected ? selectedCommentBrush.Get() : commentBrush.Get());
             fallbackTop += 32.0F;
         }
         if (hasScrollbar_) {

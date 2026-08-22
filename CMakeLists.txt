@@ -177,11 +177,31 @@ set_target_properties(fcitx5_control_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CONTROL_CORE_STATICLIB}")
 add_dependencies(fcitx5_control_core_rust fcitx5_control_core_rustlib)
 
+set(FCITX_RUST_CANDIDATE_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_candidate_core.lib")
+add_custom_target(
+  fcitx5_candidate_core_rustlib
+  COMMAND
+    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-candidate-core staticlib")
+add_library(fcitx5_candidate_core_rust STATIC IMPORTED GLOBAL)
+set_target_properties(fcitx5_candidate_core_rust
+                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}")
+add_dependencies(fcitx5_candidate_core_rust fcitx5_candidate_core_rustlib)
+
 add_library(fcitx5_candidate_model STATIC src/candidate/candidate_model.cpp)
 add_library(fcitx5::candidate_model ALIAS fcitx5_candidate_model)
 target_compile_features(fcitx5_candidate_model PUBLIC cxx_std_20)
 target_include_directories(
   fcitx5_candidate_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/candidate")
+target_link_libraries(fcitx5_candidate_model PUBLIC fcitx5_candidate_core_rust ws2_32 userenv
+                                                  ntdll)
+add_dependencies(fcitx5_candidate_model fcitx5_candidate_core_rustlib)
 fcitx_apply_project_options(fcitx5_candidate_model)
 
 add_library(fcitx5_miniz STATIC "${FCITX_MINIZ_SOURCE_DIR}/miniz.c")
@@ -398,14 +418,21 @@ add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
 target_compile_features(fcitx5_candidate_layout PUBLIC cxx_std_20)
 target_include_directories(
   fcitx5_candidate_layout PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
+target_link_libraries(fcitx5_candidate_layout PUBLIC fcitx5_candidate_core_rust ws2_32 userenv
+                                                   ntdll)
+add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
 fcitx_apply_project_options(fcitx5_candidate_layout)
+
+target_link_libraries(fcitx5_config_app PRIVATE fcitx5::candidate_layout)
 
 add_library(fcitx5_candidate_interaction STATIC src/ui/candidate_interaction.cpp)
 add_library(fcitx5::candidate_interaction ALIAS fcitx5_candidate_interaction)
 target_compile_features(fcitx5_candidate_interaction PUBLIC cxx_std_20)
 target_include_directories(
   fcitx5_candidate_interaction PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
-target_link_libraries(fcitx5_candidate_interaction PUBLIC d2d1 user32)
+target_link_libraries(fcitx5_candidate_interaction PUBLIC fcitx5_candidate_core_rust d2d1
+                                                         user32 ws2_32 userenv ntdll)
+add_dependencies(fcitx5_candidate_interaction fcitx5_candidate_core_rustlib)
 fcitx_apply_project_options(fcitx5_candidate_interaction)
 
 add_executable(
@@ -786,6 +813,28 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/security/trusted-keys.template.json")
     set_tests_properties(
       rust-package-core-artifact-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_custom_target(
+      fcitx5_rust_candidate_poc_contract
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-report.json"
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      COMMENT "Running Rust Candidate out-of-process PoC contract")
+    add_test(
+      NAME rust-candidate-poc-contract
+      COMMAND
+        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-report.json")
+    set_tests_properties(
+      rust-candidate-poc-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(FCITX_PWSH_EXECUTABLE)
       add_custom_target(
         fcitx5_rust_package_core_packaged_artifact_smoke

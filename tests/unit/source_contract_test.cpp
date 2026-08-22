@@ -238,6 +238,12 @@ int main(int argc, char** argv) {
         return fail("RUST-R1-04: provider policy/runner must be Rust authoritative, bounded, and covered by artifact smoke");
     }
     const auto configSource = read_text(sourceRoot / "src/config/app_main.cpp");
+    const auto candidateLayoutSource = read_text(sourceRoot / "rust/candidate-core/src/lib.rs");
+    const auto candidatePocManifest =
+        read_text(sourceRoot / "rust/candidate-core/Cargo.toml");
+    const auto candidatePocBinary =
+        read_text(sourceRoot / "rust/candidate-core/src/bin/candidate_poc.rs");
+    const auto candidateUiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
@@ -246,6 +252,18 @@ int main(int argc, char** argv) {
         configSource.find("ensureProductionPreview()") == std::string::npos ||
         configSource.find("fcitx5-ui.exe") == std::string::npos ||
         configSource.find("--demo --parent-pid") == std::string::npos ||
+        configSource.find("#include \"candidate_layout.h\"") == std::string::npos ||
+        configSource.find("fcitx::windows::ui::layout(input)") == std::string::npos ||
+        candidateUiSource.find("fcitx5_candidate_render_segments") == std::string::npos ||
+        candidateLayoutSource.find("fcitx5_candidate_render_segments") == std::string::npos ||
+        candidateLayoutSource.find("run_candidate_poc_self_check") == std::string::npos ||
+        candidateLayoutSource.find("cpp_ffi") == std::string::npos ||
+        candidateLayoutSource.find("send_input") == std::string::npos ||
+        candidateLayoutSource.find("global_hooks") == std::string::npos ||
+        candidateLayoutSource.find("process_injection") == std::string::npos ||
+        candidatePocManifest.find("name = \"fcitx5-candidate-poc\"") == std::string::npos ||
+        candidatePocBinary.find("--self-check") == std::string::npos ||
+        cmakeSource.find("rust-candidate-poc-contract") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||

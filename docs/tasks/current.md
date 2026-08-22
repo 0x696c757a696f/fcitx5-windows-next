@@ -1,21 +1,25 @@
-# Current Task — none
+# Current Task — RUST-R3-CANDIDATE-POC Rust Candidate UI differential PoC
 
-**State:** NO-ELIGIBLE-CURRENT
+**State:** CURRENT / HEADLESS-POC-GREEN / GUI-EVIDENCE-PENDING
 
-RUST-R2-03 is archived as completed. Automatic queue advancement stops here because no code-only task is currently eligible.
+## Gate
 
-Manual/external evidence items remain `MANUAL-PENDING` and cannot be marked passed from this environment:
+Start only after Candidate UX/layout/UILess contracts are frozen and green for the current C++ UI.
 
-- `REG-INSTALL-UAC-001`
-- `STAB-HOST-MATRIX-015`
-- `REG-BRAND-001`
-- `PLUGIN-LIFECYCLE-001`
+## Scope
 
-The next code/migration tasks in `docs/tasks/PLAN.md` are `FUTURE-GATED` PoC/release gates:
+- Build an isolated Rust Candidate UI PoC as an out-of-process executable.
+- Reuse the versioned IPC/model contract; do not use C++ FFI.
+- Model context, composition, revision, epoch, candidate selection, paging, UILess policy, DPI, locale, emoji/color-font, and layout stability with Rust strong types.
+- Compare C++ UI and Rust UI against the same mock-engine snapshots and golden layout/interaction corpus.
 
-- `RUST-R3-CANDIDATE-POC`
-- `RUST-R3-CONFIG-POC`
-- `RUST-R3-TSF-POC`
-- `RELEASE-01`
+## Must not do
 
-Do not start these without their prerequisites/evidence being explicitly satisfied and the task copied into this file.
+- Do not replace the shipping C++ Candidate UI during the PoC.
+- Do not change the Candidate IPC/model semantics while migrating language.
+- Do not add hooks, `SendInput`, injection, anti-cheat bypass, or external attack behavior.
+
+## Done when
+
+- Rust Candidate PoC has differential, accessibility, DPI, layout, and host evidence.
+- A later cutover task can decide whether to replace the C++ implementation and delete the old authoritative path.

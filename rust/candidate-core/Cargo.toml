@@ -1,0 +1,14 @@
+[package]
+name = "fcitx5-candidate-core"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib", "staticlib"]
+
+[[bin]]
+name = "fcitx5-candidate-poc"
+path = "src/bin/candidate_poc.rs"
