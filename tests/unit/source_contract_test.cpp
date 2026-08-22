@@ -484,6 +484,8 @@ int main(int argc, char** argv) {
     const auto rustTsfPocSource = read_text(sourceRoot / "rust/tsf-poc/src/lib.rs");
     const auto rustTsfPocSmoke =
         read_text(sourceRoot / "tests/unit/rust_tsf_poc_export_smoke.cpp");
+    const auto rustTsfPocArtifactAudit =
+        read_text(sourceRoot / "tests/unit/rust_tsf_poc_artifact_audit.cpp");
     const auto tsfKeyCommitTest =
         read_text(sourceRoot / "tests/integration/tsf_key_commit_test.cpp");
     const auto rustTsfPocCorpus =
@@ -491,6 +493,7 @@ int main(int argc, char** argv) {
     if (cmakeSource.find("fcitx5_tsf_poc_rustdll") == std::string::npos ||
         cmakeSource.find("rust-tsf-poc-unit") == std::string::npos ||
         cmakeSource.find("rust-tsf-poc-export-smoke") == std::string::npos ||
+        cmakeSource.find("rust-tsf-poc-artifact-audit") == std::string::npos ||
         rustTsfPocManifest.find("windows = { version = \"0.62.2\"") == std::string::npos ||
         rustTsfPocManifest.find("\"Win32_UI_TextServices\"") == std::string::npos ||
         rustTsfPocSource.find("ITfTextInputProcessorEx") == std::string::npos ||
@@ -524,6 +527,13 @@ int main(int argc, char** argv) {
         rustTsfPocSmoke.find("Fcitx5TsfPocBehaviorReport") == std::string::npos ||
         rustTsfPocSmoke.find("\\\"rust_case_passes\\\":7") == std::string::npos ||
         rustTsfPocSmoke.find("\\\"cpp_baseline_consumes_same_corpus\\\":true") ==
+            std::string::npos ||
+        rustTsfPocArtifactAudit.find("parsePe") == std::string::npos ||
+        rustTsfPocArtifactAudit.find("winhttp.dll") == std::string::npos ||
+        rustTsfPocArtifactAudit.find("ws2_32.dll") == std::string::npos ||
+        rustTsfPocArtifactAudit.find("2 * 1024 * 1024") == std::string::npos ||
+        rustTsfPocArtifactAudit.find("ASLR and NX") == std::string::npos ||
+        rustTsfPocArtifactAudit.find("product engine/config/package/control") ==
             std::string::npos ||
         rustTsfPocCorpus.find("\"format_version\": 1") == std::string::npos ||
         rustTsfPocCorpus.find("\"activate_advises_sinks\"") == std::string::npos ||

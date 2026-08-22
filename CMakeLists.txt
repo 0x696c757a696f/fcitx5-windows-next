@@ -1181,6 +1181,14 @@ if(BUILD_TESTING)
   add_test(NAME rust-tsf-poc-export-smoke
            COMMAND fcitx5_rust_tsf_poc_export_smoke "${FCITX_RUST_TSF_POC_DLL}")
 
+  add_executable(fcitx5_rust_tsf_poc_artifact_audit
+                 tests/unit/rust_tsf_poc_artifact_audit.cpp)
+  add_dependencies(fcitx5_rust_tsf_poc_artifact_audit fcitx5_tsf_poc_rustdll)
+  fcitx_apply_project_options(fcitx5_rust_tsf_poc_artifact_audit)
+  fcitx_apply_binary_hardening(fcitx5_rust_tsf_poc_artifact_audit)
+  add_test(NAME rust-tsf-poc-artifact-audit
+           COMMAND fcitx5_rust_tsf_poc_artifact_audit "${FCITX_RUST_TSF_POC_DLL}")
+
   add_executable(fcitx5_input_scope_policy_test tests/unit/input_scope_policy_test.cpp)
   target_include_directories(
     fcitx5_input_scope_policy_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
