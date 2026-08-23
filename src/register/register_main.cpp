@@ -30,6 +30,7 @@ std::uint32_t fcitx5_register_parse_operation(Fcitx5RegisterUtf16 operation) noe
 std::uint32_t fcitx5_register_validate_dll_argument(Fcitx5RegisterUtf16 dll) noexcept;
 std::uint32_t fcitx5_register_operation_requires_admin(std::uint32_t operation) noexcept;
 std::uint32_t fcitx5_register_operation_export(std::uint32_t operation) noexcept;
+std::uint32_t fcitx5_register_registration_status_for_dll(Fcitx5RegisterUtf16 dll) noexcept;
 }
 
 enum class RegisterArtifactStatus : std::uint32_t {
@@ -59,6 +60,13 @@ enum class RegisterExport : std::uint32_t {
     none = 0,
     registerServer = 1,
     unregisterServer = 2,
+};
+
+enum class RegisterStatus : std::uint32_t {
+    registered = 0,
+    notRegistered = 1,
+    pathMismatch = 2,
+    invalidArgument = 3,
 };
 
 template <typename Function>
@@ -126,15 +134,6 @@ std::wstring registeredPath() {
     return value;
 }
 
-bool samePath(const fs::path& first, const fs::path& second) {
-    std::error_code error;
-    const fs::path normalizedFirst = fs::weakly_canonical(first, error);
-    if (error) return false;
-    const fs::path normalizedSecond = fs::weakly_canonical(second, error);
-    return !error && CompareStringOrdinal(normalizedFirst.c_str(), -1,
-                                          normalizedSecond.c_str(), -1, TRUE) == CSTR_EQUAL;
-}
-
 constexpr std::uint32_t currentArchitectureBits() noexcept {
 #if defined(_WIN64)
     return 64;
@@ -200,6 +199,12 @@ RegisterExport operationExport(RegisterOperation operation) noexcept {
         fcitx5_register_operation_export(static_cast<std::uint32_t>(operation)));
 }
 
+RegisterStatus registrationStatusForDll(const fs::path& dll) noexcept {
+    const auto native = dll.native();
+    return static_cast<RegisterStatus>(
+        fcitx5_register_registration_status_for_dll({native.data(), native.size()}));
+}
+
 HRESULT invokeRegistration(const fs::path& dll, const char* exportName) {
     SetDllDirectoryW(L"");
     HMODULE module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -243,17 +248,18 @@ int wmain(int argc, wchar_t** argv) {
         return 0;
     }
     if (operation == RegisterOperation::status) {
-        const std::wstring actual = registeredPath();
-        if (actual.empty()) {
+        const auto status = registrationStatusForDll(dll);
+        if (status == RegisterStatus::registered) {
+            std::cout << "registered\n";
+            return 0;
+        }
+        if (status == RegisterStatus::notRegistered) {
             std::cout << "not_registered\n";
             return 3;
         }
-        if (!samePath(actual, dll)) {
-            std::wcout << L"path_mismatch " << actual << L'\n';
-            return 3;
-        }
-        std::cout << "registered\n";
-        return 0;
+        const std::wstring actual = registeredPath();
+        std::wcout << L"path_mismatch " << actual << L'\n';
+        return 3;
     }
     if (operation != RegisterOperation::registerServer && operation != RegisterOperation::repair &&
         operation != RegisterOperation::unregisterServer) {
@@ -277,7 +283,8 @@ int wmain(int argc, wchar_t** argv) {
                    << static_cast<unsigned long>(result) << L'\n';
         return 6;
     }
-    if (operation != RegisterOperation::unregisterServer && !samePath(registeredPath(), dll)) {
+    if (operation != RegisterOperation::unregisterServer &&
+        registrationStatusForDll(dll) != RegisterStatus::registered) {
         std::wcerr << L"Registration completed but the registered path does not match.\n";
         return 6;
     }
