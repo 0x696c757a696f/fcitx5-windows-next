@@ -329,6 +329,10 @@ fn registered_path() -> Option<PathBuf> {
     Some(PathBuf::from(OsString::from_wide(&value)))
 }
 
+pub fn registered_path_for_display() -> Option<PathBuf> {
+    registered_path()
+}
+
 pub fn registration_status_for_dll(dll: &Path) -> u32 {
     let Some(actual) = registered_path() else {
         return REGISTER_STATUS_NOT_REGISTERED;

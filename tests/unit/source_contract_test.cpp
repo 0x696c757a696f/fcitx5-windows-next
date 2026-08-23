@@ -96,26 +96,23 @@ int main(int argc, char** argv) {
         installerSource.find("per_user_startup\":\"user-plane\"") == std::string::npos) {
         return fail("REG-INSTALL-UAC-001: installer must not own per-user startup/session state");
     }
-    const auto registerSource = read_text(sourceRoot / "src/register/register_main.cpp");
     const auto registerDevScript = read_text(sourceRoot / "tools/register-dev.ps1");
     const auto rustRegisterCore = read_text(sourceRoot / "rust/register-core/src/lib.rs");
-    if (registerSource.find("validateProductArtifact") == std::string::npos ||
-        registerSource.find("--validate-artifact") == std::string::npos ||
-        registerSource.find("paired architecture TSF DLL is missing") == std::string::npos ||
-        registerSource.find("fcitx5_register_validate_artifact") == std::string::npos ||
-        registerSource.find("fcitx5_register_parse_operation") == std::string::npos ||
-        registerSource.find("fcitx5_register_validate_dll_argument") == std::string::npos ||
-        registerSource.find("fcitx5_register_operation_requires_admin") ==
-            std::string::npos ||
-        registerSource.find("fcitx5_register_operation_export") == std::string::npos ||
-        registerSource.find("fcitx5_register_registration_status_for_dll") ==
-            std::string::npos ||
-        registerSource.find("fcitx5_register_is_elevated") == std::string::npos ||
-        registerSource.find("fcitx5_register_invoke_registration_export") ==
-            std::string::npos ||
-        registerSource.find("LoadLibraryExW(") != std::string::npos ||
-        registerSource.find("GetProcAddress(") != std::string::npos ||
-        registerSource.find("AllocateAndInitializeSid(") != std::string::npos ||
+    const auto rustRegisterCli = read_text(sourceRoot / "rust/register-core/src/main.rs");
+    if (std::filesystem::exists(sourceRoot / "src/register/register_main.cpp") ||
+        rustRegisterCli.find("--validate-artifact") == std::string::npos ||
+        rustRegisterCli.find("artifact_valid") == std::string::npos ||
+        rustRegisterCli.find("paired architecture TSF DLL is missing") == std::string::npos ||
+        rustRegisterCli.find("fcitx5-register") == std::string::npos ||
+        rustRegisterCli.find("validate_product_artifact") == std::string::npos ||
+        rustRegisterCli.find("operation_requires_admin") == std::string::npos ||
+        rustRegisterCli.find("operation_export") == std::string::npos ||
+        rustRegisterCli.find("registration_status_for_dll") == std::string::npos ||
+        rustRegisterCli.find("is_elevated") == std::string::npos ||
+        rustRegisterCli.find("invoke_registration_export") == std::string::npos ||
+        rustRegisterCli.find("LoadLibraryExW(") != std::string::npos ||
+        rustRegisterCli.find("GetProcAddress(") != std::string::npos ||
+        rustRegisterCli.find("AllocateAndInitializeSid(") != std::string::npos ||
         rustRegisterCore.find("validate_product_artifact") == std::string::npos ||
         rustRegisterCore.find("REGISTER_OPERATION_VALIDATE_ARTIFACT") == std::string::npos ||
         rustRegisterCore.find("REGISTER_DLL_ARGUMENT_INVALID") == std::string::npos ||
@@ -130,7 +127,7 @@ int main(int argc, char** argv) {
         rustRegisterCore.find("DllUnregisterServer") == std::string::npos ||
         rustRegisterCore.find("REGISTER_ARTIFACT_PAIRED_DLL_MISSING") ==
             std::string::npos) {
-        return fail("STAB-REGISTER-BOOTSTRAP-012: register helper must validate product artifacts");
+        return fail("STAB-REGISTER-BOOTSTRAP-012: register helper must be the Rust CLI and validate product artifacts");
     }
     if (registerDevScript.find("Remove-StaleComRegistration") == std::string::npos ||
         registerDevScript.find("out/package") == std::string::npos ||

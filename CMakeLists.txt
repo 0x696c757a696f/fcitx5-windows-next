@@ -600,15 +600,24 @@ endif()
 fcitx_apply_project_options(fcitx5_tsf)
 fcitx_apply_binary_hardening(fcitx5_tsf)
 
-add_executable(fcitx5_register src/register/register_main.cpp)
-set_target_properties(fcitx5_register PROPERTIES OUTPUT_NAME "fcitx5-register")
-target_include_directories(fcitx5_register PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-target_link_libraries(
-  fcitx5_register PRIVATE fcitx5::windows_common fcitx5_register_core_rust advapi32 ole32
-                          ws2_32 userenv ntdll)
-add_dependencies(fcitx5_register fcitx5_register_core_rustlib)
-fcitx_apply_project_options(fcitx5_register)
-fcitx_apply_binary_hardening(fcitx5_register)
+add_custom_target(
+  fcitx5_register
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-register.exe"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-register-cli.ps1"
+    -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
+    -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/register-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/register-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/register-core/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-register-cli.ps1"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-register CLI")
 
 add_executable(
   fcitx5_bootstrap WIN32
@@ -782,13 +791,16 @@ if(BUILD_TESTING)
   add_test(NAME control-version COMMAND fcitx5_control --version)
   add_test(NAME control-schema COMMAND fcitx5_control --schema)
   add_test(NAME control-startup-query COMMAND fcitx5_control --get-startup)
-  add_test(NAME register-version COMMAND fcitx5_register --version)
+  add_test(
+    NAME register-version
+    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-register.exe" --version)
   add_executable(fcitx5_register_artifact_test tests/unit/register_artifact_test.cpp)
   add_dependencies(fcitx5_register_artifact_test fcitx5_register)
   fcitx_apply_project_options(fcitx5_register_artifact_test)
   fcitx_apply_binary_hardening(fcitx5_register_artifact_test)
   add_test(NAME register-artifact-validation
-           COMMAND fcitx5_register_artifact_test $<TARGET_FILE:fcitx5_register>)
+           COMMAND fcitx5_register_artifact_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-register.exe")
   add_test(NAME package-version
            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-package.exe" --version)
   add_executable(fcitx5_deployment_core_test tests/unit/deployment_core_test.cpp)
