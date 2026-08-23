@@ -402,6 +402,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("read_installed_lockfile") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_parse_manifest_utf8") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_validate_manifest_compatibility_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_package_read_lockfile_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_read_trusted_keys_utf16") == std::string::npos ||
         rustPackageCore.find("write_installed_lockfile_atomic") == std::string::npos ||
@@ -466,6 +468,12 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageSource.find("manifest payload schema does not match format version") !=
             std::string::npos ||
+        packageSource.find("runtime architecture is invalid") != std::string::npos ||
+        packageSource.find("package architecture does not match this runtime") !=
+            std::string::npos ||
+        packageSource.find("package requires an unsupported Core API") !=
+            std::string::npos ||
+        packageSource.find("addon ABI does not match this engine") != std::string::npos ||
         packageSource.find("file entry violates path, hash or resource limits") !=
             std::string::npos ||
         packageSource.find("dependency identity is invalid or duplicated") !=

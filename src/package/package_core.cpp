@@ -136,6 +136,10 @@ Fcitx5PackageSignatureEnvelopeResult fcitx5_package_parse_signature_envelope_utf
     const std::uint8_t* expected_object, std::size_t expected_object_len);
 void fcitx5_package_signature_envelope_free(
     const Fcitx5PackageSignatureEnvelopeResult* envelope);
+Fcitx5PackageLifecycleResult fcitx5_package_validate_manifest_compatibility_utf8(
+    std::uint32_t package_type, Fcitx5ByteSlice package_architecture,
+    Fcitx5ByteSlice core_api, Fcitx5ByteSlice addon_abi,
+    const std::uint8_t* runtime_architecture, std::size_t runtime_architecture_len);
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -279,6 +283,22 @@ std::vector<Fcitx5TrustedKeyNative> rust_trusted_key_views(
     });
   }
   return key_views;
+}
+
+std::uint32_t rust_package_type_code(PackageType type) {
+  switch (type) {
+    case PackageType::core:
+      return 0;
+    case PackageType::addon:
+      return 1;
+    case PackageType::input_method_data:
+      return 2;
+    case PackageType::theme:
+      return 3;
+    case PackageType::translation:
+      return 4;
+  }
+  fail("invalid_manifest", "parsed manifest has an unsupported package type");
 }
 
 void require_lifecycle_ok(const Fcitx5PackageLifecycleResult& result) {
@@ -491,14 +511,10 @@ Manifest parse_manifest(std::string_view bytes) {
 
 void validate_manifest_compatibility(const Manifest& manifest,
                                      std::string_view architecture) {
-  if (architecture != "x64" && architecture != "x86")
-    fail("incompatible_package", "runtime architecture is invalid");
-  if (manifest.architecture != "any" && manifest.architecture != architecture)
-    fail("incompatible_package", "package architecture does not match this runtime");
-  if (manifest.core_api != kSupportedCoreApi)
-    fail("incompatible_package", "package requires an unsupported Core API");
-  if (manifest.type == PackageType::addon && manifest.addon_abi != kSupportedAddonAbi)
-    fail("incompatible_package", "addon ABI does not match this engine");
+  require_lifecycle_ok(fcitx5_package_validate_manifest_compatibility_utf8(
+      rust_package_type_code(manifest.type), ffi_slice(manifest.architecture),
+      ffi_slice(manifest.core_api), ffi_slice(manifest.addon_abi),
+      reinterpret_cast<const std::uint8_t*>(architecture.data()), architecture.size()));
 }
 
 bool is_safe_relative_package_path(std::string_view path) noexcept {

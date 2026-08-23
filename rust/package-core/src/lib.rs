@@ -2139,21 +2139,36 @@ pub fn validate_manifest_compatibility(
     manifest: &Manifest,
     architecture: &str,
 ) -> Result<(), CompatibilityError> {
+    validate_manifest_compatibility_fields(
+        manifest.package_type(),
+        manifest.architecture(),
+        manifest.core_api(),
+        manifest.addon_abi(),
+        architecture,
+    )
+}
+
+fn validate_manifest_compatibility_fields(
+    package_type: &PackageType,
+    package_architecture: &str,
+    core_api: &str,
+    addon_abi: &str,
+    architecture: &str,
+) -> Result<(), CompatibilityError> {
     if !matches!(architecture, "x64" | "x86") {
         return Err(compatibility_error("runtime architecture is invalid"));
     }
-    if manifest.architecture() != "any" && manifest.architecture() != architecture {
+    if package_architecture != "any" && package_architecture != architecture {
         return Err(compatibility_error(
             "package architecture does not match this runtime",
         ));
     }
-    if manifest.core_api() != SUPPORTED_CORE_API {
+    if core_api != SUPPORTED_CORE_API {
         return Err(compatibility_error(
             "package requires an unsupported Core API",
         ));
     }
-    if manifest.package_type() == &PackageType::Addon && manifest.addon_abi() != SUPPORTED_ADDON_ABI
-    {
+    if package_type == &PackageType::Addon && addon_abi != SUPPORTED_ADDON_ABI {
         return Err(compatibility_error("addon ABI does not match this engine"));
     }
     Ok(())
@@ -6550,9 +6565,9 @@ mod repair_ffi {
     use super::{
         activate_installed_version_for_rollback, activate_staged_payload_tree,
         parse_signature_envelope, parse_trusted_keys, stage_validated_archive_zip,
-        stage_verified_payload_tree, verify_installed_packages_for_repair,
-        verify_manifest_signature, verify_mldsa65_signature, PackageId, SignedObject,
-        TrustAlgorithm, TrustedKey, MAX_MANIFEST_BYTES,
+        stage_verified_payload_tree, validate_manifest_compatibility_fields,
+        verify_installed_packages_for_repair, verify_manifest_signature, verify_mldsa65_signature,
+        PackageId, PackageType, SignedObject, TrustAlgorithm, TrustedKey, MAX_MANIFEST_BYTES,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -6775,6 +6790,17 @@ mod repair_ffi {
                 })
             })
             .collect()
+    }
+
+    fn package_type_from_code(value: u32) -> Option<PackageType> {
+        match value {
+            0 => Some(PackageType::Core),
+            1 => Some(PackageType::Addon),
+            2 => Some(PackageType::InputMethodData),
+            3 => Some(PackageType::Theme),
+            4 => Some(PackageType::Translation),
+            _ => None,
+        }
     }
 
     fn stage_error_result(code: &str, message: &str) -> Fcitx5PackageStageResult {
@@ -7154,6 +7180,57 @@ mod repair_ffi {
         match parse_signature_envelope(envelope_text, expected_object) {
             Ok(envelope) => signature_envelope_ok_result(envelope),
             Err(error) => signature_envelope_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_validate_manifest_compatibility_utf8(
+        package_type: u32,
+        package_architecture: Fcitx5ByteSlice,
+        core_api: Fcitx5ByteSlice,
+        addon_abi: Fcitx5ByteSlice,
+        runtime_architecture: *const u8,
+        runtime_architecture_len: usize,
+    ) -> Fcitx5PackageRepairResult {
+        let Some(package_type) = package_type_from_code(package_type) else {
+            return error_result(
+                "invalid_manifest",
+                "parsed manifest has an unsupported package type",
+            );
+        };
+        let Some(package_architecture) = string_from_raw(package_architecture) else {
+            return error_result(
+                "invalid_manifest",
+                "parsed manifest contains invalid string data",
+            );
+        };
+        let Some(core_api) = string_from_raw(core_api) else {
+            return error_result(
+                "invalid_manifest",
+                "parsed manifest contains invalid string data",
+            );
+        };
+        let Some(addon_abi) = string_from_raw(addon_abi) else {
+            return error_result(
+                "invalid_manifest",
+                "parsed manifest contains invalid string data",
+            );
+        };
+        let Some(runtime_architecture) = string_from_raw(Fcitx5ByteSlice {
+            data: runtime_architecture,
+            len: runtime_architecture_len,
+        }) else {
+            return error_result("incompatible_package", "runtime architecture is invalid");
+        };
+        match validate_manifest_compatibility_fields(
+            &package_type,
+            &package_architecture,
+            &core_api,
+            &addon_abi,
+            &runtime_architecture,
+        ) {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
         }
     }
 
