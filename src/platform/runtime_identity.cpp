@@ -26,6 +26,9 @@ extern "C" std::size_t fcitx5_windows_common_local_name_utf16(
     std::size_t test_namespace_len,
     std::uint16_t* output,
     std::size_t capacity);
+extern "C" std::size_t fcitx5_windows_common_local_test_namespace_utf16(
+    std::uint16_t* output,
+    std::size_t capacity);
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
     std::size_t module_path_len,
@@ -174,15 +177,6 @@ bool secureInputDesktop() {
     return lowered == L"winlogon" || lowered == L"disconnect";
 }
 
-bool validChannel(std::wstring_view channel) {
-    if (channel.empty() || channel.size() > 32)
-        return false;
-    return std::all_of(channel.begin(), channel.end(), [](wchar_t value) {
-        return (value >= L'a' && value <= L'z') || (value >= L'0' && value <= L'9') ||
-               value == L'-';
-    });
-}
-
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
@@ -300,13 +294,9 @@ bool queryCurrentIdentity(RuntimeIdentity& output) noexcept {
 }
 
 std::wstring localTestNamespace() {
-    std::array<wchar_t, 34> value{};
-    const DWORD length = GetEnvironmentVariableW(L"FCITX5_TEST_NAMESPACE", value.data(),
-                                                  static_cast<DWORD>(value.size()));
-    if (length == 0 || length >= value.size())
-        return {};
-    const std::wstring_view candidate(value.data(), length);
-    return validChannel(candidate) ? std::wstring(candidate) : std::wstring{};
+    return rustWide([](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_windows_common_local_test_namespace_utf16(output, capacity);
+    });
 }
 
 std::wstring currentRuntimeGeneration() {

@@ -349,6 +349,12 @@ fn peer_development_policy_allowed(development_exception_enabled: bool) -> bool 
     development_exception_enabled
 }
 
+fn local_test_namespace() -> Option<String> {
+    env::var("FCITX5_TEST_NAMESPACE")
+        .ok()
+        .filter(|value| valid_channel(value))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn executable_files_match(
     left_volume_serial_number: u32,
@@ -716,6 +722,21 @@ pub unsafe extern "C" fn fcitx5_windows_common_local_name_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `output` may be null for size queries or writable UTF-16 storage for
+/// `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_local_test_namespace_utf16(
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(namespace) = local_test_namespace() else {
+        return 0;
+    };
+    write_wide_string(&namespace, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `module_path` must point to exactly `module_path_len` readable UTF-16 code
 /// units. `output` may be null for size queries or writable UTF-16 storage for
 /// `capacity` code units. No pointer is retained.
@@ -1073,6 +1094,21 @@ mod tests {
         assert!(local_name(true, "S", 7, "../bad", "engine", "").is_none());
         assert!(local_name(true, "S", 7, "00000042", "Engine", "").is_none());
         assert!(local_name(true, "S", 7, "00000042", "engine", "../bad").is_none());
+    }
+
+    #[test]
+    fn local_test_namespace_matches_cpp_contract() {
+        unsafe {
+            env::set_var("FCITX5_TEST_NAMESPACE", "contract-42");
+        }
+        assert_eq!(local_test_namespace().as_deref(), Some("contract-42"));
+        unsafe {
+            env::set_var("FCITX5_TEST_NAMESPACE", "../bad");
+        }
+        assert_eq!(local_test_namespace(), None);
+        unsafe {
+            env::remove_var("FCITX5_TEST_NAMESPACE");
+        }
     }
 
     #[test]
