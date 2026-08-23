@@ -14,7 +14,16 @@ extern "C" std::uint8_t fcitx5_windows_common_same_principal_session_utf16(
     std::uint32_t current_session_id,
     const std::uint16_t* current_user_sid,
     std::size_t current_user_sid_len);
-extern "C" std::uint8_t fcitx5_windows_common_peer_development_policy_allowed(
+extern "C" std::uint8_t fcitx5_windows_common_verify_pipe_server_peer_utf16(
+    void* pipe,
+    std::uint8_t current_service_account,
+    std::uint32_t current_session_id,
+    std::uint8_t current_secure_desktop,
+    const std::uint16_t* current_user_sid,
+    std::size_t current_user_sid_len,
+    std::uint32_t policy_mode,
+    const std::uint16_t* expected_executable_path,
+    std::size_t expected_executable_path_len,
     std::uint8_t development_exception_enabled);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
@@ -30,11 +39,11 @@ bool samePrincipalAndSession(const platform::ProcessIdentity& peer,
                current.userSid.size()) != 0;
 }
 
-bool developmentPeerExceptionAllowed() noexcept {
+bool developmentPeerExceptionEnabled() noexcept {
 #if defined(FCITX_DEVELOPMENT_PEER_EXCEPTION)
-    return fcitx5_windows_common_peer_development_policy_allowed(1) != 0;
+    return true;
 #else
-    return fcitx5_windows_common_peer_development_policy_allowed(0) != 0;
+    return false;
 #endif
 }
 
@@ -42,21 +51,12 @@ bool developmentPeerExceptionAllowed() noexcept {
 
 bool verifyPipeServer(HANDLE pipe, const platform::RuntimeIdentity& clientIdentity,
                       const PeerPolicy& policy) noexcept {
-    if (!pipe || pipe == INVALID_HANDLE_VALUE || !clientIdentity.mayUseUserEngine()) return false;
-    ULONG serverProcessId = 0;
-    if (!GetNamedPipeServerProcessId(pipe, &serverProcessId) || serverProcessId == 0) return false;
-    platform::ProcessIdentity server;
-    if (!platform::queryProcessIdentity(serverProcessId, server) ||
-        !samePrincipalAndSession(server, clientIdentity)) {
-        return false;
-    }
-    if (policy.mode == PeerVerificationMode::developmentSameUserSession) {
-        return developmentPeerExceptionAllowed();
-    }
-    platform::ExecutableFileIdentity expected;
-    return !policy.expectedExecutablePath.empty() && server.executableFileVerified &&
-           platform::queryExecutableFileIdentity(policy.expectedExecutablePath, expected) &&
-           platform::executableFilesMatch(server.executableFile, expected);
+    return fcitx5_windows_common_verify_pipe_server_peer_utf16(
+               pipe, clientIdentity.serviceAccount ? 1 : 0, clientIdentity.sessionId,
+               clientIdentity.secureDesktop ? 1 : 0, wideData(clientIdentity.userSid),
+               clientIdentity.userSid.size(), static_cast<std::uint32_t>(policy.mode),
+               wideData(policy.expectedExecutablePath), policy.expectedExecutablePath.size(),
+               developmentPeerExceptionEnabled() ? 1 : 0) != 0;
 }
 
 bool verifyPipeClient(HANDLE pipe, const platform::RuntimeIdentity& serverIdentity,

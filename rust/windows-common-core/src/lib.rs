@@ -389,6 +389,7 @@ unsafe extern "system" {
         file_path_size: u32,
         flags: u32,
     ) -> u32;
+    fn GetNamedPipeServerProcessId(pipe: *mut c_void, server_process_id: *mut u32) -> i32;
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
     fn GetCurrentProcessId() -> u32;
     fn LocalFree(memory: *mut c_void) -> *mut c_void;
@@ -423,6 +424,126 @@ fn same_principal_and_session(
 
 fn peer_development_policy_allowed(development_exception_enabled: bool) -> bool {
     development_exception_enabled
+}
+
+fn pipe_server_process_id(pipe: *mut c_void) -> Option<u32> {
+    if pipe.is_null() || pipe == invalid_handle_value() {
+        return None;
+    }
+    let mut process_id = 0_u32;
+    // SAFETY: `pipe` is a caller-supplied named-pipe handle. Windows validates
+    // the handle and writes a process id only on success.
+    let ok = unsafe { GetNamedPipeServerProcessId(pipe, &mut process_id) };
+    (ok != 0 && process_id != 0).then_some(process_id)
+}
+
+fn verify_pipe_server_peer(
+    pipe: *mut c_void,
+    current_service_account: bool,
+    current_session_id: u32,
+    current_secure_desktop: bool,
+    current_user_sid: &str,
+    policy_mode: u32,
+    expected_executable_path: &[u16],
+    development_exception_enabled: bool,
+) -> bool {
+    const POLICY_EXACT_EXECUTABLE: u32 = 0;
+    const POLICY_DEVELOPMENT_SAME_USER_SESSION: u32 = 1;
+
+    if !may_launch_user_engine(
+        current_service_account,
+        current_session_id,
+        current_secure_desktop,
+        current_user_sid,
+    ) {
+        return false;
+    }
+    let Some(server_process_id) = pipe_server_process_id(pipe) else {
+        return false;
+    };
+    let query = process_identity_with_executable_file(
+        server_process_id,
+        std::ptr::null_mut(),
+        0,
+        std::ptr::null_mut(),
+        0,
+        std::ptr::null_mut(),
+        0,
+    );
+    if query.status == 0 || query.user_sid_len == 0 || query.executable_path_len == 0 {
+        return false;
+    }
+    let mut server_user_sid = vec![0_u16; query.user_sid_len];
+    let mut server_executable_path = vec![0_u16; query.executable_path_len];
+    let mut server_final_path = vec![0_u16; query.executable_final_path_len];
+    let filled = process_identity_with_executable_file(
+        server_process_id,
+        server_user_sid.as_mut_ptr(),
+        server_user_sid.len(),
+        server_executable_path.as_mut_ptr(),
+        server_executable_path.len(),
+        if server_final_path.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            server_final_path.as_mut_ptr()
+        },
+        server_final_path.len(),
+    );
+    if filled.status == 0
+        || filled.user_sid_len != server_user_sid.len()
+        || filled.executable_path_len != server_executable_path.len()
+    {
+        return false;
+    }
+    let Ok(server_user_sid) = String::from_utf16(&server_user_sid) else {
+        return false;
+    };
+    if !same_principal_and_session(
+        filled.session_id,
+        filled.service_account != 0,
+        &server_user_sid,
+        current_session_id,
+        current_user_sid,
+    ) {
+        return false;
+    }
+    if policy_mode == POLICY_DEVELOPMENT_SAME_USER_SESSION {
+        return peer_development_policy_allowed(development_exception_enabled);
+    }
+    if policy_mode != POLICY_EXACT_EXECUTABLE
+        || expected_executable_path.is_empty()
+        || filled.executable_file_status == 0
+        || filled.executable_final_path_len == 0
+        || filled.executable_final_path_len > server_final_path.len()
+    {
+        return false;
+    }
+    server_final_path.truncate(filled.executable_final_path_len);
+    let Ok(server_final_path) = String::from_utf16(&server_final_path) else {
+        return false;
+    };
+    let Some((expected, expected_final_path)) =
+        executable_file_identity_owned(expected_executable_path)
+    else {
+        return false;
+    };
+    let Ok(expected_final_path) = String::from_utf16(&expected_final_path) else {
+        return false;
+    };
+    executable_files_match(
+        filled.executable_file_volume_serial_number,
+        filled.executable_file_index_high,
+        filled.executable_file_index_low,
+        filled.executable_file_number_of_links,
+        filled.executable_file_contains_reparse_point != 0,
+        &server_final_path,
+        expected.volume_serial_number,
+        expected.file_index_high,
+        expected.file_index_low,
+        expected.number_of_links,
+        expected.contains_reparse_point != 0,
+        &expected_final_path,
+    )
 }
 
 fn local_test_namespace() -> Option<String> {
@@ -1720,6 +1841,53 @@ pub extern "C" fn fcitx5_windows_common_peer_development_policy_allowed(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `pipe` must be a live named-pipe handle. `current_user_sid` and
+/// `expected_executable_path` must be null only when their corresponding length
+/// is zero, or point to valid UTF-16 buffers with exactly the provided lengths.
+/// No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_verify_pipe_server_peer_utf16(
+    pipe: *mut c_void,
+    current_service_account: u8,
+    current_session_id: u32,
+    current_secure_desktop: u8,
+    current_user_sid: *const u16,
+    current_user_sid_len: usize,
+    policy_mode: u32,
+    expected_executable_path: *const u16,
+    expected_executable_path_len: usize,
+    development_exception_enabled: u8,
+) -> u8 {
+    let Some(current_user_sid) = wide_string_from_raw(current_user_sid, current_user_sid_len)
+    else {
+        return 0;
+    };
+    let expected_executable_path = if expected_executable_path.is_null() {
+        if expected_executable_path_len != 0 {
+            return 0;
+        }
+        &[]
+    } else {
+        // SAFETY: The caller supplies exactly `expected_executable_path_len`
+        // readable UTF-16 code units. The slice is only used during this call.
+        unsafe {
+            std::slice::from_raw_parts(expected_executable_path, expected_executable_path_len)
+        }
+    };
+    verify_pipe_server_peer(
+        pipe,
+        current_service_account != 0,
+        current_session_id,
+        current_secure_desktop != 0,
+        &current_user_sid,
+        policy_mode,
+        expected_executable_path,
+        development_exception_enabled != 0,
+    ) as u8
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// Final-path pointers must be null only when their corresponding length is
 /// zero, or point to valid UTF-16 buffers with exactly the provided lengths. No
 /// pointer is retained.
@@ -2272,6 +2440,22 @@ mod tests {
         ));
         assert!(peer_development_policy_allowed(true));
         assert!(!peer_development_policy_allowed(false));
+    }
+
+    #[test]
+    fn pipe_server_peer_policy_rejects_invalid_pipe_like_cpp_contract() {
+        assert!(pipe_server_process_id(std::ptr::null_mut()).is_none());
+        assert!(pipe_server_process_id(invalid_handle_value()).is_none());
+        assert!(!verify_pipe_server_peer(
+            std::ptr::null_mut(),
+            false,
+            7,
+            false,
+            "S-1-5-21-test",
+            0,
+            &[],
+            false
+        ));
     }
 
     #[test]
