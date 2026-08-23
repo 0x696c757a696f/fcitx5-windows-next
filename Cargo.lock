@@ -86,6 +86,10 @@ name = "fcitx5-process-execution-core"
 version = "0.1.0"
 
 [[package]]
+name = "fcitx5-register-core"
+version = "0.1.0"
+
+[[package]]
 name = "fcitx5-tsf-poc"
 version = "0.1.0"
 dependencies = [

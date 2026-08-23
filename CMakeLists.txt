@@ -243,6 +243,24 @@ set_target_properties(fcitx5_control_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CONTROL_CORE_STATICLIB}")
 add_dependencies(fcitx5_control_core_rust fcitx5_control_core_rustlib)
 
+set(FCITX_RUST_REGISTER_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_register_core.lib")
+add_custom_command(
+  OUTPUT "${FCITX_RUST_REGISTER_CORE_STATICLIB}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-register-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-register-core staticlib")
+add_custom_target(fcitx5_register_core_rustlib
+                  DEPENDS "${FCITX_RUST_REGISTER_CORE_STATICLIB}")
+add_library(fcitx5_register_core_rust STATIC IMPORTED GLOBAL)
+set_target_properties(fcitx5_register_core_rust
+                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_REGISTER_CORE_STATICLIB}")
+add_dependencies(fcitx5_register_core_rust fcitx5_register_core_rustlib)
+
 set(FCITX_RUST_CANDIDATE_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_candidate_core.lib")
 set(FCITX_RUST_CANDIDATE_POC_EXE
@@ -580,7 +598,10 @@ fcitx_apply_binary_hardening(fcitx5_tsf)
 add_executable(fcitx5_register src/register/register_main.cpp)
 set_target_properties(fcitx5_register PROPERTIES OUTPUT_NAME "fcitx5-register")
 target_include_directories(fcitx5_register PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-target_link_libraries(fcitx5_register PRIVATE fcitx5::windows_common advapi32 ole32)
+target_link_libraries(
+  fcitx5_register PRIVATE fcitx5::windows_common fcitx5_register_core_rust advapi32 ole32
+                          ws2_32 userenv ntdll)
+add_dependencies(fcitx5_register fcitx5_register_core_rustlib)
 fcitx_apply_project_options(fcitx5_register)
 fcitx_apply_binary_hardening(fcitx5_register)
 

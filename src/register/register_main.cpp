@@ -5,6 +5,8 @@
 #include <objbase.h>
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -14,6 +16,26 @@ namespace {
 
 namespace fs = std::filesystem;
 using RegisterFunction = HRESULT(STDAPICALLTYPE*)();
+
+extern "C" {
+struct Fcitx5RegisterUtf16 {
+    const wchar_t* ptr;
+    std::size_t len;
+};
+
+std::uint32_t fcitx5_register_validate_artifact(Fcitx5RegisterUtf16 helper,
+                                                Fcitx5RegisterUtf16 dll,
+                                                std::uint32_t architectureBits) noexcept;
+}
+
+enum class RegisterArtifactStatus : std::uint32_t {
+    ok = 0,
+    invalidArgument = 1,
+    helperLocation = 2,
+    currentDllMissing = 3,
+    pairedDllMissing = 4,
+    dllOutsideProduct = 5,
+};
 
 template <typename Function>
 Function resolveProcAddress(HMODULE module, const char* name) noexcept {
@@ -89,45 +111,48 @@ bool samePath(const fs::path& first, const fs::path& second) {
                                           normalizedSecond.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
-std::wstring currentArchitecture() {
+constexpr std::uint32_t currentArchitectureBits() noexcept {
 #if defined(_WIN64)
-    return L"x64";
+    return 64;
 #else
-    return L"x86";
-#endif
-}
-
-std::wstring pairedArchitecture() {
-#if defined(_WIN64)
-    return L"x86";
-#else
-    return L"x64";
+    return 32;
 #endif
 }
 
 bool validateProductArtifact(const fs::path& dll, std::wstring& error) {
     error.clear();
     const fs::path executable = executablePath();
-    if (executable.empty() || executable.parent_path().filename() != L"bin") {
+    if (executable.empty()) {
+        error = L"register helper path could not be resolved";
+        return false;
+    }
+    const auto helperNative = executable.native();
+    const auto dllNative = dll.native();
+    const auto status = static_cast<RegisterArtifactStatus>(
+        fcitx5_register_validate_artifact(
+            {helperNative.data(), helperNative.size()},
+            {dllNative.data(), dllNative.size()},
+            currentArchitectureBits()));
+    switch (status) {
+    case RegisterArtifactStatus::ok:
+        return true;
+    case RegisterArtifactStatus::helperLocation:
         error = L"register helper is not running from the product bin directory";
         return false;
-    }
-    const fs::path root = executable.parent_path().parent_path();
-    const fs::path expectedDll = root / L"tsf" / currentArchitecture() / L"fcitx5-tsf.dll";
-    const fs::path pairedDll = root / L"tsf" / pairedArchitecture() / L"fcitx5-tsf.dll";
-    if (!fs::is_regular_file(expectedDll)) {
+    case RegisterArtifactStatus::currentDllMissing:
         error = L"current architecture TSF DLL is missing from the product artifact";
         return false;
-    }
-    if (!fs::is_regular_file(pairedDll)) {
+    case RegisterArtifactStatus::pairedDllMissing:
         error = L"paired architecture TSF DLL is missing from the product artifact";
         return false;
-    }
-    if (!samePath(dll, expectedDll)) {
+    case RegisterArtifactStatus::dllOutsideProduct:
         error = L"TSF DLL path does not belong to this product artifact";
         return false;
+    case RegisterArtifactStatus::invalidArgument:
+    default:
+        error = L"register artifact validation failed";
+        return false;
     }
-    return true;
 }
 
 HRESULT invokeRegistration(const fs::path& dll, const char* exportName) {

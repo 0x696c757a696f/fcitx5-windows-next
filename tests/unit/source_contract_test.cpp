@@ -98,9 +98,14 @@ int main(int argc, char** argv) {
     }
     const auto registerSource = read_text(sourceRoot / "src/register/register_main.cpp");
     const auto registerDevScript = read_text(sourceRoot / "tools/register-dev.ps1");
+    const auto rustRegisterCore = read_text(sourceRoot / "rust/register-core/src/lib.rs");
     if (registerSource.find("validateProductArtifact") == std::string::npos ||
         registerSource.find("--validate-artifact") == std::string::npos ||
-        registerSource.find("paired architecture TSF DLL is missing") == std::string::npos) {
+        registerSource.find("paired architecture TSF DLL is missing") == std::string::npos ||
+        registerSource.find("fcitx5_register_validate_artifact") == std::string::npos ||
+        rustRegisterCore.find("validate_product_artifact") == std::string::npos ||
+        rustRegisterCore.find("REGISTER_ARTIFACT_PAIRED_DLL_MISSING") ==
+            std::string::npos) {
         return fail("STAB-REGISTER-BOOTSTRAP-012: register helper must validate product artifacts");
     }
     if (registerDevScript.find("Remove-StaleComRegistration") == std::string::npos ||
