@@ -92,6 +92,11 @@ jobs:
           try {
             Invoke-CoreGate
           } catch {
+            function Convert-GitHubCommandValue([string] $Value) {
+              return $Value.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            }
+            $message = Convert-GitHubCommandValue ([string] $_.Exception.Message)
+            Write-Host "::error file=.github/workflows/core.yml,line=88,title=Core gate failed::$message"
             Write-Error $_
             Write-Host "PATH=$env:PATH"
             foreach ($tool in @('pwsh', 'cmake', 'ctest', 'ninja', 'clang-cl', 'lld-link', 'sccache', 'rustup', 'cargo', 'rustc')) {
