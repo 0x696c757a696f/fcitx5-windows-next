@@ -327,6 +327,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("process_user_sid_query_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_process_identity_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("process_identity_query_matches_cpp_contract") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_secure_input_desktop") ==
             std::string::npos ||
         rustWindowsCommonCore.find("secure_input_desktop_query_matches_cpp_contract") ==
@@ -439,11 +443,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_current_generation_utf16") ==
             std::string::npos ||
-        runtimeIdentitySource.find("fcitx5_windows_common_process_image_path_utf16") ==
+        runtimeIdentitySource.find("fcitx5_windows_common_process_identity_utf16") ==
             std::string::npos ||
-        runtimeIdentitySource.find("fcitx5_windows_common_process_session_id") ==
+        runtimeIdentitySource.find("fcitx5_windows_common_process_image_path_utf16") !=
             std::string::npos ||
-        runtimeIdentitySource.find("fcitx5_windows_common_process_user_sid_utf16") ==
+        runtimeIdentitySource.find("fcitx5_windows_common_process_session_id") !=
+            std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_process_user_sid_utf16") !=
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_secure_input_desktop") ==
             std::string::npos ||

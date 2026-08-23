@@ -565,6 +565,39 @@ fn process_user_sid(process_id: u32) -> Option<(Vec<u16>, bool)> {
     Some((sid_units, service_account))
 }
 
+fn process_identity(
+    process_id: u32,
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+) -> Fcitx5WindowsCommonProcessIdentity {
+    let session = process_session_id(process_id);
+    if session.status == 0 {
+        return Fcitx5WindowsCommonProcessIdentity::default();
+    }
+    let Some((user_sid, service_account)) = process_user_sid(process_id) else {
+        return Fcitx5WindowsCommonProcessIdentity::default();
+    };
+    let Some(executable_path) = process_image_path(process_id) else {
+        return Fcitx5WindowsCommonProcessIdentity::default();
+    };
+    let executable_path: Vec<u16> = executable_path.encode_utf16().collect();
+    write_wide_units(&user_sid, user_sid_output, user_sid_capacity);
+    write_wide_units(
+        &executable_path,
+        executable_path_output,
+        executable_path_capacity,
+    );
+    Fcitx5WindowsCommonProcessIdentity {
+        status: 1,
+        service_account: service_account as u8,
+        session_id: session.session_id,
+        user_sid_len: user_sid.len(),
+        executable_path_len: executable_path.len(),
+    }
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -669,6 +702,16 @@ pub struct Fcitx5WindowsCommonExecutableFileIdentity {
 pub struct Fcitx5WindowsCommonProcessSession {
     pub status: u8,
     pub session_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonProcessIdentity {
+    pub status: u8,
+    pub service_account: u8,
+    pub session_id: u32,
+    pub user_sid_len: usize,
+    pub executable_path_len: usize,
 }
 
 #[repr(C)]
@@ -1059,6 +1102,27 @@ pub unsafe extern "C" fn fcitx5_windows_common_process_user_sid_utf16(
         }
     }
     write_wide_units(&sid, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Output pointers may be null for size queries or point to writable UTF-16
+/// storage for their paired capacities. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_process_identity_utf16(
+    process_id: u32,
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+) -> Fcitx5WindowsCommonProcessIdentity {
+    process_identity(
+        process_id,
+        user_sid_output,
+        user_sid_capacity,
+        executable_path_output,
+        executable_path_capacity,
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -1479,6 +1543,42 @@ mod tests {
         let sid = String::from_utf16(&sid).expect("sid is utf16");
         assert!(sid.starts_with("S-1-"));
         assert!(process_user_sid(0).is_none());
+    }
+
+    #[test]
+    fn process_identity_query_matches_cpp_contract() {
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        let query = process_identity(
+            current_process_id,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+        );
+        assert_eq!(query.status, 1);
+        assert!(query.user_sid_len > 0);
+        assert!(query.executable_path_len > 0);
+        let mut sid = vec![0_u16; query.user_sid_len];
+        let mut path = vec![0_u16; query.executable_path_len];
+        let filled = process_identity(
+            current_process_id,
+            sid.as_mut_ptr(),
+            sid.len(),
+            path.as_mut_ptr(),
+            path.len(),
+        );
+        assert_eq!(filled.status, 1);
+        assert_eq!(filled.user_sid_len, sid.len());
+        assert_eq!(filled.executable_path_len, path.len());
+        assert!(String::from_utf16(&sid).expect("sid").starts_with("S-1-"));
+        assert!(String::from_utf16(&path)
+            .expect("path")
+            .to_ascii_lowercase()
+            .ends_with(".exe"));
+        assert_eq!(
+            process_identity(0, std::ptr::null_mut(), 0, std::ptr::null_mut(), 0).status,
+            0
+        );
     }
 
     #[test]

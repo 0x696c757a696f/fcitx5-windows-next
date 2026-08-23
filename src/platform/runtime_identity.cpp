@@ -26,21 +26,20 @@ extern "C" std::size_t fcitx5_windows_common_local_test_namespace_utf16(
 extern "C" std::size_t fcitx5_windows_common_current_generation_utf16(
     std::uint16_t* output,
     std::size_t capacity);
-extern "C" std::size_t fcitx5_windows_common_process_image_path_utf16(
-    std::uint32_t process_id,
-    std::uint16_t* output,
-    std::size_t capacity);
-struct Fcitx5WindowsCommonProcessSession {
+struct Fcitx5WindowsCommonProcessIdentity {
     std::uint8_t status;
+    std::uint8_t serviceAccount;
     std::uint32_t sessionId;
+    std::size_t userSidLen;
+    std::size_t executablePathLen;
 };
-extern "C" Fcitx5WindowsCommonProcessSession
-fcitx5_windows_common_process_session_id(std::uint32_t process_id);
-extern "C" std::size_t fcitx5_windows_common_process_user_sid_utf16(
+extern "C" Fcitx5WindowsCommonProcessIdentity
+fcitx5_windows_common_process_identity_utf16(
     std::uint32_t process_id,
-    std::uint8_t* service_account,
-    std::uint16_t* output,
-    std::size_t capacity);
+    std::uint16_t* user_sid_output,
+    std::size_t user_sid_capacity,
+    std::uint16_t* executable_path_output,
+    std::size_t executable_path_capacity);
 extern "C" std::uint8_t fcitx5_windows_common_secure_input_desktop();
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
@@ -116,27 +115,6 @@ fcitx5_windows_common_executable_file_identity_utf16(const std::uint16_t* path,
 
 template <typename Producer>
 std::wstring rustWide(Producer producer);
-
-bool processUserSid(DWORD processId, std::wstring& sid, bool& serviceAccount) {
-    std::uint8_t service = 0;
-    sid = rustWide([&](std::uint16_t* output, std::size_t capacity) {
-        return fcitx5_windows_common_process_user_sid_utf16(processId, &service, output,
-                                                            capacity);
-    });
-    if (sid.empty())
-        return false;
-    serviceAccount = service != 0;
-    return true;
-}
-
-bool processPath(DWORD processId, std::wstring& path) {
-    path = rustWide([&](std::uint16_t* output, std::size_t capacity) {
-        return fcitx5_windows_common_process_image_path_utf16(processId, output, capacity);
-    });
-    if (path.empty())
-        return false;
-    return true;
-}
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
@@ -217,15 +195,25 @@ bool RuntimeIdentity::mayUseUserEngine() const noexcept { return mayLaunchUserEn
 bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
     output = {};
     try {
-        ProcessIdentity result;
-        result.processId = processId;
-        const auto session = fcitx5_windows_common_process_session_id(processId);
-        if (session.status == 0 ||
-            !processUserSid(processId, result.userSid, result.serviceAccount) ||
-            !processPath(processId, result.executablePath)) {
+        const auto query = fcitx5_windows_common_process_identity_utf16(
+            processId, nullptr, 0, nullptr, 0);
+        if (query.status == 0 || query.userSidLen == 0 || query.executablePathLen == 0) {
             return false;
         }
-        result.sessionId = session.sessionId;
+        ProcessIdentity result;
+        result.userSid.assign(query.userSidLen, L'\0');
+        result.executablePath.assign(query.executablePathLen, L'\0');
+        const auto filled = fcitx5_windows_common_process_identity_utf16(
+            processId, reinterpret_cast<std::uint16_t*>(result.userSid.data()),
+            result.userSid.size(), reinterpret_cast<std::uint16_t*>(result.executablePath.data()),
+            result.executablePath.size());
+        if (filled.status == 0 || filled.userSidLen != result.userSid.size() ||
+            filled.executablePathLen != result.executablePath.size()) {
+            return false;
+        }
+        result.processId = processId;
+        result.sessionId = filled.sessionId;
+        result.serviceAccount = filled.serviceAccount != 0;
         result.executableFileVerified =
             queryExecutableFileIdentity(result.executablePath, result.executableFile);
         output = std::move(result);
