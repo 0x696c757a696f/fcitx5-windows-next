@@ -7,13 +7,22 @@ use std::path::{Path, PathBuf};
 type Dword = u32;
 type Lstatus = i32;
 type Hkey = *mut std::ffi::c_void;
+type Hmodule = *mut std::ffi::c_void;
+type Bool = i32;
+type Hresult = i32;
 
 const ERROR_SUCCESS: Lstatus = 0;
 const ERROR_FILE_NOT_FOUND: Lstatus = 2;
+const ERROR_INVALID_PARAMETER: u32 = 87;
+const ERROR_PROC_NOT_FOUND: u32 = 127;
+const FACILITY_WIN32: u32 = 7;
 const KEY_QUERY_VALUE: Dword = 0x0001;
+const LOAD_WITH_ALTERED_SEARCH_PATH: Dword = 0x00000008;
 const REG_SZ: Dword = 1;
 const HKEY_LOCAL_MACHINE: Hkey = 0x8000_0002_usize as Hkey;
 const TSF_TEXT_SERVICE_CLSID: &str = "{3A21B9E2-4F47-4C36-8BFA-91D7D3B3E901}";
+const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x20;
+const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x220;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -50,6 +59,25 @@ pub const REGISTER_STATUS_INVALID_ARGUMENT: u32 = 3;
 
 #[link(name = "advapi32")]
 unsafe extern "system" {
+    fn AllocateAndInitializeSid(
+        identifier_authority: *const SidIdentifierAuthority,
+        sub_authority_count: u8,
+        sub_authority0: Dword,
+        sub_authority1: Dword,
+        sub_authority2: Dword,
+        sub_authority3: Dword,
+        sub_authority4: Dword,
+        sub_authority5: Dword,
+        sub_authority6: Dword,
+        sub_authority7: Dword,
+        sid: *mut *mut std::ffi::c_void,
+    ) -> Bool;
+    fn CheckTokenMembership(
+        token: *mut std::ffi::c_void,
+        sid_to_check: *mut std::ffi::c_void,
+        is_member: *mut Bool,
+    ) -> Bool;
+    fn FreeSid(sid: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
     fn RegOpenKeyExW(
         h_key: Hkey,
         sub_key: *const u16,
@@ -68,6 +96,20 @@ unsafe extern "system" {
     fn RegCloseKey(h_key: Hkey) -> Lstatus;
 }
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn SetDllDirectoryW(path_name: *const u16) -> Bool;
+    fn LoadLibraryExW(file_name: *const u16, file: *mut std::ffi::c_void, flags: Dword) -> Hmodule;
+    fn GetProcAddress(module: Hmodule, proc_name: *const i8) -> *mut std::ffi::c_void;
+    fn FreeLibrary(module: Hmodule) -> Bool;
+    fn GetLastError() -> Dword;
+}
+
+#[repr(C)]
+struct SidIdentifierAuthority {
+    value: [u8; 6],
+}
+
 struct RegistryKey(Hkey);
 
 impl RegistryKey {
@@ -84,6 +126,38 @@ impl Drop for RegistryKey {
     }
 }
 
+struct Sid(*mut std::ffi::c_void);
+
+impl Sid {
+    fn get(&self) -> *mut std::ffi::c_void {
+        self.0
+    }
+}
+
+impl Drop for Sid {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = FreeSid(self.0);
+        }
+    }
+}
+
+struct Library(Hmodule);
+
+impl Library {
+    fn get(&self) -> Hmodule {
+        self.0
+    }
+}
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = FreeLibrary(self.0);
+        }
+    }
+}
+
 fn path_from_utf16(value: Fcitx5RegisterUtf16) -> Option<PathBuf> {
     if value.ptr.is_null() {
         return None;
@@ -96,6 +170,14 @@ fn wide_z(value: &OsStr) -> Vec<u16> {
     let mut wide: Vec<u16> = value.encode_wide().collect();
     wide.push(0);
     wide
+}
+
+fn hresult_from_win32(error: u32) -> Hresult {
+    if error == 0 {
+        error as Hresult
+    } else {
+        ((error & 0x0000_ffff) | (FACILITY_WIN32 << 16) | 0x8000_0000) as Hresult
+    }
 }
 
 fn architecture_names(bits: u32) -> Option<(&'static str, &'static str)> {
@@ -258,6 +340,64 @@ pub fn registration_status_for_dll(dll: &Path) -> u32 {
     }
 }
 
+pub fn is_elevated() -> bool {
+    let authority = SidIdentifierAuthority {
+        value: [0, 0, 0, 0, 0, 5],
+    };
+    let mut raw_sid: *mut std::ffi::c_void = std::ptr::null_mut();
+    let allocated = unsafe {
+        AllocateAndInitializeSid(
+            &authority,
+            2,
+            SECURITY_BUILTIN_DOMAIN_RID,
+            DOMAIN_ALIAS_RID_ADMINS,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            &mut raw_sid,
+        )
+    };
+    if allocated == 0 || raw_sid.is_null() {
+        return false;
+    }
+    let sid = Sid(raw_sid);
+    let mut is_member: Bool = 0;
+    let checked = unsafe { CheckTokenMembership(std::ptr::null_mut(), sid.get(), &mut is_member) };
+    checked != 0 && is_member != 0
+}
+
+pub fn invoke_registration_export(dll: &Path, export_kind: u32) -> Hresult {
+    let export_name = match export_kind {
+        REGISTER_EXPORT_REGISTER_SERVER => c"DllRegisterServer".as_ptr(),
+        REGISTER_EXPORT_UNREGISTER_SERVER => c"DllUnregisterServer".as_ptr(),
+        _ => return hresult_from_win32(ERROR_INVALID_PARAMETER),
+    };
+    let dll = wide_z(dll.as_os_str());
+    unsafe {
+        let _ = SetDllDirectoryW(std::ptr::null());
+    }
+    let module = unsafe {
+        LoadLibraryExW(
+            dll.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_WITH_ALTERED_SEARCH_PATH,
+        )
+    };
+    if module.is_null() {
+        return hresult_from_win32(unsafe { GetLastError() });
+    }
+    let library = Library(module);
+    let function = unsafe { GetProcAddress(library.get(), export_name) };
+    if function.is_null() {
+        return hresult_from_win32(ERROR_PROC_NOT_FOUND);
+    }
+    let function: unsafe extern "system" fn() -> Hresult = unsafe { std::mem::transmute(function) };
+    unsafe { function() }
+}
+
 #[no_mangle]
 pub extern "C" fn fcitx5_register_validate_artifact(
     helper: Fcitx5RegisterUtf16,
@@ -305,6 +445,22 @@ pub extern "C" fn fcitx5_register_registration_status_for_dll(dll: Fcitx5Registe
         return REGISTER_STATUS_INVALID_ARGUMENT;
     };
     registration_status_for_dll(&dll)
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_register_is_elevated() -> u32 {
+    is_elevated() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_register_invoke_registration_export(
+    dll: Fcitx5RegisterUtf16,
+    export_kind: u32,
+) -> Hresult {
+    let Some(dll) = path_from_utf16(dll) else {
+        return hresult_from_win32(ERROR_INVALID_PARAMETER);
+    };
+    invoke_registration_export(&dll, export_kind)
 }
 
 #[cfg(test)]
@@ -400,6 +556,21 @@ mod tests {
         assert_eq!(REGISTER_STATUS_NOT_REGISTERED, 1);
         assert_eq!(REGISTER_STATUS_PATH_MISMATCH, 2);
         assert_eq!(REGISTER_STATUS_INVALID_ARGUMENT, 3);
+    }
+
+    #[test]
+    fn win32_hresult_and_export_policy_fail_closed_for_invalid_export() {
+        assert_eq!(
+            hresult_from_win32(ERROR_INVALID_PARAMETER),
+            0x8007_0057_u32 as Hresult
+        );
+        assert_eq!(
+            invoke_registration_export(
+                Path::new("C:/missing/fcitx5-tsf.dll"),
+                REGISTER_EXPORT_NONE
+            ),
+            0x8007_0057_u32 as Hresult
+        );
     }
 
     #[test]

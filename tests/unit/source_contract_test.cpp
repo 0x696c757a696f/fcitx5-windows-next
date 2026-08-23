@@ -110,11 +110,24 @@ int main(int argc, char** argv) {
         registerSource.find("fcitx5_register_operation_export") == std::string::npos ||
         registerSource.find("fcitx5_register_registration_status_for_dll") ==
             std::string::npos ||
+        registerSource.find("fcitx5_register_is_elevated") == std::string::npos ||
+        registerSource.find("fcitx5_register_invoke_registration_export") ==
+            std::string::npos ||
+        registerSource.find("LoadLibraryExW(") != std::string::npos ||
+        registerSource.find("GetProcAddress(") != std::string::npos ||
+        registerSource.find("AllocateAndInitializeSid(") != std::string::npos ||
         rustRegisterCore.find("validate_product_artifact") == std::string::npos ||
         rustRegisterCore.find("REGISTER_OPERATION_VALIDATE_ARTIFACT") == std::string::npos ||
         rustRegisterCore.find("REGISTER_DLL_ARGUMENT_INVALID") == std::string::npos ||
         rustRegisterCore.find("REGISTER_EXPORT_UNREGISTER_SERVER") == std::string::npos ||
         rustRegisterCore.find("REGISTER_STATUS_PATH_MISMATCH") == std::string::npos ||
+        rustRegisterCore.find("fcitx5_register_is_elevated") == std::string::npos ||
+        rustRegisterCore.find("fcitx5_register_invoke_registration_export") ==
+            std::string::npos ||
+        rustRegisterCore.find("AllocateAndInitializeSid") == std::string::npos ||
+        rustRegisterCore.find("LoadLibraryExW") == std::string::npos ||
+        rustRegisterCore.find("DllRegisterServer") == std::string::npos ||
+        rustRegisterCore.find("DllUnregisterServer") == std::string::npos ||
         rustRegisterCore.find("REGISTER_ARTIFACT_PAIRED_DLL_MISSING") ==
             std::string::npos) {
         return fail("STAB-REGISTER-BOOTSTRAP-012: register helper must validate product artifacts");

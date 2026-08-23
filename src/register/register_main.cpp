@@ -15,7 +15,6 @@
 namespace {
 
 namespace fs = std::filesystem;
-using RegisterFunction = HRESULT(STDAPICALLTYPE*)();
 
 extern "C" {
 struct Fcitx5RegisterUtf16 {
@@ -31,6 +30,9 @@ std::uint32_t fcitx5_register_validate_dll_argument(Fcitx5RegisterUtf16 dll) noe
 std::uint32_t fcitx5_register_operation_requires_admin(std::uint32_t operation) noexcept;
 std::uint32_t fcitx5_register_operation_export(std::uint32_t operation) noexcept;
 std::uint32_t fcitx5_register_registration_status_for_dll(Fcitx5RegisterUtf16 dll) noexcept;
+std::uint32_t fcitx5_register_is_elevated() noexcept;
+HRESULT fcitx5_register_invoke_registration_export(Fcitx5RegisterUtf16 dll,
+                                                   std::uint32_t exportKind) noexcept;
 }
 
 enum class RegisterArtifactStatus : std::uint32_t {
@@ -69,19 +71,6 @@ enum class RegisterStatus : std::uint32_t {
     invalidArgument = 3,
 };
 
-template <typename Function>
-Function resolveProcAddress(HMODULE module, const char* name) noexcept {
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
-#endif
-    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
-    return function;
-}
-
 fs::path executablePath() {
     std::wstring value(32'768, L'\0');
     const DWORD size = GetModuleFileNameW(nullptr, value.data(), static_cast<DWORD>(value.size()));
@@ -96,19 +85,6 @@ std::wstring guidString(REFGUID guid) {
     return StringFromGUID2(guid, buffer.data(), static_cast<int>(buffer.size())) == 0
                ? std::wstring{}
                : std::wstring(buffer.data());
-}
-
-bool isElevated() noexcept {
-    BOOL administrator = FALSE;
-    SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
-    PSID sid = nullptr;
-    if (!AllocateAndInitializeSid(&authority, 2, SECURITY_BUILTIN_DOMAIN_RID,
-                                  DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &sid)) {
-        return false;
-    }
-    const BOOL checked = CheckTokenMembership(nullptr, sid, &administrator);
-    FreeSid(sid);
-    return checked && administrator;
 }
 
 std::wstring registeredPath() {
@@ -205,16 +181,6 @@ RegisterStatus registrationStatusForDll(const fs::path& dll) noexcept {
         fcitx5_register_registration_status_for_dll({native.data(), native.size()}));
 }
 
-HRESULT invokeRegistration(const fs::path& dll, const char* exportName) {
-    SetDllDirectoryW(L"");
-    HMODULE module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!module) return HRESULT_FROM_WIN32(GetLastError());
-    const auto function = resolveProcAddress<RegisterFunction>(module, exportName);
-    const HRESULT result = function ? function() : HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
-    FreeLibrary(module);
-    return result;
-}
-
 void usage() {
     std::wcerr << L"Usage: fcitx5-register "
                   L"--register|--unregister|--repair|--status|--validate-artifact "
@@ -266,7 +232,7 @@ int wmain(int argc, wchar_t** argv) {
         usage();
         return 2;
     }
-    if (operationRequiresAdmin(operation) && !isElevated()) {
+    if (operationRequiresAdmin(operation) && fcitx5_register_is_elevated() == 0) {
         std::wcerr << L"Registration changes require an elevated administrator token.\n";
         return 5;
     }
@@ -275,9 +241,9 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
     const auto exportKind = operationExport(operation);
-    const char* function = exportKind == RegisterExport::unregisterServer ? "DllUnregisterServer"
-                                                                          : "DllRegisterServer";
-    const HRESULT result = invokeRegistration(dll, function);
+    const auto native = dll.native();
+    const HRESULT result = fcitx5_register_invoke_registration_export(
+        {native.data(), native.size()}, static_cast<std::uint32_t>(exportKind));
     if (FAILED(result)) {
         std::wcerr << L"Registration operation failed: 0x" << std::hex
                    << static_cast<unsigned long>(result) << L'\n';
