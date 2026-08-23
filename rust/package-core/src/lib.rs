@@ -5060,18 +5060,53 @@ pub fn resolve_exact_dependencies(
     available: &[Manifest],
     requested_ids: &[&str],
 ) -> Result<Vec<String>, ResolutionError> {
-    let mut packages = Vec::<(&str, &Manifest)>::new();
+    let entries: Vec<_> = available
+        .iter()
+        .map(|manifest| DependencyResolutionEntry {
+            id: manifest.id().as_str().to_owned(),
+            version: manifest.version().to_owned(),
+            dependencies: manifest
+                .dependencies()
+                .iter()
+                .map(|dependency| DependencyResolutionDependency {
+                    id: dependency.id().as_str().to_owned(),
+                    version: dependency.version().to_owned(),
+                })
+                .collect(),
+        })
+        .collect();
+    resolve_exact_dependency_entries(&entries, requested_ids)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DependencyResolutionDependency {
+    id: String,
+    version: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DependencyResolutionEntry {
+    id: String,
+    version: String,
+    dependencies: Vec<DependencyResolutionDependency>,
+}
+
+fn resolve_exact_dependency_entries(
+    available: &[DependencyResolutionEntry],
+    requested_ids: &[&str],
+) -> Result<Vec<String>, ResolutionError> {
+    let mut packages = Vec::<(&str, &DependencyResolutionEntry)>::new();
     for package in available {
-        if packages.iter().any(|(id, _)| *id == package.id().as_str()) {
+        if packages.iter().any(|(id, _)| *id == package.id.as_str()) {
             return Err(resolution_error("repository contains duplicate package id"));
         }
-        packages.push((package.id().as_str(), package));
+        packages.push((package.id.as_str(), package));
     }
 
     let mut visits = Vec::<(&str, Visit)>::new();
     let mut result = Vec::new();
     for id in requested_ids {
-        visit_dependency(id, &packages, &mut visits, &mut result)?;
+        visit_dependency_entry(id, &packages, &mut visits, &mut result)?;
     }
     Ok(result)
 }
@@ -5082,9 +5117,9 @@ enum Visit {
     Complete,
 }
 
-fn visit_dependency<'a>(
+fn visit_dependency_entry<'a>(
     id: &'a str,
-    packages: &[(&'a str, &'a Manifest)],
+    packages: &[(&'a str, &'a DependencyResolutionEntry)],
     visits: &mut Vec<(&'a str, Visit)>,
     result: &mut Vec<String>,
 ) -> Result<(), ResolutionError> {
@@ -5100,17 +5135,15 @@ fn visit_dependency<'a>(
         .ok_or_else(|| resolution_error(format!("required package is unavailable: {id}")))?;
 
     visits.push((id, Visit::Visiting));
-    for dependency in manifest.dependencies() {
+    for dependency in &manifest.dependencies {
         let target = packages
             .iter()
-            .find_map(|(package_id, package)| {
-                (*package_id == dependency.id().as_str()).then_some(*package)
-            })
+            .find_map(|(package_id, package)| (*package_id == dependency.id).then_some(*package))
             .ok_or_else(|| resolution_error("exact dependency version is unavailable"))?;
-        if target.version() != dependency.version() {
+        if target.version != dependency.version {
             return Err(resolution_error("exact dependency version is unavailable"));
         }
-        visit_dependency(dependency.id().as_str(), packages, visits, result)?;
+        visit_dependency_entry(dependency.id.as_str(), packages, visits, result)?;
     }
     if let Some((_, state)) = visits.iter_mut().find(|(visited_id, _)| *visited_id == id) {
         *state = Visit::Complete;
@@ -6564,10 +6597,12 @@ mod repair_ffi {
 
     use super::{
         activate_installed_version_for_rollback, activate_staged_payload_tree,
-        parse_signature_envelope, parse_trusted_keys, stage_validated_archive_zip,
-        stage_verified_payload_tree, validate_manifest_compatibility_fields,
-        verify_installed_packages_for_repair, verify_manifest_signature, verify_mldsa65_signature,
-        PackageId, PackageType, SignedObject, TrustAlgorithm, TrustedKey, MAX_MANIFEST_BYTES,
+        parse_signature_envelope, parse_trusted_keys, resolve_exact_dependency_entries,
+        stage_validated_archive_zip, stage_verified_payload_tree,
+        validate_manifest_compatibility_fields, verify_installed_packages_for_repair,
+        verify_manifest_signature, verify_mldsa65_signature, DependencyResolutionDependency,
+        DependencyResolutionEntry, PackageId, PackageType, SignedObject, TrustAlgorithm,
+        TrustedKey, MAX_MANIFEST_BYTES,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -6634,6 +6669,25 @@ mod repair_ffi {
     pub struct Fcitx5PackageManifestDependency {
         pub id: Fcitx5ByteSlice,
         pub version: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageDependencyResolutionManifest {
+        pub id: Fcitx5ByteSlice,
+        pub version: Fcitx5ByteSlice,
+        pub dependencies: *const Fcitx5PackageManifestDependency,
+        pub dependency_count: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageDependencyResolutionResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub ids: *mut Fcitx5ByteSlice,
+        pub id_count: usize,
     }
 
     #[repr(C)]
@@ -6742,6 +6796,42 @@ mod repair_ffi {
         }
     }
 
+    fn dependency_resolution_error_result(
+        code: &str,
+        message: &str,
+    ) -> Fcitx5PackageDependencyResolutionResult {
+        let mut error_code = [0; 64];
+        let mut error_message = [0; 512];
+        write_ascii(&mut error_code, code);
+        write_ascii(&mut error_message, message);
+        Fcitx5PackageDependencyResolutionResult {
+            status: 1,
+            error_code,
+            error_message,
+            ids: std::ptr::null_mut(),
+            id_count: 0,
+        }
+    }
+
+    fn dependency_resolution_ok_result(
+        ids: Vec<String>,
+    ) -> Fcitx5PackageDependencyResolutionResult {
+        let mut raw: Vec<Fcitx5ByteSlice> = ids
+            .into_iter()
+            .map(|id| owned_slice(id.into_bytes()))
+            .collect();
+        let id_count = raw.len();
+        let ids = raw.as_mut_ptr();
+        std::mem::forget(raw);
+        Fcitx5PackageDependencyResolutionResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            ids,
+            id_count,
+        }
+    }
+
     fn path_from_utf16(ptr: *const u16, len: usize) -> Option<PathBuf> {
         if ptr.is_null() {
             return None;
@@ -6818,6 +6908,58 @@ mod repair_ffi {
                     key_id: PackageId::parse(&string_from_raw(entry.key_id)?).ok()?,
                     algorithm: algorithm_from_str(&string_from_raw(entry.algorithm)?)?,
                     signature: slice_from_raw(entry.signature)?.to_vec(),
+                })
+            })
+            .collect()
+    }
+
+    fn manifest_dependencies_from_raw(
+        dependencies: *const Fcitx5PackageManifestDependency,
+        dependency_count: usize,
+    ) -> Option<Vec<DependencyResolutionDependency>> {
+        if dependency_count == 0 {
+            return Some(Vec::new());
+        }
+        if dependencies.is_null() {
+            return None;
+        }
+        let raw = unsafe { slice::from_raw_parts(dependencies, dependency_count) };
+        raw.iter()
+            .map(|dependency| {
+                Some(DependencyResolutionDependency {
+                    id: PackageId::parse(&string_from_raw(dependency.id)?)
+                        .ok()?
+                        .as_str()
+                        .to_owned(),
+                    version: string_from_raw(dependency.version)?,
+                })
+            })
+            .collect()
+    }
+
+    fn dependency_resolution_entries_from_raw(
+        manifests: *const Fcitx5PackageDependencyResolutionManifest,
+        manifest_count: usize,
+    ) -> Option<Vec<DependencyResolutionEntry>> {
+        if manifest_count == 0 {
+            return Some(Vec::new());
+        }
+        if manifests.is_null() {
+            return None;
+        }
+        let raw = unsafe { slice::from_raw_parts(manifests, manifest_count) };
+        raw.iter()
+            .map(|manifest| {
+                Some(DependencyResolutionEntry {
+                    id: PackageId::parse(&string_from_raw(manifest.id)?)
+                        .ok()?
+                        .as_str()
+                        .to_owned(),
+                    version: string_from_raw(manifest.version)?,
+                    dependencies: manifest_dependencies_from_raw(
+                        manifest.dependencies,
+                        manifest.dependency_count,
+                    )?,
                 })
             })
             .collect()
@@ -7287,6 +7429,52 @@ mod repair_ffi {
         digest_ok_result(*blake3::hash(bytes).as_bytes())
     }
 
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_resolve_exact_dependencies_utf8(
+        manifests: *const Fcitx5PackageDependencyResolutionManifest,
+        manifest_count: usize,
+        requested_ids: *const Fcitx5ByteSlice,
+        requested_id_count: usize,
+    ) -> Fcitx5PackageDependencyResolutionResult {
+        let Some(manifests) = dependency_resolution_entries_from_raw(manifests, manifest_count)
+        else {
+            return dependency_resolution_error_result(
+                "resolution_failed",
+                "repository dependency graph is invalid",
+            );
+        };
+        let requested_ids = if requested_id_count == 0 {
+            Vec::new()
+        } else if requested_ids.is_null() {
+            return dependency_resolution_error_result(
+                "resolution_failed",
+                "requested dependency ids are invalid",
+            );
+        } else {
+            let raw = unsafe { slice::from_raw_parts(requested_ids, requested_id_count) };
+            let Some(ids) = raw
+                .iter()
+                .map(|id| {
+                    PackageId::parse(&string_from_raw(*id)?)
+                        .ok()
+                        .map(|id| id.as_str().to_owned())
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return dependency_resolution_error_result(
+                    "resolution_failed",
+                    "requested dependency ids are invalid",
+                );
+            };
+            ids
+        };
+        let requested_id_refs: Vec<_> = requested_ids.iter().map(String::as_str).collect();
+        match resolve_exact_dependency_entries(&manifests, &requested_id_refs) {
+            Ok(ids) => dependency_resolution_ok_result(ids),
+            Err(error) => dependency_resolution_error_result(error.code(), &error.to_string()),
+        }
+    }
+
     fn parse_trusted_manifest(
         manifest_text: &str,
     ) -> Result<super::Manifest, super::ManifestError> {
@@ -7369,6 +7557,21 @@ mod repair_ffi {
                     free_owned_slice(signature.key_id);
                     free_owned_slice(signature.algorithm);
                     free_owned_slice(signature.signature);
+                }
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_dependency_resolution_free(
+        ids: *mut Fcitx5ByteSlice,
+        id_count: usize,
+    ) {
+        if !ids.is_null() {
+            unsafe {
+                let ids = Vec::from_raw_parts(ids, id_count, id_count);
+                for id in &ids {
+                    free_owned_slice(*id);
                 }
             }
         }

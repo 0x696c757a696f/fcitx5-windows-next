@@ -6,14 +6,8 @@
 #include <array>
 #include <cstring>
 #include <fstream>
-#include <functional>
-#include <limits>
-#include <map>
 #include <set>
-#include <sstream>
 #include <system_error>
-#include <unordered_map>
-#include <unordered_set>
 
 extern "C" {
 struct Fcitx5ByteSlice {
@@ -68,6 +62,21 @@ struct Fcitx5PackageTrustedKeyResult {
 struct Fcitx5PackageManifestDependency {
   Fcitx5ByteSlice id;
   Fcitx5ByteSlice version;
+};
+
+struct Fcitx5PackageDependencyResolutionManifest {
+  Fcitx5ByteSlice id;
+  Fcitx5ByteSlice version;
+  const Fcitx5PackageManifestDependency* dependencies;
+  std::size_t dependency_count;
+};
+
+struct Fcitx5PackageDependencyResolutionResult {
+  int status;
+  std::uint8_t error_code[64];
+  std::uint8_t error_message[512];
+  Fcitx5ByteSlice* ids;
+  std::size_t id_count;
 };
 
 struct Fcitx5PackageManifestFile {
@@ -143,6 +152,10 @@ Fcitx5PackageDigestResult fcitx5_package_sha256_digest_utf8(
     const std::uint8_t* bytes, std::size_t len);
 Fcitx5PackageDigestResult fcitx5_package_blake3_digest_utf8(
     const std::uint8_t* bytes, std::size_t len);
+Fcitx5PackageDependencyResolutionResult fcitx5_package_resolve_exact_dependencies_utf8(
+    const Fcitx5PackageDependencyResolutionManifest* manifests, std::size_t manifest_count,
+    const Fcitx5ByteSlice* requested_ids, std::size_t requested_id_count);
+void fcitx5_package_dependency_resolution_free(Fcitx5ByteSlice* ids, std::size_t id_count);
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -343,6 +356,23 @@ class SignatureEnvelopeResultGuard final {
 
  private:
   Fcitx5PackageSignatureEnvelopeResult result_{};
+};
+
+class DependencyResolutionResultGuard final {
+ public:
+  explicit DependencyResolutionResultGuard(Fcitx5PackageDependencyResolutionResult result)
+      : result_(result) {}
+  ~DependencyResolutionResultGuard() {
+    fcitx5_package_dependency_resolution_free(result_.ids, result_.id_count);
+  }
+  DependencyResolutionResultGuard(const DependencyResolutionResultGuard&) = delete;
+  DependencyResolutionResultGuard& operator=(const DependencyResolutionResultGuard&) = delete;
+  [[nodiscard]] const Fcitx5PackageDependencyResolutionResult& get() const noexcept {
+    return result_;
+  }
+
+ private:
+  Fcitx5PackageDependencyResolutionResult result_{};
 };
 
 std::wstring native_path_string(const std::filesystem::path& path) {
@@ -734,40 +764,56 @@ void verify_payload(const Manifest& manifest, const std::filesystem::path& paylo
 
 std::vector<std::string> resolve_exact_dependencies(
     const std::vector<Manifest>& available, const std::vector<std::string>& requested_ids) {
-  std::map<std::string, const Manifest*, std::less<>> packages;
+  std::vector<std::vector<Fcitx5PackageManifestDependency>> dependency_views;
+  dependency_views.reserve(available.size());
+  std::vector<Fcitx5PackageDependencyResolutionManifest> manifest_views;
+  manifest_views.reserve(available.size());
   for (const auto& package : available) {
-    if (!packages.emplace(package.id, &package).second) {
-      fail("resolution_failed", "repository contains duplicate package id");
+    auto& dependencies = dependency_views.emplace_back();
+    dependencies.reserve(package.dependencies.size());
+    for (const auto& dependency : package.dependencies) {
+      dependencies.push_back(Fcitx5PackageManifestDependency{
+          ffi_slice(dependency.id),
+          ffi_slice(dependency.version),
+      });
     }
+    manifest_views.push_back(Fcitx5PackageDependencyResolutionManifest{
+        ffi_slice(package.id),
+        ffi_slice(package.version),
+        dependencies.empty() ? nullptr : dependencies.data(),
+        dependencies.size(),
+    });
   }
-  enum class Visit { visiting, complete };
-  std::unordered_map<std::string, Visit> visits;
-  std::vector<std::string> result;
-  std::function<void(const std::string&)> visit = [&](const std::string& id) {
-    const auto state = visits.find(id);
-    if (state != visits.end()) {
-      if (state->second == Visit::visiting) {
-        fail("resolution_failed", "dependency cycle detected");
-      }
-      return;
-    }
-    const auto found = packages.find(id);
-    if (found == packages.end()) {
-      fail("resolution_failed", "required package is unavailable: " + id);
-    }
-    visits.emplace(id, Visit::visiting);
-    for (const auto& dependency : found->second->dependencies) {
-      const auto target = packages.find(dependency.id);
-      if (target == packages.end() || target->second->version != dependency.version) {
-        fail("resolution_failed", "exact dependency version is unavailable");
-      }
-      visit(dependency.id);
-    }
-    visits[id] = Visit::complete;
-    result.push_back(id);
-  };
+
+  std::vector<Fcitx5ByteSlice> requested_views;
+  requested_views.reserve(requested_ids.size());
   for (const auto& id : requested_ids) {
-    visit(id);
+    requested_views.push_back(ffi_slice(id));
+  }
+
+  const DependencyResolutionResultGuard guard(
+      fcitx5_package_resolve_exact_dependencies_utf8(
+          manifest_views.empty() ? nullptr : manifest_views.data(), manifest_views.size(),
+          requested_views.empty() ? nullptr : requested_views.data(), requested_views.size()));
+  const auto& resolution = guard.get();
+  if (resolution.status != 0) {
+    std::string code = ffi_string(resolution.error_code);
+    std::string message = ffi_string(resolution.error_message);
+    if (code.empty()) {
+      code = "resolution_failed";
+    }
+    if (message.empty()) {
+      message = "dependency resolution failed";
+    }
+    fail(std::move(code), std::move(message));
+  }
+  if (resolution.id_count != 0 && resolution.ids == nullptr) {
+    fail("resolution_failed", "dependency resolution result is invalid");
+  }
+  std::vector<std::string> result;
+  result.reserve(resolution.id_count);
+  for (std::size_t index = 0; index < resolution.id_count; ++index) {
+    result.push_back(ffi_string(resolution.ids[index]));
   }
   return result;
 }

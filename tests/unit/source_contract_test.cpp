@@ -406,6 +406,10 @@ int main(int argc, char** argv) {
         rustPackageCore.find("fcitx5_package_parse_manifest_utf8") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_validate_manifest_compatibility_utf8") ==
             std::string::npos ||
+        rustPackageCore.find("fcitx5_package_resolve_exact_dependencies_utf8") ==
+            std::string::npos ||
+        rustPackageCore.find("fcitx5_package_dependency_resolution_free") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_package_read_lockfile_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_read_trusted_keys_utf16") == std::string::npos ||
         rustPackageCore.find("write_installed_lockfile_atomic") == std::string::npos ||
@@ -479,6 +483,12 @@ int main(int argc, char** argv) {
         packageSource.find("file entry violates path, hash or resource limits") !=
             std::string::npos ||
         packageSource.find("dependency identity is invalid or duplicated") !=
+            std::string::npos ||
+        packageSource.find("repository contains duplicate package id") !=
+            std::string::npos ||
+        packageSource.find("dependency cycle detected") != std::string::npos ||
+        packageSource.find("required package is unavailable") != std::string::npos ||
+        packageSource.find("exact dependency version is unavailable") !=
             std::string::npos ||
         packageSource.find("permission is invalid or duplicated") != std::string::npos ||
         packageSource.find("unable to write detached manifest signature") !=
