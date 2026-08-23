@@ -1,5 +1,4 @@
 #include "config_model.h"
-#include "activation_guard.h"
 #include "deployment_core.h"
 #include "fcitx5_windows/release_identity.h"
 #include "fcitx5_windows/version.h"
@@ -218,6 +217,71 @@ int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* de
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
+
+namespace fcitx::windows::tsf {
+
+extern "C" {
+std::size_t fcitx5_tsf_activation_guard_marker_path(const wchar_t* data_root,
+                                                    std::size_t data_root_len,
+                                                    wchar_t* out,
+                                                    std::size_t capacity);
+std::uint8_t fcitx5_tsf_activation_guard_status(const wchar_t* data_root,
+                                                std::size_t data_root_len,
+                                                std::uint8_t* reason_out,
+                                                std::size_t reason_capacity,
+                                                std::size_t* reason_len);
+std::uint8_t fcitx5_tsf_activation_guard_clear(const wchar_t* data_root,
+                                               std::size_t data_root_len);
+}
+
+struct ActivationGuardStatus {
+    bool disabled{};
+    std::filesystem::path markerPath;
+    std::string reason;
+};
+
+[[nodiscard]] std::filesystem::path activationGuardMarkerPath(
+    const std::filesystem::path& dataRoot) {
+    const std::wstring root = dataRoot.wstring();
+    const std::size_t required =
+        fcitx5_tsf_activation_guard_marker_path(root.data(), root.size(), nullptr, 0);
+    if (required == 0) return {};
+    std::wstring buffer(required, L'\0');
+    const std::size_t written = fcitx5_tsf_activation_guard_marker_path(
+        root.data(), root.size(), buffer.data(), buffer.size());
+    buffer.resize((std::min)(written, buffer.size()));
+    return std::filesystem::path(buffer);
+}
+
+[[nodiscard]] ActivationGuardStatus activationGuardStatus(
+    const std::filesystem::path& dataRoot) noexcept {
+    ActivationGuardStatus status;
+    try {
+        status.markerPath = activationGuardMarkerPath(dataRoot);
+        const std::wstring root = dataRoot.wstring();
+        std::array<std::uint8_t, 512> reason{};
+        std::size_t reasonLength = 0;
+        status.disabled = fcitx5_tsf_activation_guard_status(
+                              root.data(), root.size(), reason.data(), reason.size(),
+                              &reasonLength) != 0;
+        status.reason.assign(reinterpret_cast<const char*>(reason.data()),
+                             (std::min)(reasonLength, reason.size()));
+    } catch (...) {
+        status = {};
+    }
+    return status;
+}
+
+[[nodiscard]] bool clearActivationGuard(const std::filesystem::path& dataRoot) noexcept {
+    try {
+        const std::wstring root = dataRoot.wstring();
+        return fcitx5_tsf_activation_guard_clear(root.data(), root.size()) != 0;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace fcitx::windows::tsf
 
 namespace {
 

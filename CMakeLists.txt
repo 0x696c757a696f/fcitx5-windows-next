@@ -506,8 +506,6 @@ add_library(fcitx5::tsf_activation_guard ALIAS fcitx5_tsf_activation_guard)
 set_target_properties(fcitx5_tsf_activation_guard PROPERTIES
                       IMPORTED_LOCATION "${FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB}")
 add_dependencies(fcitx5_tsf_activation_guard fcitx5_tsf_support_core_rustlib)
-target_include_directories(
-  fcitx5_tsf_activation_guard INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
 target_link_libraries(fcitx5_tsf_activation_guard INTERFACE ws2_32 userenv ntdll bcrypt advapi32)
 
 add_executable(fcitx5_mock_engine src/engine/mock_engine_main.cpp)
@@ -1223,13 +1221,6 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_candidate_ui_element_test)
   fcitx_apply_binary_hardening(fcitx5_candidate_ui_element_test)
   add_test(NAME tsf-uiless-candidate-contract COMMAND fcitx5_candidate_ui_element_test)
-
-  add_executable(fcitx5_tsf_activation_guard_test tests/unit/tsf_activation_guard_test.cpp)
-  target_link_libraries(
-    fcitx5_tsf_activation_guard_test PRIVATE fcitx5::tsf_activation_guard)
-  fcitx_apply_project_options(fcitx5_tsf_activation_guard_test)
-  fcitx_apply_binary_hardening(fcitx5_tsf_activation_guard_test)
-  add_test(NAME tsf-activation-guard-contract COMMAND fcitx5_tsf_activation_guard_test)
 
   add_executable(fcitx5_runtime_identity_test tests/unit/runtime_identity_test.cpp)
   target_link_libraries(fcitx5_runtime_identity_test PRIVATE fcitx5::ipc_client)

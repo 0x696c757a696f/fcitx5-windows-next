@@ -925,12 +925,16 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("WriteProcessMemory") != std::string::npos) {
         return fail("RUST-R3-TSF-POC: Rust TSF PoC must not link product control/package/candidate or prohibited host APIs");
     }
-    if (std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.cpp") ||
+    if (std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.h") ||
+        std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/unit/tsf_activation_guard_test.cpp") ||
         cargoManifest.find("\"rust/tsf-support-core\"") == std::string::npos ||
         cargoLock.find("name = \"fcitx5-tsf-support-core\"") == std::string::npos ||
         rustTsfSupportManifest.find("crate-type = [\"staticlib\", \"rlib\"]") ==
             std::string::npos ||
         rustTsfSupportManifest.find("Win32_Storage_FileSystem") == std::string::npos ||
+        controlSource.find("#include \"activation_guard.h\"") != std::string::npos ||
+        cmakeSource.find("tests/unit/tsf_activation_guard_test.cpp") != std::string::npos ||
         rustTsfSupportSource.find("fcitx5_tsf_activation_guard_status") ==
             std::string::npos ||
         rustTsfSupportSource.find("fcitx5_tsf_activation_attempt_begin") ==
@@ -944,7 +948,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         cmakeSource.find("fcitx5-tsf-support-core") == std::string::npos ||
         cmakeSource.find("FCITX_RELEASE_DATA_DIRECTORY=") == std::string::npos) {
-        return fail("TSF-SUPPORT-RUST: activation guard policy must be Rust-owned and the old C++ source must stay deleted");
+        return fail("TSF-SUPPORT-RUST: activation guard policy must be Rust-owned and the old C++ header/source/test must stay deleted");
     }
     std::cout << "source-contract ok\n";
     return 0;
