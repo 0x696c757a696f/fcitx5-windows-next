@@ -6549,8 +6549,9 @@ mod repair_ffi {
 
     use super::{
         activate_installed_version_for_rollback, activate_staged_payload_tree, parse_trusted_keys,
-        stage_validated_archive_zip, verify_installed_packages_for_repair, PackageId,
-        TrustAlgorithm, TrustedKey, MAX_MANIFEST_BYTES,
+        stage_validated_archive_zip, stage_verified_payload_tree,
+        verify_installed_packages_for_repair, verify_manifest_signature, PackageId, TrustAlgorithm,
+        TrustedKey, MAX_MANIFEST_BYTES,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -7121,6 +7122,79 @@ mod repair_ffi {
             install_root,
             &transaction_id,
             &trusted_keys,
+        ) {
+            Ok(path) => stage_ok_result(path),
+            Err(error) => stage_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_stage_payload_utf16(
+        manifest_bytes: *const u8,
+        manifest_len: usize,
+        payload_root: *const u16,
+        payload_root_len: usize,
+        install_root: *const u16,
+        install_root_len: usize,
+        transaction_id: *const u8,
+        transaction_id_len: usize,
+        signature: *const u8,
+        signature_len: usize,
+        trusted_key: *const Fcitx5TrustedKey,
+    ) -> Fcitx5PackageStageResult {
+        let Some(manifest_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: manifest_bytes,
+            len: manifest_len,
+        }) else {
+            return stage_error_result("invalid_manifest", "manifest bytes are invalid");
+        };
+        let Ok(manifest_text) = std::str::from_utf8(manifest_bytes) else {
+            return stage_error_result("invalid_manifest", "manifest is not strict JSON");
+        };
+        let manifest = match super::parse_manifest(manifest_text) {
+            Ok(manifest) => manifest,
+            Err(error) => return stage_error_result(error.code(), &error.to_string()),
+        };
+        let Some(payload_root) = path_from_utf16(payload_root, payload_root_len) else {
+            return stage_error_result("unsafe_payload", "payload root path is invalid");
+        };
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return stage_error_result("unsafe_path", "transaction id or install root is unsafe");
+        };
+        let Some(transaction_id) = string_from_raw(Fcitx5ByteSlice {
+            data: transaction_id,
+            len: transaction_id_len,
+        }) else {
+            return stage_error_result("unsafe_path", "transaction id or install root is unsafe");
+        };
+        let Some(signature) = slice_from_raw(Fcitx5ByteSlice {
+            data: signature,
+            len: signature_len,
+        }) else {
+            return stage_error_result("invalid_signature", "signature identity is incomplete");
+        };
+        if trusted_key.is_null() {
+            return stage_error_result("invalid_keyring", "trusted key set is invalid");
+        }
+        let Some(trusted_key) = key_from_raw(unsafe { &*trusted_key }) else {
+            return stage_error_result("invalid_keyring", "trusted key set is invalid");
+        };
+        if manifest.key_id() != trusted_key.id() {
+            return stage_error_result(
+                "untrusted_key",
+                "manifest key id does not match selected trusted key",
+            );
+        }
+        if let Err(error) = verify_manifest_signature(manifest_bytes, signature, &trusted_key) {
+            return stage_error_result(error.code(), &error.to_string());
+        }
+        match stage_verified_payload_tree(
+            &manifest,
+            manifest_bytes,
+            payload_root,
+            install_root,
+            &transaction_id,
+            signature,
         ) {
             Ok(path) => stage_ok_result(path),
             Err(error) => stage_error_result(error.code(), &error.to_string()),

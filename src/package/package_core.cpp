@@ -387,17 +387,6 @@ std::string read_file_bounded(const std::filesystem::path& path, std::size_t max
   return bytes;
 }
 
-void write_file(const std::filesystem::path& path, std::string_view bytes) {
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  if (!output) {
-    fail("io_error", "unable to create file");
-  }
-  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  if (!output) {
-    fail("io_error", "unable to write complete file");
-  }
-}
-
 }  // namespace
 
 // Validators declared in package_core.h and used by the updater and deployer
@@ -901,40 +890,35 @@ std::filesystem::path stage_verified_payload(
     const std::filesystem::path& payload_root, const std::filesystem::path& install_root,
     std::string_view transaction_id, std::span<const std::byte> signature,
     const TrustedKey& trusted_key) {
-  if (!is_lower_package_id(transaction_id) || path_contains_reparse_point(install_root)) {
-    fail("unsafe_path", "transaction id or install root is unsafe");
+  static_cast<void>(manifest);
+  const detail::Fcitx5PackageTrustedKey trusted_key_view{
+      detail::byte_slice(trusted_key.id),
+      detail::byte_slice(trusted_key.algorithm),
+      detail::byte_slice(std::span<const std::byte>(trusted_key.public_key.data(),
+                                                    trusted_key.public_key.size())),
+      detail::byte_slice(std::span<const std::byte>(trusted_key.rsa_public_blob.data(),
+                                                    trusted_key.rsa_public_blob.size())),
+      trusted_key.revoked ? std::uint8_t{1} : std::uint8_t{0},
+  };
+  const std::wstring payload = native_path_string(payload_root);
+  const std::wstring root = native_path_string(install_root);
+  const auto result = detail::fcitx5_package_stage_payload_utf16(
+      reinterpret_cast<const std::uint8_t*>(manifest_bytes.data()), manifest_bytes.size(),
+      payload.data(), payload.size(), root.data(), root.size(),
+      reinterpret_cast<const std::uint8_t*>(transaction_id.data()), transaction_id.size(),
+      reinterpret_cast<const std::uint8_t*>(signature.data()), signature.size(), &trusted_key_view);
+  if (result.status != 0) {
+    std::string code = detail::ffi_ascii(result.error_code);
+    std::string message = detail::ffi_ascii(result.error_message);
+    fail(code.empty() ? "invalid_package" : std::move(code),
+         message.empty() ? "package payload staging failed" : std::move(message));
   }
-  if (manifest.key_id != trusted_key.id) {
-    fail("untrusted_key", "manifest key id does not match selected trusted key");
+  std::filesystem::path staged;
+  if (result.staged_path && result.staged_path_len != 0) {
+    staged = std::filesystem::path(
+        std::wstring(result.staged_path, result.staged_path + result.staged_path_len));
   }
-  verify_manifest_signature(manifest_bytes, signature, trusted_key);
-  verify_payload(manifest, payload_root);
-  std::filesystem::create_directories(install_root / "staging");
-  const auto staged = install_root / "staging" / std::filesystem::path(transaction_id);
-  if (std::filesystem::exists(staged)) {
-    fail("transaction_exists", "staging transaction already exists");
-  }
-  std::filesystem::create_directories(staged / "payload");
-  try {
-    for (const auto& file : manifest.files) {
-      const auto source = payload_root / std::filesystem::path(file.path);
-      const auto destination = staged / "payload" / std::filesystem::path(file.path);
-      std::filesystem::create_directories(destination.parent_path());
-      std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none);
-    }
-    write_file(staged / "manifest.json", manifest_bytes);
-    std::ofstream signature_output(staged / "manifest.sig", std::ios::binary | std::ios::trunc);
-    signature_output.write(reinterpret_cast<const char*>(signature.data()),
-                           static_cast<std::streamsize>(signature.size()));
-    if (!signature_output) {
-      fail("io_error", "unable to write detached manifest signature");
-    }
-    verify_payload(manifest, staged / "payload");
-  } catch (...) {
-    std::error_code ignored;
-    std::filesystem::remove_all(staged, ignored);
-    throw;
-  }
+  detail::fcitx5_package_wide_free(result.staged_path, result.staged_path_len);
   return staged;
 }
 

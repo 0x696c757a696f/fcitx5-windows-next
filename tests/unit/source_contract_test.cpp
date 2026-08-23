@@ -414,6 +414,7 @@ int main(int argc, char** argv) {
         rustPackageCore.find("archive_zip_staging_matches_cpp_extraction_policy") ==
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_stage_payload_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_staged_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_installed_version_utf16") ==
             std::string::npos ||
@@ -437,6 +438,7 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
         rustPackageCoreBinary.find("verify_signature_envelope") == std::string::npos ||
         packageCoreHeader.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+        packageCoreHeader.find("fcitx5_package_stage_payload_utf16") == std::string::npos ||
         packageCoreHeader.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
         packageCoreHeader.find("fcitx5_repository_verify_index_envelope_utf8") ==
             std::string::npos ||
@@ -461,6 +463,12 @@ int main(int argc, char** argv) {
         packageSource.find("dependency identity is invalid or duplicated") !=
             std::string::npos ||
         packageSource.find("permission is invalid or duplicated") != std::string::npos ||
+        packageSource.find("unable to write detached manifest signature") !=
+            std::string::npos ||
+        packageSource.find("staging transaction already exists") != std::string::npos ||
+        packageSource.find("std::filesystem::copy_file") != std::string::npos ||
+        packageSource.find("manifest key id does not match selected trusted key") !=
+            std::string::npos ||
         packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||

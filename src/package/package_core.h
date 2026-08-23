@@ -265,6 +265,12 @@ extern "C" Fcitx5PackageStageResult fcitx5_package_stage_archive_utf16(
     std::size_t install_root_len, const std::uint8_t* transaction_id,
     std::size_t transaction_id_len, const Fcitx5PackageTrustedKey* trusted_keys,
     std::size_t trusted_key_count);
+extern "C" Fcitx5PackageStageResult fcitx5_package_stage_payload_utf16(
+    const std::uint8_t* manifest_bytes, std::size_t manifest_len, const wchar_t* payload_root,
+    std::size_t payload_root_len, const wchar_t* install_root, std::size_t install_root_len,
+    const std::uint8_t* transaction_id, std::size_t transaction_id_len,
+    const std::uint8_t* signature, std::size_t signature_len,
+    const Fcitx5PackageTrustedKey* trusted_key);
 extern "C" void fcitx5_package_wide_free(wchar_t* ptr, std::size_t len);
 extern "C" Fcitx5RepositoryResult fcitx5_repository_verify_index_utf8(
     const std::uint8_t* index_data, std::size_t index_len, const std::uint8_t* signature_data,
