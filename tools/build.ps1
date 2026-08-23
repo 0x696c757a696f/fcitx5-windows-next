@@ -46,9 +46,48 @@ function Invoke-Native {
   foreach ($argument in $Arguments) {
     $startInfo.ArgumentList.Add($argument)
   }
+  $captureNativeOutput = $env:GITHUB_ACTIONS -eq 'true'
+  $stdoutPath = $null
+  $stderrPath = $null
+  if ($captureNativeOutput) {
+    New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
+    $stamp = [System.Guid]::NewGuid().ToString('N')
+    $stdoutPath = Join-Path $buildTempRoot "native-$stamp.out.log"
+    $stderrPath = Join-Path $buildTempRoot "native-$stamp.err.log"
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+  }
   $process = [System.Diagnostics.Process]::Start($startInfo)
+  if ($captureNativeOutput) {
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+  }
   $process.WaitForExit()
+  if ($captureNativeOutput) {
+    $stdoutTask.Wait()
+    $stderrTask.Wait()
+    [System.IO.File]::WriteAllText($stdoutPath, $stdoutTask.Result, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($stderrPath, $stderrTask.Result, [System.Text.Encoding]::UTF8)
+    if (-not [string]::IsNullOrWhiteSpace($stdoutTask.Result)) {
+      Write-Host $stdoutTask.Result
+    }
+    if (-not [string]::IsNullOrWhiteSpace($stderrTask.Result)) {
+      Write-Host $stderrTask.Result
+    }
+  }
   if ($process.ExitCode -ne 0) {
+    if ($captureNativeOutput) {
+      $tail = @()
+      foreach ($path in @($stdoutPath, $stderrPath)) {
+        if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+          $tail += Get-Content -LiteralPath $path -Tail 80 -Encoding UTF8
+        }
+      }
+      if ($tail.Count -ne 0) {
+        $message = ($tail -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        Write-Host "::error title=Native command failed tail::$message"
+      }
+    }
     throw "Command failed ($($process.ExitCode)): $Executable $($Arguments -join ' ')"
   }
 }
