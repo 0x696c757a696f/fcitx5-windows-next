@@ -319,6 +319,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_pipe_security_sddl_utf16") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_pipe_security_descriptor_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("ConvertStringSecurityDescriptorToSecurityDescriptorW") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("pipe_security_sddl_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_same_principal_session_utf16") ==
@@ -338,8 +342,13 @@ int main(int argc, char** argv) {
         pipeSecuritySource.find("D:P(A;;GA;;;SY)") != std::string::npos ||
         pipeSecuritySource.find("identity.userSid.empty() || identity.serviceAccount") !=
             std::string::npos ||
-        pipeSecuritySource.find("fcitx5_windows_common_pipe_security_sddl_utf16") ==
+        pipeSecuritySource.find("fcitx5_windows_common_pipe_security_descriptor_utf16") ==
             std::string::npos ||
+        pipeSecuritySource.find("fcitx5_windows_common_pipe_security_sddl_utf16") !=
+            std::string::npos ||
+        pipeSecuritySource.find("ConvertStringSecurityDescriptorToSecurityDescriptorW") !=
+            std::string::npos ||
+        pipeSecuritySource.find("#include <sddl.h>") != std::string::npos ||
         runtimeIdentitySource.find("!identity.serviceAccount && identity.sessionId != 0") !=
             std::string::npos ||
         runtimeIdentitySource.find("parseCurrentGeneration") != std::string::npos ||

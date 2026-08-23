@@ -1,42 +1,26 @@
 #include "pipe_security.h"
 
-#include <sddl.h>
-
 #include <cstdint>
-#include <string>
 
 namespace fcitx::windows::platform {
 namespace {
 
-extern "C" std::size_t fcitx5_windows_common_pipe_security_sddl_utf16(
+extern "C" void* fcitx5_windows_common_pipe_security_descriptor_utf16(
     std::uint8_t service_account,
     std::uint32_t session_id,
     const std::uint16_t* user_sid,
-    std::size_t user_sid_len,
-    std::uint16_t* output,
-    std::size_t capacity);
+    std::size_t user_sid_len);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
 }
 
-std::wstring pipeSecuritySddl(const RuntimeIdentity& identity) {
-    const auto call = [&](std::uint16_t* output, std::size_t capacity) {
-        return fcitx5_windows_common_pipe_security_sddl_utf16(
+PSECURITY_DESCRIPTOR pipeSecurityDescriptor(const RuntimeIdentity& identity) noexcept {
+    return reinterpret_cast<PSECURITY_DESCRIPTOR>(
+        fcitx5_windows_common_pipe_security_descriptor_utf16(
             identity.serviceAccount ? 1 : 0, identity.sessionId, wideData(identity.userSid),
-            identity.userSid.size(), output, capacity);
-    };
-    const std::size_t required = call(nullptr, 0);
-    if (required == 0)
-        return {};
-    std::wstring result(required, L'\0');
-    const std::size_t written =
-        call(reinterpret_cast<std::uint16_t*>(result.data()), result.size());
-    if (written == 0 || written > result.size())
-        return {};
-    result.resize(written);
-    return result;
+            identity.userSid.size()));
 }
 
 } // namespace
@@ -71,12 +55,8 @@ void PipeSecurity::reset() noexcept {
 bool PipeSecurity::create(const RuntimeIdentity& identity, PipeSecurity& output) noexcept {
     output.reset();
     try {
-        const std::wstring sddl = pipeSecuritySddl(identity);
-        if (sddl.empty())
-            return false;
-        PSECURITY_DESCRIPTOR descriptor = nullptr;
-        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) {
+        PSECURITY_DESCRIPTOR descriptor = pipeSecurityDescriptor(identity);
+        if (!descriptor) {
             return false;
         }
         output.descriptor_ = descriptor;

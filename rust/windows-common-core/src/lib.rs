@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::env;
+use std::ffi::c_void;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -269,6 +270,41 @@ fn pipe_security_sddl(service_account: bool, session_id: u32, user_sid: &str) ->
     Some(format!(
         "D:P(A;;GA;;;SY)(A;;GA;;;{user_sid})S:(ML;;NW;;;ME)"
     ))
+}
+
+fn pipe_security_descriptor(
+    service_account: bool,
+    session_id: u32,
+    user_sid: &str,
+) -> Option<*mut c_void> {
+    let sddl = pipe_security_sddl(service_account, session_id, user_sid)?;
+    let mut wide: Vec<u16> = sddl.encode_utf16().collect();
+    wide.push(0);
+    let mut descriptor: *mut c_void = std::ptr::null_mut();
+    // SAFETY: `wide` is NUL-terminated UTF-16 and `descriptor` is a valid out
+    // pointer. On success, Windows returns a LocalAlloc-owned descriptor that
+    // the C++ RAII wrapper releases with LocalFree.
+    let ok = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0 && !descriptor.is_null()).then_some(descriptor)
+}
+
+const SDDL_REVISION_1: u32 = 1;
+
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        string_security_descriptor: *const u16,
+        string_sddl_revision: u32,
+        security_descriptor: *mut *mut c_void,
+        security_descriptor_size: *mut u32,
+    ) -> i32;
 }
 
 fn same_principal_and_session(
@@ -567,6 +603,26 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_sddl_utf16(
         return 0;
     };
     write_wide_string(&sddl, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
+/// UTF-16 buffer with exactly `user_sid_len` code units. The returned pointer is
+/// null on failure; non-null pointers are allocated by Windows and must be
+/// released with `LocalFree`.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_descriptor_utf16(
+    service_account: u8,
+    session_id: u32,
+    user_sid: *const u16,
+    user_sid_len: usize,
+) -> *mut c_void {
+    let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
+        return std::ptr::null_mut();
+    };
+    pipe_security_descriptor(service_account != 0, session_id, &user_sid)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
