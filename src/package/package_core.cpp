@@ -80,6 +80,10 @@ Fcitx5PackageLifecycleResult fcitx5_package_finalize_remove_utf16(
 Fcitx5PackageLifecycleResult fcitx5_package_verify_installed_utf16(
     const wchar_t* install_root, std::size_t install_root_len,
     const Fcitx5TrustedKeyNative* trusted_keys, std::size_t trusted_key_count);
+Fcitx5PackageLifecycleResult fcitx5_package_activate_staged_utf16(
+    const wchar_t* staged_root, std::size_t staged_root_len, const wchar_t* install_root,
+    std::size_t install_root_len, const Fcitx5TrustedKeyNative* trusted_keys,
+    std::size_t trusted_key_count);
 Fcitx5PackageLifecycleResult fcitx5_package_activate_installed_version_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* version, std::size_t version_len,
@@ -366,31 +370,6 @@ void write_file(const std::filesystem::path& path, std::string_view bytes) {
   output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
   if (!output) {
     fail("io_error", "unable to write complete file");
-  }
-}
-
-Json lock_to_json(const std::vector<LockEntry>& entries) {
-  Json result = {{"format_version", 1}, {"packages", Json::array()}};
-  for (const auto& entry : entries) {
-    result["packages"].push_back({{"id", entry.id},
-                                   {"version", entry.version},
-                                   {"manifest_sha256", entry.manifest_sha256},
-                                   {"state", entry.state}});
-  }
-  return result;
-}
-
-void write_lockfile_atomic(const std::filesystem::path& install_root,
-                           const std::vector<LockEntry>& entries) {
-  const auto lock_path = install_root / "packages.lock";
-  const auto temporary_path = install_root / "packages.lock.new";
-  const auto contents = lock_to_json(entries).dump(2) + "\n";
-  write_file(temporary_path, contents);
-  if (!MoveFileExW(temporary_path.c_str(), lock_path.c_str(),
-                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    std::error_code ignored;
-    std::filesystem::remove(temporary_path, ignored);
-    fail("activation_failed", "unable to atomically publish packages.lock");
   }
 }
 
@@ -1018,68 +997,12 @@ std::vector<LockEntry> read_lockfile(const std::filesystem::path& install_root) 
 void activate_staged_package(const std::filesystem::path& staged_root,
                              const std::filesystem::path& install_root,
                              std::span<const TrustedKey> trusted_keys) {
-  if (path_contains_reparse_point(staged_root) || path_contains_reparse_point(install_root)) {
-    fail("unsafe_path", "activation path contains a reparse point");
-  }
-  const auto manifest_bytes = read_file_bounded(staged_root / "manifest.json", kMaximumManifestBytes);
-  const auto manifest = parse_manifest(manifest_bytes);
-  const auto signature_bytes = read_file_bounded(staged_root / "manifest.sig", 16U * 1024U);
-  const auto trusted_key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
-    return candidate.id == manifest.key_id;
-  });
-  if (trusted_key == trusted_keys.end()) {
-    fail("untrusted_key", "manifest key is not trusted at activation time");
-  }
-  verify_manifest_signature(manifest_bytes, std::as_bytes(std::span(signature_bytes)),
-                            *trusted_key);
-  verify_payload(manifest, staged_root / "payload");
-  const auto active_before = read_lockfile(install_root);
-  for (const auto& dependency : manifest.dependencies) {
-    const auto installed = std::ranges::find_if(active_before, [&](const LockEntry& entry) {
-      return entry.id == dependency.id && entry.version == dependency.version &&
-             entry.state != "disabled" && entry.state != "pending_remove" &&
-             entry.state != "broken" && entry.state != "quarantined";
-    });
-    if (installed == active_before.end()) {
-      fail("resolution_failed", "an exact active dependency is unavailable at activation time");
-    }
-  }
-  const auto versions = install_root / "versions" / std::filesystem::path(manifest.id);
-  std::filesystem::create_directories(versions);
-  const auto destination = versions / std::filesystem::path(manifest.version);
-  if (std::filesystem::exists(destination)) {
-    verify_payload(manifest, destination);
-  } else if (!MoveFileExW((staged_root / "payload").c_str(), destination.c_str(),
-                          MOVEFILE_WRITE_THROUGH)) {
-    fail("activation_failed", "unable to atomically publish version directory");
-  }
-
-  const auto metadata = install_root / "manifests" / std::filesystem::path(manifest.id);
-  std::filesystem::create_directories(metadata);
-  const auto manifest_destination = metadata / std::filesystem::path(manifest.version + ".json");
-  const auto signature_destination = metadata / std::filesystem::path(manifest.version + ".sig");
-  write_file(manifest_destination, manifest_bytes);
-  std::ofstream signature_output(signature_destination, std::ios::binary | std::ios::trunc);
-  signature_output.write(signature_bytes.data(), static_cast<std::streamsize>(signature_bytes.size()));
-  if (!signature_output) {
-    fail("activation_failed", "unable to publish manifest signature metadata");
-  }
-
-  auto lock = active_before;
-  const auto digest = hex_sha256(sha256(std::as_bytes(std::span(manifest_bytes))));
-  const LockEntry updated{manifest.id, manifest.version, digest, "installed"};
-  const auto existing = std::ranges::find_if(lock, [&](const LockEntry& item) {
-    return item.id == manifest.id;
-  });
-  if (existing == lock.end()) {
-    lock.push_back(updated);
-  } else {
-    *existing = updated;
-  }
-  std::ranges::sort(lock, {}, &LockEntry::id);
-  write_lockfile_atomic(install_root, lock);
-  std::error_code ignored;
-  std::filesystem::remove_all(staged_root, ignored);
+  const auto key_views = rust_trusted_key_views(trusted_keys);
+  const std::wstring staged = native_path_string(staged_root);
+  const std::wstring root = native_path_string(install_root);
+  require_lifecycle_ok(fcitx5_package_activate_staged_utf16(
+      staged.data(), staged.size(), root.data(), root.size(),
+      key_views.empty() ? nullptr : key_views.data(), key_views.size()));
 }
 
 std::vector<TrustedKey> read_trusted_keys(const std::filesystem::path& path) {

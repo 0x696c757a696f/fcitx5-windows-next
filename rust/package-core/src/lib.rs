@@ -6548,8 +6548,9 @@ mod repair_ffi {
     #![allow(unsafe_code)]
 
     use super::{
-        activate_installed_version_for_rollback, stage_validated_archive_zip,
-        verify_installed_packages_for_repair, PackageId, TrustAlgorithm, TrustedKey,
+        activate_installed_version_for_rollback, activate_staged_payload_tree,
+        stage_validated_archive_zip, verify_installed_packages_for_repair, PackageId,
+        TrustAlgorithm, TrustedKey,
     };
     use std::ffi::OsString;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -6741,6 +6742,30 @@ mod repair_ffi {
         ) {
             Ok(path) => stage_ok_result(path),
             Err(error) => stage_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_activate_staged_utf16(
+        staged_root: *const u16,
+        staged_root_len: usize,
+        install_root: *const u16,
+        install_root_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+    ) -> Fcitx5PackageRepairResult {
+        let Some(staged_root) = path_from_utf16(staged_root, staged_root_len) else {
+            return error_result("unsafe_path", "activation path contains a reparse point");
+        };
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return error_result("unsafe_path", "activation path contains a reparse point");
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return error_result("invalid_keyring", "trusted key set is invalid");
+        };
+        match activate_staged_payload_tree(staged_root, install_root, &trusted_keys) {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
         }
     }
 

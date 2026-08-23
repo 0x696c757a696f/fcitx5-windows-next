@@ -413,6 +413,7 @@ int main(int argc, char** argv) {
         rustPackageCore.find("archive_zip_staging_matches_cpp_extraction_policy") ==
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_activate_staged_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_installed_version_utf16") ==
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_wide_free") == std::string::npos ||
@@ -440,6 +441,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageCoreHeader.find("find_repository_package") == std::string::npos ||
         packageCoreHeader.find("rust_trusted_key_views") == std::string::npos ||
+        packageSource.find("write_lockfile_atomic") != std::string::npos ||
+        packageSource.find("unable to atomically publish version directory") !=
+            std::string::npos ||
+        packageSource.find("manifest key is not trusted at activation time") !=
+            std::string::npos ||
         packageSource.find("packages.lock schema is invalid") != std::string::npos ||
         packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
