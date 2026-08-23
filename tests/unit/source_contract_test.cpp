@@ -444,6 +444,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_is_safe_relative_path_utf8") ==
             std::string::npos ||
+        rustPackageCore.find("fcitx5_package_path_contains_reparse_point_utf16") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_staged_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_installed_version_utf16") ==
             std::string::npos ||
@@ -516,6 +518,10 @@ int main(int argc, char** argv) {
         packageSource.find("lowered == \"con\"") != std::string::npos ||
         packageSource.find("starts_with(\"com\"") != std::string::npos ||
         packageSource.find("path.find(':')") != std::string::npos ||
+        packageSource.find("GetFileAttributesW") != std::string::npos ||
+        packageSource.find("FILE_ATTRIBUTE_REPARSE_POINT") != std::string::npos ||
+        packageSource.find("std::filesystem::path current") != std::string::npos ||
+        packageSource.find("#include <windows.h>") != std::string::npos ||
         packageSource.find("file is missing or exceeds the hashing budget") !=
             std::string::npos ||
         packageSource.find("return sha256(std::as_bytes(std::span(bytes)))") !=

@@ -1,7 +1,5 @@
 #include "package_core.h"
 
-#include <windows.h>
-
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -150,6 +148,8 @@ std::uint8_t fcitx5_package_is_lower_package_id_utf8(
     const std::uint8_t* value, std::size_t value_len);
 std::uint8_t fcitx5_package_is_safe_relative_path_utf8(
     const std::uint8_t* value, std::size_t value_len);
+std::uint8_t fcitx5_package_path_contains_reparse_point_utf16(
+    const wchar_t* path, std::size_t path_len);
 Fcitx5PackageSignatureEnvelopeResult fcitx5_package_parse_signature_envelope_utf8(
     const std::uint8_t* envelope_bytes, std::size_t envelope_len,
     const std::uint8_t* expected_object, std::size_t expected_object_len);
@@ -435,19 +435,6 @@ std::wstring native_path_string(const std::filesystem::path& path) {
   return path.native();
 }
 
-bool contains_reparse_component(const std::filesystem::path& path) {
-  std::filesystem::path current;
-  for (const auto& component : path) {
-    current /= component;
-    const DWORD attributes = GetFileAttributesW(current.c_str());
-    if (attributes != INVALID_FILE_ATTRIBUTES &&
-        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
-      return true;
-    }
-  }
-  return false;
-}
-
 }  // namespace
 
 // Validators declared in package_core.h and used by the updater and deployer
@@ -559,7 +546,8 @@ bool is_safe_relative_package_path(std::string_view path) noexcept {
 }
 
 bool path_contains_reparse_point(const std::filesystem::path& path) {
-  return contains_reparse_component(path);
+  const std::wstring native = native_path_string(path);
+  return fcitx5_package_path_contains_reparse_point_utf16(native.data(), native.size()) != 0U;
 }
 
 std::array<std::byte, 32> sha256(std::span<const std::byte> bytes) {

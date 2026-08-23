@@ -8282,6 +8282,17 @@ mod repair_ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_path_contains_reparse_point_utf16(
+        path: *const u16,
+        path_len: usize,
+    ) -> u8 {
+        let Some(path) = path_from_utf16(path, path_len) else {
+            return 0;
+        };
+        super::path_contains_reparse_component(&path).unwrap_or(false) as u8
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn fcitx5_package_manifest_free(
         manifest: *const Fcitx5PackageParsedManifestResult,
     ) {
