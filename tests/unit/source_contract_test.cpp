@@ -403,7 +403,7 @@ int main(int argc, char** argv) {
         configSource.find("--ui-live-preview-contract-test") == std::string::npos ||
         configSource.find("ensureProductionPreview()") == std::string::npos ||
         configSource.find("fcitx5-ui.exe") == std::string::npos ||
-        configSource.find("#include \"candidate_layout.h\"") == std::string::npos ||
+        configSource.find("#include \"candidate_layout.h\"") != std::string::npos ||
         configSource.find("#include \"config_model.h\"") == std::string::npos ||
         configSource.find("fcitx::windows::ui::layout(input)") == std::string::npos ||
         configSource.find("fcitx::windows::ui::renderSegments") == std::string::npos ||
@@ -599,10 +599,13 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CANDIDATE-INTERACTION-RUST: candidate hit-test and selection intent must be Rust-owned and the old C++ source must stay deleted");
     }
-    if (std::filesystem::exists(sourceRoot / "src/ui/candidate_layout.cpp") ||
+    if (std::filesystem::exists(sourceRoot / "src/ui/candidate_layout.h") ||
+        std::filesystem::exists(sourceRoot / "src/ui/candidate_layout.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/unit/candidate_layout_test.cpp") ||
         cmakeSource.find("add_library(fcitx5_candidate_layout INTERFACE)") ==
             std::string::npos ||
         cmakeSource.find("src/ui/candidate_layout.cpp") != std::string::npos ||
+        cmakeSource.find("tests/unit/candidate_layout_test.cpp") != std::string::npos ||
         candidateLayoutSource.find("fcitx5_candidate_layout_run") == std::string::npos ||
         candidateLayoutSource.find("fcitx5_candidate_render_segments") ==
             std::string::npos ||
@@ -610,7 +613,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         candidateLayoutSource.find("render_segments_match_label_column_and_comment_contract") ==
             std::string::npos) {
-        return fail("CANDIDATE-LAYOUT-RUST: candidate layout/render segments must be Rust-owned and the old C++ source must stay deleted");
+        return fail("CANDIDATE-LAYOUT-RUST: candidate layout/render segments must be Rust-owned and the old C++ header/source/test must stay deleted");
     }
     if (configSource.find("confirmDialog(") == std::string::npos ||
         configSource.find("MessageBoxW") == std::string::npos ||

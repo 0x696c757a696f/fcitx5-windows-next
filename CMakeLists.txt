@@ -574,8 +574,6 @@ add_custom_command(
 add_library(fcitx5_candidate_layout INTERFACE)
 add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
 target_compile_features(fcitx5_candidate_layout INTERFACE cxx_std_20)
-target_include_directories(
-  fcitx5_candidate_layout INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
 target_link_libraries(fcitx5_candidate_layout INTERFACE fcitx5_candidate_core_rust ws2_32 userenv
                                                      ntdll)
 add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
@@ -1165,11 +1163,6 @@ if(BUILD_TESTING)
     message(STATUS "Cargo was not found; Rust R1 package-core tests are not registered.")
   endif()
 
-  add_executable(fcitx5_candidate_layout_test tests/unit/candidate_layout_test.cpp)
-  target_link_libraries(fcitx5_candidate_layout_test PRIVATE fcitx5::candidate_layout)
-  fcitx_apply_project_options(fcitx5_candidate_layout_test)
-  fcitx_apply_binary_hardening(fcitx5_candidate_layout_test)
-  add_test(NAME candidate-layout-contract COMMAND fcitx5_candidate_layout_test)
 
   add_executable(fcitx5_candidate_navigation_test
                  tests/unit/candidate_navigation_test.cpp)

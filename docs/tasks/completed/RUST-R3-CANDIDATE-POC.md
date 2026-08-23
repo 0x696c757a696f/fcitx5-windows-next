@@ -1,6 +1,6 @@
 # RUST-R3-CANDIDATE-POC Rust Candidate UI differential PoC
 
-**State:** MANUAL-PENDING / AUTOMATED-POC-GREEN / CANDIDATE-MODEL-RUST-CUTOVER-GREEN / CANDIDATE-MODEL-HEADER-DELETED / CANDIDATE-INTERACTION-RUST-CUTOVER-GREEN / CANDIDATE-INTERACTION-HEADER-DELETED / CANDIDATE-LAYOUT-RUST-CUTOVER-GREEN
+**State:** MANUAL-PENDING / AUTOMATED-POC-GREEN / CANDIDATE-MODEL-RUST-CUTOVER-GREEN / CANDIDATE-MODEL-HEADER-DELETED / CANDIDATE-INTERACTION-RUST-CUTOVER-GREEN / CANDIDATE-INTERACTION-HEADER-DELETED / CANDIDATE-LAYOUT-RUST-CUTOVER-GREEN / CANDIDATE-LAYOUT-HEADER-DELETED
 
 ## Automated evidence completed
 
@@ -9,7 +9,8 @@
 - Automated Rust/C++ differential coverage exists for vertical demo and horizontal scroll-demo snapshots.
 - Rust PoC has HWND screenshot, MSAA, UIA, DPI, mock-host, layout non-overlap, and layout-driven paint evidence.
 - Config Appearance candidate preview is embedded inside `fcitx5-config.exe`, resolves the current theme/config presentation data, and is compared against the real Candidate UI demo by Rust QA.
-- Candidate model semantics are Rust-owned in `fcitx5-candidate-core`; the obsolete C++ `candidate_model.h` adapter, old C++ model test, and old model/render perf benches are deleted. The remaining `src/ui/candidate_layout.h` header is still a temporary C++ ABI/UI adapter for Config preview and Candidate UI consumers.
+- Candidate model semantics are Rust-owned in `fcitx5-candidate-core`; the obsolete C++ `candidate_model.h` adapter, old C++ model test, and old model/render perf benches are deleted.
+- Candidate layout/render-segment semantics are Rust-owned in `fcitx5-candidate-core`; the obsolete C++ `candidate_layout.h` adapter and old C++ layout test are deleted. The still-C++ Config preview and Candidate UI consumers keep only local temporary Rust ABI adapters until those windows are migrated/cut over.
 
 ## Manual-pending evidence
 
