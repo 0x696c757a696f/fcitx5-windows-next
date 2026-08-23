@@ -432,16 +432,6 @@ if(FCITX_COMPILER_IS_MSVC_CL)
   target_compile_options(fcitx5_config PRIVATE /external:W0 /analyze:external-)
 endif()
 
-add_library(fcitx5_process_execution STATIC src/config/process_execution.cpp)
-add_library(fcitx5::process_execution ALIAS fcitx5_process_execution)
-target_compile_features(fcitx5_process_execution PUBLIC cxx_std_20)
-target_include_directories(
-  fcitx5_process_execution PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
-target_link_libraries(
-  fcitx5_process_execution
-  PUBLIC fcitx5_process_execution_core_rust ws2_32 userenv ntdll bcrypt advapi32)
-add_dependencies(fcitx5_process_execution fcitx5_process_execution_core_rustlib)
-fcitx_apply_project_options(fcitx5_process_execution)
 
 add_library(
   fcitx5_platform STATIC
@@ -539,8 +529,11 @@ target_link_libraries(
           fcitx5::ipc_client fcitx5::platform fcitx5::package_core
           fcitx5::deployment_core fcitx5::tsf_activation_guard
           fcitx5_package_core_rust fcitx5_control_core_rust
-          fcitx5::process_execution shell32 ole32 ws2_32 userenv ntdll)
-add_dependencies(fcitx5_control fcitx5_package_core_rustlib fcitx5_control_core_rustlib)
+          fcitx5_process_execution_core_rust shell32 ole32 ws2_32 userenv ntdll bcrypt
+          advapi32)
+add_dependencies(
+  fcitx5_control fcitx5_package_core_rustlib fcitx5_control_core_rustlib
+  fcitx5_process_execution_core_rustlib)
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
@@ -552,8 +545,9 @@ set_target_properties(fcitx5_config_app PROPERTIES OUTPUT_NAME "fcitx5-config")
 target_link_libraries(
   fcitx5_config_app
   PRIVATE fcitx5::windows_common fcitx5::release_identity fcitx5::config
-          fcitx5::process_execution fcitx5::platform d2d1 dwrite shell32 user32 comctl32
+          fcitx5::platform fcitx5_process_execution_core_rust d2d1 dwrite shell32 user32 comctl32
           advapi32 ole32)
+add_dependencies(fcitx5_config_app fcitx5_process_execution_core_rustlib)
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
@@ -982,11 +976,6 @@ if(BUILD_TESTING)
   add_test(NAME config-toml-contract COMMAND fcitx5_config_parser_test)
   set_tests_properties(config-toml-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-  add_executable(fcitx5_process_execution_test tests/unit/process_execution_test.cpp)
-  target_link_libraries(fcitx5_process_execution_test PRIVATE fcitx5::process_execution)
-  fcitx_apply_project_options(fcitx5_process_execution_test)
-  fcitx_apply_binary_hardening(fcitx5_process_execution_test)
-  add_test(NAME process-execution-pipe COMMAND fcitx5_process_execution_test)
 
   add_executable(fcitx5_source_contract_test tests/unit/source_contract_test.cpp)
   fcitx_apply_project_options(fcitx5_source_contract_test)

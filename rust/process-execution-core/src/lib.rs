@@ -564,6 +564,7 @@ pub unsafe extern "C" fn fcitx5_process_output_free(ptr: *mut u16, len: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn wide_string(value: &str) -> Vec<u16> {
         OsString::from(value).encode_wide().collect()
@@ -578,5 +579,80 @@ mod tests {
         assert_eq!(wide_string("\"simple\""), quote_wide("simple"));
         assert_eq!(wide_string("\"a b\\\\\\\\\""), quote_wide(r"a b\\"));
         assert_eq!(wide_string("\"say \\\"hi\\\"\""), quote_wide("say \"hi\""));
+    }
+
+    fn powershell() -> PathBuf {
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        PathBuf::from(system_root).join("System32/WindowsPowerShell/v1.0/powershell.exe")
+    }
+
+    fn run_powershell(command: &str, timeout_ms: u32, max_output_bytes: usize) -> (bool, String) {
+        let (ok, output) = run_process(
+            &powershell(),
+            &[
+                OsString::from("-NoProfile"),
+                OsString::from("-Command"),
+                OsString::from(command),
+            ],
+            timeout_ms,
+            max_output_bytes,
+        )
+        .expect("powershell run");
+        (ok, String::from_utf16_lossy(&output))
+    }
+
+    #[test]
+    fn process_output_is_drained_bounded_and_failure_visible() {
+        let (ok, output) = run_powershell("Write-Output hello", 30_000, 2 * 1024 * 1024);
+        assert!(ok);
+        assert!(output.contains("hello"));
+
+        let (ok, output) = run_powershell(
+            "1..2000 | ForEach-Object { 'x' * 60 }",
+            30_000,
+            2 * 1024 * 1024,
+        );
+        assert!(ok);
+        assert!(output.len() >= 64 * 1024);
+
+        let (ok, output) = run_powershell("1..4000 | ForEach-Object { 'y' * 60 }", 30_000, 4096);
+        assert!(ok);
+        assert!(output.len() <= 4096);
+
+        let (ok, output) = run_powershell("Write-Output nope; exit 7", 30_000, 2 * 1024 * 1024);
+        assert!(!ok);
+        assert!(output.contains("nope"));
+
+        let (ok, output) = run_powershell(
+            "$s=[Console]::OpenStandardOutput();$b=[byte[]](0xff,0xfe,0x61);$s.Write($b,0,$b.Length)",
+            30_000,
+            2 * 1024 * 1024,
+        );
+        assert!(ok);
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn timeout_kills_child_process_tree() {
+        let marker = std::env::temp_dir().join(format!(
+            "fcitx5-process-tree-rust-{}.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let powershell = powershell();
+        let command = format!(
+            "$m='{}';Start-Process -WindowStyle Hidden -FilePath '{}' -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 1500; Set-Content -LiteralPath \"' + $m + '\" -Value survived';Start-Sleep -Seconds 10",
+            marker.display(),
+            powershell.display()
+        );
+        let begin = Instant::now();
+        let (ok, _) = run_powershell(&command, 500, 2 * 1024 * 1024);
+        let elapsed = begin.elapsed();
+        std::thread::sleep(Duration::from_millis(2200));
+        let marker_exists = marker.exists();
+        let _ = std::fs::remove_file(&marker);
+        assert!(!ok);
+        assert!(elapsed < Duration::from_secs(7));
+        assert!(!marker_exists);
     }
 }

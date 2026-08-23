@@ -24,6 +24,7 @@ int main(int argc, char** argv) {
     if (argc != 2)
         return fail("expected repository source root");
     const std::filesystem::path sourceRoot = argv[1];
+    const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
     const auto runtimeSource = read_text(sourceRoot / "src/engine/fcitx_runtime.cpp");
     const auto warmupMarker = runtimeSource.find("warmupIds");
     if (warmupMarker == std::string::npos)
@@ -80,9 +81,25 @@ int main(int argc, char** argv) {
         return fail("REG-BRAND-001: launcher must not create a default tray/taskbar surface");
     }
     const auto controlSource = read_text(sourceRoot / "src/control/control_main.cpp");
+    const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");
+    const auto rustProcessExecutionSource =
+        read_text(sourceRoot / "rust/process-execution-core/src/lib.rs");
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
         return fail("REG-PROC-PIPE-001: Control must use the shared process executor");
+    }
+    if (std::filesystem::exists(sourceRoot / "src/config/process_execution.h") ||
+        std::filesystem::exists(sourceRoot / "src/config/process_execution.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/unit/process_execution_test.cpp") ||
+        controlSource.find("#include \"process_execution.h\"") != std::string::npos ||
+        configAppSource.find("#include \"process_execution.h\"") != std::string::npos ||
+        cmakeSource.find("src/config/process_execution.cpp") != std::string::npos ||
+        cmakeSource.find("tests/unit/process_execution_test.cpp") != std::string::npos ||
+        cmakeSource.find("fcitx5_process_execution_core_rust") == std::string::npos ||
+        rustProcessExecutionSource.find("process_output_is_drained_bounded_and_failure_visible") ==
+            std::string::npos ||
+        rustProcessExecutionSource.find("timeout_kills_child_process_tree") == std::string::npos) {
+        return fail("PROCESS-EXECUTION-RUST: process execution must be Rust-owned and the old C++ adapter/test must stay deleted");
     }
     const auto peerSource = read_text(sourceRoot / "src/ipc/peer_verification.cpp");
     if (peerSource.find("pathsReferToSameFile") != std::string::npos ||
@@ -192,7 +209,6 @@ int main(int argc, char** argv) {
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
     const auto rustPackageCoreArtifactSmoke =
         read_text(sourceRoot / "tools/test-rust-package-core-artifact.ps1");
-    const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
     const auto versionHeaderTemplate = read_text(sourceRoot / "cmake/version.h.in");
     const auto rustWindowsCommonCore =
         read_text(sourceRoot / "rust/windows-common-core/src/lib.rs");
