@@ -399,6 +399,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("fcitx5_package_blake3_digest_utf8") == std::string::npos ||
         rustPackageCore.find("verify_payload_bytes") == std::string::npos ||
         rustPackageCore.find("verify_payload_root") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_verify_payload_root_utf16") ==
+            std::string::npos ||
         rustPackageCore.find("stage_verified_payload_tree") == std::string::npos ||
         rustPackageCore.find("path_contains_reparse_component") == std::string::npos ||
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
@@ -496,6 +498,14 @@ int main(int argc, char** argv) {
         packageSource.find("staging transaction already exists") != std::string::npos ||
         packageSource.find("std::filesystem::copy_file") != std::string::npos ||
         packageSource.find("manifest key id does not match selected trusted key") !=
+            std::string::npos ||
+        packageSource.find("payload root is missing or contains a reparse point") !=
+            std::string::npos ||
+        packageSource.find("payload directory cannot be enumerated safely") !=
+            std::string::npos ||
+        packageSource.find("payload contains a reparse point") != std::string::npos ||
+        packageSource.find("payload contains an undeclared file") != std::string::npos ||
+        packageSource.find("payload verifier does not support manifest version") !=
             std::string::npos ||
         packageSource.find("BCryptOpenAlgorithmProvider") != std::string::npos ||
         packageSource.find("BCryptCreateHash") != std::string::npos ||

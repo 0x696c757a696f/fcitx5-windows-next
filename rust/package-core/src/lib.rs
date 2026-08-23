@@ -6600,9 +6600,11 @@ mod repair_ffi {
         parse_signature_envelope, parse_trusted_keys, resolve_exact_dependency_entries,
         stage_validated_archive_zip, stage_verified_payload_tree,
         validate_manifest_compatibility_fields, verify_installed_packages_for_repair,
-        verify_manifest_signature, verify_mldsa65_signature, DependencyResolutionDependency,
-        DependencyResolutionEntry, PackageId, PackageType, SignedObject, TrustAlgorithm,
-        TrustedKey, MAX_MANIFEST_BYTES,
+        verify_manifest_signature, verify_mldsa65_signature, verify_payload_root,
+        DependencyResolutionDependency, DependencyResolutionEntry, HexDigest32, PackageId,
+        PackageType, PayloadHashes, SafeRelativePackagePath, SignedObject, TrustAlgorithm,
+        TrustedKey, VerifiedArtifact, MANIFEST_FORMAT_VERSION_V1, MANIFEST_FORMAT_VERSION_V2,
+        MAX_MANIFEST_BYTES,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -6963,6 +6965,87 @@ mod repair_ffi {
                 })
             })
             .collect()
+    }
+
+    fn payload_artifacts_from_raw(
+        format_version: u32,
+        package_id: &PackageId,
+        files: *const Fcitx5PackageManifestFile,
+        file_count: usize,
+    ) -> Result<Vec<VerifiedArtifact>, &'static str> {
+        if file_count == 0 {
+            return Ok(Vec::new());
+        }
+        if files.is_null() {
+            return Err("parsed manifest file data is invalid");
+        }
+        let raw = unsafe { slice::from_raw_parts(files, file_count) };
+        raw.iter()
+            .map(|file| {
+                let path = SafeRelativePackagePath::parse(
+                    &string_from_raw(file.path).ok_or("parsed manifest file data is invalid")?,
+                )
+                .map_err(|_| "parsed manifest file data is invalid")?;
+                let sha256 =
+                    string_from_raw(file.sha256).ok_or("parsed manifest file data is invalid")?;
+                let blake3 =
+                    string_from_raw(file.blake3).ok_or("parsed manifest file data is invalid")?;
+                let hashes = match u64::from(format_version) {
+                    MANIFEST_FORMAT_VERSION_V1 => PayloadHashes::v1_sha256(
+                        HexDigest32::parse(&sha256)
+                            .map_err(|_| "parsed manifest file data is invalid")?,
+                    ),
+                    MANIFEST_FORMAT_VERSION_V2 => PayloadHashes::v2_blake3(
+                        HexDigest32::parse(&blake3)
+                            .map_err(|_| "parsed manifest file data is invalid")?,
+                        if sha256.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                HexDigest32::parse(&sha256)
+                                    .map_err(|_| "parsed manifest file data is invalid")?,
+                            )
+                        },
+                    ),
+                    _ => return Err("payload verifier does not support manifest version"),
+                };
+                Ok(VerifiedArtifact::new(
+                    package_id.clone(),
+                    path,
+                    file.size,
+                    hashes,
+                ))
+            })
+            .collect()
+    }
+
+    fn payload_manifest_from_raw(
+        format_version: u32,
+        package_id: Fcitx5ByteSlice,
+        files: *const Fcitx5PackageManifestFile,
+        file_count: usize,
+    ) -> Result<super::Manifest, &'static str> {
+        let package_id = PackageId::parse(
+            &string_from_raw(package_id).ok_or("parsed manifest file data is invalid")?,
+        )
+        .map_err(|_| "parsed manifest file data is invalid")?;
+        let files = payload_artifacts_from_raw(format_version, &package_id, files, file_count)?;
+        Ok(super::Manifest {
+            format_version: u64::from(format_version),
+            id: package_id.clone(),
+            version: "0".to_owned(),
+            package_type: PackageType::Addon,
+            architecture: "any".to_owned(),
+            min_os: "0".to_owned(),
+            core_api: "0".to_owned(),
+            addon_abi: String::new(),
+            dependencies: Vec::new(),
+            license: "unknown".to_owned(),
+            source_commit: "unknown".to_owned(),
+            permissions: Vec::new(),
+            files,
+            key_id: package_id,
+        })
     }
 
     fn package_type_from_code(value: u32) -> Option<PackageType> {
@@ -7472,6 +7555,32 @@ mod repair_ffi {
         match resolve_exact_dependency_entries(&manifests, &requested_id_refs) {
             Ok(ids) => dependency_resolution_ok_result(ids),
             Err(error) => dependency_resolution_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_verify_payload_root_utf16(
+        format_version: u32,
+        package_id: Fcitx5ByteSlice,
+        files: *const Fcitx5PackageManifestFile,
+        file_count: usize,
+        payload_root: *const u16,
+        payload_root_len: usize,
+    ) -> Fcitx5PackageRepairResult {
+        let manifest =
+            match payload_manifest_from_raw(format_version, package_id, files, file_count) {
+                Ok(manifest) => manifest,
+                Err(message) => return error_result("invalid_manifest", message),
+            };
+        let Some(payload_root) = path_from_utf16(payload_root, payload_root_len) else {
+            return error_result(
+                "unsafe_payload",
+                "payload root is missing or contains a reparse point",
+            );
+        };
+        match verify_payload_root(&manifest, payload_root) {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
         }
     }
 

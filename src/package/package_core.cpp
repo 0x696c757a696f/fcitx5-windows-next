@@ -6,7 +6,6 @@
 #include <array>
 #include <cstring>
 #include <fstream>
-#include <set>
 #include <system_error>
 
 extern "C" {
@@ -156,6 +155,10 @@ Fcitx5PackageDependencyResolutionResult fcitx5_package_resolve_exact_dependencie
     const Fcitx5PackageDependencyResolutionManifest* manifests, std::size_t manifest_count,
     const Fcitx5ByteSlice* requested_ids, std::size_t requested_id_count);
 void fcitx5_package_dependency_resolution_free(Fcitx5ByteSlice* ids, std::size_t id_count);
+Fcitx5PackageLifecycleResult fcitx5_package_verify_payload_root_utf16(
+    std::uint32_t format_version, Fcitx5ByteSlice package_id,
+    const Fcitx5PackageManifestFile* files, std::size_t file_count,
+    const wchar_t* payload_root, std::size_t payload_root_len);
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -716,50 +719,21 @@ void verify_manifest_signature_envelope(std::string_view manifest_bytes,
 }
 
 void verify_payload(const Manifest& manifest, const std::filesystem::path& payload_root) {
-  if (!std::filesystem::is_directory(payload_root) ||
-      path_contains_reparse_point(payload_root)) {
-    fail("unsafe_payload", "payload root is missing or contains a reparse point");
-  }
-  std::set<std::string, std::less<>> expected;
+  std::vector<Fcitx5PackageManifestFile> file_views;
+  file_views.reserve(manifest.files.size());
   for (const auto& file : manifest.files) {
-    expected.emplace(file.path);
-    const auto path = payload_root / std::filesystem::path(file.path);
-    if (path_contains_reparse_point(path) || !std::filesystem::is_regular_file(path) ||
-        std::filesystem::file_size(path) != file.size) {
-      fail("payload_mismatch", "payload file does not match manifest: " + file.path);
-    }
-    if (manifest.format_version == kManifestFormatVersion) {
-      if (hex_sha256(sha256_file(path)) != file.sha256) {
-        fail("payload_mismatch", "payload file does not match manifest: " + file.path);
-      }
-    } else if (manifest.format_version == kManifestV2FormatVersion) {
-      if (hex_blake3(blake3_file(path)) != file.blake3 ||
-          (!file.sha256.empty() && hex_sha256(sha256_file(path)) != file.sha256)) {
-        fail("payload_mismatch", "payload file does not match manifest: " + file.path);
-      }
-    } else {
-      fail("invalid_manifest", "payload verifier does not support manifest version");
-    }
+    file_views.push_back(Fcitx5PackageManifestFile{
+        ffi_slice(file.path),
+        file.size,
+        ffi_slice(file.sha256),
+        ffi_slice(file.blake3),
+    });
   }
-  std::error_code error;
-  for (std::filesystem::recursive_directory_iterator iterator(
-           payload_root, std::filesystem::directory_options::none, error),
-       end;
-       iterator != end; iterator.increment(error)) {
-    if (error) {
-      fail("unsafe_payload", "payload directory cannot be enumerated safely");
-    }
-    if (iterator->is_symlink(error) ||
-        (GetFileAttributesW(iterator->path().c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
-      fail("unsafe_payload", "payload contains a reparse point");
-    }
-    if (iterator->is_regular_file(error)) {
-      const auto relative = std::filesystem::relative(iterator->path(), payload_root, error);
-      if (error || !expected.contains(relative.generic_string())) {
-        fail("payload_mismatch", "payload contains an undeclared file");
-      }
-    }
-  }
+  const std::wstring payload = native_path_string(payload_root);
+  require_lifecycle_ok(fcitx5_package_verify_payload_root_utf16(
+      manifest.format_version, ffi_slice(manifest.id),
+      file_views.empty() ? nullptr : file_views.data(), file_views.size(), payload.data(),
+      payload.size()));
 }
 
 std::vector<std::string> resolve_exact_dependencies(
