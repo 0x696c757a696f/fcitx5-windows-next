@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -218,5 +219,93 @@ void finalize_package_removal(const std::filesystem::path& install_root,
 void activate_installed_version(const std::filesystem::path& install_root,
                                 std::string_view package_id, std::string_view version,
                                 std::span<const TrustedKey> trusted_keys);
+
+namespace detail {
+
+struct Fcitx5PackageByteSlice {
+  const std::uint8_t* data{};
+  std::size_t len{};
+};
+
+struct Fcitx5PackageTrustedKey {
+  Fcitx5PackageByteSlice id{};
+  Fcitx5PackageByteSlice algorithm{};
+  Fcitx5PackageByteSlice public_key{};
+  Fcitx5PackageByteSlice rsa_public_blob{};
+  std::uint8_t revoked{};
+};
+
+struct Fcitx5PackageStageResult {
+  int status{};
+  std::uint8_t error_code[64]{};
+  std::uint8_t error_message[512]{};
+  wchar_t* staged_path{};
+  std::size_t staged_path_len{};
+};
+
+extern "C" Fcitx5PackageStageResult fcitx5_package_stage_archive_utf16(
+    const wchar_t* archive_path, std::size_t archive_path_len, const wchar_t* install_root,
+    std::size_t install_root_len, const std::uint8_t* transaction_id,
+    std::size_t transaction_id_len, const Fcitx5PackageTrustedKey* trusted_keys,
+    std::size_t trusted_key_count);
+extern "C" void fcitx5_package_wide_free(wchar_t* ptr, std::size_t len);
+
+[[nodiscard]] inline Fcitx5PackageByteSlice byte_slice(std::string_view value) noexcept {
+  return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
+}
+
+[[nodiscard]] inline Fcitx5PackageByteSlice byte_slice(
+    std::span<const std::byte> value) noexcept {
+  return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
+}
+
+[[nodiscard]] inline std::vector<Fcitx5PackageTrustedKey> rust_trusted_key_views(
+    std::span<const TrustedKey> trusted_keys) {
+  std::vector<Fcitx5PackageTrustedKey> result;
+  result.reserve(trusted_keys.size());
+  for (const auto& key : trusted_keys) {
+    result.push_back(Fcitx5PackageTrustedKey{
+        byte_slice(key.id),
+        byte_slice(key.algorithm),
+        byte_slice(std::span<const std::byte>(key.public_key.data(), key.public_key.size())),
+        byte_slice(std::span<const std::byte>(key.rsa_public_blob.data(),
+                                              key.rsa_public_blob.size())),
+        key.revoked ? std::uint8_t{1} : std::uint8_t{0},
+    });
+  }
+  return result;
+}
+
+[[nodiscard]] inline std::string ffi_ascii(std::span<const std::uint8_t> bytes) {
+  const auto* begin = bytes.data();
+  const auto* end = begin + bytes.size();
+  const auto* nul = std::find(begin, end, std::uint8_t{0});
+  return {reinterpret_cast<const char*>(begin), static_cast<std::size_t>(nul - begin)};
+}
+
+}  // namespace detail
+
+[[nodiscard]] inline std::filesystem::path stage_verified_archive(
+    const std::filesystem::path& archive_path, const std::filesystem::path& install_root,
+    std::string_view transaction_id, std::span<const TrustedKey> trusted_keys) {
+  const auto key_views = detail::rust_trusted_key_views(trusted_keys);
+  const auto result = detail::fcitx5_package_stage_archive_utf16(
+      archive_path.c_str(), archive_path.native().size(), install_root.c_str(),
+      install_root.native().size(), reinterpret_cast<const std::uint8_t*>(transaction_id.data()),
+      transaction_id.size(), key_views.data(), key_views.size());
+  if (result.status != 0) {
+    const std::string code = detail::ffi_ascii(result.error_code);
+    const std::string message = detail::ffi_ascii(result.error_message);
+    throw PackageError(code.empty() ? "invalid_archive" : code,
+                       message.empty() ? "package archive validation failed" : message);
+  }
+  std::filesystem::path staged;
+  if (result.staged_path && result.staged_path_len != 0) {
+    staged = std::filesystem::path(
+        std::wstring(result.staged_path, result.staged_path + result.staged_path_len));
+  }
+  detail::fcitx5_package_wide_free(result.staged_path, result.staged_path_len);
+  return staged;
+}
 
 }  // namespace fcitx::package

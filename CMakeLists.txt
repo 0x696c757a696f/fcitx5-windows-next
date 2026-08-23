@@ -387,7 +387,6 @@ endif()
 add_library(
   fcitx5_package_core STATIC
   src/package/package_core.cpp
-  src/package/package_archive.cpp
   src/package/repository.cpp)
 add_library(fcitx5::package_core ALIAS fcitx5_package_core)
 target_compile_features(fcitx5_package_core PUBLIC cxx_std_20)
@@ -674,6 +673,13 @@ add_custom_command(
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --lib --target
     "${FCITX_RUST_TARGET}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/build.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/c/miniz_archive.c"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-package-core staticlib")
 add_custom_target(fcitx5_package_core_rustlib

@@ -240,12 +240,12 @@ int main(int argc, char** argv) {
         return fail("STAB-REGISTER-BOOTSTRAP-012: bootstrap timeouts must confirm child termination");
     }
     const auto packageSource = read_text(sourceRoot / "src/package/package_core.cpp");
-    const auto packageArchiveSource = read_text(sourceRoot / "src/package/package_archive.cpp");
+    const auto packageCoreHeader = read_text(sourceRoot / "src/package/package_core.h");
     const auto packageCorpus =
         read_text(sourceRoot / "tests/fixtures/package_path_corpus.json");
     if (packageSource.find("OrdinalIgnoreCaseLess") == std::string::npos ||
-        packageArchiveSource.find("is_unix_symlink") == std::string::npos ||
-        packageArchiveSource.find("manifest paths collide on Windows") == std::string::npos ||
+        packageCoreHeader.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+        std::filesystem::exists(sourceRoot / "src/package/package_archive.cpp") ||
         packageCorpus.find("\"case_collision_sets\"") == std::string::npos ||
         packageCorpus.find("COM9.log") == std::string::npos) {
         return fail("REG-PKG-WINPATH-001: package path policy must have shared hostile Windows corpus and collision/link guards");
@@ -406,6 +406,12 @@ int main(int argc, char** argv) {
         rustPackageCore.find("finalize_installed_package_removal") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
         rustPackageCore.find("stage_validated_archive_zip") == std::string::npos ||
+        rustPackageCore.find("unix_symlink") == std::string::npos ||
+        rustPackageCore.find("manifest paths collide on Windows") == std::string::npos ||
+        rustPackageCore.find("archive_zip_staging_matches_cpp_extraction_policy") ==
+            std::string::npos ||
+        rustPackageCore.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_wide_free") == std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
         rustPackageCoreBuild.find("mldsa_native.c") == std::string::npos ||
         rustPackageCoreBuild.find("fcitx5_mldsa65_config.h") == std::string::npos ||
@@ -421,6 +427,8 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
         rustPackageCoreBinary.find("verify_signature_envelope") == std::string::npos ||
+        packageCoreHeader.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+        packageCoreHeader.find("rust_trusted_key_views") == std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||
         rustPackageCoreManifest.find("name = \"fcitx5-downloader\"") ==
             std::string::npos ||

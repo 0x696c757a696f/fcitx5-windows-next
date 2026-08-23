@@ -6443,9 +6443,12 @@ pub fn repair_repository_sequence_state_for_repair(
 mod repair_ffi {
     #![allow(unsafe_code)]
 
-    use super::{verify_installed_packages_for_repair, PackageId, TrustAlgorithm, TrustedKey};
+    use super::{
+        stage_validated_archive_zip, verify_installed_packages_for_repair, PackageId,
+        TrustAlgorithm, TrustedKey,
+    };
     use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::PathBuf;
     use std::slice;
 
@@ -6472,6 +6475,16 @@ mod repair_ffi {
         pub status: i32,
         pub error_code: [u8; 64],
         pub error_message: [u8; 512],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageStageResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub staged_path: *mut u16,
+        pub staged_path_len: usize,
     }
 
     #[repr(C)]
@@ -6560,6 +6573,80 @@ mod repair_ffi {
         }
         let raw = unsafe { slice::from_raw_parts(trusted_keys, trusted_key_count) };
         raw.iter().map(key_from_raw).collect()
+    }
+
+    fn stage_error_result(code: &str, message: &str) -> Fcitx5PackageStageResult {
+        let mut error_code = [0; 64];
+        let mut error_message = [0; 512];
+        write_ascii(&mut error_code, code);
+        write_ascii(&mut error_message, message);
+        Fcitx5PackageStageResult {
+            status: 1,
+            error_code,
+            error_message,
+            staged_path: std::ptr::null_mut(),
+            staged_path_len: 0,
+        }
+    }
+
+    fn stage_ok_result(path: PathBuf) -> Fcitx5PackageStageResult {
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        let staged_path_len = wide.len();
+        let staged_path = wide.as_mut_ptr();
+        std::mem::forget(wide);
+        Fcitx5PackageStageResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            staged_path,
+            staged_path_len,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_stage_archive_utf16(
+        archive_path: *const u16,
+        archive_path_len: usize,
+        install_root: *const u16,
+        install_root_len: usize,
+        transaction_id: *const u8,
+        transaction_id_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+    ) -> Fcitx5PackageStageResult {
+        let Some(archive_path) = path_from_utf16(archive_path, archive_path_len) else {
+            return stage_error_result("invalid_archive", "unable to open package archive");
+        };
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return stage_error_result("unsafe_path", "transaction id is invalid");
+        };
+        let Some(transaction_id) = string_from_raw(Fcitx5ByteSlice {
+            data: transaction_id,
+            len: transaction_id_len,
+        }) else {
+            return stage_error_result("unsafe_path", "transaction id is invalid");
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return stage_error_result("invalid_keyring", "trusted key set is invalid");
+        };
+        match stage_validated_archive_zip(
+            archive_path,
+            install_root,
+            &transaction_id,
+            &trusted_keys,
+        ) {
+            Ok(path) => stage_ok_result(path),
+            Err(error) => stage_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_wide_free(ptr: *mut u16, len: usize) {
+        if !ptr.is_null() && len != 0 {
+            unsafe {
+                drop(Vec::from_raw_parts(ptr, len, len));
+            }
+        }
     }
 
     #[no_mangle]
