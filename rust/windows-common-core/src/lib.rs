@@ -296,6 +296,48 @@ fn pipe_security_descriptor(
     (ok != 0 && !descriptor.is_null()).then_some(descriptor)
 }
 
+#[repr(C)]
+struct SecurityAttributes {
+    n_length: u32,
+    security_descriptor: *mut c_void,
+    inherit_handle: i32,
+}
+
+struct PipeSecurityState {
+    descriptor: *mut c_void,
+    attributes: SecurityAttributes,
+}
+
+impl Drop for PipeSecurityState {
+    fn drop(&mut self) {
+        if !self.descriptor.is_null() {
+            // SAFETY: `descriptor` is a LocalAlloc-owned security descriptor
+            // returned by ConvertStringSecurityDescriptorToSecurityDescriptorW.
+            unsafe {
+                LocalFree(self.descriptor);
+            }
+            self.descriptor = std::ptr::null_mut();
+            self.attributes.security_descriptor = std::ptr::null_mut();
+        }
+    }
+}
+
+fn pipe_security_state(
+    service_account: bool,
+    session_id: u32,
+    user_sid: &str,
+) -> Option<Box<PipeSecurityState>> {
+    let descriptor = pipe_security_descriptor(service_account, session_id, user_sid)?;
+    Some(Box::new(PipeSecurityState {
+        descriptor,
+        attributes: SecurityAttributes {
+            n_length: std::mem::size_of::<SecurityAttributes>() as u32,
+            security_descriptor: descriptor,
+            inherit_handle: 0,
+        },
+    }))
+}
+
 const SDDL_REVISION_1: u32 = 1;
 
 #[link(name = "advapi32")]
@@ -1591,6 +1633,55 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_descriptor_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
+/// UTF-16 buffer with exactly `user_sid_len` code units. The returned pointer is
+/// a Rust-owned opaque handle that must be released with
+/// `fcitx5_windows_common_pipe_security_destroy`.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_create_utf16(
+    service_account: u8,
+    session_id: u32,
+    user_sid: *const u16,
+    user_sid_len: usize,
+) -> *mut c_void {
+    let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
+        return std::ptr::null_mut();
+    };
+    let Some(state) = pipe_security_state(service_account != 0, session_id, &user_sid) else {
+        return std::ptr::null_mut();
+    };
+    Box::into_raw(state).cast::<c_void>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_pipe_security_attributes(
+    state: *mut c_void,
+) -> *mut c_void {
+    if state.is_null() {
+        return std::ptr::null_mut();
+    }
+    let state = state.cast::<PipeSecurityState>();
+    // SAFETY: `state` is an opaque handle returned by
+    // fcitx5_windows_common_pipe_security_create_utf16 and remains owned by
+    // the caller until destroy.
+    unsafe { std::ptr::addr_of_mut!((*state).attributes).cast::<c_void>() }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_pipe_security_destroy(state: *mut c_void) {
+    if state.is_null() {
+        return;
+    }
+    // SAFETY: `state` must be a handle returned by
+    // fcitx5_windows_common_pipe_security_create_utf16 that has not yet been
+    // destroyed. Dropping the Box releases the LocalAlloc descriptor.
+    unsafe {
+        drop(Box::from_raw(state.cast::<PipeSecurityState>()));
+    }
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// SID pointers must be null only when their corresponding length is zero, or
 /// point to valid UTF-16 buffers with exactly the provided lengths. No pointer
 /// is retained.
@@ -2128,6 +2219,25 @@ mod tests {
         assert_eq!(pipe_security_sddl(true, 7, "S-1-5-21-test"), None);
         assert_eq!(pipe_security_sddl(false, 0, "S-1-5-21-test"), None);
         assert_eq!(pipe_security_sddl(false, 7, ""), None);
+    }
+
+    #[test]
+    fn pipe_security_state_matches_cpp_attributes_contract() {
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        let (sid, _service_account) =
+            process_user_sid(current_process_id).expect("current process user sid");
+        let sid = String::from_utf16(&sid).expect("sid is utf16");
+        let state = pipe_security_state(false, 7, &sid).expect("valid pipe security state");
+        assert!(!state.descriptor.is_null());
+        assert_eq!(
+            state.attributes.n_length,
+            std::mem::size_of::<SecurityAttributes>() as u32
+        );
+        assert_eq!(state.attributes.security_descriptor, state.descriptor);
+        assert_eq!(state.attributes.inherit_handle, 0);
+        assert!(pipe_security_state(true, 7, &sid).is_none());
+        assert!(pipe_security_state(false, 0, &sid).is_none());
+        assert!(pipe_security_state(false, 7, "").is_none());
     }
 
     #[test]

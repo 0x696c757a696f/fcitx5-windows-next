@@ -17,14 +17,13 @@ public:
 
     [[nodiscard]] static bool create(const RuntimeIdentity& identity,
                                      PipeSecurity& output) noexcept;
-    [[nodiscard]] SECURITY_ATTRIBUTES* attributes() noexcept { return &attributes_; }
-    [[nodiscard]] bool valid() const noexcept { return descriptor_ != nullptr; }
+    [[nodiscard]] SECURITY_ATTRIBUTES* attributes() noexcept;
+    [[nodiscard]] bool valid() const noexcept { return state_ != nullptr; }
 
 private:
     void reset() noexcept;
 
-    PSECURITY_DESCRIPTOR descriptor_{};
-    SECURITY_ATTRIBUTES attributes_{};
+    void* state_{};
 };
 
 } // namespace fcitx::windows::platform
