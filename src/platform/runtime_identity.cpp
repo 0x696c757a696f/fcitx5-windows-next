@@ -52,6 +52,21 @@ extern "C" std::uint8_t fcitx5_windows_common_may_launch_user_engine_utf16(
     std::uint8_t secure_desktop,
     const std::uint16_t* user_sid,
     std::size_t user_sid_len);
+extern "C" std::uint8_t fcitx5_windows_common_executable_files_match_utf16(
+    std::uint32_t left_volume_serial_number,
+    std::uint32_t left_file_index_high,
+    std::uint32_t left_file_index_low,
+    std::uint32_t left_number_of_links,
+    std::uint8_t left_contains_reparse_point,
+    const std::uint16_t* left_final_path,
+    std::size_t left_final_path_len,
+    std::uint32_t right_volume_serial_number,
+    std::uint32_t right_file_index_high,
+    std::uint32_t right_file_index_low,
+    std::uint32_t right_number_of_links,
+    std::uint8_t right_contains_reparse_point,
+    const std::uint16_t* right_final_path,
+    std::size_t right_final_path_len);
 
 class Handle final {
   public:
@@ -169,12 +184,6 @@ bool pathIsReparsePoint(const std::filesystem::path& source) {
     const DWORD attributes = GetFileAttributesW(source.c_str());
     return attributes == INVALID_FILE_ATTRIBUTES ||
            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-}
-
-bool sameFinalPath(std::wstring_view left, std::wstring_view right) noexcept {
-    return !left.empty() && !right.empty() &&
-           CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(),
-                                static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
 }
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
@@ -407,12 +416,12 @@ bool queryExecutableFileIdentity(std::wstring_view path,
 
 bool executableFilesMatch(const ExecutableFileIdentity& left,
                           const ExecutableFileIdentity& right) noexcept {
-    return !left.containsReparsePoint && !right.containsReparsePoint &&
-           left.numberOfLinks == 1 && right.numberOfLinks == 1 &&
-           left.volumeSerialNumber == right.volumeSerialNumber &&
-           left.fileIndexHigh == right.fileIndexHigh &&
-           left.fileIndexLow == right.fileIndexLow &&
-           sameFinalPath(left.finalPath, right.finalPath);
+    return fcitx5_windows_common_executable_files_match_utf16(
+               left.volumeSerialNumber, left.fileIndexHigh, left.fileIndexLow, left.numberOfLinks,
+               left.containsReparsePoint ? 1 : 0, wideData(left.finalPath),
+               left.finalPath.size(), right.volumeSerialNumber, right.fileIndexHigh,
+               right.fileIndexLow, right.numberOfLinks, right.containsReparsePoint ? 1 : 0,
+               wideData(right.finalPath), right.finalPath.size()) != 0;
 }
 
 bool executablePathsMatch(std::wstring_view left, std::wstring_view right) noexcept {

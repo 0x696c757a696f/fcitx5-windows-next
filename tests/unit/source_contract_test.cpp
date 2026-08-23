@@ -327,6 +327,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("peer_verification_policy_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_executable_files_match_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("executable_file_match_policy_matches_cpp_contract") ==
+            std::string::npos ||
         pipeSecuritySource.find("D:P(A;;GA;;;SY)") != std::string::npos ||
         pipeSecuritySource.find("identity.userSid.empty() || identity.serviceAccount") !=
             std::string::npos ||
@@ -342,7 +346,13 @@ int main(int argc, char** argv) {
         runtimeIdentitySource.find("kReleaseIdentity.pipe_prefix") != std::string::npos ||
         runtimeIdentitySource.find("kReleaseIdentity.local_object_prefix") !=
             std::string::npos ||
+        runtimeIdentitySource.find("sameFinalPath") != std::string::npos ||
+        runtimeIdentitySource.find("left.numberOfLinks == 1") != std::string::npos ||
+        runtimeIdentitySource.find("left.volumeSerialNumber == right.volumeSerialNumber") !=
+            std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_local_name_utf16") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_executable_files_match_utf16") ==
             std::string::npos ||
         cmakeSource.find("fcitx5_platform PUBLIC fcitx5::release_identity fcitx5::windows_common") ==
             std::string::npos ||

@@ -288,6 +288,33 @@ fn peer_development_policy_allowed(development_exception_enabled: bool) -> bool 
     development_exception_enabled
 }
 
+#[allow(clippy::too_many_arguments)]
+fn executable_files_match(
+    left_volume_serial_number: u32,
+    left_file_index_high: u32,
+    left_file_index_low: u32,
+    left_number_of_links: u32,
+    left_contains_reparse_point: bool,
+    left_final_path: &str,
+    right_volume_serial_number: u32,
+    right_file_index_high: u32,
+    right_file_index_low: u32,
+    right_number_of_links: u32,
+    right_contains_reparse_point: bool,
+    right_final_path: &str,
+) -> bool {
+    !left_contains_reparse_point
+        && !right_contains_reparse_point
+        && left_number_of_links == 1
+        && right_number_of_links == 1
+        && left_volume_serial_number == right_volume_serial_number
+        && left_file_index_high == right_file_index_high
+        && left_file_index_low == right_file_index_low
+        && !left_final_path.is_empty()
+        && !right_final_path.is_empty()
+        && left_final_path.to_uppercase() == right_final_path.to_uppercase()
+}
+
 fn local_name(
     pipe: bool,
     user_sid: &str,
@@ -567,6 +594,52 @@ pub extern "C" fn fcitx5_windows_common_peer_development_policy_allowed(
     peer_development_policy_allowed(development_exception_enabled != 0) as u8
 }
 
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Final-path pointers must be null only when their corresponding length is
+/// zero, or point to valid UTF-16 buffers with exactly the provided lengths. No
+/// pointer is retained.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn fcitx5_windows_common_executable_files_match_utf16(
+    left_volume_serial_number: u32,
+    left_file_index_high: u32,
+    left_file_index_low: u32,
+    left_number_of_links: u32,
+    left_contains_reparse_point: u8,
+    left_final_path: *const u16,
+    left_final_path_len: usize,
+    right_volume_serial_number: u32,
+    right_file_index_high: u32,
+    right_file_index_low: u32,
+    right_number_of_links: u32,
+    right_contains_reparse_point: u8,
+    right_final_path: *const u16,
+    right_final_path_len: usize,
+) -> u8 {
+    let Some(left_final_path) = wide_string_from_raw(left_final_path, left_final_path_len) else {
+        return 0;
+    };
+    let Some(right_final_path) = wide_string_from_raw(right_final_path, right_final_path_len)
+    else {
+        return 0;
+    };
+    executable_files_match(
+        left_volume_serial_number,
+        left_file_index_high,
+        left_file_index_low,
+        left_number_of_links,
+        left_contains_reparse_point != 0,
+        &left_final_path,
+        right_volume_serial_number,
+        right_file_index_high,
+        right_file_index_low,
+        right_number_of_links,
+        right_contains_reparse_point != 0,
+        &right_final_path,
+    ) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,5 +807,65 @@ mod tests {
         ));
         assert!(peer_development_policy_allowed(true));
         assert!(!peer_development_policy_allowed(false));
+    }
+
+    #[test]
+    fn executable_file_match_policy_matches_cpp_contract() {
+        assert!(executable_files_match(
+            11,
+            22,
+            33,
+            1,
+            false,
+            r"\\?\C:\Program Files\Fcitx5\fcitx5-engine.exe",
+            11,
+            22,
+            33,
+            1,
+            false,
+            r"\\?\c:\program files\fcitx5\FCITX5-ENGINE.EXE",
+        ));
+        assert!(!executable_files_match(
+            11,
+            22,
+            33,
+            2,
+            false,
+            r"\\?\C:\Program Files\Fcitx5\fcitx5-engine.exe",
+            11,
+            22,
+            33,
+            1,
+            false,
+            r"\\?\C:\Program Files\Fcitx5\fcitx5-engine.exe",
+        ));
+        assert!(!executable_files_match(
+            11,
+            22,
+            33,
+            1,
+            true,
+            r"\\?\C:\Program Files\Fcitx5\fcitx5-engine.exe",
+            11,
+            22,
+            33,
+            1,
+            false,
+            r"\\?\C:\Program Files\Fcitx5\fcitx5-engine.exe",
+        ));
+        assert!(!executable_files_match(
+            11,
+            22,
+            33,
+            1,
+            false,
+            "",
+            11,
+            22,
+            33,
+            1,
+            false,
+            r"\\?\C:\Program Files\Fcitx5\fcitx5-engine.exe",
+        ));
     }
 }
