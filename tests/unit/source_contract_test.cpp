@@ -339,6 +339,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("basic_file_identity_match_policy_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_basic_file_identity_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("basic_file_identity_query_rejects_empty_path_like_cpp_contract") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_path_is_reparse_point_utf16") ==
             std::string::npos ||
         rustWindowsCommonCore.find("path_reparse_policy_fails_closed_like_cpp_contract") ==
@@ -369,11 +373,14 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("leftIdentity.volumeSerialNumber == rightIdentity.volumeSerialNumber") !=
             std::string::npos ||
+        runtimeIdentitySource.find("FILE_FLAG_BACKUP_SEMANTICS") != std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_local_name_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_executable_files_match_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_basic_file_identities_match") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_basic_file_identity_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_path_is_reparse_point_utf16") ==
             std::string::npos ||

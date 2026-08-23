@@ -74,6 +74,15 @@ extern "C" std::uint8_t fcitx5_windows_common_basic_file_identities_match(
     std::uint32_t right_volume_serial_number,
     std::uint32_t right_file_index_high,
     std::uint32_t right_file_index_low);
+struct Fcitx5WindowsCommonBasicFileIdentity {
+    std::uint8_t status;
+    std::uint32_t volumeSerialNumber;
+    std::uint32_t fileIndexHigh;
+    std::uint32_t fileIndexLow;
+};
+extern "C" Fcitx5WindowsCommonBasicFileIdentity
+fcitx5_windows_common_basic_file_identity_utf16(const std::uint16_t* path,
+                                                std::size_t path_len);
 extern "C" std::uint8_t fcitx5_windows_common_path_is_reparse_point_utf16(
     const std::uint16_t* path,
     std::size_t path_len);
@@ -164,35 +173,14 @@ bool validChannel(std::wstring_view channel) {
     });
 }
 
-struct BasicFileIdentity {
-    DWORD volumeSerialNumber{};
-    DWORD fileIndexHigh{};
-    DWORD fileIndexLow{};
-};
-
-bool queryFileIdentity(std::wstring_view path, BasicFileIdentity& identity) {
-    identity = {};
-    if (path.empty() || path.size() >= 32768)
-        return false;
-    const std::wstring source(path);
-    Handle file(CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                            OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-    if (!file)
-        return false;
-    BY_HANDLE_FILE_INFORMATION information{};
-    if (!GetFileInformationByHandle(file.get(), &information))
-        return false;
-    identity.volumeSerialNumber = information.dwVolumeSerialNumber;
-    identity.fileIndexHigh = information.nFileIndexHigh;
-    identity.fileIndexLow = information.nFileIndexLow;
-    return true;
-}
-
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
+bool queryFileIdentity(std::wstring_view path, Fcitx5WindowsCommonBasicFileIdentity& identity) {
+    identity = fcitx5_windows_common_basic_file_identity_utf16(wideData(path), path.size());
+    return identity.status != 0;
 }
 
 template <typename Producer>
@@ -370,8 +358,8 @@ std::wstring makeLocalObjectName(const RuntimeIdentity& identity,
 
 bool pathsReferToSameFile(std::wstring_view left, std::wstring_view right) noexcept {
     try {
-        BasicFileIdentity leftIdentity;
-        BasicFileIdentity rightIdentity;
+        Fcitx5WindowsCommonBasicFileIdentity leftIdentity;
+        Fcitx5WindowsCommonBasicFileIdentity rightIdentity;
         return queryFileIdentity(left, leftIdentity) && queryFileIdentity(right, rightIdentity) &&
                fcitx5_windows_common_basic_file_identities_match(
                    leftIdentity.volumeSerialNumber, leftIdentity.fileIndexHigh,

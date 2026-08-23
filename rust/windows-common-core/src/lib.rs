@@ -308,6 +308,24 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateFileW(
+        file_name: *const u16,
+        desired_access: u32,
+        share_mode: u32,
+        security_attributes: *mut c_void,
+        creation_disposition: u32,
+        flags_and_attributes: u32,
+        template_file: *mut c_void,
+    ) -> *mut c_void;
+    fn GetFileInformationByHandle(
+        file: *mut c_void,
+        file_information: *mut ByHandleFileInformation,
+    ) -> i32;
+    fn CloseHandle(object: *mut c_void) -> i32;
+}
+
 fn same_principal_and_session(
     peer_session_id: u32,
     peer_service_account: bool,
@@ -363,6 +381,110 @@ fn basic_file_identities_match(
     left_volume_serial_number == right_volume_serial_number
         && left_file_index_high == right_file_index_high
         && left_file_index_low == right_file_index_low
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonBasicFileIdentity {
+    pub status: u8,
+    pub volume_serial_number: u32,
+    pub file_index_high: u32,
+    pub file_index_low: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FileTime {
+    low_date_time: u32,
+    high_date_time: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ByHandleFileInformation {
+    file_attributes: u32,
+    creation_time: FileTime,
+    last_access_time: FileTime,
+    last_write_time: FileTime,
+    volume_serial_number: u32,
+    file_size_high: u32,
+    file_size_low: u32,
+    number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+
+fn invalid_handle_value() -> *mut c_void {
+    (-1_isize) as *mut c_void
+}
+
+fn basic_file_identity(path: &[u16]) -> Fcitx5WindowsCommonBasicFileIdentity {
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_WRITE: u32 = 0x2;
+    const FILE_SHARE_DELETE: u32 = 0x4;
+    const OPEN_EXISTING: u32 = 3;
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    if path.is_empty() || path.len() >= 32_768 {
+        return Fcitx5WindowsCommonBasicFileIdentity::default();
+    }
+    let mut nul_terminated = path.to_vec();
+    nul_terminated.push(0);
+    // SAFETY: `nul_terminated` is a NUL-terminated UTF-16 path. We request
+    // metadata-only access and close the returned handle on every success path.
+    let handle = unsafe {
+        CreateFileW(
+            nul_terminated.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle.is_null() || handle == invalid_handle_value() {
+        return Fcitx5WindowsCommonBasicFileIdentity::default();
+    }
+    let mut information = ByHandleFileInformation {
+        file_attributes: 0,
+        creation_time: FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        },
+        last_access_time: FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        },
+        last_write_time: FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        },
+        volume_serial_number: 0,
+        file_size_high: 0,
+        file_size_low: 0,
+        number_of_links: 0,
+        file_index_high: 0,
+        file_index_low: 0,
+    };
+    // SAFETY: `handle` is valid and `information` points to initialized writable
+    // storage matching BY_HANDLE_FILE_INFORMATION layout.
+    let ok = unsafe { GetFileInformationByHandle(handle, &mut information) };
+    // SAFETY: `handle` was returned by CreateFileW above.
+    unsafe {
+        CloseHandle(handle);
+    }
+    if ok == 0 {
+        return Fcitx5WindowsCommonBasicFileIdentity::default();
+    }
+    Fcitx5WindowsCommonBasicFileIdentity {
+        status: 1,
+        volume_serial_number: information.volume_serial_number,
+        file_index_high: information.file_index_high,
+        file_index_low: information.file_index_low,
+    }
 }
 
 fn path_is_reparse_point_or_untrusted(path: &Path) -> bool {
@@ -739,6 +861,22 @@ pub extern "C" fn fcitx5_windows_common_basic_file_identities_match(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `path` must point to exactly `path_len` readable UTF-16 code units.
+pub unsafe extern "C" fn fcitx5_windows_common_basic_file_identity_utf16(
+    path: *const u16,
+    path_len: usize,
+) -> Fcitx5WindowsCommonBasicFileIdentity {
+    if path.is_null() {
+        return Fcitx5WindowsCommonBasicFileIdentity::default();
+    }
+    // SAFETY: The caller supplies exactly `path_len` readable UTF-16 code units.
+    // The path is copied and not retained.
+    basic_file_identity(unsafe { std::slice::from_raw_parts(path, path_len) })
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `path` must point to exactly `path_len` readable UTF-16 code units. The
 /// function returns true for invalid/unreadable paths to preserve the
 /// fail-closed executable identity policy.
@@ -987,6 +1125,12 @@ mod tests {
         assert!(!basic_file_identities_match(12, 22, 33, 11, 22, 33));
         assert!(!basic_file_identities_match(11, 23, 33, 11, 22, 33));
         assert!(!basic_file_identities_match(11, 22, 34, 11, 22, 33));
+    }
+
+    #[test]
+    fn basic_file_identity_query_rejects_empty_path_like_cpp_contract() {
+        let empty = basic_file_identity(&[]);
+        assert_eq!(empty.status, 0);
     }
 
     #[test]
