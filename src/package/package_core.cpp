@@ -156,8 +156,12 @@ Fcitx5PackageLifecycleResult fcitx5_package_validate_manifest_compatibility_utf8
     const std::uint8_t* runtime_architecture, std::size_t runtime_architecture_len);
 Fcitx5PackageDigestResult fcitx5_package_sha256_digest_utf8(
     const std::uint8_t* bytes, std::size_t len);
+Fcitx5PackageDigestResult fcitx5_package_sha256_file_utf16(
+    const wchar_t* path, std::size_t path_len);
 Fcitx5PackageDigestResult fcitx5_package_blake3_digest_utf8(
     const std::uint8_t* bytes, std::size_t len);
+Fcitx5PackageDigestResult fcitx5_package_blake3_file_utf16(
+    const wchar_t* path, std::size_t path_len);
 Fcitx5PackageDependencyResolutionResult fcitx5_package_resolve_exact_dependencies_utf8(
     const Fcitx5PackageDependencyResolutionManifest* manifests, std::size_t manifest_count,
     const Fcitx5ByteSlice* requested_ids, std::size_t requested_id_count);
@@ -540,13 +544,8 @@ std::array<std::byte, 32> sha256(std::span<const std::byte> bytes) {
 }
 
 std::array<std::byte, 32> sha256_file(const std::filesystem::path& path) {
-  std::error_code error;
-  const auto size = std::filesystem::file_size(path, error);
-  if (error || size > kMaximumPayloadBytes) {
-    fail("invalid_file", "file is missing or exceeds the hashing budget");
-  }
-  const auto bytes = read_file_bounded(path, static_cast<std::size_t>(size));
-  return sha256(std::as_bytes(std::span(bytes)));
+  const std::wstring native = native_path_string(path);
+  return require_digest_ok(fcitx5_package_sha256_file_utf16(native.data(), native.size()));
 }
 
 std::string hex_sha256(std::span<const std::byte> digest) {
@@ -567,8 +566,8 @@ std::array<std::byte, 32> blake3(std::span<const std::byte> bytes) {
 }
 
 std::array<std::byte, 32> blake3_file(const std::filesystem::path& path) {
-  const auto bytes = read_file_bounded(path, kMaximumFileBytes);
-  return blake3(std::as_bytes(std::span(bytes)));
+  const std::wstring native = native_path_string(path);
+  return require_digest_ok(fcitx5_package_blake3_file_utf16(native.data(), native.size()));
 }
 
 std::string hex_blake3(std::span<const std::byte> digest) {

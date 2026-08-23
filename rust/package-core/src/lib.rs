@@ -8024,6 +8024,20 @@ mod repair_ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_sha256_file_utf16(
+        path: *const u16,
+        path_len: usize,
+    ) -> Fcitx5PackageDigestResult {
+        let Some(path) = path_from_utf16(path, path_len) else {
+            return digest_error_result("invalid_file", "file path is invalid");
+        };
+        match super::read_repair_file_bounded(&path, super::MAX_PAYLOAD_BYTES) {
+            Ok(bytes) => digest_ok_result(super::sha256_bytes(&bytes)),
+            Err(error) => digest_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn fcitx5_package_blake3_digest_utf8(
         bytes: *const u8,
         len: usize,
@@ -8032,6 +8046,20 @@ mod repair_ffi {
             return digest_error_result("invalid_file", "digest input bytes are invalid");
         };
         digest_ok_result(*blake3::hash(bytes).as_bytes())
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_blake3_file_utf16(
+        path: *const u16,
+        path_len: usize,
+    ) -> Fcitx5PackageDigestResult {
+        let Some(path) = path_from_utf16(path, path_len) else {
+            return digest_error_result("invalid_file", "file path is invalid");
+        };
+        match super::read_repair_file_bounded(&path, super::MAX_FILE_BYTES) {
+            Ok(bytes) => digest_ok_result(*blake3::hash(&bytes).as_bytes()),
+            Err(error) => digest_error_result(error.code(), &error.to_string()),
+        }
     }
 
     #[no_mangle]

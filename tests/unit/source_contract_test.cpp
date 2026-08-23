@@ -397,6 +397,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("blake3_digest") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_sha256_digest_utf8") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_blake3_digest_utf8") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_sha256_file_utf16") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_blake3_file_utf16") == std::string::npos ||
         rustPackageCore.find("verify_payload_bytes") == std::string::npos ||
         rustPackageCore.find("verify_payload_root") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_verify_payload_root_utf16") ==
@@ -510,6 +512,12 @@ int main(int argc, char** argv) {
         packageSource.find("lowered == \"con\"") != std::string::npos ||
         packageSource.find("starts_with(\"com\"") != std::string::npos ||
         packageSource.find("path.find(':')") != std::string::npos ||
+        packageSource.find("file is missing or exceeds the hashing budget") !=
+            std::string::npos ||
+        packageSource.find("return sha256(std::as_bytes(std::span(bytes)))") !=
+            std::string::npos ||
+        packageSource.find("return blake3(std::as_bytes(std::span(bytes)))") !=
+            std::string::npos ||
         packageSource.find("manifest payload schema does not match format version") !=
             std::string::npos ||
         packageSource.find("runtime architecture is invalid") != std::string::npos ||
