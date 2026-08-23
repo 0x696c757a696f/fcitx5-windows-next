@@ -173,14 +173,35 @@ target_include_directories(
   fcitx5_release_identity
   INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>")
 
-add_library(fcitx5_windows_common STATIC src/common/version.cpp)
+set(FCITX_RUST_WINDOWS_COMMON_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_windows_common_core.lib")
+add_custom_command(
+  OUTPUT "${FCITX_RUST_WINDOWS_COMMON_STATICLIB}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_WINDOWS_VERSION=${PROJECT_VERSION}"
+    "FCITX_RELEASE_CHANNEL_NAME=${FCITX_RELEASE_CHANNEL}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-windows-common-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/src/lib.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-windows-common-core staticlib")
+add_custom_target(fcitx5_windows_common_rustlib
+                  DEPENDS "${FCITX_RUST_WINDOWS_COMMON_STATICLIB}")
+add_library(fcitx5_windows_common STATIC IMPORTED GLOBAL)
 add_library(fcitx5::windows_common ALIAS fcitx5_windows_common)
-
-target_compile_features(fcitx5_windows_common PUBLIC cxx_std_20)
+set_target_properties(fcitx5_windows_common PROPERTIES
+                      IMPORTED_LOCATION "${FCITX_RUST_WINDOWS_COMMON_STATICLIB}")
+add_dependencies(fcitx5_windows_common fcitx5_windows_common_rustlib)
 target_include_directories(
   fcitx5_windows_common
-  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>")
-fcitx_apply_project_options(fcitx5_windows_common)
+  INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>")
+target_link_libraries(fcitx5_windows_common INTERFACE ws2_32 userenv ntdll bcrypt advapi32)
 
 add_library(fcitx5_protocol STATIC protocol/protocol.cpp)
 add_library(fcitx5::protocol ALIAS fcitx5_protocol)

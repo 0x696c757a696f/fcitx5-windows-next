@@ -193,6 +193,29 @@ int main(int argc, char** argv) {
     const auto rustPackageCoreArtifactSmoke =
         read_text(sourceRoot / "tools/test-rust-package-core-artifact.ps1");
     const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
+    const auto versionHeaderTemplate = read_text(sourceRoot / "cmake/version.h.in");
+    const auto rustWindowsCommonCore =
+        read_text(sourceRoot / "rust/windows-common-core/src/lib.rs");
+    const auto rustWindowsCommonManifest =
+        read_text(sourceRoot / "rust/windows-common-core/Cargo.toml");
+    if (std::filesystem::exists(sourceRoot / "src/common/version.cpp") ||
+        cargoManifest.find("\"rust/windows-common-core\"") == std::string::npos ||
+        cargoLock.find("name = \"fcitx5-windows-common-core\"") == std::string::npos ||
+        rustWindowsCommonManifest.find("crate-type = [\"staticlib\", \"rlib\"]") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("FCITX_WINDOWS_VERSION") == std::string::npos ||
+        rustWindowsCommonCore.find("FCITX_RELEASE_CHANNEL_NAME") == std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_version") == std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_architecture") ==
+            std::string::npos ||
+        cmakeSource.find("fcitx5-windows-common-core") == std::string::npos ||
+        cmakeSource.find("FCITX_RUST_WINDOWS_COMMON_STATICLIB") == std::string::npos ||
+        cmakeSource.find("FCITX_WINDOWS_VERSION=${PROJECT_VERSION}") == std::string::npos ||
+        versionHeaderTemplate.find("fcitx5_windows_common_version") == std::string::npos ||
+        versionHeaderTemplate.find("fcitx5_windows_common_release_channel") ==
+            std::string::npos) {
+        return fail("COMMON-RUST: product version/channel/architecture must be Rust-owned and the old C++ version source must stay deleted");
+    }
     if (rustToolchain.find("channel = \"1.98.0\"") == std::string::npos ||
         rustToolchain.find("aarch64-pc-windows-msvc") == std::string::npos ||
         cargoManifest.find("\"rust/package-core\"") == std::string::npos ||

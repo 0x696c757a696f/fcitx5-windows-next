@@ -1,8 +1,17 @@
 #pragma once
 
+#include <cstddef>
 #include <string_view>
 
 #include <fcitx5_windows/release_identity.h>
+
+extern "C" {
+const unsigned char* fcitx5_windows_common_version();
+std::size_t fcitx5_windows_common_version_len();
+const unsigned char* fcitx5_windows_common_release_channel();
+std::size_t fcitx5_windows_common_release_channel_len();
+unsigned int fcitx5_windows_common_architecture();
+}
 
 namespace fcitx::windows {
 
@@ -13,8 +22,20 @@ enum class Architecture {
     x64,
 };
 
-[[nodiscard]] std::string_view version() noexcept;
-[[nodiscard]] Architecture architecture() noexcept;
-[[nodiscard]] std::string_view release_channel() noexcept;
+[[nodiscard]] inline std::string_view version() noexcept {
+    return {reinterpret_cast<const char*>(fcitx5_windows_common_version()),
+            fcitx5_windows_common_version_len()};
+}
+
+[[nodiscard]] inline Architecture architecture() noexcept {
+    return fcitx5_windows_common_architecture() == 1 ? Architecture::x64
+                                                     : Architecture::x86;
+}
+
+[[nodiscard]] inline std::string_view release_channel() noexcept {
+    return {reinterpret_cast<const char*>(
+                fcitx5_windows_common_release_channel()),
+            fcitx5_windows_common_release_channel_len()};
+}
 
 } // namespace fcitx::windows
