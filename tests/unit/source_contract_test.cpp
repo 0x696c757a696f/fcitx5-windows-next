@@ -138,9 +138,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustLauncherCoreSource.find("launcher_child_command_lines_match_cpp_contract") ==
             std::string::npos ||
+        launcherSource.find("protocol::decodeHeader(header") != std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_frame_body_size") == std::string::npos ||
+        rustLauncherCoreSource.find("launcher_pipe_frame_header_matches_cpp_protocol_contract") ==
+            std::string::npos ||
         cmakeSource.find("FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}") ==
             std::string::npos) {
-        return fail("LAUNCHER-RUST: launcher ledger parse/save/default-path policy must be Rust-owned");
+        return fail("LAUNCHER-RUST: launcher state/path/tray/command/frame policy must be Rust-owned");
     }
     const auto controlSource = read_text(sourceRoot / "src/control/control_main.cpp");
     const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");

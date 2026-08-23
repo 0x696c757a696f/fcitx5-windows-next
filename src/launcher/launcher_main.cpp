@@ -149,10 +149,8 @@ bool readFrame(HANDLE pipe, std::vector<std::uint8_t>& bytes) {
     std::array<std::uint8_t, protocol::kHeaderSize> header{};
     if (!transfer(pipe, false, header.data(), header.size(), 500))
         return false;
-    protocol::MessageType type{};
-    protocol::Metadata metadata;
     std::uint32_t bodySize = 0;
-    if (!protocol::decodeHeader(header, type, bodySize, metadata))
+    if (!fcitx5_launcher_frame_body_size(header.data(), header.size(), &bodySize))
         return false;
     bytes.assign(header.begin(), header.end());
     bytes.resize(protocol::kHeaderSize + bodySize);

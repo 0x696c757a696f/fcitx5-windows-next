@@ -87,4 +87,6 @@ std::size_t fcitx5_launcher_ui_command_utf16(
 std::size_t fcitx5_launcher_config_command_utf16(
     const std::uint16_t* config_path, std::size_t config_path_len, const std::uint16_t* arguments,
     std::size_t arguments_len, std::uint16_t* output, std::size_t capacity);
+std::uint8_t fcitx5_launcher_frame_body_size(
+    const std::uint8_t* header, std::size_t header_len, std::uint32_t* body_size_out);
 }

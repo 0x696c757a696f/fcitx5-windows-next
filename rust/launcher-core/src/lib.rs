@@ -18,6 +18,11 @@ const MAXIMUM_BACKOFF_MS: u64 = 30_000;
 const SAFE_MODE_CRASH_THRESHOLD: u32 = 3;
 const RELEASE_DATA_DIRECTORY_FALLBACK: &str = "Fcitx5";
 const STATE_FILE_NAME: &str = "launcher-state.v1";
+const PROTOCOL_MAGIC: u32 = 0x3457_4346;
+const PROTOCOL_VERSION: u16 = 14;
+const PROTOCOL_HEADER_SIZE: usize = 64;
+const PROTOCOL_MAX_HOT_FRAME_SIZE: u32 = 256 * 1024;
+const PROTOCOL_MAX_CONTROL_FRAME_SIZE: u32 = 1024 * 1024;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[repr(u32)]
@@ -463,6 +468,73 @@ fn input_method_display_from_raw(
     .flatten()
     .next()
     .unwrap_or_default()
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    let slice = bytes.get(offset..offset + 2)?;
+    Some(u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    let slice = bytes.get(offset..offset + 4)?;
+    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+    let slice = bytes.get(offset..offset + 8)?;
+    Some(u64::from_le_bytes([
+        slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
+    ]))
+}
+
+fn is_protocol_request(raw_type: u16) -> bool {
+    matches!(raw_type, 1 | 3 | 5 | 7 | 9 | 10)
+}
+
+fn is_protocol_response(raw_type: u16) -> bool {
+    matches!(raw_type, 2 | 4 | 6 | 8 | 11)
+}
+
+fn protocol_maximum_frame_size(raw_type: u16) -> Option<u32> {
+    match raw_type {
+        1..=11 => Some(if matches!(raw_type, 5 | 6) {
+            PROTOCOL_MAX_CONTROL_FRAME_SIZE
+        } else {
+            PROTOCOL_MAX_HOT_FRAME_SIZE
+        }),
+        _ => None,
+    }
+}
+
+fn launcher_frame_body_size(header: &[u8]) -> Option<u32> {
+    if header.len() != PROTOCOL_HEADER_SIZE {
+        return None;
+    }
+    let magic = read_u32_le(header, 0)?;
+    let version = read_u16_le(header, 4)?;
+    let raw_type = read_u16_le(header, 6)?;
+    let body_size = read_u32_le(header, 8)?;
+    let request_id = read_u64_le(header, 12)?;
+    let response_to = read_u64_le(header, 20)?;
+
+    if magic != PROTOCOL_MAGIC || version != PROTOCOL_VERSION || request_id == 0 {
+        return None;
+    }
+    if is_protocol_request(raw_type) {
+        if response_to != 0 {
+            return None;
+        }
+    } else if is_protocol_response(raw_type) {
+        if response_to == 0 {
+            return None;
+        }
+    } else {
+        return None;
+    }
+
+    let maximum_frame_size = protocol_maximum_frame_size(raw_type)?;
+    let maximum_body_size = maximum_frame_size.checked_sub(PROTOCOL_HEADER_SIZE as u32)?;
+    (body_size <= maximum_body_size).then_some(body_size)
 }
 
 fn append_literal(output: &mut Vec<u16>, text: &str) {
@@ -1110,6 +1182,32 @@ pub unsafe extern "C" fn fcitx5_launcher_config_command_utf16(
     write_utf16_units(&command, output, capacity)
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// `header` must point to exactly `header_len` readable bytes and
+/// `body_size_out` must point to writable `u32` storage. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_launcher_frame_body_size(
+    header: *const u8,
+    header_len: usize,
+    body_size_out: *mut u32,
+) -> u8 {
+    if header.is_null() || body_size_out.is_null() {
+        return 0;
+    }
+    // SAFETY: The caller supplies exactly `header_len` readable bytes. We never
+    // retain this pointer and validate the protocol length before decoding.
+    let header = unsafe { std::slice::from_raw_parts(header, header_len) };
+    let Some(body_size) = launcher_frame_body_size(header) else {
+        return 0;
+    };
+    // SAFETY: The caller supplied writable storage for one u32.
+    unsafe {
+        *body_size_out = body_size;
+    }
+    1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1420,5 +1518,63 @@ mod tests {
             )),
             r#""C:\Fcitx5\bin\fcitx5-config.exe" --diagnostics"#
         );
+    }
+
+    fn protocol_header(
+        raw_type: u16,
+        body_size: u32,
+        request_id: u64,
+        response_to: u64,
+    ) -> Vec<u8> {
+        let mut header = Vec::new();
+        header.extend(PROTOCOL_MAGIC.to_le_bytes());
+        header.extend(PROTOCOL_VERSION.to_le_bytes());
+        header.extend(raw_type.to_le_bytes());
+        header.extend(body_size.to_le_bytes());
+        header.extend(request_id.to_le_bytes());
+        header.extend(response_to.to_le_bytes());
+        header.extend(0u64.to_le_bytes());
+        header.extend(0u32.to_le_bytes());
+        header.extend(0u64.to_le_bytes());
+        header.extend(0u64.to_le_bytes());
+        header.extend(0u64.to_le_bytes());
+        assert_eq!(header.len(), PROTOCOL_HEADER_SIZE);
+        header
+    }
+
+    #[test]
+    fn launcher_pipe_frame_header_matches_cpp_protocol_contract() {
+        assert_eq!(
+            launcher_frame_body_size(&protocol_header(5, 1024 * 1024 - 64, 7, 0)),
+            Some(1024 * 1024 - 64)
+        );
+        assert_eq!(
+            launcher_frame_body_size(&protocol_header(3, 256 * 1024 - 64, 7, 0)),
+            Some(256 * 1024 - 64)
+        );
+        assert_eq!(
+            launcher_frame_body_size(&protocol_header(3, 256 * 1024 - 63, 7, 0)),
+            None
+        );
+        assert_eq!(
+            launcher_frame_body_size(&protocol_header(5, 16, 0, 0)),
+            None
+        );
+        assert_eq!(
+            launcher_frame_body_size(&protocol_header(5, 16, 7, 1)),
+            None
+        );
+        assert_eq!(
+            launcher_frame_body_size(&protocol_header(6, 16, 7, 0)),
+            None
+        );
+        assert_eq!(
+            launcher_frame_body_size(&protocol_header(12, 0, 7, 0)),
+            None
+        );
+
+        let mut wrong_magic = protocol_header(5, 0, 7, 0);
+        wrong_magic[0] ^= 0xff;
+        assert_eq!(launcher_frame_body_size(&wrong_magic), None);
     }
 }
