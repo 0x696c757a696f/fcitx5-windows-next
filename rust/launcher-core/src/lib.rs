@@ -363,6 +363,104 @@ fn write_utf16_path_checked(value: &Path, out: *mut u16, capacity: usize) -> Opt
     Some(wide.len())
 }
 
+fn write_utf16_string(value: &str, out: *mut u16, capacity: usize) -> usize {
+    let wide: Vec<u16> = value.encode_utf16().collect();
+    if !out.is_null() && capacity != 0 {
+        let count = wide.len().min(capacity);
+        if count != 0 {
+            // SAFETY: The caller supplied writable storage for `capacity` u16
+            // values. We copy at most that many initialized elements.
+            unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), out, count) };
+        }
+    }
+    wide.len()
+}
+
+fn utf16_string_from_raw(text: *const u16, len: usize) -> Option<String> {
+    let text = wide_slice(text, len)?;
+    String::from_utf16(text).ok()
+}
+
+fn utf8_candidate_from_raw(text: *const u8, len: usize) -> Option<String> {
+    if text.is_null() {
+        return None;
+    }
+    // SAFETY: The caller passes a valid byte buffer with exactly `len` elements
+    // for the duration of this call. We copy into an owned `String`.
+    let slice = unsafe { std::slice::from_raw_parts(text, len) };
+    std::str::from_utf8(slice)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn tray_status_text(
+    launcher_state_value: u32,
+    engine_state_value: u32,
+    chinese: bool,
+) -> &'static str {
+    let launcher_state = launcher_state(launcher_state_value).unwrap_or(LauncherState::UserStopped);
+    let engine_state = match engine_state_value {
+        0 => EngineState::Stopped,
+        1 => EngineState::Starting,
+        2 => EngineState::Ready,
+        _ => EngineState::Stopped,
+    };
+    if launcher_state == LauncherState::SafeMode {
+        return if chinese { "安全模式" } else { "Safe mode" };
+    }
+    if launcher_state == LauncherState::UserStopped {
+        return if chinese { "已暂停" } else { "Paused" };
+    }
+    if launcher_state == LauncherState::CrashBackoff {
+        return if chinese {
+            "故障恢复中"
+        } else {
+            "Recovering"
+        };
+    }
+    if launcher_state == LauncherState::Updating {
+        return if chinese { "正在更新" } else { "Updating" };
+    }
+    if launcher_state == LauncherState::Uninstalling {
+        return if chinese {
+            "正在卸载"
+        } else {
+            "Uninstalling"
+        };
+    }
+    if engine_state == EngineState::Ready {
+        return if chinese { "运行中" } else { "Running" };
+    }
+    if engine_state == EngineState::Starting {
+        return if chinese { "正在启动" } else { "Starting" };
+    }
+    if chinese {
+        "服务未运行"
+    } else {
+        "Service stopped"
+    }
+}
+
+fn input_method_display_from_raw(
+    native_name: *const u8,
+    native_name_len: usize,
+    name: *const u8,
+    name_len: usize,
+    id: *const u8,
+    id_len: usize,
+) -> String {
+    [
+        utf8_candidate_from_raw(native_name, native_name_len),
+        utf8_candidate_from_raw(name, name_len),
+        utf8_candidate_from_raw(id, id_len),
+    ]
+    .into_iter()
+    .flatten()
+    .next()
+    .unwrap_or_default()
+}
+
 fn start_suppressed(state: LauncherState) -> bool {
     matches!(
         state,
@@ -778,6 +876,79 @@ pub unsafe extern "C" fn fcitx5_launcher_resolve_default_process_paths_utf16(
     u8::from(engine_len.is_some() && ui_len.is_some())
 }
 
+#[no_mangle]
+pub extern "C" fn fcitx5_launcher_tray_status_text_utf16(
+    launcher_state: u32,
+    engine_state: u32,
+    chinese: u8,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    write_utf16_string(
+        tray_status_text(launcher_state, engine_state, chinese != 0),
+        output,
+        capacity,
+    )
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// Non-null input pointers must point to valid byte buffers with exactly the
+/// provided lengths. `output` may be null for size queries or writable UTF-16
+/// storage for `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_launcher_tray_input_method_display_utf16(
+    native_name: *const u8,
+    native_name_len: usize,
+    name: *const u8,
+    name_len: usize,
+    id: *const u8,
+    id_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let display =
+        input_method_display_from_raw(native_name, native_name_len, name, name_len, id, id_len);
+    write_utf16_string(&display, output, capacity)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `product_name` must be null only when `product_name_len == 0`, or point to a
+/// valid UTF-16 buffer with exactly that length. Byte-string pointers follow the
+/// same lifetime rule as `fcitx5_launcher_tray_input_method_display_utf16`.
+/// `output` may be null for size queries or writable UTF-16 storage for
+/// `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_launcher_tray_tooltip_utf16(
+    product_name: *const u16,
+    product_name_len: usize,
+    launcher_state: u32,
+    engine_state: u32,
+    chinese: u8,
+    native_name: *const u8,
+    native_name_len: usize,
+    name: *const u8,
+    name_len: usize,
+    id: *const u8,
+    id_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(product_name) = utf16_string_from_raw(product_name, product_name_len) else {
+        return 0;
+    };
+    let status = tray_status_text(launcher_state, engine_state, chinese != 0);
+    let display =
+        input_method_display_from_raw(native_name, native_name_len, name, name_len, id, id_len);
+    let tooltip = if display.is_empty() {
+        format!("{product_name} — {status}")
+    } else {
+        format!("{product_name} — {status} — {display}")
+    };
+    write_utf16_string(&tooltip, output, capacity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -958,5 +1129,102 @@ mod tests {
         assert!(!absolute_windows_path_wide(&wide(r"\Fcitx5\bin")));
         assert!(!absolute_windows_path_wide(&wide(r"Fcitx5\bin")));
         assert!(!absolute_windows_path_wide(&wide(r"1:\Fcitx5\bin")));
+    }
+
+    #[test]
+    fn tray_text_and_tooltip_match_cpp_display_contract() {
+        assert_eq!(
+            tray_status_text(
+                LauncherState::SafeMode as u32,
+                EngineState::Ready as u32,
+                false
+            ),
+            "Safe mode"
+        );
+        assert_eq!(
+            tray_status_text(
+                LauncherState::Normal as u32,
+                EngineState::Ready as u32,
+                true
+            ),
+            "运行中"
+        );
+        assert_eq!(
+            tray_status_text(
+                LauncherState::Normal as u32,
+                EngineState::Stopped as u32,
+                false
+            ),
+            "Service stopped"
+        );
+
+        let native = "五笔".as_bytes();
+        let name = "Wubi".as_bytes();
+        let id = "rime-wubi".as_bytes();
+        assert_eq!(
+            input_method_display_from_raw(
+                native.as_ptr(),
+                native.len(),
+                name.as_ptr(),
+                name.len(),
+                id.as_ptr(),
+                id.len(),
+            ),
+            "五笔"
+        );
+        let invalid = [0xff_u8];
+        assert_eq!(
+            input_method_display_from_raw(
+                invalid.as_ptr(),
+                invalid.len(),
+                name.as_ptr(),
+                name.len(),
+                id.as_ptr(),
+                id.len(),
+            ),
+            "Wubi"
+        );
+
+        let product = "Fcitx5 for Windows Next".encode_utf16().collect::<Vec<_>>();
+        let required = unsafe {
+            fcitx5_launcher_tray_tooltip_utf16(
+                product.as_ptr(),
+                product.len(),
+                LauncherState::Normal as u32,
+                EngineState::Ready as u32,
+                0,
+                native.as_ptr(),
+                native.len(),
+                name.as_ptr(),
+                name.len(),
+                id.as_ptr(),
+                id.len(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        let mut output = vec![0_u16; required];
+        let written = unsafe {
+            fcitx5_launcher_tray_tooltip_utf16(
+                product.as_ptr(),
+                product.len(),
+                LauncherState::Normal as u32,
+                EngineState::Ready as u32,
+                0,
+                native.as_ptr(),
+                native.len(),
+                name.as_ptr(),
+                name.len(),
+                id.as_ptr(),
+                id.len(),
+                output.as_mut_ptr(),
+                output.len(),
+            )
+        };
+        assert_eq!(written, required);
+        assert_eq!(
+            String::from_utf16(&output).expect("tooltip should be valid UTF-16"),
+            "Fcitx5 for Windows Next — Running — 五笔"
+        );
     }
 }

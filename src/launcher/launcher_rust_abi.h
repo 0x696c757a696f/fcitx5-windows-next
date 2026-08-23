@@ -60,4 +60,18 @@ std::uint8_t fcitx5_launcher_resolve_default_process_paths_utf16(
     const std::uint16_t* generation, std::size_t generation_len, std::uint16_t* engine_output,
     std::size_t engine_capacity, std::uint16_t* ui_output, std::size_t ui_capacity,
     std::size_t* required_engine_len, std::size_t* required_ui_len);
+std::size_t fcitx5_launcher_tray_status_text_utf16(std::uint32_t launcher_state,
+                                                   std::uint32_t engine_state,
+                                                   std::uint8_t chinese, std::uint16_t* output,
+                                                   std::size_t capacity);
+std::size_t fcitx5_launcher_tray_input_method_display_utf16(
+    const std::uint8_t* native_name, std::size_t native_name_len, const std::uint8_t* name,
+    std::size_t name_len, const std::uint8_t* id, std::size_t id_len, std::uint16_t* output,
+    std::size_t capacity);
+std::size_t fcitx5_launcher_tray_tooltip_utf16(
+    const std::uint16_t* product_name, std::size_t product_name_len,
+    std::uint32_t launcher_state, std::uint32_t engine_state, std::uint8_t chinese,
+    const std::uint8_t* native_name, std::size_t native_name_len, const std::uint8_t* name,
+    std::size_t name_len, const std::uint8_t* id, std::size_t id_len, std::uint16_t* output,
+    std::size_t capacity);
 }

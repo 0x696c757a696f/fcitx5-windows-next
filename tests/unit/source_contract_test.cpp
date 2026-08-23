@@ -112,6 +112,19 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustLauncherCoreSource.find("fcitx5_launcher_absolute_windows_path_utf16") ==
             std::string::npos ||
+        trayIconSource.find("MultiByteToWideChar") != std::string::npos ||
+        trayIconSource.find("const wchar_t* statusText") != std::string::npos ||
+        trayIconSource.find("Safe mode") != std::string::npos ||
+        trayIconSource.find("服务未运行") != std::string::npos ||
+        trayIconSource.find("L\" — \"") != std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_tray_status_text_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_tray_input_method_display_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_tray_tooltip_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("tray_text_and_tooltip_match_cpp_display_contract") ==
+            std::string::npos ||
         cmakeSource.find("FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}") ==
             std::string::npos) {
         return fail("LAUNCHER-RUST: launcher ledger parse/save/default-path policy must be Rust-owned");

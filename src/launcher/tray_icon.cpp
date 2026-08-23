@@ -1,6 +1,7 @@
 #include "tray_icon.h"
 
 #include "fcitx5_windows/release_identity.h"
+#include "launcher_rust_abi.h"
 #include "resource.h"
 
 #include <shellapi.h>
@@ -29,25 +30,6 @@ bool chineseUi() noexcept {
     return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
 }
 
-const wchar_t* statusText(LauncherState launcherState, EngineState engineState) noexcept {
-    const bool chinese = chineseUi();
-    if (launcherState == LauncherState::safeMode)
-        return chinese ? L"安全模式" : L"Safe mode";
-    if (launcherState == LauncherState::userStopped)
-        return chinese ? L"已暂停" : L"Paused";
-    if (launcherState == LauncherState::crashBackoff)
-        return chinese ? L"故障恢复中" : L"Recovering";
-    if (launcherState == LauncherState::updating)
-        return chinese ? L"正在更新" : L"Updating";
-    if (launcherState == LauncherState::uninstalling)
-        return chinese ? L"正在卸载" : L"Uninstalling";
-    if (engineState == EngineState::ready)
-        return chinese ? L"运行中" : L"Running";
-    if (engineState == EngineState::starting)
-        return chinese ? L"正在启动" : L"Starting";
-    return chinese ? L"服务未运行" : L"Service stopped";
-}
-
 HICON statusIcon(HINSTANCE instance, LauncherState launcherState,
                  EngineState engineState) noexcept {
     int resource = IDI_FCITX5_APP;
@@ -67,45 +49,56 @@ void copyText(wchar_t* destination, std::size_t capacity, const std::wstring& va
     wcsncpy_s(destination, capacity, value.c_str(), _TRUNCATE);
 }
 
-bool utf8ToWide(std::string_view input, std::wstring& output) {
-    output.clear();
-    if (input.empty())
-        return true;
-    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
-                                         static_cast<int>(input.size()), nullptr, 0);
-    if (size <= 0)
-        return false;
-    output.resize(static_cast<std::size_t>(size));
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
-                               static_cast<int>(input.size()), output.data(), size) == size;
+template <typename Producer>
+std::wstring callRustText(Producer producer) {
+    const std::size_t required = producer(nullptr, 0);
+    if (required == 0)
+        return {};
+    std::vector<wchar_t> buffer(required);
+    const std::size_t written =
+        producer(reinterpret_cast<std::uint16_t*>(buffer.data()), buffer.size());
+    if (written == 0 || written > buffer.size())
+        return {};
+    return std::wstring(buffer.data(), buffer.data() + written);
 }
 
-std::wstring inputMethodDisplay(
-    const protocol::EngineStatusResponse& status) {
-    std::wstring display;
-    if (!status.currentInputMethodNativeName.empty() &&
-        utf8ToWide(status.currentInputMethodNativeName, display) && !display.empty()) {
-        return display;
-    }
-    if (!status.currentInputMethodName.empty() &&
-        utf8ToWide(status.currentInputMethodName, display) && !display.empty()) {
-        return display;
-    }
-    if (!status.currentInputMethodId.empty() &&
-        utf8ToWide(status.currentInputMethodId, display) && !display.empty()) {
-        return display;
-    }
-    return {};
+std::wstring statusText(LauncherState launcherState, EngineState engineState, bool chinese) {
+    return callRustText([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_launcher_tray_status_text_utf16(
+            static_cast<std::uint32_t>(launcherState), static_cast<std::uint32_t>(engineState),
+            chinese ? 1 : 0, output, capacity);
+    });
+}
+
+std::wstring inputMethodDisplay(const protocol::EngineStatusResponse& status) {
+    return callRustText([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_launcher_tray_input_method_display_utf16(
+            reinterpret_cast<const std::uint8_t*>(status.currentInputMethodNativeName.data()),
+            status.currentInputMethodNativeName.size(),
+            reinterpret_cast<const std::uint8_t*>(status.currentInputMethodName.data()),
+            status.currentInputMethodName.size(),
+            reinterpret_cast<const std::uint8_t*>(status.currentInputMethodId.data()),
+            status.currentInputMethodId.size(), output, capacity);
+    });
 }
 
 std::wstring tooltipText(LauncherState launcherState, EngineState engineState,
                          const protocol::EngineStatusResponse& inputMethodStatus) {
-    std::wstring text = std::wstring(fcitx::windows::kReleaseIdentity.service_description) +
-                        L" — " + statusText(launcherState, engineState);
-    std::wstring method = inputMethodDisplay(inputMethodStatus);
-    if (!method.empty())
-        text += L" — " + method;
-    return text;
+    const std::wstring productName = fcitx::windows::kReleaseIdentity.service_description;
+    const bool chinese = chineseUi();
+    return callRustText([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_launcher_tray_tooltip_utf16(
+            reinterpret_cast<const std::uint16_t*>(productName.data()), productName.size(),
+            static_cast<std::uint32_t>(launcherState), static_cast<std::uint32_t>(engineState),
+            chinese ? 1 : 0,
+            reinterpret_cast<const std::uint8_t*>(
+                inputMethodStatus.currentInputMethodNativeName.data()),
+            inputMethodStatus.currentInputMethodNativeName.size(),
+            reinterpret_cast<const std::uint8_t*>(inputMethodStatus.currentInputMethodName.data()),
+            inputMethodStatus.currentInputMethodName.size(),
+            reinterpret_cast<const std::uint8_t*>(inputMethodStatus.currentInputMethodId.data()),
+            inputMethodStatus.currentInputMethodId.size(), output, capacity);
+    });
 }
 
 std::wstring joinExecutable(std::wstring_view directory, const wchar_t* executable) {
@@ -280,7 +273,7 @@ void TrayIcon::showMenu() noexcept {
         return;
     const bool chinese = chineseUi();
     const std::wstring status = std::wstring(chinese ? L"状态：" : L"Status: ") +
-                                statusText(launcherState_, engineState_);
+                                statusText(launcherState_, engineState_, chinese);
     AppendMenuW(menu, MF_STRING | MF_DISABLED, kStatus, status.c_str());
     const std::wstring inputMethod = inputMethodDisplay(inputMethodStatus_);
     if (!inputMethod.empty()) {
