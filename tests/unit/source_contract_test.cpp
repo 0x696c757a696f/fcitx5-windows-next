@@ -652,12 +652,15 @@ int main(int argc, char** argv) {
             std::string::npos ||
         buildScript.find("CMAKE_C_COMPILER_LAUNCHER=$sccachePath") ==
             std::string::npos ||
-        ciCacheScript.find("CARGO_INCREMENTAL = '0'") == std::string::npos ||
         ciCacheScript.find("RUSTC_WRAPPER = 'sccache'") == std::string::npos ||
+        ciCacheScript.find("CARGO_INCREMENTAL = '0'") != std::string::npos ||
+        ciCacheScript.find("SCCACHE_CACHE_SIZE = '30G'") == std::string::npos ||
+        ciCacheScript.find("SCCACHE_IGNORE_SERVER_IO_ERROR = '1'") == std::string::npos ||
         ciCacheScript.find("ACTIONS_RUNTIME_TOKEN") == std::string::npos ||
         ciCacheScript.find("GITHUB_ACTIONS") == std::string::npos ||
         cargoManifest.find("debug = \"line-tables-only\"") == std::string::npos ||
         cargoManifest.find("[profile.dev.package.\"*\"]") == std::string::npos ||
+        cargoConfig.find("rustc-wrapper = \"sccache\"") == std::string::npos ||
         cargoConfig.find("linker = \"rust-lld\"") == std::string::npos ||
         cargoConfig.find("aarch64-pc-windows-msvc") == std::string::npos ||
         cmakePresets.find("\"generator\": \"Ninja Multi-Config\"") == std::string::npos ||

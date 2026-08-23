@@ -43,7 +43,7 @@ jobs:
             out/toolchains/rust/cargo-home/git
             out/toolchains/rust/cargo-home/bin
             out/toolchains/rust/target
-          key: ${{ runner.os }}-${{ matrix.architecture }}-rust-msvc-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust/**/Cargo.toml', 'tools/prepare-rust.ps1') }}
+          key: ${{ runner.os }}-${{ matrix.architecture }}-rust-msvc-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'rust/**/Cargo.toml', 'tools/prepare-rust.ps1') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.architecture }}-rust-msvc-
             ${{ runner.os }}-rust-msvc-

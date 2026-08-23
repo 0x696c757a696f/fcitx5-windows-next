@@ -26,10 +26,11 @@ $environment = [ordered]@{
   RUSTUP_IO_THREADS = '1'
   CARGO_TERM_COLOR = 'always'
   FCITX_ENABLE_SCCACHE = '1'
+  SCCACHE_CACHE_SIZE = '30G'
+  SCCACHE_IGNORE_SERVER_IO_ERROR = '1'
 }
 
 if ($useGitHubSccache) {
-  $environment.CARGO_INCREMENTAL = '0'
   $environment.RUSTC_WRAPPER = 'sccache'
   $environment.SCCACHE_GHA_ENABLED = 'true'
 } else {
