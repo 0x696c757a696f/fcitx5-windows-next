@@ -421,6 +421,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_verify_mldsa65_signature_utf8") ==
             std::string::npos ||
+        rustPackageCore.find("fcitx5_package_verify_signature_envelope_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_staged_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_installed_version_utf16") ==
             std::string::npos ||
@@ -486,6 +488,11 @@ int main(int argc, char** argv) {
         packageSource.find("signature envelope requires an unsupported algorithm") !=
             std::string::npos ||
         packageSource.find("CryptStringToBinaryA") != std::string::npos ||
+        packageSource.find("ML-DSA signature key id does not match signed metadata") !=
+            std::string::npos ||
+        packageSource.find("ML-DSA signature key is not trusted") != std::string::npos ||
+        packageSource.find("signature envelope has no required ML-DSA signature") !=
+            std::string::npos ||
         packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||

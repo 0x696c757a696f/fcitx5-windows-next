@@ -6755,6 +6755,28 @@ mod repair_ffi {
         raw.iter().map(key_from_raw).collect()
     }
 
+    fn signature_entries_from_raw(
+        signatures: *const Fcitx5PackageSignatureEnvelopeEntry,
+        signature_count: usize,
+    ) -> Option<Vec<super::SignatureEnvelopeEntry>> {
+        if signature_count == 0 {
+            return Some(Vec::new());
+        }
+        if signatures.is_null() {
+            return None;
+        }
+        let raw = unsafe { slice::from_raw_parts(signatures, signature_count) };
+        raw.iter()
+            .map(|entry| {
+                Some(super::SignatureEnvelopeEntry {
+                    key_id: PackageId::parse(&string_from_raw(entry.key_id)?).ok()?,
+                    algorithm: algorithm_from_str(&string_from_raw(entry.algorithm)?)?,
+                    signature: slice_from_raw(entry.signature)?.to_vec(),
+                })
+            })
+            .collect()
+    }
+
     fn stage_error_result(code: &str, message: &str) -> Fcitx5PackageStageResult {
         let mut error_code = [0; 64];
         let mut error_message = [0; 512];
@@ -7415,6 +7437,74 @@ mod repair_ffi {
             return error_result("invalid_keyring", "trusted key set is invalid");
         };
         match verify_mldsa65_signature(object_bytes, signature, &trusted_key) {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_verify_signature_envelope_utf8(
+        object_bytes: *const u8,
+        object_len: usize,
+        format_version: u32,
+        signed_object: Fcitx5ByteSlice,
+        canonicalization: Fcitx5ByteSlice,
+        signatures: *const Fcitx5PackageSignatureEnvelopeEntry,
+        signature_count: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+        expected_object: *const u8,
+        expected_object_len: usize,
+        expected_key_id: *const u8,
+        expected_key_id_len: usize,
+    ) -> Fcitx5PackageRepairResult {
+        let Some(object_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: object_bytes,
+            len: object_len,
+        }) else {
+            return error_result("invalid_signature", "signature envelope binding is invalid");
+        };
+        let Some(signed_object) = signed_object_from_raw(signed_object) else {
+            return error_result("invalid_signature", "signature envelope binding is invalid");
+        };
+        let Some(canonicalization) = string_from_raw(canonicalization) else {
+            return error_result("invalid_signature", "signature envelope binding is invalid");
+        };
+        let Some(signatures) = signature_entries_from_raw(signatures, signature_count) else {
+            return error_result(
+                "invalid_signature",
+                "signature envelope entry data is invalid",
+            );
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return error_result("invalid_keyring", "trusted key set is invalid");
+        };
+        let Some(expected_object) = signed_object_from_raw(Fcitx5ByteSlice {
+            data: expected_object,
+            len: expected_object_len,
+        }) else {
+            return error_result("invalid_signature", "signature envelope binding is invalid");
+        };
+        let Some(expected_key_id) = string_from_raw(Fcitx5ByteSlice {
+            data: expected_key_id,
+            len: expected_key_id_len,
+        })
+        .and_then(|value| PackageId::parse(&value).ok()) else {
+            return error_result("invalid_signature", "signature envelope binding is invalid");
+        };
+        let envelope = super::SignatureEnvelope {
+            format_version: u64::from(format_version),
+            signed_object,
+            canonicalization,
+            signatures,
+        };
+        match super::verify_signature_envelope(
+            object_bytes,
+            &envelope,
+            &trusted_keys,
+            expected_object,
+            &expected_key_id,
+        ) {
             Ok(()) => ok_result(),
             Err(error) => error_result(error.code(), &error.to_string()),
         }

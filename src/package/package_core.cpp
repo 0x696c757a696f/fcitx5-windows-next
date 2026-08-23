@@ -154,6 +154,13 @@ Fcitx5PackageLifecycleResult fcitx5_package_verify_manifest_signature_utf8(
 Fcitx5PackageLifecycleResult fcitx5_package_verify_mldsa65_signature_utf8(
     const std::uint8_t* object_bytes, std::size_t object_len, const std::uint8_t* signature,
     std::size_t signature_len, const Fcitx5TrustedKeyNative* trusted_key);
+Fcitx5PackageLifecycleResult fcitx5_package_verify_signature_envelope_utf8(
+    const std::uint8_t* object_bytes, std::size_t object_len, std::uint32_t format_version,
+    Fcitx5ByteSlice signed_object, Fcitx5ByteSlice canonicalization,
+    const Fcitx5PackageSignatureEnvelopeEntry* signatures, std::size_t signature_count,
+    const Fcitx5TrustedKeyNative* trusted_keys, std::size_t trusted_key_count,
+    const std::uint8_t* expected_object, std::size_t expected_object_len,
+    const std::uint8_t* expected_key_id, std::size_t expected_key_id_len);
 Fcitx5PackageLifecycleResult fcitx5_package_activate_staged_utf16(
     const wchar_t* staged_root, std::size_t staged_root_len, const wchar_t* install_root,
     std::size_t install_root_len, const Fcitx5TrustedKeyNative* trusted_keys,
@@ -175,8 +182,6 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr std::size_t kMaximumIdBytes = 64U;
-constexpr std::string_view kSignatureEnvelopeCanonicalization =
-    "fcitx5-windows-next-json-v1";
 
 class AlgorithmHandle final {
  public:
@@ -677,32 +682,23 @@ void verify_signature_envelope(std::string_view object_bytes,
                                std::span<const TrustedKey> trusted_keys,
                                std::string_view expected_object,
                                std::string_view expected_key_id) {
-  if (envelope.format_version != 2U || envelope.signed_object != expected_object ||
-      envelope.canonicalization != kSignatureEnvelopeCanonicalization ||
-      !is_lower_package_id(expected_key_id)) {
-    fail("invalid_signature", "signature envelope binding is invalid");
-  }
-  bool saw_required_key = false;
+  std::vector<Fcitx5PackageSignatureEnvelopeEntry> signature_views;
+  signature_views.reserve(envelope.signatures.size());
   for (const auto& entry : envelope.signatures) {
-    if (entry.algorithm != "mldsa65") {
-      continue;
-    }
-    if (entry.key_id != expected_key_id) {
-      fail("untrusted_key", "ML-DSA signature key id does not match signed metadata");
-    }
-    saw_required_key = true;
-    const auto trusted_key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
-      return candidate.id == entry.key_id;
+    signature_views.push_back(Fcitx5PackageSignatureEnvelopeEntry{
+        ffi_slice(entry.key_id),
+        ffi_slice(entry.algorithm),
+        ffi_slice(std::span<const std::byte>(entry.signature.data(), entry.signature.size())),
     });
-    if (trusted_key == trusted_keys.end()) {
-      fail("untrusted_key", "ML-DSA signature key is not trusted");
-    }
-    verify_mldsa65_signature(object_bytes, std::span(entry.signature), *trusted_key);
-    return;
   }
-  if (!saw_required_key) {
-    fail("invalid_signature", "signature envelope has no required ML-DSA signature");
-  }
+  const auto key_views = rust_trusted_key_views(trusted_keys);
+  require_lifecycle_ok(fcitx5_package_verify_signature_envelope_utf8(
+      reinterpret_cast<const std::uint8_t*>(object_bytes.data()), object_bytes.size(),
+      envelope.format_version, ffi_slice(envelope.signed_object),
+      ffi_slice(envelope.canonicalization), signature_views.data(), signature_views.size(),
+      key_views.empty() ? nullptr : key_views.data(), key_views.size(),
+      reinterpret_cast<const std::uint8_t*>(expected_object.data()), expected_object.size(),
+      reinterpret_cast<const std::uint8_t*>(expected_key_id.data()), expected_key_id.size()));
 }
 
 void verify_manifest_signature_envelope(std::string_view manifest_bytes,
