@@ -280,6 +280,7 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/windows-common-core/src/lib.rs");
     const auto rustWindowsCommonManifest =
         read_text(sourceRoot / "rust/windows-common-core/Cargo.toml");
+    const auto runtimeIdentitySource = read_text(sourceRoot / "src/platform/runtime_identity.cpp");
     if (std::filesystem::exists(sourceRoot / "src/common/version.cpp") ||
         cargoManifest.find("\"rust/windows-common-core\"") == std::string::npos ||
         cargoLock.find("name = \"fcitx5-windows-common-core\"") == std::string::npos ||
@@ -290,13 +291,24 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("fcitx5_windows_common_version") == std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_architecture") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_local_name_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("local_endpoint_and_object_names_match_cpp_contract") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("kReleaseIdentity.pipe_prefix") != std::string::npos ||
+        runtimeIdentitySource.find("kReleaseIdentity.local_object_prefix") !=
+            std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_local_name_utf16") ==
+            std::string::npos ||
+        cmakeSource.find("fcitx5_platform PUBLIC fcitx5::release_identity fcitx5::windows_common") ==
+            std::string::npos ||
         cmakeSource.find("fcitx5-windows-common-core") == std::string::npos ||
         cmakeSource.find("FCITX_RUST_WINDOWS_COMMON_STATICLIB") == std::string::npos ||
         cmakeSource.find("FCITX_WINDOWS_VERSION=${PROJECT_VERSION}") == std::string::npos ||
         versionHeaderTemplate.find("fcitx5_windows_common_version") == std::string::npos ||
         versionHeaderTemplate.find("fcitx5_windows_common_release_channel") ==
             std::string::npos) {
-        return fail("COMMON-RUST: product version/channel/architecture must be Rust-owned and the old C++ version source must stay deleted");
+        return fail("COMMON-RUST: product version/channel/architecture and local IPC name policy must be Rust-owned");
     }
     if (rustToolchain.find("channel = \"1.98.0\"") == std::string::npos ||
         rustToolchain.find("aarch64-pc-windows-msvc") == std::string::npos ||

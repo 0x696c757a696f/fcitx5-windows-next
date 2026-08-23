@@ -17,6 +17,20 @@
 namespace fcitx::windows::platform {
 namespace {
 
+extern "C" std::size_t fcitx5_windows_common_local_name_utf16(
+    std::uint32_t kind,
+    const std::uint16_t* user_sid,
+    std::size_t user_sid_len,
+    std::uint32_t session_id,
+    const std::uint16_t* generation,
+    std::size_t generation_len,
+    const std::uint16_t* channel,
+    std::size_t channel_len,
+    const std::uint16_t* test_namespace,
+    std::size_t test_namespace_len,
+    std::uint16_t* output,
+    std::size_t capacity);
+
 class Handle final {
   public:
     explicit Handle(HANDLE value = nullptr) noexcept : value_(value) {}
@@ -266,6 +280,32 @@ bool sameFinalPath(std::wstring_view left, std::wstring_view right) noexcept {
                                 static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
 }
 
+const std::uint16_t* wideData(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
+std::wstring rustLocalName(std::uint32_t kind, const RuntimeIdentity& identity,
+                           std::wstring_view generation, std::wstring_view channel) {
+    const std::wstring testNamespace = localTestNamespace();
+    const auto call = [&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_windows_common_local_name_utf16(
+            kind, wideData(identity.userSid), identity.userSid.size(), identity.sessionId,
+            wideData(generation), generation.size(), wideData(channel), channel.size(),
+            wideData(testNamespace), testNamespace.size(), output, capacity);
+    };
+    const std::size_t required = call(nullptr, 0);
+    if (required == 0)
+        return {};
+    std::wstring result(required, L'\0');
+    const std::size_t written =
+        call(reinterpret_cast<std::uint16_t*>(result.data()), result.size());
+    if (written == 0 || written > result.size())
+        return {};
+    result.resize(written);
+    return result;
+}
+
 } // namespace
 
 bool mayLaunchUserEngine(const RuntimeIdentity& identity) noexcept {
@@ -408,15 +448,7 @@ std::wstring makeLocalEndpointName(const RuntimeIdentity& identity, std::wstring
 std::wstring makeLocalEndpointName(const RuntimeIdentity& identity,
                                    std::wstring_view generation,
                                    std::wstring_view channel) {
-    if (identity.userSid.empty() || identity.sessionId == 0 || !validGeneration(generation) ||
-        !validChannel(channel))
-        return {};
-    const std::wstring testNamespace = localTestNamespace();
-    const std::wstring namespacePart =
-        testNamespace.empty() ? std::wstring{} : L".Test." + testNamespace;
-    return L"\\\\.\\pipe\\" + std::wstring(kReleaseIdentity.pipe_prefix) + L"." + identity.userSid +
-           L".Session." + std::to_wstring(identity.sessionId) + L".Generation." +
-           std::wstring(generation) + namespacePart + L"." + std::wstring(channel);
+    return rustLocalName(0, identity, generation, channel);
 }
 
 std::wstring makeLocalObjectName(const RuntimeIdentity& identity, std::wstring_view channel) {
@@ -426,16 +458,7 @@ std::wstring makeLocalObjectName(const RuntimeIdentity& identity, std::wstring_v
 std::wstring makeLocalObjectName(const RuntimeIdentity& identity,
                                  std::wstring_view generation,
                                  std::wstring_view channel) {
-    if (identity.userSid.empty() || identity.sessionId == 0 || !validGeneration(generation) ||
-        !validChannel(channel))
-        return {};
-    const std::wstring testNamespace = localTestNamespace();
-    const std::wstring namespacePart =
-        testNamespace.empty() ? std::wstring{} : L".Test." + testNamespace;
-    return L"Local\\" + std::wstring(kReleaseIdentity.local_object_prefix) + L"." +
-           identity.userSid + L".Session." + std::to_wstring(identity.sessionId) +
-           L".Generation." + std::wstring(generation) + namespacePart + L"." +
-           std::wstring(channel);
+    return rustLocalName(1, identity, generation, channel);
 }
 
 bool pathsReferToSameFile(std::wstring_view left, std::wstring_view right) noexcept {

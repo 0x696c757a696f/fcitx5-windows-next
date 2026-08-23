@@ -446,7 +446,8 @@ add_library(
 add_library(fcitx5::platform ALIAS fcitx5_platform)
 target_compile_features(fcitx5_platform PUBLIC cxx_std_20)
 target_include_directories(fcitx5_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/platform")
-target_link_libraries(fcitx5_platform PUBLIC fcitx5::release_identity advapi32 user32)
+target_link_libraries(fcitx5_platform PUBLIC fcitx5::release_identity fcitx5::windows_common
+                                            advapi32 user32)
 fcitx_apply_project_options(fcitx5_platform)
 
 add_library(fcitx5_launcher_state INTERFACE)
