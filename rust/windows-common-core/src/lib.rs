@@ -628,6 +628,105 @@ fn current_identity(
     }
 }
 
+fn process_identity_with_executable_file(
+    process_id: u32,
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+    executable_final_path_output: *mut u16,
+    executable_final_path_capacity: usize,
+) -> Fcitx5WindowsCommonProcessExecutableIdentity {
+    let session = process_session_id(process_id);
+    if session.status == 0 {
+        return Fcitx5WindowsCommonProcessExecutableIdentity::default();
+    }
+    let Some((user_sid, service_account)) = process_user_sid(process_id) else {
+        return Fcitx5WindowsCommonProcessExecutableIdentity::default();
+    };
+    let Some(executable_path) = process_image_path(process_id) else {
+        return Fcitx5WindowsCommonProcessExecutableIdentity::default();
+    };
+    let executable_path: Vec<u16> = executable_path.encode_utf16().collect();
+    write_wide_units(&user_sid, user_sid_output, user_sid_capacity);
+    write_wide_units(
+        &executable_path,
+        executable_path_output,
+        executable_path_capacity,
+    );
+
+    if let Some((identity, final_path)) = executable_file_identity_owned(&executable_path) {
+        write_wide_units(
+            &final_path,
+            executable_final_path_output,
+            executable_final_path_capacity,
+        );
+        return Fcitx5WindowsCommonProcessExecutableIdentity {
+            status: 1,
+            service_account: service_account as u8,
+            executable_file_status: 1,
+            executable_file_contains_reparse_point: identity.contains_reparse_point,
+            session_id: session.session_id,
+            executable_file_volume_serial_number: identity.volume_serial_number,
+            executable_file_index_high: identity.file_index_high,
+            executable_file_index_low: identity.file_index_low,
+            executable_file_number_of_links: identity.number_of_links,
+            user_sid_len: user_sid.len(),
+            executable_path_len: executable_path.len(),
+            executable_final_path_len: final_path.len(),
+        };
+    }
+
+    Fcitx5WindowsCommonProcessExecutableIdentity {
+        status: 1,
+        service_account: service_account as u8,
+        session_id: session.session_id,
+        user_sid_len: user_sid.len(),
+        executable_path_len: executable_path.len(),
+        ..Default::default()
+    }
+}
+
+fn current_identity_with_executable_file(
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+    executable_final_path_output: *mut u16,
+    executable_final_path_capacity: usize,
+) -> Fcitx5WindowsCommonCurrentExecutableIdentity {
+    // SAFETY: Retrieves the current process id and has no preconditions.
+    let process_id = unsafe { GetCurrentProcessId() };
+    let process = process_identity_with_executable_file(
+        process_id,
+        user_sid_output,
+        user_sid_capacity,
+        executable_path_output,
+        executable_path_capacity,
+        executable_final_path_output,
+        executable_final_path_capacity,
+    );
+    if process.status == 0 {
+        return Fcitx5WindowsCommonCurrentExecutableIdentity::default();
+    }
+    Fcitx5WindowsCommonCurrentExecutableIdentity {
+        status: 1,
+        service_account: process.service_account,
+        secure_desktop: secure_input_desktop() as u8,
+        executable_file_status: process.executable_file_status,
+        executable_file_contains_reparse_point: process.executable_file_contains_reparse_point,
+        process_id,
+        session_id: process.session_id,
+        executable_file_volume_serial_number: process.executable_file_volume_serial_number,
+        executable_file_index_high: process.executable_file_index_high,
+        executable_file_index_low: process.executable_file_index_low,
+        executable_file_number_of_links: process.executable_file_number_of_links,
+        user_sid_len: process.user_sid_len,
+        executable_path_len: process.executable_path_len,
+        executable_final_path_len: process.executable_final_path_len,
+    }
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -771,6 +870,42 @@ pub struct Fcitx5WindowsCommonCurrentIdentity {
     pub session_id: u32,
     pub user_sid_len: usize,
     pub executable_path_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonProcessExecutableIdentity {
+    pub status: u8,
+    pub service_account: u8,
+    pub executable_file_status: u8,
+    pub executable_file_contains_reparse_point: u8,
+    pub session_id: u32,
+    pub executable_file_volume_serial_number: u32,
+    pub executable_file_index_high: u32,
+    pub executable_file_index_low: u32,
+    pub executable_file_number_of_links: u32,
+    pub user_sid_len: usize,
+    pub executable_path_len: usize,
+    pub executable_final_path_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonCurrentExecutableIdentity {
+    pub status: u8,
+    pub service_account: u8,
+    pub secure_desktop: u8,
+    pub executable_file_status: u8,
+    pub executable_file_contains_reparse_point: u8,
+    pub process_id: u32,
+    pub session_id: u32,
+    pub executable_file_volume_serial_number: u32,
+    pub executable_file_index_high: u32,
+    pub executable_file_index_low: u32,
+    pub executable_file_number_of_links: u32,
+    pub user_sid_len: usize,
+    pub executable_path_len: usize,
+    pub executable_final_path_len: usize,
 }
 
 #[repr(C)]
@@ -972,31 +1107,32 @@ fn executable_file_identity(
     }
 }
 
-fn executable_paths_match(left: &[u16], right: &[u16]) -> bool {
-    let mut left_final_path = vec![0_u16; ENDPOINT_MAX_WIDE_UNITS];
-    let left_identity =
-        executable_file_identity(left, left_final_path.as_mut_ptr(), left_final_path.len());
-    if left_identity.status == 0
-        || left_identity.final_path_len == 0
-        || left_identity.final_path_len > left_final_path.len()
+fn executable_file_identity_owned(
+    path: &[u16],
+) -> Option<(Fcitx5WindowsCommonExecutableFileIdentity, Vec<u16>)> {
+    let mut final_path = vec![0_u16; ENDPOINT_MAX_WIDE_UNITS];
+    let identity = executable_file_identity(path, final_path.as_mut_ptr(), final_path.len());
+    if identity.status == 0
+        || identity.final_path_len == 0
+        || identity.final_path_len > final_path.len()
     {
-        return false;
+        return None;
     }
-    left_final_path.truncate(left_identity.final_path_len);
+    final_path.truncate(identity.final_path_len);
+    Some((identity, final_path))
+}
+
+fn executable_paths_match(left: &[u16], right: &[u16]) -> bool {
+    let Some((left_identity, left_final_path)) = executable_file_identity_owned(left) else {
+        return false;
+    };
     let Ok(left_final_path) = String::from_utf16(&left_final_path) else {
         return false;
     };
 
-    let mut right_final_path = vec![0_u16; ENDPOINT_MAX_WIDE_UNITS];
-    let right_identity =
-        executable_file_identity(right, right_final_path.as_mut_ptr(), right_final_path.len());
-    if right_identity.status == 0
-        || right_identity.final_path_len == 0
-        || right_identity.final_path_len > right_final_path.len()
-    {
+    let Some((right_identity, right_final_path)) = executable_file_identity_owned(right) else {
         return false;
-    }
-    right_final_path.truncate(right_identity.final_path_len);
+    };
     let Ok(right_final_path) = String::from_utf16(&right_final_path) else {
         return false;
     };
@@ -1245,6 +1381,54 @@ pub unsafe extern "C" fn fcitx5_windows_common_current_identity_utf16(
         user_sid_capacity,
         executable_path_output,
         executable_path_capacity,
+    )
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Output pointers may be null for size queries or point to writable UTF-16
+/// storage for their paired capacities. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_process_identity_with_executable_file_utf16(
+    process_id: u32,
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+    executable_final_path_output: *mut u16,
+    executable_final_path_capacity: usize,
+) -> Fcitx5WindowsCommonProcessExecutableIdentity {
+    process_identity_with_executable_file(
+        process_id,
+        user_sid_output,
+        user_sid_capacity,
+        executable_path_output,
+        executable_path_capacity,
+        executable_final_path_output,
+        executable_final_path_capacity,
+    )
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Output pointers may be null for size queries or point to writable UTF-16
+/// storage for their paired capacities. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_current_identity_with_executable_file_utf16(
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+    executable_final_path_output: *mut u16,
+    executable_final_path_capacity: usize,
+) -> Fcitx5WindowsCommonCurrentExecutableIdentity {
+    current_identity_with_executable_file(
+        user_sid_output,
+        user_sid_capacity,
+        executable_path_output,
+        executable_path_capacity,
+        executable_final_path_output,
+        executable_final_path_capacity,
     )
 }
 
@@ -1753,6 +1937,107 @@ mod tests {
         assert!(String::from_utf16(&sid).expect("sid").starts_with("S-1-"));
         assert!(String::from_utf16(&path)
             .expect("path")
+            .to_ascii_lowercase()
+            .ends_with(".exe"));
+    }
+
+    #[test]
+    fn process_identity_with_executable_file_matches_cpp_contract() {
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        let query = process_identity_with_executable_file(
+            current_process_id,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+        );
+        assert_eq!(query.status, 1);
+        assert!(query.user_sid_len > 0);
+        assert!(query.executable_path_len > 0);
+        assert_eq!(query.executable_file_status, 1);
+        assert!(query.executable_final_path_len > 0);
+        let mut sid = vec![0_u16; query.user_sid_len];
+        let mut path = vec![0_u16; query.executable_path_len];
+        let mut final_path = vec![0_u16; query.executable_final_path_len];
+        let filled = process_identity_with_executable_file(
+            current_process_id,
+            sid.as_mut_ptr(),
+            sid.len(),
+            path.as_mut_ptr(),
+            path.len(),
+            final_path.as_mut_ptr(),
+            final_path.len(),
+        );
+        assert_eq!(filled.status, 1);
+        assert_eq!(filled.user_sid_len, sid.len());
+        assert_eq!(filled.executable_path_len, path.len());
+        assert_eq!(filled.executable_file_status, 1);
+        assert_eq!(filled.executable_final_path_len, final_path.len());
+        assert!(String::from_utf16(&sid).expect("sid").starts_with("S-1-"));
+        assert!(String::from_utf16(&path)
+            .expect("path")
+            .to_ascii_lowercase()
+            .ends_with(".exe"));
+        assert!(String::from_utf16(&final_path)
+            .expect("final path")
+            .to_ascii_lowercase()
+            .ends_with(".exe"));
+        assert_eq!(
+            process_identity_with_executable_file(
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                0
+            )
+            .status,
+            0
+        );
+    }
+
+    #[test]
+    fn current_identity_with_executable_file_matches_cpp_contract() {
+        let query = current_identity_with_executable_file(
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+        );
+        assert_eq!(query.status, 1);
+        assert_eq!(query.process_id, unsafe { GetCurrentProcessId() });
+        assert_eq!(query.executable_file_status, 1);
+        assert!(query.user_sid_len > 0);
+        assert!(query.executable_path_len > 0);
+        assert!(query.executable_final_path_len > 0);
+        let mut sid = vec![0_u16; query.user_sid_len];
+        let mut path = vec![0_u16; query.executable_path_len];
+        let mut final_path = vec![0_u16; query.executable_final_path_len];
+        let filled = current_identity_with_executable_file(
+            sid.as_mut_ptr(),
+            sid.len(),
+            path.as_mut_ptr(),
+            path.len(),
+            final_path.as_mut_ptr(),
+            final_path.len(),
+        );
+        assert_eq!(filled.status, 1);
+        assert_eq!(filled.user_sid_len, sid.len());
+        assert_eq!(filled.executable_path_len, path.len());
+        assert_eq!(filled.executable_file_status, 1);
+        assert_eq!(filled.executable_final_path_len, final_path.len());
+        assert!(String::from_utf16(&sid).expect("sid").starts_with("S-1-"));
+        assert!(String::from_utf16(&path)
+            .expect("path")
+            .to_ascii_lowercase()
+            .ends_with(".exe"));
+        assert!(String::from_utf16(&final_path)
+            .expect("final path")
             .to_ascii_lowercase()
             .ends_with(".exe"));
     }

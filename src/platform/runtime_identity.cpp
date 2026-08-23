@@ -26,35 +26,53 @@ extern "C" std::size_t fcitx5_windows_common_local_test_namespace_utf16(
 extern "C" std::size_t fcitx5_windows_common_current_generation_utf16(
     std::uint16_t* output,
     std::size_t capacity);
-struct Fcitx5WindowsCommonProcessIdentity {
+struct Fcitx5WindowsCommonProcessExecutableIdentity {
     std::uint8_t status;
     std::uint8_t serviceAccount;
+    std::uint8_t executableFileStatus;
+    std::uint8_t executableFileContainsReparsePoint;
     std::uint32_t sessionId;
+    std::uint32_t executableFileVolumeSerialNumber;
+    std::uint32_t executableFileIndexHigh;
+    std::uint32_t executableFileIndexLow;
+    std::uint32_t executableFileNumberOfLinks;
     std::size_t userSidLen;
     std::size_t executablePathLen;
+    std::size_t executableFinalPathLen;
 };
-struct Fcitx5WindowsCommonCurrentIdentity {
+struct Fcitx5WindowsCommonCurrentExecutableIdentity {
     std::uint8_t status;
     std::uint8_t serviceAccount;
     std::uint8_t secureDesktop;
+    std::uint8_t executableFileStatus;
+    std::uint8_t executableFileContainsReparsePoint;
     std::uint32_t processId;
     std::uint32_t sessionId;
+    std::uint32_t executableFileVolumeSerialNumber;
+    std::uint32_t executableFileIndexHigh;
+    std::uint32_t executableFileIndexLow;
+    std::uint32_t executableFileNumberOfLinks;
     std::size_t userSidLen;
     std::size_t executablePathLen;
+    std::size_t executableFinalPathLen;
 };
-extern "C" Fcitx5WindowsCommonProcessIdentity
-fcitx5_windows_common_process_identity_utf16(
+extern "C" Fcitx5WindowsCommonProcessExecutableIdentity
+fcitx5_windows_common_process_identity_with_executable_file_utf16(
     std::uint32_t process_id,
     std::uint16_t* user_sid_output,
     std::size_t user_sid_capacity,
     std::uint16_t* executable_path_output,
-    std::size_t executable_path_capacity);
-extern "C" Fcitx5WindowsCommonCurrentIdentity
-fcitx5_windows_common_current_identity_utf16(
+    std::size_t executable_path_capacity,
+    std::uint16_t* executable_final_path_output,
+    std::size_t executable_final_path_capacity);
+extern "C" Fcitx5WindowsCommonCurrentExecutableIdentity
+fcitx5_windows_common_current_identity_with_executable_file_utf16(
     std::uint16_t* user_sid_output,
     std::size_t user_sid_capacity,
     std::uint16_t* executable_path_output,
-    std::size_t executable_path_capacity);
+    std::size_t executable_path_capacity,
+    std::uint16_t* executable_final_path_output,
+    std::size_t executable_final_path_capacity);
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
     std::size_t module_path_len,
@@ -129,6 +147,28 @@ const std::uint16_t* wideData(std::wstring_view value) noexcept {
     return reinterpret_cast<const std::uint16_t*>(value.data());
 }
 
+template <typename Identity>
+bool copyExecutableFileIdentity(const Identity& identity,
+                                std::wstring& finalPath,
+                                ExecutableFileIdentity& output) {
+    output = {};
+    if (identity.executableFileStatus == 0) {
+        return false;
+    }
+    if (identity.executableFinalPathLen == 0 ||
+        identity.executableFinalPathLen > finalPath.size()) {
+        return false;
+    }
+    finalPath.resize(identity.executableFinalPathLen);
+    output.volumeSerialNumber = identity.executableFileVolumeSerialNumber;
+    output.fileIndexHigh = identity.executableFileIndexHigh;
+    output.fileIndexLow = identity.executableFileIndexLow;
+    output.numberOfLinks = identity.executableFileNumberOfLinks;
+    output.containsReparsePoint = identity.executableFileContainsReparsePoint != 0;
+    output.finalPath = std::move(finalPath);
+    return true;
+}
+
 template <typename Producer>
 std::wstring rustWide(Producer producer) {
     const std::size_t required = producer(nullptr, 0);
@@ -198,18 +238,23 @@ bool RuntimeIdentity::mayUseUserEngine() const noexcept { return mayLaunchUserEn
 bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
     output = {};
     try {
-        const auto query = fcitx5_windows_common_process_identity_utf16(
-            processId, nullptr, 0, nullptr, 0);
+        const auto query = fcitx5_windows_common_process_identity_with_executable_file_utf16(
+            processId, nullptr, 0, nullptr, 0, nullptr, 0);
         if (query.status == 0 || query.userSidLen == 0 || query.executablePathLen == 0) {
             return false;
         }
         ProcessIdentity result;
         result.userSid.assign(query.userSidLen, L'\0');
         result.executablePath.assign(query.executablePathLen, L'\0');
-        const auto filled = fcitx5_windows_common_process_identity_utf16(
+        std::wstring executableFinalPath(query.executableFinalPathLen, L'\0');
+        const auto filled = fcitx5_windows_common_process_identity_with_executable_file_utf16(
             processId, reinterpret_cast<std::uint16_t*>(result.userSid.data()),
             result.userSid.size(), reinterpret_cast<std::uint16_t*>(result.executablePath.data()),
-            result.executablePath.size());
+            result.executablePath.size(),
+            executableFinalPath.empty()
+                ? nullptr
+                : reinterpret_cast<std::uint16_t*>(executableFinalPath.data()),
+            executableFinalPath.size());
         if (filled.status == 0 || filled.userSidLen != result.userSid.size() ||
             filled.executablePathLen != result.executablePath.size()) {
             return false;
@@ -218,7 +263,7 @@ bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
         result.sessionId = filled.sessionId;
         result.serviceAccount = filled.serviceAccount != 0;
         result.executableFileVerified =
-            queryExecutableFileIdentity(result.executablePath, result.executableFile);
+            copyExecutableFileIdentity(filled, executableFinalPath, result.executableFile);
         output = std::move(result);
         return true;
     } catch (...) {
@@ -230,18 +275,23 @@ bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
 bool queryCurrentIdentity(RuntimeIdentity& output) noexcept {
     output = {};
     try {
-        const auto query =
-            fcitx5_windows_common_current_identity_utf16(nullptr, 0, nullptr, 0);
+        const auto query = fcitx5_windows_common_current_identity_with_executable_file_utf16(
+            nullptr, 0, nullptr, 0, nullptr, 0);
         if (query.status == 0 || query.userSidLen == 0 || query.executablePathLen == 0) {
             return false;
         }
         RuntimeIdentity result;
         result.userSid.assign(query.userSidLen, L'\0');
         result.executablePath.assign(query.executablePathLen, L'\0');
-        const auto filled = fcitx5_windows_common_current_identity_utf16(
+        std::wstring executableFinalPath(query.executableFinalPathLen, L'\0');
+        const auto filled = fcitx5_windows_common_current_identity_with_executable_file_utf16(
             reinterpret_cast<std::uint16_t*>(result.userSid.data()), result.userSid.size(),
             reinterpret_cast<std::uint16_t*>(result.executablePath.data()),
-            result.executablePath.size());
+            result.executablePath.size(),
+            executableFinalPath.empty()
+                ? nullptr
+                : reinterpret_cast<std::uint16_t*>(executableFinalPath.data()),
+            executableFinalPath.size());
         if (filled.status == 0 || filled.userSidLen != result.userSid.size() ||
             filled.executablePathLen != result.executablePath.size()) {
             return false;
@@ -251,7 +301,7 @@ bool queryCurrentIdentity(RuntimeIdentity& output) noexcept {
         result.serviceAccount = filled.serviceAccount != 0;
         result.secureDesktop = filled.secureDesktop != 0;
         result.executableFileVerified =
-            queryExecutableFileIdentity(result.executablePath, result.executableFile);
+            copyExecutableFileIdentity(filled, executableFinalPath, result.executableFile);
         output = std::move(result);
         return true;
     } catch (...) {

@@ -335,6 +335,18 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("current_identity_query_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find(
+            "fcitx5_windows_common_process_identity_with_executable_file_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find(
+            "process_identity_with_executable_file_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find(
+            "fcitx5_windows_common_current_identity_with_executable_file_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find(
+            "current_identity_with_executable_file_matches_cpp_contract") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_secure_input_desktop") ==
             std::string::npos ||
         rustWindowsCommonCore.find("secure_input_desktop_query_matches_cpp_contract") ==
@@ -449,6 +461,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("queryExecutableFileIdentity(right, rightIdentity)") !=
             std::string::npos ||
+        runtimeIdentitySource.find("queryExecutableFileIdentity(result.executablePath") !=
+            std::string::npos ||
         runtimeIdentitySource.find("FILE_FLAG_BACKUP_SEMANTICS") != std::string::npos ||
         runtimeIdentitySource.find("GetFinalPathNameByHandleW") != std::string::npos ||
         runtimeIdentitySource.find("FILE_NAME_NORMALIZED") != std::string::npos ||
@@ -463,9 +477,15 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_current_generation_utf16") ==
             std::string::npos ||
-        runtimeIdentitySource.find("fcitx5_windows_common_process_identity_utf16") ==
+        runtimeIdentitySource.find(
+            "fcitx5_windows_common_process_identity_with_executable_file_utf16") ==
             std::string::npos ||
-        runtimeIdentitySource.find("fcitx5_windows_common_current_identity_utf16") ==
+        runtimeIdentitySource.find(
+            "fcitx5_windows_common_current_identity_with_executable_file_utf16") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_process_identity_utf16") !=
+            std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_current_identity_utf16") !=
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_process_image_path_utf16") !=
             std::string::npos ||
