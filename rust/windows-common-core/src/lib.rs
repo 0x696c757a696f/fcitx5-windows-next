@@ -315,6 +315,19 @@ fn executable_files_match(
         && left_final_path.to_uppercase() == right_final_path.to_uppercase()
 }
 
+fn basic_file_identities_match(
+    left_volume_serial_number: u32,
+    left_file_index_high: u32,
+    left_file_index_low: u32,
+    right_volume_serial_number: u32,
+    right_file_index_high: u32,
+    right_file_index_low: u32,
+) -> bool {
+    left_volume_serial_number == right_volume_serial_number
+        && left_file_index_high == right_file_index_high
+        && left_file_index_low == right_file_index_low
+}
+
 fn local_name(
     pipe: bool,
     user_sid: &str,
@@ -640,6 +653,25 @@ pub unsafe extern "C" fn fcitx5_windows_common_executable_files_match_utf16(
     ) as u8
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_basic_file_identities_match(
+    left_volume_serial_number: u32,
+    left_file_index_high: u32,
+    left_file_index_low: u32,
+    right_volume_serial_number: u32,
+    right_file_index_high: u32,
+    right_file_index_low: u32,
+) -> u8 {
+    basic_file_identities_match(
+        left_volume_serial_number,
+        left_file_index_high,
+        left_file_index_low,
+        right_volume_serial_number,
+        right_file_index_high,
+        right_file_index_low,
+    ) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -867,5 +899,13 @@ mod tests {
             false,
             r"\\?\C:\Program Files\Fcitx5\fcitx5-engine.exe",
         ));
+    }
+
+    #[test]
+    fn basic_file_identity_match_policy_matches_cpp_contract() {
+        assert!(basic_file_identities_match(11, 22, 33, 11, 22, 33));
+        assert!(!basic_file_identities_match(12, 22, 33, 11, 22, 33));
+        assert!(!basic_file_identities_match(11, 23, 33, 11, 22, 33));
+        assert!(!basic_file_identities_match(11, 22, 34, 11, 22, 33));
     }
 }

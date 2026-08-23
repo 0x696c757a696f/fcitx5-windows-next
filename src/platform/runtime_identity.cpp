@@ -67,6 +67,13 @@ extern "C" std::uint8_t fcitx5_windows_common_executable_files_match_utf16(
     std::uint8_t right_contains_reparse_point,
     const std::uint16_t* right_final_path,
     std::size_t right_final_path_len);
+extern "C" std::uint8_t fcitx5_windows_common_basic_file_identities_match(
+    std::uint32_t left_volume_serial_number,
+    std::uint32_t left_file_index_high,
+    std::uint32_t left_file_index_low,
+    std::uint32_t right_volume_serial_number,
+    std::uint32_t right_file_index_high,
+    std::uint32_t right_file_index_low);
 
 class Handle final {
   public:
@@ -369,9 +376,10 @@ bool pathsReferToSameFile(std::wstring_view left, std::wstring_view right) noexc
         BasicFileIdentity leftIdentity;
         BasicFileIdentity rightIdentity;
         return queryFileIdentity(left, leftIdentity) && queryFileIdentity(right, rightIdentity) &&
-               leftIdentity.volumeSerialNumber == rightIdentity.volumeSerialNumber &&
-               leftIdentity.fileIndexHigh == rightIdentity.fileIndexHigh &&
-               leftIdentity.fileIndexLow == rightIdentity.fileIndexLow;
+               fcitx5_windows_common_basic_file_identities_match(
+                   leftIdentity.volumeSerialNumber, leftIdentity.fileIndexHigh,
+                   leftIdentity.fileIndexLow, rightIdentity.volumeSerialNumber,
+                   rightIdentity.fileIndexHigh, rightIdentity.fileIndexLow) != 0;
     } catch (...) {
         return false;
     }
