@@ -175,6 +175,8 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/src/downloader_main.rs");
     const auto rustDownloaderBuild =
         read_text(sourceRoot / "tools/build-rust-downloader-cli.ps1");
+    const auto updaterSource = read_text(sourceRoot / "src/updater/updater_main.cpp");
+    const auto deploymentCoreSource = read_text(sourceRoot / "src/updater/deployment_core.cpp");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
     const auto rustPackageCoreArtifactSmoke =
@@ -244,6 +246,15 @@ int main(int argc, char** argv) {
         rustDownloaderBinary.find("MoveFileExW") == std::string::npos ||
         rustDownloaderBuild.find("fcitx5-downloader.exe") == std::string::npos ||
         rustDownloaderBuild.find("--bin fcitx5-downloader") == std::string::npos ||
+        updaterSource.find("cleanup_previous_known_good") == std::string::npos ||
+        updaterSource.find("remove_all(target") != std::string::npos ||
+        deploymentCoreSource.find("fcitx5_update_cleanup_previous_known_good_utf16") ==
+            std::string::npos ||
+        rustPackageCore.find("cleanup_previous_known_good") == std::string::npos ||
+        rustPackageCore.find("invalid core package id for --cleanup-previous") ==
+            std::string::npos ||
+        rustPackageCore.find("cleanup target escapes the versions directory") ==
+            std::string::npos ||
         rustPackageCliBuild.find("fcitx5-package.exe") == std::string::npos ||
         rustPackageCliBuild.find("fcitx5-package-core.exe") == std::string::npos ||
         rustPackageCliBuild.find("--bin fcitx5-package-core") == std::string::npos ||

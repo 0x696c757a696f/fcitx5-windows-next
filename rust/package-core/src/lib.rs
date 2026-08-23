@@ -3364,7 +3364,7 @@ mod deployment_ffi {
     #![allow(unsafe_code)]
 
     use super::win32_fs_adapter;
-    use super::{JsonParser, JsonValue};
+    use super::{JsonParser, JsonValue, PackageId};
     use std::ffi::OsString;
     use std::fs;
     use std::os::windows::ffi::OsStringExt;
@@ -3837,6 +3837,52 @@ mod deployment_ffi {
         write_deployment_state(root, &state)
     }
 
+    fn ascii_from_buffer(buffer: &[u8]) -> Result<String, String> {
+        String::from_utf8(
+            buffer
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect(),
+        )
+        .map_err(|_| "deployment state schema is invalid".to_owned())
+    }
+
+    fn cleanup_previous_known_good(
+        root: &Path,
+        channel: &str,
+        package_id: &str,
+    ) -> Result<(), String> {
+        let package_id = PackageId::parse(package_id)
+            .map_err(|_| "invalid core package id for --cleanup-previous".to_owned())?;
+        let state = read_deployment_state(root, channel)?;
+        if state.healthy == 0
+            || !state
+                .pending
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect::<Vec<_>>()
+                .is_empty()
+        {
+            return Err("deployment is not stable".to_owned());
+        }
+        let previous = ascii_from_buffer(&state.previous)?;
+        if !previous.is_empty() && (!token(&previous) || matches!(previous.as_str(), "." | "..")) {
+            return Err("invalid previous version for --cleanup-previous".to_owned());
+        }
+        let versions = root.join("packages").join("versions");
+        let target = versions.join(package_id.as_str()).join(&previous);
+        if !previous.is_empty() && !target.starts_with(&versions) {
+            return Err("cleanup target escapes the versions directory".to_owned());
+        }
+        clear_previous_known_good(root, channel)?;
+        if !previous.is_empty() {
+            let _ = fs::remove_dir_all(target);
+        }
+        Ok(())
+    }
+
     fn runtime_state_path(root: &Path) -> PathBuf {
         root.join("current.json")
     }
@@ -4120,6 +4166,30 @@ mod deployment_ffi {
             return 1;
         };
         match clear_previous_known_good(&root, &channel) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_cleanup_previous_known_good_utf16(
+        root: *const u16,
+        root_len: usize,
+        channel: *const u16,
+        channel_len: usize,
+        package_id: *const u16,
+        package_id_len: usize,
+    ) -> i32 {
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(channel) = string_from_utf16(channel, channel_len) else {
+            return 1;
+        };
+        let Some(package_id) = string_from_utf16(package_id, package_id_len) else {
+            return 1;
+        };
+        match cleanup_previous_known_good(&root, &channel, &package_id) {
             Ok(()) => 0,
             Err(_) => 1,
         }

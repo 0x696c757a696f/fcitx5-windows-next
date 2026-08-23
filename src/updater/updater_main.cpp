@@ -101,26 +101,7 @@ int wmain(int argc, wchar_t** argv) {
       const std::filesystem::path root(argv[2]);
       const auto channel = std::filesystem::path(argv[3]).string();
       const std::string packageId = std::filesystem::path(argv[4]).string();
-      // Destructive filesystem operation built from a CLI argument: the core
-      // package id must be a canonical lowercase package id so it cannot
-      // escape the versions directory (e.g. ".." or "foo/../../.."). Without
-      // this check remove_all() below could delete arbitrary directories.
-      if (!fcitx::package::is_lower_package_id(packageId))
-        throw std::runtime_error("invalid core package id for --cleanup-previous");
-      const auto state = fcitx::update::read_deployment_state(root, channel);
-      fcitx::update::clear_previous_known_good(root, channel);
-      if (!state.previous.empty()) {
-        if (!fcitx::package::is_ascii_token(state.previous, ".+-_"))
-          throw std::runtime_error("invalid previous version for --cleanup-previous");
-        const auto versions = (root / "packages/versions").lexically_normal();
-        const auto target = (versions / packageId / state.previous).lexically_normal();
-        // Defense in depth: the resolved target must remain inside versions/.
-        const std::wstring prefix = versions.wstring() + L"\\";
-        if (target.wstring().rfind(prefix, 0) != 0)
-          throw std::runtime_error("cleanup target escapes the versions directory");
-        std::error_code ignored;
-        std::filesystem::remove_all(target, ignored);
-      }
+      fcitx::update::cleanup_previous_known_good(root, channel, packageId);
       return 0;
     }
     if (argc == 5 && std::wstring_view(argv[1]) == L"--install-tsf-dll") {

@@ -66,6 +66,12 @@ int fcitx5_update_clear_previous_known_good_utf16(const std::uint16_t* root,
                                                   std::size_t root_len,
                                                   const std::uint16_t* channel,
                                                   std::size_t channel_len);
+int fcitx5_update_cleanup_previous_known_good_utf16(const std::uint16_t* root,
+                                                    std::size_t root_len,
+                                                    const std::uint16_t* channel,
+                                                    std::size_t channel_len,
+                                                    const std::uint16_t* package_id,
+                                                    std::size_t package_id_len);
 int fcitx5_update_read_runtime_generation_state_utf16(const std::uint16_t* root,
                                                       std::size_t root_len,
                                                       Fcitx5GenerationState* out_state);
@@ -464,6 +470,17 @@ void clear_previous_known_good(const std::filesystem::path& root, std::string_vi
   if (fcitx5_update_clear_previous_known_good_utf16(utf16_ptr(root), root.native().size(),
                                                     utf16_ptr(channel_wide),
                                                     channel_wide.size()) != 0) {
+    throw std::runtime_error("previous-known-good cleanup failed");
+  }
+}
+
+void cleanup_previous_known_good(const std::filesystem::path& root, std::string_view channel,
+                                 std::string_view package_id) {
+  const auto channel_wide = widen_ascii(channel);
+  const auto package_id_wide = widen_ascii(package_id);
+  if (fcitx5_update_cleanup_previous_known_good_utf16(
+          utf16_ptr(root), root.native().size(), utf16_ptr(channel_wide), channel_wide.size(),
+          utf16_ptr(package_id_wide), package_id_wide.size()) != 0) {
     throw std::runtime_error("previous-known-good cleanup failed");
   }
 }

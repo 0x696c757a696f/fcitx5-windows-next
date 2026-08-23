@@ -58,6 +58,9 @@ void mark_current_healthy(const std::filesystem::path& root, std::string_view ch
                                           std::string_view channel);
 void finish_rollback(const std::filesystem::path& root, std::string_view channel);
 void clear_previous_known_good(const std::filesystem::path& root, std::string_view channel);
+void cleanup_previous_known_good(const std::filesystem::path& root,
+                                 std::string_view channel,
+                                 std::string_view package_id);
 [[nodiscard]] TsfDllUpdateResult install_tsf_dll_generation(
     const std::filesystem::path& registered_dll_path,
     const std::filesystem::path& verified_new_dll_path,
