@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -202,6 +202,58 @@ fn path_from_wide(path: *const u16, len: usize) -> Option<PathBuf> {
     Some(PathBuf::from(OsString::from_wide(slice)))
 }
 
+fn os_string_from_wide(text: *const u16, len: usize) -> Option<OsString> {
+    if text.is_null() {
+        return (len == 0).then(OsString::new);
+    }
+    // SAFETY: The C++ adapter passes a valid UTF-16 buffer with exactly `len`
+    // elements for the duration of this call.
+    let slice = unsafe { std::slice::from_raw_parts(text, len) };
+    Some(OsString::from_wide(slice))
+}
+
+fn wide_slice<'a>(text: *const u16, len: usize) -> Option<&'a [u16]> {
+    if text.is_null() {
+        return (len == 0).then_some(&[]);
+    }
+    // SAFETY: The C++ adapter passes a valid UTF-16 buffer with exactly `len`
+    // elements for the duration of this call.
+    Some(unsafe { std::slice::from_raw_parts(text, len) })
+}
+
+fn absolute_windows_path_wide(path: &[u16]) -> bool {
+    path.len() >= 3
+        && ((path[0] >= b'A' as u16 && path[0] <= b'Z' as u16)
+            || (path[0] >= b'a' as u16 && path[0] <= b'z' as u16))
+        && path[1] == b':' as u16
+        && (path[2] == b'\\' as u16 || path[2] == b'/' as u16)
+}
+
+fn resolve_default_process_paths(
+    executable_directory: &Path,
+    generation: &OsStr,
+) -> (PathBuf, PathBuf) {
+    let installed_root = if executable_directory.file_name() == Some(OsStr::new("bin")) {
+        executable_directory
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| executable_directory.to_path_buf())
+    } else {
+        executable_directory.to_path_buf()
+    };
+    let generation_bin = installed_root.join("runtime").join(generation).join("bin");
+    let generation_engine = generation_bin.join("fcitx5-engine.exe");
+    let generation_ui = generation_bin.join("fcitx5-ui.exe");
+    if generation_engine.exists() && generation_ui.exists() {
+        (generation_engine, generation_ui)
+    } else {
+        (
+            executable_directory.join("fcitx5-engine.exe"),
+            executable_directory.join("fcitx5-ui.exe"),
+        )
+    }
+}
+
 fn wide_nul(path: &Path) -> Vec<u16> {
     let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     wide.push(0);
@@ -294,6 +346,21 @@ fn write_utf16_path(value: &Path, out: *mut u16, capacity: usize) -> usize {
         unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), out, count) };
     }
     wide.len()
+}
+
+fn write_utf16_path_checked(value: &Path, out: *mut u16, capacity: usize) -> Option<usize> {
+    let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
+    if !out.is_null() {
+        if capacity < wide.len() {
+            return None;
+        }
+        if !wide.is_empty() {
+            // SAFETY: The caller supplied writable storage for at least
+            // `wide.len()` u16 values.
+            unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), out, wide.len()) };
+        }
+    }
+    Some(wide.len())
 }
 
 fn start_suppressed(state: LauncherState) -> bool {
@@ -649,6 +716,68 @@ pub unsafe extern "C" fn fcitx5_launcher_default_state_store_path_utf16(
     write_utf16_path(&path, out, capacity)
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// `path` must be null with `len == 0`, or point to a valid UTF-16 buffer with
+/// exactly `len` elements for the duration of this call.
+pub unsafe extern "C" fn fcitx5_launcher_absolute_windows_path_utf16(
+    path: *const u16,
+    len: usize,
+) -> u8 {
+    let Some(path) = wide_slice(path, len) else {
+        return 0;
+    };
+    u8::from(absolute_windows_path_wide(path))
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// Input pointers must be null only when their corresponding length is zero, or
+/// point to valid UTF-16 buffers with exactly the provided lengths. Output
+/// pointers may be null for size queries; otherwise they must point to writable
+/// storage with the advertised capacities. Required lengths exclude NUL
+/// terminators. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_launcher_resolve_default_process_paths_utf16(
+    executable_directory: *const u16,
+    executable_directory_len: usize,
+    generation: *const u16,
+    generation_len: usize,
+    engine_output: *mut u16,
+    engine_capacity: usize,
+    ui_output: *mut u16,
+    ui_capacity: usize,
+    required_engine_len: *mut usize,
+    required_ui_len: *mut usize,
+) -> u8 {
+    let Some(executable_directory) = path_from_wide(executable_directory, executable_directory_len)
+    else {
+        return 0;
+    };
+    let Some(generation) = os_string_from_wide(generation, generation_len) else {
+        return 0;
+    };
+    let (engine, ui) = resolve_default_process_paths(&executable_directory, &generation);
+    let engine_len = write_utf16_path_checked(&engine, engine_output, engine_capacity);
+    let ui_len = write_utf16_path_checked(&ui, ui_output, ui_capacity);
+    if let Some(engine_len) = engine_len {
+        if !required_engine_len.is_null() {
+            unsafe {
+                *required_engine_len = engine_len;
+            }
+        }
+    }
+    if let Some(ui_len) = ui_len {
+        if !required_ui_len.is_null() {
+            unsafe {
+                *required_ui_len = ui_len;
+            }
+        }
+    }
+    u8::from(engine_len.is_some() && ui_len.is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -792,5 +921,42 @@ mod tests {
         assert_eq!(load_snapshot_from_path(&state_path), Err(2));
 
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn launcher_default_process_paths_match_cpp_generation_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-launcher-core-default-paths-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        let generation_bin = root.join("runtime").join("g1").join("bin");
+        fs::create_dir_all(&bin).expect("bin directory should be created");
+        fs::create_dir_all(&generation_bin).expect("generation bin should be created");
+
+        let (engine, ui) = resolve_default_process_paths(&bin, OsStr::new("g1"));
+        assert_eq!(engine, bin.join("fcitx5-engine.exe"));
+        assert_eq!(ui, bin.join("fcitx5-ui.exe"));
+
+        fs::write(generation_bin.join("fcitx5-engine.exe"), b"engine")
+            .expect("generation engine should be created");
+        fs::write(generation_bin.join("fcitx5-ui.exe"), b"ui")
+            .expect("generation ui should be created");
+        let (engine, ui) = resolve_default_process_paths(&bin, OsStr::new("g1"));
+        assert_eq!(engine, generation_bin.join("fcitx5-engine.exe"));
+        assert_eq!(ui, generation_bin.join("fcitx5-ui.exe"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn absolute_windows_path_matches_cpp_contract() {
+        let wide = |value: &str| value.encode_utf16().collect::<Vec<_>>();
+        assert!(absolute_windows_path_wide(&wide(r"C:\Fcitx5\bin")));
+        assert!(absolute_windows_path_wide(&wide(r"d:/Fcitx5/bin")));
+        assert!(!absolute_windows_path_wide(&wide(r"\Fcitx5\bin")));
+        assert!(!absolute_windows_path_wide(&wide(r"Fcitx5\bin")));
+        assert!(!absolute_windows_path_wide(&wide(r"1:\Fcitx5\bin")));
     }
 }

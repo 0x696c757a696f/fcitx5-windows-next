@@ -53,4 +53,11 @@ std::uint8_t fcitx5_launcher_state_store_save_utf16(
     fcitx::windows::launcher::rust_abi::Fcitx5LauncherSnapshot snapshot);
 std::size_t fcitx5_launcher_default_state_store_path_utf16(std::uint16_t* output,
                                                            std::size_t capacity);
+std::uint8_t fcitx5_launcher_absolute_windows_path_utf16(const std::uint16_t* path,
+                                                         std::size_t len);
+std::uint8_t fcitx5_launcher_resolve_default_process_paths_utf16(
+    const std::uint16_t* executable_directory, std::size_t executable_directory_len,
+    const std::uint16_t* generation, std::size_t generation_len, std::uint16_t* engine_output,
+    std::size_t engine_capacity, std::uint16_t* ui_output, std::size_t ui_capacity,
+    std::size_t* required_engine_len, std::size_t* required_ui_len);
 }

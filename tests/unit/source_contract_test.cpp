@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
     }
     const auto launcherSource = read_text(sourceRoot / "src/launcher/launcher_main.cpp");
     const auto trayIconSource = read_text(sourceRoot / "src/launcher/tray_icon.cpp");
+    const auto trayIconHeader = read_text(sourceRoot / "src/launcher/tray_icon.h");
     const auto rustLauncherCoreSource = read_text(sourceRoot / "rust/launcher-core/src/lib.rs");
     const auto jobMarker = launcherSource.find("HANDLE job = CreateJobObjectW");
     const auto jobLimitMarker = launcherSource.find("SetInformationJobObject", jobMarker);
@@ -98,6 +99,18 @@ int main(int argc, char** argv) {
         rustLauncherCoreSource.find("state_store_parser_matches_frozen_cpp_ledger_contract") ==
             std::string::npos ||
         rustLauncherCoreSource.find("state_store_save_load_and_publish_match_frozen_cpp_contract") ==
+            std::string::npos ||
+        launcherSource.find("#include <filesystem>") != std::string::npos ||
+        trayIconHeader.find("#include <filesystem>") != std::string::npos ||
+        trayIconHeader.find("std::filesystem::path") != std::string::npos ||
+        launcherSource.find("std::filesystem") != std::string::npos ||
+        launcherSource.find("generationBin") != std::string::npos ||
+        launcherSource.find("installedRoot") != std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_resolve_default_process_paths_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("launcher_default_process_paths_match_cpp_generation_contract") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_absolute_windows_path_utf16") ==
             std::string::npos ||
         cmakeSource.find("FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}") ==
             std::string::npos) {

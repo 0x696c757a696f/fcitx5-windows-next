@@ -3,11 +3,11 @@
 #include "pipe_security.h"
 #include "protocol.h"
 #include "runtime_identity.h"
+#include "launcher_rust_abi.h"
 #include "state_machine.h"
 #include "state_store.h"
 #include "tray_icon.h"
 
-#include <fcitx5_windows/release_identity.h>
 #include <fcitx5_windows/version.h>
 
 #include <Windows.h>
@@ -16,7 +16,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <filesystem>
 #include <iostream>
 #include <span>
 #include <string>
@@ -34,21 +33,53 @@ class SystemClock final : public launcher::Clock {
 };
 
 bool absoluteWindowsPath(std::wstring_view path) {
-    return path.size() >= 3 &&
-           (((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z')) &&
-            path[1] == L':' && (path[2] == L'\\' || path[2] == L'/'));
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return fcitx5_launcher_absolute_windows_path_utf16(
+               reinterpret_cast<const std::uint16_t*>(path.data()), path.size()) != 0;
 }
 
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
 
-std::filesystem::path executableDirectory() {
+std::wstring executableDirectory() {
     std::wstring path(32'768, L'\0');
     const DWORD size =
         GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
     if (size == 0 || size >= path.size())
         return {};
     path.resize(size);
-    return std::filesystem::path(path).parent_path();
+    const std::size_t separator = path.find_last_of(L"\\/");
+    if (separator == std::wstring::npos)
+        return {};
+    path.resize(separator);
+    return path;
+}
+
+const std::uint16_t* utf16Data(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
+bool resolveDefaultProcessPaths(std::wstring_view directory, std::wstring_view generation,
+                                std::wstring& enginePath, std::wstring& uiPath) {
+    std::size_t engineLen = 0;
+    std::size_t uiLen = 0;
+    if (!fcitx5_launcher_resolve_default_process_paths_utf16(
+            utf16Data(directory), directory.size(), utf16Data(generation), generation.size(),
+            nullptr, 0, nullptr, 0, &engineLen, &uiLen) ||
+        engineLen == 0 || uiLen == 0) {
+        return false;
+    }
+    std::vector<wchar_t> engine(engineLen);
+    std::vector<wchar_t> ui(uiLen);
+    if (!fcitx5_launcher_resolve_default_process_paths_utf16(
+            utf16Data(directory), directory.size(), utf16Data(generation), generation.size(),
+            reinterpret_cast<std::uint16_t*>(engine.data()), engine.size(),
+            reinterpret_cast<std::uint16_t*>(ui.data()), ui.size(), &engineLen, &uiLen)) {
+        return false;
+    }
+    enginePath.assign(engine.data(), engine.data() + engineLen);
+    uiPath.assign(ui.data(), ui.data() + uiLen);
+    return true;
 }
 
 bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeout) {
@@ -312,20 +343,10 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         }
     }
     if (enginePath.empty() && installedDefaults) {
-        const auto directory = executableDirectory();
+        const std::wstring directory = executableDirectory();
         const auto generation = platform::currentRuntimeGeneration();
-        const auto installedRoot = directory.filename() == L"bin" ? directory.parent_path()
-                                                                  : directory;
-        const auto generationBin = installedRoot / L"runtime" / generation / L"bin";
-        const auto generationEngine = generationBin / L"fcitx5-engine.exe";
-        const auto generationUi = generationBin / L"fcitx5-ui.exe";
-        if (std::filesystem::exists(generationEngine) && std::filesystem::exists(generationUi)) {
-            enginePath = generationEngine.wstring();
-            uiPath = generationUi.wstring();
-        } else {
-            enginePath = (directory / L"fcitx5-engine.exe").wstring();
-            uiPath = (directory / L"fcitx5-ui.exe").wstring();
-        }
+        if (!resolveDefaultProcessPaths(directory, generation, enginePath, uiPath))
+            return 1;
     }
     if (!absoluteWindowsPath(enginePath) ||
         GetFileAttributesW(enginePath.c_str()) == INVALID_FILE_ATTRIBUTES)

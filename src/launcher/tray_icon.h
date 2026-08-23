@@ -6,7 +6,8 @@
 #include <Windows.h>
 #include <shellapi.h>
 
-#include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace fcitx::windows::launcher {
 
@@ -20,8 +21,7 @@ public:
     TrayIcon(const TrayIcon&) = delete;
     TrayIcon& operator=(const TrayIcon&) = delete;
 
-    [[nodiscard]] bool create(HINSTANCE instance,
-                              const std::filesystem::path& executableDirectory);
+    [[nodiscard]] bool create(HINSTANCE instance, std::wstring_view executableDirectory);
     void update(LauncherState launcherState, EngineState engineState,
                 const protocol::EngineStatusResponse& inputMethodStatus = {});
     void dispatchMessages();
@@ -44,7 +44,8 @@ private:
     HWND window_{};
     NOTIFYICONDATAW icon_{};
     UINT taskbarCreated_{};
-    std::filesystem::path configPath_;
+    std::wstring configPath_;
+    std::wstring configDirectory_;
     LauncherState launcherState_{LauncherState::normal};
     EngineState engineState_{EngineState::stopped};
     protocol::EngineStatusResponse inputMethodStatus_;

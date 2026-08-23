@@ -108,6 +108,14 @@ std::wstring tooltipText(LauncherState launcherState, EngineState engineState,
     return text;
 }
 
+std::wstring joinExecutable(std::wstring_view directory, const wchar_t* executable) {
+    std::wstring result(directory);
+    if (!result.empty() && result.back() != L'\\' && result.back() != L'/')
+        result.push_back(L'\\');
+    result += executable;
+    return result;
+}
+
 } // namespace
 
 TrayIcon::~TrayIcon() {
@@ -116,10 +124,10 @@ TrayIcon::~TrayIcon() {
         DestroyWindow(window_);
 }
 
-bool TrayIcon::create(HINSTANCE instance,
-                      const std::filesystem::path& executableDirectory) {
+bool TrayIcon::create(HINSTANCE instance, std::wstring_view executableDirectory) {
     instance_ = instance;
-    configPath_ = executableDirectory / L"fcitx5-config.exe";
+    configDirectory_ = std::wstring(executableDirectory);
+    configPath_ = joinExecutable(configDirectory_, L"fcitx5-config.exe");
     taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
     WNDCLASSEXW windowClass{sizeof(windowClass)};
     windowClass.lpfnWndProc = windowProcedure;
@@ -249,7 +257,7 @@ void TrayIcon::launch(const wchar_t* arguments) noexcept {
     if (configPath_.empty() ||
         GetFileAttributesW(configPath_.c_str()) == INVALID_FILE_ATTRIBUTES)
         return;
-    std::wstring command = L"\"" + configPath_.wstring() + L"\"";
+    std::wstring command = L"\"" + configPath_ + L"\"";
     if (arguments && *arguments) {
         command.push_back(L' ');
         command.append(arguments);
@@ -259,7 +267,7 @@ void TrayIcon::launch(const wchar_t* arguments) noexcept {
     STARTUPINFOW startup{sizeof(startup)};
     PROCESS_INFORMATION process{};
     if (CreateProcessW(configPath_.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
-                       CREATE_UNICODE_ENVIRONMENT, nullptr, configPath_.parent_path().c_str(),
+                       CREATE_UNICODE_ENVIRONMENT, nullptr, configDirectory_.c_str(),
                        &startup, &process)) {
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
