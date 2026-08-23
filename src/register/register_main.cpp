@@ -28,6 +28,8 @@ std::uint32_t fcitx5_register_validate_artifact(Fcitx5RegisterUtf16 helper,
                                                 std::uint32_t architectureBits) noexcept;
 std::uint32_t fcitx5_register_parse_operation(Fcitx5RegisterUtf16 operation) noexcept;
 std::uint32_t fcitx5_register_validate_dll_argument(Fcitx5RegisterUtf16 dll) noexcept;
+std::uint32_t fcitx5_register_operation_requires_admin(std::uint32_t operation) noexcept;
+std::uint32_t fcitx5_register_operation_export(std::uint32_t operation) noexcept;
 }
 
 enum class RegisterArtifactStatus : std::uint32_t {
@@ -51,6 +53,12 @@ enum class RegisterOperation : std::uint32_t {
 enum class RegisterDllArgumentStatus : std::uint32_t {
     ok = 0,
     invalid = 1,
+};
+
+enum class RegisterExport : std::uint32_t {
+    none = 0,
+    registerServer = 1,
+    unregisterServer = 2,
 };
 
 template <typename Function>
@@ -183,6 +191,15 @@ bool validateDllArgument(const fs::path& dll) noexcept {
            RegisterDllArgumentStatus::ok;
 }
 
+bool operationRequiresAdmin(RegisterOperation operation) noexcept {
+    return fcitx5_register_operation_requires_admin(static_cast<std::uint32_t>(operation)) != 0;
+}
+
+RegisterExport operationExport(RegisterOperation operation) noexcept {
+    return static_cast<RegisterExport>(
+        fcitx5_register_operation_export(static_cast<std::uint32_t>(operation)));
+}
+
 HRESULT invokeRegistration(const fs::path& dll, const char* exportName) {
     SetDllDirectoryW(L"");
     HMODULE module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -243,7 +260,7 @@ int wmain(int argc, wchar_t** argv) {
         usage();
         return 2;
     }
-    if (!isElevated()) {
+    if (operationRequiresAdmin(operation) && !isElevated()) {
         std::wcerr << L"Registration changes require an elevated administrator token.\n";
         return 5;
     }
@@ -251,8 +268,9 @@ int wmain(int argc, wchar_t** argv) {
         std::wcerr << L"TSF DLL does not exist: " << dll.c_str() << L'\n';
         return 2;
     }
-    const char* function = operation == RegisterOperation::unregisterServer ? "DllUnregisterServer"
-                                                                            : "DllRegisterServer";
+    const auto exportKind = operationExport(operation);
+    const char* function = exportKind == RegisterExport::unregisterServer ? "DllUnregisterServer"
+                                                                          : "DllRegisterServer";
     const HRESULT result = invokeRegistration(dll, function);
     if (FAILED(result)) {
         std::wcerr << L"Registration operation failed: 0x" << std::hex

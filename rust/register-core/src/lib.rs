@@ -28,6 +28,10 @@ pub const REGISTER_OPERATION_VALIDATE_ARTIFACT: u32 = 5;
 pub const REGISTER_DLL_ARGUMENT_OK: u32 = 0;
 pub const REGISTER_DLL_ARGUMENT_INVALID: u32 = 1;
 
+pub const REGISTER_EXPORT_NONE: u32 = 0;
+pub const REGISTER_EXPORT_REGISTER_SERVER: u32 = 1;
+pub const REGISTER_EXPORT_UNREGISTER_SERVER: u32 = 2;
+
 fn path_from_utf16(value: Fcitx5RegisterUtf16) -> Option<PathBuf> {
     if value.ptr.is_null() {
         return None;
@@ -109,6 +113,21 @@ pub fn validate_dll_argument(dll: &Path) -> u32 {
     }
 }
 
+pub fn operation_requires_admin(operation: u32) -> u32 {
+    matches!(
+        operation,
+        REGISTER_OPERATION_REGISTER | REGISTER_OPERATION_REPAIR | REGISTER_OPERATION_UNREGISTER
+    ) as u32
+}
+
+pub fn operation_export(operation: u32) -> u32 {
+    match operation {
+        REGISTER_OPERATION_REGISTER | REGISTER_OPERATION_REPAIR => REGISTER_EXPORT_REGISTER_SERVER,
+        REGISTER_OPERATION_UNREGISTER => REGISTER_EXPORT_UNREGISTER_SERVER,
+        _ => REGISTER_EXPORT_NONE,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fcitx5_register_validate_artifact(
     helper: Fcitx5RegisterUtf16,
@@ -138,6 +157,16 @@ pub extern "C" fn fcitx5_register_validate_dll_argument(dll: Fcitx5RegisterUtf16
         return REGISTER_DLL_ARGUMENT_INVALID;
     };
     validate_dll_argument(&dll)
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_register_operation_requires_admin(operation: u32) -> u32 {
+    operation_requires_admin(operation)
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_register_operation_export(operation: u32) -> u32 {
+    operation_export(operation)
 }
 
 #[cfg(test)]
@@ -196,6 +225,34 @@ mod tests {
         assert_eq!(
             validate_dll_argument(Path::new("C:/Fcitx5/tsf/x64/other.dll")),
             REGISTER_DLL_ARGUMENT_INVALID
+        );
+    }
+
+    #[test]
+    fn classifies_registration_privilege_and_export_policy() {
+        assert_eq!(operation_requires_admin(REGISTER_OPERATION_REGISTER), 1);
+        assert_eq!(operation_requires_admin(REGISTER_OPERATION_REPAIR), 1);
+        assert_eq!(operation_requires_admin(REGISTER_OPERATION_UNREGISTER), 1);
+        assert_eq!(operation_requires_admin(REGISTER_OPERATION_STATUS), 0);
+        assert_eq!(
+            operation_requires_admin(REGISTER_OPERATION_VALIDATE_ARTIFACT),
+            0
+        );
+        assert_eq!(
+            operation_export(REGISTER_OPERATION_REGISTER),
+            REGISTER_EXPORT_REGISTER_SERVER
+        );
+        assert_eq!(
+            operation_export(REGISTER_OPERATION_REPAIR),
+            REGISTER_EXPORT_REGISTER_SERVER
+        );
+        assert_eq!(
+            operation_export(REGISTER_OPERATION_UNREGISTER),
+            REGISTER_EXPORT_UNREGISTER_SERVER
+        );
+        assert_eq!(
+            operation_export(REGISTER_OPERATION_STATUS),
+            REGISTER_EXPORT_NONE
         );
     }
 
