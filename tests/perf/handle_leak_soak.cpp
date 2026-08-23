@@ -10,6 +10,19 @@
 
 namespace {
 
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
 struct Resources {
     DWORD handles{};
     DWORD gdi{};
@@ -30,10 +43,8 @@ bool exercise(const wchar_t* path) {
     if (!module) return false;
     using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**);
     using CanUnloadNow = HRESULT(STDAPICALLTYPE*)();
-    const auto getClassObject = reinterpret_cast<GetClassObject>(
-        GetProcAddress(module, "DllGetClassObject"));
-    const auto canUnload = reinterpret_cast<CanUnloadNow>(
-        GetProcAddress(module, "DllCanUnloadNow"));
+    const auto getClassObject = resolveProcAddress<GetClassObject>(module, "DllGetClassObject");
+    const auto canUnload = resolveProcAddress<CanUnloadNow>(module, "DllCanUnloadNow");
     Microsoft::WRL::ComPtr<IClassFactory> factory;
     Microsoft::WRL::ComPtr<ITfTextInputProcessorEx> service;
     bool okay = getClassObject && canUnload &&

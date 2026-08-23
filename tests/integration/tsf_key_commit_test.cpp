@@ -22,6 +22,19 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
 class TestRange final : public ITfRange {
 public:
     TestRange() : document_(std::make_shared<std::wstring>()) {}
@@ -798,8 +811,7 @@ int exerciseGuardFailOpen(const wchar_t* dllPath) {
         return 1;
     }
     using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**);
-    const auto getClassObject =
-        reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
+    const auto getClassObject = resolveProcAddress<GetClassObject>(module, "DllGetClassObject");
     ComPtr<IClassFactory> factory;
     ComPtr<ITfTextInputProcessorEx> service;
     ComPtr<ITfKeyEventSink> keySink;
@@ -850,8 +862,7 @@ int exercise(const wchar_t* dllPath, HANDLE engineProcess) {
         return 1;
     }
     using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**);
-    const auto getClassObject =
-        reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
+    const auto getClassObject = resolveProcAddress<GetClassObject>(module, "DllGetClassObject");
     ComPtr<IClassFactory> factory;
     ComPtr<ITfTextInputProcessorEx> service;
     ComPtr<ITfKeyEventSink> keySink;

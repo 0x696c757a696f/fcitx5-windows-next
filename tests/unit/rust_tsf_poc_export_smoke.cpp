@@ -17,6 +17,19 @@ constexpr GUID kUnsupportedClsid{0xaaaaaaaa,
                                  0xcccc,
                                  {0xdd, 0xdd, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee}};
 
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -38,22 +51,20 @@ int wmain(int argc, wchar_t** argv) {
     using CompositionTranscriptReport = const char*(__stdcall*)(size_t*);
     using DifferentialSummaryReport = const char*(__stdcall*)(size_t*);
     using ForcedFailure = HRESULT(__stdcall*)();
-    const auto getClassObject =
-        reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
-    const auto canUnloadNow =
-        reinterpret_cast<CanUnloadNow>(GetProcAddress(module, "DllCanUnloadNow"));
-    const auto behaviorReport = reinterpret_cast<BehaviorReport>(
-        GetProcAddress(module, "Fcitx5TsfPocBehaviorReport"));
-    const auto profileIdentityReport = reinterpret_cast<ProfileIdentityReport>(
-        GetProcAddress(module, "Fcitx5TsfPocProfileIdentityReport"));
-    const auto ipcBoundaryReport = reinterpret_cast<IpcBoundaryReport>(
-        GetProcAddress(module, "Fcitx5TsfPocIpcBoundaryReport"));
-    const auto compositionTranscriptReport = reinterpret_cast<CompositionTranscriptReport>(
-        GetProcAddress(module, "Fcitx5TsfPocCompositionTranscriptReport"));
-    const auto differentialSummaryReport = reinterpret_cast<DifferentialSummaryReport>(
-        GetProcAddress(module, "Fcitx5TsfPocDifferentialSummaryReport"));
-    const auto forcedFailure = reinterpret_cast<ForcedFailure>(
-        GetProcAddress(module, "Fcitx5TsfPocForcedFailureForTest"));
+    const auto getClassObject = resolveProcAddress<GetClassObject>(module, "DllGetClassObject");
+    const auto canUnloadNow = resolveProcAddress<CanUnloadNow>(module, "DllCanUnloadNow");
+    const auto behaviorReport =
+        resolveProcAddress<BehaviorReport>(module, "Fcitx5TsfPocBehaviorReport");
+    const auto profileIdentityReport = resolveProcAddress<ProfileIdentityReport>(
+        module, "Fcitx5TsfPocProfileIdentityReport");
+    const auto ipcBoundaryReport =
+        resolveProcAddress<IpcBoundaryReport>(module, "Fcitx5TsfPocIpcBoundaryReport");
+    const auto compositionTranscriptReport = resolveProcAddress<CompositionTranscriptReport>(
+        module, "Fcitx5TsfPocCompositionTranscriptReport");
+    const auto differentialSummaryReport = resolveProcAddress<DifferentialSummaryReport>(
+        module, "Fcitx5TsfPocDifferentialSummaryReport");
+    const auto forcedFailure =
+        resolveProcAddress<ForcedFailure>(module, "Fcitx5TsfPocForcedFailureForTest");
     if (!getClassObject || !canUnloadNow || !behaviorReport || !profileIdentityReport ||
         !ipcBoundaryReport || !compositionTranscriptReport || !differentialSummaryReport ||
         !forcedFailure) {

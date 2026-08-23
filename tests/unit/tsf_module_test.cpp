@@ -25,6 +25,23 @@ static_assert(fcitx::windows::tsf::kObsoleteInputProfiles.size() == 3);
 static_assert(fcitx::windows::tsf::kObsoleteInputProfiles[0].language ==
               MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
 
+namespace {
+
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
+} // namespace
+
 int wmain(int argc, wchar_t** argv) {
     const GUID retiredRime = fcitx::windows::tsf::deterministicProfileGuid("zh-cn-rime-addon");
     const GUID retiredRimeAgain =
@@ -156,8 +173,7 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
     using GetClassObject = HRESULT(__stdcall*)(REFCLSID, REFIID, void**);
-    const auto getClassObject =
-        reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
+    const auto getClassObject = resolveProcAddress<GetClassObject>(module, "DllGetClassObject");
     if (!getClassObject) {
         std::cerr << "DllGetClassObject export missing\n";
         FreeLibrary(module);
