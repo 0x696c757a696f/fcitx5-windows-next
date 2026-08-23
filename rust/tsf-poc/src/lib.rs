@@ -34,8 +34,9 @@ use windows::Win32::UI::TextServices::{
     ITfKeystrokeMgr, ITfRange, ITfSource, ITfTextInputProcessor, ITfTextInputProcessorEx,
     ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfThreadFocusSink,
     ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl,
-    ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, GUID_TFCAT_TIP_KEYBOARD,
-    TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
+    ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, InputScope, GUID_TFCAT_TIP_KEYBOARD,
+    IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD,
+    IS_PRIVATE, TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
 };
 use windows_core::{
     implement, w, ComObject, IUnknown, IUnknownImpl, Interface, Ref, Result, BOOL, BSTR, GUID,
@@ -120,6 +121,18 @@ where
         Ok(result) => result,
         Err(_) => E_UNEXPECTED,
     }
+}
+
+pub fn is_sensitive_input_scope(scope: InputScope) -> bool {
+    matches!(
+        scope,
+        IS_PASSWORD
+            | IS_PRIVATE
+            | IS_NUMERIC_PASSWORD
+            | IS_NUMERIC_PIN
+            | IS_ALPHANUMERIC_PIN
+            | IS_ALPHANUMERIC_PIN_SET
+    )
 }
 
 fn hresult_from_win32(error: WIN32_ERROR) -> HRESULT {
@@ -1945,11 +1958,38 @@ pub unsafe extern "system" fn Fcitx5TsfPocForcedFailureForTest() -> HRESULT {
 mod tests {
     use super::*;
     use windows::Win32::Foundation::S_FALSE;
+    use windows::Win32::UI::TextServices::{
+        IS_CHAT, IS_DEFAULT, IS_EMAIL_SMTPEMAILADDRESS, IS_NUMBER, IS_SEARCH, IS_URL,
+    };
 
     #[test]
     fn panic_boundary_converts_unwind_to_hresult() {
         let result = panic_to_hresult(|| panic!("forced TSF PoC panic boundary regression"));
         assert_eq!(result, E_UNEXPECTED);
+    }
+
+    #[test]
+    fn sensitive_input_scope_policy_matches_frozen_cpp_contract() {
+        for scope in [
+            IS_PASSWORD,
+            IS_PRIVATE,
+            IS_NUMERIC_PASSWORD,
+            IS_NUMERIC_PIN,
+            IS_ALPHANUMERIC_PIN,
+            IS_ALPHANUMERIC_PIN_SET,
+        ] {
+            assert!(is_sensitive_input_scope(scope));
+        }
+        for scope in [
+            IS_DEFAULT,
+            IS_URL,
+            IS_EMAIL_SMTPEMAILADDRESS,
+            IS_CHAT,
+            IS_NUMBER,
+            IS_SEARCH,
+        ] {
+            assert!(!is_sensitive_input_scope(scope));
+        }
     }
 
     #[test]

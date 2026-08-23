@@ -1325,13 +1325,6 @@ if(BUILD_TESTING)
   add_test(NAME rust-tsf-poc-artifact-audit
            COMMAND fcitx5_rust_tsf_poc_artifact_audit "${FCITX_RUST_TSF_POC_DLL}")
 
-  add_executable(fcitx5_input_scope_policy_test tests/unit/input_scope_policy_test.cpp)
-  target_include_directories(
-    fcitx5_input_scope_policy_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-  fcitx_apply_project_options(fcitx5_input_scope_policy_test)
-  fcitx_apply_binary_hardening(fcitx5_input_scope_policy_test)
-  add_test(NAME tsf-sensitive-input-policy COMMAND fcitx5_input_scope_policy_test)
-
   add_executable(fcitx5_tsf_key_commit_test tests/integration/tsf_key_commit_test.cpp)
   add_dependencies(fcitx5_tsf_key_commit_test fcitx5_tsf)
   target_sources(fcitx5_tsf_key_commit_test PRIVATE src/tsf/input_scope_guids.cpp)

@@ -966,6 +966,18 @@ int main(int argc, char** argv) {
         cmakeSource.find("FCITX_RELEASE_DATA_DIRECTORY=") == std::string::npos) {
         return fail("TSF-SUPPORT-RUST: activation guard policy must be Rust-owned and the old C++ header/source/test must stay deleted");
     }
+    if (std::filesystem::exists(sourceRoot / "src/tsf/input_scope_policy.h") ||
+        std::filesystem::exists(sourceRoot / "tests/unit/input_scope_policy_test.cpp") ||
+        cmakeSource.find("tests/unit/input_scope_policy_test.cpp") != std::string::npos ||
+        cmakeSource.find("fcitx5_input_scope_policy_test") != std::string::npos ||
+        cmakeSource.find("tsf-sensitive-input-policy") != std::string::npos ||
+        rustTsfPocSource.find("fn is_sensitive_input_scope") == std::string::npos ||
+        rustTsfPocSource.find("sensitive_input_scope_policy_matches_frozen_cpp_contract") ==
+            std::string::npos ||
+        rustTsfPocSource.find("IS_PASSWORD") == std::string::npos ||
+        rustTsfPocSource.find("IS_ALPHANUMERIC_PIN_SET") == std::string::npos) {
+        return fail("TSF-SUPPORT-RUST: input-scope sensitivity policy must be Rust-owned and the old C++ header/test must stay deleted");
+    }
     std::cout << "source-contract ok\n";
     return 0;
 }
