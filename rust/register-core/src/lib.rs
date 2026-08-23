@@ -18,6 +18,16 @@ pub const REGISTER_ARTIFACT_CURRENT_DLL_MISSING: u32 = 3;
 pub const REGISTER_ARTIFACT_PAIRED_DLL_MISSING: u32 = 4;
 pub const REGISTER_ARTIFACT_DLL_OUTSIDE_PRODUCT: u32 = 5;
 
+pub const REGISTER_OPERATION_UNKNOWN: u32 = 0;
+pub const REGISTER_OPERATION_REGISTER: u32 = 1;
+pub const REGISTER_OPERATION_REPAIR: u32 = 2;
+pub const REGISTER_OPERATION_UNREGISTER: u32 = 3;
+pub const REGISTER_OPERATION_STATUS: u32 = 4;
+pub const REGISTER_OPERATION_VALIDATE_ARTIFACT: u32 = 5;
+
+pub const REGISTER_DLL_ARGUMENT_OK: u32 = 0;
+pub const REGISTER_DLL_ARGUMENT_INVALID: u32 = 1;
+
 fn path_from_utf16(value: Fcitx5RegisterUtf16) -> Option<PathBuf> {
     if value.ptr.is_null() {
         return None;
@@ -79,6 +89,26 @@ pub fn validate_product_artifact(helper: &Path, dll: &Path, architecture_bits: u
     REGISTER_ARTIFACT_OK
 }
 
+pub fn parse_operation(operation: &OsStr) -> u32 {
+    let text = operation.to_string_lossy();
+    match text.as_ref() {
+        "--register" => REGISTER_OPERATION_REGISTER,
+        "--repair" => REGISTER_OPERATION_REPAIR,
+        "--unregister" => REGISTER_OPERATION_UNREGISTER,
+        "--status" => REGISTER_OPERATION_STATUS,
+        "--validate-artifact" => REGISTER_OPERATION_VALIDATE_ARTIFACT,
+        _ => REGISTER_OPERATION_UNKNOWN,
+    }
+}
+
+pub fn validate_dll_argument(dll: &Path) -> u32 {
+    if dll.is_absolute() && dll.file_name() == Some(OsStr::new("fcitx5-tsf.dll")) {
+        REGISTER_DLL_ARGUMENT_OK
+    } else {
+        REGISTER_DLL_ARGUMENT_INVALID
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fcitx5_register_validate_artifact(
     helper: Fcitx5RegisterUtf16,
@@ -92,6 +122,22 @@ pub extern "C" fn fcitx5_register_validate_artifact(
         return REGISTER_ARTIFACT_INVALID_ARGUMENT;
     };
     validate_product_artifact(&helper, &dll, architecture_bits)
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_register_parse_operation(operation: Fcitx5RegisterUtf16) -> u32 {
+    let Some(operation) = path_from_utf16(operation) else {
+        return REGISTER_OPERATION_UNKNOWN;
+    };
+    parse_operation(operation.as_os_str())
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_register_validate_dll_argument(dll: Fcitx5RegisterUtf16) -> u32 {
+    let Some(dll) = path_from_utf16(dll) else {
+        return REGISTER_DLL_ARGUMENT_INVALID;
+    };
+    validate_dll_argument(&dll)
 }
 
 #[cfg(test)]
@@ -111,6 +157,46 @@ mod tests {
     fn write_fixture(path: &Path) {
         fs::create_dir_all(path.parent().expect("fixture parent")).expect("create fixture parent");
         fs::write(path, b"fixture").expect("write fixture");
+    }
+
+    #[test]
+    fn parses_register_operations_and_validates_tsf_dll_argument() {
+        assert_eq!(
+            parse_operation(OsStr::new("--register")),
+            REGISTER_OPERATION_REGISTER
+        );
+        assert_eq!(
+            parse_operation(OsStr::new("--repair")),
+            REGISTER_OPERATION_REPAIR
+        );
+        assert_eq!(
+            parse_operation(OsStr::new("--unregister")),
+            REGISTER_OPERATION_UNREGISTER
+        );
+        assert_eq!(
+            parse_operation(OsStr::new("--status")),
+            REGISTER_OPERATION_STATUS
+        );
+        assert_eq!(
+            parse_operation(OsStr::new("--validate-artifact")),
+            REGISTER_OPERATION_VALIDATE_ARTIFACT
+        );
+        assert_eq!(
+            parse_operation(OsStr::new("--bad")),
+            REGISTER_OPERATION_UNKNOWN
+        );
+        assert_eq!(
+            validate_dll_argument(Path::new("C:/Fcitx5/tsf/x64/fcitx5-tsf.dll")),
+            REGISTER_DLL_ARGUMENT_OK
+        );
+        assert_eq!(
+            validate_dll_argument(Path::new("fcitx5-tsf.dll")),
+            REGISTER_DLL_ARGUMENT_INVALID
+        );
+        assert_eq!(
+            validate_dll_argument(Path::new("C:/Fcitx5/tsf/x64/other.dll")),
+            REGISTER_DLL_ARGUMENT_INVALID
+        );
     }
 
     #[test]

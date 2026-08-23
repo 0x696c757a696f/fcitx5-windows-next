@@ -103,7 +103,11 @@ int main(int argc, char** argv) {
         registerSource.find("--validate-artifact") == std::string::npos ||
         registerSource.find("paired architecture TSF DLL is missing") == std::string::npos ||
         registerSource.find("fcitx5_register_validate_artifact") == std::string::npos ||
+        registerSource.find("fcitx5_register_parse_operation") == std::string::npos ||
+        registerSource.find("fcitx5_register_validate_dll_argument") == std::string::npos ||
         rustRegisterCore.find("validate_product_artifact") == std::string::npos ||
+        rustRegisterCore.find("REGISTER_OPERATION_VALIDATE_ARTIFACT") == std::string::npos ||
+        rustRegisterCore.find("REGISTER_DLL_ARGUMENT_INVALID") == std::string::npos ||
         rustRegisterCore.find("REGISTER_ARTIFACT_PAIRED_DLL_MISSING") ==
             std::string::npos) {
         return fail("STAB-REGISTER-BOOTSTRAP-012: register helper must validate product artifacts");

@@ -26,6 +26,8 @@ struct Fcitx5RegisterUtf16 {
 std::uint32_t fcitx5_register_validate_artifact(Fcitx5RegisterUtf16 helper,
                                                 Fcitx5RegisterUtf16 dll,
                                                 std::uint32_t architectureBits) noexcept;
+std::uint32_t fcitx5_register_parse_operation(Fcitx5RegisterUtf16 operation) noexcept;
+std::uint32_t fcitx5_register_validate_dll_argument(Fcitx5RegisterUtf16 dll) noexcept;
 }
 
 enum class RegisterArtifactStatus : std::uint32_t {
@@ -35,6 +37,20 @@ enum class RegisterArtifactStatus : std::uint32_t {
     currentDllMissing = 3,
     pairedDllMissing = 4,
     dllOutsideProduct = 5,
+};
+
+enum class RegisterOperation : std::uint32_t {
+    unknown = 0,
+    registerServer = 1,
+    repair = 2,
+    unregisterServer = 3,
+    status = 4,
+    validateArtifact = 5,
+};
+
+enum class RegisterDllArgumentStatus : std::uint32_t {
+    ok = 0,
+    invalid = 1,
 };
 
 template <typename Function>
@@ -155,6 +171,18 @@ bool validateProductArtifact(const fs::path& dll, std::wstring& error) {
     }
 }
 
+RegisterOperation parseOperation(std::wstring_view value) noexcept {
+    return static_cast<RegisterOperation>(
+        fcitx5_register_parse_operation({value.data(), value.size()}));
+}
+
+bool validateDllArgument(const fs::path& dll) noexcept {
+    const auto native = dll.native();
+    return static_cast<RegisterDllArgumentStatus>(
+               fcitx5_register_validate_dll_argument({native.data(), native.size()})) ==
+           RegisterDllArgumentStatus::ok;
+}
+
 HRESULT invokeRegistration(const fs::path& dll, const char* exportName) {
     SetDllDirectoryW(L"");
     HMODULE module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -182,9 +210,9 @@ int wmain(int argc, wchar_t** argv) {
         usage();
         return 2;
     }
-    const std::wstring_view operation(argv[1]);
+    const auto operation = parseOperation(argv[1]);
     const fs::path dll(argv[3]);
-    if (!dll.is_absolute() || dll.filename() != L"fcitx5-tsf.dll") {
+    if (!validateDllArgument(dll)) {
         std::wcerr << L"The TSF DLL must be an absolute path ending in fcitx5-tsf.dll.\n";
         return 2;
     }
@@ -193,11 +221,11 @@ int wmain(int argc, wchar_t** argv) {
         std::wcerr << validationError << L'\n';
         return 2;
     }
-    if (operation == L"--validate-artifact") {
+    if (operation == RegisterOperation::validateArtifact) {
         std::cout << "artifact_valid\n";
         return 0;
     }
-    if (operation == L"--status") {
+    if (operation == RegisterOperation::status) {
         const std::wstring actual = registeredPath();
         if (actual.empty()) {
             std::cout << "not_registered\n";
@@ -210,8 +238,8 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << "registered\n";
         return 0;
     }
-    if (operation != L"--register" && operation != L"--repair" &&
-        operation != L"--unregister") {
+    if (operation != RegisterOperation::registerServer && operation != RegisterOperation::repair &&
+        operation != RegisterOperation::unregisterServer) {
         usage();
         return 2;
     }
@@ -223,15 +251,15 @@ int wmain(int argc, wchar_t** argv) {
         std::wcerr << L"TSF DLL does not exist: " << dll.c_str() << L'\n';
         return 2;
     }
-    const char* function = operation == L"--unregister" ? "DllUnregisterServer"
-                                                         : "DllRegisterServer";
+    const char* function = operation == RegisterOperation::unregisterServer ? "DllUnregisterServer"
+                                                                            : "DllRegisterServer";
     const HRESULT result = invokeRegistration(dll, function);
     if (FAILED(result)) {
         std::wcerr << L"Registration operation failed: 0x" << std::hex
                    << static_cast<unsigned long>(result) << L'\n';
         return 6;
     }
-    if (operation != L"--unregister" && !samePath(registeredPath(), dll)) {
+    if (operation != RegisterOperation::unregisterServer && !samePath(registeredPath(), dll)) {
         std::wcerr << L"Registration completed but the registered path does not match.\n";
         return 6;
     }
