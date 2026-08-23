@@ -400,6 +400,7 @@ int main(int argc, char** argv) {
         rustPackageCore.find("path_contains_reparse_component") == std::string::npos ||
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("read_installed_lockfile") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_read_lockfile_utf16") == std::string::npos ||
         rustPackageCore.find("write_installed_lockfile_atomic") == std::string::npos ||
         rustPackageCore.find("activate_staged_payload_tree") == std::string::npos ||
         rustPackageCore.find("set_installed_package_state") == std::string::npos ||
@@ -439,6 +440,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageCoreHeader.find("find_repository_package") == std::string::npos ||
         packageCoreHeader.find("rust_trusted_key_views") == std::string::npos ||
+        packageSource.find("packages.lock schema is invalid") != std::string::npos ||
         packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||

@@ -5925,7 +5925,8 @@ mod lifecycle_ffi {
 
     use super::{
         finalize_installed_package_removal, mark_installed_package_for_removal,
-        set_installed_package_state, LifecycleError, PackageLifecycleState,
+        read_installed_lockfile, set_installed_package_state, LifecycleError,
+        PackageLifecycleState,
     };
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -5938,6 +5939,25 @@ mod lifecycle_ffi {
         pub status: i32,
         pub error_code: [u8; 64],
         pub error_message: [u8; 512],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5LockEntry {
+        pub id: [u8; 65],
+        pub version: [u8; 65],
+        pub manifest_sha256: [u8; 65],
+        pub state: [u8; 33],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5LockfileResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub entries: *mut Fcitx5LockEntry,
+        pub entry_count: usize,
     }
 
     fn write_ascii<const N: usize>(buffer: &mut [u8; N], value: &str) {
@@ -5970,6 +5990,48 @@ mod lifecycle_ffi {
         }
     }
 
+    fn lockfile_error_result(code: &str, message: &str) -> Fcitx5LockfileResult {
+        let mut error_code = [0; 64];
+        let mut error_message = [0; 512];
+        write_ascii(&mut error_code, code);
+        write_ascii(&mut error_message, message);
+        Fcitx5LockfileResult {
+            status: 1,
+            error_code,
+            error_message,
+            entries: std::ptr::null_mut(),
+            entry_count: 0,
+        }
+    }
+
+    fn lock_entry(id: &str, version: &str, manifest_sha256: &str, state: &str) -> Fcitx5LockEntry {
+        let mut entry = Fcitx5LockEntry {
+            id: [0; 65],
+            version: [0; 65],
+            manifest_sha256: [0; 65],
+            state: [0; 33],
+        };
+        write_ascii(&mut entry.id, id);
+        write_ascii(&mut entry.version, version);
+        write_ascii(&mut entry.manifest_sha256, manifest_sha256);
+        write_ascii(&mut entry.state, state);
+        entry
+    }
+
+    fn lockfile_ok_result(entries: Vec<Fcitx5LockEntry>) -> Fcitx5LockfileResult {
+        let mut entries = entries.into_boxed_slice();
+        let entry_count = entries.len();
+        let entries_ptr = entries.as_mut_ptr();
+        std::mem::forget(entries);
+        Fcitx5LockfileResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            entries: entries_ptr,
+            entry_count,
+        }
+    }
+
     fn path_from_utf16(ptr: *const u16, len: usize) -> Option<PathBuf> {
         if ptr.is_null() {
             return None;
@@ -5984,6 +6046,48 @@ mod lifecycle_ffi {
         }
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         std::str::from_utf8(slice).ok().map(ToOwned::to_owned)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_read_lockfile_utf16(
+        install_root: *const u16,
+        install_root_len: usize,
+    ) -> Fcitx5LockfileResult {
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return lockfile_error_result("invalid_lockfile", "install root path is invalid");
+        };
+        let entries = match read_installed_lockfile(install_root) {
+            Ok(entries) => entries,
+            Err(error) => return lockfile_error_result(error.code(), &error.to_string()),
+        };
+        lockfile_ok_result(
+            entries
+                .iter()
+                .map(|entry| {
+                    lock_entry(
+                        entry.id().as_str(),
+                        entry.version(),
+                        entry.manifest_sha256().as_str(),
+                        entry.state().as_str(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_lockfile_free(
+        entries: *mut Fcitx5LockEntry,
+        entry_count: usize,
+    ) {
+        if !entries.is_null() {
+            unsafe {
+                drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                    entries,
+                    entry_count,
+                )));
+            }
+        }
     }
 
     #[no_mangle]

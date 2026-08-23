@@ -46,10 +46,28 @@ struct Fcitx5PackageLifecycleResult {
   std::uint8_t error_message[512];
 };
 
+struct Fcitx5PackageLockEntry {
+  std::uint8_t id[65];
+  std::uint8_t version[65];
+  std::uint8_t manifest_sha256[65];
+  std::uint8_t state[33];
+};
+
+struct Fcitx5PackageLockfileResult {
+  int status;
+  std::uint8_t error_code[64];
+  std::uint8_t error_message[512];
+  Fcitx5PackageLockEntry* entries;
+  std::size_t entry_count;
+};
+
 struct Fcitx5RepositorySequenceRepairResult {
   std::uint8_t repaired;
 };
 
+Fcitx5PackageLockfileResult fcitx5_package_read_lockfile_utf16(
+    const wchar_t* install_root, std::size_t install_root_len);
+void fcitx5_package_lockfile_free(Fcitx5PackageLockEntry* entries, std::size_t entry_count);
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -969,42 +987,31 @@ std::filesystem::path stage_verified_payload(
 }
 
 std::vector<LockEntry> read_lockfile(const std::filesystem::path& install_root) {
-  const auto lock_path = install_root / "packages.lock";
-  if (!std::filesystem::exists(lock_path)) {
-    return {};
-  }
-  Json document;
-  try {
-    document = Json::parse(read_file_bounded(lock_path, kMaximumManifestBytes));
-  } catch (const Json::exception&) {
-    fail("invalid_lockfile", "packages.lock is not strict JSON");
-  }
-  require_object_keys(document, {"format_version", "packages"});
-  if (!document["format_version"].is_number_unsigned() ||
-      document["format_version"].get<std::uint32_t>() != 1U ||
-      !document["packages"].is_array() ||
-      document["packages"].size() > kMaximumFileCount) {
-    fail("invalid_lockfile", "packages.lock schema is invalid");
+  const std::wstring root = native_path_string(install_root);
+  const auto lockfile_result = fcitx5_package_read_lockfile_utf16(root.data(), root.size());
+  if (lockfile_result.status != 0) {
+    std::string code = ffi_string(lockfile_result.error_code);
+    std::string message = ffi_string(lockfile_result.error_message);
+    if (code.empty()) {
+      code = "invalid_lockfile";
+    }
+    if (message.empty()) {
+      message = "packages.lock read failed";
+    }
+    fail(std::move(code), std::move(message));
   }
   std::vector<LockEntry> result;
-  std::set<std::string, std::less<>> ids;
-  for (const auto& item : document["packages"]) {
-    require_object_keys(item, {"id", "version", "manifest_sha256", "state"});
-    LockEntry entry{require_string(item, "id", kMaximumIdBytes),
-                    require_string(item, "version", kMaximumVersionBytes),
-                    require_string(item, "manifest_sha256", 64U),
-                    require_string(item, "state", 32U)};
-    if (!is_lower_package_id(entry.id) || !is_ascii_token(entry.version, ".+-_") ||
-        !is_hex_digest(entry.manifest_sha256) ||
-        (entry.state != "installed" && entry.state != "enabled" &&
-         entry.state != "disabled" && entry.state != "pending_update" &&
-         entry.state != "pending_remove" && entry.state != "broken" &&
-         entry.state != "quarantined") ||
-        !ids.emplace(entry.id).second) {
-      fail("invalid_lockfile", "packages.lock entry is invalid");
-    }
-    result.push_back(std::move(entry));
+  result.reserve(lockfile_result.entry_count);
+  for (std::size_t index = 0; index < lockfile_result.entry_count; ++index) {
+    const auto& entry = lockfile_result.entries[index];
+    result.push_back(LockEntry{
+        ffi_string(entry.id),
+        ffi_string(entry.version),
+        ffi_string(entry.manifest_sha256),
+        ffi_string(entry.state),
+    });
   }
+  fcitx5_package_lockfile_free(lockfile_result.entries, lockfile_result.entry_count);
   return result;
 }
 
