@@ -113,8 +113,9 @@ int wmain(int argc, wchar_t** argv) {
             std::string::npos ||
         profileReport.find("\"windows_profile_count\":1") == std::string::npos ||
         profileReport.find("\"dynamic_profile_registration\":false") == std::string::npos ||
-        profileReport.find("\"rust_poc_registers_profile\":false") == std::string::npos ||
-        profileReport.find("\"shipping_cxx_authoritative\":true") == std::string::npos ||
+        profileReport.find("\"rust_poc_registers_profile\":true") == std::string::npos ||
+        profileReport.find("\"shipping_cxx_authoritative\":false") == std::string::npos ||
+        profileReport.find("\"rust_shipping_authoritative\":true") == std::string::npos ||
         profileReport.find("\"release_identity_source\":\"cmake/release_identity.h.in\"") ==
             std::string::npos) {
         std::cerr << "Rust TSF PoC profile identity report should match stable release identity\n";
@@ -133,7 +134,8 @@ int wmain(int argc, wchar_t** argv) {
         ipcReport.find("\"network_imports\":false") == std::string::npos ||
         ipcReport.find("\"external_engine_link\":false") == std::string::npos ||
         ipcReport.find("\"host_blocking_call\":false") == std::string::npos ||
-        ipcReport.find("\"shipping_cxx_authoritative\":true") == std::string::npos) {
+        ipcReport.find("\"shipping_cxx_authoritative\":false") == std::string::npos ||
+        ipcReport.find("\"rust_shipping_authoritative\":true") == std::string::npos) {
         std::cerr << "Rust TSF PoC IPC boundary report should fail open for slow or invalid engine replies\n";
         FreeLibrary(module);
         return 1;
@@ -152,7 +154,8 @@ int wmain(int argc, wchar_t** argv) {
         compositionReport.find("\"preedit_text\":\"hao\"") == std::string::npos ||
         compositionReport.find("\"composition_active_after\":true") == std::string::npos ||
         compositionReport.find("\"host_differential_pending\":true") == std::string::npos ||
-        compositionReport.find("\"shipping_cxx_authoritative\":true") == std::string::npos) {
+        compositionReport.find("\"shipping_cxx_authoritative\":false") == std::string::npos ||
+        compositionReport.find("\"rust_shipping_authoritative\":true") == std::string::npos) {
         std::cerr << "Rust TSF PoC composition transcript should preserve single edit-session operation order\n";
         FreeLibrary(module);
         return 1;
@@ -173,7 +176,8 @@ int wmain(int argc, wchar_t** argv) {
             std::string::npos ||
         summaryReport.find("\"arm64_ci_artifact_green\":true") == std::string::npos ||
         summaryReport.find("\"real_host_matrix_pending\":true") == std::string::npos ||
-        summaryReport.find("\"product_decision\":\"continue_poc\"") == std::string::npos) {
+        summaryReport.find("\"product_decision\":\"shipping_rust_cutover\"") ==
+            std::string::npos) {
         std::cerr << "Rust TSF PoC differential summary should list green and pending evidence\n";
         FreeLibrary(module);
         return 1;

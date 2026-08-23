@@ -578,27 +578,27 @@ add_custom_command(
           "$<TARGET_FILE_DIR:fcitx5_ui>/resources"
   VERBATIM)
 
-add_library(
-  fcitx5_tsf SHARED
-  src/tsf/module.cpp
-  src/tsf/candidate_ui_element.cpp
-  src/tsf/input_scope_guids.cpp
-  src/tsf/input_profiles.cpp
-  src/tsf/registration.cpp
-  src/tsf/text_service.cpp
-  src/tsf/fcitx5-tsf.def
-  resources/windows/tsf.rc)
-set_target_properties(fcitx5_tsf PROPERTIES PREFIX "" OUTPUT_NAME "fcitx5-tsf")
-target_include_directories(fcitx5_tsf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-target_link_libraries(
+add_custom_target(
   fcitx5_tsf
-  PRIVATE fcitx5::release_identity fcitx5::ipc_client fcitx5::tsf_activation_guard uuid ole32
-          oleaut32 advapi32)
-if(FCITX_DEVELOPMENT_PEER_EXCEPTION)
-  target_compile_definitions(fcitx5_tsf PRIVATE FCITX_DEVELOPMENT_PEER_EXCEPTION=1)
-endif()
-fcitx_apply_project_options(fcitx5_tsf)
-fcitx_apply_binary_hardening(fcitx5_tsf)
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-poc --lib --target
+    "${FCITX_RUST_TARGET}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different "${FCITX_RUST_TSF_POC_DLL}"
+    "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/tsf.rc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/resource.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5-tsf.ico"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-poc/build.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust shipping fcitx5-tsf.dll")
+set(FCITX_SHIPPING_TSF_DLL "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll")
 
 add_custom_target(
   fcitx5_register
@@ -1307,13 +1307,14 @@ if(BUILD_TESTING)
                    $<TARGET_FILE:fcitx5_crash_engine_fixture>)
 
   add_executable(fcitx5_tsf_module_test tests/unit/tsf_module_test.cpp)
+  add_dependencies(fcitx5_tsf_module_test fcitx5_tsf)
   target_sources(fcitx5_tsf_module_test PRIVATE src/tsf/input_profiles.cpp)
   target_include_directories(fcitx5_tsf_module_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
   target_link_libraries(fcitx5_tsf_module_test PRIVATE fcitx5::release_identity uuid ole32)
   fcitx_apply_project_options(fcitx5_tsf_module_test)
   fcitx_apply_binary_hardening(fcitx5_tsf_module_test)
   add_test(NAME tsf-module-activation
-           COMMAND fcitx5_tsf_module_test $<TARGET_FILE:fcitx5_tsf>)
+           COMMAND fcitx5_tsf_module_test "${FCITX_SHIPPING_TSF_DLL}")
 
   add_executable(fcitx5_rust_tsf_poc_export_smoke
                  tests/unit/rust_tsf_poc_export_smoke.cpp)
@@ -1347,6 +1348,7 @@ if(BUILD_TESTING)
   add_test(NAME tsf-sensitive-input-policy COMMAND fcitx5_input_scope_policy_test)
 
   add_executable(fcitx5_tsf_key_commit_test tests/integration/tsf_key_commit_test.cpp)
+  add_dependencies(fcitx5_tsf_key_commit_test fcitx5_tsf)
   target_sources(fcitx5_tsf_key_commit_test PRIVATE src/tsf/input_scope_guids.cpp)
   target_include_directories(fcitx5_tsf_key_commit_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
   target_link_libraries(fcitx5_tsf_key_commit_test PRIVATE fcitx5::release_identity uuid ole32 oleaut32)
@@ -1354,7 +1356,7 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_tsf_key_commit_test)
   add_test(NAME tsf-key-commit-e2e
            COMMAND fcitx5_tsf_key_commit_test
-                   $<TARGET_FILE:fcitx5_tsf>
+                  "${FCITX_SHIPPING_TSF_DLL}"
                    $<TARGET_FILE:fcitx5_mock_engine>
                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/tsf_behavior_corpus.json")
 
@@ -1363,6 +1365,7 @@ if(BUILD_TESTING)
   # and a foreground user desktop with Notepad.
   add_executable(fcitx5_tsf_notepad_e2e_test
                  tests/integration/tsf_notepad_e2e_test.cpp)
+  add_dependencies(fcitx5_tsf_notepad_e2e_test fcitx5_tsf)
   target_sources(fcitx5_tsf_notepad_e2e_test PRIVATE src/tsf/input_profiles.cpp)
   target_include_directories(fcitx5_tsf_notepad_e2e_test
                              PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")

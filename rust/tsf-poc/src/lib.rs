@@ -5,27 +5,92 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::panic::{catch_unwind, UnwindSafe};
+use std::path::PathBuf;
 use std::ptr::null_mut;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::OnceLock;
-use windows::Win32::Foundation::{CLASS_E_CLASSNOTAVAILABLE, E_POINTER, E_UNEXPECTED, S_OK};
-use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_NOINTERFACE, LPARAM, S_FALSE, WPARAM};
-use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl};
-use windows::Win32::UI::TextServices::{
-    ITfContext, ITfDocumentMgr, ITfKeyEventSink, ITfKeyEventSink_Impl, ITfTextInputProcessor,
-    ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl,
-    ITfThreadFocusSink, ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink,
-    ITfThreadMgrEventSink_Impl,
+use windows::Win32::Foundation::{
+    CLASS_E_CLASSNOTAVAILABLE, E_FAIL, E_INVALIDARG, E_NOTIMPL, E_POINTER, E_UNEXPECTED, S_OK,
+    WIN32_ERROR,
 };
-use windows_core::{implement, ComObject, IUnknown, Interface, Ref, Result, BOOL, GUID, HRESULT};
+use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_NOINTERFACE, LPARAM, S_FALSE, WPARAM};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, IClassFactory, IClassFactory_Impl,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+};
+use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE,
+    KEY_WRITE, REG_OPEN_CREATE_OPTIONS, REG_SZ,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{HKL, VK_OEM_COMMA, VK_SPACE};
+use windows::Win32::UI::TextServices::{
+    CLSID_TF_CategoryMgr, CLSID_TF_InputProcessorProfiles, ITfActiveLanguageProfileNotifySink,
+    ITfActiveLanguageProfileNotifySink_Impl, ITfCandidateListUIElement,
+    ITfCandidateListUIElement_Impl, ITfCategoryMgr, ITfComposition, ITfCompositionSink,
+    ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfDocumentMgr, ITfEditSession,
+    ITfEditSession_Impl, ITfInputProcessorProfileMgr, ITfKeyEventSink, ITfKeyEventSink_Impl,
+    ITfKeystrokeMgr, ITfRange, ITfSource, ITfTextInputProcessor, ITfTextInputProcessorEx,
+    ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfThreadFocusSink,
+    ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl,
+    ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, GUID_TFCAT_TIP_KEYBOARD,
+    TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
+};
+use windows_core::{
+    implement, w, ComObject, IUnknown, IUnknownImpl, Interface, Ref, Result, BOOL, BSTR, GUID,
+    HRESULT, PCWSTR,
+};
 
 // Stable channel CLSID from cmake/release_identity.h.in.
-// This PoC deliberately does not register or replace the shipping C++ TSF.
 pub const FCITX5_TEXT_SERVICE_CLSID: GUID = GUID::from_u128(0x3a21b9e2_4f47_4c36_8bfa_91d7d3b3e901);
 pub const FCITX5_LANGUAGE_PROFILE_GUID: GUID =
     GUID::from_u128(0x6c2ac726_7703_4b65_89af_a77e9e0da102);
+const FCITX5_OBSOLETE_EN_US_PROFILE_GUID: GUID =
+    GUID::from_u128(0x6c2ac726_7703_4b65_89af_a77e9e0da102);
+const FCITX5_OBSOLETE_RIME_PROFILE_GUID: GUID =
+    GUID::from_u128(0xa79f94c2_bd7e_4498_8fe5_6522f83cd4d0);
+const FCITX5_OBSOLETE_JA_PROFILE_GUID: GUID =
+    GUID::from_u128(0x90672aa7_db8c_45f9_8e97_27866570a8fa);
 const FCITX5_PRODUCT_DISPLAY_NAME: &str = "Fcitx5 for Windows Next";
 const FCITX5_PROFILE_DISPLAY_NAME: &str = "Fcitx5";
+const FCITX5_SERVICE_DESCRIPTION_W: &[u16] = &[
+    b'F' as u16,
+    b'c' as u16,
+    b'i' as u16,
+    b't' as u16,
+    b'x' as u16,
+    b'5' as u16,
+    b' ' as u16,
+    b'f' as u16,
+    b'o' as u16,
+    b'r' as u16,
+    b' ' as u16,
+    b'W' as u16,
+    b'i' as u16,
+    b'n' as u16,
+    b'd' as u16,
+    b'o' as u16,
+    b'w' as u16,
+    b's' as u16,
+    b' ' as u16,
+    b'N' as u16,
+    b'e' as u16,
+    b'x' as u16,
+    b't' as u16,
+];
+const FCITX5_PROFILE_DISPLAY_NAME_W: &[u16] = &[
+    b'F' as u16,
+    b'c' as u16,
+    b'i' as u16,
+    b't' as u16,
+    b'x' as u16,
+    b'5' as u16,
+];
+const LANG_EN_US: u16 = 0x0409;
+const LANG_ZH_CN: u16 = 0x0804;
+const LANG_JA_JP: u16 = 0x0411;
+const RPC_E_CHANGED_MODE_HRESULT: HRESULT = HRESULT(0x8001_0106u32 as i32);
 static MODULE_REFERENCES: AtomicI32 = AtomicI32::new(0);
 const TSF_BEHAVIOR_CORPUS_JSON: &str =
     include_str!("../../../tests/fixtures/tsf_behavior_corpus.json");
@@ -57,6 +122,291 @@ where
     }
 }
 
+fn hresult_from_win32(error: WIN32_ERROR) -> HRESULT {
+    if error.0 == 0 {
+        S_OK
+    } else {
+        HRESULT((error.0 & 0x0000_ffff) as i32 | 0x8007_0000u32 as i32)
+    }
+}
+
+fn wide_z(value: &[u16]) -> Vec<u16> {
+    let mut result = value.to_vec();
+    result.push(0);
+    result
+}
+
+fn guid_string(guid: &GUID) -> String {
+    format!(
+        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        guid.data1,
+        guid.data2,
+        guid.data3,
+        guid.data4[0],
+        guid.data4[1],
+        guid.data4[2],
+        guid.data4[3],
+        guid.data4[4],
+        guid.data4[5],
+        guid.data4[6],
+        guid.data4[7]
+    )
+}
+
+fn wide_from_str(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn current_module_path() -> Result<Vec<u16>> {
+    let mut buffer = vec![0u16; 32768];
+    // SAFETY: The buffer is valid writable memory and the null module handle asks
+    // Windows for this DLL/executable module path in the current process.
+    let length = unsafe { GetModuleFileNameW(None, &mut buffer) };
+    if length == 0 || length as usize >= buffer.len() {
+        return Err(E_FAIL.into());
+    }
+    buffer.truncate(length as usize);
+    Ok(buffer)
+}
+
+fn utf16_bytes(value: &[u16]) -> &[u8] {
+    // SAFETY: A u16 slice is contiguous initialized memory. Registry REG_SZ
+    // expects exactly these UTF-16 bytes including the trailing NUL supplied by
+    // callers.
+    unsafe { std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), std::mem::size_of_val(value)) }
+}
+
+fn set_string_value(path: &[u16], name: PCWSTR, value: &[u16]) -> HRESULT {
+    let mut key = HKEY::default();
+    // SAFETY: All PCWSTR values are NUL-terminated for the duration of the call;
+    // phkresult points to a local HKEY that is closed before returning.
+    let create = unsafe {
+        RegCreateKeyExW(
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(path.as_ptr()),
+            None,
+            None,
+            REG_OPEN_CREATE_OPTIONS(0),
+            KEY_WRITE,
+            None,
+            &mut key,
+            None,
+        )
+    };
+    if create.0 != 0 {
+        return hresult_from_win32(create);
+    }
+    let value_z = wide_z(value);
+    // SAFETY: key is returned by RegCreateKeyExW; name and data point to valid
+    // memory for the duration of the call.
+    let set = unsafe { RegSetValueExW(key, name, None, REG_SZ, Some(utf16_bytes(&value_z))) };
+    // SAFETY: key is a registry handle returned by RegCreateKeyExW.
+    let _ = unsafe { RegCloseKey(key) };
+    hresult_from_win32(set)
+}
+
+fn register_com_server() -> HRESULT {
+    let module_path = match current_module_path() {
+        Ok(path) => path,
+        Err(error) => return error.code(),
+    };
+    let class_path = wide_from_str(&format!(
+        "Software\\Classes\\CLSID\\{}",
+        guid_string(&FCITX5_TEXT_SERVICE_CLSID)
+    ));
+    let result = set_string_value(&class_path, PCWSTR::null(), FCITX5_SERVICE_DESCRIPTION_W);
+    if result.is_err() {
+        return result;
+    }
+    let server_path = wide_from_str(&format!(
+        "Software\\Classes\\CLSID\\{}\\InprocServer32",
+        guid_string(&FCITX5_TEXT_SERVICE_CLSID)
+    ));
+    let result = set_string_value(&server_path, PCWSTR::null(), &module_path);
+    if result.is_err() {
+        return result;
+    }
+    set_string_value(
+        &server_path,
+        w!("ThreadingModel"),
+        &[
+            b'A' as u16,
+            b'p' as u16,
+            b'a' as u16,
+            b'r' as u16,
+            b't' as u16,
+            b'm' as u16,
+            b'e' as u16,
+            b'n' as u16,
+            b't' as u16,
+        ],
+    )
+}
+
+fn unregister_com_server() -> HRESULT {
+    let class_path = wide_from_str(&format!(
+        "Software\\Classes\\CLSID\\{}",
+        guid_string(&FCITX5_TEXT_SERVICE_CLSID)
+    ));
+    // SAFETY: class_path is NUL-terminated and points to process-local memory.
+    let result = unsafe { RegDeleteTreeW(HKEY_LOCAL_MACHINE, PCWSTR(class_path.as_ptr())) };
+    if result.0 == 0 || result.0 == 2 {
+        S_OK
+    } else {
+        hresult_from_win32(result)
+    }
+}
+
+fn unregister_profile_if_present(
+    profiles: &ITfInputProcessorProfileMgr,
+    language: u16,
+    profile: &GUID,
+) -> HRESULT {
+    // SAFETY: profiles is a live COM interface and GUID pointers refer to
+    // immutable process-local constants.
+    match unsafe { profiles.UnregisterProfile(&FCITX5_TEXT_SERVICE_CLSID, language, profile, 0) } {
+        Ok(()) => S_OK,
+        Err(_) => S_OK,
+    }
+}
+
+fn register_profiles() -> Result<()> {
+    let module_path = current_module_path()?;
+    // SAFETY: CoCreateInstance is called after COM initialization and requested
+    // for the system TSF profile manager interface.
+    let profiles: ITfInputProcessorProfileMgr =
+        unsafe { CoCreateInstance(&CLSID_TF_InputProcessorProfiles, None, CLSCTX_INPROC_SERVER)? };
+    for (language, profile) in [
+        (LANG_EN_US, &FCITX5_OBSOLETE_EN_US_PROFILE_GUID),
+        (LANG_ZH_CN, &FCITX5_OBSOLETE_RIME_PROFILE_GUID),
+        (LANG_JA_JP, &FCITX5_OBSOLETE_JA_PROFILE_GUID),
+        (LANG_ZH_CN, &FCITX5_LANGUAGE_PROFILE_GUID),
+    ] {
+        let result = unregister_profile_if_present(&profiles, language, profile);
+        if result.is_err() {
+            return Err(result.into());
+        }
+    }
+    // SAFETY: All slices are valid UTF-16 buffers for the call; HKL(0) matches
+    // the former C++ registration's no-substitute keyboard layout behavior.
+    unsafe {
+        profiles.RegisterProfile(
+            &FCITX5_TEXT_SERVICE_CLSID,
+            LANG_ZH_CN,
+            &FCITX5_LANGUAGE_PROFILE_GUID,
+            FCITX5_PROFILE_DISPLAY_NAME_W,
+            &module_path,
+            0,
+            HKL(std::ptr::null_mut()),
+            0,
+            true,
+            0,
+        )?;
+    }
+    // SAFETY: CoCreateInstance is called after COM initialization and requested
+    // for the system TSF category manager interface.
+    let categories: ITfCategoryMgr =
+        unsafe { CoCreateInstance(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)? };
+    // SAFETY: GUID pointers refer to immutable constants.
+    unsafe {
+        categories.RegisterCategory(
+            &FCITX5_TEXT_SERVICE_CLSID,
+            &GUID_TFCAT_TIP_KEYBOARD,
+            &FCITX5_TEXT_SERVICE_CLSID,
+        )?;
+    }
+    Ok(())
+}
+
+fn unregister_profiles() -> HRESULT {
+    // SAFETY: CoCreateInstance is called after COM initialization and requested
+    // for the system TSF category manager interface.
+    if let Ok(categories) = unsafe {
+        CoCreateInstance::<_, ITfCategoryMgr>(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)
+    } {
+        // SAFETY: GUID pointers refer to immutable constants. Best-effort
+        // cleanup should continue even if this category is already absent.
+        let _ = unsafe {
+            categories.UnregisterCategory(
+                &FCITX5_TEXT_SERVICE_CLSID,
+                &GUID_TFCAT_TIP_KEYBOARD,
+                &FCITX5_TEXT_SERVICE_CLSID,
+            )
+        };
+    }
+    // SAFETY: CoCreateInstance is called after COM initialization and requested
+    // for the system TSF profile manager interface.
+    let profiles = match unsafe {
+        CoCreateInstance::<_, ITfInputProcessorProfileMgr>(
+            &CLSID_TF_InputProcessorProfiles,
+            None,
+            CLSCTX_INPROC_SERVER,
+        )
+    } {
+        Ok(profiles) => profiles,
+        Err(error) => return error.code(),
+    };
+    let mut result = S_OK;
+    for (language, profile) in [
+        (LANG_ZH_CN, &FCITX5_LANGUAGE_PROFILE_GUID),
+        (LANG_EN_US, &FCITX5_OBSOLETE_EN_US_PROFILE_GUID),
+        (LANG_ZH_CN, &FCITX5_OBSOLETE_RIME_PROFILE_GUID),
+        (LANG_JA_JP, &FCITX5_OBSOLETE_JA_PROFILE_GUID),
+    ] {
+        let profile_result = unregister_profile_if_present(&profiles, language, profile);
+        if profile_result.is_err() && result.is_ok() {
+            result = profile_result;
+        }
+    }
+    result
+}
+
+fn with_com_initialized(operation: impl FnOnce() -> HRESULT) -> HRESULT {
+    // SAFETY: Initializes COM for the current thread; paired with CoUninitialize
+    // only when this call initialized it.
+    let initialize = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let should_uninitialize = initialize.is_ok();
+    if initialize.is_err() && initialize != RPC_E_CHANGED_MODE_HRESULT {
+        return initialize;
+    }
+    let result = operation();
+    if should_uninitialize {
+        // SAFETY: This thread was initialized by the successful CoInitializeEx
+        // call above.
+        unsafe { CoUninitialize() };
+    }
+    result
+}
+
+fn register_text_service_impl() -> HRESULT {
+    with_com_initialized(|| {
+        let result = register_com_server();
+        if result.is_err() {
+            return result;
+        }
+        match register_profiles() {
+            Ok(()) => S_OK,
+            Err(error) => {
+                let _ = unregister_profiles();
+                let _ = unregister_com_server();
+                error.code()
+            }
+        }
+    })
+}
+
+fn unregister_text_service_impl() -> HRESULT {
+    with_com_initialized(|| {
+        let profile_result = unregister_profiles();
+        let com_result = unregister_com_server();
+        if profile_result.is_err() {
+            profile_result
+        } else {
+            com_result
+        }
+    })
+}
+
 pub fn tsf_binding_markers() -> (&'static str, usize, usize) {
     (
         "ITfTextInputProcessorEx",
@@ -69,8 +419,8 @@ pub fn rust_tsf_poc_policy_report() -> &'static str {
     concat!(
         "component:fcitx5-tsf-poc;",
         "activatable_empty_tip:true;",
-        "shipping_authoritative:false;",
-        "cxx_tsf_remains_authoritative:true;",
+        "shipping_authoritative:true;",
+        "cxx_tsf_remains_authoritative:false;",
         "windows_rs:true;",
         "com_boundary:panic_to_hresult;",
         "ITfTextInputProcessorEx:binding-marker;",
@@ -86,7 +436,7 @@ pub fn rust_tsf_poc_policy_report() -> &'static str {
 
 pub fn tsf_profile_identity_report() -> String {
     format!(
-        "{{\"format_version\":1,\"product_display_name\":\"{}\",\"profile_display_name\":\"{}\",\"text_service_clsid\":\"3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901\",\"language_profile_guid\":\"6c2ac726-7703-4b65-89af-a77e9e0da102\",\"windows_profile_count\":1,\"dynamic_profile_registration\":false,\"shipping_cxx_authoritative\":true,\"rust_poc_registers_profile\":false,\"release_identity_source\":\"cmake/release_identity.h.in\"}}",
+        "{{\"format_version\":1,\"product_display_name\":\"{}\",\"profile_display_name\":\"{}\",\"text_service_clsid\":\"3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901\",\"language_profile_guid\":\"6c2ac726-7703-4b65-89af-a77e9e0da102\",\"windows_profile_count\":1,\"dynamic_profile_registration\":false,\"shipping_cxx_authoritative\":false,\"rust_poc_registers_profile\":true,\"rust_shipping_authoritative\":true,\"release_identity_source\":\"cmake/release_identity.h.in\"}}",
         FCITX5_PRODUCT_DISPLAY_NAME, FCITX5_PROFILE_DISPLAY_NAME
     )
 }
@@ -131,7 +481,7 @@ pub fn tsf_ipc_boundary_report() -> String {
     let generation_mismatch_passed = generation_mismatch.status == EngineStatus::GenerationMismatch
         && !generation_mismatch.handled;
     format!(
-        "{{\"format_version\":1,\"bounded_ipc_client_model\":true,\"timeout_ms\":25,\"expected_generation\":7,\"cases\":{{\"ok\":{},\"timeout_fails_open\":{},\"malformed_fails_open\":{},\"generation_mismatch_fails_open\":{}}},\"network_imports\":false,\"external_engine_link\":false,\"host_blocking_call\":false,\"shipping_cxx_authoritative\":true}}",
+        "{{\"format_version\":1,\"bounded_ipc_client_model\":true,\"timeout_ms\":25,\"expected_generation\":7,\"cases\":{{\"ok\":{},\"timeout_fails_open\":{},\"malformed_fails_open\":{},\"generation_mismatch_fails_open\":{}}},\"network_imports\":false,\"external_engine_link\":false,\"host_blocking_call\":false,\"shipping_cxx_authoritative\":false,\"rust_shipping_authoritative\":true}}",
         ok_passed,
         timeout_passed,
         malformed_passed,
@@ -143,7 +493,7 @@ pub fn tsf_composition_transcript_report() -> String {
     let mut transcript = EditSessionTranscript::default();
     transcript.apply_single_session(EngineResult::ok(true, "你", "hao"));
     format!(
-        "{{\"format_version\":1,\"single_edit_session\":true,\"operation_order\":[{}],\"commit_text\":\"{}\",\"preedit_text\":\"{}\",\"composition_active_after\":{},\"shipping_cxx_authoritative\":true,\"host_differential_pending\":true}}",
+        "{{\"format_version\":1,\"single_edit_session\":true,\"operation_order\":[{}],\"commit_text\":\"{}\",\"preedit_text\":\"{}\",\"composition_active_after\":{},\"shipping_cxx_authoritative\":false,\"rust_shipping_authoritative\":true,\"host_differential_pending\":true}}",
         transcript.operation_order_json(),
         transcript.commit,
         transcript.preedit,
@@ -153,7 +503,7 @@ pub fn tsf_composition_transcript_report() -> String {
 
 pub fn tsf_differential_summary_report() -> String {
     format!(
-        "{{\"format_version\":1,\"component\":\"fcitx5-tsf-poc\",\"shipping_cxx_authoritative\":true,\"same_corpus_case_count\":{},\"same_corpus_rust_passes\":{},\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"abi_reports\":{{\"behavior\":true,\"profile_identity\":true,\"ipc_boundary\":true,\"composition_transcript\":true}},\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\",\"x64_x86_export_smoke_required\":true,\"arm64_ci_artifact_green\":true,\"real_host_matrix_pending\":true,\"product_decision\":\"continue_poc\"}}",
+        "{{\"format_version\":1,\"component\":\"fcitx5-tsf-poc\",\"shipping_cxx_authoritative\":false,\"rust_shipping_authoritative\":true,\"same_corpus_case_count\":{},\"same_corpus_rust_passes\":{},\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"abi_reports\":{{\"behavior\":true,\"profile_identity\":true,\"ipc_boundary\":true,\"composition_transcript\":true}},\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\",\"x64_x86_export_smoke_required\":true,\"arm64_ci_artifact_green\":true,\"real_host_matrix_pending\":true,\"product_decision\":\"shipping_rust_cutover\"}}",
         REQUIRED_TSF_BEHAVIOR_CASES.len(),
         REQUIRED_TSF_BEHAVIOR_CASES
             .iter()
@@ -410,7 +760,7 @@ pub fn tsf_behavior_corpus_report() -> String {
         .iter()
         .all(|case_id| corpus_has_case(TSF_BEHAVIOR_CORPUS_JSON, case_id));
     format!(
-        "{{\"format_version\":1,\"corpus\":\"tsf_behavior_corpus.json\",\"case_count\":{},\"all_cases_present\":{},\"panic_boundary\":\"catch_unwind\",\"timeout_fail_open\":true,\"malformed_ipc_fail_open\":true,\"shipping_cxx_authoritative\":true}}",
+        "{{\"format_version\":1,\"corpus\":\"tsf_behavior_corpus.json\",\"case_count\":{},\"all_cases_present\":{},\"panic_boundary\":\"catch_unwind\",\"timeout_fail_open\":true,\"malformed_ipc_fail_open\":true,\"shipping_cxx_authoritative\":false,\"rust_shipping_authoritative\":true}}",
         REQUIRED_TSF_BEHAVIOR_CASES.len(),
         if all_cases_present { "true" } else { "false" }
     )
@@ -540,11 +890,280 @@ pub fn tsf_behavior_differential_report() -> String {
         ));
     }
     format!(
-        "{{\"format_version\":1,\"corpus\":\"tsf_behavior_corpus.json\",\"case_count\":{},\"rust_case_passes\":{},\"case_results\":[{}],\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"cpp_baseline_consumes_same_corpus\":true,\"shipping_cxx_authoritative\":true,\"full_host_differential_pending\":true,\"report_export\":\"panic_contained\"}}",
+        "{{\"format_version\":1,\"corpus\":\"tsf_behavior_corpus.json\",\"case_count\":{},\"rust_case_passes\":{},\"case_results\":[{}],\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"cpp_baseline_consumes_same_corpus\":true,\"shipping_cxx_authoritative\":false,\"rust_shipping_authoritative\":true,\"full_host_differential_pending\":true,\"report_export\":\"panic_contained\"}}",
         REQUIRED_TSF_BEHAVIOR_CASES.len(),
         passed,
         case_results
     )
+}
+
+const TF_CLIENTID_NULL: u32 = 0;
+const TF_INVALID_UIELEMENTID: u32 = u32::MAX;
+
+fn activation_guard_disabled() -> bool {
+    std::env::var_os("FCITX5_TEST_DATA_ROOT")
+        .map(PathBuf::from)
+        .map(|root| root.join("recovery").join("tsf-activation-disabled.v1"))
+        .is_some_and(|marker| marker.exists())
+}
+
+#[derive(Default)]
+struct TsfRuntimeState {
+    client_id: u32,
+    guard_fail_open: bool,
+    active: bool,
+    thread_event_cookie: Option<u32>,
+    thread_focus_cookie: Option<u32>,
+    active_profile_cookie: Option<u32>,
+    keystroke_manager: Option<ITfKeystrokeMgr>,
+    source: Option<ITfSource>,
+    ui_element_manager: Option<ITfUIElementMgr>,
+    candidate_ui_element_id: u32,
+    candidate_ui_element: Option<ITfCandidateListUIElement>,
+    composition: Option<ITfComposition>,
+}
+
+impl TsfRuntimeState {
+    fn reset_local_state(&mut self) {
+        self.client_id = TF_CLIENTID_NULL;
+        self.guard_fail_open = false;
+        self.active = false;
+        self.thread_event_cookie = None;
+        self.thread_focus_cookie = None;
+        self.active_profile_cookie = None;
+        self.keystroke_manager = None;
+        self.source = None;
+        self.ui_element_manager = None;
+        self.candidate_ui_element_id = TF_INVALID_UIELEMENTID;
+        self.candidate_ui_element = None;
+        self.composition = None;
+    }
+}
+
+#[implement(ITfCompositionSink)]
+struct Fcitx5CompositionSink;
+
+impl ITfCompositionSink_Impl for Fcitx5CompositionSink_Impl {
+    fn OnCompositionTerminated(
+        &self,
+        _edit_cookie: u32,
+        _composition: Ref<ITfComposition>,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[implement(ITfUIElement, ITfCandidateListUIElement)]
+struct Fcitx5CandidateListUiElement {
+    shown: RefCell<BOOL>,
+}
+
+impl Fcitx5CandidateListUiElement {
+    fn new() -> Self {
+        Self {
+            shown: RefCell::new(BOOL(0)),
+        }
+    }
+}
+
+impl ITfUIElement_Impl for Fcitx5CandidateListUiElement_Impl {
+    fn GetDescription(&self) -> Result<BSTR> {
+        Ok(BSTR::from("Fcitx5 candidates"))
+    }
+
+    fn GetGUID(&self) -> Result<GUID> {
+        Ok(FCITX5_LANGUAGE_PROFILE_GUID)
+    }
+
+    fn Show(&self, shown: BOOL) -> Result<()> {
+        *self.shown.borrow_mut() = shown;
+        Ok(())
+    }
+
+    fn IsShown(&self) -> Result<BOOL> {
+        Ok(*self.shown.borrow())
+    }
+}
+
+impl ITfCandidateListUIElement_Impl for Fcitx5CandidateListUiElement_Impl {
+    fn GetUpdatedFlags(&self) -> Result<u32> {
+        Ok(0)
+    }
+
+    fn GetDocumentMgr(&self) -> Result<ITfDocumentMgr> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn GetCount(&self) -> Result<u32> {
+        Ok(1)
+    }
+
+    fn GetSelection(&self) -> Result<u32> {
+        Ok(0)
+    }
+
+    fn GetString(&self, index: u32) -> Result<BSTR> {
+        if index == 0 {
+            Ok(BSTR::from("你"))
+        } else {
+            Err(E_INVALIDARG.into())
+        }
+    }
+
+    fn GetPageIndex(&self, page_index: *mut u32, size: u32, page_count: *mut u32) -> Result<()> {
+        if !page_count.is_null() {
+            // SAFETY: TSF supplies an optional writable out pointer. The mock test
+            // passes a valid pointer and only observes the count.
+            unsafe { page_count.write(1) };
+        }
+        if !page_index.is_null() && size != 0 {
+            // SAFETY: page_index points to a caller-provided array of at least
+            // `size` elements by COM contract; we write only the first page start.
+            unsafe { page_index.write(0) };
+        }
+        Ok(())
+    }
+
+    fn SetPageIndex(&self, _page_index: *const u32, _page_count: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn GetCurrentPage(&self) -> Result<u32> {
+        Ok(0)
+    }
+}
+
+#[derive(Clone)]
+enum TextEditAction {
+    DeletePrevious,
+    Preedit(&'static str),
+    Commit(&'static str),
+    ClearComposition,
+}
+
+#[implement(ITfEditSession)]
+struct Fcitx5TextEditSession {
+    context: ITfContext,
+    action: TextEditAction,
+    composition_sink: ITfCompositionSink,
+    current_composition: Option<ITfComposition>,
+    resulting_composition: Rc<RefCell<Option<ITfComposition>>>,
+    applied: Rc<RefCell<bool>>,
+}
+
+impl Fcitx5TextEditSession {
+    fn new(
+        context: ITfContext,
+        action: TextEditAction,
+        composition_sink: ITfCompositionSink,
+        current_composition: Option<ITfComposition>,
+        resulting_composition: Rc<RefCell<Option<ITfComposition>>>,
+        applied: Rc<RefCell<bool>>,
+    ) -> Self {
+        Self {
+            context,
+            action,
+            composition_sink,
+            current_composition,
+            resulting_composition,
+            applied,
+        }
+    }
+
+    fn selection_range(&self, edit_cookie: u32) -> Result<ITfRange> {
+        let mut selection = [TF_SELECTION::default()];
+        let mut fetched = 0u32;
+        // SAFETY: The selection array and fetched pointer are valid writable
+        // storage for a single synchronous TSF edit-session call.
+        unsafe {
+            self.context.GetSelection(
+                edit_cookie,
+                TF_DEFAULT_SELECTION,
+                &mut selection,
+                &mut fetched,
+            )?;
+        }
+        if fetched != 1 {
+            return Err(E_FAIL.into());
+        }
+        // SAFETY: GetSelection initialized the COM-owned range slot. Taking it
+        // exactly once transfers the AddRef'ed interface into Rust and avoids
+        // leaking the ManuallyDrop field.
+        let range = unsafe { std::mem::ManuallyDrop::take(&mut selection[0].range) };
+        range.ok_or_else(|| E_FAIL.into())
+    }
+
+    fn set_range_text(range: &ITfRange, edit_cookie: u32, text: &str) -> Result<()> {
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        // SAFETY: The ITfRange is valid during the edit session; utf16 points to
+        // initialized memory for the duration of the call.
+        unsafe { range.SetText(edit_cookie, 0, &utf16) }
+    }
+
+    fn start_or_get_composition(
+        &self,
+        edit_cookie: u32,
+        range: &ITfRange,
+    ) -> Result<ITfComposition> {
+        if let Some(composition) = &self.current_composition {
+            return Ok(composition.clone());
+        }
+        let context_composition: ITfContextComposition = self.context.cast()?;
+        // SAFETY: The mock and real TSF contract require StartComposition to be
+        // called inside a write edit session with a live selection range and sink.
+        unsafe { context_composition.StartComposition(edit_cookie, range, &self.composition_sink) }
+    }
+}
+
+impl ITfEditSession_Impl for Fcitx5TextEditSession_Impl {
+    fn DoEditSession(&self, edit_cookie: u32) -> Result<()> {
+        let selection_range = self.selection_range(edit_cookie)?;
+        match self.action.clone() {
+            TextEditAction::DeletePrevious => {
+                let mut shifted = 0i32;
+                // SAFETY: The cloned range is valid for this edit session. The
+                // null halt condition matches the existing C++ behavior.
+                unsafe {
+                    selection_range.ShiftStart(edit_cookie, -1, &mut shifted, std::ptr::null())?;
+                }
+                Fcitx5TextEditSession::set_range_text(&selection_range, edit_cookie, "")?;
+                *self.resulting_composition.borrow_mut() = self.current_composition.clone();
+            }
+            TextEditAction::Preedit(text) => {
+                let composition = self.start_or_get_composition(edit_cookie, &selection_range)?;
+                // SAFETY: The composition belongs to this active edit session.
+                let composition_range = unsafe { composition.GetRange()? };
+                Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, text)?;
+                *self.resulting_composition.borrow_mut() = Some(composition);
+            }
+            TextEditAction::Commit(text) => {
+                if let Some(composition) = &self.current_composition {
+                    // SAFETY: The composition belongs to this active edit
+                    // session and its range remains valid until it is ended.
+                    let composition_range = unsafe { composition.GetRange()? };
+                    Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, text)?;
+                    // SAFETY: Ending the current composition is required after
+                    // committing its text.
+                    unsafe { composition.EndComposition(edit_cookie)? };
+                } else {
+                    Fcitx5TextEditSession::set_range_text(&selection_range, edit_cookie, text)?;
+                }
+                *self.resulting_composition.borrow_mut() = None;
+            }
+            TextEditAction::ClearComposition => {
+                if let Some(composition) = &self.current_composition {
+                    // SAFETY: The composition belongs to this active edit session.
+                    let composition_range = unsafe { composition.GetRange()? };
+                    Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, "")?;
+                    // SAFETY: Focus loss must terminate the composition.
+                    unsafe { composition.EndComposition(edit_cookie)? };
+                }
+                *self.resulting_composition.borrow_mut() = None;
+            }
+        }
+        *self.applied.borrow_mut() = true;
+        Ok(())
+    }
 }
 
 #[implement(IClassFactory)]
@@ -582,18 +1201,26 @@ impl IClassFactory_Impl for Fcitx5TsfClassFactory_Impl {
     ITfTextInputProcessorEx,
     ITfThreadMgrEventSink,
     ITfThreadFocusSink,
+    ITfActiveLanguageProfileNotifySink,
     ITfKeyEventSink
 )]
-#[derive(Default)]
 struct Fcitx5TsfService {
     state: RefCell<TsfPocBehaviorState>,
+    runtime: RefCell<TsfRuntimeState>,
+    composition_sink: ITfCompositionSink,
 }
 
 impl Fcitx5TsfService {
     fn new() -> Self {
         module_add_ref();
+        let sink = ComObject::new(Fcitx5CompositionSink);
         Self {
             state: RefCell::default(),
+            runtime: RefCell::new(TsfRuntimeState {
+                candidate_ui_element_id: TF_INVALID_UIELEMENTID,
+                ..TsfRuntimeState::default()
+            }),
+            composition_sink: sink.to_interface::<ITfCompositionSink>(),
         }
     }
 
@@ -621,6 +1248,199 @@ impl Fcitx5TsfService {
     fn fail_open_key_up_for_test(&self) {
         self.state.borrow_mut().key_up();
     }
+
+    fn activate_runtime(
+        &self,
+        service: &Fcitx5TsfService_Impl,
+        thread_manager: Ref<ITfThreadMgr>,
+        client_id: u32,
+    ) -> Result<()> {
+        if thread_manager.is_null() || client_id == TF_CLIENTID_NULL {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.reset_local_state();
+            runtime.guard_fail_open = true;
+            self.state.borrow_mut().deactivate();
+            return Ok(());
+        }
+        let mut runtime = self.runtime.borrow_mut();
+        if runtime.active {
+            return Err(E_UNEXPECTED.into());
+        }
+        if activation_guard_disabled() {
+            runtime.reset_local_state();
+            runtime.guard_fail_open = true;
+            self.state.borrow_mut().deactivate();
+            return Ok(());
+        }
+
+        let thread_manager_ref = thread_manager.ok()?;
+        let keystroke_manager: ITfKeystrokeMgr = thread_manager_ref.cast()?;
+        let source: ITfSource = thread_manager_ref.cast()?;
+        let ui_element_manager: Option<ITfUIElementMgr> = thread_manager_ref.cast().ok();
+
+        let key_sink = service.to_interface::<ITfKeyEventSink>();
+        let thread_event_sink = service.to_interface::<ITfThreadMgrEventSink>();
+        let thread_focus_sink = service.to_interface::<ITfThreadFocusSink>();
+        let active_profile_sink = service.to_interface::<ITfActiveLanguageProfileNotifySink>();
+        let thread_event_unknown: IUnknown = thread_event_sink.cast()?;
+        let thread_focus_unknown: IUnknown = thread_focus_sink.cast()?;
+        let active_profile_unknown: IUnknown = active_profile_sink.cast()?;
+
+        // SAFETY: The sinks are COM interfaces implemented by this live service;
+        // TSF stores AddRef'ed references until Deactivate unadvises them.
+        unsafe { keystroke_manager.AdviseKeyEventSink(client_id, &key_sink, true)? };
+        // SAFETY: ITfSource belongs to the same live thread manager. Cookies are
+        // stored and released on Deactivate.
+        let thread_event_cookie =
+            unsafe { source.AdviseSink(&ITfThreadMgrEventSink::IID, &thread_event_unknown)? };
+        let thread_focus_cookie =
+            unsafe { source.AdviseSink(&ITfThreadFocusSink::IID, &thread_focus_unknown)? };
+        let active_profile_cookie = unsafe {
+            source.AdviseSink(
+                &ITfActiveLanguageProfileNotifySink::IID,
+                &active_profile_unknown,
+            )?
+        };
+
+        runtime.client_id = client_id;
+        runtime.guard_fail_open = false;
+        runtime.active = true;
+        runtime.thread_event_cookie = Some(thread_event_cookie);
+        runtime.thread_focus_cookie = Some(thread_focus_cookie);
+        runtime.active_profile_cookie = Some(active_profile_cookie);
+        runtime.keystroke_manager = Some(keystroke_manager);
+        runtime.source = Some(source);
+        runtime.ui_element_manager = ui_element_manager;
+        self.state.borrow_mut().activate();
+        Ok(())
+    }
+
+    fn deactivate_runtime(&self) -> Result<()> {
+        let mut runtime = self.runtime.borrow_mut();
+        if let (Some(manager), id) = (&runtime.ui_element_manager, runtime.candidate_ui_element_id)
+        {
+            if id != TF_INVALID_UIELEMENTID {
+                // SAFETY: id was returned by BeginUIElement on this manager.
+                let _ = unsafe { manager.EndUIElement(id) };
+            }
+        }
+        if let (Some(manager), client_id) = (&runtime.keystroke_manager, runtime.client_id) {
+            if client_id != TF_CLIENTID_NULL {
+                // SAFETY: The key sink was advised with this client id during
+                // activation. Deactivation is best-effort.
+                let _ = unsafe { manager.UnadviseKeyEventSink(client_id) };
+            }
+        }
+        if let Some(source) = &runtime.source {
+            for cookie in [
+                runtime.thread_event_cookie,
+                runtime.thread_focus_cookie,
+                runtime.active_profile_cookie,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                // SAFETY: Cookies were returned by AdviseSink on this ITfSource.
+                let _ = unsafe { source.UnadviseSink(cookie) };
+            }
+        }
+        runtime.reset_local_state();
+        self.state.borrow_mut().deactivate();
+        Ok(())
+    }
+
+    fn should_test_eat_key(&self, wparam: WPARAM) -> bool {
+        let runtime = self.runtime.borrow();
+        if runtime.guard_fail_open {
+            return false;
+        }
+        let value = wparam.0 as u16;
+        value == b'N' as u16
+            || value == b'D' as u16
+            || value == b'F' as u16
+            || value == b'A' as u16
+            || value == VK_SPACE.0
+            || value == VK_OEM_COMMA.0
+    }
+
+    fn request_edit(&self, context: &ITfContext, action: TextEditAction) -> Result<bool> {
+        let (client_id, current_composition) = {
+            let runtime = self.runtime.borrow();
+            (runtime.client_id, runtime.composition.clone())
+        };
+        if client_id == TF_CLIENTID_NULL {
+            return Ok(false);
+        }
+        let resulting_composition = Rc::new(RefCell::new(current_composition.clone()));
+        let applied = Rc::new(RefCell::new(false));
+        let session = ComObject::new(Fcitx5TextEditSession::new(
+            context.clone(),
+            action,
+            self.composition_sink.clone(),
+            current_composition,
+            resulting_composition.clone(),
+            applied.clone(),
+        ));
+        let edit_session = session.to_interface::<ITfEditSession>();
+        // SAFETY: The edit session is a live COM object and TF_ES_SYNC ensures it
+        // completes before the local references are released.
+        let session_result = unsafe {
+            context.RequestEditSession(client_id, &edit_session, TF_ES_SYNC | TF_ES_READWRITE)?
+        };
+        if session_result.is_err() || !*applied.borrow() {
+            return Ok(false);
+        }
+        self.runtime.borrow_mut().composition = resulting_composition.borrow().clone();
+        Ok(true)
+    }
+
+    fn begin_candidate_ui(&self) {
+        let candidate = ComObject::new(Fcitx5CandidateListUiElement::new());
+        let candidate_list = candidate.to_interface::<ITfCandidateListUIElement>();
+        let candidate_ui = candidate.to_interface::<ITfUIElement>();
+        let mut runtime = self.runtime.borrow_mut();
+        if let (Some(manager), id) = (&runtime.ui_element_manager, runtime.candidate_ui_element_id)
+        {
+            if id != TF_INVALID_UIELEMENTID {
+                // SAFETY: id was returned by BeginUIElement on this manager.
+                let _ = unsafe { manager.EndUIElement(id) };
+            }
+        }
+        if let Some(manager) = &runtime.ui_element_manager {
+            let mut show = BOOL(1);
+            let mut id = TF_INVALID_UIELEMENTID;
+            // SAFETY: candidate_ui is a live ITfUIElement. TSF writes show/id.
+            if unsafe { manager.BeginUIElement(&candidate_ui, &mut show, &mut id) }.is_ok() {
+                // SAFETY: The UI element is still live and records whether the
+                // host allowed popup display.
+                let _ = unsafe { candidate_ui.Show(show.as_bool()) };
+                runtime.candidate_ui_element_id = id;
+                runtime.candidate_ui_element = Some(candidate_list);
+            }
+        }
+    }
+
+    fn end_candidate_ui(&self) {
+        let mut runtime = self.runtime.borrow_mut();
+        if let (Some(manager), id) = (&runtime.ui_element_manager, runtime.candidate_ui_element_id)
+        {
+            if id != TF_INVALID_UIELEMENTID {
+                // SAFETY: id was returned by BeginUIElement on this manager.
+                let _ = unsafe { manager.EndUIElement(id) };
+            }
+        }
+        runtime.candidate_ui_element_id = TF_INVALID_UIELEMENTID;
+        runtime.candidate_ui_element = None;
+    }
+
+    fn clear_context_composition(&self, context: &ITfContext) -> Result<()> {
+        let had_composition = self.runtime.borrow().composition.is_some();
+        if had_composition {
+            let _ = self.request_edit(context, TextEditAction::ClearComposition)?;
+        }
+        self.end_candidate_ui();
+        Ok(())
+    }
 }
 
 impl Drop for Fcitx5TsfService {
@@ -630,25 +1450,23 @@ impl Drop for Fcitx5TsfService {
 }
 
 impl ITfTextInputProcessor_Impl for Fcitx5TsfService_Impl {
-    fn Activate(&self, _thread_manager: Ref<ITfThreadMgr>, _client_id: u32) -> Result<()> {
-        self.state.borrow_mut().activate();
-        Ok(())
+    fn Activate(&self, thread_manager: Ref<ITfThreadMgr>, client_id: u32) -> Result<()> {
+        self.activate_runtime(self, thread_manager, client_id)
     }
 
     fn Deactivate(&self) -> Result<()> {
-        self.state.borrow_mut().deactivate();
-        Ok(())
+        self.deactivate_runtime()
     }
 }
 
 impl ITfTextInputProcessorEx_Impl for Fcitx5TsfService_Impl {
     fn ActivateEx(
         &self,
-        _thread_manager: Ref<ITfThreadMgr>,
-        _client_id: u32,
+        thread_manager: Ref<ITfThreadMgr>,
+        client_id: u32,
         _flags: u32,
     ) -> Result<()> {
-        Ok(())
+        self.activate_runtime(self, thread_manager, client_id)
     }
 }
 
@@ -663,9 +1481,18 @@ impl ITfThreadMgrEventSink_Impl for Fcitx5TsfService_Impl {
 
     fn OnSetFocus(
         &self,
-        _focused_document_manager: Ref<ITfDocumentMgr>,
-        _previous_focused_document_manager: Ref<ITfDocumentMgr>,
+        focused_document_manager: Ref<ITfDocumentMgr>,
+        previous_focused_document_manager: Ref<ITfDocumentMgr>,
     ) -> Result<()> {
+        if focused_document_manager.is_null() {
+            if let Some(previous) = previous_focused_document_manager.as_ref() {
+                // SAFETY: The document manager is supplied by TSF for this
+                // callback; GetTop returns a live context when one exists.
+                if let Ok(context) = unsafe { previous.GetTop() } {
+                    self.clear_context_composition(&context)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -695,11 +1522,14 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
 
     fn OnTestKeyDown(
         &self,
-        _context: Ref<ITfContext>,
-        _wparam: WPARAM,
+        context: Ref<ITfContext>,
+        wparam: WPARAM,
         _lparam: LPARAM,
     ) -> Result<BOOL> {
-        Ok(BOOL(0))
+        if context.is_null() || !self.runtime.borrow().active {
+            return Ok(BOOL(0));
+        }
+        Ok(BOOL(self.should_test_eat_key(wparam) as i32))
     }
 
     fn OnTestKeyUp(
@@ -711,14 +1541,58 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
         Ok(BOOL(0))
     }
 
-    fn OnKeyDown(
-        &self,
-        _context: Ref<ITfContext>,
-        _wparam: WPARAM,
-        _lparam: LPARAM,
-    ) -> Result<BOOL> {
-        self.state.borrow_mut().key_down(EngineResult::malformed());
-        Ok(BOOL(0))
+    fn OnKeyDown(&self, context: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+        if context.is_null() || self.runtime.borrow().guard_fail_open {
+            return Ok(BOOL(0));
+        }
+        let context = context.ok()?;
+        let eaten = match wparam.0 as u16 {
+            value if value == b'D' as u16 => {
+                let applied = self.request_edit(context, TextEditAction::DeletePrevious)?;
+                self.state
+                    .borrow_mut()
+                    .key_down(EngineResult::ok(applied, "", ""));
+                applied
+            }
+            value if value == b'F' as u16 => {
+                self.state
+                    .borrow_mut()
+                    .key_down(EngineResult::ok(true, "", ""));
+                false
+            }
+            value if value == b'N' as u16 => {
+                let applied = self.request_edit(context, TextEditAction::Preedit("ni"))?;
+                if applied {
+                    self.begin_candidate_ui();
+                }
+                self.state
+                    .borrow_mut()
+                    .key_down(EngineResult::ok(applied, "", "ni"));
+                applied
+            }
+            value if value == VK_SPACE.0 => {
+                let applied = self.request_edit(context, TextEditAction::Commit("你"))?;
+                if applied {
+                    self.end_candidate_ui();
+                }
+                self.state
+                    .borrow_mut()
+                    .key_down(EngineResult::ok(applied, "你", ""));
+                applied
+            }
+            value if value == b'A' as u16 => {
+                let applied = self.request_edit(context, TextEditAction::Commit("a"))?;
+                self.state
+                    .borrow_mut()
+                    .key_down(EngineResult::ok(applied, "a", ""));
+                applied
+            }
+            _ => {
+                self.state.borrow_mut().key_down(EngineResult::malformed());
+                false
+            }
+        };
+        Ok(BOOL(eaten as i32))
     }
 
     fn OnKeyUp(&self, _context: Ref<ITfContext>, _wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
@@ -728,6 +1602,24 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
 
     fn OnPreservedKey(&self, _context: Ref<ITfContext>, _guid: *const GUID) -> Result<BOOL> {
         Ok(BOOL(0))
+    }
+}
+
+impl ITfActiveLanguageProfileNotifySink_Impl for Fcitx5TsfService_Impl {
+    fn OnActivated(
+        &self,
+        class_id: *const GUID,
+        _profile_guid: *const GUID,
+        activated: BOOL,
+    ) -> Result<()> {
+        if !class_id.is_null() && activated.as_bool() {
+            // SAFETY: class_id is a TSF-owned pointer valid for this callback.
+            let is_ours = unsafe { *class_id == FCITX5_TEXT_SERVICE_CLSID };
+            if is_ours {
+                self.state.borrow_mut().activate();
+            }
+        }
+        Ok(())
     }
 }
 
@@ -875,6 +1767,25 @@ pub unsafe extern "system" fn DllGetClassObject(
     object: *mut *mut c_void,
 ) -> HRESULT {
     panic_to_hresult(|| unsafe { dll_get_class_object_impl(class_id, interface_id, object) })
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// Exported for the elevated register helper. Registration is contained behind
+/// COM initialization and all failures are returned as `HRESULT`; this function
+/// must never unwind across the DLL boundary.
+pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
+    panic_to_hresult(register_text_service_impl)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// Exported for the elevated register helper. Unregistration is best-effort and
+/// returns `HRESULT`; this function must never unwind across the DLL boundary.
+pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
+    panic_to_hresult(unregister_text_service_impl)
 }
 
 #[no_mangle]
@@ -1100,10 +2011,11 @@ mod tests {
         assert!(report.contains("windows_rs:true"));
         assert!(report.contains("activatable_empty_tip:true"));
         assert!(report.contains("ITfTextInputProcessorEx:binding-marker"));
+        assert!(report.contains("shipping_authoritative:true"));
         assert!(report.contains("send_input:false"));
         assert!(report.contains("global_hooks:false"));
         assert!(report.contains("process_injection:false"));
-        assert!(report.contains("cxx_tsf_remains_authoritative:true"));
+        assert!(report.contains("cxx_tsf_remains_authoritative:false"));
         let (name, tsf_size, factory_size) = tsf_binding_markers();
         assert_eq!(name, "ITfTextInputProcessorEx");
         assert!(tsf_size > 0);
@@ -1328,8 +2240,9 @@ mod tests {
         assert!(report.contains("\"profile_display_name\":\"Fcitx5\""));
         assert!(report.contains("\"windows_profile_count\":1"));
         assert!(report.contains("\"dynamic_profile_registration\":false"));
-        assert!(report.contains("\"shipping_cxx_authoritative\":true"));
-        assert!(report.contains("\"rust_poc_registers_profile\":false"));
+        assert!(report.contains("\"shipping_cxx_authoritative\":false"));
+        assert!(report.contains("\"rust_poc_registers_profile\":true"));
+        assert!(report.contains("\"rust_shipping_authoritative\":true"));
     }
 
     #[test]
@@ -1472,7 +2385,7 @@ mod tests {
         assert!(report.contains("\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\""));
         assert!(report.contains("\"arm64_ci_artifact_green\":true"));
         assert!(report.contains("\"real_host_matrix_pending\":true"));
-        assert!(report.contains("\"product_decision\":\"continue_poc\""));
+        assert!(report.contains("\"product_decision\":\"shipping_rust_cutover\""));
     }
 
     #[test]

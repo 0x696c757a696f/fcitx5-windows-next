@@ -671,7 +671,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustTsfPocSource.find("tsf_differential_summary_report") == std::string::npos ||
         rustTsfPocSource.find("arm64_ci_artifact_green") == std::string::npos ||
-        rustTsfPocSource.find("product_decision\\\":\\\"continue_poc") ==
+        rustTsfPocSource.find("product_decision\\\":\\\"shipping_rust_cutover") ==
             std::string::npos ||
         rustTsfPocSource.find("product_display_name") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
@@ -699,7 +699,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustTsfPocSource.find("single_edit_session_commit_preedit_update") ==
             std::string::npos ||
-        rustTsfPocSource.find("cxx_tsf_remains_authoritative:true") == std::string::npos ||
+        rustTsfPocSource.find("cxx_tsf_remains_authoritative:false") == std::string::npos ||
         rustTsfPocSource.find("bounded_ipc_client:not-linked") == std::string::npos ||
         rustTsfPocSource.find("send_input:false") == std::string::npos ||
         rustTsfPocSource.find("global_hooks:false") == std::string::npos ||
