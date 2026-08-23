@@ -493,6 +493,9 @@ int main(int argc, char** argv) {
     const auto rustTsfPocArtifactAudit =
         read_text(sourceRoot / "tests/unit/rust_tsf_poc_artifact_audit.cpp");
     const auto buildScript = read_text(sourceRoot / "tools/build.ps1");
+    const auto ciCacheScript = read_text(sourceRoot / "tools/configure-ci-cache.ps1");
+    const auto cargoConfig = read_text(sourceRoot / ".cargo/config.toml");
+    const auto compilerOptions = read_text(sourceRoot / "cmake/CompilerOptions.cmake");
     const auto cmakePresets = read_text(sourceRoot / "CMakePresets.json");
     const auto coreWorkflow = read_text(sourceRoot / ".github/workflows/core.yml");
     const auto releaseWorkflow = read_text(sourceRoot / ".github/workflows/release.yml");
@@ -641,22 +644,50 @@ int main(int argc, char** argv) {
             std::string::npos ||
         buildScript.find("amd64_arm64") == std::string::npos ||
         buildScript.find("Assert-FastWindowsToolchain") == std::string::npos ||
+        buildScript.find("Default build requires $tool") == std::string::npos ||
         buildScript.find("clang-cl") == std::string::npos ||
         buildScript.find("lld-link") == std::string::npos ||
         buildScript.find("ninja") == std::string::npos ||
-        buildScript.find("CMAKE_C_COMPILER_LAUNCHER=sccache") == std::string::npos ||
+        buildScript.find("sccachePath = [System.IO.Path]::GetFullPath") ==
+            std::string::npos ||
+        buildScript.find("CMAKE_C_COMPILER_LAUNCHER=$sccachePath") ==
+            std::string::npos ||
+        ciCacheScript.find("CARGO_INCREMENTAL = '0'") == std::string::npos ||
+        ciCacheScript.find("RUSTC_WRAPPER = 'sccache'") == std::string::npos ||
+        ciCacheScript.find("ACTIONS_RUNTIME_TOKEN") == std::string::npos ||
+        ciCacheScript.find("GITHUB_ACTIONS") == std::string::npos ||
+        cargoManifest.find("debug = \"line-tables-only\"") == std::string::npos ||
+        cargoManifest.find("[profile.dev.package.\"*\"]") == std::string::npos ||
+        cargoConfig.find("linker = \"rust-lld\"") == std::string::npos ||
+        cargoConfig.find("aarch64-pc-windows-msvc") == std::string::npos ||
         cmakePresets.find("\"generator\": \"Ninja Multi-Config\"") == std::string::npos ||
         cmakePresets.find("\"CMAKE_C_COMPILER\": \"clang-cl\"") == std::string::npos ||
         cmakePresets.find("\"CMAKE_CXX_COMPILER\": \"clang-cl\"") == std::string::npos ||
-        cmakePresets.find("\"CMAKE_LINKER\": \"lld-link\"") == std::string::npos ||
+        cmakePresets.find("\"CMAKE_LINKER_TYPE\": \"LLD\"") == std::string::npos ||
+        cmakePresets.find("--target=aarch64-pc-windows-msvc") == std::string::npos ||
         cmakePresets.find("\"FCITX_TARGET_ARCH\": \"arm64\"") == std::string::npos ||
         cmakeSource.find("FCITX_COMPILER_IS_CLANG_CL") == std::string::npos ||
+        cmakeSource.find("CMAKE_MSVC_DEBUG_INFORMATION_FORMAT") == std::string::npos ||
+        cmakeSource.find("CMAKE_CXX_SCAN_FOR_MODULES") == std::string::npos ||
+        cmakeSource.find("FCITX_PROJECT_PCH_HEADER") == std::string::npos ||
+        compilerOptions.find("FCITX_TARGET_USES_PCH") == std::string::npos ||
+        compilerOptions.find("target_precompile_headers") == std::string::npos ||
+        cmakeSource.find("src/pch/fcitx_windows_pch.h") == std::string::npos ||
+        cmakeSource.find("FCITX_RUST_BUILD_ENV") == std::string::npos ||
+        cmakeSource.find("SCCACHE_DIR=$ENV{SCCACHE_DIR}") == std::string::npos ||
         cmakeSource.find("FCITX_EFFECTIVE_TARGET_ARCH") == std::string::npos ||
+        coreWorkflow.find("Restore fast Windows toolchain cache") == std::string::npos ||
         coreWorkflow.find("Prepare fast Windows toolchain") == std::string::npos ||
+        releaseWorkflow.find("Restore fast Windows toolchain cache") == std::string::npos ||
         releaseWorkflow.find("Prepare fast Windows toolchain") == std::string::npos ||
-        fastToolchainScript.find("choco") == std::string::npos ||
-        fastToolchainScript.find("llvm") == std::string::npos ||
+        fastToolchainScript.find("out/toolchains/fast") == std::string::npos ||
+        fastToolchainScript.find("7zr.exe") == std::string::npos ||
+        fastToolchainScript.find("clang+llvm-$llvmVersion-x86_64-pc-windows-msvc.tar.xz") ==
+            std::string::npos ||
+        fastToolchainScript.find("tar.exe") == std::string::npos ||
+        fastToolchainScript.find("curl.exe") == std::string::npos ||
         fastToolchainScript.find("ninja") == std::string::npos ||
+        fastToolchainScript.find("sccache") == std::string::npos ||
         fastToolchainScript.find("clang-cl") == std::string::npos ||
         fastToolchainScript.find("lld-link") == std::string::npos ||
         buildScript.find("vcvarsall.bat") ==

@@ -1,10 +1,17 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.29)
 
 project(
   fcitx5-windows-next
   VERSION 0.1.0
   DESCRIPTION "Native Fcitx5 platform frontend for Windows"
   LANGUAGES C CXX)
+
+if(POLICY CMP0141)
+  cmake_policy(SET CMP0141 NEW)
+endif()
+set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+    "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 include(CTest)
 
@@ -57,6 +64,7 @@ option(FCITX_BUILD_BENCHMARKS "Build repeatable microbenchmarks" ON)
 option(FCITX_BUILD_FUZZERS "Build security-boundary fuzz harnesses" ON)
 option(FCITX_DEVELOPMENT_PEER_EXCEPTION
        "Allow explicitly marked same-user/session peers in development builds" OFF)
+option(FCITX_ENABLE_PCH "Use project precompiled headers for C++ targets" ON)
 set(FCITX_TARGET_ARCH
     ""
     CACHE STRING "Windows target architecture: x64, x86, or arm64")
@@ -66,10 +74,10 @@ set(FCITX_COMPILER_IS_CLANG_CL OFF)
 set(FCITX_COMPILER_IS_MSVC_CL OFF)
 if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   set(FCITX_COMPILER_IS_CLANG_CL ON)
-  message(STATUS "Default Windows toolchain: ClangCL / LLVM lld-link")
+  message(STATUS "Default Windows toolchain: clang-cl / Ninja / lld-link")
 elseif(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(FCITX_COMPILER_IS_MSVC_CL ON)
-  message(STATUS "Windows toolchain: MSVC cl/link compatibility path")
+  message(STATUS "Windows toolchain: MSVC cl.exe compatibility path")
 endif()
 
 find_program(
@@ -81,6 +89,27 @@ find_program(FCITX_PWSH_EXECUTABLE pwsh powershell REQUIRED)
 set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
 set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
 set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
+set(FCITX_RUST_BUILD_ENV)
+if("$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND
+   NOT "$ENV{ACTIONS_RUNTIME_TOKEN}" STREQUAL "" AND
+   (NOT "$ENV{ACTIONS_CACHE_URL}" STREQUAL "" OR
+    NOT "$ENV{ACTIONS_RESULTS_URL}" STREQUAL ""))
+  list(APPEND FCITX_RUST_BUILD_ENV "SCCACHE_GHA_ENABLED=true")
+elseif(NOT "$ENV{SCCACHE_DIR}" STREQUAL "")
+  list(APPEND FCITX_RUST_BUILD_ENV "--unset=SCCACHE_GHA_ENABLED")
+else()
+  list(APPEND FCITX_RUST_BUILD_ENV "--unset=SCCACHE_GHA_ENABLED")
+endif()
+list(APPEND FCITX_RUST_BUILD_ENV
+     "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+     "CARGO_HOME=${FCITX_CARGO_HOME}"
+     "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}")
+if(NOT "$ENV{RUSTC_WRAPPER}" STREQUAL "")
+  list(APPEND FCITX_RUST_BUILD_ENV "RUSTC_WRAPPER=$ENV{RUSTC_WRAPPER}")
+endif()
+if(NOT "$ENV{SCCACHE_DIR}" STREQUAL "")
+  list(APPEND FCITX_RUST_BUILD_ENV "SCCACHE_DIR=$ENV{SCCACHE_DIR}")
+endif()
 set(FCITX_EFFECTIVE_TARGET_ARCH "${FCITX_TARGET_ARCH}")
 if(NOT FCITX_EFFECTIVE_TARGET_ARCH)
   set(FCITX_CMAKE_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
@@ -119,6 +148,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerOptions)
+set(FCITX_PROJECT_PCH_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/pch/fcitx_windows_pch.h")
 
 configure_file(
   cmake/version.h.in
@@ -155,8 +185,7 @@ set(FCITX_RUST_LAUNCHER_CORE_STATICLIB
 add_custom_target(
   fcitx5_launcher_core_rustlib
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-launcher-core --lib --target
     "${FCITX_RUST_TARGET}"
@@ -172,8 +201,7 @@ set(FCITX_RUST_PROCESS_EXECUTION_CORE_STATICLIB
 add_custom_target(
   fcitx5_process_execution_core_rustlib
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-process-execution-core --lib --target
     "${FCITX_RUST_TARGET}"
@@ -190,8 +218,7 @@ set(FCITX_RUST_CONTROL_CORE_STATICLIB
 add_custom_target(
   fcitx5_control_core_rustlib
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-control-core --lib --target
     "${FCITX_RUST_TARGET}"
@@ -209,8 +236,7 @@ set(FCITX_RUST_CANDIDATE_POC_EXE
 add_custom_target(
   fcitx5_candidate_core_rustlib
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --lib --target
     "${FCITX_RUST_TARGET}"
@@ -223,8 +249,7 @@ add_dependencies(fcitx5_candidate_core_rust fcitx5_candidate_core_rustlib)
 add_custom_target(
   fcitx5_candidate_poc_rustbin
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
     fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}"
@@ -236,8 +261,7 @@ set(FCITX_RUST_TSF_POC_DLL
 add_custom_target(
   fcitx5_tsf_poc_rustdll
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-poc --lib --target
     "${FCITX_RUST_TARGET}"
@@ -557,8 +581,7 @@ add_custom_target(
   fcitx5_package ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-package.exe"
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
     "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
@@ -573,8 +596,7 @@ set(FCITX_RUST_PACKAGE_CORE_STATICLIB
 add_custom_target(
   fcitx5_package_core_rustlib
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
@@ -609,8 +631,7 @@ add_custom_target(
   fcitx5_provider ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-provider.exe"
   COMMAND
-    "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-    "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
     "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
@@ -780,8 +801,7 @@ if(BUILD_TESTING)
   add_test(
     NAME config-ui-preview-fidelity-qa
     COMMAND
-      "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-      "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
       "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-qa --target
       "${FCITX_RUST_TARGET}" -- --config-exe "$<TARGET_FILE:fcitx5_config_app>"
@@ -791,8 +811,7 @@ if(BUILD_TESTING)
   add_test(
     NAME rust-config-poc-contract
     COMMAND
-      "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-      "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
       "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --target
       "${FCITX_RUST_TARGET}" -- --self-check --report
@@ -802,8 +821,7 @@ if(BUILD_TESTING)
   add_test(
     NAME rust-config-poc-window-smoke
     COMMAND
-      "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-      "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
       "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --target
       "${FCITX_RUST_TARGET}" -- --window-smoke --report
@@ -850,8 +868,7 @@ if(BUILD_TESTING)
     add_custom_target(
       fcitx5_rust_package_core_test
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
@@ -863,8 +880,7 @@ if(BUILD_TESTING)
     add_custom_target(
       fcitx5_rust_package_core_artifact_smoke
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
@@ -876,8 +892,7 @@ if(BUILD_TESTING)
     add_test(
       NAME rust-package-core-differential
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
@@ -888,8 +903,7 @@ if(BUILD_TESTING)
     add_test(
       NAME rust-package-core-artifact-smoke
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
@@ -901,8 +915,7 @@ if(BUILD_TESTING)
     add_custom_target(
       fcitx5_rust_candidate_poc_contract
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
         fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
@@ -912,8 +925,7 @@ if(BUILD_TESTING)
     add_test(
       NAME rust-candidate-poc-contract
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
         fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
@@ -923,8 +935,7 @@ if(BUILD_TESTING)
     add_test(
       NAME rust-candidate-poc-window-smoke
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
         fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke --report
@@ -935,8 +946,7 @@ if(BUILD_TESTING)
     add_test(
       NAME rust-candidate-poc-demo-snapshot
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
         fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
@@ -949,8 +959,7 @@ if(BUILD_TESTING)
     add_test(
       NAME rust-candidate-poc-scroll-demo-snapshot
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
         fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
@@ -964,8 +973,7 @@ if(BUILD_TESTING)
       add_test(
         NAME "rust-candidate-poc-host-snapshot-${FCITX_CANDIDATE_HOST_SNAPSHOT}"
         COMMAND
-          "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-          "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
           "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
           "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
           fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
@@ -980,8 +988,7 @@ if(BUILD_TESTING)
     add_test(
       NAME rust-candidate-poc-dpi-smoke
       COMMAND
-        "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-        "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
         "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
         fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
@@ -995,8 +1002,7 @@ if(BUILD_TESTING)
       add_custom_target(
         fcitx5_rust_package_core_packaged_artifact_smoke
         COMMAND
-          "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-          "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
           "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
           "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
           "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
@@ -1007,8 +1013,7 @@ if(BUILD_TESTING)
       add_test(
         NAME rust-package-core-packaged-artifact-smoke
         COMMAND
-          "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-          "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
           "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
           "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
           "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
@@ -1196,8 +1201,7 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_rust_tsf_poc_export_smoke)
   add_test(NAME rust-tsf-poc-unit
            COMMAND
-             "${CMAKE_COMMAND}" -E env "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
-             "CARGO_HOME=${FCITX_CARGO_HOME}" "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}"
+             "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
              "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
              "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-poc --target
              "${FCITX_RUST_TARGET}")

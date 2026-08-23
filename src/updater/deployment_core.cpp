@@ -108,10 +108,6 @@ std::wstring widen_ascii(std::string_view value) {
   return {value, end};
 }
 
-[[nodiscard]] const std::uint16_t* utf16_ptr(std::wstring_view value) {
-  return reinterpret_cast<const std::uint16_t*>(value.data());
-}
-
 [[nodiscard]] const std::uint16_t* utf16_ptr(const std::wstring& value) {
   return reinterpret_cast<const std::uint16_t*>(value.c_str());
 }

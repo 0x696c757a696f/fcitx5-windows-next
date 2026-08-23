@@ -13,14 +13,21 @@ members = [
 
 [profile.dev]
 opt-level = 0
-debug = 1
+debug = "line-tables-only"
 codegen-units = 16
 lto = false
 incremental = true
 
+[profile.dev.package."*"]
+debug = false
+
 [profile.test]
 opt-level = 0
-debug = 1
+debug = "line-tables-only"
 codegen-units = 16
 lto = false
 incremental = true
+
+[profile.debugging]
+inherits = "dev"
+debug = true

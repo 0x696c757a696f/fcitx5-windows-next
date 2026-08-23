@@ -53,6 +53,15 @@ jobs:
         with:
           version: v0.17.0
 
+      - name: Restore fast Windows toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: out/toolchains/fast
+          key: ${{ runner.os }}-fast-toolchain-llvm-22.1.8-ninja-1.13.2-sccache-0.17.0-${{ hashFiles('tools/prepare-fast-toolchain.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-fast-toolchain-llvm-22.1.8-ninja-1.13.2-sccache-0.17.0-
+            ${{ runner.os }}-fast-toolchain-
+
       - name: Prepare fast Windows toolchain
         shell: pwsh
         run: ./tools/prepare-fast-toolchain.ps1 -InstallForCI

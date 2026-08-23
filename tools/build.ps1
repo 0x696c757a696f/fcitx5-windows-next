@@ -15,7 +15,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$minimumCMake = [version]'3.28.0'
+$minimumCMake = [version]'3.29.0'
 $buildTempRoot = Join-Path $repoRoot 'out/tmp'
 
 function Invoke-Native {
@@ -181,7 +181,7 @@ function Import-MsvcEnvironment([string] $TargetArchitecture) {
 function Assert-FastWindowsToolchain {
   foreach ($tool in @('ninja', 'clang-cl', 'lld-link')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-      throw "Default build requires $tool on PATH. Install LLVM clang-cl/lld-link and Ninja, or run tools/prepare-fast-toolchain.ps1 in CI."
+      throw "Default build requires $tool on PATH. Import Visual Studio C++ environment and install repo-local clang-cl/lld-link/Ninja via tools/prepare-fast-toolchain.ps1 -InstallLocal."
     }
   }
 }
@@ -197,12 +197,14 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
   $analyzeValue = if ($Analyze) { 'ON' } else { 'OFF' }
   $configureArguments = @('--preset', $preset, "-DFCITX_ENABLE_MSVC_ANALYZE=$analyzeValue")
   if ($env:FCITX_ENABLE_SCCACHE -eq '1') {
-    if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) {
+    $sccacheCommand = Get-Command sccache -ErrorAction SilentlyContinue
+    if (-not $sccacheCommand) {
       throw 'FCITX_ENABLE_SCCACHE=1 requires sccache on PATH.'
     }
+    $sccachePath = [System.IO.Path]::GetFullPath($sccacheCommand.Source)
     $configureArguments += @(
-      '-DCMAKE_C_COMPILER_LAUNCHER=sccache',
-      '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache'
+      "-DCMAKE_C_COMPILER_LAUNCHER=$sccachePath",
+      "-DCMAKE_CXX_COMPILER_LAUNCHER=$sccachePath"
     )
   }
   Invoke-Native $cmake $configureArguments
@@ -253,6 +255,8 @@ try {
   $env:CARGO_HOME = Join-Path $repoRoot 'out/toolchains/rust/cargo-home'
   $env:RUSTUP_INIT_SKIP_PATH_CHECK = 'yes'
   $env:RUSTUP_IO_THREADS = '1'
+  & (Join-Path $PSScriptRoot 'prepare-fast-toolchain.ps1') -InstallLocal
+  & (Join-Path $PSScriptRoot 'configure-ci-cache.ps1')
   & (Join-Path $PSScriptRoot 'prepare-rust.ps1')
   $rustToolchainBin = Join-Path $env:RUSTUP_HOME 'toolchains/1.98.0-x86_64-pc-windows-msvc/bin'
   $env:PATH = "$rustToolchainBin;$env:PATH"

@@ -268,13 +268,7 @@ CaptureEvidence capture_window(HWND window, const fs::path& path) {
     throw std::runtime_error("CreateCompatibleBitmap failed for candidate UI screenshot");
   }
   HGDIOBJ old_object = SelectObject(memory_dc, bitmap);
-  if (!BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY)) {
-    SelectObject(memory_dc, old_object);
-    DeleteObject(bitmap);
-    DeleteDC(memory_dc);
-    ReleaseDC(window, window_dc);
-    throw std::runtime_error("BitBlt failed for candidate UI screenshot");
-  }
+  SendMessageW(window, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(memory_dc), 0);
 
   BITMAPINFO info{};
   info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -292,6 +286,42 @@ CaptureEvidence capture_window(HWND window, const fs::path& path) {
     DeleteDC(memory_dc);
     ReleaseDC(window, window_dc);
     throw std::runtime_error("GetDIBits failed for candidate UI screenshot");
+  }
+
+  const auto count_non_background = [](const std::vector<std::uint32_t>& values) {
+    const std::uint32_t background = values.empty() ? 0U : values.front();
+    std::size_t count = 0;
+    for (const auto pixel : values) {
+      if (pixel != background) {
+        ++count;
+      }
+    }
+    return count;
+  };
+  if (count_non_background(pixels) == 0) {
+    HDC screen_dc = GetDC(nullptr);
+    const BOOL copied = screen_dc != nullptr
+                            ? BitBlt(memory_dc, 0, 0, width, height, screen_dc, rectangle.left,
+                                     rectangle.top, SRCCOPY | CAPTUREBLT)
+                            : FALSE;
+    if (screen_dc != nullptr) {
+      ReleaseDC(nullptr, screen_dc);
+    }
+    if (!copied) {
+      SelectObject(memory_dc, old_object);
+      DeleteObject(bitmap);
+      DeleteDC(memory_dc);
+      ReleaseDC(window, window_dc);
+      throw std::runtime_error("BitBlt failed for candidate UI screenshot");
+    }
+    if (GetDIBits(memory_dc, bitmap, 0, static_cast<UINT>(height), pixels.data(), &info,
+                  DIB_RGB_COLORS) == 0) {
+      SelectObject(memory_dc, old_object);
+      DeleteObject(bitmap);
+      DeleteDC(memory_dc);
+      ReleaseDC(window, window_dc);
+      throw std::runtime_error("GetDIBits fallback failed for candidate UI screenshot");
+    }
   }
 
   SelectObject(memory_dc, old_object);

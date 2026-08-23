@@ -335,24 +335,6 @@ fs::path localDataDirectory() {
     return result / fcitx::windows::kReleaseIdentity.data_directory;
 }
 
-std::wstring quote(std::wstring_view value) {
-    std::wstring result = L"\"";
-    unsigned backslashes = 0;
-    for (const wchar_t character : value) {
-        if (character == L'\\') {
-            ++backslashes;
-        } else {
-            if (character == L'"')
-                result.append(backslashes + 1, L'\\');
-            backslashes = 0;
-            result.push_back(character);
-        }
-    }
-    result.append(backslashes, L'\\');
-    result.push_back(L'"');
-    return result;
-}
-
 bool runControl(const std::vector<std::wstring>& arguments, std::wstring& output) {
     return fcitx::windows::config::runExecutable(
         executableDirectory() / L"fcitx5-control.exe", arguments, output);

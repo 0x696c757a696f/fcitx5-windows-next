@@ -23,9 +23,11 @@ type Wparam = usize;
 const BI_RGB: Dword = 0;
 const DIB_RGB_COLORS: Uint = 0;
 const PW_RENDERFULLCONTENT: Uint = 0x0000_0002;
+const CAPTUREBLT: Dword = 0x4000_0000;
 const SRCCOPY: Dword = 0x00CC_0020;
 const WM_COMMAND: Uint = 0x0111;
 const WM_CLOSE: Uint = 0x0010;
+const WM_PRINTCLIENT: Uint = 0x0318;
 
 const K_NAV_GENERAL: i32 = 130;
 const K_NAV_APPEARANCE: i32 = 131;
@@ -108,6 +110,7 @@ struct BitmapInfo {
 extern "system" {
     fn EnumWindows(callback: extern "system" fn(Hwnd, Lparam) -> Bool, lparam: Lparam) -> Bool;
     fn GetDlgItem(hwnd: Hwnd, id: i32) -> Hwnd;
+    fn GetDC(hwnd: Hwnd) -> Hdc;
     fn GetWindowDC(hwnd: Hwnd) -> Hdc;
     fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
     fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
@@ -378,6 +381,13 @@ fn intersects(left: Rect, right: Rect) -> bool {
 }
 
 fn capture_window(hwnd: Hwnd) -> Result<BitmapCapture, String> {
+    capture_window_with_client_print(hwnd, false)
+}
+
+fn capture_window_with_client_print(
+    hwnd: Hwnd,
+    prefer_client_print: bool,
+) -> Result<BitmapCapture, String> {
     let mut rect = Rect::default();
     if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
         return Err("GetWindowRect failed".to_string());
@@ -406,13 +416,59 @@ fn capture_window(hwnd: Hwnd) -> Result<BitmapCapture, String> {
         return Err("GDI capture allocation failed".to_string());
     }
     let previous = unsafe { SelectObject(memory_dc, bitmap.cast::<c_void>()) };
-    let printed = unsafe { PrintWindow(hwnd, memory_dc, PW_RENDERFULLCONTENT) };
-    if printed == 0 {
+    let mut result = if prefer_client_print {
+        unsafe {
+            SendMessageW(hwnd, WM_PRINTCLIENT, memory_dc as Wparam, 0);
+        }
+        capture_bitmap(memory_dc, bitmap, width, height)
+    } else {
+        Err("client print skipped".to_string())
+    };
+    if result
+        .as_ref()
+        .map(|capture| image_stats(capture).non_background_pixels < 64)
+        .unwrap_or(true)
+    {
+        let printed = unsafe { PrintWindow(hwnd, memory_dc, PW_RENDERFULLCONTENT) };
+        if printed == 0 {
+            unsafe {
+                BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY);
+            }
+        }
+        result = capture_bitmap(memory_dc, bitmap, width, height);
+    }
+    if result
+        .as_ref()
+        .map(|capture| image_stats(capture).non_background_pixels < 64)
+        .unwrap_or(false)
+    {
         unsafe {
             BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY);
         }
+        result = capture_bitmap(memory_dc, bitmap, width, height);
     }
-    let result = capture_bitmap(memory_dc, bitmap, width, height);
+    let screen_dc = if prefer_client_print {
+        unsafe { GetDC(std::ptr::null_mut()) }
+    } else {
+        std::ptr::null_mut()
+    };
+    if !screen_dc.is_null() {
+        unsafe {
+            BitBlt(
+                memory_dc,
+                0,
+                0,
+                width,
+                height,
+                screen_dc,
+                rect.left,
+                rect.top,
+                SRCCOPY | CAPTUREBLT,
+            );
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+        }
+        result = capture_bitmap(memory_dc, bitmap, width, height);
+    }
     unsafe {
         SelectObject(memory_dc, previous);
         DeleteObject(bitmap.cast::<c_void>());
@@ -430,7 +486,7 @@ fn capture_candidate_reference(candidate_ui: &Path, out_dir: &Path) -> Result<Im
     let guard = ProcessGuard { child };
     let hwnd = wait_for_window(guard.child.id(), Duration::from_secs(10))?;
     thread::sleep(Duration::from_millis(300));
-    let capture = capture_window(hwnd)?;
+    let capture = capture_window_with_client_print(hwnd, true)?;
     write_bitmap(&capture, &out_dir.join("candidate-ui-demo-reference.bmp"))?;
     unsafe {
         SendMessageW(hwnd, WM_CLOSE, 0, 0);

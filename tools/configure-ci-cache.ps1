@@ -9,8 +9,14 @@ $rustRoot = Join-Path $repoRoot 'out/toolchains/rust'
 $rustupHome = Join-Path $rustRoot 'rustup-home'
 $cargoHome = Join-Path $rustRoot 'cargo-home'
 $cargoTarget = Join-Path $rustRoot 'target'
+$sccacheDir = Join-Path $repoRoot 'out/toolchains/sccache'
 
-New-Item -ItemType Directory -Force -Path $rustupHome, $cargoHome, $cargoTarget | Out-Null
+New-Item -ItemType Directory -Force -Path $rustupHome, $cargoHome, $cargoTarget, $sccacheDir | Out-Null
+
+$useGitHubSccache = $env:GITHUB_ACTIONS -eq 'true' -and
+  -not [string]::IsNullOrWhiteSpace($env:ACTIONS_RUNTIME_TOKEN) -and
+  (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_CACHE_URL) -or
+   -not [string]::IsNullOrWhiteSpace($env:ACTIONS_RESULTS_URL))
 
 $environment = [ordered]@{
   RUSTUP_HOME = $rustupHome
@@ -18,11 +24,22 @@ $environment = [ordered]@{
   CARGO_TARGET_DIR = $cargoTarget
   RUSTUP_INIT_SKIP_PATH_CHECK = 'yes'
   RUSTUP_IO_THREADS = '1'
-  CARGO_INCREMENTAL = '1'
   CARGO_TERM_COLOR = 'always'
-  RUSTC_WRAPPER = 'sccache'
-  SCCACHE_GHA_ENABLED = 'true'
   FCITX_ENABLE_SCCACHE = '1'
+}
+
+if ($useGitHubSccache) {
+  $environment.CARGO_INCREMENTAL = '0'
+  $environment.RUSTC_WRAPPER = 'sccache'
+  $environment.SCCACHE_GHA_ENABLED = 'true'
+} else {
+  [Environment]::SetEnvironmentVariable('CARGO_INCREMENTAL', $null, 'Process')
+  Remove-Item Env:CARGO_INCREMENTAL -ErrorAction SilentlyContinue
+  [Environment]::SetEnvironmentVariable('RUSTC_WRAPPER', $null, 'Process')
+  Remove-Item Env:RUSTC_WRAPPER -ErrorAction SilentlyContinue
+  [Environment]::SetEnvironmentVariable('SCCACHE_GHA_ENABLED', $null, 'Process')
+  Remove-Item Env:SCCACHE_GHA_ENABLED -ErrorAction SilentlyContinue
+  $environment.SCCACHE_DIR = $sccacheDir
 }
 
 foreach ($entry in $environment.GetEnumerator()) {

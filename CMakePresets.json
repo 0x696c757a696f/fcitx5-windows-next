@@ -14,7 +14,7 @@
         "BUILD_TESTING": "ON",
         "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl",
-        "CMAKE_LINKER": "lld-link",
+        "CMAKE_LINKER_TYPE": "LLD",
         "FCITX_WARNINGS_AS_ERRORS": "ON",
         "FCITX_RELEASE_CHANNEL": "stable"
       }

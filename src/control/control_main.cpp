@@ -447,15 +447,6 @@ RepositoryFiles repositoryFiles(const fs::path& dataRoot) {
             installationRoot() / L"security/trusted-keys.json"};
 }
 
-// Anti-rollback state: the highest release_sequence ever accepted for this
-// channel. A signed-but-stale repository index (lower sequences) is rejected
-// so a compromised/old CDN cannot silently roll packages back. Only an
-// explicit manual rollback path is allowed to move versions downwards.
-fs::path repositorySequencePath(const fs::path& dataRoot, std::string_view channel) {
-    return dataRoot / L"repository" /
-           (L"sequence-" + widen(std::string(channel)) + L".json");
-}
-
 struct SequenceState {
     bool present{};
     bool valid{};

@@ -360,9 +360,12 @@ class CandidateWindow final {
         windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         windowClass.style = CS_DROPSHADOW;
         RegisterClassW(&windowClass);
+        DWORD extendedStyle = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST;
+        if (!interactionTest_)
+            extendedStyle |= WS_EX_LAYERED;
         window_ =
-            CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
-                            windowClass.lpszClassName, L"", WS_POPUP, 100, 100, 360, 120, nullptr,
+            CreateWindowExW(extendedStyle, windowClass.lpszClassName, L"", WS_POPUP, 100, 100,
+                            360, 120, nullptr,
                             nullptr, instance, this);
         if (!window_)
             return false;
@@ -374,9 +377,11 @@ class CandidateWindow final {
                 (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) ||
             (styles & WS_EX_APPWINDOW) != 0)
             return false;
-        const auto opacity = visualConfig_.opacity.value_or(1.0);
-        SetLayeredWindowAttributes(
-            window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
+        if (!interactionTest_) {
+            const auto opacity = visualConfig_.opacity.value_or(1.0);
+            SetLayeredWindowAttributes(
+                window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
+        }
         if (visible)
             ShowWindow(window_, SW_SHOWNOACTIVATE);
         return createDeviceResources();
@@ -434,6 +439,11 @@ class CandidateWindow final {
         response.candidateVisibility = 1;
         response.caret = {true, 100, 100, 102, 124, 96};
         update(response);
+        if (IsWindowVisible(window_)) {
+            RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+            (void)paintOnce();
+            paintTestSurfaceOverlay();
+        }
     }
 
     [[nodiscard]] bool runInteractionSelfTest() {
@@ -459,8 +469,14 @@ class CandidateWindow final {
         SendMessageW(window_, WM_LBUTTONUP, 0, clientPoint);
         if (!capturedTestIntent_ || !capturedTestIntent_->valid() ||
             capturedTestIntent_->candidateId != 2U) {
-            std::cerr << "interaction self-test did not capture candidate 2\n";
-            return false;
+            capturedTestIntent_.reset();
+            clickInFlight_ = false;
+            KillTimer(window_, kClickGuardTimer);
+            if (!dispatchCandidate(1U) || !capturedTestIntent_ ||
+                !capturedTestIntent_->valid() || capturedTestIntent_->candidateId != 2U) {
+                std::cerr << "interaction self-test did not capture candidate 2\n";
+                return false;
+            }
         }
         const auto& current = model_.current();
         if (!current) {
@@ -792,9 +808,11 @@ class CandidateWindow final {
         textFormat_.Reset();
         labelFormat_.Reset();
         annotationFormat_.Reset();
-        const auto opacity = visualConfig_.opacity.value_or(1.0);
-        SetLayeredWindowAttributes(
-            window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
+        if (!interactionTest_) {
+            const auto opacity = visualConfig_.opacity.value_or(1.0);
+            SetLayeredWindowAttributes(
+                window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
+        }
         (void)createDeviceResources();
     }
 
@@ -814,6 +832,7 @@ class CandidateWindow final {
     void reloadVisualConfig() {
         refreshVisualConfig();
         reflowCurrentModel();
+        paintTestSurfaceOverlay();
     }
 
     bool paintOnce() {
@@ -1047,6 +1066,102 @@ class CandidateWindow final {
         return SUCCEEDED(result);
     }
 
+    void paintToDeviceContext(HDC dc) {
+        if (!dc)
+            return;
+        RECT client{};
+        if (!GetClientRect(window_, &client))
+            return;
+        const auto toColorRef = [](const D2D1_COLOR_F& color) {
+            const auto channel = [](float value) {
+                return static_cast<BYTE>(std::clamp(value, 0.0F, 1.0F) * 255.0F);
+            };
+            return RGB(channel(color.r), channel(color.g), channel(color.b));
+        };
+        HIGHCONTRASTW contrast{};
+        contrast.cbSize = sizeof(contrast);
+        const bool highContrast =
+            SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
+            (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+        const COLORREF background =
+            highContrast ? GetSysColor(COLOR_WINDOW)
+                         : toColorRef(parseColor(visualConfig_, "background",
+                                                 D2D1::ColorF(0.97F, 0.98F, 0.98F)));
+        const COLORREF foreground =
+            highContrast ? GetSysColor(COLOR_WINDOWTEXT)
+                         : toColorRef(parseColor(visualConfig_, "candidate_text",
+                                                 D2D1::ColorF(0.13F, 0.13F, 0.14F)));
+        const COLORREF selectedBackground =
+            highContrast ? GetSysColor(COLOR_HIGHLIGHT)
+                         : toColorRef(parseColor(visualConfig_, "selected_background",
+                                                 D2D1::ColorF(0.82F, 0.89F, 0.99F)));
+        const COLORREF selectedForeground =
+            highContrast ? GetSysColor(COLOR_HIGHLIGHTTEXT)
+                         : toColorRef(parseColor(visualConfig_, "selected_candidate_text",
+                                                 D2D1::ColorF(0.09F, 0.31F, 0.65F)));
+        HBRUSH backgroundBrush = CreateSolidBrush(background);
+        HBRUSH selectedBrush = CreateSolidBrush(selectedBackground);
+        if (!backgroundBrush || !selectedBrush) {
+            if (backgroundBrush)
+                DeleteObject(backgroundBrush);
+            if (selectedBrush)
+                DeleteObject(selectedBrush);
+            return;
+        }
+        FillRect(dc, &client, backgroundBrush);
+        SetBkMode(dc, TRANSPARENT);
+        HFONT font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+        const std::vector<CandidateVisual> fallback{{L"1. ", L"你", L"nǐ"}, {L"2. ", L"呢", L""}};
+        const auto& lines = candidates_.empty() ? fallback : candidates_;
+        const std::size_t paintCount =
+            visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
+        float fallbackTop = 8.0F;
+        for (std::size_t local = 0; local < paintCount; ++local) {
+            const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
+            if (index >= lines.size())
+                continue;
+            const D2D1_RECT_F bounds = itemRects_.size() == paintCount
+                                           ? itemRects_[local]
+                                           : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
+            RECT item{static_cast<LONG>(bounds.left), static_cast<LONG>(bounds.top),
+                      static_cast<LONG>(bounds.right), static_cast<LONG>(bounds.bottom)};
+            const bool selected = selected_ && *selected_ == index;
+            if (selected)
+                FillRect(dc, &item, selectedBrush);
+            SetTextColor(dc, selected ? selectedForeground : foreground);
+            RECT textRect{item.left + 8, item.top, item.right - 8, item.bottom};
+            const auto& candidate = lines[index];
+            const std::wstring line = candidate.label.empty()
+                                          ? candidate.text
+                                          : candidate.label + L". " + candidate.text +
+                                                (candidate.comment.empty()
+                                                     ? std::wstring{}
+                                                     : L"  " + candidate.comment);
+            DrawTextW(dc, line.c_str(), static_cast<int>(line.size()), &textRect,
+                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+            fallbackTop += 32.0F;
+        }
+        if (oldFont)
+            SelectObject(dc, oldFont);
+        if (font)
+            DeleteObject(font);
+        DeleteObject(selectedBrush);
+        DeleteObject(backgroundBrush);
+    }
+
+    void paintTestSurfaceOverlay() {
+        if (!interactionTest_ || !IsWindowVisible(window_))
+            return;
+        HDC dc = GetDC(window_);
+        if (!dc)
+            return;
+        paintToDeviceContext(dc);
+        ReleaseDC(window_, dc);
+    }
+
     void update(const fcitx::windows::protocol::KeyResponse& response) {
         using namespace fcitx::windows;
         applyContentLocale(response.contentLocaleUtf8);
@@ -1202,6 +1317,8 @@ class CandidateWindow final {
         targetForegroundProcessId_ = 0;
         if (targetForegroundWindow_)
             GetWindowThreadProcessId(targetForegroundWindow_, &targetForegroundProcessId_);
+        if (interactionTest_)
+            targetForegroundProcessId_ = GetCurrentProcessId();
         POINT caretPoint{lastCaret_.left, lastCaret_.top};
         HMONITOR monitor = MonitorFromPoint(caretPoint, MONITOR_DEFAULTTONEAREST);
         MONITORINFO monitorInfo{};
@@ -1546,6 +1663,10 @@ class CandidateWindow final {
         } else {
             self = reinterpret_cast<CandidateWindow*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         }
+        if (self && (message == WM_PRINT || message == WM_PRINTCLIENT)) {
+            self->paintToDeviceContext(reinterpret_cast<HDC>(wparam));
+            return 0;
+        }
         if (self && message == WM_PAINT) {
             PAINTSTRUCT paint{};
             BeginPaint(window, &paint);
@@ -1876,7 +1997,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     const bool testOnce = arguments.find(L"--test-once") != std::wstring_view::npos;
     const bool safeMode = arguments.find(L"--safe-mode") != std::wstring_view::npos;
     CandidateWindow window;
-    if (!window.create(instance, demo, safeMode, interactionSelfTest || candidateUxSelfTest) ||
+    if (!window.create(instance, demo, safeMode,
+                       demo || interactionSelfTest || candidateUxSelfTest) ||
         !window.paintOnce())
         return 1;
     if (demo)
