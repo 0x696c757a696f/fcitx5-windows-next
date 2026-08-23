@@ -12,21 +12,13 @@ recover from a frozen host application because an input-method component failed.
 
 ## Current engineering baseline
 
-The only current engineering baseline is the frozen v1.7 specification:
+The repository is being developed as a production Windows input-method
+distribution with strict automated gates for build, runtime behavior, security,
+packaging and release artifacts.
 
-`D:\Desktop\Fcitx5_for_Windows_工程规格_现代软件工程_轻量SSDLC_DevSecOps_Codex执行版_v1.7.md`
-
-SHA-256:
-
-`740878ebe3084a0817d404ca2052c6e433bc53b102c883f680fda4c480d0e0ab`
-
-Existing code already covers TSF, IPC, launcher, engine, candidate UI, config,
-packages, updater and release tooling, but acceptance is intentionally being
-re-established in Phase 0 → Phase 8 order. Historical green test runs and older
-v1.5/v1.6 notes are useful evidence, not current completion claims.
-
-Start with [docs/README.md](docs/README.md) before changing architecture or
-declaring a phase complete.
+Existing code covers TSF, IPC, launcher, engine, candidate UI, config, packages,
+updater and release tooling. Acceptance is based on fresh tests and artifact
+checks for the code being changed, not on historical green runs.
 
 ## Architecture in one screen
 
@@ -75,9 +67,6 @@ Subject to v1.7 re-acceptance, the repository currently includes:
   in-use TSF DLL replacement by rename-old → install-new → delayed cleanup;
 - release gates for package artifacts, identity, dependency policy, secrets,
   license inventory and text/locale hygiene.
-
-The newest product direction for themes and UX is documented in
-[docs/theme-ui-ux-product-plan.md](docs/theme-ui-ux-product-plan.md).
 
 ## Build requirements
 
@@ -170,22 +159,3 @@ The current red lines are deliberate:
 Runtime updates use deployment-level generation side-by-side draining: each
 generation keeps strict internal versioning, while old host processes may
 naturally drain on the old generation until they exit.
-
-## Documentation map
-
-- [docs/current-task-summary.md](docs/current-task-summary.md): current status,
-  red lights and next execution queue.
-- [docs/technical-program-plan.md](docs/technical-program-plan.md): v1.7 phase
-  plan and architectural constraints.
-- [docs/theme-ui-ux-product-plan.md](docs/theme-ui-ux-product-plan.md): theme,
-  plugin manager and UI/UX product plan.
-- [docs/reference-baseline.md](docs/reference-baseline.md): pinned reference
-  repositories and license boundaries.
-- [docs/product-test-plan.md](docs/product-test-plan.md) and
-  [docs/ssdlc-verification-matrix.md](docs/ssdlc-verification-matrix.md):
-  verification policy.
-- [docs/adr](docs/adr): accepted architecture decisions.
-
-If a document conflicts with v1.7 or
-[docs/current-task-summary.md](docs/current-task-summary.md), treat it as
-historical until it is explicitly reconciled.
