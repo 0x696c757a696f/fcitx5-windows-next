@@ -276,7 +276,7 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/src/deployer_main.rs");
     const auto rustDeployerBuild =
         read_text(sourceRoot / "tools/build-rust-deployer-cli.ps1");
-    const auto deploymentCoreSource = read_text(sourceRoot / "src/updater/deployment_core.cpp");
+    const auto deploymentCoreHeader = read_text(sourceRoot / "src/updater/deployment_core.h");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
     const auto rustPackageCoreArtifactSmoke =
@@ -461,21 +461,24 @@ int main(int argc, char** argv) {
         rustDeployerBuild.find("fcitx5-deployer.exe") == std::string::npos ||
         rustDeployerBuild.find("--bin fcitx5-deployer") == std::string::npos ||
         cmakeSource.find("Building Rust fcitx5-deployer CLI") == std::string::npos ||
-        deploymentCoreSource.find("fcitx5_update_cleanup_previous_known_good_utf16") ==
+        std::filesystem::exists(sourceRoot / "src/updater/deployment_core.cpp") ||
+        deploymentCoreHeader.find("fcitx5_update_cleanup_previous_known_good_utf16") ==
             std::string::npos ||
-        deploymentCoreSource.find("fcitx5_update_install_tsf_dll_generation_utf16") ==
+        deploymentCoreHeader.find("fcitx5_update_install_tsf_dll_generation_utf16") ==
             std::string::npos ||
-        deploymentCoreSource.find("fcitx5_update_cleanup_old_tsf_dlls_utf16") ==
+        deploymentCoreHeader.find("fcitx5_update_cleanup_old_tsf_dlls_utf16") ==
             std::string::npos ||
-        deploymentCoreSource.find("fcitx5_update_runtime_generation_directory_utf16") ==
+        deploymentCoreHeader.find("fcitx5_update_runtime_generation_directory_utf16") ==
             std::string::npos ||
-        deploymentCoreSource.find("fcitx5_update_install_runtime_generation_utf16") ==
+        deploymentCoreHeader.find("fcitx5_update_install_runtime_generation_utf16") ==
             std::string::npos ||
-        deploymentCoreSource.find("CopyFileW(") != std::string::npos ||
-        deploymentCoreSource.find("DeleteFileW(") != std::string::npos ||
-        deploymentCoreSource.find("copy_directory_tree") != std::string::npos ||
-        deploymentCoreSource.find("stage_runtime_payload") != std::string::npos ||
-        deploymentCoreSource.find("publish_runtime_directory") != std::string::npos ||
+        deploymentCoreHeader.find("CopyFileW(") != std::string::npos ||
+        deploymentCoreHeader.find("DeleteFileW(") != std::string::npos ||
+        deploymentCoreHeader.find("copy_directory_tree") != std::string::npos ||
+        deploymentCoreHeader.find("stage_runtime_payload") != std::string::npos ||
+        deploymentCoreHeader.find("publish_runtime_directory") != std::string::npos ||
+        cmakeSource.find("add_library(fcitx5_deployment_core INTERFACE)") ==
+            std::string::npos ||
         rustPackageCore.find("cleanup_previous_known_good") == std::string::npos ||
         rustPackageCore.find("install_tsf_dll_generation") == std::string::npos ||
         rustPackageCore.find("cleanup_old_tsf_dlls") == std::string::npos ||

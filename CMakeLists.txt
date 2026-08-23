@@ -408,20 +408,15 @@ if(FCITX_COMPILER_IS_MSVC_CL)
   target_compile_options(fcitx5_package_core PRIVATE /external:W0 /analyze:external-)
 endif()
 
-add_library(fcitx5_deployment_core STATIC src/updater/deployment_core.cpp)
+add_library(fcitx5_deployment_core INTERFACE)
 add_library(fcitx5::deployment_core ALIAS fcitx5_deployment_core)
-target_compile_features(fcitx5_deployment_core PUBLIC cxx_std_20)
-target_include_directories(fcitx5_deployment_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/updater")
-target_include_directories(fcitx5_deployment_core SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+target_compile_features(fcitx5_deployment_core INTERFACE cxx_std_20)
+target_include_directories(fcitx5_deployment_core INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/updater")
 target_link_libraries(
   fcitx5_deployment_core
-  PUBLIC fcitx5_package_core_rust
+  INTERFACE fcitx5_package_core_rust
          ws2_32 userenv ntdll bcrypt crypt32 ole32)
 add_dependencies(fcitx5_deployment_core fcitx5_package_core_rustlib)
-fcitx_apply_project_options(fcitx5_deployment_core)
-if(FCITX_COMPILER_IS_MSVC_CL)
-  target_compile_options(fcitx5_deployment_core PRIVATE /external:W0 /analyze:external-)
-endif()
 
 add_library(fcitx5_config STATIC src/config/config_parser.cpp)
 add_library(fcitx5::config ALIAS fcitx5_config)
