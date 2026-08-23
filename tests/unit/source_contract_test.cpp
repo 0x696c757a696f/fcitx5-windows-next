@@ -295,6 +295,22 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("local_endpoint_and_object_names_match_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_current_generation_for_module_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find(
+            "fcitx5_windows_common_current_generation_from_install_root_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_installation_root_for_module_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_portable_data_root_for_module_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("runtime_generation_and_install_roots_match_cpp_contract") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("parseCurrentGeneration") != std::string::npos ||
+        runtimeIdentitySource.find("parsePlainGeneration") != std::string::npos ||
+        runtimeIdentitySource.find("readSmallTextFile") != std::string::npos ||
+        runtimeIdentitySource.find("installRootForModule") != std::string::npos ||
+        runtimeIdentitySource.find("runtimeGenerationForRuntimeModule") != std::string::npos ||
         runtimeIdentitySource.find("kReleaseIdentity.pipe_prefix") != std::string::npos ||
         runtimeIdentitySource.find("kReleaseIdentity.local_object_prefix") !=
             std::string::npos ||

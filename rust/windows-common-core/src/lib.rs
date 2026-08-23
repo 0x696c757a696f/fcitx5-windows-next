@@ -1,8 +1,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use std::env;
+use std::fs;
+use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+
 const VERSION_FALLBACK: &str = env!("CARGO_PKG_VERSION");
 const RELEASE_CHANNEL_FALLBACK: &str = "stable";
 const ENDPOINT_MAX_WIDE_UNITS: usize = 32_768;
+const SMALL_TEXT_FILE_MAX_BYTES: u64 = 64 * 1024;
 
 fn version() -> &'static str {
     option_env!("FCITX_WINDOWS_VERSION").unwrap_or(VERSION_FALLBACK)
@@ -55,6 +61,15 @@ fn wide_string_from_raw(text: *const u16, len: usize) -> Option<String> {
 
 fn write_wide_string(value: &str, out: *mut u16, capacity: usize) -> usize {
     let wide: Vec<u16> = value.encode_utf16().collect();
+    write_wide_units(&wide, out, capacity)
+}
+
+fn write_wide_path(value: &Path, out: *mut u16, capacity: usize) -> usize {
+    let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
+    write_wide_units(&wide, out, capacity)
+}
+
+fn write_wide_units(wide: &[u16], out: *mut u16, capacity: usize) -> usize {
     if !out.is_null() && capacity != 0 {
         let count = wide.len().min(capacity);
         if count != 0 {
@@ -64,6 +79,178 @@ fn write_wide_string(value: &str, out: *mut u16, capacity: usize) -> usize {
         }
     }
     wide.len()
+}
+
+fn path_from_raw(path: *const u16, len: usize) -> Option<PathBuf> {
+    let value = wide_string_from_raw(path, len)?;
+    (!value.is_empty()).then(|| PathBuf::from(value))
+}
+
+fn environment_generation() -> Option<String> {
+    env::var("FCITX5_RELEASE_GENERATION")
+        .ok()
+        .filter(|value| valid_generation(value))
+}
+
+fn read_small_text_file(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > SMALL_TEXT_FILE_MAX_BYTES {
+        return None;
+    }
+    fs::read_to_string(path).ok()
+}
+
+fn parse_plain_generation(bytes: &str) -> Option<String> {
+    let candidate = bytes.trim_matches(['\n', '\r', ' ', '\t']);
+    (candidate.is_ascii() && valid_generation(candidate)).then(|| candidate.to_owned())
+}
+
+fn parse_current_generation(json: &str) -> Option<String> {
+    let key_position = json.find("\"current_generation\"")?;
+    let colon = json[key_position..].find(':')? + key_position;
+    let mut quote = colon + 1;
+    while let Some(character) = json.as_bytes().get(quote) {
+        if !matches!(character, b' ' | b'\t' | b'\r' | b'\n') {
+            break;
+        }
+        quote += 1;
+    }
+    if json.as_bytes().get(quote) != Some(&b'"') {
+        return None;
+    }
+    let begin = quote + 1;
+    let end = json[begin..].find('"')? + begin;
+    if end == begin {
+        return None;
+    }
+    let candidate = &json[begin..end];
+    (candidate.is_ascii() && valid_generation(candidate)).then(|| candidate.to_owned())
+}
+
+fn leaf_lower(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn install_root_for_module(module_path: &Path) -> Option<PathBuf> {
+    let directory = module_path.parent()?;
+    let parent_name = leaf_lower(directory);
+    let grand_parent = directory.parent().unwrap_or_else(|| Path::new(""));
+    let grand_parent_name = leaf_lower(grand_parent);
+    if matches!(parent_name.as_str(), "x64" | "x86") && grand_parent_name == "tsf" {
+        return directory.parent()?.parent().map(Path::to_path_buf);
+    }
+    if parent_name == "bin"
+        && directory
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|value| value.to_str())
+            .is_some_and(valid_generation)
+        && directory
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|path| leaf_lower(path) == "runtime")
+    {
+        return directory
+            .parent()?
+            .parent()?
+            .parent()
+            .map(Path::to_path_buf);
+    }
+    if matches!(parent_name.as_str(), "bin" | "management") {
+        return directory.parent().map(Path::to_path_buf);
+    }
+    if directory
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(valid_generation)
+        && grand_parent_name == "runtime"
+    {
+        return directory.parent()?.parent().map(Path::to_path_buf);
+    }
+    None
+}
+
+fn runtime_generation_for_runtime_module(module_path: &Path) -> Option<String> {
+    let directory = module_path.parent()?;
+    if leaf_lower(directory) == "bin"
+        && directory
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|value| value.to_str())
+            .is_some_and(valid_generation)
+        && directory
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|path| leaf_lower(path) == "runtime")
+    {
+        return directory
+            .parent()?
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(ToOwned::to_owned);
+    }
+    if directory
+        .parent()
+        .is_none_or(|path| leaf_lower(path) != "runtime")
+    {
+        return None;
+    }
+    let generation = directory.file_name()?.to_str()?;
+    valid_generation(generation).then(|| generation.to_owned())
+}
+
+fn current_runtime_generation_from_install_root(root: &Path) -> Option<String> {
+    if let Some(generation) = environment_generation() {
+        return Some(generation);
+    }
+    if root.as_os_str().is_empty() {
+        return None;
+    }
+    parse_current_generation(&read_small_text_file(&root.join("current.json"))?)
+}
+
+fn current_runtime_generation_for_module(module_path: &Path) -> Option<String> {
+    if let Some(generation) = environment_generation() {
+        return Some(generation);
+    }
+    if module_path.as_os_str().is_empty() {
+        return None;
+    }
+    if let Some(generation) = runtime_generation_for_runtime_module(module_path) {
+        return Some(generation);
+    }
+    if let Some(generation) = module_path
+        .parent()
+        .and_then(|directory| read_small_text_file(&directory.join("fcitx5-tsf.generation")))
+        .and_then(|bytes| parse_plain_generation(&bytes))
+    {
+        return Some(generation);
+    }
+    let root = install_root_for_module(module_path)?;
+    current_runtime_generation_from_install_root(&root)
+}
+
+fn portable_data_root_for_module(module_path: &Path) -> Option<PathBuf> {
+    if module_path.as_os_str().is_empty() {
+        return None;
+    }
+    if let Some(root) = install_root_for_module(module_path) {
+        if root.join("portable.flag").exists() {
+            return Some(root.join("data"));
+        }
+    }
+    let directory = module_path.parent()?;
+    if directory.join("portable.flag").exists() {
+        return Some(directory.join("data"));
+    }
+    let parent = directory.parent()?;
+    parent
+        .join("portable.flag")
+        .exists()
+        .then(|| parent.join("data"))
 }
 
 fn local_name(
@@ -176,9 +363,94 @@ pub unsafe extern "C" fn fcitx5_windows_common_local_name_utf16(
     write_wide_string(&name, output, capacity)
 }
 
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `module_path` must point to exactly `module_path_len` readable UTF-16 code
+/// units. `output` may be null for size queries or writable UTF-16 storage for
+/// `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_current_generation_for_module_utf16(
+    module_path: *const u16,
+    module_path_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(module_path) = path_from_raw(module_path, module_path_len) else {
+        return 0;
+    };
+    let Some(generation) = current_runtime_generation_for_module(&module_path) else {
+        return 0;
+    };
+    write_wide_string(&generation, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `install_root` must point to exactly `install_root_len` readable UTF-16 code
+/// units. `output` may be null for size queries or writable UTF-16 storage for
+/// `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_current_generation_from_install_root_utf16(
+    install_root: *const u16,
+    install_root_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(install_root) = path_from_raw(install_root, install_root_len) else {
+        return 0;
+    };
+    let Some(generation) = current_runtime_generation_from_install_root(&install_root) else {
+        return 0;
+    };
+    write_wide_string(&generation, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `module_path` must point to exactly `module_path_len` readable UTF-16 code
+/// units. `output` may be null for size queries or writable UTF-16 storage for
+/// `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_installation_root_for_module_utf16(
+    module_path: *const u16,
+    module_path_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(module_path) = path_from_raw(module_path, module_path_len) else {
+        return 0;
+    };
+    let Some(root) = install_root_for_module(&module_path) else {
+        return 0;
+    };
+    write_wide_path(&root, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `module_path` must point to exactly `module_path_len` readable UTF-16 code
+/// units. `output` may be null for size queries or writable UTF-16 storage for
+/// `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_portable_data_root_for_module_utf16(
+    module_path: *const u16,
+    module_path_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(module_path) = path_from_raw(module_path, module_path_len) else {
+        return 0;
+    };
+    let Some(root) = portable_data_root_for_module(&module_path) else {
+        return 0;
+    };
+    write_wide_path(&root, output, capacity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn version_and_release_channel_are_stable_static_strings() {
@@ -225,5 +497,68 @@ mod tests {
         assert!(local_name(true, "S", 7, "../bad", "engine", "").is_none());
         assert!(local_name(true, "S", 7, "00000042", "Engine", "").is_none());
         assert!(local_name(true, "S", 7, "00000042", "engine", "../bad").is_none());
+    }
+
+    #[test]
+    fn runtime_generation_and_install_roots_match_cpp_contract() {
+        let root = env::temp_dir().join(format!(
+            "fcitx5-windows-common-generation-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("tsf").join("x64")).expect("create tsf root");
+        fs::create_dir_all(root.join("runtime").join("00000041").join("bin"))
+            .expect("create runtime root");
+        fs::write(root.join("portable.flag"), b"portable\n").expect("write portable flag");
+        fs::write(
+            root.join("current.json"),
+            b"{\n  \"format_version\": 1,\n  \"current_generation\": \"00000042\",\n  \"previous_generation\": \"00000041\",\n  \"build_id\": \"build-42\"\n}\n",
+        )
+        .expect("write current generation");
+        fs::write(
+            root.join("tsf").join("x64").join("fcitx5-tsf.generation"),
+            b"00000044\n",
+        )
+        .expect("write tsf generation");
+        let tsf_module = root.join("tsf").join("x64").join("fcitx5-tsf.dll");
+        let runtime_module = root
+            .join("runtime")
+            .join("00000041")
+            .join("fcitx5-engine.exe");
+        let runtime_bin_module = root
+            .join("runtime")
+            .join("00000041")
+            .join("bin")
+            .join("fcitx5-engine.exe");
+        assert_eq!(
+            current_runtime_generation_from_install_root(&root).as_deref(),
+            Some("00000042")
+        );
+        assert_eq!(
+            current_runtime_generation_for_module(&tsf_module).as_deref(),
+            Some("00000044")
+        );
+        assert_eq!(
+            current_runtime_generation_for_module(&runtime_module).as_deref(),
+            Some("00000041")
+        );
+        assert_eq!(
+            current_runtime_generation_for_module(&runtime_bin_module).as_deref(),
+            Some("00000041")
+        );
+        assert_eq!(
+            install_root_for_module(&runtime_bin_module).as_deref(),
+            Some(root.as_path())
+        );
+        assert_eq!(
+            portable_data_root_for_module(&runtime_bin_module).as_deref(),
+            Some(root.join("data").as_path())
+        );
+        fs::File::create(root.join("current.json"))
+            .expect("truncate current")
+            .write_all(b"{\"current_generation\":\"../bad\"}\n")
+            .expect("write invalid current");
+        assert_eq!(current_runtime_generation_from_install_root(&root), None);
+        let _ = fs::remove_dir_all(&root);
     }
 }
