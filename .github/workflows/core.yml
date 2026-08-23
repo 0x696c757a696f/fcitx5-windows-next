@@ -73,19 +73,36 @@ jobs:
       - name: Build, analyze, test, and run policy checks
         shell: pwsh
         run: |
-          if ('${{ matrix.architecture }}' -eq 'arm64') {
-            # ARM64 is a cross-compile lane on x64 runners: build and run the
-            # static policy checks, but skip CTest because ARM64 executables
-            # cannot start on an x64 host. The native Fcitx engine is x64/x86.
-            ./tools/build.ps1 dev -Architecture arm64 -Configuration Release
-            ./tools/check-runtime-security.ps1 -Architecture arm64 -Configuration Release
-            ./tools/check-secrets.ps1
-            ./tools/check-licenses.ps1
-            ./tools/check-dependencies.ps1
-            ./tools/check-locales.ps1
-            ./tools/check-text-format.ps1
-          } else {
-            ./tools/verify-product.ps1 pr -Architecture ${{ matrix.architecture }}
+          function Invoke-CoreGate {
+            if ('${{ matrix.architecture }}' -eq 'arm64') {
+              # ARM64 is a cross-compile lane on x64 runners: build and run the
+              # static policy checks, but skip CTest because ARM64 executables
+              # cannot start on an x64 host. The native Fcitx engine is x64/x86.
+              ./tools/build.ps1 dev -Architecture arm64 -Configuration Release
+              ./tools/check-runtime-security.ps1 -Architecture arm64 -Configuration Release
+              ./tools/check-secrets.ps1
+              ./tools/check-licenses.ps1
+              ./tools/check-dependencies.ps1
+              ./tools/check-locales.ps1
+              ./tools/check-text-format.ps1
+            } else {
+              ./tools/verify-product.ps1 pr -Architecture ${{ matrix.architecture }}
+            }
+          }
+          try {
+            Invoke-CoreGate
+          } catch {
+            Write-Error $_
+            Write-Host "PATH=$env:PATH"
+            foreach ($tool in @('pwsh', 'cmake', 'ctest', 'ninja', 'clang-cl', 'lld-link', 'sccache', 'rustup', 'cargo', 'rustc')) {
+              $command = Get-Command $tool -ErrorAction SilentlyContinue
+              if ($command) {
+                Write-Host "$tool -> $($command.Source)"
+              } else {
+                Write-Host "$tool -> <missing>"
+              }
+            }
+            throw
           }
 
       - name: Show compiler cache stats
