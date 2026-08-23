@@ -317,6 +317,7 @@ unsafe extern "system" {
         exe_name: *mut u16,
         size: *mut u32,
     ) -> i32;
+    fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
     fn CreateFileW(
         file_name: *const u16,
         desired_access: u32,
@@ -423,6 +424,22 @@ fn process_image_path(process_id: u32) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn process_session_id(process_id: u32) -> Fcitx5WindowsCommonProcessSession {
+    if process_id == 0 {
+        return Fcitx5WindowsCommonProcessSession::default();
+    }
+    let mut session_id = 0_u32;
+    // SAFETY: `session_id` is a valid out pointer for the duration of the call.
+    let ok = unsafe { ProcessIdToSessionId(process_id, &mut session_id) };
+    if ok == 0 {
+        return Fcitx5WindowsCommonProcessSession::default();
+    }
+    Fcitx5WindowsCommonProcessSession {
+        status: 1,
+        session_id,
+    }
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -520,6 +537,13 @@ pub struct Fcitx5WindowsCommonExecutableFileIdentity {
     pub file_index_low: u32,
     pub number_of_links: u32,
     pub final_path_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonProcessSession {
+    pub status: u8,
+    pub session_id: u32,
 }
 
 #[repr(C)]
@@ -866,6 +890,13 @@ pub unsafe extern "C" fn fcitx5_windows_common_process_image_path_utf16(
         return 0;
     };
     write_wide_string(&path, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_process_session_id(
+    process_id: u32,
+) -> Fcitx5WindowsCommonProcessSession {
+    process_session_id(process_id)
 }
 
 #[unsafe(no_mangle)]
@@ -1268,6 +1299,14 @@ mod tests {
         let path = process_image_path(current_process_id).expect("current process image path");
         assert!(path.to_ascii_lowercase().ends_with(".exe"));
         assert!(process_image_path(0).is_none());
+    }
+
+    #[test]
+    fn process_session_id_query_matches_cpp_contract() {
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        let session = process_session_id(current_process_id);
+        assert_eq!(session.status, 1);
+        assert_eq!(process_session_id(0).status, 0);
     }
 
     #[test]

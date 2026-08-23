@@ -33,6 +33,12 @@ extern "C" std::size_t fcitx5_windows_common_process_image_path_utf16(
     std::uint32_t process_id,
     std::uint16_t* output,
     std::size_t capacity);
+struct Fcitx5WindowsCommonProcessSession {
+    std::uint8_t status;
+    std::uint32_t sessionId;
+};
+extern "C" Fcitx5WindowsCommonProcessSession
+fcitx5_windows_common_process_session_id(std::uint32_t process_id);
 extern "C" std::uint8_t fcitx5_windows_common_secure_input_desktop();
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
@@ -250,11 +256,12 @@ bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
             return false;
         ProcessIdentity result;
         result.processId = processId;
-        if (!ProcessIdToSessionId(processId, &result.sessionId) ||
-            !tokenSid(process.get(), result.userSid, result.serviceAccount) ||
+        const auto session = fcitx5_windows_common_process_session_id(processId);
+        if (session.status == 0 || !tokenSid(process.get(), result.userSid, result.serviceAccount) ||
             !processPath(processId, result.executablePath)) {
             return false;
         }
+        result.sessionId = session.sessionId;
         result.executableFileVerified =
             queryExecutableFileIdentity(result.executablePath, result.executableFile);
         output = std::move(result);
