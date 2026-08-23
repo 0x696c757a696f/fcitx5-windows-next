@@ -6548,11 +6548,12 @@ mod repair_ffi {
     #![allow(unsafe_code)]
 
     use super::{
-        activate_installed_version_for_rollback, activate_staged_payload_tree,
+        activate_installed_version_for_rollback, activate_staged_payload_tree, parse_trusted_keys,
         stage_validated_archive_zip, verify_installed_packages_for_repair, PackageId,
-        TrustAlgorithm, TrustedKey,
+        TrustAlgorithm, TrustedKey, MAX_MANIFEST_BYTES,
     };
     use std::ffi::OsString;
+    use std::fs;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::PathBuf;
     use std::slice;
@@ -6590,6 +6591,16 @@ mod repair_ffi {
         pub error_message: [u8; 512],
         pub staged_path: *mut u16,
         pub staged_path_len: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageTrustedKeyResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub keys: *mut Fcitx5TrustedKey,
+        pub key_count: usize,
     }
 
     #[repr(C)]
@@ -6705,6 +6716,118 @@ mod repair_ffi {
             error_message: [0; 512],
             staged_path,
             staged_path_len,
+        }
+    }
+
+    fn trusted_key_error_result(code: &str, message: &str) -> Fcitx5PackageTrustedKeyResult {
+        let mut error_code = [0; 64];
+        let mut error_message = [0; 512];
+        write_ascii(&mut error_code, code);
+        write_ascii(&mut error_message, message);
+        Fcitx5PackageTrustedKeyResult {
+            status: 1,
+            error_code,
+            error_message,
+            keys: std::ptr::null_mut(),
+            key_count: 0,
+        }
+    }
+
+    fn owned_slice(mut bytes: Vec<u8>) -> Fcitx5ByteSlice {
+        let len = bytes.len();
+        if len == 0 {
+            return Fcitx5ByteSlice {
+                data: std::ptr::null(),
+                len: 0,
+            };
+        }
+        let data = bytes.as_mut_ptr();
+        std::mem::forget(bytes);
+        Fcitx5ByteSlice { data, len }
+    }
+
+    fn trusted_key_ok_result(keys: Vec<TrustedKey>) -> Fcitx5PackageTrustedKeyResult {
+        let mut raw: Vec<Fcitx5TrustedKey> = keys
+            .into_iter()
+            .map(|key| Fcitx5TrustedKey {
+                id: owned_slice(key.id().as_str().as_bytes().to_vec()),
+                algorithm: owned_slice(key.algorithm().as_str().as_bytes().to_vec()),
+                public_key: owned_slice(key.public_key().to_vec()),
+                rsa_public_blob: Fcitx5ByteSlice {
+                    data: std::ptr::null(),
+                    len: 0,
+                },
+                revoked: u8::from(key.revoked()),
+            })
+            .collect();
+        let key_count = raw.len();
+        let keys = raw.as_mut_ptr();
+        std::mem::forget(raw);
+        Fcitx5PackageTrustedKeyResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            keys,
+            key_count,
+        }
+    }
+
+    fn free_owned_slice(slice: Fcitx5ByteSlice) {
+        if !slice.data.is_null() && slice.len != 0 {
+            unsafe {
+                drop(Vec::from_raw_parts(
+                    slice.data.cast_mut(),
+                    slice.len,
+                    slice.len,
+                ));
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_read_trusted_keys_utf16(
+        keyring_path: *const u16,
+        keyring_path_len: usize,
+    ) -> Fcitx5PackageTrustedKeyResult {
+        let Some(keyring_path) = path_from_utf16(keyring_path, keyring_path_len) else {
+            return trusted_key_error_result("invalid_file", "trusted key path is invalid");
+        };
+        let bytes = match fs::read(&keyring_path) {
+            Ok(bytes) if !bytes.is_empty() && bytes.len() <= MAX_MANIFEST_BYTES => bytes,
+            _ => {
+                return trusted_key_error_result(
+                    "invalid_file",
+                    "trusted key file is missing or exceeds its resource budget",
+                )
+            }
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            return trusted_key_error_result(
+                "invalid_keyring",
+                "trusted key file is not strict JSON",
+            );
+        };
+        match parse_trusted_keys(&text) {
+            Ok(keys) => trusted_key_ok_result(keys),
+            Err(error) => trusted_key_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_trusted_keys_free(
+        keys: *mut Fcitx5TrustedKey,
+        key_count: usize,
+    ) {
+        if !keys.is_null() {
+            unsafe {
+                let slice = Vec::from_raw_parts(keys, key_count, key_count);
+                for key in &slice {
+                    free_owned_slice(key.id);
+                    free_owned_slice(key.algorithm);
+                    free_owned_slice(key.public_key);
+                    free_owned_slice(key.rsa_public_blob);
+                }
+            }
         }
     }
 

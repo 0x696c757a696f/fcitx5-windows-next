@@ -61,6 +61,14 @@ struct Fcitx5PackageLockfileResult {
   std::size_t entry_count;
 };
 
+struct Fcitx5PackageTrustedKeyResult {
+  int status;
+  std::uint8_t error_code[64];
+  std::uint8_t error_message[512];
+  Fcitx5TrustedKeyNative* keys;
+  std::size_t key_count;
+};
+
 struct Fcitx5RepositorySequenceRepairResult {
   std::uint8_t repaired;
 };
@@ -68,6 +76,9 @@ struct Fcitx5RepositorySequenceRepairResult {
 Fcitx5PackageLockfileResult fcitx5_package_read_lockfile_utf16(
     const wchar_t* install_root, std::size_t install_root_len);
 void fcitx5_package_lockfile_free(Fcitx5PackageLockEntry* entries, std::size_t entry_count);
+Fcitx5PackageTrustedKeyResult fcitx5_package_read_trusted_keys_utf16(
+    const wchar_t* keyring_path, std::size_t keyring_path_len);
+void fcitx5_package_trusted_keys_free(Fcitx5TrustedKeyNative* keys, std::size_t key_count);
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -168,6 +179,27 @@ std::string ffi_string(std::span<const std::uint8_t> bytes) {
           static_cast<std::size_t>(end - bytes.begin())};
 }
 
+std::string ffi_string(Fcitx5ByteSlice bytes) {
+  if (bytes.len == 0) {
+    return {};
+  }
+  if (bytes.data == nullptr) {
+    fail("invalid_keyring", "trusted key set is invalid");
+  }
+  return {reinterpret_cast<const char*>(bytes.data), bytes.len};
+}
+
+std::vector<std::byte> ffi_bytes(Fcitx5ByteSlice bytes) {
+  if (bytes.len == 0) {
+    return {};
+  }
+  if (bytes.data == nullptr) {
+    fail("invalid_keyring", "trusted key set is invalid");
+  }
+  const auto* begin = reinterpret_cast<const std::byte*>(bytes.data);
+  return {begin, begin + bytes.len};
+}
+
 Fcitx5ByteSlice ffi_slice(std::string_view value) {
   return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
@@ -207,6 +239,20 @@ void require_lifecycle_ok(const Fcitx5PackageLifecycleResult& result) {
   }
   fail(std::move(code), std::move(message));
 }
+
+class TrustedKeyResultGuard final {
+ public:
+  explicit TrustedKeyResultGuard(Fcitx5PackageTrustedKeyResult result) : result_(result) {}
+  ~TrustedKeyResultGuard() {
+    fcitx5_package_trusted_keys_free(result_.keys, result_.key_count);
+  }
+  TrustedKeyResultGuard(const TrustedKeyResultGuard&) = delete;
+  TrustedKeyResultGuard& operator=(const TrustedKeyResultGuard&) = delete;
+  [[nodiscard]] const Fcitx5PackageTrustedKeyResult& get() const noexcept { return result_; }
+
+ private:
+  Fcitx5PackageTrustedKeyResult result_{};
+};
 
 std::wstring native_path_string(const std::filesystem::path& path) {
   return path.native();
@@ -1006,90 +1052,31 @@ void activate_staged_package(const std::filesystem::path& staged_root,
 }
 
 std::vector<TrustedKey> read_trusted_keys(const std::filesystem::path& path) {
-  Json document;
-  try {
-    document = Json::parse(read_file_bounded(path, kMaximumManifestBytes));
-  } catch (const Json::exception&) {
-    fail("invalid_keyring", "trusted key file is not strict JSON");
-  }
-  if (!document.is_object() || !document.contains("format_version") ||
-      !document["format_version"].is_number_unsigned()) {
-    fail("invalid_keyring", "trusted key file schema is invalid");
-  }
-  const auto format_version = document["format_version"].get<std::uint32_t>();
-  if (format_version == 1U) {
-    require_object_keys(document, {"format_version", "keys"});
-  } else if (format_version == 2U) {
-    require_object_keys(document, {"format_version", "policy", "keys"});
-    const auto& policy = document["policy"];
-    require_object_keys(policy, {"official_required_signatures", "compatibility_hashes",
-                                 "default_payload_hash"});
-    if (!policy["official_required_signatures"].is_array() ||
-        policy["official_required_signatures"].size() > 8U ||
-        !policy["compatibility_hashes"].is_array() ||
-        policy["compatibility_hashes"].size() > 8U ||
-        require_string(policy, "default_payload_hash", 32U) != "blake3") {
-      fail("invalid_keyring", "trusted key policy is invalid");
+  const std::wstring keyring = native_path_string(path);
+  const TrustedKeyResultGuard guard(
+      fcitx5_package_read_trusted_keys_utf16(keyring.data(), keyring.size()));
+  const auto& keyring_result = guard.get();
+  if (keyring_result.status != 0) {
+    std::string code = ffi_string(keyring_result.error_code);
+    std::string message = ffi_string(keyring_result.error_message);
+    if (code.empty()) {
+      code = "invalid_keyring";
     }
-    for (const auto& algorithm : policy["official_required_signatures"]) {
-      if (!algorithm.is_string())
-        fail("invalid_keyring", "trusted key policy algorithm is invalid");
-      const auto value = algorithm.get<std::string>();
-      if (value != "mldsa65" && value != "slhdsa-sha2-128s") {
-        fail("invalid_keyring", "trusted key policy requires unsupported algorithm");
-      }
+    if (message.empty()) {
+      message = "trusted key file is invalid";
     }
-  } else {
-    fail("invalid_keyring", "trusted key format version is unsupported");
-  }
-  if (!document["keys"].is_array() || document["keys"].size() > 64U) {
-    fail("invalid_keyring", "trusted key file schema is invalid");
+    fail(std::move(code), std::move(message));
   }
   std::vector<TrustedKey> result;
-  std::set<std::string, std::less<>> ids;
-  for (const auto& item : document["keys"]) {
-    if (format_version == 1U) {
-      require_object_keys(item, {"key_id", "algorithm", "status", "public_key_base64"});
-    } else {
-      require_object_keys(item, {"key_id", "algorithm", "status", "public_key_base64",
-                                 "scope", "channels"});
-      if (!item["scope"].is_array() || item["scope"].empty() || item["scope"].size() > 8U ||
-          !item["channels"].is_array() || item["channels"].empty() ||
-          item["channels"].size() > 16U) {
-        fail("invalid_keyring", "trusted key scope/channel policy is invalid");
-      }
-    }
-    auto id = require_string(item, "key_id", kMaximumIdBytes);
-    const auto algorithm = require_string(item, "algorithm", 32U);
-    const auto status = require_string(item, "status", 16U);
-    const auto public_key = require_string(item, "public_key_base64", 16384U);
-    if (!is_lower_package_id(id) || (status != "trusted" && status != "revoked") ||
-        !ids.emplace(id).second) {
-      fail("invalid_keyring", "trusted key record is invalid");
-    }
-    auto blob = decode_base64(public_key);
-    if (algorithm == "rsa-2048-sha256") {
-      if (blob.size() < sizeof(BCRYPT_RSAKEY_BLOB)) {
-        fail("invalid_keyring", "RSA public key blob is truncated");
-      }
-      BCRYPT_RSAKEY_BLOB header{};
-      std::memcpy(&header, blob.data(), sizeof(header));
-      if (header.Magic != BCRYPT_RSAPUBLIC_MAGIC || header.BitLength < 2048U ||
-          header.BitLength > 4096U) {
-        fail("invalid_keyring", "RSA public key strength or representation is invalid");
-      }
-    } else if (format_version == 2U && algorithm == "mldsa65") {
-      if (blob.size() != 1952U) {
-        fail("invalid_keyring", "ML-DSA-65 public key length is invalid");
-      }
-    } else if (format_version == 2U && algorithm == "slhdsa-sha2-128s") {
-      if (blob.size() != 32U) {
-        fail("invalid_keyring", "SLH-DSA public key length is invalid");
-      }
-    } else {
-      fail("invalid_keyring", "trusted key algorithm is unsupported");
-    }
-    result.push_back(TrustedKey{std::move(id), algorithm, std::move(blob), status == "revoked"});
+  result.reserve(keyring_result.key_count);
+  for (std::size_t index = 0; index < keyring_result.key_count; ++index) {
+    const auto& key = keyring_result.keys[index];
+    result.push_back(TrustedKey{
+        ffi_string(key.id),
+        ffi_string(key.algorithm),
+        ffi_bytes(key.public_key),
+        key.revoked != 0,
+    });
   }
   return result;
 }

@@ -401,6 +401,7 @@ int main(int argc, char** argv) {
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("read_installed_lockfile") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_read_lockfile_utf16") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_read_trusted_keys_utf16") == std::string::npos ||
         rustPackageCore.find("write_installed_lockfile_atomic") == std::string::npos ||
         rustPackageCore.find("activate_staged_payload_tree") == std::string::npos ||
         rustPackageCore.find("set_installed_package_state") == std::string::npos ||
@@ -447,6 +448,12 @@ int main(int argc, char** argv) {
         packageSource.find("manifest key is not trusted at activation time") !=
             std::string::npos ||
         packageSource.find("packages.lock schema is invalid") != std::string::npos ||
+        packageSource.find("trusted key policy requires unsupported algorithm") !=
+            std::string::npos ||
+        packageSource.find("RSA public key strength or representation is invalid") !=
+            std::string::npos ||
+        packageSource.find("trusted key scope/channel policy is invalid") !=
+            std::string::npos ||
         packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||
