@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace fcitx::windows::ui {
@@ -68,6 +69,15 @@ struct Fcitx5CandidateRenderItemOutput {
     std::uint8_t drawComment{};
 };
 
+struct Fcitx5CandidateSelectionIntent {
+    std::uint32_t targetProcessId{};
+    std::uint64_t engineEpoch{};
+    std::uint64_t contextId{};
+    std::uint64_t compositionId{};
+    std::uint64_t revision{};
+    std::uint64_t candidateId{};
+};
+
 extern "C" int fcitx5_candidate_layout_run(const Fcitx5CandidateLayoutInput* input,
                                             const Fcitx5CandidateLayoutSize* items,
                                             std::size_t itemCount,
@@ -81,6 +91,12 @@ extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemI
                                                  std::uint8_t scrollMode,
                                                  Fcitx5CandidateRenderItemOutput* outItems,
                                                  float* outLabelColumnWidth);
+extern "C" std::uint8_t fcitx5_candidate_hit_test(const Fcitx5CandidateLayoutRect* rects,
+                                                   std::size_t rectCount, float x, float y,
+                                                   std::size_t* outIndex);
+extern "C" Fcitx5CandidateSelectionIntent fcitx5_candidate_selection_intent(
+    std::uint32_t targetProcessId, std::uint64_t engineEpoch, std::uint64_t contextId,
+    std::uint64_t compositionId, std::uint64_t revision, std::uint64_t candidateId);
 
 } // namespace detail
 
@@ -144,6 +160,20 @@ struct RenderItemSegments {
     Rect text{};
     Rect comment{};
     bool drawComment{};
+};
+
+struct CandidateSelectionIntent {
+    std::uint32_t targetProcessId{};
+    std::uint64_t engineEpoch{};
+    std::uint64_t contextId{};
+    std::uint64_t compositionId{};
+    std::uint64_t revision{};
+    std::uint64_t candidateId{};
+
+    [[nodiscard]] bool valid() const noexcept {
+        return targetProcessId != 0 && engineEpoch != 0 && contextId != 0 &&
+               compositionId != 0 && revision != 0 && candidateId != 0;
+    }
 };
 
 [[nodiscard]] inline std::uint32_t toRust(Orientation value) noexcept {
@@ -262,6 +292,29 @@ struct RenderItemSegments {
         });
     }
     return result;
+}
+
+template <typename RectType>
+[[nodiscard]] inline std::optional<std::size_t> hitTestCandidate(
+    const std::vector<RectType>& itemRects, float x, float y) noexcept {
+    std::vector<detail::Fcitx5CandidateLayoutRect> rustRects;
+    rustRects.reserve(itemRects.size());
+    for (const auto& rectangle : itemRects)
+        rustRects.push_back({rectangle.left, rectangle.top, rectangle.right, rectangle.bottom});
+    std::size_t index = 0;
+    if (detail::fcitx5_candidate_hit_test(rustRects.data(), rustRects.size(), x, y, &index) == 0)
+        return std::nullopt;
+    return index;
+}
+
+[[nodiscard]] inline CandidateSelectionIntent makeCandidateSelectionIntent(
+    std::uint32_t targetProcessId, std::uint64_t engineEpoch,
+    std::uint64_t contextId, std::uint64_t compositionId,
+    std::uint64_t revision, std::uint64_t candidateId) noexcept {
+    const auto intent = detail::fcitx5_candidate_selection_intent(
+        targetProcessId, engineEpoch, contextId, compositionId, revision, candidateId);
+    return {intent.targetProcessId, intent.engineEpoch, intent.contextId,
+            intent.compositionId, intent.revision, intent.candidateId};
 }
 
 } // namespace fcitx::windows::ui

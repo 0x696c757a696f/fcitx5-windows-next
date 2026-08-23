@@ -578,10 +578,12 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CANDIDATE-MODEL-RUST: candidate model semantics must be Rust-owned and the old C++ source must stay deleted");
     }
-    if (std::filesystem::exists(sourceRoot / "src/ui/candidate_interaction.cpp") ||
-        cmakeSource.find("add_library(fcitx5_candidate_interaction INTERFACE)") ==
-            std::string::npos ||
+    if (std::filesystem::exists(sourceRoot / "src/ui/candidate_interaction.h") ||
+        std::filesystem::exists(sourceRoot / "src/ui/candidate_interaction.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/unit/candidate_interaction_test.cpp") ||
+        cmakeSource.find("fcitx5_candidate_interaction") != std::string::npos ||
         cmakeSource.find("src/ui/candidate_interaction.cpp") != std::string::npos ||
+        cmakeSource.find("tests/unit/candidate_interaction_test.cpp") != std::string::npos ||
         candidateLayoutSource.find("fcitx5_candidate_hit_test") == std::string::npos ||
         candidateLayoutSource.find("fcitx5_candidate_selection_intent") ==
             std::string::npos ||

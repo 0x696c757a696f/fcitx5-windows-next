@@ -1,5 +1,4 @@
 #include "candidate_layout.h"
-#include "candidate_interaction.h"
 #include "candidate_model.h"
 #include "config_model.h"
 #include "peer_verification.h"

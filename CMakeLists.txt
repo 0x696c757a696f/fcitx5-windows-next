@@ -591,15 +591,6 @@ add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
 
 target_link_libraries(fcitx5_config_app PRIVATE fcitx5::candidate_layout)
 
-add_library(fcitx5_candidate_interaction INTERFACE)
-add_library(fcitx5::candidate_interaction ALIAS fcitx5_candidate_interaction)
-target_compile_features(fcitx5_candidate_interaction INTERFACE cxx_std_20)
-target_include_directories(
-  fcitx5_candidate_interaction INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
-target_link_libraries(fcitx5_candidate_interaction INTERFACE fcitx5_candidate_core_rust d2d1
-                                                            user32 ws2_32 userenv ntdll)
-add_dependencies(fcitx5_candidate_interaction fcitx5_candidate_core_rustlib)
-
 add_executable(
   fcitx5_ui WIN32
   src/ui/ui_main.cpp
@@ -607,7 +598,7 @@ add_executable(
 set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
   target_link_libraries(
   fcitx5_ui
-  PRIVATE fcitx5::candidate_model fcitx5::candidate_layout fcitx5::candidate_interaction fcitx5::config
+  PRIVATE fcitx5::candidate_model fcitx5::candidate_layout fcitx5::config
           fcitx5::protocol fcitx5::ipc_client fcitx5::platform
           d2d1 dwrite shell32 ole32)
 fcitx_apply_project_options(fcitx5_ui)
@@ -1203,11 +1194,6 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_candidate_navigation_test)
   add_test(NAME candidate-navigation-contract COMMAND fcitx5_candidate_navigation_test)
 
-  add_executable(fcitx5_candidate_interaction_test tests/unit/candidate_interaction_test.cpp)
-  target_link_libraries(fcitx5_candidate_interaction_test PRIVATE fcitx5::candidate_interaction)
-  fcitx_apply_project_options(fcitx5_candidate_interaction_test)
-  fcitx_apply_binary_hardening(fcitx5_candidate_interaction_test)
-  add_test(NAME candidate-interaction-contract COMMAND fcitx5_candidate_interaction_test)
   add_test(NAME candidate-ui-device-smoke
            COMMAND fcitx5_ui --self-test --simulate-device-loss)
   add_test(NAME candidate-ui-safe-mode-smoke COMMAND fcitx5_ui --self-test --safe-mode)
