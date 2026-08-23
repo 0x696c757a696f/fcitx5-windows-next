@@ -82,6 +82,19 @@ std::wstring inputMethodDisplay(const protocol::EngineStatusResponse& status) {
     });
 }
 
+const std::uint16_t* utf16Data(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
+std::wstring configCommandLine(std::wstring_view configPath, std::wstring_view arguments) {
+    return callRustText([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_launcher_config_command_utf16(
+            utf16Data(configPath), configPath.size(), utf16Data(arguments), arguments.size(),
+            output, capacity);
+    });
+}
+
 std::wstring tooltipText(LauncherState launcherState, EngineState engineState,
                          const protocol::EngineStatusResponse& inputMethodStatus) {
     const std::wstring productName = fcitx::windows::kReleaseIdentity.service_description;
@@ -250,11 +263,10 @@ void TrayIcon::launch(const wchar_t* arguments) noexcept {
     if (configPath_.empty() ||
         GetFileAttributesW(configPath_.c_str()) == INVALID_FILE_ATTRIBUTES)
         return;
-    std::wstring command = L"\"" + configPath_ + L"\"";
-    if (arguments && *arguments) {
-        command.push_back(L' ');
-        command.append(arguments);
-    }
+    const std::wstring_view argumentView = arguments ? std::wstring_view(arguments) : L"";
+    const std::wstring command = configCommandLine(configPath_, argumentView);
+    if (command.empty())
+        return;
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{sizeof(startup)};

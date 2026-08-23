@@ -125,6 +125,19 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustLauncherCoreSource.find("tray_text_and_tooltip_match_cpp_display_contract") ==
             std::string::npos ||
+        launcherSource.find("std::wstring quote") != std::string::npos ||
+        launcherSource.find("quote(enginePath)") != std::string::npos ||
+        launcherSource.find("quote(uiPath)") != std::string::npos ||
+        launcherSource.find("std::to_wstring(GetCurrentProcessId())") !=
+            std::string::npos ||
+        trayIconSource.find("L\"\\\"\" + configPath_") != std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_engine_command_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_ui_command_utf16") == std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_config_command_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("launcher_child_command_lines_match_cpp_contract") ==
+            std::string::npos ||
         cmakeSource.find("FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}") ==
             std::string::npos) {
         return fail("LAUNCHER-RUST: launcher ledger parse/save/default-path policy must be Rust-owned");

@@ -74,4 +74,17 @@ std::size_t fcitx5_launcher_tray_tooltip_utf16(
     const std::uint8_t* native_name, std::size_t native_name_len, const std::uint8_t* name,
     std::size_t name_len, const std::uint8_t* id, std::size_t id_len, std::uint16_t* output,
     std::size_t capacity);
+std::size_t fcitx5_launcher_engine_command_utf16(
+    const std::uint16_t* engine_path, std::size_t engine_path_len,
+    const std::uint16_t* ready_event, std::size_t ready_event_len,
+    const std::uint16_t* stop_event, std::size_t stop_event_len,
+    const std::uint16_t* generation, std::size_t generation_len, std::uint8_t safe_mode,
+    std::uint16_t* output, std::size_t capacity);
+std::size_t fcitx5_launcher_ui_command_utf16(
+    const std::uint16_t* ui_path, std::size_t ui_path_len, std::uint32_t parent_pid,
+    const std::uint16_t* generation, std::size_t generation_len, std::uint8_t safe_mode,
+    std::uint16_t* output, std::size_t capacity);
+std::size_t fcitx5_launcher_config_command_utf16(
+    const std::uint16_t* config_path, std::size_t config_path_len, const std::uint16_t* arguments,
+    std::size_t arguments_len, std::uint16_t* output, std::size_t capacity);
 }

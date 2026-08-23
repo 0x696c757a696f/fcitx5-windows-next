@@ -38,8 +38,6 @@ bool absoluteWindowsPath(std::wstring_view path) {
                reinterpret_cast<const std::uint16_t*>(path.data()), path.size()) != 0;
 }
 
-std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
-
 std::wstring executableDirectory() {
     std::wstring path(32'768, L'\0');
     const DWORD size =
@@ -57,6 +55,19 @@ std::wstring executableDirectory() {
 const std::uint16_t* utf16Data(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
+template <typename Producer>
+std::wstring callRustWide(Producer producer) {
+    const std::size_t required = producer(nullptr, 0);
+    if (required == 0)
+        return {};
+    std::vector<wchar_t> buffer(required);
+    const std::size_t written =
+        producer(reinterpret_cast<std::uint16_t*>(buffer.data()), buffer.size());
+    if (written == 0 || written > buffer.size())
+        return {};
+    return std::wstring(buffer.data(), buffer.data() + written);
 }
 
 bool resolveDefaultProcessPaths(std::wstring_view directory, std::wstring_view generation,
@@ -80,6 +91,26 @@ bool resolveDefaultProcessPaths(std::wstring_view directory, std::wstring_view g
     enginePath.assign(engine.data(), engine.data() + engineLen);
     uiPath.assign(ui.data(), ui.data() + uiLen);
     return true;
+}
+
+std::wstring engineCommandLine(std::wstring_view enginePath, std::wstring_view readyEventName,
+                               std::wstring_view stopEventName, std::wstring_view generation,
+                               bool safeMode) {
+    return callRustWide([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_launcher_engine_command_utf16(
+            utf16Data(enginePath), enginePath.size(), utf16Data(readyEventName),
+            readyEventName.size(), utf16Data(stopEventName), stopEventName.size(),
+            utf16Data(generation), generation.size(), safeMode ? 1 : 0, output, capacity);
+    });
+}
+
+std::wstring uiCommandLine(std::wstring_view uiPath, DWORD parentProcessId,
+                           std::wstring_view generation, bool safeMode) {
+    return callRustWide([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_launcher_ui_command_utf16(
+            utf16Data(uiPath), uiPath.size(), parentProcessId, utf16Data(generation),
+            generation.size(), safeMode ? 1 : 0, output, capacity);
+    });
 }
 
 bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeout) {
@@ -151,11 +182,13 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
     HANDLE stopEvent = CreateEventW(security, TRUE, FALSE, stopEventName.c_str());
     if (!stopEvent)
         return false;
-    std::wstring command = quote(enginePath) + L" --ready-event " + quote(readyEventName) +
-                           L" --stop-event " + quote(stopEventName) + L" --generation " +
-                           quote(platform::currentRuntimeGeneration());
-    if (safeMode)
-        command += L" --safe-mode";
+    const std::wstring command =
+        engineCommandLine(enginePath, readyEventName, stopEventName,
+                          platform::currentRuntimeGeneration(), safeMode);
+    if (command.empty()) {
+        CloseHandle(stopEvent);
+        return false;
+    }
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};
@@ -179,11 +212,11 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
 }
 
 bool launchUi(const std::wstring& uiPath, bool safeMode, HANDLE job, UiProcess& output) {
-    std::wstring command =
-        quote(uiPath) + L" --parent-pid " + std::to_wstring(GetCurrentProcessId()) +
-        L" --generation " + quote(platform::currentRuntimeGeneration());
-    if (safeMode)
-        command += L" --safe-mode";
+    const std::wstring command =
+        uiCommandLine(uiPath, GetCurrentProcessId(), platform::currentRuntimeGeneration(),
+                      safeMode);
+    if (command.empty())
+        return false;
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};

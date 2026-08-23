@@ -365,15 +365,19 @@ fn write_utf16_path_checked(value: &Path, out: *mut u16, capacity: usize) -> Opt
 
 fn write_utf16_string(value: &str, out: *mut u16, capacity: usize) -> usize {
     let wide: Vec<u16> = value.encode_utf16().collect();
+    write_utf16_units(&wide, out, capacity)
+}
+
+fn write_utf16_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
     if !out.is_null() && capacity != 0 {
-        let count = wide.len().min(capacity);
+        let count = value.len().min(capacity);
         if count != 0 {
             // SAFETY: The caller supplied writable storage for `capacity` u16
             // values. We copy at most that many initialized elements.
-            unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), out, count) };
+            unsafe { std::ptr::copy_nonoverlapping(value.as_ptr(), out, count) };
         }
     }
-    wide.len()
+    value.len()
 }
 
 fn utf16_string_from_raw(text: *const u16, len: usize) -> Option<String> {
@@ -459,6 +463,69 @@ fn input_method_display_from_raw(
     .flatten()
     .next()
     .unwrap_or_default()
+}
+
+fn append_literal(output: &mut Vec<u16>, text: &str) {
+    output.extend(text.encode_utf16());
+}
+
+fn append_os(output: &mut Vec<u16>, value: &OsStr) {
+    output.extend(value.encode_wide());
+}
+
+fn append_quoted_os(output: &mut Vec<u16>, value: &OsStr) {
+    output.push(b'"' as u16);
+    append_os(output, value);
+    output.push(b'"' as u16);
+}
+
+fn launcher_engine_command(
+    engine_path: &OsStr,
+    ready_event: &OsStr,
+    stop_event: &OsStr,
+    generation: &OsStr,
+    safe_mode: bool,
+) -> Vec<u16> {
+    let mut command = Vec::new();
+    append_quoted_os(&mut command, engine_path);
+    append_literal(&mut command, " --ready-event ");
+    append_quoted_os(&mut command, ready_event);
+    append_literal(&mut command, " --stop-event ");
+    append_quoted_os(&mut command, stop_event);
+    append_literal(&mut command, " --generation ");
+    append_quoted_os(&mut command, generation);
+    if safe_mode {
+        append_literal(&mut command, " --safe-mode");
+    }
+    command
+}
+
+fn launcher_ui_command(
+    ui_path: &OsStr,
+    parent_pid: u32,
+    generation: &OsStr,
+    safe_mode: bool,
+) -> Vec<u16> {
+    let mut command = Vec::new();
+    append_quoted_os(&mut command, ui_path);
+    append_literal(&mut command, " --parent-pid ");
+    append_literal(&mut command, &parent_pid.to_string());
+    append_literal(&mut command, " --generation ");
+    append_quoted_os(&mut command, generation);
+    if safe_mode {
+        append_literal(&mut command, " --safe-mode");
+    }
+    command
+}
+
+fn launcher_config_command(config_path: &OsStr, arguments: &OsStr) -> Vec<u16> {
+    let mut command = Vec::new();
+    append_quoted_os(&mut command, config_path);
+    if !arguments.is_empty() {
+        append_literal(&mut command, " ");
+        append_os(&mut command, arguments);
+    }
+    command
 }
 
 fn start_suppressed(state: LauncherState) -> bool {
@@ -949,6 +1016,100 @@ pub unsafe extern "C" fn fcitx5_launcher_tray_tooltip_utf16(
     write_utf16_string(&tooltip, output, capacity)
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// Input pointers must be null only when their corresponding length is zero, or
+/// point to valid UTF-16 buffers with exactly the provided lengths. `output` may
+/// be null for size queries or writable UTF-16 storage for `capacity` code
+/// units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_launcher_engine_command_utf16(
+    engine_path: *const u16,
+    engine_path_len: usize,
+    ready_event: *const u16,
+    ready_event_len: usize,
+    stop_event: *const u16,
+    stop_event_len: usize,
+    generation: *const u16,
+    generation_len: usize,
+    safe_mode: u8,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(engine_path) = os_string_from_wide(engine_path, engine_path_len) else {
+        return 0;
+    };
+    let Some(ready_event) = os_string_from_wide(ready_event, ready_event_len) else {
+        return 0;
+    };
+    let Some(stop_event) = os_string_from_wide(stop_event, stop_event_len) else {
+        return 0;
+    };
+    let Some(generation) = os_string_from_wide(generation, generation_len) else {
+        return 0;
+    };
+    let command = launcher_engine_command(
+        &engine_path,
+        &ready_event,
+        &stop_event,
+        &generation,
+        safe_mode != 0,
+    );
+    write_utf16_units(&command, output, capacity)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// Input pointers must be null only when their corresponding length is zero, or
+/// point to valid UTF-16 buffers with exactly the provided lengths. `output` may
+/// be null for size queries or writable UTF-16 storage for `capacity` code
+/// units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_launcher_ui_command_utf16(
+    ui_path: *const u16,
+    ui_path_len: usize,
+    parent_pid: u32,
+    generation: *const u16,
+    generation_len: usize,
+    safe_mode: u8,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(ui_path) = os_string_from_wide(ui_path, ui_path_len) else {
+        return 0;
+    };
+    let Some(generation) = os_string_from_wide(generation, generation_len) else {
+        return 0;
+    };
+    let command = launcher_ui_command(&ui_path, parent_pid, &generation, safe_mode != 0);
+    write_utf16_units(&command, output, capacity)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// Input pointers must be null only when their corresponding length is zero, or
+/// point to valid UTF-16 buffers with exactly the provided lengths. `output` may
+/// be null for size queries or writable UTF-16 storage for `capacity` code
+/// units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_launcher_config_command_utf16(
+    config_path: *const u16,
+    config_path_len: usize,
+    arguments: *const u16,
+    arguments_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(config_path) = os_string_from_wide(config_path, config_path_len) else {
+        return 0;
+    };
+    let Some(arguments) = os_string_from_wide(arguments, arguments_len) else {
+        return 0;
+    };
+    let command = launcher_config_command(&config_path, &arguments);
+    write_utf16_units(&command, output, capacity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1225,6 +1386,39 @@ mod tests {
         assert_eq!(
             String::from_utf16(&output).expect("tooltip should be valid UTF-16"),
             "Fcitx5 for Windows Next — Running — 五笔"
+        );
+    }
+
+    #[test]
+    fn launcher_child_command_lines_match_cpp_contract() {
+        let to_string = |value: Vec<u16>| {
+            String::from_utf16(&value).expect("command line should be UTF-16 text")
+        };
+        assert_eq!(
+            to_string(launcher_engine_command(
+                OsStr::new(r"C:\Fcitx5\bin\fcitx5-engine.exe"),
+                OsStr::new("ready"),
+                OsStr::new("stop"),
+                OsStr::new("g1"),
+                true,
+            )),
+            r#""C:\Fcitx5\bin\fcitx5-engine.exe" --ready-event "ready" --stop-event "stop" --generation "g1" --safe-mode"#
+        );
+        assert_eq!(
+            to_string(launcher_ui_command(
+                OsStr::new(r"C:\Fcitx5\bin\fcitx5-ui.exe"),
+                42,
+                OsStr::new("g1"),
+                false,
+            )),
+            r#""C:\Fcitx5\bin\fcitx5-ui.exe" --parent-pid 42 --generation "g1""#
+        );
+        assert_eq!(
+            to_string(launcher_config_command(
+                OsStr::new(r"C:\Fcitx5\bin\fcitx5-config.exe"),
+                OsStr::new("--diagnostics"),
+            )),
+            r#""C:\Fcitx5\bin\fcitx5-config.exe" --diagnostics"#
         );
     }
 }
