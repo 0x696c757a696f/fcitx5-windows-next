@@ -438,10 +438,15 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_wide_free") == std::string::npos ||
         rustPackageCore.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
+        rustPackageCore.find("fcitx5_repository_verify_index_struct_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_repository_verify_index_envelope_utf8") ==
             std::string::npos ||
         rustPackageCore.find("fcitx5_repository_verify_index_parsed_envelope_utf8") ==
             std::string::npos ||
+        rustPackageCore.find("fcitx5_repository_verify_index_parsed_envelope_struct_utf8") ==
+            std::string::npos ||
+        rustPackageCore.find("fcitx5_repository_index_free") == std::string::npos ||
         rustPackageCore.find("fcitx5_repository_find_package_index_utf8") ==
             std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
@@ -461,9 +466,11 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("verify_signature_envelope") == std::string::npos ||
         packageCoreHeader.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
         packageCoreHeader.find("fcitx5_package_stage_payload_utf16") == std::string::npos ||
-        packageCoreHeader.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
-        packageCoreHeader.find("fcitx5_repository_verify_index_parsed_envelope_utf8") ==
+        packageCoreHeader.find("fcitx5_repository_verify_index_struct_utf8") ==
             std::string::npos ||
+        packageCoreHeader.find("fcitx5_repository_verify_index_parsed_envelope_struct_utf8") ==
+            std::string::npos ||
+        packageCoreHeader.find("fcitx5_repository_index_free") == std::string::npos ||
         packageCoreHeader.find("find_repository_package") == std::string::npos ||
         packageCoreHeader.find("rust_trusted_key_views") == std::string::npos ||
         packageCoreHeader.find("entry.architecture == \"any\"") != std::string::npos ||
@@ -475,6 +482,11 @@ int main(int argc, char** argv) {
         packageCoreHeader.find("repository signature envelope encoding failed") !=
             std::string::npos ||
         packageCoreHeader.find("json_string(std::string_view") != std::string::npos ||
+        packageCoreHeader.find("nlohmann") != std::string::npos ||
+        packageCoreHeader.find("parse_verified_repository_json") != std::string::npos ||
+        packageCoreHeader.find("verified repository payload is not strict JSON") !=
+            std::string::npos ||
+        packageCoreHeader.find("fcitx5_repository_blob_free") != std::string::npos ||
         packageSource.find("write_lockfile_atomic") != std::string::npos ||
         packageSource.find("unable to atomically publish version directory") !=
             std::string::npos ||

@@ -12,8 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include <nlohmann/json.hpp>
-
 namespace fcitx::package {
 
 // Package identifiers are strictly lowercase alphanumerics with '.', '-', '_',
@@ -245,18 +243,6 @@ struct Fcitx5PackageStageResult {
   std::size_t staged_path_len{};
 };
 
-struct Fcitx5RepositoryBlob {
-  std::uint8_t* data{};
-  std::size_t len{};
-};
-
-struct Fcitx5RepositoryResult {
-  int status{};
-  char error_code[64]{};
-  char error_message[512]{};
-  Fcitx5RepositoryBlob blob{};
-};
-
 struct Fcitx5RepositoryFindEntry {
   Fcitx5PackageByteSlice id{};
   Fcitx5PackageByteSlice architecture{};
@@ -266,6 +252,37 @@ struct Fcitx5RepositorySignatureEnvelopeEntry {
   Fcitx5PackageByteSlice key_id{};
   Fcitx5PackageByteSlice algorithm{};
   Fcitx5PackageByteSlice signature{};
+};
+
+struct Fcitx5RepositoryDependencyResult {
+  Fcitx5PackageByteSlice id{};
+  Fcitx5PackageByteSlice version{};
+};
+
+struct Fcitx5RepositoryEntryResult {
+  Fcitx5PackageByteSlice id{};
+  Fcitx5PackageByteSlice title{};
+  Fcitx5PackageByteSlice summary{};
+  Fcitx5PackageByteSlice version{};
+  std::uint64_t release_sequence{};
+  std::uint32_t package_type{};
+  Fcitx5PackageByteSlice architecture{};
+  Fcitx5PackageByteSlice download_url{};
+  Fcitx5PackageByteSlice sha256{};
+  Fcitx5RepositoryDependencyResult* dependencies{};
+  std::size_t dependency_count{};
+};
+
+struct Fcitx5RepositoryIndexResult {
+  int status{};
+  char error_code[64]{};
+  char error_message[512]{};
+  std::uint32_t format_version{};
+  Fcitx5PackageByteSlice channel{};
+  Fcitx5PackageByteSlice generated_at{};
+  Fcitx5PackageByteSlice key_id{};
+  Fcitx5RepositoryEntryResult* packages{};
+  std::size_t package_count{};
 };
 
 extern "C" Fcitx5PackageStageResult fcitx5_package_stage_archive_utf16(
@@ -280,12 +297,12 @@ extern "C" Fcitx5PackageStageResult fcitx5_package_stage_payload_utf16(
     const std::uint8_t* signature, std::size_t signature_len,
     const Fcitx5PackageTrustedKey* trusted_key);
 extern "C" void fcitx5_package_wide_free(wchar_t* ptr, std::size_t len);
-extern "C" Fcitx5RepositoryResult fcitx5_repository_verify_index_utf8(
+extern "C" Fcitx5RepositoryIndexResult fcitx5_repository_verify_index_struct_utf8(
     const std::uint8_t* index_data, std::size_t index_len, const std::uint8_t* signature_data,
     std::size_t signature_len, const Fcitx5PackageTrustedKey* trusted_keys,
     std::size_t trusted_key_count, const std::uint8_t* expected_channel,
     std::size_t expected_channel_len);
-extern "C" Fcitx5RepositoryResult fcitx5_repository_verify_index_parsed_envelope_utf8(
+extern "C" Fcitx5RepositoryIndexResult fcitx5_repository_verify_index_parsed_envelope_struct_utf8(
     const std::uint8_t* index_data, std::size_t index_len, std::uint32_t format_version,
     Fcitx5PackageByteSlice signed_object, Fcitx5PackageByteSlice canonicalization,
     const Fcitx5RepositorySignatureEnvelopeEntry* signatures, std::size_t signature_count,
@@ -296,7 +313,7 @@ extern "C" std::size_t fcitx5_repository_find_package_index_utf8(
     const Fcitx5RepositoryFindEntry* entries, std::size_t entry_count,
     const std::uint8_t* package_id, std::size_t package_id_len,
     const std::uint8_t* architecture, std::size_t architecture_len);
-extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len);
+extern "C" void fcitx5_repository_index_free(const Fcitx5RepositoryIndexResult* index);
 
 [[nodiscard]] inline Fcitx5PackageByteSlice byte_slice(std::string_view value) noexcept {
   return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
@@ -336,70 +353,87 @@ extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len)
   return {bytes, static_cast<std::size_t>(nul - bytes)};
 }
 
-[[nodiscard]] inline RepositoryIndex parse_verified_repository_json(std::string_view bytes) {
-  nlohmann::json document;
-  try {
-    document = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, true, true);
-  } catch (const nlohmann::json::exception&) {
-    throw PackageError("invalid_repository", "verified repository payload is not strict JSON");
+[[nodiscard]] inline std::string repository_string(Fcitx5PackageByteSlice bytes) {
+  if (bytes.len == 0) {
+    return {};
   }
-  if (!document.is_object()) {
-    throw PackageError("invalid_repository", "verified repository payload is malformed");
+  if (bytes.data == nullptr) {
+    throw PackageError("invalid_repository", "verified repository payload contains invalid data");
   }
-  RepositoryIndex result;
-  try {
-    result.format_version = document.at("format_version").get<std::uint32_t>();
-    result.channel = document.at("channel").get<std::string>();
-    result.generated_at = document.at("generated_at").get<std::string>();
-    result.key_id = document.at("key_id").get<std::string>();
-    const auto& packages = document.at("packages");
-    for (const auto& item : packages) {
-      RepositoryEntry entry;
-      entry.id = item.at("id").get<std::string>();
-      entry.title = item.at("title").get<std::string>();
-      entry.summary = item.at("summary").get<std::string>();
-      entry.version = item.at("version").get<std::string>();
-      entry.release_sequence = item.at("release_sequence").get<std::uint64_t>();
-      const auto type = item.at("type").get<std::string>();
-      if (type == "core") {
-        entry.type = PackageType::core;
-      } else if (type == "addon") {
-        entry.type = PackageType::addon;
-      } else if (type == "inputmethod-data") {
-        entry.type = PackageType::input_method_data;
-      } else if (type == "theme") {
-        entry.type = PackageType::theme;
-      } else if (type == "translation") {
-        entry.type = PackageType::translation;
-      } else {
-        throw PackageError("invalid_repository",
-                           "verified repository payload has an unsupported package type");
-      }
-      entry.architecture = item.at("architecture").get<std::string>();
-      entry.download_url = item.at("download_url").get<std::string>();
-      entry.sha256 = item.at("sha256").get<std::string>();
-      for (const auto& dependency : item.at("dependencies")) {
-        Dependency parsed;
-        parsed.id = dependency.at("id").get<std::string>();
-        parsed.version = dependency.at("version").get<std::string>();
-        entry.dependencies.push_back(std::move(parsed));
-      }
-      result.packages.push_back(std::move(entry));
-    }
-  } catch (const nlohmann::json::exception&) {
-    throw PackageError("invalid_repository", "verified repository payload is malformed");
-  }
-  return result;
+  return {reinterpret_cast<const char*>(bytes.data), bytes.len};
 }
 
-[[nodiscard]] inline RepositoryIndex repository_result(Fcitx5RepositoryResult result) {
-  if (result.status != 0) {
-    throw PackageError(ffi_ascii(result.error_code, std::size(result.error_code)),
-                       ffi_ascii(result.error_message, std::size(result.error_message)));
+class RepositoryIndexResultGuard final {
+ public:
+  explicit RepositoryIndexResultGuard(Fcitx5RepositoryIndexResult result) : result_(result) {}
+  ~RepositoryIndexResultGuard() { fcitx5_repository_index_free(&result_); }
+  RepositoryIndexResultGuard(const RepositoryIndexResultGuard&) = delete;
+  RepositoryIndexResultGuard& operator=(const RepositoryIndexResultGuard&) = delete;
+  [[nodiscard]] const Fcitx5RepositoryIndexResult& get() const noexcept { return result_; }
+
+ private:
+  Fcitx5RepositoryIndexResult result_{};
+};
+
+[[nodiscard]] inline PackageType repository_package_type(std::uint32_t package_type) {
+  switch (package_type) {
+    case 0:
+      return PackageType::core;
+    case 1:
+      return PackageType::addon;
+    case 2:
+      return PackageType::input_method_data;
+    case 3:
+      return PackageType::theme;
+    case 4:
+      return PackageType::translation;
+    default:
+      throw PackageError("invalid_repository",
+                         "verified repository payload has an unsupported package type");
   }
-  std::string verified_blob(reinterpret_cast<const char*>(result.blob.data), result.blob.len);
-  fcitx5_repository_blob_free(result.blob.data, result.blob.len);
-  return parse_verified_repository_json(verified_blob);
+}
+
+[[nodiscard]] inline RepositoryIndex repository_result(Fcitx5RepositoryIndexResult result) {
+  const RepositoryIndexResultGuard guard(result);
+  const auto& verified = guard.get();
+  if (verified.status != 0) {
+    throw PackageError(ffi_ascii(verified.error_code, std::size(verified.error_code)),
+                       ffi_ascii(verified.error_message, std::size(verified.error_message)));
+  }
+  RepositoryIndex parsed;
+  parsed.format_version = verified.format_version;
+  parsed.channel = repository_string(verified.channel);
+  parsed.generated_at = repository_string(verified.generated_at);
+  parsed.key_id = repository_string(verified.key_id);
+  if (verified.package_count != 0 && verified.packages == nullptr) {
+    throw PackageError("invalid_repository", "verified repository package data is invalid");
+  }
+  parsed.packages.reserve(verified.package_count);
+  for (std::size_t package_index = 0; package_index < verified.package_count; ++package_index) {
+    const auto& package = verified.packages[package_index];
+    RepositoryEntry entry;
+    entry.id = repository_string(package.id);
+    entry.title = repository_string(package.title);
+    entry.summary = repository_string(package.summary);
+    entry.version = repository_string(package.version);
+    entry.release_sequence = package.release_sequence;
+    entry.type = repository_package_type(package.package_type);
+    entry.architecture = repository_string(package.architecture);
+    entry.download_url = repository_string(package.download_url);
+    entry.sha256 = repository_string(package.sha256);
+    if (package.dependency_count != 0 && package.dependencies == nullptr) {
+      throw PackageError("invalid_repository", "verified repository dependency data is invalid");
+    }
+    entry.dependencies.reserve(package.dependency_count);
+    for (std::size_t dependency_index = 0; dependency_index < package.dependency_count;
+         ++dependency_index) {
+      const auto& dependency = package.dependencies[dependency_index];
+      entry.dependencies.push_back(
+          Dependency{repository_string(dependency.id), repository_string(dependency.version)});
+    }
+    parsed.packages.push_back(std::move(entry));
+  }
+  return parsed;
 }
 
 }  // namespace detail
@@ -431,7 +465,7 @@ extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len)
     std::string_view index_bytes, std::span<const std::byte> signature,
     std::span<const TrustedKey> trusted_keys, std::string_view expectedChannel) {
   const auto key_views = detail::rust_trusted_key_views(trusted_keys);
-  return detail::repository_result(detail::fcitx5_repository_verify_index_utf8(
+  return detail::repository_result(detail::fcitx5_repository_verify_index_struct_utf8(
       reinterpret_cast<const std::uint8_t*>(index_bytes.data()), index_bytes.size(),
       reinterpret_cast<const std::uint8_t*>(signature.data()), signature.size(),
       key_views.data(), key_views.size(),
@@ -451,7 +485,7 @@ extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len)
     });
   }
   const auto key_views = detail::rust_trusted_key_views(trusted_keys);
-  return detail::repository_result(detail::fcitx5_repository_verify_index_parsed_envelope_utf8(
+  return detail::repository_result(detail::fcitx5_repository_verify_index_parsed_envelope_struct_utf8(
       reinterpret_cast<const std::uint8_t*>(index_bytes.data()), index_bytes.size(),
       envelope.format_version, detail::byte_slice(envelope.signed_object),
       detail::byte_slice(envelope.canonicalization),

@@ -3171,6 +3171,43 @@ mod repository_ffi {
         pub signature: Fcitx5ByteSlice,
     }
 
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RepositoryDependency {
+        pub id: Fcitx5ByteSlice,
+        pub version: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RepositoryEntryResult {
+        pub id: Fcitx5ByteSlice,
+        pub title: Fcitx5ByteSlice,
+        pub summary: Fcitx5ByteSlice,
+        pub version: Fcitx5ByteSlice,
+        pub release_sequence: u64,
+        pub package_type: u32,
+        pub architecture: Fcitx5ByteSlice,
+        pub download_url: Fcitx5ByteSlice,
+        pub sha256: Fcitx5ByteSlice,
+        pub dependencies: *mut Fcitx5RepositoryDependency,
+        pub dependency_count: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RepositoryIndexResult {
+        pub status: i32,
+        pub error_code: [u8; ERROR_CODE_BYTES],
+        pub error_message: [u8; ERROR_MESSAGE_BYTES],
+        pub format_version: u32,
+        pub channel: Fcitx5ByteSlice,
+        pub generated_at: Fcitx5ByteSlice,
+        pub key_id: Fcitx5ByteSlice,
+        pub packages: *mut Fcitx5RepositoryEntryResult,
+        pub package_count: usize,
+    }
+
     fn empty_result() -> Fcitx5RepositoryResult {
         Fcitx5RepositoryResult {
             status: 0,
@@ -3210,6 +3247,39 @@ mod repository_ffi {
         };
         std::mem::forget(bytes);
         result
+    }
+
+    fn empty_slice() -> Fcitx5ByteSlice {
+        Fcitx5ByteSlice {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+
+    fn owned_slice(mut bytes: Vec<u8>) -> Fcitx5ByteSlice {
+        if bytes.is_empty() {
+            return empty_slice();
+        }
+        let data = bytes.as_mut_ptr();
+        let len = bytes.len();
+        std::mem::forget(bytes);
+        Fcitx5ByteSlice { data, len }
+    }
+
+    fn owned_slice_from_str(value: &str) -> Fcitx5ByteSlice {
+        owned_slice(value.as_bytes().to_vec())
+    }
+
+    fn free_owned_slice(slice: Fcitx5ByteSlice) {
+        if !slice.data.is_null() {
+            unsafe {
+                drop(Vec::from_raw_parts(
+                    slice.data.cast_mut(),
+                    slice.len,
+                    slice.len,
+                ));
+            }
+        }
     }
 
     fn slice_from_raw<'a>(slice: Fcitx5ByteSlice) -> Option<&'a [u8]> {
@@ -3415,6 +3485,112 @@ mod repository_ffi {
         }
     }
 
+    fn repository_package_type_code(package_type: &super::PackageType) -> u32 {
+        match package_type {
+            super::PackageType::Core => 0,
+            super::PackageType::Addon => 1,
+            super::PackageType::InputMethodData => 2,
+            super::PackageType::Theme => 3,
+            super::PackageType::Translation => 4,
+        }
+    }
+
+    fn repository_dependency_array(
+        dependencies: &[super::RepositoryDependency],
+    ) -> (*mut Fcitx5RepositoryDependency, usize) {
+        if dependencies.is_empty() {
+            return (std::ptr::null_mut(), 0);
+        }
+        let mut raw: Vec<Fcitx5RepositoryDependency> = dependencies
+            .iter()
+            .map(|dependency| Fcitx5RepositoryDependency {
+                id: owned_slice_from_str(dependency.id()),
+                version: owned_slice_from_str(dependency.version()),
+            })
+            .collect();
+        let count = raw.len();
+        let ptr = raw.as_mut_ptr();
+        std::mem::forget(raw);
+        (ptr, count)
+    }
+
+    fn repository_entry_array(
+        packages: &[RepositoryEntry],
+    ) -> (*mut Fcitx5RepositoryEntryResult, usize) {
+        if packages.is_empty() {
+            return (std::ptr::null_mut(), 0);
+        }
+        let mut raw: Vec<Fcitx5RepositoryEntryResult> = packages
+            .iter()
+            .map(|entry| {
+                let (dependencies, dependency_count) =
+                    repository_dependency_array(entry.dependencies());
+                Fcitx5RepositoryEntryResult {
+                    id: owned_slice_from_str(entry.id()),
+                    title: owned_slice_from_str(entry.title()),
+                    summary: owned_slice_from_str(entry.summary()),
+                    version: owned_slice_from_str(entry.version()),
+                    release_sequence: entry.release_sequence(),
+                    package_type: repository_package_type_code(entry.package_type()),
+                    architecture: owned_slice_from_str(entry.architecture()),
+                    download_url: owned_slice_from_str(entry.download_url()),
+                    sha256: owned_slice_from_str(entry.sha256().as_str()),
+                    dependencies,
+                    dependency_count,
+                }
+            })
+            .collect();
+        let count = raw.len();
+        let ptr = raw.as_mut_ptr();
+        std::mem::forget(raw);
+        (ptr, count)
+    }
+
+    fn repository_index_error_result(
+        code: &str,
+        message: impl Into<String>,
+    ) -> Fcitx5RepositoryIndexResult {
+        let mut error_code = [0; ERROR_CODE_BYTES];
+        let mut error_message = [0; ERROR_MESSAGE_BYTES];
+        write_c_string(&mut error_code, code);
+        write_c_string(&mut error_message, &message.into());
+        Fcitx5RepositoryIndexResult {
+            status: 1,
+            error_code,
+            error_message,
+            format_version: 0,
+            channel: empty_slice(),
+            generated_at: empty_slice(),
+            key_id: empty_slice(),
+            packages: std::ptr::null_mut(),
+            package_count: 0,
+        }
+    }
+
+    fn repository_index_ok_result(index: RepositoryIndex) -> Fcitx5RepositoryIndexResult {
+        let (packages, package_count) = repository_entry_array(index.packages());
+        Fcitx5RepositoryIndexResult {
+            status: 0,
+            error_code: [0; ERROR_CODE_BYTES],
+            error_message: [0; ERROR_MESSAGE_BYTES],
+            format_version: index.format_version() as u32,
+            channel: owned_slice_from_str(index.channel()),
+            generated_at: owned_slice_from_str(index.generated_at()),
+            key_id: owned_slice_from_str(index.key_id()),
+            packages,
+            package_count,
+        }
+    }
+
+    fn repository_index_result(
+        result: Result<RepositoryIndex, super::RepositoryError>,
+    ) -> Fcitx5RepositoryIndexResult {
+        match result {
+            Ok(index) => repository_index_ok_result(index),
+            Err(error) => repository_index_error_result(error.code(), error.to_string()),
+        }
+    }
+
     #[no_mangle]
     pub unsafe extern "C" fn fcitx5_repository_find_package_index_utf8(
         entries: *const Fcitx5RepositoryFindEntry,
@@ -3502,6 +3678,58 @@ mod repository_ffi {
             );
         };
         repository_result(verify_repository_index(
+            index_bytes,
+            signature_bytes,
+            &trusted_keys,
+            &expected_channel,
+        ))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_verify_index_struct_utf8(
+        index_data: *const u8,
+        index_len: usize,
+        signature_data: *const u8,
+        signature_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+        expected_channel: *const u8,
+        expected_channel_len: usize,
+    ) -> Fcitx5RepositoryIndexResult {
+        let Some(index_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: index_data,
+            len: index_len,
+        }) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "repository index is not strict JSON",
+            );
+        };
+        let Some(signature_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: signature_data,
+            len: signature_len,
+        }) else {
+            return repository_index_error_result(
+                "invalid_signature",
+                "repository signature is invalid",
+            );
+        };
+        let Some(expected_channel) = string_from_raw(Fcitx5ByteSlice {
+            data: expected_channel,
+            len: expected_channel_len,
+        }) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "repository identity is invalid",
+            );
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "trusted repository key set is invalid",
+            );
+        };
+        repository_index_result(verify_repository_index(
             index_bytes,
             signature_bytes,
             &trusted_keys,
@@ -3616,6 +3844,119 @@ mod repository_ffi {
             &trusted_keys,
             &expected_channel,
         ))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_verify_index_parsed_envelope_struct_utf8(
+        index_data: *const u8,
+        index_len: usize,
+        format_version: u32,
+        signed_object: Fcitx5ByteSlice,
+        canonicalization: Fcitx5ByteSlice,
+        signatures: *const Fcitx5RepositorySignatureEnvelopeEntry,
+        signature_count: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+        expected_channel: *const u8,
+        expected_channel_len: usize,
+    ) -> Fcitx5RepositoryIndexResult {
+        let Some(index_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: index_data,
+            len: index_len,
+        }) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "repository index is not strict JSON",
+            );
+        };
+        let Some(signed_object) = string_from_raw(signed_object) else {
+            return repository_index_error_result(
+                "invalid_signature",
+                "signature envelope is invalid",
+            );
+        };
+        let Some(signed_object) = SignedObject::parse(&signed_object) else {
+            return repository_index_error_result(
+                "invalid_signature",
+                "signature envelope is invalid",
+            );
+        };
+        let Some(canonicalization) = string_from_raw(canonicalization) else {
+            return repository_index_error_result(
+                "invalid_signature",
+                "signature envelope is invalid",
+            );
+        };
+        let signatures = match signature_entries_from_raw(signatures, signature_count) {
+            Ok(signatures) => signatures,
+            Err(message) => return repository_index_error_result("invalid_signature", message),
+        };
+        let Some(expected_channel) = string_from_raw(Fcitx5ByteSlice {
+            data: expected_channel,
+            len: expected_channel_len,
+        }) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "repository identity is invalid",
+            );
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "trusted repository key set is invalid",
+            );
+        };
+        let envelope = SignatureEnvelope {
+            format_version: u64::from(format_version),
+            signed_object,
+            canonicalization,
+            signatures,
+        };
+        repository_index_result(verify_repository_index_envelope(
+            index_bytes,
+            &envelope,
+            &trusted_keys,
+            &expected_channel,
+        ))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_index_free(
+        index: *const Fcitx5RepositoryIndexResult,
+    ) {
+        if index.is_null() {
+            return;
+        }
+        let index = unsafe { &*index };
+        free_owned_slice(index.channel);
+        free_owned_slice(index.generated_at);
+        free_owned_slice(index.key_id);
+        if !index.packages.is_null() {
+            unsafe {
+                let packages =
+                    Vec::from_raw_parts(index.packages, index.package_count, index.package_count);
+                for package in &packages {
+                    free_owned_slice(package.id);
+                    free_owned_slice(package.title);
+                    free_owned_slice(package.summary);
+                    free_owned_slice(package.version);
+                    free_owned_slice(package.architecture);
+                    free_owned_slice(package.download_url);
+                    free_owned_slice(package.sha256);
+                    if !package.dependencies.is_null() {
+                        let dependencies = Vec::from_raw_parts(
+                            package.dependencies,
+                            package.dependency_count,
+                            package.dependency_count,
+                        );
+                        for dependency in &dependencies {
+                            free_owned_slice(dependency.id);
+                            free_owned_slice(dependency.version);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
