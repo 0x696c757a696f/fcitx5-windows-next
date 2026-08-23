@@ -96,19 +96,16 @@ extern "C" std::uint8_t fcitx5_windows_common_executable_files_match_utf16(
     std::uint8_t right_contains_reparse_point,
     const std::uint16_t* right_final_path,
     std::size_t right_final_path_len);
-extern "C" std::uint8_t fcitx5_windows_common_basic_file_identities_match(
-    std::uint32_t left_volume_serial_number,
-    std::uint32_t left_file_index_high,
-    std::uint32_t left_file_index_low,
-    std::uint32_t right_volume_serial_number,
-    std::uint32_t right_file_index_high,
-    std::uint32_t right_file_index_low);
-struct Fcitx5WindowsCommonBasicFileIdentity {
-    std::uint8_t status;
-    std::uint32_t volumeSerialNumber;
-    std::uint32_t fileIndexHigh;
-    std::uint32_t fileIndexLow;
-};
+extern "C" std::uint8_t fcitx5_windows_common_paths_refer_to_same_file_utf16(
+    const std::uint16_t* left_path,
+    std::size_t left_path_len,
+    const std::uint16_t* right_path,
+    std::size_t right_path_len);
+extern "C" std::uint8_t fcitx5_windows_common_executable_paths_match_utf16(
+    const std::uint16_t* left_path,
+    std::size_t left_path_len,
+    const std::uint16_t* right_path,
+    std::size_t right_path_len);
 struct Fcitx5WindowsCommonExecutableFileIdentity {
     std::uint8_t status;
     std::uint8_t containsReparsePoint;
@@ -118,9 +115,6 @@ struct Fcitx5WindowsCommonExecutableFileIdentity {
     std::uint32_t numberOfLinks;
     std::size_t finalPathLen;
 };
-extern "C" Fcitx5WindowsCommonBasicFileIdentity
-fcitx5_windows_common_basic_file_identity_utf16(const std::uint16_t* path,
-                                                std::size_t path_len);
 extern "C" Fcitx5WindowsCommonExecutableFileIdentity
 fcitx5_windows_common_executable_file_identity_utf16(const std::uint16_t* path,
                                                      std::size_t path_len,
@@ -133,11 +127,6 @@ std::wstring rustWide(Producer producer);
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
-}
-
-bool queryFileIdentity(std::wstring_view path, Fcitx5WindowsCommonBasicFileIdentity& identity) {
-    identity = fcitx5_windows_common_basic_file_identity_utf16(wideData(path), path.size());
-    return identity.status != 0;
 }
 
 template <typename Producer>
@@ -330,13 +319,8 @@ std::wstring makeLocalObjectName(const RuntimeIdentity& identity,
 
 bool pathsReferToSameFile(std::wstring_view left, std::wstring_view right) noexcept {
     try {
-        Fcitx5WindowsCommonBasicFileIdentity leftIdentity;
-        Fcitx5WindowsCommonBasicFileIdentity rightIdentity;
-        return queryFileIdentity(left, leftIdentity) && queryFileIdentity(right, rightIdentity) &&
-               fcitx5_windows_common_basic_file_identities_match(
-                   leftIdentity.volumeSerialNumber, leftIdentity.fileIndexHigh,
-                   leftIdentity.fileIndexLow, rightIdentity.volumeSerialNumber,
-                   rightIdentity.fileIndexHigh, rightIdentity.fileIndexLow) != 0;
+        return fcitx5_windows_common_paths_refer_to_same_file_utf16(
+                   wideData(left), left.size(), wideData(right), right.size()) != 0;
     } catch (...) {
         return false;
     }
@@ -382,11 +366,8 @@ bool executableFilesMatch(const ExecutableFileIdentity& left,
 
 bool executablePathsMatch(std::wstring_view left, std::wstring_view right) noexcept {
     try {
-        ExecutableFileIdentity leftIdentity;
-        ExecutableFileIdentity rightIdentity;
-        return queryExecutableFileIdentity(left, leftIdentity) &&
-               queryExecutableFileIdentity(right, rightIdentity) &&
-               executableFilesMatch(leftIdentity, rightIdentity);
+        return fcitx5_windows_common_executable_paths_match_utf16(
+                   wideData(left), left.size(), wideData(right), right.size()) != 0;
     } catch (...) {
         return false;
     }

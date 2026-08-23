@@ -706,6 +706,23 @@ fn basic_file_identities_match(
         && left_file_index_low == right_file_index_low
 }
 
+fn paths_refer_to_same_file(left: &[u16], right: &[u16]) -> bool {
+    let left = basic_file_identity(left);
+    if left.status == 0 {
+        return false;
+    }
+    let right = basic_file_identity(right);
+    right.status != 0
+        && basic_file_identities_match(
+            left.volume_serial_number,
+            left.file_index_high,
+            left.file_index_low,
+            right.volume_serial_number,
+            right.file_index_high,
+            right.file_index_low,
+        )
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Fcitx5WindowsCommonBasicFileIdentity {
@@ -953,6 +970,51 @@ fn executable_file_identity(
         number_of_links: information.number_of_links,
         final_path_len: final_path_len as usize,
     }
+}
+
+fn executable_paths_match(left: &[u16], right: &[u16]) -> bool {
+    let mut left_final_path = vec![0_u16; ENDPOINT_MAX_WIDE_UNITS];
+    let left_identity =
+        executable_file_identity(left, left_final_path.as_mut_ptr(), left_final_path.len());
+    if left_identity.status == 0
+        || left_identity.final_path_len == 0
+        || left_identity.final_path_len > left_final_path.len()
+    {
+        return false;
+    }
+    left_final_path.truncate(left_identity.final_path_len);
+    let Ok(left_final_path) = String::from_utf16(&left_final_path) else {
+        return false;
+    };
+
+    let mut right_final_path = vec![0_u16; ENDPOINT_MAX_WIDE_UNITS];
+    let right_identity =
+        executable_file_identity(right, right_final_path.as_mut_ptr(), right_final_path.len());
+    if right_identity.status == 0
+        || right_identity.final_path_len == 0
+        || right_identity.final_path_len > right_final_path.len()
+    {
+        return false;
+    }
+    right_final_path.truncate(right_identity.final_path_len);
+    let Ok(right_final_path) = String::from_utf16(&right_final_path) else {
+        return false;
+    };
+
+    executable_files_match(
+        left_identity.volume_serial_number,
+        left_identity.file_index_high,
+        left_identity.file_index_low,
+        left_identity.number_of_links,
+        left_identity.contains_reparse_point != 0,
+        &left_final_path,
+        right_identity.volume_serial_number,
+        right_identity.file_index_high,
+        right_identity.file_index_low,
+        right_identity.number_of_links,
+        right_identity.contains_reparse_point != 0,
+        &right_final_path,
+    )
 }
 
 fn path_is_reparse_point_or_untrusted(path: &Path) -> bool {
@@ -1464,6 +1526,25 @@ pub unsafe extern "C" fn fcitx5_windows_common_basic_file_identity_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// Both path pointers must point to exactly their corresponding readable UTF-16
+/// code-unit lengths. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_paths_refer_to_same_file_utf16(
+    left_path: *const u16,
+    left_path_len: usize,
+    right_path: *const u16,
+    right_path_len: usize,
+) -> u8 {
+    if left_path.is_null() || right_path.is_null() {
+        return 0;
+    }
+    let left = unsafe { std::slice::from_raw_parts(left_path, left_path_len) };
+    let right = unsafe { std::slice::from_raw_parts(right_path, right_path_len) };
+    paths_refer_to_same_file(left, right) as u8
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `path` must point to exactly `path_len` readable UTF-16 code units.
 /// `final_path_output` must point to writable storage for `final_path_capacity`
 /// UTF-16 code units. No pointer is retained.
@@ -1483,6 +1564,25 @@ pub unsafe extern "C" fn fcitx5_windows_common_executable_file_identity_utf16(
         final_path_output,
         final_path_capacity,
     )
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Both path pointers must point to exactly their corresponding readable UTF-16
+/// code-unit lengths. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_executable_paths_match_utf16(
+    left_path: *const u16,
+    left_path_len: usize,
+    right_path: *const u16,
+    right_path_len: usize,
+) -> u8 {
+    if left_path.is_null() || right_path.is_null() {
+        return 0;
+    }
+    let left = unsafe { std::slice::from_raw_parts(left_path, left_path_len) };
+    let right = unsafe { std::slice::from_raw_parts(right_path, right_path_len) };
+    executable_paths_match(left, right) as u8
 }
 
 #[unsafe(no_mangle)]
@@ -1848,6 +1948,20 @@ mod tests {
     }
 
     #[test]
+    fn paths_refer_to_same_file_query_matches_cpp_contract() {
+        let current = env::current_exe().expect("current exe");
+        let current_wide: Vec<u16> = current.as_os_str().encode_wide().collect();
+        let missing = env::temp_dir().join(format!(
+            "fcitx5-windows-common-missing-basic-file-{}",
+            std::process::id()
+        ));
+        let missing_wide: Vec<u16> = missing.as_os_str().encode_wide().collect();
+        assert!(paths_refer_to_same_file(&current_wide, &current_wide));
+        assert!(!paths_refer_to_same_file(&current_wide, &missing_wide));
+        assert!(!paths_refer_to_same_file(&[], &current_wide));
+    }
+
+    #[test]
     fn basic_file_identity_query_rejects_empty_path_like_cpp_contract() {
         let empty = basic_file_identity(&[]);
         assert_eq!(empty.status, 0);
@@ -1858,6 +1972,20 @@ mod tests {
         let mut final_path = [0_u16; 16];
         let empty = executable_file_identity(&[], final_path.as_mut_ptr(), final_path.len());
         assert_eq!(empty.status, 0);
+    }
+
+    #[test]
+    fn executable_paths_match_query_matches_cpp_contract() {
+        let current = env::current_exe().expect("current exe");
+        let current_wide: Vec<u16> = current.as_os_str().encode_wide().collect();
+        let missing = env::temp_dir().join(format!(
+            "fcitx5-windows-common-missing-executable-file-{}",
+            std::process::id()
+        ));
+        let missing_wide: Vec<u16> = missing.as_os_str().encode_wide().collect();
+        assert!(executable_paths_match(&current_wide, &current_wide));
+        assert!(!executable_paths_match(&current_wide, &missing_wide));
+        assert!(!executable_paths_match(&[], &current_wide));
     }
 
     #[test]

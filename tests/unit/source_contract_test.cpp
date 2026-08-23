@@ -378,9 +378,17 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_basic_file_identity_utf16") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_paths_refer_to_same_file_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("paths_refer_to_same_file_query_matches_cpp_contract") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("basic_file_identity_query_rejects_empty_path_like_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_executable_file_identity_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_executable_paths_match_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("executable_paths_match_query_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("executable_file_identity_query_rejects_empty_path_like_cpp_contract") ==
             std::string::npos ||
@@ -434,6 +442,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("leftIdentity.volumeSerialNumber == rightIdentity.volumeSerialNumber") !=
             std::string::npos ||
+        runtimeIdentitySource.find("queryFileIdentity") != std::string::npos ||
+        runtimeIdentitySource.find("Fcitx5WindowsCommonBasicFileIdentity leftIdentity") !=
+            std::string::npos ||
+        runtimeIdentitySource.find("queryExecutableFileIdentity(left, leftIdentity)") !=
+            std::string::npos ||
+        runtimeIdentitySource.find("queryExecutableFileIdentity(right, rightIdentity)") !=
+            std::string::npos ||
         runtimeIdentitySource.find("FILE_FLAG_BACKUP_SEMANTICS") != std::string::npos ||
         runtimeIdentitySource.find("GetFinalPathNameByHandleW") != std::string::npos ||
         runtimeIdentitySource.find("FILE_NAME_NORMALIZED") != std::string::npos ||
@@ -462,9 +477,9 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_executable_files_match_utf16") ==
             std::string::npos ||
-        runtimeIdentitySource.find("fcitx5_windows_common_basic_file_identities_match") ==
+        runtimeIdentitySource.find("fcitx5_windows_common_paths_refer_to_same_file_utf16") ==
             std::string::npos ||
-        runtimeIdentitySource.find("fcitx5_windows_common_basic_file_identity_utf16") ==
+        runtimeIdentitySource.find("fcitx5_windows_common_executable_paths_match_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_executable_file_identity_utf16") ==
             std::string::npos ||

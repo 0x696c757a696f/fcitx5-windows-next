@@ -39,7 +39,7 @@ jobs:
           submodules: recursive
 
       - name: Restore Rust toolchain and target cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             out/toolchains/rust/rustup-home
@@ -58,7 +58,7 @@ jobs:
           version: v0.17.0
 
       - name: Restore fast Windows toolchain cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: out/toolchains/fast
           key: ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.17.0-${{ hashFiles('tools/prepare-fast-toolchain.ps1') }}
