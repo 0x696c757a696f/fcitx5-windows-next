@@ -310,6 +310,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("current_runtime_generation_abi_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_process_image_path_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("process_image_path_query_matches_cpp_contract") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_current_generation_for_module_utf16") ==
             std::string::npos ||
         rustWindowsCommonCore.find(
@@ -380,6 +384,7 @@ int main(int argc, char** argv) {
         runtimeIdentitySource.find("GetEnvironmentVariableW") != std::string::npos ||
         runtimeIdentitySource.find("bool validChannel") != std::string::npos ||
         runtimeIdentitySource.find("GetModuleFileNameW") != std::string::npos ||
+        runtimeIdentitySource.find("QueryFullProcessImageNameW") != std::string::npos ||
         runtimeIdentitySource.find("kReleaseIdentity.pipe_prefix") != std::string::npos ||
         runtimeIdentitySource.find("kReleaseIdentity.local_object_prefix") !=
             std::string::npos ||
@@ -402,6 +407,8 @@ int main(int argc, char** argv) {
         runtimeIdentitySource.find("fcitx5_windows_common_local_test_namespace_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_current_generation_utf16") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_process_image_path_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_executable_files_match_utf16") ==
             std::string::npos ||

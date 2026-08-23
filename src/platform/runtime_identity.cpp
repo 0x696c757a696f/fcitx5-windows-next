@@ -32,6 +32,10 @@ extern "C" std::size_t fcitx5_windows_common_local_test_namespace_utf16(
 extern "C" std::size_t fcitx5_windows_common_current_generation_utf16(
     std::uint16_t* output,
     std::size_t capacity);
+extern "C" std::size_t fcitx5_windows_common_process_image_path_utf16(
+    std::uint32_t process_id,
+    std::uint16_t* output,
+    std::size_t capacity);
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
     std::size_t module_path_len,
@@ -152,14 +156,15 @@ bool tokenSid(HANDLE process, std::wstring& sid, bool& serviceAccount) {
     return true;
 }
 
-bool processPath(HANDLE process, std::wstring& path) {
-    path.assign(32768, L'\0');
-    DWORD length = static_cast<DWORD>(path.size());
-    if (!QueryFullProcessImageNameW(process, 0, path.data(), &length) || length == 0) {
-        path.clear();
+template <typename Producer>
+std::wstring rustWide(Producer producer);
+
+bool processPath(DWORD processId, std::wstring& path) {
+    path = rustWide([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_windows_common_process_image_path_utf16(processId, output, capacity);
+    });
+    if (path.empty())
         return false;
-    }
-    path.resize(length);
     return true;
 }
 
@@ -266,7 +271,7 @@ bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
         result.processId = processId;
         if (!ProcessIdToSessionId(processId, &result.sessionId) ||
             !tokenSid(process.get(), result.userSid, result.serviceAccount) ||
-            !processPath(process.get(), result.executablePath)) {
+            !processPath(processId, result.executablePath)) {
             return false;
         }
         result.executableFileVerified =

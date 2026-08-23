@@ -310,6 +310,13 @@ unsafe extern "system" {
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
+    fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> *mut c_void;
+    fn QueryFullProcessImageNameW(
+        process: *mut c_void,
+        flags: u32,
+        exe_name: *mut u16,
+        size: *mut u32,
+    ) -> i32;
     fn CreateFileW(
         file_name: *const u16,
         desired_access: u32,
@@ -371,6 +378,36 @@ fn current_runtime_generation() -> String {
         }
     }
     "current".to_owned()
+}
+
+fn process_image_path(process_id: u32) -> Option<String> {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+
+    if process_id == 0 {
+        return None;
+    }
+    // SAFETY: Opening by process id with query-only rights. Any successful
+    // handle is closed before returning.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+    if handle.is_null() || handle == invalid_handle_value() {
+        return None;
+    }
+    let mut path = vec![0_u16; ENDPOINT_MAX_WIDE_UNITS];
+    let mut length = path.len() as u32;
+    // SAFETY: `handle` is valid and `path` is writable storage for `length`
+    // UTF-16 code units. Windows updates `length` with the written count.
+    let ok = unsafe { QueryFullProcessImageNameW(handle, 0, path.as_mut_ptr(), &mut length) };
+    // SAFETY: `handle` was returned by OpenProcess above.
+    unsafe {
+        CloseHandle(handle);
+    }
+    if ok == 0 || length == 0 || length as usize > path.len() {
+        return None;
+    }
+    path.truncate(length as usize);
+    String::from_utf16(&path)
+        .ok()
+        .filter(|value| !value.is_empty())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -767,6 +804,22 @@ pub unsafe extern "C" fn fcitx5_windows_common_current_generation_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `output` may be null for size queries or writable UTF-16 storage for
+/// `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_process_image_path_utf16(
+    process_id: u32,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(path) = process_image_path(process_id) else {
+        return 0;
+    };
+    write_wide_string(&path, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `module_path` must point to exactly `module_path_len` readable UTF-16 code
 /// units. `output` may be null for size queries or writable UTF-16 storage for
 /// `capacity` code units. No pointer is retained.
@@ -1079,6 +1132,11 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcessId() -> u32;
+    }
+
     #[test]
     fn version_and_release_channel_are_stable_static_strings() {
         assert!(!version().is_empty());
@@ -1146,6 +1204,14 @@ mod tests {
         let generation = current_runtime_generation();
         assert!(!generation.is_empty());
         assert!(valid_generation(&generation));
+    }
+
+    #[test]
+    fn process_image_path_query_matches_cpp_contract() {
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        let path = process_image_path(current_process_id).expect("current process image path");
+        assert!(path.to_ascii_lowercase().ends_with(".exe"));
+        assert!(process_image_path(0).is_none());
     }
 
     #[test]
