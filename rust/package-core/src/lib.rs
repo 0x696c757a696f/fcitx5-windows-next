@@ -6444,8 +6444,8 @@ mod repair_ffi {
     #![allow(unsafe_code)]
 
     use super::{
-        stage_validated_archive_zip, verify_installed_packages_for_repair, PackageId,
-        TrustAlgorithm, TrustedKey,
+        activate_installed_version_for_rollback, stage_validated_archive_zip,
+        verify_installed_packages_for_repair, PackageId, TrustAlgorithm, TrustedKey,
     };
     use std::ffi::OsString;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -6663,6 +6663,46 @@ mod repair_ffi {
             return error_result("invalid_keyring", "trusted key set is invalid");
         };
         match verify_installed_packages_for_repair(install_root, &trusted_keys) {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_activate_installed_version_utf16(
+        install_root: *const u16,
+        install_root_len: usize,
+        package_id: *const u8,
+        package_id_len: usize,
+        version: *const u8,
+        version_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+    ) -> Fcitx5PackageRepairResult {
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return error_result("invalid_identity", "known-good package identity is invalid");
+        };
+        let Some(package_id) = string_from_raw(Fcitx5ByteSlice {
+            data: package_id,
+            len: package_id_len,
+        }) else {
+            return error_result("invalid_identity", "known-good package identity is invalid");
+        };
+        let Some(version) = string_from_raw(Fcitx5ByteSlice {
+            data: version,
+            len: version_len,
+        }) else {
+            return error_result("invalid_identity", "known-good package identity is invalid");
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return error_result("invalid_keyring", "trusted key set is invalid");
+        };
+        match activate_installed_version_for_rollback(
+            install_root,
+            &package_id,
+            &version,
+            &trusted_keys,
+        ) {
             Ok(()) => ok_result(),
             Err(error) => error_result(error.code(), &error.to_string()),
         }

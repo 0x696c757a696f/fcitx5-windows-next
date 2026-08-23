@@ -62,6 +62,10 @@ Fcitx5PackageLifecycleResult fcitx5_package_finalize_remove_utf16(
 Fcitx5PackageLifecycleResult fcitx5_package_verify_installed_utf16(
     const wchar_t* install_root, std::size_t install_root_len,
     const Fcitx5TrustedKeyNative* trusted_keys, std::size_t trusted_key_count);
+Fcitx5PackageLifecycleResult fcitx5_package_activate_installed_version_utf16(
+    const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
+    std::size_t package_id_len, const std::uint8_t* version, std::size_t version_len,
+    const Fcitx5TrustedKeyNative* trusted_keys, std::size_t trusted_key_count);
 Fcitx5RepositorySequenceRepairResult fcitx5_repository_sequence_repair_utf16(
     const wchar_t* data_root, std::size_t data_root_len, const wchar_t* index_path,
     std::size_t index_path_len, const wchar_t* signature_path, std::size_t signature_path_len,
@@ -1212,33 +1216,12 @@ void finalize_package_removal(const std::filesystem::path& install_root,
 void activate_installed_version(const std::filesystem::path& install_root,
                                 std::string_view package_id, std::string_view version,
                                 std::span<const TrustedKey> trusted_keys) {
-  if (!is_lower_package_id(package_id) || !is_ascii_token(version, ".+-_"))
-    fail("invalid_identity", "known-good package identity is invalid");
-  const auto metadata = install_root / "manifests" / std::filesystem::path(package_id);
-  const auto manifest_bytes = read_file_bounded(
-      metadata / std::filesystem::path(std::string(version) + ".json"), kMaximumManifestBytes);
-  const auto manifest = parse_manifest(manifest_bytes);
-  if (manifest.id != package_id || manifest.version != version)
-    fail("rollback_failed", "known-good manifest identity differs");
-  const auto key = std::ranges::find_if(trusted_keys, [&](const TrustedKey& candidate) {
-    return candidate.id == manifest.key_id;
-  });
-  if (key == trusted_keys.end()) fail("untrusted_key", "known-good key is no longer trusted");
-  const auto signature = read_file_bounded(
-      metadata / std::filesystem::path(std::string(version) + ".sig"), 16U * 1024U);
-  verify_manifest_signature(manifest_bytes, std::as_bytes(std::span(signature)), *key);
-  verify_payload(manifest, install_root / "versions" / std::filesystem::path(package_id) /
-                               std::filesystem::path(version));
-  auto lock = read_lockfile(install_root);
-  const auto entry = std::ranges::find_if(lock, [&](const LockEntry& item) {
-    return item.id == package_id;
-  });
-  const LockEntry known_good{std::string(package_id), std::string(version),
-                             hex_sha256(sha256(std::as_bytes(std::span(manifest_bytes)))),
-                             "installed"};
-  if (entry == lock.end()) lock.push_back(known_good); else *entry = known_good;
-  std::ranges::sort(lock, {}, &LockEntry::id);
-  write_lockfile_atomic(install_root, lock);
+  const auto key_views = rust_trusted_key_views(trusted_keys);
+  const std::wstring root = native_path_string(install_root);
+  require_lifecycle_ok(fcitx5_package_activate_installed_version_utf16(
+      root.data(), root.size(), reinterpret_cast<const std::uint8_t*>(package_id.data()),
+      package_id.size(), reinterpret_cast<const std::uint8_t*>(version.data()), version.size(),
+      key_views.empty() ? nullptr : key_views.data(), key_views.size()));
 }
 
 }  // namespace fcitx::package

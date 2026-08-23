@@ -3,7 +3,7 @@
 // (canonical lowercase package id) and the resolved target must stay inside
 // the versions directory. A malicious id must be refused without deleting
 // anything; a valid id cleans up the previous version as intended.
-#include "deployment_core.h"
+#include "deployment_test_core.h"
 
 #include <windows.h>
 

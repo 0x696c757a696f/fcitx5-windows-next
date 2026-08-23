@@ -276,7 +276,8 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/src/deployer_main.rs");
     const auto rustDeployerBuild =
         read_text(sourceRoot / "tools/build-rust-deployer-cli.ps1");
-    const auto deploymentCoreHeader = read_text(sourceRoot / "src/updater/deployment_core.h");
+    const auto deploymentCoreHeader =
+        read_text(sourceRoot / "tests/support/deployment_test_core.h");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
     const auto rustPackageCoreArtifactSmoke =
@@ -411,6 +412,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("archive_zip_staging_matches_cpp_extraction_policy") ==
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_activate_installed_version_utf16") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_package_wide_free") == std::string::npos ||
         rustPackageCore.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
         rustPackageCore.find("fcitx5_repository_verify_index_envelope_utf8") ==
@@ -436,6 +439,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageCoreHeader.find("find_repository_package") == std::string::npos ||
         packageCoreHeader.find("rust_trusted_key_views") == std::string::npos ||
+        packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||
         rustPackageCoreManifest.find("name = \"fcitx5-downloader\"") ==
@@ -478,6 +482,7 @@ int main(int argc, char** argv) {
         rustDeployerBuild.find("--bin fcitx5-deployer") == std::string::npos ||
         cmakeSource.find("Building Rust fcitx5-deployer CLI") == std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/updater/deployment_core.cpp") ||
+        std::filesystem::exists(sourceRoot / "src/updater/deployment_core.h") ||
         deploymentCoreHeader.find("fcitx5_update_cleanup_previous_known_good_utf16") ==
             std::string::npos ||
         deploymentCoreHeader.find("fcitx5_update_install_tsf_dll_generation_utf16") ==
@@ -493,6 +498,8 @@ int main(int argc, char** argv) {
         deploymentCoreHeader.find("copy_directory_tree") != std::string::npos ||
         deploymentCoreHeader.find("stage_runtime_payload") != std::string::npos ||
         deploymentCoreHeader.find("publish_runtime_directory") != std::string::npos ||
+        controlSource.find("#include \"deployment_core.h\"") != std::string::npos ||
+        cmakeSource.find("${CMAKE_CURRENT_SOURCE_DIR}/src/updater") != std::string::npos ||
         cmakeSource.find("add_library(fcitx5_deployment_core INTERFACE)") ==
             std::string::npos ||
         rustPackageCore.find("cleanup_previous_known_good") == std::string::npos ||

@@ -410,7 +410,7 @@ endif()
 add_library(fcitx5_deployment_core INTERFACE)
 add_library(fcitx5::deployment_core ALIAS fcitx5_deployment_core)
 target_compile_features(fcitx5_deployment_core INTERFACE cxx_std_20)
-target_include_directories(fcitx5_deployment_core INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/updater")
+target_include_directories(fcitx5_deployment_core INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
 target_link_libraries(
   fcitx5_deployment_core
   INTERFACE fcitx5_package_core_rust
@@ -523,7 +523,7 @@ target_link_libraries(
   fcitx5_control
   PRIVATE fcitx5::windows_common fcitx5::config fcitx5::protocol
           fcitx5::ipc_client fcitx5::platform fcitx5::package_core
-          fcitx5::deployment_core fcitx5::tsf_activation_guard
+          fcitx5::tsf_activation_guard
           fcitx5_package_core_rust fcitx5_control_core_rust
           fcitx5_process_execution_core_rust shell32 ole32 ws2_32 userenv ntdll bcrypt
           advapi32)

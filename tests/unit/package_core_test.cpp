@@ -789,6 +789,9 @@ int main(int argc, char** argv) {
     verify_installed_packages(install, std::span(&trusted, 1U));
     set_package_state(install, "fcitx5-rime", "disabled");
     expect(read_lockfile(install).front().state == "disabled", "package state was not persisted");
+    activate_installed_version(install, "fcitx5-rime", "1.0.0", std::span(&trusted, 1U));
+    expect(read_lockfile(install).front().state == "installed",
+           "rollback activation did not restore installed state");
 
     auto revoked = trusted;
     revoked.revoked = true;

@@ -1,5 +1,4 @@
 #include "config_model.h"
-#include "deployment_core.h"
 #include "fcitx5_windows/release_identity.h"
 #include "fcitx5_windows/version.h"
 #include "launcher_client.h"
@@ -53,6 +52,8 @@ int fcitx5_repository_sequence_state_write_utf16(const wchar_t* data_root,
                                                  const wchar_t* channel,
                                                  std::size_t channel_len,
                                                  std::uint64_t maximum);
+int fcitx5_update_read_update_owner_utf16(const std::uint16_t* root, std::size_t root_len,
+                                          std::uint32_t* out_owner);
 
 struct Fcitx5ControlUtf16 {
     const wchar_t* ptr;
@@ -346,6 +347,45 @@ namespace {
 namespace fs = std::filesystem;
 using fcitx::windows::config::Config;
 using fcitx::windows::config::ParseError;
+
+enum class UpdateOwner : std::uint32_t {
+    builtin = 0,
+    chocolatey = 1,
+    winget = 2,
+    enterprise = 3,
+    manual = 4,
+};
+
+[[nodiscard]] const std::uint16_t* utf16Data(const std::wstring& value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
+[[nodiscard]] std::string_view updateOwnerName(UpdateOwner owner) noexcept {
+    switch (owner) {
+    case UpdateOwner::builtin:
+        return "builtin";
+    case UpdateOwner::chocolatey:
+        return "chocolatey";
+    case UpdateOwner::winget:
+        return "winget";
+    case UpdateOwner::enterprise:
+        return "enterprise";
+    case UpdateOwner::manual:
+        return "manual";
+    }
+    return "manual";
+}
+
+[[nodiscard]] UpdateOwner readUpdateOwner(const fs::path& root) {
+    std::uint32_t owner = static_cast<std::uint32_t>(UpdateOwner::manual);
+    const std::wstring native = root.native();
+    if (fcitx5_update_read_update_owner_utf16(utf16Data(native), native.size(), &owner) != 0 ||
+        owner > static_cast<std::uint32_t>(UpdateOwner::manual)) {
+        throw std::runtime_error("update owner schema is invalid");
+    }
+    return static_cast<UpdateOwner>(owner);
+}
 
 constexpr wchar_t kVisualConfigChangedMessage[] =
     L"Fcitx5WindowsNext.VisualConfigChanged.v1";
@@ -1778,8 +1818,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         const auto tsfGuard = fcitx::windows::tsf::activationGuardStatus(dataRoot);
         const std::string dataRootUtf8 = narrow(dataRoot.generic_wstring());
-        const std::string updateOwner{
-            fcitx::update::owner_name(fcitx::update::read_update_owner(installationRoot()))};
+        const std::string updateOwner{updateOwnerName(readUpdateOwner(installationRoot()))};
         const Fcitx5ControlStatus status{
             reachable ? std::uint8_t{1} : std::uint8_t{0},
             static_cast<std::int32_t>(response.launcherState),
