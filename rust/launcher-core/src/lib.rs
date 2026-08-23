@@ -1,10 +1,24 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use windows::core::PCWSTR;
+use windows::Win32::Storage::FileSystem::{
+    MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+};
+
 const STARTUP_CRASH_WINDOW_MS: u64 = 10_000;
 const STABLE_RUNTIME_MS: u64 = 60_000;
 const INITIAL_BACKOFF_MS: u64 = 250;
 const MAXIMUM_BACKOFF_MS: u64 = 30_000;
 const SAFE_MODE_CRASH_THRESHOLD: u32 = 3;
+const RELEASE_DATA_DIRECTORY_FALLBACK: &str = "Fcitx5";
+const STATE_FILE_NAME: &str = "launcher-state.v1";
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +105,195 @@ fn command(value: u32) -> Option<Command> {
         5 => Some(Command::ResetSafeMode),
         _ => None,
     }
+}
+
+fn release_data_directory() -> &'static str {
+    option_env!("FCITX_RELEASE_DATA_DIRECTORY").unwrap_or(RELEASE_DATA_DIRECTORY_FALLBACK)
+}
+
+fn state_name(state: LauncherState) -> &'static str {
+    match state {
+        LauncherState::Normal => "normal",
+        LauncherState::UserStopped => "user-stopped",
+        LauncherState::Updating => "updating",
+        LauncherState::Uninstalling => "uninstalling",
+        LauncherState::CrashBackoff => "crash-backoff",
+        LauncherState::SafeMode => "safe-mode",
+    }
+}
+
+fn parse_state_name(value: &str) -> Option<LauncherState> {
+    match value {
+        "normal" => Some(LauncherState::Normal),
+        "user-stopped" => Some(LauncherState::UserStopped),
+        "updating" => Some(LauncherState::Updating),
+        "uninstalling" => Some(LauncherState::Uninstalling),
+        "crash-backoff" => Some(LauncherState::CrashBackoff),
+        "safe-mode" => Some(LauncherState::SafeMode),
+        _ => None,
+    }
+}
+
+fn line_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    let marker = format!("{key}=");
+    for mut line in text.split('\n') {
+        if let Some(stripped) = line.strip_suffix('\r') {
+            line = stripped;
+        }
+        if let Some(value) = line.strip_prefix(&marker) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn parse_unsigned(value: &str) -> Option<u64> {
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut result = 0_u64;
+    for digit in value.bytes().map(|b| u64::from(b - b'0')) {
+        result = result.checked_mul(10)?.checked_add(digit)?;
+    }
+    Some(result)
+}
+
+fn parse_snapshot(text: &str) -> Option<Fcitx5LauncherSnapshot> {
+    if let Some(legacy) = text.strip_suffix('\n') {
+        if let Some(state) = parse_state_name(legacy) {
+            return Some(Fcitx5LauncherSnapshot {
+                state: state as u32,
+                consecutive_startup_crashes: 0,
+                next_start_allowed_milliseconds: 0,
+            });
+        }
+    }
+    let format = line_value(text, "format_version")?;
+    let state = parse_state_name(line_value(text, "state")?)?;
+    let crashes = parse_unsigned(line_value(text, "consecutive_startup_crashes")?)?;
+    let next_start = parse_unsigned(line_value(text, "next_start_allowed_ms")?)?;
+    if format != "2" || crashes > u64::from(u32::MAX) {
+        return None;
+    }
+    Some(Fcitx5LauncherSnapshot {
+        state: state as u32,
+        consecutive_startup_crashes: crashes as u32,
+        next_start_allowed_milliseconds: next_start,
+    })
+}
+
+fn serialize_snapshot(snapshot: Fcitx5LauncherSnapshot) -> Option<String> {
+    let state = launcher_state(snapshot.state)?;
+    Some(format!(
+        "format_version=2\nstate={}\nconsecutive_startup_crashes={}\nnext_start_allowed_ms={}\n",
+        state_name(state),
+        snapshot.consecutive_startup_crashes,
+        snapshot.next_start_allowed_milliseconds
+    ))
+}
+
+fn path_from_wide(path: *const u16, len: usize) -> Option<PathBuf> {
+    if path.is_null() {
+        return (len == 0).then(PathBuf::new);
+    }
+    // SAFETY: The C++ adapter passes a valid UTF-16 buffer with exactly `len`
+    // elements for the duration of this call.
+    let slice = unsafe { std::slice::from_raw_parts(path, len) };
+    Some(PathBuf::from(OsString::from_wide(slice)))
+}
+
+fn wide_nul(path: &Path) -> Vec<u16> {
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    wide
+}
+
+fn replace_file(source: &Path, destination: &Path) -> bool {
+    let source = wide_nul(source);
+    let destination = wide_nul(destination);
+    // SAFETY: Both path buffers are NUL-terminated and live for the duration of
+    // the call. `MOVEFILE_REPLACE_EXISTING` preserves the old C++ ledger
+    // publication behavior.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .is_ok()
+}
+
+fn temporary_path(destination: &Path) -> PathBuf {
+    let mut value = destination.as_os_str().to_os_string();
+    value.push(format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    PathBuf::from(value)
+}
+
+fn load_snapshot_from_path(path: &Path) -> Result<Fcitx5LauncherSnapshot, u32> {
+    if path.as_os_str().is_empty() {
+        return Err(3);
+    }
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(0),
+        Err(_) => return Err(3),
+    };
+    let mut bytes = Vec::with_capacity(256);
+    let mut limited = file.take(256);
+    if limited.read_to_end(&mut bytes).is_err() {
+        return Err(3);
+    }
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return Err(2);
+    };
+    parse_snapshot(text).ok_or(2)
+}
+
+fn save_snapshot_to_path(path: &Path, snapshot: Fcitx5LauncherSnapshot) -> bool {
+    if path.as_os_str().is_empty() {
+        return false;
+    }
+    let Some(text) = serialize_snapshot(snapshot) else {
+        return false;
+    };
+    let temporary = temporary_path(path);
+    let result = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() || !replace_file(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return false;
+    }
+    true
+}
+
+fn default_state_store_path() -> Option<PathBuf> {
+    let local_app_data = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+    let directory = local_app_data.join(release_data_directory());
+    fs::create_dir_all(&directory).ok()?;
+    Some(directory.join(STATE_FILE_NAME))
+}
+
+fn write_utf16_path(value: &Path, out: *mut u16, capacity: usize) -> usize {
+    let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
+    if !out.is_null() && capacity != 0 {
+        let count = wide.len().min(capacity);
+        // SAFETY: The caller supplied writable storage for `capacity` u16
+        // values. We copy at most that many initialized elements.
+        unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), out, count) };
+    }
+    wide.len()
 }
 
 fn start_suppressed(state: LauncherState) -> bool {
@@ -379,6 +582,73 @@ pub unsafe extern "C" fn fcitx5_launcher_state_engine_stopped_intentionally(
     machine.engine_state = EngineState::Stopped as u32;
 }
 
+#[no_mangle]
+pub extern "C" fn fcitx5_launcher_state_is_persistent(state: u32) -> u8 {
+    u8::from(launcher_state(state).is_some())
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `path` must be either null with `len == 0`, or point to a valid UTF-16
+/// buffer with exactly `len` elements for the duration of this call.
+/// `out_snapshot` must point to writable storage when a loaded snapshot is
+/// requested. The pointer is not retained.
+pub unsafe extern "C" fn fcitx5_launcher_state_store_load_utf16(
+    path: *const u16,
+    len: usize,
+    out_snapshot: *mut Fcitx5LauncherSnapshot,
+) -> u32 {
+    if out_snapshot.is_null() {
+        return 3;
+    }
+    let Some(path) = path_from_wide(path, len) else {
+        return 3;
+    };
+    match load_snapshot_from_path(&path) {
+        Ok(snapshot) => {
+            unsafe {
+                *out_snapshot = snapshot;
+            }
+            1
+        }
+        Err(result) => result,
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `path` must be either null with `len == 0`, or point to a valid UTF-16
+/// buffer with exactly `len` elements for the duration of this call. The pointer
+/// is not retained.
+pub unsafe extern "C" fn fcitx5_launcher_state_store_save_utf16(
+    path: *const u16,
+    len: usize,
+    snapshot: Fcitx5LauncherSnapshot,
+) -> u8 {
+    let Some(path) = path_from_wide(path, len) else {
+        return 0;
+    };
+    u8::from(save_snapshot_to_path(&path, snapshot))
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `out` must be null or point to writable storage for `capacity` UTF-16 code
+/// units. The function returns the required code-unit count, excluding a NUL
+/// terminator, and does not retain the pointer.
+pub unsafe extern "C" fn fcitx5_launcher_default_state_store_path_utf16(
+    out: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(path) = default_state_store_path() else {
+        return 0;
+    };
+    write_utf16_path(&path, out, capacity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +734,63 @@ mod tests {
         .expect("safe-mode snapshot should normalize");
         assert_eq!(safe.consecutive_startup_crashes, SAFE_MODE_CRASH_THRESHOLD);
         assert_eq!(safe.next_start_allowed_milliseconds, 0);
+    }
+
+    #[test]
+    fn state_store_parser_matches_frozen_cpp_ledger_contract() {
+        let legacy = parse_snapshot("user-stopped\n").expect("legacy v1 state should parse");
+        assert_eq!(legacy.state, LauncherState::UserStopped as u32);
+        assert_eq!(legacy.consecutive_startup_crashes, 0);
+        assert_eq!(legacy.next_start_allowed_milliseconds, 0);
+
+        let v2 = parse_snapshot(
+            "format_version=2\r\nstate=safe-mode\r\nconsecutive_startup_crashes=3\r\nnext_start_allowed_ms=0\r\n",
+        )
+        .expect("v2 CRLF ledger should parse");
+        assert_eq!(v2.state, LauncherState::SafeMode as u32);
+        assert_eq!(v2.consecutive_startup_crashes, 3);
+
+        assert!(
+            parse_snapshot("format_version=2\nstate=safe-mode\nconsecutive_startup_crashes=")
+                .is_none()
+        );
+        assert!(parse_snapshot(
+            "format_version=2\nstate=safe-mode\nconsecutive_startup_crashes=4294967296\nnext_start_allowed_ms=0\n",
+        )
+        .is_none());
+        assert!(parse_snapshot(
+            "format_version=2\nstate=unknown\nconsecutive_startup_crashes=0\nnext_start_allowed_ms=0\n",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn state_store_save_load_and_publish_match_frozen_cpp_contract() {
+        let directory = std::env::temp_dir().join(format!(
+            "fcitx5-launcher-core-state-store-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).expect("test directory should be created");
+        let state_path = directory.join("launcher-state.v1");
+
+        assert_eq!(load_snapshot_from_path(&state_path), Err(0));
+
+        let snapshot = Fcitx5LauncherSnapshot {
+            state: LauncherState::CrashBackoff as u32,
+            consecutive_startup_crashes: 2,
+            next_start_allowed_milliseconds: 500,
+        };
+        assert!(save_snapshot_to_path(&state_path, snapshot));
+        assert_eq!(load_snapshot_from_path(&state_path), Ok(snapshot));
+
+        fs::write(
+            &state_path,
+            b"format_version=2\nstate=safe-mode\nconsecutive_startup_crashes=",
+        )
+        .expect("corrupt ledger should be written");
+        assert_eq!(load_snapshot_from_path(&state_path), Err(2));
+
+        let _ = fs::remove_dir_all(&directory);
     }
 }

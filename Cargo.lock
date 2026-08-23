@@ -72,6 +72,9 @@ version = "0.1.0"
 [[package]]
 name = "fcitx5-launcher-core"
 version = "0.1.0"
+dependencies = [
+ "windows",
+]
 
 [[package]]
 name = "fcitx5-package-core"

@@ -218,6 +218,7 @@ add_custom_command(
   OUTPUT "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}"
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-launcher-core --lib --target
     "${FCITX_RUST_TARGET}"
@@ -453,8 +454,7 @@ target_include_directories(
   fcitx5_launcher_state PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/launcher")
 target_link_libraries(
   fcitx5_launcher_state
-  PUBLIC fcitx5::release_identity fcitx5_launcher_core_rust shell32 ole32 ws2_32 userenv
-         ntdll bcrypt advapi32)
+  PUBLIC fcitx5_launcher_core_rust shell32 ole32 ws2_32 userenv ntdll bcrypt advapi32)
 add_dependencies(fcitx5_launcher_state fcitx5_launcher_core_rustlib)
 fcitx_apply_project_options(fcitx5_launcher_state)
 

@@ -66,6 +66,8 @@ int main(int argc, char** argv) {
     }
     const auto launcherSource = read_text(sourceRoot / "src/launcher/launcher_main.cpp");
     const auto trayIconSource = read_text(sourceRoot / "src/launcher/tray_icon.cpp");
+    const auto launcherStateStoreSource = read_text(sourceRoot / "src/launcher/state_store.cpp");
+    const auto rustLauncherCoreSource = read_text(sourceRoot / "rust/launcher-core/src/lib.rs");
     const auto jobMarker = launcherSource.find("HANDLE job = CreateJobObjectW");
     const auto jobLimitMarker = launcherSource.find("SetInformationJobObject", jobMarker);
     const auto firstUiLaunch = launcherSource.find("launchUi(uiPath", jobMarker);
@@ -79,6 +81,24 @@ int main(int argc, char** argv) {
             std::string::npos ||
         trayIconSource.find("if (!window_)\n        return;") == std::string::npos) {
         return fail("REG-BRAND-001: launcher must not create a default tray/taskbar surface");
+    }
+    if (launcherStateStoreSource.find("parseSnapshot") != std::string::npos ||
+        launcherStateStoreSource.find("CreateFileW") != std::string::npos ||
+        launcherStateStoreSource.find("WriteFile") != std::string::npos ||
+        launcherStateStoreSource.find("MoveFileExW") != std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_state_store_load_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_state_store_save_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("fcitx5_launcher_default_state_store_path_utf16") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("state_store_parser_matches_frozen_cpp_ledger_contract") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("state_store_save_load_and_publish_match_frozen_cpp_contract") ==
+            std::string::npos ||
+        cmakeSource.find("FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}") ==
+            std::string::npos) {
+        return fail("LAUNCHER-RUST: launcher ledger parse/save/default-path policy must be Rust-owned");
     }
     const auto controlSource = read_text(sourceRoot / "src/control/control_main.cpp");
     const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");
