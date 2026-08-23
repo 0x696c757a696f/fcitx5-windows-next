@@ -6550,8 +6550,8 @@ mod repair_ffi {
     use super::{
         activate_installed_version_for_rollback, activate_staged_payload_tree, parse_trusted_keys,
         stage_validated_archive_zip, stage_verified_payload_tree,
-        verify_installed_packages_for_repair, verify_manifest_signature, PackageId, TrustAlgorithm,
-        TrustedKey, MAX_MANIFEST_BYTES,
+        verify_installed_packages_for_repair, verify_manifest_signature, verify_mldsa65_signature,
+        PackageId, TrustAlgorithm, TrustedKey, MAX_MANIFEST_BYTES,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -7198,6 +7198,76 @@ mod repair_ffi {
         ) {
             Ok(path) => stage_ok_result(path),
             Err(error) => stage_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_verify_manifest_signature_utf8(
+        object_bytes: *const u8,
+        object_len: usize,
+        signature: *const u8,
+        signature_len: usize,
+        trusted_key: *const Fcitx5TrustedKey,
+    ) -> Fcitx5PackageRepairResult {
+        let Some(object_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: object_bytes,
+            len: object_len,
+        }) else {
+            return error_result("invalid_signature", "signature identity is incomplete");
+        };
+        let Some(signature) = slice_from_raw(Fcitx5ByteSlice {
+            data: signature,
+            len: signature_len,
+        }) else {
+            return error_result("invalid_signature", "signature identity is incomplete");
+        };
+        if trusted_key.is_null() {
+            return error_result("invalid_keyring", "trusted key set is invalid");
+        }
+        let Some(trusted_key) = key_from_raw(unsafe { &*trusted_key }) else {
+            return error_result("invalid_keyring", "trusted key set is invalid");
+        };
+        match verify_manifest_signature(object_bytes, signature, &trusted_key) {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_verify_mldsa65_signature_utf8(
+        object_bytes: *const u8,
+        object_len: usize,
+        signature: *const u8,
+        signature_len: usize,
+        trusted_key: *const Fcitx5TrustedKey,
+    ) -> Fcitx5PackageRepairResult {
+        let Some(object_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: object_bytes,
+            len: object_len,
+        }) else {
+            return error_result(
+                "invalid_signature",
+                "ML-DSA signature identity is incomplete",
+            );
+        };
+        let Some(signature) = slice_from_raw(Fcitx5ByteSlice {
+            data: signature,
+            len: signature_len,
+        }) else {
+            return error_result(
+                "invalid_signature",
+                "ML-DSA signature identity is incomplete",
+            );
+        };
+        if trusted_key.is_null() {
+            return error_result("invalid_keyring", "trusted key set is invalid");
+        }
+        let Some(trusted_key) = key_from_raw(unsafe { &*trusted_key }) else {
+            return error_result("invalid_keyring", "trusted key set is invalid");
+        };
+        match verify_mldsa65_signature(object_bytes, signature, &trusted_key) {
+            Ok(()) => ok_result(),
+            Err(error) => error_result(error.code(), &error.to_string()),
         }
     }
 

@@ -415,6 +415,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_stage_payload_utf16") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_verify_manifest_signature_utf8") ==
+            std::string::npos ||
+        rustPackageCore.find("fcitx5_package_verify_mldsa65_signature_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_staged_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_installed_version_utf16") ==
             std::string::npos ||
@@ -469,6 +473,10 @@ int main(int argc, char** argv) {
         packageSource.find("std::filesystem::copy_file") != std::string::npos ||
         packageSource.find("manifest key id does not match selected trusted key") !=
             std::string::npos ||
+        packageSource.find("BCryptVerifySignature") != std::string::npos ||
+        packageSource.find("BCRYPT_RSAPUBLIC_BLOB") != std::string::npos ||
+        packageSource.find("fcitx5_mldsa65_verify") != std::string::npos ||
+        packageSource.find("mldsa/mldsa_native.h") != std::string::npos ||
         packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||

@@ -17,12 +17,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#define MLD_CONFIG_FILE "fcitx5_mldsa65_config.h"
 extern "C" {
 #include <blake3.h>
-#include <mldsa/mldsa_native.h>
 }
-#undef MLD_CONFIG_FILE
 
 #include <nlohmann/json.hpp>
 
@@ -129,6 +126,12 @@ Fcitx5PackageLifecycleResult fcitx5_package_finalize_remove_utf16(
 Fcitx5PackageLifecycleResult fcitx5_package_verify_installed_utf16(
     const wchar_t* install_root, std::size_t install_root_len,
     const Fcitx5TrustedKeyNative* trusted_keys, std::size_t trusted_key_count);
+Fcitx5PackageLifecycleResult fcitx5_package_verify_manifest_signature_utf8(
+    const std::uint8_t* object_bytes, std::size_t object_len, const std::uint8_t* signature,
+    std::size_t signature_len, const Fcitx5TrustedKeyNative* trusted_key);
+Fcitx5PackageLifecycleResult fcitx5_package_verify_mldsa65_signature_utf8(
+    const std::uint8_t* object_bytes, std::size_t object_len, const std::uint8_t* signature,
+    std::size_t signature_len, const Fcitx5TrustedKeyNative* trusted_key);
 Fcitx5PackageLifecycleResult fcitx5_package_activate_staged_utf16(
     const wchar_t* staged_root, std::size_t staged_root_len, const wchar_t* install_root,
     std::size_t install_root_len, const Fcitx5TrustedKeyNative* trusted_keys,
@@ -152,8 +155,6 @@ using Json = nlohmann::json;
 constexpr std::size_t kMaximumIdBytes = 64U;
 constexpr std::string_view kSignatureEnvelopeCanonicalization =
     "fcitx5-windows-next-json-v1";
-constexpr std::size_t kMldsa65PublicKeyBytes = MLDSA65_PUBLICKEYBYTES;
-constexpr std::size_t kMldsa65SignatureBytes = MLDSA65_BYTES;
 
 class AlgorithmHandle final {
  public:
@@ -185,22 +186,6 @@ class HashHandle final {
 
  private:
   BCRYPT_HASH_HANDLE handle_{};
-};
-
-class KeyHandle final {
- public:
-  explicit KeyHandle(BCRYPT_KEY_HANDLE handle) : handle_(handle) {}
-  ~KeyHandle() {
-    if (handle_ != nullptr) {
-      BCryptDestroyKey(handle_);
-    }
-  }
-  KeyHandle(const KeyHandle&) = delete;
-  KeyHandle& operator=(const KeyHandle&) = delete;
-  [[nodiscard]] BCRYPT_KEY_HANDLE get() const noexcept { return handle_; }
-
- private:
-  BCRYPT_KEY_HANDLE handle_{};
 };
 
 [[noreturn]] void fail(std::string code, std::string message) {
@@ -707,54 +692,31 @@ SignatureEnvelope read_signature_envelope(const std::filesystem::path& path,
 void verify_manifest_signature(std::string_view manifest_bytes,
                                std::span<const std::byte> signature,
                                const TrustedKey& key) {
-  if (key.revoked) {
-    fail("revoked_key", "manifest key is revoked");
-  }
-  if (key.id.empty() || key.rsa_public_blob.empty() || signature.empty()) {
-    fail("invalid_signature", "signature identity is incomplete");
-  }
-  BCRYPT_ALG_HANDLE raw_algorithm = nullptr;
-  require_nt_success(BCryptOpenAlgorithmProvider(&raw_algorithm, BCRYPT_RSA_ALGORITHM, nullptr, 0),
-                     "BCryptOpenAlgorithmProvider");
-  AlgorithmHandle algorithm(raw_algorithm);
-  BCRYPT_KEY_HANDLE raw_key = nullptr;
-  require_nt_success(
-      BCryptImportKeyPair(algorithm.get(), nullptr, BCRYPT_RSAPUBLIC_BLOB, &raw_key,
-                          reinterpret_cast<PUCHAR>(
-                              const_cast<std::byte*>(key.rsa_public_blob.data())),
-                          static_cast<ULONG>(key.rsa_public_blob.size()), 0),
-      "BCryptImportKeyPair");
-  KeyHandle imported_key(raw_key);
-  const auto digest = sha256(std::as_bytes(std::span(manifest_bytes)));
-  BCRYPT_PKCS1_PADDING_INFO padding{BCRYPT_SHA256_ALGORITHM};
-  const auto status = BCryptVerifySignature(
-      imported_key.get(), &padding,
-      reinterpret_cast<PUCHAR>(const_cast<std::byte*>(digest.data())),
-      static_cast<ULONG>(digest.size()),
-      reinterpret_cast<PUCHAR>(const_cast<std::byte*>(signature.data())),
-      static_cast<ULONG>(signature.size()), BCRYPT_PAD_PKCS1);
-  if (status < 0) {
-    fail("invalid_signature", "manifest signature verification failed");
-  }
+  const Fcitx5TrustedKeyNative key_view{
+      ffi_slice(key.id),
+      ffi_slice(key.algorithm),
+      ffi_slice(std::span<const std::byte>(key.public_key.data(), key.public_key.size())),
+      ffi_slice(std::span<const std::byte>(key.rsa_public_blob.data(), key.rsa_public_blob.size())),
+      key.revoked ? std::uint8_t{1} : std::uint8_t{0},
+  };
+  require_lifecycle_ok(fcitx5_package_verify_manifest_signature_utf8(
+      reinterpret_cast<const std::uint8_t*>(manifest_bytes.data()), manifest_bytes.size(),
+      reinterpret_cast<const std::uint8_t*>(signature.data()), signature.size(), &key_view));
 }
 
 void verify_mldsa65_signature(std::string_view object_bytes,
                               std::span<const std::byte> signature,
                               const TrustedKey& key) {
-  if (key.revoked) {
-    fail("revoked_key", "ML-DSA key is revoked");
-  }
-  if (key.algorithm != "mldsa65" || key.public_key.size() != kMldsa65PublicKeyBytes ||
-      signature.size() != kMldsa65SignatureBytes || object_bytes.empty()) {
-    fail("invalid_signature", "ML-DSA signature identity is incomplete");
-  }
-  const auto* message = reinterpret_cast<const std::uint8_t*>(object_bytes.data());
-  const auto* signature_bytes = reinterpret_cast<const std::uint8_t*>(signature.data());
-  const auto* public_key = reinterpret_cast<const std::uint8_t*>(key.public_key.data());
-  if (fcitx5_mldsa65_verify(signature_bytes, message, object_bytes.size(), nullptr, 0U,
-                            public_key) != 0) {
-    fail("invalid_signature", "ML-DSA-65 signature verification failed");
-  }
+  const Fcitx5TrustedKeyNative key_view{
+      ffi_slice(key.id),
+      ffi_slice(key.algorithm),
+      ffi_slice(std::span<const std::byte>(key.public_key.data(), key.public_key.size())),
+      ffi_slice(std::span<const std::byte>(key.rsa_public_blob.data(), key.rsa_public_blob.size())),
+      key.revoked ? std::uint8_t{1} : std::uint8_t{0},
+  };
+  require_lifecycle_ok(fcitx5_package_verify_mldsa65_signature_utf8(
+      reinterpret_cast<const std::uint8_t*>(object_bytes.data()), object_bytes.size(),
+      reinterpret_cast<const std::uint8_t*>(signature.data()), signature.size(), &key_view));
 }
 
 void verify_signature_envelope(std::string_view object_bytes,
