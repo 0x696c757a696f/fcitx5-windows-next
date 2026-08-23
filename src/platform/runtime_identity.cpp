@@ -46,6 +46,12 @@ extern "C" std::size_t fcitx5_windows_common_portable_data_root_for_module_utf16
     std::size_t module_path_len,
     std::uint16_t* output,
     std::size_t capacity);
+extern "C" std::uint8_t fcitx5_windows_common_may_launch_user_engine_utf16(
+    std::uint8_t service_account,
+    std::uint32_t session_id,
+    std::uint8_t secure_desktop,
+    const std::uint16_t* user_sid,
+    std::size_t user_sid_len);
 
 class Handle final {
   public:
@@ -234,8 +240,10 @@ std::filesystem::path rustPortableDataRootForModule(std::wstring_view modulePath
 } // namespace
 
 bool mayLaunchUserEngine(const RuntimeIdentity& identity) noexcept {
-    return !identity.serviceAccount && identity.sessionId != 0 && !identity.secureDesktop &&
-           !identity.userSid.empty();
+    return fcitx5_windows_common_may_launch_user_engine_utf16(
+               identity.serviceAccount ? 1 : 0, identity.sessionId,
+               identity.secureDesktop ? 1 : 0, wideData(identity.userSid),
+               identity.userSid.size()) != 0;
 }
 
 bool RuntimeIdentity::mayUseUserEngine() const noexcept { return mayLaunchUserEngine(*this); }

@@ -253,6 +253,15 @@ fn portable_data_root_for_module(module_path: &Path) -> Option<PathBuf> {
         .then(|| parent.join("data"))
 }
 
+fn may_launch_user_engine(
+    service_account: bool,
+    session_id: u32,
+    secure_desktop: bool,
+    user_sid: &str,
+) -> bool {
+    !service_account && session_id != 0 && !secure_desktop && !user_sid.is_empty()
+}
+
 fn local_name(
     pipe: bool,
     user_sid: &str,
@@ -447,6 +456,29 @@ pub unsafe extern "C" fn fcitx5_windows_common_portable_data_root_for_module_utf
     write_wide_path(&root, output, capacity)
 }
 
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
+/// UTF-16 buffer with exactly `user_sid_len` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_may_launch_user_engine_utf16(
+    service_account: u8,
+    session_id: u32,
+    secure_desktop: u8,
+    user_sid: *const u16,
+    user_sid_len: usize,
+) -> u8 {
+    let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
+        return 0;
+    };
+    may_launch_user_engine(
+        service_account != 0,
+        session_id,
+        secure_desktop != 0,
+        &user_sid,
+    ) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,5 +592,14 @@ mod tests {
             .expect("write invalid current");
         assert_eq!(current_runtime_generation_from_install_root(&root), None);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn user_engine_launch_policy_matches_cpp_contract() {
+        assert!(may_launch_user_engine(false, 1, false, "S-1-5-21-test"));
+        assert!(!may_launch_user_engine(true, 1, false, "S-1-5-21-test"));
+        assert!(!may_launch_user_engine(false, 0, false, "S-1-5-21-test"));
+        assert!(!may_launch_user_engine(false, 1, true, "S-1-5-21-test"));
+        assert!(!may_launch_user_engine(false, 1, false, ""));
     }
 }

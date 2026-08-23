@@ -306,6 +306,12 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("runtime_generation_and_install_roots_match_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_may_launch_user_engine_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("user_engine_launch_policy_matches_cpp_contract") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("!identity.serviceAccount && identity.sessionId != 0") !=
+            std::string::npos ||
         runtimeIdentitySource.find("parseCurrentGeneration") != std::string::npos ||
         runtimeIdentitySource.find("parsePlainGeneration") != std::string::npos ||
         runtimeIdentitySource.find("readSmallTextFile") != std::string::npos ||
