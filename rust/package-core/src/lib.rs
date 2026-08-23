@@ -3113,8 +3113,10 @@ mod repository_ffi {
 
     use super::{
         parse_signature_envelope, verify_repository_index, verify_repository_index_envelope,
-        PackageId, RepositoryEntry, RepositoryIndex, SignedObject, TrustAlgorithm, TrustedKey,
+        PackageId, RepositoryEntry, RepositoryIndex, SignatureEnvelope, SignatureEnvelopeEntry,
+        SignedObject, TrustAlgorithm, TrustedKey, MAX_PACKAGE_ID_BYTES, MAX_SIGNATURE_BYTES,
     };
+    use std::collections::BTreeSet;
     use std::fmt::Write as _;
     use std::slice;
 
@@ -3159,6 +3161,14 @@ mod repository_ffi {
     pub struct Fcitx5RepositoryFindEntry {
         pub id: Fcitx5ByteSlice,
         pub architecture: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RepositorySignatureEnvelopeEntry {
+        pub key_id: Fcitx5ByteSlice,
+        pub algorithm: Fcitx5ByteSlice,
+        pub signature: Fcitx5ByteSlice,
     }
 
     fn empty_result() -> Fcitx5RepositoryResult {
@@ -3252,6 +3262,69 @@ mod repository_ffi {
         }
         let raw = unsafe { slice::from_raw_parts(trusted_keys, trusted_key_count) };
         raw.iter().map(key_from_raw).collect()
+    }
+
+    fn signature_algorithm_from_str(value: &str) -> Option<TrustAlgorithm> {
+        match value {
+            "mldsa65" => Some(TrustAlgorithm::Mldsa65),
+            "slhdsa-sha2-128s" => Some(TrustAlgorithm::SlhdsaSha2_128s),
+            _ => None,
+        }
+    }
+
+    fn signature_entry_from_raw(
+        raw: &Fcitx5RepositorySignatureEnvelopeEntry,
+    ) -> Result<SignatureEnvelopeEntry, &'static str> {
+        let Some(key_id) = string_from_raw(raw.key_id) else {
+            return Err("signature envelope key id is invalid or duplicated");
+        };
+        if key_id.len() > MAX_PACKAGE_ID_BYTES {
+            return Err("signature envelope key id is invalid or duplicated");
+        }
+        let key_id = PackageId::parse(&key_id)
+            .map_err(|_| "signature envelope key id is invalid or duplicated")?;
+        let Some(algorithm) = string_from_raw(raw.algorithm) else {
+            return Err("signature envelope requires an unsupported algorithm");
+        };
+        if algorithm.len() > 32 {
+            return Err("signature envelope requires an unsupported algorithm");
+        }
+        let algorithm = signature_algorithm_from_str(&algorithm)
+            .ok_or("signature envelope requires an unsupported algorithm")?;
+        let Some(signature) = slice_from_raw(raw.signature) else {
+            return Err("signature envelope signature is invalid");
+        };
+        if signature.is_empty() || signature.len() as u64 > MAX_SIGNATURE_BYTES {
+            return Err("signature envelope signature is invalid");
+        }
+        Ok(SignatureEnvelopeEntry {
+            key_id,
+            algorithm,
+            signature: signature.to_vec(),
+        })
+    }
+
+    fn signature_entries_from_raw(
+        signatures: *const Fcitx5RepositorySignatureEnvelopeEntry,
+        signature_count: usize,
+    ) -> Result<Vec<SignatureEnvelopeEntry>, &'static str> {
+        if signature_count == 0 || signature_count > 16 {
+            return Err("signature envelope signatures array is invalid");
+        }
+        if signatures.is_null() {
+            return Err("signature envelope signatures array is invalid");
+        }
+        let raw = unsafe { slice::from_raw_parts(signatures, signature_count) };
+        let mut key_ids = BTreeSet::new();
+        let mut parsed = Vec::with_capacity(raw.len());
+        for entry in raw {
+            let parsed_entry = signature_entry_from_raw(entry)?;
+            if !key_ids.insert(parsed_entry.key_id.as_str().to_owned()) {
+                return Err("signature envelope key id is invalid or duplicated");
+            }
+            parsed.push(parsed_entry);
+        }
+        Ok(parsed)
     }
 
     fn json_escape(text: &str, output: &mut String) {
@@ -3477,6 +3550,65 @@ mod repository_ffi {
         let Ok(envelope) = parse_signature_envelope(envelope_text, SignedObject::RepositoryIndex)
         else {
             return error_result("invalid_signature", "signature envelope is invalid");
+        };
+        repository_result(verify_repository_index_envelope(
+            index_bytes,
+            &envelope,
+            &trusted_keys,
+            &expected_channel,
+        ))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_verify_index_parsed_envelope_utf8(
+        index_data: *const u8,
+        index_len: usize,
+        format_version: u32,
+        signed_object: Fcitx5ByteSlice,
+        canonicalization: Fcitx5ByteSlice,
+        signatures: *const Fcitx5RepositorySignatureEnvelopeEntry,
+        signature_count: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+        expected_channel: *const u8,
+        expected_channel_len: usize,
+    ) -> Fcitx5RepositoryResult {
+        let Some(index_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: index_data,
+            len: index_len,
+        }) else {
+            return error_result("invalid_repository", "repository index is not strict JSON");
+        };
+        let Some(signed_object) = string_from_raw(signed_object) else {
+            return error_result("invalid_signature", "signature envelope is invalid");
+        };
+        let Some(signed_object) = SignedObject::parse(&signed_object) else {
+            return error_result("invalid_signature", "signature envelope is invalid");
+        };
+        let Some(canonicalization) = string_from_raw(canonicalization) else {
+            return error_result("invalid_signature", "signature envelope is invalid");
+        };
+        let signatures = match signature_entries_from_raw(signatures, signature_count) {
+            Ok(signatures) => signatures,
+            Err(message) => return error_result("invalid_signature", message),
+        };
+        let Some(expected_channel) = string_from_raw(Fcitx5ByteSlice {
+            data: expected_channel,
+            len: expected_channel_len,
+        }) else {
+            return error_result("invalid_repository", "repository identity is invalid");
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return error_result(
+                "invalid_repository",
+                "trusted repository key set is invalid",
+            );
+        };
+        let envelope = SignatureEnvelope {
+            format_version: u64::from(format_version),
+            signed_object,
+            canonicalization,
+            signatures,
         };
         repository_result(verify_repository_index_envelope(
             index_bytes,

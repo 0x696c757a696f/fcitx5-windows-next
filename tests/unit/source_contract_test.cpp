@@ -440,6 +440,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
         rustPackageCore.find("fcitx5_repository_verify_index_envelope_utf8") ==
             std::string::npos ||
+        rustPackageCore.find("fcitx5_repository_verify_index_parsed_envelope_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_repository_find_package_index_utf8") ==
             std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
@@ -460,13 +462,19 @@ int main(int argc, char** argv) {
         packageCoreHeader.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
         packageCoreHeader.find("fcitx5_package_stage_payload_utf16") == std::string::npos ||
         packageCoreHeader.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
-        packageCoreHeader.find("fcitx5_repository_verify_index_envelope_utf8") ==
+        packageCoreHeader.find("fcitx5_repository_verify_index_parsed_envelope_utf8") ==
             std::string::npos ||
         packageCoreHeader.find("find_repository_package") == std::string::npos ||
         packageCoreHeader.find("rust_trusted_key_views") == std::string::npos ||
         packageCoreHeader.find("entry.architecture == \"any\"") != std::string::npos ||
         packageCoreHeader.find("entry.architecture == architecture") !=
             std::string::npos ||
+        packageCoreHeader.find("CryptBinaryToStringA") != std::string::npos ||
+        packageCoreHeader.find("CRYPT_STRING_BASE64") != std::string::npos ||
+        packageCoreHeader.find("signature_base64") != std::string::npos ||
+        packageCoreHeader.find("repository signature envelope encoding failed") !=
+            std::string::npos ||
+        packageCoreHeader.find("json_string(std::string_view") != std::string::npos ||
         packageSource.find("write_lockfile_atomic") != std::string::npos ||
         packageSource.find("unable to atomically publish version directory") !=
             std::string::npos ||

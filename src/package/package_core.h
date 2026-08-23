@@ -5,16 +5,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <vector>
 #include <utility>
+#include <vector>
 
-#include <Windows.h>
-#include <wincrypt.h>
 #include <nlohmann/json.hpp>
 
 namespace fcitx::package {
@@ -265,6 +262,12 @@ struct Fcitx5RepositoryFindEntry {
   Fcitx5PackageByteSlice architecture{};
 };
 
+struct Fcitx5RepositorySignatureEnvelopeEntry {
+  Fcitx5PackageByteSlice key_id{};
+  Fcitx5PackageByteSlice algorithm{};
+  Fcitx5PackageByteSlice signature{};
+};
+
 extern "C" Fcitx5PackageStageResult fcitx5_package_stage_archive_utf16(
     const wchar_t* archive_path, std::size_t archive_path_len, const wchar_t* install_root,
     std::size_t install_root_len, const std::uint8_t* transaction_id,
@@ -282,10 +285,12 @@ extern "C" Fcitx5RepositoryResult fcitx5_repository_verify_index_utf8(
     std::size_t signature_len, const Fcitx5PackageTrustedKey* trusted_keys,
     std::size_t trusted_key_count, const std::uint8_t* expected_channel,
     std::size_t expected_channel_len);
-extern "C" Fcitx5RepositoryResult fcitx5_repository_verify_index_envelope_utf8(
-    const std::uint8_t* index_data, std::size_t index_len, const std::uint8_t* envelope_data,
-    std::size_t envelope_len, const Fcitx5PackageTrustedKey* trusted_keys,
-    std::size_t trusted_key_count, const std::uint8_t* expected_channel,
+extern "C" Fcitx5RepositoryResult fcitx5_repository_verify_index_parsed_envelope_utf8(
+    const std::uint8_t* index_data, std::size_t index_len, std::uint32_t format_version,
+    Fcitx5PackageByteSlice signed_object, Fcitx5PackageByteSlice canonicalization,
+    const Fcitx5RepositorySignatureEnvelopeEntry* signatures, std::size_t signature_count,
+    const Fcitx5PackageTrustedKey* trusted_keys, std::size_t trusted_key_count,
+    const std::uint8_t* expected_channel,
     std::size_t expected_channel_len);
 extern "C" std::size_t fcitx5_repository_find_package_index_utf8(
     const Fcitx5RepositoryFindEntry* entries, std::size_t entry_count,
@@ -329,61 +334,6 @@ extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len)
 [[nodiscard]] inline std::string ffi_ascii(const char* bytes, std::size_t maximum) {
   const auto* nul = std::find(bytes, bytes + maximum, '\0');
   return {bytes, static_cast<std::size_t>(nul - bytes)};
-}
-
-[[nodiscard]] inline std::string json_string(std::string_view value) {
-  std::string result = "\"";
-  for (const unsigned char character : value) {
-    switch (character) {
-      case '\\':
-        result += "\\\\";
-        break;
-      case '"':
-        result += "\\\"";
-        break;
-      case '\b':
-        result += "\\b";
-        break;
-      case '\f':
-        result += "\\f";
-        break;
-      case '\n':
-        result += "\\n";
-        break;
-      case '\r':
-        result += "\\r";
-        break;
-      case '\t':
-        result += "\\t";
-        break;
-      default:
-        if (character < 0x20U) {
-          throw PackageError("invalid_repository",
-                             "verified repository envelope contains a control character");
-        }
-        result.push_back(static_cast<char>(character));
-        break;
-    }
-  }
-  result.push_back('"');
-  return result;
-}
-
-[[nodiscard]] inline std::string base64(std::span<const std::byte> value) {
-  DWORD size = 0;
-  if (!CryptBinaryToStringA(reinterpret_cast<const BYTE*>(value.data()),
-                            static_cast<DWORD>(value.size()),
-                            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &size)) {
-    throw PackageError("invalid_repository", "repository signature envelope encoding failed");
-  }
-  std::string result(size, '\0');
-  if (!CryptBinaryToStringA(reinterpret_cast<const BYTE*>(value.data()),
-                            static_cast<DWORD>(value.size()),
-                            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, result.data(), &size)) {
-    throw PackageError("invalid_repository", "repository signature envelope encoding failed");
-  }
-  result.resize(size);
-  return result;
 }
 
 [[nodiscard]] inline RepositoryIndex parse_verified_repository_json(std::string_view bytes) {
@@ -491,30 +441,21 @@ extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len)
 [[nodiscard]] inline RepositoryIndex verify_repository_index(
     std::string_view index_bytes, const SignatureEnvelope& envelope,
     std::span<const TrustedKey> trusted_keys, std::string_view expectedChannel) {
-  std::string envelope_bytes = "{\"format_version\":" +
-                               std::to_string(envelope.format_version) +
-                               ",\"signed_object\":" +
-                               detail::json_string(envelope.signed_object) +
-                               ",\"canonicalization\":" +
-                               detail::json_string(envelope.canonicalization) +
-                               ",\"signatures\":[";
-  bool first = true;
+  std::vector<detail::Fcitx5RepositorySignatureEnvelopeEntry> signature_views;
+  signature_views.reserve(envelope.signatures.size());
   for (const auto& signature : envelope.signatures) {
-    if (!first) {
-      envelope_bytes.push_back(',');
-    }
-    first = false;
-    envelope_bytes += "{\"key_id\":" + detail::json_string(signature.key_id) +
-                      ",\"algorithm\":" + detail::json_string(signature.algorithm) +
-                      ",\"signature_base64\":" +
-                      detail::json_string(detail::base64(std::as_bytes(std::span(signature.signature)))) +
-                      '}';
+    signature_views.push_back(detail::Fcitx5RepositorySignatureEnvelopeEntry{
+        detail::byte_slice(signature.key_id),
+        detail::byte_slice(signature.algorithm),
+        detail::byte_slice(std::as_bytes(std::span(signature.signature))),
+    });
   }
-  envelope_bytes += "]}";
   const auto key_views = detail::rust_trusted_key_views(trusted_keys);
-  return detail::repository_result(detail::fcitx5_repository_verify_index_envelope_utf8(
+  return detail::repository_result(detail::fcitx5_repository_verify_index_parsed_envelope_utf8(
       reinterpret_cast<const std::uint8_t*>(index_bytes.data()), index_bytes.size(),
-      reinterpret_cast<const std::uint8_t*>(envelope_bytes.data()), envelope_bytes.size(),
+      envelope.format_version, detail::byte_slice(envelope.signed_object),
+      detail::byte_slice(envelope.canonicalization),
+      signature_views.empty() ? nullptr : signature_views.data(), signature_views.size(),
       key_views.data(), key_views.size(),
       reinterpret_cast<const std::uint8_t*>(expectedChannel.data()), expectedChannel.size()));
 }
