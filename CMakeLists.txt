@@ -182,8 +182,8 @@ fcitx_apply_project_options(fcitx5_protocol)
 
 set(FCITX_RUST_LAUNCHER_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_launcher_core.lib")
-add_custom_target(
-  fcitx5_launcher_core_rustlib
+add_custom_command(
+  OUTPUT "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
@@ -191,6 +191,8 @@ add_custom_target(
     "${FCITX_RUST_TARGET}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-launcher-core staticlib")
+add_custom_target(fcitx5_launcher_core_rustlib
+                  DEPENDS "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}")
 add_library(fcitx5_launcher_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_launcher_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}")
@@ -198,8 +200,8 @@ add_dependencies(fcitx5_launcher_core_rust fcitx5_launcher_core_rustlib)
 
 set(FCITX_RUST_PROCESS_EXECUTION_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_process_execution_core.lib")
-add_custom_target(
-  fcitx5_process_execution_core_rustlib
+add_custom_command(
+  OUTPUT "${FCITX_RUST_PROCESS_EXECUTION_CORE_STATICLIB}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
@@ -207,6 +209,8 @@ add_custom_target(
     "${FCITX_RUST_TARGET}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-process-execution-core staticlib")
+add_custom_target(fcitx5_process_execution_core_rustlib
+                  DEPENDS "${FCITX_RUST_PROCESS_EXECUTION_CORE_STATICLIB}")
 add_library(fcitx5_process_execution_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(
   fcitx5_process_execution_core_rust
@@ -215,8 +219,8 @@ add_dependencies(fcitx5_process_execution_core_rust fcitx5_process_execution_cor
 
 set(FCITX_RUST_CONTROL_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_control_core.lib")
-add_custom_target(
-  fcitx5_control_core_rustlib
+add_custom_command(
+  OUTPUT "${FCITX_RUST_CONTROL_CORE_STATICLIB}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
@@ -224,6 +228,8 @@ add_custom_target(
     "${FCITX_RUST_TARGET}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-control-core staticlib")
+add_custom_target(fcitx5_control_core_rustlib
+                  DEPENDS "${FCITX_RUST_CONTROL_CORE_STATICLIB}")
 add_library(fcitx5_control_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_control_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CONTROL_CORE_STATICLIB}")
@@ -233,8 +239,8 @@ set(FCITX_RUST_CANDIDATE_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_candidate_core.lib")
 set(FCITX_RUST_CANDIDATE_POC_EXE
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5-candidate-poc.exe")
-add_custom_target(
-  fcitx5_candidate_core_rustlib
+add_custom_command(
+  OUTPUT "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
@@ -242,6 +248,8 @@ add_custom_target(
     "${FCITX_RUST_TARGET}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-candidate-core staticlib")
+add_custom_target(fcitx5_candidate_core_rustlib
+                  DEPENDS "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}")
 add_library(fcitx5_candidate_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_candidate_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}")
@@ -593,8 +601,8 @@ add_custom_target(
 
 set(FCITX_RUST_PACKAGE_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_package_core.lib")
-add_custom_target(
-  fcitx5_package_core_rustlib
+add_custom_command(
+  OUTPUT "${FCITX_RUST_PACKAGE_CORE_STATICLIB}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
@@ -604,6 +612,8 @@ add_custom_target(
     "${FCITX_RUST_TARGET}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-package-core staticlib")
+add_custom_target(fcitx5_package_core_rustlib
+                  DEPENDS "${FCITX_RUST_PACKAGE_CORE_STATICLIB}")
 add_library(fcitx5_package_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_package_core_rust PROPERTIES
                       IMPORTED_LOCATION "${FCITX_RUST_PACKAGE_CORE_STATICLIB}")
