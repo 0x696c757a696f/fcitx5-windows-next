@@ -171,9 +171,9 @@ int wmain(int argc, wchar_t** argv) {
         summaryReport.find("\"composition_transcript\":true") == std::string::npos ||
         summaryReport.find("\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\"") ==
             std::string::npos ||
-        summaryReport.find("\"arm64_artifact_pending\":true") == std::string::npos ||
+        summaryReport.find("\"arm64_ci_artifact_green\":true") == std::string::npos ||
         summaryReport.find("\"real_host_matrix_pending\":true") == std::string::npos ||
-        summaryReport.find("\"product_decision\":\"pending\"") == std::string::npos) {
+        summaryReport.find("\"product_decision\":\"continue_poc\"") == std::string::npos) {
         std::cerr << "Rust TSF PoC differential summary should list green and pending evidence\n";
         FreeLibrary(module);
         return 1;

@@ -546,8 +546,9 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("Fcitx5TsfPocDifferentialSummaryReport") ==
             std::string::npos ||
         rustTsfPocSource.find("tsf_differential_summary_report") == std::string::npos ||
-        rustTsfPocSource.find("arm64_artifact_pending") == std::string::npos ||
-        rustTsfPocSource.find("product_decision") == std::string::npos ||
+        rustTsfPocSource.find("arm64_ci_artifact_green") == std::string::npos ||
+        rustTsfPocSource.find("product_decision\\\":\\\"continue_poc") ==
+            std::string::npos ||
         rustTsfPocSource.find("product_display_name") == std::string::npos ||
         rustTsfPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
         rustTsfPocSource.find("profile_display_name") == std::string::npos ||
@@ -677,6 +678,8 @@ int main(int argc, char** argv) {
         compilerOptions.find("target_precompile_headers") == std::string::npos ||
         cmakeSource.find("src/pch/fcitx_windows_pch.h") == std::string::npos ||
         cmakeSource.find("FCITX_RUST_BUILD_ENV") == std::string::npos ||
+        cmakeSource.find("FCITX_SCCACHE_EXECUTABLE") == std::string::npos ||
+        cmakeSource.find("RUSTC_WRAPPER=${FCITX_SCCACHE_EXECUTABLE}") == std::string::npos ||
         cmakeSource.find("SCCACHE_DIR=$ENV{SCCACHE_DIR}") == std::string::npos ||
         cmakeSource.find("FCITX_EFFECTIVE_TARGET_ARCH") == std::string::npos ||
         coreWorkflow.find("Restore fast Windows toolchain cache") == std::string::npos ||

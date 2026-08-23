@@ -153,7 +153,7 @@ pub fn tsf_composition_transcript_report() -> String {
 
 pub fn tsf_differential_summary_report() -> String {
     format!(
-        "{{\"format_version\":1,\"component\":\"fcitx5-tsf-poc\",\"shipping_cxx_authoritative\":true,\"same_corpus_case_count\":{},\"same_corpus_rust_passes\":{},\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"abi_reports\":{{\"behavior\":true,\"profile_identity\":true,\"ipc_boundary\":true,\"composition_transcript\":true}},\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\",\"x64_x86_export_smoke_required\":true,\"arm64_artifact_pending\":true,\"real_host_matrix_pending\":true,\"product_decision\":\"pending\"}}",
+        "{{\"format_version\":1,\"component\":\"fcitx5-tsf-poc\",\"shipping_cxx_authoritative\":true,\"same_corpus_case_count\":{},\"same_corpus_rust_passes\":{},\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"abi_reports\":{{\"behavior\":true,\"profile_identity\":true,\"ipc_boundary\":true,\"composition_transcript\":true}},\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\",\"x64_x86_export_smoke_required\":true,\"arm64_ci_artifact_green\":true,\"real_host_matrix_pending\":true,\"product_decision\":\"continue_poc\"}}",
         REQUIRED_TSF_BEHAVIOR_CASES.len(),
         REQUIRED_TSF_BEHAVIOR_CASES
             .iter()
@@ -1470,9 +1470,9 @@ mod tests {
         assert!(report.contains("\"ipc_boundary\":true"));
         assert!(report.contains("\"composition_transcript\":true"));
         assert!(report.contains("\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\""));
-        assert!(report.contains("\"arm64_artifact_pending\":true"));
+        assert!(report.contains("\"arm64_ci_artifact_green\":true"));
         assert!(report.contains("\"real_host_matrix_pending\":true"));
-        assert!(report.contains("\"product_decision\":\"pending\""));
+        assert!(report.contains("\"product_decision\":\"continue_poc\""));
     }
 
     #[test]
