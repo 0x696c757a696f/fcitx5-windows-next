@@ -33,6 +33,13 @@ struct Fcitx5PackageDigestResult {
   std::uint8_t digest[32];
 };
 
+struct Fcitx5PackageByteResult {
+  int status;
+  std::uint8_t error_code[64];
+  std::uint8_t error_message[512];
+  Fcitx5ByteSlice bytes;
+};
+
 struct Fcitx5PackageLockEntry {
   std::uint8_t id[65];
   std::uint8_t version[65];
@@ -163,10 +170,13 @@ Fcitx5PackageDigestResult fcitx5_package_blake3_digest_utf8(
     const std::uint8_t* bytes, std::size_t len);
 Fcitx5PackageDigestResult fcitx5_package_blake3_file_utf16(
     const wchar_t* path, std::size_t path_len);
+Fcitx5PackageByteResult fcitx5_package_hex_bytes_utf8(
+    const std::uint8_t* bytes, std::size_t len);
 Fcitx5PackageDependencyResolutionResult fcitx5_package_resolve_exact_dependencies_utf8(
     const Fcitx5PackageDependencyResolutionManifest* manifests, std::size_t manifest_count,
     const Fcitx5ByteSlice* requested_ids, std::size_t requested_id_count);
 void fcitx5_package_dependency_resolution_free(Fcitx5ByteSlice* ids, std::size_t id_count);
+void fcitx5_package_byte_slice_free(Fcitx5ByteSlice bytes);
 Fcitx5PackageLifecycleResult fcitx5_package_verify_payload_root_utf16(
     std::uint32_t format_version, Fcitx5ByteSlice package_id,
     const Fcitx5PackageManifestFile* files, std::size_t file_count,
@@ -329,6 +339,39 @@ std::array<std::byte, 32> require_digest_ok(const Fcitx5PackageDigestResult& res
   });
   return digest;
 }
+
+std::string require_byte_result_ok(const Fcitx5PackageByteResult& result) {
+  if (result.status != 0) {
+    std::string code = ffi_string(result.error_code);
+    std::string message = ffi_string(result.error_message);
+    if (code.empty()) {
+      code = "byte_result_failed";
+    }
+    if (message.empty()) {
+      message = "package byte result operation failed";
+    }
+    fail(std::move(code), std::move(message));
+  }
+  if (result.bytes.len != 0 && result.bytes.data == nullptr) {
+    fail("byte_result_failed", "package byte result data is invalid");
+  }
+  if (result.bytes.len == 0) {
+    return {};
+  }
+  return std::string(reinterpret_cast<const char*>(result.bytes.data), result.bytes.len);
+}
+
+class ByteResultGuard final {
+ public:
+  explicit ByteResultGuard(Fcitx5PackageByteResult result) : result_(result) {}
+  ~ByteResultGuard() { fcitx5_package_byte_slice_free(result_.bytes); }
+  ByteResultGuard(const ByteResultGuard&) = delete;
+  ByteResultGuard& operator=(const ByteResultGuard&) = delete;
+  [[nodiscard]] const Fcitx5PackageByteResult& get() const noexcept { return result_; }
+
+ private:
+  Fcitx5PackageByteResult result_{};
+};
 
 class TrustedKeyResultGuard final {
  public:
@@ -530,15 +573,9 @@ std::array<std::byte, 32> sha256_file(const std::filesystem::path& path) {
 }
 
 std::string hex_sha256(std::span<const std::byte> digest) {
-  constexpr std::string_view digits = "0123456789abcdef";
-  std::string result;
-  result.reserve(digest.size() * 2U);
-  for (const auto value : digest) {
-    const auto byte = std::to_integer<unsigned int>(value);
-    result.push_back(digits[byte >> 4U]);
-    result.push_back(digits[byte & 0x0FU]);
-  }
-  return result;
+  const ByteResultGuard guard(fcitx5_package_hex_bytes_utf8(
+      reinterpret_cast<const std::uint8_t*>(digest.data()), digest.size()));
+  return require_byte_result_ok(guard.get());
 }
 
 std::array<std::byte, 32> blake3(std::span<const std::byte> bytes) {

@@ -1790,14 +1790,18 @@ fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64], round_constants: &[u3
     state[7] = state[7].wrapping_add(h);
 }
 
-fn hex_lower(bytes: &[u8; 32]) -> String {
+fn hex_lower_bytes(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(64);
+    let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         output.push(char::from(HEX[usize::from(byte >> 4)]));
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+fn hex_lower(bytes: &[u8; 32]) -> String {
+    hex_lower_bytes(bytes)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7170,6 +7174,15 @@ mod repair_ffi {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageByteResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub bytes: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
     pub struct Fcitx5PackageStageResult {
         pub status: i32,
         pub error_code: [u8; 64],
@@ -7317,6 +7330,31 @@ mod repair_ffi {
             error_code,
             error_message,
             digest: [0; 32],
+        }
+    }
+
+    fn byte_ok_result(bytes: Vec<u8>) -> Fcitx5PackageByteResult {
+        Fcitx5PackageByteResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            bytes: owned_slice(bytes),
+        }
+    }
+
+    fn byte_error_result(code: &str, message: &str) -> Fcitx5PackageByteResult {
+        let mut error_code = [0; 64];
+        let mut error_message = [0; 512];
+        write_ascii(&mut error_code, code);
+        write_ascii(&mut error_message, message);
+        Fcitx5PackageByteResult {
+            status: 1,
+            error_code,
+            error_message,
+            bytes: Fcitx5ByteSlice {
+                data: std::ptr::null(),
+                len: 0,
+            },
         }
     }
 
@@ -8105,6 +8143,17 @@ mod repair_ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_hex_bytes_utf8(
+        bytes: *const u8,
+        len: usize,
+    ) -> Fcitx5PackageByteResult {
+        let Some(bytes) = slice_from_raw(Fcitx5ByteSlice { data: bytes, len }) else {
+            return byte_error_result("invalid_file", "hex input bytes are invalid");
+        };
+        byte_ok_result(super::hex_lower_bytes(bytes).into_bytes())
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn fcitx5_package_resolve_exact_dependencies_utf8(
         manifests: *const Fcitx5PackageDependencyResolutionManifest,
         manifest_count: usize,
@@ -8326,6 +8375,11 @@ mod repair_ffi {
                 }
             }
         }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_byte_slice_free(bytes: Fcitx5ByteSlice) {
+        free_owned_slice(bytes);
     }
 
     #[no_mangle]

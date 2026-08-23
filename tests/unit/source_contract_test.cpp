@@ -401,6 +401,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("fcitx5_package_blake3_digest_utf8") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_sha256_file_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_blake3_file_utf16") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_hex_bytes_utf8") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_byte_slice_free") == std::string::npos ||
         rustPackageCore.find("verify_payload_bytes") == std::string::npos ||
         rustPackageCore.find("verify_payload_root") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_verify_payload_root_utf16") ==
@@ -520,6 +522,9 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageSource.find("return blake3(std::as_bytes(std::span(bytes)))") !=
             std::string::npos ||
+        packageSource.find("constexpr std::string_view digits") != std::string::npos ||
+        packageSource.find("digits[byte >> 4U]") != std::string::npos ||
+        packageSource.find("digits[byte & 0x0FU]") != std::string::npos ||
         packageSource.find("read_file_bounded") != std::string::npos ||
         packageSource.find("std::ifstream input") != std::string::npos ||
         packageSource.find("file is missing or exceeds its resource budget") !=
