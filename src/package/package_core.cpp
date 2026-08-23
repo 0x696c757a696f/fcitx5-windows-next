@@ -1,8 +1,6 @@
 #include "package_core.h"
 
 #include <windows.h>
-#include <bcrypt.h>
-#include <wincrypt.h>
 
 #include <algorithm>
 #include <array>
@@ -16,12 +14,6 @@
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
-
-extern "C" {
-#include <blake3.h>
-}
-
-#include <nlohmann/json.hpp>
 
 extern "C" {
 struct Fcitx5ByteSlice {
@@ -41,6 +33,13 @@ struct Fcitx5PackageLifecycleResult {
   int status;
   std::uint8_t error_code[64];
   std::uint8_t error_message[512];
+};
+
+struct Fcitx5PackageDigestResult {
+  int status;
+  std::uint8_t error_code[64];
+  std::uint8_t error_message[512];
+  std::uint8_t digest[32];
 };
 
 struct Fcitx5PackageLockEntry {
@@ -140,6 +139,10 @@ Fcitx5PackageLifecycleResult fcitx5_package_validate_manifest_compatibility_utf8
     std::uint32_t package_type, Fcitx5ByteSlice package_architecture,
     Fcitx5ByteSlice core_api, Fcitx5ByteSlice addon_abi,
     const std::uint8_t* runtime_architecture, std::size_t runtime_architecture_len);
+Fcitx5PackageDigestResult fcitx5_package_sha256_digest_utf8(
+    const std::uint8_t* bytes, std::size_t len);
+Fcitx5PackageDigestResult fcitx5_package_blake3_digest_utf8(
+    const std::uint8_t* bytes, std::size_t len);
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -183,41 +186,7 @@ Fcitx5RepositorySequenceRepairResult fcitx5_repository_sequence_repair_utf16(
 namespace fcitx::package {
 namespace {
 
-using Json = nlohmann::json;
-
 constexpr std::size_t kMaximumIdBytes = 64U;
-
-class AlgorithmHandle final {
- public:
-  explicit AlgorithmHandle(BCRYPT_ALG_HANDLE handle) : handle_(handle) {}
-  ~AlgorithmHandle() {
-    if (handle_ != nullptr) {
-      BCryptCloseAlgorithmProvider(handle_, 0);
-    }
-  }
-  AlgorithmHandle(const AlgorithmHandle&) = delete;
-  AlgorithmHandle& operator=(const AlgorithmHandle&) = delete;
-  [[nodiscard]] BCRYPT_ALG_HANDLE get() const noexcept { return handle_; }
-
- private:
-  BCRYPT_ALG_HANDLE handle_{};
-};
-
-class HashHandle final {
- public:
-  explicit HashHandle(BCRYPT_HASH_HANDLE handle) : handle_(handle) {}
-  ~HashHandle() {
-    if (handle_ != nullptr) {
-      BCryptDestroyHash(handle_);
-    }
-  }
-  HashHandle(const HashHandle&) = delete;
-  HashHandle& operator=(const HashHandle&) = delete;
-  [[nodiscard]] BCRYPT_HASH_HANDLE get() const noexcept { return handle_; }
-
- private:
-  BCRYPT_HASH_HANDLE handle_{};
-};
 
 [[noreturn]] void fail(std::string code, std::string message) {
   throw PackageError(std::move(code), std::move(message));
@@ -316,6 +285,25 @@ void require_lifecycle_ok(const Fcitx5PackageLifecycleResult& result) {
   fail(std::move(code), std::move(message));
 }
 
+std::array<std::byte, 32> require_digest_ok(const Fcitx5PackageDigestResult& result) {
+  if (result.status != 0) {
+    std::string code = ffi_string(result.error_code);
+    std::string message = ffi_string(result.error_message);
+    if (code.empty()) {
+      code = "digest_failed";
+    }
+    if (message.empty()) {
+      message = "package digest operation failed";
+    }
+    fail(std::move(code), std::move(message));
+  }
+  std::array<std::byte, 32> digest{};
+  std::ranges::transform(result.digest, digest.begin(), [](std::uint8_t byte) {
+    return static_cast<std::byte>(byte);
+  });
+  return digest;
+}
+
 class TrustedKeyResultGuard final {
  public:
   explicit TrustedKeyResultGuard(Fcitx5PackageTrustedKeyResult result) : result_(result) {}
@@ -359,12 +347,6 @@ class SignatureEnvelopeResultGuard final {
 
 std::wstring native_path_string(const std::filesystem::path& path) {
   return path.native();
-}
-
-void require_nt_success(NTSTATUS status, std::string_view operation) {
-  if (status < 0) {
-    fail("crypto_error", std::string(operation) + " failed");
-  }
 }
 
 bool contains_reparse_component(const std::filesystem::path& path) {
@@ -559,25 +541,8 @@ bool path_contains_reparse_point(const std::filesystem::path& path) {
 }
 
 std::array<std::byte, 32> sha256(std::span<const std::byte> bytes) {
-  BCRYPT_ALG_HANDLE raw_algorithm = nullptr;
-  require_nt_success(BCryptOpenAlgorithmProvider(&raw_algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0),
-                     "BCryptOpenAlgorithmProvider");
-  AlgorithmHandle algorithm(raw_algorithm);
-  BCRYPT_HASH_HANDLE raw_hash = nullptr;
-  require_nt_success(BCryptCreateHash(algorithm.get(), &raw_hash, nullptr, 0, nullptr, 0, 0),
-                     "BCryptCreateHash");
-  HashHandle hash(raw_hash);
-  if (!bytes.empty()) {
-    require_nt_success(
-        BCryptHashData(hash.get(), reinterpret_cast<PUCHAR>(const_cast<std::byte*>(bytes.data())),
-                       static_cast<ULONG>(bytes.size()), 0),
-        "BCryptHashData");
-  }
-  std::array<std::byte, 32> result{};
-  require_nt_success(BCryptFinishHash(hash.get(), reinterpret_cast<PUCHAR>(result.data()),
-                                     static_cast<ULONG>(result.size()), 0),
-                     "BCryptFinishHash");
-  return result;
+  return require_digest_ok(fcitx5_package_sha256_digest_utf8(
+      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
 }
 
 std::array<std::byte, 32> sha256_file(const std::filesystem::path& path) {
@@ -603,13 +568,8 @@ std::string hex_sha256(std::span<const std::byte> digest) {
 }
 
 std::array<std::byte, 32> blake3(std::span<const std::byte> bytes) {
-  blake3_hasher hasher{};
-  blake3_hasher_init(&hasher);
-  blake3_hasher_update(&hasher, bytes.data(), bytes.size());
-  std::array<std::byte, 32> result{};
-  blake3_hasher_finalize(&hasher, reinterpret_cast<std::uint8_t*>(result.data()),
-                         result.size());
-  return result;
+  return require_digest_ok(fcitx5_package_blake3_digest_utf8(
+      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
 }
 
 std::array<std::byte, 32> blake3_file(const std::filesystem::path& path) {

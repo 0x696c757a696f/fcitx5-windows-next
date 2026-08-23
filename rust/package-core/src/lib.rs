@@ -6602,6 +6602,15 @@ mod repair_ffi {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageDigestResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub digest: [u8; 32],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
     pub struct Fcitx5PackageStageResult {
         pub status: i32,
         pub error_code: [u8; 64],
@@ -6709,6 +6718,28 @@ mod repair_ffi {
         write_ascii(&mut result.error_code, code);
         write_ascii(&mut result.error_message, message);
         result
+    }
+
+    fn digest_ok_result(digest: [u8; 32]) -> Fcitx5PackageDigestResult {
+        Fcitx5PackageDigestResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            digest,
+        }
+    }
+
+    fn digest_error_result(code: &str, message: &str) -> Fcitx5PackageDigestResult {
+        let mut error_code = [0; 64];
+        let mut error_message = [0; 512];
+        write_ascii(&mut error_code, code);
+        write_ascii(&mut error_message, message);
+        Fcitx5PackageDigestResult {
+            status: 1,
+            error_code,
+            error_message,
+            digest: [0; 32],
+        }
     }
 
     fn path_from_utf16(ptr: *const u16, len: usize) -> Option<PathBuf> {
@@ -7232,6 +7263,28 @@ mod repair_ffi {
             Ok(()) => ok_result(),
             Err(error) => error_result(error.code(), &error.to_string()),
         }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_sha256_digest_utf8(
+        bytes: *const u8,
+        len: usize,
+    ) -> Fcitx5PackageDigestResult {
+        let Some(bytes) = slice_from_raw(Fcitx5ByteSlice { data: bytes, len }) else {
+            return digest_error_result("invalid_file", "digest input bytes are invalid");
+        };
+        digest_ok_result(super::sha256_bytes(bytes))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_blake3_digest_utf8(
+        bytes: *const u8,
+        len: usize,
+    ) -> Fcitx5PackageDigestResult {
+        let Some(bytes) = slice_from_raw(Fcitx5ByteSlice { data: bytes, len }) else {
+            return digest_error_result("invalid_file", "digest input bytes are invalid");
+        };
+        digest_ok_result(*blake3::hash(bytes).as_bytes())
     }
 
     fn parse_trusted_manifest(
