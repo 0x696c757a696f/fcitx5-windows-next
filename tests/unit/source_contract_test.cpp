@@ -175,7 +175,10 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/src/downloader_main.rs");
     const auto rustDownloaderBuild =
         read_text(sourceRoot / "tools/build-rust-downloader-cli.ps1");
-    const auto updaterSource = read_text(sourceRoot / "src/updater/updater_main.cpp");
+    const auto rustUpdaterBinary =
+        read_text(sourceRoot / "rust/package-core/src/updater_main.rs");
+    const auto rustUpdaterBuild =
+        read_text(sourceRoot / "tools/build-rust-updater-cli.ps1");
     const auto deploymentCoreSource = read_text(sourceRoot / "src/updater/deployment_core.cpp");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
@@ -246,8 +249,19 @@ int main(int argc, char** argv) {
         rustDownloaderBinary.find("MoveFileExW") == std::string::npos ||
         rustDownloaderBuild.find("fcitx5-downloader.exe") == std::string::npos ||
         rustDownloaderBuild.find("--bin fcitx5-downloader") == std::string::npos ||
-        updaterSource.find("cleanup_previous_known_good") == std::string::npos ||
-        updaterSource.find("remove_all(target") != std::string::npos ||
+        std::filesystem::exists(sourceRoot / "src/updater/updater_main.cpp") ||
+        rustPackageCoreManifest.find("name = \"fcitx5-updater\"") ==
+            std::string::npos ||
+        rustUpdaterBinary.find("#![forbid(unsafe_code)]") == std::string::npos ||
+        rustUpdaterBinary.find("--activate-runtime-generation") == std::string::npos ||
+        rustUpdaterBinary.find("cleanup_previous_known_good") == std::string::npos ||
+        rustUpdaterBinary.find("activate_staged_payload_tree") == std::string::npos ||
+        rustUpdaterBinary.find("activate_installed_version_for_rollback") ==
+            std::string::npos ||
+        rustUpdaterBinary.find("update_failed:") == std::string::npos ||
+        rustUpdaterBuild.find("fcitx5-updater.exe") == std::string::npos ||
+        rustUpdaterBuild.find("--bin fcitx5-updater") == std::string::npos ||
+        cmakeSource.find("Building Rust fcitx5-updater CLI") == std::string::npos ||
         deploymentCoreSource.find("fcitx5_update_cleanup_previous_known_good_utf16") ==
             std::string::npos ||
         deploymentCoreSource.find("fcitx5_update_install_tsf_dll_generation_utf16") ==

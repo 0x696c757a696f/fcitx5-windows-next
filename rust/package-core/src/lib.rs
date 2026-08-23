@@ -3424,8 +3424,9 @@ mod repository_ffi {
 }
 
 #[cfg(windows)]
-mod deployment_ffi {
+pub mod update {
     #![allow(unsafe_code)]
+    #![allow(clippy::missing_safety_doc)]
 
     use super::win32_fs_adapter;
     use super::{path_contains_reparse_component, JsonParser, JsonValue, PackageId};
@@ -3544,7 +3545,7 @@ mod deployment_ffi {
         result
     }
 
-    fn owner_name(owner: Fcitx5UpdateOwner) -> &'static str {
+    pub fn owner_name(owner: Fcitx5UpdateOwner) -> &'static str {
         match owner {
             Fcitx5UpdateOwner::Builtin => "builtin",
             Fcitx5UpdateOwner::Chocolatey => "chocolatey",
@@ -3554,7 +3555,7 @@ mod deployment_ffi {
         }
     }
 
-    fn parse_owner(value: &str) -> Option<Fcitx5UpdateOwner> {
+    pub fn parse_owner(value: &str) -> Option<Fcitx5UpdateOwner> {
         match value {
             "builtin" => Some(Fcitx5UpdateOwner::Builtin),
             "chocolatey" => Some(Fcitx5UpdateOwner::Chocolatey),
@@ -3682,7 +3683,7 @@ mod deployment_ffi {
         parse_owner(&owner).ok_or_else(|| "unknown update owner".to_owned())
     }
 
-    fn read_update_owner(root: &Path) -> Result<Fcitx5UpdateOwner, String> {
+    pub fn read_update_owner(root: &Path) -> Result<Fcitx5UpdateOwner, String> {
         let path = update_owner_path(root);
         if !path.exists() {
             return Ok(Fcitx5UpdateOwner::Manual);
@@ -3692,7 +3693,7 @@ mod deployment_ffi {
         parse_update_owner(&bytes)
     }
 
-    fn write_update_owner(root: &Path, owner: Fcitx5UpdateOwner) -> Result<(), String> {
+    pub fn write_update_owner(root: &Path, owner: Fcitx5UpdateOwner) -> Result<(), String> {
         let text = format!(
             "{{\"format_version\":1,\"update_owner\":\"{}\"}}\n",
             owner_name(owner)
@@ -3700,7 +3701,10 @@ mod deployment_ffi {
         publish_text(&update_owner_path(root), &text)
     }
 
-    fn read_deployment_state(root: &Path, channel: &str) -> Result<Fcitx5DeploymentState, String> {
+    pub fn read_deployment_state(
+        root: &Path,
+        channel: &str,
+    ) -> Result<Fcitx5DeploymentState, String> {
         let path = state_path(root);
         if !path.exists() {
             let mut state = Fcitx5DeploymentState {
@@ -3827,7 +3831,7 @@ mod deployment_ffi {
         publish_text(&state_path(root), &text)
     }
 
-    fn begin_activation(
+    pub fn begin_activation(
         root: &Path,
         channel: &str,
         version: &str,
@@ -3881,7 +3885,7 @@ mod deployment_ffi {
         write_deployment_state(root, &state)
     }
 
-    fn mark_current_healthy(root: &Path, channel: &str) -> Result<(), String> {
+    pub fn mark_current_healthy(root: &Path, channel: &str) -> Result<(), String> {
         let mut state = read_deployment_state(root, channel)?;
         let current_bytes = state
             .current
@@ -3905,7 +3909,7 @@ mod deployment_ffi {
         write_deployment_state(root, &state)
     }
 
-    fn rollback_target(root: &Path, channel: &str) -> Result<String, String> {
+    pub fn rollback_target(root: &Path, channel: &str) -> Result<String, String> {
         let state = read_deployment_state(root, channel)?;
         let previous_bytes = state
             .previous
@@ -3927,7 +3931,7 @@ mod deployment_ffi {
         Ok(previous.to_owned())
     }
 
-    fn finish_rollback(root: &Path, channel: &str) -> Result<(), String> {
+    pub fn finish_rollback(root: &Path, channel: &str) -> Result<(), String> {
         let mut state = read_deployment_state(root, channel)?;
         let target = rollback_target(root, channel)?;
         let _ = write_ascii(&mut state.current, &target);
@@ -3937,7 +3941,7 @@ mod deployment_ffi {
         write_deployment_state(root, &state)
     }
 
-    fn clear_previous_known_good(root: &Path, channel: &str) -> Result<(), String> {
+    pub fn clear_previous_known_good(root: &Path, channel: &str) -> Result<(), String> {
         let mut state = read_deployment_state(root, channel)?;
         if state.healthy == 0
             || !state
@@ -4032,7 +4036,7 @@ mod deployment_ffi {
         let _ = win32_fs_adapter::replace_file(renamed_old_path, registered_dll_path);
     }
 
-    fn install_tsf_dll_generation(
+    pub fn install_tsf_dll_generation(
         registered_dll_path: &Path,
         verified_new_dll_path: &Path,
         generation: &str,
@@ -4172,7 +4176,7 @@ mod deployment_ffi {
         Ok(result)
     }
 
-    fn cleanup_old_tsf_dlls(tsf_arch_directory: &Path) -> Result<Vec<PathBuf>, String> {
+    pub fn cleanup_old_tsf_dlls(tsf_arch_directory: &Path) -> Result<Vec<PathBuf>, String> {
         let mut pending = Vec::new();
         if !tsf_arch_directory.is_dir() {
             return Ok(pending);
@@ -4212,7 +4216,7 @@ mod deployment_ffi {
         }
     }
 
-    fn runtime_generation_directory(root: &Path, generation: &str) -> Result<PathBuf, String> {
+    pub fn runtime_generation_directory(root: &Path, generation: &str) -> Result<PathBuf, String> {
         if !generation_token(generation) {
             return Err("runtime generation is invalid".to_owned());
         }
@@ -4405,7 +4409,7 @@ mod deployment_ffi {
         published
     }
 
-    fn install_runtime_generation(
+    pub fn install_runtime_generation(
         root: &Path,
         verified_payload_root: &Path,
         generation: &str,
@@ -4469,7 +4473,7 @@ mod deployment_ffi {
         .map_err(|_| "deployment state schema is invalid".to_owned())
     }
 
-    fn cleanup_previous_known_good(
+    pub fn cleanup_previous_known_good(
         root: &Path,
         channel: &str,
         package_id: &str,
@@ -4508,7 +4512,7 @@ mod deployment_ffi {
         root.join("current.json")
     }
 
-    fn read_runtime_generation_state(root: &Path) -> Result<Fcitx5GenerationState, String> {
+    pub fn read_runtime_generation_state(root: &Path) -> Result<Fcitx5GenerationState, String> {
         let path = runtime_state_path(root);
         if !path.exists() {
             return Ok(Fcitx5GenerationState {
@@ -4564,7 +4568,7 @@ mod deployment_ffi {
         Ok(result)
     }
 
-    fn publish_runtime_generation(
+    pub fn publish_runtime_generation(
         root: &Path,
         generation: &str,
         build_id: &str,
@@ -6330,6 +6334,66 @@ pub fn verify_installed_packages_for_repair(
         .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
     }
     Ok(())
+}
+
+#[cfg(windows)]
+pub fn activate_installed_version_for_rollback(
+    install_root: impl AsRef<Path>,
+    package_id: &str,
+    version: &str,
+    trusted_keys: &[TrustedKey],
+) -> Result<(), LifecycleError> {
+    let install_root = install_root.as_ref();
+    let package_id = PackageId::parse(package_id).map_err(|_| {
+        lifecycle_error("invalid_identity", "known-good package identity is invalid")
+    })?;
+    if !is_ascii_token(version, ".+-_") {
+        return Err(lifecycle_error(
+            "invalid_identity",
+            "known-good package identity is invalid",
+        ));
+    }
+    let metadata = install_root.join("manifests").join(package_id.as_str());
+    let manifest_path = metadata.join(format!("{version}.json"));
+    let signature_path = metadata.join(format!("{version}.sig"));
+    let manifest_bytes = read_repair_file_bounded(&manifest_path, MAX_MANIFEST_BYTES as u64)?;
+    let manifest_text = std::str::from_utf8(&manifest_bytes)
+        .map_err(|_| lifecycle_error("invalid_manifest", "manifest is not valid UTF-8"))?;
+    let manifest = parse_manifest(manifest_text)
+        .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+    if manifest.id() != &package_id || manifest.version() != version {
+        return Err(lifecycle_error(
+            "rollback_failed",
+            "known-good manifest identity differs",
+        ));
+    }
+    let trusted_key = trusted_keys
+        .iter()
+        .find(|candidate| candidate.id() == manifest.key_id())
+        .ok_or_else(|| lifecycle_error("untrusted_key", "known-good key is no longer trusted"))?;
+    let signature = read_repair_file_bounded(&signature_path, MAX_SIGNATURE_BYTES)?;
+    verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+        .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+    verify_payload_root(
+        &manifest,
+        install_root
+            .join("versions")
+            .join(package_id.as_str())
+            .join(version),
+    )
+    .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+
+    let mut lock = read_installed_lockfile(install_root)
+        .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+    upsert_installed_lock_entry(
+        &mut lock,
+        package_id,
+        version.to_owned(),
+        sha256_digest(&manifest_bytes),
+    )
+    .map_err(|error| lifecycle_error(error.code, error.message))?;
+    write_installed_lockfile_atomic(install_root, &lock)
+        .map_err(|error| lifecycle_error(error.code, error.message))
 }
 
 #[cfg(windows)]

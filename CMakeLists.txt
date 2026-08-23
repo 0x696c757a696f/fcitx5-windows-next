@@ -708,12 +708,26 @@ add_custom_target(
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-provider CLI")
 
-add_executable(fcitx5_updater src/updater/updater_main.cpp)
-set_target_properties(fcitx5_updater PROPERTIES OUTPUT_NAME "fcitx5-updater")
-target_link_libraries(fcitx5_updater PRIVATE fcitx5::windows_common fcitx5::package_core
-                                             fcitx5::deployment_core)
-fcitx_apply_project_options(fcitx5_updater)
-fcitx_apply_binary_hardening(fcitx5_updater)
+add_custom_target(
+  fcitx5_updater
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-updater.exe"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+    "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-updater-cli.ps1"
+    -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
+    -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/updater_main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-updater-cli.ps1"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-updater CLI")
 
 if(BUILD_TESTING)
   add_executable(fcitx5_version_test tests/unit/version_test.cpp)
@@ -823,7 +837,9 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_deployment_core_test)
   fcitx_apply_binary_hardening(fcitx5_deployment_core_test)
   add_test(NAME deployment-previous-known-good COMMAND fcitx5_deployment_core_test)
-  add_test(NAME updater-version COMMAND fcitx5_updater --version)
+  add_test(
+    NAME updater-version
+    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-updater.exe" --version)
   add_test(
     NAME downloader-version
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe" --version)
@@ -844,7 +860,8 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_updater_cleanup_test)
   fcitx_apply_binary_hardening(fcitx5_updater_cleanup_test)
   add_test(NAME updater-cleanup-previous
-           COMMAND fcitx5_updater_cleanup_test "$<TARGET_FILE:fcitx5_updater>")
+           COMMAND fcitx5_updater_cleanup_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-updater.exe")
 
   add_executable(fcitx5_control_repository_rollback_test
                  tests/unit/control_repository_rollback_test.cpp)
