@@ -106,35 +106,6 @@ struct CandidateVisual {
     std::wstring comment;
 };
 
-struct Fcitx5CandidateLayoutRect {
-    float left{};
-    float top{};
-    float right{};
-    float bottom{};
-};
-
-struct Fcitx5CandidateRenderItemInput {
-    Fcitx5CandidateLayoutRect bounds{};
-    float labelWidth{};
-    float textWidth{};
-    float commentWidth{};
-    std::uint8_t hasLabel{};
-};
-
-struct Fcitx5CandidateRenderItemOutput {
-    Fcitx5CandidateLayoutRect label{};
-    Fcitx5CandidateLayoutRect text{};
-    Fcitx5CandidateLayoutRect comment{};
-    std::uint8_t drawComment{};
-};
-
-extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemInput* items,
-                                                 std::size_t itemCount,
-                                                 std::uint8_t horizontalLayout,
-                                                 std::uint8_t scrollMode,
-                                                 Fcitx5CandidateRenderItemOutput* outItems,
-                                                 float* outLabelColumnWidth);
-
 template <typename Function>
 Function resolveProcAddress(HMODULE module, const char* name) noexcept {
 #if defined(__clang__)
@@ -148,11 +119,11 @@ Function resolveProcAddress(HMODULE module, const char* name) noexcept {
     return function;
 }
 
-[[nodiscard]] Fcitx5CandidateLayoutRect toRustRect(const D2D1_RECT_F& value) noexcept {
+[[nodiscard]] fcitx::windows::ui::Rect toUiRect(const D2D1_RECT_F& value) noexcept {
     return {value.left, value.top, value.right, value.bottom};
 }
 
-[[nodiscard]] D2D1_RECT_F fromRustRect(const Fcitx5CandidateLayoutRect& value) noexcept {
+[[nodiscard]] D2D1_RECT_F fromUiRect(const fcitx::windows::ui::Rect& value) noexcept {
     return D2D1::RectF(value.left, value.top, value.right, value.bottom);
 }
 
@@ -946,7 +917,7 @@ class CandidateWindow final {
             }
             return metrics.widthIncludingTrailingWhitespace;
         };
-        std::vector<Fcitx5CandidateRenderItemInput> renderInputs;
+        std::vector<fcitx::windows::ui::RenderItemInput> renderInputs;
         renderInputs.reserve(paintCount);
         for (std::size_t local = 0; local < paintCount; ++local) {
             const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
@@ -954,33 +925,28 @@ class CandidateWindow final {
                                            ? itemRects_[local]
                                            : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
             if (index >= lines.size()) {
-                renderInputs.push_back({toRustRect(bounds), 0.0F, 0.0F, 0.0F, 0U});
+                renderInputs.push_back({toUiRect(bounds), 0.0F, 0.0F, 0.0F, false});
                 fallbackTop += 32.0F;
                 continue;
             }
             const auto& candidate = lines[index];
             const float height = bounds.bottom - bounds.top;
             renderInputs.push_back(
-                {toRustRect(bounds),
+                {toUiRect(bounds),
                  naturalTextWidth(candidate.label, labelFormat_.Get(), height),
                  naturalTextWidth(candidate.text, textFormat_.Get(), height),
                  naturalTextWidth(candidate.comment, annotationFormat_.Get(), height),
-                 static_cast<std::uint8_t>(candidate.label.empty() ? 0U : 1U)});
+                 !candidate.label.empty()});
             fallbackTop += 32.0F;
         }
         fallbackTop = 8.0F;
         const bool horizontalLayout =
             resolvedPresentationOrientation_ == fcitx::windows::ui::Orientation::horizontal;
-        std::vector<Fcitx5CandidateRenderItemOutput> renderSegments(renderInputs.size());
-        float labelColumnWidth = 0.0F;
-        if (!renderInputs.empty()) {
-            (void)fcitx5_candidate_render_segments(
-                renderInputs.data(), renderInputs.size(),
-                static_cast<std::uint8_t>(horizontalLayout ? 1U : 0U),
-                static_cast<std::uint8_t>(scrollMode_ ? 1U : 0U), renderSegments.data(),
-                &labelColumnWidth);
-        }
-        (void)labelColumnWidth;
+        auto renderSegments =
+            fcitx::windows::ui::renderSegments(resolvedPresentationOrientation_, scrollMode_,
+                                               renderInputs);
+        if (renderSegments.size() != renderInputs.size())
+            renderSegments.assign(renderInputs.size(), {});
         if (scrollMode_ && itemRects_.size() > scrollColumns_) {
             borderBrush->SetOpacity(0.55F);
             if (horizontalLayout) {
@@ -1039,12 +1005,12 @@ class CandidateWindow final {
             };
             const auto& segments = renderSegments[local];
             if (!candidate.label.empty())
-                drawTextInRect(fromRustRect(segments.label), candidate.label, labelFormat_.Get(),
+                drawTextInRect(fromUiRect(segments.label), candidate.label, labelFormat_.Get(),
                                selected ? selectedLabelBrush.Get() : labelBrush.Get());
-            drawTextInRect(fromRustRect(segments.text), candidate.text, textFormat_.Get(),
+            drawTextInRect(fromUiRect(segments.text), candidate.text, textFormat_.Get(),
                            selected ? selectedTextBrush.Get() : textBrush.Get());
-            if (segments.drawComment != 0)
-                drawTextInRect(fromRustRect(segments.comment), candidate.comment,
+            if (segments.drawComment)
+                drawTextInRect(fromUiRect(segments.comment), candidate.comment,
                                annotationFormat_.Get(),
                                selected ? selectedCommentBrush.Get() : commentBrush.Get());
             fallbackTop += 32.0F;

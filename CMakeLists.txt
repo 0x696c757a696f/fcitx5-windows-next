@@ -580,15 +580,14 @@ add_custom_command(
           "$<TARGET_FILE_DIR:fcitx5_config_app>/locales"
   VERBATIM)
 
-add_library(fcitx5_candidate_layout STATIC src/ui/candidate_layout.cpp)
+add_library(fcitx5_candidate_layout INTERFACE)
 add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
-target_compile_features(fcitx5_candidate_layout PUBLIC cxx_std_20)
+target_compile_features(fcitx5_candidate_layout INTERFACE cxx_std_20)
 target_include_directories(
-  fcitx5_candidate_layout PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
-target_link_libraries(fcitx5_candidate_layout PUBLIC fcitx5_candidate_core_rust ws2_32 userenv
-                                                   ntdll)
+  fcitx5_candidate_layout INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
+target_link_libraries(fcitx5_candidate_layout INTERFACE fcitx5_candidate_core_rust ws2_32 userenv
+                                                     ntdll)
 add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
-fcitx_apply_project_options(fcitx5_candidate_layout)
 
 target_link_libraries(fcitx5_config_app PRIVATE fcitx5::candidate_layout)
 

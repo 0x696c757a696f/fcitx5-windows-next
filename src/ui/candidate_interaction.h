@@ -11,7 +11,7 @@ namespace fcitx::windows::ui {
 
 namespace detail {
 
-struct Fcitx5CandidateLayoutRect {
+struct Fcitx5CandidateHitTestRect {
     float left{};
     float top{};
     float right{};
@@ -27,7 +27,7 @@ struct Fcitx5CandidateSelectionIntent {
     std::uint64_t candidateId{};
 };
 
-extern "C" std::uint8_t fcitx5_candidate_hit_test(const Fcitx5CandidateLayoutRect* rects,
+extern "C" std::uint8_t fcitx5_candidate_hit_test(const Fcitx5CandidateHitTestRect* rects,
                                                    std::size_t rectCount, float x, float y,
                                                    std::size_t* outIndex);
 extern "C" Fcitx5CandidateSelectionIntent fcitx5_candidate_selection_intent(
@@ -52,7 +52,7 @@ struct CandidateSelectionIntent {
 
 [[nodiscard]] inline std::optional<std::size_t> hitTestCandidate(
     const std::vector<D2D1_RECT_F>& itemRects, float x, float y) noexcept {
-    std::vector<detail::Fcitx5CandidateLayoutRect> rustRects;
+    std::vector<detail::Fcitx5CandidateHitTestRect> rustRects;
     rustRects.reserve(itemRects.size());
     for (const auto& rectangle : itemRects)
         rustRects.push_back({rectangle.left, rectangle.top, rectangle.right, rectangle.bottom});
