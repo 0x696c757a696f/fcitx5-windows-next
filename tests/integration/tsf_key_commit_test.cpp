@@ -1,5 +1,6 @@
 #include "guids.h"
 
+#include <initguid.h>
 #include <Windows.h>
 #include <OleAuto.h>
 #include <inputscope.h>

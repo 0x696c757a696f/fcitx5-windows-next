@@ -1316,7 +1316,6 @@ if(BUILD_TESTING)
 
   add_executable(fcitx5_tsf_key_commit_test tests/integration/tsf_key_commit_test.cpp)
   add_dependencies(fcitx5_tsf_key_commit_test fcitx5_tsf)
-  target_sources(fcitx5_tsf_key_commit_test PRIVATE src/tsf/input_scope_guids.cpp)
   target_include_directories(fcitx5_tsf_key_commit_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
   target_link_libraries(fcitx5_tsf_key_commit_test PRIVATE fcitx5::release_identity uuid ole32 oleaut32)
   fcitx_apply_project_options(fcitx5_tsf_key_commit_test)

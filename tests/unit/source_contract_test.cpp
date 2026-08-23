@@ -1116,6 +1116,12 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("RUST-R3-TSF-POC: UILess candidate element must be Rust-owned and the old C++ source/test must stay deleted");
     }
+    if (std::filesystem::exists(sourceRoot / "src/tsf/input_scope_guids.cpp") ||
+        cmakeSource.find("src/tsf/input_scope_guids.cpp") != std::string::npos ||
+        tsfKeyCommitTest.find("#include <initguid.h>") == std::string::npos ||
+        tsfKeyCommitTest.find("GUID_PROP_INPUTSCOPE") == std::string::npos) {
+        return fail("RUST-R3-TSF-POC: input-scope GUID test support must not return as a src/tsf C++ file");
+    }
     if (std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.h") ||
         std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.cpp") ||
         std::filesystem::exists(sourceRoot / "tests/unit/tsf_activation_guard_test.cpp") ||
