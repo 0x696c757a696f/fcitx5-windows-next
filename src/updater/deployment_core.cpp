@@ -270,12 +270,39 @@ void publish_runtime_directory(const std::filesystem::path& verified_payload_roo
       std::filesystem::remove_all(temporary, ignored);
       return;
     }
-    if (!MoveFileExW(temporary.c_str(), destination.c_str(), 0)) {
-      const DWORD error = GetLastError();
-      std::filesystem::remove_all(temporary, ignored);
-      throw std::runtime_error("runtime generation publication failed: " +
-                               std::to_string(error));
+    DWORD lastError = ERROR_SUCCESS;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+      if (MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        return;
+      }
+      lastError = GetLastError();
+      if (lastError != ERROR_ACCESS_DENIED && lastError != ERROR_SHARING_VIOLATION &&
+          lastError != ERROR_LOCK_VIOLATION) {
+        break;
+      }
+      Sleep(static_cast<DWORD>(25 * (attempt + 1)));
     }
+    if (lastError == ERROR_ACCESS_DENIED || lastError == ERROR_SHARING_VIOLATION ||
+        lastError == ERROR_LOCK_VIOLATION) {
+      if (std::filesystem::exists(destination)) {
+        if (runtime_payload_complete(destination)) {
+          std::filesystem::remove_all(temporary, ignored);
+          return;
+        }
+        std::filesystem::remove_all(destination, ignored);
+      }
+      try {
+        stage_runtime_payload(temporary, destination);
+        std::filesystem::remove_all(temporary, ignored);
+        return;
+      } catch (...) {
+        std::filesystem::remove_all(destination, ignored);
+        throw;
+      }
+    }
+    std::filesystem::remove_all(temporary, ignored);
+    throw std::runtime_error("runtime generation publication failed: " +
+                             std::to_string(lastError));
   } catch (...) {
     std::filesystem::remove_all(temporary, ignored);
     throw;

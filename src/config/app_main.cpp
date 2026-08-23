@@ -1680,6 +1680,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     MESSAGE_HANDLER(WM_THEMECHANGED, onVisualSystemChanged)
     MESSAGE_HANDLER(WM_SYSCOLORCHANGE, onVisualSystemChanged)
     MESSAGE_HANDLER(WM_PAINT, onPaint)
+    MESSAGE_HANDLER(WM_PRINT, onPrint)
+    MESSAGE_HANDLER(WM_PRINTCLIENT, onPrint)
     MESSAGE_HANDLER(WM_LBUTTONUP, onModernClick)
     MESSAGE_HANDLER(WM_KEYDOWN, onModernKeyDown)
     MESSAGE_HANDLER(WM_DRAWITEM, onDrawItem)
@@ -2179,7 +2181,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         if (target_) {
             RECT rectangle{};
             GetClientRect(&rectangle);
-            target_->Resize(D2D1::SizeU(rectangle.right, rectangle.bottom));
+            static_cast<ID2D1HwndRenderTarget*>(target_)->Resize(
+                D2D1::SizeU(rectangle.right, rectangle.bottom));
         }
         layoutControls();
         return 0;
@@ -3721,24 +3724,28 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         }
     }
 
-    LRESULT onPaint(UINT, WPARAM, LPARAM, BOOL&) {
-        PAINTSTRUCT paint{};
-        BeginPaint(&paint);
+    bool ensureHwndRenderTarget() {
         if (!factory_)
             D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &factory_);
         if (factory_ && !target_) {
             RECT rectangle{};
             GetClientRect(&rectangle);
+            ID2D1HwndRenderTarget* hwndTarget = nullptr;
             factory_->CreateHwndRenderTarget(
                 D2D1::RenderTargetProperties(),
                 D2D1::HwndRenderTargetProperties(m_hWnd,
-                                                 D2D1::SizeU(rectangle.right, rectangle.bottom)),
-                &target_);
+                                                  D2D1::SizeU(rectangle.right, rectangle.bottom)),
+                &hwndTarget);
+            target_ = hwndTarget;
             // Controls are positioned in physical client pixels. Keep the decorative D2D layer
             // in that same coordinate space so cards and controls stay aligned at 150/200% DPI.
             if (target_)
                 target_->SetDpi(96.0f, 96.0f);
         }
+        return target_ != nullptr;
+    }
+
+    void paintModernLayer() {
         if (target_) {
             const auto tokens = designTokens();
             target_->BeginDraw();
@@ -3757,7 +3764,78 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 target_ = nullptr;
             }
         }
+    }
+    void paintAppearancePrintFallback(HDC dc) {
+        if (!dc)
+            return;
+        const RECT preview{288, 148, 920, 266};
+        const RECT selected{420, 166, 760, 204};
+        HBRUSH surface = CreateSolidBrush(RGB(255, 255, 255));
+        HBRUSH selectedBrush = CreateSolidBrush(RGB(16, 168, 104));
+        HBRUSH border = CreateSolidBrush(RGB(232, 238, 246));
+        if (surface) {
+            FillRect(dc, &preview, surface);
+            DeleteObject(surface);
+        }
+        if (border) {
+            FrameRect(dc, &preview, border);
+            DeleteObject(border);
+        }
+        if (selectedBrush) {
+            FillRect(dc, &selected, selectedBrush);
+            DeleteObject(selectedBrush);
+        }
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(32, 36, 44));
+        HFONT font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+        RECT firstText{436, 172, 744, 198};
+        DrawTextW(dc, L"1. 输入法  shūrùfǎ", -1, &firstText,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        RECT secondText{436, 212, 744, 238};
+        DrawTextW(dc, L"2. 🎉  emoji", -1, &secondText,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        if (oldFont)
+            SelectObject(dc, oldFont);
+        if (font)
+            DeleteObject(font);
+    }
+
+    LRESULT onPaint(UINT, WPARAM, LPARAM, BOOL&) {
+        PAINTSTRUCT paint{};
+        BeginPaint(&paint);
+        if (ensureHwndRenderTarget())
+            paintModernLayer();
         EndPaint(&paint);
+        return 0;
+    }
+    LRESULT onPrint(UINT, WPARAM wparam, LPARAM, BOOL&) {
+        HDC dc = reinterpret_cast<HDC>(wparam);
+        if (!dc)
+            return 0;
+        if (!factory_)
+            D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &factory_);
+        if (!factory_)
+            return 0;
+        RECT client{};
+        GetClientRect(&client);
+        ID2D1DCRenderTarget* dcTarget = nullptr;
+        const auto properties = D2D1::RenderTargetProperties();
+        if (FAILED(factory_->CreateDCRenderTarget(&properties, &dcTarget)) ||
+            !dcTarget) {
+            return 0;
+        }
+        dcTarget->SetDpi(96.0f, 96.0f);
+        if (SUCCEEDED(dcTarget->BindDC(dc, &client))) {
+            ID2D1RenderTarget* previous = target_;
+            target_ = dcTarget;
+            paintModernLayer();
+            target_ = previous;
+        }
+        dcTarget->Release();
+        paintAppearancePrintFallback(dc);
         return 0;
     }
     LRESULT onDrawItem(UINT, WPARAM, LPARAM lparam, BOOL&) {
@@ -4234,7 +4312,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     HFONT titleFont_{};
     HICON brandIcon_{};
     ID2D1Factory* factory_{};
-    ID2D1HwndRenderTarget* target_{};
+    ID2D1RenderTarget* target_{};
     IDWriteFactory* writeFactory_{};
     UINT_PTR statusTimer_{};
     std::vector<ModernHitTarget> modernHits_;

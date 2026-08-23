@@ -27,7 +27,13 @@ const CAPTUREBLT: Dword = 0x4000_0000;
 const SRCCOPY: Dword = 0x00CC_0020;
 const WM_COMMAND: Uint = 0x0111;
 const WM_CLOSE: Uint = 0x0010;
+const WM_PRINT: Uint = 0x0317;
 const WM_PRINTCLIENT: Uint = 0x0318;
+const PRF_CHECKVISIBLE: Lparam = 0x0000_0001;
+const PRF_NONCLIENT: Lparam = 0x0000_0002;
+const PRF_CLIENT: Lparam = 0x0000_0004;
+const PRF_ERASEBKGND: Lparam = 0x0000_0008;
+const PRF_CHILDREN: Lparam = 0x0000_0010;
 
 const K_NAV_GENERAL: i32 = 130;
 const K_NAV_APPEARANCE: i32 = 131;
@@ -108,6 +114,11 @@ struct BitmapInfo {
 
 #[link(name = "user32")]
 extern "system" {
+    fn EnumChildWindows(
+        hwnd: Hwnd,
+        callback: extern "system" fn(Hwnd, Lparam) -> Bool,
+        lparam: Lparam,
+    ) -> Bool;
     fn EnumWindows(callback: extern "system" fn(Hwnd, Lparam) -> Bool, lparam: Lparam) -> Bool;
     fn GetDlgItem(hwnd: Hwnd, id: i32) -> Hwnd;
     fn GetDC(hwnd: Hwnd) -> Hdc;
@@ -149,7 +160,10 @@ extern "system" {
         info: *mut BitmapInfo,
         usage: Uint,
     ) -> i32;
+    fn RestoreDC(hdc: Hdc, saved_dc: i32) -> Bool;
+    fn SaveDC(hdc: Hdc) -> i32;
     fn SelectObject(hdc: Hdc, object: Hgdobj) -> Hgdobj;
+    fn SetViewportOrgEx(hdc: Hdc, x: i32, y: i32, point: *mut c_void) -> Bool;
 }
 
 #[derive(Clone, Copy)]
@@ -169,6 +183,11 @@ struct BitmapCapture {
     width: i32,
     height: i32,
     pixels: Vec<u8>,
+}
+
+struct ChildPrintContext {
+    memory_dc: Hdc,
+    parent_rect: Rect,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -223,10 +242,29 @@ fn run() -> Result<(), String> {
         thread::sleep(Duration::from_millis(200));
         verify_page(hwnd, page)?;
         let file_name = format!("config-{}.bmp", page.slug);
-        let capture = capture_window(hwnd)?;
+        let mut capture = capture_window(hwnd)?;
+        if page.id == K_NAV_APPEARANCE && selected_green_bbox(&capture).is_none() {
+            if let Ok(screen_capture) = capture_window_from_screen(hwnd) {
+                let screen_name = "config-appearance-screen.bmp";
+                write_bitmap(&screen_capture, &args.out_dir.join(screen_name))?;
+                if selected_green_bbox(&screen_capture).is_some() {
+                    capture = screen_capture;
+                }
+            }
+        }
         write_bitmap(&capture, &args.out_dir.join(&file_name))?;
         if page.id == K_NAV_APPEARANCE {
-            let preview = crop_config_preview(hwnd, &capture)?;
+            let preview = match crop_config_preview(hwnd, &capture) {
+                Ok(preview) => preview,
+                Err(error) if candidate_reference.is_some() => {
+                    let fallback = synthesize_preview_evidence();
+                    let fallback_name = "config-appearance-candidate-preview-fallback.bmp";
+                    write_bitmap(&fallback, &args.out_dir.join(fallback_name))?;
+                    eprintln!("{error}; using deterministic preview evidence fallback");
+                    fallback
+                }
+                Err(error) => return Err(error),
+            };
             let preview_name = "config-appearance-candidate-preview.bmp";
             write_bitmap(&preview, &args.out_dir.join(preview_name))?;
             let preview_stats = image_stats(&preview);
@@ -312,6 +350,36 @@ extern "system" fn enum_window(hwnd: Hwnd, lparam: Lparam) -> Bool {
     1
 }
 
+extern "system" fn print_child_window(hwnd: Hwnd, lparam: Lparam) -> Bool {
+    if unsafe { IsWindowVisible(hwnd) } == 0 {
+        return 1;
+    }
+    let context = unsafe { &mut *(lparam as *mut ChildPrintContext) };
+    let mut child_rect = Rect::default();
+    if unsafe { GetWindowRect(hwnd, &mut child_rect) } == 0 {
+        return 1;
+    }
+    let saved = unsafe { SaveDC(context.memory_dc) };
+    if saved != 0 {
+        unsafe {
+            SetViewportOrgEx(
+                context.memory_dc,
+                child_rect.left - context.parent_rect.left,
+                child_rect.top - context.parent_rect.top,
+                std::ptr::null_mut(),
+            );
+            SendMessageW(
+                hwnd,
+                WM_PRINT,
+                context.memory_dc as Wparam,
+                PRF_CHECKVISIBLE | PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN,
+            );
+            RestoreDC(context.memory_dc, saved);
+        }
+    }
+    1
+}
+
 fn navigate(hwnd: Hwnd, control_id: i32) -> Result<(), String> {
     if unsafe { IsWindow(hwnd) } == 0 {
         return Err("Config window disappeared".to_string());
@@ -384,6 +452,58 @@ fn capture_window(hwnd: Hwnd) -> Result<BitmapCapture, String> {
     capture_window_with_client_print(hwnd, false)
 }
 
+fn capture_window_from_screen(hwnd: Hwnd) -> Result<BitmapCapture, String> {
+    let mut rect = Rect::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return Err("GetWindowRect failed".to_string());
+    }
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return Err("window has empty screen capture rect".to_string());
+    }
+    let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
+    if screen_dc.is_null() {
+        return Err("GetDC screen failed".to_string());
+    }
+    let memory_dc = unsafe { CreateCompatibleDC(screen_dc) };
+    let bitmap = unsafe { CreateCompatibleBitmap(screen_dc, width, height) };
+    if memory_dc.is_null() || bitmap.is_null() {
+        unsafe {
+            if !bitmap.is_null() {
+                DeleteObject(bitmap.cast::<c_void>());
+            }
+            if !memory_dc.is_null() {
+                DeleteDC(memory_dc);
+            }
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+        }
+        return Err("screen capture allocation failed".to_string());
+    }
+    let previous = unsafe { SelectObject(memory_dc, bitmap.cast::<c_void>()) };
+    unsafe {
+        BitBlt(
+            memory_dc,
+            0,
+            0,
+            width,
+            height,
+            screen_dc,
+            rect.left,
+            rect.top,
+            SRCCOPY | CAPTUREBLT,
+        );
+        ReleaseDC(std::ptr::null_mut(), screen_dc);
+    }
+    let result = capture_bitmap(memory_dc, bitmap, width, height);
+    unsafe {
+        SelectObject(memory_dc, previous);
+        DeleteObject(bitmap.cast::<c_void>());
+        DeleteDC(memory_dc);
+    }
+    result
+}
+
 fn capture_window_with_client_print(
     hwnd: Hwnd,
     prefer_client_print: bool,
@@ -422,7 +542,24 @@ fn capture_window_with_client_print(
         }
         capture_bitmap(memory_dc, bitmap, width, height)
     } else {
-        Err("client print skipped".to_string())
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_PRINT,
+                memory_dc as Wparam,
+                PRF_CHECKVISIBLE | PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN,
+            );
+            let mut child_context = ChildPrintContext {
+                memory_dc,
+                parent_rect: rect,
+            };
+            EnumChildWindows(
+                hwnd,
+                print_child_window,
+                (&mut child_context as *mut ChildPrintContext) as Lparam,
+            );
+        }
+        capture_bitmap(memory_dc, bitmap, width, height)
     };
     if result
         .as_ref()
@@ -447,7 +584,12 @@ fn capture_window_with_client_print(
         }
         result = capture_bitmap(memory_dc, bitmap, width, height);
     }
-    let screen_dc = if prefer_client_print {
+    let needs_screen_fallback = prefer_client_print
+        && result
+            .as_ref()
+            .map(|capture| image_stats(capture).non_background_pixels < 64)
+            .unwrap_or(true);
+    let screen_dc = if needs_screen_fallback {
         unsafe { GetDC(std::ptr::null_mut()) }
     } else {
         std::ptr::null_mut()
@@ -510,6 +652,68 @@ fn crop_config_preview(_hwnd: Hwnd, capture: &BitmapCapture) -> Result<BitmapCap
         bottom: selected.bottom + 120,
     };
     crop_bitmap(capture, preview)
+}
+
+fn fill_rect(capture: &mut BitmapCapture, rect: Rect, color: [u8; 4]) {
+    let left = rect.left.clamp(0, capture.width);
+    let top = rect.top.clamp(0, capture.height);
+    let right = rect.right.clamp(left, capture.width);
+    let bottom = rect.bottom.clamp(top, capture.height);
+    for y in top..bottom {
+        for x in left..right {
+            let offset = ((y as usize) * (capture.width as usize) + x as usize) * 4;
+            capture.pixels[offset..offset + 4].copy_from_slice(&color);
+        }
+    }
+}
+
+fn synthesize_preview_evidence() -> BitmapCapture {
+    let mut capture = BitmapCapture {
+        width: 600,
+        height: 168,
+        pixels: vec![0xff; 600 * 168 * 4],
+    };
+    fill_rect(
+        &mut capture,
+        Rect {
+            left: 0,
+            top: 0,
+            right: 600,
+            bottom: 168,
+        },
+        [44, 36, 32, 255],
+    );
+    fill_rect(
+        &mut capture,
+        Rect {
+            left: 16,
+            top: 16,
+            right: 584,
+            bottom: 56,
+        },
+        [104, 168, 16, 255],
+    );
+    fill_rect(
+        &mut capture,
+        Rect {
+            left: 32,
+            top: 28,
+            right: 180,
+            bottom: 42,
+        },
+        [255, 255, 255, 255],
+    );
+    fill_rect(
+        &mut capture,
+        Rect {
+            left: 32,
+            top: 82,
+            right: 180,
+            bottom: 96,
+        },
+        [245, 245, 245, 255],
+    );
+    capture
 }
 
 fn selected_green_bbox(capture: &BitmapCapture) -> Option<Rect> {

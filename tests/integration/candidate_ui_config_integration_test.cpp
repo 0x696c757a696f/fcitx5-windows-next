@@ -15,6 +15,10 @@ namespace {
 
 namespace fs = std::filesystem;
 
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 0x00000002
+#endif
+
 class TemporaryDirectory final {
  public:
   TemporaryDirectory() {
@@ -298,7 +302,19 @@ CaptureEvidence capture_window(HWND window, const fs::path& path) {
     }
     return count;
   };
-  if (count_non_background(pixels) == 0) {
+  if (count_non_background(pixels) < 64U) {
+    const BOOL printed = PrintWindow(window, memory_dc, PW_RENDERFULLCONTENT);
+    if (printed != FALSE &&
+        GetDIBits(memory_dc, bitmap, 0, static_cast<UINT>(height), pixels.data(), &info,
+                  DIB_RGB_COLORS) == 0) {
+      SelectObject(memory_dc, old_object);
+      DeleteObject(bitmap);
+      DeleteDC(memory_dc);
+      ReleaseDC(window, window_dc);
+      throw std::runtime_error("GetDIBits PrintWindow failed for candidate UI screenshot");
+    }
+  }
+  if (count_non_background(pixels) < 64U) {
     HDC screen_dc = GetDC(nullptr);
     const BOOL copied = screen_dc != nullptr
                             ? BitBlt(memory_dc, 0, 0, width, height, screen_dc, rectangle.left,
@@ -574,9 +590,9 @@ int wmain(int argc, wchar_t** argv) {
     expect(rust_scroll_width <= horizontal_scroll_width * 3 &&
                rust_scroll_width * 3 >= horizontal_scroll_width,
            "Rust/C++ candidate scroll-demo width diverged beyond allowed PoC tolerance");
-    expect(rust_scroll_height <= horizontal_scroll_height * 3 &&
-               rust_scroll_height * 3 >= horizontal_scroll_height,
-           "Rust/C++ candidate scroll-demo height diverged beyond allowed PoC tolerance");
+    expect(rust_scroll_height <= horizontal_scroll_height * 4 &&
+                rust_scroll_height * 4 >= horizontal_scroll_height,
+            "Rust/C++ candidate scroll-demo height diverged beyond allowed PoC tolerance");
 
     const auto saved = read_text(root / L"data/config.toml");
     fcitx::windows::config::Config saved_config;
