@@ -329,6 +329,7 @@ unsafe extern "system" {
         file_path_size: u32,
         flags: u32,
     ) -> u32;
+    fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
     fn CloseHandle(object: *mut c_void) -> i32;
 }
 
@@ -353,6 +354,23 @@ fn local_test_namespace() -> Option<String> {
     env::var("FCITX5_TEST_NAMESPACE")
         .ok()
         .filter(|value| valid_channel(value))
+}
+
+fn current_runtime_generation() -> String {
+    let mut path = vec![0_u16; ENDPOINT_MAX_WIDE_UNITS];
+    // SAFETY: Passing a null module handle asks Windows for the current process
+    // image path. `path` is writable storage for `path.len()` UTF-16 units.
+    let size =
+        unsafe { GetModuleFileNameW(std::ptr::null_mut(), path.as_mut_ptr(), path.len() as u32) }
+            as usize;
+    if size > 0 && size < path.len() {
+        path.truncate(size);
+        let module_path = PathBuf::from(String::from_utf16_lossy(&path));
+        if let Some(generation) = current_runtime_generation_for_module(&module_path) {
+            return generation;
+        }
+    }
+    "current".to_owned()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -737,6 +755,18 @@ pub unsafe extern "C" fn fcitx5_windows_common_local_test_namespace_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `output` may be null for size queries or writable UTF-16 storage for
+/// `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_current_generation_utf16(
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    write_wide_string(&current_runtime_generation(), output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `module_path` must point to exactly `module_path_len` readable UTF-16 code
 /// units. `output` may be null for size queries or writable UTF-16 storage for
 /// `capacity` code units. No pointer is retained.
@@ -1109,6 +1139,13 @@ mod tests {
         unsafe {
             env::remove_var("FCITX5_TEST_NAMESPACE");
         }
+    }
+
+    #[test]
+    fn current_runtime_generation_abi_matches_cpp_contract() {
+        let generation = current_runtime_generation();
+        assert!(!generation.is_empty());
+        assert!(valid_generation(&generation));
     }
 
     #[test]

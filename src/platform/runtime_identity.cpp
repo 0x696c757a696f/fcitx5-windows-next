@@ -29,6 +29,9 @@ extern "C" std::size_t fcitx5_windows_common_local_name_utf16(
 extern "C" std::size_t fcitx5_windows_common_local_test_namespace_utf16(
     std::uint16_t* output,
     std::size_t capacity);
+extern "C" std::size_t fcitx5_windows_common_current_generation_utf16(
+    std::uint16_t* output,
+    std::size_t capacity);
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
     std::size_t module_path_len,
@@ -300,16 +303,10 @@ std::wstring localTestNamespace() {
 }
 
 std::wstring currentRuntimeGeneration() {
-    std::wstring path(32'768, L'\0');
-    const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (size > 0 && size < path.size()) {
-        path.resize(size);
-        if (const std::wstring generation = rustCurrentGenerationForModule(path);
-            !generation.empty()) {
-            return generation;
-        }
-    }
-    return L"current";
+    const std::wstring generation = rustWide([](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_windows_common_current_generation_utf16(output, capacity);
+    });
+    return generation.empty() ? L"current" : generation;
 }
 
 std::wstring currentRuntimeGenerationForModule(std::wstring_view modulePath) {
