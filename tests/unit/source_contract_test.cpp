@@ -169,9 +169,15 @@ int main(int argc, char** argv) {
     }
     const auto peerSource = read_text(sourceRoot / "src/ipc/peer_verification.cpp");
     if (peerSource.find("pathsReferToSameFile") != std::string::npos ||
+        peerSource.find("CompareStringOrdinal(peer.userSid") != std::string::npos ||
+        peerSource.find("peer.sessionId == current.sessionId") != std::string::npos ||
         peerSource.find("queryExecutableFileIdentity") == std::string::npos ||
-        peerSource.find("executableFilesMatch") == std::string::npos) {
-        return fail("REG-PEER-ID-001: peer exact mode must use strict executable identity");
+        peerSource.find("executableFilesMatch") == std::string::npos ||
+        peerSource.find("fcitx5_windows_common_same_principal_session_utf16") ==
+            std::string::npos ||
+        peerSource.find("fcitx5_windows_common_peer_development_policy_allowed") ==
+            std::string::npos) {
+        return fail("REG-PEER-ID-001: peer exact mode must use strict executable identity and Rust-owned same-principal policy");
     }
     const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
     if (installerSource.find("--set-startup") != std::string::npos ||
@@ -314,6 +320,12 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("fcitx5_windows_common_pipe_security_sddl_utf16") ==
             std::string::npos ||
         rustWindowsCommonCore.find("pipe_security_sddl_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_same_principal_session_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_peer_development_policy_allowed") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("peer_verification_policy_matches_cpp_contract") ==
             std::string::npos ||
         pipeSecuritySource.find("D:P(A;;GA;;;SY)") != std::string::npos ||
         pipeSecuritySource.find("identity.userSid.empty() || identity.serviceAccount") !=

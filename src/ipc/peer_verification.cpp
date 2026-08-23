@@ -1,16 +1,41 @@
 #include "peer_verification.h"
 
+#include <cstdint>
 #include <utility>
 
 namespace fcitx::windows::ipc {
 namespace {
 
+extern "C" std::uint8_t fcitx5_windows_common_same_principal_session_utf16(
+    std::uint32_t peer_session_id,
+    std::uint8_t peer_service_account,
+    const std::uint16_t* peer_user_sid,
+    std::size_t peer_user_sid_len,
+    std::uint32_t current_session_id,
+    const std::uint16_t* current_user_sid,
+    std::size_t current_user_sid_len);
+extern "C" std::uint8_t fcitx5_windows_common_peer_development_policy_allowed(
+    std::uint8_t development_exception_enabled);
+
+const std::uint16_t* wideData(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
 bool samePrincipalAndSession(const platform::ProcessIdentity& peer,
                              const platform::RuntimeIdentity& current) noexcept {
-    return peer.sessionId == current.sessionId && !peer.serviceAccount &&
-           CompareStringOrdinal(peer.userSid.c_str(), static_cast<int>(peer.userSid.size()),
-                                current.userSid.c_str(), static_cast<int>(current.userSid.size()),
-                                TRUE) == CSTR_EQUAL;
+    return fcitx5_windows_common_same_principal_session_utf16(
+               peer.sessionId, peer.serviceAccount ? 1 : 0, wideData(peer.userSid),
+               peer.userSid.size(), current.sessionId, wideData(current.userSid),
+               current.userSid.size()) != 0;
+}
+
+bool developmentPeerExceptionAllowed() noexcept {
+#if defined(FCITX_DEVELOPMENT_PEER_EXCEPTION)
+    return fcitx5_windows_common_peer_development_policy_allowed(1) != 0;
+#else
+    return fcitx5_windows_common_peer_development_policy_allowed(0) != 0;
+#endif
 }
 
 } // namespace
@@ -26,11 +51,7 @@ bool verifyPipeServer(HANDLE pipe, const platform::RuntimeIdentity& clientIdenti
         return false;
     }
     if (policy.mode == PeerVerificationMode::developmentSameUserSession) {
-#if defined(FCITX_DEVELOPMENT_PEER_EXCEPTION)
-        return true;
-#else
-        return false;
-#endif
+        return developmentPeerExceptionAllowed();
     }
     platform::ExecutableFileIdentity expected;
     return !policy.expectedExecutablePath.empty() && server.executableFileVerified &&

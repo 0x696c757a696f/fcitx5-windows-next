@@ -271,6 +271,23 @@ fn pipe_security_sddl(service_account: bool, session_id: u32, user_sid: &str) ->
     ))
 }
 
+fn same_principal_and_session(
+    peer_session_id: u32,
+    peer_service_account: bool,
+    peer_user_sid: &str,
+    current_session_id: u32,
+    current_user_sid: &str,
+) -> bool {
+    peer_session_id == current_session_id
+        && !peer_service_account
+        && peer_user_sid.eq_ignore_ascii_case(current_user_sid)
+        && !peer_user_sid.is_empty()
+}
+
+fn peer_development_policy_allowed(development_exception_enabled: bool) -> bool {
+    development_exception_enabled
+}
+
 fn local_name(
     pipe: bool,
     user_sid: &str,
@@ -512,6 +529,44 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_sddl_utf16(
     write_wide_string(&sddl, output, capacity)
 }
 
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// SID pointers must be null only when their corresponding length is zero, or
+/// point to valid UTF-16 buffers with exactly the provided lengths. No pointer
+/// is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_same_principal_session_utf16(
+    peer_session_id: u32,
+    peer_service_account: u8,
+    peer_user_sid: *const u16,
+    peer_user_sid_len: usize,
+    current_session_id: u32,
+    current_user_sid: *const u16,
+    current_user_sid_len: usize,
+) -> u8 {
+    let Some(peer_user_sid) = wide_string_from_raw(peer_user_sid, peer_user_sid_len) else {
+        return 0;
+    };
+    let Some(current_user_sid) = wide_string_from_raw(current_user_sid, current_user_sid_len)
+    else {
+        return 0;
+    };
+    same_principal_and_session(
+        peer_session_id,
+        peer_service_account != 0,
+        &peer_user_sid,
+        current_session_id,
+        &current_user_sid,
+    ) as u8
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_peer_development_policy_allowed(
+    development_exception_enabled: u8,
+) -> u8 {
+    peer_development_policy_allowed(development_exception_enabled != 0) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,5 +700,39 @@ mod tests {
         assert_eq!(pipe_security_sddl(true, 7, "S-1-5-21-test"), None);
         assert_eq!(pipe_security_sddl(false, 0, "S-1-5-21-test"), None);
         assert_eq!(pipe_security_sddl(false, 7, ""), None);
+    }
+
+    #[test]
+    fn peer_verification_policy_matches_cpp_contract() {
+        assert!(same_principal_and_session(
+            7,
+            false,
+            "S-1-5-21-TEST",
+            7,
+            "s-1-5-21-test"
+        ));
+        assert!(!same_principal_and_session(
+            8,
+            false,
+            "S-1-5-21-test",
+            7,
+            "S-1-5-21-test"
+        ));
+        assert!(!same_principal_and_session(
+            7,
+            true,
+            "S-1-5-21-test",
+            7,
+            "S-1-5-21-test"
+        ));
+        assert!(!same_principal_and_session(
+            7,
+            false,
+            "",
+            7,
+            "S-1-5-21-test"
+        ));
+        assert!(peer_development_policy_allowed(true));
+        assert!(!peer_development_policy_allowed(false));
     }
 }
