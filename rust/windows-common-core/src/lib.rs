@@ -306,6 +306,16 @@ unsafe extern "system" {
         security_descriptor: *mut *mut c_void,
         security_descriptor_size: *mut u32,
     ) -> i32;
+    fn OpenProcessToken(process: *mut c_void, desired_access: u32, token: *mut *mut c_void) -> i32;
+    fn GetTokenInformation(
+        token: *mut c_void,
+        token_information_class: u32,
+        token_information: *mut c_void,
+        token_information_length: u32,
+        return_length: *mut u32,
+    ) -> i32;
+    fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> i32;
+    fn IsWellKnownSid(sid: *mut c_void, well_known_sid_type: i32) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -338,6 +348,7 @@ unsafe extern "system" {
         flags: u32,
     ) -> u32;
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
+    fn LocalFree(memory: *mut c_void) -> *mut c_void;
     fn CloseHandle(object: *mut c_void) -> i32;
 }
 
@@ -438,6 +449,120 @@ fn process_session_id(process_id: u32) -> Fcitx5WindowsCommonProcessSession {
         status: 1,
         session_id,
     }
+}
+
+fn process_user_sid(process_id: u32) -> Option<(Vec<u16>, bool)> {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_USER_CLASS: u32 = 1;
+    const TOKEN_INFORMATION_MAX_BYTES: u32 = 64 * 1024;
+    const WIN_LOCAL_SYSTEM_SID: i32 = 22;
+    const WIN_LOCAL_SERVICE_SID: i32 = 23;
+    const WIN_NETWORK_SERVICE_SID: i32 = 24;
+    const SID_STRING_MAX_WIDE_UNITS: usize = 1024;
+
+    if process_id == 0 {
+        return None;
+    }
+    // SAFETY: Opening by process id with query-only rights. Any successful
+    // handle is closed before returning.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+    if process.is_null() || process == invalid_handle_value() {
+        return None;
+    }
+    let mut token = std::ptr::null_mut();
+    // SAFETY: `process` is valid and `token` is a valid out pointer.
+    let token_ok = unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) };
+    // SAFETY: `process` was returned by OpenProcess above.
+    unsafe {
+        CloseHandle(process);
+    }
+    if token_ok == 0 || token.is_null() {
+        return None;
+    }
+    let mut required = 0_u32;
+    // SAFETY: The initial zero-length query asks Windows for the required
+    // buffer size. `required` is writable.
+    unsafe {
+        GetTokenInformation(
+            token,
+            TOKEN_USER_CLASS,
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+        );
+    }
+    if required == 0 || required > TOKEN_INFORMATION_MAX_BYTES {
+        // SAFETY: `token` was returned by OpenProcessToken above.
+        unsafe {
+            CloseHandle(token);
+        }
+        return None;
+    }
+    let mut buffer = vec![0_u8; required as usize];
+    // SAFETY: `buffer` provides `required` writable bytes for the TOKEN_USER
+    // payload and `required` remains a valid in/out length pointer.
+    let info_ok = unsafe {
+        GetTokenInformation(
+            token,
+            TOKEN_USER_CLASS,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            required,
+            &mut required,
+        )
+    };
+    // SAFETY: `token` was returned by OpenProcessToken above.
+    unsafe {
+        CloseHandle(token);
+    }
+    if info_ok == 0 {
+        return None;
+    }
+    let token_user = buffer.as_ptr().cast::<TokenUser>();
+    // SAFETY: A successful TokenUser query returns a TOKEN_USER-compatible
+    // buffer whose first field is SID_AND_ATTRIBUTES.
+    let sid = unsafe { (*token_user).user.sid };
+    if sid.is_null() {
+        return None;
+    }
+    let mut raw_sid = std::ptr::null_mut();
+    // SAFETY: `sid` comes from a successful TOKEN_USER query and `raw_sid` is
+    // an out pointer for a LocalAlloc-owned UTF-16 SID string.
+    if unsafe { ConvertSidToStringSidW(sid, &mut raw_sid) } == 0 || raw_sid.is_null() {
+        return None;
+    }
+    let mut len = 0_usize;
+    while len < SID_STRING_MAX_WIDE_UNITS {
+        // SAFETY: `raw_sid` points to a NUL-terminated Windows-allocated UTF-16
+        // string. The loop is bounded to avoid untrusted unbounded scanning.
+        if unsafe { *raw_sid.add(len) } == 0 {
+            break;
+        }
+        len += 1;
+    }
+    if len == SID_STRING_MAX_WIDE_UNITS {
+        // SAFETY: `raw_sid` was allocated by ConvertSidToStringSidW.
+        unsafe {
+            LocalFree(raw_sid.cast::<c_void>());
+        }
+        return None;
+    }
+    // SAFETY: `raw_sid` is readable for `len` initialized UTF-16 code units.
+    let sid_units = unsafe { std::slice::from_raw_parts(raw_sid, len) }.to_vec();
+    // SAFETY: `raw_sid` was allocated by ConvertSidToStringSidW.
+    unsafe {
+        LocalFree(raw_sid.cast::<c_void>());
+    }
+    let service_account = {
+        // SAFETY: `sid` is valid for the lifetime of `buffer`, which is still
+        // alive through this block.
+        unsafe {
+            IsWellKnownSid(sid, WIN_LOCAL_SYSTEM_SID) != 0
+                || IsWellKnownSid(sid, WIN_LOCAL_SERVICE_SID) != 0
+                || IsWellKnownSid(sid, WIN_NETWORK_SERVICE_SID) != 0
+        }
+    };
+    Some((sid_units, service_account))
 }
 
 fn secure_input_desktop() -> bool {
@@ -544,6 +669,19 @@ pub struct Fcitx5WindowsCommonExecutableFileIdentity {
 pub struct Fcitx5WindowsCommonProcessSession {
     pub status: u8,
     pub session_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SidAndAttributes {
+    sid: *mut c_void,
+    attributes: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TokenUser {
+    user: SidAndAttributes,
 }
 
 #[repr(C)]
@@ -897,6 +1035,30 @@ pub extern "C" fn fcitx5_windows_common_process_session_id(
     process_id: u32,
 ) -> Fcitx5WindowsCommonProcessSession {
     process_session_id(process_id)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `service_account` may be null or point to one writable byte. `output` may
+/// be null for size queries or writable UTF-16 storage for `capacity` code
+/// units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_process_user_sid_utf16(
+    process_id: u32,
+    service_account: *mut u8,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some((sid, is_service_account)) = process_user_sid(process_id) else {
+        return 0;
+    };
+    if !service_account.is_null() {
+        // SAFETY: The caller supplied a writable one-byte out pointer.
+        unsafe {
+            *service_account = is_service_account as u8;
+        }
+    }
+    write_wide_units(&sid, output, capacity)
 }
 
 #[unsafe(no_mangle)]
@@ -1307,6 +1469,16 @@ mod tests {
         let session = process_session_id(current_process_id);
         assert_eq!(session.status, 1);
         assert_eq!(process_session_id(0).status, 0);
+    }
+
+    #[test]
+    fn process_user_sid_query_matches_cpp_contract() {
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        let (sid, _service_account) =
+            process_user_sid(current_process_id).expect("current process user sid");
+        let sid = String::from_utf16(&sid).expect("sid is utf16");
+        assert!(sid.starts_with("S-1-"));
+        assert!(process_user_sid(0).is_none());
     }
 
     #[test]

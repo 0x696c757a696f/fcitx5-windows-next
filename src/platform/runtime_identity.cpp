@@ -1,11 +1,8 @@
 #include "runtime_identity.h"
 
-#include <sddl.h>
-
 #include <cstdint>
 #include <filesystem>
 #include <string>
-#include <vector>
 
 namespace fcitx::windows::platform {
 namespace {
@@ -39,6 +36,11 @@ struct Fcitx5WindowsCommonProcessSession {
 };
 extern "C" Fcitx5WindowsCommonProcessSession
 fcitx5_windows_common_process_session_id(std::uint32_t process_id);
+extern "C" std::size_t fcitx5_windows_common_process_user_sid_utf16(
+    std::uint32_t process_id,
+    std::uint8_t* service_account,
+    std::uint16_t* output,
+    std::size_t capacity);
 extern "C" std::uint8_t fcitx5_windows_common_secure_input_desktop();
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
@@ -111,57 +113,21 @@ fcitx5_windows_common_executable_file_identity_utf16(const std::uint16_t* path,
                                                      std::size_t path_len,
                                                      std::uint16_t* final_path_output,
                                                      std::size_t final_path_capacity);
-class Handle final {
-  public:
-    explicit Handle(HANDLE value = nullptr) noexcept : value_(value) {}
-    ~Handle() {
-        if (valid())
-            CloseHandle(value_);
-    }
-    Handle(const Handle&) = delete;
-    Handle& operator=(const Handle&) = delete;
-    [[nodiscard]] HANDLE get() const noexcept { return value_; }
-    [[nodiscard]] bool valid() const noexcept {
-        return value_ != nullptr && value_ != INVALID_HANDLE_VALUE;
-    }
-    [[nodiscard]] explicit operator bool() const noexcept { return valid(); }
-
-  private:
-    HANDLE value_;
-};
-
-bool tokenSid(HANDLE process, std::wstring& sid, bool& serviceAccount) {
-    HANDLE rawToken = nullptr;
-    if (!OpenProcessToken(process, TOKEN_QUERY, &rawToken))
-        return false;
-    Handle token(rawToken);
-    DWORD required = 0;
-    GetTokenInformation(token.get(), TokenUser, nullptr, 0, &required);
-    if (required == 0 || required > 64U * 1024U)
-        return false;
-    std::vector<std::uint8_t> buffer(required);
-    if (!GetTokenInformation(token.get(), TokenUser, buffer.data(), required, &required)) {
-        return false;
-    }
-    const auto* user = reinterpret_cast<const TOKEN_USER*>(buffer.data());
-    LPWSTR rawSid = nullptr;
-    if (!ConvertSidToStringSidW(user->User.Sid, &rawSid))
-        return false;
-    try {
-        sid.assign(rawSid);
-    } catch (...) {
-        LocalFree(rawSid);
-        throw;
-    }
-    LocalFree(rawSid);
-    serviceAccount = IsWellKnownSid(user->User.Sid, WinLocalSystemSid) != FALSE ||
-                     IsWellKnownSid(user->User.Sid, WinLocalServiceSid) != FALSE ||
-                     IsWellKnownSid(user->User.Sid, WinNetworkServiceSid) != FALSE;
-    return true;
-}
 
 template <typename Producer>
 std::wstring rustWide(Producer producer);
+
+bool processUserSid(DWORD processId, std::wstring& sid, bool& serviceAccount) {
+    std::uint8_t service = 0;
+    sid = rustWide([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_windows_common_process_user_sid_utf16(processId, &service, output,
+                                                            capacity);
+    });
+    if (sid.empty())
+        return false;
+    serviceAccount = service != 0;
+    return true;
+}
 
 bool processPath(DWORD processId, std::wstring& path) {
     path = rustWide([&](std::uint16_t* output, std::size_t capacity) {
@@ -251,13 +217,11 @@ bool RuntimeIdentity::mayUseUserEngine() const noexcept { return mayLaunchUserEn
 bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
     output = {};
     try {
-        Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId));
-        if (!process)
-            return false;
         ProcessIdentity result;
         result.processId = processId;
         const auto session = fcitx5_windows_common_process_session_id(processId);
-        if (session.status == 0 || !tokenSid(process.get(), result.userSid, result.serviceAccount) ||
+        if (session.status == 0 ||
+            !processUserSid(processId, result.userSid, result.serviceAccount) ||
             !processPath(processId, result.executablePath)) {
             return false;
         }

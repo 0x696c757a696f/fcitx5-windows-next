@@ -318,6 +318,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("process_session_id_query_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_process_user_sid_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("process_user_sid_query_matches_cpp_contract") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_secure_input_desktop") ==
             std::string::npos ||
         rustWindowsCommonCore.find("secure_input_desktop_query_matches_cpp_contract") ==
@@ -394,6 +398,14 @@ int main(int argc, char** argv) {
         runtimeIdentitySource.find("GetModuleFileNameW") != std::string::npos ||
         runtimeIdentitySource.find("QueryFullProcessImageNameW") != std::string::npos ||
         runtimeIdentitySource.find("ProcessIdToSessionId") != std::string::npos ||
+        runtimeIdentitySource.find("OpenProcessToken") != std::string::npos ||
+        runtimeIdentitySource.find("GetTokenInformation") != std::string::npos ||
+        runtimeIdentitySource.find("ConvertSidToStringSidW") != std::string::npos ||
+        runtimeIdentitySource.find("IsWellKnownSid") != std::string::npos ||
+        runtimeIdentitySource.find("LocalFree") != std::string::npos ||
+        runtimeIdentitySource.find("TOKEN_USER") != std::string::npos ||
+        runtimeIdentitySource.find("class Handle final") != std::string::npos ||
+        runtimeIdentitySource.find("#include <sddl.h>") != std::string::npos ||
         runtimeIdentitySource.find("OpenInputDesktop") != std::string::npos ||
         runtimeIdentitySource.find("GetUserObjectInformationW") != std::string::npos ||
         runtimeIdentitySource.find("CloseDesktop") != std::string::npos ||
@@ -425,6 +437,8 @@ int main(int argc, char** argv) {
         runtimeIdentitySource.find("fcitx5_windows_common_process_image_path_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_process_session_id") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_process_user_sid_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_secure_input_desktop") ==
             std::string::npos ||
