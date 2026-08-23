@@ -684,8 +684,11 @@ int main(int argc, char** argv) {
         fastToolchainScript.find("7zr.exe") == std::string::npos ||
         fastToolchainScript.find("clang+llvm-$llvmVersion-x86_64-pc-windows-msvc.tar.xz") ==
             std::string::npos ||
+        fastToolchainScript.find("cmake-$cmakeVersion-windows-x86_64.zip") ==
+            std::string::npos ||
         fastToolchainScript.find("tar.exe") == std::string::npos ||
         fastToolchainScript.find("curl.exe") == std::string::npos ||
+        fastToolchainScript.find("ctest") == std::string::npos ||
         fastToolchainScript.find("ninja") == std::string::npos ||
         fastToolchainScript.find("sccache") == std::string::npos ||
         fastToolchainScript.find("clang-cl") == std::string::npos ||

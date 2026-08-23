@@ -11,6 +11,7 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $fastRoot = Join-Path $repoRoot 'out/toolchains/fast'
 $downloadRoot = Join-Path $fastRoot 'downloads'
 $llvmVersion = '22.1.8'
+$cmakeVersion = '3.31.8'
 $ninjaVersion = '1.13.2'
 $sccacheVersion = '0.17.0'
 
@@ -110,6 +111,16 @@ function Install-LocalFastToolchain {
     Expand-ZipIfMissing -Archive $ninjaArchive -Destination $ninjaDestination -Probe $ninjaProbe
   }
 
+  $cmakeArchive = Join-Path $downloadRoot "cmake-$cmakeVersion-windows-x86_64.zip"
+  $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v$cmakeVersion/cmake-$cmakeVersion-windows-x86_64.zip"
+  $cmakeDestination = Join-Path $fastRoot "cmake-$cmakeVersion"
+  $cmakeBin = Join-Path $cmakeDestination "cmake-$cmakeVersion-windows-x86_64/bin"
+  $cmakeProbe = Join-Path $cmakeBin 'cmake.exe'
+  if (-not (Test-Path -LiteralPath $cmakeProbe -PathType Leaf)) {
+    Save-UriIfMissing -Uri $cmakeUrl -Destination $cmakeArchive -MinimumBytes 50000000
+    Expand-ZipIfMissing -Archive $cmakeArchive -Destination $cmakeDestination -Probe $cmakeProbe
+  }
+
   $sccacheArchive = Join-Path $downloadRoot "sccache-v$sccacheVersion-x86_64-pc-windows-msvc.zip"
   $sccacheUrl = "https://github.com/mozilla/sccache/releases/download/v$sccacheVersion/sccache-v$sccacheVersion-x86_64-pc-windows-msvc.zip"
   $sccacheDestination = Join-Path $fastRoot "sccache-$sccacheVersion"
@@ -131,14 +142,14 @@ if ($InstallLocal) {
   Install-LocalFastToolchain
 }
 
-Add-PathForCurrentAndFutureSteps (Join-Path $fastRoot "llvm-$llvmVersion/clang+llvm-$llvmVersion-x86_64-pc-windows-msvc/bin")
-Add-PathForCurrentAndFutureSteps (Join-Path $fastRoot "ninja-$ninjaVersion")
-Add-PathForCurrentAndFutureSteps (Join-Path $fastRoot "sccache-$sccacheVersion/sccache-v$sccacheVersion-x86_64-pc-windows-msvc")
 Add-PathForCurrentAndFutureSteps (Join-Path $env:ProgramFiles 'LLVM/bin')
-Add-PathForCurrentAndFutureSteps (Join-Path $env:ProgramFiles 'CMake/bin')
+Add-PathForCurrentAndFutureSteps (Join-Path $fastRoot "sccache-$sccacheVersion/sccache-v$sccacheVersion-x86_64-pc-windows-msvc")
+Add-PathForCurrentAndFutureSteps (Join-Path $fastRoot "ninja-$ninjaVersion")
+Add-PathForCurrentAndFutureSteps (Join-Path $fastRoot "cmake-$cmakeVersion/cmake-$cmakeVersion-windows-x86_64/bin")
+Add-PathForCurrentAndFutureSteps (Join-Path $fastRoot "llvm-$llvmVersion/clang+llvm-$llvmVersion-x86_64-pc-windows-msvc/bin")
 
 $stillMissing = @(
-  @('clang-cl', 'lld-link', 'ninja', 'sccache') |
+  @('clang-cl', 'lld-link', 'cmake', 'ctest', 'ninja', 'sccache') |
     Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
 )
 if ($stillMissing.Count -ne 0) {
@@ -147,7 +158,7 @@ if ($stillMissing.Count -ne 0) {
 }
 
 Write-Host 'Fast Windows toolchain ready:'
-foreach ($tool in @('clang-cl', 'lld-link', 'ninja', 'sccache')) {
+foreach ($tool in @('clang-cl', 'lld-link', 'cmake', 'ctest', 'ninja', 'sccache')) {
   $command = Get-Command $tool -ErrorAction Stop
   Write-Host "  $tool -> $($command.Source)"
 }
