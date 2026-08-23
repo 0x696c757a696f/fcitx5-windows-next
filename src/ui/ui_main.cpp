@@ -135,6 +135,19 @@ extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemI
                                                  Fcitx5CandidateRenderItemOutput* outItems,
                                                  float* outLabelColumnWidth);
 
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
 [[nodiscard]] Fcitx5CandidateLayoutRect toRustRect(const D2D1_RECT_F& value) noexcept {
     return {value.left, value.top, value.right, value.bottom};
 }
@@ -147,9 +160,8 @@ void enableDpiAwareness() {
     using SetContext = BOOL(WINAPI*)(HANDLE);
     const HMODULE user32 = GetModuleHandleW(L"user32.dll");
     const auto setContext =
-        user32
-            ? reinterpret_cast<SetContext>(GetProcAddress(user32, "SetProcessDpiAwarenessContext"))
-            : nullptr;
+        user32 ? resolveProcAddress<SetContext>(user32, "SetProcessDpiAwarenessContext")
+               : nullptr;
     if (setContext && setContext(reinterpret_cast<HANDLE>(-4)))
         return;
     (void)SetProcessDPIAware();
@@ -160,8 +172,7 @@ void enableNativeWindowEffects(HWND window) noexcept {
     if (!dwm)
         return;
     using SetWindowAttribute = HRESULT(WINAPI*)(HWND, DWORD, const void*, DWORD);
-    const auto setAttribute =
-        reinterpret_cast<SetWindowAttribute>(GetProcAddress(dwm, "DwmSetWindowAttribute"));
+    const auto setAttribute = resolveProcAddress<SetWindowAttribute>(dwm, "DwmSetWindowAttribute");
     if (setAttribute) {
         constexpr DWORD kWindowCornerPreference = 33;
         constexpr DWORD kRound = 2;

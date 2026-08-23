@@ -15,6 +15,19 @@ namespace {
 namespace fs = std::filesystem;
 using RegisterFunction = HRESULT(STDAPICALLTYPE*)();
 
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
 fs::path executablePath() {
     std::wstring value(32'768, L'\0');
     const DWORD size = GetModuleFileNameW(nullptr, value.data(), static_cast<DWORD>(value.size()));
@@ -121,7 +134,7 @@ HRESULT invokeRegistration(const fs::path& dll, const char* exportName) {
     SetDllDirectoryW(L"");
     HMODULE module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!module) return HRESULT_FROM_WIN32(GetLastError());
-    const auto function = reinterpret_cast<RegisterFunction>(GetProcAddress(module, exportName));
+    const auto function = resolveProcAddress<RegisterFunction>(module, exportName);
     const HRESULT result = function ? function() : HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
     FreeLibrary(module);
     return result;
