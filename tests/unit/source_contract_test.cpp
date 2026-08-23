@@ -433,6 +433,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_verify_signature_envelope_utf8") ==
             std::string::npos ||
+        rustPackageCore.find("fcitx5_package_is_ascii_token_utf8") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_is_lower_package_id_utf8") ==
+            std::string::npos ||
+        rustPackageCore.find("fcitx5_package_is_safe_relative_path_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_staged_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_activate_installed_version_utf16") ==
             std::string::npos ||
@@ -499,6 +504,12 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageSource.find("trusted key scope/channel policy is invalid") !=
             std::string::npos ||
+        packageSource.find("std::ranges::all_of(value") != std::string::npos ||
+        packageSource.find("value.front() < 'a'") != std::string::npos ||
+        packageSource.find("component.back() == '.'") != std::string::npos ||
+        packageSource.find("lowered == \"con\"") != std::string::npos ||
+        packageSource.find("starts_with(\"com\"") != std::string::npos ||
+        packageSource.find("path.find(':')") != std::string::npos ||
         packageSource.find("manifest payload schema does not match format version") !=
             std::string::npos ||
         packageSource.find("runtime architecture is invalid") != std::string::npos ||

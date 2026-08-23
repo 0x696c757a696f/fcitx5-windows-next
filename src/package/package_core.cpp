@@ -138,6 +138,13 @@ void fcitx5_package_trusted_keys_free(Fcitx5TrustedKeyNative* keys, std::size_t 
 Fcitx5PackageParsedManifestResult fcitx5_package_parse_manifest_utf8(
     const std::uint8_t* manifest_bytes, std::size_t manifest_len);
 void fcitx5_package_manifest_free(const Fcitx5PackageParsedManifestResult* manifest);
+std::uint8_t fcitx5_package_is_ascii_token_utf8(
+    const std::uint8_t* value, std::size_t value_len, const std::uint8_t* extra,
+    std::size_t extra_len);
+std::uint8_t fcitx5_package_is_lower_package_id_utf8(
+    const std::uint8_t* value, std::size_t value_len);
+std::uint8_t fcitx5_package_is_safe_relative_path_utf8(
+    const std::uint8_t* value, std::size_t value_len);
 Fcitx5PackageSignatureEnvelopeResult fcitx5_package_parse_signature_envelope_utf8(
     const std::uint8_t* envelope_bytes, std::size_t envelope_len,
     const std::uint8_t* expected_object, std::size_t expected_object_len);
@@ -201,8 +208,6 @@ Fcitx5RepositorySequenceRepairResult fcitx5_repository_sequence_repair_utf16(
 
 namespace fcitx::package {
 namespace {
-
-constexpr std::size_t kMaximumIdBytes = 64U;
 
 [[noreturn]] void fail(std::string code, std::string message) {
   throw PackageError(std::move(code), std::move(message));
@@ -420,26 +425,14 @@ std::string read_file_bounded(const std::filesystem::path& path, std::size_t max
 // Validators declared in package_core.h and used by the updater and deployer
 // for CLI-supplied identifiers that later become filesystem paths.
 bool is_ascii_token(std::string_view value, std::string_view extra) noexcept {
-  return !value.empty() && std::ranges::all_of(value, [extra](char raw_character) {
-           const auto character = static_cast<unsigned char>(raw_character);
-           return (character >= 'a' && character <= 'z') ||
-                  (character >= 'A' && character <= 'Z') ||
-                  (character >= '0' && character <= '9') ||
-                  extra.find(static_cast<char>(character)) != std::string_view::npos;
-         });
+  return fcitx5_package_is_ascii_token_utf8(
+             reinterpret_cast<const std::uint8_t*>(value.data()), value.size(),
+             reinterpret_cast<const std::uint8_t*>(extra.data()), extra.size()) != 0U;
 }
 
 bool is_lower_package_id(std::string_view value) noexcept {
-  if (value.empty() || value.size() > kMaximumIdBytes || value.front() < 'a' ||
-      value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](char raw_character) {
-    const auto character = static_cast<unsigned char>(raw_character);
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '.' || character == '-' ||
-           character == '_';
-  });
+  return fcitx5_package_is_lower_package_id_utf8(
+             reinterpret_cast<const std::uint8_t*>(value.data()), value.size()) != 0U;
 }
 
 PackageError::PackageError(std::string code, std::string message)
@@ -533,40 +526,8 @@ void validate_manifest_compatibility(const Manifest& manifest,
 }
 
 bool is_safe_relative_package_path(std::string_view path) noexcept {
-  if (path.empty() || path.size() > 512U || path.front() == '/' || path.front() == '\\' ||
-      path.back() == '/' || path.back() == '\\' || path.find(':') != std::string_view::npos ||
-      path.find('\0') != std::string_view::npos || path.find('\\') != std::string_view::npos) {
-    return false;
-  }
-  std::size_t begin = 0;
-  while (begin < path.size()) {
-    const auto end = path.find('/', begin);
-    const auto component = path.substr(begin, end == std::string_view::npos ? path.size() - begin
-                                                                          : end - begin);
-    if (component.empty() || component == "." || component == ".." ||
-        component.back() == '.' || component.back() == ' ') {
-      return false;
-    }
-    for (const unsigned char character : component) {
-      if (character < 0x20U)
-        return false;
-    }
-    auto stem = component.substr(0, component.find('.'));
-    std::string lowered;
-    lowered.reserve(stem.size());
-    for (const unsigned char character : stem) {
-      lowered.push_back(static_cast<char>(
-          character >= 'A' && character <= 'Z' ? character - 'A' + 'a' : character));
-    }
-    if (lowered == "con" || lowered == "prn" || lowered == "aux" || lowered == "nul" ||
-        (lowered.size() == 4U &&
-         ((lowered.starts_with("com") && lowered[3] >= '1' && lowered[3] <= '9') ||
-          (lowered.starts_with("lpt") && lowered[3] >= '1' && lowered[3] <= '9')))) {
-      return false;
-    }
-    begin = end == std::string_view::npos ? path.size() : end + 1U;
-  }
-  return true;
+  return fcitx5_package_is_safe_relative_path_utf8(
+             reinterpret_cast<const std::uint8_t*>(path.data()), path.size()) != 0U;
 }
 
 bool path_contains_reparse_point(const std::filesystem::path& path) {

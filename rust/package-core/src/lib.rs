@@ -8113,6 +8113,56 @@ mod repair_ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_is_ascii_token_utf8(
+        value: *const u8,
+        value_len: usize,
+        extra: *const u8,
+        extra_len: usize,
+    ) -> u8 {
+        let Some(value) = string_from_raw(Fcitx5ByteSlice {
+            data: value,
+            len: value_len,
+        }) else {
+            return 0;
+        };
+        let Some(extra) = string_from_raw(Fcitx5ByteSlice {
+            data: extra,
+            len: extra_len,
+        }) else {
+            return 0;
+        };
+        super::is_ascii_token(&value, &extra) as u8
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_is_lower_package_id_utf8(
+        value: *const u8,
+        value_len: usize,
+    ) -> u8 {
+        let Some(value) = string_from_raw(Fcitx5ByteSlice {
+            data: value,
+            len: value_len,
+        }) else {
+            return 0;
+        };
+        PackageId::parse(&value).is_ok() as u8
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_is_safe_relative_path_utf8(
+        value: *const u8,
+        value_len: usize,
+    ) -> u8 {
+        let Some(value) = string_from_raw(Fcitx5ByteSlice {
+            data: value,
+            len: value_len,
+        }) else {
+            return 0;
+        };
+        super::is_safe_relative_package_path(&value) as u8
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn fcitx5_package_manifest_free(
         manifest: *const Fcitx5PackageParsedManifestResult,
     ) {
