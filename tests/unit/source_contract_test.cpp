@@ -568,15 +568,23 @@ int main(int argc, char** argv) {
         configSource.find("drawText(brush, L\"ni hao") != std::string::npos) {
         return fail("REG-CONFIG-LIVE-001: Config candidate preview must be embedded, not an external demo window");
     }
-    if (std::filesystem::exists(sourceRoot / "src/candidate/candidate_model.cpp") ||
-        cmakeSource.find("add_library(fcitx5_candidate_model INTERFACE)") ==
-            std::string::npos ||
+    if (std::filesystem::exists(sourceRoot / "src/candidate/candidate_model.h") ||
+        std::filesystem::exists(sourceRoot / "src/candidate/candidate_model.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/unit/candidate_model_test.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/perf/focus_context_churn.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/perf/candidate_render_bench.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/perf/candidate_model_bench.cpp") ||
+        cmakeSource.find("fcitx5_candidate_model") != std::string::npos ||
         cmakeSource.find("src/candidate/candidate_model.cpp") != std::string::npos ||
+        cmakeSource.find("tests/unit/candidate_model_test.cpp") != std::string::npos ||
+        cmakeSource.find("tests/perf/focus_context_churn.cpp") != std::string::npos ||
+        cmakeSource.find("tests/perf/candidate_render_bench.cpp") != std::string::npos ||
+        cmakeSource.find("tests/perf/candidate_model_bench.cpp") != std::string::npos ||
         cmakeSource.find("fcitx5_candidate_core_rust") == std::string::npos ||
         candidateLayoutSource.find("fcitx5_candidate_model_apply") == std::string::npos ||
         candidateLayoutSource.find("candidate_model_matches_frozen_cpp_contract") ==
             std::string::npos) {
-        return fail("CANDIDATE-MODEL-RUST: candidate model semantics must be Rust-owned and the old C++ source must stay deleted");
+        return fail("CANDIDATE-MODEL-RUST: candidate model semantics must be Rust-owned and the old C++ header/source/tests must stay deleted");
     }
     if (std::filesystem::exists(sourceRoot / "src/ui/candidate_interaction.h") ||
         std::filesystem::exists(sourceRoot / "src/ui/candidate_interaction.cpp") ||

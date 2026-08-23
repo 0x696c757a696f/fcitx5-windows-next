@@ -332,15 +332,6 @@ add_custom_target(
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-tsf-poc DLL")
 
-add_library(fcitx5_candidate_model INTERFACE)
-add_library(fcitx5::candidate_model ALIAS fcitx5_candidate_model)
-target_compile_features(fcitx5_candidate_model INTERFACE cxx_std_20)
-target_include_directories(
-  fcitx5_candidate_model INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/candidate")
-target_link_libraries(fcitx5_candidate_model INTERFACE fcitx5_candidate_core_rust ws2_32 userenv
-                                                     ntdll)
-add_dependencies(fcitx5_candidate_model fcitx5_candidate_core_rustlib)
-
 add_library(fcitx5_miniz STATIC "${FCITX_MINIZ_SOURCE_DIR}/miniz.c")
 target_include_directories(fcitx5_miniz SYSTEM PUBLIC "${FCITX_MINIZ_SOURCE_DIR}")
 target_compile_definitions(fcitx5_miniz PRIVATE MINIZ_NO_ZLIB_APIS)
@@ -598,7 +589,7 @@ add_executable(
 set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
   target_link_libraries(
   fcitx5_ui
-  PRIVATE fcitx5::candidate_model fcitx5::candidate_layout fcitx5::config
+  PRIVATE fcitx5::candidate_layout fcitx5::config
           fcitx5::protocol fcitx5::ipc_client fcitx5::platform
           d2d1 dwrite shell32 ole32)
 fcitx_apply_project_options(fcitx5_ui)
@@ -987,12 +978,6 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_protocol_test)
   fcitx_apply_binary_hardening(fcitx5_protocol_test)
   add_test(NAME protocol-contract COMMAND fcitx5_protocol_test)
-
-  add_executable(fcitx5_candidate_model_test tests/unit/candidate_model_test.cpp)
-  target_link_libraries(fcitx5_candidate_model_test PRIVATE fcitx5::candidate_model)
-  fcitx_apply_project_options(fcitx5_candidate_model_test)
-  fcitx_apply_binary_hardening(fcitx5_candidate_model_test)
-  add_test(NAME candidate-model-contract COMMAND fcitx5_candidate_model_test)
 
   add_executable(fcitx5_config_parser_test tests/unit/config_parser_test.cpp)
   target_link_libraries(fcitx5_config_parser_test PRIVATE fcitx5::config)
@@ -1432,29 +1417,12 @@ if(FCITX_BUILD_FUZZERS)
 endif()
 
 if(FCITX_BUILD_BENCHMARKS)
-  add_executable(fcitx5_focus_context_churn tests/perf/focus_context_churn.cpp)
-  target_link_libraries(fcitx5_focus_context_churn PRIVATE fcitx5::candidate_model)
-  fcitx_apply_project_options(fcitx5_focus_context_churn)
-  fcitx_apply_binary_hardening(fcitx5_focus_context_churn)
-
   add_executable(fcitx5_handle_leak_soak tests/perf/handle_leak_soak.cpp)
   target_include_directories(
     fcitx5_handle_leak_soak PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
   target_link_libraries(fcitx5_handle_leak_soak PRIVATE fcitx5::release_identity uuid ole32 user32)
   fcitx_apply_project_options(fcitx5_handle_leak_soak)
   fcitx_apply_binary_hardening(fcitx5_handle_leak_soak)
-
-  add_executable(fcitx5_candidate_render_bench tests/perf/candidate_render_bench.cpp)
-  target_link_libraries(
-    fcitx5_candidate_render_bench
-    PRIVATE fcitx5::candidate_model d2d1 dwrite user32)
-  fcitx_apply_project_options(fcitx5_candidate_render_bench)
-  fcitx_apply_binary_hardening(fcitx5_candidate_render_bench)
-
-  add_executable(fcitx5_candidate_model_bench tests/perf/candidate_model_bench.cpp)
-  target_link_libraries(fcitx5_candidate_model_bench PRIVATE fcitx5::candidate_model)
-  fcitx_apply_project_options(fcitx5_candidate_model_bench)
-  fcitx_apply_binary_hardening(fcitx5_candidate_model_bench)
 
   add_executable(fcitx5_ipc_codec_bench tests/perf/ipc_codec_bench.cpp)
   target_link_libraries(fcitx5_ipc_codec_bench PRIVATE fcitx5::protocol)
