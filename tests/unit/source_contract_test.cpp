@@ -25,6 +25,11 @@ int main(int argc, char** argv) {
         return fail("expected repository source root");
     const std::filesystem::path sourceRoot = argv[1];
     const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
+    if (cmakeSource.find("fcitx5_deployer ALL") == std::string::npos ||
+        cmakeSource.find("NAME deployer-version") == std::string::npos ||
+        cmakeSource.find("NAME deployer-boundary-smoke") == std::string::npos) {
+        return fail("CI: deployer must be a default-built shipping binary before CTest/PE audit");
+    }
     const auto runtimeSource = read_text(sourceRoot / "src/engine/fcitx_runtime.cpp");
     const auto warmupMarker = runtimeSource.find("warmupIds");
     if (warmupMarker == std::string::npos)

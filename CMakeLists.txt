@@ -715,7 +715,7 @@ add_custom_target(
   COMMENT "Building Rust fcitx5-downloader CLI")
 
 add_custom_target(
-  fcitx5_deployer
+  fcitx5_deployer ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-deployer.exe"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
