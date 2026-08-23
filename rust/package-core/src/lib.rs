@@ -6605,6 +6605,47 @@ mod repair_ffi {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageManifestDependency {
+        pub id: Fcitx5ByteSlice,
+        pub version: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageManifestFile {
+        pub path: Fcitx5ByteSlice,
+        pub size: u64,
+        pub sha256: Fcitx5ByteSlice,
+        pub blake3: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageParsedManifestResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub format_version: u32,
+        pub package_type: u32,
+        pub id: Fcitx5ByteSlice,
+        pub version: Fcitx5ByteSlice,
+        pub architecture: Fcitx5ByteSlice,
+        pub min_os: Fcitx5ByteSlice,
+        pub core_api: Fcitx5ByteSlice,
+        pub addon_abi: Fcitx5ByteSlice,
+        pub dependencies: *mut Fcitx5PackageManifestDependency,
+        pub dependency_count: usize,
+        pub license: Fcitx5ByteSlice,
+        pub source_commit: Fcitx5ByteSlice,
+        pub permissions: *mut Fcitx5ByteSlice,
+        pub permission_count: usize,
+        pub files: *mut Fcitx5PackageManifestFile,
+        pub file_count: usize,
+        pub key_id: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
     pub struct Fcitx5RepositorySequenceRepairResult {
         pub repaired: u8,
     }
@@ -6733,13 +6774,46 @@ mod repair_ffi {
         }
     }
 
+    fn manifest_error_result(code: &str, message: &str) -> Fcitx5PackageParsedManifestResult {
+        let mut error_code = [0; 64];
+        let mut error_message = [0; 512];
+        write_ascii(&mut error_code, code);
+        write_ascii(&mut error_message, message);
+        Fcitx5PackageParsedManifestResult {
+            status: 1,
+            error_code,
+            error_message,
+            format_version: 0,
+            package_type: 0,
+            id: empty_slice(),
+            version: empty_slice(),
+            architecture: empty_slice(),
+            min_os: empty_slice(),
+            core_api: empty_slice(),
+            addon_abi: empty_slice(),
+            dependencies: std::ptr::null_mut(),
+            dependency_count: 0,
+            license: empty_slice(),
+            source_commit: empty_slice(),
+            permissions: std::ptr::null_mut(),
+            permission_count: 0,
+            files: std::ptr::null_mut(),
+            file_count: 0,
+            key_id: empty_slice(),
+        }
+    }
+
+    fn empty_slice() -> Fcitx5ByteSlice {
+        Fcitx5ByteSlice {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+
     fn owned_slice(mut bytes: Vec<u8>) -> Fcitx5ByteSlice {
         let len = bytes.len();
         if len == 0 {
-            return Fcitx5ByteSlice {
-                data: std::ptr::null(),
-                len: 0,
-            };
+            return empty_slice();
         }
         let data = bytes.as_mut_ptr();
         std::mem::forget(bytes);
@@ -6784,6 +6858,110 @@ mod repair_ffi {
         }
     }
 
+    fn owned_slice_from_str(value: &str) -> Fcitx5ByteSlice {
+        owned_slice(value.as_bytes().to_vec())
+    }
+
+    fn package_type_code(package_type: &super::PackageType) -> u32 {
+        match package_type {
+            super::PackageType::Core => 0,
+            super::PackageType::Addon => 1,
+            super::PackageType::InputMethodData => 2,
+            super::PackageType::Theme => 3,
+            super::PackageType::Translation => 4,
+        }
+    }
+
+    fn owned_dependency_array(
+        dependencies: &[super::Dependency],
+    ) -> (*mut Fcitx5PackageManifestDependency, usize) {
+        if dependencies.is_empty() {
+            return (std::ptr::null_mut(), 0);
+        }
+        let mut raw: Vec<Fcitx5PackageManifestDependency> = dependencies
+            .iter()
+            .map(|dependency| Fcitx5PackageManifestDependency {
+                id: owned_slice_from_str(dependency.id().as_str()),
+                version: owned_slice_from_str(dependency.version()),
+            })
+            .collect();
+        let len = raw.len();
+        let ptr = raw.as_mut_ptr();
+        std::mem::forget(raw);
+        (ptr, len)
+    }
+
+    fn owned_permission_array(permissions: &[String]) -> (*mut Fcitx5ByteSlice, usize) {
+        if permissions.is_empty() {
+            return (std::ptr::null_mut(), 0);
+        }
+        let mut raw: Vec<Fcitx5ByteSlice> = permissions
+            .iter()
+            .map(|permission| owned_slice_from_str(permission))
+            .collect();
+        let len = raw.len();
+        let ptr = raw.as_mut_ptr();
+        std::mem::forget(raw);
+        (ptr, len)
+    }
+
+    fn owned_file_array(
+        files: &[super::VerifiedArtifact],
+    ) -> (*mut Fcitx5PackageManifestFile, usize) {
+        if files.is_empty() {
+            return (std::ptr::null_mut(), 0);
+        }
+        let mut raw: Vec<Fcitx5PackageManifestFile> = files
+            .iter()
+            .map(|file| Fcitx5PackageManifestFile {
+                path: owned_slice_from_str(file.path().as_str()),
+                size: file.size(),
+                sha256: file
+                    .hashes()
+                    .sha256()
+                    .map(|hash| owned_slice_from_str(hash.as_str()))
+                    .unwrap_or_else(empty_slice),
+                blake3: file
+                    .hashes()
+                    .blake3()
+                    .map(|hash| owned_slice_from_str(hash.as_str()))
+                    .unwrap_or_else(empty_slice),
+            })
+            .collect();
+        let len = raw.len();
+        let ptr = raw.as_mut_ptr();
+        std::mem::forget(raw);
+        (ptr, len)
+    }
+
+    fn manifest_ok_result(manifest: super::Manifest) -> Fcitx5PackageParsedManifestResult {
+        let (dependencies, dependency_count) = owned_dependency_array(manifest.dependencies());
+        let (permissions, permission_count) = owned_permission_array(manifest.permissions());
+        let (files, file_count) = owned_file_array(manifest.files());
+        Fcitx5PackageParsedManifestResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            format_version: manifest.format_version() as u32,
+            package_type: package_type_code(manifest.package_type()),
+            id: owned_slice_from_str(manifest.id().as_str()),
+            version: owned_slice_from_str(manifest.version()),
+            architecture: owned_slice_from_str(manifest.architecture()),
+            min_os: owned_slice_from_str(manifest.min_os()),
+            core_api: owned_slice_from_str(manifest.core_api()),
+            addon_abi: owned_slice_from_str(manifest.addon_abi()),
+            dependencies,
+            dependency_count,
+            license: owned_slice_from_str(manifest.license()),
+            source_commit: owned_slice_from_str(manifest.source_commit()),
+            permissions,
+            permission_count,
+            files,
+            file_count,
+            key_id: owned_slice_from_str(manifest.key_id().as_str()),
+        }
+    }
+
     #[no_mangle]
     pub unsafe extern "C" fn fcitx5_package_read_trusted_keys_utf16(
         keyring_path: *const u16,
@@ -6810,6 +6988,87 @@ mod repair_ffi {
         match parse_trusted_keys(&text) {
             Ok(keys) => trusted_key_ok_result(keys),
             Err(error) => trusted_key_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_parse_manifest_utf8(
+        manifest_bytes: *const u8,
+        manifest_len: usize,
+    ) -> Fcitx5PackageParsedManifestResult {
+        let Some(manifest_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: manifest_bytes,
+            len: manifest_len,
+        }) else {
+            return manifest_error_result("invalid_manifest", "manifest bytes are invalid");
+        };
+        let Ok(manifest_text) = std::str::from_utf8(manifest_bytes) else {
+            return manifest_error_result("invalid_manifest", "manifest is not strict JSON");
+        };
+        match parse_trusted_manifest(manifest_text) {
+            Ok(manifest) => manifest_ok_result(manifest),
+            Err(error) => manifest_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    fn parse_trusted_manifest(
+        manifest_text: &str,
+    ) -> Result<super::Manifest, super::ManifestError> {
+        super::parse_manifest(manifest_text)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_manifest_free(
+        manifest: *const Fcitx5PackageParsedManifestResult,
+    ) {
+        if manifest.is_null() {
+            return;
+        }
+        let manifest = unsafe { &*manifest };
+        free_owned_slice(manifest.id);
+        free_owned_slice(manifest.version);
+        free_owned_slice(manifest.architecture);
+        free_owned_slice(manifest.min_os);
+        free_owned_slice(manifest.core_api);
+        free_owned_slice(manifest.addon_abi);
+        free_owned_slice(manifest.license);
+        free_owned_slice(manifest.source_commit);
+        free_owned_slice(manifest.key_id);
+        if !manifest.dependencies.is_null() {
+            unsafe {
+                let dependencies = Vec::from_raw_parts(
+                    manifest.dependencies,
+                    manifest.dependency_count,
+                    manifest.dependency_count,
+                );
+                for dependency in &dependencies {
+                    free_owned_slice(dependency.id);
+                    free_owned_slice(dependency.version);
+                }
+            }
+        }
+        if !manifest.permissions.is_null() {
+            unsafe {
+                let permissions = Vec::from_raw_parts(
+                    manifest.permissions,
+                    manifest.permission_count,
+                    manifest.permission_count,
+                );
+                for permission in &permissions {
+                    free_owned_slice(*permission);
+                }
+            }
+        }
+        if !manifest.files.is_null() {
+            unsafe {
+                let files =
+                    Vec::from_raw_parts(manifest.files, manifest.file_count, manifest.file_count);
+                for file in &files {
+                    free_owned_slice(file.path);
+                    free_owned_slice(file.sha256);
+                    free_owned_slice(file.blake3);
+                }
+            }
         }
     }
 

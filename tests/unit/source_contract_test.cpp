@@ -243,8 +243,7 @@ int main(int argc, char** argv) {
     const auto packageCoreHeader = read_text(sourceRoot / "src/package/package_core.h");
     const auto packageCorpus =
         read_text(sourceRoot / "tests/fixtures/package_path_corpus.json");
-    if (packageSource.find("OrdinalIgnoreCaseLess") == std::string::npos ||
-        packageCoreHeader.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+    if (packageCoreHeader.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/package_archive.cpp") ||
         packageCorpus.find("\"case_collision_sets\"") == std::string::npos ||
         packageCorpus.find("COM9.log") == std::string::npos) {
@@ -400,6 +399,7 @@ int main(int argc, char** argv) {
         rustPackageCore.find("path_contains_reparse_component") == std::string::npos ||
         rustPackageCore.find("parse_lockfile") == std::string::npos ||
         rustPackageCore.find("read_installed_lockfile") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_parse_manifest_utf8") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_read_lockfile_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_read_trusted_keys_utf16") == std::string::npos ||
         rustPackageCore.find("write_installed_lockfile_atomic") == std::string::npos ||
@@ -454,6 +454,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageSource.find("trusted key scope/channel policy is invalid") !=
             std::string::npos ||
+        packageSource.find("manifest payload schema does not match format version") !=
+            std::string::npos ||
+        packageSource.find("file entry violates path, hash or resource limits") !=
+            std::string::npos ||
+        packageSource.find("dependency identity is invalid or duplicated") !=
+            std::string::npos ||
+        packageSource.find("permission is invalid or duplicated") != std::string::npos ||
         packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||

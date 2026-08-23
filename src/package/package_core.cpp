@@ -69,6 +69,41 @@ struct Fcitx5PackageTrustedKeyResult {
   std::size_t key_count;
 };
 
+struct Fcitx5PackageManifestDependency {
+  Fcitx5ByteSlice id;
+  Fcitx5ByteSlice version;
+};
+
+struct Fcitx5PackageManifestFile {
+  Fcitx5ByteSlice path;
+  std::uint64_t size;
+  Fcitx5ByteSlice sha256;
+  Fcitx5ByteSlice blake3;
+};
+
+struct Fcitx5PackageParsedManifestResult {
+  int status;
+  std::uint8_t error_code[64];
+  std::uint8_t error_message[512];
+  std::uint32_t format_version;
+  std::uint32_t package_type;
+  Fcitx5ByteSlice id;
+  Fcitx5ByteSlice version;
+  Fcitx5ByteSlice architecture;
+  Fcitx5ByteSlice min_os;
+  Fcitx5ByteSlice core_api;
+  Fcitx5ByteSlice addon_abi;
+  Fcitx5PackageManifestDependency* dependencies;
+  std::size_t dependency_count;
+  Fcitx5ByteSlice license;
+  Fcitx5ByteSlice source_commit;
+  Fcitx5ByteSlice* permissions;
+  std::size_t permission_count;
+  Fcitx5PackageManifestFile* files;
+  std::size_t file_count;
+  Fcitx5ByteSlice key_id;
+};
+
 struct Fcitx5RepositorySequenceRepairResult {
   std::uint8_t repaired;
 };
@@ -79,6 +114,9 @@ void fcitx5_package_lockfile_free(Fcitx5PackageLockEntry* entries, std::size_t e
 Fcitx5PackageTrustedKeyResult fcitx5_package_read_trusted_keys_utf16(
     const wchar_t* keyring_path, std::size_t keyring_path_len);
 void fcitx5_package_trusted_keys_free(Fcitx5TrustedKeyNative* keys, std::size_t key_count);
+Fcitx5PackageParsedManifestResult fcitx5_package_parse_manifest_utf8(
+    const std::uint8_t* manifest_bytes, std::size_t manifest_len);
+void fcitx5_package_manifest_free(const Fcitx5PackageParsedManifestResult* manifest);
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -112,10 +150,6 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr std::size_t kMaximumIdBytes = 64U;
-constexpr std::size_t kMaximumVersionBytes = 64U;
-constexpr std::size_t kMaximumMetadataBytes = 256U;
-constexpr std::size_t kMaximumDependencyCount = 256U;
-constexpr std::size_t kMaximumPermissionCount = 32U;
 constexpr std::string_view kSignatureEnvelopeCanonicalization =
     "fcitx5-windows-next-json-v1";
 constexpr std::size_t kMldsa65PublicKeyBytes = MLDSA65_PUBLICKEYBYTES;
@@ -200,6 +234,16 @@ std::vector<std::byte> ffi_bytes(Fcitx5ByteSlice bytes) {
   return {begin, begin + bytes.len};
 }
 
+std::string ffi_manifest_string(Fcitx5ByteSlice bytes) {
+  if (bytes.len == 0) {
+    return {};
+  }
+  if (bytes.data == nullptr) {
+    fail("invalid_manifest", "parsed manifest contains invalid string data");
+  }
+  return {reinterpret_cast<const char*>(bytes.data), bytes.len};
+}
+
 Fcitx5ByteSlice ffi_slice(std::string_view value) {
   return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
@@ -254,6 +298,18 @@ class TrustedKeyResultGuard final {
   Fcitx5PackageTrustedKeyResult result_{};
 };
 
+class ManifestResultGuard final {
+ public:
+  explicit ManifestResultGuard(Fcitx5PackageParsedManifestResult result) : result_(result) {}
+  ~ManifestResultGuard() { fcitx5_package_manifest_free(&result_); }
+  ManifestResultGuard(const ManifestResultGuard&) = delete;
+  ManifestResultGuard& operator=(const ManifestResultGuard&) = delete;
+  [[nodiscard]] const Fcitx5PackageParsedManifestResult& get() const noexcept { return result_; }
+
+ private:
+  Fcitx5PackageParsedManifestResult result_{};
+};
+
 std::wstring native_path_string(const std::filesystem::path& path) {
   return path.native();
 }
@@ -262,43 +318,6 @@ void require_nt_success(NTSTATUS status, std::string_view operation) {
   if (status < 0) {
     fail("crypto_error", std::string(operation) + " failed");
   }
-}
-
-void require_object_keys(const Json& object, std::initializer_list<std::string_view> required,
-                         std::initializer_list<std::string_view> optional = {}) {
-  if (!object.is_object()) {
-    fail("invalid_manifest", "expected a JSON object");
-  }
-  std::set<std::string, std::less<>> allowed;
-  for (const auto key : required) {
-    allowed.emplace(key);
-    if (!object.contains(key)) {
-      fail("invalid_manifest", "missing required key: " + std::string(key));
-    }
-  }
-  for (const auto key : optional) {
-    allowed.emplace(key);
-  }
-  for (const auto& [key, unused] : object.items()) {
-    static_cast<void>(unused);
-    if (!allowed.contains(key)) {
-      fail("invalid_manifest", "unknown key: " + key);
-    }
-  }
-}
-
-std::string require_string(const Json& object, std::string_view key, std::size_t maximum,
-                           bool allow_empty = false) {
-  const auto& value = object.at(key);
-  if (!value.is_string()) {
-    fail("invalid_manifest", std::string(key) + " must be a string");
-  }
-  auto result = value.get<std::string>();
-  if ((!allow_empty && result.empty()) || result.size() > maximum ||
-      result.find('\0') != std::string::npos) {
-    fail("invalid_manifest", std::string(key) + " has an invalid length");
-  }
-  return result;
 }
 
 void require_signature_object_keys(const Json& object,
@@ -335,24 +354,6 @@ std::string require_signature_string(const Json& object, std::string_view key,
   return result;
 }
 
-bool is_hex_digest(std::string_view value) {
-  return value.size() == 64U && std::ranges::all_of(value, [](char raw_character) {
-           const auto character = static_cast<unsigned char>(raw_character);
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f') ||
-                  (character >= 'A' && character <= 'F');
-         });
-}
-
-PackageType parse_type(std::string_view value) {
-  if (value == "core") return PackageType::core;
-  if (value == "addon") return PackageType::addon;
-  if (value == "inputmethod-data") return PackageType::input_method_data;
-  if (value == "theme") return PackageType::theme;
-  if (value == "translation") return PackageType::translation;
-  fail("invalid_manifest", "unsupported package type");
-}
-
 bool contains_reparse_component(const std::filesystem::path& path) {
   std::filesystem::path current;
   for (const auto& component : path) {
@@ -364,28 +365,6 @@ bool contains_reparse_component(const std::filesystem::path& path) {
     }
   }
   return false;
-}
-
-struct OrdinalIgnoreCaseLess {
-  bool operator()(const std::wstring& left, const std::wstring& right) const noexcept {
-    return CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(),
-                                static_cast<int>(right.size()), TRUE) == CSTR_LESS_THAN;
-  }
-};
-
-std::wstring utf8_path_to_windows_key(std::string_view value) {
-  const auto input_size = static_cast<int>(value.size());
-  const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                                           input_size, nullptr, 0);
-  if (required <= 0) {
-    fail("invalid_manifest", "file path is not valid UTF-8");
-  }
-  std::wstring result(static_cast<std::size_t>(required), L'\0');
-  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), input_size,
-                          result.data(), required) != required) {
-    fail("invalid_manifest", "file path conversion failed");
-  }
-  return result;
 }
 
 std::string read_file_bounded(const std::filesystem::path& path, std::size_t maximum) {
@@ -452,130 +431,78 @@ PackageError::PackageError(std::string code, std::string message)
 const std::string& PackageError::code() const noexcept { return code_; }
 
 Manifest parse_manifest(std::string_view bytes) {
-  if (bytes.empty() || bytes.size() > kMaximumManifestBytes) {
-    fail("invalid_manifest", "manifest size is outside the accepted range");
+  const ManifestResultGuard guard(fcitx5_package_parse_manifest_utf8(
+      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
+  const auto& manifest_result = guard.get();
+  if (manifest_result.status != 0) {
+    std::string code = ffi_string(manifest_result.error_code);
+    std::string message = ffi_string(manifest_result.error_message);
+    if (code.empty()) {
+      code = "invalid_manifest";
+    }
+    if (message.empty()) {
+      message = "manifest is invalid";
+    }
+    fail(std::move(code), std::move(message));
   }
-  Json document;
-  try {
-    document = Json::parse(bytes.begin(), bytes.end(), nullptr, true, true);
-  } catch (const Json::exception&) {
-    fail("invalid_manifest", "manifest is not strict JSON");
-  }
-  require_object_keys(document,
-                      {"format_version", "id", "version", "type", "architecture", "min_os",
-                       "core_api", "addon_abi", "dependencies", "license", "source_commit",
-                       "permissions", "key_id"},
-                      {"files", "payload"});
-  if (!document["format_version"].is_number_unsigned()) {
-    fail("unsupported_manifest", "format_version must be numeric");
-  }
-  const auto format_version = document["format_version"].get<std::uint32_t>();
-  if (format_version != kManifestFormatVersion &&
-      format_version != kManifestV2FormatVersion) {
-    fail("unsupported_manifest", "format_version is unsupported");
-  }
-  if ((format_version == kManifestFormatVersion &&
-       (!document.contains("files") || document.contains("payload"))) ||
-      (format_version == kManifestV2FormatVersion &&
-       (!document.contains("payload") || document.contains("files")))) {
-    fail("invalid_manifest", "manifest payload schema does not match format version");
-  }
-
   Manifest result;
-  result.format_version = format_version;
-  result.id = require_string(document, "id", kMaximumIdBytes);
-  result.version = require_string(document, "version", kMaximumVersionBytes);
-  result.type = parse_type(require_string(document, "type", 32U));
-  result.architecture = require_string(document, "architecture", 8U);
-  result.min_os = require_string(document, "min_os", 32U);
-  result.core_api = require_string(document, "core_api", kMaximumVersionBytes);
-  result.addon_abi = require_string(document, "addon_abi", kMaximumVersionBytes, true);
-  result.license = require_string(document, "license", kMaximumMetadataBytes);
-  result.source_commit = require_string(document, "source_commit", 128U);
-  result.key_id = require_string(document, "key_id", kMaximumIdBytes);
-  if (!is_lower_package_id(result.id) || !is_lower_package_id(result.key_id) ||
-      !is_ascii_token(result.version, ".+-_") ||
-      (result.architecture != "any" && result.architecture != "x86" &&
-       result.architecture != "x64")) {
-    fail("invalid_manifest", "package identity or architecture is invalid");
+  result.format_version = manifest_result.format_version;
+  switch (manifest_result.package_type) {
+    case 0:
+      result.type = PackageType::core;
+      break;
+    case 1:
+      result.type = PackageType::addon;
+      break;
+    case 2:
+      result.type = PackageType::input_method_data;
+      break;
+    case 3:
+      result.type = PackageType::theme;
+      break;
+    case 4:
+      result.type = PackageType::translation;
+      break;
+    default:
+      fail("invalid_manifest", "parsed manifest has an unsupported package type");
   }
-
-  const auto& dependencies = document["dependencies"];
-  if (!dependencies.is_array() || dependencies.size() > kMaximumDependencyCount) {
-    fail("invalid_manifest", "dependencies must be a bounded array");
+  result.id = ffi_manifest_string(manifest_result.id);
+  result.version = ffi_manifest_string(manifest_result.version);
+  result.architecture = ffi_manifest_string(manifest_result.architecture);
+  result.min_os = ffi_manifest_string(manifest_result.min_os);
+  result.core_api = ffi_manifest_string(manifest_result.core_api);
+  result.addon_abi = ffi_manifest_string(manifest_result.addon_abi);
+  result.license = ffi_manifest_string(manifest_result.license);
+  result.source_commit = ffi_manifest_string(manifest_result.source_commit);
+  result.key_id = ffi_manifest_string(manifest_result.key_id);
+  if (manifest_result.dependency_count != 0 && manifest_result.dependencies == nullptr) {
+    fail("invalid_manifest", "parsed manifest dependency data is invalid");
   }
-  std::set<std::string, std::less<>> dependency_ids;
-  for (const auto& dependency : dependencies) {
-    require_object_keys(dependency, {"id", "version"});
-    Dependency parsed{require_string(dependency, "id", kMaximumIdBytes),
-                      require_string(dependency, "version", kMaximumVersionBytes)};
-    if (!is_lower_package_id(parsed.id) || !is_ascii_token(parsed.version, ".+-_") ||
-        !dependency_ids.emplace(parsed.id).second) {
-      fail("invalid_manifest", "dependency identity is invalid or duplicated");
-    }
-    result.dependencies.push_back(std::move(parsed));
+  result.dependencies.reserve(manifest_result.dependency_count);
+  for (std::size_t index = 0; index < manifest_result.dependency_count; ++index) {
+    const auto& dependency = manifest_result.dependencies[index];
+    result.dependencies.push_back(
+        Dependency{ffi_manifest_string(dependency.id), ffi_manifest_string(dependency.version)});
   }
-
-  const auto& permissions = document["permissions"];
-  if (!permissions.is_array() || permissions.size() > kMaximumPermissionCount) {
-    fail("invalid_manifest", "permissions must be a bounded array");
+  if (manifest_result.permission_count != 0 && manifest_result.permissions == nullptr) {
+    fail("invalid_manifest", "parsed manifest permission data is invalid");
   }
-  std::set<std::string, std::less<>> permission_names;
-  for (const auto& permission : permissions) {
-    if (!permission.is_string()) {
-      fail("invalid_manifest", "permission must be a string");
-    }
-    auto parsed = permission.get<std::string>();
-    if (parsed.size() > 64U || !is_ascii_token(parsed, "-_") ||
-        !permission_names.emplace(parsed).second) {
-      fail("invalid_manifest", "permission is invalid or duplicated");
-    }
-    result.permissions.push_back(std::move(parsed));
+  result.permissions.reserve(manifest_result.permission_count);
+  for (std::size_t index = 0; index < manifest_result.permission_count; ++index) {
+    result.permissions.push_back(ffi_manifest_string(manifest_result.permissions[index]));
   }
-
-  const auto& files = format_version == kManifestFormatVersion ? document["files"]
-                                                               : document["payload"];
-  if (!files.is_array() || files.empty() || files.size() > kMaximumFileCount) {
-    fail("invalid_manifest", "files must be a non-empty bounded array");
+  if (manifest_result.file_count != 0 && manifest_result.files == nullptr) {
+    fail("invalid_manifest", "parsed manifest file data is invalid");
   }
-  std::set<std::string, std::less<>> file_paths;
-  std::set<std::wstring, OrdinalIgnoreCaseLess> windows_file_paths;
-  std::uint64_t total_size = 0;
-  for (const auto& file : files) {
-    if (format_version == kManifestFormatVersion) {
-      require_object_keys(file, {"path", "size", "sha256"});
-    } else {
-      require_object_keys(file, {"path", "size", "hashes"});
-    }
-    FileEntry parsed;
-    parsed.path = require_string(file, "path", 512U);
-    if (format_version == kManifestFormatVersion) {
-      parsed.sha256 = require_string(file, "sha256", 64U);
-    } else {
-      const auto& hashes = file["hashes"];
-      require_object_keys(hashes, {"blake3"}, {"sha256"});
-      parsed.blake3 = require_string(hashes, "blake3", 64U);
-      if (hashes.contains("sha256")) {
-        parsed.sha256 = require_string(hashes, "sha256", 64U);
-      }
-    }
-    if (!file["size"].is_number_unsigned()) {
-      fail("invalid_manifest", "file size must be an unsigned integer");
-    }
-    parsed.size = file["size"].get<std::uint64_t>();
-    if (!is_safe_relative_package_path(parsed.path) ||
-        (format_version == kManifestFormatVersion && !is_hex_digest(parsed.sha256)) ||
-        (format_version == kManifestV2FormatVersion &&
-         (!is_hex_digest(parsed.blake3) ||
-          (!parsed.sha256.empty() && !is_hex_digest(parsed.sha256)))) ||
-        parsed.size > kMaximumFileBytes ||
-        total_size > kMaximumPayloadBytes - parsed.size ||
-        !file_paths.emplace(parsed.path).second ||
-        !windows_file_paths.emplace(utf8_path_to_windows_key(parsed.path)).second) {
-      fail("invalid_manifest", "file entry violates path, hash or resource limits");
-    }
-    total_size += parsed.size;
-    result.files.push_back(std::move(parsed));
+  result.files.reserve(manifest_result.file_count);
+  for (std::size_t index = 0; index < manifest_result.file_count; ++index) {
+    const auto& file = manifest_result.files[index];
+    result.files.push_back(FileEntry{
+        ffi_manifest_string(file.path),
+        file.size,
+        ffi_manifest_string(file.sha256),
+        ffi_manifest_string(file.blake3),
+    });
   }
   return result;
 }
