@@ -179,6 +179,10 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/src/updater_main.rs");
     const auto rustUpdaterBuild =
         read_text(sourceRoot / "tools/build-rust-updater-cli.ps1");
+    const auto rustDeployerBinary =
+        read_text(sourceRoot / "rust/package-core/src/deployer_main.rs");
+    const auto rustDeployerBuild =
+        read_text(sourceRoot / "tools/build-rust-deployer-cli.ps1");
     const auto deploymentCoreSource = read_text(sourceRoot / "src/updater/deployment_core.cpp");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
@@ -262,6 +266,18 @@ int main(int argc, char** argv) {
         rustUpdaterBuild.find("fcitx5-updater.exe") == std::string::npos ||
         rustUpdaterBuild.find("--bin fcitx5-updater") == std::string::npos ||
         cmakeSource.find("Building Rust fcitx5-updater CLI") == std::string::npos ||
+        std::filesystem::exists(sourceRoot / "src/package/deployer_main.cpp") ||
+        rustPackageCoreManifest.find("name = \"fcitx5-deployer\"") ==
+            std::string::npos ||
+        rustDeployerBinary.find("mod win32") == std::string::npos ||
+        rustDeployerBinary.find("copy_exclusive_artifact") == std::string::npos ||
+        rustDeployerBinary.find("protected_install_root") == std::string::npos ||
+        rustDeployerBinary.find("stage_validated_archive_zip") == std::string::npos ||
+        rustDeployerBinary.find("activate_staged_payload_tree") == std::string::npos ||
+        rustDeployerBinary.find("deployer request is invalid") == std::string::npos ||
+        rustDeployerBuild.find("fcitx5-deployer.exe") == std::string::npos ||
+        rustDeployerBuild.find("--bin fcitx5-deployer") == std::string::npos ||
+        cmakeSource.find("Building Rust fcitx5-deployer CLI") == std::string::npos ||
         deploymentCoreSource.find("fcitx5_update_cleanup_previous_known_good_utf16") ==
             std::string::npos ||
         deploymentCoreSource.find("fcitx5_update_install_tsf_dll_generation_utf16") ==
