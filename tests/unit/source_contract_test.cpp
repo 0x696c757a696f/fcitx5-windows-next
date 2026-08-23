@@ -343,6 +343,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("basic_file_identity_query_rejects_empty_path_like_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_executable_file_identity_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("executable_file_identity_query_rejects_empty_path_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("GetFinalPathNameByHandleW") == std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_path_is_reparse_point_utf16") ==
             std::string::npos ||
         rustWindowsCommonCore.find("path_reparse_policy_fails_closed_like_cpp_contract") ==
@@ -374,6 +379,13 @@ int main(int argc, char** argv) {
         runtimeIdentitySource.find("leftIdentity.volumeSerialNumber == rightIdentity.volumeSerialNumber") !=
             std::string::npos ||
         runtimeIdentitySource.find("FILE_FLAG_BACKUP_SEMANTICS") != std::string::npos ||
+        runtimeIdentitySource.find("GetFinalPathNameByHandleW") != std::string::npos ||
+        runtimeIdentitySource.find("FILE_NAME_NORMALIZED") != std::string::npos ||
+        runtimeIdentitySource.find("VOLUME_NAME_DOS") != std::string::npos ||
+        runtimeIdentitySource.find("FILE_ATTRIBUTE_NORMAL") != std::string::npos ||
+        runtimeIdentitySource.find("CreateFileW(source.c_str()") != std::string::npos ||
+        runtimeIdentitySource.find("GetFileInformationByHandle(file.get()") !=
+            std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_local_name_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_executable_files_match_utf16") ==
@@ -382,7 +394,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_basic_file_identity_utf16") ==
             std::string::npos ||
-        runtimeIdentitySource.find("fcitx5_windows_common_path_is_reparse_point_utf16") ==
+        runtimeIdentitySource.find("fcitx5_windows_common_executable_file_identity_utf16") ==
             std::string::npos ||
         runtimeIdentitySource.find("GetFileAttributesW") != std::string::npos ||
         runtimeIdentitySource.find("FILE_ATTRIBUTE_REPARSE_POINT") != std::string::npos ||

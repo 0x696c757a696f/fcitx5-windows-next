@@ -80,13 +80,23 @@ struct Fcitx5WindowsCommonBasicFileIdentity {
     std::uint32_t fileIndexHigh;
     std::uint32_t fileIndexLow;
 };
+struct Fcitx5WindowsCommonExecutableFileIdentity {
+    std::uint8_t status;
+    std::uint8_t containsReparsePoint;
+    std::uint32_t volumeSerialNumber;
+    std::uint32_t fileIndexHigh;
+    std::uint32_t fileIndexLow;
+    std::uint32_t numberOfLinks;
+    std::size_t finalPathLen;
+};
 extern "C" Fcitx5WindowsCommonBasicFileIdentity
 fcitx5_windows_common_basic_file_identity_utf16(const std::uint16_t* path,
                                                 std::size_t path_len);
-extern "C" std::uint8_t fcitx5_windows_common_path_is_reparse_point_utf16(
-    const std::uint16_t* path,
-    std::size_t path_len);
-
+extern "C" Fcitx5WindowsCommonExecutableFileIdentity
+fcitx5_windows_common_executable_file_identity_utf16(const std::uint16_t* path,
+                                                     std::size_t path_len,
+                                                     std::uint16_t* final_path_output,
+                                                     std::size_t final_path_capacity);
 class Handle final {
   public:
     explicit Handle(HANDLE value = nullptr) noexcept : value_(value) {}
@@ -374,32 +384,21 @@ bool queryExecutableFileIdentity(std::wstring_view path,
                                  ExecutableFileIdentity& output) noexcept {
     output = {};
     try {
-        if (path.empty() || path.size() >= 32768)
-            return false;
-        const std::wstring source(path);
-        Handle file(CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-        if (!file)
-            return false;
-        BY_HANDLE_FILE_INFORMATION information{};
-        if (!GetFileInformationByHandle(file.get(), &information))
-            return false;
         std::wstring finalPath(32768, L'\0');
-        DWORD finalPathLength = GetFinalPathNameByHandleW(
-            file.get(), finalPath.data(), static_cast<DWORD>(finalPath.size()),
-            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-        if (finalPathLength == 0 || finalPathLength >= finalPath.size())
+        const auto identity = fcitx5_windows_common_executable_file_identity_utf16(
+            wideData(path), path.size(), reinterpret_cast<std::uint16_t*>(finalPath.data()),
+            finalPath.size());
+        if (identity.status == 0 || identity.finalPathLen == 0 ||
+            identity.finalPathLen > finalPath.size()) {
             return false;
-        finalPath.resize(finalPathLength);
+        }
+        finalPath.resize(identity.finalPathLen);
         ExecutableFileIdentity result;
-        result.volumeSerialNumber = information.dwVolumeSerialNumber;
-        result.fileIndexHigh = information.nFileIndexHigh;
-        result.fileIndexLow = information.nFileIndexLow;
-        result.numberOfLinks = information.nNumberOfLinks;
-        result.containsReparsePoint =
-            fcitx5_windows_common_path_is_reparse_point_utf16(wideData(source), source.size()) !=
-            0;
+        result.volumeSerialNumber = identity.volumeSerialNumber;
+        result.fileIndexHigh = identity.fileIndexHigh;
+        result.fileIndexLow = identity.fileIndexLow;
+        result.numberOfLinks = identity.numberOfLinks;
+        result.containsReparsePoint = identity.containsReparsePoint != 0;
         result.finalPath = std::move(finalPath);
         output = std::move(result);
         return true;

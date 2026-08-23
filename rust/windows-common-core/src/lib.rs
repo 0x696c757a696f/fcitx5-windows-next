@@ -323,6 +323,12 @@ unsafe extern "system" {
         file: *mut c_void,
         file_information: *mut ByHandleFileInformation,
     ) -> i32;
+    fn GetFinalPathNameByHandleW(
+        file: *mut c_void,
+        file_path: *mut u16,
+        file_path_size: u32,
+        flags: u32,
+    ) -> u32;
     fn CloseHandle(object: *mut c_void) -> i32;
 }
 
@@ -390,6 +396,18 @@ pub struct Fcitx5WindowsCommonBasicFileIdentity {
     pub volume_serial_number: u32,
     pub file_index_high: u32,
     pub file_index_low: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonExecutableFileIdentity {
+    pub status: u8,
+    pub contains_reparse_point: u8,
+    pub volume_serial_number: u32,
+    pub file_index_high: u32,
+    pub file_index_low: u32,
+    pub number_of_links: u32,
+    pub final_path_len: usize,
 }
 
 #[repr(C)]
@@ -484,6 +502,97 @@ fn basic_file_identity(path: &[u16]) -> Fcitx5WindowsCommonBasicFileIdentity {
         volume_serial_number: information.volume_serial_number,
         file_index_high: information.file_index_high,
         file_index_low: information.file_index_low,
+    }
+}
+
+fn executable_file_identity(
+    path: &[u16],
+    final_path_output: *mut u16,
+    final_path_capacity: usize,
+) -> Fcitx5WindowsCommonExecutableFileIdentity {
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_WRITE: u32 = 0x2;
+    const FILE_SHARE_DELETE: u32 = 0x4;
+    const OPEN_EXISTING: u32 = 3;
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+    const NORMALIZED_DOS_PATH: u32 = 0;
+
+    if path.is_empty()
+        || path.len() >= 32_768
+        || final_path_output.is_null()
+        || final_path_capacity == 0
+    {
+        return Fcitx5WindowsCommonExecutableFileIdentity::default();
+    }
+    let mut nul_terminated = path.to_vec();
+    nul_terminated.push(0);
+    // SAFETY: `nul_terminated` is a NUL-terminated UTF-16 path. We request
+    // metadata-only access and close the returned handle before returning.
+    let handle = unsafe {
+        CreateFileW(
+            nul_terminated.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle.is_null() || handle == invalid_handle_value() {
+        return Fcitx5WindowsCommonExecutableFileIdentity::default();
+    }
+    let mut information = ByHandleFileInformation {
+        file_attributes: 0,
+        creation_time: FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        },
+        last_access_time: FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        },
+        last_write_time: FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        },
+        volume_serial_number: 0,
+        file_size_high: 0,
+        file_size_low: 0,
+        number_of_links: 0,
+        file_index_high: 0,
+        file_index_low: 0,
+    };
+    // SAFETY: `handle` is valid and `information` points to initialized writable
+    // storage matching BY_HANDLE_FILE_INFORMATION layout.
+    let info_ok = unsafe { GetFileInformationByHandle(handle, &mut information) };
+    // SAFETY: `final_path_output` points to writable storage for
+    // `final_path_capacity` UTF-16 code units supplied by the caller.
+    let final_path_len = unsafe {
+        GetFinalPathNameByHandleW(
+            handle,
+            final_path_output,
+            final_path_capacity as u32,
+            NORMALIZED_DOS_PATH,
+        )
+    };
+    // SAFETY: `handle` was returned by CreateFileW above.
+    unsafe {
+        CloseHandle(handle);
+    }
+    if info_ok == 0 || final_path_len == 0 || final_path_len as usize >= final_path_capacity {
+        return Fcitx5WindowsCommonExecutableFileIdentity::default();
+    }
+    let path_buf = PathBuf::from(String::from_utf16_lossy(path));
+    Fcitx5WindowsCommonExecutableFileIdentity {
+        status: 1,
+        contains_reparse_point: path_is_reparse_point_or_untrusted(&path_buf) as u8,
+        volume_serial_number: information.volume_serial_number,
+        file_index_high: information.file_index_high,
+        file_index_low: information.file_index_low,
+        number_of_links: information.number_of_links,
+        final_path_len: final_path_len as usize,
     }
 }
 
@@ -877,6 +986,30 @@ pub unsafe extern "C" fn fcitx5_windows_common_basic_file_identity_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `path` must point to exactly `path_len` readable UTF-16 code units.
+/// `final_path_output` must point to writable storage for `final_path_capacity`
+/// UTF-16 code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_executable_file_identity_utf16(
+    path: *const u16,
+    path_len: usize,
+    final_path_output: *mut u16,
+    final_path_capacity: usize,
+) -> Fcitx5WindowsCommonExecutableFileIdentity {
+    if path.is_null() {
+        return Fcitx5WindowsCommonExecutableFileIdentity::default();
+    }
+    // SAFETY: The caller supplies exactly `path_len` readable UTF-16 code units.
+    // The path is copied and not retained.
+    executable_file_identity(
+        unsafe { std::slice::from_raw_parts(path, path_len) },
+        final_path_output,
+        final_path_capacity,
+    )
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `path` must point to exactly `path_len` readable UTF-16 code units. The
 /// function returns true for invalid/unreadable paths to preserve the
 /// fail-closed executable identity policy.
@@ -1130,6 +1263,13 @@ mod tests {
     #[test]
     fn basic_file_identity_query_rejects_empty_path_like_cpp_contract() {
         let empty = basic_file_identity(&[]);
+        assert_eq!(empty.status, 0);
+    }
+
+    #[test]
+    fn executable_file_identity_query_rejects_empty_path_like_cpp_contract() {
+        let mut final_path = [0_u16; 16];
+        let empty = executable_file_identity(&[], final_path.as_mut_ptr(), final_path.len());
         assert_eq!(empty.status, 0);
     }
 
