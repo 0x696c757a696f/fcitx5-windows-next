@@ -260,6 +260,11 @@ struct Fcitx5RepositoryResult {
   Fcitx5RepositoryBlob blob{};
 };
 
+struct Fcitx5RepositoryFindEntry {
+  Fcitx5PackageByteSlice id{};
+  Fcitx5PackageByteSlice architecture{};
+};
+
 extern "C" Fcitx5PackageStageResult fcitx5_package_stage_archive_utf16(
     const wchar_t* archive_path, std::size_t archive_path_len, const wchar_t* install_root,
     std::size_t install_root_len, const std::uint8_t* transaction_id,
@@ -282,6 +287,10 @@ extern "C" Fcitx5RepositoryResult fcitx5_repository_verify_index_envelope_utf8(
     std::size_t envelope_len, const Fcitx5PackageTrustedKey* trusted_keys,
     std::size_t trusted_key_count, const std::uint8_t* expected_channel,
     std::size_t expected_channel_len);
+extern "C" std::size_t fcitx5_repository_find_package_index_utf8(
+    const Fcitx5RepositoryFindEntry* entries, std::size_t entry_count,
+    const std::uint8_t* package_id, std::size_t package_id_len,
+    const std::uint8_t* architecture, std::size_t architecture_len);
 extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len);
 
 [[nodiscard]] inline Fcitx5PackageByteSlice byte_slice(std::string_view value) noexcept {
@@ -513,11 +522,19 @@ extern "C" void fcitx5_repository_blob_free(std::uint8_t* data, std::size_t len)
 [[nodiscard]] inline const RepositoryEntry* find_repository_package(
     const RepositoryIndex& index, std::string_view package_id,
     std::string_view architecture) noexcept {
-  const auto match = std::ranges::find_if(index.packages, [&](const RepositoryEntry& entry) {
-    return entry.id == package_id &&
-           (entry.architecture == "any" || entry.architecture == architecture);
-  });
-  return match == index.packages.end() ? nullptr : &*match;
+  std::vector<detail::Fcitx5RepositoryFindEntry> entries;
+  entries.reserve(index.packages.size());
+  for (const auto& entry : index.packages) {
+    entries.push_back(detail::Fcitx5RepositoryFindEntry{
+        detail::byte_slice(entry.id),
+        detail::byte_slice(entry.architecture),
+    });
+  }
+  const auto found = detail::fcitx5_repository_find_package_index_utf8(
+      entries.empty() ? nullptr : entries.data(), entries.size(),
+      reinterpret_cast<const std::uint8_t*>(package_id.data()), package_id.size(),
+      reinterpret_cast<const std::uint8_t*>(architecture.data()), architecture.size());
+  return found < index.packages.size() ? &index.packages[found] : nullptr;
 }
 
 }  // namespace fcitx::package

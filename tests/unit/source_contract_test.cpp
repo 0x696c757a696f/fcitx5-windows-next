@@ -440,6 +440,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
         rustPackageCore.find("fcitx5_repository_verify_index_envelope_utf8") ==
             std::string::npos ||
+        rustPackageCore.find("fcitx5_repository_find_package_index_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
         rustPackageCoreBuild.find("mldsa_native.c") == std::string::npos ||
         rustPackageCoreBuild.find("fcitx5_mldsa65_config.h") == std::string::npos ||
@@ -462,6 +464,9 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageCoreHeader.find("find_repository_package") == std::string::npos ||
         packageCoreHeader.find("rust_trusted_key_views") == std::string::npos ||
+        packageCoreHeader.find("entry.architecture == \"any\"") != std::string::npos ||
+        packageCoreHeader.find("entry.architecture == architecture") !=
+            std::string::npos ||
         packageSource.find("write_lockfile_atomic") != std::string::npos ||
         packageSource.find("unable to atomically publish version directory") !=
             std::string::npos ||

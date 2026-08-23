@@ -3154,6 +3154,13 @@ mod repository_ffi {
         pub blob: Fcitx5RepositoryBlob,
     }
 
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RepositoryFindEntry {
+        pub id: Fcitx5ByteSlice,
+        pub architecture: Fcitx5ByteSlice,
+    }
+
     fn empty_result() -> Fcitx5RepositoryResult {
         Fcitx5RepositoryResult {
             status: 0,
@@ -3333,6 +3340,48 @@ mod repository_ffi {
             Ok(index) => blob_result(repository_index_to_json(&index).into_bytes()),
             Err(error) => error_result(error.code(), error.to_string()),
         }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_find_package_index_utf8(
+        entries: *const Fcitx5RepositoryFindEntry,
+        entry_count: usize,
+        package_id: *const u8,
+        package_id_len: usize,
+        architecture: *const u8,
+        architecture_len: usize,
+    ) -> usize {
+        let not_found = usize::MAX;
+        let Some(package_id) = string_from_raw(Fcitx5ByteSlice {
+            data: package_id,
+            len: package_id_len,
+        }) else {
+            return not_found;
+        };
+        let Some(architecture) = string_from_raw(Fcitx5ByteSlice {
+            data: architecture,
+            len: architecture_len,
+        }) else {
+            return not_found;
+        };
+        if entry_count == 0 {
+            return not_found;
+        }
+        if entries.is_null() {
+            return not_found;
+        }
+        let entries = unsafe { slice::from_raw_parts(entries, entry_count) };
+        entries
+            .iter()
+            .enumerate()
+            .find_map(|(index, entry)| {
+                let id = string_from_raw(entry.id)?;
+                let entry_architecture = string_from_raw(entry.architecture)?;
+                (id == package_id
+                    && (entry_architecture == "any" || entry_architecture == architecture))
+                    .then_some(index)
+            })
+            .unwrap_or(not_found)
     }
 
     #[no_mangle]
