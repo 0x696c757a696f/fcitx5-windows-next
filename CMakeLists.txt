@@ -1200,20 +1200,6 @@ if(BUILD_TESTING)
             "$<TARGET_FILE_DIR:fcitx5_ui>/resources" "${FCITX_RUST_CANDIDATE_POC_EXE}")
   set_tests_properties(candidate-ui-live-presentation-contract PROPERTIES TIMEOUT 30)
 
-  add_executable(
-    fcitx5_candidate_ui_element_test
-    tests/unit/candidate_ui_element_test.cpp
-    src/tsf/candidate_ui_element.cpp)
-  target_include_directories(
-    fcitx5_candidate_ui_element_test
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/ipc")
-  target_link_libraries(
-    fcitx5_candidate_ui_element_test PRIVATE fcitx5::ipc_client ole32 oleaut32)
-  fcitx_apply_project_options(fcitx5_candidate_ui_element_test)
-  fcitx_apply_binary_hardening(fcitx5_candidate_ui_element_test)
-  add_test(NAME tsf-uiless-candidate-contract COMMAND fcitx5_candidate_ui_element_test)
-
   add_executable(fcitx5_runtime_identity_test tests/unit/runtime_identity_test.cpp)
   target_link_libraries(fcitx5_runtime_identity_test PRIVATE fcitx5::ipc_client)
   fcitx_apply_project_options(fcitx5_runtime_identity_test)

@@ -1100,6 +1100,22 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("WriteProcessMemory") != std::string::npos) {
         return fail("RUST-R3-TSF-POC: Rust TSF PoC must not link product control/package/candidate or prohibited host APIs");
     }
+    if (std::filesystem::exists(sourceRoot / "src/tsf/candidate_ui_element.h") ||
+        std::filesystem::exists(sourceRoot / "src/tsf/candidate_ui_element.cpp") ||
+        std::filesystem::exists(sourceRoot / "tests/unit/candidate_ui_element_test.cpp") ||
+        cmakeSource.find("fcitx5_candidate_ui_element_test") != std::string::npos ||
+        cmakeSource.find("tsf-uiless-candidate-contract") != std::string::npos ||
+        rustTsfPocSource.find("Fcitx5CandidateListUiElement") == std::string::npos ||
+        rustTsfPocSource.find("impl ITfCandidateListUIElement_Impl") ==
+            std::string::npos ||
+        rustTsfPocSource.find("uiless_candidate_show_false_preserves_metadata") ==
+            std::string::npos ||
+        rustTsfPocSmoke.find("\\\"uiless_candidate_show_false_preserves_metadata\\\"") ==
+            std::string::npos ||
+        rustTsfPocCorpus.find("\"uiless_candidate_show_false_preserves_metadata\"") ==
+            std::string::npos) {
+        return fail("RUST-R3-TSF-POC: UILess candidate element must be Rust-owned and the old C++ source/test must stay deleted");
+    }
     if (std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.h") ||
         std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.cpp") ||
         std::filesystem::exists(sourceRoot / "tests/unit/tsf_activation_guard_test.cpp") ||
