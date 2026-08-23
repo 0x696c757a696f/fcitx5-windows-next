@@ -578,6 +578,17 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CANDIDATE-MODEL-RUST: candidate model semantics must be Rust-owned and the old C++ source must stay deleted");
     }
+    if (std::filesystem::exists(sourceRoot / "src/ui/candidate_interaction.cpp") ||
+        cmakeSource.find("add_library(fcitx5_candidate_interaction INTERFACE)") ==
+            std::string::npos ||
+        cmakeSource.find("src/ui/candidate_interaction.cpp") != std::string::npos ||
+        candidateLayoutSource.find("fcitx5_candidate_hit_test") == std::string::npos ||
+        candidateLayoutSource.find("fcitx5_candidate_selection_intent") ==
+            std::string::npos ||
+        candidateLayoutSource.find("interaction_helpers_match_cpp_contract") ==
+            std::string::npos) {
+        return fail("CANDIDATE-INTERACTION-RUST: candidate hit-test and selection intent must be Rust-owned and the old C++ source must stay deleted");
+    }
     if (configSource.find("confirmDialog(") == std::string::npos ||
         configSource.find("MessageBoxW") == std::string::npos ||
         configSource.find("std::wstring(get(\"app.title\")) + L\" — \"") ==

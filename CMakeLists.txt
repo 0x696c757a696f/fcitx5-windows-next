@@ -592,15 +592,14 @@ fcitx_apply_project_options(fcitx5_candidate_layout)
 
 target_link_libraries(fcitx5_config_app PRIVATE fcitx5::candidate_layout)
 
-add_library(fcitx5_candidate_interaction STATIC src/ui/candidate_interaction.cpp)
+add_library(fcitx5_candidate_interaction INTERFACE)
 add_library(fcitx5::candidate_interaction ALIAS fcitx5_candidate_interaction)
-target_compile_features(fcitx5_candidate_interaction PUBLIC cxx_std_20)
+target_compile_features(fcitx5_candidate_interaction INTERFACE cxx_std_20)
 target_include_directories(
-  fcitx5_candidate_interaction PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
-target_link_libraries(fcitx5_candidate_interaction PUBLIC fcitx5_candidate_core_rust d2d1
-                                                         user32 ws2_32 userenv ntdll)
+  fcitx5_candidate_interaction INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
+target_link_libraries(fcitx5_candidate_interaction INTERFACE fcitx5_candidate_core_rust d2d1
+                                                            user32 ws2_32 userenv ntdll)
 add_dependencies(fcitx5_candidate_interaction fcitx5_candidate_core_rustlib)
-fcitx_apply_project_options(fcitx5_candidate_interaction)
 
 add_executable(
   fcitx5_ui WIN32
