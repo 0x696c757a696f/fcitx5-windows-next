@@ -117,7 +117,7 @@ function Install-LocalFastToolchain {
   $cmakeBin = Join-Path $cmakeDestination "cmake-$cmakeVersion-windows-x86_64/bin"
   $cmakeProbe = Join-Path $cmakeBin 'cmake.exe'
   if (-not (Test-Path -LiteralPath $cmakeProbe -PathType Leaf)) {
-    Save-UriIfMissing -Uri $cmakeUrl -Destination $cmakeArchive -MinimumBytes 50000000
+    Save-UriIfMissing -Uri $cmakeUrl -Destination $cmakeArchive -MinimumBytes 40000000
     Expand-ZipIfMissing -Archive $cmakeArchive -Destination $cmakeDestination -Probe $cmakeProbe
   }
 
