@@ -5,8 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <fstream>
-#include <system_error>
 
 extern "C" {
 struct Fcitx5ByteSlice {
@@ -147,6 +145,9 @@ std::uint8_t fcitx5_package_is_safe_relative_path_utf8(
     const std::uint8_t* value, std::size_t value_len);
 Fcitx5PackageSignatureEnvelopeResult fcitx5_package_parse_signature_envelope_utf8(
     const std::uint8_t* envelope_bytes, std::size_t envelope_len,
+    const std::uint8_t* expected_object, std::size_t expected_object_len);
+Fcitx5PackageSignatureEnvelopeResult fcitx5_package_read_signature_envelope_utf16(
+    const wchar_t* envelope_path, std::size_t envelope_path_len,
     const std::uint8_t* expected_object, std::size_t expected_object_len);
 void fcitx5_package_signature_envelope_free(
     const Fcitx5PackageSignatureEnvelopeResult* envelope);
@@ -404,26 +405,6 @@ bool contains_reparse_component(const std::filesystem::path& path) {
   return false;
 }
 
-std::string read_file_bounded(const std::filesystem::path& path, std::size_t maximum) {
-  std::error_code error;
-  const auto size = std::filesystem::file_size(path, error);
-  if (error || size > maximum) {
-    fail("invalid_file", "file is missing or exceeds its resource budget");
-  }
-  std::ifstream input(path, std::ios::binary);
-  if (!input) {
-    fail("io_error", "unable to open file");
-  }
-  std::string bytes(static_cast<std::size_t>(size), '\0');
-  if (!bytes.empty()) {
-    input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  }
-  if (!input) {
-    fail("io_error", "unable to read complete file");
-  }
-  return bytes;
-}
-
 }  // namespace
 
 // Validators declared in package_core.h and used by the updater and deployer
@@ -612,8 +593,39 @@ SignatureEnvelope parse_signature_envelope(std::string_view bytes,
 
 SignatureEnvelope read_signature_envelope(const std::filesystem::path& path,
                                           std::string_view expected_object) {
-  return parse_signature_envelope(read_file_bounded(path, kMaximumManifestBytes),
-                                  expected_object);
+  const std::wstring native = native_path_string(path);
+  const SignatureEnvelopeResultGuard guard(fcitx5_package_read_signature_envelope_utf16(
+      native.data(), native.size(), reinterpret_cast<const std::uint8_t*>(expected_object.data()),
+      expected_object.size()));
+  const auto& envelope_result = guard.get();
+  if (envelope_result.status != 0) {
+    std::string code = ffi_string(envelope_result.error_code);
+    std::string message = ffi_string(envelope_result.error_message);
+    if (code.empty()) {
+      code = "invalid_signature";
+    }
+    if (message.empty()) {
+      message = "signature envelope is invalid";
+    }
+    fail(std::move(code), std::move(message));
+  }
+  SignatureEnvelope result;
+  result.format_version = envelope_result.format_version;
+  result.signed_object = ffi_manifest_string(envelope_result.signed_object);
+  result.canonicalization = ffi_manifest_string(envelope_result.canonicalization);
+  if (envelope_result.signature_count != 0 && envelope_result.signatures == nullptr) {
+    fail("invalid_signature", "parsed signature envelope entry data is invalid");
+  }
+  result.signatures.reserve(envelope_result.signature_count);
+  for (std::size_t index = 0; index < envelope_result.signature_count; ++index) {
+    const auto& signature = envelope_result.signatures[index];
+    result.signatures.push_back(SignatureEnvelopeEntry{
+        ffi_manifest_string(signature.key_id),
+        ffi_manifest_string(signature.algorithm),
+        ffi_bytes(signature.signature),
+    });
+  }
+  return result;
 }
 
 void verify_manifest_signature(std::string_view manifest_bytes,

@@ -388,6 +388,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("parse_signature_envelope") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_parse_signature_envelope_utf8") ==
             std::string::npos ||
+        rustPackageCore.find("fcitx5_package_read_signature_envelope_utf16") ==
+            std::string::npos ||
         rustPackageCore.find("verify_signature_envelope") == std::string::npos ||
         rustPackageCore.find("verify_mldsa65_signature") == std::string::npos ||
         rustPackageCore.find("resolve_exact_dependencies") == std::string::npos ||
@@ -518,6 +520,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         packageSource.find("return blake3(std::as_bytes(std::span(bytes)))") !=
             std::string::npos ||
+        packageSource.find("read_file_bounded") != std::string::npos ||
+        packageSource.find("std::ifstream input") != std::string::npos ||
+        packageSource.find("file is missing or exceeds its resource budget") !=
+            std::string::npos ||
+        packageSource.find("unable to read complete file") != std::string::npos ||
         packageSource.find("manifest payload schema does not match format version") !=
             std::string::npos ||
         packageSource.find("runtime architecture is invalid") != std::string::npos ||

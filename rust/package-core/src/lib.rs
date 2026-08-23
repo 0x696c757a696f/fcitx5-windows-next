@@ -7962,6 +7962,48 @@ mod repair_ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_read_signature_envelope_utf16(
+        envelope_path: *const u16,
+        envelope_path_len: usize,
+        expected_object: *const u8,
+        expected_object_len: usize,
+    ) -> Fcitx5PackageSignatureEnvelopeResult {
+        let Some(envelope_path) = path_from_utf16(envelope_path, envelope_path_len) else {
+            return signature_envelope_error_result(
+                "invalid_file",
+                "signature envelope path is invalid",
+            );
+        };
+        let Some(expected_object) = signed_object_from_raw(Fcitx5ByteSlice {
+            data: expected_object,
+            len: expected_object_len,
+        }) else {
+            return signature_envelope_error_result(
+                "invalid_signature",
+                "signature envelope identity is invalid",
+            );
+        };
+        let envelope_bytes =
+            match super::read_repair_file_bounded(&envelope_path, super::MAX_MANIFEST_BYTES as u64)
+            {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return signature_envelope_error_result(error.code(), &error.to_string())
+                }
+            };
+        let Ok(envelope_text) = std::str::from_utf8(&envelope_bytes) else {
+            return signature_envelope_error_result(
+                "invalid_signature",
+                "signature envelope is not strict JSON",
+            );
+        };
+        match parse_signature_envelope(envelope_text, expected_object) {
+            Ok(envelope) => signature_envelope_ok_result(envelope),
+            Err(error) => signature_envelope_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn fcitx5_package_validate_manifest_compatibility_utf8(
         package_type: u32,
         package_architecture: Fcitx5ByteSlice,
