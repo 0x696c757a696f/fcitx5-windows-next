@@ -1,0 +1,13 @@
+[package]
+name = "fcitx5-tsf-support-core"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+windows = { version = "0.62.2", features = ["Win32_Storage_FileSystem"] }

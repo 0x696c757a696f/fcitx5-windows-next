@@ -146,10 +146,13 @@ set(FCITX_RELEASE_CHANNEL "stable" CACHE STRING "Release identity: stable, beta,
 set_property(CACHE FCITX_RELEASE_CHANNEL PROPERTY STRINGS stable beta nightly)
 if(FCITX_RELEASE_CHANNEL STREQUAL "stable")
   set(FCITX_RELEASE_CHANNEL_INDEX 0)
+  set(FCITX_RELEASE_DATA_DIRECTORY "Fcitx5")
 elseif(FCITX_RELEASE_CHANNEL STREQUAL "beta")
   set(FCITX_RELEASE_CHANNEL_INDEX 1)
+  set(FCITX_RELEASE_DATA_DIRECTORY "Fcitx5-Beta")
 elseif(FCITX_RELEASE_CHANNEL STREQUAL "nightly")
   set(FCITX_RELEASE_CHANNEL_INDEX 2)
+  set(FCITX_RELEASE_DATA_DIRECTORY "Fcitx5-Nightly")
 else()
   message(FATAL_ERROR "FCITX_RELEASE_CHANNEL must be stable, beta, or nightly")
 endif()
@@ -489,13 +492,33 @@ if(FCITX_DEVELOPMENT_PEER_EXCEPTION)
 endif()
 fcitx_apply_project_options(fcitx5_ipc_client)
 
-add_library(fcitx5_tsf_activation_guard STATIC src/tsf/activation_guard.cpp)
+set(FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_tsf_support_core.lib")
+add_custom_command(
+  OUTPUT "${FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-support-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-support-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-support-core/src/lib.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-tsf-support-core staticlib")
+add_custom_target(fcitx5_tsf_support_core_rustlib
+                  DEPENDS "${FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB}")
+add_library(fcitx5_tsf_activation_guard STATIC IMPORTED GLOBAL)
 add_library(fcitx5::tsf_activation_guard ALIAS fcitx5_tsf_activation_guard)
-target_compile_features(fcitx5_tsf_activation_guard PUBLIC cxx_std_20)
+set_target_properties(fcitx5_tsf_activation_guard PROPERTIES
+                      IMPORTED_LOCATION "${FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB}")
+add_dependencies(fcitx5_tsf_activation_guard fcitx5_tsf_support_core_rustlib)
 target_include_directories(
-  fcitx5_tsf_activation_guard PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
-target_link_libraries(fcitx5_tsf_activation_guard PUBLIC fcitx5::release_identity shell32)
-fcitx_apply_project_options(fcitx5_tsf_activation_guard)
+  fcitx5_tsf_activation_guard INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/tsf")
+target_link_libraries(fcitx5_tsf_activation_guard INTERFACE ws2_32 userenv ntdll bcrypt advapi32)
 
 add_executable(fcitx5_mock_engine src/engine/mock_engine_main.cpp)
 set_target_properties(fcitx5_mock_engine PROPERTIES OUTPUT_NAME "fcitx5-mock-engine")

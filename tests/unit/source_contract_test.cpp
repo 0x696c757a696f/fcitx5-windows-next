@@ -635,6 +635,10 @@ int main(int argc, char** argv) {
     }
     const auto rustTsfPocManifest = read_text(sourceRoot / "rust/tsf-poc/Cargo.toml");
     const auto rustTsfPocSource = read_text(sourceRoot / "rust/tsf-poc/src/lib.rs");
+    const auto rustTsfSupportManifest =
+        read_text(sourceRoot / "rust/tsf-support-core/Cargo.toml");
+    const auto rustTsfSupportSource =
+        read_text(sourceRoot / "rust/tsf-support-core/src/lib.rs");
     const auto rustTsfPocSmoke =
         read_text(sourceRoot / "tests/unit/rust_tsf_poc_export_smoke.cpp");
     const auto rustTsfPocArtifactAudit =
@@ -873,6 +877,27 @@ int main(int argc, char** argv) {
         rustTsfPocSource.find("CreateRemoteThread") != std::string::npos ||
         rustTsfPocSource.find("WriteProcessMemory") != std::string::npos) {
         return fail("RUST-R3-TSF-POC: Rust TSF PoC must not link product control/package/candidate or prohibited host APIs");
+    }
+    if (std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.cpp") ||
+        cargoManifest.find("\"rust/tsf-support-core\"") == std::string::npos ||
+        cargoLock.find("name = \"fcitx5-tsf-support-core\"") == std::string::npos ||
+        rustTsfSupportManifest.find("crate-type = [\"staticlib\", \"rlib\"]") ==
+            std::string::npos ||
+        rustTsfSupportManifest.find("Win32_Storage_FileSystem") == std::string::npos ||
+        rustTsfSupportSource.find("fcitx5_tsf_activation_guard_status") ==
+            std::string::npos ||
+        rustTsfSupportSource.find("fcitx5_tsf_activation_attempt_begin") ==
+            std::string::npos ||
+        rustTsfSupportSource.find("MOVEFILE_REPLACE_EXISTING") == std::string::npos ||
+        rustTsfSupportSource.find("SendInput") != std::string::npos ||
+        rustTsfSupportSource.find("SetWindowsHookEx") != std::string::npos ||
+        rustTsfSupportSource.find("CreateRemoteThread") != std::string::npos ||
+        rustTsfSupportSource.find("WriteProcessMemory") != std::string::npos ||
+        cmakeSource.find("FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB") ==
+            std::string::npos ||
+        cmakeSource.find("fcitx5-tsf-support-core") == std::string::npos ||
+        cmakeSource.find("FCITX_RELEASE_DATA_DIRECTORY=") == std::string::npos) {
+        return fail("TSF-SUPPORT-RUST: activation guard policy must be Rust-owned and the old C++ source must stay deleted");
     }
     std::cout << "source-contract ok\n";
     return 0;
