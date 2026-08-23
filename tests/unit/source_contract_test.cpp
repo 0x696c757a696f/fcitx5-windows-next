@@ -1122,6 +1122,17 @@ int main(int argc, char** argv) {
         tsfKeyCommitTest.find("GUID_PROP_INPUTSCOPE") == std::string::npos) {
         return fail("RUST-R3-TSF-POC: input-scope GUID test support must not return as a src/tsf C++ file");
     }
+    if (std::filesystem::exists(sourceRoot / "src/tsf/input_profiles.cpp") ||
+        std::filesystem::exists(sourceRoot / "src/tsf/input_profiles.h") ||
+        std::filesystem::exists(sourceRoot / "src/tsf/guids.h") ||
+        cmakeSource.find("src/tsf/input_profiles.cpp") != std::string::npos ||
+        cmakeSource.find("${CMAKE_CURRENT_SOURCE_DIR}/src/tsf") != std::string::npos ||
+        tsfKeyCommitTest.find("#include \"guids.h\"") != std::string::npos ||
+        rustTsfPocSource.find("rust_shipping_authoritative") == std::string::npos ||
+        rustTsfPocSource.find("windows_profile_count") == std::string::npos ||
+        rustTsfPocSource.find("dynamic_profile_registration") == std::string::npos) {
+        return fail("RUST-R3-TSF-POC: TSF profile identity must be Rust/release-identity-owned and old src/tsf C++ helpers must stay deleted");
+    }
     if (std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.h") ||
         std::filesystem::exists(sourceRoot / "src/tsf/activation_guard.cpp") ||
         std::filesystem::exists(sourceRoot / "tests/unit/tsf_activation_guard_test.cpp") ||

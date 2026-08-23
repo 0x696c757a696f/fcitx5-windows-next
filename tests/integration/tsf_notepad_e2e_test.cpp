@@ -1,5 +1,4 @@
-#include "guids.h"
-#include "input_profiles.h"
+#include "tsf_test_identity.h"
 
 #include <Windows.h>
 #include <msctf.h>

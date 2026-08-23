@@ -1,4 +1,4 @@
-#include "guids.h"
+#include "tsf_test_identity.h"
 
 #include <initguid.h>
 #include <Windows.h>
