@@ -33,6 +33,15 @@ struct Fcitx5WindowsCommonProcessIdentity {
     std::size_t userSidLen;
     std::size_t executablePathLen;
 };
+struct Fcitx5WindowsCommonCurrentIdentity {
+    std::uint8_t status;
+    std::uint8_t serviceAccount;
+    std::uint8_t secureDesktop;
+    std::uint32_t processId;
+    std::uint32_t sessionId;
+    std::size_t userSidLen;
+    std::size_t executablePathLen;
+};
 extern "C" Fcitx5WindowsCommonProcessIdentity
 fcitx5_windows_common_process_identity_utf16(
     std::uint32_t process_id,
@@ -40,7 +49,12 @@ fcitx5_windows_common_process_identity_utf16(
     std::size_t user_sid_capacity,
     std::uint16_t* executable_path_output,
     std::size_t executable_path_capacity);
-extern "C" std::uint8_t fcitx5_windows_common_secure_input_desktop();
+extern "C" Fcitx5WindowsCommonCurrentIdentity
+fcitx5_windows_common_current_identity_utf16(
+    std::uint16_t* user_sid_output,
+    std::size_t user_sid_capacity,
+    std::uint16_t* executable_path_output,
+    std::size_t executable_path_capacity);
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
     std::size_t module_path_len,
@@ -226,13 +240,29 @@ bool queryProcessIdentity(DWORD processId, ProcessIdentity& output) noexcept {
 
 bool queryCurrentIdentity(RuntimeIdentity& output) noexcept {
     output = {};
-    ProcessIdentity process;
-    if (!queryProcessIdentity(GetCurrentProcessId(), process))
-        return false;
     try {
+        const auto query =
+            fcitx5_windows_common_current_identity_utf16(nullptr, 0, nullptr, 0);
+        if (query.status == 0 || query.userSidLen == 0 || query.executablePathLen == 0) {
+            return false;
+        }
         RuntimeIdentity result;
-        static_cast<ProcessIdentity&>(result) = std::move(process);
-        result.secureDesktop = fcitx5_windows_common_secure_input_desktop() != 0;
+        result.userSid.assign(query.userSidLen, L'\0');
+        result.executablePath.assign(query.executablePathLen, L'\0');
+        const auto filled = fcitx5_windows_common_current_identity_utf16(
+            reinterpret_cast<std::uint16_t*>(result.userSid.data()), result.userSid.size(),
+            reinterpret_cast<std::uint16_t*>(result.executablePath.data()),
+            result.executablePath.size());
+        if (filled.status == 0 || filled.userSidLen != result.userSid.size() ||
+            filled.executablePathLen != result.executablePath.size()) {
+            return false;
+        }
+        result.processId = filled.processId;
+        result.sessionId = filled.sessionId;
+        result.serviceAccount = filled.serviceAccount != 0;
+        result.secureDesktop = filled.secureDesktop != 0;
+        result.executableFileVerified =
+            queryExecutableFileIdentity(result.executablePath, result.executableFile);
         output = std::move(result);
         return true;
     } catch (...) {

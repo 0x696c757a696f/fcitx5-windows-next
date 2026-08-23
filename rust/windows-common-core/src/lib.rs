@@ -348,6 +348,7 @@ unsafe extern "system" {
         flags: u32,
     ) -> u32;
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
+    fn GetCurrentProcessId() -> u32;
     fn LocalFree(memory: *mut c_void) -> *mut c_void;
     fn CloseHandle(object: *mut c_void) -> i32;
 }
@@ -598,6 +599,35 @@ fn process_identity(
     }
 }
 
+fn current_identity(
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+) -> Fcitx5WindowsCommonCurrentIdentity {
+    // SAFETY: Retrieves the current process id and has no preconditions.
+    let process_id = unsafe { GetCurrentProcessId() };
+    let process = process_identity(
+        process_id,
+        user_sid_output,
+        user_sid_capacity,
+        executable_path_output,
+        executable_path_capacity,
+    );
+    if process.status == 0 {
+        return Fcitx5WindowsCommonCurrentIdentity::default();
+    }
+    Fcitx5WindowsCommonCurrentIdentity {
+        status: 1,
+        service_account: process.service_account,
+        secure_desktop: secure_input_desktop() as u8,
+        process_id,
+        session_id: process.session_id,
+        user_sid_len: process.user_sid_len,
+        executable_path_len: process.executable_path_len,
+    }
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -709,6 +739,18 @@ pub struct Fcitx5WindowsCommonProcessSession {
 pub struct Fcitx5WindowsCommonProcessIdentity {
     pub status: u8,
     pub service_account: u8,
+    pub session_id: u32,
+    pub user_sid_len: usize,
+    pub executable_path_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonCurrentIdentity {
+    pub status: u8,
+    pub service_account: u8,
+    pub secure_desktop: u8,
+    pub process_id: u32,
     pub session_id: u32,
     pub user_sid_len: usize,
     pub executable_path_len: usize,
@@ -1126,6 +1168,25 @@ pub unsafe extern "C" fn fcitx5_windows_common_process_identity_utf16(
 }
 
 #[unsafe(no_mangle)]
+/// # Safety
+///
+/// Output pointers may be null for size queries or point to writable UTF-16
+/// storage for their paired capacities. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_current_identity_utf16(
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+) -> Fcitx5WindowsCommonCurrentIdentity {
+    current_identity(
+        user_sid_output,
+        user_sid_capacity,
+        executable_path_output,
+        executable_path_capacity,
+    )
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_secure_input_desktop() -> u8 {
     secure_input_desktop() as u8
 }
@@ -1445,11 +1506,6 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetCurrentProcessId() -> u32;
-    }
-
     #[test]
     fn version_and_release_channel_are_stable_static_strings() {
         assert!(!version().is_empty());
@@ -1579,6 +1635,26 @@ mod tests {
             process_identity(0, std::ptr::null_mut(), 0, std::ptr::null_mut(), 0).status,
             0
         );
+    }
+
+    #[test]
+    fn current_identity_query_matches_cpp_contract() {
+        let query = current_identity(std::ptr::null_mut(), 0, std::ptr::null_mut(), 0);
+        assert_eq!(query.status, 1);
+        assert_eq!(query.process_id, unsafe { GetCurrentProcessId() });
+        assert!(query.user_sid_len > 0);
+        assert!(query.executable_path_len > 0);
+        let mut sid = vec![0_u16; query.user_sid_len];
+        let mut path = vec![0_u16; query.executable_path_len];
+        let filled = current_identity(sid.as_mut_ptr(), sid.len(), path.as_mut_ptr(), path.len());
+        assert_eq!(filled.status, 1);
+        assert_eq!(filled.user_sid_len, sid.len());
+        assert_eq!(filled.executable_path_len, path.len());
+        assert!(String::from_utf16(&sid).expect("sid").starts_with("S-1-"));
+        assert!(String::from_utf16(&path)
+            .expect("path")
+            .to_ascii_lowercase()
+            .ends_with(".exe"));
     }
 
     #[test]
