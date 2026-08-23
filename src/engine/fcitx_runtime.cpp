@@ -47,6 +47,19 @@ struct EngineConfig {
     bool scrollMode{};
 };
 
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
 std::filesystem::path localDataDirectory() {
     std::wstring modulePath(32'768, L'\0');
     const DWORD size =
@@ -164,11 +177,11 @@ bool setupEnvironment() {
     using AddDirectory = DLL_DIRECTORY_COOKIE(WINAPI*)(PCWSTR);
     const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
     const auto setDefaultDirectories = kernel
-                                           ? reinterpret_cast<SetDefaultDirectories>(
-                                                 GetProcAddress(kernel, "SetDefaultDllDirectories"))
+                                           ? resolveProcAddress<SetDefaultDirectories>(
+                                                 kernel, "SetDefaultDllDirectories")
                                            : nullptr;
     const auto addDirectory =
-        kernel ? reinterpret_cast<AddDirectory>(GetProcAddress(kernel, "AddDllDirectory"))
+        kernel ? resolveProcAddress<AddDirectory>(kernel, "AddDllDirectory")
                : nullptr;
     if (!setDefaultDirectories || !addDirectory ||
         !setDefaultDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 |

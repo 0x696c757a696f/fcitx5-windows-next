@@ -41,6 +41,19 @@ struct LogicalKeyText {
     bool deadKey{};
 };
 
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
 std::wstring modulePath() {
     std::wstring path(32'768, L'\0');
     const DWORD size = GetModuleFileNameW(moduleHandle(), path.data(),
@@ -175,8 +188,8 @@ UINT windowDpi(HWND window) noexcept {
     using GetDpiForWindowFunction = UINT(WINAPI*)(HWND);
     const HMODULE user32 = GetModuleHandleW(L"user32.dll");
     const auto getDpiForWindow = user32
-                                     ? reinterpret_cast<GetDpiForWindowFunction>(
-                                           GetProcAddress(user32, "GetDpiForWindow"))
+                                     ? resolveProcAddress<GetDpiForWindowFunction>(
+                                           user32, "GetDpiForWindow")
                                      : nullptr;
     if (getDpiForWindow && window) {
         const UINT dpi = getDpiForWindow(window);
