@@ -619,14 +619,25 @@ add_custom_target(
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-register CLI")
 
-add_executable(
-  fcitx5_bootstrap WIN32
-  src/bootstrap/bootstrap_main.cpp
-  resources/windows/app.rc)
-set_target_properties(fcitx5_bootstrap PROPERTIES OUTPUT_NAME "fcitx5-bootstrap")
-target_link_libraries(fcitx5_bootstrap PRIVATE fcitx5::windows_common shell32 user32)
-fcitx_apply_project_options(fcitx5_bootstrap)
-fcitx_apply_binary_hardening(fcitx5_bootstrap)
+add_custom_target(
+  fcitx5_bootstrap
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-bootstrap.exe"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+    "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-bootstrap-cli.ps1"
+    -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
+    -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/bootstrap_main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-bootstrap-cli.ps1"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-bootstrap CLI")
 
 add_custom_target(
   fcitx5_package ALL

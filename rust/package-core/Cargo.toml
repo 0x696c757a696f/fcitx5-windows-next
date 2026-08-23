@@ -29,6 +29,10 @@ path = "src/updater_main.rs"
 name = "fcitx5-deployer"
 path = "src/deployer_main.rs"
 
+[[bin]]
+name = "fcitx5-bootstrap"
+path = "src/bootstrap_main.rs"
+
 [dependencies]
 blake3 = { version = "=1.5.5", default-features = false, features = ["pure"] }
 

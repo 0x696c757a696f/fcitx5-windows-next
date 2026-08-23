@@ -135,14 +135,18 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("REG-UPDATE-TSF: dev TSF unregister must clean stale package-stage COM registrations");
     }
-    const auto bootstrapSource = read_text(sourceRoot / "src/bootstrap/bootstrap_main.cpp");
-    if (bootstrapSource.find("TerminateProcess(process.hProcess, ERROR_TIMEOUT)") ==
+    const auto rustBootstrapSource =
+        read_text(sourceRoot / "rust/package-core/src/bootstrap_main.rs");
+    if (std::filesystem::exists(sourceRoot / "src/bootstrap/bootstrap_main.cpp") ||
+        rustBootstrapSource.find("#![windows_subsystem = \"windows\"]") ==
             std::string::npos ||
-        bootstrapSource.find("TerminateProcess(info.hProcess, ERROR_TIMEOUT)") ==
+        rustBootstrapSource.find("TerminateProcess(process.process, ERROR_TIMEOUT)") ==
             std::string::npos ||
-        bootstrapSource.find("WaitForSingleObject(process.hProcess, 5000)") ==
+        rustBootstrapSource.find("TerminateProcess(info.process, ERROR_TIMEOUT)") ==
             std::string::npos ||
-        bootstrapSource.find("WaitForSingleObject(info.hProcess, 5000)") ==
+        rustBootstrapSource.find("WaitForSingleObject(process.process, 5000)") ==
+            std::string::npos ||
+        rustBootstrapSource.find("WaitForSingleObject(info.process, 5000)") ==
             std::string::npos) {
         return fail("STAB-REGISTER-BOOTSTRAP-012: bootstrap timeouts must confirm child termination");
     }
