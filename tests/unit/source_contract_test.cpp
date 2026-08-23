@@ -254,14 +254,28 @@ int main(int argc, char** argv) {
             std::string::npos ||
         deploymentCoreSource.find("fcitx5_update_cleanup_old_tsf_dlls_utf16") ==
             std::string::npos ||
+        deploymentCoreSource.find("fcitx5_update_runtime_generation_directory_utf16") ==
+            std::string::npos ||
+        deploymentCoreSource.find("fcitx5_update_install_runtime_generation_utf16") ==
+            std::string::npos ||
         deploymentCoreSource.find("CopyFileW(") != std::string::npos ||
         deploymentCoreSource.find("DeleteFileW(") != std::string::npos ||
+        deploymentCoreSource.find("copy_directory_tree") != std::string::npos ||
+        deploymentCoreSource.find("stage_runtime_payload") != std::string::npos ||
+        deploymentCoreSource.find("publish_runtime_directory") != std::string::npos ||
         rustPackageCore.find("cleanup_previous_known_good") == std::string::npos ||
         rustPackageCore.find("install_tsf_dll_generation") == std::string::npos ||
         rustPackageCore.find("cleanup_old_tsf_dlls") == std::string::npos ||
+        rustPackageCore.find("install_runtime_generation") == std::string::npos ||
+        rustPackageCore.find("publish_runtime_directory") == std::string::npos ||
+        rustPackageCore.find("stage_runtime_payload") == std::string::npos ||
         rustPackageCore.find("fcitx5_update_install_tsf_dll_generation_utf16") ==
             std::string::npos ||
         rustPackageCore.find("fcitx5_update_cleanup_old_tsf_dlls_utf16") ==
+            std::string::npos ||
+        rustPackageCore.find("fcitx5_update_install_runtime_generation_utf16") ==
+            std::string::npos ||
+        rustPackageCore.find("fcitx5_update_runtime_generation_directory_utf16") ==
             std::string::npos ||
         rustPackageCore.find("MOVEFILE_DELAY_UNTIL_REBOOT") == std::string::npos ||
         rustPackageCore.find("invalid core package id for --cleanup-previous") ==

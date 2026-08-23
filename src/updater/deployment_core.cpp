@@ -1,21 +1,12 @@
 #include "deployment_core.h"
 
-#include <windows.h>
-
 #include <cstdint>
 #include <algorithm>
 #include <array>
-#include <fstream>
-#include <iterator>
-#include <set>
 #include <stdexcept>
-
-#include <nlohmann/json.hpp>
 
 namespace fcitx::update {
 namespace {
-
-using Json = nlohmann::json;
 
 struct Fcitx5DeploymentState {
   std::uint32_t format_version{};
@@ -48,6 +39,21 @@ struct Fcitx5TsfDllUpdateResult {
   std::uint8_t old_cleanup_pending{};
   std::uint8_t old_cleanup_scheduled_for_reboot{};
   std::array<std::uint16_t, 32768> renamed_old_path{};
+};
+
+struct Fcitx5RuntimeGenerationInstallResult {
+  std::int32_t status{};
+  std::uint8_t runtime_installed{};
+  std::uint8_t tsf_x64_installed{};
+  std::uint8_t tsf_x86_installed{};
+  std::uint8_t current_published{};
+  std::uint8_t tsf_x64_old_dll_renamed{};
+  std::uint8_t tsf_x64_old_cleanup_pending{};
+  std::uint8_t tsf_x64_old_cleanup_scheduled_for_reboot{};
+  std::uint8_t tsf_x86_old_dll_renamed{};
+  std::uint8_t tsf_x86_old_cleanup_pending{};
+  std::uint8_t tsf_x86_old_cleanup_scheduled_for_reboot{};
+  std::array<std::uint16_t, 32768> generation_directory{};
 };
 
 extern "C" {
@@ -93,6 +99,22 @@ int fcitx5_update_install_tsf_dll_generation_utf16(
 int fcitx5_update_cleanup_old_tsf_dlls_utf16(const std::uint16_t* tsf_arch_directory,
                                              std::size_t tsf_arch_directory_len,
                                              std::size_t* out_pending_count);
+int fcitx5_update_runtime_generation_directory_utf16(const std::uint16_t* root,
+                                                     std::size_t root_len,
+                                                     const std::uint16_t* generation,
+                                                     std::size_t generation_len,
+                                                     std::uint16_t* out_path,
+                                                     std::size_t out_path_len);
+int fcitx5_update_install_runtime_generation_utf16(
+    const std::uint16_t* root,
+    std::size_t root_len,
+    const std::uint16_t* verified_payload_root,
+    std::size_t verified_payload_root_len,
+    const std::uint16_t* generation,
+    std::size_t generation_len,
+    const std::uint16_t* build_id,
+    std::size_t build_id_len,
+    Fcitx5RuntimeGenerationInstallResult* out_result);
 int fcitx5_update_read_runtime_generation_state_utf16(const std::uint16_t* root,
                                                       std::size_t root_len,
                                                       Fcitx5GenerationState* out_state);
@@ -111,15 +133,6 @@ bool token(std::string_view value) {
                   (character >= 'A' && character <= 'Z') ||
                   (character >= '0' && character <= '9') || character == '.' ||
                   character == '-' || character == '_' || character == '+';
-         });
-}
-
-bool generation_token(std::string_view value) {
-  return !value.empty() && value.size() <= 32U &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= 'a' && character <= 'z') ||
-                  (character >= '0' && character <= '9') || character == '-' ||
-                  character == '_';
          });
 }
 
@@ -142,175 +155,6 @@ std::wstring widen_ascii(std::string_view value) {
 std::wstring bounded_wide(const std::uint16_t* value, std::size_t maximum) {
   const auto end = std::find(value, value + maximum, 0);
   return {reinterpret_cast<const wchar_t*>(value), reinterpret_cast<const wchar_t*>(end)};
-}
-
-bool contains_reparse_component(const std::filesystem::path& path) {
-  std::filesystem::path current;
-  for (const auto& component : path) {
-    current /= component;
-    const DWORD attributes = GetFileAttributesW(current.c_str());
-    if (attributes != INVALID_FILE_ATTRIBUTES &&
-        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
-      return true;
-    }
-  }
-  return false;
-}
-
-[[maybe_unused]] std::filesystem::path state_path(const std::filesystem::path& root) {
-  return root / "deployment.json";
-}
-
-[[maybe_unused]] std::filesystem::path current_generation_path(const std::filesystem::path& root) {
-  return root / "current.json";
-}
-
-void copy_directory_tree(const std::filesystem::path& source,
-                         const std::filesystem::path& destination) {
-  if (!std::filesystem::is_directory(source)) return;
-  std::filesystem::create_directories(destination);
-  for (const auto& entry : std::filesystem::recursive_directory_iterator(source)) {
-    const auto relative = std::filesystem::relative(entry.path(), source);
-    const auto target = destination / relative;
-    std::error_code error;
-    if (entry.is_directory(error)) {
-      if (error) throw std::runtime_error("runtime source directory inspection failed");
-      std::filesystem::create_directories(target);
-    } else if (entry.is_regular_file(error)) {
-      if (error) throw std::runtime_error("runtime source file inspection failed");
-      std::filesystem::create_directories(target.parent_path());
-      std::filesystem::copy_file(entry.path(), target, std::filesystem::copy_options::none);
-    } else if (entry.is_symlink(error) || entry.is_other(error)) {
-      throw std::runtime_error("runtime source contains unsupported file type");
-    }
-  }
-}
-
-void copy_optional_file(const std::filesystem::path& source,
-                        const std::filesystem::path& destination) {
-  if (!std::filesystem::is_regular_file(source)) return;
-  std::filesystem::create_directories(destination.parent_path());
-  std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none);
-}
-
-void stage_runtime_payload(const std::filesystem::path& verified_payload_root,
-                           const std::filesystem::path& destination) {
-  if (!std::filesystem::is_directory(verified_payload_root)) {
-    throw std::runtime_error("runtime generation payload is incomplete");
-  }
-  copy_directory_tree(verified_payload_root / L"bin", destination / L"bin");
-  copy_directory_tree(verified_payload_root / L"lib", destination / L"lib");
-  copy_directory_tree(verified_payload_root / L"share", destination / L"share");
-  copy_directory_tree(verified_payload_root / L"themes", destination / L"themes");
-  copy_directory_tree(verified_payload_root / L"data", destination / L"data");
-  copy_optional_file(verified_payload_root / L"portable.flag", destination / L"portable.flag");
-}
-
-bool runtime_payload_complete(const std::filesystem::path& root) {
-  return std::filesystem::is_regular_file(root / L"bin" / L"fcitx5-engine.exe") &&
-         std::filesystem::is_regular_file(root / L"bin" / L"fcitx5-launcher.exe") &&
-         std::filesystem::is_regular_file(root / L"bin" / L"fcitx5-ui.exe") &&
-         std::filesystem::is_directory(root / L"lib") &&
-         std::filesystem::is_directory(root / L"share");
-}
-
-void validate_runtime_generation_payload(const std::filesystem::path& verified_payload_root) {
-  if (!std::filesystem::is_directory(verified_payload_root) ||
-      !runtime_payload_complete(verified_payload_root) ||
-      !std::filesystem::is_regular_file(verified_payload_root / L"tsf" / L"x64" /
-                                        L"fcitx5-tsf.dll") ||
-      !std::filesystem::is_regular_file(verified_payload_root / L"tsf" / L"x86" /
-                                        L"fcitx5-tsf.dll")) {
-    throw std::runtime_error("runtime generation payload is incomplete");
-  }
-}
-
-void publish_runtime_directory(const std::filesystem::path& verified_payload_root,
-                               const std::filesystem::path& destination) {
-  const auto temporary = std::filesystem::path(destination.wstring() + L".new." +
-                                              std::to_wstring(GetCurrentProcessId()) + L"." +
-                                              std::to_wstring(GetTickCount64()));
-  std::error_code ignored;
-  std::filesystem::remove_all(temporary, ignored);
-  try {
-    stage_runtime_payload(verified_payload_root, temporary);
-    std::filesystem::create_directories(destination.parent_path());
-    if (std::filesystem::exists(destination)) {
-      if (!runtime_payload_complete(destination)) {
-        throw std::runtime_error("existing runtime generation is incomplete");
-      }
-      std::filesystem::remove_all(temporary, ignored);
-      return;
-    }
-    DWORD lastError = ERROR_SUCCESS;
-    for (int attempt = 0; attempt < 5; ++attempt) {
-      if (MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
-        return;
-      }
-      lastError = GetLastError();
-      if (lastError != ERROR_ACCESS_DENIED && lastError != ERROR_SHARING_VIOLATION &&
-          lastError != ERROR_LOCK_VIOLATION) {
-        break;
-      }
-      Sleep(static_cast<DWORD>(25 * (attempt + 1)));
-    }
-    if (lastError == ERROR_ACCESS_DENIED || lastError == ERROR_SHARING_VIOLATION ||
-        lastError == ERROR_LOCK_VIOLATION) {
-      if (std::filesystem::exists(destination)) {
-        if (runtime_payload_complete(destination)) {
-          std::filesystem::remove_all(temporary, ignored);
-          return;
-        }
-        std::filesystem::remove_all(destination, ignored);
-      }
-      try {
-        stage_runtime_payload(temporary, destination);
-        std::filesystem::remove_all(temporary, ignored);
-        return;
-      } catch (...) {
-        std::filesystem::remove_all(destination, ignored);
-        throw;
-      }
-    }
-    std::filesystem::remove_all(temporary, ignored);
-    throw std::runtime_error("runtime generation publication failed: " +
-                             std::to_string(lastError));
-  } catch (...) {
-    std::filesystem::remove_all(temporary, ignored);
-    throw;
-  }
-}
-
-void publish(const std::filesystem::path& path, std::string_view bytes) {
-  std::filesystem::create_directories(path.parent_path());
-  const auto temporary = std::filesystem::path(path.wstring() + L".new");
-  std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  output.close();
-  if (!output || !MoveFileExW(temporary.c_str(), path.c_str(),
-                              MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    std::error_code ignored;
-    std::filesystem::remove(temporary, ignored);
-    throw std::runtime_error("atomic deployment state publication failed");
-  }
-}
-
-[[maybe_unused]] Json state_json(const DeploymentState& state) {
-  return {{"format_version", 1}, {"channel", state.channel},
-          {"update_owner", owner_name(state.owner)}, {"current", state.current},
-          {"previous", state.previous}, {"pending", state.pending},
-          {"healthy", state.healthy}};
-}
-
-[[maybe_unused]] Json runtime_generation_json(const RuntimeGenerationState& state) {
-  return {{"format_version", 1},
-          {"current_generation", state.current_generation},
-          {"previous_generation", state.previous_generation},
-          {"build_id", state.build_id}};
-}
-
-[[maybe_unused]] void write_state(const std::filesystem::path& root, const DeploymentState& state) {
-  publish(state_path(root), state_json(state).dump(2) + "\n");
 }
 
 }  // namespace
@@ -489,8 +333,15 @@ std::vector<std::filesystem::path> cleanup_old_tsf_dlls(
 
 std::filesystem::path runtime_generation_directory(const std::filesystem::path& root,
                                                    std::string_view generation) {
-  if (!generation_token(generation)) throw std::invalid_argument("runtime generation is invalid");
-  return root / "runtime" / std::filesystem::path(std::string(generation));
+  const auto generation_wide = widen_ascii(generation);
+  std::array<std::uint16_t, 32768> path{};
+  if (fcitx5_update_runtime_generation_directory_utf16(
+          utf16_ptr(root), root.native().size(),
+          utf16_ptr(generation_wide), generation_wide.size(),
+          path.data(), path.size()) != 0) {
+    throw std::invalid_argument("runtime generation is invalid");
+  }
+  return std::filesystem::path(bounded_wide(path.data(), path.size()));
 }
 
 RuntimeGenerationInstallResult install_runtime_generation(
@@ -498,26 +349,37 @@ RuntimeGenerationInstallResult install_runtime_generation(
     const std::filesystem::path& verified_payload_root,
     std::string_view generation,
     std::string_view build_id) {
-  if (!root.is_absolute() || !verified_payload_root.is_absolute() ||
-      !generation_token(generation) || !token(build_id) || contains_reparse_component(root) ||
-      contains_reparse_component(verified_payload_root)) {
-    throw std::invalid_argument("runtime generation install inputs are invalid");
+  const auto generation_wide = widen_ascii(generation);
+  const auto build_id_wide = widen_ascii(build_id);
+  Fcitx5RuntimeGenerationInstallResult rust_result{};
+  if (fcitx5_update_install_runtime_generation_utf16(
+          utf16_ptr(root), root.native().size(),
+          utf16_ptr(verified_payload_root), verified_payload_root.native().size(),
+          utf16_ptr(generation_wide), generation_wide.size(),
+          utf16_ptr(build_id_wide), build_id_wide.size(),
+          &rust_result) != 0) {
+    throw std::runtime_error("runtime generation install failed");
   }
-  validate_runtime_generation_payload(verified_payload_root);
   RuntimeGenerationInstallResult result;
-  result.generation_directory = runtime_generation_directory(root, generation);
-  publish_runtime_directory(verified_payload_root, result.generation_directory);
-  result.runtime_installed = true;
-  const auto incomingX64 = verified_payload_root / L"tsf" / L"x64" / L"fcitx5-tsf.dll";
-  const auto incomingX86 = verified_payload_root / L"tsf" / L"x86" / L"fcitx5-tsf.dll";
-  result.tsf_x64 = install_tsf_dll_generation(root / L"tsf" / L"x64" / L"fcitx5-tsf.dll",
-                                              incomingX64, generation);
-  result.tsf_x64_installed = true;
-  result.tsf_x86 = install_tsf_dll_generation(root / L"tsf" / L"x86" / L"fcitx5-tsf.dll",
-                                              incomingX86, generation);
-  result.tsf_x86_installed = true;
-  publish_runtime_generation(root, generation, build_id);
-  result.current_published = true;
+  result.generation_directory =
+      std::filesystem::path(bounded_wide(rust_result.generation_directory.data(),
+                                         rust_result.generation_directory.size()));
+  result.runtime_installed = rust_result.runtime_installed != 0;
+  result.tsf_x64_installed = rust_result.tsf_x64_installed != 0;
+  result.tsf_x86_installed = rust_result.tsf_x86_installed != 0;
+  result.current_published = rust_result.current_published != 0;
+  result.tsf_x64.registered_path = root / L"tsf" / L"x64" / L"fcitx5-tsf.dll";
+  result.tsf_x64.old_dll_renamed = rust_result.tsf_x64_old_dll_renamed != 0;
+  result.tsf_x64.new_dll_installed = rust_result.tsf_x64_installed != 0;
+  result.tsf_x64.old_cleanup_pending = rust_result.tsf_x64_old_cleanup_pending != 0;
+  result.tsf_x64.old_cleanup_scheduled_for_reboot =
+      rust_result.tsf_x64_old_cleanup_scheduled_for_reboot != 0;
+  result.tsf_x86.registered_path = root / L"tsf" / L"x86" / L"fcitx5-tsf.dll";
+  result.tsf_x86.old_dll_renamed = rust_result.tsf_x86_old_dll_renamed != 0;
+  result.tsf_x86.new_dll_installed = rust_result.tsf_x86_installed != 0;
+  result.tsf_x86.old_cleanup_pending = rust_result.tsf_x86_old_cleanup_pending != 0;
+  result.tsf_x86.old_cleanup_scheduled_for_reboot =
+      rust_result.tsf_x86_old_cleanup_scheduled_for_reboot != 0;
   return result;
 }
 
@@ -538,11 +400,6 @@ RuntimeGenerationState read_runtime_generation_state(const std::filesystem::path
 void publish_runtime_generation(const std::filesystem::path& root,
                                 std::string_view generation,
                                 std::string_view build_id) {
-  if (!generation_token(generation) || !token(build_id))
-    throw std::invalid_argument("runtime generation publication identity is invalid");
-  if (!std::filesystem::is_directory(runtime_generation_directory(root, generation))) {
-    throw std::runtime_error("runtime generation directory is missing");
-  }
   const auto generation_wide = widen_ascii(generation);
   const auto build_id_wide = widen_ascii(build_id);
   if (fcitx5_update_publish_runtime_generation_utf16(utf16_ptr(root), root.native().size(),

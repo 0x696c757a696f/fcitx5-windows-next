@@ -488,6 +488,7 @@ mod win32_fs_adapter {
         fn DeleteFileW(file_name: *const u16) -> i32;
         fn GetCurrentProcessId() -> u32;
         fn GetTickCount64() -> u64;
+        fn Sleep(milliseconds: u32);
     }
 
     pub fn current_process_id() -> u32 {
@@ -496,6 +497,10 @@ mod win32_fs_adapter {
 
     pub fn tick_count64() -> u64 {
         unsafe { GetTickCount64() }
+    }
+
+    pub fn sleep_ms(milliseconds: u32) {
+        unsafe { Sleep(milliseconds) };
     }
 
     pub fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
@@ -3488,6 +3493,31 @@ mod deployment_ffi {
         pub renamed_old_path: [u16; TSF_UPDATE_RESULT_PATH_U16],
     }
 
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5RuntimeGenerationInstallResult {
+        pub status: i32,
+        pub runtime_installed: u8,
+        pub tsf_x64_installed: u8,
+        pub tsf_x86_installed: u8,
+        pub current_published: u8,
+        pub tsf_x64_old_dll_renamed: u8,
+        pub tsf_x64_old_cleanup_pending: u8,
+        pub tsf_x64_old_cleanup_scheduled_for_reboot: u8,
+        pub tsf_x86_old_dll_renamed: u8,
+        pub tsf_x86_old_cleanup_pending: u8,
+        pub tsf_x86_old_cleanup_scheduled_for_reboot: u8,
+        pub generation_directory: [u16; TSF_UPDATE_RESULT_PATH_U16],
+    }
+
+    #[derive(Clone, Copy)]
+    struct TsfDllUpdateSummary {
+        old_dll_renamed: u8,
+        new_dll_installed: u8,
+        old_cleanup_pending: u8,
+        old_cleanup_scheduled_for_reboot: u8,
+    }
+
     fn write_ascii<const N: usize>(buffer: &mut [u8; N], value: &str) -> bool {
         if value.len() >= N {
             return false;
@@ -4075,6 +4105,73 @@ mod deployment_ffi {
         Ok(result)
     }
 
+    fn install_tsf_dll_generation_summary(
+        registered_dll_path: &Path,
+        verified_new_dll_path: &Path,
+        generation: &str,
+    ) -> Result<TsfDllUpdateSummary, String> {
+        validate_tsf_update_inputs(registered_dll_path, verified_new_dll_path, generation)?;
+        fs::create_dir_all(
+            registered_dll_path
+                .parent()
+                .ok_or_else(|| "registered TSF DLL path is invalid".to_owned())?,
+        )
+        .map_err(|_| "registered TSF DLL path is invalid".to_owned())?;
+        let mut result = TsfDllUpdateSummary {
+            old_dll_renamed: 0,
+            new_dll_installed: 0,
+            old_cleanup_pending: 0,
+            old_cleanup_scheduled_for_reboot: 0,
+        };
+        let mut renamed_old_path = PathBuf::new();
+        if registered_dll_path.exists() {
+            if !registered_dll_path.is_file() {
+                return Err("registered TSF DLL path is not a regular file".to_owned());
+            }
+            renamed_old_path = unique_old_tsf_path(registered_dll_path, generation)?;
+            win32_fs_adapter::move_file(registered_dll_path, &renamed_old_path)
+                .map_err(|_| "old TSF DLL rename failed".to_owned())?;
+            result.old_dll_renamed = 1;
+        }
+
+        let mut temporary_name = OsString::from(registered_dll_path.as_os_str());
+        temporary_name.push(format!(
+            ".new.{}.{}",
+            win32_fs_adapter::current_process_id(),
+            win32_fs_adapter::tick_count64()
+        ));
+        let temporary = PathBuf::from(temporary_name);
+        let staged = (|| {
+            fs::copy(verified_new_dll_path, &temporary)
+                .map_err(|_| "new TSF DLL staging copy failed".to_owned())?;
+            win32_fs_adapter::replace_file(&temporary, registered_dll_path)
+                .map_err(|_| "new TSF DLL publication failed".to_owned())?;
+            publish_text(
+                &registered_dll_path
+                    .parent()
+                    .ok_or_else(|| "registered TSF DLL path is invalid".to_owned())?
+                    .join("fcitx5-tsf.generation"),
+                &format!("{generation}\n"),
+            )
+            .map_err(|_| "TSF generation publication failed".to_owned())?;
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = staged {
+            let _ = fs::remove_file(&temporary);
+            restore_renamed_tsf(registered_dll_path, &renamed_old_path);
+            return Err(error);
+        }
+        result.new_dll_installed = 1;
+        if result.old_dll_renamed != 0 {
+            let (removed, scheduled) = cleanup_old_tsf_dll(&renamed_old_path)?;
+            if !removed {
+                result.old_cleanup_pending = 1;
+                result.old_cleanup_scheduled_for_reboot = scheduled as u8;
+            }
+        }
+        Ok(result)
+    }
+
     fn cleanup_old_tsf_dlls(tsf_arch_directory: &Path) -> Result<Vec<PathBuf>, String> {
         let mut pending = Vec::new();
         if !tsf_arch_directory.is_dir() {
@@ -4094,6 +4191,271 @@ mod deployment_ffi {
             }
         }
         Ok(pending)
+    }
+
+    fn empty_runtime_generation_install_result(
+        status: i32,
+    ) -> Fcitx5RuntimeGenerationInstallResult {
+        Fcitx5RuntimeGenerationInstallResult {
+            status,
+            runtime_installed: 0,
+            tsf_x64_installed: 0,
+            tsf_x86_installed: 0,
+            current_published: 0,
+            tsf_x64_old_dll_renamed: 0,
+            tsf_x64_old_cleanup_pending: 0,
+            tsf_x64_old_cleanup_scheduled_for_reboot: 0,
+            tsf_x86_old_dll_renamed: 0,
+            tsf_x86_old_cleanup_pending: 0,
+            tsf_x86_old_cleanup_scheduled_for_reboot: 0,
+            generation_directory: [0; TSF_UPDATE_RESULT_PATH_U16],
+        }
+    }
+
+    fn runtime_generation_directory(root: &Path, generation: &str) -> Result<PathBuf, String> {
+        if !generation_token(generation) {
+            return Err("runtime generation is invalid".to_owned());
+        }
+        Ok(root.join("runtime").join(generation))
+    }
+
+    fn runtime_payload_complete(root: &Path) -> bool {
+        root.join("bin").join("fcitx5-engine.exe").is_file()
+            && root.join("bin").join("fcitx5-launcher.exe").is_file()
+            && root.join("bin").join("fcitx5-ui.exe").is_file()
+            && root.join("lib").is_dir()
+            && root.join("share").is_dir()
+    }
+
+    fn copy_directory_tree(source: &Path, destination: &Path) -> Result<(), String> {
+        if !source.is_dir() {
+            return Ok(());
+        }
+        fs::create_dir_all(destination)
+            .map_err(|_| "runtime destination directory creation failed".to_owned())?;
+        for entry in fs::read_dir(source)
+            .map_err(|_| "runtime source directory inspection failed".to_owned())?
+        {
+            let entry =
+                entry.map_err(|_| "runtime source directory inspection failed".to_owned())?;
+            let source_path = entry.path();
+            if path_contains_reparse_component(&source_path).unwrap_or(true) {
+                return Err("runtime source contains unsupported file type".to_owned());
+            }
+            let target_path = destination.join(entry.file_name());
+            let metadata = fs::symlink_metadata(&source_path)
+                .map_err(|_| "runtime source file inspection failed".to_owned())?;
+            let file_type = metadata.file_type();
+            if file_type.is_dir() {
+                copy_directory_tree(&source_path, &target_path)?;
+            } else if file_type.is_file() {
+                fs::create_dir_all(
+                    target_path
+                        .parent()
+                        .ok_or_else(|| "runtime destination path is invalid".to_owned())?,
+                )
+                .map_err(|_| "runtime destination directory creation failed".to_owned())?;
+                fs::copy(&source_path, &target_path)
+                    .map_err(|_| "runtime payload copy failed".to_owned())?;
+            } else {
+                return Err("runtime source contains unsupported file type".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    fn copy_optional_file(source: &Path, destination: &Path) -> Result<(), String> {
+        if !source.is_file() {
+            return Ok(());
+        }
+        fs::create_dir_all(
+            destination
+                .parent()
+                .ok_or_else(|| "runtime destination path is invalid".to_owned())?,
+        )
+        .map_err(|_| "runtime destination directory creation failed".to_owned())?;
+        fs::copy(source, destination).map_err(|_| "runtime payload copy failed".to_owned())?;
+        Ok(())
+    }
+
+    fn stage_runtime_payload(
+        verified_payload_root: &Path,
+        destination: &Path,
+    ) -> Result<(), String> {
+        if !verified_payload_root.is_dir() {
+            return Err("runtime generation payload is incomplete".to_owned());
+        }
+        copy_directory_tree(&verified_payload_root.join("bin"), &destination.join("bin"))?;
+        copy_directory_tree(&verified_payload_root.join("lib"), &destination.join("lib"))?;
+        copy_directory_tree(
+            &verified_payload_root.join("share"),
+            &destination.join("share"),
+        )?;
+        copy_directory_tree(
+            &verified_payload_root.join("themes"),
+            &destination.join("themes"),
+        )?;
+        copy_directory_tree(
+            &verified_payload_root.join("data"),
+            &destination.join("data"),
+        )?;
+        copy_optional_file(
+            &verified_payload_root.join("portable.flag"),
+            &destination.join("portable.flag"),
+        )
+    }
+
+    fn validate_runtime_generation_payload(verified_payload_root: &Path) -> Result<(), String> {
+        if !verified_payload_root.is_dir()
+            || !runtime_payload_complete(verified_payload_root)
+            || !verified_payload_root
+                .join("tsf")
+                .join("x64")
+                .join("fcitx5-tsf.dll")
+                .is_file()
+            || !verified_payload_root
+                .join("tsf")
+                .join("x86")
+                .join("fcitx5-tsf.dll")
+                .is_file()
+        {
+            return Err("runtime generation payload is incomplete".to_owned());
+        }
+        Ok(())
+    }
+
+    fn is_transient_publish_error(error: &std::io::Error) -> bool {
+        matches!(
+            error.raw_os_error(),
+            Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+        )
+    }
+
+    fn publish_runtime_directory(
+        verified_payload_root: &Path,
+        destination: &Path,
+    ) -> Result<(), String> {
+        let mut temporary_name = OsString::from(destination.as_os_str());
+        temporary_name.push(format!(
+            ".new.{}.{}",
+            win32_fs_adapter::current_process_id(),
+            win32_fs_adapter::tick_count64()
+        ));
+        let temporary = PathBuf::from(temporary_name);
+        let _ = fs::remove_dir_all(&temporary);
+        let published = (|| {
+            stage_runtime_payload(verified_payload_root, &temporary)?;
+            fs::create_dir_all(
+                destination
+                    .parent()
+                    .ok_or_else(|| "runtime destination path is invalid".to_owned())?,
+            )
+            .map_err(|_| "runtime destination directory creation failed".to_owned())?;
+            if destination.exists() {
+                if !runtime_payload_complete(destination) {
+                    return Err("existing runtime generation is incomplete".to_owned());
+                }
+                let _ = fs::remove_dir_all(&temporary);
+                return Ok(());
+            }
+            let mut last_error = None;
+            for attempt in 0..5 {
+                match win32_fs_adapter::publish_directory(&temporary, destination) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        let transient = is_transient_publish_error(&error);
+                        last_error = Some(error);
+                        if !transient {
+                            break;
+                        }
+                        win32_fs_adapter::sleep_ms(25 * (attempt + 1));
+                    }
+                }
+            }
+            if let Some(error) = last_error.as_ref() {
+                if is_transient_publish_error(error) {
+                    if destination.exists() {
+                        if runtime_payload_complete(destination) {
+                            let _ = fs::remove_dir_all(&temporary);
+                            return Ok(());
+                        }
+                        let _ = fs::remove_dir_all(destination);
+                    }
+                    match stage_runtime_payload(&temporary, destination) {
+                        Ok(()) => {
+                            let _ = fs::remove_dir_all(&temporary);
+                            return Ok(());
+                        }
+                        Err(error) => {
+                            let _ = fs::remove_dir_all(destination);
+                            return Err(error);
+                        }
+                    }
+                }
+                return Err(format!(
+                    "runtime generation publication failed: {}",
+                    error.raw_os_error().unwrap_or_default()
+                ));
+            }
+            Err("runtime generation publication failed".to_owned())
+        })();
+        if published.is_err() {
+            let _ = fs::remove_dir_all(&temporary);
+        }
+        published
+    }
+
+    fn install_runtime_generation(
+        root: &Path,
+        verified_payload_root: &Path,
+        generation: &str,
+        build_id: &str,
+    ) -> Result<Fcitx5RuntimeGenerationInstallResult, String> {
+        if !root.is_absolute()
+            || !verified_payload_root.is_absolute()
+            || !token(build_id)
+            || path_contains_reparse_component(root).unwrap_or(true)
+            || path_contains_reparse_component(verified_payload_root).unwrap_or(true)
+        {
+            return Err("runtime generation install inputs are invalid".to_owned());
+        }
+        validate_runtime_generation_payload(verified_payload_root)?;
+        let generation_directory = runtime_generation_directory(root, generation)?;
+        let mut result = empty_runtime_generation_install_result(0);
+        if !write_wide_path(&mut result.generation_directory, &generation_directory) {
+            return Err("runtime generation directory path is too long".to_owned());
+        }
+        publish_runtime_directory(verified_payload_root, &generation_directory)?;
+        result.runtime_installed = 1;
+        let incoming_x64 = verified_payload_root
+            .join("tsf")
+            .join("x64")
+            .join("fcitx5-tsf.dll");
+        let tsf_x64 = install_tsf_dll_generation_summary(
+            &root.join("tsf").join("x64").join("fcitx5-tsf.dll"),
+            &incoming_x64,
+            generation,
+        )?;
+        result.tsf_x64_installed = 1;
+        result.tsf_x64_old_dll_renamed = tsf_x64.old_dll_renamed;
+        result.tsf_x64_old_cleanup_pending = tsf_x64.old_cleanup_pending;
+        result.tsf_x64_old_cleanup_scheduled_for_reboot = tsf_x64.old_cleanup_scheduled_for_reboot;
+        let incoming_x86 = verified_payload_root
+            .join("tsf")
+            .join("x86")
+            .join("fcitx5-tsf.dll");
+        let tsf_x86 = install_tsf_dll_generation_summary(
+            &root.join("tsf").join("x86").join("fcitx5-tsf.dll"),
+            &incoming_x86,
+            generation,
+        )?;
+        result.tsf_x86_installed = 1;
+        result.tsf_x86_old_dll_renamed = tsf_x86.old_dll_renamed;
+        result.tsf_x86_old_cleanup_pending = tsf_x86.old_cleanup_pending;
+        result.tsf_x86_old_cleanup_scheduled_for_reboot = tsf_x86.old_cleanup_scheduled_for_reboot;
+        publish_runtime_generation(root, generation, build_id)?;
+        result.current_published = 1;
+        Ok(result)
     }
 
     fn ascii_from_buffer(buffer: &[u8]) -> Result<String, String> {
@@ -4526,6 +4888,84 @@ mod deployment_ffi {
                 0
             }
             Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_runtime_generation_directory_utf16(
+        root: *const u16,
+        root_len: usize,
+        generation: *const u16,
+        generation_len: usize,
+        out_path: *mut u16,
+        out_path_len: usize,
+    ) -> i32 {
+        if out_path.is_null() || out_path_len == 0 {
+            return 1;
+        }
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(generation) = string_from_utf16(generation, generation_len) else {
+            return 1;
+        };
+        let Ok(path) = runtime_generation_directory(&root, &generation) else {
+            return 1;
+        };
+        let value = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        if value.len() >= out_path_len {
+            return 1;
+        }
+        unsafe {
+            std::ptr::write_bytes(out_path, 0, out_path_len);
+            std::ptr::copy_nonoverlapping(value.as_ptr(), out_path, value.len());
+        }
+        0
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_install_runtime_generation_utf16(
+        root: *const u16,
+        root_len: usize,
+        verified_payload_root: *const u16,
+        verified_payload_root_len: usize,
+        generation: *const u16,
+        generation_len: usize,
+        build_id: *const u16,
+        build_id_len: usize,
+        out_result: *mut Fcitx5RuntimeGenerationInstallResult,
+    ) -> i32 {
+        if out_result.is_null() {
+            return 1;
+        }
+        let Some(root) = path_from_utf16(root, root_len) else {
+            return 1;
+        };
+        let Some(verified_payload_root) =
+            path_from_utf16(verified_payload_root, verified_payload_root_len)
+        else {
+            return 1;
+        };
+        let Some(generation) = string_from_utf16(generation, generation_len) else {
+            return 1;
+        };
+        let Some(build_id) = string_from_utf16(build_id, build_id_len) else {
+            return 1;
+        };
+        match install_runtime_generation(&root, &verified_payload_root, &generation, &build_id) {
+            Ok(mut result) => {
+                result.status = 0;
+                unsafe {
+                    *out_result = result;
+                }
+                0
+            }
+            Err(_) => {
+                unsafe {
+                    *out_result = empty_runtime_generation_install_result(1);
+                }
+                1
+            }
         }
     }
 
