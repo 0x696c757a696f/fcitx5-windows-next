@@ -339,6 +339,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("basic_file_identity_match_policy_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_path_is_reparse_point_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("path_reparse_policy_fails_closed_like_cpp_contract") ==
+            std::string::npos ||
         pipeSecuritySource.find("D:P(A;;GA;;;SY)") != std::string::npos ||
         pipeSecuritySource.find("identity.userSid.empty() || identity.serviceAccount") !=
             std::string::npos ||
@@ -371,6 +375,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_basic_file_identities_match") ==
             std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_path_is_reparse_point_utf16") ==
+            std::string::npos ||
+        runtimeIdentitySource.find("GetFileAttributesW") != std::string::npos ||
+        runtimeIdentitySource.find("FILE_ATTRIBUTE_REPARSE_POINT") != std::string::npos ||
         cmakeSource.find("fcitx5_platform PUBLIC fcitx5::release_identity fcitx5::windows_common") ==
             std::string::npos ||
         cmakeSource.find("fcitx5-windows-common-core") == std::string::npos ||

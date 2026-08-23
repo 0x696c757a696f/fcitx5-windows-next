@@ -4,6 +4,7 @@ use std::env;
 use std::ffi::c_void;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 const VERSION_FALLBACK: &str = env!("CARGO_PKG_VERSION");
@@ -362,6 +363,13 @@ fn basic_file_identities_match(
     left_volume_serial_number == right_volume_serial_number
         && left_file_index_high == right_file_index_high
         && left_file_index_low == right_file_index_low
+}
+
+fn path_is_reparse_point_or_untrusted(path: &Path) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+        .unwrap_or(true)
 }
 
 fn local_name(
@@ -728,6 +736,22 @@ pub extern "C" fn fcitx5_windows_common_basic_file_identities_match(
     ) as u8
 }
 
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `path` must point to exactly `path_len` readable UTF-16 code units. The
+/// function returns true for invalid/unreadable paths to preserve the
+/// fail-closed executable identity policy.
+pub unsafe extern "C" fn fcitx5_windows_common_path_is_reparse_point_utf16(
+    path: *const u16,
+    path_len: usize,
+) -> u8 {
+    let Some(path) = path_from_raw(path, path_len) else {
+        return 1;
+    };
+    path_is_reparse_point_or_untrusted(&path) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -963,5 +987,15 @@ mod tests {
         assert!(!basic_file_identities_match(12, 22, 33, 11, 22, 33));
         assert!(!basic_file_identities_match(11, 23, 33, 11, 22, 33));
         assert!(!basic_file_identities_match(11, 22, 34, 11, 22, 33));
+    }
+
+    #[test]
+    fn path_reparse_policy_fails_closed_like_cpp_contract() {
+        let missing = env::temp_dir().join(format!(
+            "fcitx5-windows-common-missing-reparse-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&missing);
+        assert!(path_is_reparse_point_or_untrusted(&missing));
     }
 }

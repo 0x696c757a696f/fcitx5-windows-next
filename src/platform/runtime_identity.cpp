@@ -74,6 +74,9 @@ extern "C" std::uint8_t fcitx5_windows_common_basic_file_identities_match(
     std::uint32_t right_volume_serial_number,
     std::uint32_t right_file_index_high,
     std::uint32_t right_file_index_low);
+extern "C" std::uint8_t fcitx5_windows_common_path_is_reparse_point_utf16(
+    const std::uint16_t* path,
+    std::size_t path_len);
 
 class Handle final {
   public:
@@ -185,12 +188,6 @@ bool queryFileIdentity(std::wstring_view path, BasicFileIdentity& identity) {
     identity.fileIndexHigh = information.nFileIndexHigh;
     identity.fileIndexLow = information.nFileIndexLow;
     return true;
-}
-
-bool pathIsReparsePoint(const std::filesystem::path& source) {
-    const DWORD attributes = GetFileAttributesW(source.c_str());
-    return attributes == INVALID_FILE_ATTRIBUTES ||
-           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 }
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
@@ -412,7 +409,9 @@ bool queryExecutableFileIdentity(std::wstring_view path,
         result.fileIndexHigh = information.nFileIndexHigh;
         result.fileIndexLow = information.nFileIndexLow;
         result.numberOfLinks = information.nNumberOfLinks;
-        result.containsReparsePoint = pathIsReparsePoint(std::filesystem::path(source));
+        result.containsReparsePoint =
+            fcitx5_windows_common_path_is_reparse_point_utf16(wideData(source), source.size()) !=
+            0;
         result.finalPath = std::move(finalPath);
         output = std::move(result);
         return true;
