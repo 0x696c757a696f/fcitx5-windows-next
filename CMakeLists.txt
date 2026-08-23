@@ -444,19 +444,15 @@ target_include_directories(fcitx5_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/s
 target_link_libraries(fcitx5_platform PUBLIC fcitx5::release_identity advapi32 user32)
 fcitx_apply_project_options(fcitx5_platform)
 
-add_library(
-  fcitx5_launcher_state STATIC
-  src/launcher/state_machine.cpp
-  src/launcher/state_store.cpp)
+add_library(fcitx5_launcher_state INTERFACE)
 add_library(fcitx5::launcher_state ALIAS fcitx5_launcher_state)
-target_compile_features(fcitx5_launcher_state PUBLIC cxx_std_20)
+target_compile_features(fcitx5_launcher_state INTERFACE cxx_std_20)
 target_include_directories(
-  fcitx5_launcher_state PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/launcher")
+  fcitx5_launcher_state INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/launcher")
 target_link_libraries(
   fcitx5_launcher_state
-  PUBLIC fcitx5_launcher_core_rust shell32 ole32 ws2_32 userenv ntdll bcrypt advapi32)
+  INTERFACE fcitx5_launcher_core_rust shell32 ole32 ws2_32 userenv ntdll bcrypt advapi32)
 add_dependencies(fcitx5_launcher_state fcitx5_launcher_core_rustlib)
-fcitx_apply_project_options(fcitx5_launcher_state)
 
 add_library(
   fcitx5_ipc_client STATIC
