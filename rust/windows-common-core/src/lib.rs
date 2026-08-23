@@ -340,6 +340,19 @@ unsafe extern "system" {
     fn CloseHandle(object: *mut c_void) -> i32;
 }
 
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn OpenInputDesktop(flags: u32, inherit: i32, desired_access: u32) -> *mut c_void;
+    fn GetUserObjectInformationW(
+        object: *mut c_void,
+        index: i32,
+        information: *mut c_void,
+        length: u32,
+        length_needed: *mut u32,
+    ) -> i32;
+    fn CloseDesktop(desktop: *mut c_void) -> i32;
+}
+
 fn same_principal_and_session(
     peer_session_id: u32,
     peer_service_account: bool,
@@ -408,6 +421,44 @@ fn process_image_path(process_id: u32) -> Option<String> {
     String::from_utf16(&path)
         .ok()
         .filter(|value| !value.is_empty())
+}
+
+fn secure_input_desktop() -> bool {
+    const DESKTOP_READOBJECTS: u32 = 0x0001;
+    const UOI_NAME: i32 = 2;
+
+    // SAFETY: Opens the current input desktop for read-only object metadata.
+    // Failure is treated as secure/fail-closed, matching the C++ contract.
+    let desktop = unsafe { OpenInputDesktop(0, 0, DESKTOP_READOBJECTS) };
+    if desktop.is_null() {
+        return true;
+    }
+    let mut name = [0_u16; 256];
+    let mut required = 0_u32;
+    // SAFETY: `desktop` is valid and `name` is writable storage. The handle is
+    // closed immediately after the metadata query.
+    let read = unsafe {
+        GetUserObjectInformationW(
+            desktop,
+            UOI_NAME,
+            name.as_mut_ptr().cast::<c_void>(),
+            (name.len() * std::mem::size_of::<u16>()) as u32,
+            &mut required,
+        )
+    };
+    // SAFETY: `desktop` was returned by OpenInputDesktop above.
+    unsafe {
+        CloseDesktop(desktop);
+    }
+    if read == 0 {
+        return true;
+    }
+    let end = name
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(name.len());
+    let lowered = String::from_utf16_lossy(&name[..end]).to_lowercase();
+    lowered == "winlogon" || lowered == "disconnect"
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -818,6 +869,11 @@ pub unsafe extern "C" fn fcitx5_windows_common_process_image_path_utf16(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_secure_input_desktop() -> u8 {
+    secure_input_desktop() as u8
+}
+
+#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `module_path` must point to exactly `module_path_len` readable UTF-16 code
@@ -1212,6 +1268,11 @@ mod tests {
         let path = process_image_path(current_process_id).expect("current process image path");
         assert!(path.to_ascii_lowercase().ends_with(".exe"));
         assert!(process_image_path(0).is_none());
+    }
+
+    #[test]
+    fn secure_input_desktop_query_matches_cpp_contract() {
+        let _ = secure_input_desktop();
     }
 
     #[test]

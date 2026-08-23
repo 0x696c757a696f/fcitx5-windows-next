@@ -2,10 +2,7 @@
 
 #include <sddl.h>
 
-#include <algorithm>
-#include <array>
 #include <cstdint>
-#include <cwctype>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -36,6 +33,7 @@ extern "C" std::size_t fcitx5_windows_common_process_image_path_utf16(
     std::uint32_t process_id,
     std::uint16_t* output,
     std::size_t capacity);
+extern "C" std::uint8_t fcitx5_windows_common_secure_input_desktop();
 extern "C" std::size_t fcitx5_windows_common_current_generation_for_module_utf16(
     const std::uint16_t* module_path,
     std::size_t module_path_len,
@@ -168,23 +166,6 @@ bool processPath(DWORD processId, std::wstring& path) {
     return true;
 }
 
-bool secureInputDesktop() {
-    HDESK desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
-    if (!desktop)
-        return true;
-    std::array<wchar_t, 256> name{};
-    DWORD required = 0;
-    const BOOL read = GetUserObjectInformationW(desktop, UOI_NAME, name.data(),
-                                                static_cast<DWORD>(sizeof(name)), &required);
-    CloseDesktop(desktop);
-    if (!read)
-        return true;
-    std::wstring lowered(name.data());
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                   [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
-    return lowered == L"winlogon" || lowered == L"disconnect";
-}
-
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
@@ -292,7 +273,7 @@ bool queryCurrentIdentity(RuntimeIdentity& output) noexcept {
     try {
         RuntimeIdentity result;
         static_cast<ProcessIdentity&>(result) = std::move(process);
-        result.secureDesktop = secureInputDesktop();
+        result.secureDesktop = fcitx5_windows_common_secure_input_desktop() != 0;
         output = std::move(result);
         return true;
     } catch (...) {
