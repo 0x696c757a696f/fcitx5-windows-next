@@ -101,6 +101,23 @@ struct Fcitx5PackageParsedManifestResult {
   Fcitx5ByteSlice key_id;
 };
 
+struct Fcitx5PackageSignatureEnvelopeEntry {
+  Fcitx5ByteSlice key_id;
+  Fcitx5ByteSlice algorithm;
+  Fcitx5ByteSlice signature;
+};
+
+struct Fcitx5PackageSignatureEnvelopeResult {
+  int status;
+  std::uint8_t error_code[64];
+  std::uint8_t error_message[512];
+  std::uint32_t format_version;
+  Fcitx5ByteSlice signed_object;
+  Fcitx5ByteSlice canonicalization;
+  Fcitx5PackageSignatureEnvelopeEntry* signatures;
+  std::size_t signature_count;
+};
+
 struct Fcitx5RepositorySequenceRepairResult {
   std::uint8_t repaired;
 };
@@ -114,6 +131,11 @@ void fcitx5_package_trusted_keys_free(Fcitx5TrustedKeyNative* keys, std::size_t 
 Fcitx5PackageParsedManifestResult fcitx5_package_parse_manifest_utf8(
     const std::uint8_t* manifest_bytes, std::size_t manifest_len);
 void fcitx5_package_manifest_free(const Fcitx5PackageParsedManifestResult* manifest);
+Fcitx5PackageSignatureEnvelopeResult fcitx5_package_parse_signature_envelope_utf8(
+    const std::uint8_t* envelope_bytes, std::size_t envelope_len,
+    const std::uint8_t* expected_object, std::size_t expected_object_len);
+void fcitx5_package_signature_envelope_free(
+    const Fcitx5PackageSignatureEnvelopeResult* envelope);
 Fcitx5PackageLifecycleResult fcitx5_package_set_state_utf16(
     const wchar_t* install_root, std::size_t install_root_len, const std::uint8_t* package_id,
     std::size_t package_id_len, const std::uint8_t* state, std::size_t state_len);
@@ -295,6 +317,21 @@ class ManifestResultGuard final {
   Fcitx5PackageParsedManifestResult result_{};
 };
 
+class SignatureEnvelopeResultGuard final {
+ public:
+  explicit SignatureEnvelopeResultGuard(Fcitx5PackageSignatureEnvelopeResult result)
+      : result_(result) {}
+  ~SignatureEnvelopeResultGuard() { fcitx5_package_signature_envelope_free(&result_); }
+  SignatureEnvelopeResultGuard(const SignatureEnvelopeResultGuard&) = delete;
+  SignatureEnvelopeResultGuard& operator=(const SignatureEnvelopeResultGuard&) = delete;
+  [[nodiscard]] const Fcitx5PackageSignatureEnvelopeResult& get() const noexcept {
+    return result_;
+  }
+
+ private:
+  Fcitx5PackageSignatureEnvelopeResult result_{};
+};
+
 std::wstring native_path_string(const std::filesystem::path& path) {
   return path.native();
 }
@@ -303,40 +340,6 @@ void require_nt_success(NTSTATUS status, std::string_view operation) {
   if (status < 0) {
     fail("crypto_error", std::string(operation) + " failed");
   }
-}
-
-void require_signature_object_keys(const Json& object,
-                                   std::initializer_list<std::string_view> required) {
-  if (!object.is_object()) {
-    fail("invalid_signature", "signature envelope entry must be a JSON object");
-  }
-  std::set<std::string, std::less<>> allowed;
-  for (const auto key : required) {
-    allowed.emplace(key);
-    if (!object.contains(key)) {
-      fail("invalid_signature", "signature envelope is missing required key: " +
-                                    std::string(key));
-    }
-  }
-  for (const auto& [key, unused] : object.items()) {
-    static_cast<void>(unused);
-    if (!allowed.contains(key)) {
-      fail("invalid_signature", "signature envelope has unknown key: " + key);
-    }
-  }
-}
-
-std::string require_signature_string(const Json& object, std::string_view key,
-                                     std::size_t maximum) {
-  const auto& value = object.at(key);
-  if (!value.is_string()) {
-    fail("invalid_signature", std::string(key) + " must be a string");
-  }
-  auto result = value.get<std::string>();
-  if (result.empty() || result.size() > maximum || result.find('\0') != std::string::npos) {
-    fail("invalid_signature", std::string(key) + " has an invalid length");
-  }
-  return result;
 }
 
 bool contains_reparse_component(const std::filesystem::path& path) {
@@ -597,88 +600,38 @@ std::string hex_blake3(std::span<const std::byte> digest) {
   return hex_sha256(digest);
 }
 
-std::vector<std::byte> decode_base64(std::string_view encoded) {
-  if (encoded.empty() || encoded.size() > 16384U) {
-    fail("invalid_signature", "base64 value is empty or too large");
-  }
-  DWORD output_size = 0;
-  if (!CryptStringToBinaryA(encoded.data(), static_cast<DWORD>(encoded.size()),
-                            CRYPT_STRING_BASE64 | CRYPT_STRING_STRICT, nullptr, &output_size,
-                            nullptr, nullptr)) {
-    fail("invalid_signature", "base64 value is malformed");
-  }
-  std::vector<std::byte> result(output_size);
-  if (!CryptStringToBinaryA(encoded.data(), static_cast<DWORD>(encoded.size()),
-                            CRYPT_STRING_BASE64 | CRYPT_STRING_STRICT,
-                            reinterpret_cast<BYTE*>(result.data()), &output_size, nullptr,
-                            nullptr)) {
-    fail("invalid_signature", "base64 decoding failed");
-  }
-  result.resize(output_size);
-  return result;
-}
-
 SignatureEnvelope parse_signature_envelope(std::string_view bytes,
                                            std::string_view expected_object) {
-  if (bytes.empty() || bytes.size() > kMaximumManifestBytes ||
-      (expected_object != "repository-index" && expected_object != "package-manifest")) {
-    fail("invalid_signature", "signature envelope identity is invalid");
+  const SignatureEnvelopeResultGuard guard(fcitx5_package_parse_signature_envelope_utf8(
+      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(),
+      reinterpret_cast<const std::uint8_t*>(expected_object.data()), expected_object.size()));
+  const auto& envelope_result = guard.get();
+  if (envelope_result.status != 0) {
+    std::string code = ffi_string(envelope_result.error_code);
+    std::string message = ffi_string(envelope_result.error_message);
+    if (code.empty()) {
+      code = "invalid_signature";
+    }
+    if (message.empty()) {
+      message = "signature envelope is invalid";
+    }
+    fail(std::move(code), std::move(message));
   }
-
-  Json document;
-  try {
-    document = Json::parse(bytes);
-  } catch (const Json::exception&) {
-    fail("invalid_signature", "signature envelope is not strict JSON");
-  }
-
-  require_signature_object_keys(document,
-                                {"format_version", "signed_object", "canonicalization",
-                                 "signatures"});
-  if (!document["format_version"].is_number_unsigned() ||
-      document["format_version"].get<std::uint32_t>() != 2U) {
-    fail("invalid_signature", "signature envelope format version is unsupported");
-  }
-
   SignatureEnvelope result;
-  result.format_version = 2U;
-  result.signed_object = require_signature_string(document, "signed_object", 64U);
-  result.canonicalization = require_signature_string(document, "canonicalization", 64U);
-  if (result.signed_object != expected_object ||
-      (result.signed_object != "repository-index" &&
-       result.signed_object != "package-manifest") ||
-      result.canonicalization != kSignatureEnvelopeCanonicalization) {
-    fail("invalid_signature", "signature envelope object binding is invalid");
+  result.format_version = envelope_result.format_version;
+  result.signed_object = ffi_manifest_string(envelope_result.signed_object);
+  result.canonicalization = ffi_manifest_string(envelope_result.canonicalization);
+  if (envelope_result.signature_count != 0 && envelope_result.signatures == nullptr) {
+    fail("invalid_signature", "parsed signature envelope entry data is invalid");
   }
-
-  const auto& signatures = document["signatures"];
-  if (!signatures.is_array() || signatures.empty() || signatures.size() > 16U) {
-    fail("invalid_signature", "signature envelope signatures array is invalid");
-  }
-
-  std::set<std::string, std::less<>> key_ids;
-  bool has_required_mldsa65 = false;
-  for (const auto& item : signatures) {
-    require_signature_object_keys(item, {"key_id", "algorithm", "signature_base64"});
-    auto key_id = require_signature_string(item, "key_id", kMaximumIdBytes);
-    auto algorithm = require_signature_string(item, "algorithm", 32U);
-    if (!is_lower_package_id(key_id) || !key_ids.emplace(key_id).second) {
-      fail("invalid_signature", "signature envelope key id is invalid or duplicated");
-    }
-    if (algorithm != "mldsa65" && algorithm != "slhdsa-sha2-128s") {
-      fail("invalid_signature", "signature envelope requires an unsupported algorithm");
-    }
-    if (algorithm == "mldsa65") {
-      has_required_mldsa65 = true;
-    }
-    auto signature = decode_base64(
-        require_signature_string(item, "signature_base64", 16384U));
+  result.signatures.reserve(envelope_result.signature_count);
+  for (std::size_t index = 0; index < envelope_result.signature_count; ++index) {
+    const auto& signature = envelope_result.signatures[index];
     result.signatures.push_back(SignatureEnvelopeEntry{
-        std::move(key_id), std::move(algorithm), std::move(signature)});
-  }
-
-  if (!has_required_mldsa65) {
-    fail("invalid_signature", "signature envelope is missing required ML-DSA-65 signature");
+        ffi_manifest_string(signature.key_id),
+        ffi_manifest_string(signature.algorithm),
+        ffi_bytes(signature.signature),
+    });
   }
   return result;
 }

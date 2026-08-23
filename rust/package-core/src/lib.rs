@@ -6548,10 +6548,11 @@ mod repair_ffi {
     #![allow(unsafe_code)]
 
     use super::{
-        activate_installed_version_for_rollback, activate_staged_payload_tree, parse_trusted_keys,
-        stage_validated_archive_zip, stage_verified_payload_tree,
-        verify_installed_packages_for_repair, verify_manifest_signature, verify_mldsa65_signature,
-        PackageId, TrustAlgorithm, TrustedKey, MAX_MANIFEST_BYTES,
+        activate_installed_version_for_rollback, activate_staged_payload_tree,
+        parse_signature_envelope, parse_trusted_keys, stage_validated_archive_zip,
+        stage_verified_payload_tree, verify_installed_packages_for_repair,
+        verify_manifest_signature, verify_mldsa65_signature, PackageId, SignedObject,
+        TrustAlgorithm, TrustedKey, MAX_MANIFEST_BYTES,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -6643,6 +6644,27 @@ mod repair_ffi {
         pub files: *mut Fcitx5PackageManifestFile,
         pub file_count: usize,
         pub key_id: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageSignatureEnvelopeEntry {
+        pub key_id: Fcitx5ByteSlice,
+        pub algorithm: Fcitx5ByteSlice,
+        pub signature: Fcitx5ByteSlice,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5PackageSignatureEnvelopeResult {
+        pub status: i32,
+        pub error_code: [u8; 64],
+        pub error_message: [u8; 512],
+        pub format_version: u32,
+        pub signed_object: Fcitx5ByteSlice,
+        pub canonicalization: Fcitx5ByteSlice,
+        pub signatures: *mut Fcitx5PackageSignatureEnvelopeEntry,
+        pub signature_count: usize,
     }
 
     #[repr(C)]
@@ -6801,6 +6823,26 @@ mod repair_ffi {
             files: std::ptr::null_mut(),
             file_count: 0,
             key_id: empty_slice(),
+        }
+    }
+
+    fn signature_envelope_error_result(
+        code: &str,
+        message: &str,
+    ) -> Fcitx5PackageSignatureEnvelopeResult {
+        let mut error_code = [0; 64];
+        let mut error_message = [0; 512];
+        write_ascii(&mut error_code, code);
+        write_ascii(&mut error_message, message);
+        Fcitx5PackageSignatureEnvelopeResult {
+            status: 1,
+            error_code,
+            error_message,
+            format_version: 0,
+            signed_object: empty_slice(),
+            canonicalization: empty_slice(),
+            signatures: std::ptr::null_mut(),
+            signature_count: 0,
         }
     }
 
@@ -6963,6 +7005,42 @@ mod repair_ffi {
         }
     }
 
+    fn owned_signature_entry_array(
+        signatures: &[super::SignatureEnvelopeEntry],
+    ) -> (*mut Fcitx5PackageSignatureEnvelopeEntry, usize) {
+        if signatures.is_empty() {
+            return (std::ptr::null_mut(), 0);
+        }
+        let mut raw: Vec<Fcitx5PackageSignatureEnvelopeEntry> = signatures
+            .iter()
+            .map(|entry| Fcitx5PackageSignatureEnvelopeEntry {
+                key_id: owned_slice_from_str(entry.key_id().as_str()),
+                algorithm: owned_slice_from_str(entry.algorithm().as_str()),
+                signature: owned_slice(entry.signature().to_vec()),
+            })
+            .collect();
+        let len = raw.len();
+        let ptr = raw.as_mut_ptr();
+        std::mem::forget(raw);
+        (ptr, len)
+    }
+
+    fn signature_envelope_ok_result(
+        envelope: super::SignatureEnvelope,
+    ) -> Fcitx5PackageSignatureEnvelopeResult {
+        let (signatures, signature_count) = owned_signature_entry_array(envelope.signatures());
+        Fcitx5PackageSignatureEnvelopeResult {
+            status: 0,
+            error_code: [0; 64],
+            error_message: [0; 512],
+            format_version: envelope.format_version() as u32,
+            signed_object: owned_slice_from_str(envelope.signed_object().as_str()),
+            canonicalization: owned_slice_from_str(envelope.canonicalization()),
+            signatures,
+            signature_count,
+        }
+    }
+
     #[no_mangle]
     pub unsafe extern "C" fn fcitx5_package_read_trusted_keys_utf16(
         keyring_path: *const u16,
@@ -7009,6 +7087,51 @@ mod repair_ffi {
         match parse_trusted_manifest(manifest_text) {
             Ok(manifest) => manifest_ok_result(manifest),
             Err(error) => manifest_error_result(error.code(), &error.to_string()),
+        }
+    }
+
+    fn signed_object_from_raw(expected_object: Fcitx5ByteSlice) -> Option<SignedObject> {
+        match string_from_raw(expected_object)?.as_str() {
+            "repository-index" => Some(SignedObject::RepositoryIndex),
+            "package-manifest" => Some(SignedObject::PackageManifest),
+            _ => None,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_parse_signature_envelope_utf8(
+        envelope_bytes: *const u8,
+        envelope_len: usize,
+        expected_object: *const u8,
+        expected_object_len: usize,
+    ) -> Fcitx5PackageSignatureEnvelopeResult {
+        let Some(envelope_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: envelope_bytes,
+            len: envelope_len,
+        }) else {
+            return signature_envelope_error_result(
+                "invalid_signature",
+                "signature envelope identity is invalid",
+            );
+        };
+        let Ok(envelope_text) = std::str::from_utf8(envelope_bytes) else {
+            return signature_envelope_error_result(
+                "invalid_signature",
+                "signature envelope is not strict JSON",
+            );
+        };
+        let Some(expected_object) = signed_object_from_raw(Fcitx5ByteSlice {
+            data: expected_object,
+            len: expected_object_len,
+        }) else {
+            return signature_envelope_error_result(
+                "invalid_signature",
+                "signature envelope identity is invalid",
+            );
+        };
+        match parse_signature_envelope(envelope_text, expected_object) {
+            Ok(envelope) => signature_envelope_ok_result(envelope),
+            Err(error) => signature_envelope_error_result(error.code(), &error.to_string()),
         }
     }
 
@@ -7068,6 +7191,32 @@ mod repair_ffi {
                     free_owned_slice(file.path);
                     free_owned_slice(file.sha256);
                     free_owned_slice(file.blake3);
+                }
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_signature_envelope_free(
+        envelope: *const Fcitx5PackageSignatureEnvelopeResult,
+    ) {
+        if envelope.is_null() {
+            return;
+        }
+        let envelope = unsafe { &*envelope };
+        free_owned_slice(envelope.signed_object);
+        free_owned_slice(envelope.canonicalization);
+        if !envelope.signatures.is_null() {
+            unsafe {
+                let signatures = Vec::from_raw_parts(
+                    envelope.signatures,
+                    envelope.signature_count,
+                    envelope.signature_count,
+                );
+                for signature in &signatures {
+                    free_owned_slice(signature.key_id);
+                    free_owned_slice(signature.algorithm);
+                    free_owned_slice(signature.signature);
                 }
             }
         }

@@ -386,6 +386,8 @@ int main(int argc, char** argv) {
         rustPackageCore.find("parse_manifest") == std::string::npos ||
         rustPackageCore.find("parse_trusted_keys") == std::string::npos ||
         rustPackageCore.find("parse_signature_envelope") == std::string::npos ||
+        rustPackageCore.find("fcitx5_package_parse_signature_envelope_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("verify_signature_envelope") == std::string::npos ||
         rustPackageCore.find("verify_mldsa65_signature") == std::string::npos ||
         rustPackageCore.find("resolve_exact_dependencies") == std::string::npos ||
@@ -477,6 +479,13 @@ int main(int argc, char** argv) {
         packageSource.find("BCRYPT_RSAPUBLIC_BLOB") != std::string::npos ||
         packageSource.find("fcitx5_mldsa65_verify") != std::string::npos ||
         packageSource.find("mldsa/mldsa_native.h") != std::string::npos ||
+        packageSource.find("signature envelope format version is unsupported") !=
+            std::string::npos ||
+        packageSource.find("signature envelope key id is invalid or duplicated") !=
+            std::string::npos ||
+        packageSource.find("signature envelope requires an unsupported algorithm") !=
+            std::string::npos ||
+        packageSource.find("CryptStringToBinaryA") != std::string::npos ||
         packageSource.find("known-good manifest identity differs") != std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||
