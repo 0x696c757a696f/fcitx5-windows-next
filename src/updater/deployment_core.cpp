@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <iterator>
 #include <set>
@@ -40,6 +41,15 @@ struct Fcitx5StringResult {
   char value[65]{};
 };
 
+struct Fcitx5TsfDllUpdateResult {
+  std::int32_t status{};
+  std::uint8_t old_dll_renamed{};
+  std::uint8_t new_dll_installed{};
+  std::uint8_t old_cleanup_pending{};
+  std::uint8_t old_cleanup_scheduled_for_reboot{};
+  std::array<std::uint16_t, 32768> renamed_old_path{};
+};
+
 extern "C" {
 int fcitx5_update_write_update_owner_utf16(const std::uint16_t* root, std::size_t root_len,
                                            std::uint32_t owner);
@@ -72,6 +82,17 @@ int fcitx5_update_cleanup_previous_known_good_utf16(const std::uint16_t* root,
                                                     std::size_t channel_len,
                                                     const std::uint16_t* package_id,
                                                     std::size_t package_id_len);
+int fcitx5_update_install_tsf_dll_generation_utf16(
+    const std::uint16_t* registered_dll_path,
+    std::size_t registered_dll_path_len,
+    const std::uint16_t* verified_new_dll_path,
+    std::size_t verified_new_dll_path_len,
+    const std::uint16_t* generation,
+    std::size_t generation_len,
+    Fcitx5TsfDllUpdateResult* out_result);
+int fcitx5_update_cleanup_old_tsf_dlls_utf16(const std::uint16_t* tsf_arch_directory,
+                                             std::size_t tsf_arch_directory_len,
+                                             std::size_t* out_pending_count);
 int fcitx5_update_read_runtime_generation_state_utf16(const std::uint16_t* root,
                                                       std::size_t root_len,
                                                       Fcitx5GenerationState* out_state);
@@ -118,12 +139,9 @@ std::wstring widen_ascii(std::string_view value) {
   return reinterpret_cast<const std::uint16_t*>(value.c_str());
 }
 
-bool old_tsf_name(const std::filesystem::path& path) {
-  const auto name = path.filename().wstring();
-  constexpr std::wstring_view prefix = L"fcitx5-tsf.old.";
-  constexpr std::wstring_view suffix = L".dll";
-  return name.size() > prefix.size() + suffix.size() && name.starts_with(prefix) &&
-         name.ends_with(suffix);
+std::wstring bounded_wide(const std::uint16_t* value, std::size_t maximum) {
+  const auto end = std::find(value, value + maximum, 0);
+  return {reinterpret_cast<const wchar_t*>(value), reinterpret_cast<const wchar_t*>(end)};
 }
 
 bool contains_reparse_component(const std::filesystem::path& path) {
@@ -137,58 +155,6 @@ bool contains_reparse_component(const std::filesystem::path& path) {
     }
   }
   return false;
-}
-
-void validate_tsf_update_inputs(const std::filesystem::path& registered_dll_path,
-                                const std::filesystem::path& verified_new_dll_path,
-                                std::string_view generation) {
-  if (!registered_dll_path.is_absolute() || registered_dll_path.filename() != L"fcitx5-tsf.dll" ||
-      registered_dll_path.parent_path().empty()) {
-    throw std::invalid_argument("registered TSF DLL path is invalid");
-  }
-  if (!verified_new_dll_path.is_absolute() ||
-      !std::filesystem::is_regular_file(verified_new_dll_path)) {
-    throw std::invalid_argument("verified TSF DLL path is invalid");
-  }
-  if (!generation_token(generation)) throw std::invalid_argument("TSF generation is invalid");
-}
-
-std::filesystem::path unique_old_tsf_path(const std::filesystem::path& registered_dll_path,
-                                          std::string_view generation) {
-  const auto directory = registered_dll_path.parent_path();
-  const auto generation_text = widen_ascii(generation);
-  for (unsigned attempt = 0; attempt < 64U; ++attempt) {
-    const auto candidate =
-        directory / (L"fcitx5-tsf.old." + generation_text + L"." +
-                     std::to_wstring(GetCurrentProcessId()) + L"." +
-                     std::to_wstring(GetTickCount64()) + L"." + std::to_wstring(attempt) +
-                     L".dll");
-    if (!std::filesystem::exists(candidate)) return candidate;
-  }
-  throw std::runtime_error("unable to allocate old TSF DLL path");
-}
-
-bool cleanup_old_tsf_dll(const std::filesystem::path& path, bool& scheduled_for_reboot) noexcept {
-  scheduled_for_reboot = false;
-  if (DeleteFileW(path.c_str())) return true;
-  const DWORD error = GetLastError();
-  if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return true;
-  if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION ||
-      error == ERROR_ACCESS_DENIED) {
-    scheduled_for_reboot =
-        MoveFileExW(path.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT) != FALSE;
-  }
-  return false;
-}
-
-void restore_renamed_tsf(const std::filesystem::path& registered_dll_path,
-                         const std::filesystem::path& renamed_old_path) noexcept {
-  if (renamed_old_path.empty() || !std::filesystem::exists(renamed_old_path) ||
-      std::filesystem::exists(registered_dll_path)) {
-    return;
-  }
-  (void)MoveFileExW(renamed_old_path.c_str(), registered_dll_path.c_str(),
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 }
 
 [[maybe_unused]] std::filesystem::path state_path(const std::filesystem::path& root) {
@@ -489,66 +455,36 @@ TsfDllUpdateResult install_tsf_dll_generation(
     const std::filesystem::path& registered_dll_path,
     const std::filesystem::path& verified_new_dll_path,
     std::string_view generation) {
-  validate_tsf_update_inputs(registered_dll_path, verified_new_dll_path, generation);
-  std::filesystem::create_directories(registered_dll_path.parent_path());
   TsfDllUpdateResult result;
   result.registered_path = registered_dll_path;
-  if (std::filesystem::exists(registered_dll_path)) {
-    if (!std::filesystem::is_regular_file(registered_dll_path)) {
-      throw std::runtime_error("registered TSF DLL path is not a regular file");
-    }
-    result.renamed_old_path = unique_old_tsf_path(registered_dll_path, generation);
-    if (!MoveFileExW(registered_dll_path.c_str(), result.renamed_old_path.c_str(),
-                     MOVEFILE_WRITE_THROUGH)) {
-      throw std::runtime_error("old TSF DLL rename failed");
-    }
-    result.old_dll_renamed = true;
+  const auto generation_wide = widen_ascii(generation);
+  Fcitx5TsfDllUpdateResult rust_result{};
+  if (fcitx5_update_install_tsf_dll_generation_utf16(
+          utf16_ptr(registered_dll_path), registered_dll_path.native().size(),
+          utf16_ptr(verified_new_dll_path), verified_new_dll_path.native().size(),
+          utf16_ptr(generation_wide), generation_wide.size(), &rust_result) != 0) {
+    throw std::runtime_error("TSF DLL generation install failed");
   }
-
-  const auto temporary = std::filesystem::path(
-      registered_dll_path.wstring() + L".new." + std::to_wstring(GetCurrentProcessId()) + L"." +
-      std::to_wstring(GetTickCount64()));
-  try {
-    if (!CopyFileW(verified_new_dll_path.c_str(), temporary.c_str(), FALSE)) {
-      restore_renamed_tsf(registered_dll_path, result.renamed_old_path);
-      throw std::runtime_error("new TSF DLL staging copy failed");
-    }
-    if (!MoveFileExW(temporary.c_str(), registered_dll_path.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-      std::error_code ignored;
-      std::filesystem::remove(temporary, ignored);
-      restore_renamed_tsf(registered_dll_path, result.renamed_old_path);
-      throw std::runtime_error("new TSF DLL publication failed");
-    }
-    publish(registered_dll_path.parent_path() / L"fcitx5-tsf.generation",
-            std::string(generation) + "\n");
-    result.new_dll_installed = true;
-    if (result.old_dll_renamed) {
-      bool scheduled = false;
-      if (!cleanup_old_tsf_dll(result.renamed_old_path, scheduled)) {
-        result.old_cleanup_pending = true;
-        result.old_cleanup_scheduled_for_reboot = scheduled;
-      }
-    }
-    return result;
-  } catch (...) {
-    std::error_code ignored;
-    std::filesystem::remove(temporary, ignored);
-    throw;
-  }
+  result.old_dll_renamed = rust_result.old_dll_renamed != 0;
+  result.new_dll_installed = rust_result.new_dll_installed != 0;
+  result.old_cleanup_pending = rust_result.old_cleanup_pending != 0;
+  result.old_cleanup_scheduled_for_reboot =
+      rust_result.old_cleanup_scheduled_for_reboot != 0;
+  result.renamed_old_path =
+      std::filesystem::path(bounded_wide(rust_result.renamed_old_path.data(),
+                                         rust_result.renamed_old_path.size()));
+  return result;
 }
 
 std::vector<std::filesystem::path> cleanup_old_tsf_dlls(
     const std::filesystem::path& tsf_arch_directory) {
-  std::vector<std::filesystem::path> pending;
-  if (!std::filesystem::is_directory(tsf_arch_directory)) return pending;
-  for (const auto& entry : std::filesystem::directory_iterator(tsf_arch_directory)) {
-    std::error_code error;
-    if (!entry.is_regular_file(error) || error || !old_tsf_name(entry.path())) continue;
-    bool scheduled = false;
-    if (!cleanup_old_tsf_dll(entry.path(), scheduled)) pending.push_back(entry.path());
+  std::size_t pending_count = 0;
+  if (fcitx5_update_cleanup_old_tsf_dlls_utf16(
+          utf16_ptr(tsf_arch_directory), tsf_arch_directory.native().size(),
+          &pending_count) != 0) {
+    throw std::runtime_error("old TSF DLL cleanup failed");
   }
-  return pending;
+  return std::vector<std::filesystem::path>(pending_count);
 }
 
 std::filesystem::path runtime_generation_directory(const std::filesystem::path& root,

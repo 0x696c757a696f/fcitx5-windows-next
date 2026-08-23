@@ -476,6 +476,7 @@ mod win32_fs_adapter {
     use std::path::Path;
 
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_DELAY_UNTIL_REBOOT: u32 = 0x4;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
 
     unsafe extern "system" {
@@ -484,6 +485,17 @@ mod win32_fs_adapter {
             new_file_name: *const u16,
             flags: u32,
         ) -> i32;
+        fn DeleteFileW(file_name: *const u16) -> i32;
+        fn GetCurrentProcessId() -> u32;
+        fn GetTickCount64() -> u64;
+    }
+
+    pub fn current_process_id() -> u32 {
+        unsafe { GetCurrentProcessId() }
+    }
+
+    pub fn tick_count64() -> u64 {
+        unsafe { GetTickCount64() }
     }
 
     pub fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
@@ -496,6 +508,53 @@ mod win32_fs_adapter {
                 source_wide.as_ptr(),
                 destination_wide.as_ptr(),
                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
+        let mut source_wide: Vec<u16> = source.as_os_str().encode_wide().collect();
+        let mut destination_wide: Vec<u16> = destination.as_os_str().encode_wide().collect();
+        source_wide.push(0);
+        destination_wide.push(0);
+        let ok = unsafe {
+            MoveFileExW(
+                source_wide.as_ptr(),
+                destination_wide.as_ptr(),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn delete_file(path: &Path) -> io::Result<()> {
+        let mut path_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        path_wide.push(0);
+        let ok = unsafe { DeleteFileW(path_wide.as_ptr()) };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn schedule_delete_on_reboot(path: &Path) -> io::Result<()> {
+        let mut path_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        path_wide.push(0);
+        let ok = unsafe {
+            MoveFileExW(
+                path_wide.as_ptr(),
+                std::ptr::null(),
+                MOVEFILE_DELAY_UNTIL_REBOOT,
             )
         };
         if ok == 0 {
@@ -3364,12 +3423,19 @@ mod deployment_ffi {
     #![allow(unsafe_code)]
 
     use super::win32_fs_adapter;
-    use super::{JsonParser, JsonValue, PackageId};
+    use super::{path_contains_reparse_component, JsonParser, JsonValue, PackageId};
     use std::ffi::OsString;
     use std::fs;
-    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::{Path, PathBuf};
     use std::slice;
+
+    const TSF_UPDATE_RESULT_PATH_U16: usize = 32768;
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_PATH_NOT_FOUND: i32 = 3;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
 
     #[repr(u32)]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3409,6 +3475,17 @@ mod deployment_ffi {
         pub error_code: [u8; 64],
         pub error_message: [u8; 512],
         pub value: [u8; 65],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Fcitx5TsfDllUpdateResult {
+        pub status: i32,
+        pub old_dll_renamed: u8,
+        pub new_dll_installed: u8,
+        pub old_cleanup_pending: u8,
+        pub old_cleanup_scheduled_for_reboot: u8,
+        pub renamed_old_path: [u16; TSF_UPDATE_RESULT_PATH_U16],
     }
 
     fn write_ascii<const N: usize>(buffer: &mut [u8; N], value: &str) -> bool {
@@ -3497,6 +3574,16 @@ mod deployment_ffi {
         }
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         String::from_utf16(slice).ok()
+    }
+
+    fn write_wide_path<const N: usize>(buffer: &mut [u16; N], path: &Path) -> bool {
+        let value = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        if value.len() >= N {
+            return false;
+        }
+        buffer.fill(0);
+        buffer[..value.len()].copy_from_slice(&value);
+        true
     }
 
     fn state_path(root: &Path) -> PathBuf {
@@ -3835,6 +3922,178 @@ mod deployment_ffi {
         }
         state.previous = [0; 65];
         write_deployment_state(root, &state)
+    }
+
+    fn old_tsf_name(path: &Path) -> bool {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        name.len() > "fcitx5-tsf.old.".len() + ".dll".len()
+            && name.starts_with("fcitx5-tsf.old.")
+            && name.ends_with(".dll")
+    }
+
+    fn validate_tsf_update_inputs(
+        registered_dll_path: &Path,
+        verified_new_dll_path: &Path,
+        generation: &str,
+    ) -> Result<(), String> {
+        if !registered_dll_path.is_absolute()
+            || registered_dll_path.file_name() != Some(std::ffi::OsStr::new("fcitx5-tsf.dll"))
+            || registered_dll_path.parent().is_none()
+        {
+            return Err("registered TSF DLL path is invalid".to_owned());
+        }
+        if !verified_new_dll_path.is_absolute()
+            || !verified_new_dll_path.is_file()
+            || path_contains_reparse_component(verified_new_dll_path)
+                .map_err(|_| "verified TSF DLL path is invalid".to_owned())?
+        {
+            return Err("verified TSF DLL path is invalid".to_owned());
+        }
+        if !generation_token(generation) {
+            return Err("TSF generation is invalid".to_owned());
+        }
+        Ok(())
+    }
+
+    fn unique_old_tsf_path(
+        registered_dll_path: &Path,
+        generation: &str,
+    ) -> Result<PathBuf, String> {
+        let directory = registered_dll_path
+            .parent()
+            .ok_or_else(|| "registered TSF DLL path is invalid".to_owned())?;
+        let process_id = win32_fs_adapter::current_process_id();
+        let tick = win32_fs_adapter::tick_count64();
+        for attempt in 0..64_u32 {
+            let candidate = directory.join(format!(
+                "fcitx5-tsf.old.{generation}.{process_id}.{tick}.{attempt}.dll"
+            ));
+            if !candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+        Err("unable to allocate old TSF DLL path".to_owned())
+    }
+
+    fn cleanup_old_tsf_dll(path: &Path) -> Result<(bool, bool), String> {
+        match win32_fs_adapter::delete_file(path) {
+            Ok(()) => Ok((true, false)),
+            Err(error) => match error.raw_os_error() {
+                Some(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => Ok((true, false)),
+                Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION) => {
+                    let scheduled = win32_fs_adapter::schedule_delete_on_reboot(path).is_ok();
+                    Ok((false, scheduled))
+                }
+                _ => Ok((false, false)),
+            },
+        }
+    }
+
+    fn restore_renamed_tsf(registered_dll_path: &Path, renamed_old_path: &Path) {
+        if renamed_old_path.as_os_str().is_empty()
+            || !renamed_old_path.exists()
+            || registered_dll_path.exists()
+        {
+            return;
+        }
+        let _ = win32_fs_adapter::replace_file(renamed_old_path, registered_dll_path);
+    }
+
+    fn install_tsf_dll_generation(
+        registered_dll_path: &Path,
+        verified_new_dll_path: &Path,
+        generation: &str,
+    ) -> Result<Fcitx5TsfDllUpdateResult, String> {
+        validate_tsf_update_inputs(registered_dll_path, verified_new_dll_path, generation)?;
+        fs::create_dir_all(
+            registered_dll_path
+                .parent()
+                .ok_or_else(|| "registered TSF DLL path is invalid".to_owned())?,
+        )
+        .map_err(|_| "registered TSF DLL path is invalid".to_owned())?;
+        let mut result = Fcitx5TsfDllUpdateResult {
+            status: 0,
+            old_dll_renamed: 0,
+            new_dll_installed: 0,
+            old_cleanup_pending: 0,
+            old_cleanup_scheduled_for_reboot: 0,
+            renamed_old_path: [0; TSF_UPDATE_RESULT_PATH_U16],
+        };
+        let mut renamed_old_path = PathBuf::new();
+        if registered_dll_path.exists() {
+            if !registered_dll_path.is_file() {
+                return Err("registered TSF DLL path is not a regular file".to_owned());
+            }
+            renamed_old_path = unique_old_tsf_path(registered_dll_path, generation)?;
+            win32_fs_adapter::move_file(registered_dll_path, &renamed_old_path)
+                .map_err(|_| "old TSF DLL rename failed".to_owned())?;
+            result.old_dll_renamed = 1;
+            if !write_wide_path(&mut result.renamed_old_path, &renamed_old_path) {
+                restore_renamed_tsf(registered_dll_path, &renamed_old_path);
+                return Err("old TSF DLL path is too long".to_owned());
+            }
+        }
+
+        let mut temporary_name = OsString::from(registered_dll_path.as_os_str());
+        temporary_name.push(format!(
+            ".new.{}.{}",
+            win32_fs_adapter::current_process_id(),
+            win32_fs_adapter::tick_count64()
+        ));
+        let temporary = PathBuf::from(temporary_name);
+        let staged = (|| {
+            fs::copy(verified_new_dll_path, &temporary)
+                .map_err(|_| "new TSF DLL staging copy failed".to_owned())?;
+            win32_fs_adapter::replace_file(&temporary, registered_dll_path)
+                .map_err(|_| "new TSF DLL publication failed".to_owned())?;
+            publish_text(
+                &registered_dll_path
+                    .parent()
+                    .ok_or_else(|| "registered TSF DLL path is invalid".to_owned())?
+                    .join("fcitx5-tsf.generation"),
+                &format!("{generation}\n"),
+            )
+            .map_err(|_| "TSF generation publication failed".to_owned())?;
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = staged {
+            let _ = fs::remove_file(&temporary);
+            restore_renamed_tsf(registered_dll_path, &renamed_old_path);
+            return Err(error);
+        }
+        result.new_dll_installed = 1;
+        if result.old_dll_renamed != 0 {
+            let (removed, scheduled) = cleanup_old_tsf_dll(&renamed_old_path)?;
+            if !removed {
+                result.old_cleanup_pending = 1;
+                result.old_cleanup_scheduled_for_reboot = scheduled as u8;
+            }
+        }
+        Ok(result)
+    }
+
+    fn cleanup_old_tsf_dlls(tsf_arch_directory: &Path) -> Result<Vec<PathBuf>, String> {
+        let mut pending = Vec::new();
+        if !tsf_arch_directory.is_dir() {
+            return Ok(pending);
+        }
+        for entry in
+            fs::read_dir(tsf_arch_directory).map_err(|_| "old TSF DLL cleanup failed".to_owned())?
+        {
+            let entry = entry.map_err(|_| "old TSF DLL cleanup failed".to_owned())?;
+            let path = entry.path();
+            if !path.is_file() || !old_tsf_name(&path) {
+                continue;
+            }
+            let (removed, _) = cleanup_old_tsf_dll(&path)?;
+            if !removed {
+                pending.push(path);
+            }
+        }
+        Ok(pending)
     }
 
     fn ascii_from_buffer(buffer: &[u8]) -> Result<String, String> {
@@ -4191,6 +4450,81 @@ mod deployment_ffi {
         };
         match cleanup_previous_known_good(&root, &channel, &package_id) {
             Ok(()) => 0,
+            Err(_) => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_install_tsf_dll_generation_utf16(
+        registered_dll_path: *const u16,
+        registered_dll_path_len: usize,
+        verified_new_dll_path: *const u16,
+        verified_new_dll_path_len: usize,
+        generation: *const u16,
+        generation_len: usize,
+        out_result: *mut Fcitx5TsfDllUpdateResult,
+    ) -> i32 {
+        if out_result.is_null() {
+            return 1;
+        }
+        let Some(registered_dll_path) =
+            path_from_utf16(registered_dll_path, registered_dll_path_len)
+        else {
+            return 1;
+        };
+        let Some(verified_new_dll_path) =
+            path_from_utf16(verified_new_dll_path, verified_new_dll_path_len)
+        else {
+            return 1;
+        };
+        let Some(generation) = string_from_utf16(generation, generation_len) else {
+            return 1;
+        };
+        match install_tsf_dll_generation(&registered_dll_path, &verified_new_dll_path, &generation)
+        {
+            Ok(mut result) => {
+                result.status = 0;
+                unsafe {
+                    *out_result = result;
+                }
+                0
+            }
+            Err(_) => {
+                unsafe {
+                    *out_result = Fcitx5TsfDllUpdateResult {
+                        status: 1,
+                        old_dll_renamed: 0,
+                        new_dll_installed: 0,
+                        old_cleanup_pending: 0,
+                        old_cleanup_scheduled_for_reboot: 0,
+                        renamed_old_path: [0; TSF_UPDATE_RESULT_PATH_U16],
+                    };
+                }
+                1
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_update_cleanup_old_tsf_dlls_utf16(
+        tsf_arch_directory: *const u16,
+        tsf_arch_directory_len: usize,
+        out_pending_count: *mut usize,
+    ) -> i32 {
+        if out_pending_count.is_null() {
+            return 1;
+        }
+        let Some(tsf_arch_directory) = path_from_utf16(tsf_arch_directory, tsf_arch_directory_len)
+        else {
+            return 1;
+        };
+        match cleanup_old_tsf_dlls(&tsf_arch_directory) {
+            Ok(pending) => {
+                unsafe {
+                    *out_pending_count = pending.len();
+                }
+                0
+            }
             Err(_) => 1,
         }
     }

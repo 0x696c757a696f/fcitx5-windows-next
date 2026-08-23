@@ -250,7 +250,20 @@ int main(int argc, char** argv) {
         updaterSource.find("remove_all(target") != std::string::npos ||
         deploymentCoreSource.find("fcitx5_update_cleanup_previous_known_good_utf16") ==
             std::string::npos ||
+        deploymentCoreSource.find("fcitx5_update_install_tsf_dll_generation_utf16") ==
+            std::string::npos ||
+        deploymentCoreSource.find("fcitx5_update_cleanup_old_tsf_dlls_utf16") ==
+            std::string::npos ||
+        deploymentCoreSource.find("CopyFileW(") != std::string::npos ||
+        deploymentCoreSource.find("DeleteFileW(") != std::string::npos ||
         rustPackageCore.find("cleanup_previous_known_good") == std::string::npos ||
+        rustPackageCore.find("install_tsf_dll_generation") == std::string::npos ||
+        rustPackageCore.find("cleanup_old_tsf_dlls") == std::string::npos ||
+        rustPackageCore.find("fcitx5_update_install_tsf_dll_generation_utf16") ==
+            std::string::npos ||
+        rustPackageCore.find("fcitx5_update_cleanup_old_tsf_dlls_utf16") ==
+            std::string::npos ||
+        rustPackageCore.find("MOVEFILE_DELAY_UNTIL_REBOOT") == std::string::npos ||
         rustPackageCore.find("invalid core package id for --cleanup-previous") ==
             std::string::npos ||
         rustPackageCore.find("cleanup target escapes the versions directory") ==
