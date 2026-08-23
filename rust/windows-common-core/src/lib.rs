@@ -262,6 +262,15 @@ fn may_launch_user_engine(
     !service_account && session_id != 0 && !secure_desktop && !user_sid.is_empty()
 }
 
+fn pipe_security_sddl(service_account: bool, session_id: u32, user_sid: &str) -> Option<String> {
+    if service_account || session_id == 0 || user_sid.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "D:P(A;;GA;;;SY)(A;;GA;;;{user_sid})S:(ML;;NW;;;ME)"
+    ))
+}
+
 fn local_name(
     pipe: bool,
     user_sid: &str,
@@ -479,6 +488,30 @@ pub unsafe extern "C" fn fcitx5_windows_common_may_launch_user_engine_utf16(
     ) as u8
 }
 
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
+/// UTF-16 buffer with exactly `user_sid_len` code units. `output` may be null
+/// for size queries or writable UTF-16 storage for `capacity` code units. No
+/// pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_sddl_utf16(
+    service_account: u8,
+    session_id: u32,
+    user_sid: *const u16,
+    user_sid_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
+        return 0;
+    };
+    let Some(sddl) = pipe_security_sddl(service_account != 0, session_id, &user_sid) else {
+        return 0;
+    };
+    write_wide_string(&sddl, output, capacity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,5 +634,16 @@ mod tests {
         assert!(!may_launch_user_engine(false, 0, false, "S-1-5-21-test"));
         assert!(!may_launch_user_engine(false, 1, true, "S-1-5-21-test"));
         assert!(!may_launch_user_engine(false, 1, false, ""));
+    }
+
+    #[test]
+    fn pipe_security_sddl_matches_cpp_contract() {
+        assert_eq!(
+            pipe_security_sddl(false, 7, "S-1-5-21-test").as_deref(),
+            Some("D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-test)S:(ML;;NW;;;ME)")
+        );
+        assert_eq!(pipe_security_sddl(true, 7, "S-1-5-21-test"), None);
+        assert_eq!(pipe_security_sddl(false, 0, "S-1-5-21-test"), None);
+        assert_eq!(pipe_security_sddl(false, 7, ""), None);
     }
 }

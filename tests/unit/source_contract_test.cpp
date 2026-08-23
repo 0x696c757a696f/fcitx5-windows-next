@@ -281,6 +281,7 @@ int main(int argc, char** argv) {
     const auto rustWindowsCommonManifest =
         read_text(sourceRoot / "rust/windows-common-core/Cargo.toml");
     const auto runtimeIdentitySource = read_text(sourceRoot / "src/platform/runtime_identity.cpp");
+    const auto pipeSecuritySource = read_text(sourceRoot / "src/platform/pipe_security.cpp");
     if (std::filesystem::exists(sourceRoot / "src/common/version.cpp") ||
         cargoManifest.find("\"rust/windows-common-core\"") == std::string::npos ||
         cargoLock.find("name = \"fcitx5-windows-common-core\"") == std::string::npos ||
@@ -310,6 +311,15 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("user_engine_launch_policy_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_pipe_security_sddl_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("pipe_security_sddl_matches_cpp_contract") ==
+            std::string::npos ||
+        pipeSecuritySource.find("D:P(A;;GA;;;SY)") != std::string::npos ||
+        pipeSecuritySource.find("identity.userSid.empty() || identity.serviceAccount") !=
+            std::string::npos ||
+        pipeSecuritySource.find("fcitx5_windows_common_pipe_security_sddl_utf16") ==
+            std::string::npos ||
         runtimeIdentitySource.find("!identity.serviceAccount && identity.sessionId != 0") !=
             std::string::npos ||
         runtimeIdentitySource.find("parseCurrentGeneration") != std::string::npos ||
@@ -330,7 +340,7 @@ int main(int argc, char** argv) {
         versionHeaderTemplate.find("fcitx5_windows_common_version") == std::string::npos ||
         versionHeaderTemplate.find("fcitx5_windows_common_release_channel") ==
             std::string::npos) {
-        return fail("COMMON-RUST: product version/channel/architecture and local IPC name policy must be Rust-owned");
+        return fail("COMMON-RUST: product version/channel/architecture, local IPC naming, generation paths, and pipe security policy must be Rust-owned");
     }
     if (rustToolchain.find("channel = \"1.98.0\"") == std::string::npos ||
         rustToolchain.find("aarch64-pc-windows-msvc") == std::string::npos ||

@@ -2,9 +2,44 @@
 
 #include <sddl.h>
 
+#include <cstdint>
 #include <string>
 
 namespace fcitx::windows::platform {
+namespace {
+
+extern "C" std::size_t fcitx5_windows_common_pipe_security_sddl_utf16(
+    std::uint8_t service_account,
+    std::uint32_t session_id,
+    const std::uint16_t* user_sid,
+    std::size_t user_sid_len,
+    std::uint16_t* output,
+    std::size_t capacity);
+
+const std::uint16_t* wideData(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return reinterpret_cast<const std::uint16_t*>(value.data());
+}
+
+std::wstring pipeSecuritySddl(const RuntimeIdentity& identity) {
+    const auto call = [&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_windows_common_pipe_security_sddl_utf16(
+            identity.serviceAccount ? 1 : 0, identity.sessionId, wideData(identity.userSid),
+            identity.userSid.size(), output, capacity);
+    };
+    const std::size_t required = call(nullptr, 0);
+    if (required == 0)
+        return {};
+    std::wstring result(required, L'\0');
+    const std::size_t written =
+        call(reinterpret_cast<std::uint16_t*>(result.data()), result.size());
+    if (written == 0 || written > result.size())
+        return {};
+    result.resize(written);
+    return result;
+}
+
+} // namespace
 
 PipeSecurity::~PipeSecurity() { reset(); }
 
@@ -35,10 +70,10 @@ void PipeSecurity::reset() noexcept {
 
 bool PipeSecurity::create(const RuntimeIdentity& identity, PipeSecurity& output) noexcept {
     output.reset();
-    if (identity.userSid.empty() || identity.serviceAccount || identity.sessionId == 0) return false;
     try {
-        const std::wstring sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;" + identity.userSid +
-                                  L")S:(ML;;NW;;;ME)";
+        const std::wstring sddl = pipeSecuritySddl(identity);
+        if (sddl.empty())
+            return false;
         PSECURITY_DESCRIPTOR descriptor = nullptr;
         if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) {
