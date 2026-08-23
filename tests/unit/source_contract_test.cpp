@@ -97,10 +97,17 @@ int main(int argc, char** argv) {
         return fail("REG-INSTALL-UAC-001: installer must not own per-user startup/session state");
     }
     const auto registerSource = read_text(sourceRoot / "src/register/register_main.cpp");
+    const auto registerDevScript = read_text(sourceRoot / "tools/register-dev.ps1");
     if (registerSource.find("validateProductArtifact") == std::string::npos ||
         registerSource.find("--validate-artifact") == std::string::npos ||
         registerSource.find("paired architecture TSF DLL is missing") == std::string::npos) {
         return fail("STAB-REGISTER-BOOTSTRAP-012: register helper must validate product artifacts");
+    }
+    if (registerDevScript.find("Remove-StaleComRegistration") == std::string::npos ||
+        registerDevScript.find("out/package") == std::string::npos ||
+        registerDevScript.find("registered DLL is missing; removing stale COM registration") ==
+            std::string::npos) {
+        return fail("REG-UPDATE-TSF: dev TSF unregister must clean stale package-stage COM registrations");
     }
     const auto bootstrapSource = read_text(sourceRoot / "src/bootstrap/bootstrap_main.cpp");
     if (bootstrapSource.find("TerminateProcess(process.hProcess, ERROR_TIMEOUT)") ==

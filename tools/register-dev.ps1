@@ -23,7 +23,8 @@ $sourceX86Dll = Join-Path $repoRoot "out/build/windows-x86-dev/$Configuration/fc
 $x64Regsvr = Join-Path $env:SystemRoot 'System32/regsvr32.exe'
 $x86Regsvr = Join-Path $env:SystemRoot 'SysWOW64/regsvr32.exe'
 $clsid = '{3A21B9E2-4F47-4C36-8BFA-91D7D3B3E901}'
-$classKeyPath = "Software\Classes\CLSID\$clsid\InprocServer32"
+$classRootPath = "Software\Classes\CLSID\$clsid"
+$classKeyPath = "$classRootPath\InprocServer32"
 
 foreach ($path in @($x64Regsvr, $x86Regsvr)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -79,6 +80,39 @@ function Assert-PathUnderRoot {
     }
   }
   throw "Refusing to unregister a COM server outside this repository's development paths: $Path"
+}
+
+function Remove-StaleComRegistration {
+  param(
+    [Parameter(Mandatory)] [string] $Name,
+    [Parameter(Mandatory)] [Microsoft.Win32.RegistryView] $View,
+    [Parameter(Mandatory)] [string] $Dll,
+    [Parameter(Mandatory)] [string[]] $AllowedRoots
+  )
+
+  Assert-PathUnderRoot -Path $Dll -AllowedRoots $AllowedRoots
+  if (Test-Path -LiteralPath $Dll -PathType Leaf) {
+    throw "$Name registered DLL exists and must self-unregister: $Dll"
+  }
+
+  $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+    [Microsoft.Win32.RegistryHive]::LocalMachine,
+    $View
+  )
+  try {
+    $classes = $baseKey.OpenSubKey('Software\Classes\CLSID', $true)
+    if (-not $classes) {
+      throw "$Name Classes\\CLSID registry root is unavailable."
+    }
+    try {
+      $classes.DeleteSubKeyTree($clsid, $false)
+    } finally {
+      $classes.Dispose()
+    }
+  } finally {
+    $baseKey.Dispose()
+  }
+  Write-Host "$Name registered DLL is missing; removing stale COM registration: $Dll"
 }
 
 function Assert-ComRegistration {
@@ -143,7 +177,8 @@ if ($Action -eq 'register') {
   $allowedRoots = @(
     (Join-Path $repoRoot 'out/dev-registration'),
     (Join-Path $repoRoot 'out/build/windows-x64-dev'),
-    (Join-Path $repoRoot 'out/build/windows-x86-dev')
+    (Join-Path $repoRoot 'out/build/windows-x86-dev'),
+    (Join-Path $repoRoot 'out/package')
   )
   $targets = @(
     [pscustomobject]@{
@@ -165,7 +200,13 @@ if ($Action -eq 'register') {
     if (-not $target.Dll) { continue }
     Assert-PathUnderRoot -Path $target.Dll -AllowedRoots $allowedRoots
     if (-not (Test-Path -LiteralPath $target.Dll -PathType Leaf)) {
-      throw "$($target.Name) registered DLL is missing and cannot self-unregister: $($target.Dll)"
+      Remove-StaleComRegistration -Name $target.Name -View $target.View `
+        -Dll $target.Dll -AllowedRoots $allowedRoots
+      $remaining = Get-ComServerPath -View $target.View
+      if ($remaining) {
+        throw "$($target.Name) stale COM registration remains at '$remaining'."
+      }
+      continue
     }
     Invoke-Regsvr -Executable $target.Executable -Dll $target.Dll -Unregister $true
     $remaining = Get-ComServerPath -View $target.View
