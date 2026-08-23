@@ -666,12 +666,26 @@ target_link_libraries(
   PUBLIC fcitx5_package_core_rust ole32 advapi32 ws2_32 userenv ntdll)
 add_dependencies(fcitx5_package_core fcitx5_package_core_rustlib)
 
-add_executable(fcitx5_downloader src/package/downloader_main.cpp)
-set_target_properties(fcitx5_downloader PROPERTIES OUTPUT_NAME "fcitx5-downloader")
-target_link_libraries(
-  fcitx5_downloader PRIVATE fcitx5::windows_common fcitx5::package_core winhttp advapi32)
-fcitx_apply_project_options(fcitx5_downloader)
-fcitx_apply_binary_hardening(fcitx5_downloader)
+add_custom_target(
+  fcitx5_downloader
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+    "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-downloader-cli.ps1"
+    -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
+    -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/downloader_main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-downloader-cli.ps1"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-downloader CLI")
 
 add_executable(fcitx5_deployer src/package/deployer_main.cpp)
 set_target_properties(fcitx5_deployer PROPERTIES OUTPUT_NAME "fcitx5-deployer")
@@ -784,7 +798,8 @@ if(BUILD_TESTING)
   add_test(
     NAME control-package-stopped-service-contract
     COMMAND fcitx5_control_package_integration_test
-            "$<TARGET_FILE:fcitx5_control>" "$<TARGET_FILE:fcitx5_downloader>")
+            "$<TARGET_FILE:fcitx5_control>"
+            "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe")
   set_tests_properties(control-package-stopped-service-contract PROPERTIES TIMEOUT 30)
   add_test(NAME launcher-version COMMAND fcitx5_launcher --version)
   add_test(NAME mock-engine-version COMMAND fcitx5_mock_engine --version)
@@ -809,8 +824,12 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_deployment_core_test)
   add_test(NAME deployment-previous-known-good COMMAND fcitx5_deployment_core_test)
   add_test(NAME updater-version COMMAND fcitx5_updater --version)
-  add_test(NAME downloader-version COMMAND fcitx5_downloader --version)
-  add_test(NAME downloader-boundary-smoke COMMAND fcitx5_downloader --self-test)
+  add_test(
+    NAME downloader-version
+    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe" --version)
+  add_test(
+    NAME downloader-boundary-smoke
+    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe" --self-test)
   add_test(NAME deployer-version COMMAND fcitx5_deployer --version)
   add_test(NAME deployer-boundary-smoke COMMAND fcitx5_deployer --self-test)
   add_test(NAME provider-version

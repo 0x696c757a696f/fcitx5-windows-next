@@ -171,6 +171,10 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/c/miniz_archive.c");
     const auto rustPackageCoreBinary =
         read_text(sourceRoot / "rust/package-core/src/main.rs");
+    const auto rustDownloaderBinary =
+        read_text(sourceRoot / "rust/package-core/src/downloader_main.rs");
+    const auto rustDownloaderBuild =
+        read_text(sourceRoot / "tools/build-rust-downloader-cli.ps1");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
     const auto rustPackageCoreArtifactSmoke =
@@ -225,6 +229,21 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("winhttp.dll") == std::string::npos ||
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
         rustPackageCoreBinary.find("verify_signature_envelope") == std::string::npos ||
+        std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||
+        rustPackageCoreManifest.find("name = \"fcitx5-downloader\"") ==
+            std::string::npos ||
+        rustDownloaderBinary.find("WinHttpOpen") == std::string::npos ||
+        rustDownloaderBinary.find("WinHttpCrackUrl") == std::string::npos ||
+        rustDownloaderBinary.find("WINHTTP_OPTION_REDIRECT_POLICY_NEVER") ==
+            std::string::npos ||
+        rustDownloaderBinary.find("downloader refuses to run elevated") ==
+            std::string::npos ||
+        rustDownloaderBinary.find("only credential-free HTTPS is allowed") ==
+            std::string::npos ||
+        rustDownloaderBinary.find("sha256_digest") == std::string::npos ||
+        rustDownloaderBinary.find("MoveFileExW") == std::string::npos ||
+        rustDownloaderBuild.find("fcitx5-downloader.exe") == std::string::npos ||
+        rustDownloaderBuild.find("--bin fcitx5-downloader") == std::string::npos ||
         rustPackageCliBuild.find("fcitx5-package.exe") == std::string::npos ||
         rustPackageCliBuild.find("fcitx5-package-core.exe") == std::string::npos ||
         rustPackageCliBuild.find("--bin fcitx5-package-core") == std::string::npos ||

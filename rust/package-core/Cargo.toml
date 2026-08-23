@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "fcitx5-provider"
 path = "src/provider_main.rs"
 
+[[bin]]
+name = "fcitx5-downloader"
+path = "src/downloader_main.rs"
+
 [dependencies]
 blake3 = { version = "=1.5.5", default-features = false, features = ["pure"] }
 
