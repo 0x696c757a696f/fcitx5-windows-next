@@ -41,12 +41,25 @@ namespace {
 namespace fs = std::filesystem;
 using Strings = std::unordered_map<std::string, std::wstring>;
 
+template <typename Function>
+Function resolveProcAddress(HMODULE module, const char* name) noexcept {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+    const auto function = reinterpret_cast<Function>(GetProcAddress(module, name));
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+    return function;
+}
+
 void enableDpiAwareness() noexcept {
     const HMODULE user32 = GetModuleHandleW(L"user32.dll");
     using SetContext = BOOL(WINAPI*)(HANDLE);
-    const auto setContext = user32 ? reinterpret_cast<SetContext>(
-                                        GetProcAddress(user32, "SetProcessDpiAwarenessContext"))
-                                   : nullptr;
+    const auto setContext =
+        user32 ? resolveProcAddress<SetContext>(user32, "SetProcessDpiAwarenessContext")
+               : nullptr;
     if (!setContext || !setContext(reinterpret_cast<HANDLE>(-4)))
         (void)SetProcessDPIAware();
 }
@@ -56,8 +69,7 @@ void enableNativeWindowEffects(HWND window) noexcept {
     if (!dwm)
         return;
     using SetAttribute = HRESULT(WINAPI*)(HWND, DWORD, const void*, DWORD);
-    const auto setAttribute =
-        reinterpret_cast<SetAttribute>(GetProcAddress(dwm, "DwmSetWindowAttribute"));
+    const auto setAttribute = resolveProcAddress<SetAttribute>(dwm, "DwmSetWindowAttribute");
     if (setAttribute) {
         constexpr DWORD kCornerPreference = 33;
         constexpr DWORD kCaptionColor = 35;
@@ -78,7 +90,7 @@ void setCurrentProcessAppUserModelId(const wchar_t* appId) noexcept {
         return;
     using SetAppId = HRESULT(WINAPI*)(PCWSTR);
     const auto setAppId =
-        reinterpret_cast<SetAppId>(GetProcAddress(shell, "SetCurrentProcessExplicitAppUserModelID"));
+        resolveProcAddress<SetAppId>(shell, "SetCurrentProcessExplicitAppUserModelID");
     if (setAppId && appId && *appId)
         (void)setAppId(appId);
     FreeLibrary(shell);
@@ -1864,8 +1876,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const HMODULE user32 = GetModuleHandleW(L"user32.dll");
         using GetDpiForWindowProc = UINT(WINAPI*)(HWND);
         const auto getDpiForWindow =
-            user32 ? reinterpret_cast<GetDpiForWindowProc>(
-                         GetProcAddress(user32, "GetDpiForWindow"))
+            user32 ? resolveProcAddress<GetDpiForWindowProc>(user32, "GetDpiForWindow")
                    : nullptr;
         if (getDpiForWindow) {
             const UINT dpi = getDpiForWindow(m_hWnd);
@@ -1892,8 +1903,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const HMODULE user32 = GetModuleHandleW(L"user32.dll");
         using SystemParametersInfoForDpiProc = BOOL(WINAPI*)(UINT, UINT, PVOID, UINT, UINT);
         const auto systemParametersInfoForDpi =
-            user32 ? reinterpret_cast<SystemParametersInfoForDpiProc>(
-                         GetProcAddress(user32, "SystemParametersInfoForDpi"))
+            user32 ? resolveProcAddress<SystemParametersInfoForDpiProc>(
+                         user32, "SystemParametersInfoForDpi")
                    : nullptr;
         const bool dpiMetrics =
             systemParametersInfoForDpi &&
