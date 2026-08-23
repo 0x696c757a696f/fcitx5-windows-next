@@ -387,13 +387,13 @@ endif()
 add_library(
   fcitx5_package_core STATIC
   src/package/package_core.cpp
-  src/package/repository.cpp)
+  )
 add_library(fcitx5::package_core ALIAS fcitx5_package_core)
 target_compile_features(fcitx5_package_core PUBLIC cxx_std_20)
 target_include_directories(
   fcitx5_package_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/package")
 target_include_directories(
-  fcitx5_package_core SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+  fcitx5_package_core SYSTEM PUBLIC "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
 target_include_directories(
   fcitx5_package_core SYSTEM PRIVATE "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
 target_include_directories(

@@ -412,6 +412,9 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustPackageCore.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
         rustPackageCore.find("fcitx5_package_wide_free") == std::string::npos ||
+        rustPackageCore.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
+        rustPackageCore.find("fcitx5_repository_verify_index_envelope_utf8") ==
+            std::string::npos ||
         rustPackageCore.find("VerifiedArtifact") == std::string::npos ||
         rustPackageCoreBuild.find("mldsa_native.c") == std::string::npos ||
         rustPackageCoreBuild.find("fcitx5_mldsa65_config.h") == std::string::npos ||
@@ -428,7 +431,12 @@ int main(int argc, char** argv) {
         rustPackageCoreBinary.find("parse_trusted_keys") == std::string::npos ||
         rustPackageCoreBinary.find("verify_signature_envelope") == std::string::npos ||
         packageCoreHeader.find("fcitx5_package_stage_archive_utf16") == std::string::npos ||
+        packageCoreHeader.find("fcitx5_repository_verify_index_utf8") == std::string::npos ||
+        packageCoreHeader.find("fcitx5_repository_verify_index_envelope_utf8") ==
+            std::string::npos ||
+        packageCoreHeader.find("find_repository_package") == std::string::npos ||
         packageCoreHeader.find("rust_trusted_key_views") == std::string::npos ||
+        std::filesystem::exists(sourceRoot / "src/package/repository.cpp") ||
         std::filesystem::exists(sourceRoot / "src/package/downloader_main.cpp") ||
         rustPackageCoreManifest.find("name = \"fcitx5-downloader\"") ==
             std::string::npos ||
