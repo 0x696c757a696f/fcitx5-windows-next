@@ -12,9 +12,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
@@ -24,7 +23,6 @@
 #include <utility>
 #include <vector>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
@@ -183,6 +181,8 @@ int fcitx5_control_startup_set_utf16(Fcitx5ControlUtf16 executable_directory,
                                      std::uint8_t enabled);
 int fcitx5_control_atomic_write_utf8_file_utf16(Fcitx5ControlUtf16 destination,
                                                 Fcitx5ControlUtf8 content);
+int fcitx5_control_read_file_utf16(Fcitx5ControlUtf16 path, std::uint64_t maximum,
+                                   char** out_ptr, std::size_t* out_len);
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 int fcitx5_control_usage_text_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
@@ -417,6 +417,7 @@ constexpr std::uint32_t kRootActionStatus = 8;
 constexpr std::uint32_t kRootActionRestartEngine = 9;
 constexpr std::uint32_t kRootActionShutdown = 10;
 constexpr std::uint32_t kRootActionDiagnosticsPlan = 11;
+constexpr int kControlFileReadInvalidFile = 1;
 constexpr std::uint32_t kConfigActionValidate = 1;
 constexpr std::uint32_t kConfigActionApply = 2;
 constexpr std::uint32_t kConfigActionResetConfig = 3;
@@ -566,31 +567,37 @@ std::uint32_t packageAction(const std::vector<std::wstring_view>& arguments) {
         state.empty() ? Fcitx5ControlUtf16{nullptr, 0} : Fcitx5ControlUtf16{state.data(), state.size()});
 }
 
+bool readUtf8Bounded(const fs::path& path, std::size_t maximum, std::string& text) {
+    const std::wstring pathText = path.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_read_file_utf16(
+        {pathText.data(), pathText.size()}, maximum, &bytes, &length);
+    if (status != 0)
+        return false;
+    text = takeRustUtf8(bytes, length);
+    return true;
+}
+
 bool readUtf8(const fs::path& path, std::string& text) {
-    std::error_code error;
-    const auto size = fs::file_size(path, error);
-    if (error || size > 256U * 1024U)
-        return false;
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
-        return false;
-    text.assign(std::istreambuf_iterator<char>(stream), {});
-    return stream.good() || stream.eof();
+    return readUtf8Bounded(path, 256U * 1024U, text);
 }
 
 std::vector<std::byte> readBinary(const fs::path& path, std::size_t maximum) {
-    std::error_code error;
-    const auto size = fs::file_size(path, error);
-    if (error || size > maximum)
+    const std::wstring pathText = path.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_read_file_utf16(
+        {pathText.data(), pathText.size()}, maximum, &bytes, &length);
+    if (status == kControlFileReadInvalidFile)
         throw fcitx::package::PackageError("invalid_file", "file is missing or too large");
-    std::ifstream stream(path, std::ios::binary);
-    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-    if (!bytes.empty())
-        stream.read(reinterpret_cast<char*>(bytes.data()),
-                    static_cast<std::streamsize>(bytes.size()));
-    if (!stream)
+    if (status != 0)
         throw fcitx::package::PackageError("io_error", "file read failed");
-    return bytes;
+    std::vector<std::byte> result(length);
+    if (bytes && length > 0)
+        std::memcpy(result.data(), bytes, length);
+    fcitx5_control_utf8_free(bytes, length);
+    return result;
 }
 
 fs::path executableDirectory() {
@@ -806,14 +813,9 @@ std::string installedManifestBytes(const fs::path& packageRoot,
                                    const fcitx::package::LockEntry& entry) {
     const auto path = packageRoot / L"manifests" / widen(entry.id) /
                       widen(entry.version + ".json");
-    std::error_code error;
-    const auto size = fs::file_size(path, error);
-    if (error || size > fcitx::package::kMaximumManifestBytes)
-        return {};
-    std::ifstream input(path, std::ios::binary);
-    if (!input)
-        return {};
-    return {std::istreambuf_iterator<char>(input), {}};
+    std::string bytes;
+    return readUtf8Bounded(path, fcitx::package::kMaximumManifestBytes, bytes) ? bytes
+                                                                               : std::string{};
 }
 
 std::string configSurfaceJson(const fcitx::package::Manifest* manifest,

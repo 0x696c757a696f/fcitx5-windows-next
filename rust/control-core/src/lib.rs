@@ -111,6 +111,9 @@ const CONTROL_ROOT_ACTION_STATUS: u32 = 8;
 const CONTROL_ROOT_ACTION_RESTART_ENGINE: u32 = 9;
 const CONTROL_ROOT_ACTION_SHUTDOWN: u32 = 10;
 const CONTROL_ROOT_ACTION_DIAGNOSTICS_PLAN: u32 = 11;
+const CONTROL_FILE_READ_OK: i32 = 0;
+const CONTROL_FILE_READ_INVALID_FILE: i32 = 1;
+const CONTROL_FILE_READ_IO_ERROR: i32 = 2;
 const CONTROL_CONFIG_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_CONFIG_ACTION_VALIDATE: u32 = 1;
 const CONTROL_CONFIG_ACTION_APPLY: u32 = 2;
@@ -495,6 +498,21 @@ fn atomic_write_utf8_file(destination: PathBuf, text: &[u8]) -> Result<(), ()> {
         return Err(());
     }
     Ok(())
+}
+
+fn read_file_bounded(path: PathBuf, maximum: u64) -> Result<Vec<u8>, i32> {
+    if path.as_os_str().is_empty() {
+        return Err(CONTROL_FILE_READ_INVALID_FILE);
+    }
+    let metadata = std::fs::metadata(&path).map_err(|_| CONTROL_FILE_READ_INVALID_FILE)?;
+    if !metadata.is_file() || metadata.len() > maximum {
+        return Err(CONTROL_FILE_READ_INVALID_FILE);
+    }
+    let bytes = std::fs::read(&path).map_err(|_| CONTROL_FILE_READ_IO_ERROR)?;
+    if bytes.len() as u64 > maximum {
+        return Err(CONTROL_FILE_READ_INVALID_FILE);
+    }
+    Ok(bytes)
 }
 
 fn quote(value: &std::ffi::OsStr) -> OsString {
@@ -1560,6 +1578,41 @@ pub unsafe extern "C" fn fcitx5_control_atomic_write_utf8_file_utf16(
 
 /// # Safety
 ///
+/// `path` must remain valid UTF-16 for the duration of the call. `out_ptr` and
+/// `out_len` must point to writable storage. On success, the returned buffer
+/// must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_read_file_utf16(
+    path: Fcitx5ControlUtf16,
+    maximum: u64,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return CONTROL_FILE_READ_IO_ERROR;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(path) = string_from_utf16(path) else {
+        return CONTROL_FILE_READ_INVALID_FILE;
+    };
+    match read_file_bounded(PathBuf::from(path), maximum) {
+        Ok(bytes) => {
+            let status = boxed_utf8_result(bytes, out_ptr, out_len);
+            if status == 0 {
+                CONTROL_FILE_READ_OK
+            } else {
+                status
+            }
+        }
+        Err(status) => status,
+    }
+}
+
+/// # Safety
+///
 /// `out_ptr` and `out_len` must point to writable storage. The returned pointer
 /// is process-static UTF-8 data and must not be freed by the caller.
 #[no_mangle]
@@ -2178,6 +2231,54 @@ mod tests {
             )
         };
         assert_eq!(null_status, 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bounded_file_read_matches_cpp_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-bounded-read-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create test root");
+        let path = root.join("config.toml");
+        std::fs::write(&path, b"format_version = 1\n").expect("write test file");
+        assert_eq!(
+            read_file_bounded(path.clone(), 256 * 1024).expect("read bounded file"),
+            b"format_version = 1\n"
+        );
+        assert_eq!(
+            read_file_bounded(path.clone(), 4).expect_err("too large should fail"),
+            CONTROL_FILE_READ_INVALID_FILE
+        );
+        assert_eq!(
+            read_file_bounded(root.join("missing.toml"), 256 * 1024)
+                .expect_err("missing should fail"),
+            CONTROL_FILE_READ_INVALID_FILE
+        );
+
+        let empty_path = root.join("empty");
+        std::fs::write(&empty_path, b"").expect("write empty file");
+        let wide_path = empty_path.as_os_str().encode_wide().collect::<Vec<_>>();
+        let mut bytes: *mut u8 = std::ptr::null_mut();
+        let mut len = usize::MAX;
+        let status = unsafe {
+            fcitx5_control_read_file_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: wide_path.as_ptr(),
+                    len: wide_path.len(),
+                },
+                256 * 1024,
+                &mut bytes,
+                &mut len,
+            )
+        };
+        assert_eq!(status, CONTROL_FILE_READ_OK);
+        assert_eq!(len, 0);
+        unsafe {
+            fcitx5_control_utf8_free(bytes, len);
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
