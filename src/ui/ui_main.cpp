@@ -107,6 +107,11 @@ struct Fcitx5CandidateSelectionIntent {
     std::uint64_t candidateId{};
 };
 
+struct Fcitx5WindowsCommonUtf8ToWide {
+    std::uint8_t status;
+    std::size_t utf16Len;
+};
+
 extern "C" int fcitx5_candidate_layout_run(const Fcitx5CandidateLayoutInput* input,
                                             const Fcitx5CandidateLayoutSize* items,
                                             std::size_t itemCount,
@@ -126,6 +131,11 @@ extern "C" std::uint8_t fcitx5_candidate_hit_test(const Fcitx5CandidateLayoutRec
 extern "C" Fcitx5CandidateSelectionIntent fcitx5_candidate_selection_intent(
     std::uint32_t targetProcessId, std::uint64_t engineEpoch, std::uint64_t contextId,
     std::uint64_t compositionId, std::uint64_t revision, std::uint64_t candidateId);
+extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
+    const std::uint8_t* input,
+    std::size_t input_len,
+    std::uint16_t* output,
+    std::size_t capacity);
 
 } // namespace detail
 
@@ -623,17 +633,27 @@ void enableNativeWindowEffects(HWND window) noexcept {
 }
 
 bool utf8ToWide(std::string_view input, std::wstring& output) {
-    if (input.empty()) {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    const auto* bytes =
+        input.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(input.data());
+    const auto query = fcitx::windows::ui::detail::fcitx5_windows_common_utf8_to_wide_utf16(
+        bytes, input.size(), nullptr, 0);
+    if (query.status == 0) {
+        output.clear();
+        return false;
+    }
+    if (query.utf16Len == 0) {
         output.clear();
         return true;
     }
-    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
-                                         static_cast<int>(input.size()), nullptr, 0);
-    if (size <= 0)
+    output.assign(query.utf16Len, L'\0');
+    const auto filled = fcitx::windows::ui::detail::fcitx5_windows_common_utf8_to_wide_utf16(
+        bytes, input.size(), reinterpret_cast<std::uint16_t*>(output.data()), output.size());
+    if (filled.status == 0 || filled.utf16Len != output.size()) {
+        output.clear();
         return false;
-    output.resize(static_cast<std::size_t>(size));
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
-                               static_cast<int>(input.size()), output.data(), size) == size;
+    }
+    return true;
 }
 
 std::optional<std::string> readBoundedFile(const std::filesystem::path& path, std::size_t maximum) {

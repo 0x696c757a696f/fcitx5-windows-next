@@ -69,6 +69,14 @@ int main(int argc, char** argv) {
         uiSource.find("REG-CAND-AUTO-001") == std::string::npos) {
         return fail("REG-CAND-UX: Candidate UI must have auto layout and composition-scoped width contract");
     }
+    if (uiSource.find("MultiByteToWideChar") != std::string::npos ||
+        uiSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
+        uiSource.find("CP_UTF8") != std::string::npos ||
+        uiSource.find("fcitx5_windows_common_utf8_to_wide_utf16") == std::string::npos ||
+        cmakeSource.find("fcitx5::windows_common fcitx5::protocol fcitx5::ipc_client fcitx5::platform") ==
+            std::string::npos) {
+        return fail("CANDIDATE-UI-TEXT-RUST: Candidate UI UTF-8 to UTF-16 conversion must be Rust-owned");
+    }
     const auto launcherSource = read_text(sourceRoot / "src/launcher/launcher_main.cpp");
     const auto trayIconSource = read_text(sourceRoot / "src/launcher/tray_icon.cpp");
     const auto trayIconHeader = read_text(sourceRoot / "src/launcher/tray_icon.h");

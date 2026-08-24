@@ -576,7 +576,7 @@ set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
   target_link_libraries(
   fcitx5_ui
   PRIVATE fcitx5::candidate_layout fcitx5::config
-          fcitx5::protocol fcitx5::ipc_client fcitx5::platform
+          fcitx5::windows_common fcitx5::protocol fcitx5::ipc_client fcitx5::platform
           d2d1 dwrite shell32 ole32)
 fcitx_apply_project_options(fcitx5_ui)
 fcitx_apply_binary_hardening(fcitx5_ui)
