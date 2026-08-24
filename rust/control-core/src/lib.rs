@@ -1453,6 +1453,10 @@ fn package_state_keeps_installed_version(state: &[u8]) -> bool {
     state != b"pending_remove"
 }
 
+fn repository_max_release_sequence(sequences: &[u64]) -> u64 {
+    sequences.iter().copied().max().unwrap_or(0)
+}
+
 fn package_config_surface_kinds(
     package_type: u32,
     permissions: &[Fcitx5ControlUtf8],
@@ -2865,6 +2869,25 @@ pub unsafe extern "C" fn fcitx5_control_package_state_keeps_installed_version_ut
 
 /// # Safety
 ///
+/// `sequences` must point to `sequence_count` readable `u64` values, or be
+/// null only when `sequence_count` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_repository_max_release_sequence(
+    sequences: *const u64,
+    sequence_count: usize,
+) -> u64 {
+    if sequence_count == 0 {
+        return 0;
+    }
+    if sequences.is_null() {
+        return 0;
+    }
+    let sequences = unsafe { std::slice::from_raw_parts(sequences, sequence_count) };
+    repository_max_release_sequence(sequences)
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -3970,6 +3993,24 @@ mod tests {
         assert_eq!(
             unsafe { fcitx5_control_package_state_keeps_installed_version_utf8(disabled) },
             1
+        );
+    }
+
+    #[test]
+    fn repository_max_release_sequence_matches_cpp_contract() {
+        assert_eq!(repository_max_release_sequence(&[]), 0);
+        assert_eq!(repository_max_release_sequence(&[7]), 7);
+        assert_eq!(repository_max_release_sequence(&[3, 12, 9, 12, 1]), 12);
+        assert_eq!(
+            unsafe { fcitx5_control_repository_max_release_sequence(std::ptr::null(), 0) },
+            0
+        );
+        let values = [10_u64, 2, 42, 8];
+        assert_eq!(
+            unsafe {
+                fcitx5_control_repository_max_release_sequence(values.as_ptr(), values.len())
+            },
+            42
         );
     }
 

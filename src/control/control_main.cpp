@@ -278,6 +278,8 @@ std::uint8_t fcitx5_control_package_update_available_utf8(
     Fcitx5ControlUtf8 available_version);
 std::uint8_t fcitx5_control_package_state_satisfies_dependency_utf8(Fcitx5ControlUtf8 state);
 std::uint8_t fcitx5_control_package_state_keeps_installed_version_utf8(Fcitx5ControlUtf8 state);
+std::uint64_t fcitx5_control_repository_max_release_sequence(const std::uint64_t* sequences,
+                                                             std::size_t sequence_count);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -846,11 +848,13 @@ void writeMaxSequence(const fs::path& dataRoot, std::string_view channel,
     }
 }
 
-std::uint64_t indexMaxSequence(const fcitx::package::RepositoryIndex& repository) {
-    std::uint64_t maximum = 0;
+std::uint64_t repositoryMaxReleaseSequence(const fcitx::package::RepositoryIndex& repository) {
+    std::vector<std::uint64_t> sequences;
+    sequences.reserve(repository.packages.size());
     for (const auto& entry : repository.packages)
-        maximum = std::max(maximum, entry.release_sequence);
-    return maximum;
+        sequences.push_back(entry.release_sequence);
+    const auto* data = sequences.empty() ? nullptr : sequences.data();
+    return fcitx5_control_repository_max_release_sequence(data, sequences.size());
 }
 
 fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
@@ -866,7 +870,8 @@ fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
     // Defense in depth: the cached index itself must not be an older
     // sequence than what was previously accepted, even if the cache file was
     // replaced outside the refresh path.
-    if (indexMaxSequence(repository) < readMaxSequence(dataRoot, repository.channel, true))
+    if (repositoryMaxReleaseSequence(repository) <
+        readMaxSequence(dataRoot, repository.channel, true))
         throw fcitx::package::PackageError(
             "rollback_rejected",
             "cached repository index is older than the accepted release sequence");
@@ -902,7 +907,7 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
     // the highest previously accepted for this channel. The signature proves
     // who published it, not that it is the latest; the sequence check keeps
     // a stale-but-valid index from being treated as an update.
-    const auto maximum = indexMaxSequence(repository);
+    const auto maximum = repositoryMaxReleaseSequence(repository);
     const auto accepted = readMaxSequence(
         dataRoot, repository.channel,
         fs::exists(files.index) ||
