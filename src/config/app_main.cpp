@@ -21,7 +21,6 @@ extern CAppModule _Module;
 
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <array>
 #include <cstddef>
@@ -626,11 +625,10 @@ bool parseFlatJson(std::string_view text, Strings& strings) {
 }
 
 bool loadLocale(const fs::path& path, Strings& strings) {
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
+    const auto text = fcitx::windows::config::readBoundedFile(path, 256U * 1024U);
+    if (!text)
         return false;
-    const std::string text(std::istreambuf_iterator<char>(stream), {});
-    return parseFlatJson(text, strings);
+    return parseFlatJson(*text, strings);
 }
 
 struct ParsedCommandLine {

@@ -1640,6 +1640,11 @@ int main(int argc, char** argv) {
         configSource.find("resolveTheme(") != std::string::npos ||
         configSource.find("parseD2DColor") == std::string::npos ||
         configSource.find("resolveThemePath") == std::string::npos ||
+        configSource.find("#include <fstream>") != std::string::npos ||
+        configSource.find("std::ifstream") != std::string::npos ||
+        configSource.find("loadLocale") == std::string::npos ||
+        configSource.find("fcitx::windows::config::readBoundedFile(path, 256U * 1024U)") ==
+            std::string::npos ||
         configSource.find("std::optional<std::string> readBoundedFile") !=
             std::string::npos ||
         configSource.find("fs::file_size") != std::string::npos ||
