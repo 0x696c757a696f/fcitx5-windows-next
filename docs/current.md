@@ -53,7 +53,8 @@ Windows host
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
 | Engine E2 `engine-core` ledger | `CUTOVER-GREEN` (Rust authoritative; ledger + carets/popupAllowed/selectedOverride/inputMethodOverridden cut over, C++ maps deleted) | Deferred: `pendingStates` derived cache (E5 snapshot DTO), `EngineEpoch`/`Generation` (E4 IPC scope); then E3 Event→Action |
 | Engine E3 Event→Action | `CUTOVER-GREEN` (unified `handle_key_event` entry; 4 product decisions Rust-owned, `processKey` executes the returned decision) | E4: IPC transport/framing/session/deadline + `EngineEpoch`/`Generation` to Rust; `pendingStates` moves with E5 snapshot DTO |
-| Engine E4 IPC scope | `PARTIAL` (E4-1+E4-2: `EngineEpoch` generate/validate, request ordering, key deadline policy Rust-owned in engine-core; `handleRequest` applies them) | Remaining E4: transport/framing consolidation + per-connection session state; `Generation` stays release-platform scope; `pendingStates` moves with E5 snapshot DTO |
+| Engine E4 IPC scope | `PARTIAL` (E4-1+E4-2: `EngineEpoch` generate/validate, request ordering, key deadline policy Rust-owned in engine-core; `handleRequest` applies them) | Remaining E4: transport/framing consolidation + per-connection session state; `Generation` stays release-platform scope |
+| Engine E5 snapshot/status canonicalization | `STARTED` (E5-1: `content_locale_for_input_method` + `status_short_label` Rust-owned; `collectResult`/`currentInputMethod` apply them) | Full `RuntimeResult` snapshot DTO canonicalization + `pendingStates` store to Rust (freeze→side-by-side→cutover) |
 
 ## Current Red Lights
 

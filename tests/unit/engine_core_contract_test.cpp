@@ -411,6 +411,34 @@ int runCorpus() {
             "key request deadline policy must be 2500 ms cold / 75 ms warm");
     }
 
+    // E5-1: snapshot/status canonicalization.
+    {
+        failures += !expect(
+            fcitx5_engine_core_content_locale_for_input_method("mozc") ==
+                    FCITX_ENGINE_CORE_CONTENT_LOCALE_JA_JP &&
+                fcitx5_engine_core_content_locale_for_input_method("hangul") ==
+                    FCITX_ENGINE_CORE_CONTENT_LOCALE_KO_KR &&
+                fcitx5_engine_core_content_locale_for_input_method("keyboard-us") ==
+                    FCITX_ENGINE_CORE_CONTENT_LOCALE_EN_US &&
+                fcitx5_engine_core_content_locale_for_input_method("pinyin") ==
+                    FCITX_ENGINE_CORE_CONTENT_LOCALE_ZH_CN &&
+                fcitx5_engine_core_content_locale_for_input_method("unknown") ==
+                    FCITX_ENGINE_CORE_CONTENT_LOCALE_NONE,
+            "content-locale canonicalization must map input-method families");
+        std::uint8_t label[8]{};
+        failures += !expect(
+            fcitx5_engine_core_status_short_label(
+                reinterpret_cast<const std::uint8_t*>("abc"), 3, label, sizeof(label)) == 2 &&
+                label[0] == 'a' && label[1] == 'b',
+            "short label must take two ASCII bytes");
+        const char* chinese = "\xe4\xbd\xa0\xe5\xa5\xbd"; // 你好
+        failures += !expect(
+            fcitx5_engine_core_status_short_label(
+                reinterpret_cast<const std::uint8_t*>(chinese), 6, label, sizeof(label)) == 3 &&
+                label[0] == 0xe4 && label[1] == 0xbd && label[2] == 0xa0,
+            "short label must take the first code point for non-ASCII");
+    }
+
     return failures;
 }
 

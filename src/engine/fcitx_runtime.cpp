@@ -343,29 +343,32 @@ bool warmupHasNoUserState(EngineInputContext& context) {
     return !candidateList || candidateList->empty();
 }
 
-std::size_t utf8CharacterEnd(std::string_view text, std::size_t offset) noexcept {
-    if (offset >= text.size())
-        return text.size();
-    const auto byte = static_cast<unsigned char>(text[offset]);
-    std::size_t length = 1;
-    if ((byte & 0xe0U) == 0xc0U)
-        length = 2;
-    else if ((byte & 0xf0U) == 0xe0U)
-        length = 3;
-    else if ((byte & 0xf8U) == 0xf0U)
-        length = 4;
-    return (std::min)(text.size(), offset + length);
+// E5-1: snapshot/status canonicalization is Rust-owned. The adapter maps the
+// Rust content-locale code back to the display string and fetches the
+// canonical short label through the C ABI.
+std::string contentLocaleToString(int locale) {
+    switch (locale) {
+    case FCITX_ENGINE_CORE_CONTENT_LOCALE_ZH_CN:
+        return "zh-CN";
+    case FCITX_ENGINE_CORE_CONTENT_LOCALE_JA_JP:
+        return "ja-JP";
+    case FCITX_ENGINE_CORE_CONTENT_LOCALE_KO_KR:
+        return "ko-KR";
+    case FCITX_ENGINE_CORE_CONTENT_LOCALE_EN_US:
+        return "en-US";
+    default:
+        return {};
+    }
 }
 
-std::string statusShortLabel(std::string_view text) {
-    if (text.empty())
+std::string shortLabelFromRust(std::string_view text) {
+    std::uint8_t buffer[16]{};
+    const auto written = fcitx5_engine_core_status_short_label(
+        reinterpret_cast<const std::uint8_t*>(text.data()), text.size(), buffer,
+        sizeof(buffer));
+    if (written > sizeof(buffer))
         return {};
-    if (text.size() >= 2 &&
-        static_cast<unsigned char>(text[0]) < 0x80U &&
-        static_cast<unsigned char>(text[1]) < 0x80U) {
-        return std::string(text.substr(0, 2));
-    }
-    return std::string(text.substr(0, utf8CharacterEnd(text, 0)));
+    return std::string(reinterpret_cast<const char*>(buffer), written);
 }
 
 } // namespace
@@ -529,20 +532,6 @@ class FcitxRuntime::Impl final {
             instance->eventDispatcher().dispatchPending();
     }
 
-    static std::string contentLocaleForInputMethod(std::string_view id) {
-        if (id.find("mozc") != std::string_view::npos)
-            return "ja-JP";
-        if (id.find("hangul") != std::string_view::npos)
-            return "ko-KR";
-        if (id.find("keyboard-us") != std::string_view::npos)
-            return "en-US";
-        if (id.find("rime") != std::string_view::npos ||
-            id.find("pinyin") != std::string_view::npos ||
-            id.find("libime") != std::string_view::npos)
-            return "zh-CN";
-        return {};
-    }
-
     RuntimeResult collectResult(const ClientContextKey& key,
                                 EngineInputContext& context, bool handled) {
         dispatchPendingEvents();
@@ -552,9 +541,11 @@ class FcitxRuntime::Impl final {
         int popupAllowed = 0;
         if (fcitx5_engine_core_popup_allowed(ledger.get(), &ledgerKey, &popupAllowed))
             output.popupAllowed = popupAllowed != 0;
-        output.contentLocaleUtf8 =
-            contentLocaleForInputMethod(instance ? instance->inputMethod(&context)
-                                                 : std::string{});
+        output.contentLocaleUtf8 = contentLocaleToString(
+            fcitx5_engine_core_content_locale_for_input_method(
+                instance
+                    ? instance->inputMethod(&context).c_str()
+                    : ""));
         output.commitUtf8 = context.takeCommit();
         auto [preedit, caretOffset] = readPreedit(context);
         output.preeditUtf8 = std::move(preedit);
@@ -982,7 +973,7 @@ InputMethodStatus FcitxRuntime::currentInputMethod() const {
     const auto* entry = manager.entry(id);
     if (!entry) {
         output.name = id;
-        output.shortLabel = statusShortLabel(output.name);
+        output.shortLabel = shortLabelFromRust(output.name);
         return output;
     }
     output.name = entry->name();
@@ -997,7 +988,7 @@ InputMethodStatus FcitxRuntime::currentInputMethod() const {
         display = entry->label().empty() ? output.nativeName : entry->label();
     if (display.empty())
         display = output.nativeName.empty() ? output.name : output.nativeName;
-    output.shortLabel = statusShortLabel(display);
+    output.shortLabel = shortLabelFromRust(display);
     return output;
 }
 

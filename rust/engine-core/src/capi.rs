@@ -251,6 +251,88 @@ pub extern "C" fn fcitx5_engine_core_key_request_timeout_ms(revision: u64) -> u3
 }
 
 // ---------------------------------------------------------------------------
+// E5-1: snapshot/status canonicalization
+// ---------------------------------------------------------------------------
+
+pub const FCITX_ENGINE_CORE_CONTENT_LOCALE_NONE: i32 = 0;
+pub const FCITX_ENGINE_CORE_CONTENT_LOCALE_ZH_CN: i32 = 1;
+pub const FCITX_ENGINE_CORE_CONTENT_LOCALE_JA_JP: i32 = 2;
+pub const FCITX_ENGINE_CORE_CONTENT_LOCALE_KO_KR: i32 = 3;
+pub const FCITX_ENGINE_CORE_CONTENT_LOCALE_EN_US: i32 = 4;
+
+/// Maps an input-method id to the canonical content-locale code. Null or
+/// empty ids map to NONE.
+///
+/// # Safety
+/// `input_method_id` must be a valid NUL-terminated string or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_content_locale_for_input_method(
+    input_method_id: *const std::os::raw::c_char,
+) -> i32 {
+    if input_method_id.is_null() {
+        return FCITX_ENGINE_CORE_CONTENT_LOCALE_NONE;
+    }
+    let result = panic::catch_unwind(|| {
+        // SAFETY: caller provides a valid NUL-terminated string.
+        let text = unsafe { std::ffi::CStr::from_ptr(input_method_id) };
+        let id = std::str::from_utf8(text.to_bytes()).unwrap_or("");
+        crate::content_locale_for_input_method(id)
+    });
+    match result {
+        Ok(crate::ContentLocale::None) => FCITX_ENGINE_CORE_CONTENT_LOCALE_NONE,
+        Ok(crate::ContentLocale::ZhCn) => FCITX_ENGINE_CORE_CONTENT_LOCALE_ZH_CN,
+        Ok(crate::ContentLocale::JaJp) => FCITX_ENGINE_CORE_CONTENT_LOCALE_JA_JP,
+        Ok(crate::ContentLocale::KoKr) => FCITX_ENGINE_CORE_CONTENT_LOCALE_KO_KR,
+        Ok(crate::ContentLocale::EnUs) => FCITX_ENGINE_CORE_CONTENT_LOCALE_EN_US,
+        Err(_) => FCITX_ENGINE_CORE_CONTENT_LOCALE_NONE,
+    }
+}
+
+/// Writes the canonical short label into `out` and returns the number of
+/// bytes written. When `out_capacity` is insufficient the required size is
+/// returned without writing (the caller can retry).
+///
+/// # Safety
+/// `text`/`text_len` must describe a readable buffer (null with length 0 is
+/// allowed); `out` must be writable for `out_capacity` bytes or null with
+/// capacity 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_status_short_label(
+    text: *const u8,
+    text_len: usize,
+    out: *mut u8,
+    out_capacity: usize,
+) -> usize {
+    let result = panic::catch_unwind(|| {
+        if text.is_null() && text_len != 0 {
+            return Vec::new();
+        }
+        let slice = if text_len == 0 {
+            &[][..]
+        } else {
+            // SAFETY: caller provides a valid buffer of `text_len` bytes.
+            unsafe { std::slice::from_raw_parts(text, text_len) }
+        };
+        crate::status_short_label(slice).to_vec()
+    });
+    let label = match result {
+        Ok(label) => label,
+        Err(_) => return 0,
+    };
+    if label.len() > out_capacity {
+        return label.len();
+    }
+    if !label.is_empty() && !out.is_null() {
+        // SAFETY: caller provides a writable buffer of `out_capacity` bytes
+        // and `label.len() <= out_capacity`.
+        unsafe {
+            std::ptr::copy_nonoverlapping(label.as_ptr(), out, label.len());
+        }
+    }
+    label.len()
+}
+
+// ---------------------------------------------------------------------------
 // E3 event-shape consolidation: unified handle_key_event
 // ---------------------------------------------------------------------------
 

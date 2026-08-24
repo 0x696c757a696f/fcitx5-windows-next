@@ -671,3 +671,72 @@ pub fn key_request_timeout_ms(revision: u64) -> u32 {
         75
     }
 }
+
+// ---------------------------------------------------------------------------
+// E5-1: snapshot/status canonicalization
+//
+// The content-locale and short-label canonicalization for engine snapshots
+// and status are Rust-owned; `FcitxRuntime::Impl` (`collectResult`,
+// `currentInputMethod`) applies them. Both mirror the frozen C++ helpers
+// exactly (byte-level, tolerating arbitrary input).
+// ---------------------------------------------------------------------------
+
+/// Canonical content locale for an input-method id (mirrors
+/// `contentLocaleForInputMethod`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentLocale {
+    None,
+    ZhCn,
+    JaJp,
+    KoKr,
+    EnUs,
+}
+
+/// Maps an input-method id to the canonical content locale, mirroring
+/// `contentLocaleForInputMethod` (substring checks in C++ order; the zh-CN
+/// family is checked last).
+pub fn content_locale_for_input_method(id: &str) -> ContentLocale {
+    if id.contains("mozc") {
+        ContentLocale::JaJp
+    } else if id.contains("hangul") {
+        ContentLocale::KoKr
+    } else if id.contains("keyboard-us") {
+        ContentLocale::EnUs
+    } else if id.contains("rime") || id.contains("pinyin") || id.contains("libime") {
+        ContentLocale::ZhCn
+    } else {
+        ContentLocale::None
+    }
+}
+
+/// Byte length of the UTF-8 code point starting at `offset` (mirrors
+/// `utf8CharacterEnd`; tolerates overlong encodings).
+fn utf8_character_end(text: &[u8], offset: usize) -> usize {
+    if offset >= text.len() {
+        return text.len();
+    }
+    let byte = text[offset];
+    let length = if byte & 0xe0 == 0xc0 {
+        2
+    } else if byte & 0xf0 == 0xe0 {
+        3
+    } else if byte & 0xf8 == 0xf0 {
+        4
+    } else {
+        1
+    };
+    text.len().min(offset + length)
+}
+
+/// Canonical short label: two ASCII bytes when the text starts with two
+/// ASCII bytes, otherwise the first code point (mirrors `statusShortLabel`).
+pub fn status_short_label(text: &[u8]) -> &[u8] {
+    if text.is_empty() {
+        return &[];
+    }
+    if text.len() >= 2 && text[0] < 0x80 && text[1] < 0x80 {
+        &text[..2]
+    } else {
+        &text[..utf8_character_end(text, 0)]
+    }
+}

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 extern "C" {
@@ -242,5 +243,23 @@ int fcitx5_engine_core_validate_engine_epoch(std::uint64_t frameEpoch,
 int fcitx5_engine_core_accept_frame_sequence(std::uint64_t requestId,
                                              std::uint64_t lastRequestId);
 std::uint32_t fcitx5_engine_core_key_request_timeout_ms(std::uint64_t revision);
+
+// E5-1: snapshot/status canonicalization. `content_locale_for_input_method`
+// maps an input-method id to the canonical content-locale code;
+// `status_short_label` writes the canonical short label (two ASCII bytes or
+// the first code point) and returns the byte count.
+enum FcitxEngineCoreContentLocaleC {
+    FCITX_ENGINE_CORE_CONTENT_LOCALE_NONE = 0,
+    FCITX_ENGINE_CORE_CONTENT_LOCALE_ZH_CN = 1,
+    FCITX_ENGINE_CORE_CONTENT_LOCALE_JA_JP = 2,
+    FCITX_ENGINE_CORE_CONTENT_LOCALE_KO_KR = 3,
+    FCITX_ENGINE_CORE_CONTENT_LOCALE_EN_US = 4,
+};
+
+int fcitx5_engine_core_content_locale_for_input_method(const char* inputMethodId);
+std::size_t fcitx5_engine_core_status_short_label(const std::uint8_t* text,
+                                                  std::size_t textLength,
+                                                  std::uint8_t* out,
+                                                  std::size_t outCapacity);
 
 } // extern "C"

@@ -204,11 +204,16 @@ int main(int argc, char** argv) {
         runtimeSource.find("fcitx5_engine_core_ledger_forget") == std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_set_caret") == std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_handle_key_event") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_content_locale_for_input_method") ==
+            std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_status_short_label") == std::string::npos ||
         runtimeSource.find("const auto matches = [&]") != std::string::npos ||
         runtimeSource.find("sameColumnNavigationTarget") != std::string::npos ||
         runtimeSource.find("if (surroundingTextValid_)") != std::string::npos ||
-        runtimeSource.find("entry(request.inputMethodUtf8)") != std::string::npos) {
-        return fail("ENGINE-E2/E3: ledger, per-context product state, and the unified Event→Action decision must be Rust-owned in fcitx_runtime.cpp");
+        runtimeSource.find("entry(request.inputMethodUtf8)") != std::string::npos ||
+        runtimeSource.find("contentLocaleForInputMethod") != std::string::npos ||
+        runtimeSource.find("statusShortLabel") != std::string::npos) {
+        return fail("ENGINE-E2/E3/E5: ledger, per-context product state, Event→Action decisions, and snapshot/status canonicalization must be Rust-owned in fcitx_runtime.cpp");
     }
     const auto nativeEngineCmakeSource = read_text(sourceRoot / "native-engine/CMakeLists.txt");
     if (nativeEngineCmakeSource.find("fcitx5_protocol_core_rust") == std::string::npos ||

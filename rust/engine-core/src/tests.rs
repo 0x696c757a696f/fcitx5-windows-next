@@ -1227,3 +1227,58 @@ fn key_request_timeout_policy() {
     assert_eq!(key_request_timeout_ms(1), 75);
     assert_eq!(key_request_timeout_ms(42), 75);
 }
+
+// ---------------------------------------------------------------------------
+// E5-1: snapshot/status canonicalization
+// ---------------------------------------------------------------------------
+
+use super::{content_locale_for_input_method, status_short_label, ContentLocale};
+
+#[test]
+fn content_locale_maps_input_method_families() {
+    assert_eq!(content_locale_for_input_method("mozc"), ContentLocale::JaJp);
+    assert_eq!(
+        content_locale_for_input_method("mozcjp"),
+        ContentLocale::JaJp
+    );
+    assert_eq!(
+        content_locale_for_input_method("hangul"),
+        ContentLocale::KoKr
+    );
+    assert_eq!(
+        content_locale_for_input_method("keyboard-us"),
+        ContentLocale::EnUs
+    );
+    assert_eq!(content_locale_for_input_method("rime"), ContentLocale::ZhCn);
+    assert_eq!(
+        content_locale_for_input_method("pinyin"),
+        ContentLocale::ZhCn
+    );
+    assert_eq!(
+        content_locale_for_input_method("libime"),
+        ContentLocale::ZhCn
+    );
+    assert_eq!(
+        content_locale_for_input_method("libime-pinyin"),
+        ContentLocale::ZhCn
+    );
+    assert_eq!(
+        content_locale_for_input_method("unknown"),
+        ContentLocale::None
+    );
+    assert_eq!(content_locale_for_input_method(""), ContentLocale::None);
+}
+
+#[test]
+fn status_short_label_ascii_pair_or_first_code_point() {
+    assert_eq!(status_short_label(b""), b"");
+    assert_eq!(status_short_label(b"ab"), b"ab");
+    assert_eq!(status_short_label(b"abc"), b"ab");
+    assert_eq!(status_short_label("中文".as_bytes()), "中".as_bytes());
+    // Mixed leading ASCII then multibyte: the ASCII lead is one code point.
+    assert_eq!(status_short_label(b"a\xe4\xb8\xad"), b"a");
+    // Non-ASCII lead: first code point (3-byte).
+    assert_eq!(status_short_label("中".as_bytes()), "中".as_bytes());
+    // Overlong (invalid UTF-8) lead is still classified by the leading byte.
+    assert_eq!(status_short_label(b"\xc0\x80"), b"\xc0\x80");
+}
