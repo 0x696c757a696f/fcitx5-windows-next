@@ -1,11 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::env;
-use std::ffi::c_void;
+use std::ffi::{c_void, OsString};
 use std::fs;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const VERSION_FALLBACK: &str = env!("CARGO_PKG_VERSION");
@@ -19,8 +19,24 @@ const IPC_HEADER_SIZE: usize = 64;
 const IPC_MAX_HOT_FRAME_SIZE: usize = 256 * 1024;
 const ERROR_INVALID_DATA: u32 = 13;
 const ERROR_TIMEOUT: u32 = 1460;
+const KF_FLAG_CREATE: u32 = 0x0000_8000;
 static NEXT_LAUNCHER_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_PIPE_CLIENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+#[repr(C)]
+struct Guid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+
+const FOLDERID_LOCAL_APP_DATA: Guid = Guid {
+    data1: 0xf1b3_2785,
+    data2: 0x6fba,
+    data3: 0x4fcf,
+    data4: [0x9d, 0x55, 0x7b, 0x8e, 0x7f, 0x15, 0x70, 0x91],
+};
 
 fn version() -> &'static str {
     option_env!("FCITX_WINDOWS_VERSION").unwrap_or(VERSION_FALLBACK)
@@ -277,6 +293,71 @@ fn portable_data_root_for_module(module_path: &Path) -> Option<PathBuf> {
         .then(|| parent.join("data"))
 }
 
+fn release_data_directory_from_raw(path: *const u16, len: usize) -> Option<PathBuf> {
+    let directory = path_from_raw(path, len)?;
+    let mut components = directory.components();
+    let first = components.next()?;
+    if !matches!(first, Component::Normal(_))
+        || !components.all(|component| matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(directory)
+}
+
+fn local_app_data_root() -> Option<PathBuf> {
+    let mut local_app_data: *mut u16 = std::ptr::null_mut();
+    // SAFETY: FOLDERID_LOCAL_APP_DATA is a stable KNOWNFOLDERID, the token is
+    // null for the current user, and `local_app_data` is an out pointer freed
+    // with CoTaskMemFree on success.
+    let status = unsafe {
+        SHGetKnownFolderPath(
+            &FOLDERID_LOCAL_APP_DATA,
+            KF_FLAG_CREATE,
+            std::ptr::null_mut(),
+            &mut local_app_data,
+        )
+    };
+    if status < 0 || local_app_data.is_null() {
+        return None;
+    }
+    let mut len = 0usize;
+    // SAFETY: SHGetKnownFolderPath returns a NUL-terminated UTF-16 string.
+    unsafe {
+        while *local_app_data.add(len) != 0 {
+            len += 1;
+        }
+    }
+    // SAFETY: `len` was measured up to the terminating NUL.
+    let path = PathBuf::from(OsString::from_wide(unsafe {
+        std::slice::from_raw_parts(local_app_data, len)
+    }));
+    // SAFETY: Buffer ownership belongs to the caller and is released with
+    // CoTaskMemFree according to SHGetKnownFolderPath.
+    unsafe {
+        CoTaskMemFree(local_app_data.cast());
+    }
+    Some(path)
+}
+
+fn default_data_root_for_module_with_local<F>(
+    module_path: &Path,
+    data_directory: &Path,
+    local_app_data: F,
+) -> Option<PathBuf>
+where
+    F: FnOnce() -> Option<PathBuf>,
+{
+    if let Some(root) = portable_data_root_for_module(module_path) {
+        return Some(root);
+    }
+    local_app_data().map(|root| root.join(data_directory))
+}
+
+fn default_data_root_for_module(module_path: &Path, data_directory: &Path) -> Option<PathBuf> {
+    default_data_root_for_module_with_local(module_path, data_directory, local_app_data_root)
+}
+
 fn may_launch_user_engine(
     service_account: bool,
     session_id: u32,
@@ -462,6 +543,21 @@ unsafe extern "system" {
         length_needed: *mut u32,
     ) -> i32;
     fn CloseDesktop(desktop: *mut c_void) -> i32;
+}
+
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn SHGetKnownFolderPath(
+        known_folder_id: *const Guid,
+        flags: u32,
+        token: *mut c_void,
+        path: *mut *mut u16,
+    ) -> i32;
+}
+
+#[link(name = "ole32")]
+unsafe extern "system" {
+    fn CoTaskMemFree(memory: *mut c_void);
 }
 
 fn same_principal_and_session(
@@ -2687,6 +2783,34 @@ pub unsafe extern "C" fn fcitx5_windows_common_portable_data_root_for_module_utf
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `module_path` and `data_directory` must point to exactly their paired
+/// readable UTF-16 code unit lengths. `data_directory` must be a non-empty
+/// relative product data directory. `output` may be null for size queries or
+/// writable UTF-16 storage for `capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_default_data_root_for_module_utf16(
+    module_path: *const u16,
+    module_path_len: usize,
+    data_directory: *const u16,
+    data_directory_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(module_path) = path_from_raw(module_path, module_path_len) else {
+        return 0;
+    };
+    let Some(data_directory) = release_data_directory_from_raw(data_directory, data_directory_len)
+    else {
+        return 0;
+    };
+    let Some(root) = default_data_root_for_module(&module_path, &data_directory) else {
+        return 0;
+    };
+    write_wide_path(&root, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
 /// UTF-16 buffer with exactly `user_sid_len` code units. No pointer is retained.
 pub unsafe extern "C" fn fcitx5_windows_common_may_launch_user_engine_utf16(
@@ -3477,6 +3601,10 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn wide_units(value: &str) -> Vec<u16> {
+        value.encode_utf16().collect()
+    }
+
     #[test]
     fn version_and_release_channel_are_stable_static_strings() {
         assert!(!version().is_empty());
@@ -3789,12 +3917,57 @@ mod tests {
             portable_data_root_for_module(&runtime_bin_module).as_deref(),
             Some(root.join("data").as_path())
         );
+        assert_eq!(
+            default_data_root_for_module_with_local(
+                &runtime_bin_module,
+                Path::new("Fcitx5"),
+                || Some(root.join("local"))
+            )
+            .as_deref(),
+            Some(root.join("data").as_path())
+        );
         fs::File::create(root.join("current.json"))
             .expect("truncate current")
             .write_all(b"{\"current_generation\":\"../bad\"}\n")
             .expect("write invalid current");
         assert_eq!(current_runtime_generation_from_install_root(&root), None);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn default_data_root_falls_back_to_local_app_data_contract() {
+        let root = env::temp_dir().join(format!(
+            "fcitx5-windows-common-local-data-root-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let module = root
+            .join("runtime")
+            .join("00000041")
+            .join("fcitx5-control.exe");
+        assert_eq!(
+            default_data_root_for_module_with_local(&module, Path::new("Fcitx5"), || {
+                Some(root.join("local-app-data"))
+            })
+            .as_deref(),
+            Some(root.join("local-app-data").join("Fcitx5").as_path())
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn release_data_directory_rejects_absolute_or_traversal_contract() {
+        let empty = wide_units("");
+        let absolute = wide_units(r"C:\Users\test\AppData");
+        let traversal = wide_units(r"..\Fcitx5");
+        let nested = wide_units(r"Fcitx5\stable");
+        assert!(release_data_directory_from_raw(empty.as_ptr(), empty.len()).is_none());
+        assert!(release_data_directory_from_raw(absolute.as_ptr(), absolute.len()).is_none());
+        assert!(release_data_directory_from_raw(traversal.as_ptr(), traversal.len()).is_none());
+        assert_eq!(
+            release_data_directory_from_raw(nested.as_ptr(), nested.len()).as_deref(),
+            Some(Path::new(r"Fcitx5\stable"))
+        );
     }
 
     #[test]

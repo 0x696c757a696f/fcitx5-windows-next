@@ -7,11 +7,11 @@
 #include "protocol.h"
 #include "runtime_identity.h"
 
-#include <ShlObj.h>
 #include <Windows.h>
 
 #include <algorithm>
 #include <array>
+#include <combaseapi.h>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -1086,20 +1086,11 @@ void printThemeDetail(const fs::path& dataRoot, std::string_view id) {
 
 fs::path defaultDataRoot() {
     fcitx::windows::platform::RuntimeIdentity identity;
-    if (fcitx::windows::platform::queryCurrentIdentity(identity) &&
-        !identity.executablePath.empty()) {
-        if (const auto portableData = fcitx::windows::platform::portableDataRootForModule(
-                identity.executablePath);
-            !portableData.empty()) {
-            return portableData;
-        }
-    }
-    PWSTR localAppData = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &localAppData)))
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
+        identity.executablePath.empty())
         return {};
-    fs::path result(localAppData);
-    CoTaskMemFree(localAppData);
-    return result / fcitx::windows::kReleaseIdentity.data_directory;
+    return fcitx::windows::platform::defaultDataRootForModule(
+        identity.executablePath, fcitx::windows::kReleaseIdentity.data_directory);
 }
 
 bool validateConfig(const fs::path& source, std::string& text, ParseError& parseError) {

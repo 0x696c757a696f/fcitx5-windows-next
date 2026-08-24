@@ -323,14 +323,18 @@ int main(int argc, char** argv) {
         controlSource.find("CP_UTF8") != std::string::npos ||
         controlSource.find("GetTickCount64") != std::string::npos ||
         controlSource.find("GetModuleFileNameW") != std::string::npos ||
+        controlSource.find("SHGetKnownFolderPath") != std::string::npos ||
+        controlSource.find("CoTaskMemFree") != std::string::npos ||
+        controlSource.find("FOLDERID_LocalAppData") != std::string::npos ||
         controlSource.find("queryCurrentIdentity(identity)") == std::string::npos ||
+        controlSource.find("defaultDataRootForModule") == std::string::npos ||
         controlSource.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_wide_utf16_to_utf8") ==
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos) {
-        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, and executable path discovery must be Rust-owned");
+        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, and default data-root discovery must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
@@ -701,7 +705,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_portable_data_root_for_module_utf16") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_default_data_root_for_module_utf16") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("runtime_generation_and_install_roots_match_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("default_data_root_falls_back_to_local_app_data_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("release_data_directory_rejects_absolute_or_traversal_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_may_launch_user_engine_utf16") ==
             std::string::npos ||
@@ -961,6 +971,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeIdentitySource.find("fcitx5_windows_common_executable_file_identity_utf16") ==
             std::string::npos ||
+        runtimeIdentitySource.find("fcitx5_windows_common_default_data_root_for_module_utf16") ==
+            std::string::npos ||
         runtimeIdentitySource.find("GetFileAttributesW") != std::string::npos ||
         runtimeIdentitySource.find("FILE_ATTRIBUTE_REPARSE_POINT") != std::string::npos ||
         cmakeSource.find("fcitx5_platform PUBLIC fcitx5::release_identity fcitx5::windows_common") ==
@@ -971,7 +983,7 @@ int main(int argc, char** argv) {
         versionHeaderTemplate.find("fcitx5_windows_common_version") == std::string::npos ||
         versionHeaderTemplate.find("fcitx5_windows_common_release_channel") ==
             std::string::npos) {
-        return fail("COMMON-RUST: product version/channel/architecture, local IPC naming, generation paths, and pipe security policy must be Rust-owned");
+        return fail("COMMON-RUST: product version/channel/architecture, local IPC naming, generation paths, default data-root, and pipe security policy must be Rust-owned");
     }
     if (rustToolchain.find("channel = \"1.98.0\"") == std::string::npos ||
         rustToolchain.find("aarch64-pc-windows-msvc") == std::string::npos ||

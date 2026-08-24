@@ -47,6 +47,8 @@ struct RuntimeIdentity : ProcessIdentity {
 [[nodiscard]] std::wstring currentRuntimeGenerationFromInstallRoot(std::wstring_view installRoot);
 [[nodiscard]] std::filesystem::path installationRootForModule(std::wstring_view modulePath);
 [[nodiscard]] std::filesystem::path portableDataRootForModule(std::wstring_view modulePath);
+[[nodiscard]] std::filesystem::path defaultDataRootForModule(std::wstring_view modulePath,
+                                                             std::wstring_view dataDirectory);
 // Returns an empty string in production. Integration tests may set the validated
 // FCITX5_TEST_NAMESPACE environment variable to prevent named-pipe/object collisions
 // with a desktop instance that is already running for the same user and session.

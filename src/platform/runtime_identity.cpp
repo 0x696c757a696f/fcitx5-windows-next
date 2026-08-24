@@ -93,6 +93,13 @@ extern "C" std::size_t fcitx5_windows_common_portable_data_root_for_module_utf16
     std::size_t module_path_len,
     std::uint16_t* output,
     std::size_t capacity);
+extern "C" std::size_t fcitx5_windows_common_default_data_root_for_module_utf16(
+    const std::uint16_t* module_path,
+    std::size_t module_path_len,
+    const std::uint16_t* data_directory,
+    std::size_t data_directory_len,
+    std::uint16_t* output,
+    std::size_t capacity);
 extern "C" std::uint8_t fcitx5_windows_common_may_launch_user_engine_utf16(
     std::uint8_t service_account,
     std::uint32_t session_id,
@@ -224,6 +231,16 @@ std::filesystem::path rustPortableDataRootForModule(std::wstring_view modulePath
     return path.empty() ? std::filesystem::path{} : std::filesystem::path(path);
 }
 
+std::filesystem::path rustDefaultDataRootForModule(std::wstring_view modulePath,
+                                                   std::wstring_view dataDirectory) {
+    const std::wstring path = rustWide([&](std::uint16_t* output, std::size_t capacity) {
+        return fcitx5_windows_common_default_data_root_for_module_utf16(
+            wideData(modulePath), modulePath.size(), wideData(dataDirectory),
+            dataDirectory.size(), output, capacity);
+    });
+    return path.empty() ? std::filesystem::path{} : std::filesystem::path(path);
+}
+
 } // namespace
 
 bool mayLaunchUserEngine(const RuntimeIdentity& identity) noexcept {
@@ -342,6 +359,15 @@ std::filesystem::path installationRootForModule(std::wstring_view modulePath) {
 std::filesystem::path portableDataRootForModule(std::wstring_view modulePath) {
     try {
         return rustPortableDataRootForModule(modulePath);
+    } catch (...) {
+        return {};
+    }
+}
+
+std::filesystem::path defaultDataRootForModule(std::wstring_view modulePath,
+                                               std::wstring_view dataDirectory) {
+    try {
+        return rustDefaultDataRootForModule(modulePath, dataDirectory);
     } catch (...) {
         return {};
     }
