@@ -694,20 +694,6 @@ fs::path installationRoot() {
     return directory.filename() == L"bin" ? directory.parent_path() : directory;
 }
 
-std::optional<std::string> readBoundedFile(const fs::path& path, std::size_t maximum) {
-    std::error_code error;
-    const auto size = fs::file_size(path, error);
-    if (error || size > maximum)
-        return std::nullopt;
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
-        return std::nullopt;
-    std::string contents(static_cast<std::size_t>(size), '\0');
-    if (size != 0 && !stream.read(contents.data(), static_cast<std::streamsize>(size)))
-        return std::nullopt;
-    return contents;
-}
-
 bool systemUsesDarkAppearance() noexcept {
     DWORD light = 1;
     DWORD size = sizeof(light);

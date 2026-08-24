@@ -30,6 +30,8 @@ std::size_t fcitx5_control_resolve_theme_path_utf16(
     Fcitx5ControlUtf16 install_root, Fcitx5ControlUtf16 data_root,
     Fcitx5ControlUtf8 requested_id, std::uint8_t builtin, wchar_t* output,
     std::size_t capacity);
+int fcitx5_control_read_file_utf16(Fcitx5ControlUtf16 path, std::uint64_t maximum,
+                                   char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -559,6 +561,20 @@ std::filesystem::path resolveThemePath(const std::filesystem::path& installation
     if (written == 0 || written > buffer.size())
         return {};
     return std::filesystem::path(std::wstring(buffer.data(), buffer.data() + written));
+}
+
+std::optional<std::string> readBoundedFile(const std::filesystem::path& path,
+                                          std::size_t maximum) noexcept {
+    const std::wstring pathText = path.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_read_file_utf16(
+        utf16View(pathText), static_cast<std::uint64_t>(maximum), &bytes, &length);
+    if (status != 0) {
+        fcitx5_control_utf8_free(bytes, length);
+        return std::nullopt;
+    }
+    return takeRustUtf8(bytes, length);
 }
 
 bool updatePresentationToml(std::string_view source, std::string_view appearanceMode,

@@ -23,7 +23,6 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -655,20 +654,6 @@ bool utf8ToWide(std::string_view input, std::wstring& output) {
         return false;
     }
     return true;
-}
-
-std::optional<std::string> readBoundedFile(const std::filesystem::path& path, std::size_t maximum) {
-    std::error_code error;
-    const auto size = std::filesystem::file_size(path, error);
-    if (error || size > maximum)
-        return std::nullopt;
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
-        return std::nullopt;
-    std::string contents(static_cast<std::size_t>(size), '\0');
-    if (size != 0 && !stream.read(contents.data(), static_cast<std::streamsize>(size)))
-        return std::nullopt;
-    return contents;
 }
 
 bool systemUsesDarkAppearance() noexcept {

@@ -95,6 +95,8 @@ struct ParseError {
 [[nodiscard]] std::filesystem::path resolveThemePath(
     const std::filesystem::path& installationRoot, const std::filesystem::path& dataRoot,
     std::string_view requestedId, bool builtin) noexcept;
+[[nodiscard]] std::optional<std::string> readBoundedFile(
+    const std::filesystem::path& path, std::size_t maximum) noexcept;
 [[nodiscard]] Config mergeConfig(const Config& base, const Config& overrideConfig);
 
 } // namespace fcitx::windows::config

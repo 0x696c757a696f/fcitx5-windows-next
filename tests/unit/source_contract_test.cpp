@@ -1602,6 +1602,8 @@ int main(int argc, char** argv) {
         return fail("RUST-R1-04: provider policy/runner must be Rust authoritative, bounded, and covered by artifact smoke");
     }
     const auto configSource = read_text(sourceRoot / "src/config/app_main.cpp");
+    const auto configParserThemeSource =
+        read_text(sourceRoot / "src/config/config_parser.cpp");
     const auto candidateLayoutSource = read_text(sourceRoot / "rust/candidate-core/src/lib.rs");
     const auto candidatePocManifest =
         read_text(sourceRoot / "rust/candidate-core/Cargo.toml");
@@ -1638,12 +1640,22 @@ int main(int argc, char** argv) {
         configSource.find("resolveTheme(") != std::string::npos ||
         configSource.find("parseD2DColor") == std::string::npos ||
         configSource.find("resolveThemePath") == std::string::npos ||
+        configSource.find("std::optional<std::string> readBoundedFile") !=
+            std::string::npos ||
+        configSource.find("fs::file_size") != std::string::npos ||
         configSource.find("resources\" / L\"themes\" / L\"default\"") != std::string::npos ||
         configSource.find("dataRoot / L\"themes\"") != std::string::npos ||
+        configParserThemeSource.find("readBoundedFile") == std::string::npos ||
+        configParserThemeSource.find("fcitx5_control_read_file_utf16") ==
+            std::string::npos ||
         cmakeSource.find("fcitx5::config") == std::string::npos ||
         candidateUiSource.find("fcitx::windows::ui::renderSegments") == std::string::npos ||
         candidateUiSource.find("resolveThemeConfig") == std::string::npos ||
         candidateUiSource.find("resolveThemePath") == std::string::npos ||
+        candidateUiSource.find("#include <fstream>") != std::string::npos ||
+        candidateUiSource.find("std::optional<std::string> readBoundedFile") !=
+            std::string::npos ||
+        candidateUiSource.find("std::filesystem::file_size") != std::string::npos ||
         candidateUiSource.find("parseTheme(") != std::string::npos ||
         candidateUiSource.find("resolveTheme(") != std::string::npos ||
         candidateUiSource.find("resources\" / L\"themes\" / L\"default\"") !=
