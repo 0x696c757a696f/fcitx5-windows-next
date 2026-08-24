@@ -12,6 +12,13 @@
 namespace fcitx::windows::ipc {
 namespace {
 
+extern "C" std::uint8_t fcitx5_windows_common_pipe_transfer(
+    void* pipe,
+    std::uint8_t write,
+    std::uint8_t* data,
+    std::size_t size,
+    std::uint64_t deadline);
+
 DWORD remaining(std::uint64_t deadline) noexcept {
     const auto now = GetTickCount64();
     if (now >= deadline) return 0;
@@ -21,37 +28,8 @@ DWORD remaining(std::uint64_t deadline) noexcept {
 
 bool transfer(HANDLE pipe, bool write, void* data, std::size_t size,
               std::uint64_t deadline) noexcept {
-    auto* cursor = static_cast<std::uint8_t*>(data);
-    std::size_t completed = 0;
-    while (completed < size) {
-        const DWORD wait = remaining(deadline);
-        if (wait == 0 || size - completed > MAXDWORD) return false;
-        HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!event) return false;
-        OVERLAPPED operation{};
-        operation.hEvent = event;
-        DWORD transferred = 0;
-        const DWORD requested = static_cast<DWORD>(size - completed);
-        const BOOL immediate = write
-                                   ? WriteFile(pipe, cursor + completed, requested, &transferred,
-                                               &operation)
-                                   : ReadFile(pipe, cursor + completed, requested, &transferred,
-                                              &operation);
-        bool success = immediate != FALSE;
-        if (!success && GetLastError() == ERROR_IO_PENDING) {
-            if (WaitForSingleObject(event, wait) == WAIT_OBJECT_0) {
-                success = GetOverlappedResult(pipe, &operation, &transferred, FALSE) != FALSE;
-            } else {
-                CancelIoEx(pipe, &operation);
-                GetOverlappedResult(pipe, &operation, &transferred, TRUE);
-                success = false;
-            }
-        }
-        CloseHandle(event);
-        if (!success || transferred == 0) return false;
-        completed += transferred;
-    }
-    return true;
+    return fcitx5_windows_common_pipe_transfer(
+               pipe, write ? 1 : 0, static_cast<std::uint8_t*>(data), size, deadline) != 0;
 }
 
 } // namespace

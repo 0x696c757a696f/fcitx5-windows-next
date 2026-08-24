@@ -11,6 +11,7 @@ const VERSION_FALLBACK: &str = env!("CARGO_PKG_VERSION");
 const RELEASE_CHANNEL_FALLBACK: &str = "stable";
 const ENDPOINT_MAX_WIDE_UNITS: usize = 32_768;
 const SMALL_TEXT_FILE_MAX_BYTES: u64 = 64 * 1024;
+const MAX_DWORD_MINUS_ONE: u64 = u32::MAX as u64 - 1;
 
 fn version() -> &'static str {
     option_env!("FCITX_WINDOWS_VERSION").unwrap_or(VERSION_FALLBACK)
@@ -393,6 +394,36 @@ unsafe extern "system" {
     fn GetNamedPipeServerProcessId(pipe: *mut c_void, server_process_id: *mut u32) -> i32;
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
     fn GetCurrentProcessId() -> u32;
+    fn GetTickCount64() -> u64;
+    fn CreateEventW(
+        event_attributes: *mut c_void,
+        manual_reset: i32,
+        initial_state: i32,
+        name: *const u16,
+    ) -> *mut c_void;
+    fn WriteFile(
+        file: *mut c_void,
+        buffer: *const c_void,
+        number_of_bytes_to_write: u32,
+        number_of_bytes_written: *mut u32,
+        overlapped: *mut Overlapped,
+    ) -> i32;
+    fn ReadFile(
+        file: *mut c_void,
+        buffer: *mut c_void,
+        number_of_bytes_to_read: u32,
+        number_of_bytes_read: *mut u32,
+        overlapped: *mut Overlapped,
+    ) -> i32;
+    fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
+    fn GetOverlappedResult(
+        file: *mut c_void,
+        overlapped: *mut Overlapped,
+        number_of_bytes_transferred: *mut u32,
+        wait: i32,
+    ) -> i32;
+    fn CancelIoEx(file: *mut c_void, overlapped: *mut Overlapped) -> i32;
+    fn GetLastError() -> u32;
     fn LocalFree(memory: *mut c_void) -> *mut c_void;
     fn CloseHandle(object: *mut c_void) -> i32;
 }
@@ -425,6 +456,105 @@ fn same_principal_and_session(
 
 fn peer_development_policy_allowed(development_exception_enabled: bool) -> bool {
     development_exception_enabled
+}
+
+fn remaining_milliseconds(deadline: u64) -> Option<u32> {
+    // SAFETY: Monotonic Windows tick query with no preconditions.
+    let now = unsafe { GetTickCount64() };
+    if now >= deadline {
+        return None;
+    }
+    Some((deadline - now).min(MAX_DWORD_MINUS_ONE) as u32)
+}
+
+fn pipe_transfer(
+    pipe: *mut c_void,
+    write: bool,
+    data: *mut u8,
+    size: usize,
+    deadline: u64,
+) -> bool {
+    const ERROR_IO_PENDING: u32 = 997;
+    const WAIT_OBJECT_0: u32 = 0;
+
+    if pipe.is_null() || pipe == invalid_handle_value() || (data.is_null() && size != 0) {
+        return false;
+    }
+    let mut completed = 0_usize;
+    while completed < size {
+        let Some(wait) = remaining_milliseconds(deadline) else {
+            return false;
+        };
+        let remaining = size - completed;
+        if remaining > u32::MAX as usize {
+            return false;
+        }
+        // SAFETY: Creates an unnamed manual-reset event for one overlapped I/O.
+        let event = unsafe { CreateEventW(std::ptr::null_mut(), 1, 0, std::ptr::null()) };
+        if event.is_null() {
+            return false;
+        }
+        let mut operation = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 0,
+            offset_high: 0,
+            event,
+        };
+        let mut transferred = 0_u32;
+        // SAFETY: The caller supplies a valid pipe handle and a buffer covering
+        // `size` bytes for this operation. Windows validates the handle. The
+        // event and OVERLAPPED live until the operation is completed/cancelled.
+        let immediate = unsafe {
+            if write {
+                WriteFile(
+                    pipe,
+                    data.add(completed).cast::<c_void>(),
+                    remaining as u32,
+                    &mut transferred,
+                    &mut operation,
+                )
+            } else {
+                ReadFile(
+                    pipe,
+                    data.add(completed).cast::<c_void>(),
+                    remaining as u32,
+                    &mut transferred,
+                    &mut operation,
+                )
+            }
+        };
+        let mut success = immediate != 0;
+        if !success {
+            // SAFETY: Reads the thread-local Win32 error for the I/O call above.
+            let error = unsafe { GetLastError() };
+            if error == ERROR_IO_PENDING {
+                // SAFETY: Waits on the event owned by this operation.
+                let wait_result = unsafe { WaitForSingleObject(event, wait) };
+                if wait_result == WAIT_OBJECT_0 {
+                    // SAFETY: The event signaled that this overlapped operation completed.
+                    success = unsafe {
+                        GetOverlappedResult(pipe, &mut operation, &mut transferred, 0) != 0
+                    };
+                } else {
+                    // SAFETY: Cancels and drains this specific outstanding operation before
+                    // closing the event handle.
+                    unsafe {
+                        CancelIoEx(pipe, &mut operation);
+                        GetOverlappedResult(pipe, &mut operation, &mut transferred, 1);
+                    }
+                    success = false;
+                }
+            }
+        }
+        // SAFETY: `event` is a live handle from CreateEventW above.
+        unsafe { CloseHandle(event) };
+        if !success || transferred == 0 {
+            return false;
+        }
+        completed += transferred as usize;
+    }
+    true
 }
 
 fn pipe_server_process_id(pipe: *mut c_void) -> Option<u32> {
@@ -1224,6 +1354,16 @@ struct TokenUser {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+struct Overlapped {
+    internal: usize,
+    internal_high: usize,
+    offset: u32,
+    offset_high: u32,
+    event: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct FileTime {
     low_date_time: u32,
     high_date_time: u32,
@@ -1979,6 +2119,23 @@ pub extern "C" fn fcitx5_windows_common_peer_development_policy_allowed(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `pipe` must be a live overlapped pipe handle. `data` must be null only when
+/// `size` is zero, or point to a buffer covering exactly `size` bytes. For
+/// write operations the buffer is read; for read operations the buffer is
+/// written. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_transfer(
+    pipe: *mut c_void,
+    write: u8,
+    data: *mut u8,
+    size: usize,
+    deadline: u64,
+) -> u8 {
+    pipe_transfer(pipe, write != 0, data, size, deadline) as u8
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `pipe` must be a live named-pipe handle. `current_user_sid` and
 /// `expected_executable_path` must be null only when their corresponding length
 /// is zero, or point to valid UTF-16 buffers with exactly the provided lengths.
@@ -2634,6 +2791,25 @@ mod tests {
             0,
             &[],
             false
+        ));
+    }
+
+    #[test]
+    fn pipe_transfer_rejects_invalid_pipe_like_cpp_contract() {
+        assert!(!pipe_transfer(
+            std::ptr::null_mut(),
+            true,
+            std::ptr::null_mut(),
+            1,
+            unsafe { GetTickCount64() } + 100
+        ));
+        let mut byte = 0_u8;
+        assert!(!pipe_transfer(
+            invalid_handle_value(),
+            false,
+            &mut byte,
+            1,
+            unsafe { GetTickCount64() } + 100
         ));
     }
 

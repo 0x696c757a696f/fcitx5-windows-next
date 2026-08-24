@@ -189,6 +189,23 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("REG-PEER-ID-001: pipe peer verification must use Rust-owned process and executable policy");
     }
+    const auto pipeClientSource = read_text(sourceRoot / "src/ipc/pipe_client.cpp");
+    const auto launcherClientSource = read_text(sourceRoot / "src/ipc/launcher_client.cpp");
+    if (pipeClientSource.find("CreateEventW") != std::string::npos ||
+        pipeClientSource.find("WriteFile(") != std::string::npos ||
+        pipeClientSource.find("ReadFile(") != std::string::npos ||
+        pipeClientSource.find("WaitForSingleObject") != std::string::npos ||
+        pipeClientSource.find("GetOverlappedResult") != std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_pipe_transfer") == std::string::npos ||
+        launcherClientSource.find("CreateEventW") != std::string::npos ||
+        launcherClientSource.find("WriteFile(") != std::string::npos ||
+        launcherClientSource.find("ReadFile(") != std::string::npos ||
+        launcherClientSource.find("WaitForSingleObject") != std::string::npos ||
+        launcherClientSource.find("GetOverlappedResult") != std::string::npos ||
+        launcherClientSource.find("fcitx5_windows_common_pipe_transfer") ==
+            std::string::npos) {
+        return fail("IPC-TRANSFER-RUST: non-Engine IPC clients must use Rust-owned overlapped pipe transfer");
+    }
     const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
     if (installerSource.find("--set-startup") != std::string::npos ||
         installerSource.find("--background") != std::string::npos ||
@@ -393,6 +410,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("peer_verification_policy_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transfer") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("pipe_transfer_rejects_invalid_pipe_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("GetOverlappedResult") == std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_verify_pipe_server_peer_utf16") ==
             std::string::npos ||
         rustWindowsCommonCore.find("pipe_server_peer_policy_rejects_invalid_pipe_like_cpp_contract") ==
