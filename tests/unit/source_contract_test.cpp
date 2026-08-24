@@ -188,6 +188,8 @@ int main(int argc, char** argv) {
     }
     const auto uiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
     const auto rustCandidateCoreSource = read_text(sourceRoot / "rust/candidate-core/src/lib.rs");
+    const auto configParserCandidateSource =
+        read_text(sourceRoot / "src/config/config_parser.cpp");
     if (uiSource.find("L\"zh-CN\", &format") != std::string::npos) {
         return fail("REG-PROFILE-001: candidate DWrite locale must not be hardcoded to zh-CN");
     }
@@ -253,6 +255,18 @@ int main(int argc, char** argv) {
         rustCandidateCoreSource.find("content_locale_or_default_abi_uses_two_phase_utf16_output") ==
             std::string::npos) {
         return fail("CANDIDATE-UI-CONTENT-LOCALE-RUST: Candidate UI content locale policy must be Rust-owned");
+    }
+    if (uiSource.find("reservedLabel") == std::string::npos ||
+        uiSource.find("configuredSequenceLabel") == std::string::npos ||
+        uiSource.find("fcitx5_candidate_scroll_label_policy") == std::string::npos ||
+        rustCandidateCoreSource.find("fcitx5_candidate_scroll_label_policy") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("scroll_label_policy_reserves_and_shows_current_row_or_column") ==
+            std::string::npos ||
+        configParserCandidateSource.find("\"sequence\"") == std::string::npos ||
+        configParserCandidateSource.find("candidate label sequence must contain 1 to 9 strings") ==
+            std::string::npos) {
+        return fail("CANDIDATE-UI-SCROLL-LABELS: Candidate UI must reserve configurable row/column labels through Rust policy");
     }
     if (uiSource.find("CommandLineToArgvW") != std::string::npos ||
         uiSource.find("GetCommandLineW") != std::string::npos ||

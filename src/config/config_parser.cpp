@@ -324,7 +324,7 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
                 return setError(error, "geometry must be a table");
 
             if (const auto* label = (*candidate)["label"].as_table()) {
-                if (!allowed(*label, {"visible", "style", "font_scale", "gap_dip"},
+                if (!allowed(*label, {"visible", "style", "font_scale", "gap_dip", "sequence"},
                              "candidate.label.", error))
                     return false;
                 std::optional<std::string> style;
@@ -350,6 +350,23 @@ bool parseConfig(std::string_view text, Config& output, ParseError& error) noexc
                 if (!ranged(output.label.fontScale, 0.5, 1.5, "label font scale", error) ||
                     !ranged(output.label.gap, 0, 64, "label gap", error))
                     return false;
+                if (const auto* sequence = (*label)["sequence"].as_array()) {
+                    if (sequence->empty() || sequence->size() > 9)
+                        return setError(error, "candidate label sequence must contain 1 to 9 strings",
+                                        &sequence->source());
+                    std::vector<std::string> labels;
+                    labels.reserve(sequence->size());
+                    for (const auto& item : *sequence) {
+                        const auto value = item.value<std::string>();
+                        if (!value || value->empty() || value->size() > 16)
+                            return setError(error,
+                                            "candidate label sequence entries must be 1 to 16 UTF-8 bytes",
+                                            &item.source());
+                        labels.emplace_back(std::move(*value));
+                    }
+                    output.label.sequence = std::move(labels);
+                } else if (label->contains("sequence"))
+                    return setError(error, "candidate label sequence must be an array");
             } else if (candidate->contains("label"))
                 return setError(error, "label must be a table");
 
@@ -501,6 +518,7 @@ shadow = true
 # 只改变序号外观，不改变真正的选词按键。
 visible = true
 style = "dot" # plain | dot | paren | bracket | circled
+sequence = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
 font_scale = 0.85
 gap_dip = 4.0
 
@@ -769,6 +787,7 @@ Config mergeConfig(const Config& base, const Config& overrideConfig) {
     mergeOptional(result.label.style, overrideConfig.label.style);
     mergeOptional(result.label.fontScale, overrideConfig.label.fontScale);
     mergeOptional(result.label.gap, overrideConfig.label.gap);
+    mergeOptional(result.label.sequence, overrideConfig.label.sequence);
     mergeFont(result.uiFont, overrideConfig.uiFont);
     mergeFont(result.candidateFont, overrideConfig.candidateFont);
     mergeFont(result.annotationFont, overrideConfig.annotationFont);

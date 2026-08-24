@@ -23,6 +23,9 @@ int main() {
         "format_version = 1\n[candidate]\npage_size = 0\n",
         "format_version = 1\n[candidate]\npage_size = 10\n",
         "format_version = 1\n[candidate.colors]\nbackground = 'red'\n",
+        "format_version = 1\n[candidate.label]\nsequence = []\n",
+        "format_version = 1\n[candidate.label]\nsequence = ['']\n",
+        "format_version = 1\n[candidate.label]\nsequence = ['1','2','3','4','5','6','7','8','9','0']\n",
         "format_version = 1\n[fonts.candidate]\nfamilies = []\n",
         "format_version = 1\n[appearance]\ntheme = '../escape'\n",
         "format_version = 1\n[ui]\nlanguage = 'fr-FR'\n",
@@ -51,6 +54,13 @@ int main() {
     if (!parseConfig("format_version = 1\n[candidate]\npage_size = 7\n", config, error) ||
         !config.candidatePageSize || *config.candidatePageSize != 7) {
         std::cerr << "valid page_size rejected: " << error.message << '\n';
+        return 1;
+    }
+    if (!parseConfig("format_version = 1\n[candidate.label]\nsequence = ['a', 'b', 'c']\n",
+                     config, error) ||
+        !config.label.sequence || config.label.sequence->size() != 3 ||
+        (*config.label.sequence)[1] != "b") {
+        std::cerr << "valid candidate label sequence rejected: " << error.message << '\n';
         return 1;
     }
     if (!parseConfig("format_version = 1\n[input_methods]\nenabled = [\"pinyin\", \"wbx\"]\n"

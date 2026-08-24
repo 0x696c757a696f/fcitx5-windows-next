@@ -239,6 +239,14 @@ pub struct Fcitx5CandidateRenderItemOutput {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5CandidateScrollLabel {
+    pub reserve: u8,
+    pub show: u8,
+    pub slot: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Fcitx5CandidateUtf8 {
     pub ptr: *const u8,
@@ -487,6 +495,23 @@ fn content_locale_or_default(locale: &[u8]) -> Vec<u16> {
         .iter()
         .map(|character| u16::from(*character))
         .collect()
+}
+
+fn scroll_label_policy(
+    candidate_index: usize,
+    selected_index: usize,
+    page_size: usize,
+    total_candidates: usize,
+) -> Fcitx5CandidateScrollLabel {
+    if page_size == 0 || total_candidates <= page_size || candidate_index >= total_candidates {
+        return Fcitx5CandidateScrollLabel::default();
+    }
+    let slot = candidate_index % page_size + 1;
+    Fcitx5CandidateScrollLabel {
+        reserve: 1,
+        show: (candidate_index / page_size == selected_index / page_size) as u8,
+        slot: slot.min(u32::MAX as usize) as u32,
+    }
 }
 
 fn parse_candidate_command_line(
@@ -1044,6 +1069,16 @@ pub unsafe extern "C" fn fcitx5_candidate_locale_prefers_compact_horizontal_utf8
         return 0;
     };
     locale_prefers_compact_horizontal(locale) as u8
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_candidate_scroll_label_policy(
+    candidate_index: usize,
+    selected_index: usize,
+    page_size: usize,
+    total_candidates: usize,
+) -> Fcitx5CandidateScrollLabel {
+    scroll_label_policy(candidate_index, selected_index, page_size, total_candidates)
 }
 
 #[no_mangle]
@@ -2237,6 +2272,22 @@ mod tests {
             fcitx5_candidate_content_locale_or_default_utf16(invalid, std::ptr::null_mut(), 0)
         };
         assert!(fallback_required > 0);
+    }
+
+    #[test]
+    fn scroll_label_policy_reserves_and_shows_current_row_or_column() {
+        let inactive = scroll_label_policy(2, 8, 6, 20);
+        assert_eq!(inactive.reserve, 1);
+        assert_eq!(inactive.show, 0);
+        assert_eq!(inactive.slot, 3);
+
+        let active = scroll_label_policy(10, 8, 6, 20);
+        assert_eq!(active.reserve, 1);
+        assert_eq!(active.show, 1);
+        assert_eq!(active.slot, 5);
+
+        assert_eq!(scroll_label_policy(0, 0, 6, 6).reserve, 0);
+        assert_eq!(scroll_label_policy(0, 0, 0, 20).reserve, 0);
     }
 
     #[test]

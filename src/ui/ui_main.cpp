@@ -487,6 +487,12 @@ struct Fcitx5CandidateModelSnapshot {
     std::uint8_t popupAllowed{};
 };
 
+struct Fcitx5CandidateScrollLabel {
+    std::uint8_t reserve{};
+    std::uint8_t show{};
+    std::uint32_t slot{};
+};
+
 extern "C" void* fcitx5_candidate_model_create();
 extern "C" void fcitx5_candidate_model_destroy(void* model);
 extern "C" void fcitx5_candidate_model_reset(void* model);
@@ -500,6 +506,11 @@ extern "C" std::size_t fcitx5_candidate_content_locale_or_default_utf16(
     std::size_t localeCapacity);
 extern "C" std::uint8_t fcitx5_candidate_locale_prefers_compact_horizontal_utf8(
     Fcitx5CandidateUtf8 locale);
+extern "C" Fcitx5CandidateScrollLabel fcitx5_candidate_scroll_label_policy(
+    std::size_t candidateIndex,
+    std::size_t selectedIndex,
+    std::size_t pageSize,
+    std::size_t totalCandidates);
 
 [[nodiscard]] Fcitx5CandidateUtf8 toRust(std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
@@ -650,10 +661,37 @@ bool localePrefersCompactHorizontal(std::string_view locale) noexcept {
                candidate::detail::toRust(locale)) != 0;
 }
 
+std::wstring formatCandidateLabel(std::wstring_view label,
+                                  fcitx::windows::config::LabelStyle style) {
+    if (label.empty())
+        return {};
+    switch (style) {
+    case fcitx::windows::config::LabelStyle::plain:
+        return std::wstring(label) + L" ";
+    case fcitx::windows::config::LabelStyle::dot:
+        return std::wstring(label) + L". ";
+    case fcitx::windows::config::LabelStyle::paren:
+        return L"(" + std::wstring(label) + L") ";
+    case fcitx::windows::config::LabelStyle::bracket:
+        return L"[" + std::wstring(label) + L"] ";
+    case fcitx::windows::config::LabelStyle::circled:
+        if (label.size() == 1 && label[0] >= L'1' && label[0] <= L'9')
+            return std::wstring(1, static_cast<wchar_t>(0x2460 + label[0] - L'1')) + L" ";
+        return std::wstring(label) + L" ";
+    }
+    return std::wstring(label) + L" ";
+}
+
+std::wstring fallbackCandidateLabel(std::uint32_t slot) {
+    return std::to_wstring(slot == 0 ? 1U : slot);
+}
+
 struct CandidateVisual {
     std::wstring label;
+    std::wstring reservedLabel;
     std::wstring text;
     std::wstring comment;
+    bool sourceLabel{};
 };
 
 template <typename Function>
@@ -1313,6 +1351,45 @@ class CandidateWindow final {
         (void)createDeviceResources();
     }
 
+    [[nodiscard]] std::wstring configuredSequenceLabel(std::uint32_t slot) const {
+        std::wstring label;
+        if (slot > 0 && visualConfig_.label.sequence &&
+            slot <= visualConfig_.label.sequence->size() &&
+            utf8ToWide((*visualConfig_.label.sequence)[slot - 1U], label) && !label.empty()) {
+            return label;
+        }
+        return fallbackCandidateLabel(slot);
+    }
+
+    void applyScrollLabelReservations() {
+        const auto style =
+            visualConfig_.label.style.value_or(fcitx::windows::config::LabelStyle::dot);
+        const bool labelsVisible = visualConfig_.label.visible.value_or(true);
+        for (auto& candidate : candidates_) {
+            if (candidate.sourceLabel) {
+                candidate.reservedLabel = candidate.label;
+            } else {
+                candidate.label.clear();
+                candidate.reservedLabel.clear();
+            }
+        }
+        if (!scrollMode_ || !labelsVisible || scrollColumns_ == 0 || !selected_)
+            return;
+        for (std::size_t index = 0; index < candidates_.size(); ++index) {
+            auto& candidate = candidates_[index];
+            if (candidate.sourceLabel)
+                continue;
+            const auto policy = candidate::detail::fcitx5_candidate_scroll_label_policy(
+                index, *selected_, scrollColumns_, candidates_.size());
+            if (policy.reserve == 0)
+                continue;
+            candidate.reservedLabel = formatCandidateLabel(configuredSequenceLabel(policy.slot),
+                                                          style);
+            if (policy.show != 0)
+                candidate.label = candidate.reservedLabel;
+        }
+    }
+
     void reloadVisualConfig() {
         refreshVisualConfig();
         reflowCurrentModel();
@@ -1401,7 +1478,9 @@ class CandidateWindow final {
                                     borderBrush.Get(), 1.0F);
             borderBrush->SetOpacity(1.0F);
         }
-        const std::vector<CandidateVisual> fallback{{L"1. ", L"你", L"nǐ"}, {L"2. ", L"呢", L""}};
+        const std::vector<CandidateVisual> fallback{
+            {L"1. ", L"1. ", L"你", L"nǐ", true},
+            {L"2. ", L"2. ", L"呢", L"", true}};
         const auto& lines = candidates_.empty() ? fallback : candidates_;
         float fallbackTop = 8.0F;
         const std::size_t paintCount =
@@ -1435,10 +1514,10 @@ class CandidateWindow final {
             const float height = bounds.bottom - bounds.top;
             renderInputs.push_back(
                 {toUiRect(bounds),
-                 naturalTextWidth(candidate.label, labelFormat_.Get(), height),
+                 naturalTextWidth(candidate.reservedLabel, labelFormat_.Get(), height),
                  naturalTextWidth(candidate.text, textFormat_.Get(), height),
                  naturalTextWidth(candidate.comment, annotationFormat_.Get(), height),
-                 !candidate.label.empty()});
+                 !candidate.reservedLabel.empty()});
             fallbackTop += 32.0F;
         }
         fallbackTop = 8.0F;
@@ -1593,7 +1672,9 @@ class CandidateWindow final {
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
-        const std::vector<CandidateVisual> fallback{{L"1. ", L"你", L"nǐ"}, {L"2. ", L"呢", L""}};
+        const std::vector<CandidateVisual> fallback{
+            {L"1. ", L"1. ", L"你", L"nǐ", true},
+            {L"2. ", L"2. ", L"呢", L"", true}};
         const auto& lines = candidates_.empty() ? fallback : candidates_;
         const std::size_t paintCount =
             visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
@@ -1747,28 +1828,11 @@ class CandidateWindow final {
                 continue;
             CandidateVisual visual;
             if (visualConfig_.label.visible.value_or(true) && !label.empty()) {
-                using fcitx::windows::config::LabelStyle;
-                switch (visualConfig_.label.style.value_or(LabelStyle::dot)) {
-                case LabelStyle::plain:
-                    visual.label = label + L" ";
-                    break;
-                case LabelStyle::dot:
-                    visual.label = label + L". ";
-                    break;
-                case LabelStyle::paren:
-                    visual.label = L"(" + label + L") ";
-                    break;
-                case LabelStyle::bracket:
-                    visual.label = L"[" + label + L"] ";
-                    break;
-                case LabelStyle::circled:
-                    if (label.size() == 1 && label[0] >= L'1' && label[0] <= L'9')
-                        visual.label.assign(1, static_cast<wchar_t>(0x2460 + label[0] - L'1'));
-                    else
-                        visual.label = label;
-                    visual.label += L" ";
-                    break;
-                }
+                visual.label = formatCandidateLabel(
+                    label,
+                    visualConfig_.label.style.value_or(fcitx::windows::config::LabelStyle::dot));
+                visual.reservedLabel = visual.label;
+                visual.sourceLabel = true;
             }
             visual.text = std::move(text);
             if (!comment.empty())
@@ -1822,17 +1886,19 @@ class CandidateWindow final {
         }
         resolvedPresentationOrientation_ =
             horizontalPresentation ? ui::Orientation::horizontal : ui::Orientation::vertical;
+        applyScrollLabelReservations();
         float scrollLabelColumnWidth = 0.0F;
         if (scrollMode_ && horizontalPresentation) {
             for (const auto candidateIndex : renderIndices_) {
                 const auto& candidate = candidates_[candidateIndex];
-                if (candidate.label.empty())
+                if (candidate.reservedLabel.empty())
                     continue;
                 ComPtr<IDWriteTextLayout> labelLayout;
                 DWRITE_TEXT_METRICS metrics{};
                 if (writeFactory_ && labelFormat_ &&
                     SUCCEEDED(writeFactory_->CreateTextLayout(
-                        candidate.label.data(), static_cast<UINT32>(candidate.label.size()),
+                        candidate.reservedLabel.data(),
+                        static_cast<UINT32>(candidate.reservedLabel.size()),
                         labelFormat_.Get(), 4096.0F, 512.0F, &labelLayout)) &&
                     SUCCEEDED(labelLayout->GetMetrics(&metrics))) {
                     scrollLabelColumnWidth = (std::max)(
@@ -1861,9 +1927,9 @@ class CandidateWindow final {
                 height = (std::max)(height, metrics.height);
                 return true;
             };
-            if (scrollMode_ && horizontalPresentation && candidate.label.empty())
+            if (scrollMode_ && horizontalPresentation && candidate.reservedLabel.empty())
                 width += scrollLabelColumnWidth;
-            if (measure(candidate.label, labelFormat_.Get()) &&
+            if (measure(candidate.reservedLabel, labelFormat_.Get()) &&
                 measure(candidate.text, textFormat_.Get()) &&
                 measure(candidate.comment, annotationFormat_.Get())) {
                 items.push_back({width + itemPaddingX * 2, height + itemPaddingY * 2});

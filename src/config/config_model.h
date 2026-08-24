@@ -33,6 +33,7 @@ struct Label {
     std::optional<LabelStyle> style;
     std::optional<double> fontScale;
     std::optional<double> gap;
+    std::optional<std::vector<std::string>> sequence;
 };
 
 struct Font {
