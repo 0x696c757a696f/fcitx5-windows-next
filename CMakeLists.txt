@@ -210,6 +210,10 @@ add_library(fcitx5_protocol STATIC protocol/protocol.cpp)
 add_library(fcitx5::protocol ALIAS fcitx5_protocol)
 target_compile_features(fcitx5_protocol PUBLIC cxx_std_20)
 target_include_directories(fcitx5_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
+# E1 cutover: the codec is authoritative in Rust `fcitx5-protocol-core`; this
+# static library only marshals over the C ABI, so every consumer links the Rust
+# codec transitively.
+target_link_libraries(fcitx5_protocol PUBLIC fcitx5_protocol_core_rust)
 fcitx_apply_project_options(fcitx5_protocol)
 
 set(FCITX_RUST_LAUNCHER_CORE_STATICLIB
@@ -330,6 +334,33 @@ add_custom_target(
     fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-candidate-poc executable")
+
+set(FCITX_RUST_PROTOCOL_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_protocol_core.lib")
+add_custom_command(
+  OUTPUT "${FCITX_RUST_PROTOCOL_CORE_STATICLIB}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-protocol-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/capi.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/capi_tests.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/tests.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-protocol-core staticlib")
+add_custom_target(fcitx5_protocol_core_rustlib
+                  DEPENDS "${FCITX_RUST_PROTOCOL_CORE_STATICLIB}")
+add_library(fcitx5_protocol_core_rust STATIC IMPORTED GLOBAL)
+set_target_properties(fcitx5_protocol_core_rust
+                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_PROTOCOL_CORE_STATICLIB}")
+add_dependencies(fcitx5_protocol_core_rust fcitx5_protocol_core_rustlib)
+target_link_libraries(fcitx5_protocol_core_rust INTERFACE ws2_32 userenv ntdll)
 
 set(FCITX_RUST_TSF_POC_DLL
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_tsf_poc.dll")
@@ -979,6 +1010,12 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_protocol_test)
   fcitx_apply_binary_hardening(fcitx5_protocol_test)
   add_test(NAME protocol-contract COMMAND fcitx5_protocol_test)
+  add_executable(fcitx5_protocol_differential_test tests/unit/protocol_differential_test.cpp)
+  target_link_libraries(fcitx5_protocol_differential_test
+                        PRIVATE fcitx5::protocol fcitx5_protocol_core_rust)
+  fcitx_apply_project_options(fcitx5_protocol_differential_test)
+  fcitx_apply_binary_hardening(fcitx5_protocol_differential_test)
+  add_test(NAME protocol-differential-contract COMMAND fcitx5_protocol_differential_test)
 
   add_executable(fcitx5_config_parser_test tests/unit/config_parser_test.cpp)
   target_link_libraries(fcitx5_config_parser_test PRIVATE fcitx5::config)

@@ -1,10 +1,19 @@
 # Current Truth Snapshot
 
-Date: 2026-08-24
+Date: 2026-08-24 (updated after the 2026-08-24 review rebaseline)
 
-HEAD recorded at snapshot start: `0584572fb71d0d5597395d5ebee5f87f3bd49856`
+HEAD recorded at snapshot start: `e993dfc6cbd0d1688ef67f153cb1164a0e144955`
 
-Working tree at snapshot start: clean.
+Working tree at snapshot start: `candidate-core` label-gap layout and launcher
+clock Rust-ownership work in progress (uncommitted). Files touched at this
+snapshot: `rust/candidate-core/src/lib.rs`,
+`rust/windows-common-core/src/lib.rs`, `src/config/app_main.cpp`,
+`src/launcher/launcher_main.cpp`, `src/ui/ui_main.cpp`,
+`tests/unit/source_contract_test.cpp`,
+`tools/capture-candidate-evidence.ps1`. These are part of the
+Candidate label-gap/right-aligned label cell work and the Launcher
+`GetTickCount64` -> Rust tick/deadline source cutover; source-contract guards
+and candidate-core tests were updated in the same working tree.
 
 ## Shipping Architecture
 
@@ -41,6 +50,7 @@ Windows host
 | Rust Config | `MIGRATION-CANDIDATE` | Time-boxed product spike or explicit ADR choosing WTL+D2D vs Rust native Config |
 | Candidate Rust core | `SHIPPING-DOMAIN` | Remove duplicated C++ validation/state, preserve renderer evidence, add candidate-action/upstream alignment |
 | Rust package/update/control/launcher cores | `SHIPPING-DOMAIN` where already cut over, `MIGRATION-CANDIDATE` where shell remains | Delete replaced C++ authoritative implementation and keep adapter thin |
+| Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
 
 ## Current Red Lights
 
@@ -51,11 +61,12 @@ Windows host
 - Engine product state is still mostly C++; the Fcitx adapter boundary is documented but not yet fully cut.
 - Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
 - The TSF profile boundary is now frozen in `docs/tsf-profile-boundary.md`: Windows exposes only the single product profile `Fcitx5`; internal engines/addons remain Fcitx state; obsolete dynamic profile data is cleanup input only.
+- `rust/protocol-core` is now the single authoritative FCW4 codec: `protocol/protocol.cpp` is a thin marshalling adapter over the C ABI (`protocol/protocol_ffi.h`, typed encode/decode + `decode_header` in `capi.rs`), and `protocol-differential-contract` pins the pre-cutover wire bytes via `tests/unit/protocol_wire_golden.inc` (19 samples). C++ `protocol.h` API and all call sites are unchanged; see `docs/fcitx-upstream-rebaseline-audit.md` for the Fcitx5 upstream baseline audit (fork is official `ebf24ddc` + 41 lines; all three Windows-local changes are not yet upstream; 1 of 6 patches applies clean to master).
 
 ## Next Five Code/Design Tasks
 
 1. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
 2. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
-3. Start Engine E1 only from the frozen call graph/schema in `docs/engine-boundary.md`.
+3. Engine E1 cutover: done at this HEAD — `protocol/protocol.cpp` is a thin C ABI bridge over the Rust `protocol-core` codec (`protocol/protocol_ffi.h`), the old C++ codec internals are deleted, `protocol.h` API and call sites are unchanged, and the wire is frozen in `tests/unit/protocol_wire_golden.inc`. Next E1-adjacent step: migrate `src/engine` protocol state/validation consumers onto the Rust core where a gated task exists.
 4. Prepare the Config technology spike/ADR instead of adding more raw WTL controls.
 5. Keep single-profile TSF registration guarded while installer/UAC and host evidence are collected.

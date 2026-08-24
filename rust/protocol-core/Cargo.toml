@@ -1,0 +1,10 @@
+[package]
+name = "fcitx5-protocol-core"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib", "staticlib"]

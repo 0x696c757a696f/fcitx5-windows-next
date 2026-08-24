@@ -12,6 +12,7 @@ members = [
   "rust/config-poc",
   "rust/candidate-core",
   "rust/tsf-poc",
+  "rust/protocol-core",
 ]
 
 [profile.dev]
