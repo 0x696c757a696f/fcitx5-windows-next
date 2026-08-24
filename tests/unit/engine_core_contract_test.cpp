@@ -242,6 +242,51 @@ int runCorpus() {
         fcitx5_engine_core_input_method_overridden(ledger, &a, &overridden) == 0,
         "inputMethodOverridden(0) must report absent (C++ default semantics)");
 
+    // E3 Event → Action: input-method switch hotkey decision (mirrors the
+    // frozen C++ `matches()` semantics that the Rust decision replaced).
+    {
+        const char* toggle = "Ctrl+Space";
+        const char* next = "Ctrl+Shift";
+        int action = FCITX_ENGINE_CORE_IM_ACTION_NONE;
+        failures += !expect(
+            fcitx5_engine_core_classify_input_method_switch(1, 0, 0, 0x20, toggle, next,
+                                                            &action) == 1 &&
+                action == FCITX_ENGINE_CORE_IM_ACTION_TOGGLE,
+            "Ctrl+Space must decide TOGGLE");
+        failures += !expect(
+            fcitx5_engine_core_classify_input_method_switch(1, 1, 0, 0xffe1, toggle, next,
+                                                            &action) == 1 &&
+                action == FCITX_ENGINE_CORE_IM_ACTION_NEXT,
+            "Ctrl+Shift on Shift_L must decide NEXT");
+        failures += !expect(
+            fcitx5_engine_core_classify_input_method_switch(1, 1, 0, 0x20,
+                                                            "Ctrl+Shift+Space", next,
+                                                            &action) == 1 &&
+                action == FCITX_ENGINE_CORE_IM_ACTION_TOGGLE,
+            "Ctrl+Shift+Space must decide TOGGLE");
+        failures += !expect(
+            fcitx5_engine_core_classify_input_method_switch(0, 1, 1, 0xffe1, "Alt+Shift",
+                                                            next, &action) == 1 &&
+                action == FCITX_ENGINE_CORE_IM_ACTION_TOGGLE,
+            "Alt+Shift must decide TOGGLE");
+        failures += !expect(
+            fcitx5_engine_core_classify_input_method_switch(0, 1, 0, 0x20, toggle, next,
+                                                            &action) == 0,
+            "Shift+Space must not match any hotkey");
+        failures += !expect(
+            fcitx5_engine_core_classify_input_method_switch(1, 0, 0, 0x41, toggle, next,
+                                                            &action) == 0,
+            "ordinary key must not match any hotkey");
+        failures += !expect(
+            fcitx5_engine_core_classify_input_method_switch(1, 0, 0, 0x20, nullptr, nullptr,
+                                                            &action) == 0,
+            "unconfigured hotkeys must not match");
+        failures += !expect(
+            fcitx5_engine_core_classify_input_method_switch(1, 0, 0, 0, toggle, next,
+                                                            &action) == 0,
+            "FcitxKey_None must never match");
+    }
+
     return failures;
 }
 

@@ -1,4 +1,7 @@
-use super::{CaretRect, ContextKey, ContextLedger, LedgerError};
+use super::{
+    classify_input_method_switch, CaretRect, ContextKey, ContextLedger, ImSwitchAction,
+    LedgerError, KEY_SYM_ALT_L, KEY_SYM_CONTROL_L, KEY_SYM_NONE, KEY_SYM_SHIFT_L, KEY_SYM_SPACE,
+};
 
 fn key_a() -> ContextKey {
     ContextKey::new(100, 1, 7)
@@ -256,4 +259,137 @@ fn product_state_maps_survive_ledger_lifecycle() {
     assert_eq!(ledger.popup_allowed(key_a()), Some(true));
     assert_eq!(ledger.selected_override(key_a()), Some(2));
     assert!(ledger.input_method_overridden(key_a()));
+}
+
+// ---------------------------------------------------------------------------
+// E3: input-method switch hotkey decision corpus
+// ---------------------------------------------------------------------------
+
+const TOGGLE: &str = "Ctrl+Space";
+const NEXT: &str = "Ctrl+Shift";
+
+fn classify(ctrl: bool, shift: bool, alt: bool, sym: u32) -> Option<ImSwitchAction> {
+    classify_input_method_switch(ctrl, shift, alt, sym, Some(TOGGLE), Some(NEXT))
+}
+
+#[test]
+fn ctrl_space_toggles() {
+    assert_eq!(
+        classify(true, false, false, KEY_SYM_SPACE),
+        Some(ImSwitchAction::Toggle)
+    );
+}
+
+#[test]
+fn ctrl_shift_nexts() {
+    assert_eq!(
+        classify(true, true, false, KEY_SYM_SHIFT_L),
+        Some(ImSwitchAction::Next)
+    );
+}
+
+#[test]
+fn ctrl_shift_space_toggles() {
+    // "Ctrl+Shift+Space" is the default toggle string; the decision matches
+    // the toggle hotkey before the next hotkey.
+    assert_eq!(
+        classify_input_method_switch(
+            true,
+            true,
+            false,
+            KEY_SYM_SPACE,
+            Some("Ctrl+Shift+Space"),
+            Some(NEXT)
+        ),
+        Some(ImSwitchAction::Toggle)
+    );
+}
+
+#[test]
+fn alt_shift_toggles() {
+    assert_eq!(
+        classify_input_method_switch(
+            false,
+            true,
+            true,
+            KEY_SYM_SHIFT_L,
+            Some("Alt+Shift"),
+            Some(NEXT)
+        ),
+        Some(ImSwitchAction::Toggle)
+    );
+}
+
+#[test]
+fn modifier_combinations_do_not_match() {
+    // Shift+Space without Ctrl: not a hotkey.
+    assert_eq!(classify(false, true, false, KEY_SYM_SPACE), None);
+    // Ctrl+Alt+Space: Alt disqualifies Ctrl+Space.
+    assert_eq!(classify(true, false, true, KEY_SYM_SPACE), None);
+    // Shift_L with only Ctrl (no Shift): not Ctrl+Shift.
+    assert_eq!(classify(true, false, false, KEY_SYM_SHIFT_L), None);
+    // Shift_L with only Shift (no Ctrl/Alt): nothing.
+    assert_eq!(classify(false, true, false, KEY_SYM_SHIFT_L), None);
+}
+
+#[test]
+fn ordinary_keys_never_match_hotkeys() {
+    assert_eq!(classify(true, false, false, 0x41), None);
+    assert_eq!(classify(true, false, false, KEY_SYM_CONTROL_L), None);
+    assert_eq!(classify(false, false, true, KEY_SYM_ALT_L), None);
+}
+
+#[test]
+fn none_keysym_never_matches() {
+    assert_eq!(classify(true, false, false, KEY_SYM_NONE), None);
+    assert_eq!(
+        classify_input_method_switch(true, false, false, KEY_SYM_NONE, Some(TOGGLE), Some(NEXT)),
+        None
+    );
+}
+
+#[test]
+fn unconfigured_hotkeys_do_not_match() {
+    assert_eq!(
+        classify_input_method_switch(true, false, false, KEY_SYM_SPACE, None, Some(NEXT)),
+        None
+    );
+    assert_eq!(
+        classify_input_method_switch(true, false, false, KEY_SYM_SPACE, Some(TOGGLE), None),
+        Some(ImSwitchAction::Toggle)
+    );
+    assert_eq!(
+        classify_input_method_switch(true, false, false, KEY_SYM_SPACE, None, None),
+        None
+    );
+}
+
+#[test]
+fn unknown_hotkey_string_never_matches() {
+    assert_eq!(
+        classify_input_method_switch(
+            true,
+            false,
+            false,
+            KEY_SYM_SPACE,
+            Some("F11"),
+            Some("Ctrl+Shift")
+        ),
+        None
+    );
+}
+
+#[test]
+fn toggle_wins_when_both_hotkeys_identical() {
+    assert_eq!(
+        classify_input_method_switch(
+            true,
+            false,
+            false,
+            KEY_SYM_SPACE,
+            Some(TOGGLE),
+            Some(TOGGLE)
+        ),
+        Some(ImSwitchAction::Toggle)
+    );
 }

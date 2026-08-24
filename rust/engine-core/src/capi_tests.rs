@@ -348,3 +348,106 @@ fn input_method_overridden_c_abi() {
     );
     free_ledger(ledger);
 }
+
+// ---------------------------------------------------------------------------
+// E3: input-method switch decision C ABI
+// ---------------------------------------------------------------------------
+
+use super::{
+    fcitx5_engine_core_classify_input_method_switch, FCITX_ENGINE_CORE_IM_ACTION_NEXT,
+    FCITX_ENGINE_CORE_IM_ACTION_TOGGLE,
+};
+use crate::KEY_SYM_SPACE;
+
+fn cstr(value: &str) -> std::ffi::CString {
+    std::ffi::CString::new(value).expect("no NUL in test hotkey")
+}
+
+#[test]
+fn classify_c_abi_toggle_and_next() {
+    let toggle = cstr("Ctrl+Space");
+    let next = cstr("Ctrl+Shift");
+    let mut action = 0;
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_classify_input_method_switch(
+                1,
+                0,
+                0,
+                KEY_SYM_SPACE,
+                toggle.as_ptr(),
+                next.as_ptr(),
+                &mut action,
+            )
+        },
+        1
+    );
+    assert_eq!(action, FCITX_ENGINE_CORE_IM_ACTION_TOGGLE);
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_classify_input_method_switch(
+                1,
+                1,
+                0,
+                crate::KEY_SYM_SHIFT_L,
+                toggle.as_ptr(),
+                next.as_ptr(),
+                &mut action,
+            )
+        },
+        1
+    );
+    assert_eq!(action, FCITX_ENGINE_CORE_IM_ACTION_NEXT);
+}
+
+#[test]
+fn classify_c_abi_no_match_and_null_hotkeys() {
+    let toggle = cstr("Ctrl+Space");
+    let next = cstr("Ctrl+Shift");
+    let mut action = -1;
+    // Plain 'A' with Ctrl: not a hotkey.
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_classify_input_method_switch(
+                1,
+                0,
+                0,
+                0x41,
+                toggle.as_ptr(),
+                next.as_ptr(),
+                &mut action,
+            )
+        },
+        0
+    );
+    // Null hotkeys = not configured.
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_classify_input_method_switch(
+                1,
+                0,
+                0,
+                KEY_SYM_SPACE,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut action,
+            )
+        },
+        0
+    );
+    // Null output pointer fails closed.
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_classify_input_method_switch(
+                1,
+                0,
+                0,
+                KEY_SYM_SPACE,
+                toggle.as_ptr(),
+                next.as_ptr(),
+                std::ptr::null_mut(),
+            )
+        },
+        0
+    );
+}

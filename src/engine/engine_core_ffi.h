@@ -102,4 +102,21 @@ int fcitx5_engine_core_input_method_overridden(void* ledger,
                                                const FcitxEngineContextKeyC* key,
                                                int* outOverridden);
 
+// E3 Event → Action: input-method switch hotkey decision. Returns 1 and
+// writes `outAction` (FCITX_ENGINE_CORE_IM_ACTION_TOGGLE=1 / NEXT=2) when the
+// non-release key event matches a configured hotkey; 0 otherwise.
+// `hotkeyToggle`/`hotkeyNext` are NUL-terminated UTF-8 hotkey strings
+// ("Ctrl+Space" etc.) or null (not configured).
+enum FcitxEngineCoreImActionC {
+    FCITX_ENGINE_CORE_IM_ACTION_NONE = 0,
+    FCITX_ENGINE_CORE_IM_ACTION_TOGGLE = 1,
+    FCITX_ENGINE_CORE_IM_ACTION_NEXT = 2,
+};
+
+int fcitx5_engine_core_classify_input_method_switch(int ctrl, int shift, int alt,
+                                                    std::uint32_t keySym,
+                                                    const char* hotkeyToggle,
+                                                    const char* hotkeyNext,
+                                                    int* outAction);
+
 } // extern "C"

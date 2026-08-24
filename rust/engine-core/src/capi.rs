@@ -12,7 +12,9 @@
 use std::ffi::c_void;
 use std::panic::{self, AssertUnwindSafe};
 
-use crate::{CaretRect, ContextKey, ContextLedger, LedgerError};
+use crate::{
+    classify_input_method_switch, CaretRect, ContextKey, ContextLedger, ImSwitchAction, LedgerError,
+};
 
 /// Matches `ClientContextKey` and the C `FcitxEngineContextKeyC`.
 #[repr(C)]
@@ -201,6 +203,67 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_end_result(
 mod capi_tests;
 
 // ---------------------------------------------------------------------------
+// E3: Event → Action — input-method switch decision
+// ---------------------------------------------------------------------------
+
+pub const FCITX_ENGINE_CORE_IM_ACTION_TOGGLE: i32 = 1;
+pub const FCITX_ENGINE_CORE_IM_ACTION_NEXT: i32 = 2;
+
+/// Decides whether a non-release key event triggers the configured
+/// input-method switch hotkey. Returns 1 and writes `out_action` (TOGGLE or
+/// NEXT) when a hotkey matches; 0 when nothing matches or on null output.
+///
+/// `hotkey_toggle`/`hotkey_next` are NUL-terminated UTF-8 strings or null
+/// (null means "not configured").
+///
+/// # Safety
+/// `hotkey_toggle`/`hotkey_next` must be valid NUL-terminated strings or
+/// null; `out_action` must be writable or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_classify_input_method_switch(
+    ctrl: i32,
+    shift: i32,
+    alt: i32,
+    key_sym: u32,
+    hotkey_toggle: *const std::os::raw::c_char,
+    hotkey_next: *const std::os::raw::c_char,
+    out_action: *mut i32,
+) -> i32 {
+    if out_action.is_null() {
+        return 0;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let toggler = if hotkey_toggle.is_null() {
+            None
+        } else {
+            // SAFETY: caller provides a valid NUL-terminated string.
+            let text = unsafe { std::ffi::CStr::from_ptr(hotkey_toggle) };
+            Some(text.to_str().unwrap_or(""))
+        };
+        let next = if hotkey_next.is_null() {
+            None
+        } else {
+            // SAFETY: caller provides a valid NUL-terminated string.
+            let text = unsafe { std::ffi::CStr::from_ptr(hotkey_next) };
+            Some(text.to_str().unwrap_or(""))
+        };
+        classify_input_method_switch(ctrl != 0, shift != 0, alt != 0, key_sym, toggler, next)
+    }));
+    let Some(action) = result.unwrap_or(None) else {
+        return 0;
+    };
+    let code = match action {
+        ImSwitchAction::Toggle => FCITX_ENGINE_CORE_IM_ACTION_TOGGLE,
+        ImSwitchAction::Next => FCITX_ENGINE_CORE_IM_ACTION_NEXT,
+    };
+    // SAFETY: output pointer checked above.
+    unsafe {
+        *out_action = code;
+    }
+    1
+}
+
+// ---------------------------------------------------------------------------
 // Per-context product state (E2 extension: carets / popupAllowed /
 // selectedOverride / inputMethodOverridden)
 // ---------------------------------------------------------------------------
@@ -246,7 +309,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_caret(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
     out_caret: *mut CaretRect,
-) -> u8 {
+) -> i32 {
     let Some(key) = from_c(key) else {
         return 0;
     };
@@ -309,7 +372,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_popup_allowed(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
     out_allowed: *mut i32,
-) -> u8 {
+) -> i32 {
     let Some(key) = from_c(key) else {
         return 0;
     };
@@ -400,7 +463,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_selected_override(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
     out_value: *mut u32,
-) -> u8 {
+) -> i32 {
     let Some(key) = from_c(key) else {
         return 0;
     };
@@ -464,7 +527,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_input_method_overridden(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
     out_overridden: *mut i32,
-) -> u8 {
+) -> i32 {
     let Some(key) = from_c(key) else {
         return 0;
     };

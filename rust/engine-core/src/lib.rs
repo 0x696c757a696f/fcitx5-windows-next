@@ -258,6 +258,86 @@ impl ContextLedger {
     }
 }
 
+// ---------------------------------------------------------------------------
+// E3: Event → Action (functional core)
+//
+// The Engine is a Functional Core / Imperative Shell: the C++ Fcitx adapter
+// flattens Fcitx events into plain EngineEvents, Rust decides the action
+// batch from the authoritative product state, and the C++ adapter executes
+// the actions against Fcitx objects. `classify_input_method_switch` is the
+// first decision moved to Rust; it mirrors the C++ `matches()` hotkey logic
+// in `FcitxRuntime::processKey` exactly (toggle is checked before next).
+// ---------------------------------------------------------------------------
+
+/// Keysym constants mirroring `fcitx-utils/keysymgen.h`.
+pub const KEY_SYM_NONE: u32 = 0x0;
+pub const KEY_SYM_SPACE: u32 = 0x0020;
+pub const KEY_SYM_SHIFT_L: u32 = 0xffe1;
+pub const KEY_SYM_CONTROL_L: u32 = 0xffe3;
+pub const KEY_SYM_ALT_L: u32 = 0xffe9;
+
+/// Input-method switch action decided from a key event + hotkey config.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImSwitchAction {
+    Toggle,
+    Next,
+}
+
+/// Decides whether a non-release key event triggers the configured
+/// input-method switch hotkey.
+///
+/// Mirrors `FcitxRuntime::processKey`:
+///
+/// ```cpp
+/// if (!event.isRelease()) {
+///   const auto matches = [&](const std::optional<std::string>& hotkey) {
+///     if (!hotkey || keySym == FcitxKey_None) return false;
+///     if (*hotkey == "Ctrl+Space") return ctrl && !shift && !alt && keySym == FcitxKey_space;
+///     if (*hotkey == "Ctrl+Shift") return ctrl && shift && !alt && keySym == FcitxKey_Shift_L;
+///     if (*hotkey == "Ctrl+Shift+Space") return ctrl && shift && !alt && keySym == FcitxKey_space;
+///     if (*hotkey == "Alt+Shift") return alt && shift && !ctrl && keySym == FcitxKey_Shift_L;
+///     return false;
+///   };
+///   if (matches(engineConfig.hotkeyToggle)) { toggle... }
+///   if (matches(engineConfig.hotkeyNext)) { next... }
+/// }
+/// ```
+///
+/// The caller already excluded release events, so `is_release` is not part of
+/// the decision. Unknown hotkey strings never match. Toggle wins when both
+/// configured hotkeys match the same event.
+pub fn classify_input_method_switch(
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    key_sym: u32,
+    hotkey_toggle: Option<&str>,
+    hotkey_next: Option<&str>,
+) -> Option<ImSwitchAction> {
+    if key_sym == KEY_SYM_NONE {
+        return None;
+    }
+    let matches = |hotkey: Option<&str>| -> bool {
+        let Some(hotkey) = hotkey else {
+            return false;
+        };
+        match hotkey {
+            "Ctrl+Space" => ctrl && !shift && !alt && key_sym == KEY_SYM_SPACE,
+            "Ctrl+Shift" => ctrl && shift && !alt && key_sym == KEY_SYM_SHIFT_L,
+            "Ctrl+Shift+Space" => ctrl && shift && !alt && key_sym == KEY_SYM_SPACE,
+            "Alt+Shift" => alt && shift && !ctrl && key_sym == KEY_SYM_SHIFT_L,
+            _ => false,
+        }
+    };
+    if matches(hotkey_toggle) {
+        return Some(ImSwitchAction::Toggle);
+    }
+    if matches(hotkey_next) {
+        return Some(ImSwitchAction::Next);
+    }
+    None
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

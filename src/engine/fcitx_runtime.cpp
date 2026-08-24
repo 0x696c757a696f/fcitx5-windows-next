@@ -772,30 +772,27 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         const bool shift = (request.keyFlags & protocol::kKeyFlagShift) != 0;
         const bool alt = (request.keyFlags & protocol::kKeyFlagAlt) != 0;
         // Read the immutable config snapshot loaded at startup - never reopen
-        // config.toml on the input hot path.
+        // config.toml on the input hot path. The hotkey decision is Rust-owned
+        // (E3 Event -> Action): the C++ adapter only executes the returned
+        // action against Fcitx.
         const auto& engineConfig = impl_->config;
-        const auto matches = [&](const std::optional<std::string>& hotkey) {
-            if (!hotkey || keySym == FcitxKey_None)
-                return false;
-            if (*hotkey == "Ctrl+Space")
-                return ctrl && !shift && !alt && keySym == FcitxKey_space;
-            if (*hotkey == "Ctrl+Shift")
-                return ctrl && shift && !alt && keySym == FcitxKey_Shift_L;
-            if (*hotkey == "Ctrl+Shift+Space")
-                return ctrl && shift && !alt && keySym == FcitxKey_space;
-            if (*hotkey == "Alt+Shift")
-                return alt && shift && !ctrl && keySym == FcitxKey_Shift_L;
-            return false;
-        };
-        if (matches(engineConfig.hotkeyToggle)) {
-            impl_->toggleInputMethod(engineConfig, key, context);
-            event.filterAndAccept();
-            return impl_->collectResult(key, context, true);
-        }
-        if (matches(engineConfig.hotkeyNext)) {
-            impl_->nextInputMethod(engineConfig, key, context);
-            event.filterAndAccept();
-            return impl_->collectResult(key, context, true);
+        int action = FCITX_ENGINE_CORE_IM_ACTION_NONE;
+        if (fcitx5_engine_core_classify_input_method_switch(
+                ctrl ? 1 : 0, shift ? 1 : 0, alt ? 1 : 0,
+                static_cast<std::uint32_t>(keySym),
+                engineConfig.hotkeyToggle ? engineConfig.hotkeyToggle->c_str() : nullptr,
+                engineConfig.hotkeyNext ? engineConfig.hotkeyNext->c_str() : nullptr,
+                &action)) {
+            if (action == FCITX_ENGINE_CORE_IM_ACTION_TOGGLE) {
+                impl_->toggleInputMethod(engineConfig, key, context);
+                event.filterAndAccept();
+                return impl_->collectResult(key, context, true);
+            }
+            if (action == FCITX_ENGINE_CORE_IM_ACTION_NEXT) {
+                impl_->nextInputMethod(engineConfig, key, context);
+                event.filterAndAccept();
+                return impl_->collectResult(key, context, true);
+            }
         }
     }
     // Candidate navigation keys while candidates are visible. Fcitx's default

@@ -207,8 +207,11 @@ int main(int argc, char** argv) {
         runtimeSource.find("fcitx5_engine_core_set_selected_override") == std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_clear_selected_override") == std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_set_input_method_overridden") ==
-            std::string::npos) {
-        return fail("ENGINE-E2: context/composition/revision ledger and per-context product state must be Rust-owned in fcitx_runtime.cpp");
+            std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_classify_input_method_switch") ==
+            std::string::npos ||
+        runtimeSource.find("const auto matches = [&]") != std::string::npos) {
+        return fail("ENGINE-E2/E3: ledger, per-context product state, and the input-method switch decision must be Rust-owned in fcitx_runtime.cpp");
     }
     const auto nativeEngineCmakeSource = read_text(sourceRoot / "native-engine/CMakeLists.txt");
     if (nativeEngineCmakeSource.find("fcitx5_protocol_core_rust") == std::string::npos ||
