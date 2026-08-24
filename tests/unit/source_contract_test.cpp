@@ -214,6 +214,15 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open and overlapped transfer");
     }
+    if (pipeClientSource.find("MultiByteToWideChar") != std::string::npos ||
+        pipeClientSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
+        pipeClientSource.find("CP_UTF8") != std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_utf8_offset_to_wide") ==
+            std::string::npos) {
+        return fail("IPC-TEXT-RUST: IPC client UTF-8 to UTF-16 response conversion must be Rust-owned");
+    }
     const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
     if (installerSource.find("--set-startup") != std::string::npos ||
         installerSource.find("--background") != std::string::npos ||
@@ -428,6 +437,14 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("open_pipe_client_rejects_empty_name_like_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("WaitNamedPipeW") == std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_utf8_offset_to_wide") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("utf8_to_wide_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("utf8_offset_to_wide_matches_cpp_contract") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_verify_pipe_server_peer_utf16") ==
             std::string::npos ||
         rustWindowsCommonCore.find("pipe_server_peer_policy_rejects_invalid_pipe_like_cpp_contract") ==

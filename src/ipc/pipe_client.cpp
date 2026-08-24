@@ -4,8 +4,6 @@
 #include "protocol.h"
 
 #include <array>
-#include <limits>
-#include <span>
 #include <vector>
 
 namespace fcitx::windows::ipc {
@@ -22,38 +20,58 @@ extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     std::size_t pipe_name_len,
     std::uint64_t deadline,
     std::uint8_t wait_when_busy);
+struct Fcitx5WindowsCommonUtf8ToWide {
+    std::uint8_t status;
+    std::size_t utf16Len;
+};
+struct Fcitx5WindowsCommonUtf8OffsetToWide {
+    std::uint8_t status;
+    std::uint32_t utf16Offset;
+};
+extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
+    const std::uint8_t* input,
+    std::size_t input_len,
+    std::uint16_t* output,
+    std::size_t capacity);
+extern "C" Fcitx5WindowsCommonUtf8OffsetToWide
+fcitx5_windows_common_utf8_offset_to_wide(const std::uint8_t* input,
+                                          std::size_t input_len,
+                                          std::uint32_t offset);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
 }
 
+const std::uint8_t* byteData(std::string_view value) noexcept {
+    return value.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(value.data());
+}
+
 bool utf8ToWide(std::string_view input, std::wstring& output) {
     output.clear();
-    if (input.empty()) {
-        return true;
-    }
-    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
-                                         static_cast<int>(input.size()), nullptr, 0);
-    if (size <= 0) {
+    const auto query =
+        fcitx5_windows_common_utf8_to_wide_utf16(byteData(input), input.size(), nullptr, 0);
+    if (query.status == 0) {
         return false;
     }
-    output.resize(static_cast<std::size_t>(size));
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
-                               static_cast<int>(input.size()), output.data(), size) == size;
+    output.assign(query.utf16Len, L'\0');
+    const auto filled = fcitx5_windows_common_utf8_to_wide_utf16(
+        byteData(input), input.size(),
+        output.empty() ? nullptr : reinterpret_cast<std::uint16_t*>(output.data()),
+        output.size());
+    if (filled.status == 0 || filled.utf16Len != output.size()) {
+        output.clear();
+        return false;
+    }
+    return true;
 }
 
 bool utf8OffsetToWide(std::string_view input, std::uint32_t offset,
                       std::uint32_t& output) {
-    if (offset > input.size()) return false;
-    if (offset == 0) {
-        output = 0;
-        return true;
-    }
-    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
-                                         static_cast<int>(offset), nullptr, 0);
-    if (size <= 0) return false;
-    output = static_cast<std::uint32_t>(size);
+    const auto converted =
+        fcitx5_windows_common_utf8_offset_to_wide(byteData(input), input.size(), offset);
+    if (converted.status == 0) return false;
+    output = converted.utf16Offset;
     return true;
 }
 

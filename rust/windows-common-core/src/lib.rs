@@ -1193,6 +1193,35 @@ fn current_identity_with_executable_file(
     }
 }
 
+fn utf8_to_wide(bytes: &[u8], output: *mut u16, capacity: usize) -> Fcitx5WindowsCommonUtf8ToWide {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Fcitx5WindowsCommonUtf8ToWide::default();
+    };
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    write_wide_units(&wide, output, capacity);
+    Fcitx5WindowsCommonUtf8ToWide {
+        status: 1,
+        utf16_len: wide.len(),
+    }
+}
+
+fn utf8_offset_to_wide(bytes: &[u8], offset: u32) -> Fcitx5WindowsCommonUtf8OffsetToWide {
+    let offset = offset as usize;
+    if offset > bytes.len() {
+        return Fcitx5WindowsCommonUtf8OffsetToWide::default();
+    }
+    let Ok(prefix) = std::str::from_utf8(&bytes[..offset]) else {
+        return Fcitx5WindowsCommonUtf8OffsetToWide::default();
+    };
+    let Ok(utf16_offset) = u32::try_from(prefix.encode_utf16().count()) else {
+        return Fcitx5WindowsCommonUtf8OffsetToWide::default();
+    };
+    Fcitx5WindowsCommonUtf8OffsetToWide {
+        status: 1,
+        utf16_offset,
+    }
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -1371,6 +1400,20 @@ pub struct Fcitx5WindowsCommonVerifiedPipeClient {
     pub user_sid_len: usize,
     pub executable_path_len: usize,
     pub executable_final_path_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonUtf8ToWide {
+    pub status: u8,
+    pub utf16_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonUtf8OffsetToWide {
+    pub status: u8,
+    pub utf16_offset: u32,
 }
 
 #[repr(C)]
@@ -2215,6 +2258,55 @@ pub unsafe extern "C" fn fcitx5_windows_common_open_pipe_client_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `input` must be null only when `input_len` is zero, or point to a readable
+/// byte buffer with exactly the provided length. `output` may be null for size
+/// queries or point to writable UTF-16 storage for `capacity` code units. No
+/// pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_utf8_to_wide_utf16(
+    input: *const u8,
+    input_len: usize,
+    output: *mut u16,
+    capacity: usize,
+) -> Fcitx5WindowsCommonUtf8ToWide {
+    let input = if input.is_null() {
+        if input_len != 0 {
+            return Fcitx5WindowsCommonUtf8ToWide::default();
+        }
+        &[]
+    } else {
+        // SAFETY: The caller supplies exactly `input_len` readable bytes. The
+        // slice is only decoded/copied during this call.
+        unsafe { std::slice::from_raw_parts(input, input_len) }
+    };
+    utf8_to_wide(input, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `input` must be null only when `input_len` is zero, or point to a readable
+/// byte buffer with exactly the provided length. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_utf8_offset_to_wide(
+    input: *const u8,
+    input_len: usize,
+    offset: u32,
+) -> Fcitx5WindowsCommonUtf8OffsetToWide {
+    let input = if input.is_null() {
+        if input_len != 0 {
+            return Fcitx5WindowsCommonUtf8OffsetToWide::default();
+        }
+        &[]
+    } else {
+        // SAFETY: The caller supplies exactly `input_len` readable bytes. The
+        // slice is only decoded during this call.
+        unsafe { std::slice::from_raw_parts(input, input_len) }
+    };
+    utf8_offset_to_wide(input, offset)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `pipe` must be a live named-pipe handle. `current_user_sid` and
 /// `expected_executable_path` must be null only when their corresponding length
 /// is zero, or point to valid UTF-16 buffers with exactly the provided lengths.
@@ -2902,6 +2994,34 @@ mod tests {
             open_pipe_client(&[b'x' as u16], unsafe { GetTickCount64() }, true),
             invalid_handle_value()
         );
+    }
+
+    #[test]
+    fn utf8_to_wide_matches_cpp_contract() {
+        let source = "abc\u{1f600}";
+        let query = utf8_to_wide(source.as_bytes(), std::ptr::null_mut(), 0);
+        assert_eq!(query.status, 1);
+        assert_eq!(query.utf16_len, 5);
+        let mut wide = vec![0_u16; query.utf16_len];
+        let filled = utf8_to_wide(source.as_bytes(), wide.as_mut_ptr(), wide.len());
+        assert_eq!(filled.status, 1);
+        assert_eq!(filled.utf16_len, wide.len());
+        assert_eq!(String::from_utf16(&wide).expect("wide"), source);
+        assert_eq!(utf8_to_wide(&[0xff], std::ptr::null_mut(), 0).status, 0);
+    }
+
+    #[test]
+    fn utf8_offset_to_wide_matches_cpp_contract() {
+        let source = "a\u{1f600}b";
+        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 0).utf16_offset, 0);
+        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 1).utf16_offset, 1);
+        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 5).utf16_offset, 3);
+        assert_eq!(
+            utf8_offset_to_wide(source.as_bytes(), source.len() as u32).utf16_offset,
+            4
+        );
+        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 2).status, 0);
+        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 99).status, 0);
     }
 
     #[test]
