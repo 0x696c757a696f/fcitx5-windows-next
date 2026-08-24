@@ -187,6 +187,7 @@ int main(int argc, char** argv) {
         return fail("REG-WARMUP-001: warmup must fail closed on user-state output");
     }
     const auto uiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
+    const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");
     const auto rustCandidateCoreSource = read_text(sourceRoot / "rust/candidate-core/src/lib.rs");
     const auto configParserCandidateSource =
         read_text(sourceRoot / "src/config/config_parser.cpp");
@@ -258,15 +259,24 @@ int main(int argc, char** argv) {
     }
     if (uiSource.find("reservedLabel") == std::string::npos ||
         uiSource.find("configuredSequenceLabel") == std::string::npos ||
+        uiSource.find("labelGap") == std::string::npos ||
+        uiSource.find("DWRITE_TEXT_ALIGNMENT_TRAILING") == std::string::npos ||
+        uiSource.find("DWRITE_TRIMMING_GRANULARITY_NONE") == std::string::npos ||
+        uiSource.find("DT_END_ELLIPSIS") != std::string::npos ||
         uiSource.find("fcitx5_candidate_scroll_label_policy") == std::string::npos ||
         rustCandidateCoreSource.find("fcitx5_candidate_scroll_label_policy") ==
             std::string::npos ||
+        rustCandidateCoreSource.find("label_gap") == std::string::npos ||
+        rustCandidateCoreSource.find("LABEL_CELL_SAFETY_PADDING") == std::string::npos ||
+        rustCandidateCoreSource.find("source.label_gap.max") == std::string::npos ||
         rustCandidateCoreSource.find("scroll_label_policy_reserves_and_shows_current_row_or_column") ==
             std::string::npos ||
+        configAppSource.find("labelGap") == std::string::npos ||
+        configAppSource.find("DWRITE_TEXT_ALIGNMENT_TRAILING") == std::string::npos ||
         configParserCandidateSource.find("\"sequence\"") == std::string::npos ||
         configParserCandidateSource.find("candidate label sequence must contain 1 to 9 strings") ==
             std::string::npos) {
-        return fail("CANDIDATE-UI-SCROLL-LABELS: Candidate UI must reserve configurable row/column labels through Rust policy");
+        return fail("CANDIDATE-UI-SCROLL-LABELS: Candidate UI must reserve configurable row/column labels through Rust policy and draw right-aligned label cells");
     }
     if (uiSource.find("CommandLineToArgvW") != std::string::npos ||
         uiSource.find("GetCommandLineW") != std::string::npos ||
@@ -298,6 +308,13 @@ int main(int argc, char** argv) {
     if (launcherSource.find("GetCurrentProcessId") != std::string::npos ||
         launcherSource.find("fcitx5_windows_common_current_process_id") == std::string::npos) {
         return fail("LAUNCHER-UI-PARENT-PID-RUST: Launcher UI parent process id must be Rust-owned");
+    }
+    if (launcherSource.find("GetTickCount64") != std::string::npos ||
+        launcherSource.find("fcitx5_windows_common_tick_milliseconds") == std::string::npos ||
+        launcherSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
+            std::string::npos ||
+        launcherSource.find("fcitx5_windows_common_deadline_has_time") == std::string::npos) {
+        return fail("LAUNCHER-CLOCK-RUST: Launcher time/deadline source must be Rust-owned");
     }
     if (launcherSource.find("GetModuleFileNameW") != std::string::npos ||
         launcherSource.find("queryCurrentIdentity(identity)") == std::string::npos) {
@@ -392,7 +409,6 @@ int main(int argc, char** argv) {
         return fail("LAUNCHER-RUST: launcher state/path/tray/command/frame policy must be Rust-owned");
     }
     const auto controlSource = read_text(sourceRoot / "src/control/control_main.cpp");
-    const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");
     const auto rustControlCoreSource = read_text(sourceRoot / "rust/control-core/src/lib.rs");
     const auto rustProcessExecutionSource =
         read_text(sourceRoot / "rust/process-execution-core/src/lib.rs");
@@ -1131,6 +1147,8 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("pipe_transact_with_error_preserves_launcher_failure_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_deadline_after_milliseconds") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_tick_milliseconds") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_deadline_has_time") ==
             std::string::npos ||
@@ -1984,7 +2002,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         candidateLayoutSource.find("layout_matches_frozen_cpp_contract") ==
             std::string::npos ||
-        candidateLayoutSource.find("render_segments_match_label_column_and_comment_contract") ==
+        candidateLayoutSource.find("render_segments_match_label_column_gap_and_comment_contract") ==
             std::string::npos) {
         return fail("CANDIDATE-LAYOUT-RUST: candidate layout/render segments must be Rust-owned and the old C++ header/source/test must stay deleted");
     }

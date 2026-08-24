@@ -22,6 +22,10 @@
 #include <vector>
 
 extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
+extern "C" std::uint64_t fcitx5_windows_common_tick_milliseconds();
+extern "C" std::uint64_t fcitx5_windows_common_deadline_after_milliseconds(
+    std::uint32_t milliseconds);
+extern "C" std::uint8_t fcitx5_windows_common_deadline_has_time(std::uint64_t deadline);
 
 namespace {
 
@@ -30,7 +34,7 @@ using namespace fcitx::windows;
 class SystemClock final : public launcher::Clock {
   public:
     [[nodiscard]] std::uint64_t nowMilliseconds() const noexcept override {
-        return GetTickCount64();
+        return fcitx5_windows_common_tick_milliseconds();
     }
 };
 
@@ -205,7 +209,7 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
         CloseHandle(stopEvent);
         return false;
     }
-    output = {process.hProcess, stopEvent, GetTickCount64()};
+    output = {process.hProcess, stopEvent, fcitx5_windows_common_tick_milliseconds()};
     return true;
 }
 
@@ -320,13 +324,13 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In
         launcher::TrayIcon tray;
         if (!tray.create(instance, executableDirectory()))
             return 10;
-        const std::uint64_t deadline = GetTickCount64() + 5000;
+        const std::uint64_t deadline = fcitx5_windows_common_deadline_after_milliseconds(5000);
         do {
             tray.dispatchMessages();
             if (tray.iconAdded() && tray.shellVisible())
                 return 0;
             Sleep(25);
-        } while (GetTickCount64() < deadline);
+        } while (fcitx5_windows_common_deadline_has_time(deadline) != 0);
         if (!tray.iconAdded())
             return 11;
         return tray.usesGuidIdentity() ? 13 : 12;

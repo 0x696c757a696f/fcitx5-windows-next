@@ -213,6 +213,16 @@ try {
   $scroll.Kill($true)
   $scroll.WaitForExit(5000) | Out-Null
 
+  Invoke-Control @('--set-presentation', 'light', 'builtin:default', 'horizontal', 'enabled',
+    '6', 'Microsoft YaHei')
+  $scrollHorizontal = Start-CandidateDemo '--scroll-demo'
+  $scrollHorizontalWindow = Wait-CandidateWindow -Process $scrollHorizontal
+  Start-Sleep -Milliseconds 300
+  $scrollHorizontalRectangle = Save-WindowPng -Window $scrollHorizontalWindow `
+    -Path (Join-Path $evidence 'candidate-scroll-mode-horizontal-current-row.png')
+  $scrollHorizontal.Kill($true)
+  $scrollHorizontal.WaitForExit(5000) | Out-Null
+
   $record = [ordered]@{
     format_version = 1
     generated_at = [DateTimeOffset]::UtcNow.ToString('O')
@@ -221,6 +231,7 @@ try {
     horizontal_dark = $horizontal
     restored_vertical = $restored
     scroll_mode = $scrollRectangle
+    scroll_mode_horizontal = $scrollHorizontalRectangle
   }
   $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath `
     (Join-Path $evidence 'candidate-presentation-evidence.json') -Encoding utf8NoBOM

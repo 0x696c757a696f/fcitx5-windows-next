@@ -144,6 +144,7 @@ struct Fcitx5CandidateLayoutOutput {
 struct Fcitx5CandidateRenderItemInput {
     Fcitx5CandidateLayoutRect bounds{};
     float labelWidth{};
+    float labelGap{};
     float textWidth{};
     float commentWidth{};
     std::uint8_t hasLabel{};
@@ -237,6 +238,7 @@ struct LayoutResult {
 struct RenderItemInput {
     Rect bounds{};
     float labelWidth{};
+    float labelGap{};
     float textWidth{};
     float commentWidth{};
     bool hasLabel{};
@@ -351,6 +353,7 @@ struct CandidateSelectionIntent {
         rustInputs.push_back({
             {item.bounds.left, item.bounds.top, item.bounds.right, item.bounds.bottom},
             item.labelWidth,
+            item.labelGap,
             item.textWidth,
             item.commentWidth,
             static_cast<std::uint8_t>(item.hasLabel ? 1U : 0U),
@@ -3567,7 +3570,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         brush->SetColor(labelText);
         drawText(brush, label, segments.label.left, segments.label.top, segments.label.right,
                  segments.label.bottom, labelSize,
-                 DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
+                 DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING,
                  DWRITE_PARAGRAPH_ALIGNMENT_CENTER, family);
         brush->SetColor(candidateText);
         drawText(brush, text, segments.text.left, segments.text.top, segments.text.right,
@@ -3658,20 +3661,19 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             using fcitx::windows::config::LabelStyle;
             switch (visualConfig.label.style.value_or(LabelStyle::dot)) {
             case LabelStyle::plain:
-                return std::wstring(label) + L" ";
+                return std::wstring(label);
             case LabelStyle::dot:
-                return std::wstring(label) + L". ";
+                return std::wstring(label) + L".";
             case LabelStyle::paren:
-                return L"(" + std::wstring(label) + L") ";
+                return L"(" + std::wstring(label) + L")";
             case LabelStyle::bracket:
-                return L"[" + std::wstring(label) + L"] ";
+                return L"[" + std::wstring(label) + L"]";
             case LabelStyle::circled:
                 if (label.size() == 1 && label[0] >= L'1' && label[0] <= L'9')
-                    return std::wstring(1, static_cast<wchar_t>(0x2460 + label[0] - L'1')) +
-                           L" ";
-                return std::wstring(label) + L" ";
+                    return std::wstring(1, static_cast<wchar_t>(0x2460 + label[0] - L'1'));
+                return std::wstring(label);
             }
-            return std::wstring(label) + L". ";
+            return std::wstring(label) + L".";
         };
         const auto previewComment = [](std::wstring_view comment) {
             return comment.empty() ? std::wstring{} : L"  " + std::wstring(comment);
@@ -3693,6 +3695,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 static_cast<float>(visualConfig.geometry.itemPaddingX.value_or(6.0));
             const float itemPaddingY =
                 static_cast<float>(visualConfig.geometry.itemPaddingY.value_or(4.0));
+            const float labelGap = static_cast<float>(visualConfig.label.gap.value_or(4.0));
             for (const auto& candidate : candidates) {
                 const float labelWidth =
                     measureTextWidth(candidate.label, previewLabelSize,
@@ -3705,7 +3708,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                                      DWRITE_FONT_WEIGHT_NORMAL, fontFamily);
                 const float textHeight =
                     (std::max)({previewLabelSize, previewTextSize, previewCommentSize}) * 1.35F;
-                itemSizes.push_back({labelWidth + textWidth + commentWidth + itemPaddingX * 2.0F,
+                itemSizes.push_back({labelWidth + (candidate.label.empty() ? 0.0F : labelGap) +
+                                         textWidth + commentWidth + itemPaddingX * 2.0F,
                                      textHeight + itemPaddingY * 2.0F});
             }
             fcitx::windows::ui::LayoutInput input{
@@ -3741,6 +3745,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                     content,
                     measureTextWidth(candidate.label, previewLabelSize,
                                      DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
+                    labelGap,
                     measureTextWidth(candidate.text, previewTextSize,
                                      DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
                     measureTextWidth(candidate.comment, previewCommentSize,

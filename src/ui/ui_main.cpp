@@ -80,6 +80,7 @@ struct Fcitx5CandidateLayoutOutput {
 struct Fcitx5CandidateRenderItemInput {
     Fcitx5CandidateLayoutRect bounds{};
     float labelWidth{};
+    float labelGap{};
     float textWidth{};
     float commentWidth{};
     std::uint8_t hasLabel{};
@@ -223,6 +224,7 @@ struct LayoutResult {
 struct RenderItemInput {
     Rect bounds{};
     float labelWidth{};
+    float labelGap{};
     float textWidth{};
     float commentWidth{};
     bool hasLabel{};
@@ -337,6 +339,7 @@ struct CandidateSelectionIntent {
         rustInputs.push_back({
             {item.bounds.left, item.bounds.top, item.bounds.right, item.bounds.bottom},
             item.labelWidth,
+            item.labelGap,
             item.textWidth,
             item.commentWidth,
             static_cast<std::uint8_t>(item.hasLabel ? 1U : 0U),
@@ -667,19 +670,19 @@ std::wstring formatCandidateLabel(std::wstring_view label,
         return {};
     switch (style) {
     case fcitx::windows::config::LabelStyle::plain:
-        return std::wstring(label) + L" ";
+        return std::wstring(label);
     case fcitx::windows::config::LabelStyle::dot:
-        return std::wstring(label) + L". ";
+        return std::wstring(label) + L".";
     case fcitx::windows::config::LabelStyle::paren:
-        return L"(" + std::wstring(label) + L") ";
+        return L"(" + std::wstring(label) + L")";
     case fcitx::windows::config::LabelStyle::bracket:
-        return L"[" + std::wstring(label) + L"] ";
+        return L"[" + std::wstring(label) + L"]";
     case fcitx::windows::config::LabelStyle::circled:
         if (label.size() == 1 && label[0] >= L'1' && label[0] <= L'9')
-            return std::wstring(1, static_cast<wchar_t>(0x2460 + label[0] - L'1')) + L" ";
-        return std::wstring(label) + L" ";
+            return std::wstring(1, static_cast<wchar_t>(0x2460 + label[0] - L'1'));
+        return std::wstring(label);
     }
-    return std::wstring(label) + L" ";
+    return std::wstring(label);
 }
 
 std::wstring fallbackCandidateLabel(std::uint32_t slot) {
@@ -1500,13 +1503,15 @@ class CandidateWindow final {
         };
         std::vector<fcitx::windows::ui::RenderItemInput> renderInputs;
         renderInputs.reserve(paintCount);
+        const float labelGap =
+            static_cast<float>(visualConfig_.label.gap.value_or(4.0) * fontDpiScale_);
         for (std::size_t local = 0; local < paintCount; ++local) {
             const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
             const D2D1_RECT_F bounds = itemRects_.size() == paintCount
                                            ? itemRects_[local]
                                            : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
             if (index >= lines.size()) {
-                renderInputs.push_back({toUiRect(bounds), 0.0F, 0.0F, 0.0F, false});
+                renderInputs.push_back({toUiRect(bounds), 0.0F, labelGap, 0.0F, 0.0F, false});
                 fallbackTop += 32.0F;
                 continue;
             }
@@ -1515,6 +1520,7 @@ class CandidateWindow final {
             renderInputs.push_back(
                 {toUiRect(bounds),
                  naturalTextWidth(candidate.reservedLabel, labelFormat_.Get(), height),
+                 labelGap,
                  naturalTextWidth(candidate.text, textFormat_.Get(), height),
                  naturalTextWidth(candidate.comment, annotationFormat_.Get(), height),
                  !candidate.reservedLabel.empty()});
@@ -1696,12 +1702,12 @@ class CandidateWindow final {
             const auto& candidate = lines[index];
             const std::wstring line = candidate.label.empty()
                                           ? candidate.text
-                                          : candidate.label + L". " + candidate.text +
+                                          : candidate.label + L" " + candidate.text +
                                                 (candidate.comment.empty()
                                                      ? std::wstring{}
                                                      : L"  " + candidate.comment);
             DrawTextW(dc, line.c_str(), static_cast<int>(line.size()), &textRect,
-                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
             fallbackTop += 32.0F;
         }
         if (oldFont)
@@ -1873,6 +1879,8 @@ class CandidateWindow final {
             static_cast<float>(visualConfig_.geometry.itemPaddingX.value_or(6.0) * scale);
         const float itemPaddingY =
             static_cast<float>(visualConfig_.geometry.itemPaddingY.value_or(4.0) * scale);
+        const float labelGap =
+            static_cast<float>(visualConfig_.label.gap.value_or(4.0) * scale);
         selectionInflateX_ = itemPaddingX * 0.65F;
         selectionInflateY_ = itemPaddingY * 0.55F;
         const auto configuredOrientation =
@@ -1928,10 +1936,12 @@ class CandidateWindow final {
                 return true;
             };
             if (scrollMode_ && horizontalPresentation && candidate.reservedLabel.empty())
-                width += scrollLabelColumnWidth;
+                width += scrollLabelColumnWidth + labelGap;
             if (measure(candidate.reservedLabel, labelFormat_.Get()) &&
                 measure(candidate.text, textFormat_.Get()) &&
                 measure(candidate.comment, annotationFormat_.Get())) {
+                if (!candidate.reservedLabel.empty())
+                    width += labelGap;
                 items.push_back({width + itemPaddingX * 2, height + itemPaddingY * 2});
             } else {
                 items.push_back({336 * scale, 32 * scale});
@@ -2357,6 +2367,11 @@ class CandidateWindow final {
                           labelFormat_) ||
             !createFormat(visualConfig_.annotationFont,
                           visualConfig_.annotationFont.scale.value_or(0.85), annotationFormat_))
+            return false;
+        if (FAILED(labelFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)))
+            return false;
+        DWRITE_TRIMMING labelTrimming{DWRITE_TRIMMING_GRANULARITY_NONE, 0, 0};
+        if (FAILED(labelFormat_->SetTrimming(&labelTrimming, nullptr)))
             return false;
         if (!renderTarget_) {
             RECT client{};

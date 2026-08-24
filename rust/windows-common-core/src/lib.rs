@@ -628,6 +628,11 @@ fn deadline_after_milliseconds(milliseconds: u32) -> u64 {
     unsafe { GetTickCount64() }.saturating_add(milliseconds as u64)
 }
 
+fn tick_milliseconds() -> u64 {
+    // SAFETY: Monotonic Windows tick query with no preconditions.
+    unsafe { GetTickCount64() }
+}
+
 fn deadline_has_time(deadline: u64) -> bool {
     remaining_milliseconds(deadline).is_some()
 }
@@ -3075,6 +3080,11 @@ pub extern "C" fn fcitx5_windows_common_deadline_after_milliseconds(milliseconds
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_tick_milliseconds() -> u64 {
+    tick_milliseconds()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_deadline_has_time(deadline: u64) -> u8 {
     deadline_has_time(deadline) as u8
 }
@@ -4169,6 +4179,8 @@ mod tests {
     #[test]
     fn deadline_and_current_process_id_match_cpp_contract() {
         assert_ne!(deadline_after_milliseconds(1), 0);
+        assert_ne!(tick_milliseconds(), 0);
+        assert_ne!(fcitx5_windows_common_tick_milliseconds(), 0);
         assert!(deadline_has_time(deadline_after_milliseconds(100)));
         assert!(!deadline_has_time(0));
         assert_ne!(unsafe { GetCurrentProcessId() }, 0);

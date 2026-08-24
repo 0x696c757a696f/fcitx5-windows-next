@@ -224,6 +224,7 @@ pub struct Fcitx5CandidateCommandLine {
 pub struct Fcitx5CandidateRenderItemInput {
     pub bounds: Fcitx5CandidateLayoutRect,
     pub label_width: f32,
+    pub label_gap: f32,
     pub text_width: f32,
     pub comment_width: f32,
     pub has_label: u8,
@@ -1109,9 +1110,10 @@ pub unsafe extern "C" fn fcitx5_candidate_render_segments(
     } else {
         unsafe { std::slice::from_raw_parts_mut(out_items, item_count) }
     };
+    const LABEL_CELL_SAFETY_PADDING: f32 = 2.0;
     let label_column_width = items.iter().fold(0.0_f32, |width, item| {
         if item.has_label != 0 {
-            width.max(item.label_width)
+            width.max(item.label_width + LABEL_CELL_SAFETY_PADDING)
         } else {
             width
         }
@@ -1126,7 +1128,12 @@ pub unsafe extern "C" fn fcitx5_candidate_render_segments(
         } else {
             0.0
         };
-        let text_left = source.bounds.left + effective_label_column_width;
+        let label_gap = if reserve_label && label_column_width > 0.0 {
+            source.label_gap.max(0.0)
+        } else {
+            0.0
+        };
+        let text_left = source.bounds.left + effective_label_column_width + label_gap;
         let text_available = (source.bounds.right - text_left).max(1.0);
         let text_draw_width = source.text_width.max(0.0).min(text_available);
         let comment_left = text_left + text_draw_width + 4.0;
@@ -2368,7 +2375,7 @@ mod tests {
     }
 
     #[test]
-    fn render_segments_match_label_column_and_comment_contract() {
+    fn render_segments_match_label_column_gap_and_comment_contract() {
         let input = [
             Fcitx5CandidateRenderItemInput {
                 bounds: Fcitx5CandidateLayoutRect {
@@ -2378,6 +2385,7 @@ mod tests {
                     bottom: 48.0,
                 },
                 label_width: 18.0,
+                label_gap: 4.0,
                 text_width: 80.0,
                 comment_width: 40.0,
                 has_label: 1,
@@ -2390,6 +2398,7 @@ mod tests {
                     bottom: 80.0,
                 },
                 label_width: 10.0,
+                label_gap: 4.0,
                 text_width: 96.0,
                 comment_width: 20.0,
                 has_label: 1,
@@ -2410,17 +2419,20 @@ mod tests {
             },
             0
         );
-        assert_eq!(label_column, 18.0);
-        assert_eq!(output[0].text.left, 28.0);
-        assert_eq!(output[0].comment.left, 112.0);
+        assert_eq!(label_column, 20.0);
+        assert_eq!(output[0].label.right, 30.0);
+        assert_eq!(output[0].text.left, 34.0);
+        assert_eq!(output[0].comment.left, 118.0);
         assert_eq!(output[0].draw_comment, 1);
-        assert_eq!(output[1].text.left, 28.0);
+        assert_eq!(output[1].label.right, 30.0);
+        assert_eq!(output[1].text.left, 34.0);
         assert_eq!(output[1].comment.left, 114.0);
         assert_eq!(output[1].draw_comment, 0);
 
         let no_label = [Fcitx5CandidateRenderItemInput {
             bounds: input[0].bounds,
             label_width: 18.0,
+            label_gap: 4.0,
             text_width: 80.0,
             comment_width: 0.0,
             has_label: 0,
