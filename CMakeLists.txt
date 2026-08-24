@@ -362,6 +362,36 @@ set_target_properties(fcitx5_protocol_core_rust
 add_dependencies(fcitx5_protocol_core_rust fcitx5_protocol_core_rustlib)
 target_link_libraries(fcitx5_protocol_core_rust INTERFACE ws2_32 userenv ntdll)
 
+# E2 side-by-side: Engine context/composition/revision ledger is Rust
+# authoritative in `fcitx5-engine-core`; `src/engine/fcitx_runtime.cpp` is not
+# cut over yet (see docs/engine-boundary.md migration order).
+set(FCITX_RUST_ENGINE_CORE_STATICLIB
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_engine_core.lib")
+add_custom_command(
+  OUTPUT "${FCITX_RUST_ENGINE_CORE_STATICLIB}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-engine-core --lib --target
+    "${FCITX_RUST_TARGET}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/engine-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/engine-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/engine-core/src/capi.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/engine-core/src/capi_tests.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/engine-core/src/tests.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-engine-core staticlib")
+add_custom_target(fcitx5_engine_core_rustlib
+                  DEPENDS "${FCITX_RUST_ENGINE_CORE_STATICLIB}")
+add_library(fcitx5_engine_core_rust STATIC IMPORTED GLOBAL)
+set_target_properties(fcitx5_engine_core_rust
+                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_ENGINE_CORE_STATICLIB}")
+add_dependencies(fcitx5_engine_core_rust fcitx5_engine_core_rustlib)
+target_link_libraries(fcitx5_engine_core_rust INTERFACE ws2_32 userenv ntdll)
+
 set(FCITX_RUST_TSF_POC_DLL
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_tsf_poc.dll")
 add_custom_target(
@@ -1016,6 +1046,14 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_protocol_differential_test)
   fcitx_apply_binary_hardening(fcitx5_protocol_differential_test)
   add_test(NAME protocol-differential-contract COMMAND fcitx5_protocol_differential_test)
+
+  add_executable(fcitx5_engine_core_contract_test tests/unit/engine_core_contract_test.cpp)
+  target_include_directories(fcitx5_engine_core_contract_test
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/engine")
+  target_link_libraries(fcitx5_engine_core_contract_test PRIVATE fcitx5_engine_core_rust)
+  fcitx_apply_project_options(fcitx5_engine_core_contract_test)
+  fcitx_apply_binary_hardening(fcitx5_engine_core_contract_test)
+  add_test(NAME engine-core-contract COMMAND fcitx5_engine_core_contract_test)
 
   add_executable(fcitx5_config_parser_test tests/unit/config_parser_test.cpp)
   target_link_libraries(fcitx5_config_parser_test PRIVATE fcitx5::config)

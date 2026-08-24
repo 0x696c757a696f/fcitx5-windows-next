@@ -79,6 +79,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fcitx5-engine-core"
+version = "0.1.0"
+
+[[package]]
 name = "fcitx5-launcher-core"
 version = "0.1.0"
 dependencies = [

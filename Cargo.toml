@@ -13,6 +13,7 @@ members = [
   "rust/candidate-core",
   "rust/tsf-poc",
   "rust/protocol-core",
+  "rust/engine-core",
 ]
 
 [profile.dev]
