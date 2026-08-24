@@ -1480,6 +1480,18 @@ fn repository_metadata_url(base_url: &[u16], metadata_name: &[u8]) -> Option<Vec
     Some(result)
 }
 
+fn repository_default_base_url(channel: &[u8]) -> Option<Vec<u16>> {
+    if channel
+        .iter()
+        .any(|byte| !byte.is_ascii() || *byte == b'/' || *byte == b'\\' || *byte == 0)
+    {
+        return None;
+    }
+    let mut result = b"https://packages.fcitx5-windows.org/v1/".to_vec();
+    result.extend_from_slice(channel);
+    Some(result.into_iter().map(u16::from).collect())
+}
+
 fn package_config_surface_kinds(
     package_type: u32,
     permissions: &[Fcitx5ControlUtf8],
@@ -2935,6 +2947,24 @@ pub unsafe extern "C" fn fcitx5_control_repository_metadata_url_utf16(
 
 /// # Safety
 ///
+/// `channel` must remain valid ASCII for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_repository_default_base_url_utf16(
+    channel: Fcitx5ControlUtf8,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(channel) = utf8_slice(channel) else {
+        return 0;
+    };
+    let Some(url) = repository_default_base_url(channel) else {
+        return 0;
+    };
+    write_wide_units(&url, output, capacity)
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -4105,6 +4135,40 @@ mod tests {
         assert_eq!(
             String::from_utf16(&output).unwrap(),
             "https://packages.example/v1/dev/index.json"
+        );
+    }
+
+    #[test]
+    fn repository_default_base_url_matches_cpp_contract() {
+        assert_eq!(
+            String::from_utf16(&repository_default_base_url(b"stable").unwrap()).unwrap(),
+            "https://packages.fcitx5-windows.org/v1/stable"
+        );
+        assert_eq!(
+            String::from_utf16(&repository_default_base_url(b"").unwrap()).unwrap(),
+            "https://packages.fcitx5-windows.org/v1/"
+        );
+        assert!(repository_default_base_url(b"bad/channel").is_none());
+
+        let channel = Fcitx5ControlUtf8 {
+            ptr: b"dev".as_ptr(),
+            len: 3,
+        };
+        let required = unsafe {
+            fcitx5_control_repository_default_base_url_utf16(channel, std::ptr::null_mut(), 0)
+        };
+        let mut output = vec![0_u16; required];
+        let written = unsafe {
+            fcitx5_control_repository_default_base_url_utf16(
+                channel,
+                output.as_mut_ptr(),
+                output.len(),
+            )
+        };
+        assert_eq!(written, output.len());
+        assert_eq!(
+            String::from_utf16(&output).unwrap(),
+            "https://packages.fcitx5-windows.org/v1/dev"
         );
     }
 

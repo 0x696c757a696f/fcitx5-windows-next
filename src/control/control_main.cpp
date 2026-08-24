@@ -283,6 +283,9 @@ std::uint64_t fcitx5_control_repository_max_release_sequence(const std::uint64_t
 std::size_t fcitx5_control_repository_metadata_url_utf16(Fcitx5ControlUtf16 base_url,
                                                          Fcitx5ControlUtf8 metadata_name,
                                                          wchar_t* output, std::size_t capacity);
+std::size_t fcitx5_control_repository_default_base_url_utf16(Fcitx5ControlUtf8 channel,
+                                                             wchar_t* output,
+                                                             std::size_t capacity);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -868,6 +871,17 @@ std::wstring repositoryMetadataUrl(std::wstring_view baseUrl, std::string_view m
     std::wstring result(required, L'\0');
     const std::size_t written = fcitx5_control_repository_metadata_url_utf16(
         nativeView(baseUrl), utf8View(metadataName), result.data(), result.size());
+    return written == result.size() ? result : std::wstring{};
+}
+
+std::wstring repositoryDefaultBaseUrl(std::string_view channel) {
+    const std::size_t required =
+        fcitx5_control_repository_default_base_url_utf16(utf8View(channel), nullptr, 0);
+    if (required == 0)
+        return {};
+    std::wstring result(required, L'\0');
+    const std::size_t written = fcitx5_control_repository_default_base_url_utf16(
+        utf8View(channel), result.data(), result.size());
     return written == result.size() ? result : std::wstring{};
 }
 
@@ -1833,8 +1847,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (packageCommand == kPackageActionPackagesRefresh) {
             const auto defaultBase =
-                widen(std::string("https://packages.fcitx5-windows.org/v1/") +
-                      std::string(fcitx::windows::kReleaseIdentity.channel_name));
+                repositoryDefaultBaseUrl(fcitx::windows::kReleaseIdentity.channel_name);
             refreshRepository(dataRoot,
                               arguments.size() == 2 ? std::wstring(arguments[1]) : defaultBase);
             printPackages(dataRoot);

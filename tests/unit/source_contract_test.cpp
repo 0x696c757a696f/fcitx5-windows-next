@@ -368,6 +368,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         controlSource.find("fcitx5_control_repository_metadata_url_utf16") ==
             std::string::npos ||
+        controlSource.find("fcitx5_control_repository_default_base_url_utf16") ==
+            std::string::npos ||
         controlSource.find("fcitx5_control_repository_cache_prepare_utf16") ==
             std::string::npos ||
         controlSource.find("fcitx5_control_repository_cache_publish_utf16") ==
@@ -413,6 +415,10 @@ int main(int argc, char** argv) {
         controlSource.find("baseUrl.pop_back()") != std::string::npos ||
         controlSource.find("baseUrl + L\"/index.json\"") != std::string::npos ||
         controlSource.find("baseUrl + L\"/index.sig\"") != std::string::npos ||
+        controlSource.find("https://packages.fcitx5-windows.org/v1/") !=
+            std::string::npos ||
+        controlSource.find("std::string(fcitx::windows::kReleaseIdentity.channel_name)") !=
+            std::string::npos ||
         controlSource.find("std::string typeName(") != std::string::npos ||
         controlSource.find("return \"inputmethod-data\"") != std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_atomic_write_utf8_file_utf16") ==
@@ -443,6 +449,8 @@ int main(int argc, char** argv) {
         rustControlCoreSource.find("fcitx5_control_repository_max_release_sequence") ==
             std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_repository_metadata_url_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_repository_default_base_url_utf16") ==
             std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_repository_cache_prepare_utf16") ==
             std::string::npos ||
@@ -476,6 +484,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustControlCoreSource.find("repository_metadata_url_matches_cpp_contract") ==
             std::string::npos ||
+        rustControlCoreSource.find("repository_default_base_url_matches_cpp_contract") ==
+            std::string::npos ||
         rustControlCoreSource.find("repository_cache_staging_and_publish_match_cpp_contract") ==
             std::string::npos ||
         rustControlCoreSource.find("package_archive_cache_prepare_matches_cpp_contract") ==
@@ -495,7 +505,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos) {
-        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, optional config reads, installed manifest reads, package config surface policy, repository error classification, bundled package probe inventory, package type display names/update/lifecycle policy, repository release-sequence/metadata URL policy, repository/package cache staging/publication, and atomic config file writes must be Rust-owned");
+        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, optional config reads, installed manifest reads, package config surface policy, repository error classification, bundled package probe inventory, package type display names/update/lifecycle policy, repository release-sequence/metadata/default URL policy, repository/package cache staging/publication, and atomic config file writes must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
