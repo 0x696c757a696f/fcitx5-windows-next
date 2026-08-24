@@ -173,6 +173,10 @@ struct Fcitx5ControlPackageDetail {
     Fcitx5ControlUtf8 permissionsJson;
     Fcitx5ControlUtf8 configSurfaceJson;
 };
+struct Fcitx5ControlBundledPackageDescriptor {
+    Fcitx5ControlUtf8 id;
+    Fcitx5ControlUtf8 title;
+};
 struct Fcitx5ControlPathResult {
     int status;
     std::size_t pathLen;
@@ -263,6 +267,11 @@ int fcitx5_control_package_config_surface_json_utf8(
 int fcitx5_control_repository_error_utf8(Fcitx5ControlUtf8 error_code,
                                          Fcitx5ControlUtf16 keyring, char** out_ptr,
                                          std::size_t* out_len);
+std::size_t fcitx5_control_bundled_package_count();
+std::uint8_t fcitx5_control_bundled_package_descriptor(
+    std::size_t index, Fcitx5ControlBundledPackageDescriptor* descriptor);
+std::uint8_t fcitx5_control_bundled_package_present_utf16(Fcitx5ControlUtf16 install_root,
+                                                          Fcitx5ControlUtf8 id);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -520,6 +529,10 @@ std::string takeRustUtf8(char* bytes, std::size_t length) {
     }
     fcitx5_control_utf8_free(bytes, length);
     return result;
+}
+
+std::string copyUtf8(Fcitx5ControlUtf8 value) {
+    return value.ptr && value.len > 0 ? std::string(value.ptr, value.len) : std::string{};
 }
 
 template <typename Producer>
@@ -1424,6 +1437,33 @@ struct PackageSummaryRow {
     bool updateAvailable{};
 };
 
+struct BundledComponent {
+    std::string id;
+    std::string title;
+};
+
+bool bundledPackagePresent(const fs::path& installRoot, std::string_view id) {
+    const std::wstring installRootText = installRoot.wstring();
+    return fcitx5_control_bundled_package_present_utf16(
+               nativeView(installRootText), utf8View(id)) != 0;
+}
+
+std::vector<BundledComponent> presentBundledPackages(const fs::path& installRoot) {
+    std::vector<BundledComponent> result;
+    const std::size_t count = fcitx5_control_bundled_package_count();
+    result.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        Fcitx5ControlBundledPackageDescriptor descriptor{};
+        if (fcitx5_control_bundled_package_descriptor(index, &descriptor) == 0)
+            continue;
+        const std::string id = copyUtf8(descriptor.id);
+        if (id.empty() || !bundledPackagePresent(installRoot, id))
+            continue;
+        result.push_back(BundledComponent{id, copyUtf8(descriptor.title)});
+    }
+    return result;
+}
+
 std::string packagesListJson(bool repositoryAvailable, std::string_view repositoryError,
                              const std::vector<PackageSummaryRow>& packages) {
     std::vector<Fcitx5ControlPackageSummary> views;
@@ -1463,28 +1503,10 @@ void printPackages(const fs::path& dataRoot) {
     std::map<std::string, fcitx::package::LockEntry, std::less<>> active;
     for (const auto& entry : installed)
         active.emplace(entry.id, entry);
-    struct BundledComponent {
-        const char* id;
-        const char* title;
-        fs::path probe;
-    };
     const fs::path installRoot = installationRoot();
-    const std::array bundledCandidates{
-        BundledComponent{"fcitx5-chinese-addons", "Fcitx5 Chinese Addons",
-                         installRoot / L"lib/fcitx5/libpinyin.dll"},
-        BundledComponent{"fcitx5-rime", "Rime",
-                         installRoot / L"lib/fcitx5/librime.dll"},
-        BundledComponent{"fcitx5-lua", "Fcitx5 Lua",
-                         installRoot / L"lib/fcitx5/libluaaddonloader.dll"},
-        BundledComponent{"fcitx5-chttrans", "Simplified / Traditional Conversion",
-                         installRoot / L"lib/fcitx5/libchttrans.dll"},
-        BundledComponent{"librime-lua", "Rime Lua", installRoot / L"bin/lua54.dll"},
-    };
     std::map<std::string, BundledComponent, std::less<>> bundled;
-    for (const auto& component : bundledCandidates) {
-        if (fs::is_regular_file(component.probe))
-            bundled.emplace(component.id, component);
-    }
+    for (auto component : presentBundledPackages(installRoot))
+        bundled.emplace(component.id, std::move(component));
     fcitx::package::RepositoryIndex repository;
     bool repositoryAvailable = false;
     std::string repositoryError;
@@ -1573,16 +1595,7 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
         repositoryError = repositoryErrorCode(dataRoot, error.code());
     }
 
-    const fs::path installRoot = installationRoot();
-    const std::map<std::string, fs::path, std::less<>> bundledProbes{
-        {"fcitx5-chinese-addons", installRoot / L"lib/fcitx5/libpinyin.dll"},
-        {"fcitx5-rime", installRoot / L"lib/fcitx5/librime.dll"},
-        {"fcitx5-lua", installRoot / L"lib/fcitx5/libluaaddonloader.dll"},
-        {"fcitx5-chttrans", installRoot / L"lib/fcitx5/libchttrans.dll"},
-        {"librime-lua", installRoot / L"bin/lua54.dll"},
-    };
-    const auto bundled = bundledProbes.find(packageId);
-    const bool bundledNow = bundled != bundledProbes.end() && fs::is_regular_file(bundled->second);
+    const bool bundledNow = bundledPackagePresent(installationRoot(), packageId);
     if (active == installed.end() && !repositoryEntry && !bundledNow)
         throw fcitx::package::PackageError("package_not_found", "package is unknown");
 

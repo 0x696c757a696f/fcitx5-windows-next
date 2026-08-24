@@ -309,6 +309,12 @@ pub struct Fcitx5ControlPackageDetail {
 }
 
 #[repr(C)]
+pub struct Fcitx5ControlBundledPackageDescriptor {
+    id: Fcitx5ControlUtf8,
+    title: Fcitx5ControlUtf8,
+}
+
+#[repr(C)]
 pub struct Fcitx5ControlPathResult {
     status: i32,
     path_len: usize,
@@ -1407,10 +1413,10 @@ fn config_surfaces_json(owner: Fcitx5ControlUtf8, kinds: &[Fcitx5ControlUtf8]) -
     Some(output)
 }
 
-fn config_surface_kind_bytes(kind: &str) -> Fcitx5ControlUtf8 {
+fn static_utf8_view(value: &'static str) -> Fcitx5ControlUtf8 {
     Fcitx5ControlUtf8 {
-        ptr: kind.as_ptr(),
-        len: kind.len(),
+        ptr: value.as_ptr(),
+        len: value.len(),
     }
 }
 
@@ -1465,7 +1471,7 @@ fn package_config_surface_json(
     let kinds = package_config_surface_kinds(package_type, permissions, file_paths)?;
     let kind_views = kinds
         .iter()
-        .map(|kind| config_surface_kind_bytes(kind))
+        .map(|kind| static_utf8_view(kind))
         .collect::<Vec<_>>();
     config_surfaces_json(owner, &kind_views)
 }
@@ -1476,6 +1482,61 @@ fn classify_repository_error(error_code: &[u8], keyring: &std::path::Path) -> Ve
     } else {
         error_code.to_vec()
     }
+}
+
+struct BundledPackage {
+    id: &'static str,
+    title: &'static str,
+    probe_relative_path: &'static str,
+}
+
+const BUNDLED_PACKAGES: &[BundledPackage] = &[
+    BundledPackage {
+        id: "fcitx5-chinese-addons",
+        title: "Fcitx5 Chinese Addons",
+        probe_relative_path: "lib/fcitx5/libpinyin.dll",
+    },
+    BundledPackage {
+        id: "fcitx5-rime",
+        title: "Rime",
+        probe_relative_path: "lib/fcitx5/librime.dll",
+    },
+    BundledPackage {
+        id: "fcitx5-lua",
+        title: "Fcitx5 Lua",
+        probe_relative_path: "lib/fcitx5/libluaaddonloader.dll",
+    },
+    BundledPackage {
+        id: "fcitx5-chttrans",
+        title: "Simplified / Traditional Conversion",
+        probe_relative_path: "lib/fcitx5/libchttrans.dll",
+    },
+    BundledPackage {
+        id: "librime-lua",
+        title: "Rime Lua",
+        probe_relative_path: "bin/lua54.dll",
+    },
+];
+
+fn bundled_package_descriptor(index: usize) -> Option<Fcitx5ControlBundledPackageDescriptor> {
+    let package = BUNDLED_PACKAGES.get(index)?;
+    Some(Fcitx5ControlBundledPackageDescriptor {
+        id: static_utf8_view(package.id),
+        title: static_utf8_view(package.title),
+    })
+}
+
+fn bundled_package_present(install_root: &std::path::Path, id: &[u8]) -> bool {
+    if install_root.as_os_str().is_empty() {
+        return false;
+    }
+    let Ok(id) = std::str::from_utf8(id) else {
+        return false;
+    };
+    let Some(package) = BUNDLED_PACKAGES.iter().find(|package| package.id == id) else {
+        return false;
+    };
+    install_root.join(package.probe_relative_path).is_file()
 }
 
 fn package_detail_json(detail: &Fcitx5ControlPackageDetail) -> Option<Vec<u8>> {
@@ -2683,6 +2744,50 @@ pub unsafe extern "C" fn fcitx5_control_repository_error_utf8(
     )
 }
 
+#[no_mangle]
+pub extern "C" fn fcitx5_control_bundled_package_count() -> usize {
+    BUNDLED_PACKAGES.len()
+}
+
+/// # Safety
+///
+/// `descriptor` must point to writable storage. Returned UTF-8 slices point to
+/// static strings and do not need to be freed.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_bundled_package_descriptor(
+    index: usize,
+    descriptor: *mut Fcitx5ControlBundledPackageDescriptor,
+) -> u8 {
+    if descriptor.is_null() {
+        return 0;
+    }
+    let Some(value) = bundled_package_descriptor(index) else {
+        return 0;
+    };
+    unsafe {
+        *descriptor = value;
+    }
+    1
+}
+
+/// # Safety
+///
+/// `install_root` must remain valid UTF-16 for the duration of the call, and
+/// `id` must remain valid UTF-8 for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_bundled_package_present_utf16(
+    install_root: Fcitx5ControlUtf16,
+    id: Fcitx5ControlUtf8,
+) -> u8 {
+    let Some(install_root) = string_from_utf16(install_root) else {
+        return 0;
+    };
+    let Some(id) = utf8_slice(id) else {
+        return 0;
+    };
+    bundled_package_present(&PathBuf::from(install_root), id) as u8
+}
+
 /// # Safety
 ///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
@@ -3670,6 +3775,33 @@ mod tests {
             classify_repository_error(b"rollback_rejected", &keyring),
             b"rollback_rejected"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bundled_package_probe_inventory_matches_cpp_contract() {
+        assert_eq!(fcitx5_control_bundled_package_count(), 5);
+        let descriptor = bundled_package_descriptor(0).expect("first bundled package");
+        assert_eq!(
+            utf8_slice(descriptor.id),
+            Some(&b"fcitx5-chinese-addons"[..])
+        );
+        assert_eq!(
+            utf8_slice(descriptor.title),
+            Some(&b"Fcitx5 Chinese Addons"[..])
+        );
+        assert!(bundled_package_descriptor(99).is_none());
+
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-bundled-probe-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("lib/fcitx5")).expect("create lib probe dir");
+        assert!(!bundled_package_present(&root, b"fcitx5-rime"));
+        std::fs::write(root.join("lib/fcitx5/librime.dll"), b"fixture").expect("write probe");
+        assert!(bundled_package_present(&root, b"fcitx5-rime"));
+        assert!(!bundled_package_present(&root, b"unknown"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
