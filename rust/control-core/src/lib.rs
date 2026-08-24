@@ -1452,6 +1452,32 @@ fn package_architecture_matches_native(architecture: &[u8]) -> bool {
     architecture == b"any" || architecture == native
 }
 
+const ADDON_METADATA_KEY_UNKNOWN: u32 = 0;
+const ADDON_METADATA_KEY_NAME: u32 = 1;
+const ADDON_METADATA_KEY_CATEGORY: u32 = 2;
+const ADDON_METADATA_KEY_LIBRARY: u32 = 3;
+const ADDON_METADATA_KEY_TYPE: u32 = 4;
+const ADDON_METADATA_KEY_VERSION: u32 = 5;
+const ADDON_METADATA_KEY_CONFIGURABLE: u32 = 6;
+const ADDON_METADATA_KEY_ON_DEMAND: u32 = 7;
+
+fn addon_metadata_section_is_addon(section: &[u8]) -> bool {
+    section == b"[Addon]"
+}
+
+fn addon_metadata_key(key: &[u8]) -> u32 {
+    match key {
+        b"Name" => ADDON_METADATA_KEY_NAME,
+        b"Category" => ADDON_METADATA_KEY_CATEGORY,
+        b"Library" => ADDON_METADATA_KEY_LIBRARY,
+        b"Type" => ADDON_METADATA_KEY_TYPE,
+        b"Version" => ADDON_METADATA_KEY_VERSION,
+        b"Configurable" => ADDON_METADATA_KEY_CONFIGURABLE,
+        b"OnDemand" => ADDON_METADATA_KEY_ON_DEMAND,
+        _ => ADDON_METADATA_KEY_UNKNOWN,
+    }
+}
+
 fn addon_metadata_bool(value: &[u8]) -> bool {
     matches!(value, b"True" | b"true" | b"1")
 }
@@ -2913,6 +2939,26 @@ pub unsafe extern "C" fn fcitx5_control_package_architecture_matches_native_utf8
 
 /// # Safety
 ///
+/// `section` must remain valid UTF-8 for the duration of the call when its
+/// pointer is non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_addon_metadata_section_is_addon_utf8(
+    section: Fcitx5ControlUtf8,
+) -> u8 {
+    addon_metadata_section_is_addon(utf8_slice(section).unwrap_or(&[])) as u8
+}
+
+/// # Safety
+///
+/// `key` must remain valid UTF-8 for the duration of the call when its pointer
+/// is non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_addon_metadata_key_utf8(key: Fcitx5ControlUtf8) -> u32 {
+    addon_metadata_key(utf8_slice(key).unwrap_or(&[]))
+}
+
+/// # Safety
+///
 /// `value` must remain valid UTF-8 for the duration of the call when its
 /// pointer is non-null.
 #[no_mangle]
@@ -4120,6 +4166,44 @@ mod tests {
         assert_eq!(
             unsafe { fcitx5_control_package_architecture_matches_native_utf8(unsupported) },
             0
+        );
+    }
+
+    #[test]
+    fn addon_metadata_vocabulary_matches_cpp_contract() {
+        assert!(addon_metadata_section_is_addon(b"[Addon]"));
+        assert!(!addon_metadata_section_is_addon(b"[Addon/Disabled]"));
+        assert!(!addon_metadata_section_is_addon(b"Addon"));
+        assert_eq!(addon_metadata_key(b"Name"), ADDON_METADATA_KEY_NAME);
+        assert_eq!(addon_metadata_key(b"Category"), ADDON_METADATA_KEY_CATEGORY);
+        assert_eq!(addon_metadata_key(b"Library"), ADDON_METADATA_KEY_LIBRARY);
+        assert_eq!(addon_metadata_key(b"Type"), ADDON_METADATA_KEY_TYPE);
+        assert_eq!(addon_metadata_key(b"Version"), ADDON_METADATA_KEY_VERSION);
+        assert_eq!(
+            addon_metadata_key(b"Configurable"),
+            ADDON_METADATA_KEY_CONFIGURABLE
+        );
+        assert_eq!(
+            addon_metadata_key(b"OnDemand"),
+            ADDON_METADATA_KEY_ON_DEMAND
+        );
+        assert_eq!(addon_metadata_key(b"name"), ADDON_METADATA_KEY_UNKNOWN);
+
+        let section = Fcitx5ControlUtf8 {
+            ptr: b"[Addon]".as_ptr(),
+            len: 7,
+        };
+        let key = Fcitx5ControlUtf8 {
+            ptr: b"OnDemand".as_ptr(),
+            len: 8,
+        };
+        assert_eq!(
+            unsafe { fcitx5_control_addon_metadata_section_is_addon_utf8(section) },
+            1
+        );
+        assert_eq!(
+            unsafe { fcitx5_control_addon_metadata_key_utf8(key) },
+            ADDON_METADATA_KEY_ON_DEMAND
         );
     }
 

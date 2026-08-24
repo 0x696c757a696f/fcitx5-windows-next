@@ -276,6 +276,8 @@ Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_ty
 Fcitx5ControlUtf8 fcitx5_control_native_package_architecture_utf8();
 std::uint8_t fcitx5_control_package_architecture_matches_native_utf8(
     Fcitx5ControlUtf8 architecture);
+std::uint8_t fcitx5_control_addon_metadata_section_is_addon_utf8(Fcitx5ControlUtf8 section);
+std::uint32_t fcitx5_control_addon_metadata_key_utf8(Fcitx5ControlUtf8 key);
 std::uint8_t fcitx5_control_addon_metadata_bool_utf8(Fcitx5ControlUtf8 value);
 std::uint8_t fcitx5_control_package_update_available_utf8(
     std::uint8_t installed_present, Fcitx5ControlUtf8 installed_version,
@@ -1110,6 +1112,25 @@ bool addonMetadataBool(std::string_view value) {
     return fcitx5_control_addon_metadata_bool_utf8(utf8View(value)) != 0;
 }
 
+bool addonMetadataSectionIsAddon(std::string_view section) {
+    return fcitx5_control_addon_metadata_section_is_addon_utf8(utf8View(section)) != 0;
+}
+
+enum class AddonMetadataKey : std::uint32_t {
+    unknown = 0,
+    name = 1,
+    category = 2,
+    library = 3,
+    type = 4,
+    version = 5,
+    configurable = 6,
+    onDemand = 7,
+};
+
+AddonMetadataKey addonMetadataKey(std::string_view key) {
+    return static_cast<AddonMetadataKey>(fcitx5_control_addon_metadata_key_utf8(utf8View(key)));
+}
+
 std::optional<AddonDescriptor> parseAddonDescriptor(const fs::path& path,
                                                     const fs::path& libraryRoot) {
     std::string text;
@@ -1128,7 +1149,7 @@ std::optional<AddonDescriptor> parseAddonDescriptor(const fs::path& path,
         if (line.empty() || line.front() == '#')
             continue;
         if (line.front() == '[' && line.back() == ']') {
-            inAddon = line == "[Addon]";
+            inAddon = addonMetadataSectionIsAddon(line);
             continue;
         }
         if (!inAddon)
@@ -1138,20 +1159,31 @@ std::optional<AddonDescriptor> parseAddonDescriptor(const fs::path& path,
             continue;
         const auto key = trimAscii(line.substr(0, separator));
         const auto value = trimAscii(line.substr(separator + 1));
-        if (key == "Name")
+        switch (addonMetadataKey(key)) {
+        case AddonMetadataKey::name:
             descriptor.name = std::string(value);
-        else if (key == "Category")
+            break;
+        case AddonMetadataKey::category:
             descriptor.category = std::string(value);
-        else if (key == "Library")
+            break;
+        case AddonMetadataKey::library:
             descriptor.library = std::string(value);
-        else if (key == "Type")
+            break;
+        case AddonMetadataKey::type:
             descriptor.type = std::string(value);
-        else if (key == "Version")
+            break;
+        case AddonMetadataKey::version:
             descriptor.version = std::string(value);
-        else if (key == "Configurable")
+            break;
+        case AddonMetadataKey::configurable:
             descriptor.configurable = addonMetadataBool(value);
-        else if (key == "OnDemand")
+            break;
+        case AddonMetadataKey::onDemand:
             descriptor.onDemand = addonMetadataBool(value);
+            break;
+        case AddonMetadataKey::unknown:
+            break;
+        }
     }
     if (descriptor.id.empty() || !fcitx::package::is_lower_package_id(descriptor.id) ||
         descriptor.name.empty())
