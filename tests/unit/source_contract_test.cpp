@@ -28,6 +28,8 @@ int main(int argc, char** argv) {
     const auto specSource = read_text(sourceRoot / "docs/spec-v1.8.md");
     const auto currentTruthSource = read_text(sourceRoot / "docs/current.md");
     const auto engineBoundarySource = read_text(sourceRoot / "docs/engine-boundary.md");
+    const auto runtimeSecurityScript =
+        read_text(sourceRoot / "tools/check-runtime-security.ps1");
     const auto programPlanSource = read_text(sourceRoot / "docs/technical-program-plan.md");
     const auto referenceBaselineSource = read_text(sourceRoot / "docs/reference-baseline.md");
     const auto upstreamBoundaryAdr =
@@ -52,6 +54,18 @@ int main(int argc, char** argv) {
         specSource.find("TEXT_REPLACE_SURROUNDING") == std::string::npos ||
         specSource.find("upstream addons") == std::string::npos) {
         return fail("FCITX-UPSTREAM-BOUNDARY: Fcitx C++ island, addon model, and capability protocol rules must stay recorded");
+    }
+    if (runtimeSecurityScript.find("Join-Path $repoRoot 'rust'") == std::string::npos ||
+        runtimeSecurityScript.find("[switch] $SourceOnly") == std::string::npos ||
+        runtimeSecurityScript.find("'*.rs'") == std::string::npos ||
+        runtimeSecurityScript.find("Runtime security source audit passed") == std::string::npos ||
+        runtimeSecurityScript.find("C++/Rust source files") == std::string::npos ||
+        runtimeSecurityScript.find("SetWindowsHookEx") == std::string::npos ||
+        runtimeSecurityScript.find("SendInput") == std::string::npos ||
+        runtimeSecurityScript.find("WriteProcessMemory") == std::string::npos ||
+        runtimeSecurityScript.find("CreateRemoteThread") == std::string::npos ||
+        runtimeSecurityScript.find("VirtualAllocEx") == std::string::npos) {
+        return fail("RUNTIME-SECURITY-RUST-SCAN: runtime security source scan must cover Rust and prohibited input/injection APIs");
     }
     if (cmakeSource.find("fcitx5_deployer ALL") == std::string::npos ||
         cmakeSource.find("NAME deployer-version") == std::string::npos ||
