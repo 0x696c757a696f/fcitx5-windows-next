@@ -1203,3 +1203,27 @@ fn engine_epoch_validation_matches() {
     assert!(!validate_engine_epoch(41, 42));
     assert!(!validate_engine_epoch(42, 43));
 }
+
+// ---------------------------------------------------------------------------
+// E4-2: request sequence and deadline policy
+// ---------------------------------------------------------------------------
+
+use super::{accept_frame_sequence, key_request_timeout_ms};
+
+#[test]
+fn frame_sequence_accepts_strictly_newer_ids() {
+    assert!(accept_frame_sequence(1, 0));
+    assert!(accept_frame_sequence(10, 5));
+    assert!(!accept_frame_sequence(0, 0)); // duplicate rejected
+    assert!(!accept_frame_sequence(5, 5));
+    assert!(!accept_frame_sequence(4, 5)); // stale rejected
+}
+
+#[test]
+fn key_request_timeout_policy() {
+    // Cold context (revision 0) gets the widened first-context deadline.
+    assert_eq!(key_request_timeout_ms(0), 2500);
+    // Warm keys get the tight input deadline.
+    assert_eq!(key_request_timeout_ms(1), 75);
+    assert_eq!(key_request_timeout_ms(42), 75);
+}

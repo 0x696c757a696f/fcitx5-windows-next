@@ -643,3 +643,31 @@ pub fn generate_engine_epoch() -> u64 {
 pub fn validate_engine_epoch(frame_epoch: u64, process_epoch: u64) -> bool {
     frame_epoch == process_epoch
 }
+
+// ---------------------------------------------------------------------------
+// E4-2: request-sequence and deadline policy
+//
+// The engine server's per-connection request ordering and key-request
+// deadline policy are Rust-owned; `fcitx_engine_main.cpp` (`handleRequest`)
+// only applies them. Client-side response-scalar validation already lives in
+// `windows-common-core` (`fcitx5_windows_common_apply_*_response_scalars`).
+// ---------------------------------------------------------------------------
+
+/// Accepts a request frame when its id is strictly newer than the last
+/// accepted id on the connection (mirrors
+/// `frame.metadata.requestId <= lastRequestId` rejection).
+pub fn accept_frame_sequence(request_id: u64, last_request_id: u64) -> bool {
+    request_id > last_request_id
+}
+
+/// Key-request dispatcher deadline in milliseconds (mirrors the
+/// `FcitxRuntime::processKey` timeout policy in `handleRequest`): a cold
+/// context (revision 0) gets the widened first-context deadline, warm keys
+/// the tight input deadline.
+pub fn key_request_timeout_ms(revision: u64) -> u32 {
+    if revision == 0 {
+        2500
+    } else {
+        75
+    }
+}

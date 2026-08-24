@@ -189,7 +189,9 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
                                         const platform::RuntimeIdentity& serverIdentity,
                                         const std::wstring& uiExecutable) {
     protocol::FrameView frame;
-    if (!protocol::decodeFrame(requestBytes, frame) || frame.metadata.requestId <= lastRequestId) {
+    // E4-2: request ordering is Rust-owned (strictly newer ids accepted).
+    if (!protocol::decodeFrame(requestBytes, frame) ||
+        fcitx5_engine_core_accept_frame_sequence(frame.metadata.requestId, lastRequestId) == 0) {
         return {};
     }
     if (frame.type == protocol::MessageType::helloRequest) {
@@ -214,10 +216,8 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
     if (frame.type == protocol::MessageType::keyRequest) {
         protocol::KeyRequest request;
         engine::RuntimeResult runtimeResult;
-        const auto timeout =
-            frame.metadata.revision == 0
-                ? std::chrono::milliseconds(2500)
-                : std::chrono::milliseconds(75);
+        const auto timeout = std::chrono::milliseconds(
+            fcitx5_engine_core_key_request_timeout_ms(frame.metadata.revision));
         if (!protocol::decode(frame, request) ||
             !dispatcher.processKey(
                 engine::ClientContextKey{clientIdentity.processId, connectionId,
@@ -308,8 +308,8 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
         (std::filesystem::path(executable).parent_path() / "fcitx5-ui.exe").wstring();
     engine::PresentationPublisher presentation(
         platform::makeLocalEndpointName(identity, L"presentation"), uiExecutable);
-    // E4: the engine-process session epoch is Rust-generated (mirrors
-    // GetSystemTimeAsFileTime); the C++ shell only holds the value.
+    // E4: the engine-process session epoch is Rust-generated (100ns-since-1601
+    // FILETIME value); the C++ shell only holds the value.
     const std::uint64_t engineEpoch = fcitx5_engine_core_generate_engine_epoch();
     std::atomic<std::uint64_t> nextResponseId{1};
     std::atomic<std::uint64_t> nextConnectionId{1};

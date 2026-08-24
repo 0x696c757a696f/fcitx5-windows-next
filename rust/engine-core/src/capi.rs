@@ -228,6 +228,28 @@ pub extern "C" fn fcitx5_engine_core_validate_engine_epoch(
     }
 }
 
+/// Accepts a request frame when its id is strictly newer than the last
+/// accepted id on the connection. Returns 1 when accepted, 0 when stale or
+/// duplicate.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_engine_core_accept_frame_sequence(
+    request_id: u64,
+    last_request_id: u64,
+) -> i32 {
+    if crate::accept_frame_sequence(request_id, last_request_id) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Key-request dispatcher deadline in milliseconds (cold context revision 0
+/// gets 2500 ms, warm keys 75 ms).
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_engine_core_key_request_timeout_ms(revision: u64) -> u32 {
+    panic::catch_unwind(|| crate::key_request_timeout_ms(revision)).unwrap_or(75)
+}
+
 // ---------------------------------------------------------------------------
 // E3 event-shape consolidation: unified handle_key_event
 // ---------------------------------------------------------------------------

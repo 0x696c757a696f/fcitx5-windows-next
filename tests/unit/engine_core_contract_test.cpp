@@ -392,6 +392,25 @@ int runCorpus() {
             "override marker must suppress the input-method switch");
     }
 
+    // E4: engine-process session epoch + request-sequence/deadline policy.
+    {
+        failures += !expect(
+            fcitx5_engine_core_validate_engine_epoch(42, 42) == 1 &&
+                fcitx5_engine_core_validate_engine_epoch(41, 42) == 0,
+            "engine epoch validation must reject mismatched frames");
+        failures += !expect(
+            fcitx5_engine_core_accept_frame_sequence(1, 0) == 1 &&
+                fcitx5_engine_core_accept_frame_sequence(0, 0) == 0 &&
+                fcitx5_engine_core_accept_frame_sequence(5, 5) == 0 &&
+                fcitx5_engine_core_accept_frame_sequence(4, 5) == 0,
+            "request ordering must accept only strictly newer ids");
+        failures += !expect(
+            fcitx5_engine_core_key_request_timeout_ms(0) == 2500 &&
+                fcitx5_engine_core_key_request_timeout_ms(1) == 75 &&
+                fcitx5_engine_core_key_request_timeout_ms(42) == 75,
+            "key request deadline policy must be 2500 ms cold / 75 ms warm");
+    }
+
     return failures;
 }
 
