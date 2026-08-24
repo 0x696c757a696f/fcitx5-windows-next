@@ -1506,6 +1506,27 @@ fn theme_file_path(theme_dir: &std::path::Path) -> Option<PathBuf> {
     Some(theme_dir.join(THEME_FILE_NAME))
 }
 
+fn resolve_theme_path(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    requested_id: &str,
+    builtin: bool,
+) -> Option<PathBuf> {
+    if builtin {
+        return (requested_id == "builtin:default")
+            .then(|| builtin_theme_path(install_root))
+            .flatten();
+    }
+    if !theme_id_valid(requested_id) {
+        return None;
+    }
+    Some(
+        user_themes_dir(data_root)?
+            .join(requested_id)
+            .join(THEME_FILE_NAME),
+    )
+}
+
 fn is_lower_theme_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
@@ -3577,6 +3598,42 @@ pub unsafe extern "C" fn fcitx5_control_resolve_theme_config_utf8(
 
 /// # Safety
 ///
+/// `install_root`, `data_root`, and `requested_id` must remain valid for the
+/// duration of the call when their pointers are non-null. `output` must be
+/// writable for `capacity` UTF-16 code units when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_resolve_theme_path_utf16(
+    install_root: Fcitx5ControlUtf16,
+    data_root: Fcitx5ControlUtf16,
+    requested_id: Fcitx5ControlUtf8,
+    builtin: u8,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(install_root) = string_from_utf16(install_root) else {
+        return 0;
+    };
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return 0;
+    };
+    let Some(requested_id) =
+        utf8_slice(requested_id).and_then(|value| std::str::from_utf8(value).ok())
+    else {
+        return 0;
+    };
+    let Some(path) = resolve_theme_path(
+        &PathBuf::from(install_root),
+        &PathBuf::from(data_root),
+        requested_id,
+        builtin != 0,
+    ) else {
+        return 0;
+    };
+    write_wide_path(&path, output, capacity)
+}
+
+/// # Safety
+///
 /// `source`, `requested_id`, and `theme_id` must remain valid UTF-8 for the
 /// duration of the call when their pointers are non-null.
 #[no_mangle]
@@ -5156,6 +5213,68 @@ b = "${a}"
 background = "${a}"
 "##;
         assert!(resolved_theme_config(cycle, b"solar", false, false).is_none());
+    }
+
+    #[test]
+    fn theme_path_resolve_matches_windinput_style_contract() {
+        let install = std::path::PathBuf::from(r"C:\Program Files\Fcitx5");
+        let data = std::path::PathBuf::from(r"C:\Users\Alice\AppData\Local\Fcitx5");
+
+        let builtin = resolve_theme_path(&install, &data, "builtin:default", true).unwrap();
+        assert!(builtin.ends_with(r"resources\themes\default\theme.toml"));
+        assert!(resolve_theme_path(&install, &data, "solar", true).is_none());
+
+        let user = resolve_theme_path(&install, &data, "eosphoros-night", false).unwrap();
+        assert!(user.ends_with(r"themes\eosphoros-night\theme.toml"));
+        assert!(resolve_theme_path(&install, &data, "Bad ID", false).is_none());
+        assert!(resolve_theme_path(&install, &std::path::PathBuf::new(), "solar", false).is_none());
+
+        let install_wide = wide(&install.to_string_lossy());
+        let data_wide = wide(&data.to_string_lossy());
+        let required = unsafe {
+            fcitx5_control_resolve_theme_path_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: install_wide.as_ptr(),
+                    len: install_wide.len(),
+                },
+                Fcitx5ControlUtf16 {
+                    ptr: data_wide.as_ptr(),
+                    len: data_wide.len(),
+                },
+                Fcitx5ControlUtf8 {
+                    ptr: b"eosphoros-night".as_ptr(),
+                    len: 15,
+                },
+                0,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        assert!(required > 0);
+        let mut output = vec![0u16; required];
+        let written = unsafe {
+            fcitx5_control_resolve_theme_path_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: install_wide.as_ptr(),
+                    len: install_wide.len(),
+                },
+                Fcitx5ControlUtf16 {
+                    ptr: data_wide.as_ptr(),
+                    len: data_wide.len(),
+                },
+                Fcitx5ControlUtf8 {
+                    ptr: b"eosphoros-night".as_ptr(),
+                    len: 15,
+                },
+                0,
+                output.as_mut_ptr(),
+                output.len(),
+            )
+        };
+        assert_eq!(written, required);
+        assert!(String::from_utf16(&output)
+            .unwrap()
+            .ends_with(r"themes\eosphoros-night\theme.toml"));
     }
 
     #[test]

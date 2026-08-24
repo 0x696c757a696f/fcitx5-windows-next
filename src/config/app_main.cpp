@@ -3534,19 +3534,12 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const bool dark = *user.appearanceMode == AppearanceMode::dark ||
                           (*user.appearanceMode == AppearanceMode::system &&
                            systemUsesDarkAppearance());
-        fs::path themePath;
-        if (*user.theme == "builtin:default") {
-            themePath = installationRoot() / L"resources" / L"themes" / L"default" /
-                        L"theme.toml";
-        } else if (!dataRoot.empty()) {
-            const std::wstring wideTheme = widen(*user.theme);
-            if (!wideTheme.empty())
-                themePath = dataRoot / L"themes" / wideTheme / L"theme.toml";
-        }
+        const bool builtin = *user.theme == "builtin:default";
+        const fs::path themePath =
+            resolveThemePath(installationRoot(), dataRoot, *user.theme, builtin);
         if (!themePath.empty()) {
             if (const auto text = readBoundedFile(themePath, 512U * 1024U)) {
                 Config themeConfig;
-                const bool builtin = *user.theme == "builtin:default";
                 if (resolveThemeConfig(*text, *user.theme, builtin, dark, themeConfig, error)) {
                     return mergeConfig(defaults, mergeConfig(themeConfig, user));
                 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -91,6 +92,9 @@ struct ParseError {
 [[nodiscard]] bool resolveThemeConfig(std::string_view themeText, std::string_view requestedId,
                                       bool builtin, bool dark, Config& output,
                                       ParseError& error) noexcept;
+[[nodiscard]] std::filesystem::path resolveThemePath(
+    const std::filesystem::path& installationRoot, const std::filesystem::path& dataRoot,
+    std::string_view requestedId, bool builtin) noexcept;
 [[nodiscard]] Config mergeConfig(const Config& base, const Config& overrideConfig);
 
 } // namespace fcitx::windows::config

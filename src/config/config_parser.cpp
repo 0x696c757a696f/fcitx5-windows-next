@@ -7,19 +7,29 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <set>
 #include <sstream>
 #include <utility>
+#include <vector>
 
 extern "C" {
 struct Fcitx5ControlUtf8 {
     const char* ptr;
     std::size_t len;
 };
+struct Fcitx5ControlUtf16 {
+    const wchar_t* ptr;
+    std::size_t len;
+};
 int fcitx5_control_resolve_theme_config_utf8(Fcitx5ControlUtf8 text,
                                              Fcitx5ControlUtf8 requested_id,
                                              std::uint8_t builtin, std::uint8_t dark,
                                              char** out_ptr, std::size_t* out_len);
+std::size_t fcitx5_control_resolve_theme_path_utf16(
+    Fcitx5ControlUtf16 install_root, Fcitx5ControlUtf16 data_root,
+    Fcitx5ControlUtf8 requested_id, std::uint8_t builtin, wchar_t* output,
+    std::size_t capacity);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
 }
 
@@ -114,6 +124,10 @@ bool parseFont(const toml::table& parent, std::string_view key, Font& output, bo
         return setError(error, "font weight must be 100..900 in steps of 100");
     }
     return true;
+}
+
+Fcitx5ControlUtf16 utf16View(std::wstring_view value) noexcept {
+    return {value.data(), value.size()};
 }
 
 bool validColor(std::string_view value) {
@@ -526,6 +540,25 @@ bool resolveThemeConfig(std::string_view themeText, std::string_view requestedId
         return false;
     }
     return true;
+}
+
+std::filesystem::path resolveThemePath(const std::filesystem::path& installationRoot,
+                                       const std::filesystem::path& dataRoot,
+                                       std::string_view requestedId, bool builtin) noexcept {
+    const std::wstring install = installationRoot.wstring();
+    const std::wstring data = dataRoot.wstring();
+    const std::size_t required = fcitx5_control_resolve_theme_path_utf16(
+        utf16View(install), utf16View(data), utf8View(requestedId),
+        builtin ? std::uint8_t{1} : std::uint8_t{0}, nullptr, 0);
+    if (required == 0)
+        return {};
+    std::vector<wchar_t> buffer(required);
+    const std::size_t written = fcitx5_control_resolve_theme_path_utf16(
+        utf16View(install), utf16View(data), utf8View(requestedId),
+        builtin ? std::uint8_t{1} : std::uint8_t{0}, buffer.data(), buffer.size());
+    if (written == 0 || written > buffer.size())
+        return {};
+    return std::filesystem::path(std::wstring(buffer.data(), buffer.data() + written));
 }
 
 bool updatePresentationToml(std::string_view source, std::string_view appearanceMode,

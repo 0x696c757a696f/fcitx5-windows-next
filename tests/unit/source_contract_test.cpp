@@ -552,6 +552,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustControlCoreSource.find("theme_palette_resolve_matches_windinput_contract") ==
             std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_resolve_theme_path_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("theme_path_resolve_matches_windinput_style_contract") ==
+            std::string::npos ||
         rustControlCoreSource.find("native_package_architecture_matches_target_contract") ==
             std::string::npos ||
         rustControlCoreSource.find("package_architecture_match_matches_cpp_contract") ==
@@ -1633,12 +1637,18 @@ int main(int argc, char** argv) {
         configSource.find("parseTheme(") != std::string::npos ||
         configSource.find("resolveTheme(") != std::string::npos ||
         configSource.find("parseD2DColor") == std::string::npos ||
-        configSource.find("resources\" / L\"themes\" / L\"default\"") == std::string::npos ||
+        configSource.find("resolveThemePath") == std::string::npos ||
+        configSource.find("resources\" / L\"themes\" / L\"default\"") != std::string::npos ||
+        configSource.find("dataRoot / L\"themes\"") != std::string::npos ||
         cmakeSource.find("fcitx5::config") == std::string::npos ||
         candidateUiSource.find("fcitx::windows::ui::renderSegments") == std::string::npos ||
         candidateUiSource.find("resolveThemeConfig") == std::string::npos ||
+        candidateUiSource.find("resolveThemePath") == std::string::npos ||
         candidateUiSource.find("parseTheme(") != std::string::npos ||
         candidateUiSource.find("resolveTheme(") != std::string::npos ||
+        candidateUiSource.find("resources\" / L\"themes\" / L\"default\"") !=
+            std::string::npos ||
+        candidateUiSource.find("data / L\"themes\"") != std::string::npos ||
         candidateUiSource.find("kDrawTextOptions") == std::string::npos ||
         candidateUiSource.find("0x4U") == std::string::npos ||
         candidateLayoutSource.find("fcitx5_candidate_render_segments") == std::string::npos ||

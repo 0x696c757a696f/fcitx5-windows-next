@@ -767,18 +767,12 @@ fcitx::windows::config::Config loadVisualConfig(bool safeMode) {
                       (mode == AppearanceMode::system && systemUsesDarkAppearance());
     const std::string themeId =
         safeMode ? "builtin:default" : user.theme.value_or("builtin:default");
-    std::filesystem::path themePath;
-    if (themeId == "builtin:default") {
-        themePath = executableDirectory() / L"resources" / L"themes" / L"default" / L"theme.toml";
-    } else if (!data.empty()) {
-        std::wstring wideId;
-        if (utf8ToWide(themeId, wideId))
-            themePath = data / L"themes" / wideId / L"theme.toml";
-    }
+    const bool builtin = themeId == "builtin:default";
+    const std::filesystem::path themePath =
+        resolveThemePath(executableDirectory(), data, themeId, builtin);
     if (!themePath.empty()) {
         if (const auto text = readBoundedFile(themePath, 512U * 1024U)) {
             Config themeConfig;
-            const bool builtin = themeId == "builtin:default";
             if (resolveThemeConfig(*text, themeId, builtin, dark, themeConfig, error)) {
                 return mergeConfig(defaults, mergeConfig(themeConfig, user));
             }
