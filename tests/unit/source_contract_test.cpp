@@ -223,6 +223,10 @@ int main(int argc, char** argv) {
     const auto trayIconSource = read_text(sourceRoot / "src/launcher/tray_icon.cpp");
     const auto trayIconHeader = read_text(sourceRoot / "src/launcher/tray_icon.h");
     const auto rustLauncherCoreSource = read_text(sourceRoot / "rust/launcher-core/src/lib.rs");
+    if (launcherSource.find("GetCurrentProcessId") != std::string::npos ||
+        launcherSource.find("fcitx5_windows_common_current_process_id") == std::string::npos) {
+        return fail("LAUNCHER-UI-PARENT-PID-RUST: Launcher UI parent process id must be Rust-owned");
+    }
     const auto jobMarker = launcherSource.find("HANDLE job = CreateJobObjectW");
     const auto jobLimitMarker = launcherSource.find("SetInformationJobObject", jobMarker);
     const auto firstUiLaunch = launcherSource.find("launchUi(uiPath", jobMarker);

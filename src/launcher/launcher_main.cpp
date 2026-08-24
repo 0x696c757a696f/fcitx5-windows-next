@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
+
 namespace {
 
 using namespace fcitx::windows;
@@ -211,8 +213,8 @@ bool launchEngine(const std::wstring& enginePath, const std::wstring& readyEvent
 
 bool launchUi(const std::wstring& uiPath, bool safeMode, HANDLE job, UiProcess& output) {
     const std::wstring command =
-        uiCommandLine(uiPath, GetCurrentProcessId(), platform::currentRuntimeGeneration(),
-                      safeMode);
+        uiCommandLine(uiPath, fcitx5_windows_common_current_process_id(),
+                      platform::currentRuntimeGeneration(), safeMode);
     if (command.empty())
         return false;
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
