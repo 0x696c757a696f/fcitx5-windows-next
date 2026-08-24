@@ -204,6 +204,31 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_end_result(
 mod capi_tests;
 
 // ---------------------------------------------------------------------------
+// E4: engine-process session epoch
+// ---------------------------------------------------------------------------
+
+/// Generates the engine-process session epoch (100ns since 1601-01-01 UTC,
+/// mirroring `GetSystemTimeAsFileTime`). Called once at engine startup.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_engine_core_generate_engine_epoch() -> u64 {
+    panic::catch_unwind(crate::generate_engine_epoch).unwrap_or(0)
+}
+
+/// Validates a frame's engine epoch against the process epoch. Returns 1 when
+/// they match, 0 otherwise.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_engine_core_validate_engine_epoch(
+    frame_epoch: u64,
+    process_epoch: u64,
+) -> i32 {
+    if crate::validate_engine_epoch(frame_epoch, process_epoch) {
+        1
+    } else {
+        0
+    }
+}
+
+// ---------------------------------------------------------------------------
 // E3 event-shape consolidation: unified handle_key_event
 // ---------------------------------------------------------------------------
 

@@ -53,6 +53,7 @@ Windows host
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
 | Engine E2 `engine-core` ledger | `CUTOVER-GREEN` (Rust authoritative; ledger + carets/popupAllowed/selectedOverride/inputMethodOverridden cut over, C++ maps deleted) | Deferred: `pendingStates` derived cache (E5 snapshot DTO), `EngineEpoch`/`Generation` (E4 IPC scope); then E3 Event→Action |
 | Engine E3 Event→Action | `CUTOVER-GREEN` (unified `handle_key_event` entry; 4 product decisions Rust-owned, `processKey` executes the returned decision) | E4: IPC transport/framing/session/deadline + `EngineEpoch`/`Generation` to Rust; `pendingStates` moves with E5 snapshot DTO |
+| Engine E4 IPC scope | `STARTED` (E4-1: `EngineEpoch` generate/validate Rust-owned in engine-core; `fcitx_engine_main.cpp` uses them) | Move IPC transport/framing/session/deadline policy to Rust; `Generation` stays release-platform scope; `pendingStates` moves with E5 snapshot DTO |
 
 ## Current Red Lights
 

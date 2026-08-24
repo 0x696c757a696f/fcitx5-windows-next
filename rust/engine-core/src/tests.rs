@@ -1175,3 +1175,31 @@ mod handle_tests {
         assert_eq!(decision.im_switch, Some(ImSwitchAction::Toggle));
     }
 }
+
+// ---------------------------------------------------------------------------
+// E4: engine epoch
+// ---------------------------------------------------------------------------
+
+use super::{generate_engine_epoch, validate_engine_epoch};
+
+#[test]
+fn engine_epoch_generation_is_plausible_filetime() {
+    let epoch = generate_engine_epoch();
+    // FILETIME for 2026 is ~1.34e17 (100ns since 1601); assert magnitude.
+    assert!(epoch > 130_000_000_000_000_000, "epoch too small: {epoch}");
+    assert!(epoch < 140_000_000_000_000_000, "epoch too large: {epoch}");
+}
+
+#[test]
+fn engine_epoch_generation_monotonic_enough() {
+    let first = generate_engine_epoch();
+    let second = generate_engine_epoch();
+    assert!(second >= first);
+}
+
+#[test]
+fn engine_epoch_validation_matches() {
+    assert!(validate_engine_epoch(42, 42));
+    assert!(!validate_engine_epoch(41, 42));
+    assert!(!validate_engine_epoch(42, 43));
+}

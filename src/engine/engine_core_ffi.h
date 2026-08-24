@@ -228,4 +228,11 @@ struct FcitxEngineKeyDecisionC {
 int fcitx5_engine_core_handle_key_event(const FcitxEngineKeyEventC* event,
                                         FcitxEngineKeyDecisionC* outDecision);
 
+// E4: engine-process session epoch. `generate_engine_epoch` returns a
+// 100ns-since-1601 value (mirrors GetSystemTimeAsFileTime); the engine calls
+// it once at startup and `validate_engine_epoch` rejects mismatched frames.
+std::uint64_t fcitx5_engine_core_generate_engine_epoch(void);
+int fcitx5_engine_core_validate_engine_epoch(std::uint64_t frameEpoch,
+                                             std::uint64_t processEpoch);
+
 } // extern "C"

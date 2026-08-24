@@ -608,3 +608,38 @@ mod tests;
 
 pub mod capi;
 pub mod navigation;
+
+// ---------------------------------------------------------------------------
+// E4: engine-process session epoch (start)
+//
+// The engine-process handshake epoch (`EngineEpoch`) is generated and
+// validated by Rust; the C++ process shell only holds the value and compares
+// it per frame. Generation (`FCITX5_RELEASE_GENERATION`) is a release
+// platform attribute that stays in `windows-common-core`/platform scope.
+// ---------------------------------------------------------------------------
+
+/// Seconds between 1601-01-01 (FILETIME epoch) and 1970-01-01 (Unix epoch).
+const FILETIME_UNIX_EPOCH_DELTA_SECONDS: u64 = 11_644_473_600;
+
+/// Generates the engine-process session epoch.
+///
+/// Mirrors the C++ `GetSystemTimeAsFileTime`-derived value: a
+/// 100-nanosecond-interval count since 1601-01-01 UTC. The engine process
+/// generates this once at startup and rejects frames whose metadata epoch
+/// does not match.
+pub fn generate_engine_epoch() -> u64 {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    duration
+        .as_secs()
+        .saturating_add(FILETIME_UNIX_EPOCH_DELTA_SECONDS)
+        .saturating_mul(10_000_000)
+        .saturating_add(u64::from(duration.subsec_nanos()) / 100)
+}
+
+/// Validates a frame's engine epoch against the process epoch (mirrors
+/// `frame.metadata.engineEpoch != engineEpoch` rejection).
+pub fn validate_engine_epoch(frame_epoch: u64, process_epoch: u64) -> bool {
+    frame_epoch == process_epoch
+}

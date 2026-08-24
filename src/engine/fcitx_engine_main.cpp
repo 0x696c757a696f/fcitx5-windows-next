@@ -1,5 +1,6 @@
 #include "fcitx_dispatcher.h"
 #include "fcitx_runtime.h"
+#include "engine_core_ffi.h"
 #include "peer_verification.h"
 #include "pipe_security.h"
 #include "presentation_publisher.h"
@@ -207,7 +208,7 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
     }
     if (!handshakeComplete)
         return {};
-    if (frame.metadata.engineEpoch != engineEpoch ||
+    if (fcitx5_engine_core_validate_engine_epoch(frame.metadata.engineEpoch, engineEpoch) == 0 ||
         frame.metadata.sessionId != clientIdentity.sessionId) return {};
 
     if (frame.type == protocol::MessageType::keyRequest) {
@@ -307,10 +308,9 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
         (std::filesystem::path(executable).parent_path() / "fcitx5-ui.exe").wstring();
     engine::PresentationPublisher presentation(
         platform::makeLocalEndpointName(identity, L"presentation"), uiExecutable);
-    FILETIME now{};
-    GetSystemTimeAsFileTime(&now);
-    const std::uint64_t engineEpoch =
-        (static_cast<std::uint64_t>(now.dwHighDateTime) << 32U) | now.dwLowDateTime;
+    // E4: the engine-process session epoch is Rust-generated (mirrors
+    // GetSystemTimeAsFileTime); the C++ shell only holds the value.
+    const std::uint64_t engineEpoch = fcitx5_engine_core_generate_engine_epoch();
     std::atomic<std::uint64_t> nextResponseId{1};
     std::atomic<std::uint64_t> nextConnectionId{1};
     std::atomic<bool> readinessSignaled{};
