@@ -114,6 +114,7 @@ const CONTROL_ROOT_ACTION_DIAGNOSTICS_PLAN: u32 = 11;
 const CONTROL_FILE_READ_OK: i32 = 0;
 const CONTROL_FILE_READ_INVALID_FILE: i32 = 1;
 const CONTROL_FILE_READ_IO_ERROR: i32 = 2;
+const CONTROL_FILE_READ_MISSING: i32 = 3;
 const CONTROL_ARCHIVE_CACHE_INVALID: i32 = 1;
 const CONTROL_ARCHIVE_CACHE_STALE_REMOVED: i32 = 2;
 const CONTROL_MAXIMUM_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -540,6 +541,25 @@ fn read_file_bounded(path: PathBuf, maximum: u64) -> Result<Vec<u8>, i32> {
         return Err(CONTROL_FILE_READ_INVALID_FILE);
     }
     Ok(bytes)
+}
+
+fn read_optional_file_bounded(path: PathBuf, maximum: u64) -> Result<Option<Vec<u8>>, i32> {
+    if path.as_os_str().is_empty() {
+        return Err(CONTROL_FILE_READ_INVALID_FILE);
+    }
+    let metadata = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(CONTROL_FILE_READ_INVALID_FILE),
+    };
+    if !metadata.is_file() || metadata.len() > maximum {
+        return Err(CONTROL_FILE_READ_INVALID_FILE);
+    }
+    let bytes = std::fs::read(&path).map_err(|_| CONTROL_FILE_READ_IO_ERROR)?;
+    if bytes.len() as u64 > maximum {
+        return Err(CONTROL_FILE_READ_INVALID_FILE);
+    }
+    Ok(Some(bytes))
 }
 
 fn installed_manifest_path(
@@ -1850,6 +1870,42 @@ pub unsafe extern "C" fn fcitx5_control_read_file_utf16(
 
 /// # Safety
 ///
+/// `path` must remain valid UTF-16 for the duration of the call. `out_ptr` and
+/// `out_len` must point to writable storage. On `CONTROL_FILE_READ_OK`, the
+/// returned buffer must be freed with `fcitx5_control_utf8_free`. Missing files
+/// return `CONTROL_FILE_READ_MISSING` and no buffer.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_read_optional_config_utf16(
+    path: Fcitx5ControlUtf16,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return CONTROL_FILE_READ_IO_ERROR;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(path) = string_from_utf16(path) else {
+        return CONTROL_FILE_READ_INVALID_FILE;
+    };
+    match read_optional_file_bounded(PathBuf::from(path), 256 * 1024) {
+        Ok(Some(bytes)) => {
+            let status = boxed_utf8_result(bytes, out_ptr, out_len);
+            if status == 0 {
+                CONTROL_FILE_READ_OK
+            } else {
+                status
+            }
+        }
+        Ok(None) => CONTROL_FILE_READ_MISSING,
+        Err(status) => status,
+    }
+}
+
+/// # Safety
+///
 /// `package_root` must remain valid UTF-16 for the duration of the call. `id`
 /// and `version` must remain valid UTF-8 for the duration of the call.
 /// `out_ptr` and `out_len` must point to writable storage. On success, the
@@ -2796,6 +2852,51 @@ mod tests {
         };
         assert_eq!(status, CONTROL_FILE_READ_OK);
         assert_eq!(len, 0);
+        unsafe {
+            fcitx5_control_utf8_free(bytes, len);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn optional_config_read_matches_cpp_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-optional-config-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create test root");
+        let config = root.join("config.toml");
+
+        assert_eq!(
+            read_optional_file_bounded(config.clone(), 256 * 1024).expect("missing is ok"),
+            None
+        );
+        std::fs::write(&config, b"format_version = 1\n").expect("write config");
+        assert_eq!(
+            read_optional_file_bounded(config.clone(), 256 * 1024).expect("read optional config"),
+            Some(b"format_version = 1\n".to_vec())
+        );
+        assert_eq!(
+            read_optional_file_bounded(config.clone(), 4).expect_err("too large should fail"),
+            CONTROL_FILE_READ_INVALID_FILE
+        );
+
+        let wide_path = config.as_os_str().encode_wide().collect::<Vec<_>>();
+        let mut bytes: *mut u8 = std::ptr::null_mut();
+        let mut len = 0;
+        let status = unsafe {
+            fcitx5_control_read_optional_config_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: wide_path.as_ptr(),
+                    len: wide_path.len(),
+                },
+                &mut bytes,
+                &mut len,
+            )
+        };
+        assert_eq!(status, CONTROL_FILE_READ_OK);
+        assert_eq!(len, b"format_version = 1\n".len());
         unsafe {
             fcitx5_control_utf8_free(bytes, len);
         }

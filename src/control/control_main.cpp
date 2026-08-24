@@ -187,6 +187,8 @@ int fcitx5_control_atomic_write_utf8_file_utf16(Fcitx5ControlUtf16 destination,
                                                 Fcitx5ControlUtf8 content);
 int fcitx5_control_read_file_utf16(Fcitx5ControlUtf16 path, std::uint64_t maximum,
                                    char** out_ptr, std::size_t* out_len);
+int fcitx5_control_read_optional_config_utf16(Fcitx5ControlUtf16 path, char** out_ptr,
+                                              std::size_t* out_len);
 int fcitx5_control_installed_manifest_bytes_utf16(Fcitx5ControlUtf16 package_root,
                                                   Fcitx5ControlUtf8 id,
                                                   Fcitx5ControlUtf8 version, char** out_ptr,
@@ -451,6 +453,7 @@ constexpr std::uint32_t kRootActionRestartEngine = 9;
 constexpr std::uint32_t kRootActionShutdown = 10;
 constexpr std::uint32_t kRootActionDiagnosticsPlan = 11;
 constexpr int kControlFileReadInvalidFile = 1;
+constexpr int kControlFileReadMissing = 3;
 constexpr int kControlArchiveCacheInvalid = 1;
 constexpr std::uint32_t kConfigActionValidate = 1;
 constexpr std::uint32_t kConfigActionApply = 2;
@@ -632,6 +635,26 @@ bool readUtf8Bounded(const fs::path& path, std::size_t maximum, std::string& tex
 
 bool readUtf8(const fs::path& path, std::string& text) {
     return readUtf8Bounded(path, 256U * 1024U, text);
+}
+
+enum class OptionalConfigRead {
+    present,
+    missing,
+    error,
+};
+
+OptionalConfigRead readOptionalConfig(const fs::path& path, std::string& text) {
+    const std::wstring pathText = path.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_read_optional_config_utf16(
+        {pathText.data(), pathText.size()}, &bytes, &length);
+    if (status == kControlFileReadMissing)
+        return OptionalConfigRead::missing;
+    if (status != 0)
+        return OptionalConfigRead::error;
+    text = takeRustUtf8(bytes, length);
+    return OptionalConfigRead::present;
 }
 
 std::vector<std::byte> readBinary(const fs::path& path, std::size_t maximum) {
@@ -1809,7 +1832,7 @@ int wmain(int argc, wchar_t** argv) {
     if (controlConfigAction == kConfigActionGetPresentation) {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string text;
-        if (fs::exists(configPath) && !readUtf8(configPath, text))
+        if (readOptionalConfig(configPath, text) == OptionalConfigRead::error)
             return 5;
         ParseError error;
         Config defaults;
@@ -1880,7 +1903,7 @@ int wmain(int argc, wchar_t** argv) {
     if (controlConfigAction == kConfigActionSetPresentation) {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string source = fcitx::windows::config::defaultConfigToml();
-        if (fs::exists(configPath) && !readUtf8(configPath, source))
+        if (readOptionalConfig(configPath, source) == OptionalConfigRead::error)
             return 5;
         std::string updated;
         ParseError error;
@@ -1906,10 +1929,14 @@ int wmain(int argc, wchar_t** argv) {
             launcherCommand(fcitx::windows::protocol::LauncherCommand::status, response);
         const fs::path configPath = dataRoot / L"config.toml";
         bool configValid = true;
-        if (fs::exists(configPath)) {
-            std::string text;
-            ParseError error;
-            configValid = validateConfig(configPath, text, error);
+        std::string text;
+        ParseError error;
+        const auto configRead = readOptionalConfig(configPath, text);
+        if (configRead == OptionalConfigRead::error)
+            configValid = false;
+        else if (configRead == OptionalConfigRead::present) {
+            Config parsed;
+            configValid = fcitx::windows::config::parseConfig(text, parsed, error);
         }
         const auto tsfGuard = fcitx::windows::tsf::activationGuardStatus(dataRoot);
         const std::string dataRootUtf8 = narrow(dataRoot.generic_wstring());
@@ -1953,7 +1980,7 @@ int wmain(int argc, wchar_t** argv) {
     if (controlConfigAction == kConfigActionResetPresentation) {
         const fs::path configPath = dataRoot / L"config.toml";
         std::string source = "format_version = 1\n";
-        if (fs::exists(configPath) && !readUtf8(configPath, source))
+        if (readOptionalConfig(configPath, source) == OptionalConfigRead::error)
             return 5;
         std::string updated;
         ParseError error;
