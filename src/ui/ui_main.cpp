@@ -7,7 +7,6 @@
 
 #include <fcitx5_windows/release_identity.h>
 
-#include <ShlObj.h>
 #include <Shellapi.h>
 #include <Windows.h>
 #include <d2d1.h>
@@ -662,12 +661,11 @@ bool systemUsesDarkAppearance() noexcept {
 }
 
 std::filesystem::path executableDirectory() {
-    std::wstring path(32'768, L'\0');
-    const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (size == 0 || size >= path.size())
+    fcitx::windows::platform::RuntimeIdentity identity;
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
+        identity.executablePath.empty())
         return {};
-    path.resize(size);
-    return std::filesystem::path(path).parent_path();
+    return std::filesystem::path(identity.executablePath).parent_path();
 }
 
 bool parseUnsigned(std::wstring_view text, std::uint64_t& value) noexcept {
@@ -707,23 +705,17 @@ int runCandidateSelectionTest(int argumentCount, wchar_t** arguments) {
 }
 
 std::filesystem::path localDataDirectory() {
-    std::wstring modulePath(32'768, L'\0');
-    const DWORD size =
-        GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
-    if (size > 0 && size < modulePath.size()) {
-        modulePath.resize(size);
-        if (const auto portableData =
-                fcitx::windows::platform::portableDataRootForModule(modulePath);
-            !portableData.empty()) {
-            return portableData;
-        }
-    }
-    PWSTR path = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &path)))
+    fcitx::windows::platform::RuntimeIdentity identity;
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
+        identity.executablePath.empty())
         return {};
-    std::filesystem::path result(path);
-    CoTaskMemFree(path);
-    return result / fcitx::windows::kReleaseIdentity.data_directory;
+    if (const auto portableData =
+            fcitx::windows::platform::portableDataRootForModule(identity.executablePath);
+        !portableData.empty()) {
+        return portableData;
+    }
+    return fcitx::windows::platform::defaultDataRootForModule(
+        identity.executablePath, fcitx::windows::kReleaseIdentity.data_directory);
 }
 
 fcitx::windows::config::Config loadVisualConfig(bool safeMode) {
@@ -785,14 +777,12 @@ class CandidateWindow final {
         interactionTest_ = interactionTest;
         if (!interactionTest_) {
             fcitx::windows::platform::RuntimeIdentity identity;
-            std::wstring executable(32'768, L'\0');
-            const DWORD executableSize = GetModuleFileNameW(
-                nullptr, executable.data(), static_cast<DWORD>(executable.size()));
             if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
-                executableSize == 0 || executableSize >= executable.size()) return false;
-            executable.resize(executableSize);
+                identity.executablePath.empty()) return false;
             const auto engine =
-                (std::filesystem::path(executable).parent_path() / L"fcitx5-engine.exe").wstring();
+                (std::filesystem::path(identity.executablePath).parent_path() /
+                 L"fcitx5-engine.exe")
+                    .wstring();
             candidateClient_ = std::make_unique<fcitx::windows::ipc::PipeClient>(
                 fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
                 fcitx::windows::ipc::PeerPolicy::exact(engine));
@@ -2336,14 +2326,11 @@ void servePresentation(HWND window, bool testOnce) {
     if (!platform::queryCurrentIdentity(identity) ||
         !platform::PipeSecurity::create(identity, security))
         return;
-    std::wstring executable(32'768, L'\0');
-    const DWORD size =
-        GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
-    if (size == 0 || size >= executable.size())
+    if (identity.executablePath.empty())
         return;
-    executable.resize(size);
     const auto engine =
-        (std::filesystem::path(executable).parent_path() / "fcitx5-engine.exe").wstring();
+        (std::filesystem::path(identity.executablePath).parent_path() / "fcitx5-engine.exe")
+            .wstring();
     const auto pipeName = platform::makeLocalEndpointName(identity, L"presentation");
     for (;;) {
         HANDLE pipe = CreateNamedPipeW(

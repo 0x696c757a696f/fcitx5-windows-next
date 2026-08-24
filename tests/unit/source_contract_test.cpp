@@ -225,6 +225,16 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CANDIDATE-UI-DARK-MODE-RUST: Candidate UI dark mode policy must be Rust-owned");
     }
+    if (uiSource.find("GetModuleFileNameW") != std::string::npos ||
+        uiSource.find("SHGetKnownFolderPath") != std::string::npos ||
+        uiSource.find("CoTaskMemFree") != std::string::npos ||
+        uiSource.find("FOLDERID_LocalAppData") != std::string::npos ||
+        uiSource.find("#include <ShlObj.h>") != std::string::npos ||
+        uiSource.find("queryCurrentIdentity(identity)") == std::string::npos ||
+        uiSource.find("portableDataRootForModule") == std::string::npos ||
+        uiSource.find("defaultDataRootForModule") == std::string::npos) {
+        return fail("CANDIDATE-UI-RUNTIME-PATHS-RUST: Candidate UI runtime paths must be Rust-owned");
+    }
     const auto launcherSource = read_text(sourceRoot / "src/launcher/launcher_main.cpp");
     const auto trayIconSource = read_text(sourceRoot / "src/launcher/tray_icon.cpp");
     const auto trayIconHeader = read_text(sourceRoot / "src/launcher/tray_icon.h");
