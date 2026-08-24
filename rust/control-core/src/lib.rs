@@ -1442,6 +1442,17 @@ fn package_update_available(
         && installed_version != available_version
 }
 
+fn package_state_satisfies_dependency(state: &[u8]) -> bool {
+    !matches!(
+        state,
+        b"disabled" | b"pending_remove" | b"broken" | b"quarantined"
+    )
+}
+
+fn package_state_keeps_installed_version(state: &[u8]) -> bool {
+    state != b"pending_remove"
+}
+
 fn package_config_surface_kinds(
     package_type: u32,
     permissions: &[Fcitx5ControlUtf8],
@@ -2832,6 +2843,28 @@ pub unsafe extern "C" fn fcitx5_control_package_update_available_utf8(
 
 /// # Safety
 ///
+/// `state` must remain valid UTF-8 for the duration of the call when its
+/// pointer is non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_state_satisfies_dependency_utf8(
+    state: Fcitx5ControlUtf8,
+) -> u8 {
+    package_state_satisfies_dependency(utf8_slice(state).unwrap_or(&[])) as u8
+}
+
+/// # Safety
+///
+/// `state` must remain valid UTF-8 for the duration of the call when its
+/// pointer is non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_state_keeps_installed_version_utf8(
+    state: Fcitx5ControlUtf8,
+) -> u8 {
+    package_state_keeps_installed_version(utf8_slice(state).unwrap_or(&[])) as u8
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -3892,6 +3925,51 @@ mod tests {
         assert_eq!(
             unsafe { fcitx5_control_package_update_available_utf8(0, installed, available) },
             0
+        );
+    }
+
+    #[test]
+    fn package_lifecycle_state_policy_matches_cpp_contract() {
+        for state in [
+            b"installed".as_slice(),
+            b"enabled".as_slice(),
+            b"".as_slice(),
+        ] {
+            assert!(package_state_satisfies_dependency(state));
+            assert!(package_state_keeps_installed_version(state));
+        }
+        for state in [
+            b"disabled".as_slice(),
+            b"pending_remove".as_slice(),
+            b"broken".as_slice(),
+            b"quarantined".as_slice(),
+        ] {
+            assert!(!package_state_satisfies_dependency(state));
+        }
+        assert!(package_state_keeps_installed_version(b"disabled"));
+        assert!(package_state_keeps_installed_version(b"broken"));
+        assert!(package_state_keeps_installed_version(b"quarantined"));
+        assert!(!package_state_keeps_installed_version(b"pending_remove"));
+
+        let disabled = Fcitx5ControlUtf8 {
+            ptr: b"disabled".as_ptr(),
+            len: 8,
+        };
+        let installed = Fcitx5ControlUtf8 {
+            ptr: b"installed".as_ptr(),
+            len: 9,
+        };
+        assert_eq!(
+            unsafe { fcitx5_control_package_state_satisfies_dependency_utf8(disabled) },
+            0
+        );
+        assert_eq!(
+            unsafe { fcitx5_control_package_state_satisfies_dependency_utf8(installed) },
+            1
+        );
+        assert_eq!(
+            unsafe { fcitx5_control_package_state_keeps_installed_version_utf8(disabled) },
+            1
         );
     }
 

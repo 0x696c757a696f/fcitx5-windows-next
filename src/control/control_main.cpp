@@ -276,6 +276,8 @@ Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_ty
 std::uint8_t fcitx5_control_package_update_available_utf8(
     std::uint8_t installed_present, Fcitx5ControlUtf8 installed_version,
     Fcitx5ControlUtf8 available_version);
+std::uint8_t fcitx5_control_package_state_satisfies_dependency_utf8(Fcitx5ControlUtf8 state);
+std::uint8_t fcitx5_control_package_state_keeps_installed_version_utf8(Fcitx5ControlUtf8 state);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -951,6 +953,14 @@ bool packageUpdateAvailable(bool installedPresent, std::string_view installedVer
                utf8View(installedVersion), utf8View(availableVersion)) != 0;
 }
 
+bool packageStateSatisfiesDependency(std::string_view state) {
+    return fcitx5_control_package_state_satisfies_dependency_utf8(utf8View(state)) != 0;
+}
+
+bool packageStateKeepsInstalledVersion(std::string_view state) {
+    return fcitx5_control_package_state_keeps_installed_version_utf8(utf8View(state)) != 0;
+}
+
 std::string jsonDependencies(std::span<const fcitx::package::Dependency> dependencies) {
     std::vector<Fcitx5ControlPackageDependency> views;
     views.reserve(dependencies.size());
@@ -1365,8 +1375,7 @@ void installRepositoryPackage(const fs::path& dataRoot,
         const auto installed =
             std::ranges::find_if(lock, [&](const fcitx::package::LockEntry& item) {
                 return item.id == dependency.id && item.version == dependency.version &&
-                       item.state != "disabled" && item.state != "pending_remove" &&
-                       item.state != "broken" && item.state != "quarantined";
+                       packageStateSatisfiesDependency(item.state);
             });
         if (installed == lock.end()) {
             const auto* dependencyEntry = fcitx::package::find_repository_package(
@@ -1382,7 +1391,7 @@ void installRepositoryPackage(const fs::path& dataRoot,
     const auto current = fcitx::package::read_lockfile(packageRoot);
     const auto same = std::ranges::find_if(current, [&](const fcitx::package::LockEntry& item) {
         return item.id == entry->id && item.version == entry->version &&
-               item.state != "pending_remove";
+               packageStateKeepsInstalledVersion(item.state);
     });
     if (same != current.end())
         return;
