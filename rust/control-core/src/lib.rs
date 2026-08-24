@@ -124,6 +124,11 @@ const CONTROL_CONFIG_ACTION_RESET_CONFIG: u32 = 3;
 const CONTROL_CONFIG_ACTION_RESET_PRESENTATION: u32 = 4;
 const CONTROL_CONFIG_ACTION_GET_PRESENTATION: u32 = 5;
 const CONTROL_CONFIG_ACTION_SET_PRESENTATION: u32 = 6;
+const CONTROL_PACKAGE_TYPE_CORE: u32 = 0;
+const CONTROL_PACKAGE_TYPE_ADDON: u32 = 1;
+const CONTROL_PACKAGE_TYPE_INPUT_METHOD_DATA: u32 = 2;
+const CONTROL_PACKAGE_TYPE_THEME: u32 = 3;
+const CONTROL_PACKAGE_TYPE_TRANSLATION: u32 = 4;
 const CONTROL_ENGINE_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_ENGINE_ACTION_GET_INPUT_METHODS: u32 = 1;
 const CONTROL_ENGINE_ACTION_SET_INPUT_METHOD: u32 = 2;
@@ -1382,6 +1387,69 @@ fn config_surfaces_json(owner: Fcitx5ControlUtf8, kinds: &[Fcitx5ControlUtf8]) -
     Some(output)
 }
 
+fn config_surface_kind_bytes(kind: &str) -> Fcitx5ControlUtf8 {
+    Fcitx5ControlUtf8 {
+        ptr: kind.as_ptr(),
+        len: kind.len(),
+    }
+}
+
+fn package_config_surface_kinds(
+    package_type: u32,
+    permissions: &[Fcitx5ControlUtf8],
+    file_paths: &[Fcitx5ControlUtf8],
+) -> Option<Vec<&'static str>> {
+    let mut surfaces = std::collections::BTreeSet::new();
+    match package_type {
+        CONTROL_PACKAGE_TYPE_THEME => {
+            surfaces.insert("theme");
+        }
+        CONTROL_PACKAGE_TYPE_INPUT_METHOD_DATA => {
+            surfaces.insert("input-method-data");
+        }
+        CONTROL_PACKAGE_TYPE_ADDON => {
+            surfaces.insert("fcitx-addon");
+        }
+        CONTROL_PACKAGE_TYPE_CORE | CONTROL_PACKAGE_TYPE_TRANSLATION => {}
+        _ => return None,
+    }
+    for permission in permissions {
+        if utf8_slice(*permission)? == b"input-data" {
+            surfaces.insert("input-method-data");
+        }
+    }
+    for path in file_paths {
+        let path = utf8_slice(*path)?;
+        if path.starts_with(b"share/fcitx5/addon/") && path.ends_with(b".conf") {
+            surfaces.insert("fcitx-addon-config");
+        }
+        if path.starts_with(b"lib/fcitx5/") && path.ends_with(b".dll") {
+            surfaces.insert("fcitx-addon");
+        }
+        if path.starts_with(b"share/rime-data/") {
+            surfaces.insert("rime-data");
+        }
+        if path.starts_with(b"themes/") || path.starts_with(b"share/themes/") {
+            surfaces.insert("theme");
+        }
+    }
+    Some(surfaces.into_iter().collect())
+}
+
+fn package_config_surface_json(
+    owner: Fcitx5ControlUtf8,
+    package_type: u32,
+    permissions: &[Fcitx5ControlUtf8],
+    file_paths: &[Fcitx5ControlUtf8],
+) -> Option<Vec<u8>> {
+    let kinds = package_config_surface_kinds(package_type, permissions, file_paths)?;
+    let kind_views = kinds
+        .iter()
+        .map(|kind| config_surface_kind_bytes(kind))
+        .collect::<Vec<_>>();
+    config_surfaces_json(owner, &kind_views)
+}
+
 fn package_detail_json(detail: &Fcitx5ControlPackageDetail) -> Option<Vec<u8>> {
     let mut output = Vec::new();
     output.extend_from_slice(br#"{"format_version":1,"repository_available":"#);
@@ -2481,6 +2549,45 @@ pub unsafe extern "C" fn fcitx5_control_config_surfaces_json_utf8(
 
 /// # Safety
 ///
+/// `permissions` and `file_paths` must either be null with a zero count or
+/// point to the corresponding count of valid UTF-8 slices. `owner` and all
+/// slices must remain valid for the duration of the call. `out_ptr` and
+/// `out_len` must point to writable storage. Any returned buffer must be freed
+/// with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_config_surface_json_utf8(
+    owner: Fcitx5ControlUtf8,
+    package_type: u32,
+    permissions: *const Fcitx5ControlUtf8,
+    permission_count: usize,
+    file_paths: *const Fcitx5ControlUtf8,
+    file_path_count: usize,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if (permissions.is_null() && permission_count != 0)
+        || (file_paths.is_null() && file_path_count != 0)
+    {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    }
+    let permissions = if permission_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(permissions, permission_count) }
+    };
+    let file_paths = if file_path_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(file_paths, file_path_count) }
+    };
+    match package_config_surface_json(owner, package_type, permissions, file_paths) {
+        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -3342,6 +3449,58 @@ mod tests {
         assert_eq!(
             text,
             r#"[{"kind":"fcitx-addon","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"},{"kind":"rime-data","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"}]"#
+        );
+    }
+
+    #[test]
+    fn package_config_surface_policy_matches_cpp_contract() {
+        let owner = Fcitx5ControlUtf8 {
+            ptr: b"fcitx5-rime".as_ptr(),
+            len: 11,
+        };
+        let permissions = [Fcitx5ControlUtf8 {
+            ptr: b"input-data".as_ptr(),
+            len: 10,
+        }];
+        let file_paths = [
+            Fcitx5ControlUtf8 {
+                ptr: b"share/fcitx5/addon/rime.conf".as_ptr(),
+                len: 28,
+            },
+            Fcitx5ControlUtf8 {
+                ptr: b"lib/fcitx5/rime.dll".as_ptr(),
+                len: 19,
+            },
+            Fcitx5ControlUtf8 {
+                ptr: b"share/rime-data/default.yaml".as_ptr(),
+                len: 28,
+            },
+            Fcitx5ControlUtf8 {
+                ptr: b"themes/rime/theme.toml".as_ptr(),
+                len: 22,
+            },
+        ];
+        let json = package_config_surface_json(
+            owner,
+            CONTROL_PACKAGE_TYPE_ADDON,
+            &permissions,
+            &file_paths,
+        )
+        .expect("package config surface should format");
+        let text = String::from_utf8(json).expect("surface JSON should be UTF-8");
+        assert_eq!(
+            text,
+            r#"[{"kind":"fcitx-addon","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"},{"kind":"fcitx-addon-config","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"},{"kind":"input-method-data","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"},{"kind":"rime-data","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"},{"kind":"theme","owner":"fcitx5-rime","schema":"generic-fcitx-config-v1"}]"#
+        );
+
+        assert_eq!(
+            package_config_surface_kinds(CONTROL_PACKAGE_TYPE_THEME, &[], &[])
+                .expect("theme surfaces"),
+            vec!["theme"]
+        );
+        assert!(
+            package_config_surface_kinds(999, &[], &[]).is_none(),
+            "unknown package types must not produce surfaces"
         );
     }
 

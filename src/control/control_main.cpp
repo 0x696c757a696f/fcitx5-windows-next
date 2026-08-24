@@ -253,6 +253,11 @@ int fcitx5_control_config_surfaces_json_utf8(Fcitx5ControlUtf8 owner,
                                              const Fcitx5ControlUtf8* kinds,
                                              std::size_t kind_count, char** out_ptr,
                                              std::size_t* out_len);
+int fcitx5_control_package_config_surface_json_utf8(
+    Fcitx5ControlUtf8 owner, std::uint32_t package_type,
+    const Fcitx5ControlUtf8* permissions, std::size_t permission_count,
+    const Fcitx5ControlUtf8* file_paths, std::size_t file_path_count, char** out_ptr,
+    std::size_t* out_len);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -881,6 +886,23 @@ std::string typeName(fcitx::package::PackageType type) {
     return "unknown";
 }
 
+std::uint32_t packageTypeValue(fcitx::package::PackageType type) {
+    using fcitx::package::PackageType;
+    switch (type) {
+    case PackageType::core:
+        return 0;
+    case PackageType::addon:
+        return 1;
+    case PackageType::input_method_data:
+        return 2;
+    case PackageType::theme:
+        return 3;
+    case PackageType::translation:
+        return 4;
+    }
+    return 0;
+}
+
 std::string jsonDependencies(std::span<const fcitx::package::Dependency> dependencies) {
     std::vector<Fcitx5ControlPackageDependency> views;
     views.reserve(dependencies.size());
@@ -924,38 +946,23 @@ std::string installedManifestBytes(const fs::path& packageRoot,
 std::string configSurfaceJson(const fcitx::package::Manifest* manifest,
                               fcitx::package::PackageType type,
                               std::string_view packageId) {
-    std::set<std::string> surfaces;
-    if (type == fcitx::package::PackageType::theme)
-        surfaces.emplace("theme");
-    if (type == fcitx::package::PackageType::input_method_data)
-        surfaces.emplace("input-method-data");
-    if (type == fcitx::package::PackageType::addon)
-        surfaces.emplace("fcitx-addon");
+    std::vector<Fcitx5ControlUtf8> permissions;
+    std::vector<Fcitx5ControlUtf8> filePaths;
     if (manifest) {
-        if (std::ranges::find(manifest->permissions, "input-data") !=
-            manifest->permissions.end())
-            surfaces.emplace("input-method-data");
-        for (const auto& file : manifest->files) {
-            if (file.path.starts_with("share/fcitx5/addon/") && file.path.ends_with(".conf"))
-                surfaces.emplace("fcitx-addon-config");
-            if (file.path.starts_with("lib/fcitx5/") && file.path.ends_with(".dll"))
-                surfaces.emplace("fcitx-addon");
-            if (file.path.starts_with("share/rime-data/"))
-                surfaces.emplace("rime-data");
-            if (file.path.starts_with("themes/") || file.path.starts_with("share/themes/"))
-                surfaces.emplace("theme");
-        }
-    }
-    std::vector<Fcitx5ControlUtf8> views;
-    views.reserve(surfaces.size());
-    for (const auto& surface : surfaces) {
-        views.push_back(utf8View(surface));
+        permissions.reserve(manifest->permissions.size());
+        for (const auto& permission : manifest->permissions)
+            permissions.push_back(utf8View(permission));
+        filePaths.reserve(manifest->files.size());
+        for (const auto& file : manifest->files)
+            filePaths.push_back(utf8View(file.path));
     }
     char* bytes = nullptr;
     std::size_t length = 0;
-    const auto* data = views.empty() ? nullptr : views.data();
-    if (fcitx5_control_config_surfaces_json_utf8(utf8View(packageId), data, views.size(), &bytes,
-                                                 &length) != 0)
+    const auto* permissionsData = permissions.empty() ? nullptr : permissions.data();
+    const auto* filePathsData = filePaths.empty() ? nullptr : filePaths.data();
+    if (fcitx5_control_package_config_surface_json_utf8(
+            utf8View(packageId), packageTypeValue(type), permissionsData, permissions.size(),
+            filePathsData, filePaths.size(), &bytes, &length) != 0)
         return {};
     return takeRustUtf8(bytes, length);
 }
