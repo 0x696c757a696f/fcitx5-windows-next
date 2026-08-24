@@ -45,6 +45,18 @@ int main(int argc, char** argv) {
             std::string::npos ||
         engineBoundarySource.find("Fcitx Object Owners") == std::string::npos ||
         engineBoundarySource.find("Rust Product-State Owners") == std::string::npos ||
+        engineBoundarySource.find("Current Engine Call Graph") == std::string::npos ||
+        engineBoundarySource.find("FcitxDispatcher::processKey") == std::string::npos ||
+        engineBoundarySource.find("protocol::decodeFrame") == std::string::npos ||
+        engineBoundarySource.find("Current IPC Schema Freeze") == std::string::npos ||
+        engineBoundarySource.find("Version: `14`") == std::string::npos ||
+        engineBoundarySource.find("candidateSelectRequest") == std::string::npos ||
+        engineBoundarySource.find("Current Engine C ABI") == std::string::npos ||
+        engineBoundarySource.find("There is no Rust Engine Product Core ABI") ==
+            std::string::npos ||
+        engineBoundarySource.find("Current Upstream Fcitx/Addons Patch Inventory") ==
+            std::string::npos ||
+        engineBoundarySource.find("fcitx5-rime-windows-paths.patch") == std::string::npos ||
         engineBoundarySource.find("TEXT_REPLACE_SURROUNDING") == std::string::npos ||
         engineBoundarySource.find("std::string") == std::string::npos ||
         upstreamBoundaryAdr.find("Addon == DLL") == std::string::npos ||

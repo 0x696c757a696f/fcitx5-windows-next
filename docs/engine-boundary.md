@@ -78,6 +78,113 @@ Current `src/engine/fcitx_runtime.cpp` still owns product state maps:
 
 These are migration candidates for Rust Engine Product Core after the call graph and corpus are frozen.
 
+## Current Engine Call Graph
+
+Current `HEAD` still routes the Engine hot path through C++:
+
+```text
+fcitx5-engine.exe
+  -> src/engine/fcitx_engine_main.cpp
+     -> named-pipe frame read
+     -> protocol::decodeFrame / protocol::decode(...)
+     -> handshake and metadata checks
+     -> FcitxDispatcher
+        -> fcitx::EventDispatcher thread
+        -> FcitxRuntime
+           -> EngineInputContext
+           -> keyFromRequest
+           -> context.keyEvent / candidate.select / pending state
+           -> collectResult
+     -> makeStateResponse / makeEngineStatusResponse
+     -> protocol::encode(...)
+```
+
+Current request handlers:
+
+- `helloRequest`: establishes one client handshake and validates process/session identity.
+- `keyRequest`: calls `FcitxDispatcher::processKey`, then publishes a `KeyResponse`.
+- `candidateSelectRequest`: accepts only from the product UI executable, calls `selectCandidate`, publishes updated state, then signals the UI event.
+- `stateRequest`: drains a pending state snapshot for a context when the UI missed an event.
+- `engineStatusRequest`: returns current input-method display metadata.
+
+The dispatcher deadline check is part of the current contract: if queued work reaches the Fcitx event loop after the caller's deadline, it is dropped before touching Fcitx state.
+
+## Current IPC Schema Freeze
+
+The current Engine IPC schema is C++ owned in `protocol/protocol.h` and `protocol/protocol.cpp`.
+
+Frozen frame constants at this baseline:
+
+- Magic: `FCW4`
+- Version: `14`
+- Header size: `64`
+- Hot frame limit: `256 KiB`
+- Control frame limit: `1 MiB`
+- Commit/preedit/surrounding text limit: `16 KiB`
+- Candidate count limit: `128`
+- Candidate field limit: `4096 bytes`
+- Logical key text limit: `64 bytes`
+- Input-method id limit: `64 bytes`
+- Input-method display-name limit: `128 bytes`
+- Locale tag limit: `35 bytes`
+
+Message types currently in the shared protocol:
+
+- `helloRequest`
+- `helloResponse`
+- `keyRequest`
+- `keyResponse`
+- `launcherRequest`
+- `launcherResponse`
+- `candidateSelectRequest`
+- `candidateSelectResponse`
+- `stateRequest`
+- `engineStatusRequest`
+- `engineStatusResponse`
+
+Engine-facing metadata currently carries:
+
+- `requestId`
+- `responseTo`
+- `engineEpoch`
+- `sessionId`
+- `contextId`
+- `compositionId`
+- `revision`
+
+Current key request payload carries virtual key, key flags, scan code, extended-key bit, popup policy, keyboard layout, logical UTF-8 text, input-method id, surrounding text/cursor/anchor, and caret rectangle.
+
+Current key response payload carries handled/commit/preedit/candidates, selected candidate, page/total/visibility/page-size/bulk/end flags, delete-surrounding-text, forward-key, caret rectangle, popup policy, and content locale.
+
+This schema is the compatibility corpus for `E1`. Moving it to Rust must preserve decode rejection behavior, payload budgets, metadata semantics, and fuzz/unit coverage before C++ protocol ownership is deleted.
+
+## Current Engine C ABI
+
+There is no Rust Engine Product Core ABI at this baseline.
+
+Existing Rust ABIs used around the Engine are adjacent, not the Engine core boundary:
+
+- `rust/windows-common-core` backs shared IPC transport, peer verification, deadlines, identity, path, UTF conversion, and response scalar validation used by C++ clients.
+- `rust/candidate-core` backs Candidate model/layout/interaction DTO validation and UI-side state.
+- `rust/launcher-core` backs launcher state/path/tray/command/frame policy.
+
+Therefore the first Engine Rust ABI must be introduced as a new, narrow boundary and must not reuse adjacent crates as a hidden Engine state owner. It must pass only plain event/action DTO data and opaque Rust handles; it must not expose Fcitx object pointers or share allocator-owned C++ containers.
+
+## Current Upstream Fcitx/Addons Patch Inventory
+
+The repository keeps upstream Fcitx/addon changes as an explicit small patch queue under `third_party/patches`:
+
+- `fcitx5-windows-user-data-root.patch`
+- `libime-windows-model-dirs.patch`
+- `fcitx5-chinese-addons-msys2-clang-libcxx.patch`
+- `fcitx5-lua-windows-lua54.patch`
+- `fcitx5-rime-windows-paths.patch`
+- `librime-msys2-clang-windows.patch`
+
+These patches are integration patches for upstream consumption/build behavior. They are not authority to fork Fcitx core semantics, rewrite upstream addons in Windows-private Rust, or bind the full Fcitx C++ object model into Rust.
+
+Any new Fcitx/addon patch must be recorded here with owner, upstream target, reason, and removal/upstreaming condition.
+
 ## Protocol Capability Model
 
 Engine protocol must be versioned and capability-aware. Do not freeze the current Fcitx frontend API as a closed action enum.

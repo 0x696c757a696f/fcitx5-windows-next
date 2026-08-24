@@ -57,4 +57,4 @@ Windows host
 2. Rebase the old task queue against current HEAD as `TODO`, `ALREADY-GREEN`, `PARTIAL`, `MANUAL-PENDING`, or `BLOCKED`.
 3. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
 4. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
-5. Rebase the old task queue against current HEAD as `TODO`, `ALREADY-GREEN`, `PARTIAL`, `MANUAL-PENDING`, or `BLOCKED`.
+5. Converge single TSF profile code paths and keep legacy profile data only as cleanup input.
