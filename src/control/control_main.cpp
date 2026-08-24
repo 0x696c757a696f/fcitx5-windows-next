@@ -173,6 +173,10 @@ struct Fcitx5ControlPackageDetail {
     Fcitx5ControlUtf8 permissionsJson;
     Fcitx5ControlUtf8 configSurfaceJson;
 };
+struct Fcitx5ControlPathResult {
+    int status;
+    std::size_t pathLen;
+};
 int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
                                        Fcitx5ControlUtf16 registry_value,
                                        std::uint8_t* out_enabled);
@@ -192,6 +196,14 @@ int fcitx5_control_repository_cache_cleanup_utf16(Fcitx5ControlUtf16 index,
                                                   Fcitx5ControlUtf16 signature);
 int fcitx5_control_repository_cache_publish_utf16(Fcitx5ControlUtf16 index,
                                                   Fcitx5ControlUtf16 signature);
+Fcitx5ControlPathResult fcitx5_control_package_archive_cache_prepare_utf16(
+    Fcitx5ControlUtf16 data_root, Fcitx5ControlUtf8 id, Fcitx5ControlUtf8 version,
+    std::uint8_t existing_hash_matches, wchar_t* output, std::size_t capacity);
+std::size_t fcitx5_control_package_archive_cache_path_utf16(Fcitx5ControlUtf16 data_root,
+                                                            Fcitx5ControlUtf8 id,
+                                                            Fcitx5ControlUtf8 version,
+                                                            wchar_t* output,
+                                                            std::size_t capacity);
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 int fcitx5_control_usage_text_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
@@ -427,6 +439,7 @@ constexpr std::uint32_t kRootActionRestartEngine = 9;
 constexpr std::uint32_t kRootActionShutdown = 10;
 constexpr std::uint32_t kRootActionDiagnosticsPlan = 11;
 constexpr int kControlFileReadInvalidFile = 1;
+constexpr int kControlArchiveCacheInvalid = 1;
 constexpr std::uint32_t kConfigActionValidate = 1;
 constexpr std::uint32_t kConfigActionApply = 2;
 constexpr std::uint32_t kConfigActionResetConfig = 3;
@@ -690,6 +703,32 @@ bool publishRepositoryCache(const RepositoryFiles& files) {
     std::wstring signatureText;
     return fcitx5_control_repository_cache_publish_utf16(
                pathView(files.index, indexText), pathView(files.signature, signatureText)) == 0;
+}
+
+fs::path packageArchiveCachePath(const fs::path& dataRoot,
+                                 const fcitx::package::RepositoryEntry& entry) {
+    const std::wstring dataRootText = dataRoot.wstring();
+    const std::wstring archive = takeRustWide([&](wchar_t* output, std::size_t capacity) {
+        return fcitx5_control_package_archive_cache_path_utf16(
+            nativeView(dataRootText), utf8View(entry.id), utf8View(entry.version), output,
+            capacity);
+    });
+    return archive.empty() ? fs::path{} : fs::path(archive);
+}
+
+fs::path preparePackageArchiveCache(const fs::path& dataRoot,
+                                    const fcitx::package::RepositoryEntry& entry,
+                                    bool existingHashMatches) {
+    const std::wstring dataRootText = dataRoot.wstring();
+    std::wstring archive(32768, L'\0');
+    const auto result = fcitx5_control_package_archive_cache_prepare_utf16(
+        nativeView(dataRootText), utf8View(entry.id), utf8View(entry.version),
+        existingHashMatches ? 1 : 0, archive.data(), archive.size());
+    if (result.status == kControlArchiveCacheInvalid || result.pathLen == 0 ||
+        result.pathLen > archive.size())
+        throw fcitx::package::PackageError("io_error", "package download cache preparation failed");
+    archive.resize(result.pathLen);
+    return archive;
 }
 
 struct SequenceState {
@@ -1286,18 +1325,17 @@ void installRepositoryPackage(const fs::path& dataRoot,
     if (same != current.end())
         return;
 
-    const auto downloads = dataRoot / L"downloads";
-    fs::create_directories(downloads);
-    const auto archive = downloads / widen(entry->id + "-" + entry->version + ".fcpkg");
+    const auto archive = packageArchiveCachePath(dataRoot, *entry);
+    if (archive.empty())
+        throw fcitx::package::PackageError("io_error", "package download cache preparation failed");
     bool validCache = false;
     if (fs::exists(archive)) {
         validCache =
             fcitx::package::hex_sha256(fcitx::package::sha256_file(archive)) == entry->sha256;
-        if (!validCache) {
-            std::error_code ignored;
-            fs::remove(archive, ignored);
-        }
     }
+    const auto preparedArchive = preparePackageArchiveCache(dataRoot, *entry, validCache);
+    if (preparedArchive != archive)
+        throw fcitx::package::PackageError("io_error", "package download cache preparation failed");
     if (!validCache && !runProcess(executableDirectory() / L"fcitx5-downloader.exe",
                                    {L"--download", widen(entry->download_url), widen(entry->sha256),
                                     archive.wstring()})) {

@@ -114,6 +114,8 @@ const CONTROL_ROOT_ACTION_DIAGNOSTICS_PLAN: u32 = 11;
 const CONTROL_FILE_READ_OK: i32 = 0;
 const CONTROL_FILE_READ_INVALID_FILE: i32 = 1;
 const CONTROL_FILE_READ_IO_ERROR: i32 = 2;
+const CONTROL_ARCHIVE_CACHE_INVALID: i32 = 1;
+const CONTROL_ARCHIVE_CACHE_STALE_REMOVED: i32 = 2;
 const CONTROL_CONFIG_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_CONFIG_ACTION_VALIDATE: u32 = 1;
 const CONTROL_CONFIG_ACTION_APPLY: u32 = 2;
@@ -297,6 +299,12 @@ pub struct Fcitx5ControlPackageDetail {
     dependencies_json: Fcitx5ControlUtf8,
     permissions_json: Fcitx5ControlUtf8,
     config_surface_json: Fcitx5ControlUtf8,
+}
+
+#[repr(C)]
+pub struct Fcitx5ControlPathResult {
+    status: i32,
+    path_len: usize,
 }
 
 #[link(name = "advapi32")]
@@ -594,6 +602,51 @@ fn publish_repository_cache(
     let incoming_signature = repository_cache_incoming_path(signature).ok_or(())?;
     move_replace_write_through(&incoming_signature, signature)?;
     move_replace_write_through(&incoming_index, index)
+}
+
+fn ascii_token_from_utf8(value: Fcitx5ControlUtf8) -> Option<String> {
+    let bytes = utf8_slice(value)?;
+    if bytes.is_empty()
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return None;
+    }
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
+fn package_archive_cache_path(
+    data_root: &std::path::Path,
+    id: &str,
+    version: &str,
+) -> Option<PathBuf> {
+    if data_root.as_os_str().is_empty() || id.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some(
+        data_root
+            .join("downloads")
+            .join(format!("{id}-{version}.fcpkg")),
+    )
+}
+
+fn prepare_package_archive_cache(
+    data_root: &std::path::Path,
+    id: &str,
+    version: &str,
+    existing_hash_matches: bool,
+) -> Result<(PathBuf, bool), i32> {
+    let archive =
+        package_archive_cache_path(data_root, id, version).ok_or(CONTROL_ARCHIVE_CACHE_INVALID)?;
+    let downloads = archive.parent().ok_or(CONTROL_ARCHIVE_CACHE_INVALID)?;
+    std::fs::create_dir_all(downloads).map_err(|_| CONTROL_ARCHIVE_CACHE_INVALID)?;
+    let existed = archive.exists();
+    if existed && !existing_hash_matches {
+        std::fs::remove_file(&archive).map_err(|_| CONTROL_ARCHIVE_CACHE_INVALID)?;
+        return Ok((archive, true));
+    }
+    Ok((archive, false))
 }
 
 fn quote(value: &std::ffi::OsStr) -> OsString {
@@ -1777,6 +1830,91 @@ pub unsafe extern "C" fn fcitx5_control_repository_cache_publish_utf16(
 
 /// # Safety
 ///
+/// `data_root` must remain valid UTF-16 for the duration of the call. `id` and
+/// `version` must remain valid UTF-8 for the duration of the call. `output` may
+/// be null for size queries or writable UTF-16 storage for `capacity` code
+/// units. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_archive_cache_prepare_utf16(
+    data_root: Fcitx5ControlUtf16,
+    id: Fcitx5ControlUtf8,
+    version: Fcitx5ControlUtf8,
+    existing_hash_matches: u8,
+    output: *mut u16,
+    capacity: usize,
+) -> Fcitx5ControlPathResult {
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return Fcitx5ControlPathResult {
+            status: CONTROL_ARCHIVE_CACHE_INVALID,
+            path_len: 0,
+        };
+    };
+    let Some(id) = ascii_token_from_utf8(id) else {
+        return Fcitx5ControlPathResult {
+            status: CONTROL_ARCHIVE_CACHE_INVALID,
+            path_len: 0,
+        };
+    };
+    let Some(version) = ascii_token_from_utf8(version) else {
+        return Fcitx5ControlPathResult {
+            status: CONTROL_ARCHIVE_CACHE_INVALID,
+            path_len: 0,
+        };
+    };
+    let (archive, stale_removed) = match prepare_package_archive_cache(
+        &PathBuf::from(data_root),
+        &id,
+        &version,
+        existing_hash_matches != 0,
+    ) {
+        Ok(value) => value,
+        Err(status) => {
+            return Fcitx5ControlPathResult {
+                status,
+                path_len: 0,
+            };
+        }
+    };
+    let path_len = write_wide_path(&archive, output, capacity);
+    let status = if stale_removed {
+        CONTROL_ARCHIVE_CACHE_STALE_REMOVED
+    } else {
+        0
+    };
+    Fcitx5ControlPathResult { status, path_len }
+}
+
+/// # Safety
+///
+/// `data_root` must remain valid UTF-16 for the duration of the call. `id` and
+/// `version` must remain valid UTF-8 for the duration of the call. `output` may
+/// be null for size queries or writable UTF-16 storage for `capacity` code
+/// units. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_archive_cache_path_utf16(
+    data_root: Fcitx5ControlUtf16,
+    id: Fcitx5ControlUtf8,
+    version: Fcitx5ControlUtf8,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return 0;
+    };
+    let Some(id) = ascii_token_from_utf8(id) else {
+        return 0;
+    };
+    let Some(version) = ascii_token_from_utf8(version) else {
+        return 0;
+    };
+    let Some(path) = package_archive_cache_path(&PathBuf::from(data_root), &id, &version) else {
+        return 0;
+    };
+    write_wide_path(&path, output, capacity)
+}
+
+/// # Safety
+///
 /// `out_ptr` and `out_len` must point to writable storage. The returned pointer
 /// is process-static UTF-8 data and must not be freed by the caller.
 #[no_mangle]
@@ -2498,6 +2636,49 @@ mod tests {
         remove_repository_incoming(&index, &signature).expect("cleanup repository cache");
         assert!(!incoming_index.exists());
         assert!(!incoming_signature.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn package_archive_cache_prepare_matches_cpp_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-package-archive-cache-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let (archive, removed) =
+            prepare_package_archive_cache(&root, "fcitx5-rime", "1.0.0", false)
+                .expect("prepare fresh cache");
+        assert!(!removed);
+        assert_eq!(
+            archive,
+            root.join("downloads").join("fcitx5-rime-1.0.0.fcpkg")
+        );
+        assert!(archive.parent().expect("downloads parent").is_dir());
+
+        std::fs::write(&archive, b"cached").expect("write cached archive");
+        let (same_archive, removed) =
+            prepare_package_archive_cache(&root, "fcitx5-rime", "1.0.0", true)
+                .expect("prepare matching cache");
+        assert_eq!(same_archive, archive);
+        assert!(!removed);
+        assert_eq!(
+            std::fs::read(&archive).expect("cache still exists"),
+            b"cached"
+        );
+
+        let (stale_archive, removed) =
+            prepare_package_archive_cache(&root, "fcitx5-rime", "1.0.0", false)
+                .expect("prepare stale cache");
+        assert_eq!(stale_archive, archive);
+        assert!(removed);
+        assert!(!archive.exists());
+
+        let invalid = Fcitx5ControlUtf8 {
+            ptr: b"..\\bad".as_ptr(),
+            len: 6,
+        };
+        assert!(ascii_token_from_utf8(invalid).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
