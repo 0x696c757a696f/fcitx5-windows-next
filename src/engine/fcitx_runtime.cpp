@@ -277,20 +277,26 @@ class EngineInputContext final : public InputContext {
         return std::exchange(forwardKey_, std::nullopt);
     }
     bool applySurroundingText(const protocol::KeyRequest& request) {
-        if (request.surroundingTextValid) {
+        // E3-3: the surrounding-text action decision is Rust-owned; this
+        // adapter only executes the returned action against Fcitx.
+        FcitxSurroundingTextDecisionC decision{};
+        if (fcitx5_engine_core_decide_surrounding_text(
+                request.surroundingTextValid ? 1 : 0, surroundingTextValid_ ? 1 : 0,
+                &decision) != FCITX_ENGINE_CORE_OK) {
+            surroundingText().invalidate();
+            surroundingTextValid_ = false;
+            return false;
+        }
+        if (decision.action == FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET) {
             surroundingText().setText(request.surroundingTextUtf8,
                                       request.surroundingCursor,
                                       request.surroundingAnchor);
             surroundingTextValid_ = true;
-            return true;
-        }
-        if (surroundingTextValid_) {
+        } else {
             surroundingText().invalidate();
             surroundingTextValid_ = false;
-            return true;
         }
-        surroundingText().invalidate();
-        return false;
+        return decision.update != 0;
     }
 
   private:
@@ -745,21 +751,33 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         context.updateSurroundingText();
     }
     const auto& group = impl_->instance->inputMethodManager().currentGroup();
-    const std::string selected =
-        !request.inputMethodUtf8.empty() &&
-                impl_->instance->inputMethodManager().entry(request.inputMethodUtf8)
-            ? request.inputMethodUtf8
-            : group.defaultInputMethod();
+    // E3-3: the input-method selection decision is Rust-owned; the adapter
+    // flattens the entry/equality facts and executes the returned selection.
+    const std::string& requestIm = request.inputMethodUtf8;
+    const std::string& defaultIm = group.defaultInputMethod();
+    const bool hasRequestIm = !requestIm.empty();
+    const bool requestImValid =
+        hasRequestIm && impl_->instance->inputMethodManager().entry(requestIm) != nullptr;
+    const bool defaultImValid =
+        impl_->instance->inputMethodManager().entry(defaultIm) != nullptr;
+    const std::string& currentIm = impl_->instance->inputMethod(&context);
     int inputMethodOverridden = 0;
     const bool hasOverride =
         fcitx5_engine_core_input_method_overridden(impl_->ledger.get(), &ledgerKey,
                                                    &inputMethodOverridden) != 0;
-    if ((!hasOverride || inputMethodOverridden == 0) && !selected.empty() &&
-        impl_->instance->inputMethodManager().entry(selected) &&
-        impl_->instance->inputMethod(&context) != selected) {
-        (void)impl_->instance->inputMethodEngine(selected);
-        impl_->instance->setCurrentInputMethod(&context, selected, true);
-        impl_->dispatchPendingEvents();
+    int selection = FCITX_ENGINE_CORE_IM_SELECTION_NONE;
+    if (fcitx5_engine_core_decide_input_method_selection(
+            hasRequestIm ? 1 : 0, requestImValid ? 1 : 0, defaultImValid ? 1 : 0,
+            !defaultIm.empty() ? 1 : 0, hasRequestIm && currentIm == requestIm ? 1 : 0,
+            currentIm == defaultIm ? 1 : 0, hasOverride && inputMethodOverridden != 0 ? 1 : 0,
+            &selection) == FCITX_ENGINE_CORE_OK) {
+        if (selection != FCITX_ENGINE_CORE_IM_SELECTION_NONE) {
+            const std::string& target =
+                selection == FCITX_ENGINE_CORE_IM_SELECTION_REQUEST ? requestIm : defaultIm;
+            (void)impl_->instance->inputMethodEngine(target);
+            impl_->instance->setCurrentInputMethod(&context, target, true);
+            impl_->dispatchPendingEvents();
+        }
     }
     KeyEvent event(&context, keyFromRequest(request),
                    (request.keyFlags & protocol::kKeyFlagRelease) != 0);

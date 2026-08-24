@@ -338,6 +338,120 @@ pub fn classify_input_method_switch(
     None
 }
 
+// ---------------------------------------------------------------------------
+// E3-3: surrounding-text and input-method-selection decisions
+// ---------------------------------------------------------------------------
+
+/// Surrounding-text action decided from request validity + current state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurroundingTextAction {
+    Set,
+    Invalidate,
+}
+
+/// Result of the surrounding-text decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurroundingTextDecision {
+    pub action: SurroundingTextAction,
+    /// Whether the caller must call `updateSurroundingText`.
+    pub update: bool,
+}
+
+/// Decides the surrounding-text action, mirroring
+/// `EngineInputContext::applySurroundingText` exactly:
+///
+/// ```cpp
+/// if (request.surroundingTextValid) {
+///     surroundingText().setText(...); surroundingTextValid_ = true; return true;
+/// }
+/// if (surroundingTextValid_) {
+///     surroundingText().invalidate(); surroundingTextValid_ = false; return true;
+/// }
+/// surroundingText().invalidate(); return false;
+/// ```
+pub fn decide_surrounding_text(
+    request_valid: bool,
+    current_valid: bool,
+) -> SurroundingTextDecision {
+    if request_valid {
+        SurroundingTextDecision {
+            action: SurroundingTextAction::Set,
+            update: true,
+        }
+    } else if current_valid {
+        SurroundingTextDecision {
+            action: SurroundingTextAction::Invalidate,
+            update: true,
+        }
+    } else {
+        SurroundingTextDecision {
+            action: SurroundingTextAction::Invalidate,
+            update: false,
+        }
+    }
+}
+
+/// Input-method selection decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputMethodSelection {
+    /// Keep the current input method.
+    NoChange,
+    /// Activate `request.inputMethodUtf8` (it is a valid entry).
+    SelectRequest,
+    /// Activate the group default input method.
+    SelectDefault,
+}
+
+/// Decides whether to switch the per-context input method, mirroring
+/// `FcitxRuntime::processKey`:
+///
+/// ```cpp
+/// const std::string selected =
+///     !request.inputMethodUtf8.empty() && entry(request.inputMethodUtf8)
+///         ? request.inputMethodUtf8 : group.defaultInputMethod();
+/// if ((!overridden) && !selected.empty() && entry(selected) &&
+///     inputMethod(&context) != selected) { switch to selected; }
+/// ```
+///
+/// The C++ adapter passes the string-comparison and `entry()` facts so the
+/// decision stays pure. `overridden` is the ledger input-method-override
+/// marker (a user hotkey switch must survive the next keystroke).
+pub fn decide_input_method_selection(
+    has_request_im: bool,
+    request_im_valid: bool,
+    default_im_valid: bool,
+    default_im_nonempty: bool,
+    current_eq_request: bool,
+    current_eq_default: bool,
+    overridden: bool,
+) -> InputMethodSelection {
+    let use_request = has_request_im && request_im_valid;
+    let selected_valid = if use_request {
+        request_im_valid
+    } else {
+        default_im_valid
+    };
+    let selected_nonempty = if use_request {
+        true
+    } else {
+        default_im_nonempty
+    };
+    let current_eq_selected = if use_request {
+        current_eq_request
+    } else {
+        current_eq_default
+    };
+    if !overridden && selected_nonempty && selected_valid && !current_eq_selected {
+        if use_request {
+            InputMethodSelection::SelectRequest
+        } else {
+            InputMethodSelection::SelectDefault
+        }
+    } else {
+        InputMethodSelection::NoChange
+    }
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

@@ -357,6 +357,41 @@ int runCorpus() {
             "ordinary key must not be consumed");
     }
 
+    // E3-3 Event → Action: surrounding-text and input-method-selection corpus.
+    {
+        FcitxSurroundingTextDecisionC st{};
+        failures += !expect(
+            fcitx5_engine_core_decide_surrounding_text(1, 0, &st) == FCITX_ENGINE_CORE_OK &&
+                st.action == FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET && st.update == 1,
+            "valid request must decide SET with update");
+        failures += !expect(
+            fcitx5_engine_core_decide_surrounding_text(0, 1, &st) == FCITX_ENGINE_CORE_OK &&
+                st.action == FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE &&
+                st.update == 1,
+            "invalid request with valid state must decide INVALIDATE with update");
+        failures += !expect(
+            fcitx5_engine_core_decide_surrounding_text(0, 0, &st) == FCITX_ENGINE_CORE_OK &&
+                st.action == FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE &&
+                st.update == 0,
+            "invalid request with invalid state must decide INVALIDATE without update");
+        int selection = -1;
+        failures += !expect(
+            fcitx5_engine_core_decide_input_method_selection(1, 1, 1, 1, 0, 0, 0, &selection) ==
+                    FCITX_ENGINE_CORE_OK &&
+                selection == FCITX_ENGINE_CORE_IM_SELECTION_REQUEST,
+            "valid request input method must be selected when current differs");
+        failures += !expect(
+            fcitx5_engine_core_decide_input_method_selection(0, 0, 1, 1, 0, 1, 0, &selection) ==
+                    FCITX_ENGINE_CORE_OK &&
+                selection == FCITX_ENGINE_CORE_IM_SELECTION_NONE,
+            "no switch when current already equals the default");
+        failures += !expect(
+            fcitx5_engine_core_decide_input_method_selection(1, 1, 1, 1, 0, 0, 1, &selection) ==
+                    FCITX_ENGINE_CORE_OK &&
+                selection == FCITX_ENGINE_CORE_IM_SELECTION_NONE,
+            "override marker must suppress the input-method switch");
+    }
+
     return failures;
 }
 

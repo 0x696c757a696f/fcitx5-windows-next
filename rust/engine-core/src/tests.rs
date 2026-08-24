@@ -882,3 +882,144 @@ mod navigation_tests {
         assert_eq!(d.action, CandidateAction::None);
     }
 }
+
+// ---------------------------------------------------------------------------
+// E3-3: surrounding-text and input-method-selection decision corpus
+// ---------------------------------------------------------------------------
+
+use super::{
+    decide_input_method_selection, decide_surrounding_text, InputMethodSelection,
+    SurroundingTextAction, SurroundingTextDecision,
+};
+
+#[test]
+fn surrounding_text_valid_sets() {
+    assert_eq!(
+        decide_surrounding_text(true, false),
+        SurroundingTextDecision {
+            action: SurroundingTextAction::Set,
+            update: true,
+        }
+    );
+    assert_eq!(
+        decide_surrounding_text(true, true),
+        SurroundingTextDecision {
+            action: SurroundingTextAction::Set,
+            update: true,
+        }
+    );
+}
+
+#[test]
+fn surrounding_text_invalid_with_valid_state_invalidates_and_updates() {
+    assert_eq!(
+        decide_surrounding_text(false, true),
+        SurroundingTextDecision {
+            action: SurroundingTextAction::Invalidate,
+            update: true,
+        }
+    );
+}
+
+#[test]
+fn surrounding_text_invalid_with_invalid_state_invalidates_without_update() {
+    assert_eq!(
+        decide_surrounding_text(false, false),
+        SurroundingTextDecision {
+            action: SurroundingTextAction::Invalidate,
+            update: false,
+        }
+    );
+}
+
+fn select(
+    has_request: bool,
+    request_valid: bool,
+    default_valid: bool,
+    default_nonempty: bool,
+    current_eq_request: bool,
+    current_eq_default: bool,
+    overridden: bool,
+) -> InputMethodSelection {
+    decide_input_method_selection(
+        has_request,
+        request_valid,
+        default_valid,
+        default_nonempty,
+        current_eq_request,
+        current_eq_default,
+        overridden,
+    )
+}
+
+#[test]
+fn im_selection_valid_request_wins() {
+    // request valid + current differs -> SelectRequest.
+    assert_eq!(
+        select(true, true, true, true, false, false, false),
+        InputMethodSelection::SelectRequest
+    );
+}
+
+#[test]
+fn im_selection_falls_back_to_default() {
+    // request empty -> default valid + differs -> SelectDefault.
+    assert_eq!(
+        select(false, false, true, true, false, false, false),
+        InputMethodSelection::SelectDefault
+    );
+}
+
+#[test]
+fn im_selection_no_change_when_current_matches() {
+    // request valid but current already equals it.
+    assert_eq!(
+        select(true, true, true, true, true, false, false),
+        InputMethodSelection::NoChange
+    );
+    // default valid and current already equals it.
+    assert_eq!(
+        select(false, false, true, true, false, true, false),
+        InputMethodSelection::NoChange
+    );
+}
+
+#[test]
+fn im_selection_respects_override_marker() {
+    // overridden -> no switch even when everything else matches.
+    assert_eq!(
+        select(true, true, true, true, false, false, true),
+        InputMethodSelection::NoChange
+    );
+}
+
+#[test]
+fn im_selection_rejects_invalid_selected() {
+    // request provided but invalid -> falls to default; default invalid too.
+    assert_eq!(
+        select(true, false, false, true, false, false, false),
+        InputMethodSelection::NoChange
+    );
+    // request valid but default invalid when request empty.
+    assert_eq!(
+        select(false, false, false, true, false, false, false),
+        InputMethodSelection::NoChange
+    );
+}
+
+#[test]
+fn im_selection_rejects_empty_default() {
+    assert_eq!(
+        select(false, false, true, false, false, false, false),
+        InputMethodSelection::NoChange
+    );
+}
+
+#[test]
+fn im_selection_ignores_invalid_request_but_uses_default() {
+    // has_request but entry(request) invalid -> use default (valid + differs).
+    assert_eq!(
+        select(true, false, true, true, false, false, false),
+        InputMethodSelection::SelectDefault
+    );
+}

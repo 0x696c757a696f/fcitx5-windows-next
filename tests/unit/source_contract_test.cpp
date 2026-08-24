@@ -212,8 +212,14 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_decide_candidate_action") ==
             std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_decide_surrounding_text") ==
+            std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_decide_input_method_selection") ==
+            std::string::npos ||
         runtimeSource.find("const auto matches = [&]") != std::string::npos ||
-        runtimeSource.find("sameColumnNavigationTarget") != std::string::npos) {
+        runtimeSource.find("sameColumnNavigationTarget") != std::string::npos ||
+        runtimeSource.find("if (surroundingTextValid_)") != std::string::npos ||
+        runtimeSource.find("entry(request.inputMethodUtf8)") != std::string::npos) {
         return fail("ENGINE-E2/E3: ledger, per-context product state, and the Event→Action decisions must be Rust-owned in fcitx_runtime.cpp");
     }
     const auto nativeEngineCmakeSource = read_text(sourceRoot / "native-engine/CMakeLists.txt");

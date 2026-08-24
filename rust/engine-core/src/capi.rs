@@ -204,6 +204,118 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_end_result(
 mod capi_tests;
 
 // ---------------------------------------------------------------------------
+// E3-3: surrounding-text and input-method-selection decisions
+// ---------------------------------------------------------------------------
+
+/// Decision output for the surrounding-text decision
+/// (`FcitxSurroundingTextDecisionC`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FcitxSurroundingTextDecisionC {
+    pub action: i32,
+    pub update: u8,
+}
+
+pub const FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET: i32 = 0;
+pub const FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE: i32 = 1;
+
+/// Decides the surrounding-text action (E3-3). Writes `out_decision` and
+/// returns FCITX_ENGINE_CORE_OK (0); returns FCITX_ENGINE_CORE_STALE (1) on
+/// null output (fail closed).
+///
+/// # Safety
+/// `out_decision` must be writable or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_decide_surrounding_text(
+    request_valid: i32,
+    current_valid: i32,
+    out_decision: *mut FcitxSurroundingTextDecisionC,
+) -> i32 {
+    if out_decision.is_null() {
+        return FCITX_ENGINE_CORE_STALE;
+    }
+    let result = panic::catch_unwind(|| {
+        crate::decide_surrounding_text(request_valid != 0, current_valid != 0)
+    });
+    match result {
+        Ok(decision) => {
+            let action = match decision.action {
+                crate::SurroundingTextAction::Set => FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET,
+                crate::SurroundingTextAction::Invalidate => {
+                    FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE
+                }
+            };
+            let output = FcitxSurroundingTextDecisionC {
+                action,
+                update: if decision.update { 1 } else { 0 },
+            };
+            // SAFETY: output pointer checked above.
+            unsafe {
+                *out_decision = output;
+            }
+            FCITX_ENGINE_CORE_OK
+        }
+        Err(_) => FCITX_ENGINE_CORE_STALE,
+    }
+}
+
+pub const FCITX_ENGINE_CORE_IM_SELECTION_NONE: i32 = 0;
+pub const FCITX_ENGINE_CORE_IM_SELECTION_REQUEST: i32 = 1;
+pub const FCITX_ENGINE_CORE_IM_SELECTION_DEFAULT: i32 = 2;
+
+/// Decides the input-method selection (E3-3). Returns FCITX_ENGINE_CORE_OK
+/// (0) and writes `out_selection` (NONE/REQUEST/DEFAULT); returns
+/// FCITX_ENGINE_CORE_STALE (1) on null output (fail closed).
+///
+/// # Safety
+/// `out_selection` must be writable or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_decide_input_method_selection(
+    has_request_im: i32,
+    request_im_valid: i32,
+    default_im_valid: i32,
+    default_im_nonempty: i32,
+    current_eq_request: i32,
+    current_eq_default: i32,
+    overridden: i32,
+    out_selection: *mut i32,
+) -> i32 {
+    if out_selection.is_null() {
+        return FCITX_ENGINE_CORE_STALE;
+    }
+    let result = panic::catch_unwind(|| {
+        crate::decide_input_method_selection(
+            has_request_im != 0,
+            request_im_valid != 0,
+            default_im_valid != 0,
+            default_im_nonempty != 0,
+            current_eq_request != 0,
+            current_eq_default != 0,
+            overridden != 0,
+        )
+    });
+    match result {
+        Ok(selection) => {
+            let code = match selection {
+                crate::InputMethodSelection::NoChange => FCITX_ENGINE_CORE_IM_SELECTION_NONE,
+                crate::InputMethodSelection::SelectRequest => {
+                    FCITX_ENGINE_CORE_IM_SELECTION_REQUEST
+                }
+                crate::InputMethodSelection::SelectDefault => {
+                    FCITX_ENGINE_CORE_IM_SELECTION_DEFAULT
+                }
+            };
+            // SAFETY: output pointer checked above.
+            unsafe {
+                *out_selection = code;
+            }
+            FCITX_ENGINE_CORE_OK
+        }
+        Err(_) => FCITX_ENGINE_CORE_STALE,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // E3-2: Event → Action — candidate navigation decision
 // ---------------------------------------------------------------------------
 

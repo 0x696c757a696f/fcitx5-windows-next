@@ -646,3 +646,96 @@ fn decide_c_abi_null_input_fails_closed() {
         FCITX_ENGINE_CORE_STALE
     );
 }
+
+// ---------------------------------------------------------------------------
+// E3-3: surrounding-text and input-method-selection C ABI
+// ---------------------------------------------------------------------------
+
+use super::{
+    fcitx5_engine_core_decide_input_method_selection, fcitx5_engine_core_decide_surrounding_text,
+    FcitxSurroundingTextDecisionC, FCITX_ENGINE_CORE_IM_SELECTION_DEFAULT,
+    FCITX_ENGINE_CORE_IM_SELECTION_NONE, FCITX_ENGINE_CORE_IM_SELECTION_REQUEST,
+    FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE,
+    FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET,
+};
+
+#[test]
+fn surrounding_text_c_abi_set_and_invalidate() {
+    let mut out = FcitxSurroundingTextDecisionC {
+        action: -1,
+        update: 0,
+    };
+    assert_eq!(
+        unsafe { fcitx5_engine_core_decide_surrounding_text(1, 0, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(out.action, FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET);
+    assert_eq!(out.update, 1);
+    assert_eq!(
+        unsafe { fcitx5_engine_core_decide_surrounding_text(0, 1, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        out.action,
+        FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE
+    );
+    assert_eq!(out.update, 1);
+    assert_eq!(
+        unsafe { fcitx5_engine_core_decide_surrounding_text(0, 0, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        out.action,
+        FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE
+    );
+    assert_eq!(out.update, 0);
+    assert_eq!(
+        unsafe { fcitx5_engine_core_decide_surrounding_text(1, 1, std::ptr::null_mut()) },
+        FCITX_ENGINE_CORE_STALE
+    );
+}
+
+#[test]
+fn input_method_selection_c_abi() {
+    let mut out = -1;
+    // Valid request, current differs -> SelectRequest.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_decide_input_method_selection(1, 1, 1, 1, 0, 0, 0, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(out, FCITX_ENGINE_CORE_IM_SELECTION_REQUEST);
+    // No request -> valid default, differs -> SelectDefault.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_decide_input_method_selection(0, 0, 1, 1, 0, 0, 0, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(out, FCITX_ENGINE_CORE_IM_SELECTION_DEFAULT);
+    // Current already matches -> none.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_decide_input_method_selection(1, 1, 1, 1, 1, 0, 0, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(out, FCITX_ENGINE_CORE_IM_SELECTION_NONE);
+    // Overridden -> none.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_decide_input_method_selection(1, 1, 1, 1, 0, 0, 1, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(out, FCITX_ENGINE_CORE_IM_SELECTION_NONE);
+    // Null output -> fail closed.
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_decide_input_method_selection(
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            )
+        },
+        FCITX_ENGINE_CORE_STALE
+    );
+}

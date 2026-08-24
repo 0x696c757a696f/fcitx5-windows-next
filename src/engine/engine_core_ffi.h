@@ -162,4 +162,29 @@ int fcitx5_engine_core_decide_candidate_action(std::uint32_t keySym, int plainSh
                                                int hasOverride, std::uint32_t overrideValue,
                                                FcitxCandidateDecisionC* outDecision);
 
+// E3-3 Event → Action: surrounding-text and input-method-selection decisions.
+enum FcitxEngineCoreSurroundingTextActionC {
+    FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET = 0,
+    FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE = 1,
+};
+
+struct FcitxSurroundingTextDecisionC {
+    std::int32_t action;
+    std::uint8_t update;
+};
+
+int fcitx5_engine_core_decide_surrounding_text(int requestValid, int currentValid,
+                                               FcitxSurroundingTextDecisionC* outDecision);
+
+enum FcitxEngineCoreImSelectionC {
+    FCITX_ENGINE_CORE_IM_SELECTION_NONE = 0,
+    FCITX_ENGINE_CORE_IM_SELECTION_REQUEST = 1,
+    FCITX_ENGINE_CORE_IM_SELECTION_DEFAULT = 2,
+};
+
+int fcitx5_engine_core_decide_input_method_selection(int hasRequestIm, int requestImValid,
+                                                     int defaultImValid, int defaultImNonempty,
+                                                     int currentEqRequest, int currentEqDefault,
+                                                     int overridden, int* outSelection);
+
 } // extern "C"
