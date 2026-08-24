@@ -28,9 +28,13 @@ int main(int argc, char** argv) {
     const auto specSource = read_text(sourceRoot / "docs/spec-v1.8.md");
     const auto currentTruthSource = read_text(sourceRoot / "docs/current.md");
     const auto engineBoundarySource = read_text(sourceRoot / "docs/engine-boundary.md");
+    const auto tsfProfileBoundarySource = read_text(sourceRoot / "docs/tsf-profile-boundary.md");
     const auto taskRebaselineSource = read_text(sourceRoot / "docs/tasks/rebaseline.md");
     const auto runtimeSecurityScript =
         read_text(sourceRoot / "tools/check-runtime-security.ps1");
+    const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
+    const auto registerCoreSource = read_text(sourceRoot / "rust/register-core/src/lib.rs");
+    const auto tsfTestIdentitySource = read_text(sourceRoot / "tests/support/tsf_test_identity.h");
     const auto programPlanSource = read_text(sourceRoot / "docs/technical-program-plan.md");
     const auto referenceBaselineSource = read_text(sourceRoot / "docs/reference-baseline.md");
     const auto upstreamBoundaryAdr =
@@ -79,11 +83,59 @@ int main(int argc, char** argv) {
         taskRebaselineSource.find("MANUAL-PENDING") == std::string::npos ||
         taskRebaselineSource.find("REL-01 `RELEASE-01`") == std::string::npos ||
         taskRebaselineSource.find("BLOCKED") == std::string::npos ||
-        taskRebaselineSource.find("P0-5 single TSF profile code convergence") ==
+        taskRebaselineSource.find("P0-5 Single TSF profile code convergence") ==
             std::string::npos ||
+        taskRebaselineSource.find("docs/tsf-profile-boundary.md") == std::string::npos ||
         taskRebaselineSource.find("Engine is not permanently all C++") ==
             std::string::npos) {
         return fail("TASK-REBASELINE: old queue interpretation must stay current-head classified");
+    }
+    if (tsfProfileBoundarySource.find("TSF Profile Boundary") == std::string::npos ||
+        tsfProfileBoundarySource.find("Windows TSF language profile") == std::string::npos ||
+        tsfProfileBoundarySource.find("`Fcitx5`") == std::string::npos ||
+        tsfProfileBoundarySource.find("3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901") ==
+            std::string::npos ||
+        tsfProfileBoundarySource.find("6c2ac726-7703-4b65-89af-a77e9e0da102") ==
+            std::string::npos ||
+        tsfProfileBoundarySource.find("Windows profile count: `1`") == std::string::npos ||
+        tsfProfileBoundarySource.find("must not become separate Windows TSF profiles") ==
+            std::string::npos ||
+        tsfProfileBoundarySource.find("cleanup inputs only") == std::string::npos ||
+        tsfProfileBoundarySource.find("must never drive new `RegisterProfile` calls") ==
+            std::string::npos ||
+        currentTruthSource.find("docs/tsf-profile-boundary.md") == std::string::npos ||
+        currentTruthSource.find("obsolete dynamic profile data is cleanup input only") ==
+            std::string::npos) {
+        return fail("TSF-PROFILE-BOUNDARY: single product profile and legacy cleanup limits must stay documented");
+    }
+    if (registerCoreSource.find("TSF_TEXT_SERVICE_CLSID") == std::string::npos ||
+        registerCoreSource.find("Software\\Classes\\CLSID\\{}\\InprocServer32") ==
+            std::string::npos ||
+        registerCoreSource.find("REGISTER_OPERATION_REPAIR") == std::string::npos ||
+        registerCoreSource.find("REGISTER_EXPORT_REGISTER_SERVER") == std::string::npos ||
+        registerCoreSource.find("RegisterProfile") != std::string::npos ||
+        registerCoreSource.find("UnregisterProfile") != std::string::npos ||
+        registerCoreSource.find("ITfInputProcessorProfiles") != std::string::npos ||
+        registerCoreSource.find("tsf-profile-ledger") != std::string::npos ||
+        registerCoreSource.find("input_methods") != std::string::npos) {
+        return fail("TSF-PROFILE-BOUNDARY: register-core must stay a thin DLL/CLSID helper, not a profile owner");
+    }
+    if (installerSource.find("fcitx5-updater.exe\"; Parameters: \"--install-tsf-dll") ==
+            std::string::npos ||
+        installerSource.find("fcitx5-register.exe\"; Parameters: \"--register --dll") ==
+            std::string::npos ||
+        installerSource.find("fcitx5-register-x86.exe\"; Parameters: \"--register --dll") ==
+            std::string::npos ||
+        installerSource.find("fcitx5-register.exe\"; Parameters: \"--unregister --dll") ==
+            std::string::npos ||
+        installerSource.find("fcitx5-register-x86.exe\"; Parameters: \"--unregister --dll") ==
+            std::string::npos ||
+        installerSource.find("RegisterProfile") != std::string::npos ||
+        installerSource.find("InputProcessorProfiles") != std::string::npos ||
+        installerSource.find("tsf-profile-ledger") != std::string::npos ||
+        installerSource.find("Rime") != std::string::npos ||
+        installerSource.find("Mozc") != std::string::npos) {
+        return fail("TSF-PROFILE-BOUNDARY: installer must invoke TSF DLL registration only, not per-engine profiles");
     }
     if (runtimeSecurityScript.find("Join-Path $repoRoot 'rust'") == std::string::npos ||
         runtimeSecurityScript.find("[switch] $SourceOnly") == std::string::npos ||
@@ -456,7 +508,6 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("IPC-LAUNCHER-RESPONSE-RUST: launcher response acceptance policy must be Rust-owned");
     }
-    const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
     if (installerSource.find("--set-startup") != std::string::npos ||
         installerSource.find("--background") != std::string::npos ||
         installerSource.find("per_user_startup\":\"user-plane\"") == std::string::npos) {
@@ -1578,6 +1629,30 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "tests/integration/tsf_key_commit_test.cpp");
     const auto rustTsfPocCorpus =
         read_text(sourceRoot / "tests/fixtures/tsf_behavior_corpus.json");
+    const auto registerProfileCall = rustTsfPocSource.find("profiles.RegisterProfile(");
+    if (registerProfileCall == std::string::npos ||
+        rustTsfPocSource.find("profiles.RegisterProfile(", registerProfileCall + 1U) !=
+            std::string::npos ||
+        rustTsfPocSource.find("FCITX5_OBSOLETE_EN_US_PROFILE_GUID") == std::string::npos ||
+        rustTsfPocSource.find("FCITX5_OBSOLETE_RIME_PROFILE_GUID") == std::string::npos ||
+        rustTsfPocSource.find("FCITX5_OBSOLETE_JA_PROFILE_GUID") == std::string::npos ||
+        rustTsfPocSource.find("&FCITX5_LANGUAGE_PROFILE_GUID") == std::string::npos ||
+        rustTsfPocSource.find("FCITX5_PROFILE_DISPLAY_NAME_W") == std::string::npos ||
+        rustTsfPocSource.find("windows_profile_count") == std::string::npos ||
+        rustTsfPocSource.find("dynamic_profile_registration") == std::string::npos ||
+        tsfTestIdentitySource.find("inline constexpr std::array<InputProfile, 1>") ==
+            std::string::npos ||
+        tsfTestIdentitySource.find("inline constexpr std::array<ProfileIdentity, 3>") ==
+            std::string::npos ||
+        tsfTestIdentitySource.find("return loadRegistrableInputProfiles();") ==
+            std::string::npos ||
+        tsfTestIdentitySource.find("inputMethodForProfileGuid") == std::string::npos ||
+        tsfTestIdentitySource.find("return profile->engine;") == std::string::npos ||
+        tsfTestIdentitySource.find("tsf-profile-ledger.tsv") == std::string::npos ||
+        tsfTestIdentitySource.find("if (!profile.dynamic) continue;") ==
+            std::string::npos) {
+        return fail("TSF-PROFILE-BOUNDARY: Rust TSF must register one product profile and use legacy dynamic data only for cleanup");
+    }
     if (cmakeSource.find("fcitx5_tsf_poc_rustdll") == std::string::npos ||
         cmakeSource.find("rust-tsf-poc-unit") == std::string::npos ||
         cmakeSource.find("rust-tsf-poc-export-smoke") == std::string::npos ||

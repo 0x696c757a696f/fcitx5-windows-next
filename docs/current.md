@@ -50,11 +50,12 @@ Windows host
 - Runtime security now has explicit `Win10` and `Win7` lanes. The modern `Win10` lane remains the default full PE/source audit; product networking is enforced through source-boundary scanning plus PE blocking for explicit HTTP/URL stacks because Rust-linked MSVC binaries import `WS2_32.dll` through Rust std even without product network code. The legacy `Win7` lane is expected to stay red until the launcher/Rust runtime hard import of `GetSystemTimePreciseAsFileTime` is removed or a separate legacy strategy is implemented.
 - Engine product state is still mostly C++; the Fcitx adapter boundary is documented but not yet fully cut.
 - Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
+- The TSF profile boundary is now frozen in `docs/tsf-profile-boundary.md`: Windows exposes only the single product profile `Fcitx5`; internal engines/addons remain Fcitx state; obsolete dynamic profile data is cleanup input only.
 
 ## Next Five Code/Design Tasks
 
-1. Converge single TSF profile code paths and keep legacy profile data only as cleanup input.
-2. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
-3. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
-4. Start Engine E1 only from the frozen call graph/schema in `docs/engine-boundary.md`.
-5. Prepare the Config technology spike/ADR instead of adding more raw WTL controls.
+1. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
+2. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
+3. Start Engine E1 only from the frozen call graph/schema in `docs/engine-boundary.md`.
+4. Prepare the Config technology spike/ADR instead of adding more raw WTL controls.
+5. Keep single-profile TSF registration guarded while installer/UAC and host evidence are collected.

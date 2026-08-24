@@ -37,7 +37,7 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 | P0-2 Old queue rebaseline | `ALREADY-GREEN` | This file classifies the old queue against current `HEAD`. | Keep PLAN pointed here before automatic advancement decisions. |
 | P0-3 Rust dependency/license/SBOM lockstep | `ALREADY-GREEN` | `tools/cargo-inventory.ps1`, `tools/check-dependencies.ps1`, and `tools/generate-sbom.ps1` verify Cargo registry packages against `third_party/dependencies.json`; status records SBOM evidence. | External advisory review remains outside automation. |
 | P0-4 Runtime-security scans Rust | `ALREADY-GREEN` | `tools/check-runtime-security.ps1` scans C++ and Rust source and has explicit `Win10`/`Win7` min-OS lanes. | Keep `Win7` lane visibly red until the Rust/MSVC hard import strategy is solved. |
-| P0-5 Single TSF profile code convergence | `TODO` | Old `src/tsf` C++ helpers are deleted and Rust profile identity is guarded, but register/repair/uninstall and legacy cleanup paths still need a single-profile audit. | Inspect registration/control/installer code and remove any dynamic multi-profile machinery that is not legacy cleanup. |
+| P0-5 Single TSF profile code convergence | `ALREADY-GREEN` | `docs/tsf-profile-boundary.md` freezes the one-profile contract; Rust TSF registers only `Fcitx5`, unregisters obsolete profile GUIDs as cleanup, and reports `windows_profile_count:1` plus `dynamic_profile_registration:false`. `rust/register-core` stays a DLL/CLSID registration helper and the installer only invokes x64/x86 register helpers, with no per-engine profile list. Source-contract guards these boundaries. | Keep legacy dynamic profile data as cleanup input only; do not reintroduce per-engine Windows profiles without a new explicit product decision. |
 | P0-6 Generation draining real E2E | `MANUAL-PENDING` | Automated generation/update contracts exist, but real Word/Chrome old-generation host survival and cleanup evidence is not recorded. | Prepare/run the real-host generation-drain matrix. |
 
 ## Old v1.8 Queue Rebaseline
@@ -95,8 +95,7 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 
 ## Next Eligible Work
 
-1. P0-5 single TSF profile code convergence: audit register/control/installer cleanup paths and delete unused dynamic multi-profile machinery.
-2. Continue non-Engine C++ shrink only where Rust owner and regression evidence already exist.
-3. Prepare P0-6 real generation-drain E2E and Rust TSF host matrix evidence.
-4. Start Engine E1 planning only from the frozen call graph/schema in `docs/engine-boundary.md`.
-
+1. Continue non-Engine C++ shrink only where Rust owner and regression evidence already exist.
+2. Prepare P0-6 real generation-drain E2E and Rust TSF host matrix evidence.
+3. Start Engine E1 planning only from the frozen call graph/schema in `docs/engine-boundary.md`.
+4. Prepare Config technology/product spike before adding more Config UI controls.
