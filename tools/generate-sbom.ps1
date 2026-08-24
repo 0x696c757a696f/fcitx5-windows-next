@@ -9,11 +9,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+. (Join-Path $PSScriptRoot 'cargo-inventory.ps1')
 $stage = [IO.Path]::GetFullPath($StageRoot)
 $output = [IO.Path]::GetFullPath($OutputPath)
 if (-not (Test-Path -LiteralPath $stage -PathType Container)) { throw 'SBOM stage root is missing.' }
 $inventory = Get-Content -LiteralPath (Join-Path $repoRoot 'third_party/dependencies.json') -Raw |
   ConvertFrom-Json
+$cargoLockPath = Join-Path $repoRoot 'Cargo.lock'
+$cargoRegistryPackages = @(Assert-CargoInventoryMatchesManifest `
+    -CargoLockPath $cargoLockPath -Manifest $inventory)
 $packages = @(
   [ordered]@{
     SPDXID = 'SPDXRef-Product'
@@ -39,6 +43,7 @@ foreach ($dependency in $inventory.packages) {
     supplier = 'NOASSERTION'
   }
 }
+$cargoPackageCount = $cargoRegistryPackages.Count
 $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
   $relative = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
   $id = 'SPDXRef-File-' + (([Text.Encoding]::UTF8.GetBytes($relative) | ForEach-Object { $_.ToString('x2') }) -join '')
@@ -69,4 +74,4 @@ $document = [ordered]@{
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $output) | Out-Null
 [IO.File]::WriteAllText($output, (($document | ConvertTo-Json -Depth 12) + "`n"),
   [Text.UTF8Encoding]::new($false))
-Write-Host "SPDX SBOM: $output"
+Write-Host "SPDX SBOM: $output ($cargoPackageCount Cargo registry packages verified against inventory)"

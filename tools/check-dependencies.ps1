@@ -5,6 +5,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+. (Join-Path $PSScriptRoot 'cargo-inventory.ps1')
 $manifestPath = Join-Path $repoRoot 'third_party/dependencies.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 
@@ -28,38 +29,16 @@ if ($untrackedDependencyDirectives.Count -gt 0) {
 
 $cargoLockPath = Join-Path $repoRoot 'Cargo.lock'
 if (Test-Path -LiteralPath $cargoLockPath -PathType Leaf) {
-  $cargoLock = Get-Content -LiteralPath $cargoLockPath -Raw
-  $allowedCargoPackages = @($manifest.packages |
-    Where-Object { $_.name -like 'rust-crate-*' } |
-    ForEach-Object { ([string] $_.name).Substring('rust-crate-'.Length) })
-  $allowedCargoPackages += @($allowedCargoPackages |
-    ForEach-Object { ([string] $_).Replace('-', '_') })
-  $cargoPackageMatches = [regex]::Matches(
-    $cargoLock,
-    '(?ms)\[\[package\]\]\s+name = "([^"]+)".*?(?=\n\[\[package\]\]|\z)'
-  )
-  $untrackedCargoPackages = [System.Collections.Generic.List[string]]::new()
   $blockedCargoPackages = [System.Collections.Generic.List[string]]::new()
-  foreach ($match in $cargoPackageMatches) {
-    $name = $match.Groups[1].Value
-    $packageBlock = $match.Value
-    $version = ''
-    if ($packageBlock -match '(?m)^\s*version\s*=\s*"([^"]+)"\s*$') {
-      $version = $Matches[1]
-    }
-    if ($name -eq 'arrayref' -and $version -eq '0.3.10') {
-      $blockedCargoPackages.Add("$name $version")
-    }
-    $isRegistryCrate = $packageBlock -match '(?m)^\s*source\s*=\s*"registry\+https://github\.com/rust-lang/crates\.io-index"\s*$'
-    if ($isRegistryCrate -and $allowedCargoPackages -notcontains $name) {
-      $untrackedCargoPackages.Add($name)
+  $cargoRegistryPackages = @(Assert-CargoInventoryMatchesManifest `
+      -CargoLockPath $cargoLockPath -Manifest $manifest)
+  foreach ($package in $cargoRegistryPackages) {
+    if ($package.Name -eq 'arrayref' -and $package.Version -eq '0.3.10') {
+      $blockedCargoPackages.Add("$($package.Name) $($package.Version)")
     }
   }
   if ($blockedCargoPackages.Count -gt 0) {
     throw "Cargo.lock contains blocked crate versions from a RustSec/crates.io incident:`n$($blockedCargoPackages -join "`n")"
-  }
-  if ($untrackedCargoPackages.Count -gt 0) {
-    throw "Cargo.lock contains untracked third-party crate sources; add Cargo dependency inventory/SBOM/license review:`n$($untrackedCargoPackages -join "`n")"
   }
 }
 

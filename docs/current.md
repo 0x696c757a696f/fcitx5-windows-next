@@ -46,7 +46,7 @@ Windows host
 
 - Real-host matrix for Rust TSF remains manual-pending.
 - Strict direct clippy with `-D warnings` still hits existing `too_many_arguments` helpers in `rust/windows-common-core`; adjusted clippy with that existing lint allowed is green.
-- A unified current Cargo + C++ dependency/license/SBOM inventory needs to stay in lockstep with every new Rust crate or Windows crate update.
+- Cargo registry crates are checked against `third_party/dependencies.json` by name and version before dependency checks and SBOM generation. Advisory review for the declared dependency set remains an external process.
 - Engine product state is still mostly C++; the Fcitx adapter boundary is documented but not yet fully cut.
 - Existing long-form specs may contain historical task text. ADR 0009 and this snapshot control the current Fcitx/Rust boundary.
 
@@ -54,6 +54,6 @@ Windows host
 
 1. Freeze Engine call graph and C++/Rust ABI in `docs/engine-boundary.md`.
 2. Rebase the old task queue against current HEAD as `TODO`, `ALREADY-GREEN`, `PARTIAL`, `MANUAL-PENDING`, or `BLOCKED`.
-3. Close Rust supply-chain inventory gaps: dependency check, license check, SBOM, Rust source policy and runtime-security Rust scanning.
-4. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
-5. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
+3. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
+4. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
+5. Rebase the old task queue against current HEAD as `TODO`, `ALREADY-GREEN`, `PARTIAL`, `MANUAL-PENDING`, or `BLOCKED`.

@@ -511,6 +511,8 @@ int main(int argc, char** argv) {
     const auto deploymentCoreHeader =
         read_text(sourceRoot / "tests/support/deployment_test_core.h");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
+    const auto cargoInventory = read_text(sourceRoot / "tools/cargo-inventory.ps1");
+    const auto sbomGenerator = read_text(sourceRoot / "tools/generate-sbom.ps1");
     const auto dependencyInventory = read_text(sourceRoot / "third_party/dependencies.json");
     const auto rustPackageCoreArtifactSmoke =
         read_text(sourceRoot / "tools/test-rust-package-core-artifact.ps1");
@@ -1172,9 +1174,18 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustPackageCoreArtifactSmoke.find("CargoTarget") == std::string::npos ||
         rustPackageCoreArtifactSmoke.find("--audit-self-pe") == std::string::npos ||
-        dependencyCheck.find("Cargo.lock contains untracked third-party crate sources") ==
+        cargoInventory.find("Cargo.lock contains untracked third-party crate sources") ==
             std::string::npos ||
-        dependencyCheck.find("arrayref' -and $version -eq '0.3.10'") ==
+        dependencyCheck.find("Assert-CargoInventoryMatchesManifest") == std::string::npos ||
+        cargoInventory.find("Get-CargoRegistryPackages") == std::string::npos ||
+        cargoInventory.find("Cargo.lock crate versions differ from third_party/dependencies.json") ==
+            std::string::npos ||
+        sbomGenerator.find("Assert-CargoInventoryMatchesManifest") == std::string::npos ||
+        sbomGenerator.find("Cargo registry packages verified against inventory") ==
+            std::string::npos ||
+        dependencyCheck.find("$package.Name -eq 'arrayref'") ==
+            std::string::npos ||
+        dependencyCheck.find("$package.Version -eq '0.3.10'") ==
             std::string::npos ||
         dependencyInventory.find("\"rust-crate-blake3\"") ==
             std::string::npos) {
