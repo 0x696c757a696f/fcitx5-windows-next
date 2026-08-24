@@ -210,8 +210,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_classify_input_method_switch") ==
             std::string::npos ||
-        runtimeSource.find("const auto matches = [&]") != std::string::npos) {
-        return fail("ENGINE-E2/E3: ledger, per-context product state, and the input-method switch decision must be Rust-owned in fcitx_runtime.cpp");
+        runtimeSource.find("fcitx5_engine_core_decide_candidate_action") ==
+            std::string::npos ||
+        runtimeSource.find("const auto matches = [&]") != std::string::npos ||
+        runtimeSource.find("sameColumnNavigationTarget") != std::string::npos) {
+        return fail("ENGINE-E2/E3: ledger, per-context product state, and the Event→Action decisions must be Rust-owned in fcitx_runtime.cpp");
     }
     const auto nativeEngineCmakeSource = read_text(sourceRoot / "native-engine/CMakeLists.txt");
     if (nativeEngineCmakeSource.find("fcitx5_protocol_core_rust") == std::string::npos ||

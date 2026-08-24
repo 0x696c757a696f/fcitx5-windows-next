@@ -287,6 +287,76 @@ int runCorpus() {
             "FcitxKey_None must never match");
     }
 
+    // E3-2 Event → Action: candidate navigation decision corpus (mirrors the
+    // frozen C++ branch semantics the Rust decision replaced).
+    {
+        FcitxCandidateViewC view{};
+        view.count = 10;
+        view.listSize = 10;
+        view.cursor = 0;
+        view.bulkCursor = -1;
+        view.hasBulkCursor = 0;
+        view.hasBulk = 0;
+        view.pageable = 1;
+        view.hasPrev = 0;
+        view.hasNext = 0;
+        FcitxCandidateConfigC viewConfig{};
+        viewConfig.scrollMode = 0;
+        viewConfig.vertical = 0;
+        viewConfig.candidatePageSize = -1;
+        FcitxCandidateDecisionC decision{};
+        // Ordinary paging ';' selects the second candidate.
+        failures += !expect(
+            fcitx5_engine_core_decide_candidate_action(0x3b, 1, &view, &viewConfig, 0, 0,
+                                                       &decision) == FCITX_ENGINE_CORE_OK &&
+                decision.consume == 1 &&
+                decision.action == FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR &&
+                decision.value == 1,
+            "ordinary ';' must select candidate 1 and clear override");
+        // Space with a highlight override commits that candidate.
+        failures += !expect(
+            fcitx5_engine_core_decide_candidate_action(0x20, 1, &view, &viewConfig, 1, 3,
+                                                       &decision) == FCITX_ENGINE_CORE_OK &&
+                decision.consume == 1 &&
+                decision.action == FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR &&
+                decision.value == 3,
+            "Space must commit the overridden candidate");
+        // Space without override is not consumed.
+        failures += !expect(
+            fcitx5_engine_core_decide_candidate_action(0x20, 1, &view, &viewConfig, 0, 0,
+                                                       &decision) == FCITX_ENGINE_CORE_OK &&
+                decision.consume == 0 &&
+                decision.action == FCITX_ENGINE_CORE_CANDIDATE_ACTION_NONE,
+            "Space without override must not be consumed");
+        // Right moves the highlight.
+        failures += !expect(
+            fcitx5_engine_core_decide_candidate_action(0xff53, 1, &view, &viewConfig, 1, 2,
+                                                       &decision) == FCITX_ENGINE_CORE_OK &&
+                decision.consume == 1 &&
+                decision.action == FCITX_ENGINE_CORE_CANDIDATE_ACTION_SET_OVERRIDE &&
+                decision.value == 3,
+            "Right must move the highlight override");
+        // '=' with a next page turns the page and resets the override.
+        {
+            FcitxCandidateViewC paged = view;
+            paged.hasNext = 1;
+            failures += !expect(
+                fcitx5_engine_core_decide_candidate_action(0x3d, 1, &paged, &viewConfig, 0, 0,
+                                                           &decision) == FCITX_ENGINE_CORE_OK &&
+                    decision.consume == 1 &&
+                    decision.action ==
+                        FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE &&
+                    decision.value == 0,
+                "next-page key must turn the page and reset the override");
+        }
+        // Ordinary key is not consumed.
+        failures += !expect(
+            fcitx5_engine_core_decide_candidate_action(0x61, 1, &view, &viewConfig, 0, 0,
+                                                       &decision) == FCITX_ENGINE_CORE_OK &&
+                decision.consume == 0,
+            "ordinary key must not be consumed");
+    }
+
     return failures;
 }
 

@@ -119,4 +119,47 @@ int fcitx5_engine_core_classify_input_method_switch(int ctrl, int shift, int alt
                                                     const char* hotkeyNext,
                                                     int* outAction);
 
+// E3-2 Event → Action: candidate navigation decision. The C++ adapter
+// flattens the Fcitx candidate list + config into `FcitxCandidateViewC` /
+// `FcitxCandidateConfigC`, asks Rust what to do for a non-release key, and
+// executes the returned `FcitxCandidateDecisionC` against Fcitx.
+struct FcitxCandidateViewC {
+    std::int32_t count;
+    std::int32_t listSize;
+    std::int32_t cursor;
+    std::int32_t bulkCursor;
+    std::uint8_t hasBulkCursor;
+    std::uint8_t hasBulk;
+    std::uint8_t pageable;
+    std::uint8_t hasPrev;
+    std::uint8_t hasNext;
+};
+
+struct FcitxCandidateConfigC {
+    std::uint8_t scrollMode;
+    std::uint8_t vertical;
+    std::int32_t candidatePageSize; // -1 = not configured
+};
+
+enum FcitxEngineCoreCandidateActionC {
+    FCITX_ENGINE_CORE_CANDIDATE_ACTION_NONE = 0,
+    FCITX_ENGINE_CORE_CANDIDATE_ACTION_CONSUME_ONLY = 1,
+    FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR = 2,
+    FCITX_ENGINE_CORE_CANDIDATE_ACTION_SET_OVERRIDE = 3,
+    FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE = 4,
+    FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_PREV_AND_SET_OVERRIDE = 5,
+};
+
+struct FcitxCandidateDecisionC {
+    std::uint8_t consume;
+    std::int32_t action;
+    std::uint32_t value;
+};
+
+int fcitx5_engine_core_decide_candidate_action(std::uint32_t keySym, int plainShortcut,
+                                               const FcitxCandidateViewC* view,
+                                               const FcitxCandidateConfigC* config,
+                                               int hasOverride, std::uint32_t overrideValue,
+                                               FcitxCandidateDecisionC* outDecision);
+
 } // extern "C"

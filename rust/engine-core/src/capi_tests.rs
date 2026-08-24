@@ -451,3 +451,198 @@ fn classify_c_abi_no_match_and_null_hotkeys() {
         0
     );
 }
+// ---------------------------------------------------------------------------
+// E3-2: candidate navigation decision C ABI
+// ---------------------------------------------------------------------------
+
+use super::{
+    fcitx5_engine_core_decide_candidate_action, FcitxCandidateConfigC, FcitxCandidateDecisionC,
+    FcitxCandidateViewC, FCITX_ENGINE_CORE_CANDIDATE_ACTION_NONE,
+    FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE,
+    FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR,
+};
+use crate::navigation::KEY_SYM_SEMICOLON;
+
+fn view10() -> FcitxCandidateViewC {
+    FcitxCandidateViewC {
+        count: 10,
+        list_size: 10,
+        cursor: 0,
+        bulk_cursor: -1,
+        has_bulk_cursor: 0,
+        has_bulk: 0,
+        pageable: 1,
+        has_prev: 0,
+        has_next: 0,
+    }
+}
+
+fn config_plain() -> FcitxCandidateConfigC {
+    FcitxCandidateConfigC {
+        scroll_mode: 0,
+        vertical: 0,
+        candidate_page_size: -1,
+    }
+}
+
+#[test]
+fn decide_c_abi_semicolon_selects_second() {
+    let view = view10();
+    let config = config_plain();
+    let mut out = FcitxCandidateDecisionC {
+        consume: 0,
+        action: -1,
+        value: 0,
+    };
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_decide_candidate_action(
+                KEY_SYM_SEMICOLON,
+                1,
+                &view,
+                &config,
+                0,
+                0,
+                &mut out,
+            )
+        },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(out.consume, 1);
+    assert_eq!(
+        out.action,
+        FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR
+    );
+    assert_eq!(out.value, 1);
+}
+
+#[test]
+fn decide_c_abi_space_commits_override() {
+    let view = view10();
+    let config = config_plain();
+    let mut out = FcitxCandidateDecisionC {
+        consume: 0,
+        action: -1,
+        value: 0,
+    };
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_decide_candidate_action(0x20, 1, &view, &config, 1, 3, &mut out)
+        },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        out.action,
+        FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR
+    );
+    assert_eq!(out.value, 3);
+}
+
+#[test]
+fn decide_c_abi_scroll_next_page() {
+    let view = FcitxCandidateViewC {
+        count: 20,
+        list_size: 10,
+        cursor: 0,
+        bulk_cursor: 19,
+        has_bulk_cursor: 1,
+        has_bulk: 1,
+        pageable: 1,
+        has_prev: 0,
+        has_next: 1,
+    };
+    let config = FcitxCandidateConfigC {
+        scroll_mode: 1,
+        vertical: 1,
+        candidate_page_size: 5,
+    };
+    let mut out = FcitxCandidateDecisionC {
+        consume: 0,
+        action: -1,
+        value: 0,
+    };
+    // '=' next page in scroll viewport at the end -> PageNext + override 0.
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_decide_candidate_action(0x3d, 1, &view, &config, 1, 19, &mut out)
+        },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        out.action,
+        FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE
+    );
+    assert_eq!(out.value, 0);
+}
+
+#[test]
+fn decide_c_abi_ordinary_key_not_consumed() {
+    let view = view10();
+    let config = config_plain();
+    let mut out = FcitxCandidateDecisionC {
+        consume: 0,
+        action: -1,
+        value: 0,
+    };
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_decide_candidate_action(0x61, 1, &view, &config, 0, 0, &mut out)
+        },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(out.consume, 0);
+    assert_eq!(out.action, FCITX_ENGINE_CORE_CANDIDATE_ACTION_NONE);
+}
+
+#[test]
+fn decide_c_abi_null_input_fails_closed() {
+    let view = view10();
+    let config = config_plain();
+    let mut out = FcitxCandidateDecisionC {
+        consume: 0,
+        action: -1,
+        value: 0,
+    };
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_decide_candidate_action(
+                KEY_SYM_SEMICOLON,
+                1,
+                std::ptr::null(),
+                &config,
+                0,
+                0,
+                &mut out,
+            )
+        },
+        FCITX_ENGINE_CORE_STALE
+    );
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_decide_candidate_action(
+                KEY_SYM_SEMICOLON,
+                1,
+                &view,
+                std::ptr::null(),
+                0,
+                0,
+                &mut out,
+            )
+        },
+        FCITX_ENGINE_CORE_STALE
+    );
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_decide_candidate_action(
+                KEY_SYM_SEMICOLON,
+                1,
+                &view,
+                &config,
+                0,
+                0,
+                std::ptr::null_mut(),
+            )
+        },
+        FCITX_ENGINE_CORE_STALE
+    );
+}

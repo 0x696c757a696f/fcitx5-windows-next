@@ -13,7 +13,8 @@ use std::ffi::c_void;
 use std::panic::{self, AssertUnwindSafe};
 
 use crate::{
-    classify_input_method_switch, CaretRect, ContextKey, ContextLedger, ImSwitchAction, LedgerError,
+    classify_input_method_switch, navigation, CaretRect, ContextKey, ContextLedger, ImSwitchAction,
+    LedgerError,
 };
 
 /// Matches `ClientContextKey` and the C `FcitxEngineContextKeyC`.
@@ -201,6 +202,146 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_end_result(
 #[cfg(test)]
 #[path = "capi_tests.rs"]
 mod capi_tests;
+
+// ---------------------------------------------------------------------------
+// E3-2: Event → Action — candidate navigation decision
+// ---------------------------------------------------------------------------
+
+/// Candidate view facts flattened by the C++ adapter from the Fcitx candidate
+/// list (`FcitxCandidateViewC` in `engine_core_ffi.h`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FcitxCandidateViewC {
+    pub count: i32,
+    pub list_size: i32,
+    pub cursor: i32,
+    pub bulk_cursor: i32,
+    pub has_bulk_cursor: u8,
+    pub has_bulk: u8,
+    pub pageable: u8,
+    pub has_prev: u8,
+    pub has_next: u8,
+}
+
+/// Candidate-navigation config facts (`FcitxCandidateConfigC`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FcitxCandidateConfigC {
+    pub scroll_mode: u8,
+    pub vertical: u8,
+    pub candidate_page_size: i32,
+}
+
+/// Decision output (`FcitxCandidateDecisionC`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FcitxCandidateDecisionC {
+    pub consume: u8,
+    pub action: i32,
+    pub value: u32,
+}
+
+pub const FCITX_ENGINE_CORE_CANDIDATE_ACTION_NONE: i32 = 0;
+pub const FCITX_ENGINE_CORE_CANDIDATE_ACTION_CONSUME_ONLY: i32 = 1;
+pub const FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR: i32 = 2;
+pub const FCITX_ENGINE_CORE_CANDIDATE_ACTION_SET_OVERRIDE: i32 = 3;
+pub const FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE: i32 = 4;
+pub const FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_PREV_AND_SET_OVERRIDE: i32 = 5;
+
+fn candidate_action_code(action: navigation::CandidateAction) -> i32 {
+    match action {
+        navigation::CandidateAction::None => FCITX_ENGINE_CORE_CANDIDATE_ACTION_NONE,
+        navigation::CandidateAction::ConsumeOnly => FCITX_ENGINE_CORE_CANDIDATE_ACTION_CONSUME_ONLY,
+        navigation::CandidateAction::SelectAndClear(_) => {
+            FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR
+        }
+        navigation::CandidateAction::SetOverride(_) => {
+            FCITX_ENGINE_CORE_CANDIDATE_ACTION_SET_OVERRIDE
+        }
+        navigation::CandidateAction::PageNextAndSetOverride(_) => {
+            FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE
+        }
+        navigation::CandidateAction::PagePrevAndSetOverride(_) => {
+            FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_PREV_AND_SET_OVERRIDE
+        }
+    }
+}
+
+fn candidate_action_value(action: navigation::CandidateAction) -> u32 {
+    match action {
+        navigation::CandidateAction::SelectAndClear(value)
+        | navigation::CandidateAction::SetOverride(value)
+        | navigation::CandidateAction::PageNextAndSetOverride(value)
+        | navigation::CandidateAction::PagePrevAndSetOverride(value) => value,
+        _ => 0,
+    }
+}
+
+/// Decides the action for a non-release candidate-navigation key (E3-2).
+/// Writes `out_decision` and returns FCITX_ENGINE_CORE_OK (0) on success;
+/// returns FCITX_ENGINE_CORE_STALE (1) on null input (fail closed).
+///
+/// # Safety
+/// `view`/`config`/`out_decision` must be valid or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_decide_candidate_action(
+    key_sym: u32,
+    plain_shortcut: i32,
+    view: *const FcitxCandidateViewC,
+    config: *const FcitxCandidateConfigC,
+    has_override: i32,
+    override_value: u32,
+    out_decision: *mut FcitxCandidateDecisionC,
+) -> i32 {
+    if view.is_null() || config.is_null() || out_decision.is_null() {
+        return FCITX_ENGINE_CORE_STALE;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller provides valid pointers (checked above).
+        let view = unsafe { *view };
+        let config = unsafe { *config };
+        navigation::decide_candidate_action(
+            key_sym,
+            plain_shortcut != 0,
+            view.count,
+            view.list_size,
+            view.cursor,
+            view.bulk_cursor,
+            view.has_bulk_cursor != 0,
+            view.has_bulk != 0,
+            view.pageable != 0,
+            view.has_prev != 0,
+            view.has_next != 0,
+            config.scroll_mode != 0,
+            config.vertical != 0,
+            if config.candidate_page_size < 0 {
+                None
+            } else {
+                Some(config.candidate_page_size)
+            },
+            if has_override != 0 {
+                Some(override_value)
+            } else {
+                None
+            },
+        )
+    }));
+    match result {
+        Ok(decision) => {
+            let output = FcitxCandidateDecisionC {
+                consume: if decision.consume { 1 } else { 0 },
+                action: candidate_action_code(decision.action),
+                value: candidate_action_value(decision.action),
+            };
+            // SAFETY: output pointer checked above.
+            unsafe {
+                *out_decision = output;
+            }
+            FCITX_ENGINE_CORE_OK
+        }
+        Err(_) => FCITX_ENGINE_CORE_STALE,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // E3: Event → Action — input-method switch decision

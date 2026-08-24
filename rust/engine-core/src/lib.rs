@@ -343,3 +343,4 @@ pub fn classify_input_method_switch(
 mod tests;
 
 pub mod capi;
+pub mod navigation;

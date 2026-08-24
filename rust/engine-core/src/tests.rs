@@ -393,3 +393,492 @@ fn toggle_wins_when_both_hotkeys_identical() {
         Some(ImSwitchAction::Toggle)
     );
 }
+
+// ---------------------------------------------------------------------------
+// E3-2: candidate navigation decision corpus
+// ---------------------------------------------------------------------------
+
+mod navigation_tests {
+    use super::super::navigation::{
+        column_navigation_target, column_selection_target, decide_candidate_action,
+        row_navigation_target, row_selection_target, same_column_navigation_target,
+        CandidateAction, CandidateDecision, KEY_SYM_0, KEY_SYM_2, KEY_SYM_9, KEY_SYM_APOSTROPHE,
+        KEY_SYM_COMMA, KEY_SYM_DOWN, KEY_SYM_EQUAL, KEY_SYM_LEFT, KEY_SYM_MINUS, KEY_SYM_RETURN,
+        KEY_SYM_RIGHT, KEY_SYM_SEMICOLON, KEY_SYM_UP,
+    };
+    use crate::KEY_SYM_SPACE;
+
+    // Default non-scroll, non-bulk view: 10 candidates, cursor 0, pageable
+    // with neither prev nor next.
+    fn view10() -> (i32, i32, i32, i32, bool, bool, bool, bool, bool) {
+        (10, 10, 0, -1, false, false, true, false, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn decide(
+        sym: u32,
+        plain: bool,
+        count: i32,
+        list_size: i32,
+        cursor: i32,
+        bulk_cursor: i32,
+        has_bulk_cursor: bool,
+        has_bulk: bool,
+        pageable: bool,
+        has_prev: bool,
+        has_next: bool,
+        scroll_mode: bool,
+        vertical: bool,
+        page_size: Option<i32>,
+        override_value: Option<u32>,
+    ) -> CandidateDecision {
+        decide_candidate_action(
+            sym,
+            plain,
+            count,
+            list_size,
+            cursor,
+            bulk_cursor,
+            has_bulk_cursor,
+            has_bulk,
+            pageable,
+            has_prev,
+            has_next,
+            scroll_mode,
+            vertical,
+            page_size,
+            override_value,
+        )
+    }
+
+    fn view10_decide(sym: u32, plain: bool, override_value: Option<u32>) -> CandidateDecision {
+        let (count, list_size, cursor, bulk_cursor, hbc, hb, pageable, hp, hn) = view10();
+        decide(
+            sym,
+            plain,
+            count,
+            list_size,
+            cursor,
+            bulk_cursor,
+            hbc,
+            hb,
+            pageable,
+            hp,
+            hn,
+            false,
+            false,
+            None,
+            override_value,
+        )
+    }
+
+    // -- target helpers ----------------------------------------------------
+
+    #[test]
+    fn row_selection_target_matches_cpp() {
+        // focus 4 is row 0 (4/5), column 1 -> target 0*5+1 = 1.
+        assert_eq!(row_selection_target(4, 1, 5, 20), Some(1));
+        // focus 4, column 4 -> 4.
+        assert_eq!(row_selection_target(4, 4, 5, 20), Some(4));
+        // focus 6 is row 1 (6/5), column 3 -> 5+3 = 8.
+        assert_eq!(row_selection_target(6, 3, 5, 20), Some(8));
+        // focus 19 is row 3, column 4 -> 15+4 = 19 (valid).
+        assert_eq!(row_selection_target(19, 4, 5, 20), Some(19));
+        // focus 19, column 4 but count 19 -> 19 >= 19 invalid.
+        assert_eq!(row_selection_target(19, 4, 5, 19), None);
+    }
+
+    #[test]
+    fn column_selection_target_matches_cpp() {
+        // focus 4, rows 3: 4%3=1, columnStart=3, row 1 -> 3+1 = 4.
+        assert_eq!(column_selection_target(4, 1, 3, 20), Some(4));
+        // focus 4, row 2 -> 3+2 = 5.
+        assert_eq!(column_selection_target(4, 2, 3, 20), Some(5));
+        // focus 4, row 2, count 5 -> 5 >= 5 invalid.
+        assert_eq!(column_selection_target(4, 2, 3, 5), None);
+        // focus 4, row 0 -> 3.
+        assert_eq!(column_selection_target(4, 0, 3, 20), Some(3));
+    }
+
+    #[test]
+    fn navigation_target_helpers_match_cpp() {
+        // rowNavigationTarget(4, 5, 20, true, false): base 0 -> 5
+        assert_eq!(row_navigation_target(4, 5, 20, true, false).index, 5);
+        // rowNavigationTarget(4, 5, 20, false, false): base 0 < 5 -> beforeStart
+        let back = row_navigation_target(4, 5, 20, false, false);
+        assert!(back.before_start && back.index == 4);
+        // columnNavigationTarget(4, 3, 20, true, false): next 6+0 -> 6
+        assert_eq!(column_navigation_target(4, 3, 20, true, false).index, 6);
+        // sameColumnNavigationTarget(4, 3, 20, true): 5
+        assert_eq!(same_column_navigation_target(4, 3, 20, true).index, 5);
+    }
+
+    // -- branch 1: scroll digit selection ----------------------------------
+
+    #[test]
+    fn scroll_digit_selects_target() {
+        // scroll vertical, focus 4, digit '2' -> column 1 ->
+        // columnSelectionTarget(4, 1, 5, 20): 4%5=4, columnStart=0, target=0+1=1.
+        let d = decide(
+            KEY_SYM_2,
+            true,
+            20,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            Some(5),
+            Some(4),
+        );
+        assert_eq!(
+            d,
+            CandidateDecision {
+                consume: true,
+                action: CandidateAction::SelectAndClear(1),
+            }
+        );
+    }
+
+    #[test]
+    fn scroll_digit_invalid_target_consumes_without_action() {
+        // Only 3 candidates, focus 2, digit '9' -> column 8 >= dimension 3 -> None.
+        let d = decide(
+            KEY_SYM_9,
+            true,
+            3,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            Some(3),
+            Some(2),
+        );
+        assert_eq!(d.action, CandidateAction::ConsumeOnly);
+        assert!(d.consume);
+    }
+
+    #[test]
+    fn scroll_zero_consumes_without_selecting() {
+        // '0' sets column None -> ConsumeOnly.
+        let d = decide(
+            KEY_SYM_0,
+            true,
+            20,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            Some(5),
+            Some(4),
+        );
+        assert_eq!(d.action, CandidateAction::ConsumeOnly);
+        assert!(d.consume);
+    }
+
+    #[test]
+    fn scroll_semicolon_selects_second_column() {
+        // vertical, ';' -> column 1 -> columnSelectionTarget(4, 1, 5, 20) = 1.
+        let d = decide(
+            KEY_SYM_SEMICOLON,
+            true,
+            20,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            Some(5),
+            Some(4),
+        );
+        assert_eq!(d.action, CandidateAction::SelectAndClear(1));
+    }
+
+    // -- branch 2: scroll navigation ---------------------------------------
+
+    #[test]
+    fn scroll_down_sets_override() {
+        // scroll vertical, focus 1, Down -> sameColumnNavigationTarget(1, 5, 20, true) -> 2.
+        let d = decide(
+            KEY_SYM_DOWN,
+            true,
+            20,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            Some(5),
+            Some(1),
+        );
+        assert_eq!(d.action, CandidateAction::SetOverride(2));
+        assert!(d.consume);
+    }
+
+    #[test]
+    fn scroll_up_at_start_reports_before_start_no_page() {
+        // focus 0, Up -> beforeStart; vertical Up/Down never turns pages ->
+        // SetOverride(0).
+        let d = decide(
+            KEY_SYM_UP,
+            true,
+            20,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            Some(5),
+            Some(0),
+        );
+        assert_eq!(d.action, CandidateAction::SetOverride(0));
+    }
+
+    #[test]
+    fn scroll_page_key_turns_prev_page() {
+        // scroll vertical, '-' (prevPage), focus 0 -> columnNavigationTarget
+        // beforeStart; page keys (not Up/Down) may turn pages.
+        let d = decide(
+            KEY_SYM_MINUS,
+            true,
+            20,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+            Some(5),
+            Some(0),
+        );
+        assert_eq!(d.action, CandidateAction::PagePrevAndSetOverride(0));
+    }
+
+    #[test]
+    fn scroll_page_key_turns_next_page() {
+        // scroll vertical, '=' (nextPage), focus 19 -> afterEnd; has_next ->
+        // PageNextAndSetOverride(0).
+        let d = decide(
+            KEY_SYM_EQUAL,
+            true,
+            20,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+            Some(5),
+            Some(19),
+        );
+        assert_eq!(d.action, CandidateAction::PageNextAndSetOverride(0));
+    }
+
+    // -- branch 3: page keys -----------------------------------------------
+
+    #[test]
+    fn page_next_with_page_turns_and_resets_override() {
+        // '=' with has_next -> PageNextAndSetOverride(0).
+        let d = decide(
+            KEY_SYM_EQUAL,
+            true,
+            10,
+            10,
+            0,
+            -1,
+            false,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(d.action, CandidateAction::PageNextAndSetOverride(0));
+    }
+
+    #[test]
+    fn page_prev_without_page_consumes_only() {
+        let d = decide(
+            KEY_SYM_COMMA,
+            true,
+            10,
+            10,
+            0,
+            -1,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(d.action, CandidateAction::ConsumeOnly);
+        assert!(d.consume);
+    }
+
+    // -- branch 4: ordinary ';' / '\'' -------------------------------------
+
+    #[test]
+    fn ordinary_semicolon_selects_second_candidate() {
+        let d = view10_decide(KEY_SYM_SEMICOLON, true, None);
+        assert_eq!(d.action, CandidateAction::SelectAndClear(1));
+        assert!(d.consume);
+    }
+
+    #[test]
+    fn ordinary_apostrophe_selects_third_candidate() {
+        let d = view10_decide(KEY_SYM_APOSTROPHE, true, None);
+        assert_eq!(d.action, CandidateAction::SelectAndClear(2));
+    }
+
+    #[test]
+    fn ordinary_semicolon_out_of_range_not_consumed() {
+        // Only 1 candidate: target 1 >= 1 -> not consumed.
+        let d = decide(
+            KEY_SYM_SEMICOLON,
+            true,
+            1,
+            1,
+            0,
+            -1,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+        assert!(!d.consume);
+        assert_eq!(d.action, CandidateAction::None);
+    }
+
+    // -- branch 5: Left/Right ----------------------------------------------
+
+    #[test]
+    fn right_moves_highlight() {
+        let d = view10_decide(KEY_SYM_RIGHT, true, Some(3));
+        assert_eq!(d.action, CandidateAction::SetOverride(4));
+    }
+
+    #[test]
+    fn left_at_start_clamps_to_zero() {
+        let d = view10_decide(KEY_SYM_LEFT, true, Some(0));
+        assert_eq!(d.action, CandidateAction::SetOverride(0));
+    }
+
+    #[test]
+    fn right_without_override_uses_list_cursor() {
+        let d = view10_decide(KEY_SYM_RIGHT, true, None);
+        assert_eq!(d.action, CandidateAction::SetOverride(1));
+    }
+
+    // -- branch 6: Space/Return --------------------------------------------
+
+    #[test]
+    fn space_commits_highlighted_candidate() {
+        let d = view10_decide(KEY_SYM_SPACE, true, Some(3));
+        assert_eq!(d.action, CandidateAction::SelectAndClear(3));
+    }
+
+    #[test]
+    fn space_without_override_not_consumed() {
+        let d = view10_decide(KEY_SYM_SPACE, true, None);
+        assert!(!d.consume);
+        assert_eq!(d.action, CandidateAction::None);
+    }
+
+    #[test]
+    fn return_commits_highlighted_candidate() {
+        let d = view10_decide(KEY_SYM_RETURN, true, Some(2));
+        assert_eq!(d.action, CandidateAction::SelectAndClear(2));
+    }
+
+    #[test]
+    fn space_override_out_of_range_not_consumed() {
+        // bounded = 10, override 15 out of range.
+        let d = view10_decide(KEY_SYM_SPACE, true, Some(15));
+        assert!(!d.consume);
+    }
+
+    // -- no match ----------------------------------------------------------
+
+    #[test]
+    fn ordinary_key_not_consumed() {
+        let d = view10_decide(0x61, true, None);
+        assert!(!d.consume);
+        assert_eq!(d.action, CandidateAction::None);
+    }
+
+    #[test]
+    fn shifted_digit_not_a_scroll_shortcut() {
+        // plain=false: scroll digit branch skipped.
+        let d = decide(
+            KEY_SYM_2,
+            false,
+            20,
+            10,
+            0,
+            0,
+            true,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            Some(5),
+            Some(4),
+        );
+        assert!(!d.consume);
+        assert_eq!(d.action, CandidateAction::None);
+    }
+}

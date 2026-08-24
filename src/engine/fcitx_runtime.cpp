@@ -239,8 +239,8 @@ FcitxEngineCaretC toLedgerCaret(const protocol::CaretRect& caret) {
 }
 
 protocol::CaretRect fromLedgerCaret(const FcitxEngineCaretC& caret) {
-    return protocol::CaretRect{caret.valid, caret.left, caret.top, caret.right, caret.bottom,
-                               caret.dpi};
+    return protocol::CaretRect{caret.valid != 0, caret.left, caret.top, caret.right,
+                               caret.bottom, caret.dpi};
 }
 
 class EngineInputContext final : public InputContext {
@@ -802,215 +802,90 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     // key symbols directly ('+' and '_' carry a Shift state), select the
     // second/third candidate with ';'/''', and move the highlight with the
     // Left/Right arrow keys without committing.
+    // E3-2: the candidate-navigation decision is Rust-owned
+    // (`fcitx5_engine_core_decide_candidate_action`); the C++ adapter only
+    // flattens the Fcitx candidate view and executes the returned actions.
     {
         const KeySym sym = event.key().sym();
         if (!event.isRelease()) {
             if (const auto list = context.inputPanel().candidateList();
                 list && !list->empty()) {
                 const auto* bulk = list->toBulk();
+                const auto* bulkCursor = list->toBulkCursor();
+                auto* pageable = list->toPageable();
                 const int count =
                     bulk && bulk->totalSize() >= 0 ? bulk->totalSize() : list->size();
-                const int bounded = std::clamp(
-                    count, 0, static_cast<int>(protocol::kMaxCandidates));
-                const bool nextPage =
-                    sym == FcitxKey_equal || sym == FcitxKey_plus ||
-                    sym == FcitxKey_period || sym == FcitxKey_bracketright;
-                const bool prevPage =
-                    sym == FcitxKey_minus || sym == FcitxKey_underscore ||
-                    sym == FcitxKey_comma || sym == FcitxKey_bracketleft;
-                const bool upDown = sym == FcitxKey_Up || sym == FcitxKey_Down;
-                const bool scroll = impl_->config.scrollMode && bulk && bulk->totalSize() >= 0;
-                const bool verticalScroll =
-                    impl_->config.orientation == config::Orientation::vertical;
-                const std::size_t dimension = static_cast<std::size_t>(
-                    std::clamp(impl_->config.candidatePageSize.value_or(list->size()), 1,
-                               static_cast<int>(protocol::kMaxCandidates)));
-                // In the scroll viewport, Up/Down scroll one row instead of
-                // the Fcitx default page turn; in ordinary paging they keep
-                // the Fcitx default (Up=PrevPage, Down=NextPage).
-                const bool scrollNext = nextPage || (scroll && sym == FcitxKey_Down);
-                const bool scrollPrev = prevPage || (scroll && sym == FcitxKey_Up);
-                const auto currentFocus = [&] {
-                    int focus = 0;
-                    std::uint32_t overrideValue = 0;
-                    if (fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey,
-                                                             &overrideValue)) {
-                        focus = static_cast<int>(overrideValue);
-                    } else if (const auto* bulkCursor = list->toBulkCursor()) {
-                        const int global = bulkCursor->globalCursorIndex();
-                        focus = global >= 0 ? global : list->cursorIndex();
-                    } else {
-                        focus = list->cursorIndex();
-                    }
-                    return std::clamp(focus, 0, (std::max)(0, bounded - 1));
-                };
-                const bool plainShortcut =
-                    (request.keyFlags & (protocol::kKeyFlagShift |
-                                         protocol::kKeyFlagControl |
-                                         protocol::kKeyFlagAlt)) == 0;
-                if (scroll && plainShortcut) {
-                    std::optional<std::size_t> column;
-                    bool consume = false;
-                    if (sym == FcitxKey_0) {
-                        consume = true;
-                    } else if (sym >= FcitxKey_1 && sym <= FcitxKey_9) {
-                        consume = true;
-                        const auto digit = static_cast<std::size_t>(sym - FcitxKey_1);
-                        if (digit < dimension)
-                            column = digit;
-                    } else if (sym == FcitxKey_semicolon) {
-                        consume = true;
-                        column = 1U;
-                    } else if (sym == FcitxKey_apostrophe) {
-                        consume = true;
-                        column = 2U;
-                    }
-                    if (consume) {
-                        const auto target =
-                            column ? (verticalScroll
-                                          ? columnSelectionTarget(
-                                                static_cast<std::size_t>(currentFocus()), *column,
-                                                dimension, static_cast<std::size_t>(bounded))
-                                          : rowSelectionTarget(
-                                                static_cast<std::size_t>(currentFocus()), *column,
-                                                dimension, static_cast<std::size_t>(bounded)))
-                                   : std::nullopt;
-                        if (target) {
-                            bulk->candidateFromAll(static_cast<int>(*target)).select(&context);
-                            (void)fcitx5_engine_core_clear_selected_override(
-                                impl_->ledger.get(), &ledgerKey);
-                        }
-                        event.filterAndAccept();
-                        return impl_->collectResult(key, context, true);
-                    }
-                }
-                auto* pageable = list->toPageable();
-                if (scroll && (scrollNext || scrollPrev)) {
-                    // Scroll viewport (bulk candidate list). Horizontal
-                    // layout is a row grid: Up/Down keep the column, while
-                    // page keys land on the row start. Vertical layout is a
-                    // single visible column: Up/Down move within that column,
-                    // while page keys switch to the previous/next column top.
-                    const int rowWidth = static_cast<int>(dimension);
-                    const int available = (std::max)(0, bounded);
-                    const int cursor = currentFocus();
-                    const auto navigation =
-                        verticalScroll && upDown
-                            ? sameColumnNavigationTarget(static_cast<std::size_t>(cursor),
-                                                         dimension,
-                                                         static_cast<std::size_t>(available),
-                                                         scrollNext)
-                        : verticalScroll
-                            ? columnNavigationTarget(static_cast<std::size_t>(cursor),
-                                                     dimension,
-                                                     static_cast<std::size_t>(available),
-                                                     scrollNext, false)
-                            : rowNavigationTarget(static_cast<std::size_t>(cursor),
-                                                  dimension,
-                                                  static_cast<std::size_t>(available),
-                                                  scrollNext, upDown);
-                    int target = static_cast<int>(navigation.index);
-                    if (navigation.beforeStart) {
-                        if (!(verticalScroll && upDown) && pageable && pageable->hasPrev()) {
-                            pageable->prev();
-                            event.filter();
-                            target = !verticalScroll && upDown ? cursor % rowWidth : 0;
-                        }
-                    } else if (navigation.afterEnd) {
-                        if (!(verticalScroll && upDown) && pageable && pageable->hasNext()) {
-                            pageable->next();
-                            event.filter();
-                            target = !verticalScroll && upDown ? cursor % rowWidth : 0;
-                        }
-                    }
-                    (void)fcitx5_engine_core_set_selected_override(
-                        impl_->ledger.get(), &ledgerKey,
-                        static_cast<std::uint32_t>(std::clamp(
-                            target, 0, (std::max)(0, available - 1))));
-                    event.filterAndAccept();
-                    return impl_->collectResult(key, context, true);
-                }
-                if (pageable && (nextPage || prevPage)) {
-                    if (nextPage && pageable->hasNext()) {
-                        pageable->next();
-                        // The highlight jumps to the first candidate of the
-                        // new page instead of keeping the previous position
-                        // (Fcitx's cursor can stay within the page column).
-                        (void)fcitx5_engine_core_set_selected_override(
-                            impl_->ledger.get(), &ledgerKey, 0);
-                    } else if (prevPage && pageable->hasPrev()) {
-                        pageable->prev();
-                        (void)fcitx5_engine_core_set_selected_override(
-                            impl_->ledger.get(), &ledgerKey, 0);
-                    }
-                    event.filterAndAccept();
-                    return impl_->collectResult(key, context, true);
-                }
-                // In ordinary paging, ';' selects the second candidate and
-                // '\'' the third. Scroll mode handled them above relative to
-                // the highlighted row so their semantics match labels 2/3.
-                if (!scroll &&
-                    (sym == FcitxKey_semicolon || sym == FcitxKey_apostrophe)) {
-                    const std::size_t target = sym == FcitxKey_semicolon ? 1U : 2U;
-                    if (target < static_cast<std::size_t>(bounded)) {
-                        const auto& candidate =
-                            bulk && bulk->totalSize() >= 0
-                                ? bulk->candidateFromAll(static_cast<int>(target))
-                                : list->candidate(static_cast<int>(target));
-                        candidate.select(&context);
-                        event.filterAndAccept();
-                        (void)fcitx5_engine_core_clear_selected_override(
-                            impl_->ledger.get(), &ledgerKey);
-                        return impl_->collectResult(key, context, true);
-                    }
-                }
-                // Left/Right move the highlighted candidate without
-                // committing, but only while a candidate list is present. TSF
-                // keeps idle navigation in the host editor, so this does not
-                // freeze caret movement outside real IME input.
-                if (plainShortcut && (sym == FcitxKey_Left || sym == FcitxKey_Right) &&
-                    bounded > 0) {
-                    const int focus = currentFocus();
-                    int nextFocus = focus;
-                    if (scroll && verticalScroll) {
-                        const auto navigation =
-                            columnNavigationTarget(static_cast<std::size_t>(focus),
-                                                   dimension,
-                                                   static_cast<std::size_t>(bounded),
-                                                   sym == FcitxKey_Right, true);
-                        nextFocus = static_cast<int>(navigation.index);
-                    } else {
-                        nextFocus = std::clamp(
-                            focus + (sym == FcitxKey_Right ? 1 : -1), 0, bounded - 1);
-                    }
-                    (void)fcitx5_engine_core_set_selected_override(
-                        impl_->ledger.get(), &ledgerKey,
-                        static_cast<std::uint32_t>(nextFocus));
-                    event.filterAndAccept();
-                    return impl_->collectResult(key, context, true);
-                }
-                // Space / Enter commit the highlighted candidate (the
-                // selectedOverride set by the arrow/page keys) instead of the
-                // Fcitx cursor, which may still point at the first candidate
-                // after the highlight moved. Without this the committed text
-                // does not match the highlighted row.
-                if ((sym == FcitxKey_space || sym == FcitxKey_Return) &&
-                    !event.isRelease()) {
-                    std::uint32_t overrideValue = 0;
-                    if (fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey,
-                                                             &overrideValue)) {
-                        const int focus = static_cast<int>(overrideValue);
-                        if (focus >= 0 && focus < bounded) {
+                FcitxCandidateViewC view{};
+                view.count = count;
+                view.listSize = static_cast<std::int32_t>(list->size());
+                view.cursor = static_cast<std::int32_t>(list->cursorIndex());
+                view.bulkCursor = bulkCursor
+                                      ? static_cast<std::int32_t>(bulkCursor->globalCursorIndex())
+                                      : -1;
+                view.hasBulkCursor = bulkCursor ? 1U : 0U;
+                view.hasBulk = bulk && bulk->totalSize() >= 0 ? 1U : 0U;
+                view.pageable = pageable ? 1U : 0U;
+                view.hasPrev = pageable && pageable->hasPrev() ? 1U : 0U;
+                view.hasNext = pageable && pageable->hasNext() ? 1U : 0U;
+                FcitxCandidateConfigC viewConfig{};
+                viewConfig.scrollMode = impl_->config.scrollMode ? 1U : 0U;
+                viewConfig.vertical =
+                    impl_->config.orientation == config::Orientation::vertical ? 1U : 0U;
+                viewConfig.candidatePageSize =
+                    impl_->config.candidatePageSize
+                        ? static_cast<std::int32_t>(*impl_->config.candidatePageSize)
+                        : -1;
+                std::uint32_t overrideValue = 0;
+                const bool hasOverride =
+                    fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey,
+                                                         &overrideValue) != 0;
+                FcitxCandidateDecisionC decision{};
+                if (fcitx5_engine_core_decide_candidate_action(
+                        static_cast<std::uint32_t>(sym),
+                        (request.keyFlags &
+                         (protocol::kKeyFlagShift | protocol::kKeyFlagControl |
+                          protocol::kKeyFlagAlt)) == 0
+                            ? 1
+                            : 0,
+                        &view, &viewConfig, hasOverride ? 1 : 0, overrideValue, &decision) ==
+                    FCITX_ENGINE_CORE_OK) {
+                    if (decision.consume) {
+                        const auto selectCandidate = [&](std::uint32_t index) {
                             const auto& candidate =
                                 bulk && bulk->totalSize() >= 0
-                                    ? bulk->candidateFromAll(focus)
-                                    : list->candidate(focus);
+                                    ? bulk->candidateFromAll(static_cast<int>(index))
+                                    : list->candidate(static_cast<int>(index));
                             candidate.select(&context);
-                            event.filterAndAccept();
+                        };
+                        switch (decision.action) {
+                        case FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR:
+                            selectCandidate(decision.value);
                             (void)fcitx5_engine_core_clear_selected_override(
                                 impl_->ledger.get(), &ledgerKey);
-                            return impl_->collectResult(key, context, true);
+                            break;
+                        case FCITX_ENGINE_CORE_CANDIDATE_ACTION_SET_OVERRIDE:
+                            (void)fcitx5_engine_core_set_selected_override(
+                                impl_->ledger.get(), &ledgerKey, decision.value);
+                            break;
+                        case FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE:
+                            if (pageable) {
+                                pageable->next();
+                            }
+                            (void)fcitx5_engine_core_set_selected_override(
+                                impl_->ledger.get(), &ledgerKey, decision.value);
+                            break;
+                        case FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_PREV_AND_SET_OVERRIDE:
+                            if (pageable) {
+                                pageable->prev();
+                            }
+                            (void)fcitx5_engine_core_set_selected_override(
+                                impl_->ledger.get(), &ledgerKey, decision.value);
+                            break;
+                        default:
+                            break;
                         }
+                        event.filterAndAccept();
+                        return impl_->collectResult(key, context, true);
                     }
                 }
             }
