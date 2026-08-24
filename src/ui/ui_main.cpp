@@ -136,6 +136,7 @@ extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf1
     std::uint16_t* output,
     std::size_t capacity);
 extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
+extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
 
 } // namespace detail
 
@@ -657,13 +658,7 @@ bool utf8ToWide(std::string_view input, std::wstring& output) {
 }
 
 bool systemUsesDarkAppearance() noexcept {
-    DWORD light = 1;
-    DWORD size = sizeof(light);
-    if (RegGetValueW(
-            HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-            L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size) != ERROR_SUCCESS)
-        return false;
-    return light == 0;
+    return fcitx::windows::ui::detail::fcitx5_windows_common_system_uses_dark_appearance() != 0;
 }
 
 std::filesystem::path executableDirectory() {

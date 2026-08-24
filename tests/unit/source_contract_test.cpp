@@ -219,6 +219,12 @@ int main(int argc, char** argv) {
         uiSource.find("fcitx5_windows_common_current_process_id") == std::string::npos) {
         return fail("CANDIDATE-UI-PID-RUST: Candidate UI current process id must be Rust-owned");
     }
+    if (uiSource.find("RegGetValueW") != std::string::npos ||
+        uiSource.find("AppsUseLightTheme") != std::string::npos ||
+        uiSource.find("fcitx5_windows_common_system_uses_dark_appearance") ==
+            std::string::npos) {
+        return fail("CANDIDATE-UI-DARK-MODE-RUST: Candidate UI dark mode policy must be Rust-owned");
+    }
     const auto launcherSource = read_text(sourceRoot / "src/launcher/launcher_main.cpp");
     const auto trayIconSource = read_text(sourceRoot / "src/launcher/tray_icon.cpp");
     const auto trayIconHeader = read_text(sourceRoot / "src/launcher/tray_icon.h");
@@ -320,6 +326,12 @@ int main(int argc, char** argv) {
         configAppSource.find("fcitx5_windows_common_wide_utf16_to_utf8") ==
             std::string::npos) {
         return fail("CONFIG-APP-TEXT-RUST: Config app UTF-8/UTF-16 conversion must be Rust-owned");
+    }
+    if (configAppSource.find("RegGetValueW") != std::string::npos ||
+        configAppSource.find("AppsUseLightTheme") != std::string::npos ||
+        configAppSource.find("fcitx5_windows_common_system_uses_dark_appearance") ==
+            std::string::npos) {
+        return fail("CONFIG-APP-DARK-MODE-RUST: Config app dark mode policy must be Rust-owned");
     }
     if (controlSource.find("MultiByteToWideChar") != std::string::npos ||
         controlSource.find("WideCharToMultiByte") != std::string::npos ||
@@ -1022,6 +1034,12 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("deadline_and_current_process_id_match_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_system_uses_dark_appearance") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find(
+            "system_dark_appearance_registry_policy_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("AppsUseLightTheme") == std::string::npos ||
         rustWindowsCommonCore.find("ipc_response_header_body_size") ==
             std::string::npos ||
         rustWindowsCommonCore.find("GetOverlappedResult") == std::string::npos ||

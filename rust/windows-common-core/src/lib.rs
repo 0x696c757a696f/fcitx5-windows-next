@@ -18,8 +18,11 @@ const IPC_VERSION: u16 = 14;
 const IPC_HEADER_SIZE: usize = 64;
 const IPC_MAX_HOT_FRAME_SIZE: usize = 256 * 1024;
 const ERROR_INVALID_DATA: u32 = 13;
+const ERROR_SUCCESS: i32 = 0;
 const ERROR_TIMEOUT: u32 = 1460;
 const KF_FLAG_CREATE: u32 = 0x0000_8000;
+const RRF_RT_REG_DWORD: u32 = 0x0000_0010;
+const HKEY_CURRENT_USER: *mut c_void = 0x8000_0001usize as *mut c_void;
 static NEXT_LAUNCHER_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_PIPE_CLIENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -441,6 +444,31 @@ fn pipe_security_state(
     }))
 }
 
+fn system_uses_dark_appearance() -> bool {
+    let mut sub_key: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+        .encode_utf16()
+        .collect();
+    sub_key.push(0);
+    let mut value_name: Vec<u16> = "AppsUseLightTheme".encode_utf16().collect();
+    value_name.push(0);
+    let mut light = 1_u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: The registry key and value are NUL-terminated UTF-16 strings,
+    // and `light`/`size` are valid output buffers for a REG_DWORD query.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            sub_key.as_ptr(),
+            value_name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut light as *mut u32).cast::<c_void>(),
+            &mut size,
+        )
+    };
+    status == ERROR_SUCCESS && size == std::mem::size_of::<u32>() as u32 && light == 0
+}
+
 const SDDL_REVISION_1: u32 = 1;
 
 #[link(name = "advapi32")]
@@ -461,6 +489,15 @@ unsafe extern "system" {
     ) -> i32;
     fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> i32;
     fn IsWellKnownSid(sid: *mut c_void, well_known_sid_type: i32) -> i32;
+    fn RegGetValueW(
+        key: *mut c_void,
+        sub_key: *const u16,
+        value: *const u16,
+        flags: u32,
+        value_type: *mut u32,
+        data: *mut c_void,
+        data_size: *mut u32,
+    ) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -3049,6 +3086,11 @@ pub extern "C" fn fcitx5_windows_common_current_process_id() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_system_uses_dark_appearance() -> u8 {
+    system_uses_dark_appearance() as u8
+}
+
+#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `pipe_name` must be null only when `pipe_name_len` is zero, or point to a
@@ -4133,6 +4175,15 @@ mod tests {
         assert_eq!(fcitx5_windows_common_current_process_id(), unsafe {
             GetCurrentProcessId()
         });
+    }
+
+    #[test]
+    fn system_dark_appearance_registry_policy_matches_cpp_contract() {
+        assert!(matches!(
+            fcitx5_windows_common_system_uses_dark_appearance(),
+            0 | 1
+        ));
+        assert!(matches!(system_uses_dark_appearance(), false | true));
     }
 
     #[test]

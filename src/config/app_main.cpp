@@ -428,6 +428,7 @@ extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf1
 extern "C" Fcitx5WindowsCommonWideToUtf8 fcitx5_windows_common_wide_utf16_to_utf8(
     const std::uint16_t* input, std::size_t inputLen, std::uint8_t* output,
     std::size_t capacity);
+extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
 
 template <typename Function>
 Function resolveProcAddress(HMODULE module, const char* name) noexcept {
@@ -694,13 +695,7 @@ fs::path installationRoot() {
 }
 
 bool systemUsesDarkAppearance() noexcept {
-    DWORD light = 1;
-    DWORD size = sizeof(light);
-    if (RegGetValueW(
-            HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-            L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size) != ERROR_SUCCESS)
-        return false;
-    return light == 0;
+    return fcitx5_windows_common_system_uses_dark_appearance() != 0;
 }
 
 fs::path localDataDirectory() {
