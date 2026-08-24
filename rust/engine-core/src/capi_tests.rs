@@ -739,3 +739,104 @@ fn input_method_selection_c_abi() {
         FCITX_ENGINE_CORE_STALE
     );
 }
+
+// ---------------------------------------------------------------------------
+// E3 event-shape consolidation: handle_key_event C ABI
+// ---------------------------------------------------------------------------
+
+use super::{fcitx5_engine_core_handle_key_event, FcitxEngineKeyDecisionC, FcitxEngineKeyEventC};
+use std::ffi::CString;
+
+fn key_event_c() -> FcitxEngineKeyEventC {
+    FcitxEngineKeyEventC {
+        key_sym: 0x61,
+        key_flags: 0,
+        is_release: 0,
+        hotkey_toggle: std::ptr::null(),
+        hotkey_next: std::ptr::null(),
+        surrounding_text_valid: 1,
+        current_surrounding_valid: 0,
+        has_request_im: 0,
+        request_im_valid: 0,
+        default_im_valid: 1,
+        default_im_nonempty: 1,
+        current_eq_request: 0,
+        current_eq_default: 1,
+        im_overridden: 0,
+        has_candidates: 0,
+        view: FcitxCandidateViewC {
+            count: 0,
+            list_size: 0,
+            cursor: 0,
+            bulk_cursor: -1,
+            has_bulk_cursor: 0,
+            has_bulk: 0,
+            pageable: 0,
+            has_prev: 0,
+            has_next: 0,
+        },
+        config: FcitxCandidateConfigC {
+            scroll_mode: 0,
+            vertical: 0,
+            candidate_page_size: -1,
+        },
+        has_override: 0,
+        override_value: 0,
+    }
+}
+
+#[test]
+fn handle_key_event_c_abi_forward() {
+    let event = key_event_c();
+    let mut out = FcitxEngineKeyDecisionC::default();
+    assert_eq!(
+        unsafe { fcitx5_engine_core_handle_key_event(&event, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        out.surrounding_action,
+        FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET
+    );
+    assert_eq!(out.surrounding_update, 1);
+    assert_eq!(out.im_selection, FCITX_ENGINE_CORE_IM_SELECTION_NONE);
+    assert_eq!(out.im_switch, 0);
+    assert_eq!(out.candidate_consume, 0);
+    assert_eq!(
+        out.candidate_action,
+        FCITX_ENGINE_CORE_CANDIDATE_ACTION_NONE
+    );
+    assert_eq!(out.clear_override, 1);
+    assert_eq!(out.forward_key, 1);
+}
+
+#[test]
+fn handle_key_event_c_abi_hotkey() {
+    let toggle = CString::new("Ctrl+Space").unwrap();
+    let next = CString::new("Ctrl+Shift").unwrap();
+    let mut event = key_event_c();
+    event.key_sym = 0x20;
+    event.key_flags = 0x2; // kKeyFlagControl
+    event.hotkey_toggle = toggle.as_ptr();
+    event.hotkey_next = next.as_ptr();
+    let mut out = FcitxEngineKeyDecisionC::default();
+    assert_eq!(
+        unsafe { fcitx5_engine_core_handle_key_event(&event, &mut out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(out.im_switch, FCITX_ENGINE_CORE_IM_ACTION_TOGGLE);
+    assert_eq!(out.forward_key, 0);
+    assert_eq!(out.clear_override, 0);
+}
+
+#[test]
+fn handle_key_event_c_abi_null_fails_closed() {
+    let event = key_event_c();
+    assert_eq!(
+        unsafe { fcitx5_engine_core_handle_key_event(std::ptr::null(), std::ptr::null_mut()) },
+        FCITX_ENGINE_CORE_STALE
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_handle_key_event(&event, std::ptr::null_mut()) },
+        FCITX_ENGINE_CORE_STALE
+    );
+}

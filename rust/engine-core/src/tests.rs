@@ -1023,3 +1023,155 @@ fn im_selection_ignores_invalid_request_but_uses_default() {
         InputMethodSelection::SelectDefault
     );
 }
+
+// ---------------------------------------------------------------------------
+// E3 event-shape consolidation: handle_key_event corpus
+// ---------------------------------------------------------------------------
+
+mod handle_tests {
+    use super::super::navigation::{CandidateAction, KEY_SYM_DOWN, KEY_SYM_SEMICOLON};
+    use super::super::{
+        handle_key_event, EngineKeyEvent, ImSwitchAction, InputMethodSelection,
+        SurroundingTextAction,
+    };
+    use super::super::{KEY_SYM_ALT_L, KEY_SYM_CONTROL_L, KEY_SYM_SHIFT_L, KEY_SYM_SPACE};
+
+    fn base_event() -> EngineKeyEvent<'static> {
+        EngineKeyEvent {
+            key_sym: 0x61,
+            ctrl: false,
+            shift: false,
+            alt: false,
+            plain_shortcut: true,
+            is_release: false,
+            hotkey_toggle: Some("Ctrl+Space"),
+            hotkey_next: Some("Ctrl+Shift"),
+            surrounding_text_valid: true,
+            current_surrounding_valid: false,
+            has_request_im: false,
+            request_im_valid: false,
+            default_im_valid: true,
+            default_im_nonempty: true,
+            current_eq_request: false,
+            current_eq_default: true,
+            im_overridden: false,
+            has_candidates: false,
+            candidate_count: 0,
+            candidate_list_size: 0,
+            candidate_cursor: 0,
+            candidate_bulk_cursor: -1,
+            candidate_has_bulk_cursor: false,
+            candidate_has_bulk: false,
+            candidate_pageable: false,
+            candidate_has_prev: false,
+            candidate_has_next: false,
+            scroll_mode: false,
+            vertical: false,
+            candidate_page_size: None,
+            has_override: false,
+            override_value: 0,
+        }
+    }
+
+    #[test]
+    fn handle_forward_key_clears_override() {
+        let event = base_event();
+        let decision = handle_key_event(&event);
+        assert_eq!(decision.surrounding.action, SurroundingTextAction::Set);
+        assert_eq!(decision.im_selection, InputMethodSelection::NoChange);
+        assert_eq!(decision.im_switch, None);
+        assert!(decision.candidate.is_none());
+        assert!(decision.clear_override);
+        assert!(decision.forward_key);
+    }
+
+    #[test]
+    fn handle_modifier_forward_keeps_override() {
+        let mut event = base_event();
+        event.key_sym = KEY_SYM_SHIFT_L;
+        let decision = handle_key_event(&event);
+        assert!(!decision.clear_override);
+        assert!(decision.forward_key);
+        event.key_sym = KEY_SYM_CONTROL_L;
+        assert!(!handle_key_event(&event).clear_override);
+        event.key_sym = KEY_SYM_ALT_L;
+        assert!(!handle_key_event(&event).clear_override);
+    }
+
+    #[test]
+    fn handle_hotkey_switch_is_main_path() {
+        let mut event = base_event();
+        event.key_sym = KEY_SYM_SPACE;
+        event.ctrl = true;
+        event.plain_shortcut = false;
+        let decision = handle_key_event(&event);
+        assert_eq!(decision.im_switch, Some(ImSwitchAction::Toggle));
+        assert!(!decision.forward_key);
+        assert!(!decision.clear_override);
+        assert!(decision.candidate.is_none());
+    }
+
+    #[test]
+    fn handle_candidate_navigation_is_main_path() {
+        let mut event = base_event();
+        event.has_candidates = true;
+        event.candidate_count = 10;
+        event.candidate_list_size = 10;
+        event.candidate_pageable = true;
+        event.key_sym = KEY_SYM_SEMICOLON;
+        let decision = handle_key_event(&event);
+        assert_eq!(decision.im_switch, None);
+        assert!(!decision.forward_key);
+        let candidate = decision.candidate.expect("candidate decision");
+        assert!(candidate.consume);
+        assert_eq!(candidate.action, CandidateAction::SelectAndClear(1));
+    }
+
+    #[test]
+    fn handle_candidate_scroll_down_sets_override() {
+        let mut event = base_event();
+        event.has_candidates = true;
+        event.candidate_count = 20;
+        event.candidate_list_size = 10;
+        event.candidate_has_bulk = true;
+        event.candidate_pageable = true;
+        event.scroll_mode = true;
+        event.vertical = true;
+        event.candidate_page_size = Some(5);
+        event.key_sym = KEY_SYM_DOWN;
+        event.has_override = true;
+        event.override_value = 1;
+        let decision = handle_key_event(&event);
+        let candidate = decision.candidate.expect("candidate decision");
+        assert!(candidate.consume);
+        assert_eq!(candidate.action, CandidateAction::SetOverride(2));
+    }
+
+    #[test]
+    fn handle_release_event_skips_decisions() {
+        let mut event = base_event();
+        event.is_release = true;
+        event.key_sym = KEY_SYM_SPACE;
+        event.ctrl = true;
+        let decision = handle_key_event(&event);
+        assert_eq!(decision.im_switch, None);
+        assert!(decision.candidate.is_none());
+        assert!(!decision.clear_override);
+        assert!(decision.forward_key);
+    }
+
+    #[test]
+    fn handle_im_selection_decided_always() {
+        let mut event = base_event();
+        event.current_eq_default = false; // default differs -> SelectDefault
+        let decision = handle_key_event(&event);
+        assert_eq!(decision.im_selection, InputMethodSelection::SelectDefault);
+        // But a hotkey match is still the main path.
+        event.key_sym = KEY_SYM_SPACE;
+        event.ctrl = true;
+        event.plain_shortcut = false;
+        let decision = handle_key_event(&event);
+        assert_eq!(decision.im_selection, InputMethodSelection::SelectDefault);
+        assert_eq!(decision.im_switch, Some(ImSwitchAction::Toggle));
+    }
+}

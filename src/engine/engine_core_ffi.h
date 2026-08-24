@@ -187,4 +187,45 @@ int fcitx5_engine_core_decide_input_method_selection(int hasRequestIm, int reque
                                                      int currentEqRequest, int currentEqDefault,
                                                      int overridden, int* outSelection);
 
+// E3 event-shape consolidation: unified Event→Action entry for a key request.
+// The C++ adapter flattens all key facts into `FcitxEngineKeyEventC`, Rust
+// composes the four product decisions in `processKey` order, and the adapter
+// executes the returned `FcitxEngineKeyDecisionC`.
+struct FcitxEngineKeyEventC {
+    std::uint32_t keySym;
+    std::uint32_t keyFlags; // protocol kKeyFlag* bits (Shift/Control/Alt/...)
+    std::uint8_t isRelease;
+    const char* hotkeyToggle; // NUL-terminated or null
+    const char* hotkeyNext;   // NUL-terminated or null
+    std::uint8_t surroundingTextValid;
+    std::uint8_t currentSurroundingValid;
+    std::uint8_t hasRequestIm;
+    std::uint8_t requestImValid;
+    std::uint8_t defaultImValid;
+    std::uint8_t defaultImNonempty;
+    std::uint8_t currentEqRequest;
+    std::uint8_t currentEqDefault;
+    std::uint8_t imOverridden;
+    std::uint8_t hasCandidates;
+    FcitxCandidateViewC view;
+    FcitxCandidateConfigC config;
+    std::uint8_t hasOverride;
+    std::uint32_t overrideValue;
+};
+
+struct FcitxEngineKeyDecisionC {
+    std::int32_t surroundingAction;
+    std::uint8_t surroundingUpdate;
+    std::int32_t imSelection;
+    std::int32_t imSwitch;
+    std::uint8_t candidateConsume;
+    std::int32_t candidateAction;
+    std::uint32_t candidateValue;
+    std::uint8_t clearOverride;
+    std::uint8_t forwardKey;
+};
+
+int fcitx5_engine_core_handle_key_event(const FcitxEngineKeyEventC* event,
+                                        FcitxEngineKeyDecisionC* outDecision);
+
 } // extern "C"

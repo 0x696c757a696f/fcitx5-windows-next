@@ -452,6 +452,156 @@ pub fn decide_input_method_selection(
     }
 }
 
+// ---------------------------------------------------------------------------
+// E3 event-shape consolidation: single EngineEvent -> EngineKeyDecision entry
+//
+// `handle_key_event` is the unified Event→Action entry for a key request. It
+// composes the four product decisions (surrounding-text, input-method
+// selection, input-method switch hotkey, candidate navigation) in the exact
+// `FcitxRuntime::processKey` order and returns one `EngineKeyDecision` that
+// the C++ adapter executes. The individual decision functions remain public
+// and their C ABI stays available (corpus compatibility).
+// ---------------------------------------------------------------------------
+
+/// Flattened key-event facts for the unified decision.
+pub struct EngineKeyEvent<'a> {
+    pub key_sym: u32,
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub plain_shortcut: bool,
+    pub is_release: bool,
+    pub hotkey_toggle: Option<&'a str>,
+    pub hotkey_next: Option<&'a str>,
+    pub surrounding_text_valid: bool,
+    pub current_surrounding_valid: bool,
+    pub has_request_im: bool,
+    pub request_im_valid: bool,
+    pub default_im_valid: bool,
+    pub default_im_nonempty: bool,
+    pub current_eq_request: bool,
+    pub current_eq_default: bool,
+    pub im_overridden: bool,
+    pub has_candidates: bool,
+    pub candidate_count: i32,
+    pub candidate_list_size: i32,
+    pub candidate_cursor: i32,
+    pub candidate_bulk_cursor: i32,
+    pub candidate_has_bulk_cursor: bool,
+    pub candidate_has_bulk: bool,
+    pub candidate_pageable: bool,
+    pub candidate_has_prev: bool,
+    pub candidate_has_next: bool,
+    pub scroll_mode: bool,
+    pub vertical: bool,
+    pub candidate_page_size: Option<i32>,
+    pub has_override: bool,
+    pub override_value: u32,
+}
+
+/// Unified decision output for a key event. The adapter executes the
+/// surrounding-text and input-method-selection actions first, then exactly one
+/// main path: input-method switch, candidate navigation, or forward-to-Fcitx.
+pub struct EngineKeyDecision {
+    pub surrounding: SurroundingTextDecision,
+    pub im_selection: InputMethodSelection,
+    pub im_switch: Option<ImSwitchAction>,
+    pub candidate: Option<navigation::CandidateDecision>,
+    pub clear_override: bool,
+    pub forward_key: bool,
+}
+
+/// Decides the full action set for a key request, mirroring
+/// `FcitxRuntime::processKey` order:
+///
+/// 1. surrounding-text action (always);
+/// 2. input-method selection (always);
+/// 3. input-method switch hotkey (non-release) — if matched, that is the
+///    main path and nothing else is decided;
+/// 4. candidate navigation (non-release, candidates visible) — if it
+///    consumes the event, that is the main path;
+/// 5. otherwise forward to Fcitx, clearing the highlight override on an
+///    ordinary non-modifier key.
+pub fn handle_key_event(event: &EngineKeyEvent) -> EngineKeyDecision {
+    let surrounding = decide_surrounding_text(
+        event.surrounding_text_valid,
+        event.current_surrounding_valid,
+    );
+    let im_selection = decide_input_method_selection(
+        event.has_request_im,
+        event.request_im_valid,
+        event.default_im_valid,
+        event.default_im_nonempty,
+        event.current_eq_request,
+        event.current_eq_default,
+        event.im_overridden,
+    );
+    if !event.is_release {
+        if let Some(im_switch) = classify_input_method_switch(
+            event.ctrl,
+            event.shift,
+            event.alt,
+            event.key_sym,
+            event.hotkey_toggle,
+            event.hotkey_next,
+        ) {
+            return EngineKeyDecision {
+                surrounding,
+                im_selection,
+                im_switch: Some(im_switch),
+                candidate: None,
+                clear_override: false,
+                forward_key: false,
+            };
+        }
+        if event.has_candidates {
+            let candidate = navigation::decide_candidate_action(
+                event.key_sym,
+                event.plain_shortcut,
+                event.candidate_count,
+                event.candidate_list_size,
+                event.candidate_cursor,
+                event.candidate_bulk_cursor,
+                event.candidate_has_bulk_cursor,
+                event.candidate_has_bulk,
+                event.candidate_pageable,
+                event.candidate_has_prev,
+                event.candidate_has_next,
+                event.scroll_mode,
+                event.vertical,
+                event.candidate_page_size,
+                if event.has_override {
+                    Some(event.override_value)
+                } else {
+                    None
+                },
+            );
+            if candidate.consume {
+                return EngineKeyDecision {
+                    surrounding,
+                    im_selection,
+                    im_switch: None,
+                    candidate: Some(candidate),
+                    clear_override: false,
+                    forward_key: false,
+                };
+            }
+        }
+    }
+    let clear_override = !event.is_release
+        && event.key_sym != KEY_SYM_SHIFT_L
+        && event.key_sym != KEY_SYM_CONTROL_L
+        && event.key_sym != KEY_SYM_ALT_L;
+    EngineKeyDecision {
+        surrounding,
+        im_selection,
+        im_switch: None,
+        candidate: None,
+        clear_override,
+        forward_key: true,
+    }
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

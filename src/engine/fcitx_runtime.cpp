@@ -276,18 +276,11 @@ class EngineInputContext final : public InputContext {
     std::optional<ForwardKeyOperation> takeForwardKey() {
         return std::exchange(forwardKey_, std::nullopt);
     }
-    bool applySurroundingText(const protocol::KeyRequest& request) {
-        // E3-3: the surrounding-text action decision is Rust-owned; this
-        // adapter only executes the returned action against Fcitx.
-        FcitxSurroundingTextDecisionC decision{};
-        if (fcitx5_engine_core_decide_surrounding_text(
-                request.surroundingTextValid ? 1 : 0, surroundingTextValid_ ? 1 : 0,
-                &decision) != FCITX_ENGINE_CORE_OK) {
-            surroundingText().invalidate();
-            surroundingTextValid_ = false;
-            return false;
-        }
-        if (decision.action == FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET) {
+    bool applySurroundingText(const protocol::KeyRequest& request,
+                              const FcitxEngineKeyDecisionC& decision) {
+        // E3: the surrounding-text decision is Rust-owned; this adapter only
+        // executes the returned action against Fcitx.
+        if (decision.surroundingAction == FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET) {
             surroundingText().setText(request.surroundingTextUtf8,
                                       request.surroundingCursor,
                                       request.surroundingAnchor);
@@ -296,7 +289,11 @@ class EngineInputContext final : public InputContext {
             surroundingText().invalidate();
             surroundingTextValid_ = false;
         }
-        return decision.update != 0;
+        return decision.surroundingUpdate != 0;
+    }
+
+    [[nodiscard]] bool hasSurroundingText() const noexcept {
+        return surroundingTextValid_;
     }
 
   private:
@@ -747,12 +744,13 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         impl_->focused = &context;
         impl_->dispatchPendingEvents();
     }
-    if (context.applySurroundingText(request)) {
-        context.updateSurroundingText();
-    }
+    // E3 event-shape consolidation: the unified Event→Action decision is
+    // Rust-owned (`fcitx5_engine_core_handle_key_event`); the adapter only
+    // flattens Fcitx facts and executes the returned decision.
+    KeyEvent event(&context, keyFromRequest(request),
+                   (request.keyFlags & protocol::kKeyFlagRelease) != 0);
+    const KeySym keySym = event.key().sym();
     const auto& group = impl_->instance->inputMethodManager().currentGroup();
-    // E3-3: the input-method selection decision is Rust-owned; the adapter
-    // flattens the entry/equality facts and executes the returned selection.
     const std::string& requestIm = request.inputMethodUtf8;
     const std::string& defaultIm = group.defaultInputMethod();
     const bool hasRequestIm = !requestIm.empty();
@@ -762,156 +760,138 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         impl_->instance->inputMethodManager().entry(defaultIm) != nullptr;
     const std::string& currentIm = impl_->instance->inputMethod(&context);
     int inputMethodOverridden = 0;
-    const bool hasOverride =
+    const bool hasImOverride =
         fcitx5_engine_core_input_method_overridden(impl_->ledger.get(), &ledgerKey,
                                                    &inputMethodOverridden) != 0;
-    int selection = FCITX_ENGINE_CORE_IM_SELECTION_NONE;
-    if (fcitx5_engine_core_decide_input_method_selection(
-            hasRequestIm ? 1 : 0, requestImValid ? 1 : 0, defaultImValid ? 1 : 0,
-            !defaultIm.empty() ? 1 : 0, hasRequestIm && currentIm == requestIm ? 1 : 0,
-            currentIm == defaultIm ? 1 : 0, hasOverride && inputMethodOverridden != 0 ? 1 : 0,
-            &selection) == FCITX_ENGINE_CORE_OK) {
-        if (selection != FCITX_ENGINE_CORE_IM_SELECTION_NONE) {
-            const std::string& target =
-                selection == FCITX_ENGINE_CORE_IM_SELECTION_REQUEST ? requestIm : defaultIm;
-            (void)impl_->instance->inputMethodEngine(target);
-            impl_->instance->setCurrentInputMethod(&context, target, true);
-            impl_->dispatchPendingEvents();
+    FcitxEngineKeyEventC keyEvent{};
+    keyEvent.keySym = static_cast<std::uint32_t>(keySym);
+    keyEvent.keyFlags = request.keyFlags;
+    keyEvent.isRelease = event.isRelease() ? 1U : 0U;
+    keyEvent.hotkeyToggle =
+        impl_->config.hotkeyToggle ? impl_->config.hotkeyToggle->c_str() : nullptr;
+    keyEvent.hotkeyNext =
+        impl_->config.hotkeyNext ? impl_->config.hotkeyNext->c_str() : nullptr;
+    keyEvent.surroundingTextValid = request.surroundingTextValid ? 1U : 0U;
+    keyEvent.currentSurroundingValid = context.hasSurroundingText() ? 1U : 0U;
+    keyEvent.hasRequestIm = hasRequestIm ? 1U : 0U;
+    keyEvent.requestImValid = requestImValid ? 1U : 0U;
+    keyEvent.defaultImValid = defaultImValid ? 1U : 0U;
+    keyEvent.defaultImNonempty = !defaultIm.empty() ? 1U : 0U;
+    keyEvent.currentEqRequest = hasRequestIm && currentIm == requestIm ? 1U : 0U;
+    keyEvent.currentEqDefault = currentIm == defaultIm ? 1U : 0U;
+    keyEvent.imOverridden = hasImOverride && inputMethodOverridden != 0 ? 1U : 0U;
+    if (const auto list = context.inputPanel().candidateList();
+        list && !list->empty()) {
+        const auto* bulk = list->toBulk();
+        const auto* bulkCursor = list->toBulkCursor();
+        auto* pageable = list->toPageable();
+        keyEvent.hasCandidates = 1U;
+        keyEvent.view.count =
+            bulk && bulk->totalSize() >= 0 ? bulk->totalSize() : list->size();
+        keyEvent.view.listSize = static_cast<std::int32_t>(list->size());
+        keyEvent.view.cursor = static_cast<std::int32_t>(list->cursorIndex());
+        keyEvent.view.bulkCursor =
+            bulkCursor ? static_cast<std::int32_t>(bulkCursor->globalCursorIndex()) : -1;
+        keyEvent.view.hasBulkCursor = bulkCursor ? 1U : 0U;
+        keyEvent.view.hasBulk = bulk && bulk->totalSize() >= 0 ? 1U : 0U;
+        keyEvent.view.pageable = pageable ? 1U : 0U;
+        keyEvent.view.hasPrev = pageable && pageable->hasPrev() ? 1U : 0U;
+        keyEvent.view.hasNext = pageable && pageable->hasNext() ? 1U : 0U;
+        keyEvent.config.scrollMode = impl_->config.scrollMode ? 1U : 0U;
+        keyEvent.config.vertical =
+            impl_->config.orientation == config::Orientation::vertical ? 1U : 0U;
+        keyEvent.config.candidatePageSize =
+            impl_->config.candidatePageSize
+                ? static_cast<std::int32_t>(*impl_->config.candidatePageSize)
+                : -1;
+        std::uint32_t overrideValue = 0;
+        if (fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey,
+                                                 &overrideValue)) {
+            keyEvent.hasOverride = 1U;
+            keyEvent.overrideValue = overrideValue;
         }
     }
-    KeyEvent event(&context, keyFromRequest(request),
-                   (request.keyFlags & protocol::kKeyFlagRelease) != 0);
-    // Input-method switch hotkeys from [hotkeys] in config.toml. The toggle
-    // flips between the active input method and keyboard passthrough; next
-    // cycles through [input_methods].enabled.
-    if (!event.isRelease()) {
-        const auto& keySym = event.key().sym();
-        const bool ctrl = (request.keyFlags & protocol::kKeyFlagControl) != 0;
-        const bool shift = (request.keyFlags & protocol::kKeyFlagShift) != 0;
-        const bool alt = (request.keyFlags & protocol::kKeyFlagAlt) != 0;
-        // Read the immutable config snapshot loaded at startup - never reopen
-        // config.toml on the input hot path. The hotkey decision is Rust-owned
-        // (E3 Event -> Action): the C++ adapter only executes the returned
-        // action against Fcitx.
-        const auto& engineConfig = impl_->config;
-        int action = FCITX_ENGINE_CORE_IM_ACTION_NONE;
-        if (fcitx5_engine_core_classify_input_method_switch(
-                ctrl ? 1 : 0, shift ? 1 : 0, alt ? 1 : 0,
-                static_cast<std::uint32_t>(keySym),
-                engineConfig.hotkeyToggle ? engineConfig.hotkeyToggle->c_str() : nullptr,
-                engineConfig.hotkeyNext ? engineConfig.hotkeyNext->c_str() : nullptr,
-                &action)) {
-            if (action == FCITX_ENGINE_CORE_IM_ACTION_TOGGLE) {
-                impl_->toggleInputMethod(engineConfig, key, context);
-                event.filterAndAccept();
-                return impl_->collectResult(key, context, true);
-            }
-            if (action == FCITX_ENGINE_CORE_IM_ACTION_NEXT) {
-                impl_->nextInputMethod(engineConfig, key, context);
-                event.filterAndAccept();
-                return impl_->collectResult(key, context, true);
-            }
-        }
+    FcitxEngineKeyDecisionC decision{};
+    if (fcitx5_engine_core_handle_key_event(&keyEvent, &decision) != FCITX_ENGINE_CORE_OK) {
+        // Fail closed: forward the key to Fcitx without any product action.
+        context.keyEvent(event);
+        const FcitxEngineCaretC failCaret = toLedgerCaret(request.caret);
+        (void)fcitx5_engine_core_set_caret(impl_->ledger.get(), &ledgerKey, &failCaret);
+        return impl_->collectResult(key, context, event.accepted());
     }
-    // Candidate navigation keys while candidates are visible. Fcitx's default
-    // PrevPage/NextPage are Up/Down, which the scroll viewport uses for
-    // continuous cursor movement, so route the number-row page keys and the
-    // comma/period and bracket pairs to the pageable list explicitly, compare
-    // key symbols directly ('+' and '_' carry a Shift state), select the
-    // second/third candidate with ';'/''', and move the highlight with the
-    // Left/Right arrow keys without committing.
-    // E3-2: the candidate-navigation decision is Rust-owned
-    // (`fcitx5_engine_core_decide_candidate_action`); the C++ adapter only
-    // flattens the Fcitx candidate view and executes the returned actions.
-    {
-        const KeySym sym = event.key().sym();
-        if (!event.isRelease()) {
-            if (const auto list = context.inputPanel().candidateList();
-                list && !list->empty()) {
-                const auto* bulk = list->toBulk();
-                const auto* bulkCursor = list->toBulkCursor();
-                auto* pageable = list->toPageable();
-                const int count =
-                    bulk && bulk->totalSize() >= 0 ? bulk->totalSize() : list->size();
-                FcitxCandidateViewC view{};
-                view.count = count;
-                view.listSize = static_cast<std::int32_t>(list->size());
-                view.cursor = static_cast<std::int32_t>(list->cursorIndex());
-                view.bulkCursor = bulkCursor
-                                      ? static_cast<std::int32_t>(bulkCursor->globalCursorIndex())
-                                      : -1;
-                view.hasBulkCursor = bulkCursor ? 1U : 0U;
-                view.hasBulk = bulk && bulk->totalSize() >= 0 ? 1U : 0U;
-                view.pageable = pageable ? 1U : 0U;
-                view.hasPrev = pageable && pageable->hasPrev() ? 1U : 0U;
-                view.hasNext = pageable && pageable->hasNext() ? 1U : 0U;
-                FcitxCandidateConfigC viewConfig{};
-                viewConfig.scrollMode = impl_->config.scrollMode ? 1U : 0U;
-                viewConfig.vertical =
-                    impl_->config.orientation == config::Orientation::vertical ? 1U : 0U;
-                viewConfig.candidatePageSize =
-                    impl_->config.candidatePageSize
-                        ? static_cast<std::int32_t>(*impl_->config.candidatePageSize)
-                        : -1;
-                std::uint32_t overrideValue = 0;
-                const bool hasOverride =
-                    fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey,
-                                                         &overrideValue) != 0;
-                FcitxCandidateDecisionC decision{};
-                if (fcitx5_engine_core_decide_candidate_action(
-                        static_cast<std::uint32_t>(sym),
-                        (request.keyFlags &
-                         (protocol::kKeyFlagShift | protocol::kKeyFlagControl |
-                          protocol::kKeyFlagAlt)) == 0
-                            ? 1
-                            : 0,
-                        &view, &viewConfig, hasOverride ? 1 : 0, overrideValue, &decision) ==
-                    FCITX_ENGINE_CORE_OK) {
-                    if (decision.consume) {
-                        const auto selectCandidate = [&](std::uint32_t index) {
-                            const auto& candidate =
-                                bulk && bulk->totalSize() >= 0
-                                    ? bulk->candidateFromAll(static_cast<int>(index))
-                                    : list->candidate(static_cast<int>(index));
-                            candidate.select(&context);
-                        };
-                        switch (decision.action) {
-                        case FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR:
-                            selectCandidate(decision.value);
-                            (void)fcitx5_engine_core_clear_selected_override(
-                                impl_->ledger.get(), &ledgerKey);
-                            break;
-                        case FCITX_ENGINE_CORE_CANDIDATE_ACTION_SET_OVERRIDE:
-                            (void)fcitx5_engine_core_set_selected_override(
-                                impl_->ledger.get(), &ledgerKey, decision.value);
-                            break;
-                        case FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE:
-                            if (pageable) {
-                                pageable->next();
-                            }
-                            (void)fcitx5_engine_core_set_selected_override(
-                                impl_->ledger.get(), &ledgerKey, decision.value);
-                            break;
-                        case FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_PREV_AND_SET_OVERRIDE:
-                            if (pageable) {
-                                pageable->prev();
-                            }
-                            (void)fcitx5_engine_core_set_selected_override(
-                                impl_->ledger.get(), &ledgerKey, decision.value);
-                            break;
-                        default:
-                            break;
-                        }
-                        event.filterAndAccept();
-                        return impl_->collectResult(key, context, true);
-                    }
+    // Execute the surrounding-text action.
+    if (context.applySurroundingText(request, decision)) {
+        context.updateSurroundingText();
+    }
+    // Execute the input-method selection.
+    if (decision.imSelection != FCITX_ENGINE_CORE_IM_SELECTION_NONE) {
+        const std::string& target =
+            decision.imSelection == FCITX_ENGINE_CORE_IM_SELECTION_REQUEST ? requestIm
+                                                                           : defaultIm;
+        (void)impl_->instance->inputMethodEngine(target);
+        impl_->instance->setCurrentInputMethod(&context, target, true);
+        impl_->dispatchPendingEvents();
+    }
+    // Main path: input-method switch hotkey.
+    if (decision.imSwitch == FCITX_ENGINE_CORE_IM_ACTION_TOGGLE) {
+        impl_->toggleInputMethod(impl_->config, key, context);
+        event.filterAndAccept();
+        return impl_->collectResult(key, context, true);
+    }
+    if (decision.imSwitch == FCITX_ENGINE_CORE_IM_ACTION_NEXT) {
+        impl_->nextInputMethod(impl_->config, key, context);
+        event.filterAndAccept();
+        return impl_->collectResult(key, context, true);
+    }
+    // Main path: candidate navigation.
+    if (decision.candidateConsume) {
+        const auto list = context.inputPanel().candidateList();
+        if (list) {
+            const auto* bulk = list->toBulk();
+            auto* pageable = list->toPageable();
+            const auto selectCandidate = [&](std::uint32_t index) {
+                const auto& candidate =
+                    bulk && bulk->totalSize() >= 0
+                        ? bulk->candidateFromAll(static_cast<int>(index))
+                        : list->candidate(static_cast<int>(index));
+                candidate.select(&context);
+            };
+            switch (decision.candidateAction) {
+            case FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR:
+                selectCandidate(decision.candidateValue);
+                (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(),
+                                                                 &ledgerKey);
+                break;
+            case FCITX_ENGINE_CORE_CANDIDATE_ACTION_SET_OVERRIDE:
+                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(),
+                                                               &ledgerKey,
+                                                               decision.candidateValue);
+                break;
+            case FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE:
+                if (pageable) {
+                    pageable->next();
                 }
+                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(),
+                                                               &ledgerKey,
+                                                               decision.candidateValue);
+                break;
+            case FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_PREV_AND_SET_OVERRIDE:
+                if (pageable) {
+                    pageable->prev();
+                }
+                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(),
+                                                               &ledgerKey,
+                                                               decision.candidateValue);
+                break;
+            default:
+                break;
             }
         }
+        event.filterAndAccept();
+        return impl_->collectResult(key, context, true);
     }
-    if (!event.isRelease() && event.key().sym() != FcitxKey_Shift_L &&
-        event.key().sym() != FcitxKey_Control_L &&
-        event.key().sym() != FcitxKey_Alt_L) {
+    // Forward the key to Fcitx.
+    if (decision.clearOverride) {
         (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(), &ledgerKey);
     }
     context.keyEvent(event);

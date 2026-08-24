@@ -204,6 +204,171 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_end_result(
 mod capi_tests;
 
 // ---------------------------------------------------------------------------
+// E3 event-shape consolidation: unified handle_key_event
+// ---------------------------------------------------------------------------
+
+/// Flattened key-event facts for the unified decision
+/// (`FcitxEngineKeyEventC` in `engine_core_ffi.h`).
+#[repr(C)]
+pub struct FcitxEngineKeyEventC {
+    pub key_sym: u32,
+    pub key_flags: u32,
+    pub is_release: u8,
+    pub hotkey_toggle: *const std::os::raw::c_char,
+    pub hotkey_next: *const std::os::raw::c_char,
+    pub surrounding_text_valid: u8,
+    pub current_surrounding_valid: u8,
+    pub has_request_im: u8,
+    pub request_im_valid: u8,
+    pub default_im_valid: u8,
+    pub default_im_nonempty: u8,
+    pub current_eq_request: u8,
+    pub current_eq_default: u8,
+    pub im_overridden: u8,
+    pub has_candidates: u8,
+    pub view: FcitxCandidateViewC,
+    pub config: FcitxCandidateConfigC,
+    pub has_override: u8,
+    pub override_value: u32,
+}
+
+/// Unified decision output (`FcitxEngineKeyDecisionC`).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FcitxEngineKeyDecisionC {
+    pub surrounding_action: i32,
+    pub surrounding_update: u8,
+    pub im_selection: i32,
+    pub im_switch: i32,
+    pub candidate_consume: u8,
+    pub candidate_action: i32,
+    pub candidate_value: u32,
+    pub clear_override: u8,
+    pub forward_key: u8,
+}
+
+const FLAG_SHIFT: u32 = 1 << 0;
+const FLAG_CONTROL: u32 = 1 << 1;
+const FLAG_ALT: u32 = 1 << 2;
+
+fn cstr_option(pointer: *const std::os::raw::c_char) -> Option<String> {
+    if pointer.is_null() {
+        return None;
+    }
+    // SAFETY: caller provides a valid NUL-terminated string.
+    let text = unsafe { std::ffi::CStr::from_ptr(pointer) };
+    Some(text.to_string_lossy().into_owned())
+}
+
+/// Unified Event→Action decision for a key request (E3 consolidation).
+/// Writes `out_decision` and returns FCITX_ENGINE_CORE_OK (0); returns
+/// FCITX_ENGINE_CORE_STALE (1) on null input (fail closed).
+///
+/// # Safety
+/// `event`/`out_decision` must be valid or null; hotkey strings must be
+/// NUL-terminated or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_handle_key_event(
+    event: *const FcitxEngineKeyEventC,
+    out_decision: *mut FcitxEngineKeyDecisionC,
+) -> i32 {
+    if event.is_null() || out_decision.is_null() {
+        return FCITX_ENGINE_CORE_STALE;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller provides valid pointers (checked above).
+        let event = unsafe { &*event };
+        crate::handle_key_event(&crate::EngineKeyEvent {
+            key_sym: event.key_sym,
+            ctrl: event.key_flags & FLAG_CONTROL != 0,
+            shift: event.key_flags & FLAG_SHIFT != 0,
+            alt: event.key_flags & FLAG_ALT != 0,
+            plain_shortcut: event.key_flags & (FLAG_SHIFT | FLAG_CONTROL | FLAG_ALT) == 0,
+            is_release: event.is_release != 0,
+            hotkey_toggle: cstr_option(event.hotkey_toggle).as_deref(),
+            hotkey_next: cstr_option(event.hotkey_next).as_deref(),
+            surrounding_text_valid: event.surrounding_text_valid != 0,
+            current_surrounding_valid: event.current_surrounding_valid != 0,
+            has_request_im: event.has_request_im != 0,
+            request_im_valid: event.request_im_valid != 0,
+            default_im_valid: event.default_im_valid != 0,
+            default_im_nonempty: event.default_im_nonempty != 0,
+            current_eq_request: event.current_eq_request != 0,
+            current_eq_default: event.current_eq_default != 0,
+            im_overridden: event.im_overridden != 0,
+            has_candidates: event.has_candidates != 0,
+            candidate_count: event.view.count,
+            candidate_list_size: event.view.list_size,
+            candidate_cursor: event.view.cursor,
+            candidate_bulk_cursor: event.view.bulk_cursor,
+            candidate_has_bulk_cursor: event.view.has_bulk_cursor != 0,
+            candidate_has_bulk: event.view.has_bulk != 0,
+            candidate_pageable: event.view.pageable != 0,
+            candidate_has_prev: event.view.has_prev != 0,
+            candidate_has_next: event.view.has_next != 0,
+            scroll_mode: event.config.scroll_mode != 0,
+            vertical: event.config.vertical != 0,
+            candidate_page_size: if event.config.candidate_page_size < 0 {
+                None
+            } else {
+                Some(event.config.candidate_page_size)
+            },
+            has_override: event.has_override != 0,
+            override_value: event.override_value,
+        })
+    }));
+    match result {
+        Ok(decision) => {
+            let (candidate_consume, candidate_action, candidate_value) = match decision.candidate {
+                Some(candidate) => (
+                    if candidate.consume { 1 } else { 0 },
+                    candidate_action_code(candidate.action),
+                    candidate_action_value(candidate.action),
+                ),
+                None => (0, FCITX_ENGINE_CORE_CANDIDATE_ACTION_NONE, 0),
+            };
+            let im_switch = match decision.im_switch {
+                Some(ImSwitchAction::Toggle) => FCITX_ENGINE_CORE_IM_ACTION_TOGGLE,
+                Some(ImSwitchAction::Next) => FCITX_ENGINE_CORE_IM_ACTION_NEXT,
+                None => 0,
+            };
+            let im_selection = match decision.im_selection {
+                crate::InputMethodSelection::NoChange => FCITX_ENGINE_CORE_IM_SELECTION_NONE,
+                crate::InputMethodSelection::SelectRequest => {
+                    FCITX_ENGINE_CORE_IM_SELECTION_REQUEST
+                }
+                crate::InputMethodSelection::SelectDefault => {
+                    FCITX_ENGINE_CORE_IM_SELECTION_DEFAULT
+                }
+            };
+            let surrounding_action = match decision.surrounding.action {
+                crate::SurroundingTextAction::Set => FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET,
+                crate::SurroundingTextAction::Invalidate => {
+                    FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE
+                }
+            };
+            let output = FcitxEngineKeyDecisionC {
+                surrounding_action,
+                surrounding_update: if decision.surrounding.update { 1 } else { 0 },
+                im_selection,
+                im_switch,
+                candidate_consume,
+                candidate_action,
+                candidate_value,
+                clear_override: if decision.clear_override { 1 } else { 0 },
+                forward_key: if decision.forward_key { 1 } else { 0 },
+            };
+            // SAFETY: output pointer checked above.
+            unsafe {
+                *out_decision = output;
+            }
+            FCITX_ENGINE_CORE_OK
+        }
+        Err(_) => FCITX_ENGINE_CORE_STALE,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // E3-3: surrounding-text and input-method-selection decisions
 // ---------------------------------------------------------------------------
 
