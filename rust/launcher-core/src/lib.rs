@@ -23,6 +23,7 @@ const PROTOCOL_VERSION: u16 = 14;
 const PROTOCOL_HEADER_SIZE: usize = 64;
 const PROTOCOL_MAX_HOT_FRAME_SIZE: u32 = 256 * 1024;
 const PROTOCOL_MAX_CONTROL_FRAME_SIZE: u32 = 1024 * 1024;
+const LANG_CHINESE: u16 = 0x04;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[repr(u32)]
@@ -383,6 +384,19 @@ fn write_utf16_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
         }
     }
     value.len()
+}
+
+fn primary_lang_id(language: u16) -> u16 {
+    language & 0x03ff
+}
+
+fn user_default_ui_language_prefers_chinese() -> bool {
+    primary_lang_id(unsafe { GetUserDefaultUILanguage() }) == LANG_CHINESE
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetUserDefaultUILanguage() -> u16;
 }
 
 fn utf16_string_from_raw(text: *const u16, len: usize) -> Option<String> {
@@ -1031,6 +1045,11 @@ pub extern "C" fn fcitx5_launcher_tray_status_text_utf16(
 }
 
 #[no_mangle]
+pub extern "C" fn fcitx5_launcher_user_default_ui_language_prefers_chinese() -> u8 {
+    user_default_ui_language_prefers_chinese() as u8
+}
+
+#[no_mangle]
 /// # Safety
 ///
 /// Non-null input pointers must point to valid byte buffers with exactly the
@@ -1485,6 +1504,16 @@ mod tests {
             String::from_utf16(&output).expect("tooltip should be valid UTF-16"),
             "Fcitx5 for Windows Next — Running — 五笔"
         );
+    }
+
+    #[test]
+    fn tray_ui_language_preference_matches_cpp_contract() {
+        assert_eq!(primary_lang_id(0x0804), LANG_CHINESE);
+        assert_eq!(primary_lang_id(0x0409), 0x09);
+        assert!(matches!(
+            fcitx5_launcher_user_default_ui_language_prefers_chinese(),
+            0 | 1
+        ));
     }
 
     #[test]

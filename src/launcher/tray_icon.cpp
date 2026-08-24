@@ -27,7 +27,7 @@ constexpr UINT kDiagnostics = 104U;
 constexpr UINT kExit = 105U;
 
 bool chineseUi() noexcept {
-    return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
+    return fcitx5_launcher_user_default_ui_language_prefers_chinese() != 0;
 }
 
 HICON statusIcon(HINSTANCE instance, LauncherState launcherState,

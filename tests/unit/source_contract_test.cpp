@@ -312,6 +312,16 @@ int main(int argc, char** argv) {
         trayIconSource.find("L\" — \"") != std::string::npos ||
         rustLauncherCoreSource.find("fcitx5_launcher_tray_status_text_utf16") ==
             std::string::npos ||
+        trayIconSource.find("GetUserDefaultUILanguage") != std::string::npos ||
+        trayIconSource.find("PRIMARYLANGID") != std::string::npos ||
+        trayIconSource.find("LANG_CHINESE") != std::string::npos ||
+        trayIconSource.find("fcitx5_launcher_user_default_ui_language_prefers_chinese") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find(
+            "fcitx5_launcher_user_default_ui_language_prefers_chinese") ==
+            std::string::npos ||
+        rustLauncherCoreSource.find("tray_ui_language_preference_matches_cpp_contract") ==
+            std::string::npos ||
         rustLauncherCoreSource.find("fcitx5_launcher_tray_input_method_display_utf16") ==
             std::string::npos ||
         rustLauncherCoreSource.find("fcitx5_launcher_tray_tooltip_utf16") ==

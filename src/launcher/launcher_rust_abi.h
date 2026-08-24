@@ -64,6 +64,7 @@ std::size_t fcitx5_launcher_tray_status_text_utf16(std::uint32_t launcher_state,
                                                    std::uint32_t engine_state,
                                                    std::uint8_t chinese, std::uint16_t* output,
                                                    std::size_t capacity);
+std::uint8_t fcitx5_launcher_user_default_ui_language_prefers_chinese();
 std::size_t fcitx5_launcher_tray_input_method_display_utf16(
     const std::uint8_t* native_name, std::size_t native_name_len, const std::uint8_t* name,
     std::size_t name_len, const std::uint8_t* id, std::size_t id_len, std::uint16_t* output,
