@@ -413,6 +413,15 @@ namespace {
 namespace fs = std::filesystem;
 using Strings = std::unordered_map<std::string, std::wstring>;
 
+struct Fcitx5WindowsCommonUtf8ToWide {
+    std::uint8_t status;
+    std::size_t utf16Len;
+};
+
+extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
+    const std::uint8_t* input, std::size_t inputLen, std::uint16_t* output,
+    std::size_t capacity);
+
 template <typename Function>
 Function resolveProcAddress(HMODULE module, const char* name) noexcept {
 #if defined(__clang__)
@@ -469,15 +478,17 @@ void setCurrentProcessAppUserModelId(const wchar_t* appId) noexcept {
 }
 
 std::wstring widen(std::string_view value) {
-    if (value.empty())
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    const auto* bytes =
+        value.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(value.data());
+    const auto query =
+        fcitx5_windows_common_utf8_to_wide_utf16(bytes, value.size(), nullptr, 0);
+    if (query.status == 0 || query.utf16Len == 0)
         return {};
-    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                                          static_cast<int>(value.size()), nullptr, 0);
-    if (count <= 0)
-        return {};
-    std::wstring result(static_cast<std::size_t>(count), L'\0');
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                               static_cast<int>(value.size()), result.data(), count) == count
+    std::wstring result(query.utf16Len, L'\0');
+    const auto filled = fcitx5_windows_common_utf8_to_wide_utf16(
+        bytes, value.size(), reinterpret_cast<std::uint16_t*>(result.data()), result.size());
+    return filled.status != 0 && filled.utf16Len == result.size()
                ? result
                : std::wstring{};
 }

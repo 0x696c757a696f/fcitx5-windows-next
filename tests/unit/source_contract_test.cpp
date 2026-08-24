@@ -167,6 +167,12 @@ int main(int argc, char** argv) {
     const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");
     const auto rustProcessExecutionSource =
         read_text(sourceRoot / "rust/process-execution-core/src/lib.rs");
+    if (configAppSource.find("MultiByteToWideChar") != std::string::npos ||
+        configAppSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
+        configAppSource.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
+            std::string::npos) {
+        return fail("CONFIG-APP-TEXT-RUST: Config app UTF-8 to UTF-16 conversion must be Rust-owned");
+    }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
         return fail("REG-PROC-PIPE-001: Control must use the shared process executor");
