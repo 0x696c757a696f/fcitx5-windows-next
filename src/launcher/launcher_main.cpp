@@ -41,12 +41,10 @@ bool absoluteWindowsPath(std::wstring_view path) {
 }
 
 std::wstring executableDirectory() {
-    std::wstring path(32'768, L'\0');
-    const DWORD size =
-        GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (size == 0 || size >= path.size())
+    platform::RuntimeIdentity identity;
+    if (!platform::queryCurrentIdentity(identity) || identity.executablePath.empty())
         return {};
-    path.resize(size);
+    std::wstring path = identity.executablePath;
     const std::size_t separator = path.find_last_of(L"\\/");
     if (separator == std::wstring::npos)
         return {};
