@@ -130,6 +130,16 @@ struct Fcitx5ControlThemeRecord {
     Fcitx5ControlUtf8 license;
     Fcitx5ControlUtf8 description;
 };
+struct Fcitx5ControlThemeDiscoveryEntry {
+    Fcitx5ControlUtf16 path;
+    Fcitx5ControlUtf8 id;
+    Fcitx5ControlUtf8 source;
+};
+struct Fcitx5ControlThemeDiscoveryResult {
+    int status;
+    Fcitx5ControlThemeDiscoveryEntry* entries;
+    std::size_t entryCount;
+};
 struct Fcitx5ControlThemeDetail {
     Fcitx5ControlThemeRecord theme;
     std::uint8_t hasLightBranch;
@@ -274,8 +284,9 @@ std::uint8_t fcitx5_control_bundled_package_present_utf16(Fcitx5ControlUtf16 ins
                                                           Fcitx5ControlUtf8 id);
 Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_type);
 Fcitx5ControlUtf8 fcitx5_control_builtin_theme_id_utf8();
-Fcitx5ControlUtf8 fcitx5_control_builtin_theme_source_utf8();
-Fcitx5ControlUtf8 fcitx5_control_user_theme_source_utf8();
+Fcitx5ControlThemeDiscoveryResult fcitx5_control_discover_themes_utf16(
+    Fcitx5ControlUtf16 install_root, Fcitx5ControlUtf16 data_root);
+void fcitx5_control_theme_discovery_free(Fcitx5ControlThemeDiscoveryResult result);
 std::uint8_t fcitx5_control_theme_record_matches_requested_id_utf8(
     Fcitx5ControlUtf8 source, Fcitx5ControlUtf8 requested_id, Fcitx5ControlUtf8 theme_id);
 Fcitx5ControlUtf8 fcitx5_control_native_package_architecture_utf8();
@@ -1006,14 +1017,6 @@ std::string builtinThemeId() {
     return copyUtf8(fcitx5_control_builtin_theme_id_utf8());
 }
 
-std::string builtinThemeSource() {
-    return copyUtf8(fcitx5_control_builtin_theme_source_utf8());
-}
-
-std::string userThemeSource() {
-    return copyUtf8(fcitx5_control_user_theme_source_utf8());
-}
-
 bool themeRecordMatchesRequestedId(std::string_view source, std::string_view requestedId,
                                    std::string_view themeId) {
     return fcitx5_control_theme_record_matches_requested_id_utf8(
@@ -1283,25 +1286,22 @@ std::optional<ThemeRecord> loadThemeRecord(const fs::path& path, std::string id,
 
 std::vector<ThemeRecord> listThemes(const fs::path& dataRoot) {
     std::vector<ThemeRecord> result;
-    if (auto builtin = loadThemeRecord(installationRoot() / L"resources/themes/default/theme.toml",
-                                       builtinThemeId(), builtinThemeSource())) {
-        result.push_back(std::move(*builtin));
-    }
-    const auto userThemes = dataRoot / L"themes";
-    std::error_code error;
-    if (fs::is_directory(userThemes, error)) {
-        for (const auto& entry : fs::directory_iterator(userThemes, error)) {
-            if (error)
-                break;
-            if (!entry.is_directory(error))
+    const std::wstring installRoot = installationRoot().wstring();
+    const std::wstring dataRootText = dataRoot.wstring();
+    const auto discovery =
+        fcitx5_control_discover_themes_utf16(nativeView(installRoot), nativeView(dataRootText));
+    if (discovery.status == 0 && discovery.entries != nullptr) {
+        for (std::size_t index = 0; index < discovery.entryCount; ++index) {
+            const auto& entry = discovery.entries[index];
+            if (entry.path.ptr == nullptr || entry.path.len == 0)
                 continue;
-            const auto id = narrow(entry.path().filename().wstring());
-            if (!fcitx::package::is_lower_package_id(id))
-                continue;
-            if (auto theme = loadThemeRecord(entry.path() / L"theme.toml", id, userThemeSource()))
+            const std::wstring path(entry.path.ptr, entry.path.len);
+            if (auto theme =
+                    loadThemeRecord(fs::path(path), copyUtf8(entry.id), copyUtf8(entry.source)))
                 result.push_back(std::move(*theme));
         }
     }
+    fcitx5_control_theme_discovery_free(discovery);
     std::ranges::sort(result, {}, &ThemeRecord::id);
     return result;
 }

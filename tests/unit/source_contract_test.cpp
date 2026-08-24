@@ -359,8 +359,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         controlSource.find("fcitx5_control_package_type_name_utf8") == std::string::npos ||
         controlSource.find("fcitx5_control_builtin_theme_id_utf8") == std::string::npos ||
-        controlSource.find("fcitx5_control_builtin_theme_source_utf8") == std::string::npos ||
-        controlSource.find("fcitx5_control_user_theme_source_utf8") == std::string::npos ||
+        controlSource.find("fcitx5_control_discover_themes_utf16") == std::string::npos ||
+        controlSource.find("fcitx5_control_theme_discovery_free") == std::string::npos ||
         controlSource.find("fcitx5_control_theme_record_matches_requested_id_utf8") ==
             std::string::npos ||
         controlSource.find("fcitx5_control_native_package_architecture_utf8") ==
@@ -445,6 +445,9 @@ int main(int argc, char** argv) {
         controlSource.find("value == \"True\"") != std::string::npos ||
         controlSource.find("\"builtin:default\"") != std::string::npos ||
         controlSource.find("source == \"user\"") != std::string::npos ||
+        controlSource.find("resources/themes/default/theme.toml") != std::string::npos ||
+        controlSource.find("dataRoot / L\"themes\"") != std::string::npos ||
+        controlSource.find("L\"theme.toml\"") != std::string::npos ||
         controlSource.find("std::string typeName(") != std::string::npos ||
         controlSource.find("return \"inputmethod-data\"") != std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_atomic_write_utf8_file_utf16") ==
@@ -471,6 +474,10 @@ int main(int argc, char** argv) {
         rustControlCoreSource.find("fcitx5_control_builtin_theme_source_utf8") ==
             std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_user_theme_source_utf8") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_discover_themes_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_theme_discovery_free") ==
             std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_theme_record_matches_requested_id_utf8") ==
             std::string::npos ||
@@ -524,6 +531,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustControlCoreSource.find("theme_vocabulary_and_match_policy_matches_cpp_contract") ==
             std::string::npos ||
+        rustControlCoreSource.find("theme_discovery_matches_windinput_style_contract") ==
+            std::string::npos ||
         rustControlCoreSource.find("native_package_architecture_matches_target_contract") ==
             std::string::npos ||
         rustControlCoreSource.find("package_architecture_match_matches_cpp_contract") ==
@@ -563,7 +572,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos) {
-        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, optional config reads, installed manifest reads, addon metadata vocabulary/bool policy, theme vocabulary/match policy, package config surface policy, repository error classification, bundled package probe inventory, package type/native architecture/match/update/lifecycle/transaction policy, repository release-sequence/metadata/default URL policy, repository/package cache staging/publication, and atomic config file writes must be Rust-owned");
+        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, optional config reads, installed manifest reads, addon metadata vocabulary/bool policy, theme vocabulary/storage/match policy, package config surface policy, repository error classification, bundled package probe inventory, package type/native architecture/match/update/lifecycle/transaction policy, repository release-sequence/metadata/default URL policy, repository/package cache staging/publication, and atomic config file writes must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {

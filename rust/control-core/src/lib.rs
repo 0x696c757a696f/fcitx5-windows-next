@@ -256,6 +256,20 @@ pub struct Fcitx5ControlThemeRecord {
 }
 
 #[repr(C)]
+pub struct Fcitx5ControlThemeDiscoveryEntry {
+    path: Fcitx5ControlUtf16,
+    id: Fcitx5ControlUtf8,
+    source: Fcitx5ControlUtf8,
+}
+
+#[repr(C)]
+pub struct Fcitx5ControlThemeDiscoveryResult {
+    status: i32,
+    entries: *mut Fcitx5ControlThemeDiscoveryEntry,
+    entry_count: usize,
+}
+
+#[repr(C)]
 pub struct Fcitx5ControlThemeDetail {
     theme: Fcitx5ControlThemeRecord,
     has_light_branch: u8,
@@ -1439,6 +1453,8 @@ fn builtin_theme_id() -> Fcitx5ControlUtf8 {
     static_utf8_view("builtin:default")
 }
 
+const THEME_FILE_NAME: &str = "theme.toml";
+
 fn builtin_theme_source() -> Fcitx5ControlUtf8 {
     static_utf8_view("builtin")
 }
@@ -1449,6 +1465,133 @@ fn user_theme_source() -> Fcitx5ControlUtf8 {
 
 fn theme_record_matches_requested_id(source: &[u8], requested_id: &[u8], theme_id: &[u8]) -> bool {
     source != b"user" || theme_id == requested_id
+}
+
+fn builtin_theme_path(install_root: &std::path::Path) -> Option<PathBuf> {
+    if install_root.as_os_str().is_empty() {
+        return None;
+    }
+    Some(
+        install_root
+            .join("resources")
+            .join("themes")
+            .join("default")
+            .join(THEME_FILE_NAME),
+    )
+}
+
+fn user_themes_dir(data_root: &std::path::Path) -> Option<PathBuf> {
+    if data_root.as_os_str().is_empty() {
+        return None;
+    }
+    Some(data_root.join("themes"))
+}
+
+fn theme_file_path(theme_dir: &std::path::Path) -> Option<PathBuf> {
+    if theme_dir.as_os_str().is_empty() {
+        return None;
+    }
+    Some(theme_dir.join(THEME_FILE_NAME))
+}
+
+fn is_lower_theme_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_lowercase()
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
+        })
+}
+
+struct ThemeDiscoveryEntryOwned {
+    path: PathBuf,
+    id: String,
+    source: &'static str,
+}
+
+fn discover_themes(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+) -> Vec<ThemeDiscoveryEntryOwned> {
+    let mut entries = Vec::new();
+    if let Some(path) = builtin_theme_path(install_root) {
+        entries.push(ThemeDiscoveryEntryOwned {
+            path,
+            id: "builtin:default".to_owned(),
+            source: "builtin",
+        });
+    }
+    let Some(user_themes) = user_themes_dir(data_root) else {
+        return entries;
+    };
+    let Ok(directory) = std::fs::read_dir(user_themes) else {
+        return entries;
+    };
+    for entry in directory.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !is_lower_theme_id(&id) {
+            continue;
+        }
+        let Some(path) = theme_file_path(&entry.path()) else {
+            continue;
+        };
+        entries.push(ThemeDiscoveryEntryOwned {
+            path,
+            id,
+            source: "user",
+        });
+    }
+    entries.sort_by(|left, right| left.id.cmp(&right.id));
+    entries
+}
+
+fn leak_utf8_slice(value: &str) -> Fcitx5ControlUtf8 {
+    let mut boxed = value.as_bytes().to_vec().into_boxed_slice();
+    let view = Fcitx5ControlUtf8 {
+        ptr: boxed.as_mut_ptr(),
+        len: boxed.len(),
+    };
+    std::mem::forget(boxed);
+    view
+}
+
+fn leak_utf16_path(value: &std::path::Path) -> Fcitx5ControlUtf16 {
+    let mut boxed = value
+        .as_os_str()
+        .encode_wide()
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let view = Fcitx5ControlUtf16 {
+        ptr: boxed.as_mut_ptr(),
+        len: boxed.len(),
+    };
+    std::mem::forget(boxed);
+    view
+}
+
+unsafe fn free_utf8_slice(value: Fcitx5ControlUtf8) {
+    if !value.ptr.is_null() {
+        let slice = std::ptr::slice_from_raw_parts_mut(value.ptr as *mut u8, value.len);
+        unsafe {
+            drop(Box::from_raw(slice));
+        }
+    }
+}
+
+unsafe fn free_utf16_slice(value: Fcitx5ControlUtf16) {
+    if !value.ptr.is_null() {
+        let slice = std::ptr::slice_from_raw_parts_mut(value.ptr as *mut u16, value.len);
+        unsafe {
+            drop(Box::from_raw(slice));
+        }
+    }
 }
 
 fn native_package_architecture() -> Fcitx5ControlUtf8 {
@@ -2951,6 +3094,70 @@ pub extern "C" fn fcitx5_control_user_theme_source_utf8() -> Fcitx5ControlUtf8 {
 
 /// # Safety
 ///
+/// `install_root` and `data_root` must remain valid UTF-16 for the duration of
+/// the call.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_discover_themes_utf16(
+    install_root: Fcitx5ControlUtf16,
+    data_root: Fcitx5ControlUtf16,
+) -> Fcitx5ControlThemeDiscoveryResult {
+    let Some(install_root) = string_from_utf16(install_root) else {
+        return Fcitx5ControlThemeDiscoveryResult {
+            status: 1,
+            entries: std::ptr::null_mut(),
+            entry_count: 0,
+        };
+    };
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return Fcitx5ControlThemeDiscoveryResult {
+            status: 1,
+            entries: std::ptr::null_mut(),
+            entry_count: 0,
+        };
+    };
+    let entries = discover_themes(&PathBuf::from(install_root), &PathBuf::from(data_root));
+    let entries = entries
+        .iter()
+        .map(|entry| Fcitx5ControlThemeDiscoveryEntry {
+            path: leak_utf16_path(&entry.path),
+            id: leak_utf8_slice(&entry.id),
+            source: leak_utf8_slice(entry.source),
+        })
+        .collect::<Vec<_>>();
+    let mut entries = entries.into_boxed_slice();
+    let result = Fcitx5ControlThemeDiscoveryResult {
+        status: 0,
+        entries: entries.as_mut_ptr(),
+        entry_count: entries.len(),
+    };
+    std::mem::forget(entries);
+    result
+}
+
+/// # Safety
+///
+/// `entries` must be a result previously returned by
+/// `fcitx5_control_discover_themes_utf16`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_discovery_free(
+    entries: Fcitx5ControlThemeDiscoveryResult,
+) {
+    if entries.entries.is_null() {
+        return;
+    }
+    let slice = std::ptr::slice_from_raw_parts_mut(entries.entries, entries.entry_count);
+    let entries = unsafe { Box::from_raw(slice) };
+    for entry in entries.iter() {
+        unsafe {
+            free_utf16_slice(entry.path);
+            free_utf8_slice(entry.id);
+            free_utf8_slice(entry.source);
+        }
+    }
+}
+
+/// # Safety
+///
 /// `source`, `requested_id`, and `theme_id` must remain valid UTF-8 for the
 /// duration of the call when their pointers are non-null.
 #[no_mangle]
@@ -4213,6 +4420,74 @@ mod tests {
             },
             0
         );
+    }
+
+    #[test]
+    fn theme_discovery_matches_windinput_style_contract() {
+        let install_root = PathBuf::from(r"C:\Fcitx5");
+        let data_root = PathBuf::from(r"C:\Users\Alice\AppData\Roaming\Fcitx5");
+        let theme_dir = data_root.join("themes").join("solar");
+        assert_eq!(
+            builtin_theme_path(&install_root),
+            Some(
+                install_root
+                    .join("resources")
+                    .join("themes")
+                    .join("default")
+                    .join(THEME_FILE_NAME)
+            )
+        );
+        assert_eq!(user_themes_dir(&data_root), Some(data_root.join("themes")));
+        assert_eq!(
+            theme_file_path(&theme_dir),
+            Some(theme_dir.join(THEME_FILE_NAME))
+        );
+        assert!(builtin_theme_path(std::path::Path::new("")).is_none());
+        assert!(user_themes_dir(std::path::Path::new("")).is_none());
+        assert!(theme_file_path(std::path::Path::new("")).is_none());
+
+        let temp = std::env::temp_dir().join(format!(
+            "fcitx5_control_theme_discovery_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join("data").join("themes").join("solar")).unwrap();
+        std::fs::create_dir_all(temp.join("data").join("themes").join("Bad")).unwrap();
+        let install = temp.join("install");
+        std::fs::create_dir_all(&install).unwrap();
+
+        let entries = discover_themes(&install, &temp.join("data"));
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|entry| {
+            entry.id == "builtin:default"
+                && entry.source == "builtin"
+                && entry.path.ends_with(r"resources\themes\default\theme.toml")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.id == "solar" && entry.source == "user" && entry.path.ends_with("theme.toml")
+        }));
+        assert!(!entries.iter().any(|entry| entry.id == "Bad"));
+
+        let install_wide = wide(&install.to_string_lossy());
+        let data_wide = wide(&temp.join("data").to_string_lossy());
+        let result = unsafe {
+            fcitx5_control_discover_themes_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: install_wide.as_ptr(),
+                    len: install_wide.len(),
+                },
+                Fcitx5ControlUtf16 {
+                    ptr: data_wide.as_ptr(),
+                    len: data_wide.len(),
+                },
+            )
+        };
+        assert_eq!(result.status, 0);
+        assert_eq!(result.entry_count, 2);
+        unsafe {
+            fcitx5_control_theme_discovery_free(result);
+        }
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
