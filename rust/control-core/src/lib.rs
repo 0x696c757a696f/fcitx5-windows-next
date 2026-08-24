@@ -9,12 +9,19 @@ type Dword = u32;
 type Lstatus = i32;
 type Hkey = *mut c_void;
 
+const GENERIC_WRITE: Dword = 0x4000_0000;
+const CREATE_NEW: Dword = 1;
+const FILE_ATTRIBUTE_NORMAL: Dword = 0x0000_0080;
+const FILE_FLAG_WRITE_THROUGH: Dword = 0x8000_0000;
+const MOVEFILE_REPLACE_EXISTING: Dword = 0x0000_0001;
+const MOVEFILE_WRITE_THROUGH: Dword = 0x0000_0008;
 const ERROR_SUCCESS: Lstatus = 0;
 const ERROR_FILE_NOT_FOUND: Lstatus = 2;
 const KEY_QUERY_VALUE: Dword = 0x0001;
 const KEY_SET_VALUE: Dword = 0x0002;
 const REG_SZ: Dword = 1;
 const HKEY_CURRENT_USER: Hkey = 0x8000_0001_usize as Hkey;
+const INVALID_HANDLE_VALUE: *mut c_void = usize::MAX as *mut c_void;
 const RUN_KEY: &[u16] = &[
     b'S' as u16,
     b'o' as u16,
@@ -136,6 +143,14 @@ const CONTROL_RESTART_ENGINE_COMMANDS: &[u32] = &[
     LAUNCHER_COMMAND_START_DEMAND,
 ];
 const CONTROL_SHUTDOWN_COMMANDS: &[u32] = &[LAUNCHER_COMMAND_SHUTDOWN];
+
+#[repr(C)]
+struct Guid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
 
 pub fn control_schema_json() -> &'static str {
     CONTROL_SCHEMA_JSON
@@ -321,6 +336,36 @@ unsafe extern "system" {
     fn RegCloseKey(h_key: Hkey) -> Lstatus;
 }
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateFileW(
+        file_name: *const u16,
+        desired_access: Dword,
+        share_mode: Dword,
+        security_attributes: *mut c_void,
+        creation_disposition: Dword,
+        flags_and_attributes: Dword,
+        template_file: *mut c_void,
+    ) -> *mut c_void;
+    fn WriteFile(
+        file: *mut c_void,
+        buffer: *const c_void,
+        number_of_bytes_to_write: Dword,
+        number_of_bytes_written: *mut Dword,
+        overlapped: *mut c_void,
+    ) -> i32;
+    fn FlushFileBuffers(file: *mut c_void) -> i32;
+    fn CloseHandle(object: *mut c_void) -> i32;
+    fn DeleteFileW(file_name: *const u16) -> i32;
+    fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: Dword) -> i32;
+}
+
+#[link(name = "ole32")]
+unsafe extern "system" {
+    fn CoCreateGuid(guid: *mut Guid) -> i32;
+    fn StringFromGUID2(guid: *const Guid, string: *mut u16, max: i32) -> i32;
+}
+
 struct RegistryKey(Hkey);
 
 impl RegistryKey {
@@ -337,6 +382,22 @@ impl Drop for RegistryKey {
     }
 }
 
+struct FileHandle(*mut c_void);
+
+impl FileHandle {
+    fn get(&self) -> *mut c_void {
+        self.0
+    }
+}
+
+impl Drop for FileHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
 fn string_from_utf16(value: Fcitx5ControlUtf16) -> Option<OsString> {
     if value.ptr.is_null() {
         return None;
@@ -349,6 +410,91 @@ fn wide_z(value: &std::ffi::OsStr) -> Vec<u16> {
     let mut wide: Vec<u16> = value.encode_wide().collect();
     wide.push(0);
     wide
+}
+
+fn guid_suffix() -> Option<OsString> {
+    let mut guid = Guid {
+        data1: 0,
+        data2: 0,
+        data3: 0,
+        data4: [0; 8],
+    };
+    let status = unsafe { CoCreateGuid(&mut guid) };
+    if status < 0 {
+        return None;
+    }
+    let mut buffer = [0_u16; 40];
+    let len = unsafe { StringFromGUID2(&guid, buffer.as_mut_ptr(), buffer.len() as i32) };
+    if len <= 1 || len as usize > buffer.len() {
+        return None;
+    }
+    Some(OsString::from_wide(&buffer[..len as usize - 1]))
+}
+
+fn temporary_path_for_atomic_write(destination: &std::path::Path) -> Option<PathBuf> {
+    let mut temporary = destination.as_os_str().to_owned();
+    temporary.push(".");
+    temporary.push(guid_suffix()?);
+    temporary.push(".tmp");
+    Some(PathBuf::from(temporary))
+}
+
+fn atomic_write_utf8_file(destination: PathBuf, text: &[u8]) -> Result<(), ()> {
+    if destination.as_os_str().is_empty() || text.len() > Dword::MAX as usize {
+        return Err(());
+    }
+    let parent = destination.parent().ok_or(())?;
+    std::fs::create_dir_all(parent).map_err(|_| ())?;
+    let temporary = temporary_path_for_atomic_write(&destination).ok_or(())?;
+    let temporary_wide = wide_z(temporary.as_os_str());
+    let destination_wide = wide_z(destination.as_os_str());
+    let raw_file = unsafe {
+        CreateFileW(
+            temporary_wide.as_ptr(),
+            GENERIC_WRITE,
+            0,
+            null_mut(),
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
+            null_mut(),
+        )
+    };
+    if raw_file == INVALID_HANDLE_VALUE || raw_file.is_null() {
+        return Err(());
+    }
+    let file = FileHandle(raw_file);
+    let mut written = 0_u32;
+    let write_ok = unsafe {
+        WriteFile(
+            file.get(),
+            text.as_ptr().cast(),
+            text.len() as Dword,
+            &mut written,
+            null_mut(),
+        ) != 0
+    } && written as usize == text.len()
+        && unsafe { FlushFileBuffers(file.get()) != 0 };
+    drop(file);
+    if !write_ok {
+        unsafe {
+            let _ = DeleteFileW(temporary_wide.as_ptr());
+        }
+        return Err(());
+    }
+    let moved = unsafe {
+        MoveFileExW(
+            temporary_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        ) != 0
+    };
+    if !moved {
+        unsafe {
+            let _ = DeleteFileW(temporary_wide.as_ptr());
+        }
+        return Err(());
+    }
+    Ok(())
 }
 
 fn quote(value: &std::ffi::OsStr) -> OsString {
@@ -1392,6 +1538,28 @@ pub unsafe extern "C" fn fcitx5_control_startup_set_utf16(
 
 /// # Safety
 ///
+/// `destination` must remain valid UTF-16 for the duration of the call.
+/// `content` must remain readable for the duration of the call. No pointer is
+/// retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_atomic_write_utf8_file_utf16(
+    destination: Fcitx5ControlUtf16,
+    content: Fcitx5ControlUtf8,
+) -> i32 {
+    let Some(destination) = string_from_utf16(destination) else {
+        return 1;
+    };
+    let Some(content) = utf8_slice(content) else {
+        return 1;
+    };
+    match atomic_write_utf8_file(PathBuf::from(destination), content) {
+        Ok(()) => 0,
+        Err(()) => 1,
+    }
+}
+
+/// # Safety
+///
 /// `out_ptr` and `out_len` must point to writable storage. The returned pointer
 /// is process-static UTF-8 data and must not be freed by the caller.
 #[no_mangle]
@@ -1954,6 +2122,63 @@ mod tests {
             startup_json(false).as_slice(),
             br#"{"format_version":1,"enabled":false}"#
         );
+    }
+
+    #[test]
+    fn atomic_config_file_write_matches_cpp_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-atomic-write-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let destination = root.join("nested").join("config.toml");
+
+        atomic_write_utf8_file(destination.clone(), b"first = true\n")
+            .expect("initial atomic write");
+        assert_eq!(
+            std::fs::read(&destination).expect("read initial content"),
+            b"first = true\n"
+        );
+
+        let path = destination.as_os_str().encode_wide().collect::<Vec<_>>();
+        let replacement = b"second = true\n";
+        let status = unsafe {
+            fcitx5_control_atomic_write_utf8_file_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: path.as_ptr(),
+                    len: path.len(),
+                },
+                Fcitx5ControlUtf8 {
+                    ptr: replacement.as_ptr(),
+                    len: replacement.len(),
+                },
+            )
+        };
+        assert_eq!(status, 0);
+        assert_eq!(
+            std::fs::read(&destination).expect("read replacement content"),
+            replacement
+        );
+        let leftovers = std::fs::read_dir(destination.parent().expect("parent exists"))
+            .expect("read parent directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
+        let null_status = unsafe {
+            fcitx5_control_atomic_write_utf8_file_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: std::ptr::null(),
+                    len: 0,
+                },
+                Fcitx5ControlUtf8 {
+                    ptr: replacement.as_ptr(),
+                    len: replacement.len(),
+                },
+            )
+        };
+        assert_eq!(null_status, 1);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

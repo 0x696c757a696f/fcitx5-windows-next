@@ -264,6 +264,11 @@ add_custom_command(
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-control-core --lib --target
     "${FCITX_RUST_TARGET}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/src/lib.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-control-core staticlib")
 add_custom_target(fcitx5_control_core_rustlib
@@ -272,6 +277,7 @@ add_library(fcitx5_control_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_control_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CONTROL_CORE_STATICLIB}")
 add_dependencies(fcitx5_control_core_rust fcitx5_control_core_rustlib)
+target_link_libraries(fcitx5_control_core_rust INTERFACE advapi32 ole32)
 
 set(FCITX_RUST_REGISTER_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_register_core.lib")

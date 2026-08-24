@@ -303,6 +303,7 @@ int main(int argc, char** argv) {
     }
     const auto controlSource = read_text(sourceRoot / "src/control/control_main.cpp");
     const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");
+    const auto rustControlCoreSource = read_text(sourceRoot / "rust/control-core/src/lib.rs");
     const auto rustProcessExecutionSource =
         read_text(sourceRoot / "rust/process-execution-core/src/lib.rs");
     if (configAppSource.find("MultiByteToWideChar") != std::string::npos ||
@@ -326,15 +327,34 @@ int main(int argc, char** argv) {
         controlSource.find("SHGetKnownFolderPath") != std::string::npos ||
         controlSource.find("CoTaskMemFree") != std::string::npos ||
         controlSource.find("FOLDERID_LocalAppData") != std::string::npos ||
+        controlSource.find("CoCreateGuid") != std::string::npos ||
+        controlSource.find("StringFromGUID2") != std::string::npos ||
+        controlSource.find("CreateFileW(") != std::string::npos ||
+        controlSource.find("WriteFile(") != std::string::npos ||
+        controlSource.find("FlushFileBuffers") != std::string::npos ||
+        controlSource.find("DeleteFileW(") != std::string::npos ||
+        controlSource.find("FILE_FLAG_WRITE_THROUGH") != std::string::npos ||
         controlSource.find("queryCurrentIdentity(identity)") == std::string::npos ||
         controlSource.find("defaultDataRootForModule") == std::string::npos ||
+        controlSource.find("fcitx5_control_atomic_write_utf8_file_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_atomic_write_utf8_file_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("atomic_config_file_write_matches_cpp_contract") ==
+            std::string::npos ||
+        rustControlCoreSource.find("FILE_FLAG_WRITE_THROUGH") == std::string::npos ||
+        rustControlCoreSource.find("MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH") ==
+            std::string::npos ||
+        cmakeSource.find("rust/control-core/src/lib.rs") == std::string::npos ||
+        cmakeSource.find("target_link_libraries(fcitx5_control_core_rust INTERFACE advapi32 ole32)") ==
+            std::string::npos ||
         controlSource.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_wide_utf16_to_utf8") ==
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos) {
-        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, and default data-root discovery must be Rust-owned");
+        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, and atomic config file writes must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
@@ -1618,7 +1638,6 @@ int main(int argc, char** argv) {
         return fail("REG-BRAND-001: product/TSF penguin icons and Settings AppUserModelID must be wired");
     }
     const auto configParserSource = read_text(sourceRoot / "src/config/config_parser.cpp");
-    const auto rustControlCoreSource = read_text(sourceRoot / "rust/control-core/src/lib.rs");
     if (rustControlCoreSource.find("diagnostics_plan_json") == std::string::npos ||
         rustControlCoreSource.find("\"sensitive_input\":false") == std::string::npos ||
         rustControlCoreSource.find("--diagnostics-plan") == std::string::npos ||

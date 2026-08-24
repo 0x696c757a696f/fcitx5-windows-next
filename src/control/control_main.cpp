@@ -10,8 +10,6 @@
 #include <Windows.h>
 
 #include <algorithm>
-#include <array>
-#include <combaseapi.h>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -183,6 +181,8 @@ int fcitx5_control_startup_query_utf16(Fcitx5ControlUtf16 executable_directory,
 int fcitx5_control_startup_set_utf16(Fcitx5ControlUtf16 executable_directory,
                                      Fcitx5ControlUtf16 registry_value,
                                      std::uint8_t enabled);
+int fcitx5_control_atomic_write_utf8_file_utf16(Fcitx5ControlUtf16 destination,
+                                                Fcitx5ControlUtf8 content);
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 int fcitx5_control_usage_text_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
@@ -1101,37 +1101,9 @@ bool validateConfig(const fs::path& source, std::string& text, ParseError& parse
 }
 
 bool atomicWrite(const fs::path& destination, std::string_view text) {
-    std::error_code error;
-    fs::create_directories(destination.parent_path(), error);
-    if (error)
-        return false;
-    GUID identifier{};
-    std::array<wchar_t, 40> identifierText{};
-    if (FAILED(CoCreateGuid(&identifier)) ||
-        StringFromGUID2(identifier, identifierText.data(),
-                        static_cast<int>(identifierText.size())) == 0)
-        return false;
-    const fs::path temporary = destination.wstring() + L"." + identifierText.data() + L".tmp";
-    HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
-    if (file == INVALID_HANDLE_VALUE)
-        return false;
-    DWORD written = 0;
-    const bool writeOk =
-        text.size() <= MAXDWORD &&
-        WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) &&
-        written == text.size() && FlushFileBuffers(file);
-    CloseHandle(file);
-    if (!writeOk) {
-        DeleteFileW(temporary.c_str());
-        return false;
-    }
-    if (!MoveFileExW(temporary.c_str(), destination.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        DeleteFileW(temporary.c_str());
-        return false;
-    }
-    return true;
+    const std::wstring destinationText = destination.wstring();
+    return fcitx5_control_atomic_write_utf8_file_utf16(
+               {destinationText.data(), destinationText.size()}, utf8View(text)) == 0;
 }
 
 bool writeVisualConfig(const fs::path& destination, std::string_view text) {
