@@ -1,6 +1,7 @@
 #include "fcitx_runtime.h"
 #include "candidate_navigation.h"
 #include "config_model.h"
+#include "engine_core_ffi.h"
 #include "key_event.h"
 #include "runtime_identity.h"
 #include <fcitx5_windows/release_identity.h>
@@ -213,6 +214,25 @@ struct KeyHash {
     }
 };
 
+// RAII owner of the Rust `fcitx5-engine-core` context/composition/revision
+// ledger (E2 cutover: the ledger is the single authoritative owner; the C++
+// `nextCompositionId`/`compositions`/`revisions` maps are deleted).
+class EngineLedger final {
+  public:
+    EngineLedger() : handle_(fcitx5_engine_core_ledger_new()) {}
+    ~EngineLedger() { fcitx5_engine_core_ledger_free(handle_); }
+    EngineLedger(const EngineLedger&) = delete;
+    EngineLedger& operator=(const EngineLedger&) = delete;
+    [[nodiscard]] void* get() const noexcept { return handle_; }
+
+  private:
+    void* handle_;
+};
+
+FcitxEngineContextKeyC toLedgerKey(const ClientContextKey& key) {
+    return FcitxEngineContextKeyC{key.processId, key.connectionId, key.contextId};
+}
+
 class EngineInputContext final : public InputContext {
   public:
     struct DeleteSurroundingOperation {
@@ -343,9 +363,8 @@ class FcitxRuntime::Impl final {
     std::unordered_map<ClientContextKey, std::unique_ptr<EngineInputContext>, KeyHash> contexts;
     std::unique_ptr<EngineInputContext> warmupContext;
     EngineInputContext* focused{};
-    std::uint64_t nextCompositionId{1};
-    std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> revisions;
-    std::unordered_map<ClientContextKey, std::uint64_t, KeyHash> compositions;
+    // Rust-authoritative context/composition/revision ledger (E2 cutover).
+    EngineLedger ledger;
     std::unordered_map<ClientContextKey, protocol::CaretRect, KeyHash> carets;
     std::unordered_map<ClientContextKey, bool, KeyHash> popupAllowed;
     std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
@@ -481,8 +500,8 @@ class FcitxRuntime::Impl final {
         }
         if (focused == context)
             focused = nullptr;
-        revisions.erase(iterator->first);
-        compositions.erase(iterator->first);
+        const FcitxEngineContextKeyC ledgerKey = toLedgerKey(iterator->first);
+        fcitx5_engine_core_ledger_forget(ledger.get(), &ledgerKey);
         carets.erase(iterator->first);
         popupAllowed.erase(iterator->first);
         pendingStates.erase(iterator->first);
@@ -547,14 +566,13 @@ class FcitxRuntime::Impl final {
         }
         const auto candidateList = context.inputPanel().candidateList();
         const bool hasCandidates = candidateList && !candidateList->empty();
-        auto& composition = compositions[key];
-        if ((!output.preeditUtf8.empty() || hasCandidates) && composition == 0) {
-            composition = nextCompositionId++;
-            if (composition == 0)
-                composition = nextCompositionId++;
-        }
-        if (output.preeditUtf8.empty() && !hasCandidates)
-            composition = 0;
+        std::uint64_t composition = 0;
+        std::uint64_t revision = 0;
+        const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
+        (void)fcitx5_engine_core_ledger_end_result(
+            ledger.get(), &ledgerKey,
+            (!output.preeditUtf8.empty() || hasCandidates) ? 1 : 0,
+            &composition, &revision);
         if (hasCandidates) {
             const int fcitxPageSize =
                 std::clamp(candidateList->size(), 0,
@@ -632,7 +650,7 @@ class FcitxRuntime::Impl final {
             output.candidateVisibility = output.preeditUtf8.empty() ? 2U : 1U;
         }
         output.compositionId = composition;
-        output.revision = ++revisions[key];
+        output.revision = revision;
         if (const auto found = carets.find(key); found != carets.end())
             output.caret = found->second;
         return output;
@@ -702,10 +720,10 @@ bool FcitxRuntime::initialize(bool safeMode) {
 
 RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                                        const protocol::KeyRequest& request) {
-    const auto currentRevision = impl_->revisions[key];
-    const auto currentComposition = impl_->compositions[key];
-    if (request.metadata.revision != currentRevision ||
-        request.metadata.compositionId != currentComposition) {
+    const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
+    if (fcitx5_engine_core_ledger_begin_key(
+            impl_->ledger.get(), &ledgerKey, request.metadata.revision,
+            request.metadata.compositionId) != FCITX_ENGINE_CORE_OK) {
         throw std::invalid_argument("stale input context state");
     }
     auto& context = impl_->contextFor(key);
@@ -1000,10 +1018,14 @@ RuntimeResult FcitxRuntime::selectCandidate(
             return item.first.processId == targetProcessId &&
                    item.first.contextId == request.metadata.contextId;
         });
-    if (found == impl_->contexts.end() ||
-        impl_->revisions[found->first] != request.metadata.revision ||
-        impl_->compositions[found->first] != request.metadata.compositionId ||
-        request.candidateId == 0 || (request.candidateId >> 8U) != request.metadata.compositionId) {
+    if (found == impl_->contexts.end()) {
+        throw std::invalid_argument("stale candidate selection state");
+    }
+    const FcitxEngineContextKeyC ledgerKey = toLedgerKey(found->first);
+    if (fcitx5_engine_core_ledger_select_candidate(
+            impl_->ledger.get(), &ledgerKey, request.metadata.revision,
+            request.metadata.compositionId, request.candidateId) !=
+        FCITX_ENGINE_CORE_OK) {
         throw std::invalid_argument("stale candidate selection state");
     }
     auto& context = *found->second;

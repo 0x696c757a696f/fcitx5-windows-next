@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
         engineBoundarySource.find("Version: `14`") == std::string::npos ||
         engineBoundarySource.find("candidateSelectRequest") == std::string::npos ||
         engineBoundarySource.find("Current Engine C ABI") == std::string::npos ||
-        engineBoundarySource.find("There is no Rust Engine Product Core ABI") ==
+        engineBoundarySource.find("The Engine now has two Rust ABIs") ==
             std::string::npos ||
         engineBoundarySource.find("Current Upstream Fcitx/Addons Patch Inventory") ==
             std::string::npos ||
@@ -185,6 +185,25 @@ int main(int argc, char** argv) {
     if (warmupSection.find("warmupHasNoUserState") == std::string::npos ||
         warmupSection.find("takeCommit();") != std::string::npos) {
         return fail("REG-WARMUP-001: warmup must fail closed on user-state output");
+    }
+    // ENGINE-E2: the context/composition/revision ledger must stay Rust
+    // authoritative in `fcitx5-engine-core`; the old C++ maps and the native
+    // lane wiring must not regress.
+    if (runtimeSource.find("std::uint64_t nextCompositionId{1}") != std::string::npos ||
+        runtimeSource.find("revisions.erase") != std::string::npos ||
+        runtimeSource.find("++revisions[") != std::string::npos ||
+        runtimeSource.find("compositions[key]") != std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_ledger_begin_key") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_ledger_end_result") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_ledger_select_candidate") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_ledger_forget") == std::string::npos) {
+        return fail("ENGINE-E2: context/composition/revision ledger must be Rust-owned in fcitx_runtime.cpp");
+    }
+    const auto nativeEngineCmakeSource = read_text(sourceRoot / "native-engine/CMakeLists.txt");
+    if (nativeEngineCmakeSource.find("fcitx5_protocol_core_rust") == std::string::npos ||
+        nativeEngineCmakeSource.find("fcitx5_engine_core_rust") == std::string::npos ||
+        nativeEngineCmakeSource.find("x86_64-pc-windows-gnu") == std::string::npos) {
+        return fail("ENGINE-E2: native-engine lane must link the Rust protocol/engine staticlibs (GNU ABI)");
     }
     const auto uiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
     const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");

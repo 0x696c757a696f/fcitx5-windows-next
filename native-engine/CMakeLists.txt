@@ -52,6 +52,64 @@ configure_file(
   "${CMAKE_CURRENT_BINARY_DIR}/generated/fcitx5_windows/release_identity.h"
   @ONLY)
 
+# ---------------------------------------------------------------------------
+# Rust staticlib wiring (E1 protocol-core + E2 engine-core, GNU ABI).
+#
+# The MSYS2/clang64 lane links with the GNU ABI, so the Rust crates are built
+# with the `x86_64-pc-windows-gnu` target into
+# `out/toolchains/rust/target-gnu`. The Windows Rust toolchain provides cargo;
+# rust-std for the GNU target is installed under the toolchain rustlib.
+# `RUSTC_WRAPPER=` (empty) disables the sccache wrapper (not on PATH here).
+# ---------------------------------------------------------------------------
+set(FCITX_RUST_CARGO
+    "${REPOSITORY_ROOT}/out/toolchains/rust/cargo-home/bin/cargo.exe")
+set(FCITX_RUSTUP_HOME "${REPOSITORY_ROOT}/out/toolchains/rust/rustup-home")
+set(FCITX_RUST_CARGO_HOME "${REPOSITORY_ROOT}/out/toolchains/rust/cargo-home")
+set(FCITX_RUST_TARGET_DIR "${REPOSITORY_ROOT}/out/toolchains/rust/target-gnu")
+set(FCITX_RUST_TARGET "x86_64-pc-windows-gnu")
+set(FCITX_RUST_CARGO_ENV
+    "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
+    "CARGO_HOME=${FCITX_RUST_CARGO_HOME}"
+    "CARGO_TARGET_DIR=${FCITX_RUST_TARGET_DIR}"
+    "RUSTC_WRAPPER=")
+
+# Builds one Rust crate as a GNU staticlib and exposes it as
+# `<target>_rust` (imported static library) plus `<target>_rustlib` (build
+# step). `crate` is the Cargo package name; `crate_dir` the `rust/` directory.
+function(fcitx_add_rust_staticlib target crate crate_dir)
+  set(lib_name "${crate}")
+  string(REPLACE "-" "_" lib_name "${lib_name}")
+  set(staticlib
+      "${FCITX_RUST_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/lib${lib_name}.a")
+  set(rust_sources)
+  file(GLOB rust_sources "${REPOSITORY_ROOT}/rust/${crate_dir}/src/*.rs")
+  add_custom_command(
+    OUTPUT "${staticlib}"
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_CARGO_ENV}
+      "${FCITX_RUST_CARGO}" build --locked --manifest-path
+      "${REPOSITORY_ROOT}/Cargo.toml" -p ${crate} --lib --target
+      "${FCITX_RUST_TARGET}"
+    DEPENDS
+      "${REPOSITORY_ROOT}/Cargo.toml"
+      "${REPOSITORY_ROOT}/Cargo.lock"
+      "${REPOSITORY_ROOT}/rust/${crate_dir}/Cargo.toml"
+      ${rust_sources}
+    WORKING_DIRECTORY "${REPOSITORY_ROOT}"
+    COMMENT "Building Rust ${crate} (GNU) staticlib")
+  add_custom_target(${target}_rustlib DEPENDS "${staticlib}")
+  add_library(${target}_rust STATIC IMPORTED GLOBAL)
+  set_target_properties(${target}_rust
+                        PROPERTIES IMPORTED_LOCATION "${staticlib}")
+  add_dependencies(${target}_rust ${target}_rustlib)
+endfunction()
+
+fcitx_add_rust_staticlib(fcitx5_protocol_core fcitx5-protocol-core protocol-core)
+fcitx_add_rust_staticlib(fcitx5_engine_core fcitx5-engine-core engine-core)
+fcitx_add_rust_staticlib(fcitx5_windows_common_core fcitx5-windows-common-core
+                         windows-common-core)
+fcitx_add_rust_staticlib(fcitx5_control_core fcitx5-control-core control-core)
+
 add_executable(
   fcitx5_engine
   "${REPOSITORY_ROOT}/protocol/protocol.cpp"
@@ -84,7 +142,12 @@ target_include_directories(
 target_include_directories(
   fcitx5_engine
   SYSTEM PRIVATE "${REPOSITORY_ROOT}/third_party/tomlplusplus/include")
-target_link_libraries(fcitx5_engine PRIVATE Fcitx5::Core advapi32 user32)
+target_link_libraries(
+  fcitx5_engine
+  PRIVATE Fcitx5::Core advapi32 user32
+          fcitx5_protocol_core_rust fcitx5_engine_core_rust
+          fcitx5_windows_common_core_rust fcitx5_control_core_rust
+          ntdll ws2_32 userenv)
 fcitx_stage_native_runtime(fcitx5_engine)
 
 # Platform keyboard layer following the same design used by Fcitx5 Android:

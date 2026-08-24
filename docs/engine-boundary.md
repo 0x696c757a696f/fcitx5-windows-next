@@ -167,12 +167,15 @@ The Engine now has two Rust ABIs:
   marshalling bridge over 23 typed C functions. Wire compatibility is frozen
   by `tests/unit/protocol_wire_golden.inc` and verified by
   `protocol-differential-contract`.
-- `fcitx5-engine-core` (`src/engine/engine_core_ffi.h`, E2 side-by-side): the
-  per-context composition/revision ledger is Rust authoritative. The C ABI
-  passes only plain data (context key + metadata scalars) and an opaque ledger
-  handle. `src/engine/fcitx_runtime.cpp` is **not cut over yet**; the frozen
-  C++ ledger semantics are pinned by `tests/unit/engine_core_contract_test.cpp`
-  (`engine-core-contract`).
+- `fcitx5-engine-core` (`src/engine/engine_core_ffi.h`, E2 cutover): the
+  per-context composition/revision ledger is Rust authoritative and
+  `FcitxRuntime::Impl` is cut over: the C++ `nextCompositionId`/
+  `compositions`/`revisions` maps are deleted and the runtime calls the C ABI
+  (`begin_key`/`select_candidate`/`end_result`/`forget`). The frozen C++ ledger
+  semantics are pinned by `tests/unit/engine_core_contract_test.cpp`
+  (`engine-core-contract`) and by the real `fcitx5-engine.exe` integration
+  acceptance (`fcitx5_engine_integration_test` baseline/typing-fuzz/safe-mode/
+  chttrans on the native-engine lane).
 
 Adjacent Rust ABIs used around the Engine remain non-Engine boundaries:
 
@@ -267,7 +270,7 @@ Forbidden across Engine Rust/C++ ABI:
 
 1. `E0`: freeze current Engine call graph, owner matrix, protocol schema and corpus. **DONE** (`docs/engine-boundary.md`, `docs/tasks/rebaseline.md`).
 2. `E1`: move Engine protocol DTO, IDs, validation and codec to Rust. **DONE — CUTOVER-GREEN** (2026-08-24): `fcitx5-protocol-core` is the authoritative codec; `protocol/protocol.cpp` is a thin bridge; wire frozen by `protocol_wire_golden.inc`; `protocol-differential-contract` + 79/79 CTest green; Cargo/clippy/fmt green.
-3. `E2`: move context/composition/revision/generation state to Rust. **IN PROGRESS — side-by-side**: `fcitx5-engine-core` ledger (composition id allocation, per-context composition/revision, stale checks, candidate id validation) is Rust-authoritative with a narrow C ABI (`engine_core_ffi.h`); the C++ semantics are frozen by `tests/unit/engine_core_contract_test.cpp` (`engine-core-contract`, green). Remaining E2 work: cut `FcitxRuntime::Impl` over to the ledger, delete the C++ `nextCompositionId`/`compositions`/`revisions` maps, then extend to `EngineEpoch`/`Generation` and the remaining per-context maps (`carets`, `popupAllowed`, `pendingStates`, `selectedOverride`, `inputMethodOverridden`) with the same freeze → side-by-side → differential → cutover discipline.
+3. `E2`: move context/composition/revision/generation state to Rust. **DONE — CUTOVER-GREEN** (2026-08-24): `fcitx5-engine-core` owns the per-context ledger (composition id allocation starting at 1 with reserved-0 wrap, per-context composition/revision, `processKey`/`selectCandidate` stale checks, candidate id validation) with a narrow C ABI (`engine_core_ffi.h`); `FcitxRuntime::Impl` is cut over and the C++ `nextCompositionId`/`compositions`/`revisions` maps are deleted; `engine-core-contract` pins the frozen semantics; real `fcitx5-engine.exe` integration acceptance (baseline/typing-fuzz/safe-mode/chttrans) passes on the native-engine lane. Remaining E2 work: extend to `EngineEpoch`/`Generation` and the remaining per-context maps (`carets`, `popupAllowed`, `pendingStates`, `selectedOverride`, `inputMethodOverridden`) with the same freeze → side-by-side → differential → cutover discipline.
 4. `E3`: converge Fcitx event -> plain EngineEvent -> Rust -> EngineActionBatch -> C++ adapter.
 5. `E4`: move Engine IPC transport/framing/session/deadline policy to Rust.
 6. `E5`: move snapshot and surrounding-text canonicalization to Rust.
@@ -275,13 +278,19 @@ Forbidden across Engine Rust/C++ ABI:
 
 Every step requires regression evidence, no duplicate authoritative state, no new Fcitx object pointer exposure, and unchanged upstream addon behavior.
 
-## Known integration gap: native-engine (MSYS2) lane
+## Known integration gap: native-engine (MSYS2) lane — RESOLVED
 
 `tools/bootstrap-fcitx.ps1` / `tools/test-fcitx.ps1` build the upstream-facing
 `native-engine/CMakeLists.txt` project (the `fcitx5-engine.exe` that links
 `Fcitx5::Core`). Since E1, `protocol/protocol.cpp` calls the Rust
-`fcitx5_protocol_core_*` ABI, and E2 adds `fcitx5_engine_core_*`, but
-`native-engine/CMakeLists.txt` has no Rust staticlib wiring yet. The MSYS2 lane
-needs an explicit Rust (GNU ABI) staticlib step before that engine build can
-link again. This is tracked as part of E4 (Engine IPC/Rust integration) and
-must be exercised before any shipping engine cutover.
+`fcitx5_protocol_core_*` ABI and the runtime calls `fcitx5_engine_core_*`, so
+`native-engine/CMakeLists.txt` now wires the Windows Rust toolchain's GNU-Abi
+staticlibs directly: a `fcitx_add_rust_staticlib` helper builds
+`fcitx5-protocol-core`, `fcitx5-engine-core`, `fcitx5-windows-common-core`, and
+`fcitx5-control-core` with the `x86_64-pc-windows-gnu` target (rust-std for
+that target is installed under `out/toolchains/rust`) into
+`out/toolchains/rust/target-gnu`, and `fcitx5_engine` links them plus
+`ntdll`/`ws2_32`/`userenv`. Verified: `fcitx5-engine.exe` builds, installs, and
+passes the real-engine integration acceptance
+(`fcitx5_engine_integration_test` baseline / typing-fuzz 4000 iterations /
+safe-mode / chttrans) with `FCITX_USER_DATA_ROOT` isolated.
