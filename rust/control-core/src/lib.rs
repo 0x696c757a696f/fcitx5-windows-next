@@ -436,17 +436,21 @@ fn wide_z(value: &std::ffi::OsStr) -> Vec<u16> {
     wide
 }
 
-fn write_wide_path(value: &std::path::Path, out: *mut u16, capacity: usize) -> usize {
-    let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
+fn write_wide_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
     if !out.is_null() && capacity != 0 {
-        let count = wide.len().min(capacity);
+        let count = value.len().min(capacity);
         if count != 0 {
             unsafe {
-                std::ptr::copy_nonoverlapping(wide.as_ptr(), out, count);
+                std::ptr::copy_nonoverlapping(value.as_ptr(), out, count);
             }
         }
     }
-    wide.len()
+    value.len()
+}
+
+fn write_wide_path(value: &std::path::Path, out: *mut u16, capacity: usize) -> usize {
+    let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
+    write_wide_units(&wide, out, capacity)
 }
 
 fn guid_suffix() -> Option<OsString> {
@@ -1455,6 +1459,25 @@ fn package_state_keeps_installed_version(state: &[u8]) -> bool {
 
 fn repository_max_release_sequence(sequences: &[u64]) -> u64 {
     sequences.iter().copied().max().unwrap_or(0)
+}
+
+fn repository_metadata_url(base_url: &[u16], metadata_name: &[u8]) -> Option<Vec<u16>> {
+    if metadata_name.is_empty()
+        || metadata_name
+            .iter()
+            .any(|byte| !byte.is_ascii() || *byte == b'/' || *byte == b'\\' || *byte == 0)
+    {
+        return None;
+    }
+    let mut trimmed = base_url;
+    while trimmed.last().copied() == Some(b'/' as u16) {
+        trimmed = &trimmed[..trimmed.len() - 1];
+    }
+    let mut result = Vec::with_capacity(trimmed.len() + 1 + metadata_name.len());
+    result.extend_from_slice(trimmed);
+    result.push(b'/' as u16);
+    result.extend(metadata_name.iter().map(|byte| *byte as u16));
+    Some(result)
 }
 
 fn package_config_surface_kinds(
@@ -2888,6 +2911,30 @@ pub unsafe extern "C" fn fcitx5_control_repository_max_release_sequence(
 
 /// # Safety
 ///
+/// `base_url` must remain valid UTF-16 for the duration of the call.
+/// `metadata_name` must remain valid ASCII for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_repository_metadata_url_utf16(
+    base_url: Fcitx5ControlUtf16,
+    metadata_name: Fcitx5ControlUtf8,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    if base_url.ptr.is_null() {
+        return 0;
+    }
+    let base_url = unsafe { std::slice::from_raw_parts(base_url.ptr, base_url.len) };
+    let Some(metadata_name) = utf8_slice(metadata_name) else {
+        return 0;
+    };
+    let Some(url) = repository_metadata_url(base_url, metadata_name) else {
+        return 0;
+    };
+    write_wide_units(&url, output, capacity)
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -4011,6 +4058,53 @@ mod tests {
                 fcitx5_control_repository_max_release_sequence(values.as_ptr(), values.len())
             },
             42
+        );
+    }
+
+    #[test]
+    fn repository_metadata_url_matches_cpp_contract() {
+        let base = wide("https://packages.example/v1/dev///");
+        assert_eq!(
+            String::from_utf16(&repository_metadata_url(&base, b"index.json").unwrap()).unwrap(),
+            "https://packages.example/v1/dev/index.json"
+        );
+        assert_eq!(
+            String::from_utf16(&repository_metadata_url(&base, b"index.sig").unwrap()).unwrap(),
+            "https://packages.example/v1/dev/index.sig"
+        );
+        assert!(repository_metadata_url(&base, b"nested/index.json").is_none());
+
+        let name = Fcitx5ControlUtf8 {
+            ptr: b"index.json".as_ptr(),
+            len: 10,
+        };
+        let required = unsafe {
+            fcitx5_control_repository_metadata_url_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: base.as_ptr(),
+                    len: base.len(),
+                },
+                name,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        let mut output = vec![0_u16; required];
+        let written = unsafe {
+            fcitx5_control_repository_metadata_url_utf16(
+                Fcitx5ControlUtf16 {
+                    ptr: base.as_ptr(),
+                    len: base.len(),
+                },
+                name,
+                output.as_mut_ptr(),
+                output.len(),
+            )
+        };
+        assert_eq!(written, output.len());
+        assert_eq!(
+            String::from_utf16(&output).unwrap(),
+            "https://packages.example/v1/dev/index.json"
         );
     }
 

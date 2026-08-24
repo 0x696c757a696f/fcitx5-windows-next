@@ -280,6 +280,9 @@ std::uint8_t fcitx5_control_package_state_satisfies_dependency_utf8(Fcitx5Contro
 std::uint8_t fcitx5_control_package_state_keeps_installed_version_utf8(Fcitx5ControlUtf8 state);
 std::uint64_t fcitx5_control_repository_max_release_sequence(const std::uint64_t* sequences,
                                                              std::size_t sequence_count);
+std::size_t fcitx5_control_repository_metadata_url_utf16(Fcitx5ControlUtf16 base_url,
+                                                         Fcitx5ControlUtf8 metadata_name,
+                                                         wchar_t* output, std::size_t capacity);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -857,6 +860,17 @@ std::uint64_t repositoryMaxReleaseSequence(const fcitx::package::RepositoryIndex
     return fcitx5_control_repository_max_release_sequence(data, sequences.size());
 }
 
+std::wstring repositoryMetadataUrl(std::wstring_view baseUrl, std::string_view metadataName) {
+    const std::size_t required = fcitx5_control_repository_metadata_url_utf16(
+        nativeView(baseUrl), utf8View(metadataName), nullptr, 0);
+    if (required == 0)
+        return {};
+    std::wstring result(required, L'\0');
+    const std::size_t written = fcitx5_control_repository_metadata_url_utf16(
+        nativeView(baseUrl), utf8View(metadataName), result.data(), result.size());
+    return written == result.size() ? result : std::wstring{};
+}
+
 fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
     const auto files = repositoryFiles(dataRoot);
     std::string index;
@@ -879,8 +893,10 @@ fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
 }
 
 void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
-    while (!baseUrl.empty() && baseUrl.back() == L'/')
-        baseUrl.pop_back();
+    const auto indexUrl = repositoryMetadataUrl(baseUrl, "index.json");
+    const auto signatureUrl = repositoryMetadataUrl(baseUrl, "index.sig");
+    if (indexUrl.empty() || signatureUrl.empty())
+        throw fcitx::package::PackageError("network_error", "repository metadata URL is invalid");
     const auto files = repositoryFiles(dataRoot);
     if (!prepareRepositoryCache(files))
         throw fcitx::package::PackageError("io_error", "repository cache staging failed");
@@ -889,10 +905,10 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
     if (incomingIndex.empty() || incomingSignature.empty())
         throw fcitx::package::PackageError("io_error", "repository cache staging failed");
     const auto downloader = executableDirectory() / L"fcitx5-downloader.exe";
-    if (!runProcess(downloader, {L"--download-signed-metadata", baseUrl + L"/index.json",
-                                 incomingIndex.wstring()}) ||
-        !runProcess(downloader, {L"--download-signed-metadata", baseUrl + L"/index.sig",
-                                 incomingSignature.wstring()})) {
+    if (!runProcess(downloader,
+                    {L"--download-signed-metadata", indexUrl, incomingIndex.wstring()}) ||
+        !runProcess(downloader,
+                    {L"--download-signed-metadata", signatureUrl, incomingSignature.wstring()})) {
         cleanupRepositoryCache(files);
         throw fcitx::package::PackageError("network_error", "repository download failed");
     }
