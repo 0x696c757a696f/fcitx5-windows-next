@@ -187,6 +187,7 @@ int main(int argc, char** argv) {
         return fail("REG-WARMUP-001: warmup must fail closed on user-state output");
     }
     const auto uiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
+    const auto rustCandidateCoreSource = read_text(sourceRoot / "rust/candidate-core/src/lib.rs");
     if (uiSource.find("L\"zh-CN\", &format") != std::string::npos) {
         return fail("REG-PROFILE-001: candidate DWrite locale must not be hardcoded to zh-CN");
     }
@@ -196,10 +197,10 @@ int main(int argc, char** argv) {
     }
     if (uiSource.find("contentLocaleUtf8") == std::string::npos ||
         uiSource.find("dwriteLocale_.c_str()") == std::string::npos ||
-        uiSource.find("--locale-self-test") == std::string::npos) {
+        rustCandidateCoreSource.find("--locale-self-test") == std::string::npos) {
         return fail("STAB-CAND-LOCALE-013: Candidate UI must drive DWrite locale from candidate content metadata");
     }
-    if (uiSource.find("--candidate-ux-self-test") == std::string::npos ||
+    if (rustCandidateCoreSource.find("--candidate-ux-self-test") == std::string::npos ||
         uiSource.find("resolveAutomaticPresentation") == std::string::npos ||
         uiSource.find("compositionAutoOrientation_") == std::string::npos ||
         uiSource.find("compositionStableWidth_") == std::string::npos ||
@@ -224,6 +225,19 @@ int main(int argc, char** argv) {
         uiSource.find("fcitx5_windows_common_system_uses_dark_appearance") ==
             std::string::npos) {
         return fail("CANDIDATE-UI-DARK-MODE-RUST: Candidate UI dark mode policy must be Rust-owned");
+    }
+    if (uiSource.find("CommandLineToArgvW") != std::string::npos ||
+        uiSource.find("GetCommandLineW") != std::string::npos ||
+        uiSource.find("LocalFree(argumentValues)") != std::string::npos ||
+        uiSource.find("#include <Shellapi.h>") != std::string::npos ||
+        uiSource.find("std::wcstoul") != std::string::npos ||
+        uiSource.find("fcitx5_candidate_parse_command_line_utf16") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("fcitx5_candidate_parse_command_line_utf16") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("candidate_ui_command_line_matches_cpp_contract") ==
+            std::string::npos) {
+        return fail("CANDIDATE-UI-COMMAND-LINE-RUST: Candidate UI command-line policy must be Rust-owned");
     }
     if (uiSource.find("GetModuleFileNameW") != std::string::npos ||
         uiSource.find("SHGetKnownFolderPath") != std::string::npos ||

@@ -7,7 +7,6 @@
 
 #include <fcitx5_windows/release_identity.h>
 
-#include <Shellapi.h>
 #include <Windows.h>
 #include <d2d1.h>
 #include <dwrite.h>
@@ -17,10 +16,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cerrno>
 #include <charconv>
 #include <cctype>
-#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -105,6 +102,34 @@ struct Fcitx5CandidateSelectionIntent {
     std::uint64_t candidateId{};
 };
 
+struct Fcitx5CandidateCommandLine {
+    std::uint8_t status{};
+    std::uint8_t candidateSelectMode{};
+    std::uint8_t selfTest{};
+    std::uint8_t interactionSelfTest{};
+    std::uint8_t uilessPresentationSelfTest{};
+    std::uint8_t scrollExpansionSelfTest{};
+    std::uint8_t localeSelfTest{};
+    std::uint8_t candidateUxSelfTest{};
+    std::uint8_t reloadTest{};
+    std::uint8_t simulateDeviceLoss{};
+    std::uint8_t scrollDemo{};
+    std::uint8_t demo{};
+    std::uint8_t testOnce{};
+    std::uint8_t safeMode{};
+    std::uint8_t hasParentId{};
+    std::uint8_t reserved{};
+    std::size_t generationLen{};
+    std::size_t candidatePeerLen{};
+    std::uint32_t parentId{};
+    std::uint32_t targetProcessId{};
+    std::uint64_t engineEpoch{};
+    std::uint64_t contextId{};
+    std::uint64_t compositionId{};
+    std::uint64_t revision{};
+    std::uint64_t candidateId{};
+};
+
 struct Fcitx5WindowsCommonUtf8ToWide {
     std::uint8_t status;
     std::size_t utf16Len;
@@ -129,6 +154,13 @@ extern "C" std::uint8_t fcitx5_candidate_hit_test(const Fcitx5CandidateLayoutRec
 extern "C" Fcitx5CandidateSelectionIntent fcitx5_candidate_selection_intent(
     std::uint32_t targetProcessId, std::uint64_t engineEpoch, std::uint64_t contextId,
     std::uint64_t compositionId, std::uint64_t revision, std::uint64_t candidateId);
+extern "C" Fcitx5CandidateCommandLine fcitx5_candidate_parse_command_line_utf16(
+    const std::uint16_t* arguments,
+    std::size_t argumentsLen,
+    std::uint16_t* generationOut,
+    std::size_t generationCapacity,
+    std::uint16_t* candidatePeerOut,
+    std::size_t candidatePeerCapacity);
 extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
     const std::uint8_t* input,
     std::size_t input_len,
@@ -354,6 +386,36 @@ template <typename RectType>
         targetProcessId, engineEpoch, contextId, compositionId, revision, candidateId);
     return {intent.targetProcessId, intent.engineEpoch, intent.contextId,
             intent.compositionId, intent.revision, intent.candidateId};
+}
+
+struct ParsedCommandLine {
+    detail::Fcitx5CandidateCommandLine flags{};
+    std::wstring generation;
+    std::wstring candidatePeer;
+    bool valid{};
+};
+
+[[nodiscard]] inline ParsedCommandLine parseCommandLine(std::wstring_view arguments) {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    const auto* input = reinterpret_cast<const std::uint16_t*>(arguments.data());
+    const auto query = detail::fcitx5_candidate_parse_command_line_utf16(
+        input, arguments.size(), nullptr, 0, nullptr, 0);
+    if (query.status == 0)
+        return {};
+    ParsedCommandLine parsed;
+    parsed.flags = query;
+    parsed.generation.resize(query.generationLen);
+    parsed.candidatePeer.resize(query.candidatePeerLen);
+    const auto filled = detail::fcitx5_candidate_parse_command_line_utf16(
+        input, arguments.size(), reinterpret_cast<std::uint16_t*>(parsed.generation.data()),
+        parsed.generation.size(), reinterpret_cast<std::uint16_t*>(parsed.candidatePeer.data()),
+        parsed.candidatePeer.size());
+    if (filled.status == 0 || filled.generationLen != parsed.generation.size() ||
+        filled.candidatePeerLen != parsed.candidatePeer.size())
+        return {};
+    parsed.flags = filled;
+    parsed.valid = true;
+    return parsed;
 }
 
 } // namespace fcitx::windows::ui
@@ -668,38 +730,15 @@ std::filesystem::path executableDirectory() {
     return std::filesystem::path(identity.executablePath).parent_path();
 }
 
-bool parseUnsigned(std::wstring_view text, std::uint64_t& value) noexcept {
-    if (text.empty()) return false;
-    wchar_t* end = nullptr;
-    errno = 0;
-    const auto parsed = _wcstoui64(text.data(), &end, 10);
-    if (errno == ERANGE || end != text.data() + text.size()) return false;
-    value = parsed;
-    return true;
-}
-
-int runCandidateSelectionTest(int argumentCount, wchar_t** arguments) {
-    if (argumentCount != 9 ||
-        std::wstring_view(arguments[1]) != L"--candidate-select-test") return 64;
-    std::uint64_t targetProcessId = 0;
-    std::uint64_t engineEpoch = 0;
-    std::uint64_t contextId = 0;
-    std::uint64_t compositionId = 0;
-    std::uint64_t revision = 0;
-    std::uint64_t candidateId = 0;
-    if (!parseUnsigned(arguments[3], targetProcessId) || targetProcessId > UINT32_MAX ||
-        !parseUnsigned(arguments[4], engineEpoch) ||
-        !parseUnsigned(arguments[5], contextId) ||
-        !parseUnsigned(arguments[6], compositionId) ||
-        !parseUnsigned(arguments[7], revision) ||
-        !parseUnsigned(arguments[8], candidateId)) return 65;
+int runCandidateSelectionTest(const fcitx::windows::ui::ParsedCommandLine& parsed) {
     fcitx::windows::platform::RuntimeIdentity identity;
     if (!fcitx::windows::platform::queryCurrentIdentity(identity)) return 66;
     fcitx::windows::ipc::PipeClient client(
         fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
-        fcitx::windows::ipc::PeerPolicy::exact(arguments[2]));
-    return client.selectCandidate(static_cast<std::uint32_t>(targetProcessId), engineEpoch,
-                                  contextId, compositionId, revision, candidateId)
+        fcitx::windows::ipc::PeerPolicy::exact(parsed.candidatePeer));
+    return client.selectCandidate(parsed.flags.targetProcessId, parsed.flags.engineEpoch,
+                                  parsed.flags.contextId, parsed.flags.compositionId,
+                                  parsed.flags.revision, parsed.flags.candidateId)
                ? 0
                : 67;
 }
@@ -2382,50 +2421,32 @@ void servePresentation(HWND window, bool testOnce) {
 
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR commandLine, _In_ int) {
     enableDpiAwareness();
-    int argumentCount = 0;
-    wchar_t** argumentValues = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
-    if (argumentValues) {
-        for (int index = 1; index < argumentCount; ++index) {
-            if (std::wstring_view(argumentValues[index]) == L"--generation" &&
-                index + 1 < argumentCount) {
-                const std::wstring generation = argumentValues[++index];
-                if (!SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION",
-                                             generation.c_str()) ||
-                    fcitx::windows::platform::currentRuntimeGeneration() != generation) {
-                    LocalFree(argumentValues);
-                    return 1;
-                }
-            }
-        }
-    }
-    if (argumentValues && argumentCount > 1 &&
-        std::wstring_view(argumentValues[1]) == L"--candidate-select-test") {
-        const int result = runCandidateSelectionTest(argumentCount, argumentValues);
-        LocalFree(argumentValues);
-        return result;
-    }
-    if (argumentValues) LocalFree(argumentValues);
     const std::wstring_view arguments = commandLine ? commandLine : L"";
-    const bool selfTest = arguments.find(L"--self-test") != std::wstring_view::npos;
-    const bool interactionSelfTest =
-        arguments.find(L"--interaction-self-test") != std::wstring_view::npos;
-    const bool uilessPresentationSelfTest =
-        arguments.find(L"--uiless-presentation-self-test") != std::wstring_view::npos;
-    const bool scrollExpansionSelfTest =
-        arguments.find(L"--scroll-expansion-self-test") != std::wstring_view::npos;
-    const bool localeSelfTest =
-        arguments.find(L"--locale-self-test") != std::wstring_view::npos;
-    const bool candidateUxSelfTest =
-        arguments.find(L"--candidate-ux-self-test") != std::wstring_view::npos;
-    const bool reloadTest = arguments.find(L"--reload-test") != std::wstring_view::npos;
-    const bool simulateDeviceLoss =
-        arguments.find(L"--simulate-device-loss") != std::wstring_view::npos;
-    const bool scrollDemo = arguments.find(L"--scroll-demo") != std::wstring_view::npos;
-    const bool demo = interactionSelfTest || scrollExpansionSelfTest || localeSelfTest ||
-                      candidateUxSelfTest || scrollDemo ||
-                      arguments.find(L"--demo") != std::wstring_view::npos;
-    const bool testOnce = arguments.find(L"--test-once") != std::wstring_view::npos;
-    const bool safeMode = arguments.find(L"--safe-mode") != std::wstring_view::npos;
+    const auto parsed = fcitx::windows::ui::parseCommandLine(arguments);
+    if (!parsed.valid)
+        return 1;
+    if (!parsed.generation.empty() &&
+        (!SetEnvironmentVariableW(L"FCITX5_RELEASE_GENERATION", parsed.generation.c_str()) ||
+         fcitx::windows::platform::currentRuntimeGeneration() != parsed.generation)) {
+        return 1;
+    }
+    if (parsed.flags.candidateSelectMode != 0) {
+        if (parsed.flags.candidateSelectMode != 1)
+            return parsed.flags.candidateSelectMode;
+        return runCandidateSelectionTest(parsed);
+    }
+    const bool selfTest = parsed.flags.selfTest != 0;
+    const bool interactionSelfTest = parsed.flags.interactionSelfTest != 0;
+    const bool uilessPresentationSelfTest = parsed.flags.uilessPresentationSelfTest != 0;
+    const bool scrollExpansionSelfTest = parsed.flags.scrollExpansionSelfTest != 0;
+    const bool localeSelfTest = parsed.flags.localeSelfTest != 0;
+    const bool candidateUxSelfTest = parsed.flags.candidateUxSelfTest != 0;
+    const bool reloadTest = parsed.flags.reloadTest != 0;
+    const bool simulateDeviceLoss = parsed.flags.simulateDeviceLoss != 0;
+    const bool scrollDemo = parsed.flags.scrollDemo != 0;
+    const bool demo = parsed.flags.demo != 0;
+    const bool testOnce = parsed.flags.testOnce != 0;
+    const bool safeMode = parsed.flags.safeMode != 0;
     CandidateWindow window;
     if (!window.create(instance, demo, safeMode,
                        demo || interactionSelfTest || candidateUxSelfTest) ||
@@ -2456,21 +2477,15 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     }
     if (selfTest)
         return 0;
-    const auto parentMarker = arguments.find(L"--parent-pid ");
-    if (parentMarker != std::wstring_view::npos) {
-        const wchar_t* number = arguments.data() + parentMarker + 13;
-        wchar_t* end = nullptr;
-        const unsigned long parentId = std::wcstoul(number, &end, 10);
-        if (end != number && parentId != 0) {
-            const HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parentId);
-            if (parent) {
-                const HWND handle = window.handle();
-                std::thread([parent, handle] {
-                    WaitForSingleObject(parent, INFINITE);
-                    CloseHandle(parent);
-                    PostMessageW(handle, WM_CLOSE, 0, 0);
-                }).detach();
-            }
+    if (parsed.flags.hasParentId != 0) {
+        const HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parsed.flags.parentId);
+        if (parent) {
+            const HWND handle = window.handle();
+            std::thread([parent, handle] {
+                WaitForSingleObject(parent, INFINITE);
+                CloseHandle(parent);
+                PostMessageW(handle, WM_CLOSE, 0, 0);
+            }).detach();
         }
     }
     std::thread(servePresentation, window.handle(), testOnce).detach();
