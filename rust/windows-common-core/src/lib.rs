@@ -20,6 +20,7 @@ const IPC_MAX_HOT_FRAME_SIZE: usize = 256 * 1024;
 const ERROR_INVALID_DATA: u32 = 13;
 const ERROR_TIMEOUT: u32 = 1460;
 static NEXT_LAUNCHER_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_PIPE_CLIENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 fn version() -> &'static str {
     option_env!("FCITX_WINDOWS_VERSION").unwrap_or(VERSION_FALLBACK)
@@ -1509,6 +1510,10 @@ fn next_launcher_request_id() -> u64 {
     NEXT_LAUNCHER_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+fn next_pipe_client_request_id() -> u64 {
+    NEXT_PIPE_CLIENT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 fn apply_key_response_scalars(
     input: Fcitx5WindowsCommonKeyResponseScalarInput,
 ) -> Fcitx5WindowsCommonKeyResponseScalars {
@@ -2919,6 +2924,11 @@ pub extern "C" fn fcitx5_windows_common_next_launcher_request_id() -> u64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_next_pipe_client_request_id() -> u64 {
+    next_pipe_client_request_id()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_ipc_status_ok(status: u32) -> u8 {
     ipc_status_ok(status) as u8
 }
@@ -3748,6 +3758,10 @@ mod tests {
         let first = fcitx5_windows_common_next_launcher_request_id();
         let second = fcitx5_windows_common_next_launcher_request_id();
         assert_eq!(second, first + 1);
+        let pipe_first = fcitx5_windows_common_next_pipe_client_request_id();
+        let pipe_second = fcitx5_windows_common_next_pipe_client_request_id();
+        assert_ne!(pipe_first, 0);
+        assert_eq!(pipe_second, pipe_first + 1);
         assert_eq!(fcitx5_windows_common_ipc_status_ok(0), 1);
         assert_eq!(fcitx5_windows_common_ipc_status_ok(1), 0);
     }

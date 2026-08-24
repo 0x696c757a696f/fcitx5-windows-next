@@ -6,7 +6,6 @@
 
 #include <Windows.h>
 
-#include <atomic>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -115,7 +114,6 @@ private:
     bool handshakeComplete_{};
     std::uint64_t engineEpoch_{};
     std::uint32_t sessionId_{};
-    std::atomic<std::uint64_t> nextRequestId_{1};
     std::unordered_map<std::uint64_t, ContextState> contexts_;
 };
 

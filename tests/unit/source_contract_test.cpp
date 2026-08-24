@@ -190,6 +190,7 @@ int main(int argc, char** argv) {
         return fail("REG-PEER-ID-001: pipe peer verification must use Rust-owned process and executable policy");
     }
     const auto pipeClientSource = read_text(sourceRoot / "src/ipc/pipe_client.cpp");
+    const auto pipeClientHeaderSource = read_text(sourceRoot / "src/ipc/pipe_client.h");
     const auto launcherClientSource = read_text(sourceRoot / "src/ipc/launcher_client.cpp");
     if (pipeClientSource.find("CreateEventW") != std::string::npos ||
         pipeClientSource.find("CreateFileW") != std::string::npos ||
@@ -202,6 +203,9 @@ int main(int argc, char** argv) {
         pipeClientSource.find("CloseHandle") != std::string::npos ||
         pipeClientSource.find("GetTickCount64") != std::string::npos ||
         pipeClientSource.find("GetCurrentProcessId") != std::string::npos ||
+        pipeClientSource.find("std::atomic") != std::string::npos ||
+        pipeClientSource.find("fetch_add") != std::string::npos ||
+        pipeClientSource.find("nextRequestId_") != std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_pipe_transact") == std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
             std::string::npos ||
@@ -210,6 +214,8 @@ int main(int argc, char** argv) {
         pipeClientSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_current_process_id") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_next_pipe_client_request_id") ==
             std::string::npos ||
         launcherClientSource.find("CreateEventW") != std::string::npos ||
         launcherClientSource.find("CreateFileW") != std::string::npos ||
@@ -246,6 +252,8 @@ int main(int argc, char** argv) {
         return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open, close, deadline, current-process, and transact helpers");
     }
     if (pipeClientSource.find("protocol::decodeHeader(header") != std::string::npos ||
+        pipeClientHeaderSource.find("#include <atomic>") != std::string::npos ||
+        pipeClientHeaderSource.find("nextRequestId_") != std::string::npos ||
         pipeClientSource.find("std::array<std::uint8_t, protocol::kHeaderSize> header") !=
             std::string::npos ||
         pipeClientSource.find("response.assign(header.begin(), header.end())") !=
@@ -576,6 +584,8 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_launcher_response") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_next_launcher_request_id") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_next_pipe_client_request_id") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_ipc_status_ok") ==
             std::string::npos ||

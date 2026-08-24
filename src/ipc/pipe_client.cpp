@@ -22,6 +22,7 @@ extern "C" Fcitx5WindowsCommonPipeTransact fcitx5_windows_common_pipe_transact(
 extern "C" std::uint64_t fcitx5_windows_common_deadline_after_milliseconds(
     std::uint32_t milliseconds);
 extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
+extern "C" std::uint64_t fcitx5_windows_common_next_pipe_client_request_id();
 extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     const std::uint16_t* pipe_name,
     std::size_t pipe_name_len,
@@ -260,7 +261,7 @@ bool PipeClient::handshake(std::uint64_t deadline) noexcept {
             return true;
         }
         if (sessionId_ == 0) return false;
-        const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        const auto requestId = fcitx5_windows_common_next_pipe_client_request_id();
         protocol::HelloRequest request{
             protocol::Metadata{requestId, 0, 0, sessionId_, 0, 0, 0},
             static_cast<std::uint32_t>(sizeof(void*) * 8),
@@ -391,7 +392,7 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
             disconnect();
             return false;
         }
-        const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        const auto requestId = fcitx5_windows_common_next_pipe_client_request_id();
         auto& contextState = contexts_[contextId];
         protocol::KeyRequest request{
             protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
@@ -434,7 +435,7 @@ bool PipeClient::selectCandidate(std::uint32_t targetProcessId,
             contextId == 0 || compositionId == 0 || revision == 0 || candidateId == 0) {
             return false;
         }
-        const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        const auto requestId = fcitx5_windows_common_next_pipe_client_request_id();
         const protocol::CandidateSelectRequest request{
             protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
                                compositionId, revision},
@@ -467,7 +468,7 @@ bool PipeClient::pollState(std::uint64_t contextId, KeyResult& result) noexcept 
         const auto found = contexts_.find(contextId);
         if (found == contexts_.end() || !connect(deadline) || !handshake(deadline)) return false;
         auto& contextState = found->second;
-        const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        const auto requestId = fcitx5_windows_common_next_pipe_client_request_id();
         const protocol::StateRequest request{
             protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
                                contextState.compositionId, contextState.revision}};
@@ -498,7 +499,7 @@ bool PipeClient::queryEngineStatus(protocol::EngineStatusResponse& result,
             disconnect();
             return false;
         }
-        const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
+        const auto requestId = fcitx5_windows_common_next_pipe_client_request_id();
         const protocol::EngineStatusRequest request{
             protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, 0, 0, 0}};
         std::vector<std::uint8_t> responseBytes;
