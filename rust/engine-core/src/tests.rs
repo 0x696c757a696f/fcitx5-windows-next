@@ -1282,3 +1282,64 @@ fn status_short_label_ascii_pair_or_first_code_point() {
     // Overlong (invalid UTF-8) lead is still classified by the leading byte.
     assert_eq!(status_short_label(b"\xc0\x80"), b"\xc0\x80");
 }
+
+// ---------------------------------------------------------------------------
+// E5-2: snapshot DTO limits validation
+// ---------------------------------------------------------------------------
+
+use super::{validate_snapshot, SnapshotFacts};
+
+fn facts() -> SnapshotFacts {
+    SnapshotFacts {
+        commit_utf8_len: 3,
+        preedit_utf8_len: 2,
+        candidate_count: 5,
+        candidate_label_len_max: 1,
+        candidate_text_len_max: 4,
+        candidate_comment_len_max: 8,
+        content_locale_utf8_len: 5,
+    }
+}
+
+#[test]
+fn snapshot_validation_accepts_normal_facts() {
+    assert!(validate_snapshot(&facts()));
+}
+
+#[test]
+fn snapshot_validation_rejects_oversized_fields() {
+    let mut f = facts();
+    f.commit_utf8_len = 16 * 1024 + 1;
+    assert!(!validate_snapshot(&f));
+    f = facts();
+    f.preedit_utf8_len = 16 * 1024 + 1;
+    assert!(!validate_snapshot(&f));
+    f = facts();
+    f.candidate_count = 129;
+    assert!(!validate_snapshot(&f));
+    f = facts();
+    f.candidate_label_len_max = 4097;
+    assert!(!validate_snapshot(&f));
+    f = facts();
+    f.candidate_text_len_max = 4097;
+    assert!(!validate_snapshot(&f));
+    f = facts();
+    f.candidate_comment_len_max = 4097;
+    assert!(!validate_snapshot(&f));
+    f = facts();
+    f.content_locale_utf8_len = 36;
+    assert!(!validate_snapshot(&f));
+}
+
+#[test]
+fn snapshot_validation_accepts_boundary_values() {
+    let mut f = facts();
+    f.commit_utf8_len = 16 * 1024;
+    f.preedit_utf8_len = 16 * 1024;
+    f.candidate_count = 128;
+    f.candidate_label_len_max = 4096;
+    f.candidate_text_len_max = 4096;
+    f.candidate_comment_len_max = 4096;
+    f.content_locale_utf8_len = 35;
+    assert!(validate_snapshot(&f));
+}

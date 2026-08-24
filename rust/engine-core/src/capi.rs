@@ -1097,3 +1097,73 @@ pub unsafe extern "C" fn fcitx5_engine_core_input_method_overridden(
         Ok(false) | Err(_) => 0,
     }
 }
+
+// ---------------------------------------------------------------------------
+// E5-2: typed EngineSnapshot DTO + limits validation C ABI
+// ---------------------------------------------------------------------------
+
+/// Flat canonical engine snapshot facts (`FcitxEngineSnapshotC`). Length
+/// fields are byte lengths of the payloads held by the C++ adapter.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FcitxEngineSnapshotC {
+    pub handled: u8,
+    pub commit_utf8_len: usize,
+    pub preedit_utf8_len: usize,
+    pub preedit_caret_utf8: u32,
+    pub composition_id: u64,
+    pub revision: u64,
+    pub candidate_count: u32,
+    pub candidate_label_len_max: usize,
+    pub candidate_text_len_max: usize,
+    pub candidate_comment_len_max: usize,
+    pub content_locale_utf8_len: usize,
+    pub selected_candidate: u32,
+    pub candidate_page: u32,
+    pub candidate_total: u32,
+    pub candidate_visibility: u8,
+    pub candidate_page_size: u32,
+    pub candidate_bulk: u8,
+    pub candidate_end: u8,
+    pub delete_surrounding_text: u8,
+    pub delete_surrounding_offset: i32,
+    pub delete_surrounding_size: u32,
+    pub forward_key: u8,
+    pub forward_key_sym: u32,
+    pub forward_key_states: u32,
+    pub forward_key_code: i32,
+    pub forward_key_release: u8,
+    pub caret_valid: u8,
+    pub popup_allowed: u8,
+}
+
+/// Validates the canonical engine snapshot payload budgets. Returns 1 when
+/// valid, 0 when invalid or on null input (fail closed).
+///
+/// # Safety
+/// `snapshot` must be valid or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_validate_snapshot(
+    snapshot: *const FcitxEngineSnapshotC,
+) -> i32 {
+    if snapshot.is_null() {
+        return 0;
+    }
+    let result = panic::catch_unwind(|| {
+        // SAFETY: caller provides a valid pointer (checked above).
+        let snapshot = unsafe { &*snapshot };
+        crate::validate_snapshot(&crate::SnapshotFacts {
+            commit_utf8_len: snapshot.commit_utf8_len,
+            preedit_utf8_len: snapshot.preedit_utf8_len,
+            candidate_count: snapshot.candidate_count,
+            candidate_label_len_max: snapshot.candidate_label_len_max,
+            candidate_text_len_max: snapshot.candidate_text_len_max,
+            candidate_comment_len_max: snapshot.candidate_comment_len_max,
+            content_locale_utf8_len: snapshot.content_locale_utf8_len,
+        })
+    });
+    match result {
+        Ok(true) => 1,
+        _ => 0,
+    }
+}

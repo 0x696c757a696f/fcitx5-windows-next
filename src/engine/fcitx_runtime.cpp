@@ -652,6 +652,48 @@ class FcitxRuntime::Impl final {
         FcitxEngineCaretC caretC{};
         if (fcitx5_engine_core_caret(ledger.get(), &ledgerKey, &caretC))
             output.caret = fromLedgerCaret(caretC);
+        // E5-2: the canonical snapshot payload budgets are Rust-validated;
+        // fail closed if the snapshot exceeds the wire limits.
+        FcitxEngineSnapshotC snapshot{};
+        snapshot.handled = output.handled ? 1U : 0U;
+        snapshot.commitUtf8Len = output.commitUtf8.size();
+        snapshot.preeditUtf8Len = output.preeditUtf8.size();
+        snapshot.preeditCaretUtf8 = output.preeditCaretUtf8;
+        snapshot.compositionId = output.compositionId;
+        snapshot.revision = output.revision;
+        snapshot.candidateCount = static_cast<std::uint32_t>(output.candidates.size());
+        std::size_t labelMax = 0;
+        std::size_t textMax = 0;
+        std::size_t commentMax = 0;
+        for (const auto& candidate : output.candidates) {
+            labelMax = (std::max)(labelMax, candidate.labelUtf8.size());
+            textMax = (std::max)(textMax, candidate.textUtf8.size());
+            commentMax = (std::max)(commentMax, candidate.commentUtf8.size());
+        }
+        snapshot.candidateLabelLenMax = labelMax;
+        snapshot.candidateTextLenMax = textMax;
+        snapshot.candidateCommentLenMax = commentMax;
+        snapshot.contentLocaleUtf8Len = output.contentLocaleUtf8.size();
+        snapshot.selectedCandidate = output.selectedCandidate;
+        snapshot.candidatePage = output.candidatePage;
+        snapshot.candidateTotal = output.candidateTotal;
+        snapshot.candidateVisibility = output.candidateVisibility;
+        snapshot.candidatePageSize = output.candidatePageSize;
+        snapshot.candidateBulk = output.candidateBulk ? 1U : 0U;
+        snapshot.candidateEnd = output.candidateEnd ? 1U : 0U;
+        snapshot.deleteSurroundingText = output.deleteSurroundingText ? 1U : 0U;
+        snapshot.deleteSurroundingOffset = output.deleteSurroundingOffset;
+        snapshot.deleteSurroundingSize = output.deleteSurroundingSize;
+        snapshot.forwardKey = output.forwardKey ? 1U : 0U;
+        snapshot.forwardKeySym = output.forwardKeySym;
+        snapshot.forwardKeyStates = output.forwardKeyStates;
+        snapshot.forwardKeyCode = output.forwardKeyCode;
+        snapshot.forwardKeyRelease = output.forwardKeyRelease ? 1U : 0U;
+        snapshot.caretValid = output.caret.valid ? 1U : 0U;
+        snapshot.popupAllowed = output.popupAllowed ? 1U : 0U;
+        if (fcitx5_engine_core_validate_snapshot(&snapshot) == 0) {
+            throw std::invalid_argument("invalid engine snapshot");
+        }
         return output;
     }
 };

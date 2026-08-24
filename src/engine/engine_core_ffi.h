@@ -262,4 +262,41 @@ std::size_t fcitx5_engine_core_status_short_label(const std::uint8_t* text,
                                                   std::uint8_t* out,
                                                   std::size_t outCapacity);
 
+// E5-2: typed EngineSnapshot DTO limits validation. `validate_snapshot`
+// checks the payload budgets (commit/preedit 16 KiB, candidates 128, each
+// candidate field 4 KiB, locale 35 bytes); the engine fails closed on
+// rejection at snapshot construction.
+struct FcitxEngineSnapshotC {
+    std::uint8_t handled;
+    std::size_t commitUtf8Len;
+    std::size_t preeditUtf8Len;
+    std::uint32_t preeditCaretUtf8;
+    std::uint64_t compositionId;
+    std::uint64_t revision;
+    std::uint32_t candidateCount;
+    std::size_t candidateLabelLenMax;
+    std::size_t candidateTextLenMax;
+    std::size_t candidateCommentLenMax;
+    std::size_t contentLocaleUtf8Len;
+    std::uint32_t selectedCandidate;
+    std::uint32_t candidatePage;
+    std::uint32_t candidateTotal;
+    std::uint8_t candidateVisibility;
+    std::uint32_t candidatePageSize;
+    std::uint8_t candidateBulk;
+    std::uint8_t candidateEnd;
+    std::uint8_t deleteSurroundingText;
+    std::int32_t deleteSurroundingOffset;
+    std::uint32_t deleteSurroundingSize;
+    std::uint8_t forwardKey;
+    std::uint32_t forwardKeySym;
+    std::uint32_t forwardKeyStates;
+    std::int32_t forwardKeyCode;
+    std::uint8_t forwardKeyRelease;
+    std::uint8_t caretValid;
+    std::uint8_t popupAllowed;
+};
+
+int fcitx5_engine_core_validate_snapshot(const FcitxEngineSnapshotC* snapshot);
+
 } // extern "C"

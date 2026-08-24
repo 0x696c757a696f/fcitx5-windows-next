@@ -840,3 +840,64 @@ fn handle_key_event_c_abi_null_fails_closed() {
         FCITX_ENGINE_CORE_STALE
     );
 }
+
+// ---------------------------------------------------------------------------
+// E5-2: snapshot validation C ABI
+// ---------------------------------------------------------------------------
+
+use super::{fcitx5_engine_core_validate_snapshot, FcitxEngineSnapshotC};
+
+fn snapshot_c() -> FcitxEngineSnapshotC {
+    FcitxEngineSnapshotC {
+        handled: 1,
+        commit_utf8_len: 3,
+        preedit_utf8_len: 2,
+        preedit_caret_utf8: 1,
+        composition_id: 1,
+        revision: 1,
+        candidate_count: 5,
+        candidate_label_len_max: 1,
+        candidate_text_len_max: 4,
+        candidate_comment_len_max: 8,
+        content_locale_utf8_len: 5,
+        selected_candidate: 0,
+        candidate_page: 0,
+        candidate_total: 5,
+        candidate_visibility: 1,
+        candidate_page_size: 5,
+        candidate_bulk: 0,
+        candidate_end: 1,
+        delete_surrounding_text: 0,
+        delete_surrounding_offset: 0,
+        delete_surrounding_size: 0,
+        forward_key: 0,
+        forward_key_sym: 0,
+        forward_key_states: 0,
+        forward_key_code: 0,
+        forward_key_release: 0,
+        caret_valid: 0,
+        popup_allowed: 1,
+    }
+}
+
+#[test]
+fn validate_snapshot_c_abi() {
+    let snapshot = snapshot_c();
+    assert_eq!(
+        unsafe { fcitx5_engine_core_validate_snapshot(&snapshot) },
+        1
+    );
+    // Oversized candidate count.
+    let mut bad = snapshot_c();
+    bad.candidate_count = 129;
+    assert_eq!(unsafe { fcitx5_engine_core_validate_snapshot(&bad) }, 0);
+    // Oversized commit.
+    let mut bad = snapshot_c();
+    bad.commit_utf8_len = 16 * 1024 + 1;
+    assert_eq!(unsafe { fcitx5_engine_core_validate_snapshot(&bad) }, 0);
+    // Null fails closed.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_validate_snapshot(std::ptr::null()) },
+        0
+    );
+}

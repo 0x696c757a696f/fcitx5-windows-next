@@ -439,6 +439,33 @@ int runCorpus() {
             "short label must take the first code point for non-ASCII");
     }
 
+    // E5-2: snapshot DTO limits validation.
+    {
+        FcitxEngineSnapshotC snapshot{};
+        snapshot.commitUtf8Len = 3;
+        snapshot.preeditUtf8Len = 2;
+        snapshot.candidateCount = 5;
+        snapshot.candidateLabelLenMax = 1;
+        snapshot.candidateTextLenMax = 4;
+        snapshot.candidateCommentLenMax = 8;
+        snapshot.contentLocaleUtf8Len = 5;
+        failures += !expect(
+            fcitx5_engine_core_validate_snapshot(&snapshot) == 1,
+            "normal snapshot facts must validate");
+        snapshot.candidateCount = 129;
+        failures += !expect(
+            fcitx5_engine_core_validate_snapshot(&snapshot) == 0,
+            "oversized candidate count must be rejected");
+        snapshot.candidateCount = 5;
+        snapshot.commitUtf8Len = 16 * 1024 + 1;
+        failures += !expect(
+            fcitx5_engine_core_validate_snapshot(&snapshot) == 0,
+            "oversized commit must be rejected");
+        failures += !expect(
+            fcitx5_engine_core_validate_snapshot(nullptr) == 0,
+            "null snapshot must fail closed");
+    }
+
     return failures;
 }
 

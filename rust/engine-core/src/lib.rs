@@ -740,3 +740,49 @@ pub fn status_short_label(text: &[u8]) -> &[u8] {
         &text[..utf8_character_end(text, 0)]
     }
 }
+
+// ---------------------------------------------------------------------------
+// E5-2: typed EngineSnapshot DTO + limits validation
+//
+// The canonical engine snapshot DTO mirrors `RuntimeResult` (handled, commit,
+// preedit, composition/revision, candidates, selection/page/bulk metadata,
+// delete-surrounding, forward-key, caret, popup policy, content locale).
+// `validate_snapshot` is the Rust-authoritative limits check (payload
+// budgets); the C++ adapter feeds the DTO facts and fails closed on
+// rejection. The `pendingStates` per-context snapshot store builds on this
+// DTO next.
+// ---------------------------------------------------------------------------
+
+/// `protocol::kMaxCommitUtf8` / `kMaxPreeditUtf8`.
+pub const MAX_SNAPSHOT_TEXT_UTF8: usize = 16 * 1024;
+/// `protocol::kMaxCandidates`.
+pub const MAX_SNAPSHOT_CANDIDATES: u32 = 128;
+/// `protocol::kMaxCandidateFieldUtf8`.
+pub const MAX_SNAPSHOT_CANDIDATE_FIELD_UTF8: usize = 4096;
+/// `protocol::kMaxLocaleUtf8`.
+pub const MAX_SNAPSHOT_LOCALE_UTF8: usize = 35;
+
+/// Length facts of a canonical engine snapshot (payload budgets).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SnapshotFacts {
+    pub commit_utf8_len: usize,
+    pub preedit_utf8_len: usize,
+    pub candidate_count: u32,
+    pub candidate_label_len_max: usize,
+    pub candidate_text_len_max: usize,
+    pub candidate_comment_len_max: usize,
+    pub content_locale_utf8_len: usize,
+}
+
+/// Validates snapshot payload budgets (mirrors the protocol limits the codec
+/// enforces; the engine validates at snapshot construction so the store and
+/// the wire share one authority).
+pub fn validate_snapshot(facts: &SnapshotFacts) -> bool {
+    facts.commit_utf8_len <= MAX_SNAPSHOT_TEXT_UTF8
+        && facts.preedit_utf8_len <= MAX_SNAPSHOT_TEXT_UTF8
+        && facts.candidate_count <= MAX_SNAPSHOT_CANDIDATES
+        && facts.candidate_label_len_max <= MAX_SNAPSHOT_CANDIDATE_FIELD_UTF8
+        && facts.candidate_text_len_max <= MAX_SNAPSHOT_CANDIDATE_FIELD_UTF8
+        && facts.candidate_comment_len_max <= MAX_SNAPSHOT_CANDIDATE_FIELD_UTF8
+        && facts.content_locale_utf8_len <= MAX_SNAPSHOT_LOCALE_UTF8
+}

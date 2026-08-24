@@ -207,6 +207,7 @@ int main(int argc, char** argv) {
         runtimeSource.find("fcitx5_engine_core_content_locale_for_input_method") ==
             std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_status_short_label") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_validate_snapshot") == std::string::npos ||
         runtimeSource.find("const auto matches = [&]") != std::string::npos ||
         runtimeSource.find("sameColumnNavigationTarget") != std::string::npos ||
         runtimeSource.find("if (surroundingTextValid_)") != std::string::npos ||
