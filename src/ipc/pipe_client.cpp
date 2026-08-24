@@ -19,6 +19,9 @@ extern "C" Fcitx5WindowsCommonPipeTransact fcitx5_windows_common_pipe_transact(
     std::uint8_t* response_output,
     std::size_t response_capacity,
     std::uint64_t deadline);
+extern "C" std::uint64_t fcitx5_windows_common_deadline_after_milliseconds(
+    std::uint32_t milliseconds);
+extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
 extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     const std::uint16_t* pipe_name,
     std::size_t pipe_name_len,
@@ -207,7 +210,8 @@ bool PipeClient::handshake(std::uint64_t deadline) noexcept {
         const auto requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
         protocol::HelloRequest request{
             protocol::Metadata{requestId, 0, 0, sessionId_, 0, 0, 0},
-            static_cast<std::uint32_t>(sizeof(void*) * 8), GetCurrentProcessId()};
+            static_cast<std::uint32_t>(sizeof(void*) * 8),
+            fcitx5_windows_common_current_process_id()};
         std::vector<std::uint8_t> responseBytes;
         if (!transact(protocol::encode(request), responseBytes, deadline)) {
             return false;
@@ -294,9 +298,8 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
     result = {};
     try {
         const bool newContext = contexts_.find(contextId) == contexts_.end();
-        const std::uint64_t deadline =
-            GetTickCount64() + (newContext ? kContextStartDeadlineMilliseconds
-                                           : kInputDeadlineMilliseconds);
+        const std::uint64_t deadline = fcitx5_windows_common_deadline_after_milliseconds(
+            newContext ? kContextStartDeadlineMilliseconds : kInputDeadlineMilliseconds);
         if (!connect(deadline)) {
             (void)requestLauncherStart(identity_, launcherGeneration_, deadline,
                                        PeerPolicy::development());
@@ -341,7 +344,8 @@ bool PipeClient::selectCandidate(std::uint32_t targetProcessId,
                                  std::uint64_t revision,
                                  std::uint64_t candidateId) noexcept {
     try {
-        const std::uint64_t deadline = GetTickCount64() + kInputDeadlineMilliseconds;
+        const std::uint64_t deadline =
+            fcitx5_windows_common_deadline_after_milliseconds(kInputDeadlineMilliseconds);
         if (!connect(deadline) || !handshake(deadline) || targetProcessId == 0 ||
             expectedEngineEpoch == 0 || engineEpoch_ != expectedEngineEpoch ||
             contextId == 0 || compositionId == 0 || revision == 0 || candidateId == 0) {
@@ -375,7 +379,8 @@ bool PipeClient::selectCandidate(std::uint32_t targetProcessId,
 bool PipeClient::pollState(std::uint64_t contextId, KeyResult& result) noexcept {
     result = {};
     try {
-        const std::uint64_t deadline = GetTickCount64() + kInputDeadlineMilliseconds;
+        const std::uint64_t deadline =
+            fcitx5_windows_common_deadline_after_milliseconds(kInputDeadlineMilliseconds);
         const auto found = contexts_.find(contextId);
         if (found == contexts_.end() || !connect(deadline) || !handshake(deadline)) return false;
         auto& contextState = found->second;
@@ -404,7 +409,8 @@ bool PipeClient::queryEngineStatus(protocol::EngineStatusResponse& result,
                                    DWORD timeoutMilliseconds) noexcept {
     result = {};
     try {
-        const std::uint64_t deadline = GetTickCount64() + timeoutMilliseconds;
+        const std::uint64_t deadline =
+            fcitx5_windows_common_deadline_after_milliseconds(timeoutMilliseconds);
         if (!connect(deadline) || !handshake(deadline)) {
             disconnect();
             return false;

@@ -4,7 +4,6 @@
 
 #include <Windows.h>
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <vector>
@@ -23,17 +22,11 @@ extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     std::size_t pipe_name_len,
     std::uint64_t deadline,
     std::uint8_t wait_when_busy);
+extern "C" std::uint8_t fcitx5_windows_common_deadline_has_time(std::uint64_t deadline);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
-}
-
-DWORD remaining(std::uint64_t deadline) noexcept {
-    const auto now = GetTickCount64();
-    if (now >= deadline) return 0;
-    return static_cast<DWORD>((std::min)(deadline - now,
-                                         static_cast<std::uint64_t>(MAXDWORD - 1)));
 }
 
 bool transfer(HANDLE pipe, bool write, void* data, std::size_t size,
@@ -58,7 +51,10 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
                          const PeerPolicy& peerPolicy, protocol::LauncherCommand command,
                          protocol::LauncherResponse& response) noexcept {
     response = {};
-    if (!identity.mayUseUserEngine() || remaining(absoluteDeadlineMilliseconds) == 0) return false;
+    if (!identity.mayUseUserEngine() ||
+        fcitx5_windows_common_deadline_has_time(absoluteDeadlineMilliseconds) == 0) {
+        return false;
+    }
     const std::wstring endpoint = platform::makeLocalEndpointName(identity, generation, L"launcher");
     HANDLE pipe = fcitx5_windows_common_open_pipe_client_utf16(
         wideData(endpoint), endpoint.size(), absoluteDeadlineMilliseconds, 0);

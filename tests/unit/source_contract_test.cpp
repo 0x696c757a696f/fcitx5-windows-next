@@ -198,8 +198,14 @@ int main(int argc, char** argv) {
         pipeClientSource.find("ReadFile(") != std::string::npos ||
         pipeClientSource.find("WaitForSingleObject") != std::string::npos ||
         pipeClientSource.find("GetOverlappedResult") != std::string::npos ||
+        pipeClientSource.find("GetTickCount64") != std::string::npos ||
+        pipeClientSource.find("GetCurrentProcessId") != std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_pipe_transact") == std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_current_process_id") ==
             std::string::npos ||
         launcherClientSource.find("CreateEventW") != std::string::npos ||
         launcherClientSource.find("CreateFileW") != std::string::npos ||
@@ -208,11 +214,14 @@ int main(int argc, char** argv) {
         launcherClientSource.find("ReadFile(") != std::string::npos ||
         launcherClientSource.find("WaitForSingleObject") != std::string::npos ||
         launcherClientSource.find("GetOverlappedResult") != std::string::npos ||
+        launcherClientSource.find("GetTickCount64") != std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_pipe_transfer") ==
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
+            std::string::npos ||
+        launcherClientSource.find("fcitx5_windows_common_deadline_has_time") ==
             std::string::npos) {
-        return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open and overlapped transfer");
+        return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open, deadline, current-process, and transfer helpers");
     }
     if (pipeClientSource.find("protocol::decodeHeader(header") != std::string::npos ||
         pipeClientSource.find("std::array<std::uint8_t, protocol::kHeaderSize> header") !=
@@ -469,6 +478,14 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transact") ==
             std::string::npos ||
         rustWindowsCommonCore.find("pipe_transact_rejects_invalid_pipe_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_deadline_after_milliseconds") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_deadline_has_time") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_current_process_id") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("deadline_and_current_process_id_match_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("ipc_response_header_body_size") ==
             std::string::npos ||

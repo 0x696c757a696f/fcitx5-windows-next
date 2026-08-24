@@ -473,6 +473,15 @@ fn remaining_milliseconds(deadline: u64) -> Option<u32> {
     Some((deadline - now).min(MAX_DWORD_MINUS_ONE) as u32)
 }
 
+fn deadline_after_milliseconds(milliseconds: u32) -> u64 {
+    // SAFETY: Monotonic Windows tick query with no preconditions.
+    unsafe { GetTickCount64() }.saturating_add(milliseconds as u64)
+}
+
+fn deadline_has_time(deadline: u64) -> bool {
+    remaining_milliseconds(deadline).is_some()
+}
+
 fn pipe_transfer(
     pipe: *mut c_void,
     write: bool,
@@ -2437,6 +2446,22 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_transact(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_deadline_after_milliseconds(milliseconds: u32) -> u64 {
+    deadline_after_milliseconds(milliseconds)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_deadline_has_time(deadline: u64) -> u8 {
+    deadline_has_time(deadline) as u8
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_current_process_id() -> u32 {
+    // SAFETY: Retrieves the current process id and has no preconditions.
+    unsafe { GetCurrentProcessId() }
+}
+
+#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `pipe_name` must be null only when `pipe_name_len` is zero, or point to a
@@ -3308,6 +3333,17 @@ mod tests {
             ipc_response_header_body_size(&[0_u8; IPC_HEADER_SIZE]),
             None
         );
+    }
+
+    #[test]
+    fn deadline_and_current_process_id_match_cpp_contract() {
+        assert_ne!(deadline_after_milliseconds(1), 0);
+        assert!(deadline_has_time(deadline_after_milliseconds(100)));
+        assert!(!deadline_has_time(0));
+        assert_ne!(unsafe { GetCurrentProcessId() }, 0);
+        assert_eq!(fcitx5_windows_common_current_process_id(), unsafe {
+            GetCurrentProcessId()
+        });
     }
 
     #[test]

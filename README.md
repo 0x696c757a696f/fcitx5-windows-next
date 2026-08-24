@@ -51,7 +51,7 @@ Important boundaries:
 
 ## What is implemented
 
-Subject to v1.7 re-acceptance, the repository currently includes:
+The repository currently includes:
 
 - x86/x64 native TSF registration and activation paths;
 - versioned IPC with deadline/fail-open behavior;
@@ -121,7 +121,7 @@ Input-path changes usually require more than unit tests: contract tests,
 cross-process integration, fuzz/fault coverage, and when TSF behavior changes,
 real-host desktop evidence.
 
-Do not mark a phase complete from old logs after touching related code.
+After touching related code, record fresh results from the relevant checks.
 
 ## Installation, UAC and desktop testing
 
