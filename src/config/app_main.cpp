@@ -7,7 +7,6 @@
 
 #include <Windows.h>
 #include <CommCtrl.h>
-#include <shellapi.h>
 #include <d2d1.h>
 #include <dwrite.h>
 
@@ -421,6 +420,17 @@ struct Fcitx5WindowsCommonWideToUtf8 {
     std::size_t utf8Len;
 };
 
+struct Fcitx5ControlUtf16 {
+    const std::uint16_t* ptr;
+    std::size_t len;
+};
+
+struct Fcitx5ControlParsedConfigCommandLine {
+    std::uint8_t status;
+    std::size_t commandLen;
+    std::size_t localeLen;
+};
+
 extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
     const std::uint8_t* input, std::size_t inputLen, std::uint16_t* output,
     std::size_t capacity);
@@ -429,6 +439,17 @@ extern "C" Fcitx5WindowsCommonWideToUtf8 fcitx5_windows_common_wide_utf16_to_utf
     const std::uint16_t* input, std::size_t inputLen, std::uint8_t* output,
     std::size_t capacity);
 extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
+extern "C" Fcitx5ControlParsedConfigCommandLine
+fcitx5_control_parse_config_command_line_utf16(Fcitx5ControlUtf16 commandLine,
+                                               std::uint16_t* commandOut,
+                                               std::size_t commandCapacity,
+                                               std::uint16_t* localeOut,
+                                               std::size_t localeCapacity);
+
+Fcitx5ControlUtf16 controlUtf16(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return {reinterpret_cast<const std::uint16_t*>(value.data()), value.size()};
+}
 
 template <typename Function>
 Function resolveProcAddress(HMODULE module, const char* name) noexcept {
@@ -638,31 +659,22 @@ struct ParsedCommandLine {
 };
 
 ParsedCommandLine parseCommandLine(std::wstring_view commandLine) {
-    ParsedCommandLine parsed;
-    if (commandLine.empty())
-        return parsed;
-    std::wstring mutableCommandLine(commandLine);
-    int count = 0;
-    PWSTR* arguments = CommandLineToArgvW(mutableCommandLine.c_str(), &count);
-    if (!arguments)
+    const auto query = fcitx5_control_parse_config_command_line_utf16(
+        controlUtf16(commandLine), nullptr, 0, nullptr, 0);
+    if (query.status == 0)
         return {{}, {}, false};
-    for (int index = 0; index < count; ++index) {
-        const std::wstring_view argument(arguments[index]);
-        if (argument.starts_with(L"--lang=")) {
-            if (!parsed.localeOverride.empty()) {
-                parsed.valid = false;
-                break;
-            }
-            parsed.localeOverride = std::wstring(argument.substr(7));
-        } else if (!argument.empty()) {
-            if (!parsed.command.empty()) {
-                parsed.valid = false;
-                break;
-            }
-            parsed.command = std::wstring(argument);
-        }
-    }
-    LocalFree(arguments);
+
+    ParsedCommandLine parsed;
+    parsed.command.resize(query.commandLen);
+    parsed.localeOverride.resize(query.localeLen);
+    const auto filled = fcitx5_control_parse_config_command_line_utf16(
+        controlUtf16(commandLine), reinterpret_cast<std::uint16_t*>(parsed.command.data()),
+        parsed.command.size(),
+        reinterpret_cast<std::uint16_t*>(parsed.localeOverride.data()),
+        parsed.localeOverride.size());
+    if (filled.status == 0 || filled.commandLen != parsed.command.size() ||
+        filled.localeLen != parsed.localeOverride.size())
+        return {{}, {}, false};
     return parsed;
 }
 

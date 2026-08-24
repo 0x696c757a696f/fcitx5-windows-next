@@ -347,6 +347,17 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CONFIG-APP-DARK-MODE-RUST: Config app dark mode policy must be Rust-owned");
     }
+    if (configAppSource.find("CommandLineToArgvW") != std::string::npos ||
+        configAppSource.find("LocalFree(arguments)") != std::string::npos ||
+        configAppSource.find("#include <shellapi.h>") != std::string::npos ||
+        configAppSource.find("fcitx5_control_parse_config_command_line_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_parse_config_command_line_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("config_command_line_parser_matches_cpp_contract") ==
+            std::string::npos) {
+        return fail("CONFIG-APP-COMMAND-LINE-RUST: Config app command-line parsing must be Rust-owned");
+    }
     if (controlSource.find("MultiByteToWideChar") != std::string::npos ||
         controlSource.find("WideCharToMultiByte") != std::string::npos ||
         controlSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||

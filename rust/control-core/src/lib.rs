@@ -187,6 +187,14 @@ pub struct Fcitx5ControlUtf8 {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Fcitx5ControlParsedConfigCommandLine {
+    status: u8,
+    command_len: usize,
+    locale_len: usize,
+}
+
+#[repr(C)]
 pub struct Fcitx5ControlPresentation {
     appearance_mode: Fcitx5ControlUtf8,
     theme: Fcitx5ControlUtf8,
@@ -477,6 +485,76 @@ fn write_wide_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
 fn write_wide_path(value: &std::path::Path, out: *mut u16, capacity: usize) -> usize {
     let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
     write_wide_units(&wide, out, capacity)
+}
+
+fn split_windows_argument_string(input: &[u16]) -> Vec<Vec<u16>> {
+    let mut arguments = Vec::new();
+    let mut index = 0usize;
+    while index < input.len() {
+        while index < input.len() && matches!(input[index], 0x20 | 0x09) {
+            index += 1;
+        }
+        if index >= input.len() {
+            break;
+        }
+        let mut argument = Vec::new();
+        let mut quoted = false;
+        while index < input.len() {
+            if !quoted && matches!(input[index], 0x20 | 0x09) {
+                break;
+            }
+            let mut backslashes = 0usize;
+            while index < input.len() && input[index] == b'\\' as u16 {
+                backslashes += 1;
+                index += 1;
+            }
+            if index < input.len() && input[index] == b'"' as u16 {
+                argument.extend(std::iter::repeat(b'\\' as u16).take(backslashes / 2));
+                if backslashes % 2 == 0 {
+                    quoted = !quoted;
+                } else {
+                    argument.push(b'"' as u16);
+                }
+                index += 1;
+                continue;
+            }
+            argument.extend(std::iter::repeat(b'\\' as u16).take(backslashes));
+            if index >= input.len() {
+                break;
+            }
+            argument.push(input[index]);
+            index += 1;
+        }
+        arguments.push(argument);
+    }
+    arguments
+}
+
+fn utf16_starts_with_ascii(value: &[u16], prefix: &[u8]) -> bool {
+    value.len() >= prefix.len()
+        && value
+            .iter()
+            .zip(prefix)
+            .all(|(character, ascii)| *character == *ascii as u16)
+}
+
+fn parse_config_command_line(input: &[u16]) -> Option<(Vec<u16>, Vec<u16>)> {
+    let mut command = Vec::new();
+    let mut locale = Vec::new();
+    for argument in split_windows_argument_string(input) {
+        if utf16_starts_with_ascii(&argument, b"--lang=") {
+            if !locale.is_empty() {
+                return None;
+            }
+            locale = argument[7..].to_vec();
+        } else if !argument.is_empty() {
+            if !command.is_empty() {
+                return None;
+            }
+            command = argument;
+        }
+    }
+    Some((command, locale))
 }
 
 fn guid_suffix() -> Option<OsString> {
@@ -2507,6 +2585,40 @@ pub unsafe extern "C" fn fcitx5_control_startup_set_utf16(
 
 /// # Safety
 ///
+/// `command_line` must remain valid UTF-16 for the duration of the call.
+/// `command_out` and `locale_out` may be null for size queries or point to
+/// writable UTF-16 storage for their respective capacities. No pointer is
+/// retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_parse_config_command_line_utf16(
+    command_line: Fcitx5ControlUtf16,
+    command_out: *mut u16,
+    command_capacity: usize,
+    locale_out: *mut u16,
+    locale_capacity: usize,
+) -> Fcitx5ControlParsedConfigCommandLine {
+    if command_line.ptr.is_null() && command_line.len != 0 {
+        return Fcitx5ControlParsedConfigCommandLine::default();
+    }
+    let command_line = if command_line.ptr.is_null() {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(command_line.ptr, command_line.len) }
+    };
+    let Some((command, locale)) = parse_config_command_line(command_line) else {
+        return Fcitx5ControlParsedConfigCommandLine::default();
+    };
+    let command_len = write_wide_units(&command, command_out, command_capacity);
+    let locale_len = write_wide_units(&locale, locale_out, locale_capacity);
+    Fcitx5ControlParsedConfigCommandLine {
+        status: 1,
+        command_len,
+        locale_len,
+    }
+}
+
+/// # Safety
+///
 /// `destination` must remain valid UTF-16 for the duration of the call.
 /// `content` must remain readable for the duration of the call. No pointer is
 /// retained.
@@ -3879,6 +3991,30 @@ mod tests {
             startup_json(false).as_slice(),
             br#"{"format_version":1,"enabled":false}"#
         );
+    }
+
+    #[test]
+    fn config_command_line_parser_matches_cpp_contract() {
+        let (command, locale) =
+            parse_config_command_line(&wide(r#"--lang=zh-CN "--ui-contract-test""#))
+                .expect("valid command line");
+        assert_eq!(command, wide("--ui-contract-test"));
+        assert_eq!(locale, wide("zh-CN"));
+
+        let (command, locale) =
+            parse_config_command_line(&wide(r#""--ui-live-preview-contract-test""#))
+                .expect("quoted command");
+        assert_eq!(command, wide("--ui-live-preview-contract-test"));
+        assert!(locale.is_empty());
+
+        assert!(parse_config_command_line(&wide("--self-test --check-i18n")).is_none());
+        assert!(parse_config_command_line(&wide("--lang=system --lang=zh-CN")).is_none());
+
+        let (command, locale) =
+            parse_config_command_line(&wide("--lang= --lang=en-US --self-test"))
+                .expect("empty locale preserves legacy replacement behavior");
+        assert_eq!(command, wide("--self-test"));
+        assert_eq!(locale, wide("en-US"));
     }
 
     #[test]
