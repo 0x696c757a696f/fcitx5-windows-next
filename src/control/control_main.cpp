@@ -276,6 +276,7 @@ Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_ty
 Fcitx5ControlUtf8 fcitx5_control_native_package_architecture_utf8();
 std::uint8_t fcitx5_control_package_architecture_matches_native_utf8(
     Fcitx5ControlUtf8 architecture);
+std::uint8_t fcitx5_control_addon_metadata_bool_utf8(Fcitx5ControlUtf8 value);
 std::uint8_t fcitx5_control_package_update_available_utf8(
     std::uint8_t installed_present, Fcitx5ControlUtf8 installed_version,
     Fcitx5ControlUtf8 available_version);
@@ -1105,8 +1106,8 @@ std::string_view trimAscii(std::string_view value) {
     return value;
 }
 
-bool parseBool(std::string_view value) {
-    return value == "True" || value == "true" || value == "1";
+bool addonMetadataBool(std::string_view value) {
+    return fcitx5_control_addon_metadata_bool_utf8(utf8View(value)) != 0;
 }
 
 std::optional<AddonDescriptor> parseAddonDescriptor(const fs::path& path,
@@ -1148,9 +1149,9 @@ std::optional<AddonDescriptor> parseAddonDescriptor(const fs::path& path,
         else if (key == "Version")
             descriptor.version = std::string(value);
         else if (key == "Configurable")
-            descriptor.configurable = parseBool(value);
+            descriptor.configurable = addonMetadataBool(value);
         else if (key == "OnDemand")
-            descriptor.onDemand = parseBool(value);
+            descriptor.onDemand = addonMetadataBool(value);
     }
     if (descriptor.id.empty() || !fcitx::package::is_lower_package_id(descriptor.id) ||
         descriptor.name.empty())

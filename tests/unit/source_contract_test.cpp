@@ -362,6 +362,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         controlSource.find("fcitx5_control_package_architecture_matches_native_utf8") ==
             std::string::npos ||
+        controlSource.find("fcitx5_control_addon_metadata_bool_utf8") == std::string::npos ||
         controlSource.find("fcitx5_control_package_update_available_utf8") ==
             std::string::npos ||
         controlSource.find("fcitx5_control_package_state_satisfies_dependency_utf8") ==
@@ -431,6 +432,7 @@ int main(int argc, char** argv) {
         controlSource.find("return \"x64\"") != std::string::npos ||
         controlSource.find("return \"x86\"") != std::string::npos ||
         controlSource.find("entry.architecture != \"any\"") != std::string::npos ||
+        controlSource.find("value == \"True\"") != std::string::npos ||
         controlSource.find("std::string typeName(") != std::string::npos ||
         controlSource.find("return \"inputmethod-data\"") != std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_atomic_write_utf8_file_utf16") ==
@@ -455,6 +457,8 @@ int main(int argc, char** argv) {
         rustControlCoreSource.find("fcitx5_control_native_package_architecture_utf8") ==
             std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_package_architecture_matches_native_utf8") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_addon_metadata_bool_utf8") ==
             std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_package_update_available_utf8") ==
             std::string::npos ||
@@ -498,6 +502,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustControlCoreSource.find("package_architecture_match_matches_cpp_contract") ==
             std::string::npos ||
+        rustControlCoreSource.find("addon_metadata_bool_matches_cpp_contract") ==
+            std::string::npos ||
         rustControlCoreSource.find("package_update_available_matches_cpp_contract") ==
             std::string::npos ||
         rustControlCoreSource.find("package_lifecycle_state_policy_matches_cpp_contract") ==
@@ -529,7 +535,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos) {
-        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, optional config reads, installed manifest reads, package config surface policy, repository error classification, bundled package probe inventory, package type/native architecture/match/update/lifecycle/transaction policy, repository release-sequence/metadata/default URL policy, repository/package cache staging/publication, and atomic config file writes must be Rust-owned");
+        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, optional config reads, installed manifest reads, addon metadata bool policy, package config surface policy, repository error classification, bundled package probe inventory, package type/native architecture/match/update/lifecycle/transaction policy, repository release-sequence/metadata/default URL policy, repository/package cache staging/publication, and atomic config file writes must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {

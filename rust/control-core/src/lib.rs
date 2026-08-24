@@ -1452,6 +1452,10 @@ fn package_architecture_matches_native(architecture: &[u8]) -> bool {
     architecture == b"any" || architecture == native
 }
 
+fn addon_metadata_bool(value: &[u8]) -> bool {
+    matches!(value, b"True" | b"true" | b"1")
+}
+
 fn package_update_available(
     installed_present: bool,
     installed_version: &[u8],
@@ -2909,6 +2913,15 @@ pub unsafe extern "C" fn fcitx5_control_package_architecture_matches_native_utf8
 
 /// # Safety
 ///
+/// `value` must remain valid UTF-8 for the duration of the call when its
+/// pointer is non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_addon_metadata_bool_utf8(value: Fcitx5ControlUtf8) -> u8 {
+    addon_metadata_bool(utf8_slice(value).unwrap_or(&[])) as u8
+}
+
+/// # Safety
+///
 /// `installed_version` and `available_version` must remain valid UTF-8 for the
 /// duration of the call when their pointers are non-null.
 #[no_mangle]
@@ -4106,6 +4119,34 @@ mod tests {
         );
         assert_eq!(
             unsafe { fcitx5_control_package_architecture_matches_native_utf8(unsupported) },
+            0
+        );
+    }
+
+    #[test]
+    fn addon_metadata_bool_matches_cpp_contract() {
+        assert!(addon_metadata_bool(b"True"));
+        assert!(addon_metadata_bool(b"true"));
+        assert!(addon_metadata_bool(b"1"));
+        assert!(!addon_metadata_bool(b"TRUE"));
+        assert!(!addon_metadata_bool(b"false"));
+        assert!(!addon_metadata_bool(b"0"));
+        assert!(!addon_metadata_bool(b""));
+
+        let truthy = Fcitx5ControlUtf8 {
+            ptr: b"True".as_ptr(),
+            len: 4,
+        };
+        let falsey = Fcitx5ControlUtf8 {
+            ptr: b"TRUE".as_ptr(),
+            len: 4,
+        };
+        assert_eq!(
+            unsafe { fcitx5_control_addon_metadata_bool_utf8(truthy) },
+            1
+        );
+        assert_eq!(
+            unsafe { fcitx5_control_addon_metadata_bool_utf8(falsey) },
             0
         );
     }
