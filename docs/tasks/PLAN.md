@@ -2,6 +2,17 @@
 
 This queue exists so Codex can proceed without asking the user for a new prompt after every completed item.
 
+## Current rebaseline
+
+The queue below is historical v1.8 ordering. Current execution must first consult
+`docs/tasks/rebaseline.md`, which classifies every old queue item against the
+current `HEAD` as `TODO`, `ALREADY-GREEN`, `PARTIAL`, `MANUAL-PENDING`, or
+`BLOCKED`.
+
+Do not mechanically restart or re-implement a historical task whose current
+state is `ALREADY-GREEN` or whose old scope is now superseded by the
+2026-08-24 Engine Rust/Fcitx upstream boundary guidance.
+
 ## Advancement policy
 
 - `001` is archived as completed.
@@ -69,6 +80,6 @@ This queue exists so Codex can proceed without asking the user for a new prompt 
 - `004` and `019` are intentionally separate: `004` establishes the **single Windows TSF profile identity/metadata contract**; `019` finalizes the **penguin brand assets and shell presentation**.
 - `014` freezes Windows path semantics before Rust R1.
 - `020` freezes TSF generation-draining semantics before the Rust updater/downloader cutover.
-- Long-term language direction: Engine remains the C++ Fcitx5 island; TSF, Candidate, Config, package/update/launcher/control/provider/diagnostics and other product-owned layers should move toward Rust only through explicit gated migration tasks with differential evidence.
+- Long-term language direction: direct Fcitx-facing Engine object manipulation remains the C++ Fcitx5 adapter island; Engine product protocol/state/validation/revision/generation/policy/IPC/diagnostics moves toward Rust. TSF, Candidate, Config, package/update/launcher/control/provider/diagnostics and other product-owned layers should move toward Rust only through explicit gated migration tasks with differential evidence.
 - `R3-01`/`R3-02`/`R3-03` keep Candidate, Config, and TSF Rust paths open without destabilizing the current C++ baselines. They are PoC/differential gates, not authorization to rewrite those components during R1/R2.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

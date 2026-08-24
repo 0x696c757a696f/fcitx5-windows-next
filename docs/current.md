@@ -49,12 +49,12 @@ Windows host
 - Cargo registry crates are checked against `third_party/dependencies.json` by name and version before dependency checks and SBOM generation. Advisory review for the declared dependency set remains an external process.
 - Runtime security now has explicit `Win10` and `Win7` lanes. The modern `Win10` lane remains the default full PE/source audit; product networking is enforced through source-boundary scanning plus PE blocking for explicit HTTP/URL stacks because Rust-linked MSVC binaries import `WS2_32.dll` through Rust std even without product network code. The legacy `Win7` lane is expected to stay red until the launcher/Rust runtime hard import of `GetSystemTimePreciseAsFileTime` is removed or a separate legacy strategy is implemented.
 - Engine product state is still mostly C++; the Fcitx adapter boundary is documented but not yet fully cut.
-- Existing long-form specs may contain historical task text. ADR 0009 and this snapshot control the current Fcitx/Rust boundary.
+- Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
 
 ## Next Five Code/Design Tasks
 
-1. Freeze Engine call graph and C++/Rust ABI in `docs/engine-boundary.md`.
-2. Rebase the old task queue against current HEAD as `TODO`, `ALREADY-GREEN`, `PARTIAL`, `MANUAL-PENDING`, or `BLOCKED`.
-3. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
-4. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
-5. Converge single TSF profile code paths and keep legacy profile data only as cleanup input.
+1. Converge single TSF profile code paths and keep legacy profile data only as cleanup input.
+2. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
+3. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
+4. Start Engine E1 only from the frozen call graph/schema in `docs/engine-boundary.md`.
+5. Prepare the Config technology spike/ADR instead of adding more raw WTL controls.
