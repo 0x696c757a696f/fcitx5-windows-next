@@ -1588,6 +1588,27 @@ fn theme_id_valid(value: &str) -> bool {
         })
 }
 
+fn theme_palette_key_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
+        })
+}
+
+fn theme_color_hex_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    matches!(bytes.len(), 7 | 9) && bytes[0] == b'#' && bytes[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
+fn theme_palette_reference(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let name = value.strip_prefix("${")?.strip_suffix('}')?;
+    theme_palette_key_valid(name).then_some(name)
+}
+
 fn required_theme_string(table: &toml_edit::Table, key: &str) -> Option<String> {
     let value = table.get(key)?.as_str()?;
     (!value.is_empty()).then(|| value.to_owned())
@@ -1609,11 +1630,14 @@ fn theme_branch_table<'a>(
         return Some(None);
     };
     let branch = branch.as_table()?;
-    if !table_has_only(branch, &["candidate"]) {
+    if !table_has_only(branch, &["candidate", "palette"]) {
         return None;
     }
+    if let Some(palette) = branch.get("palette") {
+        validate_theme_palette_table(palette.as_table()?)?;
+    }
     let Some(candidate) = branch.get("candidate") else {
-        return None;
+        return Some(Some(branch));
     };
     let candidate = candidate.as_table()?;
     if !table_has_only(candidate, &["colors"]) {
@@ -1626,12 +1650,31 @@ fn theme_branch_has_colors(root: &toml_edit::Table, key: &str) -> Option<bool> {
     let Some(branch) = theme_branch_table(root, key)? else {
         return Some(false);
     };
-    let candidate = branch.get("candidate")?.as_table()?;
+    let Some(candidate) = branch.get("candidate") else {
+        return Some(false);
+    };
+    let candidate = candidate.as_table()?;
     let Some(colors) = candidate.get("colors") else {
         return Some(false);
     };
     let colors = colors.as_table()?;
     Some(!colors.is_empty())
+}
+
+fn validate_theme_palette_table(table: &toml_edit::Table) -> Option<()> {
+    for (key, value) in table.iter() {
+        if !theme_palette_key_valid(key) {
+            return None;
+        }
+        let value = value.as_str()?.trim();
+        if value.is_empty()
+            || value.len() > 96
+            || (!theme_color_hex_valid(value) && theme_palette_reference(value).is_none())
+        {
+            return None;
+        }
+    }
+    Some(())
 }
 
 fn parse_theme_document(text: &[u8]) -> Option<toml_edit::DocumentMut> {
@@ -1645,12 +1688,22 @@ fn parse_theme_document(text: &[u8]) -> Option<toml_edit::DocumentMut> {
 fn theme_summary_from_root(root: &toml_edit::Table) -> Option<ThemeSummary> {
     if !table_has_only(
         root,
-        &["format_version", "theme", "common", "light", "dark"],
+        &[
+            "format_version",
+            "theme",
+            "palette",
+            "common",
+            "light",
+            "dark",
+        ],
     ) {
         return None;
     }
     if root.get("format_version")?.as_integer()? != 1 {
         return None;
+    }
+    if let Some(palette) = root.get("palette") {
+        validate_theme_palette_table(palette.as_table()?)?;
     }
     theme_common_table(root)?;
     let metadata = root.get("theme")?.as_table()?;
@@ -1686,6 +1739,9 @@ fn parse_theme_summary(text: &[u8]) -> Option<ThemeSummary> {
 
 fn deep_merge_tables(destination: &mut toml_edit::Table, source: &toml_edit::Table) {
     for (key, value) in source.iter() {
+        if key == "palette" {
+            continue;
+        }
         if let (Some(destination_table), Some(source_table)) = (
             destination
                 .get_mut(key)
@@ -1697,6 +1753,99 @@ fn deep_merge_tables(destination: &mut toml_edit::Table, source: &toml_edit::Tab
             destination.insert(key, value.clone());
         }
     }
+}
+
+fn collect_theme_palette(
+    root: &toml_edit::Table,
+    branch_key: &str,
+) -> Option<std::collections::HashMap<String, String>> {
+    let mut palette = std::collections::HashMap::new();
+    if let Some(table) = root.get("palette") {
+        insert_theme_palette_entries(table.as_table()?, &mut palette)?;
+    }
+    if let Some(branch) = theme_branch_table(root, branch_key)? {
+        if let Some(table) = branch.get("palette") {
+            insert_theme_palette_entries(table.as_table()?, &mut palette)?;
+        }
+    }
+    Some(palette)
+}
+
+fn insert_theme_palette_entries(
+    table: &toml_edit::Table,
+    palette: &mut std::collections::HashMap<String, String>,
+) -> Option<()> {
+    validate_theme_palette_table(table)?;
+    for (key, value) in table.iter() {
+        palette.insert(key.to_string(), value.as_str()?.trim().to_string());
+    }
+    Some(())
+}
+
+fn resolve_theme_palette_name(
+    name: &str,
+    palette: &std::collections::HashMap<String, String>,
+    resolved: &mut std::collections::HashMap<String, String>,
+    visiting: &mut std::collections::HashSet<String>,
+) -> Option<String> {
+    if let Some(value) = resolved.get(name) {
+        return Some(value.clone());
+    }
+    if !visiting.insert(name.to_string()) {
+        return None;
+    }
+    let raw = palette.get(name)?;
+    let value = if let Some(reference) = theme_palette_reference(raw) {
+        resolve_theme_palette_name(reference, palette, resolved, visiting)?
+    } else if theme_color_hex_valid(raw) {
+        raw.to_string()
+    } else {
+        return None;
+    };
+    visiting.remove(name);
+    resolved.insert(name.to_string(), value.clone());
+    Some(value)
+}
+
+fn resolve_theme_color_value(
+    value: &str,
+    palette: &std::collections::HashMap<String, String>,
+    resolved: &mut std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let value = value.trim();
+    let value = if let Some(reference) = theme_palette_reference(value) {
+        let mut visiting = std::collections::HashSet::new();
+        resolve_theme_palette_name(reference, palette, resolved, &mut visiting)?
+    } else {
+        value.to_string()
+    };
+    theme_color_hex_valid(&value).then_some(value)
+}
+
+fn resolve_theme_candidate_color_refs(
+    document: &mut toml_edit::DocumentMut,
+    palette: &std::collections::HashMap<String, String>,
+) -> Option<()> {
+    let Some(candidate) = document
+        .as_table_mut()
+        .get_mut("candidate")
+        .and_then(toml_edit::Item::as_table_mut)
+    else {
+        return Some(());
+    };
+    let Some(colors) = candidate
+        .get_mut("colors")
+        .and_then(toml_edit::Item::as_table_mut)
+    else {
+        return Some(());
+    };
+    let mut resolved = std::collections::HashMap::new();
+    for (_, item) in colors.iter_mut() {
+        let value = item.as_str()?;
+        let value = resolve_theme_color_value(value, palette, &mut resolved)?;
+        *item = toml_edit::value(value);
+    }
+    Some(())
 }
 
 fn resolved_theme_config(
@@ -1717,14 +1866,17 @@ fn resolved_theme_config(
     if !theme_record_matches_requested_id(source, requested_id.as_bytes(), summary.id.as_bytes()) {
         return None;
     }
+    let branch_key = if dark { "dark" } else { "light" };
+    let palette = collect_theme_palette(root, branch_key)?;
     let mut resolved = toml_edit::DocumentMut::new();
     resolved["format_version"] = toml_edit::value(1);
     if let Some(common) = theme_common_table(root)? {
         deep_merge_tables(resolved.as_table_mut(), common);
     }
-    if let Some(branch) = theme_branch_table(root, if dark { "dark" } else { "light" })? {
+    if let Some(branch) = theme_branch_table(root, branch_key)? {
         deep_merge_tables(resolved.as_table_mut(), branch);
     }
+    resolve_theme_candidate_color_refs(&mut resolved, &palette)?;
     Some(resolved.to_string().into_bytes())
 }
 
@@ -4921,6 +5073,89 @@ background = "#FCFCFCFA"
         unsafe {
             fcitx5_control_utf8_free(ptr, len);
         }
+    }
+
+    #[test]
+    fn theme_palette_resolve_matches_windinput_contract() {
+        let text = br##"
+format_version = 1
+
+[theme]
+id = "solar"
+name = "Solar"
+version = "1"
+license = "MIT"
+
+[palette]
+surface = "#FCFCFCFA"
+ink = "#101010FF"
+candidate_text = "${ink}"
+
+[common.candidate.colors]
+background = "${surface}"
+candidate_text = "${candidate_text}"
+
+[dark.palette]
+surface = "#242629F7"
+ink = "#FFFFFFFF"
+
+[dark.candidate.colors]
+background = "${surface}"
+
+[light.candidate.colors]
+background = "${surface}"
+"##;
+        let dark = resolved_theme_config(text, b"solar", false, true).unwrap();
+        let dark_text = std::str::from_utf8(&dark).unwrap();
+        assert!(dark_text.contains("background = \"#242629F7\""));
+        assert!(dark_text.contains("candidate_text = \"#FFFFFFFF\""));
+        assert!(!dark_text.contains("[palette]"));
+        assert!(!dark_text.contains("${"));
+
+        let light = resolved_theme_config(text, b"solar", false, false).unwrap();
+        let light_text = std::str::from_utf8(&light).unwrap();
+        assert!(light_text.contains("background = \"#FCFCFCFA\""));
+        assert!(light_text.contains("candidate_text = \"#101010FF\""));
+
+        let palette_only_branch = br##"
+format_version = 1
+[theme]
+id = "solar"
+name = "Solar"
+version = "1"
+license = "MIT"
+[dark.palette]
+surface = "#242629F7"
+"##;
+        let summary = parse_theme_summary(palette_only_branch).unwrap();
+        assert!(!summary.has_dark_branch);
+
+        let unknown = br##"
+format_version = 1
+[theme]
+id = "solar"
+name = "Solar"
+version = "1"
+license = "MIT"
+[common.candidate.colors]
+background = "${missing}"
+"##;
+        assert!(resolved_theme_config(unknown, b"solar", false, false).is_none());
+
+        let cycle = br##"
+format_version = 1
+[theme]
+id = "solar"
+name = "Solar"
+version = "1"
+license = "MIT"
+[palette]
+a = "${b}"
+b = "${a}"
+[common.candidate.colors]
+background = "${a}"
+"##;
+        assert!(resolved_theme_config(cycle, b"solar", false, false).is_none());
     }
 
     #[test]

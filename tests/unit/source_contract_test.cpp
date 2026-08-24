@@ -546,6 +546,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustControlCoreSource.find("theme_resolve_config_matches_cpp_contract") ==
             std::string::npos ||
+        rustControlCoreSource.find("theme_palette_resolve_matches_windinput_contract") ==
+            std::string::npos ||
         rustControlCoreSource.find("native_package_architecture_matches_target_contract") ==
             std::string::npos ||
         rustControlCoreSource.find("package_architecture_match_matches_cpp_contract") ==
