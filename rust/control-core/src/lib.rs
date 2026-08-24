@@ -116,6 +116,7 @@ const CONTROL_FILE_READ_INVALID_FILE: i32 = 1;
 const CONTROL_FILE_READ_IO_ERROR: i32 = 2;
 const CONTROL_ARCHIVE_CACHE_INVALID: i32 = 1;
 const CONTROL_ARCHIVE_CACHE_STALE_REMOVED: i32 = 2;
+const CONTROL_MAXIMUM_MANIFEST_BYTES: u64 = 1024 * 1024;
 const CONTROL_CONFIG_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_CONFIG_ACTION_VALIDATE: u32 = 1;
 const CONTROL_CONFIG_ACTION_APPLY: u32 = 2;
@@ -534,6 +535,32 @@ fn read_file_bounded(path: PathBuf, maximum: u64) -> Result<Vec<u8>, i32> {
         return Err(CONTROL_FILE_READ_INVALID_FILE);
     }
     Ok(bytes)
+}
+
+fn installed_manifest_path(
+    package_root: &std::path::Path,
+    id: &str,
+    version: &str,
+) -> Option<PathBuf> {
+    if package_root.as_os_str().is_empty() || id.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some(
+        package_root
+            .join("manifests")
+            .join(id)
+            .join(format!("{version}.json")),
+    )
+}
+
+fn read_installed_manifest_bytes(
+    package_root: &std::path::Path,
+    id: &str,
+    version: &str,
+) -> Result<Vec<u8>, i32> {
+    let path =
+        installed_manifest_path(package_root, id, version).ok_or(CONTROL_FILE_READ_INVALID_FILE)?;
+    read_file_bounded(path, CONTROL_MAXIMUM_MANIFEST_BYTES)
 }
 
 fn repository_cache_incoming_path(path: &std::path::Path) -> Option<PathBuf> {
@@ -1747,6 +1774,49 @@ pub unsafe extern "C" fn fcitx5_control_read_file_utf16(
 
 /// # Safety
 ///
+/// `package_root` must remain valid UTF-16 for the duration of the call. `id`
+/// and `version` must remain valid UTF-8 for the duration of the call.
+/// `out_ptr` and `out_len` must point to writable storage. On success, the
+/// returned buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_installed_manifest_bytes_utf16(
+    package_root: Fcitx5ControlUtf16,
+    id: Fcitx5ControlUtf8,
+    version: Fcitx5ControlUtf8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return CONTROL_FILE_READ_IO_ERROR;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(package_root) = string_from_utf16(package_root) else {
+        return CONTROL_FILE_READ_INVALID_FILE;
+    };
+    let Some(id) = ascii_token_from_utf8(id) else {
+        return CONTROL_FILE_READ_INVALID_FILE;
+    };
+    let Some(version) = ascii_token_from_utf8(version) else {
+        return CONTROL_FILE_READ_INVALID_FILE;
+    };
+    match read_installed_manifest_bytes(&PathBuf::from(package_root), &id, &version) {
+        Ok(bytes) => {
+            let status = boxed_utf8_result(bytes, out_ptr, out_len);
+            if status == 0 {
+                CONTROL_FILE_READ_OK
+            } else {
+                status
+            }
+        }
+        Err(status) => status,
+    }
+}
+
+/// # Safety
+///
 /// `path` must remain valid UTF-16 for the duration of the call. `output` may
 /// be null for size queries or writable UTF-16 storage for `capacity` code
 /// units. No pointer is retained.
@@ -2581,6 +2651,40 @@ mod tests {
         unsafe {
             fcitx5_control_utf8_free(bytes, len);
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn installed_manifest_bytes_match_cpp_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-installed-manifest-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let manifest_dir = root.join("manifests").join("fcitx5-rime");
+        std::fs::create_dir_all(&manifest_dir).expect("create manifest dir");
+        std::fs::write(manifest_dir.join("1.0.0.json"), br#"{"id":"fcitx5-rime"}"#)
+            .expect("write manifest");
+
+        assert_eq!(
+            read_installed_manifest_bytes(&root, "fcitx5-rime", "1.0.0")
+                .expect("read installed manifest"),
+            br#"{"id":"fcitx5-rime"}"#
+        );
+        assert_eq!(
+            read_installed_manifest_bytes(&root, "fcitx5-rime", "missing")
+                .expect_err("missing manifest should fail"),
+            CONTROL_FILE_READ_INVALID_FILE
+        );
+        assert!(installed_manifest_path(&root, "fcitx5-rime", "1.0.0")
+            .expect("manifest path")
+            .ends_with("manifests\\fcitx5-rime\\1.0.0.json"));
+
+        let invalid = Fcitx5ControlUtf8 {
+            ptr: b"..\\bad".as_ptr(),
+            len: 6,
+        };
+        assert!(ascii_token_from_utf8(invalid).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

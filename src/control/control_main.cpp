@@ -187,6 +187,10 @@ int fcitx5_control_atomic_write_utf8_file_utf16(Fcitx5ControlUtf16 destination,
                                                 Fcitx5ControlUtf8 content);
 int fcitx5_control_read_file_utf16(Fcitx5ControlUtf16 path, std::uint64_t maximum,
                                    char** out_ptr, std::size_t* out_len);
+int fcitx5_control_installed_manifest_bytes_utf16(Fcitx5ControlUtf16 package_root,
+                                                  Fcitx5ControlUtf8 id,
+                                                  Fcitx5ControlUtf8 version, char** out_ptr,
+                                                  std::size_t* out_len);
 std::size_t fcitx5_control_repository_cache_incoming_path_utf16(Fcitx5ControlUtf16 path,
                                                                 wchar_t* output,
                                                                 std::size_t capacity);
@@ -907,11 +911,14 @@ std::string jsonStringArray(std::span<const std::string> values) {
 
 std::string installedManifestBytes(const fs::path& packageRoot,
                                    const fcitx::package::LockEntry& entry) {
-    const auto path = packageRoot / L"manifests" / widen(entry.id) /
-                      widen(entry.version + ".json");
-    std::string bytes;
-    return readUtf8Bounded(path, fcitx::package::kMaximumManifestBytes, bytes) ? bytes
-                                                                               : std::string{};
+    const std::wstring packageRootText = packageRoot.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const auto status = fcitx5_control_installed_manifest_bytes_utf16(
+        nativeView(packageRootText), utf8View(entry.id), utf8View(entry.version), &bytes, &length);
+    if (status != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
 }
 
 std::string configSurfaceJson(const fcitx::package::Manifest* manifest,
