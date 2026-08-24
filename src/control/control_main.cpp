@@ -594,12 +594,12 @@ std::vector<std::byte> readBinary(const fs::path& path, std::size_t maximum) {
 }
 
 fs::path executableDirectory() {
-    std::wstring path(32768, L'\0');
-    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (length == 0 || length >= path.size())
+    fcitx::windows::platform::RuntimeIdentity identity;
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
+        identity.executablePath.empty()) {
         return {};
-    path.resize(length);
-    return fs::path(path).parent_path();
+    }
+    return fs::path(identity.executablePath).parent_path();
 }
 
 fs::path installationRoot() {
@@ -1085,12 +1085,11 @@ void printThemeDetail(const fs::path& dataRoot, std::string_view id) {
 }
 
 fs::path defaultDataRoot() {
-    std::wstring modulePath(32768, L'\0');
-    const DWORD size = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
-    if (size > 0 && size < modulePath.size()) {
-        modulePath.resize(size);
-        if (const auto portableData =
-                fcitx::windows::platform::portableDataRootForModule(modulePath);
+    fcitx::windows::platform::RuntimeIdentity identity;
+    if (fcitx::windows::platform::queryCurrentIdentity(identity) &&
+        !identity.executablePath.empty()) {
+        if (const auto portableData = fcitx::windows::platform::portableDataRootForModule(
+                identity.executablePath);
             !portableData.empty()) {
             return portableData;
         }

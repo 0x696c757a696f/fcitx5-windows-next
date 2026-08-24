@@ -322,13 +322,15 @@ int main(int argc, char** argv) {
         controlSource.find("WC_ERR_INVALID_CHARS") != std::string::npos ||
         controlSource.find("CP_UTF8") != std::string::npos ||
         controlSource.find("GetTickCount64") != std::string::npos ||
+        controlSource.find("GetModuleFileNameW") != std::string::npos ||
+        controlSource.find("queryCurrentIdentity(identity)") == std::string::npos ||
         controlSource.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_wide_utf16_to_utf8") ==
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos) {
-        return fail("CONTROL-COMMON-RUST: Control text conversion and launcher deadline must be Rust-owned");
+        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, and executable path discovery must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
