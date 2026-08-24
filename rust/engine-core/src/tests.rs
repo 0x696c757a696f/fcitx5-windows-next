@@ -1,4 +1,4 @@
-use super::{ContextKey, ContextLedger, LedgerError};
+use super::{CaretRect, ContextKey, ContextLedger, LedgerError};
 
 fn key_a() -> ContextKey {
     ContextKey::new(100, 1, 7)
@@ -165,4 +165,95 @@ fn composition_allocation_wraps_and_skips_zero() {
     let (composition, _) = ledger.end_result(key_a(), true);
     assert_eq!(composition, 1);
     assert_eq!(ledger.next_composition_id, 2);
+}
+
+// ---------------------------------------------------------------------------
+// E2 extension: per-context product state maps
+// ---------------------------------------------------------------------------
+
+#[test]
+fn caret_set_get_roundtrip() {
+    let mut ledger = ContextLedger::new();
+    assert_eq!(ledger.caret(key_a()), None);
+    let caret = CaretRect {
+        valid: 1,
+        left: -100,
+        top: 200,
+        right: -98,
+        bottom: 222,
+        dpi: 144,
+    };
+    ledger.set_caret(key_a(), caret);
+    assert_eq!(ledger.caret(key_a()), Some(caret));
+    // Contexts are isolated.
+    assert_eq!(ledger.caret(key_b()), None);
+    ledger.forget(key_a());
+    assert_eq!(ledger.caret(key_a()), None);
+}
+
+#[test]
+fn popup_allowed_set_get_roundtrip() {
+    let mut ledger = ContextLedger::new();
+    assert_eq!(ledger.popup_allowed(key_a()), None);
+    ledger.set_popup_allowed(key_a(), false);
+    assert_eq!(ledger.popup_allowed(key_a()), Some(false));
+    ledger.set_popup_allowed(key_a(), true);
+    assert_eq!(ledger.popup_allowed(key_a()), Some(true));
+    ledger.forget(key_a());
+    assert_eq!(ledger.popup_allowed(key_a()), None);
+}
+
+#[test]
+fn selected_override_set_query_clear() {
+    let mut ledger = ContextLedger::new();
+    assert_eq!(ledger.selected_override(key_a()), None);
+    ledger.set_selected_override(key_a(), 3);
+    assert_eq!(ledger.selected_override(key_a()), Some(3));
+    // A stored Some(0) is still reported as present (C++ `found->second`
+    // semantics: the optional is engaged even when the value is 0).
+    ledger.set_selected_override(key_a(), 0);
+    assert_eq!(ledger.selected_override(key_a()), Some(0));
+    ledger.clear_selected_override(key_a());
+    assert_eq!(ledger.selected_override(key_a()), None);
+    // forget also clears the override.
+    ledger.set_selected_override(key_a(), 7);
+    ledger.forget(key_a());
+    assert_eq!(ledger.selected_override(key_a()), None);
+}
+
+#[test]
+fn input_method_overridden_default_false() {
+    let mut ledger = ContextLedger::new();
+    assert!(!ledger.input_method_overridden(key_a()));
+    ledger.set_input_method_overridden(key_a(), true);
+    assert!(ledger.input_method_overridden(key_a()));
+    ledger.set_input_method_overridden(key_a(), false);
+    assert!(!ledger.input_method_overridden(key_a()));
+    ledger.forget(key_a());
+    assert!(!ledger.input_method_overridden(key_a()));
+}
+
+#[test]
+fn product_state_maps_survive_ledger_lifecycle() {
+    let mut ledger = ContextLedger::new();
+    let (composition, revision) = ledger.end_result(key_a(), true);
+    let caret = CaretRect {
+        valid: 0,
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        dpi: 96,
+    };
+    ledger.set_caret(key_a(), caret);
+    ledger.set_popup_allowed(key_a(), true);
+    ledger.set_selected_override(key_a(), 2);
+    ledger.set_input_method_overridden(key_a(), true);
+    // Ledger state and product state coexist per context.
+    assert_eq!(ledger.revision_of(key_a()), revision);
+    assert_eq!(ledger.composition_of(key_a()), composition);
+    assert_eq!(ledger.caret(key_a()), Some(caret));
+    assert_eq!(ledger.popup_allowed(key_a()), Some(true));
+    assert_eq!(ledger.selected_override(key_a()), Some(2));
+    assert!(ledger.input_method_overridden(key_a()));
 }

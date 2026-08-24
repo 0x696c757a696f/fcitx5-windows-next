@@ -190,3 +190,161 @@ fn null_pointers_fail_closed() {
     );
     free_ledger(ledger);
 }
+
+// ---------------------------------------------------------------------------
+// E2 extension: per-context product state C ABI
+// ---------------------------------------------------------------------------
+
+use super::{
+    fcitx5_engine_core_caret, fcitx5_engine_core_clear_selected_override,
+    fcitx5_engine_core_input_method_overridden, fcitx5_engine_core_popup_allowed,
+    fcitx5_engine_core_selected_override, fcitx5_engine_core_set_caret,
+    fcitx5_engine_core_set_input_method_overridden, fcitx5_engine_core_set_popup_allowed,
+    fcitx5_engine_core_set_selected_override,
+};
+use crate::CaretRect;
+
+#[test]
+fn caret_c_abi_roundtrip() {
+    let ledger = new_ledger();
+    let key = key();
+    let caret = CaretRect {
+        valid: 1,
+        left: -10,
+        top: 20,
+        right: 8,
+        bottom: 30,
+        dpi: 144,
+    };
+    assert_eq!(
+        unsafe { fcitx5_engine_core_set_caret(ledger, &key, &caret) },
+        FCITX_ENGINE_CORE_OK
+    );
+    let mut out = CaretRect {
+        valid: 0,
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        dpi: 0,
+    };
+    assert_eq!(
+        unsafe { fcitx5_engine_core_caret(ledger, &key, &mut out) },
+        1
+    );
+    assert_eq!(out, caret);
+    free_ledger(ledger);
+}
+
+#[test]
+fn caret_c_abi_absent_returns_zero() {
+    let ledger = new_ledger();
+    let key = key();
+    let mut out = CaretRect {
+        valid: 0,
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        dpi: 0,
+    };
+    assert_eq!(
+        unsafe { fcitx5_engine_core_caret(ledger, &key, &mut out) },
+        0
+    );
+    free_ledger(ledger);
+}
+
+#[test]
+fn popup_allowed_c_abi_roundtrip() {
+    let ledger = new_ledger();
+    let key = key();
+    assert_eq!(
+        unsafe { fcitx5_engine_core_set_popup_allowed(ledger, &key, 0) },
+        FCITX_ENGINE_CORE_OK
+    );
+    let mut out = 1;
+    assert_eq!(
+        unsafe { fcitx5_engine_core_popup_allowed(ledger, &key, &mut out) },
+        1
+    );
+    assert_eq!(out, 0);
+    assert_eq!(
+        unsafe { fcitx5_engine_core_set_popup_allowed(ledger, &key, 1) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_popup_allowed(ledger, &key, &mut out) },
+        1
+    );
+    assert_eq!(out, 1);
+    free_ledger(ledger);
+}
+
+#[test]
+fn selected_override_c_abi_set_query_clear() {
+    let ledger = new_ledger();
+    let key = key();
+    let mut out = 0;
+    assert_eq!(
+        unsafe { fcitx5_engine_core_selected_override(ledger, &key, &mut out) },
+        0
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_set_selected_override(ledger, &key, 4) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_selected_override(ledger, &key, &mut out) },
+        1
+    );
+    assert_eq!(out, 4);
+    // Some(0) is still reported as present.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_set_selected_override(ledger, &key, 0) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_selected_override(ledger, &key, &mut out) },
+        1
+    );
+    assert_eq!(out, 0);
+    assert_eq!(
+        unsafe { fcitx5_engine_core_clear_selected_override(ledger, &key) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_selected_override(ledger, &key, &mut out) },
+        0
+    );
+    free_ledger(ledger);
+}
+
+#[test]
+fn input_method_overridden_c_abi() {
+    let ledger = new_ledger();
+    let key = key();
+    let mut out = 0;
+    assert_eq!(
+        unsafe { fcitx5_engine_core_input_method_overridden(ledger, &key, &mut out) },
+        0
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_set_input_method_overridden(ledger, &key, 1) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_input_method_overridden(ledger, &key, &mut out) },
+        1
+    );
+    assert_eq!(out, 1);
+    assert_eq!(
+        unsafe { fcitx5_engine_core_set_input_method_overridden(ledger, &key, 0) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_input_method_overridden(ledger, &key, &mut out) },
+        0
+    );
+    free_ledger(ledger);
+}

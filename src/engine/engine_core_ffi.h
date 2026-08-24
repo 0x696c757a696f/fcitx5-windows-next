@@ -26,6 +26,16 @@ struct FcitxEngineContextKeyC {
     std::uint64_t contextId;
 };
 
+// Matches `protocol::CaretRect` (and the Rust `CaretRect`).
+struct FcitxEngineCaretC {
+    std::uint8_t valid;
+    std::int32_t left;
+    std::int32_t top;
+    std::int32_t right;
+    std::int32_t bottom;
+    std::uint32_t dpi;
+};
+
 enum FcitxEngineCoreErrorC {
     FCITX_ENGINE_CORE_OK = 0,
     FCITX_ENGINE_CORE_STALE = 1,
@@ -64,5 +74,32 @@ int fcitx5_engine_core_ledger_end_result(void* ledger, const FcitxEngineContextK
                                          int hasContent,
                                          std::uint64_t* outCompositionId,
                                          std::uint64_t* outRevision);
+
+// Per-context product state (E2 extension). Setter functions return
+// FCITX_ENGINE_CORE_OK/STALE; query functions return 1 when the value is
+// present (and write the output) and 0 when absent or on null input.
+
+int fcitx5_engine_core_set_caret(void* ledger, const FcitxEngineContextKeyC* key,
+                                 const FcitxEngineCaretC* caret);
+int fcitx5_engine_core_caret(void* ledger, const FcitxEngineContextKeyC* key,
+                             FcitxEngineCaretC* outCaret);
+
+int fcitx5_engine_core_set_popup_allowed(void* ledger, const FcitxEngineContextKeyC* key,
+                                         int allowed);
+int fcitx5_engine_core_popup_allowed(void* ledger, const FcitxEngineContextKeyC* key,
+                                     int* outAllowed);
+
+int fcitx5_engine_core_set_selected_override(void* ledger, const FcitxEngineContextKeyC* key,
+                                             std::uint32_t value);
+int fcitx5_engine_core_clear_selected_override(void* ledger, const FcitxEngineContextKeyC* key);
+int fcitx5_engine_core_selected_override(void* ledger, const FcitxEngineContextKeyC* key,
+                                         std::uint32_t* outValue);
+
+int fcitx5_engine_core_set_input_method_overridden(void* ledger,
+                                                   const FcitxEngineContextKeyC* key,
+                                                   int overridden);
+int fcitx5_engine_core_input_method_overridden(void* ledger,
+                                               const FcitxEngineContextKeyC* key,
+                                               int* outOverridden);
 
 } // extern "C"

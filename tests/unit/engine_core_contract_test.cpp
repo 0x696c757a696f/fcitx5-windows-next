@@ -160,6 +160,88 @@ int runCorpus() {
             FCITX_ENGINE_CORE_STALE,
         "end_result with null outputs must fail closed");
 
+    // E2 extension: per-context product state maps.
+    // caret: absent until set; set/get roundtrip; forget clears.
+    FcitxEngineCaretC caret{};
+    failures += !expect(fcitx5_engine_core_caret(ledger, &a, &caret) == 0,
+                        "caret must be absent before set");
+    const FcitxEngineCaretC expectedCaret{1, -100, 200, -98, 222, 144};
+    failures += !expect(
+        fcitx5_engine_core_set_caret(ledger, &a, &expectedCaret) == FCITX_ENGINE_CORE_OK,
+        "set_caret must succeed");
+    failures += !expect(fcitx5_engine_core_caret(ledger, &a, &caret) == 1 &&
+                            caret.valid == expectedCaret.valid &&
+                            caret.left == expectedCaret.left &&
+                            caret.dpi == expectedCaret.dpi,
+                        "caret roundtrip must match");
+    fcitx5_engine_core_ledger_forget(ledger, &a);
+    failures += !expect(fcitx5_engine_core_caret(ledger, &a, &caret) == 0,
+                        "caret must clear on forget");
+
+    // popupAllowed: set false/true; absent until set.
+    int allowed = 1;
+    failures += !expect(fcitx5_engine_core_popup_allowed(ledger, &b, &allowed) == 0,
+                        "popupAllowed must be absent before set");
+    failures += !expect(
+        fcitx5_engine_core_set_popup_allowed(ledger, &b, 0) == FCITX_ENGINE_CORE_OK,
+        "set_popup_allowed(0) must succeed");
+    failures += !expect(fcitx5_engine_core_popup_allowed(ledger, &b, &allowed) == 1 &&
+                            allowed == 0,
+                        "popupAllowed roundtrip (false) must match");
+    failures += !expect(
+        fcitx5_engine_core_set_popup_allowed(ledger, &b, 1) == FCITX_ENGINE_CORE_OK,
+        "set_popup_allowed(1) must succeed");
+    failures += !expect(fcitx5_engine_core_popup_allowed(ledger, &b, &allowed) == 1 &&
+                            allowed == 1,
+                        "popupAllowed roundtrip (true) must match");
+
+    // selectedOverride: set/query/clear; Some(0) is still reported as set.
+    std::uint32_t overrideValue = 0;
+    failures += !expect(
+        fcitx5_engine_core_selected_override(ledger, &b, &overrideValue) == 0,
+        "selectedOverride must be absent before set");
+    failures += !expect(
+        fcitx5_engine_core_set_selected_override(ledger, &b, 4) == FCITX_ENGINE_CORE_OK,
+        "set_selected_override must succeed");
+    failures += !expect(
+        fcitx5_engine_core_selected_override(ledger, &b, &overrideValue) == 1 &&
+            overrideValue == 4,
+        "selectedOverride roundtrip must match");
+    failures += !expect(
+        fcitx5_engine_core_set_selected_override(ledger, &b, 0) == FCITX_ENGINE_CORE_OK,
+        "set_selected_override(0) must succeed");
+    failures += !expect(
+        fcitx5_engine_core_selected_override(ledger, &b, &overrideValue) == 1 &&
+            overrideValue == 0,
+        "selectedOverride Some(0) must still be reported as set");
+    failures += !expect(
+        fcitx5_engine_core_clear_selected_override(ledger, &b) == FCITX_ENGINE_CORE_OK,
+        "clear_selected_override must succeed");
+    failures += !expect(
+        fcitx5_engine_core_selected_override(ledger, &b, &overrideValue) == 0,
+        "selectedOverride must be absent after clear");
+
+    // inputMethodOverridden: unknown context reports absent; set 1 then 0.
+    int overridden = 1;
+    failures += !expect(
+        fcitx5_engine_core_input_method_overridden(ledger, &a, &overridden) == 0,
+        "inputMethodOverridden must be absent for unknown context");
+    failures += !expect(
+        fcitx5_engine_core_set_input_method_overridden(ledger, &a, 1) ==
+            FCITX_ENGINE_CORE_OK,
+        "set_input_method_overridden(1) must succeed");
+    failures += !expect(
+        fcitx5_engine_core_input_method_overridden(ledger, &a, &overridden) == 1 &&
+            overridden == 1,
+        "inputMethodOverridden must report set");
+    failures += !expect(
+        fcitx5_engine_core_set_input_method_overridden(ledger, &a, 0) ==
+            FCITX_ENGINE_CORE_OK,
+        "set_input_method_overridden(0) must succeed");
+    failures += !expect(
+        fcitx5_engine_core_input_method_overridden(ledger, &a, &overridden) == 0,
+        "inputMethodOverridden(0) must report absent (C++ default semantics)");
+
     return failures;
 }
 

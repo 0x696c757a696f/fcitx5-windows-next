@@ -39,6 +39,21 @@ impl ContextKey {
     }
 }
 
+/// Last-known caret rectangle for a context.
+///
+/// Layout matches `protocol::CaretRect` (dpi defaults to 96 in the C++
+/// aggregate default; the ledger stores whatever was set).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct CaretRect {
+    pub valid: u8,
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub dpi: u32,
+}
+
 /// Ledger rejection reasons, mirroring the C++ stale-state throws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LedgerError {
@@ -53,10 +68,19 @@ pub enum LedgerError {
 /// Replaces the C++ `nextCompositionId`/`compositions`/`revisions` members of
 /// `FcitxRuntime::Impl`. Contexts that were never seen report revision 0 and
 /// composition 0, matching the C++ `unordered_map::operator[]` default.
+///
+/// E2 extension: the ledger also owns the remaining per-context product state
+/// maps that were in `FcitxRuntime::Impl` — `carets`, `popupAllowed`,
+/// `selectedOverride`, and `inputMethodOverridden`. `pendingStates` stays a
+/// C++-owned derived cache until the E5 snapshot DTO moves to Rust.
 pub struct ContextLedger {
     next_composition_id: u64,
     compositions: HashMap<ContextKey, u64>,
     revisions: HashMap<ContextKey, u64>,
+    carets: HashMap<ContextKey, CaretRect>,
+    popup_allowed: HashMap<ContextKey, bool>,
+    selected_override: HashMap<ContextKey, Option<u32>>,
+    input_method_overridden: HashMap<ContextKey, bool>,
 }
 
 impl Default for ContextLedger {
@@ -73,6 +97,10 @@ impl ContextLedger {
             next_composition_id: 1,
             compositions: HashMap::new(),
             revisions: HashMap::new(),
+            carets: HashMap::new(),
+            popup_allowed: HashMap::new(),
+            selected_override: HashMap::new(),
+            input_method_overridden: HashMap::new(),
         }
     }
 
@@ -152,6 +180,68 @@ impl ContextLedger {
     pub fn forget(&mut self, key: ContextKey) {
         self.compositions.remove(&key);
         self.revisions.remove(&key);
+        self.carets.remove(&key);
+        self.popup_allowed.remove(&key);
+        self.selected_override.remove(&key);
+        self.input_method_overridden.remove(&key);
+    }
+
+    /// Stores the last-known caret rectangle for `key` (mirrors
+    /// `impl_->carets[key] = request.caret` in `processKey`).
+    pub fn set_caret(&mut self, key: ContextKey, caret: CaretRect) {
+        self.carets.insert(key, caret);
+    }
+
+    /// Returns the stored caret for `key`, if any (mirrors
+    /// `carets.find(key)` in `collectResult`).
+    pub fn caret(&self, key: ContextKey) -> Option<CaretRect> {
+        self.carets.get(&key).copied()
+    }
+
+    /// Stores the popup policy for `key` (mirrors
+    /// `impl_->popupAllowed[key] = request.popupAllowed`).
+    pub fn set_popup_allowed(&mut self, key: ContextKey, allowed: bool) {
+        self.popup_allowed.insert(key, allowed);
+    }
+
+    /// Returns the stored popup policy for `key`, if any.
+    pub fn popup_allowed(&self, key: ContextKey) -> Option<bool> {
+        self.popup_allowed.get(&key).copied()
+    }
+
+    /// Sets the candidate-highlight override for `key` (mirrors
+    /// `impl_->selectedOverride[key] = value`).
+    pub fn set_selected_override(&mut self, key: ContextKey, value: u32) {
+        self.selected_override.insert(key, Some(value));
+    }
+
+    /// Clears the candidate-highlight override for `key` (mirrors
+    /// `impl_->selectedOverride.erase(key)`).
+    pub fn clear_selected_override(&mut self, key: ContextKey) {
+        self.selected_override.remove(&key);
+    }
+
+    /// Returns the candidate-highlight override for `key`, if set. A stored
+    /// override of `Some(0)` is reported as present (mirrors the C++ `found
+    /// != end && found->second` checks where `Some(0)` still overrides to 0).
+    pub fn selected_override(&self, key: ContextKey) -> Option<u32> {
+        self.selected_override.get(&key).copied().flatten()
+    }
+
+    /// Marks `key` as input-method-overridden (mirrors
+    /// `inputMethodOverridden[key] = true` in the toggle/next handlers).
+    pub fn set_input_method_overridden(&mut self, key: ContextKey, overridden: bool) {
+        self.input_method_overridden.insert(key, overridden);
+    }
+
+    /// Returns whether `key` is marked input-method-overridden. Unknown
+    /// contexts report `false` (mirrors `impl_->inputMethodOverridden[key]`
+    /// default construction).
+    pub fn input_method_overridden(&self, key: ContextKey) -> bool {
+        self.input_method_overridden
+            .get(&key)
+            .copied()
+            .unwrap_or(false)
     }
 
     fn allocate_composition_id(&mut self) -> u64 {

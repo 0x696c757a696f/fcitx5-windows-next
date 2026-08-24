@@ -186,18 +186,29 @@ int main(int argc, char** argv) {
         warmupSection.find("takeCommit();") != std::string::npos) {
         return fail("REG-WARMUP-001: warmup must fail closed on user-state output");
     }
-    // ENGINE-E2: the context/composition/revision ledger must stay Rust
-    // authoritative in `fcitx5-engine-core`; the old C++ maps and the native
-    // lane wiring must not regress.
+    // ENGINE-E2: the context/composition/revision ledger and the per-context
+    // product state maps must stay Rust authoritative in `fcitx5-engine-core`;
+    // the old C++ maps and the native lane wiring must not regress.
     if (runtimeSource.find("std::uint64_t nextCompositionId{1}") != std::string::npos ||
         runtimeSource.find("revisions.erase") != std::string::npos ||
         runtimeSource.find("++revisions[") != std::string::npos ||
         runtimeSource.find("compositions[key]") != std::string::npos ||
+        runtimeSource.find("std::unordered_map<ClientContextKey, protocol::CaretRect") !=
+            std::string::npos ||
+        runtimeSource.find("popupAllowed;") != std::string::npos ||
+        runtimeSource.find("selectedOverride;") != std::string::npos ||
+        runtimeSource.find("inputMethodOverridden;") != std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_ledger_begin_key") == std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_ledger_end_result") == std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_ledger_select_candidate") == std::string::npos ||
-        runtimeSource.find("fcitx5_engine_core_ledger_forget") == std::string::npos) {
-        return fail("ENGINE-E2: context/composition/revision ledger must be Rust-owned in fcitx_runtime.cpp");
+        runtimeSource.find("fcitx5_engine_core_ledger_forget") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_set_caret") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_popup_allowed") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_set_selected_override") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_clear_selected_override") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_set_input_method_overridden") ==
+            std::string::npos) {
+        return fail("ENGINE-E2: context/composition/revision ledger and per-context product state must be Rust-owned in fcitx_runtime.cpp");
     }
     const auto nativeEngineCmakeSource = read_text(sourceRoot / "native-engine/CMakeLists.txt");
     if (nativeEngineCmakeSource.find("fcitx5_protocol_core_rust") == std::string::npos ||

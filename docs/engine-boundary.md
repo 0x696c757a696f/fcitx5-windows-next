@@ -51,12 +51,15 @@ These move to Rust authority:
 - `ContextId`
 - `CompositionId`
 - `Revision`
-- `EngineEpoch`
-- runtime/update `Generation`
+- per-context product state: last-known `CaretRect`, `popupAllowed` policy,
+  candidate-highlight `selectedOverride`, `inputMethodOverridden` marker
+- `EngineEpoch` (engine-process handshake scalar; E4 session scope)
+- runtime/update `Generation` (release platform attribute; E4 scope)
 - request freshness and stale rejection
 - deadline, timeout and fail-open policy
 - context/composition ledger
-- canonical preedit/candidate/surrounding-text snapshot DTO
+- canonical preedit/candidate/surrounding-text snapshot DTO (E5; `pendingStates`
+  stays a C++-owned derived cache until then)
 - candidate action intent DTO
 - diagnostics and health reporting
 
@@ -270,7 +273,7 @@ Forbidden across Engine Rust/C++ ABI:
 
 1. `E0`: freeze current Engine call graph, owner matrix, protocol schema and corpus. **DONE** (`docs/engine-boundary.md`, `docs/tasks/rebaseline.md`).
 2. `E1`: move Engine protocol DTO, IDs, validation and codec to Rust. **DONE — CUTOVER-GREEN** (2026-08-24): `fcitx5-protocol-core` is the authoritative codec; `protocol/protocol.cpp` is a thin bridge; wire frozen by `protocol_wire_golden.inc`; `protocol-differential-contract` + 79/79 CTest green; Cargo/clippy/fmt green.
-3. `E2`: move context/composition/revision/generation state to Rust. **DONE — CUTOVER-GREEN** (2026-08-24): `fcitx5-engine-core` owns the per-context ledger (composition id allocation starting at 1 with reserved-0 wrap, per-context composition/revision, `processKey`/`selectCandidate` stale checks, candidate id validation) with a narrow C ABI (`engine_core_ffi.h`); `FcitxRuntime::Impl` is cut over and the C++ `nextCompositionId`/`compositions`/`revisions` maps are deleted; `engine-core-contract` pins the frozen semantics; real `fcitx5-engine.exe` integration acceptance (baseline/typing-fuzz/safe-mode/chttrans) passes on the native-engine lane. Remaining E2 work: extend to `EngineEpoch`/`Generation` and the remaining per-context maps (`carets`, `popupAllowed`, `pendingStates`, `selectedOverride`, `inputMethodOverridden`) with the same freeze → side-by-side → differential → cutover discipline.
+3. `E2`: move context/composition/revision/generation state to Rust. **DONE — CUTOVER-GREEN** (2026-08-24): `fcitx5-engine-core` owns the per-context ledger (composition id allocation starting at 1 with reserved-0 wrap, per-context composition/revision, `processKey`/`selectCandidate` stale checks, candidate id validation) **and the remaining per-context product state maps** (`carets`, `popupAllowed`, `selectedOverride`, `inputMethodOverridden` — 9 more C ABI functions in `engine_core_ffi.h`) with a narrow C ABI; `FcitxRuntime::Impl` is cut over and the C++ `nextCompositionId`/`compositions`/`revisions`/`carets`/`popupAllowed`/`selectedOverride`/`inputMethodOverridden` maps are deleted; `engine-core-contract` pins the frozen semantics; source-contract guards both the ledger calls and the absence of the old C++ maps; real `fcitx5-engine.exe` integration acceptance (baseline/typing-fuzz/safe-mode/chttrans) passes on the native-engine lane with an isolated, pre-deployed `FCITX_USER_DATA_ROOT`. Explicitly deferred: `pendingStates` (a full `RuntimeResult` derived cache — moves with the E5 snapshot DTO, not as a standalone ABI), and `EngineEpoch`/`Generation` (process-level session/release attributes in the E4 IPC scope).
 4. `E3`: converge Fcitx event -> plain EngineEvent -> Rust -> EngineActionBatch -> C++ adapter.
 5. `E4`: move Engine IPC transport/framing/session/deadline policy to Rust.
 6. `E5`: move snapshot and surrounding-text canonicalization to Rust.

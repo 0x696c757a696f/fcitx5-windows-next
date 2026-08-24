@@ -233,6 +233,16 @@ FcitxEngineContextKeyC toLedgerKey(const ClientContextKey& key) {
     return FcitxEngineContextKeyC{key.processId, key.connectionId, key.contextId};
 }
 
+FcitxEngineCaretC toLedgerCaret(const protocol::CaretRect& caret) {
+    return FcitxEngineCaretC{caret.valid, caret.left, caret.top, caret.right, caret.bottom,
+                             caret.dpi};
+}
+
+protocol::CaretRect fromLedgerCaret(const FcitxEngineCaretC& caret) {
+    return protocol::CaretRect{caret.valid, caret.left, caret.top, caret.right, caret.bottom,
+                               caret.dpi};
+}
+
 class EngineInputContext final : public InputContext {
   public:
     struct DeleteSurroundingOperation {
@@ -364,23 +374,17 @@ class FcitxRuntime::Impl final {
     std::unique_ptr<EngineInputContext> warmupContext;
     EngineInputContext* focused{};
     // Rust-authoritative context/composition/revision ledger (E2 cutover).
+    // The ledger also owns the per-context product state maps
+    // (`carets`/`popupAllowed`/`selectedOverride`/`inputMethodOverridden`).
     EngineLedger ledger;
-    std::unordered_map<ClientContextKey, protocol::CaretRect, KeyHash> carets;
-    std::unordered_map<ClientContextKey, bool, KeyHash> popupAllowed;
+    // Derived cache (E2 keeps it C++-owned until the E5 snapshot DTO moves to
+    // Rust): full RuntimeResult published by selectCandidate for stateRequest
+    // replay.
     std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
-    // Focus override set by row/page navigation: moves the candidate highlight
-    // without committing. Cleared whenever ordinary input or selection changes
-    // the candidate state.
-    std::unordered_map<ClientContextKey, std::optional<std::uint32_t>, KeyHash>
-        selectedOverride;
     // Immutable snapshot of config.toml, loaded once at startup. The input
     // hot path (processKey) reads this in memory instead of reopening and
     // re-parsing the file on every keystroke.
     EngineConfig config;
-    // Set when the user switched the input method on this context via the
-    // Ctrl+Space / Ctrl+Shift hotkeys; the per-key reset to the group default
-    // respects it so a switch survives the next keystroke.
-    std::unordered_map<ClientContextKey, bool, KeyHash> inputMethodOverridden;
 
     void ensureInputMethods() {
         auto& manager = instance->inputMethodManager();
@@ -451,7 +455,8 @@ class FcitxRuntime::Impl final {
         }
         // The per-key reset to the group default below must not undo a user
         // switch on the following keystroke.
-        inputMethodOverridden[key] = true;
+        const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
+        (void)fcitx5_engine_core_set_input_method_overridden(ledger.get(), &ledgerKey, 1);
     }
 
     void nextInputMethod(const EngineConfig& config, const ClientContextKey& key,
@@ -467,7 +472,8 @@ class FcitxRuntime::Impl final {
                                                           config.enabled.size()];
         if (manager.entry(next)) {
             instance->setCurrentInputMethod(&context, next, true);
-            inputMethodOverridden[key] = true;
+            const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
+            (void)fcitx5_engine_core_set_input_method_overridden(ledger.get(), &ledgerKey, 1);
         }
     }
 
@@ -502,11 +508,7 @@ class FcitxRuntime::Impl final {
             focused = nullptr;
         const FcitxEngineContextKeyC ledgerKey = toLedgerKey(iterator->first);
         fcitx5_engine_core_ledger_forget(ledger.get(), &ledgerKey);
-        carets.erase(iterator->first);
-        popupAllowed.erase(iterator->first);
         pendingStates.erase(iterator->first);
-        inputMethodOverridden.erase(iterator->first);
-        selectedOverride.erase(iterator->first);
         return contexts.erase(iterator);
     }
 
@@ -543,8 +545,10 @@ class FcitxRuntime::Impl final {
         dispatchPendingEvents();
         RuntimeResult output;
         output.handled = handled;
-        if (const auto policy = popupAllowed.find(key); policy != popupAllowed.end())
-            output.popupAllowed = policy->second;
+        const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
+        int popupAllowed = 0;
+        if (fcitx5_engine_core_popup_allowed(ledger.get(), &ledgerKey, &popupAllowed))
+            output.popupAllowed = popupAllowed != 0;
         output.contentLocaleUtf8 =
             contentLocaleForInputMethod(instance ? instance->inputMethod(&context)
                                                  : std::string{});
@@ -568,7 +572,6 @@ class FcitxRuntime::Impl final {
         const bool hasCandidates = candidateList && !candidateList->empty();
         std::uint64_t composition = 0;
         std::uint64_t revision = 0;
-        const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
         (void)fcitx5_engine_core_ledger_end_result(
             ledger.get(), &ledgerKey,
             (!output.preeditUtf8.empty() || hasCandidates) ? 1 : 0,
@@ -604,9 +607,10 @@ class FcitxRuntime::Impl final {
                 if (global >= 0)
                     cursor = global;
             }
-            if (const auto found = selectedOverride.find(key);
-                found != selectedOverride.end() && found->second) {
-                cursor = static_cast<int>(*found->second);
+            std::uint32_t overrideValue = 0;
+            if (fcitx5_engine_core_selected_override(ledger.get(), &ledgerKey,
+                                                     &overrideValue)) {
+                cursor = static_cast<int>(overrideValue);
             }
             if (cursor >= 0 && cursor < size)
                 output.selectedCandidate = static_cast<std::uint32_t>(cursor);
@@ -651,8 +655,9 @@ class FcitxRuntime::Impl final {
         }
         output.compositionId = composition;
         output.revision = revision;
-        if (const auto found = carets.find(key); found != carets.end())
-            output.caret = found->second;
+        FcitxEngineCaretC caretC{};
+        if (fcitx5_engine_core_caret(ledger.get(), &ledgerKey, &caretC))
+            output.caret = fromLedgerCaret(caretC);
         return output;
     }
 };
@@ -727,7 +732,8 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         throw std::invalid_argument("stale input context state");
     }
     auto& context = impl_->contextFor(key);
-    impl_->popupAllowed[key] = request.popupAllowed;
+    (void)fcitx5_engine_core_set_popup_allowed(impl_->ledger.get(), &ledgerKey,
+                                               request.popupAllowed ? 1 : 0);
     if (impl_->focused != &context) {
         if (impl_->focused && impl_->focused->hasFocus())
             impl_->focused->focusOut();
@@ -744,7 +750,11 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                 impl_->instance->inputMethodManager().entry(request.inputMethodUtf8)
             ? request.inputMethodUtf8
             : group.defaultInputMethod();
-    if (!impl_->inputMethodOverridden[key] && !selected.empty() &&
+    int inputMethodOverridden = 0;
+    const bool hasOverride =
+        fcitx5_engine_core_input_method_overridden(impl_->ledger.get(), &ledgerKey,
+                                                   &inputMethodOverridden) != 0;
+    if ((!hasOverride || inputMethodOverridden == 0) && !selected.empty() &&
         impl_->instance->inputMethodManager().entry(selected) &&
         impl_->instance->inputMethod(&context) != selected) {
         (void)impl_->instance->inputMethodEngine(selected);
@@ -825,9 +835,10 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                 const bool scrollPrev = prevPage || (scroll && sym == FcitxKey_Up);
                 const auto currentFocus = [&] {
                     int focus = 0;
-                    if (const auto found = impl_->selectedOverride.find(key);
-                        found != impl_->selectedOverride.end() && found->second) {
-                        focus = static_cast<int>(*found->second);
+                    std::uint32_t overrideValue = 0;
+                    if (fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey,
+                                                             &overrideValue)) {
+                        focus = static_cast<int>(overrideValue);
                     } else if (const auto* bulkCursor = list->toBulkCursor()) {
                         const int global = bulkCursor->globalCursorIndex();
                         focus = global >= 0 ? global : list->cursorIndex();
@@ -869,7 +880,8 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                                    : std::nullopt;
                         if (target) {
                             bulk->candidateFromAll(static_cast<int>(*target)).select(&context);
-                            impl_->selectedOverride.erase(key);
+                            (void)fcitx5_engine_core_clear_selected_override(
+                                impl_->ledger.get(), &ledgerKey);
                         }
                         event.filterAndAccept();
                         return impl_->collectResult(key, context, true);
@@ -914,9 +926,10 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                             target = !verticalScroll && upDown ? cursor % rowWidth : 0;
                         }
                     }
-                    impl_->selectedOverride[key] =
+                    (void)fcitx5_engine_core_set_selected_override(
+                        impl_->ledger.get(), &ledgerKey,
                         static_cast<std::uint32_t>(std::clamp(
-                            target, 0, (std::max)(0, available - 1)));
+                            target, 0, (std::max)(0, available - 1))));
                     event.filterAndAccept();
                     return impl_->collectResult(key, context, true);
                 }
@@ -926,10 +939,12 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                         // The highlight jumps to the first candidate of the
                         // new page instead of keeping the previous position
                         // (Fcitx's cursor can stay within the page column).
-                        impl_->selectedOverride[key] = 0;
+                        (void)fcitx5_engine_core_set_selected_override(
+                            impl_->ledger.get(), &ledgerKey, 0);
                     } else if (prevPage && pageable->hasPrev()) {
                         pageable->prev();
-                        impl_->selectedOverride[key] = 0;
+                        (void)fcitx5_engine_core_set_selected_override(
+                            impl_->ledger.get(), &ledgerKey, 0);
                     }
                     event.filterAndAccept();
                     return impl_->collectResult(key, context, true);
@@ -947,7 +962,8 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                                 : list->candidate(static_cast<int>(target));
                         candidate.select(&context);
                         event.filterAndAccept();
-                        impl_->selectedOverride.erase(key);
+                        (void)fcitx5_engine_core_clear_selected_override(
+                            impl_->ledger.get(), &ledgerKey);
                         return impl_->collectResult(key, context, true);
                     }
                 }
@@ -970,8 +986,9 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                         nextFocus = std::clamp(
                             focus + (sym == FcitxKey_Right ? 1 : -1), 0, bounded - 1);
                     }
-                    impl_->selectedOverride[key] =
-                        static_cast<std::uint32_t>(nextFocus);
+                    (void)fcitx5_engine_core_set_selected_override(
+                        impl_->ledger.get(), &ledgerKey,
+                        static_cast<std::uint32_t>(nextFocus));
                     event.filterAndAccept();
                     return impl_->collectResult(key, context, true);
                 }
@@ -982,9 +999,10 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                 // does not match the highlighted row.
                 if ((sym == FcitxKey_space || sym == FcitxKey_Return) &&
                     !event.isRelease()) {
-                    if (const auto found = impl_->selectedOverride.find(key);
-                        found != impl_->selectedOverride.end() && found->second) {
-                        const int focus = static_cast<int>(*found->second);
+                    std::uint32_t overrideValue = 0;
+                    if (fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey,
+                                                             &overrideValue)) {
+                        const int focus = static_cast<int>(overrideValue);
                         if (focus >= 0 && focus < bounded) {
                             const auto& candidate =
                                 bulk && bulk->totalSize() >= 0
@@ -992,7 +1010,8 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
                                     : list->candidate(focus);
                             candidate.select(&context);
                             event.filterAndAccept();
-                            impl_->selectedOverride.erase(key);
+                            (void)fcitx5_engine_core_clear_selected_override(
+                                impl_->ledger.get(), &ledgerKey);
                             return impl_->collectResult(key, context, true);
                         }
                     }
@@ -1003,10 +1022,11 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     if (!event.isRelease() && event.key().sym() != FcitxKey_Shift_L &&
         event.key().sym() != FcitxKey_Control_L &&
         event.key().sym() != FcitxKey_Alt_L) {
-        impl_->selectedOverride.erase(key);
+        (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(), &ledgerKey);
     }
     context.keyEvent(event);
-    impl_->carets[key] = request.caret;
+    const FcitxEngineCaretC caretC = toLedgerCaret(request.caret);
+    (void)fcitx5_engine_core_set_caret(impl_->ledger.get(), &ledgerKey, &caretC);
     return impl_->collectResult(key, context, event.accepted());
 }
 
@@ -1043,7 +1063,7 @@ RuntimeResult FcitxRuntime::selectCandidate(
     const auto& candidate = bulk ? bulk->candidateFromAll(static_cast<int>(index))
                                  : candidateList->candidate(static_cast<int>(index));
     candidate.select(&context);
-    impl_->selectedOverride.erase(found->first);
+    (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(), &ledgerKey);
     RuntimeResult output = impl_->collectResult(found->first, context, true);
     impl_->pendingStates[found->first] = output;
     return output;
