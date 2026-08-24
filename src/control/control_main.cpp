@@ -77,6 +77,7 @@ Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
 Fcitx5WindowsCommonWideToUtf8 fcitx5_windows_common_wide_utf16_to_utf8(
     const std::uint16_t* input, std::size_t inputLen, std::uint8_t* output,
     std::size_t capacity);
+std::uint64_t fcitx5_windows_common_deadline_after_milliseconds(std::uint32_t milliseconds);
 struct Fcitx5ControlPresentation {
     Fcitx5ControlUtf8 appearanceMode;
     Fcitx5ControlUtf8 theme;
@@ -1159,8 +1160,9 @@ bool launcherCommand(fcitx::windows::protocol::LauncherCommand command,
         return false;
     const auto policy = fcitx::windows::ipc::PeerPolicy::exact(
         (executableDirectory() / L"fcitx5-launcher.exe").wstring());
-    return fcitx::windows::ipc::sendLauncherCommand(identity, GetTickCount64() + 1000, policy,
-                                                    command, response);
+    return fcitx::windows::ipc::sendLauncherCommand(
+        identity, fcitx5_windows_common_deadline_after_milliseconds(1000), policy, command,
+        response);
 }
 
 std::optional<fcitx::windows::protocol::LauncherCommand>
