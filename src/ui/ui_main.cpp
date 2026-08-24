@@ -136,6 +136,7 @@ extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf1
     std::size_t input_len,
     std::uint16_t* output,
     std::size_t capacity);
+extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
 
 } // namespace detail
 
@@ -1785,7 +1786,8 @@ class CandidateWindow final {
         if (targetForegroundWindow_)
             GetWindowThreadProcessId(targetForegroundWindow_, &targetForegroundProcessId_);
         if (interactionTest_)
-            targetForegroundProcessId_ = GetCurrentProcessId();
+            targetForegroundProcessId_ =
+                fcitx::windows::ui::detail::fcitx5_windows_common_current_process_id();
         POINT caretPoint{lastCaret_.left, lastCaret_.top};
         HMONITOR monitor = MonitorFromPoint(caretPoint, MONITOR_DEFAULTTONEAREST);
         MONITORINFO monitorInfo{};

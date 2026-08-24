@@ -77,6 +77,10 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CANDIDATE-UI-TEXT-RUST: Candidate UI UTF-8 to UTF-16 conversion must be Rust-owned");
     }
+    if (uiSource.find("GetCurrentProcessId") != std::string::npos ||
+        uiSource.find("fcitx5_windows_common_current_process_id") == std::string::npos) {
+        return fail("CANDIDATE-UI-PID-RUST: Candidate UI current process id must be Rust-owned");
+    }
     const auto launcherSource = read_text(sourceRoot / "src/launcher/launcher_main.cpp");
     const auto trayIconSource = read_text(sourceRoot / "src/launcher/tray_icon.cpp");
     const auto trayIconHeader = read_text(sourceRoot / "src/launcher/tray_icon.h");
