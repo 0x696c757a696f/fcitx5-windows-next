@@ -140,6 +140,16 @@ struct Fcitx5ControlThemeDiscoveryResult {
     Fcitx5ControlThemeDiscoveryEntry* entries;
     std::size_t entryCount;
 };
+struct Fcitx5ControlThemeSummaryResult {
+    int status;
+    Fcitx5ControlUtf8 id;
+    Fcitx5ControlUtf8 name;
+    Fcitx5ControlUtf8 version;
+    Fcitx5ControlUtf8 license;
+    Fcitx5ControlUtf8 description;
+    std::uint8_t hasLightBranch;
+    std::uint8_t hasDarkBranch;
+};
 struct Fcitx5ControlThemeDetail {
     Fcitx5ControlThemeRecord theme;
     std::uint8_t hasLightBranch;
@@ -287,6 +297,9 @@ Fcitx5ControlUtf8 fcitx5_control_builtin_theme_id_utf8();
 Fcitx5ControlThemeDiscoveryResult fcitx5_control_discover_themes_utf16(
     Fcitx5ControlUtf16 install_root, Fcitx5ControlUtf16 data_root);
 void fcitx5_control_theme_discovery_free(Fcitx5ControlThemeDiscoveryResult result);
+Fcitx5ControlThemeSummaryResult fcitx5_control_parse_theme_summary_utf8(
+    Fcitx5ControlUtf8 text);
+void fcitx5_control_theme_summary_free(Fcitx5ControlThemeSummaryResult summary);
 std::uint8_t fcitx5_control_theme_record_matches_requested_id_utf8(
     Fcitx5ControlUtf8 source, Fcitx5ControlUtf8 requested_id, Fcitx5ControlUtf8 theme_id);
 Fcitx5ControlUtf8 fcitx5_control_native_package_architecture_utf8();
@@ -1109,7 +1122,8 @@ struct ThemeRecord {
     std::string version;
     std::string license;
     std::string description;
-    fcitx::windows::config::Theme theme;
+    bool hasLightBranch{};
+    bool hasDarkBranch{};
 };
 
 struct AddonDescriptor {
@@ -1274,14 +1288,24 @@ std::optional<ThemeRecord> loadThemeRecord(const fs::path& path, std::string id,
     std::string text;
     if (!readUtf8(path, text))
         return std::nullopt;
-    fcitx::windows::config::Theme theme;
-    ParseError error;
-    if (!fcitx::windows::config::parseTheme(text, theme, error))
+    const auto summary = fcitx5_control_parse_theme_summary_utf8(utf8View(text));
+    if (summary.status != 0)
         return std::nullopt;
-    if (!themeRecordMatchesRequestedId(source, id, theme.id))
+    const std::string themeId = copyUtf8(summary.id);
+    if (!themeRecordMatchesRequestedId(source, id, themeId)) {
+        fcitx5_control_theme_summary_free(summary);
         return std::nullopt;
-    return ThemeRecord{std::move(id), std::move(source), theme.name, theme.version,
-                       theme.license, theme.description, std::move(theme)};
+    }
+    ThemeRecord record{std::move(id),
+                       std::move(source),
+                       copyUtf8(summary.name),
+                       copyUtf8(summary.version),
+                       copyUtf8(summary.license),
+                       copyUtf8(summary.description),
+                       summary.hasLightBranch != 0,
+                       summary.hasDarkBranch != 0};
+    fcitx5_control_theme_summary_free(summary);
+    return record;
 }
 
 std::vector<ThemeRecord> listThemes(const fs::path& dataRoot) {
@@ -1333,9 +1357,11 @@ std::string themesJson(const std::vector<ThemeRecord>& themes) {
 }
 
 std::string themeDetailJson(const ThemeRecord& theme) {
-    const Fcitx5ControlThemeDetail detail{
-        themeView(theme), !theme.theme.light.colors.empty() ? std::uint8_t{1} : std::uint8_t{0},
-        !theme.theme.dark.colors.empty() ? std::uint8_t{1} : std::uint8_t{0}};
+    const Fcitx5ControlThemeDetail detail{themeView(theme),
+                                          theme.hasLightBranch ? std::uint8_t{1}
+                                                               : std::uint8_t{0},
+                                          theme.hasDarkBranch ? std::uint8_t{1}
+                                                              : std::uint8_t{0}};
     char* bytes = nullptr;
     std::size_t length = 0;
     if (fcitx5_control_theme_detail_json_utf8(&detail, &bytes, &length) != 0)

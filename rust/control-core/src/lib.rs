@@ -180,7 +180,7 @@ pub struct Fcitx5ControlUtf16 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Fcitx5ControlUtf8 {
     ptr: *const u8,
     len: usize,
@@ -267,6 +267,18 @@ pub struct Fcitx5ControlThemeDiscoveryResult {
     status: i32,
     entries: *mut Fcitx5ControlThemeDiscoveryEntry,
     entry_count: usize,
+}
+
+#[repr(C)]
+pub struct Fcitx5ControlThemeSummaryResult {
+    status: i32,
+    id: Fcitx5ControlUtf8,
+    name: Fcitx5ControlUtf8,
+    version: Fcitx5ControlUtf8,
+    license: Fcitx5ControlUtf8,
+    description: Fcitx5ControlUtf8,
+    has_light_branch: u8,
+    has_dark_branch: u8,
 }
 
 #[repr(C)]
@@ -1550,6 +1562,102 @@ fn discover_themes(
     }
     entries.sort_by(|left, right| left.id.cmp(&right.id));
     entries
+}
+
+struct ThemeSummary {
+    id: String,
+    name: String,
+    version: String,
+    license: String,
+    description: String,
+    has_light_branch: bool,
+    has_dark_branch: bool,
+}
+
+fn table_has_only(table: &toml_edit::Table, allowed: &[&str]) -> bool {
+    table.iter().all(|(key, _)| allowed.contains(&key))
+}
+
+fn theme_id_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
+        })
+}
+
+fn required_theme_string(table: &toml_edit::Table, key: &str) -> Option<String> {
+    let value = table.get(key)?.as_str()?;
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn theme_branch_has_colors(root: &toml_edit::Table, key: &str) -> Option<bool> {
+    let Some(branch) = root.get(key) else {
+        return Some(false);
+    };
+    let branch = branch.as_table()?;
+    if !table_has_only(branch, &["candidate"]) {
+        return None;
+    }
+    let Some(candidate) = branch.get("candidate") else {
+        return None;
+    };
+    let candidate = candidate.as_table()?;
+    if !table_has_only(candidate, &["colors"]) {
+        return None;
+    }
+    let Some(colors) = candidate.get("colors") else {
+        return Some(false);
+    };
+    let colors = colors.as_table()?;
+    Some(!colors.is_empty())
+}
+
+fn parse_theme_summary(text: &[u8]) -> Option<ThemeSummary> {
+    if text.len() > 512 * 1024 {
+        return None;
+    }
+    let text = std::str::from_utf8(text).ok()?;
+    let value = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let root = value.as_table();
+    if !table_has_only(
+        root,
+        &["format_version", "theme", "common", "light", "dark"],
+    ) {
+        return None;
+    }
+    if root.get("format_version")?.as_integer()? != 1 {
+        return None;
+    }
+    if let Some(common) = root.get("common") {
+        common.as_table()?;
+    }
+    let metadata = root.get("theme")?.as_table()?;
+    if !table_has_only(
+        metadata,
+        &["id", "name", "version", "license", "description"],
+    ) {
+        return None;
+    }
+    let id = required_theme_string(metadata, "id")?;
+    if !theme_id_valid(&id) {
+        return None;
+    }
+    Some(ThemeSummary {
+        id,
+        name: required_theme_string(metadata, "name")?,
+        version: required_theme_string(metadata, "version")?,
+        license: required_theme_string(metadata, "license")?,
+        description: metadata
+            .get("description")
+            .and_then(toml_edit::Item::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        has_light_branch: theme_branch_has_colors(root, "light")?,
+        has_dark_branch: theme_branch_has_colors(root, "dark")?,
+    })
 }
 
 fn leak_utf8_slice(value: &str) -> Fcitx5ControlUtf8 {
@@ -3158,6 +3266,70 @@ pub unsafe extern "C" fn fcitx5_control_theme_discovery_free(
 
 /// # Safety
 ///
+/// `text` must remain valid UTF-8 for the duration of the call when its pointer
+/// is non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_parse_theme_summary_utf8(
+    text: Fcitx5ControlUtf8,
+) -> Fcitx5ControlThemeSummaryResult {
+    let Some(text) = utf8_slice(text) else {
+        return Fcitx5ControlThemeSummaryResult {
+            status: 1,
+            id: Fcitx5ControlUtf8::default(),
+            name: Fcitx5ControlUtf8::default(),
+            version: Fcitx5ControlUtf8::default(),
+            license: Fcitx5ControlUtf8::default(),
+            description: Fcitx5ControlUtf8::default(),
+            has_light_branch: 0,
+            has_dark_branch: 0,
+        };
+    };
+    let Some(summary) = parse_theme_summary(text) else {
+        return Fcitx5ControlThemeSummaryResult {
+            status: 1,
+            id: Fcitx5ControlUtf8::default(),
+            name: Fcitx5ControlUtf8::default(),
+            version: Fcitx5ControlUtf8::default(),
+            license: Fcitx5ControlUtf8::default(),
+            description: Fcitx5ControlUtf8::default(),
+            has_light_branch: 0,
+            has_dark_branch: 0,
+        };
+    };
+    Fcitx5ControlThemeSummaryResult {
+        status: 0,
+        id: leak_utf8_slice(&summary.id),
+        name: leak_utf8_slice(&summary.name),
+        version: leak_utf8_slice(&summary.version),
+        license: leak_utf8_slice(&summary.license),
+        description: leak_utf8_slice(&summary.description),
+        has_light_branch: summary.has_light_branch as u8,
+        has_dark_branch: summary.has_dark_branch as u8,
+    }
+}
+
+/// # Safety
+///
+/// `summary` must be a result previously returned by
+/// `fcitx5_control_parse_theme_summary_utf8`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_summary_free(
+    summary: Fcitx5ControlThemeSummaryResult,
+) {
+    if summary.status != 0 {
+        return;
+    }
+    unsafe {
+        free_utf8_slice(summary.id);
+        free_utf8_slice(summary.name);
+        free_utf8_slice(summary.version);
+        free_utf8_slice(summary.license);
+        free_utf8_slice(summary.description);
+    }
+}
+
+/// # Safety
+///
 /// `source`, `requested_id`, and `theme_id` must remain valid UTF-8 for the
 /// duration of the call when their pointers are non-null.
 #[no_mangle]
@@ -4488,6 +4660,104 @@ mod tests {
             fcitx5_control_theme_discovery_free(result);
         }
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn theme_summary_parse_matches_control_contract() {
+        let text = br##"
+format_version = 1
+
+[theme]
+id = "builtin.default"
+name = "Default"
+version = "1"
+license = "LGPL-2.1-or-later"
+description = "Built in"
+
+[common.candidate.geometry]
+margin = 8
+
+[light.candidate.colors]
+background = "#ffffff"
+
+[dark.candidate.colors]
+background = "#000000"
+"##;
+        let summary = parse_theme_summary(text).unwrap();
+        assert_eq!(summary.id, "builtin.default");
+        assert_eq!(summary.name, "Default");
+        assert_eq!(summary.version, "1");
+        assert_eq!(summary.license, "LGPL-2.1-or-later");
+        assert_eq!(summary.description, "Built in");
+        assert!(summary.has_light_branch);
+        assert!(summary.has_dark_branch);
+
+        let result = unsafe {
+            fcitx5_control_parse_theme_summary_utf8(Fcitx5ControlUtf8 {
+                ptr: text.as_ptr(),
+                len: text.len(),
+            })
+        };
+        assert_eq!(result.status, 0);
+        assert_eq!(utf8_slice(result.id), Some(b"builtin.default".as_slice()));
+        assert_eq!(utf8_slice(result.name), Some(b"Default".as_slice()));
+        assert_eq!(utf8_slice(result.version), Some(b"1".as_slice()));
+        assert_eq!(
+            utf8_slice(result.license),
+            Some(b"LGPL-2.1-or-later".as_slice())
+        );
+        assert_eq!(utf8_slice(result.description), Some(b"Built in".as_slice()));
+        assert_eq!(result.has_light_branch, 1);
+        assert_eq!(result.has_dark_branch, 1);
+        unsafe {
+            fcitx5_control_theme_summary_free(result);
+        }
+
+        assert!(parse_theme_summary(
+            br##"
+format_version = 2
+[theme]
+id = "solar"
+name = "Solar"
+version = "1"
+license = "MIT"
+"##
+        )
+        .is_none());
+        assert!(parse_theme_summary(
+            br##"
+format_version = 1
+unexpected = true
+[theme]
+id = "solar"
+name = "Solar"
+version = "1"
+license = "MIT"
+"##
+        )
+        .is_none());
+        assert!(parse_theme_summary(
+            br##"
+format_version = 1
+[theme]
+id = "Bad ID"
+name = "Solar"
+version = "1"
+license = "MIT"
+"##
+        )
+        .is_none());
+        assert!(parse_theme_summary(
+            br##"
+format_version = 1
+[theme]
+id = "solar"
+name = "Solar"
+version = "1"
+[light]
+"##
+        )
+        .is_none());
     }
 
     #[test]
