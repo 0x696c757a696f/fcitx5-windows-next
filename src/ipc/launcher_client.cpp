@@ -24,6 +24,12 @@ extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     std::uint8_t wait_when_busy);
 extern "C" void fcitx5_windows_common_close_pipe_client(void* pipe);
 extern "C" std::uint8_t fcitx5_windows_common_deadline_has_time(std::uint64_t deadline);
+extern "C" std::uint8_t fcitx5_windows_common_accept_launcher_response(
+    std::uint64_t response_to,
+    std::uint32_t session_id,
+    std::uint64_t expected_request_id,
+    std::uint32_t expected_session_id);
+extern "C" void fcitx5_windows_common_set_last_error(std::uint32_t error);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
@@ -102,8 +108,9 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
                     protocol::LauncherResponse decoded;
                     success = protocol::decodeFrame(responseBytes, frame) &&
                               protocol::decode(frame, decoded) &&
-                              decoded.metadata.responseTo == requestId &&
-                              decoded.metadata.sessionId == identity.sessionId;
+                              fcitx5_windows_common_accept_launcher_response(
+                                  decoded.metadata.responseTo, decoded.metadata.sessionId,
+                                  requestId, identity.sessionId) != 0;
                     if (success) response = decoded;
                     else failure = ERROR_INVALID_DATA;
                 }
@@ -114,7 +121,7 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
         failure = ERROR_NOT_ENOUGH_MEMORY;
     }
     fcitx5_windows_common_close_pipe_client(pipe);
-    SetLastError(success ? ERROR_SUCCESS : failure);
+    fcitx5_windows_common_set_last_error(success ? ERROR_SUCCESS : failure);
     return success;
 }
 

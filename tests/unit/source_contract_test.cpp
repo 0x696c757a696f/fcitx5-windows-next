@@ -220,12 +220,15 @@ int main(int argc, char** argv) {
         launcherClientSource.find("GetOverlappedResult") != std::string::npos ||
         launcherClientSource.find("CancelIoEx") != std::string::npos ||
         launcherClientSource.find("CloseHandle") != std::string::npos ||
+        launcherClientSource.find("SetLastError") != std::string::npos ||
         launcherClientSource.find("GetTickCount64") != std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_pipe_transfer") ==
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_close_pipe_client") ==
+            std::string::npos ||
+        launcherClientSource.find("fcitx5_windows_common_set_last_error") ==
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_deadline_has_time") ==
             std::string::npos) {
@@ -278,6 +281,10 @@ int main(int argc, char** argv) {
         pipeClientSource.find("result.handled = response.handled") != std::string::npos ||
         pipeClientSource.find("result.forwardKey = response.forwardKey") != std::string::npos ||
         pipeClientSource.find("result.caret = response.caret") != std::string::npos ||
+        launcherClientSource.find("decoded.metadata.responseTo == requestId") !=
+            std::string::npos ||
+        launcherClientSource.find("decoded.metadata.sessionId == identity.sessionId") !=
+            std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_accept_hello_response") ==
             std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_accept_key_response") !=
@@ -289,6 +296,10 @@ int main(int argc, char** argv) {
         pipeClientSource.find("fcitx5_windows_common_accept_engine_status_response") ==
             std::string::npos) {
         return fail("IPC-RESPONSE-POLICY-RUST: IPC client response acceptance policy must be Rust-owned");
+    }
+    if (launcherClientSource.find("fcitx5_windows_common_accept_launcher_response") ==
+        std::string::npos) {
+        return fail("IPC-LAUNCHER-RESPONSE-RUST: launcher response acceptance policy must be Rust-owned");
     }
     const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
     if (installerSource.find("--set-startup") != std::string::npos ||
@@ -540,7 +551,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_engine_status_response") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_accept_launcher_response") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("ipc_response_acceptance_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("set_last_error_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_set_last_error") ==
             std::string::npos ||
         rustWindowsCommonCore.find("key_response_scalar_application_matches_cpp_contract") ==
             std::string::npos ||

@@ -1417,6 +1417,15 @@ fn accept_engine_status_response(
         && ipc_status_ok(status)
 }
 
+fn accept_launcher_response(
+    response_to: u64,
+    session_id: u32,
+    expected_request_id: u64,
+    expected_session_id: u32,
+) -> bool {
+    response_to == expected_request_id && session_id == expected_session_id
+}
+
 fn apply_key_response_scalars(
     input: Fcitx5WindowsCommonKeyResponseScalarInput,
 ) -> Fcitx5WindowsCommonKeyResponseScalars {
@@ -2773,6 +2782,27 @@ pub extern "C" fn fcitx5_windows_common_accept_engine_status_response(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_accept_launcher_response(
+    response_to: u64,
+    session_id: u32,
+    expected_request_id: u64,
+    expected_session_id: u32,
+) -> u8 {
+    accept_launcher_response(
+        response_to,
+        session_id,
+        expected_request_id,
+        expected_session_id,
+    ) as u8
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_set_last_error(error: u32) {
+    // SAFETY: Sets the thread-local Win32 last-error value for the caller.
+    unsafe { SetLastError(error) };
+}
+
+#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `pipe` must be a live named-pipe handle. `current_user_sid` and
@@ -3555,6 +3585,18 @@ mod tests {
         assert!(accept_engine_status_response(13, 99, 7, 0, 13, 99, 7));
         assert!(!accept_engine_status_response(13, 0, 7, 0, 13, 99, 7));
         assert!(!accept_engine_status_response(13, 99, 7, 5, 13, 99, 7));
+
+        assert!(accept_launcher_response(14, 7, 14, 7));
+        assert!(!accept_launcher_response(15, 7, 14, 7));
+        assert!(!accept_launcher_response(14, 8, 14, 7));
+    }
+
+    #[test]
+    fn set_last_error_matches_cpp_contract() {
+        fcitx5_windows_common_set_last_error(1234);
+        assert_eq!(unsafe { GetLastError() }, 1234);
+        fcitx5_windows_common_set_last_error(0);
+        assert_eq!(unsafe { GetLastError() }, 0);
     }
 
     #[test]
