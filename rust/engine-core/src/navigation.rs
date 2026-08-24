@@ -512,3 +512,19 @@ pub fn decide_candidate_action(
         action: CandidateAction::None,
     }
 }
+
+/// Decides the scroll-mode candidate label offset (mirrors the C++
+/// `columnSelectionRow`/`rowSelectionColumn` choice in `collectResult`).
+pub fn scroll_label_offset(
+    vertical: bool,
+    cursor: usize,
+    index: usize,
+    dimension: usize,
+    size: usize,
+) -> Option<usize> {
+    if vertical {
+        column_selection_row(cursor, index, dimension, size)
+    } else {
+        row_selection_column(cursor, index, dimension, size)
+    }
+}

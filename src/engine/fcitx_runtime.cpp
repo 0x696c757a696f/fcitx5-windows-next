@@ -1,5 +1,4 @@
 #include "fcitx_runtime.h"
-#include "candidate_navigation.h"
 #include "config_model.h"
 #include "engine_core_ffi.h"
 #include "key_event.h"
@@ -371,6 +370,189 @@ std::string shortLabelFromRust(std::string_view text) {
     return std::string(reinterpret_cast<const char*>(buffer), written);
 }
 
+
+// E5-3: canonical snapshot blob serialization. The blob format is
+// Rust-authoritative (`rust/engine-core/src/snapshot.rs`); these helpers only
+// marshal `RuntimeResult` in/out of that byte format for the pending store.
+void writeU32(std::vector<std::uint8_t>& out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value));
+    out.push_back(static_cast<std::uint8_t>(value >> 8U));
+    out.push_back(static_cast<std::uint8_t>(value >> 16U));
+    out.push_back(static_cast<std::uint8_t>(value >> 24U));
+}
+
+void writeI32(std::vector<std::uint8_t>& out, std::int32_t value) {
+    writeU32(out, static_cast<std::uint32_t>(value));
+}
+
+void writeU64(std::vector<std::uint8_t>& out, std::uint64_t value) {
+    for (int index = 0; index < 8; ++index) {
+        out.push_back(static_cast<std::uint8_t>(value >> (8 * index)));
+    }
+}
+
+void writeBytes(std::vector<std::uint8_t>& out, std::string_view text) {
+    writeU32(out, static_cast<std::uint32_t>(text.size()));
+    out.insert(out.end(), text.begin(), text.end());
+}
+
+std::vector<std::uint8_t> serializeSnapshot(const RuntimeResult& result) {
+    std::vector<std::uint8_t> out;
+    out.push_back(result.handled ? 1U : 0U);
+    writeU32(out, result.preeditCaretUtf8);
+    writeU64(out, result.compositionId);
+    writeU64(out, result.revision);
+    writeU32(out, result.selectedCandidate);
+    writeU32(out, result.candidatePage);
+    writeU32(out, result.candidateTotal);
+    out.push_back(result.candidateVisibility);
+    writeU32(out, result.candidatePageSize);
+    out.push_back(result.candidateBulk ? 1U : 0U);
+    out.push_back(result.candidateEnd ? 1U : 0U);
+    out.push_back(result.deleteSurroundingText ? 1U : 0U);
+    writeI32(out, result.deleteSurroundingOffset);
+    writeU32(out, result.deleteSurroundingSize);
+    out.push_back(result.forwardKey ? 1U : 0U);
+    writeU32(out, result.forwardKeySym);
+    writeU32(out, result.forwardKeyStates);
+    writeI32(out, result.forwardKeyCode);
+    out.push_back(result.forwardKeyRelease ? 1U : 0U);
+    out.push_back(result.caret.valid ? 1U : 0U);
+    writeI32(out, result.caret.left);
+    writeI32(out, result.caret.top);
+    writeI32(out, result.caret.right);
+    writeI32(out, result.caret.bottom);
+    writeU32(out, result.caret.dpi);
+    out.push_back(result.popupAllowed ? 1U : 0U);
+    writeBytes(out, result.commitUtf8);
+    writeBytes(out, result.preeditUtf8);
+    writeBytes(out, result.contentLocaleUtf8);
+    writeU32(out, static_cast<std::uint32_t>(result.candidates.size()));
+    for (const auto& candidate : result.candidates) {
+        writeU64(out, candidate.id);
+        writeBytes(out, candidate.labelUtf8);
+        writeBytes(out, candidate.textUtf8);
+        writeBytes(out, candidate.commentUtf8);
+    }
+    return out;
+}
+
+struct BlobReader {
+    const std::uint8_t* data;
+    std::size_t size;
+    std::size_t offset{};
+
+    bool take(std::size_t count, const std::uint8_t*& pointer) {
+        if (count > size - offset)
+            return false;
+        pointer = data + offset;
+        offset += count;
+        return true;
+    }
+    bool u8(std::uint8_t& value) {
+        const std::uint8_t* pointer = nullptr;
+        if (!take(1, pointer))
+            return false;
+        value = *pointer;
+        return true;
+    }
+    bool u32(std::uint32_t& value) {
+        const std::uint8_t* pointer = nullptr;
+        if (!take(4, pointer))
+            return false;
+        value = static_cast<std::uint32_t>(pointer[0]) |
+                (static_cast<std::uint32_t>(pointer[1]) << 8U) |
+                (static_cast<std::uint32_t>(pointer[2]) << 16U) |
+                (static_cast<std::uint32_t>(pointer[3]) << 24U);
+        return true;
+    }
+    bool i32(std::int32_t& value) {
+        std::uint32_t raw = 0;
+        if (!u32(raw))
+            return false;
+        value = static_cast<std::int32_t>(raw);
+        return true;
+    }
+    bool u64(std::uint64_t& value) {
+        const std::uint8_t* pointer = nullptr;
+        if (!take(8, pointer))
+            return false;
+        value = 0;
+        for (int index = 0; index < 8; ++index)
+            value |= static_cast<std::uint64_t>(pointer[index]) << (8 * index);
+        return true;
+    }
+    bool bytes(std::string& text) {
+        std::uint32_t length = 0;
+        if (!u32(length))
+            return false;
+        const std::uint8_t* pointer = nullptr;
+        if (!take(length, pointer))
+            return false;
+        text.assign(reinterpret_cast<const char*>(pointer), length);
+        return true;
+    }
+};
+
+bool deserializeSnapshot(const std::uint8_t* data, std::size_t size, RuntimeResult& result) {
+    BlobReader reader{data, size};
+    std::uint8_t value8 = 0;
+    std::uint32_t value32 = 0;
+    if (!reader.u8(value8))
+        return false;
+    result.handled = value8 != 0;
+    if (!reader.u32(result.preeditCaretUtf8) || !reader.u64(result.compositionId) ||
+        !reader.u64(result.revision) || !reader.u32(result.selectedCandidate) ||
+        !reader.u32(result.candidatePage) || !reader.u32(result.candidateTotal) ||
+        !reader.u8(result.candidateVisibility) || !reader.u32(result.candidatePageSize))
+        return false;
+    if (!reader.u8(value8))
+        return false;
+    result.candidateBulk = value8 != 0;
+    if (!reader.u8(value8))
+        return false;
+    result.candidateEnd = value8 != 0;
+    if (!reader.u8(value8))
+        return false;
+    result.deleteSurroundingText = value8 != 0;
+    if (!reader.i32(result.deleteSurroundingOffset) || !reader.u32(result.deleteSurroundingSize))
+        return false;
+    if (!reader.u8(value8))
+        return false;
+    result.forwardKey = value8 != 0;
+    if (!reader.u32(result.forwardKeySym) || !reader.u32(result.forwardKeyStates) ||
+        !reader.i32(result.forwardKeyCode))
+        return false;
+    if (!reader.u8(value8))
+        return false;
+    result.forwardKeyRelease = value8 != 0;
+    if (!reader.u8(value8))
+        return false;
+    result.caret.valid = value8 != 0;
+    if (!reader.i32(result.caret.left) || !reader.i32(result.caret.top) ||
+        !reader.i32(result.caret.right) || !reader.i32(result.caret.bottom) ||
+        !reader.u32(result.caret.dpi))
+        return false;
+    if (!reader.u8(value8))
+        return false;
+    result.popupAllowed = value8 != 0;
+    if (!reader.bytes(result.commitUtf8) || !reader.bytes(result.preeditUtf8) ||
+        !reader.bytes(result.contentLocaleUtf8) || !reader.u32(value32))
+        return false;
+    if (value32 > protocol::kMaxCandidates)
+        return false;
+    result.candidates.clear();
+    result.candidates.reserve(value32);
+    for (std::uint32_t index = 0; index < value32; ++index) {
+        protocol::CandidateRecord record;
+        if (!reader.u64(record.id) || !reader.bytes(record.labelUtf8) ||
+            !reader.bytes(record.textUtf8) || !reader.bytes(record.commentUtf8))
+            return false;
+        result.candidates.push_back(std::move(record));
+    }
+    return reader.offset == reader.size;
+}
+
 } // namespace
 
 class FcitxRuntime::Impl final {
@@ -383,10 +565,6 @@ class FcitxRuntime::Impl final {
     // The ledger also owns the per-context product state maps
     // (`carets`/`popupAllowed`/`selectedOverride`/`inputMethodOverridden`).
     EngineLedger ledger;
-    // Derived cache (E2 keeps it C++-owned until the E5 snapshot DTO moves to
-    // Rust): full RuntimeResult published by selectCandidate for stateRequest
-    // replay.
-    std::unordered_map<ClientContextKey, RuntimeResult, KeyHash> pendingStates;
     // Immutable snapshot of config.toml, loaded once at startup. The input
     // hot path (processKey) reads this in memory instead of reopening and
     // re-parsing the file on every keystroke.
@@ -514,7 +692,6 @@ class FcitxRuntime::Impl final {
             focused = nullptr;
         const FcitxEngineContextKeyC ledgerKey = toLedgerKey(iterator->first);
         fcitx5_engine_core_ledger_forget(ledger.get(), &ledgerKey);
-        pendingStates.erase(iterator->first);
         return contexts.erase(iterator);
     }
 
@@ -622,18 +799,14 @@ class FcitxRuntime::Impl final {
                 if (!realBulk) {
                     label = candidateList->label(index).toString();
                 } else if (config.scrollMode) {
-                    const auto offset =
-                        config.orientation == config::Orientation::vertical
-                            ? columnSelectionRow(static_cast<std::size_t>((std::max)(0, cursor)),
-                                                 static_cast<std::size_t>(index),
-                                                 static_cast<std::size_t>(dimension),
-                                                 static_cast<std::size_t>(size))
-                            : rowSelectionColumn(static_cast<std::size_t>((std::max)(0, cursor)),
-                                                 static_cast<std::size_t>(index),
-                                                 static_cast<std::size_t>(dimension),
-                                                 static_cast<std::size_t>(size));
-                    if (offset) {
-                        label = std::to_string(*offset + 1U);
+                    std::uint32_t scrollOffset = 0;
+                    if (fcitx5_engine_core_scroll_label_offset(
+                            config.orientation == config::Orientation::vertical ? 1 : 0,
+                            static_cast<std::uint32_t>((std::max)(0, cursor)),
+                            static_cast<std::uint32_t>(index),
+                            static_cast<std::uint32_t>(dimension),
+                            static_cast<std::uint32_t>(size), &scrollOffset)) {
+                        label = std::to_string(scrollOffset + 1U);
                     }
                 } else if (index >= page * dimension && index < (page + 1) * dimension) {
                     label = std::to_string(index - page * dimension + 1);
@@ -968,19 +1141,30 @@ RuntimeResult FcitxRuntime::selectCandidate(
     candidate.select(&context);
     (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(), &ledgerKey);
     RuntimeResult output = impl_->collectResult(found->first, context, true);
-    impl_->pendingStates[found->first] = output;
+    // E5-3: the pending snapshot store is Rust-owned.
+    const auto blob = serializeSnapshot(output);
+    (void)fcitx5_engine_core_snapshot_store_put(impl_->ledger.get(), &ledgerKey,
+                                                output.revision, blob.data(), blob.size());
     return output;
 }
 
 RuntimeResult FcitxRuntime::takePendingState(
     const ClientContextKey& key, const protocol::StateRequest& request) {
-    const auto found = impl_->pendingStates.find(key);
-    if (found == impl_->pendingStates.end() ||
-        request.metadata.revision >= found->second.revision) {
+    const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
+    const std::size_t required =
+        fcitx5_engine_core_snapshot_store_required_size(impl_->ledger.get(), &ledgerKey);
+    if (required == 0)
+        throw std::invalid_argument("pending state is unavailable");
+    std::vector<std::uint8_t> blob(required);
+    std::size_t blobLength = 0;
+    if (fcitx5_engine_core_snapshot_store_take(
+            impl_->ledger.get(), &ledgerKey, request.metadata.revision, blob.data(),
+            blob.size(), &blobLength) == 0) {
         throw std::invalid_argument("pending state is unavailable");
     }
-    RuntimeResult output = std::move(found->second);
-    impl_->pendingStates.erase(found);
+    RuntimeResult output;
+    if (!deserializeSnapshot(blob.data(), blobLength, output))
+        throw std::invalid_argument("pending state is unavailable");
     return output;
 }
 

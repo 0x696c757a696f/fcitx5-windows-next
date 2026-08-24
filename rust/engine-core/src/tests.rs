@@ -1343,3 +1343,138 @@ fn snapshot_validation_accepts_boundary_values() {
     f.content_locale_utf8_len = 35;
     assert!(validate_snapshot(&f));
 }
+
+// ---------------------------------------------------------------------------
+// E5-3: canonical snapshot blob codec + pending store
+// ---------------------------------------------------------------------------
+
+mod snapshot_tests {
+    use super::super::snapshot::{decode_snapshot, encode_snapshot, Candidate, EngineSnapshot};
+    use super::super::ContextLedger;
+
+    fn sample() -> EngineSnapshot {
+        EngineSnapshot {
+            handled: true,
+            preedit_caret_utf8: 2,
+            composition_id: 7,
+            revision: 4,
+            selected_candidate: 1,
+            candidate_page: 0,
+            candidate_total: 2,
+            candidate_visibility: 1,
+            candidate_page_size: 2,
+            candidate_bulk: false,
+            candidate_end: true,
+            delete_surrounding_text: true,
+            delete_surrounding_offset: -1,
+            delete_surrounding_size: 2,
+            forward_key: true,
+            forward_key_sym: 0x1234,
+            forward_key_states: 0x7,
+            forward_key_code: 42,
+            forward_key_release: false,
+            caret_valid: true,
+            caret_left: -100,
+            caret_top: 200,
+            caret_right: -98,
+            caret_bottom: 222,
+            caret_dpi: 144,
+            popup_allowed: true,
+            commit_utf8: b"hi".to_vec(),
+            preedit_utf8: vec![0xe4, 0xbd, 0xa0],
+            content_locale_utf8: b"zh-CN".to_vec(),
+            candidates: vec![Candidate {
+                id: (7 << 8) | 1,
+                label: b"1".to_vec(),
+                text: vec![0xe4, 0xbd, 0xa0],
+                comment: vec![0x6e, 0xc7, 0x90],
+            }],
+        }
+    }
+
+    #[test]
+    fn snapshot_blob_roundtrip() {
+        let snapshot = sample();
+        let blob = encode_snapshot(&snapshot);
+        let decoded = decode_snapshot(&blob).expect("valid blob");
+        assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn snapshot_blob_rejects_malformed_input() {
+        assert!(decode_snapshot(&[]).is_none());
+        assert!(decode_snapshot(&[0xff; 4]).is_none());
+        // Truncated candidate count with candidates.
+        let blob = encode_snapshot(&sample());
+        assert!(decode_snapshot(&blob[..blob.len() - 1]).is_none());
+        // Trailing garbage.
+        let mut bad = blob.clone();
+        bad.push(0);
+        assert!(decode_snapshot(&bad).is_none());
+    }
+
+    #[test]
+    fn snapshot_blob_rejects_oversized_candidate_count() {
+        let mut snapshot = sample();
+        snapshot.candidates = (0..129)
+            .map(|i| Candidate {
+                id: i,
+                label: Vec::new(),
+                text: Vec::new(),
+                comment: Vec::new(),
+            })
+            .collect();
+        let blob = encode_snapshot(&snapshot);
+        assert!(decode_snapshot(&blob).is_none());
+    }
+
+    #[test]
+    fn pending_store_put_take_revision_ordering() {
+        let mut ledger = ContextLedger::new();
+        let key = super::key_a();
+        assert!(ledger.snapshot_take(key, 0).is_none());
+        // put with revision 5.
+        ledger.snapshot_put(key, 5, sample());
+        // Request revision >= stored revision is rejected.
+        assert!(ledger.snapshot_take(key, 5).is_none());
+        assert!(ledger.snapshot_take(key, 6).is_none());
+        // Strictly older request revision takes and removes the entry.
+        let taken = ledger
+            .snapshot_take(key, 4)
+            .expect("stale request must take");
+        assert_eq!(taken.revision, 4);
+        assert!(ledger.snapshot_take(key, 4).is_none());
+    }
+
+    #[test]
+    fn pending_store_forget_clears() {
+        let mut ledger = ContextLedger::new();
+        let key = super::key_b();
+        ledger.snapshot_put(key, 1, sample());
+        ledger.forget(key);
+        assert!(ledger.snapshot_take(key, 0).is_none());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// E6: scroll label offset canonicalization
+// ---------------------------------------------------------------------------
+
+use super::navigation::scroll_label_offset;
+
+#[test]
+fn scroll_label_offset_vertical_uses_column_row() {
+    // Vertical: column_selection_row(4, 7, 5, 20): 4/5=0, 7/5=1 -> different
+    // rows -> None.
+    assert_eq!(scroll_label_offset(true, 4, 7, 5, 20), None);
+    // Same row: column_selection_row(4, 2, 5, 20): 4/5=0, 2/5=0 -> 2%5=2.
+    assert_eq!(scroll_label_offset(true, 4, 2, 5, 20), Some(2));
+}
+
+#[test]
+fn scroll_label_offset_horizontal_uses_row_column() {
+    // Horizontal: row_selection_column(4, 6, 5, 20): 4/5=0, 6/5=1 -> None.
+    assert_eq!(scroll_label_offset(false, 4, 6, 5, 20), None);
+    // Same row: row_selection_column(4, 1, 5, 20) -> 1%5=1.
+    assert_eq!(scroll_label_offset(false, 4, 1, 5, 20), Some(1));
+}

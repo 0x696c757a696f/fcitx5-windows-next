@@ -54,7 +54,8 @@ Windows host
 | Engine E2 `engine-core` ledger | `CUTOVER-GREEN` (Rust authoritative; ledger + carets/popupAllowed/selectedOverride/inputMethodOverridden cut over, C++ maps deleted) | Deferred: `pendingStates` derived cache (E5 snapshot DTO), `EngineEpoch`/`Generation` (E4 IPC scope); then E3 Event→Action |
 | Engine E3 Event→Action | `CUTOVER-GREEN` (unified `handle_key_event` entry; 4 product decisions Rust-owned, `processKey` executes the returned decision) | E4: IPC transport/framing/session/deadline + `EngineEpoch`/`Generation` to Rust; `pendingStates` moves with E5 snapshot DTO |
 | Engine E4 IPC scope | `PARTIAL` (E4-1+E4-2: `EngineEpoch` generate/validate, request ordering, key deadline policy Rust-owned in engine-core; `handleRequest` applies them) | Remaining E4: transport/framing consolidation + per-connection session state; `Generation` stays release-platform scope |
-| Engine E5 snapshot/status canonicalization | `PARTIAL` (E5-1+E5-2: content-locale + short-label + typed `EngineSnapshot` DTO limits validation Rust-owned; `collectResult` applies them, fail-closed) | `pendingStates` per-context snapshot store (put/take + revision ordering) on the DTO; surrounding-text canonicalization consolidation |
+| Engine E5 snapshot/status canonicalization | `CUTOVER-GREEN` (canonicalization + typed `EngineSnapshot` DTO limits + `pendingStates` store Rust-owned; `collectResult`/`selectCandidate`/`takePendingState` apply them) | — |
+| Engine E6 C++ product-state deletion | `CUTOVER-GREEN` (`candidate_navigation.h` + unit test deleted; scroll label offset Rust-owned; only Fcitx adapter + Windows process shell remain) | — |
 
 ## Current Red Lights
 

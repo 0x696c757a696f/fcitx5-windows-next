@@ -71,8 +71,8 @@ pub enum LedgerError {
 ///
 /// E2 extension: the ledger also owns the remaining per-context product state
 /// maps that were in `FcitxRuntime::Impl` — `carets`, `popupAllowed`,
-/// `selectedOverride`, and `inputMethodOverridden`. `pendingStates` stays a
-/// C++-owned derived cache until the E5 snapshot DTO moves to Rust.
+/// `selectedOverride`, and `inputMethodOverridden`. The E5 `pendingStates`
+/// snapshot store is Rust-owned (`snapshot::SnapshotStore`).
 pub struct ContextLedger {
     next_composition_id: u64,
     compositions: HashMap<ContextKey, u64>,
@@ -81,6 +81,7 @@ pub struct ContextLedger {
     popup_allowed: HashMap<ContextKey, bool>,
     selected_override: HashMap<ContextKey, Option<u32>>,
     input_method_overridden: HashMap<ContextKey, bool>,
+    snapshot_store: snapshot::SnapshotStore,
 }
 
 impl Default for ContextLedger {
@@ -101,6 +102,7 @@ impl ContextLedger {
             popup_allowed: HashMap::new(),
             selected_override: HashMap::new(),
             input_method_overridden: HashMap::new(),
+            snapshot_store: snapshot::SnapshotStore::new(),
         }
     }
 
@@ -184,6 +186,29 @@ impl ContextLedger {
         self.popup_allowed.remove(&key);
         self.selected_override.remove(&key);
         self.input_method_overridden.remove(&key);
+        self.snapshot_store.forget(key);
+    }
+
+    /// Stores a pending snapshot for `key` (mirrors
+    /// `impl_->pendingStates[key] = output` in `selectCandidate`).
+    pub fn snapshot_put(
+        &mut self,
+        key: ContextKey,
+        revision: u64,
+        snapshot: snapshot::EngineSnapshot,
+    ) {
+        self.snapshot_store.put(key, revision, snapshot);
+    }
+
+    /// Takes the pending snapshot when the request revision is strictly older
+    /// than the stored revision, removing the entry (mirrors
+    /// `FcitxRuntime::takePendingState`).
+    pub fn snapshot_take(
+        &mut self,
+        key: ContextKey,
+        request_revision: u64,
+    ) -> Option<snapshot::EngineSnapshot> {
+        self.snapshot_store.take(key, request_revision)
     }
 
     /// Stores the last-known caret rectangle for `key` (mirrors
@@ -608,6 +633,7 @@ mod tests;
 
 pub mod capi;
 pub mod navigation;
+pub mod snapshot;
 
 // ---------------------------------------------------------------------------
 // E4: engine-process session epoch (start)

@@ -1237,14 +1237,6 @@ if(BUILD_TESTING)
   endif()
 
 
-  add_executable(fcitx5_candidate_navigation_test
-                 tests/unit/candidate_navigation_test.cpp)
-  target_include_directories(
-    fcitx5_candidate_navigation_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/engine")
-  fcitx_apply_project_options(fcitx5_candidate_navigation_test)
-  fcitx_apply_binary_hardening(fcitx5_candidate_navigation_test)
-  add_test(NAME candidate-navigation-contract COMMAND fcitx5_candidate_navigation_test)
-
   add_test(NAME candidate-ui-device-smoke
            COMMAND fcitx5_ui --self-test --simulate-device-loss)
   add_test(NAME candidate-ui-safe-mode-smoke COMMAND fcitx5_ui --self-test --safe-mode)

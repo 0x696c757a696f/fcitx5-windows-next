@@ -299,4 +299,28 @@ struct FcitxEngineSnapshotC {
 
 int fcitx5_engine_core_validate_snapshot(const FcitxEngineSnapshotC* snapshot);
 
+// E5-3: pending snapshot store. `put` stores a canonical snapshot blob with
+// its revision; `take` removes it only when the request revision is strictly
+// older than the stored revision and writes the canonical blob back (0 when
+// absent/stale/buffer-too-small, with the required size in `*outLength`);
+// `required_size` returns the stored blob size (0 when absent) so the caller
+// can size the take buffer without consuming the entry.
+int fcitx5_engine_core_snapshot_store_put(void* ledger, const FcitxEngineContextKeyC* key,
+                                          std::uint64_t revision, const std::uint8_t* blob,
+                                          std::size_t blobLength);
+int fcitx5_engine_core_snapshot_store_take(void* ledger, const FcitxEngineContextKeyC* key,
+                                           std::uint64_t requestRevision, std::uint8_t* out,
+                                           std::size_t outCapacity, std::size_t* outLength);
+std::size_t fcitx5_engine_core_snapshot_store_required_size(
+    void* ledger, const FcitxEngineContextKeyC* key);
+
+// E6: scroll-mode candidate label offset (mirrors the C++
+// `columnSelectionRow`/`rowSelectionColumn` choice). Returns 1 and writes
+// `outOffset` when the candidate index shares the cursor row/column.
+int fcitx5_engine_core_scroll_label_offset(int vertical, std::uint32_t cursor,
+                                           std::uint32_t index,
+                                           std::uint32_t dimension,
+                                           std::uint32_t size,
+                                           std::uint32_t* outOffset);
+
 } // extern "C"

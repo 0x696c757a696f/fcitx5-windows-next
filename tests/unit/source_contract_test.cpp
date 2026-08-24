@@ -208,8 +208,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_status_short_label") == std::string::npos ||
         runtimeSource.find("fcitx5_engine_core_validate_snapshot") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_snapshot_store_put") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_snapshot_store_take") == std::string::npos ||
+        runtimeSource.find("fcitx5_engine_core_scroll_label_offset") == std::string::npos ||
         runtimeSource.find("const auto matches = [&]") != std::string::npos ||
         runtimeSource.find("sameColumnNavigationTarget") != std::string::npos ||
+        runtimeSource.find("columnSelectionRow") != std::string::npos ||
+        runtimeSource.find("rowSelectionColumn") != std::string::npos ||
         runtimeSource.find("if (surroundingTextValid_)") != std::string::npos ||
         runtimeSource.find("entry(request.inputMethodUtf8)") != std::string::npos ||
         runtimeSource.find("contentLocaleForInputMethod") != std::string::npos ||

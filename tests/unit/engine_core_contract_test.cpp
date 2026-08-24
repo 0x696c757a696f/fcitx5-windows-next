@@ -466,6 +466,22 @@ int runCorpus() {
             "null snapshot must fail closed");
     }
 
+    // E5-3: pending snapshot store error paths.
+    {
+        failures += !expect(
+            fcitx5_engine_core_snapshot_store_put(ledger, &a, 1, nullptr, 0) ==
+                FCITX_ENGINE_CORE_STALE,
+            "malformed snapshot blob must be rejected");
+        failures += !expect(
+            fcitx5_engine_core_snapshot_store_required_size(ledger, &a) == 0,
+            "absent pending snapshot reports size 0");
+        std::size_t blobLength = 0;
+        failures += !expect(
+            fcitx5_engine_core_snapshot_store_take(ledger, &a, 0, nullptr, 0, &blobLength) ==
+                0,
+            "absent pending snapshot must not be taken");
+    }
+
     return failures;
 }
 

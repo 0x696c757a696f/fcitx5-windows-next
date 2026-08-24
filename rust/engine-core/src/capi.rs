@@ -1167,3 +1167,174 @@ pub unsafe extern "C" fn fcitx5_engine_core_validate_snapshot(
         _ => 0,
     }
 }
+
+// ---------------------------------------------------------------------------
+// E5-3: pending snapshot store C ABI
+// ---------------------------------------------------------------------------
+
+/// Stores a pending snapshot for a context. The blob must be a valid
+/// canonical snapshot encoding (parsed and validated by Rust); the store
+/// keeps the decoded snapshot with its revision. Returns
+/// FCITX_ENGINE_CORE_OK (0) on success, FCITX_ENGINE_CORE_STALE (1) on null
+/// input or a malformed blob (fail closed).
+///
+/// # Safety
+/// `ledger` must be a valid live handle; `key` must be valid or null;
+/// `blob`/`blob_len` must describe a readable buffer (null with length 0 is
+/// allowed).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_put(
+    ledger: *mut c_void,
+    key: *const FcitxEngineContextKeyC,
+    revision: u64,
+    blob: *const u8,
+    blob_len: usize,
+) -> i32 {
+    let Some(key) = from_c(key) else {
+        return FCITX_ENGINE_CORE_STALE;
+    };
+    if ledger.is_null() || (blob.is_null() && blob_len != 0) {
+        return FCITX_ENGINE_CORE_STALE;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let bytes = if blob_len == 0 {
+            &[][..]
+        } else {
+            // SAFETY: caller provides a valid buffer of `blob_len` bytes.
+            unsafe { std::slice::from_raw_parts(blob, blob_len) }
+        };
+        let snapshot = crate::snapshot::decode_snapshot(bytes)?;
+        // SAFETY: caller guarantees the handle came from `ledger_new`.
+        let ledger = unsafe { &mut *(ledger as *mut ContextLedger) };
+        ledger.snapshot_put(key, revision, snapshot);
+        Some(())
+    }));
+    match result {
+        Ok(Some(())) => FCITX_ENGINE_CORE_OK,
+        _ => FCITX_ENGINE_CORE_STALE,
+    }
+}
+
+/// Takes the pending snapshot for a context when the request revision is
+/// strictly older than the stored revision, removing the entry. Writes the
+/// canonical snapshot encoding into `out` and `*out_len` (when the buffer is
+/// large enough; otherwise the required size is reported in `*out_len` and 0
+/// is returned). Returns 1 on success, 0 when absent/stale/buffer-too-small
+/// or on null input.
+///
+/// # Safety
+/// `ledger` must be a valid live handle; `key`/`out_len` must be valid or
+/// null; `out` must be writable for `out_capacity` bytes or null with
+/// capacity 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_take(
+    ledger: *mut c_void,
+    key: *const FcitxEngineContextKeyC,
+    request_revision: u64,
+    out: *mut u8,
+    out_capacity: usize,
+    out_len: *mut usize,
+) -> i32 {
+    let Some(key) = from_c(key) else {
+        return 0;
+    };
+    if ledger.is_null() || out_len.is_null() {
+        return 0;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller guarantees the handle came from `ledger_new`.
+        let ledger = unsafe { &mut *(ledger as *mut ContextLedger) };
+        ledger
+            .snapshot_take(key, request_revision)
+            .map(|snapshot| crate::snapshot::encode_snapshot(&snapshot))
+    }));
+    match result {
+        Ok(Some(blob)) => {
+            // SAFETY: output pointer checked above.
+            unsafe {
+                *out_len = blob.len();
+            }
+            if blob.len() > out_capacity {
+                return 0;
+            }
+            if !blob.is_empty() && !out.is_null() {
+                // SAFETY: caller provides a writable buffer of
+                // `out_capacity` bytes and `blob.len() <= out_capacity`.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(blob.as_ptr(), out, blob.len());
+                }
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// Returns the stored pending snapshot blob size for a context (0 when
+/// absent), so the caller can size the take buffer without consuming the
+/// entry.
+///
+/// # Safety
+/// `ledger` must be a valid live handle; `key` must be valid or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_required_size(
+    ledger: *mut c_void,
+    key: *const FcitxEngineContextKeyC,
+) -> usize {
+    let Some(key) = from_c(key) else {
+        return 0;
+    };
+    if ledger.is_null() {
+        return 0;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller guarantees the handle came from `ledger_new`.
+        let ledger = unsafe { &*(ledger as *const ContextLedger) };
+        ledger
+            .snapshot_store
+            .entry_size(key)
+            .map(|snapshot| crate::snapshot::encode_snapshot(snapshot).len())
+            .unwrap_or(0)
+    }));
+    result.unwrap_or(0)
+}
+
+/// Decides the scroll-mode candidate label offset (mirrors the C++
+/// `columnSelectionRow`/`rowSelectionColumn` choice). Returns 1 and writes
+/// `out_offset` when the index is in the same row/column as the cursor;
+/// 0 otherwise or on null output.
+///
+/// # Safety
+/// `out_offset` must be writable or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_scroll_label_offset(
+    vertical: i32,
+    cursor: u32,
+    index: u32,
+    dimension: u32,
+    size: u32,
+    out_offset: *mut u32,
+) -> i32 {
+    if out_offset.is_null() {
+        return 0;
+    }
+    let result = panic::catch_unwind(|| {
+        navigation::scroll_label_offset(
+            vertical != 0,
+            cursor as usize,
+            index as usize,
+            dimension as usize,
+            size as usize,
+        )
+    });
+    match result {
+        Ok(Some(offset)) => {
+            // SAFETY: output pointer checked above.
+            unsafe {
+                *out_offset = offset as u32;
+            }
+            1
+        }
+        _ => 0,
+    }
+}
