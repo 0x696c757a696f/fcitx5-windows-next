@@ -1433,6 +1433,30 @@ fn accept_hello_response(
     response_to == expected_request_id && session_id == expected_session_id && ipc_status_ok(status)
 }
 
+fn apply_hello_response_scalars(
+    response_to: u64,
+    engine_epoch: u64,
+    session_id: u32,
+    status: u32,
+    expected_request_id: u64,
+    expected_session_id: u32,
+) -> Fcitx5WindowsCommonHelloResponseScalars {
+    if !accept_hello_response(
+        response_to,
+        session_id,
+        status,
+        expected_request_id,
+        expected_session_id,
+    ) {
+        return Fcitx5WindowsCommonHelloResponseScalars::default();
+    }
+    Fcitx5WindowsCommonHelloResponseScalars {
+        status: 1,
+        handshake_complete: 1,
+        engine_epoch,
+    }
+}
+
 fn accept_key_response(
     response_to: u64,
     engine_epoch: u64,
@@ -1768,6 +1792,14 @@ pub struct Fcitx5WindowsCommonPipeTransactWithError {
     pub status: u8,
     pub failure_error: u32,
     pub response_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonHelloResponseScalars {
+    pub status: u8,
+    pub handshake_complete: u8,
+    pub engine_epoch: u64,
 }
 
 #[repr(C)]
@@ -2816,6 +2848,25 @@ pub extern "C" fn fcitx5_windows_common_accept_hello_response(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_apply_hello_response_scalars(
+    response_to: u64,
+    engine_epoch: u64,
+    session_id: u32,
+    status: u32,
+    expected_request_id: u64,
+    expected_session_id: u32,
+) -> Fcitx5WindowsCommonHelloResponseScalars {
+    apply_hello_response_scalars(
+        response_to,
+        engine_epoch,
+        session_id,
+        status,
+        expected_request_id,
+        expected_session_id,
+    )
+}
+
+#[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn fcitx5_windows_common_accept_key_response(
     response_to: u64,
@@ -3751,6 +3802,19 @@ mod tests {
         assert!(accept_launcher_response(14, 7, 14, 7));
         assert!(!accept_launcher_response(15, 7, 14, 7));
         assert!(!accept_launcher_response(14, 8, 14, 7));
+    }
+
+    #[test]
+    fn hello_response_scalar_application_matches_cpp_contract() {
+        let accepted = apply_hello_response_scalars(11, 99, 7, 0, 11, 7);
+        assert_eq!(accepted.status, 1);
+        assert_eq!(accepted.handshake_complete, 1);
+        assert_eq!(accepted.engine_epoch, 99);
+
+        let rejected = apply_hello_response_scalars(12, 99, 7, 0, 11, 7);
+        assert_eq!(rejected.status, 0);
+        assert_eq!(rejected.handshake_complete, 0);
+        assert_eq!(rejected.engine_epoch, 0);
     }
 
     #[test]

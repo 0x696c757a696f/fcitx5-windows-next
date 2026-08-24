@@ -307,11 +307,16 @@ int main(int argc, char** argv) {
         pipeClientSource.find("result.handled = response.handled") != std::string::npos ||
         pipeClientSource.find("result.forwardKey = response.forwardKey") != std::string::npos ||
         pipeClientSource.find("result.caret = response.caret") != std::string::npos ||
+        pipeClientSource.find("engineEpoch_ = response.metadata.engineEpoch") !=
+            std::string::npos ||
+        pipeClientSource.find("handshakeComplete_ = true") != std::string::npos ||
         launcherClientSource.find("decoded.metadata.responseTo == requestId") !=
             std::string::npos ||
         launcherClientSource.find("decoded.metadata.sessionId == identity.sessionId") !=
             std::string::npos ||
-        pipeClientSource.find("fcitx5_windows_common_accept_hello_response") ==
+        pipeClientSource.find("fcitx5_windows_common_accept_hello_response") !=
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_apply_hello_response_scalars") ==
             std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_accept_key_response") !=
             std::string::npos ||
@@ -572,6 +577,10 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("utf8_offset_to_wide_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_hello_response") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_apply_hello_response_scalars") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("hello_response_scalar_application_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_key_response") ==
             std::string::npos ||

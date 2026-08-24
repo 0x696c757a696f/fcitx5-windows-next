@@ -37,6 +37,11 @@ struct Fcitx5WindowsCommonUtf8OffsetToWide {
     std::uint8_t status;
     std::uint32_t utf16Offset;
 };
+struct Fcitx5WindowsCommonHelloResponseScalars {
+    std::uint8_t status;
+    std::uint8_t handshakeComplete;
+    std::uint64_t engineEpoch;
+};
 struct Fcitx5WindowsCommonKeyResponseScalarInput {
     std::uint64_t responseTo;
     std::uint64_t engineEpoch;
@@ -109,8 +114,10 @@ fcitx5_windows_common_utf8_offset_to_wide(const std::uint8_t* input,
 extern "C" Fcitx5WindowsCommonKeyResponseScalars
 fcitx5_windows_common_apply_key_response_scalars(
     Fcitx5WindowsCommonKeyResponseScalarInput input);
-extern "C" std::uint8_t fcitx5_windows_common_accept_hello_response(
+extern "C" Fcitx5WindowsCommonHelloResponseScalars
+fcitx5_windows_common_apply_hello_response_scalars(
     std::uint64_t response_to,
+    std::uint64_t engine_epoch,
     std::uint32_t session_id,
     std::uint32_t status,
     std::uint64_t expected_request_id,
@@ -272,15 +279,20 @@ bool PipeClient::handshake(std::uint64_t deadline) noexcept {
         }
         protocol::FrameView frame;
         protocol::HelloResponse response;
-        if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response) ||
-            fcitx5_windows_common_accept_hello_response(
-                response.metadata.responseTo, response.metadata.sessionId,
-                static_cast<std::uint32_t>(response.status), requestId, sessionId_) == 0) {
+        if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response)) {
             disconnect();
             return false;
         }
-        engineEpoch_ = response.metadata.engineEpoch;
-        handshakeComplete_ = true;
+        const auto scalars = fcitx5_windows_common_apply_hello_response_scalars(
+            response.metadata.responseTo, response.metadata.engineEpoch,
+            response.metadata.sessionId, static_cast<std::uint32_t>(response.status),
+            requestId, sessionId_);
+        if (scalars.status == 0) {
+            disconnect();
+            return false;
+        }
+        engineEpoch_ = scalars.engineEpoch;
+        handshakeComplete_ = scalars.handshakeComplete != 0;
         return true;
     } catch (...) {
         disconnect();
