@@ -178,12 +178,16 @@ int main(int argc, char** argv) {
         peerSource.find("peer.sessionId == current.sessionId") != std::string::npos ||
         peerSource.find("queryExecutableFileIdentity") != std::string::npos ||
         peerSource.find("executableFilesMatch") != std::string::npos ||
+        peerSource.find("queryProcessIdentity") != std::string::npos ||
         peerSource.find("GetNamedPipeServerProcessId") != std::string::npos ||
+        peerSource.find("GetNamedPipeClientProcessId") != std::string::npos ||
+        peerSource.find("fcitx5_windows_common_same_principal_session_utf16") !=
+            std::string::npos ||
         peerSource.find("fcitx5_windows_common_verify_pipe_server_peer_utf16") ==
             std::string::npos ||
-        peerSource.find("fcitx5_windows_common_same_principal_session_utf16") ==
+        peerSource.find("fcitx5_windows_common_verify_pipe_client_peer_utf16") ==
             std::string::npos) {
-        return fail("REG-PEER-ID-001: pipe server peer verification must use Rust-owned exact executable policy");
+        return fail("REG-PEER-ID-001: pipe peer verification must use Rust-owned process and executable policy");
     }
     const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
     if (installerSource.find("--set-startup") != std::string::npos ||
@@ -394,6 +398,11 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("pipe_server_peer_policy_rejects_invalid_pipe_like_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("GetNamedPipeServerProcessId") == std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_verify_pipe_client_peer_utf16") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("pipe_client_peer_policy_rejects_invalid_pipe_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("GetNamedPipeClientProcessId") == std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_executable_files_match_utf16") ==
             std::string::npos ||
         rustWindowsCommonCore.find("executable_file_match_policy_matches_cpp_contract") ==

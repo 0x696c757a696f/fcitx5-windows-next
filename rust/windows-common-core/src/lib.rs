@@ -389,6 +389,7 @@ unsafe extern "system" {
         file_path_size: u32,
         flags: u32,
     ) -> u32;
+    fn GetNamedPipeClientProcessId(pipe: *mut c_void, client_process_id: *mut u32) -> i32;
     fn GetNamedPipeServerProcessId(pipe: *mut c_void, server_process_id: *mut u32) -> i32;
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
     fn GetCurrentProcessId() -> u32;
@@ -434,6 +435,17 @@ fn pipe_server_process_id(pipe: *mut c_void) -> Option<u32> {
     // SAFETY: `pipe` is a caller-supplied named-pipe handle. Windows validates
     // the handle and writes a process id only on success.
     let ok = unsafe { GetNamedPipeServerProcessId(pipe, &mut process_id) };
+    (ok != 0 && process_id != 0).then_some(process_id)
+}
+
+fn pipe_client_process_id(pipe: *mut c_void) -> Option<u32> {
+    if pipe.is_null() || pipe == invalid_handle_value() {
+        return None;
+    }
+    let mut process_id = 0_u32;
+    // SAFETY: `pipe` is a caller-supplied named-pipe handle. Windows validates
+    // the handle and writes a process id only on success.
+    let ok = unsafe { GetNamedPipeClientProcessId(pipe, &mut process_id) };
     (ok != 0 && process_id != 0).then_some(process_id)
 }
 
@@ -544,6 +556,114 @@ fn verify_pipe_server_peer(
         expected.contains_reparse_point != 0,
         &expected_final_path,
     )
+}
+
+fn verified_pipe_client_peer(
+    pipe: *mut c_void,
+    current_service_account: bool,
+    current_session_id: u32,
+    current_secure_desktop: bool,
+    current_user_sid: &str,
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+    executable_final_path_output: *mut u16,
+    executable_final_path_capacity: usize,
+) -> Fcitx5WindowsCommonVerifiedPipeClient {
+    if !may_launch_user_engine(
+        current_service_account,
+        current_session_id,
+        current_secure_desktop,
+        current_user_sid,
+    ) {
+        return Fcitx5WindowsCommonVerifiedPipeClient::default();
+    }
+    let Some(client_process_id) = pipe_client_process_id(pipe) else {
+        return Fcitx5WindowsCommonVerifiedPipeClient::default();
+    };
+    let query = process_identity_with_executable_file(
+        client_process_id,
+        std::ptr::null_mut(),
+        0,
+        std::ptr::null_mut(),
+        0,
+        std::ptr::null_mut(),
+        0,
+    );
+    if query.status == 0 || query.user_sid_len == 0 || query.executable_path_len == 0 {
+        return Fcitx5WindowsCommonVerifiedPipeClient::default();
+    }
+    let mut client_user_sid = vec![0_u16; query.user_sid_len];
+    let mut client_executable_path = vec![0_u16; query.executable_path_len];
+    let mut client_final_path = vec![0_u16; query.executable_final_path_len];
+    let filled = process_identity_with_executable_file(
+        client_process_id,
+        client_user_sid.as_mut_ptr(),
+        client_user_sid.len(),
+        client_executable_path.as_mut_ptr(),
+        client_executable_path.len(),
+        if client_final_path.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            client_final_path.as_mut_ptr()
+        },
+        client_final_path.len(),
+    );
+    if filled.status == 0
+        || filled.user_sid_len != client_user_sid.len()
+        || filled.executable_path_len != client_executable_path.len()
+    {
+        return Fcitx5WindowsCommonVerifiedPipeClient::default();
+    }
+    let Ok(client_user_sid_string) = String::from_utf16(&client_user_sid) else {
+        return Fcitx5WindowsCommonVerifiedPipeClient::default();
+    };
+    if !same_principal_and_session(
+        filled.session_id,
+        filled.service_account != 0,
+        &client_user_sid_string,
+        current_session_id,
+        current_user_sid,
+    ) {
+        return Fcitx5WindowsCommonVerifiedPipeClient::default();
+    }
+    if filled.executable_file_status != 0 {
+        if filled.executable_final_path_len == 0
+            || filled.executable_final_path_len > client_final_path.len()
+        {
+            return Fcitx5WindowsCommonVerifiedPipeClient::default();
+        }
+        client_final_path.truncate(filled.executable_final_path_len);
+    } else {
+        client_final_path.clear();
+    }
+    write_wide_units(&client_user_sid, user_sid_output, user_sid_capacity);
+    write_wide_units(
+        &client_executable_path,
+        executable_path_output,
+        executable_path_capacity,
+    );
+    write_wide_units(
+        &client_final_path,
+        executable_final_path_output,
+        executable_final_path_capacity,
+    );
+    Fcitx5WindowsCommonVerifiedPipeClient {
+        status: 1,
+        service_account: filled.service_account,
+        executable_file_status: filled.executable_file_status,
+        executable_file_contains_reparse_point: filled.executable_file_contains_reparse_point,
+        process_id: client_process_id,
+        session_id: filled.session_id,
+        executable_file_volume_serial_number: filled.executable_file_volume_serial_number,
+        executable_file_index_high: filled.executable_file_index_high,
+        executable_file_index_low: filled.executable_file_index_low,
+        executable_file_number_of_links: filled.executable_file_number_of_links,
+        user_sid_len: client_user_sid.len(),
+        executable_path_len: client_executable_path.len(),
+        executable_final_path_len: client_final_path.len(),
+    }
 }
 
 fn local_test_namespace() -> Option<String> {
@@ -1042,6 +1162,24 @@ pub struct Fcitx5WindowsCommonProcessExecutableIdentity {
     pub service_account: u8,
     pub executable_file_status: u8,
     pub executable_file_contains_reparse_point: u8,
+    pub session_id: u32,
+    pub executable_file_volume_serial_number: u32,
+    pub executable_file_index_high: u32,
+    pub executable_file_index_low: u32,
+    pub executable_file_number_of_links: u32,
+    pub user_sid_len: usize,
+    pub executable_path_len: usize,
+    pub executable_final_path_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonVerifiedPipeClient {
+    pub status: u8,
+    pub service_account: u8,
+    pub executable_file_status: u8,
+    pub executable_file_contains_reparse_point: u8,
+    pub process_id: u32,
     pub session_id: u32,
     pub executable_file_volume_serial_number: u32,
     pub executable_file_index_high: u32,
@@ -1888,6 +2026,47 @@ pub unsafe extern "C" fn fcitx5_windows_common_verify_pipe_server_peer_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `pipe` must be a live named-pipe handle. `current_user_sid` must be null
+/// only when `current_user_sid_len` is zero, or point to a valid UTF-16 buffer
+/// with exactly the provided length. Output pointers may be null for size
+/// queries or point to writable UTF-16 storage for their paired capacities. No
+/// pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_verify_pipe_client_peer_utf16(
+    pipe: *mut c_void,
+    current_service_account: u8,
+    current_session_id: u32,
+    current_secure_desktop: u8,
+    current_user_sid: *const u16,
+    current_user_sid_len: usize,
+    user_sid_output: *mut u16,
+    user_sid_capacity: usize,
+    executable_path_output: *mut u16,
+    executable_path_capacity: usize,
+    executable_final_path_output: *mut u16,
+    executable_final_path_capacity: usize,
+) -> Fcitx5WindowsCommonVerifiedPipeClient {
+    let Some(current_user_sid) = wide_string_from_raw(current_user_sid, current_user_sid_len)
+    else {
+        return Fcitx5WindowsCommonVerifiedPipeClient::default();
+    };
+    verified_pipe_client_peer(
+        pipe,
+        current_service_account != 0,
+        current_session_id,
+        current_secure_desktop != 0,
+        &current_user_sid,
+        user_sid_output,
+        user_sid_capacity,
+        executable_path_output,
+        executable_path_capacity,
+        executable_final_path_output,
+        executable_final_path_capacity,
+    )
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// Final-path pointers must be null only when their corresponding length is
 /// zero, or point to valid UTF-16 buffers with exactly the provided lengths. No
 /// pointer is retained.
@@ -2456,6 +2635,29 @@ mod tests {
             &[],
             false
         ));
+    }
+
+    #[test]
+    fn pipe_client_peer_policy_rejects_invalid_pipe_like_cpp_contract() {
+        assert!(pipe_client_process_id(std::ptr::null_mut()).is_none());
+        assert!(pipe_client_process_id(invalid_handle_value()).is_none());
+        assert_eq!(
+            verified_pipe_client_peer(
+                std::ptr::null_mut(),
+                false,
+                7,
+                false,
+                "S-1-5-21-test",
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                0
+            )
+            .status,
+            0
+        );
     }
 
     #[test]
