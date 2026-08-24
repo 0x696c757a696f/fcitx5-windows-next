@@ -102,6 +102,30 @@ struct Fcitx5WindowsCommonKeyResponseScalars {
     std::uint32_t caretDpi;
     std::uint8_t candidateVisibility;
 };
+struct Fcitx5WindowsCommonEngineStatusResponseScalarInput {
+    std::uint64_t requestId;
+    std::uint64_t responseTo;
+    std::uint64_t engineEpoch;
+    std::uint32_t sessionId;
+    std::uint64_t contextId;
+    std::uint64_t compositionId;
+    std::uint64_t revision;
+    std::uint32_t status;
+    std::uint64_t expectedRequestId;
+    std::uint64_t expectedEngineEpoch;
+    std::uint32_t expectedSessionId;
+};
+struct Fcitx5WindowsCommonEngineStatusResponseScalars {
+    std::uint8_t status;
+    std::uint32_t responseStatus;
+    std::uint64_t requestId;
+    std::uint64_t responseTo;
+    std::uint64_t engineEpoch;
+    std::uint32_t sessionId;
+    std::uint64_t contextId;
+    std::uint64_t compositionId;
+    std::uint64_t revision;
+};
 extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
     const std::uint8_t* input,
     std::size_t input_len,
@@ -142,14 +166,9 @@ extern "C" std::uint8_t fcitx5_windows_common_accept_candidate_select_request(
     std::uint64_t composition_id,
     std::uint64_t revision,
     std::uint64_t candidate_id);
-extern "C" std::uint8_t fcitx5_windows_common_accept_engine_status_response(
-    std::uint64_t response_to,
-    std::uint64_t engine_epoch,
-    std::uint32_t session_id,
-    std::uint32_t status,
-    std::uint64_t expected_request_id,
-    std::uint64_t expected_engine_epoch,
-    std::uint32_t expected_session_id);
+extern "C" Fcitx5WindowsCommonEngineStatusResponseScalars
+fcitx5_windows_common_apply_engine_status_response_scalars(
+    Fcitx5WindowsCommonEngineStatusResponseScalarInput input);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
@@ -528,15 +547,39 @@ bool PipeClient::queryEngineStatus(protocol::EngineStatusResponse& result,
         protocol::FrameView frame;
         protocol::EngineStatusResponse response;
         if (!protocol::decodeFrame(responseBytes, frame) ||
-            !protocol::decode(frame, response) ||
-            fcitx5_windows_common_accept_engine_status_response(
-                response.metadata.responseTo, response.metadata.engineEpoch,
-                response.metadata.sessionId, static_cast<std::uint32_t>(response.status),
-                requestId, engineEpoch_, sessionId_) == 0) {
+            !protocol::decode(frame, response)) {
             disconnect();
             return false;
         }
-        result = std::move(response);
+        const auto scalars =
+            fcitx5_windows_common_apply_engine_status_response_scalars(
+                Fcitx5WindowsCommonEngineStatusResponseScalarInput{
+                    response.metadata.requestId,
+                    response.metadata.responseTo,
+                    response.metadata.engineEpoch,
+                    response.metadata.sessionId,
+                    response.metadata.contextId,
+                    response.metadata.compositionId,
+                    response.metadata.revision,
+                    static_cast<std::uint32_t>(response.status),
+                    requestId,
+                    engineEpoch_,
+                    sessionId_});
+        if (scalars.status == 0) {
+            disconnect();
+            return false;
+        }
+        result.metadata = protocol::Metadata{scalars.requestId, scalars.responseTo,
+                                             scalars.engineEpoch, scalars.sessionId,
+                                             scalars.contextId, scalars.compositionId,
+                                             scalars.revision};
+        result.status = static_cast<protocol::Status>(scalars.responseStatus);
+        result.currentInputMethodId = std::move(response.currentInputMethodId);
+        result.currentInputMethodName = std::move(response.currentInputMethodName);
+        result.currentInputMethodNativeName =
+            std::move(response.currentInputMethodNativeName);
+        result.currentInputMethodShortLabel =
+            std::move(response.currentInputMethodShortLabel);
         return true;
     } catch (...) {
         disconnect();

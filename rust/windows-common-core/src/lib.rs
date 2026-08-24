@@ -1603,6 +1603,33 @@ fn apply_key_response_scalars(
     }
 }
 
+fn apply_engine_status_response_scalars(
+    input: Fcitx5WindowsCommonEngineStatusResponseScalarInput,
+) -> Fcitx5WindowsCommonEngineStatusResponseScalars {
+    if !accept_engine_status_response(
+        input.response_to,
+        input.engine_epoch,
+        input.session_id,
+        input.status,
+        input.expected_request_id,
+        input.expected_engine_epoch,
+        input.expected_session_id,
+    ) {
+        return Fcitx5WindowsCommonEngineStatusResponseScalars::default();
+    }
+    Fcitx5WindowsCommonEngineStatusResponseScalars {
+        status: 1,
+        response_status: input.status,
+        request_id: input.request_id,
+        response_to: input.response_to,
+        engine_epoch: input.engine_epoch,
+        session_id: input.session_id,
+        context_id: input.context_id,
+        composition_id: input.composition_id,
+        revision: input.revision,
+    }
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -1884,6 +1911,36 @@ pub struct Fcitx5WindowsCommonKeyResponseScalars {
     pub caret_bottom: i32,
     pub caret_dpi: u32,
     pub candidate_visibility: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonEngineStatusResponseScalarInput {
+    pub request_id: u64,
+    pub response_to: u64,
+    pub engine_epoch: u64,
+    pub session_id: u32,
+    pub context_id: u64,
+    pub composition_id: u64,
+    pub revision: u64,
+    pub status: u32,
+    pub expected_request_id: u64,
+    pub expected_engine_epoch: u64,
+    pub expected_session_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonEngineStatusResponseScalars {
+    pub status: u8,
+    pub response_status: u32,
+    pub request_id: u64,
+    pub response_to: u64,
+    pub engine_epoch: u64,
+    pub session_id: u32,
+    pub context_id: u64,
+    pub composition_id: u64,
+    pub revision: u64,
 }
 
 #[repr(C)]
@@ -2994,6 +3051,13 @@ pub extern "C" fn fcitx5_windows_common_accept_engine_status_response(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_apply_engine_status_response_scalars(
+    input: Fcitx5WindowsCommonEngineStatusResponseScalarInput,
+) -> Fcitx5WindowsCommonEngineStatusResponseScalars {
+    apply_engine_status_response_scalars(input)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_accept_launcher_response(
     response_to: u64,
     session_id: u32,
@@ -3876,6 +3940,42 @@ mod tests {
         assert_eq!(pipe_second, pipe_first + 1);
         assert_eq!(fcitx5_windows_common_ipc_status_ok(0), 1);
         assert_eq!(fcitx5_windows_common_ipc_status_ok(1), 0);
+    }
+
+    #[test]
+    fn engine_status_response_scalar_application_matches_cpp_contract() {
+        let input = Fcitx5WindowsCommonEngineStatusResponseScalarInput {
+            request_id: 21,
+            response_to: 13,
+            engine_epoch: 99,
+            session_id: 7,
+            context_id: 0,
+            composition_id: 0,
+            revision: 0,
+            status: 0,
+            expected_request_id: 13,
+            expected_engine_epoch: 99,
+            expected_session_id: 7,
+        };
+        let accepted = apply_engine_status_response_scalars(input);
+        assert_eq!(accepted.status, 1);
+        assert_eq!(accepted.response_status, 0);
+        assert_eq!(accepted.request_id, 21);
+        assert_eq!(accepted.response_to, 13);
+        assert_eq!(accepted.engine_epoch, 99);
+        assert_eq!(accepted.session_id, 7);
+        assert_eq!(accepted.context_id, 0);
+        assert_eq!(accepted.composition_id, 0);
+        assert_eq!(accepted.revision, 0);
+
+        let rejected = apply_engine_status_response_scalars(
+            Fcitx5WindowsCommonEngineStatusResponseScalarInput {
+                response_to: 14,
+                ..input
+            },
+        );
+        assert_eq!(rejected.status, 0);
+        assert_eq!(rejected.engine_epoch, 0);
     }
 
     #[test]
