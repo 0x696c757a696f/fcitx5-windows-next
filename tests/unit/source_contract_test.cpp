@@ -292,6 +292,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         pipeClientSource.find("response.metadata.revision <= revision") !=
             std::string::npos ||
+        pipeClientSource.find("targetProcessId == 0") != std::string::npos ||
+        pipeClientSource.find("expectedEngineEpoch == 0") != std::string::npos ||
+        pipeClientSource.find("engineEpoch_ != expectedEngineEpoch") != std::string::npos ||
+        pipeClientSource.find("contextId == 0 || compositionId == 0") !=
+            std::string::npos ||
+        pipeClientSource.find("revision == 0 || candidateId == 0") !=
+            std::string::npos ||
         pipeClientSource.find("response.status != protocol::Status::ok") !=
             std::string::npos ||
         pipeClientSource.find("contextState.compositionId = response.metadata.compositionId") !=
@@ -323,6 +330,8 @@ int main(int argc, char** argv) {
         pipeClientSource.find("fcitx5_windows_common_apply_key_response_scalars") ==
             std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_accept_candidate_select_response") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_accept_candidate_select_request") ==
             std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_accept_engine_status_response") ==
             std::string::npos) {
@@ -587,6 +596,10 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("fcitx5_windows_common_apply_key_response_scalars") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_candidate_select_response") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_accept_candidate_select_request") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("accept_candidate_select_request") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_engine_status_response") ==
             std::string::npos ||

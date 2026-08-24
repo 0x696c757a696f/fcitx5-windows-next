@@ -1506,6 +1506,24 @@ fn accept_candidate_select_response(
     )
 }
 
+fn accept_candidate_select_request(
+    current_engine_epoch: u64,
+    expected_engine_epoch: u64,
+    target_process_id: u32,
+    context_id: u64,
+    composition_id: u64,
+    revision: u64,
+    candidate_id: u64,
+) -> bool {
+    target_process_id != 0
+        && expected_engine_epoch != 0
+        && current_engine_epoch == expected_engine_epoch
+        && context_id != 0
+        && composition_id != 0
+        && revision != 0
+        && candidate_id != 0
+}
+
 fn accept_engine_status_response(
     response_to: u64,
     engine_epoch: u64,
@@ -2934,6 +2952,27 @@ pub extern "C" fn fcitx5_windows_common_accept_candidate_select_response(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_accept_candidate_select_request(
+    current_engine_epoch: u64,
+    expected_engine_epoch: u64,
+    target_process_id: u32,
+    context_id: u64,
+    composition_id: u64,
+    revision: u64,
+    candidate_id: u64,
+) -> u8 {
+    accept_candidate_select_request(
+        current_engine_epoch,
+        expected_engine_epoch,
+        target_process_id,
+        context_id,
+        composition_id,
+        revision,
+        candidate_id,
+    ) as u8
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_accept_engine_status_response(
     response_to: u64,
     engine_epoch: u64,
@@ -3794,6 +3833,15 @@ mod tests {
         assert!(!accept_candidate_select_response(
             12, 99, 7, 42, 5, 0, 12, 99, 7, 42, 5
         ));
+
+        assert!(accept_candidate_select_request(99, 99, 1234, 42, 6, 5, 77));
+        assert!(!accept_candidate_select_request(98, 99, 1234, 42, 6, 5, 77));
+        assert!(!accept_candidate_select_request(99, 0, 1234, 42, 6, 5, 77));
+        assert!(!accept_candidate_select_request(99, 99, 0, 42, 6, 5, 77));
+        assert!(!accept_candidate_select_request(99, 99, 1234, 0, 6, 5, 77));
+        assert!(!accept_candidate_select_request(99, 99, 1234, 42, 0, 5, 77));
+        assert!(!accept_candidate_select_request(99, 99, 1234, 42, 6, 0, 77));
+        assert!(!accept_candidate_select_request(99, 99, 1234, 42, 6, 5, 0));
 
         assert!(accept_engine_status_response(13, 99, 7, 0, 13, 99, 7));
         assert!(!accept_engine_status_response(13, 0, 7, 0, 13, 99, 7));

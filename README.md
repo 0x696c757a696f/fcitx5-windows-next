@@ -2,15 +2,15 @@
 
 Fcitx5 for Windows Next is a native Windows frontend and distribution layer for
 Fcitx5. It is designed around a small in-process TSF DLL, an out-of-process
-Fcitx engine, an on-demand Direct2D/DirectWrite candidate window, a native WTL
-configuration app, and a signed package/update system.
+Fcitx engine, an on-demand Direct2D/DirectWrite candidate window, native
+configuration tools, and a signed package/update system.
 
 The project goal is simple to say and hard to earn: after installation, a user
 selects **Fcitx5 for Windows Next** from `Win + Space` and types normally. They
 should not need to start helper EXEs by hand, understand internal protocols, or
 recover from a frozen host application because an input-method component failed.
 
-## Current engineering baseline
+## Engineering baseline
 
 The repository is being developed as a production Windows input-method
 distribution with strict automated gates for build, runtime behavior, security,
@@ -26,7 +26,7 @@ checks for the code being changed, not on historical green runs.
 Host app
   ↓
 fcitx5-tsf.dll
-  small COM/TSF boundary, EditSession commit, UILess projection, bounded IPC
+  small Rust COM/TSF boundary, EditSession commit, UILess projection, bounded IPC
   ↓
 fcitx5-launcher.exe
   per-user/per-session lifecycle, tray status, engine/UI supervision
@@ -75,10 +75,10 @@ The repository currently includes:
 - Windows SDK
 - Visual Studio ATL component (`Microsoft.VisualStudio.Component.VC.ATL`)
 - CMake 3.28 or newer
-- PowerShell 7 or Windows PowerShell 5.1
+- PowerShell 7
 
-The native Config app uses WTL/ATL through the pinned CMake toolchain. No IDE
-wizard, designer, GUI automation or manual publish step is part of the build.
+Native Windows helper surfaces use the pinned CMake toolchain. No IDE wizard,
+designer, GUI automation or manual publish step is part of the build.
 
 ## Common build commands
 

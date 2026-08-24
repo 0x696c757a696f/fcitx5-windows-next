@@ -134,6 +134,14 @@ extern "C" std::uint8_t fcitx5_windows_common_accept_candidate_select_response(
     std::uint32_t expected_session_id,
     std::uint64_t expected_context_id,
     std::uint64_t previous_revision);
+extern "C" std::uint8_t fcitx5_windows_common_accept_candidate_select_request(
+    std::uint64_t current_engine_epoch,
+    std::uint64_t expected_engine_epoch,
+    std::uint32_t target_process_id,
+    std::uint64_t context_id,
+    std::uint64_t composition_id,
+    std::uint64_t revision,
+    std::uint64_t candidate_id);
 extern "C" std::uint8_t fcitx5_windows_common_accept_engine_status_response(
     std::uint64_t response_to,
     std::uint64_t engine_epoch,
@@ -442,9 +450,10 @@ bool PipeClient::selectCandidate(std::uint32_t targetProcessId,
     try {
         const std::uint64_t deadline =
             fcitx5_windows_common_deadline_after_milliseconds(kInputDeadlineMilliseconds);
-        if (!connect(deadline) || !handshake(deadline) || targetProcessId == 0 ||
-            expectedEngineEpoch == 0 || engineEpoch_ != expectedEngineEpoch ||
-            contextId == 0 || compositionId == 0 || revision == 0 || candidateId == 0) {
+        if (!connect(deadline) || !handshake(deadline) ||
+            fcitx5_windows_common_accept_candidate_select_request(
+                engineEpoch_, expectedEngineEpoch, targetProcessId, contextId,
+                compositionId, revision, candidateId) == 0) {
             return false;
         }
         const auto requestId = fcitx5_windows_common_next_pipe_client_request_id();
