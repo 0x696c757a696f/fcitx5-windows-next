@@ -1431,6 +1431,17 @@ fn package_type_name(package_type: u32) -> Fcitx5ControlUtf8 {
     }
 }
 
+fn package_update_available(
+    installed_present: bool,
+    installed_version: &[u8],
+    available_version: &[u8],
+) -> bool {
+    installed_present
+        && !installed_version.is_empty()
+        && !available_version.is_empty()
+        && installed_version != available_version
+}
+
 fn package_config_surface_kinds(
     package_type: u32,
     permissions: &[Fcitx5ControlUtf8],
@@ -2806,6 +2817,21 @@ pub extern "C" fn fcitx5_control_package_type_name_utf8(package_type: u32) -> Fc
 
 /// # Safety
 ///
+/// `installed_version` and `available_version` must remain valid UTF-8 for the
+/// duration of the call when their pointers are non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_update_available_utf8(
+    installed_present: u8,
+    installed_version: Fcitx5ControlUtf8,
+    available_version: Fcitx5ControlUtf8,
+) -> u8 {
+    let installed_version = utf8_slice(installed_version).unwrap_or(&[]);
+    let available_version = utf8_slice(available_version).unwrap_or(&[]);
+    package_update_available(installed_present != 0, installed_version, available_version) as u8
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -3841,6 +3867,32 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn package_update_available_matches_cpp_contract() {
+        assert!(package_update_available(true, b"1.0.0", b"1.1.0"));
+        assert!(!package_update_available(true, b"1.0.0", b"1.0.0"));
+        assert!(!package_update_available(false, b"", b"1.1.0"));
+        assert!(!package_update_available(true, b"1.0.0", b""));
+        assert!(!package_update_available(true, b"", b"1.1.0"));
+
+        let installed = Fcitx5ControlUtf8 {
+            ptr: b"1.0.0".as_ptr(),
+            len: 5,
+        };
+        let available = Fcitx5ControlUtf8 {
+            ptr: b"1.1.0".as_ptr(),
+            len: 5,
+        };
+        assert_eq!(
+            unsafe { fcitx5_control_package_update_available_utf8(1, installed, available) },
+            1
+        );
+        assert_eq!(
+            unsafe { fcitx5_control_package_update_available_utf8(0, installed, available) },
+            0
+        );
     }
 
     #[test]

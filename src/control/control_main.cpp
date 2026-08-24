@@ -273,6 +273,9 @@ std::uint8_t fcitx5_control_bundled_package_descriptor(
 std::uint8_t fcitx5_control_bundled_package_present_utf16(Fcitx5ControlUtf16 install_root,
                                                           Fcitx5ControlUtf8 id);
 Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_type);
+std::uint8_t fcitx5_control_package_update_available_utf8(
+    std::uint8_t installed_present, Fcitx5ControlUtf8 installed_version,
+    Fcitx5ControlUtf8 available_version);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -941,6 +944,13 @@ std::string packageTypeName(fcitx::package::PackageType type) {
     return copyUtf8(fcitx5_control_package_type_name_utf8(packageTypeValue(type)));
 }
 
+bool packageUpdateAvailable(bool installedPresent, std::string_view installedVersion,
+                            std::string_view availableVersion) {
+    return fcitx5_control_package_update_available_utf8(
+               installedPresent ? std::uint8_t{1} : std::uint8_t{0},
+               utf8View(installedVersion), utf8View(availableVersion)) != 0;
+}
+
 std::string jsonDependencies(std::span<const fcitx::package::Dependency> dependencies) {
     std::vector<Fcitx5ControlPackageDependency> views;
     views.reserve(dependencies.size());
@@ -1512,18 +1522,22 @@ void printPackages(const fs::path& dataRoot) {
                 continue;
             const auto found = active.find(entry.id);
             const bool bundledNow = bundled.contains(entry.id);
-            const bool update = found != active.end() && found->second.version != entry.version;
+            const bool installedNow = found != active.end();
+            const std::string_view installedVersion =
+                installedNow ? std::string_view(found->second.version) : std::string_view{};
+            const bool update =
+                packageUpdateAvailable(installedNow, installedVersion, entry.version);
             packageRows.push_back(PackageSummaryRow{
                 entry.id,
                 entry.title,
                 entry.summary,
                 packageTypeName(entry.type),
                 entry.version,
-                found != active.end()
+                installedNow
                     ? found->second.version
                     : (bundledNow ? std::string(fcitx::windows::version()) : std::string{}),
-                found != active.end() ? found->second.state
-                                      : (bundledNow ? std::string("bundled") : std::string{}),
+                installedNow ? found->second.state
+                             : (bundledNow ? std::string("bundled") : std::string{}),
                 update});
             emitted.emplace(entry.id);
         }
@@ -1602,8 +1616,12 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
     const std::string state = active != installed.end()
                                   ? active->state
                                   : (bundledNow ? "bundled" : "");
-    const bool update = active != installed.end() && repositoryEntry &&
-                        active->version != repositoryEntry->version;
+    const bool activeInstalled = active != installed.end();
+    const bool update =
+        packageUpdateAvailable(activeInstalled, activeInstalled ? std::string_view(active->version)
+                                                                : std::string_view{},
+                               repositoryEntry ? std::string_view(repositoryEntry->version)
+                                               : std::string_view{});
     const auto typeValue = manifest ? manifest->type
                                     : (repositoryEntry ? repositoryEntry->type
                                                        : fcitx::package::PackageType::addon);
