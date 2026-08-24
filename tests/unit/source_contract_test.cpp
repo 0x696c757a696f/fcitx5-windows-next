@@ -333,7 +333,10 @@ int main(int argc, char** argv) {
         controlSource.find("WriteFile(") != std::string::npos ||
         controlSource.find("FlushFileBuffers") != std::string::npos ||
         controlSource.find("DeleteFileW(") != std::string::npos ||
+        controlSource.find("MoveFileExW(") != std::string::npos ||
         controlSource.find("FILE_FLAG_WRITE_THROUGH") != std::string::npos ||
+        controlSource.find("MOVEFILE_REPLACE_EXISTING") != std::string::npos ||
+        controlSource.find("MOVEFILE_WRITE_THROUGH") != std::string::npos ||
         controlSource.find("std::ifstream") != std::string::npos ||
         controlSource.find("std::istreambuf_iterator") != std::string::npos ||
         controlSource.find("file_size(") != std::string::npos ||
@@ -342,12 +345,22 @@ int main(int argc, char** argv) {
         controlSource.find("fcitx5_control_atomic_write_utf8_file_utf16") ==
             std::string::npos ||
         controlSource.find("fcitx5_control_read_file_utf16") == std::string::npos ||
+        controlSource.find("fcitx5_control_repository_cache_prepare_utf16") ==
+            std::string::npos ||
+        controlSource.find("fcitx5_control_repository_cache_publish_utf16") ==
+            std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_atomic_write_utf8_file_utf16") ==
             std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_read_file_utf16") == std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_repository_cache_prepare_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_repository_cache_publish_utf16") ==
+            std::string::npos ||
         rustControlCoreSource.find("atomic_config_file_write_matches_cpp_contract") ==
             std::string::npos ||
         rustControlCoreSource.find("bounded_file_read_matches_cpp_contract") ==
+            std::string::npos ||
+        rustControlCoreSource.find("repository_cache_staging_and_publish_match_cpp_contract") ==
             std::string::npos ||
         rustControlCoreSource.find("CONTROL_FILE_READ_INVALID_FILE") == std::string::npos ||
         rustControlCoreSource.find("FILE_FLAG_WRITE_THROUGH") == std::string::npos ||
@@ -362,7 +375,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos) {
-        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, and atomic config file writes must be Rust-owned");
+        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, repository cache staging/publication, and atomic config file writes must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {

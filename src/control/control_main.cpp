@@ -183,6 +183,15 @@ int fcitx5_control_atomic_write_utf8_file_utf16(Fcitx5ControlUtf16 destination,
                                                 Fcitx5ControlUtf8 content);
 int fcitx5_control_read_file_utf16(Fcitx5ControlUtf16 path, std::uint64_t maximum,
                                    char** out_ptr, std::size_t* out_len);
+std::size_t fcitx5_control_repository_cache_incoming_path_utf16(Fcitx5ControlUtf16 path,
+                                                                wchar_t* output,
+                                                                std::size_t capacity);
+int fcitx5_control_repository_cache_prepare_utf16(Fcitx5ControlUtf16 index,
+                                                  Fcitx5ControlUtf16 signature);
+int fcitx5_control_repository_cache_cleanup_utf16(Fcitx5ControlUtf16 index,
+                                                  Fcitx5ControlUtf16 signature);
+int fcitx5_control_repository_cache_publish_utf16(Fcitx5ControlUtf16 index,
+                                                  Fcitx5ControlUtf16 signature);
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 int fcitx5_control_usage_text_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
@@ -472,12 +481,29 @@ Fcitx5ControlUtf8 utf8View(std::string_view value) noexcept {
     return {value.data(), value.size()};
 }
 
+Fcitx5ControlUtf16 nativeView(std::wstring_view value) noexcept {
+    return {value.data(), value.size()};
+}
+
 std::string takeRustUtf8(char* bytes, std::size_t length) {
     std::string result;
     if (bytes && length > 0) {
         result.assign(bytes, length);
     }
     fcitx5_control_utf8_free(bytes, length);
+    return result;
+}
+
+template <typename Producer>
+std::wstring takeRustWide(Producer producer) {
+    const std::size_t required = producer(nullptr, 0);
+    if (required == 0)
+        return {};
+    std::wstring result(required, L'\0');
+    const std::size_t written = producer(result.data(), result.size());
+    if (written == 0 || written > result.size())
+        return {};
+    result.resize(written);
     return result;
 }
 
@@ -631,6 +657,41 @@ RepositoryFiles repositoryFiles(const fs::path& dataRoot) {
             installationRoot() / L"security/trusted-keys.json"};
 }
 
+Fcitx5ControlUtf16 pathView(const fs::path& path, std::wstring& storage) {
+    storage = path.wstring();
+    return nativeView(storage);
+}
+
+fs::path repositoryIncomingPath(const fs::path& path) {
+    const std::wstring pathText = path.wstring();
+    const std::wstring incoming = takeRustWide([&](wchar_t* output, std::size_t capacity) {
+        return fcitx5_control_repository_cache_incoming_path_utf16(
+            nativeView(pathText), output, capacity);
+    });
+    return incoming.empty() ? fs::path{} : fs::path(incoming);
+}
+
+bool prepareRepositoryCache(const RepositoryFiles& files) {
+    std::wstring indexText;
+    std::wstring signatureText;
+    return fcitx5_control_repository_cache_prepare_utf16(
+               pathView(files.index, indexText), pathView(files.signature, signatureText)) == 0;
+}
+
+void cleanupRepositoryCache(const RepositoryFiles& files) {
+    std::wstring indexText;
+    std::wstring signatureText;
+    (void)fcitx5_control_repository_cache_cleanup_utf16(
+        pathView(files.index, indexText), pathView(files.signature, signatureText));
+}
+
+bool publishRepositoryCache(const RepositoryFiles& files) {
+    std::wstring indexText;
+    std::wstring signatureText;
+    return fcitx5_control_repository_cache_publish_utf16(
+               pathView(files.index, indexText), pathView(files.signature, signatureText)) == 0;
+}
+
 struct SequenceState {
     bool present{};
     bool valid{};
@@ -712,19 +773,18 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
     while (!baseUrl.empty() && baseUrl.back() == L'/')
         baseUrl.pop_back();
     const auto files = repositoryFiles(dataRoot);
-    fs::create_directories(files.index.parent_path());
-    const auto incomingIndex = fs::path(files.index.wstring() + L".new");
-    const auto incomingSignature = fs::path(files.signature.wstring() + L".new");
-    std::error_code ignored;
-    fs::remove(incomingIndex, ignored);
-    fs::remove(incomingSignature, ignored);
+    if (!prepareRepositoryCache(files))
+        throw fcitx::package::PackageError("io_error", "repository cache staging failed");
+    const auto incomingIndex = repositoryIncomingPath(files.index);
+    const auto incomingSignature = repositoryIncomingPath(files.signature);
+    if (incomingIndex.empty() || incomingSignature.empty())
+        throw fcitx::package::PackageError("io_error", "repository cache staging failed");
     const auto downloader = executableDirectory() / L"fcitx5-downloader.exe";
     if (!runProcess(downloader, {L"--download-signed-metadata", baseUrl + L"/index.json",
                                  incomingIndex.wstring()}) ||
         !runProcess(downloader, {L"--download-signed-metadata", baseUrl + L"/index.sig",
                                  incomingSignature.wstring()})) {
-        fs::remove(incomingIndex, ignored);
-        fs::remove(incomingSignature, ignored);
+        cleanupRepositoryCache(files);
         throw fcitx::package::PackageError("network_error", "repository download failed");
     }
     std::string index;
@@ -747,10 +807,7 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
         throw fcitx::package::PackageError("rollback_rejected",
                                            "repository index is older than the accepted "
                                            "release sequence");
-    if (!MoveFileExW(incomingSignature.c_str(), files.signature.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ||
-        !MoveFileExW(incomingIndex.c_str(), files.index.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    if (!publishRepositoryCache(files)) {
         throw fcitx::package::PackageError("io_error", "repository cache publication failed");
     }
     writeMaxSequence(dataRoot, repository.channel, maximum);
@@ -1493,10 +1550,6 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
         utf8View(permissions),
         utf8View(configSurface)};
     std::cout << packageDetailJson(detail) << '\n';
-}
-
-Fcitx5ControlUtf16 nativeView(std::wstring_view value) noexcept {
-    return {value.data(), value.size()};
 }
 
 bool printControlSchema() {

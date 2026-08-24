@@ -415,6 +415,19 @@ fn wide_z(value: &std::ffi::OsStr) -> Vec<u16> {
     wide
 }
 
+fn write_wide_path(value: &std::path::Path, out: *mut u16, capacity: usize) -> usize {
+    let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
+    if !out.is_null() && capacity != 0 {
+        let count = wide.len().min(capacity);
+        if count != 0 {
+            unsafe {
+                std::ptr::copy_nonoverlapping(wide.as_ptr(), out, count);
+            }
+        }
+    }
+    wide.len()
+}
+
 fn guid_suffix() -> Option<OsString> {
     let mut guid = Guid {
         data1: 0,
@@ -513,6 +526,74 @@ fn read_file_bounded(path: PathBuf, maximum: u64) -> Result<Vec<u8>, i32> {
         return Err(CONTROL_FILE_READ_INVALID_FILE);
     }
     Ok(bytes)
+}
+
+fn repository_cache_incoming_path(path: &std::path::Path) -> Option<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    let mut incoming = path.as_os_str().to_owned();
+    incoming.push(".new");
+    Some(PathBuf::from(incoming))
+}
+
+fn remove_repository_incoming(
+    index: &std::path::Path,
+    signature: &std::path::Path,
+) -> Result<(), ()> {
+    let incoming_index = repository_cache_incoming_path(index).ok_or(())?;
+    let incoming_signature = repository_cache_incoming_path(signature).ok_or(())?;
+    for path in [incoming_index, incoming_signature] {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(()),
+        }
+    }
+    Ok(())
+}
+
+fn prepare_repository_cache(
+    index: &std::path::Path,
+    signature: &std::path::Path,
+) -> Result<(), ()> {
+    if let Some(parent) = index.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| ())?;
+    } else {
+        return Err(());
+    }
+    if let Some(parent) = signature.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| ())?;
+    } else {
+        return Err(());
+    }
+    remove_repository_incoming(index, signature)
+}
+
+fn move_replace_write_through(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<(), ()> {
+    let source = wide_z(source.as_os_str());
+    let destination = wide_z(destination.as_os_str());
+    let moved = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        ) != 0
+    };
+    moved.then_some(()).ok_or(())
+}
+
+fn publish_repository_cache(
+    index: &std::path::Path,
+    signature: &std::path::Path,
+) -> Result<(), ()> {
+    let incoming_index = repository_cache_incoming_path(index).ok_or(())?;
+    let incoming_signature = repository_cache_incoming_path(signature).ok_or(())?;
+    move_replace_write_through(&incoming_signature, signature)?;
+    move_replace_write_through(&incoming_index, index)
 }
 
 fn quote(value: &std::ffi::OsStr) -> OsString {
@@ -1613,6 +1694,89 @@ pub unsafe extern "C" fn fcitx5_control_read_file_utf16(
 
 /// # Safety
 ///
+/// `path` must remain valid UTF-16 for the duration of the call. `output` may
+/// be null for size queries or writable UTF-16 storage for `capacity` code
+/// units. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_repository_cache_incoming_path_utf16(
+    path: Fcitx5ControlUtf16,
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    let Some(path) = string_from_utf16(path) else {
+        return 0;
+    };
+    let Some(incoming) = repository_cache_incoming_path(&PathBuf::from(path)) else {
+        return 0;
+    };
+    write_wide_path(&incoming, output, capacity)
+}
+
+/// # Safety
+///
+/// `index` and `signature` must remain valid UTF-16 for the duration of the
+/// call. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_repository_cache_prepare_utf16(
+    index: Fcitx5ControlUtf16,
+    signature: Fcitx5ControlUtf16,
+) -> i32 {
+    let Some(index) = string_from_utf16(index) else {
+        return 1;
+    };
+    let Some(signature) = string_from_utf16(signature) else {
+        return 1;
+    };
+    match prepare_repository_cache(&PathBuf::from(index), &PathBuf::from(signature)) {
+        Ok(()) => 0,
+        Err(()) => 1,
+    }
+}
+
+/// # Safety
+///
+/// `index` and `signature` must remain valid UTF-16 for the duration of the
+/// call. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_repository_cache_cleanup_utf16(
+    index: Fcitx5ControlUtf16,
+    signature: Fcitx5ControlUtf16,
+) -> i32 {
+    let Some(index) = string_from_utf16(index) else {
+        return 1;
+    };
+    let Some(signature) = string_from_utf16(signature) else {
+        return 1;
+    };
+    match remove_repository_incoming(&PathBuf::from(index), &PathBuf::from(signature)) {
+        Ok(()) => 0,
+        Err(()) => 1,
+    }
+}
+
+/// # Safety
+///
+/// `index` and `signature` must remain valid UTF-16 for the duration of the
+/// call. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_repository_cache_publish_utf16(
+    index: Fcitx5ControlUtf16,
+    signature: Fcitx5ControlUtf16,
+) -> i32 {
+    let Some(index) = string_from_utf16(index) else {
+        return 1;
+    };
+    let Some(signature) = string_from_utf16(signature) else {
+        return 1;
+    };
+    match publish_repository_cache(&PathBuf::from(index), &PathBuf::from(signature)) {
+        Ok(()) => 0,
+        Err(()) => 1,
+    }
+}
+
+/// # Safety
+///
 /// `out_ptr` and `out_len` must point to writable storage. The returned pointer
 /// is process-static UTF-8 data and must not be freed by the caller.
 #[no_mangle]
@@ -2279,6 +2443,61 @@ mod tests {
         unsafe {
             fcitx5_control_utf8_free(bytes, len);
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn repository_cache_staging_and_publish_match_cpp_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-repository-cache-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let index = root.join("repository").join("index.json");
+        let signature = root.join("repository").join("index.sig");
+        let incoming_index = repository_cache_incoming_path(&index).expect("incoming index path");
+        let incoming_signature =
+            repository_cache_incoming_path(&signature).expect("incoming signature path");
+        assert_eq!(
+            incoming_index.file_name().and_then(|name| name.to_str()),
+            Some("index.json.new")
+        );
+        assert_eq!(
+            incoming_signature
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("index.sig.new")
+        );
+
+        std::fs::create_dir_all(index.parent().expect("repository parent"))
+            .expect("create repository parent");
+        std::fs::write(&incoming_index, b"stale-index").expect("write stale index");
+        std::fs::write(&incoming_signature, b"stale-signature").expect("write stale signature");
+        prepare_repository_cache(&index, &signature).expect("prepare repository cache");
+        assert!(!incoming_index.exists());
+        assert!(!incoming_signature.exists());
+
+        std::fs::write(&index, b"old-index").expect("write old index");
+        std::fs::write(&signature, b"old-signature").expect("write old signature");
+        std::fs::write(&incoming_index, b"new-index").expect("write incoming index");
+        std::fs::write(&incoming_signature, b"new-signature").expect("write incoming signature");
+        publish_repository_cache(&index, &signature).expect("publish repository cache");
+        assert_eq!(
+            std::fs::read(&index).expect("read published index"),
+            b"new-index"
+        );
+        assert_eq!(
+            std::fs::read(&signature).expect("read published signature"),
+            b"new-signature"
+        );
+        assert!(!incoming_index.exists());
+        assert!(!incoming_signature.exists());
+
+        std::fs::write(&incoming_index, b"cleanup-index").expect("write cleanup index");
+        std::fs::write(&incoming_signature, b"cleanup-signature").expect("write cleanup signature");
+        remove_repository_incoming(&index, &signature).expect("cleanup repository cache");
+        assert!(!incoming_index.exists());
+        assert!(!incoming_signature.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
