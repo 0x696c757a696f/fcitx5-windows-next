@@ -3,7 +3,6 @@
 #include "launcher_client.h"
 #include "protocol.h"
 
-#include <algorithm>
 #include <array>
 #include <limits>
 #include <span>
@@ -18,14 +17,15 @@ extern "C" std::uint8_t fcitx5_windows_common_pipe_transfer(
     std::uint8_t* data,
     std::size_t size,
     std::uint64_t deadline);
+extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
+    const std::uint16_t* pipe_name,
+    std::size_t pipe_name_len,
+    std::uint64_t deadline,
+    std::uint8_t wait_when_busy);
 
-DWORD remainingMilliseconds(std::uint64_t deadline) noexcept {
-    const auto now = GetTickCount64();
-    if (now >= deadline) {
-        return 0;
-    }
-    const auto remaining = deadline - now;
-    return static_cast<DWORD>((std::min)(remaining, static_cast<std::uint64_t>(MAXDWORD - 1)));
+const std::uint16_t* wideData(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return reinterpret_cast<const std::uint16_t*>(value.data());
 }
 
 bool utf8ToWide(std::string_view input, std::wstring& output) {
@@ -96,24 +96,12 @@ bool PipeClient::connect(std::uint64_t deadline) noexcept {
     if (pipe_ != INVALID_HANDLE_VALUE) {
         return true;
     }
-    if (remainingMilliseconds(deadline) == 0 || pipeName_.empty() ||
-        !identity_.mayUseUserEngine()) {
+    if (pipeName_.empty() || !identity_.mayUseUserEngine()) {
         return false;
     }
-    for (;;) {
-        pipe_ = CreateFileW(pipeName_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                            OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-        if (pipe_ != INVALID_HANDLE_VALUE) {
-            break;
-        }
-        const DWORD error = GetLastError();
-        const DWORD wait = remainingMilliseconds(deadline);
-        if (error != ERROR_PIPE_BUSY || wait == 0 ||
-            !WaitNamedPipeW(pipeName_.c_str(), wait)) {
-            SetLastError(error);
-            return false;
-        }
-    }
+    pipe_ = fcitx5_windows_common_open_pipe_client_utf16(
+        wideData(pipeName_), pipeName_.size(), deadline, 1);
+    if (pipe_ == INVALID_HANDLE_VALUE) return false;
     if (!verifyPipeServer(pipe_, identity_, peerPolicy_)) {
         disconnect();
         return false;

@@ -18,6 +18,16 @@ extern "C" std::uint8_t fcitx5_windows_common_pipe_transfer(
     std::uint8_t* data,
     std::size_t size,
     std::uint64_t deadline);
+extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
+    const std::uint16_t* pipe_name,
+    std::size_t pipe_name_len,
+    std::uint64_t deadline,
+    std::uint8_t wait_when_busy);
+
+const std::uint16_t* wideData(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return reinterpret_cast<const std::uint16_t*>(value.data());
+}
 
 DWORD remaining(std::uint64_t deadline) noexcept {
     const auto now = GetTickCount64();
@@ -50,8 +60,8 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
     response = {};
     if (!identity.mayUseUserEngine() || remaining(absoluteDeadlineMilliseconds) == 0) return false;
     const std::wstring endpoint = platform::makeLocalEndpointName(identity, generation, L"launcher");
-    HANDLE pipe = CreateFileW(endpoint.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    HANDLE pipe = fcitx5_windows_common_open_pipe_client_utf16(
+        wideData(endpoint), endpoint.size(), absoluteDeadlineMilliseconds, 0);
     if (pipe == INVALID_HANDLE_VALUE) return false;
     bool success = verifyPipeServer(pipe, identity, peerPolicy);
     DWORD failure = success ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;

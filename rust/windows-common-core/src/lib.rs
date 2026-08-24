@@ -415,6 +415,7 @@ unsafe extern "system" {
         number_of_bytes_read: *mut u32,
         overlapped: *mut Overlapped,
     ) -> i32;
+    fn WaitNamedPipeW(name: *const u16, timeout: u32) -> i32;
     fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
     fn GetOverlappedResult(
         file: *mut c_void,
@@ -424,6 +425,7 @@ unsafe extern "system" {
     ) -> i32;
     fn CancelIoEx(file: *mut c_void, overlapped: *mut Overlapped) -> i32;
     fn GetLastError() -> u32;
+    fn SetLastError(error: u32);
     fn LocalFree(memory: *mut c_void) -> *mut c_void;
     fn CloseHandle(object: *mut c_void) -> i32;
 }
@@ -555,6 +557,57 @@ fn pipe_transfer(
         completed += transferred as usize;
     }
     true
+}
+
+fn open_pipe_client(pipe_name: &[u16], deadline: u64, wait_when_busy: bool) -> *mut c_void {
+    const ERROR_PIPE_BUSY: u32 = 231;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const OPEN_EXISTING: u32 = 3;
+    const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
+
+    if pipe_name.is_empty() || remaining_milliseconds(deadline).is_none() {
+        return invalid_handle_value();
+    }
+    let mut name = pipe_name.to_vec();
+    name.push(0);
+    loop {
+        // SAFETY: `name` is an owned null-terminated UTF-16 string. The pipe is
+        // opened for overlapped client I/O, matching the previous C++ clients.
+        let pipe = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                std::ptr::null_mut(),
+                OPEN_EXISTING,
+                FILE_FLAG_OVERLAPPED,
+                std::ptr::null_mut(),
+            )
+        };
+        if !pipe.is_null() && pipe != invalid_handle_value() {
+            return pipe;
+        }
+        // SAFETY: Reads the thread-local Win32 error for CreateFileW above.
+        let error = unsafe { GetLastError() };
+        let Some(wait) = remaining_milliseconds(deadline) else {
+            // SAFETY: Restores the opening failure as the externally visible error.
+            unsafe { SetLastError(error) };
+            return invalid_handle_value();
+        };
+        if !wait_when_busy || error != ERROR_PIPE_BUSY || wait == 0 {
+            // SAFETY: Restores the opening failure as the externally visible error.
+            unsafe { SetLastError(error) };
+            return invalid_handle_value();
+        }
+        // SAFETY: `name` remains alive and null-terminated for the wait call.
+        if unsafe { WaitNamedPipeW(name.as_ptr(), wait) } == 0 {
+            // SAFETY: Preserve the original busy/open failure, matching the C++
+            // retry loop's externally visible error behavior.
+            unsafe { SetLastError(error) };
+            return invalid_handle_value();
+        }
+    }
 }
 
 fn pipe_server_process_id(pipe: *mut c_void) -> Option<u32> {
@@ -2136,6 +2189,32 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_transfer(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `pipe_name` must be null only when `pipe_name_len` is zero, or point to a
+/// readable UTF-16 buffer with exactly the provided length. No pointer is
+/// retained. The returned handle is owned by the caller and must be closed with
+/// `CloseHandle`.
+pub unsafe extern "C" fn fcitx5_windows_common_open_pipe_client_utf16(
+    pipe_name: *const u16,
+    pipe_name_len: usize,
+    deadline: u64,
+    wait_when_busy: u8,
+) -> *mut c_void {
+    let pipe_name = if pipe_name.is_null() {
+        if pipe_name_len != 0 {
+            return invalid_handle_value();
+        }
+        &[]
+    } else {
+        // SAFETY: The caller supplies exactly `pipe_name_len` readable UTF-16
+        // code units. The slice is copied before any Win32 call retains nothing.
+        unsafe { std::slice::from_raw_parts(pipe_name, pipe_name_len) }
+    };
+    open_pipe_client(pipe_name, deadline, wait_when_busy != 0)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `pipe` must be a live named-pipe handle. `current_user_sid` and
 /// `expected_executable_path` must be null only when their corresponding length
 /// is zero, or point to valid UTF-16 buffers with exactly the provided lengths.
@@ -2811,6 +2890,18 @@ mod tests {
             1,
             unsafe { GetTickCount64() } + 100
         ));
+    }
+
+    #[test]
+    fn open_pipe_client_rejects_empty_name_like_cpp_contract() {
+        assert_eq!(
+            open_pipe_client(&[], unsafe { GetTickCount64() } + 100, true),
+            invalid_handle_value()
+        );
+        assert_eq!(
+            open_pipe_client(&[b'x' as u16], unsafe { GetTickCount64() }, true),
+            invalid_handle_value()
+        );
     }
 
     #[test]
