@@ -161,6 +161,9 @@ extern "C" Fcitx5CandidateCommandLine fcitx5_candidate_parse_command_line_utf16(
     std::size_t generationCapacity,
     std::uint16_t* candidatePeerOut,
     std::size_t candidatePeerCapacity);
+extern "C" std::size_t fcitx5_candidate_default_dwrite_locale_utf16(
+    std::uint16_t* localeOut,
+    std::size_t localeCapacity);
 extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
     const std::uint8_t* input,
     std::size_t input_len,
@@ -601,11 +604,17 @@ UINT candidateDismissMessage() noexcept {
 }
 
 std::wstring defaultDwriteLocale() {
-    std::array<wchar_t, LOCALE_NAME_MAX_LENGTH> locale{};
-    const int length = GetUserDefaultLocaleName(locale.data(), static_cast<int>(locale.size()));
-    if (length > 1 && length <= static_cast<int>(locale.size()))
-        return locale.data();
-    return L"en-US";
+    const std::size_t required =
+        ui::detail::fcitx5_candidate_default_dwrite_locale_utf16(nullptr, 0);
+    if (required == 0)
+        return L"en-US";
+    std::wstring locale(required, L'\0');
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    const std::size_t written = ui::detail::fcitx5_candidate_default_dwrite_locale_utf16(
+        reinterpret_cast<std::uint16_t*>(locale.data()), locale.size());
+    if (written != locale.size())
+        return L"en-US";
+    return locale;
 }
 
 bool validContentLocale(std::string_view locale) {

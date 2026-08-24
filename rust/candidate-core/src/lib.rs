@@ -6,6 +6,19 @@ use std::ffi::c_void;
 const MAX_CANDIDATES: usize = 128;
 const MAX_CANDIDATE_TEXT_UTF8: usize = 4096;
 const MAX_TRACKED_CONTEXTS: usize = 64;
+const LOCALE_NAME_MAX_LENGTH: usize = 85;
+const DEFAULT_DWRITE_LOCALE: &[u16] = &[
+    b'e' as u16,
+    b'n' as u16,
+    b'-' as u16,
+    b'U' as u16,
+    b'S' as u16,
+];
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetUserDefaultLocaleName(locale_name: *mut u16, locale_name_capacity: i32) -> i32;
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
@@ -439,6 +452,15 @@ fn write_wide_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
         }
     }
     value.len()
+}
+
+fn default_dwrite_locale() -> Vec<u16> {
+    let mut locale = [0_u16; LOCALE_NAME_MAX_LENGTH];
+    let length = unsafe { GetUserDefaultLocaleName(locale.as_mut_ptr(), locale.len() as i32) };
+    if length > 1 && length as usize <= locale.len() {
+        return locale[..length as usize - 1].to_vec();
+    }
+    DEFAULT_DWRITE_LOCALE.to_vec()
 }
 
 fn parse_candidate_command_line(
@@ -933,6 +955,18 @@ pub unsafe extern "C" fn fcitx5_candidate_parse_command_line_utf16(
     parsed.candidate_peer_len =
         write_wide_units(&candidate_peer, candidate_peer_out, candidate_peer_capacity);
     parsed
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `locale_out` may be null for size queries or point to writable UTF-16
+/// storage for `locale_capacity` code units. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_candidate_default_dwrite_locale_utf16(
+    locale_out: *mut u16,
+    locale_capacity: usize,
+) -> usize {
+    write_wide_units(&default_dwrite_locale(), locale_out, locale_capacity)
 }
 
 #[no_mangle]
@@ -2044,6 +2078,27 @@ mod tests {
                 .candidate_select_mode,
             65
         );
+    }
+
+    #[test]
+    fn default_dwrite_locale_matches_cpp_fallback_contract() {
+        let locale = default_dwrite_locale();
+        assert!(!locale.is_empty());
+        assert!(locale.len() < LOCALE_NAME_MAX_LENGTH);
+        assert!(!locale.contains(&0));
+    }
+
+    #[test]
+    fn default_dwrite_locale_abi_uses_two_phase_utf16_output() {
+        let required =
+            unsafe { fcitx5_candidate_default_dwrite_locale_utf16(std::ptr::null_mut(), 0) };
+        assert!(required > 0);
+        let mut output = vec![0_u16; required];
+        let written = unsafe {
+            fcitx5_candidate_default_dwrite_locale_utf16(output.as_mut_ptr(), output.len())
+        };
+        assert_eq!(written, required);
+        assert!(!output.contains(&0));
     }
 
     #[test]

@@ -226,6 +226,18 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CANDIDATE-UI-DARK-MODE-RUST: Candidate UI dark mode policy must be Rust-owned");
     }
+    if (uiSource.find("GetUserDefaultLocaleName") != std::string::npos ||
+        uiSource.find("LOCALE_NAME_MAX_LENGTH") != std::string::npos ||
+        uiSource.find("fcitx5_candidate_default_dwrite_locale_utf16") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("fcitx5_candidate_default_dwrite_locale_utf16") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("default_dwrite_locale_matches_cpp_fallback_contract") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("default_dwrite_locale_abi_uses_two_phase_utf16_output") ==
+            std::string::npos) {
+        return fail("CANDIDATE-UI-DWRITE-LOCALE-RUST: Candidate UI default DWrite locale must be Rust-owned");
+    }
     if (uiSource.find("CommandLineToArgvW") != std::string::npos ||
         uiSource.find("GetCommandLineW") != std::string::npos ||
         uiSource.find("LocalFree(argumentValues)") != std::string::npos ||
