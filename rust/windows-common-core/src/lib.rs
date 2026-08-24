@@ -93,6 +93,18 @@ fn write_wide_units(wide: &[u16], out: *mut u16, capacity: usize) -> usize {
     wide.len()
 }
 
+fn write_bytes(bytes: &[u8], out: *mut u8, capacity: usize) -> usize {
+    if !out.is_null() && capacity != 0 {
+        let count = bytes.len().min(capacity);
+        if count != 0 {
+            // SAFETY: The caller supplied writable storage for `capacity` bytes.
+            // We copy at most that many initialized bytes.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, count) };
+        }
+    }
+    bytes.len()
+}
+
 fn path_from_raw(path: *const u16, len: usize) -> Option<PathBuf> {
     let value = wide_string_from_raw(path, len)?;
     (!value.is_empty()).then(|| PathBuf::from(value))
@@ -1402,6 +1414,18 @@ fn utf8_to_wide(bytes: &[u8], output: *mut u16, capacity: usize) -> Fcitx5Window
     }
 }
 
+fn wide_to_utf8(wide: &[u16], output: *mut u8, capacity: usize) -> Fcitx5WindowsCommonWideToUtf8 {
+    let Ok(text) = String::from_utf16(wide) else {
+        return Fcitx5WindowsCommonWideToUtf8::default();
+    };
+    let bytes = text.as_bytes();
+    write_bytes(bytes, output, capacity);
+    Fcitx5WindowsCommonWideToUtf8 {
+        status: 1,
+        utf8_len: bytes.len(),
+    }
+}
+
 fn utf8_offset_to_wide(bytes: &[u8], offset: u32) -> Fcitx5WindowsCommonUtf8OffsetToWide {
     let offset = offset as usize;
     if offset > bytes.len() {
@@ -1844,6 +1868,13 @@ pub struct Fcitx5WindowsCommonVerifiedPipeClient {
 pub struct Fcitx5WindowsCommonUtf8ToWide {
     pub status: u8,
     pub utf16_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonWideToUtf8 {
+    pub status: u8,
+    pub utf8_len: usize,
 }
 
 #[repr(C)]
@@ -2954,6 +2985,32 @@ pub unsafe extern "C" fn fcitx5_windows_common_utf8_to_wide_utf16(
 /// # Safety
 ///
 /// `input` must be null only when `input_len` is zero, or point to a readable
+/// UTF-16 buffer with exactly the provided length. `output` may be null for
+/// size queries or point to writable byte storage for `capacity` bytes. No
+/// pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_wide_utf16_to_utf8(
+    input: *const u16,
+    input_len: usize,
+    output: *mut u8,
+    capacity: usize,
+) -> Fcitx5WindowsCommonWideToUtf8 {
+    let input = if input.is_null() {
+        if input_len != 0 {
+            return Fcitx5WindowsCommonWideToUtf8::default();
+        }
+        &[]
+    } else {
+        // SAFETY: The caller supplies exactly `input_len` readable UTF-16 code
+        // units. The slice is only decoded/copied during this call.
+        unsafe { std::slice::from_raw_parts(input, input_len) }
+    };
+    wide_to_utf8(input, output, capacity)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `input` must be null only when `input_len` is zero, or point to a readable
 /// byte buffer with exactly the provided length. No pointer is retained.
 pub unsafe extern "C" fn fcitx5_windows_common_utf8_offset_to_wide(
     input: *const u8,
@@ -3937,6 +3994,24 @@ mod tests {
         assert_eq!(filled.utf16_len, wide.len());
         assert_eq!(String::from_utf16(&wide).expect("wide"), source);
         assert_eq!(utf8_to_wide(&[0xff], std::ptr::null_mut(), 0).status, 0);
+    }
+
+    #[test]
+    fn wide_to_utf8_matches_cpp_contract() {
+        let source = "abc\u{1f600}";
+        let wide: Vec<u16> = source.encode_utf16().collect();
+        let query = wide_to_utf8(&wide, std::ptr::null_mut(), 0);
+        assert_eq!(query.status, 1);
+        assert_eq!(query.utf8_len, source.len());
+        let mut bytes = vec![0_u8; query.utf8_len];
+        let filled = wide_to_utf8(&wide, bytes.as_mut_ptr(), bytes.len());
+        assert_eq!(filled.status, 1);
+        assert_eq!(filled.utf8_len, bytes.len());
+        assert_eq!(String::from_utf8(bytes).expect("utf8"), source);
+        assert_eq!(wide_to_utf8(&[0xd800], std::ptr::null_mut(), 0).status, 0);
+        let empty = wide_to_utf8(&[], std::ptr::null_mut(), 0);
+        assert_eq!(empty.status, 1);
+        assert_eq!(empty.utf8_len, 0);
     }
 
     #[test]

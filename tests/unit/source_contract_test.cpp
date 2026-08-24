@@ -168,10 +168,15 @@ int main(int argc, char** argv) {
     const auto rustProcessExecutionSource =
         read_text(sourceRoot / "rust/process-execution-core/src/lib.rs");
     if (configAppSource.find("MultiByteToWideChar") != std::string::npos ||
+        configAppSource.find("WideCharToMultiByte") != std::string::npos ||
         configAppSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
+        configAppSource.find("WC_ERR_INVALID_CHARS") != std::string::npos ||
+        configAppSource.find("CP_UTF8") != std::string::npos ||
         configAppSource.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
+            std::string::npos ||
+        configAppSource.find("fcitx5_windows_common_wide_utf16_to_utf8") ==
             std::string::npos) {
-        return fail("CONFIG-APP-TEXT-RUST: Config app UTF-8 to UTF-16 conversion must be Rust-owned");
+        return fail("CONFIG-APP-TEXT-RUST: Config app UTF-8/UTF-16 conversion must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
@@ -603,9 +608,13 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("WaitNamedPipeW") == std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_wide_utf16_to_utf8") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_utf8_offset_to_wide") ==
             std::string::npos ||
         rustWindowsCommonCore.find("utf8_to_wide_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("wide_to_utf8_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("utf8_offset_to_wide_matches_cpp_contract") ==
             std::string::npos ||

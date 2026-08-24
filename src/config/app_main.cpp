@@ -418,8 +418,17 @@ struct Fcitx5WindowsCommonUtf8ToWide {
     std::size_t utf16Len;
 };
 
+struct Fcitx5WindowsCommonWideToUtf8 {
+    std::uint8_t status;
+    std::size_t utf8Len;
+};
+
 extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
     const std::uint8_t* input, std::size_t inputLen, std::uint16_t* output,
+    std::size_t capacity);
+
+extern "C" Fcitx5WindowsCommonWideToUtf8 fcitx5_windows_common_wide_utf16_to_utf8(
+    const std::uint16_t* input, std::size_t inputLen, std::uint8_t* output,
     std::size_t capacity);
 
 template <typename Function>
@@ -494,17 +503,17 @@ std::wstring widen(std::string_view value) {
 }
 
 std::string narrow(std::wstring_view value) {
-    if (value.empty())
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    const auto* wide =
+        value.empty() ? nullptr : reinterpret_cast<const std::uint16_t*>(value.data());
+    const auto query =
+        fcitx5_windows_common_wide_utf16_to_utf8(wide, value.size(), nullptr, 0);
+    if (query.status == 0 || query.utf8Len == 0)
         return {};
-    const int count =
-        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-                            static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
-    if (count <= 0)
-        return {};
-    std::string result(static_cast<std::size_t>(count), '\0');
-    return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-                               static_cast<int>(value.size()), result.data(), count, nullptr,
-                               nullptr) == count
+    std::string result(query.utf8Len, '\0');
+    const auto filled = fcitx5_windows_common_wide_utf16_to_utf8(
+        wide, value.size(), reinterpret_cast<std::uint8_t*>(result.data()), result.size());
+    return filled.status != 0 && filled.utf8Len == result.size()
                ? result
                : std::string{};
 }
