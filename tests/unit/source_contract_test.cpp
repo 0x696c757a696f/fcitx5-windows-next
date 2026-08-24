@@ -316,6 +316,17 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CONFIG-APP-TEXT-RUST: Config app UTF-8/UTF-16 conversion must be Rust-owned");
     }
+    if (controlSource.find("MultiByteToWideChar") != std::string::npos ||
+        controlSource.find("WideCharToMultiByte") != std::string::npos ||
+        controlSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
+        controlSource.find("WC_ERR_INVALID_CHARS") != std::string::npos ||
+        controlSource.find("CP_UTF8") != std::string::npos ||
+        controlSource.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
+            std::string::npos ||
+        controlSource.find("fcitx5_windows_common_wide_utf16_to_utf8") ==
+            std::string::npos) {
+        return fail("CONTROL-TEXT-RUST: Control UTF-8/UTF-16 conversion must be Rust-owned");
+    }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
         return fail("REG-PROC-PIPE-001: Control must use the shared process executor");

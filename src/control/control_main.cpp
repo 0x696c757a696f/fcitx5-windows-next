@@ -63,6 +63,20 @@ struct Fcitx5ControlUtf8 {
     const char* ptr;
     std::size_t len;
 };
+struct Fcitx5WindowsCommonUtf8ToWide {
+    std::uint8_t status;
+    std::size_t utf16Len;
+};
+struct Fcitx5WindowsCommonWideToUtf8 {
+    std::uint8_t status;
+    std::size_t utf8Len;
+};
+Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
+    const std::uint8_t* input, std::size_t inputLen, std::uint16_t* output,
+    std::size_t capacity);
+Fcitx5WindowsCommonWideToUtf8 fcitx5_windows_common_wide_utf16_to_utf8(
+    const std::uint16_t* input, std::size_t inputLen, std::uint8_t* output,
+    std::size_t capacity);
 struct Fcitx5ControlPresentation {
     Fcitx5ControlUtf8 appearanceMode;
     Fcitx5ControlUtf8 theme;
@@ -423,33 +437,33 @@ constexpr std::uint32_t kPackageActionPackagesRemove = 10;
 constexpr std::uint32_t kPackageActionPackagesRepair = 11;
 
 std::string narrow(std::wstring_view value) {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     if (value.empty())
         return {};
-    const int count =
-        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-                            static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
-    if (count <= 0)
+    const auto* wide = reinterpret_cast<const std::uint16_t*>(value.data());
+    const auto query =
+        fcitx5_windows_common_wide_utf16_to_utf8(wide, value.size(), nullptr, 0);
+    if (query.status == 0 || query.utf8Len == 0)
         return {};
-    std::string result(static_cast<std::size_t>(count), '\0');
-    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-                            static_cast<int>(value.size()), result.data(), count, nullptr,
-                            nullptr) != count)
-        return {};
-    return result;
+    std::string result(query.utf8Len, '\0');
+    const auto filled = fcitx5_windows_common_wide_utf16_to_utf8(
+        wide, value.size(), reinterpret_cast<std::uint8_t*>(result.data()), result.size());
+    return filled.status != 0 && filled.utf8Len == result.size() ? result : std::string{};
 }
 
 std::wstring widen(std::string_view value) {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     if (value.empty())
         return {};
-    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                                          static_cast<int>(value.size()), nullptr, 0);
-    if (count <= 0)
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(value.data());
+    const auto query =
+        fcitx5_windows_common_utf8_to_wide_utf16(bytes, value.size(), nullptr, 0);
+    if (query.status == 0 || query.utf16Len == 0)
         return {};
-    std::wstring result(static_cast<std::size_t>(count), L'\0');
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                               static_cast<int>(value.size()), result.data(), count) == count
-               ? result
-               : std::wstring{};
+    std::wstring result(query.utf16Len, L'\0');
+    const auto filled = fcitx5_windows_common_utf8_to_wide_utf16(
+        bytes, value.size(), reinterpret_cast<std::uint16_t*>(result.data()), result.size());
+    return filled.status != 0 && filled.utf16Len == result.size() ? result : std::wstring{};
 }
 
 Fcitx5ControlUtf8 utf8View(std::string_view value) noexcept {
