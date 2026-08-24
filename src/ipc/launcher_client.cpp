@@ -4,18 +4,24 @@
 
 #include <Windows.h>
 
-#include <array>
 #include <atomic>
 #include <vector>
 
 namespace fcitx::windows::ipc {
 namespace {
 
-extern "C" std::uint8_t fcitx5_windows_common_pipe_transfer(
+struct Fcitx5WindowsCommonPipeTransactWithError {
+    std::uint8_t status;
+    std::uint32_t failureError;
+    std::size_t responseLen;
+};
+extern "C" Fcitx5WindowsCommonPipeTransactWithError
+fcitx5_windows_common_pipe_transact_with_error(
     void* pipe,
-    std::uint8_t write,
-    std::uint8_t* data,
-    std::size_t size,
+    const std::uint8_t* request,
+    std::size_t request_len,
+    std::uint8_t* response_output,
+    std::size_t response_capacity,
     std::uint64_t deadline);
 extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     const std::uint16_t* pipe_name,
@@ -34,12 +40,6 @@ extern "C" void fcitx5_windows_common_set_last_error(std::uint32_t error);
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
     return reinterpret_cast<const std::uint16_t*>(value.data());
-}
-
-bool transfer(HANDLE pipe, bool write, void* data, std::size_t size,
-              std::uint64_t deadline) noexcept {
-    return fcitx5_windows_common_pipe_transfer(
-               pipe, write ? 1 : 0, static_cast<std::uint8_t*>(data), size, deadline) != 0;
 }
 
 } // namespace
@@ -75,45 +75,28 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
             protocol::Metadata{requestId, 0, 0, identity.sessionId, 0, 0, 0},
             command};
         auto requestBytes = protocol::encode(request);
-        std::array<std::uint8_t, protocol::kHeaderSize> header{};
         if (!success) {
             failure = ERROR_ACCESS_DENIED;
-        } else if (requestBytes.empty()) {
-            success = false;
-            failure = ERROR_INVALID_DATA;
-        } else if (!transfer(pipe, true, requestBytes.data(), requestBytes.size(),
-                             absoluteDeadlineMilliseconds) ||
-                   !transfer(pipe, false, header.data(), header.size(),
-                             absoluteDeadlineMilliseconds)) {
-            success = false;
-            failure = ERROR_TIMEOUT;
         } else {
-            protocol::MessageType type{};
-            protocol::Metadata metadata;
-            std::uint32_t bodySize = 0;
-            if (!protocol::decodeHeader(header, type, bodySize, metadata)) {
+            std::vector<std::uint8_t> responseBytes(protocol::kMaxFrameSize, 0);
+            const auto transferred = fcitx5_windows_common_pipe_transact_with_error(
+                pipe, requestBytes.data(), requestBytes.size(), responseBytes.data(),
+                responseBytes.size(), absoluteDeadlineMilliseconds);
+            if (transferred.status == 0) {
                 success = false;
-                failure = ERROR_INVALID_DATA;
+                failure = transferred.failureError == ERROR_SUCCESS ? ERROR_TIMEOUT
+                                                                    : transferred.failureError;
             } else {
-                std::vector<std::uint8_t> responseBytes(header.begin(), header.end());
-                responseBytes.resize(protocol::kHeaderSize + bodySize);
-                if ((bodySize != 0 &&
-                     !transfer(pipe, false,
-                               responseBytes.data() + protocol::kHeaderSize, bodySize,
-                               absoluteDeadlineMilliseconds))) {
-                    success = false;
-                    failure = ERROR_TIMEOUT;
-                } else {
-                    protocol::FrameView frame;
-                    protocol::LauncherResponse decoded;
-                    success = protocol::decodeFrame(responseBytes, frame) &&
-                              protocol::decode(frame, decoded) &&
-                              fcitx5_windows_common_accept_launcher_response(
-                                  decoded.metadata.responseTo, decoded.metadata.sessionId,
-                                  requestId, identity.sessionId) != 0;
-                    if (success) response = decoded;
-                    else failure = ERROR_INVALID_DATA;
-                }
+                responseBytes.resize(transferred.responseLen);
+                protocol::FrameView frame;
+                protocol::LauncherResponse decoded;
+                success = protocol::decodeFrame(responseBytes, frame) &&
+                          protocol::decode(frame, decoded) &&
+                          fcitx5_windows_common_accept_launcher_response(
+                              decoded.metadata.responseTo, decoded.metadata.sessionId,
+                              requestId, identity.sessionId) != 0;
+                if (success) response = decoded;
+                else failure = ERROR_INVALID_DATA;
             }
         }
     } catch (...) {

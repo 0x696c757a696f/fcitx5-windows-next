@@ -16,6 +16,8 @@ const IPC_MAGIC: u32 = 0x3457_4346;
 const IPC_VERSION: u16 = 14;
 const IPC_HEADER_SIZE: usize = 64;
 const IPC_MAX_HOT_FRAME_SIZE: usize = 256 * 1024;
+const ERROR_INVALID_DATA: u32 = 13;
+const ERROR_TIMEOUT: u32 = 1460;
 
 fn version() -> &'static str {
     option_env!("FCITX_WINDOWS_VERSION").unwrap_or(VERSION_FALLBACK)
@@ -659,6 +661,81 @@ fn pipe_transact(
     }
     Fcitx5WindowsCommonPipeTransact {
         status: 1,
+        response_len,
+    }
+}
+
+fn pipe_transact_with_error(
+    pipe: *mut c_void,
+    request: &[u8],
+    response_output: *mut u8,
+    response_capacity: usize,
+    deadline: u64,
+) -> Fcitx5WindowsCommonPipeTransactWithError {
+    if request.is_empty()
+        || request.len() > IPC_MAX_HOT_FRAME_SIZE
+        || response_output.is_null()
+        || response_capacity < IPC_HEADER_SIZE
+    {
+        return Fcitx5WindowsCommonPipeTransactWithError {
+            failure_error: ERROR_INVALID_DATA,
+            ..Default::default()
+        };
+    }
+    if !pipe_transfer(
+        pipe,
+        true,
+        request.as_ptr() as *mut u8,
+        request.len(),
+        deadline,
+    ) {
+        return Fcitx5WindowsCommonPipeTransactWithError {
+            failure_error: ERROR_TIMEOUT,
+            ..Default::default()
+        };
+    }
+    let mut header = [0_u8; IPC_HEADER_SIZE];
+    if !pipe_transfer(pipe, false, header.as_mut_ptr(), header.len(), deadline) {
+        return Fcitx5WindowsCommonPipeTransactWithError {
+            failure_error: ERROR_TIMEOUT,
+            ..Default::default()
+        };
+    }
+    let Some(body_size) = ipc_response_header_body_size(&header) else {
+        return Fcitx5WindowsCommonPipeTransactWithError {
+            failure_error: ERROR_INVALID_DATA,
+            ..Default::default()
+        };
+    };
+    let response_len = IPC_HEADER_SIZE + body_size;
+    if response_len > response_capacity {
+        return Fcitx5WindowsCommonPipeTransactWithError {
+            failure_error: ERROR_INVALID_DATA,
+            ..Default::default()
+        };
+    }
+    // SAFETY: The caller supplied writable response storage for
+    // `response_capacity` bytes. The checked response length is within it.
+    unsafe { std::ptr::copy_nonoverlapping(header.as_ptr(), response_output, header.len()) };
+    if body_size != 0
+        && !pipe_transfer(
+            pipe,
+            false,
+            // SAFETY: `response_len <= response_capacity`, so the body starts
+            // inside the same writable allocation.
+            unsafe { response_output.add(IPC_HEADER_SIZE) },
+            body_size,
+            deadline,
+        )
+    {
+        return Fcitx5WindowsCommonPipeTransactWithError {
+            failure_error: ERROR_TIMEOUT,
+            ..Default::default()
+        };
+    }
+    Fcitx5WindowsCommonPipeTransactWithError {
+        status: 1,
+        failure_error: 0,
         response_len,
     }
 }
@@ -1676,6 +1753,14 @@ pub struct Fcitx5WindowsCommonPipeTransact {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonPipeTransactWithError {
+    pub status: u8,
+    pub failure_error: u32,
+    pub response_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Fcitx5WindowsCommonKeyResponseScalarInput {
     pub response_to: u64,
     pub engine_epoch: u64,
@@ -2578,6 +2663,32 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_transact(
         unsafe { std::slice::from_raw_parts(request, request_len) }
     };
     pipe_transact(pipe, request, response_output, response_capacity, deadline)
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `pipe` must be a live named-pipe handle. `request` must point to
+/// `request_len` readable bytes. `response_output` must point to writable
+/// storage for `response_capacity` bytes. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_transact_with_error(
+    pipe: *mut c_void,
+    request: *const u8,
+    request_len: usize,
+    response_output: *mut u8,
+    response_capacity: usize,
+    deadline: u64,
+) -> Fcitx5WindowsCommonPipeTransactWithError {
+    if request.is_null() {
+        return Fcitx5WindowsCommonPipeTransactWithError {
+            failure_error: ERROR_INVALID_DATA,
+            ..Default::default()
+        };
+    }
+    // SAFETY: The caller provides exactly `request_len` readable bytes. The
+    // slice is used only during this call.
+    let request = unsafe { std::slice::from_raw_parts(request, request_len) };
+    pipe_transact_with_error(pipe, request, response_output, response_capacity, deadline)
 }
 
 #[unsafe(no_mangle)]
@@ -3501,6 +3612,31 @@ mod tests {
             ipc_response_header_body_size(&[0_u8; IPC_HEADER_SIZE]),
             None
         );
+    }
+
+    #[test]
+    fn pipe_transact_with_error_preserves_launcher_failure_contract() {
+        let mut response = [0_u8; IPC_HEADER_SIZE];
+        let invalid_request = pipe_transact_with_error(
+            std::ptr::null_mut(),
+            &[],
+            response.as_mut_ptr(),
+            response.len(),
+            deadline_after_milliseconds(100),
+        );
+        assert_eq!(invalid_request.status, 0);
+        assert_eq!(invalid_request.failure_error, ERROR_INVALID_DATA);
+
+        let request = [0_u8; IPC_HEADER_SIZE];
+        let invalid_pipe = pipe_transact_with_error(
+            std::ptr::null_mut(),
+            &request,
+            response.as_mut_ptr(),
+            response.len(),
+            deadline_after_milliseconds(100),
+        );
+        assert_eq!(invalid_pipe.status, 0);
+        assert_eq!(invalid_pipe.failure_error, ERROR_TIMEOUT);
     }
 
     #[test]

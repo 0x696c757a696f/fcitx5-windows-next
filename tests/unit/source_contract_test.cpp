@@ -222,7 +222,9 @@ int main(int argc, char** argv) {
         launcherClientSource.find("CloseHandle") != std::string::npos ||
         launcherClientSource.find("SetLastError") != std::string::npos ||
         launcherClientSource.find("GetTickCount64") != std::string::npos ||
-        launcherClientSource.find("fcitx5_windows_common_pipe_transfer") ==
+        launcherClientSource.find("fcitx5_windows_common_pipe_transfer") !=
+            std::string::npos ||
+        launcherClientSource.find("fcitx5_windows_common_pipe_transact_with_error") ==
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
             std::string::npos ||
@@ -232,7 +234,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_deadline_has_time") ==
             std::string::npos) {
-        return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open, close, deadline, current-process, and transfer helpers");
+        return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open, close, deadline, current-process, and transact helpers");
     }
     if (pipeClientSource.find("protocol::decodeHeader(header") != std::string::npos ||
         pipeClientSource.find("std::array<std::uint8_t, protocol::kHeaderSize> header") !=
@@ -242,8 +244,15 @@ int main(int argc, char** argv) {
         pipeClientSource.find("response.resize(protocol::kHeaderSize + bodySize)") !=
             std::string::npos ||
         pipeClientSource.find("transfer(false") != std::string::npos ||
-        pipeClientSource.find("transfer(true") != std::string::npos) {
-        return fail("IPC-TRANSACT-RUST: PipeClient transact frame transport must be Rust-owned");
+        pipeClientSource.find("transfer(true") != std::string::npos ||
+        launcherClientSource.find("protocol::decodeHeader(header") != std::string::npos ||
+        launcherClientSource.find("std::array<std::uint8_t, protocol::kHeaderSize> header") !=
+            std::string::npos ||
+        launcherClientSource.find("responseBytes.resize(protocol::kHeaderSize + bodySize)") !=
+            std::string::npos ||
+        launcherClientSource.find("transfer(false") != std::string::npos ||
+        launcherClientSource.find("transfer(true") != std::string::npos) {
+        return fail("IPC-TRANSACT-RUST: non-Engine IPC client transact frame transport must be Rust-owned");
     }
     if (pipeClientSource.find("MultiByteToWideChar") != std::string::npos ||
         pipeClientSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
@@ -511,7 +520,11 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transact") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transact_with_error") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("pipe_transact_rejects_invalid_pipe_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("pipe_transact_with_error_preserves_launcher_failure_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos ||
