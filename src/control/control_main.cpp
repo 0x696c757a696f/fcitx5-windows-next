@@ -258,6 +258,9 @@ int fcitx5_control_package_config_surface_json_utf8(
     const Fcitx5ControlUtf8* permissions, std::size_t permission_count,
     const Fcitx5ControlUtf8* file_paths, std::size_t file_path_count, char** out_ptr,
     std::size_t* out_len);
+int fcitx5_control_repository_error_utf8(Fcitx5ControlUtf8 error_code,
+                                         Fcitx5ControlUtf16 keyring, char** out_ptr,
+                                         std::size_t* out_len);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -712,6 +715,17 @@ bool publishRepositoryCache(const RepositoryFiles& files) {
     std::wstring signatureText;
     return fcitx5_control_repository_cache_publish_utf16(
                pathView(files.index, indexText), pathView(files.signature, signatureText)) == 0;
+}
+
+std::string repositoryErrorCode(const fs::path& dataRoot, std::string_view errorCode) {
+    const auto files = repositoryFiles(dataRoot);
+    std::wstring keyringText;
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_repository_error_utf8(
+            utf8View(errorCode), pathView(files.keyring, keyringText), &bytes, &length) != 0)
+        return std::string(errorCode);
+    return takeRustUtf8(bytes, length);
 }
 
 fs::path packageArchiveCachePath(const fs::path& dataRoot,
@@ -1455,9 +1469,7 @@ void printPackages(const fs::path& dataRoot) {
         repository = loadRepository(dataRoot);
         repositoryAvailable = true;
     } catch (const fcitx::package::PackageError& error) {
-        repositoryError = error.code();
-        if (repositoryError == "invalid_file" && !fs::exists(repositoryFiles(dataRoot).keyring))
-            repositoryError = "missing_key";
+        repositoryError = repositoryErrorCode(dataRoot, error.code());
     }
     std::vector<PackageSummaryRow> packageRows;
     std::set<std::string> emitted;
@@ -1535,9 +1547,7 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
         repositoryEntry = fcitx::package::find_repository_package(repository, packageId,
                                                                   nativeArchitecture());
     } catch (const fcitx::package::PackageError& error) {
-        repositoryError = error.code();
-        if (repositoryError == "invalid_file" && !fs::exists(repositoryFiles(dataRoot).keyring))
-            repositoryError = "missing_key";
+        repositoryError = repositoryErrorCode(dataRoot, error.code());
     }
 
     const fs::path installRoot = installationRoot();

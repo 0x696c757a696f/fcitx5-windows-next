@@ -1450,6 +1450,14 @@ fn package_config_surface_json(
     config_surfaces_json(owner, &kind_views)
 }
 
+fn classify_repository_error(error_code: &[u8], keyring: &std::path::Path) -> Vec<u8> {
+    if error_code == b"invalid_file" && !keyring.exists() {
+        b"missing_key".to_vec()
+    } else {
+        error_code.to_vec()
+    }
+}
+
 fn package_detail_json(detail: &Fcitx5ControlPackageDetail) -> Option<Vec<u8>> {
     let mut output = Vec::new();
     output.extend_from_slice(br#"{"format_version":1,"repository_available":"#);
@@ -2588,6 +2596,39 @@ pub unsafe extern "C" fn fcitx5_control_package_config_surface_json_utf8(
 
 /// # Safety
 ///
+/// `error_code` must remain valid UTF-8 for the duration of the call.
+/// `keyring` must remain valid UTF-16 for the duration of the call. `out_ptr`
+/// and `out_len` must point to writable storage. Any returned buffer must be
+/// freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_repository_error_utf8(
+    error_code: Fcitx5ControlUtf8,
+    keyring: Fcitx5ControlUtf16,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return 1;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(error_code) = utf8_slice(error_code) else {
+        return 1;
+    };
+    let Some(keyring) = string_from_utf16(keyring) else {
+        return 1;
+    };
+    boxed_utf8_result(
+        classify_repository_error(error_code, &PathBuf::from(keyring)),
+        out_ptr,
+        out_len,
+    )
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -3502,6 +3543,33 @@ mod tests {
             package_config_surface_kinds(999, &[], &[]).is_none(),
             "unknown package types must not produce surfaces"
         );
+    }
+
+    #[test]
+    fn repository_error_classification_matches_cpp_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-repository-error-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let keyring = root.join("repository").join("trusted-keys.json");
+
+        assert_eq!(
+            classify_repository_error(b"invalid_file", &keyring),
+            b"missing_key"
+        );
+        std::fs::create_dir_all(keyring.parent().expect("keyring parent"))
+            .expect("create keyring parent");
+        std::fs::write(&keyring, b"[]").expect("write keyring");
+        assert_eq!(
+            classify_repository_error(b"invalid_file", &keyring),
+            b"invalid_file"
+        );
+        assert_eq!(
+            classify_repository_error(b"rollback_rejected", &keyring),
+            b"rollback_rejected"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
