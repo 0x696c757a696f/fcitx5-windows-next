@@ -273,6 +273,11 @@ std::uint8_t fcitx5_control_bundled_package_descriptor(
 std::uint8_t fcitx5_control_bundled_package_present_utf16(Fcitx5ControlUtf16 install_root,
                                                           Fcitx5ControlUtf8 id);
 Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_type);
+Fcitx5ControlUtf8 fcitx5_control_builtin_theme_id_utf8();
+Fcitx5ControlUtf8 fcitx5_control_builtin_theme_source_utf8();
+Fcitx5ControlUtf8 fcitx5_control_user_theme_source_utf8();
+std::uint8_t fcitx5_control_theme_record_matches_requested_id_utf8(
+    Fcitx5ControlUtf8 source, Fcitx5ControlUtf8 requested_id, Fcitx5ControlUtf8 theme_id);
 Fcitx5ControlUtf8 fcitx5_control_native_package_architecture_utf8();
 std::uint8_t fcitx5_control_package_architecture_matches_native_utf8(
     Fcitx5ControlUtf8 architecture);
@@ -997,6 +1002,24 @@ std::string packageTypeName(fcitx::package::PackageType type) {
     return copyUtf8(fcitx5_control_package_type_name_utf8(packageTypeValue(type)));
 }
 
+std::string builtinThemeId() {
+    return copyUtf8(fcitx5_control_builtin_theme_id_utf8());
+}
+
+std::string builtinThemeSource() {
+    return copyUtf8(fcitx5_control_builtin_theme_source_utf8());
+}
+
+std::string userThemeSource() {
+    return copyUtf8(fcitx5_control_user_theme_source_utf8());
+}
+
+bool themeRecordMatchesRequestedId(std::string_view source, std::string_view requestedId,
+                                   std::string_view themeId) {
+    return fcitx5_control_theme_record_matches_requested_id_utf8(
+               utf8View(source), utf8View(requestedId), utf8View(themeId)) != 0;
+}
+
 bool packageUpdateAvailable(bool installedPresent, std::string_view installedVersion,
                             std::string_view availableVersion) {
     return fcitx5_control_package_update_available_utf8(
@@ -1252,7 +1275,7 @@ std::optional<ThemeRecord> loadThemeRecord(const fs::path& path, std::string id,
     ParseError error;
     if (!fcitx::windows::config::parseTheme(text, theme, error))
         return std::nullopt;
-    if (source == "user" && theme.id != id)
+    if (!themeRecordMatchesRequestedId(source, id, theme.id))
         return std::nullopt;
     return ThemeRecord{std::move(id), std::move(source), theme.name, theme.version,
                        theme.license, theme.description, std::move(theme)};
@@ -1261,7 +1284,7 @@ std::optional<ThemeRecord> loadThemeRecord(const fs::path& path, std::string id,
 std::vector<ThemeRecord> listThemes(const fs::path& dataRoot) {
     std::vector<ThemeRecord> result;
     if (auto builtin = loadThemeRecord(installationRoot() / L"resources/themes/default/theme.toml",
-                                       "builtin:default", "builtin")) {
+                                       builtinThemeId(), builtinThemeSource())) {
         result.push_back(std::move(*builtin));
     }
     const auto userThemes = dataRoot / L"themes";
@@ -1275,7 +1298,7 @@ std::vector<ThemeRecord> listThemes(const fs::path& dataRoot) {
             const auto id = narrow(entry.path().filename().wstring());
             if (!fcitx::package::is_lower_package_id(id))
                 continue;
-            if (auto theme = loadThemeRecord(entry.path() / L"theme.toml", id, "user"))
+            if (auto theme = loadThemeRecord(entry.path() / L"theme.toml", id, userThemeSource()))
                 result.push_back(std::move(*theme));
         }
     }
@@ -1326,7 +1349,7 @@ void printThemes(const fs::path& dataRoot) {
 }
 
 void printThemeDetail(const fs::path& dataRoot, std::string_view id) {
-    if (id != "builtin:default" && !fcitx::package::is_lower_package_id(id))
+    if (id != builtinThemeId() && !fcitx::package::is_lower_package_id(id))
         throw fcitx::package::PackageError("invalid_theme", "theme id is invalid");
     const auto themes = listThemes(dataRoot);
     const auto* theme = findTheme(themes, id);
@@ -1964,7 +1987,7 @@ int wmain(int argc, wchar_t** argv) {
                 ? "automatic"
             : *config.orientation == fcitx::windows::config::Orientation::vertical ? "vertical"
                                                                                    : "horizontal";
-        const std::string theme = config.theme.value_or("builtin:default");
+        const std::string theme = config.theme.value_or(builtinThemeId());
         const bool scrollMode = config.scrollMode.value_or(false);
         const int pageSize = config.candidatePageSize.value_or(5);
         const double maxWidth = config.maxWidth.value_or(860.0);

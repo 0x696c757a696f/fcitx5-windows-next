@@ -1435,6 +1435,22 @@ fn package_type_name(package_type: u32) -> Fcitx5ControlUtf8 {
     }
 }
 
+fn builtin_theme_id() -> Fcitx5ControlUtf8 {
+    static_utf8_view("builtin:default")
+}
+
+fn builtin_theme_source() -> Fcitx5ControlUtf8 {
+    static_utf8_view("builtin")
+}
+
+fn user_theme_source() -> Fcitx5ControlUtf8 {
+    static_utf8_view("user")
+}
+
+fn theme_record_matches_requested_id(source: &[u8], requested_id: &[u8], theme_id: &[u8]) -> bool {
+    source != b"user" || theme_id == requested_id
+}
+
 fn native_package_architecture() -> Fcitx5ControlUtf8 {
     if cfg!(target_pointer_width = "64") {
         static_utf8_view("x64")
@@ -2919,6 +2935,37 @@ pub extern "C" fn fcitx5_control_package_type_name_utf8(package_type: u32) -> Fc
 }
 
 #[no_mangle]
+pub extern "C" fn fcitx5_control_builtin_theme_id_utf8() -> Fcitx5ControlUtf8 {
+    builtin_theme_id()
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_control_builtin_theme_source_utf8() -> Fcitx5ControlUtf8 {
+    builtin_theme_source()
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_control_user_theme_source_utf8() -> Fcitx5ControlUtf8 {
+    user_theme_source()
+}
+
+/// # Safety
+///
+/// `source`, `requested_id`, and `theme_id` must remain valid UTF-8 for the
+/// duration of the call when their pointers are non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_record_matches_requested_id_utf8(
+    source: Fcitx5ControlUtf8,
+    requested_id: Fcitx5ControlUtf8,
+    theme_id: Fcitx5ControlUtf8,
+) -> u8 {
+    let source = utf8_slice(source).unwrap_or(&[]);
+    let requested_id = utf8_slice(requested_id).unwrap_or(&[]);
+    let theme_id = utf8_slice(theme_id).unwrap_or(&[]);
+    theme_record_matches_requested_id(source, requested_id, theme_id) as u8
+}
+
+#[no_mangle]
 pub extern "C" fn fcitx5_control_native_package_architecture_utf8() -> Fcitx5ControlUtf8 {
     native_package_architecture()
 }
@@ -4118,6 +4165,54 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn theme_vocabulary_and_match_policy_matches_cpp_contract() {
+        assert_eq!(
+            utf8_slice(fcitx5_control_builtin_theme_id_utf8()),
+            Some(b"builtin:default".as_slice())
+        );
+        assert_eq!(
+            utf8_slice(fcitx5_control_builtin_theme_source_utf8()),
+            Some(b"builtin".as_slice())
+        );
+        assert_eq!(
+            utf8_slice(fcitx5_control_user_theme_source_utf8()),
+            Some(b"user".as_slice())
+        );
+        assert!(theme_record_matches_requested_id(
+            b"builtin",
+            b"builtin:default",
+            b"other"
+        ));
+        assert!(theme_record_matches_requested_id(
+            b"user", b"solar", b"solar"
+        ));
+        assert!(!theme_record_matches_requested_id(
+            b"user",
+            b"solar",
+            b"midnight"
+        ));
+
+        let user = Fcitx5ControlUtf8 {
+            ptr: b"user".as_ptr(),
+            len: 4,
+        };
+        let requested = Fcitx5ControlUtf8 {
+            ptr: b"solar".as_ptr(),
+            len: 5,
+        };
+        let actual = Fcitx5ControlUtf8 {
+            ptr: b"midnight".as_ptr(),
+            len: 8,
+        };
+        assert_eq!(
+            unsafe {
+                fcitx5_control_theme_record_matches_requested_id_utf8(user, requested, actual)
+            },
+            0
+        );
     }
 
     #[test]
