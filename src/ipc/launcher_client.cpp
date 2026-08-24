@@ -4,6 +4,7 @@
 
 #include <Windows.h>
 
+#include <utility>
 #include <vector>
 
 namespace fcitx::windows::ipc {
@@ -13,6 +14,39 @@ struct Fcitx5WindowsCommonPipeTransactWithError {
     std::uint8_t status;
     std::uint32_t failureError;
     std::size_t responseLen;
+};
+struct Fcitx5WindowsCommonLauncherResponseScalarInput {
+    std::uint64_t requestId;
+    std::uint64_t responseTo;
+    std::uint64_t engineEpoch;
+    std::uint32_t sessionId;
+    std::uint64_t contextId;
+    std::uint64_t compositionId;
+    std::uint64_t revision;
+    std::uint32_t status;
+    std::uint32_t launcherState;
+    std::uint32_t engineState;
+    std::uint32_t startDisposition;
+    std::uint8_t safeMode;
+    std::uint64_t retryAfterMilliseconds;
+    std::uint64_t expectedRequestId;
+    std::uint32_t expectedSessionId;
+};
+struct Fcitx5WindowsCommonLauncherResponseScalars {
+    std::uint8_t status;
+    std::uint32_t responseStatus;
+    std::uint32_t launcherState;
+    std::uint32_t engineState;
+    std::uint32_t startDisposition;
+    std::uint8_t safeMode;
+    std::uint64_t requestId;
+    std::uint64_t responseTo;
+    std::uint64_t engineEpoch;
+    std::uint32_t sessionId;
+    std::uint64_t contextId;
+    std::uint64_t compositionId;
+    std::uint64_t revision;
+    std::uint64_t retryAfterMilliseconds;
 };
 extern "C" Fcitx5WindowsCommonPipeTransactWithError
 fcitx5_windows_common_pipe_transact_with_error(
@@ -29,11 +63,9 @@ extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     std::uint8_t wait_when_busy);
 extern "C" void fcitx5_windows_common_close_pipe_client(void* pipe);
 extern "C" std::uint8_t fcitx5_windows_common_deadline_has_time(std::uint64_t deadline);
-extern "C" std::uint8_t fcitx5_windows_common_accept_launcher_response(
-    std::uint64_t response_to,
-    std::uint32_t session_id,
-    std::uint64_t expected_request_id,
-    std::uint32_t expected_session_id);
+extern "C" Fcitx5WindowsCommonLauncherResponseScalars
+fcitx5_windows_common_apply_launcher_response_scalars(
+    Fcitx5WindowsCommonLauncherResponseScalarInput input);
 extern "C" std::uint64_t fcitx5_windows_common_next_launcher_request_id();
 extern "C" std::uint8_t fcitx5_windows_common_ipc_status_ok(std::uint32_t status);
 extern "C" void fcitx5_windows_common_set_last_error(std::uint32_t error);
@@ -91,12 +123,53 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
                 protocol::FrameView frame;
                 protocol::LauncherResponse decoded;
                 success = protocol::decodeFrame(responseBytes, frame) &&
-                          protocol::decode(frame, decoded) &&
-                          fcitx5_windows_common_accept_launcher_response(
-                              decoded.metadata.responseTo, decoded.metadata.sessionId,
-                              requestId, identity.sessionId) != 0;
-                if (success) response = decoded;
-                else failure = ERROR_INVALID_DATA;
+                          protocol::decode(frame, decoded);
+                if (success) {
+                    const auto scalars =
+                        fcitx5_windows_common_apply_launcher_response_scalars(
+                            Fcitx5WindowsCommonLauncherResponseScalarInput{
+                                decoded.metadata.requestId,
+                                decoded.metadata.responseTo,
+                                decoded.metadata.engineEpoch,
+                                decoded.metadata.sessionId,
+                                decoded.metadata.contextId,
+                                decoded.metadata.compositionId,
+                                decoded.metadata.revision,
+                                static_cast<std::uint32_t>(decoded.status),
+                                decoded.launcherState,
+                                decoded.engineState,
+                                decoded.startDisposition,
+                                static_cast<std::uint8_t>(decoded.safeMode ? 1 : 0),
+                                decoded.retryAfterMilliseconds,
+                                requestId,
+                                identity.sessionId});
+                    success = scalars.status != 0;
+                    if (success) {
+                        response.metadata = protocol::Metadata{
+                            scalars.requestId,
+                            scalars.responseTo,
+                            scalars.engineEpoch,
+                            scalars.sessionId,
+                            scalars.contextId,
+                            scalars.compositionId,
+                            scalars.revision};
+                        response.status = static_cast<protocol::Status>(scalars.responseStatus);
+                        response.launcherState = scalars.launcherState;
+                        response.engineState = scalars.engineState;
+                        response.startDisposition = scalars.startDisposition;
+                        response.safeMode = scalars.safeMode != 0;
+                        response.retryAfterMilliseconds = scalars.retryAfterMilliseconds;
+                        response.currentInputMethodId =
+                            std::move(decoded.currentInputMethodId);
+                        response.currentInputMethodName =
+                            std::move(decoded.currentInputMethodName);
+                        response.currentInputMethodNativeName =
+                            std::move(decoded.currentInputMethodNativeName);
+                        response.currentInputMethodShortLabel =
+                            std::move(decoded.currentInputMethodShortLabel);
+                    }
+                }
+                if (!success) failure = ERROR_INVALID_DATA;
             }
         }
     } catch (...) {

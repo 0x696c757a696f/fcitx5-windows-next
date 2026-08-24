@@ -322,6 +322,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         launcherClientSource.find("decoded.metadata.sessionId == identity.sessionId") !=
             std::string::npos ||
+        launcherClientSource.find("response = decoded") != std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_accept_hello_response") !=
             std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_apply_hello_response_scalars") ==
@@ -340,8 +341,10 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("IPC-RESPONSE-POLICY-RUST: IPC client response acceptance policy must be Rust-owned");
     }
-    if (launcherClientSource.find("fcitx5_windows_common_accept_launcher_response") ==
-        std::string::npos) {
+    if (launcherClientSource.find("fcitx5_windows_common_accept_launcher_response") !=
+            std::string::npos ||
+        launcherClientSource.find("fcitx5_windows_common_apply_launcher_response_scalars") ==
+            std::string::npos) {
         return fail("IPC-LAUNCHER-RESPONSE-RUST: launcher response acceptance policy must be Rust-owned");
     }
     const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
@@ -611,6 +614,10 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("engine_status_response_scalar_application_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_launcher_response") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_apply_launcher_response_scalars") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("launcher_response_scalar_application_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_next_launcher_request_id") ==
             std::string::npos ||

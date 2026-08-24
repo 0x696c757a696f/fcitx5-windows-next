@@ -1630,6 +1630,35 @@ fn apply_engine_status_response_scalars(
     }
 }
 
+fn apply_launcher_response_scalars(
+    input: Fcitx5WindowsCommonLauncherResponseScalarInput,
+) -> Fcitx5WindowsCommonLauncherResponseScalars {
+    if !accept_launcher_response(
+        input.response_to,
+        input.session_id,
+        input.expected_request_id,
+        input.expected_session_id,
+    ) {
+        return Fcitx5WindowsCommonLauncherResponseScalars::default();
+    }
+    Fcitx5WindowsCommonLauncherResponseScalars {
+        status: 1,
+        response_status: input.status,
+        launcher_state: input.launcher_state,
+        engine_state: input.engine_state,
+        start_disposition: input.start_disposition,
+        safe_mode: input.safe_mode,
+        request_id: input.request_id,
+        response_to: input.response_to,
+        engine_epoch: input.engine_epoch,
+        session_id: input.session_id,
+        context_id: input.context_id,
+        composition_id: input.composition_id,
+        revision: input.revision,
+        retry_after_milliseconds: input.retry_after_milliseconds,
+    }
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -1941,6 +1970,45 @@ pub struct Fcitx5WindowsCommonEngineStatusResponseScalars {
     pub context_id: u64,
     pub composition_id: u64,
     pub revision: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonLauncherResponseScalarInput {
+    pub request_id: u64,
+    pub response_to: u64,
+    pub engine_epoch: u64,
+    pub session_id: u32,
+    pub context_id: u64,
+    pub composition_id: u64,
+    pub revision: u64,
+    pub status: u32,
+    pub launcher_state: u32,
+    pub engine_state: u32,
+    pub start_disposition: u32,
+    pub safe_mode: u8,
+    pub retry_after_milliseconds: u64,
+    pub expected_request_id: u64,
+    pub expected_session_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonLauncherResponseScalars {
+    pub status: u8,
+    pub response_status: u32,
+    pub launcher_state: u32,
+    pub engine_state: u32,
+    pub start_disposition: u32,
+    pub safe_mode: u8,
+    pub request_id: u64,
+    pub response_to: u64,
+    pub engine_epoch: u64,
+    pub session_id: u32,
+    pub context_id: u64,
+    pub composition_id: u64,
+    pub revision: u64,
+    pub retry_after_milliseconds: u64,
 }
 
 #[repr(C)]
@@ -3073,6 +3141,13 @@ pub extern "C" fn fcitx5_windows_common_accept_launcher_response(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_apply_launcher_response_scalars(
+    input: Fcitx5WindowsCommonLauncherResponseScalarInput,
+) -> Fcitx5WindowsCommonLauncherResponseScalars {
+    apply_launcher_response_scalars(input)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_next_launcher_request_id() -> u64 {
     next_launcher_request_id()
 }
@@ -3976,6 +4051,45 @@ mod tests {
         );
         assert_eq!(rejected.status, 0);
         assert_eq!(rejected.engine_epoch, 0);
+    }
+
+    #[test]
+    fn launcher_response_scalar_application_matches_cpp_contract() {
+        let input = Fcitx5WindowsCommonLauncherResponseScalarInput {
+            request_id: 0,
+            response_to: 14,
+            engine_epoch: 0,
+            session_id: 7,
+            context_id: 0,
+            composition_id: 0,
+            revision: 0,
+            status: 0,
+            launcher_state: 2,
+            engine_state: 3,
+            start_disposition: 4,
+            safe_mode: 1,
+            retry_after_milliseconds: 1500,
+            expected_request_id: 14,
+            expected_session_id: 7,
+        };
+        let accepted = apply_launcher_response_scalars(input);
+        assert_eq!(accepted.status, 1);
+        assert_eq!(accepted.response_status, 0);
+        assert_eq!(accepted.launcher_state, 2);
+        assert_eq!(accepted.engine_state, 3);
+        assert_eq!(accepted.start_disposition, 4);
+        assert_eq!(accepted.safe_mode, 1);
+        assert_eq!(accepted.response_to, 14);
+        assert_eq!(accepted.session_id, 7);
+        assert_eq!(accepted.retry_after_milliseconds, 1500);
+
+        let rejected =
+            apply_launcher_response_scalars(Fcitx5WindowsCommonLauncherResponseScalarInput {
+                session_id: 8,
+                ..input
+            });
+        assert_eq!(rejected.status, 0);
+        assert_eq!(rejected.launcher_state, 0);
     }
 
     #[test]
