@@ -257,9 +257,24 @@ int main(int argc, char** argv) {
             std::string::npos ||
         pipeClientSource.find("response.status != protocol::Status::ok") !=
             std::string::npos ||
+        pipeClientSource.find("contextState.compositionId = response.metadata.compositionId") !=
+            std::string::npos ||
+        pipeClientSource.find("contextState.revision = response.metadata.revision") !=
+            std::string::npos ||
+        pipeClientSource.find("result.engineEpoch = response.metadata.engineEpoch") !=
+            std::string::npos ||
+        pipeClientSource.find("result.compositionId = response.metadata.compositionId") !=
+            std::string::npos ||
+        pipeClientSource.find("result.revision = response.metadata.revision") !=
+            std::string::npos ||
+        pipeClientSource.find("result.handled = response.handled") != std::string::npos ||
+        pipeClientSource.find("result.forwardKey = response.forwardKey") != std::string::npos ||
+        pipeClientSource.find("result.caret = response.caret") != std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_accept_hello_response") ==
             std::string::npos ||
-        pipeClientSource.find("fcitx5_windows_common_accept_key_response") ==
+        pipeClientSource.find("fcitx5_windows_common_accept_key_response") !=
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_apply_key_response_scalars") ==
             std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_accept_candidate_select_response") ==
             std::string::npos ||
@@ -507,11 +522,15 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_key_response") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_apply_key_response_scalars") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_candidate_select_response") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_engine_status_response") ==
             std::string::npos ||
         rustWindowsCommonCore.find("ipc_response_acceptance_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("key_response_scalar_application_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_verify_pipe_server_peer_utf16") ==
             std::string::npos ||

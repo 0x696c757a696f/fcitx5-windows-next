@@ -1404,6 +1404,53 @@ fn accept_engine_status_response(
         && ipc_status_ok(status)
 }
 
+fn apply_key_response_scalars(
+    input: Fcitx5WindowsCommonKeyResponseScalarInput,
+) -> Fcitx5WindowsCommonKeyResponseScalars {
+    if !accept_key_response(
+        input.response_to,
+        input.engine_epoch,
+        input.session_id,
+        input.context_id,
+        input.revision,
+        input.status,
+        input.expected_request_id,
+        input.expected_engine_epoch,
+        input.expected_session_id,
+        input.expected_context_id,
+        input.previous_revision,
+    ) {
+        return Fcitx5WindowsCommonKeyResponseScalars::default();
+    }
+    Fcitx5WindowsCommonKeyResponseScalars {
+        status: 1,
+        handled: input.handled,
+        delete_surrounding_text: input.delete_surrounding_text,
+        forward_key: input.forward_key,
+        forward_key_release: input.forward_key_release,
+        caret_valid: input.caret_valid,
+        engine_epoch: input.engine_epoch,
+        context_composition_id: input.composition_id,
+        context_revision: input.revision,
+        result_composition_id: input.composition_id,
+        result_revision: input.revision,
+        selected_candidate: input.selected_candidate,
+        candidate_page: input.candidate_page,
+        candidate_total: input.candidate_total,
+        delete_surrounding_offset: input.delete_surrounding_offset,
+        delete_surrounding_size: input.delete_surrounding_size,
+        forward_key_sym: input.forward_key_sym,
+        forward_key_states: input.forward_key_states,
+        forward_key_code: input.forward_key_code,
+        caret_left: input.caret_left,
+        caret_top: input.caret_top,
+        caret_right: input.caret_right,
+        caret_bottom: input.caret_bottom,
+        caret_dpi: input.caret_dpi,
+        candidate_visibility: input.candidate_visibility,
+    }
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -1603,6 +1650,72 @@ pub struct Fcitx5WindowsCommonUtf8OffsetToWide {
 pub struct Fcitx5WindowsCommonPipeTransact {
     pub status: u8,
     pub response_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonKeyResponseScalarInput {
+    pub response_to: u64,
+    pub engine_epoch: u64,
+    pub session_id: u32,
+    pub context_id: u64,
+    pub composition_id: u64,
+    pub revision: u64,
+    pub status: u32,
+    pub expected_request_id: u64,
+    pub expected_engine_epoch: u64,
+    pub expected_session_id: u32,
+    pub expected_context_id: u64,
+    pub previous_revision: u64,
+    pub handled: u8,
+    pub selected_candidate: u32,
+    pub candidate_page: u32,
+    pub candidate_total: u32,
+    pub candidate_visibility: u8,
+    pub delete_surrounding_text: u8,
+    pub delete_surrounding_offset: i32,
+    pub delete_surrounding_size: u32,
+    pub forward_key: u8,
+    pub forward_key_sym: u32,
+    pub forward_key_states: u32,
+    pub forward_key_code: i32,
+    pub forward_key_release: u8,
+    pub caret_valid: u8,
+    pub caret_left: i32,
+    pub caret_top: i32,
+    pub caret_right: i32,
+    pub caret_bottom: i32,
+    pub caret_dpi: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonKeyResponseScalars {
+    pub status: u8,
+    pub handled: u8,
+    pub delete_surrounding_text: u8,
+    pub forward_key: u8,
+    pub forward_key_release: u8,
+    pub caret_valid: u8,
+    pub engine_epoch: u64,
+    pub context_composition_id: u64,
+    pub context_revision: u64,
+    pub result_composition_id: u64,
+    pub result_revision: u64,
+    pub selected_candidate: u32,
+    pub candidate_page: u32,
+    pub candidate_total: u32,
+    pub delete_surrounding_offset: i32,
+    pub delete_surrounding_size: u32,
+    pub forward_key_sym: u32,
+    pub forward_key_states: u32,
+    pub forward_key_code: i32,
+    pub caret_left: i32,
+    pub caret_top: i32,
+    pub caret_right: i32,
+    pub caret_bottom: i32,
+    pub caret_dpi: u32,
+    pub candidate_visibility: u8,
 }
 
 #[repr(C)]
@@ -2584,6 +2697,13 @@ pub extern "C" fn fcitx5_windows_common_accept_key_response(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_apply_key_response_scalars(
+    input: Fcitx5WindowsCommonKeyResponseScalarInput,
+) -> Fcitx5WindowsCommonKeyResponseScalars {
+    apply_key_response_scalars(input)
+}
+
+#[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn fcitx5_windows_common_accept_candidate_select_response(
     response_to: u64,
@@ -3409,6 +3529,75 @@ mod tests {
         assert!(accept_engine_status_response(13, 99, 7, 0, 13, 99, 7));
         assert!(!accept_engine_status_response(13, 0, 7, 0, 13, 99, 7));
         assert!(!accept_engine_status_response(13, 99, 7, 5, 13, 99, 7));
+    }
+
+    #[test]
+    fn key_response_scalar_application_matches_cpp_contract() {
+        let input = Fcitx5WindowsCommonKeyResponseScalarInput {
+            response_to: 11,
+            engine_epoch: 99,
+            session_id: 7,
+            context_id: 42,
+            composition_id: 123,
+            revision: 5,
+            status: 0,
+            expected_request_id: 11,
+            expected_engine_epoch: 99,
+            expected_session_id: 7,
+            expected_context_id: 42,
+            previous_revision: 4,
+            handled: 1,
+            selected_candidate: 2,
+            candidate_page: 3,
+            candidate_total: 9,
+            candidate_visibility: 1,
+            delete_surrounding_text: 1,
+            delete_surrounding_offset: -1,
+            delete_surrounding_size: 2,
+            forward_key: 1,
+            forward_key_sym: 0xff0d,
+            forward_key_states: 4,
+            forward_key_code: 28,
+            forward_key_release: 1,
+            caret_valid: 1,
+            caret_left: 10,
+            caret_top: 20,
+            caret_right: 30,
+            caret_bottom: 40,
+            caret_dpi: 144,
+        };
+        let applied = apply_key_response_scalars(input);
+        assert_eq!(applied.status, 1);
+        assert_eq!(applied.handled, 1);
+        assert_eq!(applied.engine_epoch, 99);
+        assert_eq!(applied.context_composition_id, 123);
+        assert_eq!(applied.context_revision, 5);
+        assert_eq!(applied.result_composition_id, 123);
+        assert_eq!(applied.result_revision, 5);
+        assert_eq!(applied.selected_candidate, 2);
+        assert_eq!(applied.candidate_page, 3);
+        assert_eq!(applied.candidate_total, 9);
+        assert_eq!(applied.candidate_visibility, 1);
+        assert_eq!(applied.delete_surrounding_text, 1);
+        assert_eq!(applied.delete_surrounding_offset, -1);
+        assert_eq!(applied.delete_surrounding_size, 2);
+        assert_eq!(applied.forward_key, 1);
+        assert_eq!(applied.forward_key_sym, 0xff0d);
+        assert_eq!(applied.forward_key_states, 4);
+        assert_eq!(applied.forward_key_code, 28);
+        assert_eq!(applied.forward_key_release, 1);
+        assert_eq!(applied.caret_valid, 1);
+        assert_eq!(applied.caret_left, 10);
+        assert_eq!(applied.caret_top, 20);
+        assert_eq!(applied.caret_right, 30);
+        assert_eq!(applied.caret_bottom, 40);
+        assert_eq!(applied.caret_dpi, 144);
+
+        let stale = Fcitx5WindowsCommonKeyResponseScalarInput {
+            revision: 4,
+            ..input
+        };
+        assert_eq!(apply_key_response_scalars(stale).status, 0);
     }
 
     #[test]

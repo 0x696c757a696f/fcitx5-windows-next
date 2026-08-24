@@ -35,6 +35,66 @@ struct Fcitx5WindowsCommonUtf8OffsetToWide {
     std::uint8_t status;
     std::uint32_t utf16Offset;
 };
+struct Fcitx5WindowsCommonKeyResponseScalarInput {
+    std::uint64_t responseTo;
+    std::uint64_t engineEpoch;
+    std::uint32_t sessionId;
+    std::uint64_t contextId;
+    std::uint64_t compositionId;
+    std::uint64_t revision;
+    std::uint32_t status;
+    std::uint64_t expectedRequestId;
+    std::uint64_t expectedEngineEpoch;
+    std::uint32_t expectedSessionId;
+    std::uint64_t expectedContextId;
+    std::uint64_t previousRevision;
+    std::uint8_t handled;
+    std::uint32_t selectedCandidate;
+    std::uint32_t candidatePage;
+    std::uint32_t candidateTotal;
+    std::uint8_t candidateVisibility;
+    std::uint8_t deleteSurroundingText;
+    std::int32_t deleteSurroundingOffset;
+    std::uint32_t deleteSurroundingSize;
+    std::uint8_t forwardKey;
+    std::uint32_t forwardKeySym;
+    std::uint32_t forwardKeyStates;
+    std::int32_t forwardKeyCode;
+    std::uint8_t forwardKeyRelease;
+    std::uint8_t caretValid;
+    std::int32_t caretLeft;
+    std::int32_t caretTop;
+    std::int32_t caretRight;
+    std::int32_t caretBottom;
+    std::uint32_t caretDpi;
+};
+struct Fcitx5WindowsCommonKeyResponseScalars {
+    std::uint8_t status;
+    std::uint8_t handled;
+    std::uint8_t deleteSurroundingText;
+    std::uint8_t forwardKey;
+    std::uint8_t forwardKeyRelease;
+    std::uint8_t caretValid;
+    std::uint64_t engineEpoch;
+    std::uint64_t contextCompositionId;
+    std::uint64_t contextRevision;
+    std::uint64_t resultCompositionId;
+    std::uint64_t resultRevision;
+    std::uint32_t selectedCandidate;
+    std::uint32_t candidatePage;
+    std::uint32_t candidateTotal;
+    std::int32_t deleteSurroundingOffset;
+    std::uint32_t deleteSurroundingSize;
+    std::uint32_t forwardKeySym;
+    std::uint32_t forwardKeyStates;
+    std::int32_t forwardKeyCode;
+    std::int32_t caretLeft;
+    std::int32_t caretTop;
+    std::int32_t caretRight;
+    std::int32_t caretBottom;
+    std::uint32_t caretDpi;
+    std::uint8_t candidateVisibility;
+};
 extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf16(
     const std::uint8_t* input,
     std::size_t input_len,
@@ -44,24 +104,15 @@ extern "C" Fcitx5WindowsCommonUtf8OffsetToWide
 fcitx5_windows_common_utf8_offset_to_wide(const std::uint8_t* input,
                                           std::size_t input_len,
                                           std::uint32_t offset);
+extern "C" Fcitx5WindowsCommonKeyResponseScalars
+fcitx5_windows_common_apply_key_response_scalars(
+    Fcitx5WindowsCommonKeyResponseScalarInput input);
 extern "C" std::uint8_t fcitx5_windows_common_accept_hello_response(
     std::uint64_t response_to,
     std::uint32_t session_id,
     std::uint32_t status,
     std::uint64_t expected_request_id,
     std::uint32_t expected_session_id);
-extern "C" std::uint8_t fcitx5_windows_common_accept_key_response(
-    std::uint64_t response_to,
-    std::uint64_t engine_epoch,
-    std::uint32_t session_id,
-    std::uint64_t context_id,
-    std::uint64_t revision,
-    std::uint32_t status,
-    std::uint64_t expected_request_id,
-    std::uint64_t expected_engine_epoch,
-    std::uint32_t expected_session_id,
-    std::uint64_t expected_context_id,
-    std::uint64_t previous_revision);
 extern "C" std::uint8_t fcitx5_windows_common_accept_candidate_select_response(
     std::uint64_t response_to,
     std::uint64_t engine_epoch,
@@ -91,6 +142,8 @@ const std::uint16_t* wideData(std::wstring_view value) noexcept {
 const std::uint8_t* byteData(std::string_view value) noexcept {
     return value.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(value.data());
 }
+
+std::uint8_t flagByte(bool value) noexcept { return value ? 1 : 0; }
 
 bool utf8ToWide(std::string_view input, std::wstring& output) {
     output.clear();
@@ -239,36 +292,66 @@ bool PipeClient::acceptKeyResponse(const protocol::KeyResponse& response,
                                    std::uint64_t contextId,
                                    ContextState& contextState,
                                    KeyResult& result) noexcept {
-    if (fcitx5_windows_common_accept_key_response(
-            response.metadata.responseTo, response.metadata.engineEpoch,
-            response.metadata.sessionId, response.metadata.contextId,
-            response.metadata.revision, static_cast<std::uint32_t>(response.status),
-            requestId, engineEpoch_, sessionId_, contextId, contextState.revision) == 0 ||
-        !utf8ToWide(response.commitUtf8, result.commit) ||
+    const Fcitx5WindowsCommonKeyResponseScalarInput scalarInput{
+        response.metadata.responseTo,
+        response.metadata.engineEpoch,
+        response.metadata.sessionId,
+        response.metadata.contextId,
+        response.metadata.compositionId,
+        response.metadata.revision,
+        static_cast<std::uint32_t>(response.status),
+        requestId,
+        engineEpoch_,
+        sessionId_,
+        contextId,
+        contextState.revision,
+        flagByte(response.handled),
+        response.selectedCandidate,
+        response.candidatePage,
+        response.candidateTotal,
+        response.candidateVisibility,
+        flagByte(response.deleteSurroundingText),
+        response.deleteSurroundingOffset,
+        response.deleteSurroundingSize,
+        flagByte(response.forwardKey),
+        response.forwardKeySym,
+        response.forwardKeyStates,
+        response.forwardKeyCode,
+        flagByte(response.forwardKeyRelease),
+        flagByte(response.caret.valid),
+        response.caret.left,
+        response.caret.top,
+        response.caret.right,
+        response.caret.bottom,
+        response.caret.dpi};
+    const auto scalars = fcitx5_windows_common_apply_key_response_scalars(scalarInput);
+    if (scalars.status == 0 || !utf8ToWide(response.commitUtf8, result.commit) ||
         !utf8ToWide(response.preeditUtf8, result.preedit) ||
         !utf8OffsetToWide(response.preeditUtf8, response.preeditCaretUtf8,
                           result.preeditCaretUtf16)) {
         return false;
     }
-    contextState.compositionId = response.metadata.compositionId;
-    contextState.revision = response.metadata.revision;
-    result.engineEpoch = response.metadata.engineEpoch;
-    result.compositionId = response.metadata.compositionId;
-    result.revision = response.metadata.revision;
-    result.handled = response.handled;
-    result.selectedCandidate = response.selectedCandidate;
-    result.candidatePage = response.candidatePage;
-    result.candidateTotal = response.candidateTotal;
-    result.candidateVisibility = response.candidateVisibility;
-    result.deleteSurroundingText = response.deleteSurroundingText;
-    result.deleteSurroundingOffset = response.deleteSurroundingOffset;
-    result.deleteSurroundingSize = response.deleteSurroundingSize;
-    result.forwardKey = response.forwardKey;
-    result.forwardKeySym = response.forwardKeySym;
-    result.forwardKeyStates = response.forwardKeyStates;
-    result.forwardKeyCode = response.forwardKeyCode;
-    result.forwardKeyRelease = response.forwardKeyRelease;
-    result.caret = response.caret;
+    contextState.compositionId = scalars.contextCompositionId;
+    contextState.revision = scalars.contextRevision;
+    result.engineEpoch = scalars.engineEpoch;
+    result.compositionId = scalars.resultCompositionId;
+    result.revision = scalars.resultRevision;
+    result.handled = scalars.handled != 0;
+    result.selectedCandidate = scalars.selectedCandidate;
+    result.candidatePage = scalars.candidatePage;
+    result.candidateTotal = scalars.candidateTotal;
+    result.candidateVisibility = scalars.candidateVisibility;
+    result.deleteSurroundingText = scalars.deleteSurroundingText != 0;
+    result.deleteSurroundingOffset = scalars.deleteSurroundingOffset;
+    result.deleteSurroundingSize = scalars.deleteSurroundingSize;
+    result.forwardKey = scalars.forwardKey != 0;
+    result.forwardKeySym = scalars.forwardKeySym;
+    result.forwardKeyStates = scalars.forwardKeyStates;
+    result.forwardKeyCode = scalars.forwardKeyCode;
+    result.forwardKeyRelease = scalars.forwardKeyRelease != 0;
+    result.caret = protocol::CaretRect{scalars.caretValid != 0, scalars.caretLeft,
+                                       scalars.caretTop, scalars.caretRight,
+                                       scalars.caretBottom, scalars.caretDpi};
     result.candidates.reserve(response.candidates.size());
     for (const auto& source : response.candidates) {
         KeyResult::Candidate candidate;
