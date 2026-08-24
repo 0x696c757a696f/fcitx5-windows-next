@@ -273,6 +273,7 @@ std::uint8_t fcitx5_control_bundled_package_descriptor(
 std::uint8_t fcitx5_control_bundled_package_present_utf16(Fcitx5ControlUtf16 install_root,
                                                           Fcitx5ControlUtf8 id);
 Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_type);
+Fcitx5ControlUtf8 fcitx5_control_native_package_architecture_utf8();
 std::uint8_t fcitx5_control_package_update_available_utf8(
     std::uint8_t installed_present, Fcitx5ControlUtf8 installed_version,
     Fcitx5ControlUtf8 available_version);
@@ -1396,11 +1397,7 @@ bool runEngineManagement(const std::vector<std::wstring>& arguments, std::string
 }
 
 std::string nativeArchitecture() {
-#if defined(_WIN64)
-    return "x64";
-#else
-    return "x86";
-#endif
+    return copyUtf8(fcitx5_control_native_package_architecture_utf8());
 }
 
 void installRepositoryPackage(const fs::path& dataRoot,

@@ -1435,6 +1435,14 @@ fn package_type_name(package_type: u32) -> Fcitx5ControlUtf8 {
     }
 }
 
+fn native_package_architecture() -> Fcitx5ControlUtf8 {
+    if cfg!(target_pointer_width = "64") {
+        static_utf8_view("x64")
+    } else {
+        static_utf8_view("x86")
+    }
+}
+
 fn package_update_available(
     installed_present: bool,
     installed_version: &[u8],
@@ -2871,6 +2879,11 @@ pub extern "C" fn fcitx5_control_package_type_name_utf8(package_type: u32) -> Fc
     package_type_name(package_type)
 }
 
+#[no_mangle]
+pub extern "C" fn fcitx5_control_native_package_architecture_utf8() -> Fcitx5ControlUtf8 {
+    native_package_architecture()
+}
+
 /// # Safety
 ///
 /// `installed_version` and `available_version` must remain valid UTF-8 for the
@@ -4023,6 +4036,20 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn native_package_architecture_matches_target_contract() {
+        let expected = if cfg!(target_pointer_width = "64") {
+            b"x64".as_slice()
+        } else {
+            b"x86".as_slice()
+        };
+        assert_eq!(utf8_slice(native_package_architecture()), Some(expected));
+        assert_eq!(
+            utf8_slice(fcitx5_control_native_package_architecture_utf8()),
+            Some(expected)
+        );
     }
 
     #[test]
