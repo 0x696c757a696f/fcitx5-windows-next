@@ -1443,6 +1443,15 @@ fn native_package_architecture() -> Fcitx5ControlUtf8 {
     }
 }
 
+fn package_architecture_matches_native(architecture: &[u8]) -> bool {
+    let native = if cfg!(target_pointer_width = "64") {
+        b"x64".as_slice()
+    } else {
+        b"x86".as_slice()
+    };
+    architecture == b"any" || architecture == native
+}
+
 fn package_update_available(
     installed_present: bool,
     installed_version: &[u8],
@@ -2886,6 +2895,20 @@ pub extern "C" fn fcitx5_control_native_package_architecture_utf8() -> Fcitx5Con
 
 /// # Safety
 ///
+/// `architecture` must remain valid UTF-8 for the duration of the call when its
+/// pointer is non-null.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_architecture_matches_native_utf8(
+    architecture: Fcitx5ControlUtf8,
+) -> u8 {
+    let Some(architecture) = utf8_slice(architecture) else {
+        return 0;
+    };
+    package_architecture_matches_native(architecture) as u8
+}
+
+/// # Safety
+///
 /// `installed_version` and `available_version` must remain valid UTF-8 for the
 /// duration of the call when their pointers are non-null.
 #[no_mangle]
@@ -4049,6 +4072,41 @@ mod tests {
         assert_eq!(
             utf8_slice(fcitx5_control_native_package_architecture_utf8()),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn package_architecture_match_matches_cpp_contract() {
+        let native = if cfg!(target_pointer_width = "64") {
+            b"x64".as_slice()
+        } else {
+            b"x86".as_slice()
+        };
+        let other = if cfg!(target_pointer_width = "64") {
+            b"x86".as_slice()
+        } else {
+            b"x64".as_slice()
+        };
+        assert!(package_architecture_matches_native(b"any"));
+        assert!(package_architecture_matches_native(native));
+        assert!(!package_architecture_matches_native(other));
+        assert!(!package_architecture_matches_native(b"arm64"));
+
+        let any = Fcitx5ControlUtf8 {
+            ptr: b"any".as_ptr(),
+            len: 3,
+        };
+        let unsupported = Fcitx5ControlUtf8 {
+            ptr: b"arm64".as_ptr(),
+            len: 5,
+        };
+        assert_eq!(
+            unsafe { fcitx5_control_package_architecture_matches_native_utf8(any) },
+            1
+        );
+        assert_eq!(
+            unsafe { fcitx5_control_package_architecture_matches_native_utf8(unsupported) },
+            0
         );
     }
 

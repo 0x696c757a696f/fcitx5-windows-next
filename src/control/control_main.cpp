@@ -274,6 +274,8 @@ std::uint8_t fcitx5_control_bundled_package_present_utf16(Fcitx5ControlUtf16 ins
                                                           Fcitx5ControlUtf8 id);
 Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_type);
 Fcitx5ControlUtf8 fcitx5_control_native_package_architecture_utf8();
+std::uint8_t fcitx5_control_package_architecture_matches_native_utf8(
+    Fcitx5ControlUtf8 architecture);
 std::uint8_t fcitx5_control_package_update_available_utf8(
     std::uint8_t installed_present, Fcitx5ControlUtf8 installed_version,
     Fcitx5ControlUtf8 available_version);
@@ -1400,6 +1402,10 @@ std::string nativeArchitecture() {
     return copyUtf8(fcitx5_control_native_package_architecture_utf8());
 }
 
+bool packageArchitectureMatchesNative(std::string_view architecture) {
+    return fcitx5_control_package_architecture_matches_native_utf8(utf8View(architecture)) != 0;
+}
+
 void installRepositoryPackage(const fs::path& dataRoot,
                               const fcitx::package::RepositoryIndex& repository,
                               std::string_view packageId, std::set<std::string>& visiting) {
@@ -1569,7 +1575,7 @@ void printPackages(const fs::path& dataRoot) {
     std::set<std::string> emitted;
     if (repositoryAvailable) {
         for (const auto& entry : repository.packages) {
-            if (entry.architecture != "any" && entry.architecture != nativeArchitecture())
+            if (!packageArchitectureMatchesNative(entry.architecture))
                 continue;
             const auto found = active.find(entry.id);
             const bool bundledNow = bundled.contains(entry.id);
