@@ -6,6 +6,9 @@ param(
   [ValidateSet('Debug', 'Release')]
   [string] $Configuration = 'Debug',
 
+  [ValidateSet('Win7', 'Win10')]
+  [string] $MinOs = 'Win10',
+
   [switch] $SourceOnly
 )
 
@@ -51,7 +54,7 @@ if (-not $SourceOnly) {
     if (Test-Path -LiteralPath $nativeEngine -PathType Leaf) { $binaries += $nativeEngine }
   }
 
-  $postWin7Imports = @(
+  $win7IncompatibleImports = @(
     'AddDllDirectory',
     'AdjustWindowRectExForDpi',
     'GetCurrentPackageFamilyName',
@@ -72,18 +75,24 @@ if (-not $SourceOnly) {
     }
     $imports = (& $dumpbin /nologo /imports $binary) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $binary" }
-    foreach ($name in $postWin7Imports) {
-      if ($imports -match "(?m)^\s+[0-9A-F]+\s+$([regex]::Escape($name))\s*$") {
-        throw "Win7-incompatible hard import '$name' found in $binary"
+    if ($MinOs -eq 'Win7') {
+      foreach ($name in $win7IncompatibleImports) {
+        if ($imports -match "(?m)^\s+[0-9A-F]+\s+$([regex]::Escape($name))\s*$") {
+          throw "Win7-incompatible hard import '$name' found in $binary"
+        }
       }
     }
     $fileName = [IO.Path]::GetFileName($binary)
+    # Rust std currently brings a WS2_32 import into Rust-linked MSVC
+    # binaries even when product source does not use networking. Keep PE
+    # blocking for explicit HTTP/URL stacks and enforce Winsock usage at the
+    # source boundary below.
     if ($fileName -in @('fcitx5-tsf.dll', 'fcitx5-engine.exe', 'fcitx5-ui.exe') -and
-        $imports -match '(?im)^\s+(WINHTTP|WININET|WS2_32|URLMON)\.dll\s*$') {
+        $imports -match '(?im)^\s+(WINHTTP|WININET|URLMON)\.dll\s*$') {
       throw "Network-capable library imported by input-plane binary: $binary"
     }
     if ($fileName -in @('fcitx5-package.exe', 'fcitx5-deployer.exe', 'fcitx5-updater.exe') -and
-        $imports -match '(?im)^\s+(WINHTTP|WININET|WS2_32|URLMON)\.dll\s*$') {
+        $imports -match '(?im)^\s+(WINHTTP|WININET|URLMON)\.dll\s*$') {
       throw "Network library crossed into non-downloader package boundary: $binary"
     }
     if ($fileName -eq 'fcitx5-downloader.exe' -and
@@ -105,6 +114,20 @@ $prohibited = @(
   '\bVirtualAllocEx\s*\(',
   '\bPROCESS_VM_(?:READ|WRITE|OPERATION)\b'
 )
+$networkProhibited = @(
+  '\bWinHttp[A-Za-z0-9_]*\s*\(',
+  '\bInternet[A-Za-z0-9_]*\s*\(',
+  '\bURLDownloadToFile[AW]?\s*\(',
+  '\bWSAStartup\s*\(',
+  '\bsocket\s*\(',
+  '\bstd::net::',
+  '\bTcpStream\b',
+  '\bUdpSocket\b',
+  '\bwindows::Win32::Networking\b'
+)
+$networkAllowedSources = @(
+  'rust/package-core/src/downloader_main.rs'
+)
 $scannedSourceCount = 0
 foreach ($root in $sourceRoots) {
   if (-not (Test-Path -LiteralPath $root.Path -PathType Container)) {
@@ -119,11 +142,19 @@ foreach ($root in $sourceRoots) {
         throw "Prohibited Hook/injection/game-memory capability found in $($source.FullName)"
       }
     }
+    $relativeSourcePath = [IO.Path]::GetRelativePath($repoRoot, $source.FullName).Replace('\', '/')
+    if ($relativeSourcePath -notin $networkAllowedSources) {
+      foreach ($pattern in $networkProhibited) {
+        if ($text -match $pattern) {
+          throw "Network capability crossed product source boundary in $($source.FullName)"
+        }
+      }
+    }
   }
 }
 
 if ($SourceOnly) {
   Write-Host "Runtime security source audit passed: $scannedSourceCount C++/Rust source files, no prohibited capability paths."
 } else {
-  Write-Host "Runtime security audit passed for ${Architecture}: $($binaries.Count) PE files, $scannedSourceCount C++/Rust source files, no prohibited capability paths."
+  Write-Host "Runtime security audit passed for ${Architecture}/${MinOs}: $($binaries.Count) PE files, $scannedSourceCount C++/Rust source files, no prohibited capability paths."
 }

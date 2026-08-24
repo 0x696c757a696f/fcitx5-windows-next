@@ -57,9 +57,23 @@ int main(int argc, char** argv) {
     }
     if (runtimeSecurityScript.find("Join-Path $repoRoot 'rust'") == std::string::npos ||
         runtimeSecurityScript.find("[switch] $SourceOnly") == std::string::npos ||
+        runtimeSecurityScript.find("[ValidateSet('Win7', 'Win10')]") == std::string::npos ||
+        runtimeSecurityScript.find("$MinOs = 'Win10'") == std::string::npos ||
+        runtimeSecurityScript.find("if ($MinOs -eq 'Win7')") == std::string::npos ||
+        runtimeSecurityScript.find("Win7-incompatible hard import") == std::string::npos ||
         runtimeSecurityScript.find("'*.rs'") == std::string::npos ||
         runtimeSecurityScript.find("Runtime security source audit passed") == std::string::npos ||
         runtimeSecurityScript.find("C++/Rust source files") == std::string::npos ||
+        runtimeSecurityScript.find("Rust std currently brings a WS2_32 import") ==
+            std::string::npos ||
+        runtimeSecurityScript.find("networkAllowedSources") == std::string::npos ||
+        runtimeSecurityScript.find("rust/package-core/src/downloader_main.rs") ==
+            std::string::npos ||
+        runtimeSecurityScript.find("Network capability crossed product source boundary") ==
+            std::string::npos ||
+        runtimeSecurityScript.find("std::net::") == std::string::npos ||
+        runtimeSecurityScript.find("TcpStream") == std::string::npos ||
+        runtimeSecurityScript.find("WSAStartup") == std::string::npos ||
         runtimeSecurityScript.find("SetWindowsHookEx") == std::string::npos ||
         runtimeSecurityScript.find("SendInput") == std::string::npos ||
         runtimeSecurityScript.find("WriteProcessMemory") == std::string::npos ||
