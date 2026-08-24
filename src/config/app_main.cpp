@@ -8,7 +8,6 @@
 #include <Windows.h>
 #include <CommCtrl.h>
 #include <shellapi.h>
-#include <shlobj.h>
 #include <d2d1.h>
 #include <dwrite.h>
 
@@ -679,17 +678,19 @@ const wchar_t* localeFileForOverride(std::wstring_view overrideLocale) {
 }
 
 fs::path executableDirectory() {
-    std::wstring path(32768, L'\0');
-    const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (size == 0 || size >= path.size())
+    fcitx::windows::platform::RuntimeIdentity identity;
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
+        identity.executablePath.empty())
         return {};
-    path.resize(size);
-    return fs::path(path).parent_path();
+    return fs::path(identity.executablePath).parent_path();
 }
 
 fs::path installationRoot() {
-    const auto directory = executableDirectory();
-    return directory.filename() == L"bin" ? directory.parent_path() : directory;
+    fcitx::windows::platform::RuntimeIdentity identity;
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
+        identity.executablePath.empty())
+        return {};
+    return fcitx::windows::platform::installationRootForModule(identity.executablePath);
 }
 
 bool systemUsesDarkAppearance() noexcept {
@@ -703,24 +704,17 @@ bool systemUsesDarkAppearance() noexcept {
 }
 
 fs::path localDataDirectory() {
-    std::wstring modulePath(32768, L'\0');
-    const DWORD size =
-        GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
-    if (size > 0 && size < modulePath.size()) {
-        modulePath.resize(size);
-        if (const auto portableData =
-                fcitx::windows::platform::portableDataRootForModule(modulePath);
-            !portableData.empty()) {
-            return portableData;
-        }
-    }
-    PWSTR localAppData = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr,
-                                    &localAppData)))
+    fcitx::windows::platform::RuntimeIdentity identity;
+    if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
+        identity.executablePath.empty())
         return {};
-    fs::path result(localAppData);
-    CoTaskMemFree(localAppData);
-    return result / fcitx::windows::kReleaseIdentity.data_directory;
+    if (const auto portableData =
+            fcitx::windows::platform::portableDataRootForModule(identity.executablePath);
+        !portableData.empty()) {
+        return portableData;
+    }
+    return fcitx::windows::platform::defaultDataRootForModule(
+        identity.executablePath, fcitx::windows::kReleaseIdentity.data_directory);
 }
 
 bool runControl(const std::vector<std::wstring>& arguments, std::wstring& output) {

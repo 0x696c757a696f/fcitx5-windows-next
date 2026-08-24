@@ -1640,6 +1640,13 @@ int main(int argc, char** argv) {
         configSource.find("resolveTheme(") != std::string::npos ||
         configSource.find("parseD2DColor") == std::string::npos ||
         configSource.find("resolveThemePath") == std::string::npos ||
+        configSource.find("GetModuleFileNameW") != std::string::npos ||
+        configSource.find("SHGetKnownFolderPath") != std::string::npos ||
+        configSource.find("CoTaskMemFree") != std::string::npos ||
+        configSource.find("FOLDERID_LocalAppData") != std::string::npos ||
+        configSource.find("queryCurrentIdentity(identity)") == std::string::npos ||
+        configSource.find("installationRootForModule") == std::string::npos ||
+        configSource.find("defaultDataRootForModule") == std::string::npos ||
         configSource.find("#include <fstream>") != std::string::npos ||
         configSource.find("std::ifstream") != std::string::npos ||
         configSource.find("loadLocale") == std::string::npos ||
