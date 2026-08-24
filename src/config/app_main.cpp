@@ -445,6 +445,8 @@ fcitx5_control_parse_config_command_line_utf16(Fcitx5ControlUtf16 commandLine,
                                                std::size_t commandCapacity,
                                                std::uint16_t* localeOut,
                                                std::size_t localeCapacity);
+extern "C" Fcitx5ControlUtf16
+fcitx5_control_config_locale_file_for_override_utf16(Fcitx5ControlUtf16 localeOverride);
 
 Fcitx5ControlUtf16 controlUtf16(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
@@ -678,16 +680,13 @@ ParsedCommandLine parseCommandLine(std::wstring_view commandLine) {
     return parsed;
 }
 
-const wchar_t* localeFileForOverride(std::wstring_view overrideLocale) {
-    if (overrideLocale.empty() || overrideLocale == L"system") {
-        const LANGID language = GetUserDefaultUILanguage();
-        return PRIMARYLANGID(language) == LANG_CHINESE ? L"zh-CN.json" : L"en-US.json";
-    }
-    if (overrideLocale == L"zh-CN")
-        return L"zh-CN.json";
-    if (overrideLocale == L"en-US")
-        return L"en-US.json";
-    return nullptr;
+std::optional<std::wstring> localeFileForOverride(std::wstring_view overrideLocale) {
+    const auto fileName =
+        fcitx5_control_config_locale_file_for_override_utf16(controlUtf16(overrideLocale));
+    if (!fileName.ptr || fileName.len == 0)
+        return std::nullopt;
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return std::wstring(reinterpret_cast<const wchar_t*>(fileName.ptr), fileName.len);
 }
 
 fs::path executableDirectory() {
@@ -4746,11 +4745,11 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     if (!command.empty() && !uiContractTest && !uiInteractionTest &&
         !uiVisualContractTest && !uiLivePreviewContractTest && !showDiagnostics)
         return 1;
-    const wchar_t* locale = localeFileForOverride(parsedCommandLine.localeOverride);
+    const auto locale = localeFileForOverride(parsedCommandLine.localeOverride);
     if (!locale)
         return 1;
     Strings strings;
-    if (!loadLocale(executableDirectory() / L"locales" / locale, strings))
+    if (!loadLocale(executableDirectory() / L"locales" / *locale, strings))
         return 2;
     if (FAILED(_Module.Init(nullptr, instance)))
         return 3;

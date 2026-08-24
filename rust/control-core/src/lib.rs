@@ -130,6 +130,31 @@ const CONTROL_PACKAGE_TYPE_ADDON: u32 = 1;
 const CONTROL_PACKAGE_TYPE_INPUT_METHOD_DATA: u32 = 2;
 const CONTROL_PACKAGE_TYPE_THEME: u32 = 3;
 const CONTROL_PACKAGE_TYPE_TRANSLATION: u32 = 4;
+const LANG_CHINESE: u16 = 0x04;
+const CONFIG_LOCALE_EN_US_FILE: &[u16] = &[
+    b'e' as u16,
+    b'n' as u16,
+    b'-' as u16,
+    b'U' as u16,
+    b'S' as u16,
+    b'.' as u16,
+    b'j' as u16,
+    b's' as u16,
+    b'o' as u16,
+    b'n' as u16,
+];
+const CONFIG_LOCALE_ZH_CN_FILE: &[u16] = &[
+    b'z' as u16,
+    b'h' as u16,
+    b'-' as u16,
+    b'C' as u16,
+    b'N' as u16,
+    b'.' as u16,
+    b'j' as u16,
+    b's' as u16,
+    b'o' as u16,
+    b'n' as u16,
+];
 const CONTROL_ENGINE_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_ENGINE_ACTION_GET_INPUT_METHODS: u32 = 1;
 const CONTROL_ENGINE_ACTION_SET_INPUT_METHOD: u32 = 2;
@@ -173,7 +198,7 @@ pub fn control_usage_text() -> &'static str {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Fcitx5ControlUtf16 {
     ptr: *const u16,
     len: usize,
@@ -396,6 +421,7 @@ unsafe extern "system" {
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
+    fn GetUserDefaultUILanguage() -> u16;
     fn CreateFileW(
         file_name: *const u16,
         desired_access: Dword,
@@ -538,6 +564,14 @@ fn utf16_starts_with_ascii(value: &[u16], prefix: &[u8]) -> bool {
             .all(|(character, ascii)| *character == *ascii as u16)
 }
 
+fn utf16_eq_ascii(value: &[u16], expected: &[u8]) -> bool {
+    value.len() == expected.len()
+        && value
+            .iter()
+            .zip(expected)
+            .all(|(character, ascii)| *character == *ascii as u16)
+}
+
 fn parse_config_command_line(input: &[u16]) -> Option<(Vec<u16>, Vec<u16>)> {
     let mut command = Vec::new();
     let mut locale = Vec::new();
@@ -555,6 +589,31 @@ fn parse_config_command_line(input: &[u16]) -> Option<(Vec<u16>, Vec<u16>)> {
         }
     }
     Some((command, locale))
+}
+
+fn primary_lang_id(language: u16) -> u16 {
+    language & 0x03ff
+}
+
+fn user_default_ui_language_prefers_chinese() -> bool {
+    primary_lang_id(unsafe { GetUserDefaultUILanguage() }) == LANG_CHINESE
+}
+
+fn config_locale_file_for_override(override_locale: &[u16]) -> Option<&'static [u16]> {
+    if override_locale.is_empty() || utf16_eq_ascii(override_locale, b"system") {
+        return Some(if user_default_ui_language_prefers_chinese() {
+            CONFIG_LOCALE_ZH_CN_FILE
+        } else {
+            CONFIG_LOCALE_EN_US_FILE
+        });
+    }
+    if utf16_eq_ascii(override_locale, b"zh-CN") {
+        return Some(CONFIG_LOCALE_ZH_CN_FILE);
+    }
+    if utf16_eq_ascii(override_locale, b"en-US") {
+        return Some(CONFIG_LOCALE_EN_US_FILE);
+    }
+    None
 }
 
 fn guid_suffix() -> Option<OsString> {
@@ -2619,6 +2678,32 @@ pub unsafe extern "C" fn fcitx5_control_parse_config_command_line_utf16(
 
 /// # Safety
 ///
+/// `override_locale` must remain valid UTF-16 for the duration of the call.
+/// The returned pointer, when non-null, refers to static storage and must not
+/// be freed by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_config_locale_file_for_override_utf16(
+    override_locale: Fcitx5ControlUtf16,
+) -> Fcitx5ControlUtf16 {
+    if override_locale.ptr.is_null() && override_locale.len != 0 {
+        return Fcitx5ControlUtf16::default();
+    }
+    let override_locale = if override_locale.ptr.is_null() {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(override_locale.ptr, override_locale.len) }
+    };
+    let Some(file_name) = config_locale_file_for_override(override_locale) else {
+        return Fcitx5ControlUtf16::default();
+    };
+    Fcitx5ControlUtf16 {
+        ptr: file_name.as_ptr(),
+        len: file_name.len(),
+    }
+}
+
+/// # Safety
+///
 /// `destination` must remain valid UTF-16 for the duration of the call.
 /// `content` must remain readable for the duration of the call. No pointer is
 /// retained.
@@ -4015,6 +4100,48 @@ mod tests {
                 .expect("empty locale preserves legacy replacement behavior");
         assert_eq!(command, wide("--self-test"));
         assert_eq!(locale, wide("en-US"));
+    }
+
+    #[test]
+    fn config_locale_file_selection_matches_cpp_contract() {
+        assert_eq!(
+            config_locale_file_for_override(&wide("zh-CN")).expect("zh locale"),
+            CONFIG_LOCALE_ZH_CN_FILE
+        );
+        assert_eq!(
+            config_locale_file_for_override(&wide("en-US")).expect("en locale"),
+            CONFIG_LOCALE_EN_US_FILE
+        );
+        assert!(config_locale_file_for_override(&wide("fr-FR")).is_none());
+        assert!(matches!(
+            config_locale_file_for_override(&wide("system")),
+            Some(CONFIG_LOCALE_EN_US_FILE) | Some(CONFIG_LOCALE_ZH_CN_FILE)
+        ));
+    }
+
+    #[test]
+    fn config_locale_file_abi_returns_static_utf16_file_name() {
+        let zh = wide("zh-CN");
+        let selected = unsafe {
+            fcitx5_control_config_locale_file_for_override_utf16(Fcitx5ControlUtf16 {
+                ptr: zh.as_ptr(),
+                len: zh.len(),
+            })
+        };
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(selected.ptr, selected.len) },
+            CONFIG_LOCALE_ZH_CN_FILE
+        );
+
+        let invalid = wide("fr-FR");
+        let missing = unsafe {
+            fcitx5_control_config_locale_file_for_override_utf16(Fcitx5ControlUtf16 {
+                ptr: invalid.as_ptr(),
+                len: invalid.len(),
+            })
+        };
+        assert!(missing.ptr.is_null());
+        assert_eq!(missing.len, 0);
     }
 
     #[test]

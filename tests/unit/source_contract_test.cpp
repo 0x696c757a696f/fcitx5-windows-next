@@ -382,6 +382,19 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CONFIG-APP-COMMAND-LINE-RUST: Config app command-line parsing must be Rust-owned");
     }
+    if (configAppSource.find("GetUserDefaultUILanguage") != std::string::npos ||
+        configAppSource.find("PRIMARYLANGID") != std::string::npos ||
+        configAppSource.find("LANG_CHINESE") != std::string::npos ||
+        configAppSource.find("fcitx5_control_config_locale_file_for_override_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_config_locale_file_for_override_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("config_locale_file_selection_matches_cpp_contract") ==
+            std::string::npos ||
+        rustControlCoreSource.find("config_locale_file_abi_returns_static_utf16_file_name") ==
+            std::string::npos) {
+        return fail("CONFIG-APP-LOCALE-RUST: Config app locale file policy must be Rust-owned");
+    }
     if (controlSource.find("MultiByteToWideChar") != std::string::npos ||
         controlSource.find("WideCharToMultiByte") != std::string::npos ||
         controlSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
