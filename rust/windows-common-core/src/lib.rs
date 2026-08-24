@@ -6,6 +6,7 @@ use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const VERSION_FALLBACK: &str = env!("CARGO_PKG_VERSION");
 const RELEASE_CHANNEL_FALLBACK: &str = "stable";
@@ -18,6 +19,7 @@ const IPC_HEADER_SIZE: usize = 64;
 const IPC_MAX_HOT_FRAME_SIZE: usize = 256 * 1024;
 const ERROR_INVALID_DATA: u32 = 13;
 const ERROR_TIMEOUT: u32 = 1460;
+static NEXT_LAUNCHER_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 fn version() -> &'static str {
     option_env!("FCITX_WINDOWS_VERSION").unwrap_or(VERSION_FALLBACK)
@@ -1503,6 +1505,10 @@ fn accept_launcher_response(
     response_to == expected_request_id && session_id == expected_session_id
 }
 
+fn next_launcher_request_id() -> u64 {
+    NEXT_LAUNCHER_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 fn apply_key_response_scalars(
     input: Fcitx5WindowsCommonKeyResponseScalarInput,
 ) -> Fcitx5WindowsCommonKeyResponseScalars {
@@ -2908,6 +2914,16 @@ pub extern "C" fn fcitx5_windows_common_accept_launcher_response(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_next_launcher_request_id() -> u64 {
+    next_launcher_request_id()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_ipc_status_ok(status: u32) -> u8 {
+    ipc_status_ok(status) as u8
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_set_last_error(error: u32) {
     // SAFETY: Sets the thread-local Win32 last-error value for the caller.
     unsafe { SetLastError(error) };
@@ -3725,6 +3741,15 @@ mod tests {
         assert!(accept_launcher_response(14, 7, 14, 7));
         assert!(!accept_launcher_response(15, 7, 14, 7));
         assert!(!accept_launcher_response(14, 8, 14, 7));
+    }
+
+    #[test]
+    fn launcher_request_id_and_status_policy_match_cpp_contract() {
+        let first = fcitx5_windows_common_next_launcher_request_id();
+        let second = fcitx5_windows_common_next_launcher_request_id();
+        assert_eq!(second, first + 1);
+        assert_eq!(fcitx5_windows_common_ipc_status_ok(0), 1);
+        assert_eq!(fcitx5_windows_common_ipc_status_ok(1), 0);
     }
 
     #[test]

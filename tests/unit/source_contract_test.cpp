@@ -222,6 +222,11 @@ int main(int argc, char** argv) {
         launcherClientSource.find("CloseHandle") != std::string::npos ||
         launcherClientSource.find("SetLastError") != std::string::npos ||
         launcherClientSource.find("GetTickCount64") != std::string::npos ||
+        launcherClientSource.find("#include <atomic>") != std::string::npos ||
+        launcherClientSource.find("std::atomic") != std::string::npos ||
+        launcherClientSource.find("fetch_add") != std::string::npos ||
+        launcherClientSource.find("response.status == protocol::Status::ok") !=
+            std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_pipe_transfer") !=
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_pipe_transact_with_error") ==
@@ -231,6 +236,10 @@ int main(int argc, char** argv) {
         launcherClientSource.find("fcitx5_windows_common_close_pipe_client") ==
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_set_last_error") ==
+            std::string::npos ||
+        launcherClientSource.find("fcitx5_windows_common_next_launcher_request_id") ==
+            std::string::npos ||
+        launcherClientSource.find("fcitx5_windows_common_ipc_status_ok") ==
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_deadline_has_time") ==
             std::string::npos) {
@@ -566,7 +575,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_accept_launcher_response") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_next_launcher_request_id") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_ipc_status_ok") ==
+            std::string::npos ||
         rustWindowsCommonCore.find("ipc_response_acceptance_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("launcher_request_id_and_status_policy_match_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("set_last_error_matches_cpp_contract") ==
             std::string::npos ||

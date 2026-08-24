@@ -4,7 +4,6 @@
 
 #include <Windows.h>
 
-#include <atomic>
 #include <vector>
 
 namespace fcitx::windows::ipc {
@@ -35,6 +34,8 @@ extern "C" std::uint8_t fcitx5_windows_common_accept_launcher_response(
     std::uint32_t session_id,
     std::uint64_t expected_request_id,
     std::uint32_t expected_session_id);
+extern "C" std::uint64_t fcitx5_windows_common_next_launcher_request_id();
+extern "C" std::uint8_t fcitx5_windows_common_ipc_status_ok(std::uint32_t status);
 extern "C" void fcitx5_windows_common_set_last_error(std::uint32_t error);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
@@ -69,8 +70,7 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
     bool success = verifyPipeServer(pipe, identity, peerPolicy);
     DWORD failure = success ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
     try {
-        static std::atomic<std::uint64_t> nextRequestId{1};
-        const auto requestId = nextRequestId.fetch_add(1, std::memory_order_relaxed);
+        const auto requestId = fcitx5_windows_common_next_launcher_request_id();
         const protocol::LauncherRequest request{
             protocol::Metadata{requestId, 0, 0, identity.sessionId, 0, 0, 0},
             command};
@@ -122,7 +122,7 @@ bool requestLauncherStart(const platform::RuntimeIdentity& identity,
     protocol::LauncherResponse response;
     return sendLauncherCommand(identity, generation, absoluteDeadlineMilliseconds, peerPolicy,
                                protocol::LauncherCommand::startDemand, response) &&
-           response.status == protocol::Status::ok;
+           fcitx5_windows_common_ipc_status_ok(static_cast<std::uint32_t>(response.status)) != 0;
 }
 
 } // namespace fcitx::windows::ipc
