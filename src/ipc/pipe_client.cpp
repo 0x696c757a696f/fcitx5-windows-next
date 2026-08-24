@@ -27,6 +27,7 @@ extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     std::size_t pipe_name_len,
     std::uint64_t deadline,
     std::uint8_t wait_when_busy);
+extern "C" void fcitx5_windows_common_close_pipe_client(void* pipe);
 struct Fcitx5WindowsCommonUtf8ToWide {
     std::uint8_t status;
     std::size_t utf16Len;
@@ -199,8 +200,7 @@ PipeClient::~PipeClient() { disconnect(); }
 
 void PipeClient::disconnect() noexcept {
     if (pipe_ != INVALID_HANDLE_VALUE) {
-        CancelIoEx(pipe_, nullptr);
-        CloseHandle(pipe_);
+        fcitx5_windows_common_close_pipe_client(pipe_);
         pipe_ = INVALID_HANDLE_VALUE;
     }
     handshakeComplete_ = false;

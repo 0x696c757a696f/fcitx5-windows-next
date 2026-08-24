@@ -22,6 +22,7 @@ extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     std::size_t pipe_name_len,
     std::uint64_t deadline,
     std::uint8_t wait_when_busy);
+extern "C" void fcitx5_windows_common_close_pipe_client(void* pipe);
 extern "C" std::uint8_t fcitx5_windows_common_deadline_has_time(std::uint64_t deadline);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
@@ -112,8 +113,7 @@ bool sendLauncherCommand(const platform::RuntimeIdentity& identity,
         success = false;
         failure = ERROR_NOT_ENOUGH_MEMORY;
     }
-    CancelIoEx(pipe, nullptr);
-    CloseHandle(pipe);
+    fcitx5_windows_common_close_pipe_client(pipe);
     SetLastError(success ? ERROR_SUCCESS : failure);
     return success;
 }

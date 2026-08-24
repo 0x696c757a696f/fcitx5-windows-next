@@ -714,6 +714,19 @@ fn open_pipe_client(pipe_name: &[u16], deadline: u64, wait_when_busy: bool) -> *
     }
 }
 
+fn close_pipe_client(pipe: *mut c_void) {
+    if pipe.is_null() || pipe == invalid_handle_value() {
+        return;
+    }
+    // SAFETY: `pipe` is expected to be a live overlapped pipe client handle.
+    // CancelIoEx is best-effort cleanup before CloseHandle, matching the
+    // previous C++ client shutdown behavior.
+    unsafe {
+        CancelIoEx(pipe, std::ptr::null_mut());
+        CloseHandle(pipe);
+    }
+}
+
 fn pipe_server_process_id(pipe: *mut c_void) -> Option<u32> {
     if pipe.is_null() || pipe == invalid_handle_value() {
         return None;
@@ -2601,6 +2614,11 @@ pub unsafe extern "C" fn fcitx5_windows_common_open_pipe_client_utf16(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_close_pipe_client(pipe: *mut c_void) {
+    close_pipe_client(pipe);
+}
+
+#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `input` must be null only when `input_len` is zero, or point to a readable
@@ -3476,6 +3494,14 @@ mod tests {
             open_pipe_client(&[b'x' as u16], unsafe { GetTickCount64() }, true),
             invalid_handle_value()
         );
+    }
+
+    #[test]
+    fn close_pipe_client_ignores_invalid_handle_like_cpp_contract() {
+        close_pipe_client(std::ptr::null_mut());
+        close_pipe_client(invalid_handle_value());
+        fcitx5_windows_common_close_pipe_client(std::ptr::null_mut());
+        fcitx5_windows_common_close_pipe_client(invalid_handle_value());
     }
 
     #[test]

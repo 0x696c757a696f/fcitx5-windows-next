@@ -198,10 +198,14 @@ int main(int argc, char** argv) {
         pipeClientSource.find("ReadFile(") != std::string::npos ||
         pipeClientSource.find("WaitForSingleObject") != std::string::npos ||
         pipeClientSource.find("GetOverlappedResult") != std::string::npos ||
+        pipeClientSource.find("CancelIoEx") != std::string::npos ||
+        pipeClientSource.find("CloseHandle") != std::string::npos ||
         pipeClientSource.find("GetTickCount64") != std::string::npos ||
         pipeClientSource.find("GetCurrentProcessId") != std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_pipe_transact") == std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_close_pipe_client") ==
             std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos ||
@@ -214,14 +218,18 @@ int main(int argc, char** argv) {
         launcherClientSource.find("ReadFile(") != std::string::npos ||
         launcherClientSource.find("WaitForSingleObject") != std::string::npos ||
         launcherClientSource.find("GetOverlappedResult") != std::string::npos ||
+        launcherClientSource.find("CancelIoEx") != std::string::npos ||
+        launcherClientSource.find("CloseHandle") != std::string::npos ||
         launcherClientSource.find("GetTickCount64") != std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_pipe_transfer") ==
             std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
             std::string::npos ||
+        launcherClientSource.find("fcitx5_windows_common_close_pipe_client") ==
+            std::string::npos ||
         launcherClientSource.find("fcitx5_windows_common_deadline_has_time") ==
             std::string::npos) {
-        return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open, deadline, current-process, and transfer helpers");
+        return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open, close, deadline, current-process, and transfer helpers");
     }
     if (pipeClientSource.find("protocol::decodeHeader(header") != std::string::npos ||
         pipeClientSource.find("std::array<std::uint8_t, protocol::kHeaderSize> header") !=
@@ -508,6 +516,10 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("fcitx5_windows_common_open_pipe_client_utf16") ==
             std::string::npos ||
         rustWindowsCommonCore.find("open_pipe_client_rejects_empty_name_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_close_pipe_client") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("close_pipe_client_ignores_invalid_handle_like_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("WaitNamedPipeW") == std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_utf8_to_wide_utf16") ==
