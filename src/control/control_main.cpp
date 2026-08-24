@@ -272,6 +272,7 @@ std::uint8_t fcitx5_control_bundled_package_descriptor(
     std::size_t index, Fcitx5ControlBundledPackageDescriptor* descriptor);
 std::uint8_t fcitx5_control_bundled_package_present_utf16(Fcitx5ControlUtf16 install_root,
                                                           Fcitx5ControlUtf8 id);
+Fcitx5ControlUtf8 fcitx5_control_package_type_name_utf8(std::uint32_t package_type);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -919,23 +920,6 @@ std::string repairRepositorySequenceState(
                                                             trustedKeys, channel);
 }
 
-std::string typeName(fcitx::package::PackageType type) {
-    using fcitx::package::PackageType;
-    switch (type) {
-    case PackageType::core:
-        return "core";
-    case PackageType::addon:
-        return "addon";
-    case PackageType::input_method_data:
-        return "inputmethod-data";
-    case PackageType::theme:
-        return "theme";
-    case PackageType::translation:
-        return "translation";
-    }
-    return "unknown";
-}
-
 std::uint32_t packageTypeValue(fcitx::package::PackageType type) {
     using fcitx::package::PackageType;
     switch (type) {
@@ -951,6 +935,10 @@ std::uint32_t packageTypeValue(fcitx::package::PackageType type) {
         return 4;
     }
     return 0;
+}
+
+std::string packageTypeName(fcitx::package::PackageType type) {
+    return copyUtf8(fcitx5_control_package_type_name_utf8(packageTypeValue(type)));
 }
 
 std::string jsonDependencies(std::span<const fcitx::package::Dependency> dependencies) {
@@ -1529,7 +1517,7 @@ void printPackages(const fs::path& dataRoot) {
                 entry.id,
                 entry.title,
                 entry.summary,
-                std::string(typeName(entry.type)),
+                packageTypeName(entry.type),
                 entry.version,
                 found != active.end()
                     ? found->second.version
@@ -1599,8 +1587,8 @@ void printPackageDetail(const fs::path& dataRoot, std::string_view packageId) {
     if (active == installed.end() && !repositoryEntry && !bundledNow)
         throw fcitx::package::PackageError("package_not_found", "package is unknown");
 
-    const std::string type = manifest ? typeName(manifest->type)
-                             : repositoryEntry ? typeName(repositoryEntry->type)
+    const std::string type = manifest ? packageTypeName(manifest->type)
+                             : repositoryEntry ? packageTypeName(repositoryEntry->type)
                                                : "addon";
     const std::string title = repositoryEntry ? repositoryEntry->title : std::string(packageId);
     const std::string summary = repositoryEntry ? repositoryEntry->summary

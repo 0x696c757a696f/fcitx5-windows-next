@@ -1420,6 +1420,17 @@ fn static_utf8_view(value: &'static str) -> Fcitx5ControlUtf8 {
     }
 }
 
+fn package_type_name(package_type: u32) -> Fcitx5ControlUtf8 {
+    match package_type {
+        CONTROL_PACKAGE_TYPE_CORE => static_utf8_view("core"),
+        CONTROL_PACKAGE_TYPE_ADDON => static_utf8_view("addon"),
+        CONTROL_PACKAGE_TYPE_INPUT_METHOD_DATA => static_utf8_view("inputmethod-data"),
+        CONTROL_PACKAGE_TYPE_THEME => static_utf8_view("theme"),
+        CONTROL_PACKAGE_TYPE_TRANSLATION => static_utf8_view("translation"),
+        _ => static_utf8_view("unknown"),
+    }
+}
+
 fn package_config_surface_kinds(
     package_type: u32,
     permissions: &[Fcitx5ControlUtf8],
@@ -2788,6 +2799,11 @@ pub unsafe extern "C" fn fcitx5_control_bundled_package_present_utf16(
     bundled_package_present(&PathBuf::from(install_root), id) as u8
 }
 
+#[no_mangle]
+pub extern "C" fn fcitx5_control_package_type_name_utf8(package_type: u32) -> Fcitx5ControlUtf8 {
+    package_type_name(package_type)
+}
+
 /// # Safety
 ///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
@@ -3803,6 +3819,28 @@ mod tests {
         assert!(bundled_package_present(&root, b"fcitx5-rime"));
         assert!(!bundled_package_present(&root, b"unknown"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn package_type_names_match_cpp_contract() {
+        let cases = [
+            (CONTROL_PACKAGE_TYPE_CORE, b"core".as_slice()),
+            (CONTROL_PACKAGE_TYPE_ADDON, b"addon".as_slice()),
+            (
+                CONTROL_PACKAGE_TYPE_INPUT_METHOD_DATA,
+                b"inputmethod-data".as_slice(),
+            ),
+            (CONTROL_PACKAGE_TYPE_THEME, b"theme".as_slice()),
+            (CONTROL_PACKAGE_TYPE_TRANSLATION, b"translation".as_slice()),
+            (999, b"unknown".as_slice()),
+        ];
+        for (package_type, expected) in cases {
+            assert_eq!(utf8_slice(package_type_name(package_type)), Some(expected));
+            assert_eq!(
+                utf8_slice(fcitx5_control_package_type_name_utf8(package_type)),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
