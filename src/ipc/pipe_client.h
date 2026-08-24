@@ -101,8 +101,6 @@ private:
     [[nodiscard]] bool transact(const std::vector<std::uint8_t>& request,
                                 std::vector<std::uint8_t>& response,
                                 std::uint64_t deadline) noexcept;
-    [[nodiscard]] bool transfer(bool write, void* data, std::size_t size,
-                                std::uint64_t deadline) noexcept;
     [[nodiscard]] bool acceptKeyResponse(const protocol::KeyResponse& response,
                                          std::uint64_t requestId,
                                          std::uint64_t contextId,

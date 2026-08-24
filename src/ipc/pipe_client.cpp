@@ -3,17 +3,21 @@
 #include "launcher_client.h"
 #include "protocol.h"
 
-#include <array>
 #include <vector>
 
 namespace fcitx::windows::ipc {
 namespace {
 
-extern "C" std::uint8_t fcitx5_windows_common_pipe_transfer(
+struct Fcitx5WindowsCommonPipeTransact {
+    std::uint8_t status;
+    std::size_t responseLen;
+};
+extern "C" Fcitx5WindowsCommonPipeTransact fcitx5_windows_common_pipe_transact(
     void* pipe,
-    std::uint8_t write,
-    std::uint8_t* data,
-    std::size_t size,
+    const std::uint8_t* request,
+    std::size_t request_len,
+    std::uint8_t* response_output,
+    std::size_t response_capacity,
     std::uint64_t deadline);
 extern "C" void* fcitx5_windows_common_open_pipe_client_utf16(
     const std::uint16_t* pipe_name,
@@ -165,41 +169,29 @@ bool PipeClient::connect(std::uint64_t deadline) noexcept {
     return true;
 }
 
-bool PipeClient::transfer(bool write, void* data, std::size_t size,
-                          std::uint64_t deadline) noexcept {
-    return fcitx5_windows_common_pipe_transfer(
-               pipe_, write ? 1 : 0, static_cast<std::uint8_t*>(data), size, deadline) != 0;
-}
-
 bool PipeClient::transact(const std::vector<std::uint8_t>& request,
                           std::vector<std::uint8_t>& response,
                           std::uint64_t deadline) noexcept {
-    if (request.empty() || request.size() > protocol::kMaxFrameSize ||
-        !transfer(true, const_cast<std::uint8_t*>(request.data()), request.size(), deadline)) {
-        disconnect();
-        return false;
-    }
-    std::array<std::uint8_t, protocol::kHeaderSize> header{};
-    if (!transfer(false, header.data(), header.size(), deadline)) {
-        disconnect();
-        return false;
-    }
-    protocol::MessageType type{};
-    std::uint32_t bodySize = 0;
-    protocol::Metadata metadata;
-    if (!protocol::decodeHeader(header, type, bodySize, metadata)) {
+    if (request.empty() || request.size() > protocol::kMaxFrameSize) {
         disconnect();
         return false;
     }
     try {
-        response.assign(header.begin(), header.end());
-        response.resize(protocol::kHeaderSize + bodySize);
+        response.assign(protocol::kMaxFrameSize, 0);
     } catch (...) {
         disconnect();
         return false;
     }
-    if (bodySize > 0 &&
-        !transfer(false, response.data() + protocol::kHeaderSize, bodySize, deadline)) {
+    const auto transferred = fcitx5_windows_common_pipe_transact(
+        pipe_, request.data(), request.size(), response.data(), response.size(), deadline);
+    if (transferred.status == 0 || transferred.responseLen < protocol::kHeaderSize ||
+        transferred.responseLen > response.size()) {
+        disconnect();
+        return false;
+    }
+    try {
+        response.resize(transferred.responseLen);
+    } catch (...) {
         disconnect();
         return false;
     }

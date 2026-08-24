@@ -12,6 +12,10 @@ const RELEASE_CHANNEL_FALLBACK: &str = "stable";
 const ENDPOINT_MAX_WIDE_UNITS: usize = 32_768;
 const SMALL_TEXT_FILE_MAX_BYTES: u64 = 64 * 1024;
 const MAX_DWORD_MINUS_ONE: u64 = u32::MAX as u64 - 1;
+const IPC_MAGIC: u32 = 0x3457_4346;
+const IPC_VERSION: u16 = 14;
+const IPC_HEADER_SIZE: usize = 64;
+const IPC_MAX_HOT_FRAME_SIZE: usize = 256 * 1024;
 
 fn version() -> &'static str {
     option_env!("FCITX_WINDOWS_VERSION").unwrap_or(VERSION_FALLBACK)
@@ -557,6 +561,97 @@ fn pipe_transfer(
         completed += transferred as usize;
     }
     true
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    let chunk = bytes.get(offset..offset + 2)?;
+    Some(u16::from_le_bytes([chunk[0], chunk[1]]))
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    let chunk = bytes.get(offset..offset + 4)?;
+    Some(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+    let chunk = bytes.get(offset..offset + 8)?;
+    Some(u64::from_le_bytes([
+        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+    ]))
+}
+
+fn ipc_response_header_body_size(header: &[u8]) -> Option<usize> {
+    if header.len() != IPC_HEADER_SIZE
+        || read_u32_le(header, 0)? != IPC_MAGIC
+        || read_u16_le(header, 4)? != IPC_VERSION
+    {
+        return None;
+    }
+    let message_type = read_u16_le(header, 6)?;
+    if !(2..=11).contains(&message_type) || message_type == 3 || message_type == 5 {
+        return None;
+    }
+    let body_size = read_u32_le(header, 8)? as usize;
+    let request_id = read_u64_le(header, 12)?;
+    let response_to = read_u64_le(header, 20)?;
+    if request_id == 0 || response_to == 0 {
+        return None;
+    }
+    (body_size <= IPC_MAX_HOT_FRAME_SIZE - IPC_HEADER_SIZE).then_some(body_size)
+}
+
+fn pipe_transact(
+    pipe: *mut c_void,
+    request: &[u8],
+    response_output: *mut u8,
+    response_capacity: usize,
+    deadline: u64,
+) -> Fcitx5WindowsCommonPipeTransact {
+    if request.is_empty()
+        || request.len() > IPC_MAX_HOT_FRAME_SIZE
+        || response_output.is_null()
+        || response_capacity < IPC_HEADER_SIZE
+        || !pipe_transfer(
+            pipe,
+            true,
+            request.as_ptr() as *mut u8,
+            request.len(),
+            deadline,
+        )
+    {
+        return Fcitx5WindowsCommonPipeTransact::default();
+    }
+    let mut header = [0_u8; IPC_HEADER_SIZE];
+    if !pipe_transfer(pipe, false, header.as_mut_ptr(), header.len(), deadline) {
+        return Fcitx5WindowsCommonPipeTransact::default();
+    }
+    let Some(body_size) = ipc_response_header_body_size(&header) else {
+        return Fcitx5WindowsCommonPipeTransact::default();
+    };
+    let response_len = IPC_HEADER_SIZE + body_size;
+    if response_len > response_capacity {
+        return Fcitx5WindowsCommonPipeTransact::default();
+    }
+    // SAFETY: The caller supplied writable response storage for
+    // `response_capacity` bytes. The checked response length is within it.
+    unsafe { std::ptr::copy_nonoverlapping(header.as_ptr(), response_output, header.len()) };
+    if body_size != 0
+        && !pipe_transfer(
+            pipe,
+            false,
+            // SAFETY: `response_len <= response_capacity`, so the body starts
+            // inside the same writable allocation.
+            unsafe { response_output.add(IPC_HEADER_SIZE) },
+            body_size,
+            deadline,
+        )
+    {
+        return Fcitx5WindowsCommonPipeTransact::default();
+    }
+    Fcitx5WindowsCommonPipeTransact {
+        status: 1,
+        response_len,
+    }
 }
 
 fn open_pipe_client(pipe_name: &[u16], deadline: u64, wait_when_busy: bool) -> *mut c_void {
@@ -1496,6 +1591,13 @@ pub struct Fcitx5WindowsCommonUtf8OffsetToWide {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5WindowsCommonPipeTransact {
+    pub status: u8,
+    pub response_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Fcitx5WindowsCommonCurrentExecutableIdentity {
     pub status: u8,
     pub service_account: u8,
@@ -2305,6 +2407,33 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_transfer(
     deadline: u64,
 ) -> u8 {
     pipe_transfer(pipe, write != 0, data, size, deadline) as u8
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `pipe` must be a live overlapped pipe handle. `request` must be null only
+/// when `request_len` is zero, or point to a readable request buffer.
+/// `response_output` must point to writable storage for `response_capacity`
+/// bytes. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_transact(
+    pipe: *mut c_void,
+    request: *const u8,
+    request_len: usize,
+    response_output: *mut u8,
+    response_capacity: usize,
+    deadline: u64,
+) -> Fcitx5WindowsCommonPipeTransact {
+    let request = if request.is_null() {
+        if request_len != 0 {
+            return Fcitx5WindowsCommonPipeTransact::default();
+        }
+        &[]
+    } else {
+        // SAFETY: The caller supplies exactly `request_len` readable bytes.
+        unsafe { std::slice::from_raw_parts(request, request_len) }
+    };
+    pipe_transact(pipe, request, response_output, response_capacity, deadline)
 }
 
 #[unsafe(no_mangle)]
@@ -3158,6 +3287,27 @@ mod tests {
             1,
             unsafe { GetTickCount64() } + 100
         ));
+    }
+
+    #[test]
+    fn pipe_transact_rejects_invalid_pipe_like_cpp_contract() {
+        let request = [0_u8; IPC_HEADER_SIZE];
+        let mut response = [0_u8; IPC_HEADER_SIZE];
+        assert_eq!(
+            pipe_transact(
+                std::ptr::null_mut(),
+                &request,
+                response.as_mut_ptr(),
+                response.len(),
+                unsafe { GetTickCount64() } + 100
+            )
+            .status,
+            0
+        );
+        assert_eq!(
+            ipc_response_header_body_size(&[0_u8; IPC_HEADER_SIZE]),
+            None
+        );
     }
 
     #[test]

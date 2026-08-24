@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
         pipeClientSource.find("ReadFile(") != std::string::npos ||
         pipeClientSource.find("WaitForSingleObject") != std::string::npos ||
         pipeClientSource.find("GetOverlappedResult") != std::string::npos ||
-        pipeClientSource.find("fcitx5_windows_common_pipe_transfer") == std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_pipe_transact") == std::string::npos ||
         pipeClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
             std::string::npos ||
         launcherClientSource.find("CreateEventW") != std::string::npos ||
@@ -213,6 +213,17 @@ int main(int argc, char** argv) {
         launcherClientSource.find("fcitx5_windows_common_open_pipe_client_utf16") ==
             std::string::npos) {
         return fail("IPC-TRANSPORT-RUST: non-Engine IPC clients must use Rust-owned pipe open and overlapped transfer");
+    }
+    if (pipeClientSource.find("protocol::decodeHeader(header") != std::string::npos ||
+        pipeClientSource.find("std::array<std::uint8_t, protocol::kHeaderSize> header") !=
+            std::string::npos ||
+        pipeClientSource.find("response.assign(header.begin(), header.end())") !=
+            std::string::npos ||
+        pipeClientSource.find("response.resize(protocol::kHeaderSize + bodySize)") !=
+            std::string::npos ||
+        pipeClientSource.find("transfer(false") != std::string::npos ||
+        pipeClientSource.find("transfer(true") != std::string::npos) {
+        return fail("IPC-TRANSACT-RUST: PipeClient transact frame transport must be Rust-owned");
     }
     if (pipeClientSource.find("MultiByteToWideChar") != std::string::npos ||
         pipeClientSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
@@ -454,6 +465,12 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transfer") ==
             std::string::npos ||
         rustWindowsCommonCore.find("pipe_transfer_rejects_invalid_pipe_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transact") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("pipe_transact_rejects_invalid_pipe_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("ipc_response_header_body_size") ==
             std::string::npos ||
         rustWindowsCommonCore.find("GetOverlappedResult") == std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_open_pipe_client_utf16") ==
