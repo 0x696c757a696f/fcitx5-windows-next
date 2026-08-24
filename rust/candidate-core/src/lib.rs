@@ -6,6 +6,7 @@ use std::ffi::c_void;
 const MAX_CANDIDATES: usize = 128;
 const MAX_CANDIDATE_TEXT_UTF8: usize = 4096;
 const MAX_TRACKED_CONTEXTS: usize = 64;
+const MAX_CONTENT_LOCALE_UTF8: usize = 35;
 const LOCALE_NAME_MAX_LENGTH: usize = 85;
 const DEFAULT_DWRITE_LOCALE: &[u16] = &[
     b'e' as u16,
@@ -461,6 +462,31 @@ fn default_dwrite_locale() -> Vec<u16> {
         return locale[..length as usize - 1].to_vec();
     }
     DEFAULT_DWRITE_LOCALE.to_vec()
+}
+
+fn content_locale_valid(locale: &[u8]) -> bool {
+    if locale.is_empty() || locale.len() > MAX_CONTENT_LOCALE_UTF8 {
+        return false;
+    }
+    let mut has_letter = false;
+    for character in locale {
+        let letter = character.is_ascii_alphabetic();
+        has_letter |= letter;
+        if !letter && !character.is_ascii_digit() && *character != b'-' {
+            return false;
+        }
+    }
+    has_letter
+}
+
+fn content_locale_or_default(locale: &[u8]) -> Vec<u16> {
+    if !content_locale_valid(locale) {
+        return default_dwrite_locale();
+    }
+    locale
+        .iter()
+        .map(|character| u16::from(*character))
+        .collect()
 }
 
 fn parse_candidate_command_line(
@@ -967,6 +993,57 @@ pub unsafe extern "C" fn fcitx5_candidate_default_dwrite_locale_utf16(
     locale_capacity: usize,
 ) -> usize {
     write_wide_units(&default_dwrite_locale(), locale_out, locale_capacity)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `locale` must either point to `locale.len` readable bytes or be null when
+/// `locale.len` is zero. The pointer is not retained.
+pub unsafe extern "C" fn fcitx5_candidate_content_locale_valid_utf8(
+    locale: Fcitx5CandidateUtf8,
+) -> u8 {
+    let Some(locale) = (unsafe { bytes_from_ffi(locale) }) else {
+        return 0;
+    };
+    content_locale_valid(locale) as u8
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `locale` must either point to `locale.len` readable bytes or be null when
+/// `locale.len` is zero. `locale_out` may be null for size queries or point to
+/// writable UTF-16 storage for `locale_capacity` code units. No pointer is
+/// retained.
+pub unsafe extern "C" fn fcitx5_candidate_content_locale_or_default_utf16(
+    locale: Fcitx5CandidateUtf8,
+    locale_out: *mut u16,
+    locale_capacity: usize,
+) -> usize {
+    let locale = (unsafe { bytes_from_ffi(locale) }).unwrap_or_default();
+    write_wide_units(
+        &content_locale_or_default(locale),
+        locale_out,
+        locale_capacity,
+    )
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `locale` must either point to `locale.len` readable bytes or be null when
+/// `locale.len` is zero. The pointer is not retained.
+pub unsafe extern "C" fn fcitx5_candidate_locale_prefers_compact_horizontal_utf8(
+    locale: Fcitx5CandidateUtf8,
+) -> u8 {
+    let Some(locale) = (unsafe { bytes_from_ffi(locale) }) else {
+        return 0;
+    };
+    let Ok(locale) = std::str::from_utf8(locale) else {
+        return 0;
+    };
+    locale_prefers_compact_horizontal(locale) as u8
 }
 
 #[no_mangle]
@@ -2099,6 +2176,67 @@ mod tests {
         };
         assert_eq!(written, required);
         assert!(!output.contains(&0));
+    }
+
+    #[test]
+    fn content_locale_policy_matches_cpp_contract() {
+        assert!(content_locale_valid(b"zh-CN"));
+        assert!(content_locale_valid(b"en-US"));
+        assert!(content_locale_valid(b"ja-JP-u-ca-japanese"));
+        assert!(!content_locale_valid(b""));
+        assert!(!content_locale_valid(b"----"));
+        assert!(!content_locale_valid(b"zh_CN"));
+        assert!(!content_locale_valid(&[b'a'; MAX_CONTENT_LOCALE_UTF8 + 1]));
+        assert_eq!(content_locale_or_default(b"zh-CN"), wide("zh-CN"));
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_content_locale_valid_utf8(Fcitx5CandidateUtf8 {
+                    ptr: b"ko-KR".as_ptr(),
+                    len: b"ko-KR".len(),
+                })
+            },
+            1
+        );
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_locale_prefers_compact_horizontal_utf8(Fcitx5CandidateUtf8 {
+                    ptr: b"JA-jp".as_ptr(),
+                    len: b"JA-jp".len(),
+                })
+            },
+            1
+        );
+    }
+
+    #[test]
+    fn content_locale_or_default_abi_uses_two_phase_utf16_output() {
+        let locale = Fcitx5CandidateUtf8 {
+            ptr: b"en-US".as_ptr(),
+            len: b"en-US".len(),
+        };
+        let required = unsafe {
+            fcitx5_candidate_content_locale_or_default_utf16(locale, std::ptr::null_mut(), 0)
+        };
+        assert_eq!(required, wide("en-US").len());
+        let mut output = vec![0_u16; required];
+        let written = unsafe {
+            fcitx5_candidate_content_locale_or_default_utf16(
+                locale,
+                output.as_mut_ptr(),
+                output.len(),
+            )
+        };
+        assert_eq!(written, required);
+        assert_eq!(output, wide("en-US"));
+
+        let invalid = Fcitx5CandidateUtf8 {
+            ptr: b"zh_CN".as_ptr(),
+            len: b"zh_CN".len(),
+        };
+        let fallback_required = unsafe {
+            fcitx5_candidate_content_locale_or_default_utf16(invalid, std::ptr::null_mut(), 0)
+        };
+        assert!(fallback_required > 0);
     }
 
     #[test]

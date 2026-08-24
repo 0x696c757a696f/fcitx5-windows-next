@@ -238,6 +238,22 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("CANDIDATE-UI-DWRITE-LOCALE-RUST: Candidate UI default DWrite locale must be Rust-owned");
     }
+    if (uiSource.find("kMaxLocaleUtf8") != std::string::npos ||
+        uiSource.find("std::tolower") != std::string::npos ||
+        uiSource.find("#include <cctype>") != std::string::npos ||
+        uiSource.find("is_ascii") != std::string::npos ||
+        uiSource.find("fcitx5_candidate_content_locale_valid_utf8") ==
+            std::string::npos ||
+        uiSource.find("fcitx5_candidate_content_locale_or_default_utf16") ==
+            std::string::npos ||
+        uiSource.find("fcitx5_candidate_locale_prefers_compact_horizontal_utf8") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("content_locale_policy_matches_cpp_contract") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("content_locale_or_default_abi_uses_two_phase_utf16_output") ==
+            std::string::npos) {
+        return fail("CANDIDATE-UI-CONTENT-LOCALE-RUST: Candidate UI content locale policy must be Rust-owned");
+    }
     if (uiSource.find("CommandLineToArgvW") != std::string::npos ||
         uiSource.find("GetCommandLineW") != std::string::npos ||
         uiSource.find("LocalFree(argumentValues)") != std::string::npos ||

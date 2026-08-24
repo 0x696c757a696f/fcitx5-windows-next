@@ -17,7 +17,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <charconv>
-#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -493,6 +492,14 @@ extern "C" void fcitx5_candidate_model_destroy(void* model);
 extern "C" void fcitx5_candidate_model_reset(void* model);
 extern "C" std::uint32_t fcitx5_candidate_model_apply(
     void* model, const Fcitx5CandidateModelSnapshot* snapshot);
+extern "C" std::uint8_t fcitx5_candidate_content_locale_valid_utf8(
+    Fcitx5CandidateUtf8 locale);
+extern "C" std::size_t fcitx5_candidate_content_locale_or_default_utf16(
+    Fcitx5CandidateUtf8 locale,
+    std::uint16_t* localeOut,
+    std::size_t localeCapacity);
+extern "C" std::uint8_t fcitx5_candidate_locale_prefers_compact_horizontal_utf8(
+    Fcitx5CandidateUtf8 locale);
 
 [[nodiscard]] Fcitx5CandidateUtf8 toRust(std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
@@ -618,37 +625,29 @@ std::wstring defaultDwriteLocale() {
 }
 
 bool validContentLocale(std::string_view locale) {
-    if (locale.empty() || locale.size() > fcitx::windows::protocol::kMaxLocaleUtf8)
-        return false;
-    bool hasLetter = false;
-    for (const unsigned char character : locale) {
-        const bool letter = (character >= 'A' && character <= 'Z') ||
-                            (character >= 'a' && character <= 'z');
-        hasLetter = hasLetter || letter;
-        if (!letter && (character < '0' || character > '9') && character != '-')
-            return false;
-    }
-    return hasLetter;
+    return candidate::detail::fcitx5_candidate_content_locale_valid_utf8(
+               candidate::detail::toRust(locale)) != 0;
 }
 
 std::wstring contentLocaleOrFallback(std::string_view locale) {
-    if (!validContentLocale(locale))
+    const auto rustLocale = candidate::detail::toRust(locale);
+    const std::size_t required =
+        candidate::detail::fcitx5_candidate_content_locale_or_default_utf16(rustLocale, nullptr, 0);
+    if (required == 0)
         return defaultDwriteLocale();
-    std::wstring result;
-    result.reserve(locale.size());
-    for (const unsigned char character : locale) {
-        result.push_back(static_cast<wchar_t>(character));
-    }
+    std::wstring result(required, L'\0');
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    const std::size_t written =
+        candidate::detail::fcitx5_candidate_content_locale_or_default_utf16(
+            rustLocale, reinterpret_cast<std::uint16_t*>(result.data()), result.size());
+    if (written != result.size())
+        return defaultDwriteLocale();
     return result;
 }
 
 bool localePrefersCompactHorizontal(std::string_view locale) noexcept {
-    if (locale.size() < 2)
-        return false;
-    const char first = static_cast<char>(std::tolower(static_cast<unsigned char>(locale[0])));
-    const char second = static_cast<char>(std::tolower(static_cast<unsigned char>(locale[1])));
-    return (first == 'z' && second == 'h') || (first == 'j' && second == 'a') ||
-           (first == 'k' && second == 'o');
+    return candidate::detail::fcitx5_candidate_locale_prefers_compact_horizontal_utf8(
+               candidate::detail::toRust(locale)) != 0;
 }
 
 struct CandidateVisual {
