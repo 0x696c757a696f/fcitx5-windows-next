@@ -1492,6 +1492,12 @@ fn repository_default_base_url(channel: &[u8]) -> Option<Vec<u16>> {
     Some(result.into_iter().map(u16::from).collect())
 }
 
+fn package_transaction_id(sha256: &[u8]) -> Vec<u8> {
+    let mut result = b"pkg-".to_vec();
+    result.extend_from_slice(&sha256[..sha256.len().min(24)]);
+    result
+}
+
 fn package_config_surface_kinds(
     package_type: u32,
     permissions: &[Fcitx5ControlUtf8],
@@ -2965,6 +2971,23 @@ pub unsafe extern "C" fn fcitx5_control_repository_default_base_url_utf16(
 
 /// # Safety
 ///
+/// `sha256` must remain valid UTF-8 for the duration of the call. `out_ptr`
+/// and `out_len` must point to writable storage. Any returned buffer must be
+/// freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_package_transaction_id_utf8(
+    sha256: Fcitx5ControlUtf8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    let Some(sha256) = utf8_slice(sha256) else {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    };
+    boxed_utf8_result(package_transaction_id(sha256), out_ptr, out_len)
+}
+
+/// # Safety
+///
 /// All UTF-8 slices inside `detail` must remain valid for the duration of the
 /// call. Raw JSON fields must contain valid JSON fragments produced by the
 /// existing package/config-surface serializers. `out_ptr` and `out_len` must
@@ -4170,6 +4193,33 @@ mod tests {
             String::from_utf16(&output).unwrap(),
             "https://packages.fcitx5-windows.org/v1/dev"
         );
+    }
+
+    #[test]
+    fn package_transaction_id_matches_cpp_contract() {
+        assert_eq!(
+            package_transaction_id(b"0123456789abcdef0123456789abcdef"),
+            b"pkg-0123456789abcdef01234567"
+        );
+        assert_eq!(package_transaction_id(b"abc"), b"pkg-abc");
+        assert_eq!(package_transaction_id(b""), b"pkg-");
+
+        let sha = Fcitx5ControlUtf8 {
+            ptr: b"abcdef0123456789abcdef0123456789".as_ptr(),
+            len: 32,
+        };
+        let mut bytes = std::ptr::null_mut();
+        let mut len = 0_usize;
+        assert_eq!(
+            unsafe { fcitx5_control_package_transaction_id_utf8(sha, &mut bytes, &mut len) },
+            0
+        );
+        assert!(!bytes.is_null());
+        let value = unsafe { std::slice::from_raw_parts(bytes, len).to_vec() };
+        unsafe {
+            fcitx5_control_utf8_free(bytes, len);
+        }
+        assert_eq!(value, b"pkg-abcdef0123456789abcdef01");
     }
 
     #[test]

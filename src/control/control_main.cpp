@@ -286,6 +286,8 @@ std::size_t fcitx5_control_repository_metadata_url_utf16(Fcitx5ControlUtf16 base
 std::size_t fcitx5_control_repository_default_base_url_utf16(Fcitx5ControlUtf8 channel,
                                                              wchar_t* output,
                                                              std::size_t capacity);
+int fcitx5_control_package_transaction_id_utf8(Fcitx5ControlUtf8 sha256, char** out_ptr,
+                                               std::size_t* out_len);
 int fcitx5_control_package_detail_json_utf8(const Fcitx5ControlPackageDetail* detail,
                                             char** out_ptr, std::size_t* out_len);
 void fcitx5_control_utf8_free(char* ptr, std::size_t len);
@@ -885,6 +887,14 @@ std::wstring repositoryDefaultBaseUrl(std::string_view channel) {
     return written == result.size() ? result : std::wstring{};
 }
 
+std::string packageTransactionId(std::string_view sha256) {
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_package_transaction_id_utf8(utf8View(sha256), &bytes, &length) != 0)
+        return {};
+    return takeRustUtf8(bytes, length);
+}
+
 fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
     const auto files = repositoryFiles(dataRoot);
     std::string index;
@@ -1448,7 +1458,7 @@ void installRepositoryPackage(const fs::path& dataRoot,
         throw fcitx::package::PackageError("network_error", "package download failed");
     }
     const auto keys = fcitx::package::read_trusted_keys(repositoryFiles(dataRoot).keyring);
-    const std::string transaction = "pkg-" + entry->sha256.substr(0U, 24U);
+    const std::string transaction = packageTransactionId(entry->sha256);
     const auto staged =
         fcitx::package::stage_verified_archive(archive, packageRoot, transaction, keys);
     fcitx::package::activate_staged_package(staged, packageRoot, keys);
