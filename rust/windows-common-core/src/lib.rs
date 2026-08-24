@@ -1222,6 +1222,84 @@ fn utf8_offset_to_wide(bytes: &[u8], offset: u32) -> Fcitx5WindowsCommonUtf8Offs
     }
 }
 
+fn ipc_status_ok(status: u32) -> bool {
+    status == 0
+}
+
+fn accept_hello_response(
+    response_to: u64,
+    session_id: u32,
+    status: u32,
+    expected_request_id: u64,
+    expected_session_id: u32,
+) -> bool {
+    response_to == expected_request_id && session_id == expected_session_id && ipc_status_ok(status)
+}
+
+fn accept_key_response(
+    response_to: u64,
+    engine_epoch: u64,
+    session_id: u32,
+    context_id: u64,
+    revision: u64,
+    status: u32,
+    expected_request_id: u64,
+    expected_engine_epoch: u64,
+    expected_session_id: u32,
+    expected_context_id: u64,
+    previous_revision: u64,
+) -> bool {
+    response_to == expected_request_id
+        && engine_epoch == expected_engine_epoch
+        && session_id == expected_session_id
+        && context_id == expected_context_id
+        && revision > previous_revision
+        && ipc_status_ok(status)
+}
+
+fn accept_candidate_select_response(
+    response_to: u64,
+    engine_epoch: u64,
+    session_id: u32,
+    context_id: u64,
+    revision: u64,
+    status: u32,
+    expected_request_id: u64,
+    expected_engine_epoch: u64,
+    expected_session_id: u32,
+    expected_context_id: u64,
+    previous_revision: u64,
+) -> bool {
+    accept_key_response(
+        response_to,
+        engine_epoch,
+        session_id,
+        context_id,
+        revision,
+        status,
+        expected_request_id,
+        expected_engine_epoch,
+        expected_session_id,
+        expected_context_id,
+        previous_revision,
+    )
+}
+
+fn accept_engine_status_response(
+    response_to: u64,
+    engine_epoch: u64,
+    session_id: u32,
+    status: u32,
+    expected_request_id: u64,
+    expected_engine_epoch: u64,
+    expected_session_id: u32,
+) -> bool {
+    response_to == expected_request_id
+        && engine_epoch == expected_engine_epoch
+        && session_id == expected_session_id
+        && ipc_status_ok(status)
+}
+
 fn secure_input_desktop() -> bool {
     const DESKTOP_READOBJECTS: u32 = 0x0001;
     const UOI_NAME: i32 = 2;
@@ -2305,6 +2383,104 @@ pub unsafe extern "C" fn fcitx5_windows_common_utf8_offset_to_wide(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_accept_hello_response(
+    response_to: u64,
+    session_id: u32,
+    status: u32,
+    expected_request_id: u64,
+    expected_session_id: u32,
+) -> u8 {
+    accept_hello_response(
+        response_to,
+        session_id,
+        status,
+        expected_request_id,
+        expected_session_id,
+    ) as u8
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn fcitx5_windows_common_accept_key_response(
+    response_to: u64,
+    engine_epoch: u64,
+    session_id: u32,
+    context_id: u64,
+    revision: u64,
+    status: u32,
+    expected_request_id: u64,
+    expected_engine_epoch: u64,
+    expected_session_id: u32,
+    expected_context_id: u64,
+    previous_revision: u64,
+) -> u8 {
+    accept_key_response(
+        response_to,
+        engine_epoch,
+        session_id,
+        context_id,
+        revision,
+        status,
+        expected_request_id,
+        expected_engine_epoch,
+        expected_session_id,
+        expected_context_id,
+        previous_revision,
+    ) as u8
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn fcitx5_windows_common_accept_candidate_select_response(
+    response_to: u64,
+    engine_epoch: u64,
+    session_id: u32,
+    context_id: u64,
+    revision: u64,
+    status: u32,
+    expected_request_id: u64,
+    expected_engine_epoch: u64,
+    expected_session_id: u32,
+    expected_context_id: u64,
+    previous_revision: u64,
+) -> u8 {
+    accept_candidate_select_response(
+        response_to,
+        engine_epoch,
+        session_id,
+        context_id,
+        revision,
+        status,
+        expected_request_id,
+        expected_engine_epoch,
+        expected_session_id,
+        expected_context_id,
+        previous_revision,
+    ) as u8
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_accept_engine_status_response(
+    response_to: u64,
+    engine_epoch: u64,
+    session_id: u32,
+    status: u32,
+    expected_request_id: u64,
+    expected_engine_epoch: u64,
+    expected_session_id: u32,
+) -> u8 {
+    accept_engine_status_response(
+        response_to,
+        engine_epoch,
+        session_id,
+        status,
+        expected_request_id,
+        expected_engine_epoch,
+        expected_session_id,
+    ) as u8
+}
+
+#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `pipe` must be a live named-pipe handle. `current_user_sid` and
@@ -3022,6 +3198,31 @@ mod tests {
         );
         assert_eq!(utf8_offset_to_wide(source.as_bytes(), 2).status, 0);
         assert_eq!(utf8_offset_to_wide(source.as_bytes(), 99).status, 0);
+    }
+
+    #[test]
+    fn ipc_response_acceptance_matches_cpp_contract() {
+        assert!(accept_hello_response(11, 7, 0, 11, 7));
+        assert!(!accept_hello_response(12, 7, 0, 11, 7));
+        assert!(!accept_hello_response(11, 8, 0, 11, 7));
+        assert!(!accept_hello_response(11, 7, 1, 11, 7));
+
+        assert!(accept_key_response(11, 99, 7, 42, 5, 0, 11, 99, 7, 42, 4));
+        assert!(!accept_key_response(11, 98, 7, 42, 5, 0, 11, 99, 7, 42, 4));
+        assert!(!accept_key_response(11, 99, 7, 42, 4, 0, 11, 99, 7, 42, 4));
+        assert!(!accept_key_response(11, 99, 7, 43, 5, 0, 11, 99, 7, 42, 4));
+        assert!(!accept_key_response(11, 99, 7, 42, 5, 3, 11, 99, 7, 42, 4));
+
+        assert!(accept_candidate_select_response(
+            12, 99, 7, 42, 6, 0, 12, 99, 7, 42, 5
+        ));
+        assert!(!accept_candidate_select_response(
+            12, 99, 7, 42, 5, 0, 12, 99, 7, 42, 5
+        ));
+
+        assert!(accept_engine_status_response(13, 99, 7, 0, 13, 99, 7));
+        assert!(!accept_engine_status_response(13, 0, 7, 0, 13, 99, 7));
+        assert!(!accept_engine_status_response(13, 99, 7, 5, 13, 99, 7));
     }
 
     #[test]

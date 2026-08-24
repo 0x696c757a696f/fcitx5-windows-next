@@ -223,6 +223,30 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("IPC-TEXT-RUST: IPC client UTF-8 to UTF-16 response conversion must be Rust-owned");
     }
+    if (pipeClientSource.find("response.metadata.responseTo != requestId") !=
+            std::string::npos ||
+        pipeClientSource.find("response.metadata.engineEpoch != engineEpoch_") !=
+            std::string::npos ||
+        pipeClientSource.find("response.metadata.sessionId != sessionId_") !=
+            std::string::npos ||
+        pipeClientSource.find("response.metadata.contextId != contextId") !=
+            std::string::npos ||
+        pipeClientSource.find("response.metadata.revision <= contextState.revision") !=
+            std::string::npos ||
+        pipeClientSource.find("response.metadata.revision <= revision") !=
+            std::string::npos ||
+        pipeClientSource.find("response.status != protocol::Status::ok") !=
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_accept_hello_response") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_accept_key_response") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_accept_candidate_select_response") ==
+            std::string::npos ||
+        pipeClientSource.find("fcitx5_windows_common_accept_engine_status_response") ==
+            std::string::npos) {
+        return fail("IPC-RESPONSE-POLICY-RUST: IPC client response acceptance policy must be Rust-owned");
+    }
     const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
     if (installerSource.find("--set-startup") != std::string::npos ||
         installerSource.find("--background") != std::string::npos ||
@@ -444,6 +468,16 @@ int main(int argc, char** argv) {
         rustWindowsCommonCore.find("utf8_to_wide_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("utf8_offset_to_wide_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_accept_hello_response") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_accept_key_response") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_accept_candidate_select_response") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_accept_engine_status_response") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("ipc_response_acceptance_matches_cpp_contract") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_verify_pipe_server_peer_utf16") ==
             std::string::npos ||

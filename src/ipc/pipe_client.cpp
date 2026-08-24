@@ -37,6 +37,44 @@ extern "C" Fcitx5WindowsCommonUtf8OffsetToWide
 fcitx5_windows_common_utf8_offset_to_wide(const std::uint8_t* input,
                                           std::size_t input_len,
                                           std::uint32_t offset);
+extern "C" std::uint8_t fcitx5_windows_common_accept_hello_response(
+    std::uint64_t response_to,
+    std::uint32_t session_id,
+    std::uint32_t status,
+    std::uint64_t expected_request_id,
+    std::uint32_t expected_session_id);
+extern "C" std::uint8_t fcitx5_windows_common_accept_key_response(
+    std::uint64_t response_to,
+    std::uint64_t engine_epoch,
+    std::uint32_t session_id,
+    std::uint64_t context_id,
+    std::uint64_t revision,
+    std::uint32_t status,
+    std::uint64_t expected_request_id,
+    std::uint64_t expected_engine_epoch,
+    std::uint32_t expected_session_id,
+    std::uint64_t expected_context_id,
+    std::uint64_t previous_revision);
+extern "C" std::uint8_t fcitx5_windows_common_accept_candidate_select_response(
+    std::uint64_t response_to,
+    std::uint64_t engine_epoch,
+    std::uint32_t session_id,
+    std::uint64_t context_id,
+    std::uint64_t revision,
+    std::uint32_t status,
+    std::uint64_t expected_request_id,
+    std::uint64_t expected_engine_epoch,
+    std::uint32_t expected_session_id,
+    std::uint64_t expected_context_id,
+    std::uint64_t previous_revision);
+extern "C" std::uint8_t fcitx5_windows_common_accept_engine_status_response(
+    std::uint64_t response_to,
+    std::uint64_t engine_epoch,
+    std::uint32_t session_id,
+    std::uint32_t status,
+    std::uint64_t expected_request_id,
+    std::uint64_t expected_engine_epoch,
+    std::uint32_t expected_session_id);
 
 const std::uint16_t* wideData(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
@@ -185,8 +223,9 @@ bool PipeClient::handshake(std::uint64_t deadline) noexcept {
         protocol::FrameView frame;
         protocol::HelloResponse response;
         if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response) ||
-            response.metadata.responseTo != requestId ||
-            response.metadata.sessionId != sessionId_ || response.status != protocol::Status::ok) {
+            fcitx5_windows_common_accept_hello_response(
+                response.metadata.responseTo, response.metadata.sessionId,
+                static_cast<std::uint32_t>(response.status), requestId, sessionId_) == 0) {
             disconnect();
             return false;
         }
@@ -204,12 +243,11 @@ bool PipeClient::acceptKeyResponse(const protocol::KeyResponse& response,
                                    std::uint64_t contextId,
                                    ContextState& contextState,
                                    KeyResult& result) noexcept {
-    if (response.metadata.responseTo != requestId ||
-        response.metadata.engineEpoch != engineEpoch_ ||
-        response.metadata.sessionId != sessionId_ ||
-        response.metadata.contextId != contextId ||
-        response.metadata.revision <= contextState.revision ||
-        response.status != protocol::Status::ok ||
+    if (fcitx5_windows_common_accept_key_response(
+            response.metadata.responseTo, response.metadata.engineEpoch,
+            response.metadata.sessionId, response.metadata.contextId,
+            response.metadata.revision, static_cast<std::uint32_t>(response.status),
+            requestId, engineEpoch_, sessionId_, contextId, contextState.revision) == 0 ||
         !utf8ToWide(response.commitUtf8, result.commit) ||
         !utf8ToWide(response.preeditUtf8, result.preedit) ||
         !utf8OffsetToWide(response.preeditUtf8, response.preeditCaretUtf8,
@@ -327,11 +365,11 @@ bool PipeClient::selectCandidate(std::uint32_t targetProcessId,
         protocol::FrameView frame;
         protocol::CandidateSelectResponse response;
         if (!protocol::decodeFrame(responseBytes, frame) || !protocol::decode(frame, response) ||
-            response.metadata.responseTo != requestId ||
-            response.metadata.engineEpoch != engineEpoch_ ||
-            response.metadata.sessionId != sessionId_ ||
-            response.metadata.contextId != contextId ||
-            response.metadata.revision <= revision || response.status != protocol::Status::ok) {
+            fcitx5_windows_common_accept_candidate_select_response(
+                response.metadata.responseTo, response.metadata.engineEpoch,
+                response.metadata.sessionId, response.metadata.contextId,
+                response.metadata.revision, static_cast<std::uint32_t>(response.status),
+                requestId, engineEpoch_, sessionId_, contextId, revision) == 0) {
             disconnect();
             return false;
         }
@@ -388,10 +426,10 @@ bool PipeClient::queryEngineStatus(protocol::EngineStatusResponse& result,
         protocol::EngineStatusResponse response;
         if (!protocol::decodeFrame(responseBytes, frame) ||
             !protocol::decode(frame, response) ||
-            response.metadata.responseTo != requestId ||
-            response.metadata.engineEpoch != engineEpoch_ ||
-            response.metadata.sessionId != sessionId_ ||
-            response.status != protocol::Status::ok) {
+            fcitx5_windows_common_accept_engine_status_response(
+                response.metadata.responseTo, response.metadata.engineEpoch,
+                response.metadata.sessionId, static_cast<std::uint32_t>(response.status),
+                requestId, engineEpoch_, sessionId_) == 0) {
             disconnect();
             return false;
         }
