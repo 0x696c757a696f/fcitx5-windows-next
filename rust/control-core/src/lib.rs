@@ -1593,9 +1593,20 @@ fn required_theme_string(table: &toml_edit::Table, key: &str) -> Option<String> 
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn theme_branch_has_colors(root: &toml_edit::Table, key: &str) -> Option<bool> {
+fn theme_common_table<'a>(root: &'a toml_edit::Table) -> Option<Option<&'a toml_edit::Table>> {
+    let Some(common) = root.get("common") else {
+        return Some(None);
+    };
+    let common = common.as_table()?;
+    table_has_only(common, &["candidate", "fonts"]).then_some(Some(common))
+}
+
+fn theme_branch_table<'a>(
+    root: &'a toml_edit::Table,
+    key: &str,
+) -> Option<Option<&'a toml_edit::Table>> {
     let Some(branch) = root.get(key) else {
-        return Some(false);
+        return Some(None);
     };
     let branch = branch.as_table()?;
     if !table_has_only(branch, &["candidate"]) {
@@ -1608,6 +1619,14 @@ fn theme_branch_has_colors(root: &toml_edit::Table, key: &str) -> Option<bool> {
     if !table_has_only(candidate, &["colors"]) {
         return None;
     }
+    Some(Some(branch))
+}
+
+fn theme_branch_has_colors(root: &toml_edit::Table, key: &str) -> Option<bool> {
+    let Some(branch) = theme_branch_table(root, key)? else {
+        return Some(false);
+    };
+    let candidate = branch.get("candidate")?.as_table()?;
     let Some(colors) = candidate.get("colors") else {
         return Some(false);
     };
@@ -1615,13 +1634,15 @@ fn theme_branch_has_colors(root: &toml_edit::Table, key: &str) -> Option<bool> {
     Some(!colors.is_empty())
 }
 
-fn parse_theme_summary(text: &[u8]) -> Option<ThemeSummary> {
+fn parse_theme_document(text: &[u8]) -> Option<toml_edit::DocumentMut> {
     if text.len() > 512 * 1024 {
         return None;
     }
     let text = std::str::from_utf8(text).ok()?;
-    let value = text.parse::<toml_edit::DocumentMut>().ok()?;
-    let root = value.as_table();
+    text.parse::<toml_edit::DocumentMut>().ok()
+}
+
+fn theme_summary_from_root(root: &toml_edit::Table) -> Option<ThemeSummary> {
     if !table_has_only(
         root,
         &["format_version", "theme", "common", "light", "dark"],
@@ -1631,9 +1652,7 @@ fn parse_theme_summary(text: &[u8]) -> Option<ThemeSummary> {
     if root.get("format_version")?.as_integer()? != 1 {
         return None;
     }
-    if let Some(common) = root.get("common") {
-        common.as_table()?;
-    }
+    theme_common_table(root)?;
     let metadata = root.get("theme")?.as_table()?;
     if !table_has_only(
         metadata,
@@ -1658,6 +1677,55 @@ fn parse_theme_summary(text: &[u8]) -> Option<ThemeSummary> {
         has_light_branch: theme_branch_has_colors(root, "light")?,
         has_dark_branch: theme_branch_has_colors(root, "dark")?,
     })
+}
+
+fn parse_theme_summary(text: &[u8]) -> Option<ThemeSummary> {
+    let value = parse_theme_document(text)?;
+    theme_summary_from_root(value.as_table())
+}
+
+fn deep_merge_tables(destination: &mut toml_edit::Table, source: &toml_edit::Table) {
+    for (key, value) in source.iter() {
+        if let (Some(destination_table), Some(source_table)) = (
+            destination
+                .get_mut(key)
+                .and_then(toml_edit::Item::as_table_mut),
+            value.as_table(),
+        ) {
+            deep_merge_tables(destination_table, source_table);
+        } else {
+            destination.insert(key, value.clone());
+        }
+    }
+}
+
+fn resolved_theme_config(
+    text: &[u8],
+    requested_id: &[u8],
+    builtin: bool,
+    dark: bool,
+) -> Option<Vec<u8>> {
+    let requested_id = std::str::from_utf8(requested_id).ok()?;
+    let value = parse_theme_document(text)?;
+    let root = value.as_table();
+    let summary = theme_summary_from_root(root)?;
+    let source = if builtin {
+        b"builtin".as_slice()
+    } else {
+        b"user".as_slice()
+    };
+    if !theme_record_matches_requested_id(source, requested_id.as_bytes(), summary.id.as_bytes()) {
+        return None;
+    }
+    let mut resolved = toml_edit::DocumentMut::new();
+    resolved["format_version"] = toml_edit::value(1);
+    if let Some(common) = theme_common_table(root)? {
+        deep_merge_tables(resolved.as_table_mut(), common);
+    }
+    if let Some(branch) = theme_branch_table(root, if dark { "dark" } else { "light" })? {
+        deep_merge_tables(resolved.as_table_mut(), branch);
+    }
+    Some(resolved.to_string().into_bytes())
 }
 
 fn leak_utf8_slice(value: &str) -> Fcitx5ControlUtf8 {
@@ -3330,6 +3398,33 @@ pub unsafe extern "C" fn fcitx5_control_theme_summary_free(
 
 /// # Safety
 ///
+/// `text` and `requested_id` must remain valid UTF-8 for the duration of the
+/// call when their pointers are non-null. `out_ptr` and `out_len` must point to
+/// writable storage. Any returned buffer must be freed with
+/// `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_resolve_theme_config_utf8(
+    text: Fcitx5ControlUtf8,
+    requested_id: Fcitx5ControlUtf8,
+    builtin: u8,
+    dark: u8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    let Some(text) = utf8_slice(text) else {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    };
+    let Some(requested_id) = utf8_slice(requested_id) else {
+        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
+    };
+    match resolved_theme_config(text, requested_id, builtin != 0, dark != 0) {
+        Some(config) => boxed_utf8_result(config, out_ptr, out_len),
+        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
+    }
+}
+
+/// # Safety
+///
 /// `source`, `requested_id`, and `theme_id` must remain valid UTF-8 for the
 /// duration of the call when their pointers are non-null.
 #[no_mangle]
@@ -4758,6 +4853,74 @@ version = "1"
 "##
         )
         .is_none());
+    }
+
+    #[test]
+    fn theme_resolve_config_matches_cpp_contract() {
+        let text = br##"
+format_version = 1
+
+[theme]
+id = "solar"
+name = "Solar"
+version = "1"
+license = "MIT"
+
+[common.candidate]
+orientation = "vertical"
+page_size = 5
+
+[common.candidate.colors]
+candidate_text = "#101010FF"
+
+[dark.candidate.colors]
+background = "#242629F7"
+candidate_text = "#FFFFFFFF"
+
+[light.candidate.colors]
+background = "#FCFCFCFA"
+"##;
+        let dark = resolved_theme_config(text, b"solar", false, true).unwrap();
+        let dark_text = std::str::from_utf8(&dark).unwrap();
+        assert!(dark_text.contains("format_version = 1"));
+        assert!(dark_text.contains("orientation = \"vertical\""));
+        assert!(dark_text.contains("page_size = 5"));
+        assert!(dark_text.contains("background = \"#242629F7\""));
+        assert!(dark_text.contains("candidate_text = \"#FFFFFFFF\""));
+
+        let light = resolved_theme_config(text, b"solar", false, false).unwrap();
+        let light_text = std::str::from_utf8(&light).unwrap();
+        assert!(light_text.contains("background = \"#FCFCFCFA\""));
+        assert!(light_text.contains("candidate_text = \"#101010FF\""));
+        assert!(resolved_theme_config(text, b"midnight", false, true).is_none());
+        assert!(resolved_theme_config(text, b"builtin:default", true, true).is_some());
+
+        let mut ptr = std::ptr::null_mut();
+        let mut len = 0;
+        assert_eq!(
+            unsafe {
+                fcitx5_control_resolve_theme_config_utf8(
+                    Fcitx5ControlUtf8 {
+                        ptr: text.as_ptr(),
+                        len: text.len(),
+                    },
+                    Fcitx5ControlUtf8 {
+                        ptr: b"solar".as_ptr(),
+                        len: 5,
+                    },
+                    0,
+                    1,
+                    &mut ptr,
+                    &mut len,
+                )
+            },
+            0
+        );
+        assert!(!ptr.is_null());
+        assert!(len > 0);
+        unsafe {
+            fcitx5_control_utf8_free(ptr, len);
+        }
     }
 
     #[test]

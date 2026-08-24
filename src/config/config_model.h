@@ -71,17 +71,6 @@ struct ParseError {
     std::size_t column{};
 };
 
-struct Theme {
-    std::string id;
-    std::string name;
-    std::string version;
-    std::string license;
-    std::string description;
-    Config common;
-    Config light;
-    Config dark;
-};
-
 [[nodiscard]] bool parseConfig(std::string_view text, Config& output, ParseError& error) noexcept;
 [[nodiscard]] std::string defaultConfigToml();
 [[nodiscard]] bool updatePresentationToml(std::string_view source, std::string_view appearanceMode,
@@ -99,8 +88,9 @@ struct Theme {
                                           std::string_view preeditMode = {}) noexcept;
 [[nodiscard]] bool resetPresentationToml(std::string_view source, std::string& output,
                                          ParseError& error) noexcept;
-[[nodiscard]] bool parseTheme(std::string_view text, Theme& output, ParseError& error) noexcept;
+[[nodiscard]] bool resolveThemeConfig(std::string_view themeText, std::string_view requestedId,
+                                      bool builtin, bool dark, Config& output,
+                                      ParseError& error) noexcept;
 [[nodiscard]] Config mergeConfig(const Config& base, const Config& overrideConfig);
-[[nodiscard]] Config resolveTheme(const Theme& theme, bool dark, const Config& userOverride);
 
 } // namespace fcitx::windows::config

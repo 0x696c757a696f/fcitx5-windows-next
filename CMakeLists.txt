@@ -277,7 +277,7 @@ add_library(fcitx5_control_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_control_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CONTROL_CORE_STATICLIB}")
 add_dependencies(fcitx5_control_core_rust fcitx5_control_core_rustlib)
-target_link_libraries(fcitx5_control_core_rust INTERFACE advapi32 ole32)
+target_link_libraries(fcitx5_control_core_rust INTERFACE advapi32 bcrypt ntdll ole32 userenv ws2_32)
 
 set(FCITX_RUST_REGISTER_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_register_core.lib")
@@ -432,6 +432,8 @@ target_include_directories(
 target_include_directories(
   fcitx5_config SYSTEM
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tomlplusplus/include")
+target_link_libraries(fcitx5_config PUBLIC fcitx5_control_core_rust)
+add_dependencies(fcitx5_config fcitx5_control_core_rustlib)
 target_compile_definitions(fcitx5_config PRIVATE TOML_EXCEPTIONS=1)
 fcitx_apply_project_options(fcitx5_config)
 if(FCITX_COMPILER_IS_MSVC_CL)

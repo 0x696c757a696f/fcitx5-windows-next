@@ -5,10 +5,23 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <set>
 #include <sstream>
 #include <utility>
+
+extern "C" {
+struct Fcitx5ControlUtf8 {
+    const char* ptr;
+    std::size_t len;
+};
+int fcitx5_control_resolve_theme_config_utf8(Fcitx5ControlUtf8 text,
+                                             Fcitx5ControlUtf8 requested_id,
+                                             std::uint8_t builtin, std::uint8_t dark,
+                                             char** out_ptr, std::size_t* out_len);
+void fcitx5_control_utf8_free(char* ptr, std::size_t len);
+}
 
 namespace fcitx::windows::config {
 namespace {
@@ -140,6 +153,18 @@ void mergeFont(Font& destination, const Font& source) {
     mergeOptional(destination.size, source.size);
     mergeOptional(destination.weight, source.weight);
     mergeOptional(destination.scale, source.scale);
+}
+
+Fcitx5ControlUtf8 utf8View(std::string_view value) noexcept {
+    return {value.data(), value.size()};
+}
+
+std::string takeRustUtf8(char* bytes, std::size_t length) {
+    std::string result;
+    if (bytes && length > 0)
+        result.assign(bytes, length);
+    fcitx5_control_utf8_free(bytes, length);
+    return result;
 }
 
 } // namespace
@@ -481,82 +506,26 @@ families = ["Cascadia Mono", "Consolas", "system"]
 )";
 }
 
-bool parseTheme(std::string_view text, Theme& output, ParseError& error) noexcept {
+bool resolveThemeConfig(std::string_view themeText, std::string_view requestedId, bool builtin,
+                        bool dark, Config& output, ParseError& error) noexcept {
     output = {};
     error = {};
-    if (text.size() > 512U * 1024U)
-        return setError(error, "theme.toml exceeds 512 KiB");
-    try {
-        const toml::table root = toml::parse(text);
-        if (!allowed(root, {"format_version", "theme", "common", "light", "dark"}, "", error))
-            return false;
-        const auto version = root["format_version"].value<std::int64_t>();
-        if (!version || *version != 1)
-            return setError(error, "format_version must be exactly 1");
-        const auto* metadata = root["theme"].as_table();
-        if (!metadata || !allowed(*metadata, {"id", "name", "version", "license", "description"},
-                                  "theme.", error))
-            return false;
-        auto required = [&](std::string_view key, std::string& destination) {
-            const auto value = (*metadata)[key].value<std::string>();
-            if (!value || value->empty())
-                return false;
-            destination = *value;
-            return true;
-        };
-        if (!required("id", output.id) || !required("name", output.name) ||
-            !required("version", output.version) || !required("license", output.license)) {
-            return setError(error, "theme metadata id/name/version/license are required");
-        }
-        if (const auto description = (*metadata)["description"].value<std::string>())
-            output.description = *description;
-        if (output.id.size() > 64 || output.id.empty() ||
-            !std::all_of(output.id.begin(), output.id.end(),
-                         [](unsigned char character) {
-                             return (character >= 'a' && character <= 'z') ||
-                                    (character >= '0' && character <= '9') || character == '.' ||
-                                    character == '_' || character == '-';
-                         }) ||
-            (!(output.id.front() >= 'a' && output.id.front() <= 'z') &&
-             !(output.id.front() >= '0' && output.id.front() <= '9'))) {
-            return setError(error, "invalid theme id");
-        }
-        auto parseBranch = [&](std::string_view key, Config& destination, bool colorsOnly) {
-            const auto* branch = root[key].as_table();
-            if (!branch)
-                return !root.contains(key) ||
-                       setError(error, std::string(key) + " must be a table");
-            if (!allowed(*branch,
-                         colorsOnly ? std::initializer_list<std::string_view>{"candidate"}
-                                    : std::initializer_list<std::string_view>{"candidate", "fonts"},
-                         std::string(key) + ".", error))
-                return false;
-            if (colorsOnly) {
-                const auto* candidate = (*branch)["candidate"].as_table();
-                if (!candidate ||
-                    !allowed(*candidate, {"colors"}, std::string(key) + ".candidate.", error))
-                    return false;
-            }
-            std::ostringstream serialized;
-            serialized << "format_version = 1\n" << toml::toml_formatter(*branch);
-            ParseError branchError;
-            if (!parseConfig(serialized.str(), destination, branchError)) {
-                error = std::move(branchError);
-                error.message = std::string(key) + ": " + error.message;
-                return false;
-            }
-            return true;
-        };
-        return parseBranch("common", output.common, false) &&
-               parseBranch("light", output.light, true) && parseBranch("dark", output.dark, true);
-    } catch (const toml::parse_error& exception) {
-        error.message = exception.description();
-        error.line = exception.source().begin.line;
-        error.column = exception.source().begin.column;
-        return false;
-    } catch (...) {
-        return setError(error, "unexpected theme configuration error");
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    if (fcitx5_control_resolve_theme_config_utf8(utf8View(themeText), utf8View(requestedId),
+                                                 builtin ? std::uint8_t{1} : std::uint8_t{0},
+                                                 dark ? std::uint8_t{1} : std::uint8_t{0},
+                                                 &bytes, &length) != 0 ||
+        bytes == nullptr || length == 0) {
+        fcitx5_control_utf8_free(bytes, length);
+        return setError(error, "theme.toml is invalid");
     }
+    const std::string resolved = takeRustUtf8(bytes, length);
+    if (!parseConfig(resolved, output, error)) {
+        error.message = "theme.toml resolved config: " + error.message;
+        return false;
+    }
+    return true;
 }
 
 bool updatePresentationToml(std::string_view source, std::string_view appearanceMode,
@@ -758,10 +727,6 @@ Config mergeConfig(const Config& base, const Config& overrideConfig) {
     for (const auto& [name, color] : overrideConfig.colors)
         result.colors[name] = color;
     return result;
-}
-
-Config resolveTheme(const Theme& theme, bool dark, const Config& userOverride) {
-    return mergeConfig(mergeConfig(theme.common, dark ? theme.dark : theme.light), userOverride);
 }
 
 } // namespace fcitx::windows::config

@@ -777,10 +777,10 @@ fcitx::windows::config::Config loadVisualConfig(bool safeMode) {
     }
     if (!themePath.empty()) {
         if (const auto text = readBoundedFile(themePath, 512U * 1024U)) {
-            Theme theme;
-            if (parseTheme(*text, theme, error) &&
-                (themeId == "builtin:default" || theme.id == themeId)) {
-                return mergeConfig(defaults, resolveTheme(theme, dark, user));
+            Config themeConfig;
+            const bool builtin = themeId == "builtin:default";
+            if (resolveThemeConfig(*text, themeId, builtin, dark, themeConfig, error)) {
+                return mergeConfig(defaults, mergeConfig(themeConfig, user));
             }
         }
     }

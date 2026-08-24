@@ -10,4 +10,4 @@ path = "src/lib.rs"
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
-toml_edit = { version = "0.22.27", default-features = false, features = ["parse"] }
+toml_edit = { version = "0.22.27", default-features = false, features = ["display", "parse"] }

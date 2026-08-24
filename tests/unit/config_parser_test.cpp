@@ -74,14 +74,19 @@ int main() {
     std::ifstream themeFile("resources/themes/default/theme.toml", std::ios::binary);
     std::ostringstream themeText;
     themeText << themeFile.rdbuf();
-    Theme theme;
-    if (!themeFile || !parseTheme(themeText.str(), theme, error) || theme.id != "builtin.default" ||
-        theme.light.colors.empty() || theme.dark.colors.empty()) {
+    Config defaultLightTheme;
+    Config defaultDarkTheme;
+    if (!themeFile ||
+        !resolveThemeConfig(themeText.str(), "builtin:default", true, false, defaultLightTheme,
+                            error) ||
+        !resolveThemeConfig(themeText.str(), "builtin:default", true, true, defaultDarkTheme,
+                            error) ||
+        defaultLightTheme.colors.empty() || defaultDarkTheme.colors.empty()) {
         std::cerr << "annotated theme rejected: " << error.message << '\n';
         return 1;
     }
-    const auto defaultLight = resolveTheme(theme, false, defaultUserConfig);
-    const auto defaultDark = resolveTheme(theme, true, defaultUserConfig);
+    const auto defaultLight = mergeConfig(defaultLightTheme, defaultUserConfig);
+    const auto defaultDark = mergeConfig(defaultDarkTheme, defaultUserConfig);
     if (defaultLight.colors.at("background") != "#FCFCFCFA" ||
         defaultDark.colors.at("background") != "#242629F7" ||
         defaultDark.colors.at("candidate_text") != "#FFFFFFFF") {
@@ -92,7 +97,7 @@ int main() {
     userOverride.orientation = Orientation::horizontal;
     userOverride.candidatePageSize = 6;
     userOverride.colors["candidate_text"] = "#112233FF";
-    const auto darkResolved = resolveTheme(theme, true, userOverride);
+    const auto darkResolved = mergeConfig(defaultDarkTheme, userOverride);
     if (darkResolved.orientation != Orientation::horizontal ||
         darkResolved.candidatePageSize != 6 ||
         darkResolved.colors.at("candidate_text") != "#112233FF" ||
@@ -100,14 +105,16 @@ int main() {
         std::cerr << "theme/user merge order failed\n";
         return 1;
     }
-    const auto resetResolved = resolveTheme(theme, true, Config{});
+    const auto resetResolved = defaultDarkTheme;
     if (resetResolved.orientation != Orientation::vertical ||
         resetResolved.colors.at("candidate_text") != "#FFFFFFFF") {
         std::cerr << "reset did not restore inherited theme value\n";
         return 1;
     }
-    if (parseTheme("format_version=1\n[theme]\nid='Bad ID'\nname='x'\nversion='1'\nlicense='MIT'\n",
-                   theme, error))
+    Config invalidTheme;
+    if (resolveThemeConfig(
+            "format_version=1\n[theme]\nid='Bad ID'\nname='x'\nversion='1'\nlicense='MIT'\n",
+            "Bad ID", false, true, invalidTheme, error))
         return 1;
     std::string updated;
     if (!updatePresentationToml(defaults, "dark", "builtin:default", "horizontal", "enabled", "6",

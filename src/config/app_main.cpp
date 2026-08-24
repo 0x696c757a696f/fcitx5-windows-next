@@ -3545,10 +3545,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         }
         if (!themePath.empty()) {
             if (const auto text = readBoundedFile(themePath, 512U * 1024U)) {
-                Theme theme;
-                if (parseTheme(*text, theme, error) &&
-                    (*user.theme == "builtin:default" || theme.id == *user.theme)) {
-                    return mergeConfig(defaults, resolveTheme(theme, dark, user));
+                Config themeConfig;
+                const bool builtin = *user.theme == "builtin:default";
+                if (resolveThemeConfig(*text, *user.theme, builtin, dark, themeConfig, error)) {
+                    return mergeConfig(defaults, mergeConfig(themeConfig, user));
                 }
             }
         }
