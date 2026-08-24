@@ -90,7 +90,7 @@ Codex 执行版 · 个人项目模式
 
 32. **边界先有契约，再有实现。** IPC、Control API、CandidateModel、config/theme typed model、package manifest 与 launcher state machine 都必须有机器可验证的当前版本契约；同版本组件必须满足契约测试，breaking change 直接同步修改双方与测试，不保留旧契约兼容层。
 
-33. **Rust 采用以风险收益为驱动，不以语言覆盖率为目标。** 只有当独立组件处理不可信网络/包/路径/状态机等边界且 Rust 能显著降低 memory-safety/状态表达风险时才迁移；迁移前必须先在当前 C++ 实现中修正逻辑语义并冻结 contract/corpus，再做 side-by-side differential verification。禁止为提高 Rust 百分比重写 TSF、Fcitx Engine、成熟 Candidate renderer 或 WTL Config；禁止让 TSF DLL 通过 FFI 链入 Rust runtime。
+33. **Rust 采用以产品边界为驱动，而不是改写 Fcitx 上游对象模型。** 除直接操作 Fcitx5 core/addon 对象的 Engine adapter 留 C++ 外，产品自有 Windows 逻辑默认继续 Rust 化；迁移前必须冻结 contract/corpus，再做 side-by-side differential verification。禁止把整个 Fcitx5 C++ API 绑定进 Rust，禁止 Windows 私有 Rust rewrite upstream addons，禁止把当前 Fcitx frontend API 形状写死成不可扩展 Rust protocol。
 
 ## 0.2 现在做什么 / 暂时不做什么
 
@@ -108,18 +108,18 @@ Codex 执行版 · 个人项目模式
 | **必须遵守　Codex 不得从配置器、插件商店或主题系统开始。首先审计并复用现有 Windows TSF/Fcitx 实现，稳定 “TSF → IPC v2 → Launcher/Engine → Fcitx5 → CandidateModel → 独立 UI → Commit” 主链。参考仓库只能作为行为与实现模式来源；任何历史 Hook/SendInput、长阻塞 IPC、宿主内 WebView、宽松 Pipe ACL、任意 ShellExecute 代理等做法不得因“别人已经这么做”而直接继承。** |
 |-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 
-## 0.4 Codex 参考学习顺序：主教材与专项教材分离
+## 0.4 Codex 参考学习顺序：上游语义与 Windows 病例分离
 
-Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整体照抄**。先按当前 Phase 读取主教材，再只为当前问题读取专项参考。默认学习顺序如下：
+Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整体照抄**。Fcitx 语义只以 `fcitx/fcitx5` core 和各 addon upstream 为权威；现有 Windows port 只可作为兼容病例或历史实现对照，不是架构依据。已排除的 Windows prototype 不得回到 Engine/Package/Candidate 架构参考链。
 
-1. **`chewing/windows-chewing-tsf`：Windows IME 主教材。** 重点学习 TSF TIP 生命周期、sink/EditSession、TestKey/KeyDown、composition、UILess、候选 UI 进程隔离、D2D、x86/x64、真实应用兼容、构建与回归。Phase 1B–4 默认首先查看它。
-2. **`gaboolic/fcitx5-windows`：Fcitx5 Windows 接线教材。** 只学习 Windows ↔ Fcitx InputContext adapter、Fcitx Instance/event loop、addon/build patch 等确有价值的接线；其早期 IPC、WebView/UI、启动方式等不得作为默认架构继承。Phase 3 为主要使用阶段。
-3. **`openvanilla/win-mcbopomofo`：thin TSF / client-server / out-of-process candidate 教材。** 重点学习 Client/Server/Config/Common 的边界、candidate/tooltip 进程外化和可测试分层。Phase 1B–4 按需要读取。
-4. **`rime/weasel`：成熟 Windows 兼容病例库。** 重点研究真实 callback 异常、composition termination、caret/layout、Office/Chromium/游戏、皮肤参数和多年用户兼容问题；不把项目整体结构当作新架构模板。Phase 4–5 权重上升。
+1. **`fcitx/fcitx5`：Fcitx core 语义权威。** 重点跟踪 `Instance`、`InputContext`、`AddonManager`、`InputPanel`、`CandidateList`、config/event、candidate action、surrounding-text capability 和 addon factory 机制。
+2. **各 addon upstream：插件语义权威。** Rime、Mozc、Hangul、m17n、Keyman、Bamboo、Chinese Addons 等不做 Windows 私有 Rust rewrite；Windows 产品层只适配、打包、隔离和呈现。
+3. **`chewing/windows-chewing-tsf`、`openvanilla/win-mcbopomofo`、Weasel 等：Windows TSF/兼容病例教材。** 只学习 TSF lifecycle、UILess、out-of-process UI、host compatibility 和失败病例，不继承其产品架构。
+4. **`fcitx-contrib/fcitx5-plugins`：跨平台插件构建与依赖清单参考。** 它不是 addon 语义权威；具体语义仍以各 addon upstream 为准。
 
 专项参考只在对应问题出现后读取：**WindInput** 用于 overlapped IPC/timeout/stale response，**Moqi** 用于 request sequence/launcher/crash lifecycle，**Rabbit** 用于 caret/focus/password/game 用例，**PIME/libIME2/Cassotis** 用于 thin backend、x86/x64 与历史架构对照。
 
-**Phase 默认参考权重：**Phase 1B = Chewing + win-mcbopomofo；Phase 2 = Chewing + win-mcbopomofo，再按问题读取 WindInput/Moqi；Phase 3 = gaboolic/fcitx5-windows + Fcitx upstream；Phase 4 = Chewing + win-mcbopomofo + Weasel；Phase 5 = Weasel + Rabbit + WindInput + Moqi + 真实宿主源码/E2E。
+**Phase 默认参考权重：**Phase 1B = Microsoft TSF + Chewing + win-mcbopomofo；Phase 2 = Chewing + win-mcbopomofo，再按问题读取 WindInput/Moqi；Phase 3 = `fcitx/fcitx5` core + addon upstream；Phase 4 = Chewing + win-mcbopomofo + Weasel；Phase 5 = Weasel + Rabbit + WindInput + Moqi + 真实宿主源码/E2E。
 
 **禁止行为：**不要在 Phase 0–4 研究 Moqi 的 AI/云同步、WindInput 的非当前产品功能、主题商店或漂亮设置器；不要因为参考项目使用某 GUI/Hook/消息转发方式就改变本项目冻结技术栈；不要复制 GPL 项目非平凡源码来“加速”，除非先完成许可证决策。
 
@@ -143,7 +143,7 @@ Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整
 1. **UILess / PresentationPolicy：**TSF `BeginUIElement(..., show=false)` 必须能抑制独立 `fcitx5-ui.exe` popup，同时继续提供 `ITfUIElement`/屏幕阅读器语义；`popup_allowed/presentation_mode` 必须成为 context/protocol 一等状态。
 2. **单一 Windows TSF Profile：**Windows 侧只注册一个固定 Fcitx5 profile，不为 Rime、拼音、Mozc、Hangul、m17n 等 engine/input method 动态增加 TSF profile。默认 Windows 显示名为 **`Fcitx5`**，TSF/语言栏使用一个固定、语言中立的 Fcitx5 图标；当前 Fcitx input method/group、BCP-47/locale、DWrite language 与候选模式由 Engine/Presentation metadata 表达，不靠新增 Windows profile。
 3. **通用 KeyEvent contract：**协议不能长期只依赖 `virtualKey + modifier flags`。在协议 breaking change 中定义 physical/logical key、scan code/extended、release、keyboard-layout/AltGr/dead-key 所需语义，再转换到 Fcitx KeyEvent；避免把 `VK_*` 手写映射扩成平台核心。
-4. **Fcitx InputContext capability：**补齐 real-engine 需要的 surrounding-text、delete-surrounding、forward-key 等能力/协商；当前空实现不得作为“通用 Fcitx frontend”完成证据。
+4. **Fcitx InputContext capability：**补齐 real-engine 需要的 surrounding-text、delete-surrounding、forward-key、atomic surrounding-text replacement、candidate action 等能力/协商；当前空实现不得作为“通用 Fcitx frontend”完成证据。Rust protocol 必须是可扩展 capability model，不得把当前 Fcitx API 固化成 `Commit(String)` / `Delete(i32,u32)` 这类封闭动作集。
 5. **Warmup 无副作用：**禁止通用 warmup 伪造 `n` 或其他真实用户文本键。只允许显式 preload/engine-loading API 或经过测试证明无学习/commit/history/global side effect 的 addon-specific hook。
 6. **CandidateModel A→B→A：**composition/revision 顺序必须按 `(engine_epoch, context_id, composition_id, revision)` 作用域判断；不同 context 的 compositionId 不互相比全局大小。
 7. **Launcher crash ledger：**SafeMode/crash-window/backoff 的最小 ledger 必须跨 launcher 自身重启保留；只持久化恢复语义所需字段，不把整个内部状态机序列化。
@@ -163,10 +163,8 @@ Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整
 |---|---|---|
 | **R1** | package core / repository / updater / downloader / provider / deployer | **首选 Rust 迁移域。** 先固定 C++ contract/corpus；Modern lane side-by-side Rust → differential → artifact smoke → 单组件 cutover。elevated deployer 必须保持最小；Legacy 若 Rust Win7 PoC 未通过可暂留 C++ lineage。 |
 | **R2** | launcher / control / diagnostics / shared process-execution | **第二波。** 先修 crash ledger、child process 与恢复语义，再迁；状态机用强类型/enum 表达，不能把旧逻辑 bug 原样翻译。 |
-| **Hold** | `fcitx5-ui.exe` CandidateModel/theme/layout | 当前 C++ D2D/DWrite 实现继续维护。只有出现真实 memory-safety/维护证据且合同/视觉 golden 完整时再 ADR；不因 Rust 可写 D2D 就重写。 |
-| **Keep C++** | `fcitx5-tsf.dll` | 宿主内最小创新；**禁止 Rust FFI/runtime 进入 TSF DLL。** |
-| **Keep C++** | `fcitx5-engine.exe` | Fcitx5 C++ upstream/API/addon 生态天然边界；优先补完整 InputContext adapter，不套 Rust FFI。 |
-| **Keep C++** | `fcitx5-config.exe` / register / bootstrap | WTL Config 与最薄 Windows helper 保持 C++；先修 machine/user ownership、process semantics，不为语言统一重写。 |
+| **R3** | TSF / Candidate UI / Config | 继续向 Rust shipping implementation 迁移；Windows/COM/D2D/WTL 外壳可阶段性保留为薄 adapter，但产品状态、协议、策略和可测试语义进入 Rust。 |
+| **Fcitx C++ island** | `fcitx5-engine.exe` 中直接操作 Fcitx core/addon 对象的 adapter | 仅保留 `fcitx::Instance`、`fcitx::InputContext`、`InputContextManager`、`FocusGroup`、`AddonManager`、`AddonInstance`、`InputMethodEngine`、`InputPanel`、`CandidateList`、Fcitx config/event conversion。Engine 其余 protocol/state/validation/revision/generation/policy/IPC 可 Rust 化。 |
 
 **迁移规则：**每个 Rust 组件必须按“C++ 语义修正 → contract/golden/fuzz corpus → Rust side-by-side → differential test → security/artifact smoke → **行为一致后再做 performance comparison** → cutover → 同批删除旧实现”的顺序推进。不得永久双栈，不用 runtime feature flag 在 C++/Rust 两套实现之间长期切换；不得在 differential 尚未通过时同时改性能算法/异步策略。回滚依赖 previous-known-good artifact，而不是保留两套 runtime implementation。
 
@@ -1925,14 +1923,14 @@ IME 的 bug 不一定只在 IME 一侧。对 Chrome/Edge、Firefox、Windows Ter
 ├─ CMakePresets.json
 ├─ cmake/
 ├─ src/
-│  ├─ tsf/                 # C++ / COM / TSF — Keep C++
-│  ├─ engine/              # C++ / Fcitx5 — Keep C++
-│  ├─ ui/                  # C++ / Win32 / D2D / DWrite — Hold
-│  ├─ config/              # C++ / WTL management GUI — Keep C++
-│  ├─ launcher/            # current C++; R2 candidate
-│  ├─ control/             # current C++; R2 candidate
-│  ├─ package/             # current C++; R1 migration source/baseline
-│  ├─ updater/             # current C++; R1 migration source/baseline
+│  ├─ tsf/                 # Rust TSF target + host-matrix gated adapter/corpus
+│  ├─ engine/              # thin C++ Fcitx adapter + Rust Engine Product Core
+│  ├─ ui/                  # Candidate UI product logic migrates Rust; Win32/D2D adapter may remain during cutover
+│  ├─ config/              # Config product logic migrates Rust; native Windows adapter may remain during cutover
+│  ├─ launcher/            # Rust state/policy core + temporary Windows shell adapter
+│  ├─ control/             # Rust command/schema/policy core + temporary Windows shell adapter
+│  ├─ package/             # Rust package/repository/update authority with temporary adapters
+│  ├─ updater/             # Rust migration source/baseline
 │  ├─ common/
 │  ├─ register/            # minimal C++ Windows helper
 │  └─ bootstrap/           # minimal C++ Windows helper
@@ -1972,7 +1970,7 @@ IME 的 bug 不一定只在 IME 一侧。对 Chrome/Edge、Firefox、Windows Ter
 └─ .github/workflows/
 ```
 
-Rust workspace 不是新的“项目中心”。它只承载已经获准的 R1/R2 target；CMake/build.ps1 仍是顶层 Windows product build orchestrator。共享协议靠 wire contract/golden corpus，跨语言业务逻辑不靠巨型 FFI bridge。某个 C++ 实现完成 cutover 后应在同批次删除，不在 `src/` 与 `rust/` 永久维护两份 authoritative 实现。
+Rust workspace 承载产品自有 Rust authority；CMake/build.ps1 仍是顶层 Windows product build orchestrator。共享协议靠 wire contract/golden corpus，跨语言业务逻辑不靠巨型 FFI bridge。某个 C++ 实现完成 cutover 后应在同批次删除，不在 `src/` 与 `rust/` 永久维护两份 authoritative 实现。直接操作 Fcitx core/addon 对象的 C++ adapter 是长期边界，不是待绑定进 Rust 的 TODO。
 
 ## 13.2 C++ 规则
 
@@ -1986,24 +1984,25 @@ Rust workspace 不是新的“项目中心”。它只承载已经获准的 R1/R
 
 - 任何新增依赖必须说明：用途、许可证、最小 Windows、二进制体积、是否可访问网络/输入、是否支持目标工具链。
 
-## 13.3 WTL / Candidate UI / Rust 迁移边界
+## 13.3 Config / Candidate UI / Rust 迁移边界
 
-### WTL / Config — Keep C++
+### Config — Rust product logic + native adapter during migration
 
-- WTL 只用于 `fcitx5-config.exe` / 必要 management windows；它不是 Candidate renderer，也不进入 TSF/engine 输入热路径。
-- Config 采用**混合原生 + D2D Settings Surface**：EDIT/复杂文本输入/系统 dialog 等保持 native HWND；NavigationItem、SettingRow、Toggle、SegmentedControl、Slider、ThemeCard、InputMethodCard、Banner、Preview 等由小型可复用 D2D component layer按需实现。该层只服务本产品，不演化成通用 GUI framework；每个自绘交互组件必须提供 keyboard/focus/UI Automation/High Contrast 等价语义。
+- Config 的 typed state、validation、command orchestration、preview state、package/config protocol 继续迁 Rust；native HWND/WTL/D2D 只作为 Windows adapter 或 spike 对照存在。
+- 若继续 WTL 路线，WTL 只用于 `fcitx5-config.exe` / 必要 management windows；它不是 Candidate renderer，也不进入 TSF/engine 输入热路径。
+- Config UI 采用任务导向的原生/轻量自绘 Settings Surface：EDIT/复杂文本输入/系统 dialog 等可保持 native HWND；NavigationItem、SettingRow、Toggle、SegmentedControl、Slider、ThemeCard、InputMethodCard、Banner、Preview 等由小型可复用 component layer按需实现。该层只服务本产品，不演化成通用 GUI framework；每个自绘交互组件必须提供 keyboard/focus/UI Automation/High Contrast 等价语义。
 - Config 不读取实时按键/preedit/commit history；网络操作通过 package/updater domain；配置语义通过 typed Control API/共享 schema 获得。
 - 候选皮肤预览不得重写第二套 renderer。调用真实 Candidate renderer 的 synthetic preview path，只发送固定测试 CandidateModel/theme snapshot。
 - Config/Control 的 child-process execution 必须只有一个 authoritative primitive：并发 drain stdout/stderr、bounded output、timeout、取消/Job containment；禁止复制“先 wait child 再读 pipe”的实现。
-- WTL/ATL toolchain 必须由命令行 MSVC/CMake 无人值守构建；不因 Rust R1/R2 引入而迁移 Config。
+- Config Rust cutover 必须先有 UIA、DPI、High Contrast、keyboard-only、typed API、startup/perf 和 Legacy/Win7 决策证据；不得长期保留 WTL shipping、Rust PoC 和第三套 UI。
 
-### Candidate UI / C++ — Hold
+### Candidate UI — Rust product logic + Win32/D2D adapter during migration
 
-- `fcitx5-ui.exe` 继续使用 C++ + Win32 + Direct2D + DirectWrite；所有 COM/D2D/DWrite/HANDLE/HWND 资源有明确 RAII owner。
+- Candidate model/layout/interaction、freshness/order、presentation policy、snapshot DTO 和用户 action intent 继续保持 Rust authority；Win32 + Direct2D + DirectWrite renderer 可阶段性保留为 adapter。
 - CandidateModel/theme/layout 与 renderer 分层；renderer 不拥有 authoritative candidate state。
-- v1.8 先修 UILess PresentationPolicy、A→B→A context/composition identity、active locale 与 config-generation reload；这些是语言无关逻辑问题，禁止用 Rust rewrite 掩盖。
+- Candidate semantics 跟随 upstream `CandidateList` 与 candidate action API；Rust 层不私有发明删除/忘记/固定候选等插件语义。
 - 对 IPC/theme/assets 先校验长度、数量、维度、路径与资源预算；Device loss、DPI、多屏、font fallback、High Contrast、RDP/低性能降级有可重放测试。
-- 只有出现重复、可归因且现有 RAII/fuzz/隔离无法合理控制的 memory-safety/维护问题，才允许 ADR 评估 Rust D2D renderer；评估前必须已有 screenshot/golden/perf/a11y corpus。
+- Rust D2D renderer cutover 前必须已有 screenshot/golden/perf/a11y corpus；不能以 Rust rewrite 掩盖 UILess、A→B→A、locale、reload 等语义问题。
 
 ### Rust R1 — 不可信数据与更新域
 
@@ -2017,12 +2016,13 @@ Generation Draining 的 Windows-specific 文件语义（in-use DLL rename、atom
 
 在 R1 稳定后再评估 `launcher / control / diagnostics / shared process-execution`。进入 R2 前先在 C++ 中修好并测试：launcher crash ledger 跨自身重启、process capture 并发 drain/cancel、session/SID ownership、repair semantics。Rust 的 `enum`/强类型用于减少非法状态，但不得把旧状态机的逻辑错误逐行翻译。
 
-### 明确禁止的 Rust 化
+### 明确禁止的错误 Rust 化
 
-- `fcitx5-tsf.dll`：Keep C++；宿主进程内禁止 Rust FFI/runtime。
-- `fcitx5-engine.exe`：Keep C++；Fcitx upstream C++ API/addon 生态是自然边界。
-- `fcitx5-config.exe`：Keep C++/WTL；美观问题不构成迁移证据。
-- register/bootstrap：保持最薄 C++ Windows helper；安全性靠输入 artifact identity、权限边界和可确认 child lifecycle，而不是语言替换。
+- 不为 Rust Engine 建立完整 Fcitx C++ API binding；Rust 不持有 `fcitx::*` object 指针，不模拟 Fcitx inheritance/vtable。
+- 不做 Windows 私有 Rust rewrite upstream addons；Windows 产品只决定 package/static/dynamic 部署、隔离、配置和 UI 呈现。
+- 不把插件模型写死为动态 DLL；必须支持 static/built-in 与 dynamic/package-loaded。
+- 不把当前 Fcitx frontend API 形状冻结成永久 Rust ABI；Engine protocol 必须 versioned、capability-aware、extensible。
+- register/bootstrap 可保持最薄 Windows adapter；安全性靠输入 artifact identity、权限边界和可确认 child lifecycle，不靠语言替换叙事。
 - 不把 Rust 行数比例、crate 数量、`unsafe` 百分比作为产品/工程 KPI。
 
 ## 13.4 Anti-Cheat Friendly Build 规则
@@ -2123,23 +2123,33 @@ publish exact files
 - Config GUI 只是 artifact，不拥有 Core build graph、config schema、package resolver 或 signing policy。
 - hosted runner 原则上即可完成完整构建；只有签名硬件/证书等真实安全需求才使用专用 runner，不允许因为 GUI build 需要桌面 session 而引入 self-hosted“宠物机”。
 
-## 13.6 Windows 技术栈决策：C++ 核心边界 + 风险驱动 Rust management plane
+## 13.6 Windows 技术栈决策：Fcitx C++ island + Rust product plane
 
-**v1.7 正式选择冻结为：**
+**v1.8 当前选择冻结为：**
 
-| 组件 | 当前/目标技术 | v1.7 决策 |
+| 组件 | 当前/目标技术 | v1.8 决策 |
 |---|---|---|
-| `fcitx5-tsf.dll` | C++ / Win32 / COM / TSF | **Keep C++。** 宿主内最小创新；不通过 FFI 引入 Rust runtime/allocator/panic 边界。 |
-| `fcitx5-engine.exe` | C++ / Fcitx5 | **Keep C++。** 完成 generic InputContext capability/profile adapter，不包 Rust FFI。 |
-| `fcitx5-ui.exe` | C++ + Win32 + Direct2D + DirectWrite | **Hold。** 先修 UILess/context/locale/config-generation；只有真实 memory-safety/维护证据才 ADR 评估重写。 |
-| `fcitx5-config.exe` | C++ + WTL/ATL + Win32 | **Keep C++。** 原生、Legacy 可控、可命令行构建；不为语言统一换 Slint/Tauri/wx。 |
+| `fcitx5-tsf.dll` | Rust / windows-rs / COM / TSF | **Rust product component。** 宿主内仍保持最小依赖、panic containment、fail-open、无 Fcitx/libime/addon 链接。 |
+| `fcitx5-engine.exe` | Rust Engine Core + thin C++ Fcitx adapter | **Mixed by boundary。** Rust 拥有 protocol/state/validation/revision/generation/policy/IPC；C++ 只直接操作 Fcitx core/addon 对象。 |
+| `fcitx5-ui.exe` | Rust target with Win32/D2D/DWrite adaptation allowed during migration | **Rust product component。** Candidate UI 产品语义、snapshot、layout policy 和 rendering state 继续迁 Rust；保留薄 Windows adapter 直到 cutover evidence 足够。 |
+| `fcitx5-config.exe` | Rust target with native Windows adapter allowed during migration | **Rust product component。** typed settings、command orchestration、preview state、validation 和 package/config protocol 迁 Rust；不为 GUI 框架重写而丢失 native/a11y 约束。 |
 | package / repository / updater / downloader / provider | C++ current → **Rust R1** | **首选迁移域。** Modern-first；contract + hostile corpus + differential + package smoke 后逐组件 cutover。 |
 | elevated deployer | 最小 C++ current；Rust R1 可选 | 权限面必须最小；只有 Modern/Legacy toolchain 与 artifact identity 证据通过才迁。 |
 | launcher / control / diagnostics / process-exec | C++ current → **Rust R2** | 第二波；先修 crash ledger、pipe/cancel/session 状态语义，再 side-by-side differential。 |
-| register / bootstrap | 最小 C++ | 保持 Windows 薄层；收紧 validated artifact 与 side-effect child lifecycle，不为 Rust 重写。 |
+| register / bootstrap | Rust policy + 最小 Windows adapter | 产品策略迁 Rust；Win32 registry/elevation/DllRegisterServer 调用层保持最薄并可继续收缩。 |
 | installer | Inno Setup | 成熟 installer；明确 machine/user ownership，不让 elevated uninstall 依赖“当前 HKCU”。 |
 
-Rust 的目标是降低**不可信数据、文件系统、网络、更新事务和复杂状态机**的实现风险，而不是追求“全 Rust”。Modern lane 可以先采用 Rust R1/R2；Legacy lane 对每个组件单独证明 Win7 Rust target 的工具链和依赖可维护性，未证明则保留该组件 C++ Legacy lineage。两条 lineage 必须来自同一 source commit，并在各自 lineage 内 Build Once。
+Rust 的目标是让产品自有 Windows 逻辑成为 memory-safe、typed、可差分验证的实现，而不是重写 Fcitx 上游。Modern lane 可以继续采用 Rust R1/R2/R3；Legacy lane 对每个组件单独证明 Rust target 的工具链和依赖可维护性，未证明则保留该组件 Legacy adapter lineage。两条 lineage 必须来自同一 source commit，并在各自 lineage 内 Build Once。
+
+### 13.6.0 Fcitx 上游边界硬规则
+
+1. Fcitx5 core object model 不做 Rust rewrite。
+2. Upstream addons 不做 Windows 私有 Rust rewrite。
+3. 直接操作 Fcitx-facing object 的层保持薄 C++ adapter。
+4. 其余产品逻辑继续 Rust 化。
+5. Addon 抽象必须支持 static/built-in 与 dynamic/package-loaded，不得假设 `Addon == DLL`。
+6. Candidate semantics 尽量跟随 Fcitx `CandidateList` 和 upstream candidate action API；Rust Candidate 层只负责传输、状态、UI 与用户触发 intent。
+7. Engine protocol 使用 capability model：`TEXT_COMMIT`、`TEXT_COMMIT_WITH_CURSOR`、`TEXT_DELETE_SURROUNDING`、`TEXT_REPLACE_SURROUNDING`、`CANDIDATE_ACTION` 等可扩展能力，不把当前 Fcitx frontend API 固定成封闭动作 enum。
 
 ### 13.6.1 皮肤与美观策略
 
@@ -3020,11 +3030,11 @@ D2D device loss
 
 | **阶段**                                       | **Codex 任务** | **完成标准** |
 |------------------------------------------------|----------------|----------------|
-| Phase 0：参考基线与源码审计 | 固定参考仓库/commit；建立 Reference Matrix。先审计 `windows-chewing-tsf` 的 TSF/UILess/out-of-process UI/build/test，再审计 `gaboolic/fcitx5-windows` 的 Fcitx adapter/event-loop/addon 接线，并用 `win-mcbopomofo` 校对 thin client/server 边界；Weasel 只建立兼容病例索引。对每个 subsystem 记录 Keep / Rewrite / Do-not-inherit。 | `reference-baseline.md` 入仓；明确“Chewing 主教材、gaboolic 仅 Fcitx 接线、win-mcbopomofo 进程边界、Weasel 病例库”；每个关键设计能指出首选参考和禁止继承项；不得仅凭 README 或旧记忆实现，也不得平均通读所有参考仓。 |
+| Phase 0：参考基线与源码审计 | 固定参考仓库/commit；建立 Reference Matrix。Fcitx 语义以 `fcitx/fcitx5` core 与 addon upstream 为权威；Windows 侧审计 `windows-chewing-tsf` 的 TSF/UILess/out-of-process UI/build/test，并用 `win-mcbopomofo` 校对 thin client/server 边界；Weasel 只建立兼容病例索引。对每个 subsystem 记录 Keep / Rewrite / Do-not-inherit。 | `reference-baseline.md` 入仓；明确“Fcitx upstream 语义权威、Chewing/WinMcBopomofo/Weasel 为 Windows 病例教材、现有 Windows port 不作架构权威”；每个关键设计能指出首选参考和禁止继承项；不得仅凭 README 或旧记忆实现，也不得平均通读所有参考仓。 |
 | Phase 1A：最小构建基线 | 建立 CMake、x86/x64 toolchain、统一 `build.ps1`、`.editorconfig`/clang-format、CMakePresets、clean-build/bootstrap；建立最小 PR CI 与 warnings/secret/license/SCA 基线；把现有 SR/NFR/SC 需求作为约束登记，但**不预建尚无真实 target 的 fuzz/property/model framework**。 | clean checkout 可构建 x86/x64 C++ Core 空壳；`build.ps1 dev/test` 有确定结果；基础 dependency/license/secret checks 可运行。完成即进入 1B，不继续装饰 CI。 |
 | Phase 1B：First Vertical Slice | 以 `windows-chewing-tsf` 为 TSF 主参考、`win-mcbopomofo` 为 thin client/server 次参考，复用成熟 TSF 最小骨架，建立最小 versioned IPC 与 mock engine，只实现足够完成一次端到端文本输入/commit 的字段和行为；先以 Notepad 跑通真实 `TSF → IPC → mock engine → Commit`。 | x86/x64 TSF 可注册/激活；Notepad 中最小输入/commit 成功；engine 不存在/失败时宿主不崩、不无限等待；主链已有第一个可自动回归的 E2E。 |
 | Phase 2：IPC / KeyEvent + Launcher 硬化 | 在已工作的主链上固定 request/response、epoch/context/composition/revision、SID+Session、DACL、peer identity、bounded I/O；把 Windows KeyEvent 从简单 VK 扩展为能表达 physical/logical key、scan/extended、release、layout/AltGr/dead-key 的语言中立 contract。Launcher 先用 C++ 修正并固化 crash ledger/backoff/SafeMode 语义；**R2 此时不得先重写。** | 错误/截断协议安全拒绝；32-client stress/idle 无积压；timeout/late work/backoff 确定；AltGr/dead-key/layout golden 通过；peer identity 为 handle-based；launcher 自身重启不能清零 crash storm；`25 ms` 仍仅为经测量固化的 bounded budget。 |
-| Phase 3：Fcitx5 / libime + 通用 InputContext / 单一 TSF Profile | 以 `gaboolic/fcitx5-windows` + Fcitx upstream 为接线参考，保持独立 C++ engine；补 surrounding text、delete surrounding、forward key 等真实 engine/addon 所需 capability；Windows 侧维持单一稳定 `Fcitx5` TSF profile，Fcitx input method/group 与 BCP-47/content locale 作为内部动态状态。通用 warmup 禁止伪造用户文本键。 | Notepad composition/commit；多 context 不串状态；engine restart epoch 正确；Rime/拼音及至少一个非中文 engine 可在同一 Windows `Fcitx5` profile 内切换，DWrite locale/输入语义随当前 Fcitx metadata 正确变化；surrounding/delete/forward contract tests 通过；warmup 无副作用。 |
+| Phase 3：Fcitx5 / libime + 通用 InputContext / 单一 TSF Profile | 以 `fcitx/fcitx5` core 与 addon upstream 为语义权威，建立 thin C++ Fcitx adapter + Rust Engine Product Core；补 surrounding text、delete surrounding、atomic replacement、candidate action、forward key 等真实 engine/addon 所需 capability；Windows 侧维持单一稳定 `Fcitx5` TSF profile，Fcitx input method/group 与 BCP-47/content locale 作为内部动态状态。通用 warmup 禁止伪造用户文本键。 | Notepad composition/commit；多 context 不串状态；engine restart epoch 正确；Rime/拼音及至少一个非中文 engine 可在同一 Windows `Fcitx5` profile 内切换，DWrite locale/输入语义随当前 Fcitx metadata 正确变化；surrounding/delete/replace/action/forward capability contract tests 通过；warmup 无副作用。 |
 | Phase 4：CandidateModel + 独立 C++ D2D UI + UILess | 保留 C++ Win32/D2D/DWrite renderer；把 UILess `popup_allowed/presentation_mode` 做成跨进程 context policy；修正 `(epoch, context, composition, revision)` 作用域和 A→B→A；DWrite locale 跟 active Fcitx input method/content locale/文本语言走；配置 reload 由 generation/broadcast 驱动、文件时间仅低频 fallback。继续 DPI、多屏、device loss、无障碍、theme/golden。**不因 Rust 可写 D2D 而重写 renderer。** | Word/UILess host 返回 `show=false` 时独立 popup 不显示而 UIElement/a11y 仍可用；A→B→A 不误丢合法 snapshot；非 zh-CN internal engine/content locale 字体/locale 正确；125/150/200%/多屏/device-loss/High Contrast 通过；隐藏时无持续 render loop/输入频率磁盘 polling。 |
 | **Milestone D0.1：First Usable / Dogfood Build** | **停止增加平台能力，打出一个供维护者日常使用的 Developer Preview。** 允许开发安装脚本/手工安装；不要求插件商店、自动更新、Plum GUI、winget/Chocolatey 或完整 package repository。把 League of Legends + Vanguard 提前作为一等真实宿主：只验证正规 TSF/Windows 系统兼容路径，不为游戏新增 Hook/SendInput/注入/规避。 | 能在日常 Windows 环境持续使用：x86/x64、真实 Fcitx5、真实候选 UI、基本字体/主题/横竖排；Notepad/Word/Chrome/VS Code 可输入；LoL 游戏内聊天至少完成 composition/candidate/commit、Alt+Tab 恢复和控制键 passthrough smoke，Vanguard 正常且无特殊规避代码；engine/UI 故障不拖垮宿主。达到后先 dogfood 和修真实问题，再进入 Phase 5。 |
 | Phase 5：可靠性、安全与兼容 + R2 前置 | 基于真实宿主补 Weasel/Rabbit/Moqi/WindInput/host-side regression；完成 launcher crash ledger、Control/Config authoritative process execution、peer identity、register/bootstrap side-effect containment、LoL/Vanguard、老游戏、RDP、Win7 Legacy VM。全部 C++ 语义稳定后，才允许按 R2 对 launcher/control/diagnostics 做 side-by-side Rust PoC。 | engine/UI crash 不杀宿主；launcher 自身重启不能绕过 SafeMode；64KiB/1MiB child output/hang/cancel 测试通过；Win7 VM + Office/terminal/老 x86/LoL 核心矩阵通过；R2 若启动必须 differential 通过且未引入 anti-cheat/Legacy 回归。 |
@@ -3062,7 +3072,7 @@ Codex 在读取/执行用户请求后先内部归类为 RESEARCH、REVIEW、CHAN
 
 2. 检查当前仓库现状，不覆盖已有正确实现；先列出与本规格冲突的地方。
 
-3. 核对当前 upstream Fcitx5、fcitx5-windows、fcitx5-plugins、Windows TSF 文档；外部 API/ABI 不凭旧记忆硬写。
+3. 核对当前 `fcitx/fcitx5`、各 addon upstream、Windows TSF 文档，以及只作为构建/依赖清单参考的 `fcitx5-plugins`；外部 API/ABI 不凭旧记忆硬写，不使用现有 Windows port 作为 Engine/Package 架构依据。
 
 4. 先搜索本仓现有依赖、Fcitx5/upstream API 与 Windows API 是否已经提供所需能力；确认不能满足后才考虑新增依赖或自研。
 
@@ -3212,9 +3222,7 @@ Codex 实现前应优先核对以下 upstream / 官方文档的当前状态。�
 
 - **Fcitx5:** [<u>https://github.com/fcitx/fcitx5</u>](https://github.com/fcitx/fcitx5)
 
-- **Fcitx5 Windows prototype:** [<u>https://github.com/fcitx-contrib/fcitx5-windows</u>](https://github.com/fcitx-contrib/fcitx5-windows)
-
-- **Fcitx5 cross-platform plugins:** [<u>https://github.com/fcitx-contrib/fcitx5-plugins</u>](https://github.com/fcitx-contrib/fcitx5-plugins)
+- **Fcitx5 cross-platform plugins:** [<u>https://github.com/fcitx-contrib/fcitx5-plugins</u>](https://github.com/fcitx-contrib/fcitx5-plugins) — 只作为跨平台插件构建与依赖清单参考，插件语义仍以各 addon upstream 为准。
 
 - **Rust Win7 MSVC target:** [<u>https://doc.rust-lang.org/rustc/platform-support/win7-windows-msvc.html</u>](https://doc.rust-lang.org/rustc/platform-support/win7-windows-msvc.html)
 
@@ -3265,14 +3273,14 @@ Microsoft DXUT/IME 行为以 Microsoft Learn / Windows classic DirectX sample �
 
 # 附录 D. Reference Implementation Matrix
 
-**全局学习优先级：**`windows-chewing-tsf` 是 Windows IME 主教材；`gaboolic/fcitx5-windows` 仅承担 Fcitx5 Windows 接线教材；`win-mcbopomofo` 是 thin client/server 与 out-of-process candidate 教材；Weasel 是成熟 Windows 兼容病例库。Codex 先按 Phase 读取这四者中的必要部分，WindInput/Moqi/Rabbit/PIME/Cassotis 等只为当前问题补盲，不要求全仓通读。
+**全局学习优先级：**Fcitx 语义以 `fcitx/fcitx5` 和各 addon upstream 为权威；Windows IME/TSF 经验以 Microsoft TSF 文档、`windows-chewing-tsf`、`win-mcbopomofo`、Weasel 等作为病例教材。现有 Windows port 不作为 Engine/Package/Candidate 架构权威。Codex 先按 Phase 读取必要部分，WindInput/Moqi/Rabbit/PIME/Cassotis 等只为当前问题补盲，不要求全仓通读。
 
 **参考不是继承授权。** 每次借鉴都必须在 `reference-baseline.md` 或当前 Task Contract 记录：`问题 → 参考 commit/文件 → 借用的行为/模式 → 明确不继承的历史设计 → 许可证处理`。若只能通过复制大量 GPL 源码才能实现，应停止并重新设计边界。
 
 | **问题域**                | **首选参考**                          | **次参考**          | **使用规则**                                                         |
 |---------------------------|---------------------------------------|---------------------|----------------------------------------------------------------------|
 | TSF 规范/基础语义         | Microsoft SampleIME                   | Weasel / Chewing    | 先按官方模型判断，再吸收实战 workaround。                            |
-| Fcitx5 Windows 接入       | gaboolic/fcitx5-windows               | Fcitx upstream      | 保留 Fcitx adapter/TSF 接线；重构 IPC、UI、启动。                    |
+| Fcitx5 core/addon 语义    | `fcitx/fcitx5` + 各 addon upstream    | fcitx5-plugins 构建清单 | Fcitx object 操作留薄 C++ adapter；产品协议/状态/策略/IPC 迁 Rust；不重写 upstream addons。 |
 | TSF 生命周期/Composition  | windows-chewing-tsf                    | Weasel / Khiin       | Chewing 为主教材；Weasel 主要补真实 callback/host 病例。              |
 | IPC ACL / peer security   | windows-chewing-tsf                   | Moqi                | SID+Session、显式 ACL、server PID/path/signature。                   |
 | IPC timeout/recovery      | WindInput                             | Moqi / Cassotis     | overlapped timeout、circuit breaker、stale response、bounded start。 |
@@ -3416,17 +3424,17 @@ Microsoft DXUT/IME 行为以 Microsoft Learn / Windows classic DirectX sample �
 
 | 子系统 | 结论 | 理由 |
 |---|---|---|
-| TSF DLL / TSF lifecycle | **Keep C++ + Fix First** | 宿主内风险最高；先补多语言 profile、通用 KeyEvent、UILess policy；不引入 Rust FFI。 |
-| IPC C++ client/wire | **Keep** | 已有 overlapped I/O、CancelIoEx、request/session/peer 基础；只升级 contract/peer identity。 |
-| Fcitx Engine/InputContext | **Keep C++ + Fix First** | upstream C++ 边界天然；补 surrounding/delete/forward/profile/warmup 语义。 |
-| CandidateModel/UI | **Keep C++ + Fix First** | D2D/DWrite/独立进程基础成熟；先修 A→B→A、UILess、locale、reload。 |
-| WTL Config | **Keep C++** | 已解决 headless build；产品收益来自 UX/typed API，不来自语言重写。 |
+| TSF DLL / TSF lifecycle | **Rust product component + host-matrix gate** | Shipping Rust TSF is allowed; 宿主内仍必须最小依赖、panic containment、fail-open、real-host matrix。 |
+| IPC client/wire | **Rust product component** | wire/protocol/transport policy、request/session/peer/deadline 属产品边界，继续迁 Rust；C++ 只可作过渡 adapter。 |
+| Fcitx Engine/InputContext | **Thin C++ Fcitx adapter + Rust Engine Core** | 直接操作 Fcitx object 留 C++；protocol/state/validation/revision/generation/policy/IPC 进入 Rust。 |
+| CandidateModel/UI | **Rust product component** | Candidate semantics 跟随 upstream `CandidateList`/candidate action；Rust 负责 DTO、snapshot、layout policy、UI 状态和用户 intent。 |
+| Config | **Rust product component** | typed settings、validation、command orchestration、preview state 迁 Rust；Windows native/a11y adapter 可阶段性保留。 |
 | package/repository/update | **Rust R1** | 不可信数据、archive/path、签名、anti-rollback、事务状态最集中；Rust收益最高。 |
 | downloader/provider | **Rust R1** | 网络/外部输入边界，且与实时输入域隔离。 |
 | elevated deployer | **R1 optional** | 代码必须最小；只有权限/Win7 toolchain/installer evidence 满足才迁。 |
 | launcher | **Rust R2** | 状态机适合强类型；先修并冻结 crash ledger/recovery contract。 |
 | control/diagnostics/process execution | **Rust R2** | CLI/JSON/child process/repair 状态适合 Rust；先统一 C++ process-exec 行为。 |
-| register/bootstrap | **Keep C++** | 极薄 Windows system layer；优先收紧 artifact identity/timeout lifecycle。 |
+| register/bootstrap | **Thin Windows adapter + Rust policy where useful** | 极薄 Windows system layer 可阶段性保留；artifact identity、operation policy、timeout lifecycle 等产品语义继续收敛到 Rust。 |
 
 ## I.3 Rust migration 不是 rewrite project
 

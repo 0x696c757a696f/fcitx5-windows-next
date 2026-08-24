@@ -25,6 +25,34 @@ int main(int argc, char** argv) {
         return fail("expected repository source root");
     const std::filesystem::path sourceRoot = argv[1];
     const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
+    const auto specSource = read_text(sourceRoot / "docs/spec-v1.8.md");
+    const auto currentTruthSource = read_text(sourceRoot / "docs/current.md");
+    const auto engineBoundarySource = read_text(sourceRoot / "docs/engine-boundary.md");
+    const auto programPlanSource = read_text(sourceRoot / "docs/technical-program-plan.md");
+    const auto referenceBaselineSource = read_text(sourceRoot / "docs/reference-baseline.md");
+    const auto upstreamBoundaryAdr =
+        read_text(sourceRoot / "docs/adr/0009-fcitx-upstream-boundary.md");
+    if (specSource.find("fcitx-contrib/fcitx5-windows") != std::string::npos ||
+        programPlanSource.find("fcitx-contrib/fcitx5-windows") != std::string::npos ||
+        referenceBaselineSource.find("fcitx-contrib/fcitx5-windows") != std::string::npos) {
+        return fail("FCITX-UPSTREAM-BOUNDARY: fcitx-contrib/fcitx5-windows must not be an architecture reference");
+    }
+    if (upstreamBoundaryAdr.find("Fcitx Upstream Boundary and Rust Product Plane") ==
+            std::string::npos ||
+        currentTruthSource.find("Rust Engine Product Core + thin C++ Fcitx adapter") ==
+            std::string::npos ||
+        engineBoundarySource.find("Fcitx Object Owners") == std::string::npos ||
+        engineBoundarySource.find("Rust Product-State Owners") == std::string::npos ||
+        engineBoundarySource.find("TEXT_REPLACE_SURROUNDING") == std::string::npos ||
+        engineBoundarySource.find("std::string") == std::string::npos ||
+        upstreamBoundaryAdr.find("Addon == DLL") == std::string::npos ||
+        upstreamBoundaryAdr.find("TEXT_REPLACE_SURROUNDING") == std::string::npos ||
+        upstreamBoundaryAdr.find("Do not rewrite upstream addons") == std::string::npos ||
+        specSource.find("13.6.0 Fcitx") == std::string::npos ||
+        specSource.find("TEXT_REPLACE_SURROUNDING") == std::string::npos ||
+        specSource.find("upstream addons") == std::string::npos) {
+        return fail("FCITX-UPSTREAM-BOUNDARY: Fcitx C++ island, addon model, and capability protocol rules must stay recorded");
+    }
     if (cmakeSource.find("fcitx5_deployer ALL") == std::string::npos ||
         cmakeSource.find("NAME deployer-version") == std::string::npos ||
         cmakeSource.find("NAME deployer-boundary-smoke") == std::string::npos) {

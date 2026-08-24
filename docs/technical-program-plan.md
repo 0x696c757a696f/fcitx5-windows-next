@@ -22,11 +22,11 @@ Host → TSF → bounded IPC → Launcher/Engine → Fcitx5 → CandidateModel
 
 | Phase | 主参考 | 本阶段交付 | 退出门禁 |
 | --- | --- | --- | --- |
-| 0 | Chewing；gaboolic/Fcitx、McBopomofo、Weasel 定向补充 | pins、许可证、Reference Matrix、Keep/Rewrite/Do-not-inherit | 每个关键设计有首选参考和禁止继承项 |
+| 0 | `fcitx/fcitx5`、addon upstream、Chewing、McBopomofo、Weasel 定向补充 | pins、许可证、Reference Matrix、Keep/Rewrite/Do-not-inherit | 每个关键设计有首选参考和禁止继承项 |
 | 1A | MSVC/CMake/Windows SDK | x86/x64 空壳、统一 build、编码/静态/依赖基础门禁 | clean checkout 的 `dev/test` 确定通过 |
 | 1B | Chewing + McBopomofo | TSF → versioned IPC → mock engine → Notepad commit | 双架构注册激活；bounded fail-open；自动 E2E |
 | 2 | Chewing；按问题看 WindInput/Moqi | IPC v2、身份/ACL/deadline、Launcher、contract/fuzz/fault | timeout/late/backoff/并发/SYSTEM-LogonUI 确定测试与延迟基线 |
-| 3 | gaboolic/Fcitx + upstream | Fcitx Instance/event loop、InputContext adapter、基础 engine | 多 context 隔离；restart epoch；启动/idle/key repeat 基线 |
+| 3 | `fcitx/fcitx5` core + addon upstream | Fcitx object adapter、capability model、基础 engine | 多 context 隔离；restart epoch；启动/idle/key repeat；surrounding/candidate action capability 基线 |
 | 4 | Chewing + McBopomofo；Weasel 病例 | CandidateModel、独立 C++ D2D UI、UILess、strict TOML、DPI/a11y | 真实宿主候选；UI crash 不阻塞；隐藏无 render loop；Win7 import smoke |
 | D0.1 | 真实宿主 | 停止加能力，维护者 dogfood；LoL+Vanguard 正规 TSF 路径 | 日常输入稳定；无 Hook/SendInput/注入；故障不拖垮宿主 |
 | 5 | Weasel；失败定向看 Rabbit/WindInput/Moqi | 可靠性、安全、Win7/游戏/Office/browser/RDP 兼容 | crash-loop、hijack、Safe Mode、实机矩阵 |
@@ -40,7 +40,7 @@ Host → TSF → bounded IPC → Launcher/Engine → Fcitx5 → CandidateModel
 ## 状态与进程所有权
 
 - TSF：composition、EditSession commit、UILess 投影；没有 renderer/engine/network。
-- Engine：InputContext、CandidateModel、选择语义、epoch/revision 的唯一权威。
+- Engine：Rust core 拥有 protocol/state/validation/revision/generation/policy/IPC；薄 C++ adapter 只直接操作 Fcitx `InputContext`、`CandidateList`、addon/config/event 对象。
 - UI：按需启动，非激活渲染不可变 snapshot；窗口消失不改变输入真相。
 - Launcher：per-user/per-session；Engine 监督、UI 按需拉起/退避、托盘与最小健康状态。
 - Config/package/updater/deployer：按需，完成后退出。
@@ -98,7 +98,6 @@ renderer synthetic host，不维护第二套近似 UI。
 Advanced 页面只暴露 generic Fcitx addon/config surface：读取 Fcitx 原生 addon/config
 描述并以受限、类型化方式呈现；Windows 层不维护巨型硬编码 input-method/addon 配置映射。
 确有高价值的一线设置可以提升为普通页面，但必须仍以 Fcitx 原生配置为单一语义来源。
-`docs/macos-config-reference.md` 记录 macOS 配置器和 fcitx-contrib 文档中可借鉴的能力边界：
 输入法分组、addon 动态配置、typed option renderer、插件管理器、数据/词库/短语管理等均
 通过 engine/control 暴露，不从 TSF DLL、Candidate UI 或包管理代码直接加载 Fcitx addon。
 
@@ -116,6 +115,13 @@ hostile corpus、golden corpus 和 fuzz seeds，再做 C++↔Rust correctness di
 只有 differential 通过后才比较性能、资源和包体积；performance second，不能用更快但语义
 不一致的 Rust 实现替换现有 C++。切换按单组件 cutover 完成，同批删除旧实现，不保留永久
 双栈。
+
+Fcitx 边界采用 ADR 0009：Fcitx5 core object model 和 upstream addons 不 Rust 重写；直接
+操作 `Instance`、`InputContext`、`AddonManager`、`CandidateList`、Fcitx config/event 的
+层保持薄 C++ adapter；其余产品逻辑继续 Rust 化。Addon 抽象必须支持 static/built-in 与
+dynamic/package-loaded，不假设 `Addon == DLL`。Engine protocol 必须使用可扩展 capability
+model，例如 `TEXT_COMMIT`、`TEXT_COMMIT_WITH_CURSOR`、`TEXT_DELETE_SURROUNDING`、
+`TEXT_REPLACE_SURROUNDING`、`CANDIDATE_ACTION`。
 
 ## 本轮执行队列
 
