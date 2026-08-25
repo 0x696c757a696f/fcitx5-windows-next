@@ -1,19 +1,10 @@
 # Current Truth Snapshot
 
-Date: 2026-08-24 (updated after the 2026-08-24 review rebaseline)
+Date: 2026-08-25 (updated after the Rust TSF package cold-start candidate UI fix)
 
-HEAD recorded at snapshot start: `e993dfc6cbd0d1688ef67f153cb1164a0e144955`
+HEAD recorded at snapshot start: `d018f1bc4b2301051e687ff4311736ba36067b29`
 
-Working tree at snapshot start: `candidate-core` label-gap layout and launcher
-clock Rust-ownership work in progress (uncommitted). Files touched at this
-snapshot: `rust/candidate-core/src/lib.rs`,
-`rust/windows-common-core/src/lib.rs`, `src/config/app_main.cpp`,
-`src/launcher/launcher_main.cpp`, `src/ui/ui_main.cpp`,
-`tests/unit/source_contract_test.cpp`,
-`tools/capture-candidate-evidence.ps1`. These are part of the
-Candidate label-gap/right-aligned label cell work and the Launcher
-`GetTickCount64` -> Rust tick/deadline source cutover; source-contract guards
-and candidate-core tests were updated in the same working tree.
+Working tree at snapshot start: clean.
 
 ## Shipping Architecture
 
@@ -33,8 +24,8 @@ Windows host
 
 | Surface | Current state | Direction |
 |---|---|---|
-| TSF | Shipping Rust target exists; real-host matrix remains pending | Rust product component gated by host evidence |
-| Engine | C++ Fcitx runtime owns direct Fcitx objects and still owns product state maps | Split into Rust Engine Product Core + thin C++ Fcitx adapter |
+| TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
+| Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
 | Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter |
 | Config | C++ WTL/Win32 shell; Rust config PoC and Rust text/process adapters exist | Rust product logic with native adapter or time-boxed product spike decision |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
@@ -46,32 +37,33 @@ Windows host
 
 | PoC / migration lane | State | Exit condition |
 |---|---|---|
-| Rust TSF | `MIGRATION-CANDIDATE` / real-host matrix pending | Full key/focus/composition/UILess/bounded IPC parity, x86/x64, unload/refcount, host matrix |
+| Rust TSF | `SHIPPING-AUTOMATED-GREEN` / real-host matrix pending | Full host matrix evidence before release readiness |
 | Rust Config | `MIGRATION-CANDIDATE` | Time-boxed product spike or explicit ADR choosing WTL+D2D vs Rust native Config |
 | Candidate Rust core | `SHIPPING-DOMAIN` | Remove duplicated C++ validation/state, preserve renderer evidence, add candidate-action/upstream alignment |
 | Rust package/update/control/launcher cores | `SHIPPING-DOMAIN` where already cut over, `MIGRATION-CANDIDATE` where shell remains | Delete replaced C++ authoritative implementation and keep adapter thin |
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
-| Engine E2 `engine-core` ledger | `CUTOVER-GREEN` (Rust authoritative; ledger + carets/popupAllowed/selectedOverride/inputMethodOverridden cut over, C++ maps deleted) | Deferred: `pendingStates` derived cache (E5 snapshot DTO), `EngineEpoch`/`Generation` (E4 IPC scope); then E3 Event→Action |
-| Engine E3 Event→Action | `CUTOVER-GREEN` (unified `handle_key_event` entry; 4 product decisions Rust-owned, `processKey` executes the returned decision) | E4: IPC transport/framing/session/deadline + `EngineEpoch`/`Generation` to Rust; `pendingStates` moves with E5 snapshot DTO |
-| Engine E4 IPC scope | `PARTIAL` (E4-1+E4-2: `EngineEpoch` generate/validate, request ordering, key deadline policy Rust-owned in engine-core; `handleRequest` applies them) | Remaining E4: transport/framing consolidation + per-connection session state; `Generation` stays release-platform scope |
+| Engine E2 `engine-core` ledger | `CUTOVER-GREEN` (Rust authoritative; ledger + carets/popupAllowed/selectedOverride/inputMethodOverridden cut over, C++ maps deleted) | — |
+| Engine E3 Event→Action | `CUTOVER-GREEN` (unified `handle_key_event` entry; 4 product decisions Rust-owned, `processKey` executes the returned decision) | — |
+| Engine E4 IPC scope | `PARTIAL` (engine epoch, request ordering, key deadline policy, and per-connection session state are Rust-owned; transport/framing primitives are partially prepared in `windows-common-core`) | Remaining E4: server-side transport/framing consolidation; `Generation` stays release-platform scope |
 | Engine E5 snapshot/status canonicalization | `CUTOVER-GREEN` (canonicalization + typed `EngineSnapshot` DTO limits + `pendingStates` store Rust-owned; `collectResult`/`selectCandidate`/`takePendingState` apply them) | — |
 | Engine E6 C++ product-state deletion | `CUTOVER-GREEN` (`candidate_navigation.h` + unit test deleted; scroll label offset Rust-owned; only Fcitx adapter + Windows process shell remain) | — |
 
 ## Current Red Lights
 
 - Real-host matrix for Rust TSF remains manual-pending.
+- Package cold-start candidate UI is green on local Notepad x64: final package stage `D:\Documents\GitHub\fcitx5-windows-next\out\package\stage-389ce50e5e5b4981ae3527bc18053fc6\Fcitx5` contains rebuilt x64/x86 Rust TSF DLLs; `--candidate-window` smoke sees `candidates=128 visibility=1`; `nihao + Space` commits `你好`.
 - Strict direct clippy with `-D warnings` still hits existing `too_many_arguments` helpers in `rust/windows-common-core`; adjusted clippy with that existing lint allowed is green.
 - Cargo registry crates are checked against `third_party/dependencies.json` by name and version before dependency checks and SBOM generation. Advisory review for the declared dependency set remains an external process.
 - Runtime security now has explicit `Win10` and `Win7` lanes. The modern `Win10` lane remains the default full PE/source audit; product networking is enforced through source-boundary scanning plus PE blocking for explicit HTTP/URL stacks because Rust-linked MSVC binaries import `WS2_32.dll` through Rust std even without product network code. The legacy `Win7` lane is expected to stay red until the launcher/Rust runtime hard import of `GetSystemTimePreciseAsFileTime` is removed or a separate legacy strategy is implemented.
-- Engine product state is migrating to Rust: E1 protocol codec is cut over (`CUTOVER-GREEN`); E2 ledger is cut over (`CUTOVER-GREEN` — `FcitxRuntime::Impl` uses the Rust ledger plus the `carets`/`popupAllowed`/`selectedOverride`/`inputMethodOverridden` maps, C++ maps deleted); `pendingStates` stays a C++ derived cache until the E5 snapshot DTO, and `EngineEpoch`/`Generation` land in the E4 IPC scope; the Fcitx adapter shrink remains.
+- Engine product state is migrating to Rust: E1 protocol codec, E2 ledger, E3 event/action decisions, E4 epoch/request/session policy, and E5 snapshot/pending-state policy are cut over (`CUTOVER-GREEN` where recorded). The Fcitx adapter and remaining Windows process/transport shell shrink remain.
 - Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
 - The TSF profile boundary is now frozen in `docs/tsf-profile-boundary.md`: Windows exposes only the single product profile `Fcitx5`; internal engines/addons remain Fcitx state; obsolete dynamic profile data is cleanup input only.
 - `rust/protocol-core` is now the single authoritative FCW4 codec: `protocol/protocol.cpp` is a thin marshalling adapter over the C ABI (`protocol/protocol_ffi.h`, typed encode/decode + `decode_header` in `capi.rs`), and `protocol-differential-contract` pins the pre-cutover wire bytes via `tests/unit/protocol_wire_golden.inc` (19 samples). C++ `protocol.h` API and all call sites are unchanged; see `docs/fcitx-upstream-rebaseline-audit.md` for the Fcitx5 upstream baseline audit (fork is official `ebf24ddc` + 41 lines; all three Windows-local changes are not yet upstream; 1 of 6 patches applies clean to master).
 
 ## Next Five Code/Design Tasks
 
-1. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
-2. Prepare real-host evidence for TSF generation draining and Rust TSF host matrix.
-3. Engine E1 + E2 are cut over at this HEAD: `protocol/protocol.cpp` is a thin C ABI bridge over the Rust `protocol-core` codec (wire frozen in `protocol_wire_golden.inc`), and `FcitxRuntime::Impl` uses the Rust `engine-core` ledger (`engine_core_ffi.h`) plus the `carets`/`popupAllowed`/`selectedOverride`/`inputMethodOverridden` per-context maps, with all C++ maps deleted; `engine-core-contract` pins the frozen ledger + map semantics and the real `fcitx5-engine.exe` integration acceptance (baseline/typing-fuzz/safe-mode/chttrans) passes on the native-engine lane with an isolated pre-deployed `FCITX_USER_DATA_ROOT`. E3 is cut over: the four Event→Action decisions (input-method switch hotkey, candidate navigation, surrounding text, input-method selection) are Rust-owned and consolidated into the unified `handle_key_event` entry; `processKey` flattens facts once and executes the returned decision. Next step: E4 (IPC transport/framing/session/deadline + `EngineEpoch`/`Generation`); `pendingStates` moves with the E5 snapshot DTO.
+1. Prepare and run real-host evidence for TSF generation draining and the Rust TSF host matrix; do not declare release readiness from Notepad-only evidence.
+2. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
+3. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core` stop-aware pipe primitives, keeping direct Fcitx object ownership in the C++ adapter.
 4. Prepare the Config technology spike/ADR instead of adding more raw WTL controls.
-5. Keep single-profile TSF registration guarded while installer/UAC and host evidence are collected.
+5. Keep single-profile TSF registration guarded while installer/UAC, plugin lifecycle, generation-drain, and host evidence are collected.
