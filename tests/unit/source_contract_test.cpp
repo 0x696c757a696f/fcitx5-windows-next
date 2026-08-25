@@ -1199,6 +1199,16 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("pipe_transfer_rejects_invalid_pipe_like_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transfer_with_stop") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("pipe_transfer_with_stop_rejects_invalid_pipe_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_pipe_connect_client") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("pipe_connect_client_rejects_invalid_pipe_like_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("WaitForMultipleObjects") == std::string::npos ||
+        rustWindowsCommonCore.find("ConnectNamedPipe") == std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transact") ==
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_pipe_transact_with_error") ==

@@ -567,6 +567,13 @@ unsafe extern "system" {
     fn SetLastError(error: u32);
     fn LocalFree(memory: *mut c_void) -> *mut c_void;
     fn CloseHandle(object: *mut c_void) -> i32;
+    fn ConnectNamedPipe(pipe: *mut c_void, overlapped: *mut Overlapped) -> i32;
+    fn WaitForMultipleObjects(
+        count: u32,
+        handles: *const *mut c_void,
+        wait_all: i32,
+        milliseconds: u32,
+    ) -> u32;
 }
 
 #[link(name = "user32")]
@@ -644,6 +651,17 @@ fn pipe_transfer(
     size: usize,
     deadline: u64,
 ) -> bool {
+    pipe_transfer_with_stop(pipe, write, data, size, deadline, std::ptr::null_mut())
+}
+
+fn pipe_transfer_with_stop(
+    pipe: *mut c_void,
+    write: bool,
+    data: *mut u8,
+    size: usize,
+    deadline: u64,
+    stop_handle: *mut c_void,
+) -> bool {
     const ERROR_IO_PENDING: u32 = 997;
     const WAIT_OBJECT_0: u32 = 0;
 
@@ -699,8 +717,15 @@ fn pipe_transfer(
             // SAFETY: Reads the thread-local Win32 error for the I/O call above.
             let error = unsafe { GetLastError() };
             if error == ERROR_IO_PENDING {
-                // SAFETY: Waits on the event owned by this operation.
-                let wait_result = unsafe { WaitForSingleObject(event, wait) };
+                let wait_result = if stop_handle.is_null() {
+                    // SAFETY: Waits on the event owned by this operation.
+                    unsafe { WaitForSingleObject(event, wait) }
+                } else {
+                    let handles = [event, stop_handle];
+                    // SAFETY: Waits on the operation event and the stop handle;
+                    // both are live handles for the duration of the call.
+                    unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, wait) }
+                };
                 if wait_result == WAIT_OBJECT_0 {
                     // SAFETY: The event signaled that this overlapped operation completed.
                     success = unsafe {
@@ -725,6 +750,77 @@ fn pipe_transfer(
         completed += transferred as usize;
     }
     true
+}
+
+fn pipe_connect_client(pipe: *mut c_void, deadline: u64, stop_handle: *mut c_void) -> bool {
+    const ERROR_PIPE_CONNECTED: u32 = 535;
+    const ERROR_IO_PENDING: u32 = 997;
+    const WAIT_OBJECT_0: u32 = 0;
+
+    if pipe.is_null() || pipe == invalid_handle_value() {
+        return false;
+    }
+    // SAFETY: Creates an unnamed manual-reset event for one overlapped connect.
+    let event = unsafe { CreateEventW(std::ptr::null_mut(), 1, 0, std::ptr::null()) };
+    if event.is_null() {
+        return false;
+    }
+    let mut operation = Overlapped {
+        internal: 0,
+        internal_high: 0,
+        offset: 0,
+        offset_high: 0,
+        event,
+    };
+    // SAFETY: The pipe is a live named-pipe server handle created for
+    // overlapped I/O; the event/OVERLAPPED live until the connect completes.
+    let immediate = unsafe { ConnectNamedPipe(pipe, &mut operation) };
+    let mut connected = immediate != 0;
+    if !connected {
+        // SAFETY: Reads the thread-local Win32 error for the connect call above.
+        let error = unsafe { GetLastError() };
+        if error == ERROR_PIPE_CONNECTED {
+            connected = true;
+        } else if error == ERROR_IO_PENDING {
+            let Some(wait) = remaining_milliseconds(deadline) else {
+                // SAFETY: Cancels and drains the outstanding connect before
+                // closing the event handle.
+                let mut transferred = 0_u32;
+                unsafe {
+                    CancelIoEx(pipe, &mut operation);
+                    GetOverlappedResult(pipe, &mut operation, &mut transferred, 1);
+                    CloseHandle(event);
+                }
+                return false;
+            };
+            let wait_result = if stop_handle.is_null() {
+                // SAFETY: Waits on the event owned by this operation.
+                unsafe { WaitForSingleObject(event, wait) }
+            } else {
+                let handles = [event, stop_handle];
+                // SAFETY: Waits on the operation event and the stop handle;
+                // both are live handles for the duration of the call.
+                unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, wait) }
+            };
+            if wait_result == WAIT_OBJECT_0 {
+                let mut transferred = 0_u32;
+                // SAFETY: The event signaled that the connect completed.
+                connected =
+                    unsafe { GetOverlappedResult(pipe, &mut operation, &mut transferred, 0) != 0 };
+            } else {
+                // SAFETY: Cancels and drains this specific outstanding operation
+                // before closing the event handle.
+                let mut transferred = 0_u32;
+                unsafe {
+                    CancelIoEx(pipe, &mut operation);
+                    GetOverlappedResult(pipe, &mut operation, &mut transferred, 1);
+                }
+            }
+        }
+    }
+    // SAFETY: `event` is a live handle from CreateEventW above.
+    unsafe { CloseHandle(event) };
+    connected
 }
 
 fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -979,6 +1075,7 @@ fn pipe_client_process_id(pipe: *mut c_void) -> Option<u32> {
     (ok != 0 && process_id != 0).then_some(process_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_pipe_server_peer(
     pipe: *mut c_void,
     current_service_account: bool,
@@ -1088,6 +1185,7 @@ fn verify_pipe_server_peer(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verified_pipe_client_peer(
     pipe: *mut c_void,
     current_service_account: bool,
@@ -1619,6 +1717,7 @@ fn apply_hello_response_scalars(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn accept_key_response(
     response_to: u64,
     engine_epoch: u64,
@@ -1640,6 +1739,7 @@ fn accept_key_response(
         && ipc_status_ok(status)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn accept_candidate_select_response(
     response_to: u64,
     engine_epoch: u64,
@@ -3024,6 +3124,39 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_transfer(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
+/// `pipe` must be a live overlapped pipe handle. `data` must be null only when
+/// `size` is zero, or point to a buffer covering exactly `size` bytes. For
+/// write operations the buffer is read; for read operations the buffer is
+/// written. `stop_handle` may be null, or must be a live waitable handle that
+/// remains valid for this call. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_transfer_with_stop(
+    pipe: *mut c_void,
+    write: u8,
+    data: *mut u8,
+    size: usize,
+    deadline: u64,
+    stop_handle: *mut c_void,
+) -> u8 {
+    pipe_transfer_with_stop(pipe, write != 0, data, size, deadline, stop_handle) as u8
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `pipe` must be a live named-pipe server handle created for overlapped I/O.
+/// `stop_handle` may be null, or must be a live waitable handle that remains
+/// valid for this call. No handle is closed or retained.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_connect_client(
+    pipe: *mut c_void,
+    deadline: u64,
+    stop_handle: *mut c_void,
+) -> u8 {
+    pipe_connect_client(pipe, deadline, stop_handle) as u8
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
 /// `pipe` must be a live overlapped pipe handle. `request` must be null only
 /// when `request_len` is zero, or point to a readable request buffer.
 /// `response_output` must point to writable storage for `response_capacity`
@@ -4128,6 +4261,72 @@ mod tests {
             1,
             unsafe { GetTickCount64() } + 100
         ));
+    }
+
+    #[test]
+    fn pipe_transfer_with_stop_rejects_invalid_pipe_like_cpp_contract() {
+        // SAFETY: Monotonic Windows tick query with no preconditions.
+        let deadline = unsafe { GetTickCount64() } + 100;
+        assert!(!pipe_transfer_with_stop(
+            std::ptr::null_mut(),
+            true,
+            std::ptr::null_mut(),
+            1,
+            deadline,
+            std::ptr::null_mut(),
+        ));
+        let mut byte = 0_u8;
+        assert!(!pipe_transfer_with_stop(
+            invalid_handle_value(),
+            false,
+            &mut byte,
+            1,
+            deadline,
+            std::ptr::null_mut(),
+        ));
+        // SAFETY: The invalid pipe/null-buffer inputs are deliberately passed
+        // to verify the C ABI's fail-closed validation path.
+        assert_eq!(
+            unsafe {
+                fcitx5_windows_common_pipe_transfer_with_stop(
+                    std::ptr::null_mut(),
+                    1,
+                    std::ptr::null_mut(),
+                    1,
+                    deadline,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+    }
+
+    #[test]
+    fn pipe_connect_client_rejects_invalid_pipe_like_cpp_contract() {
+        // SAFETY: Monotonic Windows tick query with no preconditions.
+        let deadline = unsafe { GetTickCount64() } + 100;
+        assert!(!pipe_connect_client(
+            std::ptr::null_mut(),
+            deadline,
+            std::ptr::null_mut(),
+        ));
+        assert!(!pipe_connect_client(
+            invalid_handle_value(),
+            deadline,
+            std::ptr::null_mut(),
+        ));
+        // SAFETY: The invalid pipe is deliberately passed to verify the C ABI's
+        // fail-closed validation path.
+        assert_eq!(
+            unsafe {
+                fcitx5_windows_common_pipe_connect_client(
+                    std::ptr::null_mut(),
+                    deadline,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
     }
 
     #[test]
