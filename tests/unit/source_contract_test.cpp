@@ -2037,10 +2037,24 @@ int main(int argc, char** argv) {
         configPocSource.find("fcitx5-config-rust") == std::string::npos ||
         configPocSource.find("CONFIG_SHIPPING_COMPONENT") == std::string::npos ||
         configPocSource.find("fcitx5-config") == std::string::npos ||
+        configPocSource.find("RunMode::Interactive") == std::string::npos ||
+        configPocSource.find("rust-config-settings-ui-preview") == std::string::npos ||
+        configPocSource.find("no_arg_launch") == std::string::npos ||
+        configPocSource.find("qa_navigation_ids") == std::string::npos ||
+        configPocSource.find("qa_child_control_ids") == std::string::npos ||
+        configPocSource.find("K_NAV_GENERAL") == std::string::npos ||
+        configPocSource.find("K_NAV_APPEARANCE") == std::string::npos ||
+        configPocSource.find("K_NAV_PACKAGES") == std::string::npos ||
+        configPocSource.find("K_PAGE_TITLE") == std::string::npos ||
+        configPocSource.find("K_SAVE_STATUS") == std::string::npos ||
+        configPocSource.find("WM_COMMAND") == std::string::npos ||
+        configPocSource.find("GetDlgItem(hwnd, K_PAGE_TITLE)") == std::string::npos ||
+        configPocSource.find("get_dlg_item_visible_controls") == std::string::npos ||
         configPocSource.find("--window-smoke") == std::string::npos ||
         configPocSource.find("CreateWindowExW") == std::string::npos ||
         configPocSource.find("rust-config-poc-window-smoke") == std::string::npos ||
         cmakeSource.find("rust-config-poc-window-smoke") == std::string::npos ||
+        cmakeSource.find("rust-config-ui-preview-qa") == std::string::npos ||
         cmakeSource.find("config-poc-window-smoke.json") == std::string::npos ||
         configPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
         configPocSource.find("ConfigRustCutoverEvidence") == std::string::npos ||

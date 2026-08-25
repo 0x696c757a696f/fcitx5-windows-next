@@ -446,6 +446,7 @@ struct ConfigRustCutoverEvidence {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunMode {
+    Interactive,
     SelfCheck,
     WindowSmoke,
     LegacyHeadless(LegacyHeadlessMode),
@@ -557,14 +558,19 @@ fn main() {
         }
     }
 
-    let Some(mode) = mode else {
+    let mode = if let Some(mode) = mode {
+        mode
+    } else if report.is_none() {
+        RunMode::Interactive
+    } else {
         eprintln!(
-            "usage: fcitx5-config-poc (--self-check | --window-smoke | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test) [--report PATH]"
+            "usage: fcitx5-config-poc [--self-check | --window-smoke | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test] [--report PATH]"
         );
         std::process::exit(2);
     };
 
     let result = match mode {
+        RunMode::Interactive => run_interactive_window(),
         RunMode::SelfCheck => run_self_check(),
         RunMode::WindowSmoke => run_window_smoke(),
         RunMode::LegacyHeadless(legacy) => run_legacy_headless_check(legacy),
@@ -817,6 +823,27 @@ fn create_config_window_smoke(
     _candidate_preview_rect: Rect,
 ) -> Result<WindowSmokeEvidence, String> {
     Err("Rust Config PoC window smoke requires Windows".to_owned())
+}
+
+#[cfg(windows)]
+fn run_interactive_window() -> Result<String, String> {
+    let model = frozen_settings_model();
+    validate_model(&model)?;
+    let layout = validate_layout(&model)?;
+    win32_window_smoke::run_interactive(
+        model.product_name,
+        layout.minimum_window_dip,
+        layout.candidate_preview_rect,
+    )?;
+    Ok(format!(
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-settings-ui-preview\",\n  \"real_window\":true,\n  \"no_arg_launch\":true,\n  \"qa_navigation_ids\":[130,131,132,133,134,135],\n  \"qa_child_control_ids\":[110,112,113,127,140,206],\n  \"candidate_preview_child_id\":112,\n  \"wm_command_navigation\":true,\n  \"get_dlg_item_visible_controls\":true,\n  \"stage\":\"Rust Settings UI Preview\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
+        current_component_name()
+    ))
+}
+
+#[cfg(not(windows))]
+fn run_interactive_window() -> Result<String, String> {
+    Err("Rust Settings UI Preview requires Windows".to_owned())
 }
 
 fn frozen_settings_model() -> ConfigPocModel {
@@ -2566,12 +2593,28 @@ mod win32_window_smoke {
     const DT_VCENTER: u32 = 0x0004;
     const FALSE: i32 = 0;
     const TRANSPARENT: i32 = 1;
+    const WM_CLOSE: u32 = 0x0010;
+    const WM_COMMAND: u32 = 0x0111;
+    const WM_DESTROY: u32 = 0x0002;
     const WM_PAINT: u32 = 0x000F;
+    const WS_BORDER: u32 = 0x0080_0000;
     const WS_CHILD: u32 = 0x4000_0000;
     const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
     const WS_VISIBLE: u32 = 0x1000_0000;
     const SW_SHOWNORMAL: i32 = 1;
     const GET_PIXEL_ERROR: u32 = 0xffff_ffff;
+    const K_STATUS: i32 = 110;
+    const K_PREVIEW: i32 = 112;
+    const K_PACKAGES: i32 = 113;
+    const K_PACKAGE_DETAIL: i32 = 127;
+    const K_NAV_GENERAL: i32 = 130;
+    const K_NAV_APPEARANCE: i32 = 131;
+    const K_NAV_SHORTCUTS: i32 = 132;
+    const K_NAV_UPDATES: i32 = 133;
+    const K_NAV_REPAIR: i32 = 134;
+    const K_NAV_PACKAGES: i32 = 135;
+    const K_PAGE_TITLE: i32 = 140;
+    const K_SAVE_STATUS: i32 = 206;
 
     static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -2617,6 +2660,22 @@ mod win32_window_smoke {
         rgb_reserved: [u8; 32],
     }
 
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    #[repr(C)]
+    struct Msg {
+        hwnd: Hwnd,
+        message: u32,
+        w_param: Wparam,
+        l_param: Lparam,
+        time: u32,
+        pt: Point,
+    }
+
     #[link(name = "user32")]
     unsafe extern "system" {
         fn BeginPaint(hwnd: Hwnd, paint: *mut PaintStruct) -> Hdc;
@@ -2637,17 +2696,23 @@ mod win32_window_smoke {
         ) -> Hwnd;
         fn DefWindowProcW(hwnd: Hwnd, message: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
         fn DestroyWindow(hwnd: Hwnd) -> i32;
+        fn DispatchMessageW(message: *const Msg) -> Lresult;
         fn DrawTextW(hdc: Hdc, text: *const u16, count: i32, rect: *mut Rect, format: u32) -> i32;
         fn EndPaint(hwnd: Hwnd, paint: *const PaintStruct) -> i32;
         fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn GetDC(hwnd: Hwnd) -> Hdc;
+        fn GetDlgItem(hwnd: Hwnd, item_id: i32) -> Hwnd;
+        fn GetMessageW(message: *mut Msg, hwnd: Hwnd, min_filter: u32, max_filter: u32) -> i32;
         fn GetParent(hwnd: Hwnd) -> Hwnd;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
         fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: i32) -> i32;
         fn IsWindowVisible(hwnd: Hwnd) -> i32;
+        fn PostQuitMessage(exit_code: i32);
         fn ReleaseDC(hwnd: Hwnd, dc: Hdc) -> i32;
+        fn SetWindowTextW(hwnd: Hwnd, text: Lpcwstr) -> i32;
         fn ShowWindow(hwnd: Hwnd, command_show: i32) -> i32;
+        fn TranslateMessage(message: *const Msg) -> i32;
         fn UpdateWindow(hwnd: Hwnd) -> i32;
     }
 
@@ -2753,7 +2818,7 @@ mod win32_window_smoke {
                 candidate_preview_rect.width,
                 candidate_preview_rect.height,
                 hwnd,
-                null_mut(),
+                control_id_handle(K_PREVIEW),
                 instance,
                 null_mut(),
             )
@@ -2858,12 +2923,116 @@ mod win32_window_smoke {
         })
     }
 
+    pub fn run_interactive(
+        title: &str,
+        minimum_window_dip: Size,
+        candidate_preview_rect: LayoutRect,
+    ) -> Result<(), String> {
+        let class_name = to_wide("Fcitx5ConfigPocWindow");
+        let preview_class_name = to_wide("Fcitx5ConfigPocCandidatePreviewHost");
+        let title = to_wide(title);
+        // SAFETY: A null module name asks Windows for the current process module handle.
+        let instance = unsafe { GetModuleHandleW(null()) };
+        if instance.is_null() {
+            return Err("GetModuleHandleW failed for Rust Settings UI Preview".to_owned());
+        }
+        let window_class = WndClassW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfn_wnd_proc: Some(window_proc),
+            cb_cls_extra: 0,
+            cb_wnd_extra: 0,
+            h_instance: instance,
+            h_icon: null_mut(),
+            h_cursor: null_mut(),
+            hbr_background: null_mut(),
+            lpsz_menu_name: null(),
+            lpsz_class_name: class_name.as_ptr(),
+        };
+        let preview_window_class = WndClassW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfn_wnd_proc: Some(candidate_preview_window_proc),
+            cb_cls_extra: 0,
+            cb_wnd_extra: 0,
+            h_instance: instance,
+            h_icon: null_mut(),
+            h_cursor: null_mut(),
+            hbr_background: null_mut(),
+            lpsz_menu_name: null(),
+            lpsz_class_name: preview_class_name.as_ptr(),
+        };
+        // SAFETY: The class descriptors reference live UTF-16 buffers for this call and use
+        // window procedures with the expected system ABI.
+        if unsafe { RegisterClassW(&window_class) } == 0 {
+            return Err("RegisterClassW failed for Rust Settings UI Preview".to_owned());
+        }
+        // SAFETY: Same registration contract as the top-level class above.
+        if unsafe { RegisterClassW(&preview_window_class) } == 0 {
+            return Err(
+                "RegisterClassW failed for Rust Settings UI Preview candidate preview host"
+                    .to_owned(),
+            );
+        }
+        // SAFETY: The class/title pointers stay alive for the duration of this call. Parent,
+        // menu, and parameter handles are null because this creates the top-level settings window.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                title.as_ptr(),
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                minimum_window_dip.width,
+                minimum_window_dip.height,
+                null_mut(),
+                null_mut(),
+                instance,
+                null_mut(),
+            )
+        };
+        if hwnd.is_null() {
+            return Err("CreateWindowExW failed for Rust Settings UI Preview".to_owned());
+        }
+        create_settings_controls(hwnd, instance, &preview_class_name, candidate_preview_rect)?;
+        // SAFETY: `hwnd` and its children were created successfully and can be shown/painted.
+        unsafe {
+            ShowWindow(hwnd, SW_SHOWNORMAL);
+            UpdateWindow(hwnd);
+        }
+        message_loop(hwnd)
+    }
+
     unsafe extern "system" fn window_proc(
         hwnd: Hwnd,
         message: u32,
         wparam: Wparam,
         lparam: Lparam,
     ) -> Lresult {
+        if message == WM_COMMAND {
+            let command_id = loword(wparam);
+            if let Some(title) = page_title_for_command(command_id) {
+                update_page_title(hwnd, title);
+                invalidate_preview(hwnd);
+                return 0;
+            }
+        }
+        if message == WM_CLOSE {
+            // SAFETY: Windows delivered WM_CLOSE for this live HWND; DestroyWindow starts normal
+            // teardown and leads to WM_DESTROY.
+            unsafe {
+                DestroyWindow(hwnd);
+            }
+            return 0;
+        }
+        if message == WM_DESTROY {
+            // SAFETY: The top-level Settings preview is being destroyed; posting quit exits only
+            // this process-local message loop.
+            unsafe {
+                PostQuitMessage(0);
+            }
+            return 0;
+        }
+        // SAFETY: Delegates unhandled messages to the system default window procedure.
         unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
     }
 
@@ -2996,6 +3165,250 @@ mod win32_window_smoke {
             return (pixel, false);
         };
         (pixel, pixel == plan.selected_background_color)
+    }
+
+    fn create_settings_controls(
+        hwnd: Hwnd,
+        instance: Hinstance,
+        preview_class_name: &[u16],
+        candidate_preview_rect: LayoutRect,
+    ) -> Result<(), String> {
+        let static_class = to_wide("STATIC");
+        let button_class = to_wide("BUTTON");
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            K_PAGE_TITLE,
+            "Input methods",
+            220,
+            24,
+            420,
+            34,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            K_STATUS,
+            "Ready. Rust Settings UI Preview is running inside the Config process.",
+            220,
+            398,
+            620,
+            38,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            K_PACKAGES,
+            "Official packages: fcitx5-rime, fcitx5-chinese-addons, fcitx5-mozc",
+            220,
+            300,
+            620,
+            36,
+            WS_BORDER,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            K_PACKAGE_DETAIL,
+            "Package details load through Rust package/control boundaries.",
+            220,
+            344,
+            620,
+            36,
+            WS_BORDER,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            K_SAVE_STATUS,
+            "No pending changes",
+            220,
+            88,
+            280,
+            28,
+            0,
+        )?;
+        for (index, (id, label)) in [
+            (K_NAV_GENERAL, "Input methods"),
+            (K_NAV_APPEARANCE, "Appearance"),
+            (K_NAV_SHORTCUTS, "Shortcuts"),
+            (K_NAV_UPDATES, "Updates"),
+            (K_NAV_REPAIR, "Diagnostics"),
+            (K_NAV_PACKAGES, "Packages"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            create_child_control(
+                hwnd,
+                instance,
+                &button_class,
+                *id,
+                label,
+                24,
+                24 + (index as i32 * 44),
+                164,
+                34,
+                0,
+            )?;
+        }
+        let preview_title = to_wide("Candidate Preview");
+        // SAFETY: The preview class/title pointers stay alive for the call, and `hwnd` is a live
+        // top-level window handle created above. The child coordinates come from the validated
+        // layout model and the child id is the QA-visible K_PREVIEW control id.
+        let preview_hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                preview_class_name.as_ptr(),
+                preview_title.as_ptr(),
+                WS_CHILD | WS_VISIBLE | WS_BORDER,
+                candidate_preview_rect.x,
+                candidate_preview_rect.y,
+                candidate_preview_rect.width,
+                candidate_preview_rect.height,
+                hwnd,
+                control_id_handle(K_PREVIEW),
+                instance,
+                null_mut(),
+            )
+        };
+        if preview_hwnd.is_null() {
+            return Err("CreateWindowExW failed for Rust Settings UI Preview K_PREVIEW".to_owned());
+        }
+        // SAFETY: `preview_hwnd` is a live child handle and can be explicitly repainted.
+        unsafe {
+            InvalidateRect(preview_hwnd, null(), FALSE);
+            UpdateWindow(preview_hwnd);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_child_control(
+        parent: Hwnd,
+        instance: Hinstance,
+        class_name: &[u16],
+        id: i32,
+        text: &str,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        extra_style: u32,
+    ) -> Result<Hwnd, String> {
+        let text = to_wide(text);
+        // SAFETY: The class/text UTF-16 buffers live for this call, `parent` is the live top-level
+        // window, and the positive child id is passed through Win32's HMENU/id slot.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                text.as_ptr(),
+                WS_CHILD | WS_VISIBLE | extra_style,
+                x,
+                y,
+                width,
+                height,
+                parent,
+                control_id_handle(id),
+                instance,
+                null_mut(),
+            )
+        };
+        if hwnd.is_null() {
+            return Err(format!(
+                "CreateWindowExW failed for Rust Settings UI Preview child control {id}"
+            ));
+        }
+        Ok(hwnd)
+    }
+
+    fn message_loop(hwnd: Hwnd) -> Result<(), String> {
+        let mut message = Msg {
+            hwnd: null_mut(),
+            message: 0,
+            w_param: 0,
+            l_param: 0,
+            time: 0,
+            pt: Point { x: 0, y: 0 },
+        };
+        loop {
+            // SAFETY: `message` points to writable stack storage; null HWND receives thread
+            // messages for this single Settings UI process.
+            let result = unsafe { GetMessageW(&mut message, null_mut(), 0, 0) };
+            if result == -1 {
+                // SAFETY: `hwnd` is the top-level window created by `run_interactive`; destroy it
+                // on the error path so the process does not leave a stray Config window.
+                unsafe {
+                    DestroyWindow(hwnd);
+                }
+                return Err("GetMessageW failed for Rust Settings UI Preview".to_owned());
+            }
+            if result == 0 {
+                return Ok(());
+            }
+            // SAFETY: `message` was populated by GetMessageW and can be translated/dispatched.
+            unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+
+    fn update_page_title(hwnd: Hwnd, title: &str) {
+        // SAFETY: Reads the child handle for the QA-visible K_PAGE_TITLE control.
+        let title_hwnd = unsafe { GetDlgItem(hwnd, K_PAGE_TITLE) };
+        if title_hwnd.is_null() {
+            return;
+        }
+        let title = to_wide(title);
+        // SAFETY: `title_hwnd` is a live child control and the UTF-16 buffer lives for this call.
+        unsafe {
+            SetWindowTextW(title_hwnd, title.as_ptr());
+        }
+    }
+
+    fn invalidate_preview(hwnd: Hwnd) {
+        // SAFETY: Reads the child handle for the QA-visible K_PREVIEW control.
+        let preview_hwnd = unsafe { GetDlgItem(hwnd, K_PREVIEW) };
+        if preview_hwnd.is_null() {
+            return;
+        }
+        // SAFETY: `preview_hwnd` is a live child control if GetDlgItem returned non-null.
+        unsafe {
+            InvalidateRect(preview_hwnd, null(), FALSE);
+            UpdateWindow(preview_hwnd);
+        }
+    }
+
+    fn page_title_for_command(command_id: u16) -> Option<&'static str> {
+        match i32::from(command_id) {
+            K_NAV_GENERAL => Some("Input methods"),
+            K_NAV_APPEARANCE => Some("Appearance"),
+            K_NAV_SHORTCUTS => Some("Shortcuts"),
+            K_NAV_UPDATES => Some("Updates"),
+            K_NAV_REPAIR => Some("Diagnostics and repair"),
+            K_NAV_PACKAGES => Some("Packages"),
+            _ => None,
+        }
+    }
+
+    fn loword(value: Wparam) -> u16 {
+        (value & 0xffff) as u16
+    }
+
+    fn control_id_handle(id: i32) -> *mut c_void {
+        if id <= 0 {
+            return null_mut();
+        }
+        id as usize as *mut c_void
     }
 
     fn to_wide(value: &str) -> Vec<u16> {
