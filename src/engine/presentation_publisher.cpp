@@ -2,9 +2,24 @@
 
 #include "peer_verification.h"
 
+#include <chrono>
 #include <utility>
 
 namespace fcitx::windows::engine {
+namespace {
+
+bool sameResponseIdentity(const protocol::KeyResponse& lhs,
+                          const protocol::KeyResponse& rhs) noexcept {
+    return lhs.metadata.requestId == rhs.metadata.requestId &&
+           lhs.metadata.responseTo == rhs.metadata.responseTo &&
+           lhs.metadata.engineEpoch == rhs.metadata.engineEpoch &&
+           lhs.metadata.sessionId == rhs.metadata.sessionId &&
+           lhs.metadata.contextId == rhs.metadata.contextId &&
+           lhs.metadata.compositionId == rhs.metadata.compositionId &&
+           lhs.metadata.revision == rhs.metadata.revision;
+}
+
+} // namespace
 
 PresentationPublisher::PresentationPublisher(std::wstring pipeName,
                                              std::wstring uiExecutable)
@@ -36,10 +51,16 @@ void PresentationPublisher::run() {
             std::unique_lock lock(mutex_);
             condition_.wait(lock, [this] { return stopping_ || latest_.has_value(); });
             if (stopping_) return;
-            response = std::move(latest_);
-            latest_.reset();
+            response = latest_;
         }
-        if (!send(*response)) disconnect();
+        if (send(*response)) {
+            std::lock_guard lock(mutex_);
+            if (latest_ && sameResponseIdentity(*latest_, *response))
+                latest_.reset();
+        } else {
+            disconnect();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
     }
 }
 

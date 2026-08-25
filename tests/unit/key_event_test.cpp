@@ -82,5 +82,13 @@ int main() {
         return 1;
     }
 
+    const auto chttransHotkey = engine::keyFromRequest(request(
+        'F', protocol::kKeyFlagControl | protocol::kKeyFlagShift, 0x21));
+    const fcitx::KeyList chttransHotkeys{fcitx::Key("Control+Shift+F")};
+    if (!expect(chttransHotkey.checkKeyList(chttransHotkeys),
+                "Ctrl+Shift+F did not match the Fcitx chttrans action hotkey")) {
+        return 1;
+    }
+
     return 0;
 }

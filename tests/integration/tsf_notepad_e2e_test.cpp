@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <msctf.h>
 #include <objbase.h>
+#include <tlhelp32.h>
 
 #include <array>
 #include <chrono>
@@ -147,6 +148,84 @@ bool sendControlKey(WORD key) {
     return SendInput(static_cast<UINT>(input.size()), input.data(), sizeof(INPUT)) == input.size();
 }
 
+bool sendAsciiLetters(std::wstring_view text) {
+    for (wchar_t ch : text) {
+        if (ch >= L'a' && ch <= L'z') {
+            ch = static_cast<wchar_t>(ch - L'a' + L'A');
+        }
+        if (ch < L'A' || ch > L'Z')
+            return false;
+        if (!sendVirtualKey(static_cast<WORD>(ch)))
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return true;
+}
+
+void unlockForegroundActivation() {
+    std::array<INPUT, 2> input{};
+    input[0].type = INPUT_KEYBOARD;
+    input[0].ki.wVk = VK_MENU;
+    input[1] = input[0];
+    input[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(static_cast<UINT>(input.size()), input.data(), sizeof(INPUT));
+}
+
+bool focusWindow(HWND window) {
+    if (!window)
+        return false;
+    AllowSetForegroundWindow(ASFW_ANY);
+    ShowWindow(window, SW_RESTORE);
+    const DWORD currentThread = GetCurrentThreadId();
+    DWORD targetProcess = 0;
+    const DWORD targetThread = GetWindowThreadProcessId(window, &targetProcess);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        const HWND foreground = GetForegroundWindow();
+        DWORD foregroundProcess = 0;
+        const DWORD foregroundThread =
+            foreground ? GetWindowThreadProcessId(foreground, &foregroundProcess) : 0;
+        const bool attachTarget =
+            targetThread != 0 && targetThread != currentThread &&
+            AttachThreadInput(currentThread, targetThread, TRUE) != FALSE;
+        const bool attachForeground =
+            foregroundThread != 0 && foregroundThread != currentThread &&
+            foregroundThread != targetThread &&
+            AttachThreadInput(currentThread, foregroundThread, TRUE) != FALSE;
+        unlockForegroundActivation();
+        SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        BringWindowToTop(window);
+        SetForegroundWindow(window);
+        SetFocus(window);
+        if (attachForeground)
+            AttachThreadInput(currentThread, foregroundThread, FALSE);
+        if (attachTarget)
+            AttachThreadInput(currentThread, targetThread, FALSE);
+        if (GetForegroundWindow() == window)
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
+bool candidateWindowVisible() {
+    const std::wstring className =
+        std::wstring(fcitx::windows::kReleaseIdentity.local_object_prefix) + L".Candidate";
+    const HWND window = FindWindowW(className.c_str(), nullptr);
+    return window && IsWindowVisible(window);
+}
+
+bool waitCandidateWindowVisible() {
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        if (candidateWindowVisible())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
 std::wstring clipboardText() {
     if (!OpenClipboard(nullptr))
         return {};
@@ -173,12 +252,57 @@ bool clearClipboardText() {
     return false;
 }
 
+bool processHasModule(DWORD processId, std::wstring_view moduleName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, processId);
+    if (snapshot == INVALID_HANDLE_VALUE) return false;
+    MODULEENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+    if (Module32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szModule, moduleName.data()) == 0) {
+                found = true;
+                break;
+            }
+        } while (Module32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
+
+std::wstring processModulePath(DWORD processId, std::wstring_view moduleName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, processId);
+    if (snapshot == INVALID_HANDLE_VALUE) return {};
+    MODULEENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    std::wstring path;
+    if (Module32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szModule, moduleName.data()) == 0) {
+                path = entry.szExePath;
+                break;
+            }
+        } while (Module32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return path;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
     const bool passthrough =
         argc >= 2 && std::wstring_view(argv[1]) == L"--passthrough";
-    if (argc < 1 || argc > 3 || (passthrough && argc > 2) || (!passthrough && argc > 2))
+    const bool rawHarness =
+        argc >= 2 && std::wstring_view(argv[1]) == L"--raw-harness";
+    const bool sampleMode =
+        argc >= 2 && std::wstring_view(argv[1]) == L"--sample";
+    const bool candidateWindowMode =
+        argc >= 2 && std::wstring_view(argv[1]) == L"--candidate-window";
+    if (argc < 1 || argc > 5 || (passthrough && argc > 2) ||
+        (rawHarness && argc > 2) || (sampleMode && argc != 5) ||
+        (candidateWindowMode && argc != 3) ||
+        (!passthrough && !rawHarness && !sampleMode && !candidateWindowMode && argc > 2))
         return 1;
     // The engine executable is an optional argument used only in the real-input
     // mode. It is published through FCITX5_TEST_ENGINE_PATH so the development
@@ -186,14 +310,16 @@ int wmain(int argc, wchar_t** argv) {
     // from the DLL location; the variable is inherited by the Notepad child
     // process. The passthrough mode deliberately omits it: that mode verifies
     // the fail-open path when no engine is available.
-    if (!passthrough && argc == 2) {
-        const std::wstring enginePath(argv[1]);
+    if (!passthrough && !rawHarness && (sampleMode || candidateWindowMode || argc == 2)) {
+        const std::wstring enginePath(sampleMode       ? argv[4]
+                                      : candidateWindowMode ? argv[2]
+                                                            : argv[1]);
         if (enginePath.empty() || !SetEnvironmentVariableW(L"FCITX5_TEST_ENGINE_PATH",
                                                            enginePath.c_str()))
             return 1;
     }
     TsfSessionActivation activation;
-    if (!activation.activate())
+    if (!rawHarness && !activation.activate())
         return 5;
 
     wchar_t command[] = L"notepad.exe";
@@ -213,7 +339,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!search.window)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    if (!search.window || !SetForegroundWindow(search.window)) {
+    if (!search.window || !focusWindow(search.window)) {
         std::cerr << "Notepad window could not receive foreground input\n";
         return 7;
     }
@@ -229,9 +355,31 @@ int wmain(int argc, wchar_t** argv) {
     if (!sendControlKey('A') || !sendVirtualKey(VK_BACK))
         return 8;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    if (passthrough) {
+    if (passthrough || rawHarness) {
         if (!sendVirtualKey('A') || !sendVirtualKey('B') || !sendVirtualKey('C'))
             return 8;
+    } else if (sampleMode) {
+        if (!sendAsciiLetters(argv[2]))
+            return 8;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        if (!sendVirtualKey(VK_SPACE))
+            return 8;
+    } else if (candidateWindowMode) {
+        if (!sendVirtualKey('N'))
+            return 8;
+        if (!waitCandidateWindowVisible()) {
+            const bool tsfLoaded = processHasModule(process.dwProcessId, L"fcitx5-tsf.dll");
+            std::cerr << "Candidate UI window was not visible after preedit; "
+                      << "fcitx5_tsf_loaded=" << (tsfLoaded ? "yes" : "no");
+            const std::wstring modulePath =
+                processModulePath(process.dwProcessId, L"fcitx5-tsf.dll");
+            if (!modulePath.empty())
+                std::wcerr << L" fcitx5_tsf_path=" << modulePath;
+            std::cerr << '\n';
+            return 10;
+        }
+        std::cout << "Notepad TSF candidate window smoke passed\n";
+        return 0;
     } else {
         if (!sendVirtualKey('N') || !sendVirtualKey('I'))
             return 8;
@@ -244,15 +392,22 @@ int wmain(int argc, wchar_t** argv) {
         return 8;
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     const std::wstring text = clipboardText();
-    const std::wstring expected = passthrough ? L"abc" : L"\x4f60";
+    const std::wstring expected = (passthrough || rawHarness) ? L"abc" :
+                                  sampleMode ? std::wstring(argv[3]) :
+                                               L"\x4f60";
     if (text != expected) {
+        const bool tsfLoaded = processHasModule(process.dwProcessId, L"fcitx5-tsf.dll");
         std::cerr << "Notepad did not receive the exact expected text; length="
                   << text.size() << " first=U+" << std::hex
-                  << (text.empty() ? 0U : static_cast<unsigned>(text.front())) << '\n';
+                  << (text.empty() ? 0U : static_cast<unsigned>(text.front()))
+                  << " fcitx5_tsf_loaded=" << (tsfLoaded ? "yes" : "no") << '\n';
         return 9;
     }
-    std::cout << (passthrough
+    std::cout << (rawHarness
+                      ? "Notepad raw keyboard harness passed: abc\n"
+                      : passthrough
                       ? "Notepad TSF engine-unavailable fallback passed: abc\n"
+                      : sampleMode ? "Notepad TSF sample typing smoke passed\n"
                       : "Notepad TSF typing smoke passed: U+4F60\n");
     return 0;
 }

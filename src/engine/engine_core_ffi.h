@@ -239,7 +239,7 @@ int fcitx5_engine_core_validate_engine_epoch(std::uint64_t frameEpoch,
 // E4-2: request-sequence and deadline policy. `accept_frame_sequence`
 // rejects stale/duplicate request ids on a connection;
 // `key_request_timeout_ms` returns the dispatcher deadline (2500 ms for a
-// cold context with revision 0, 75 ms for warm keys).
+// cold context with revision 0, 250 ms for warm keys).
 int fcitx5_engine_core_accept_frame_sequence(std::uint64_t requestId,
                                              std::uint64_t lastRequestId);
 std::uint32_t fcitx5_engine_core_key_request_timeout_ms(std::uint64_t revision);

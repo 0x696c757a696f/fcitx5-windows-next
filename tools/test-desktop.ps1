@@ -48,7 +48,14 @@ $bin = Join-Path $app 'bin'
 $control = Join-Path $bin 'fcitx5-control.exe'
 $config = Join-Path $bin 'fcitx5-config.exe'
 $launcher = Join-Path $bin 'fcitx5-launcher.exe'
-$engine = Join-Path $bin 'fcitx5-engine.exe'
+$current = Get-Content -LiteralPath (Join-Path $app 'current.json') -Raw | ConvertFrom-Json
+$runtimeEngine = Join-Path $app (
+  'runtime/{0}/bin/fcitx5-engine.exe' -f [string]$current.current_generation)
+$engine = if (Test-Path -LiteralPath $runtimeEngine -PathType Leaf) {
+  $runtimeEngine
+} else {
+  Join-Path $bin 'fcitx5-engine.exe'
+}
 $notepadTest = Join-Path $repoRoot "out/build/windows-x64-dev/$Configuration/fcitx5_tsf_notepad_e2e_test.exe"
 foreach ($path in @($control, $config, $launcher, $notepadTest)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -353,12 +360,21 @@ try {
     }
     if (-not $iconAvailable) { Start-Sleep -Milliseconds 100 }
   } while (-not $iconAvailable -and [Environment]::TickCount64 -lt $deadline)
-  if ($trayWindow -eq [IntPtr]::Zero) { throw 'Launcher tray owner window was not created.' }
-  $evidence.checks.tray_icon_registered = $true
-  $evidence.checks.tray_icon_locator = if ($iconAvailable) {
-    'shell-notify-icon-rectangle'
+  if ($trayWindow -eq [IntPtr]::Zero) {
+    # REG-BRAND-001 intentionally removed the default tray/taskbar surface from
+    # normal launcher startup. Desktop input verification must still exercise the
+    # real launcher/engine/TSF path instead of stopping on that obsolete surface.
+    $evidence.checks.tray_surface = 'absent_by_contract'
+    $evidence.checks.tray_icon_registered = $false
+    $evidence.checks.tray_icon_locator = 'absent_by_contract'
   } else {
-    'documented-notification-callback-fallback'
+    $evidence.checks.tray_surface = 'present'
+    $evidence.checks.tray_icon_registered = $true
+    $evidence.checks.tray_icon_locator = if ($iconAvailable) {
+      'shell-notify-icon-rectangle'
+    } else {
+      'documented-notification-callback-fallback'
+    }
   }
 
   $uiContract = Start-Process -FilePath $config -ArgumentList '--ui-contract-test' `
@@ -370,16 +386,37 @@ try {
   if ($uiInteraction.ExitCode -ne 0) { throw 'Config complete interaction sweep failed.' }
   $evidence.checks.config_interaction_coverage = $true
 
-  Test-TrayConfigLaunch 5
-  Test-TrayConfigLaunch 6
-  $evidence.checks.tray_settings_and_diagnostics = $true
+  & $notepadTest --raw-harness
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Desktop keyboard automation harness failed before TSF activation.'
+  }
+  $evidence.checks.notepad_keyboard_harness = 'abc'
+
+  if ($trayWindow -ne [IntPtr]::Zero) {
+    Test-TrayConfigLaunch 5
+    Test-TrayConfigLaunch 6
+    $evidence.checks.tray_settings_and_diagnostics = $true
+  } else {
+    $evidence.checks.tray_settings_and_diagnostics = 'skipped_no_default_tray_surface'
+  }
+
+  & $notepadTest --candidate-window $engine
+  if ($LASTEXITCODE -ne 0) { throw 'Real Notepad candidate UI smoke failed.' }
+  $evidence.checks.notepad_candidate_window = 'visible_after_preedit'
 
   & $notepadTest $engine
   if ($LASTEXITCODE -ne 0) { throw 'Real Notepad TSF typing smoke failed.' }
   $evidence.checks.notepad_commit = '你'
 
   $before = @(Get-ProductEngineIds)
-  Invoke-TrayMenuItem 2
+  if ($trayWindow -ne [IntPtr]::Zero) {
+    Invoke-TrayMenuItem 2
+    $evidence.checks.engine_restart_surface = 'tray'
+  } else {
+    & $control --restart-engine | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Control restart command failed.' }
+    $evidence.checks.engine_restart_surface = 'control'
+  }
   $deadline = [Environment]::TickCount64 + 10000
   do {
     Start-Sleep -Milliseconds 100
@@ -391,13 +428,24 @@ try {
   [void](Wait-EngineReady)
   $evidence.checks.tray_engine_restart = $true
 
-  Invoke-TrayMenuItem 3
-  [void](Wait-LauncherState 1 0)
-  Invoke-TrayMenuItem 3
-  [void](Wait-EngineReady)
-  $evidence.checks.tray_pause_resume = $true
+  if ($trayWindow -ne [IntPtr]::Zero) {
+    Invoke-TrayMenuItem 3
+    [void](Wait-LauncherState 1 0)
+    Invoke-TrayMenuItem 3
+    [void](Wait-EngineReady)
+    $evidence.checks.tray_pause_resume = $true
+  } else {
+    $evidence.checks.tray_pause_resume = 'skipped_no_default_tray_surface'
+  }
 
-  Invoke-TrayMenuItem 8
+  if ($trayWindow -ne [IntPtr]::Zero) {
+    Invoke-TrayMenuItem 8
+    $evidence.checks.launcher_exit_surface = 'tray'
+  } else {
+    & $control --shutdown | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Control shutdown command failed.' }
+    $evidence.checks.launcher_exit_surface = 'control'
+  }
   [void](Wait-Launcher $false)
   $evidence.checks.tray_exit = $true
   & $notepadTest --passthrough

@@ -7,9 +7,53 @@ $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $stage = Join-Path $repoRoot 'out/stage/fcitx5'
 $engine = Join-Path $stage 'bin/fcitx5-engine.exe'
 $bash = Join-Path $repoRoot 'out/toolchains/msys64/usr/bin/bash.exe'
+
+& (Join-Path $PSScriptRoot 'prepare-fast-toolchain.ps1') -InstallLocal
+
 $cmakeCommand = Get-Command cmake.exe -ErrorAction SilentlyContinue
 $cmake = if ($cmakeCommand) { $cmakeCommand.Source } else { $null }
 if (-not $cmake) { $cmake = Join-Path $env:ProgramFiles 'CMake/bin/cmake.exe' }
+
+function Get-VcVarsArgument([string] $TargetArchitecture) {
+  switch ($TargetArchitecture) {
+    'x64' { return 'amd64' }
+    'x86' { return 'amd64_x86' }
+    default { throw "Unsupported architecture for Visual Studio environment: $TargetArchitecture" }
+  }
+}
+
+function Import-MsvcEnvironment([string] $TargetArchitecture) {
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+  if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+    throw 'vswhere.exe is required to locate the Visual Studio C++ toolchain.'
+  }
+  $components = @('Microsoft.VisualStudio.Component.VC.Tools.x86.x64')
+  $arguments = @('-latest', '-products', '*')
+  foreach ($component in $components) {
+    $arguments += @('-requires', $component)
+  }
+  $arguments += @('-property', 'installationPath')
+  $installationPath = (& $vswhere @arguments | Select-Object -First 1)
+  if ([string]::IsNullOrWhiteSpace($installationPath)) {
+    throw "Visual Studio C++ toolchain missing for $TargetArchitecture."
+  }
+  $vcvars = Join-Path $installationPath 'VC/Auxiliary/Build/vcvarsall.bat'
+  if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) {
+    throw "vcvarsall.bat not found under Visual Studio installation: $installationPath"
+  }
+  $vcvarsArgument = Get-VcVarsArgument $TargetArchitecture
+  $command = "`"$vcvars`" $vcvarsArgument >nul && set"
+  $environmentLines = & $env:ComSpec /d /s /c $command
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to import Visual Studio environment for $TargetArchitecture using $vcvarsArgument."
+  }
+  foreach ($line in $environmentLines) {
+    $separator = $line.IndexOf('=')
+    if ($separator -le 0) { continue }
+    [Environment]::SetEnvironmentVariable(
+      $line.Substring(0, $separator), $line.Substring($separator + 1), 'Process')
+  }
+}
 
 foreach ($path in @($bash, $cmake, (Join-Path $stage 'lib/cmake/Fcitx5Core/Fcitx5CoreConfig.cmake'))) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -42,6 +86,7 @@ $previousLuaMarker = [Environment]::GetEnvironmentVariable('FCITX_LUA_TEST_MARKE
 $testRoots = @()
 try {
   foreach ($architecture in @('x64', 'x86')) {
+    Import-MsvcEnvironment $architecture
     $testDataRoot = Join-Path $testDataParent ('fcitx-engine-' + [guid]::NewGuid().ToString('N'))
     $testRoots += $testDataRoot
     New-Item -ItemType Directory -Path $testDataRoot | Out-Null

@@ -826,6 +826,20 @@ fn handle_key_event_c_abi_hotkey() {
     assert_eq!(out.im_switch, FCITX_ENGINE_CORE_IM_ACTION_TOGGLE);
     assert_eq!(out.forward_key, 0);
     assert_eq!(out.clear_override, 0);
+
+    let mut next_event = key_event_c();
+    next_event.key_sym = 0xffe1;
+    next_event.key_flags = 0x3; // kKeyFlagControl | kKeyFlagShift
+    next_event.hotkey_toggle = toggle.as_ptr();
+    next_event.hotkey_next = next.as_ptr();
+    let mut next_out = FcitxEngineKeyDecisionC::default();
+    assert_eq!(
+        unsafe { fcitx5_engine_core_handle_key_event(&next_event, &mut next_out) },
+        FCITX_ENGINE_CORE_OK
+    );
+    assert_eq!(next_out.im_switch, FCITX_ENGINE_CORE_IM_ACTION_NEXT);
+    assert_eq!(next_out.forward_key, 0);
+    assert_eq!(next_out.clear_override, 0);
 }
 
 #[test]

@@ -3,21 +3,31 @@
 #![allow(non_snake_case)]
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::panic::{catch_unwind, UnwindSafe};
 use std::path::PathBuf;
+use std::process::Command;
 use std::ptr::null_mut;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::OnceLock;
+use std::thread::sleep;
+use std::time::Duration;
+
+use fcitx5_protocol_core as protocol;
+use fcitx5_windows_common_core as common;
 use windows::Win32::Foundation::{
     CLASS_E_CLASSNOTAVAILABLE, E_FAIL, E_INVALIDARG, E_NOTIMPL, E_POINTER, E_UNEXPECTED, HMODULE,
-    S_OK, WIN32_ERROR,
+    POINT, RECT, S_OK, WIN32_ERROR,
 };
 use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_NOINTERFACE, LPARAM, S_FALSE, WPARAM};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, IClassFactory, IClassFactory_Impl,
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IClassFactory,
+    IClassFactory_Impl, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
@@ -27,20 +37,27 @@ use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE,
     KEY_WRITE, REG_OPEN_CREATE_OPTIONS, REG_SZ,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{HKL, VK_OEM_COMMA, VK_SPACE};
+use windows::Win32::System::Variant::{VariantClear, VT_EMPTY, VT_UNKNOWN};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetFocus, GetKeyState, GetKeyboardLayout, MapVirtualKeyExW, HKL, MAPVK_VK_TO_VSC_EX,
+    VK_CONTROL, VK_LWIN, VK_MENU, VK_OEM_COMMA, VK_RWIN, VK_SHIFT, VK_SPACE,
+};
 use windows::Win32::UI::TextServices::{
     CLSID_TF_CategoryMgr, CLSID_TF_InputProcessorProfiles, ITfActiveLanguageProfileNotifySink,
     ITfActiveLanguageProfileNotifySink_Impl, ITfCandidateListUIElement,
     ITfCandidateListUIElement_Impl, ITfCategoryMgr, ITfComposition, ITfCompositionSink,
     ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfDocumentMgr, ITfEditSession,
-    ITfEditSession_Impl, ITfInputProcessorProfileMgr, ITfKeyEventSink, ITfKeyEventSink_Impl,
-    ITfKeystrokeMgr, ITfRange, ITfSource, ITfTextInputProcessor, ITfTextInputProcessorEx,
-    ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfThreadFocusSink,
-    ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl,
-    ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, InputScope, GUID_TFCAT_TIP_KEYBOARD,
-    IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD,
-    IS_PRIVATE, TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
+    ITfEditSession_Impl, ITfInputProcessorProfileMgr, ITfInputScope, ITfKeyEventSink,
+    ITfKeyEventSink_Impl, ITfKeystrokeMgr, ITfRange, ITfSource, ITfTextInputProcessor,
+    ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl,
+    ITfThreadFocusSink, ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink,
+    ITfThreadMgrEventSink_Impl, ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, InputScope,
+    GUID_PROP_INPUTSCOPE, GUID_TFCAT_TIP_KEYBOARD, IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET,
+    IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD, IS_PRIVATE, TF_DEFAULT_SELECTION, TF_ES_READ,
+    TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
 };
+use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
 use windows_core::{
     implement, w, ComObject, IUnknown, IUnknownImpl, Interface, Ref, Result, BOOL, BSTR, GUID,
     HRESULT, PCWSTR,
@@ -933,12 +950,860 @@ pub fn tsf_behavior_differential_report() -> String {
 
 const TF_CLIENTID_NULL: u32 = 0;
 const TF_INVALID_UIELEMENTID: u32 = u32::MAX;
+const COLD_LAUNCH_DEADLINE_MILLISECONDS: u32 = 20000;
+const INPUT_DEADLINE_MILLISECONDS: u32 = 250;
+const SURROUNDING_LIMIT_UTF16: i32 = 128;
+const PEER_POLICY_EXACT_EXECUTABLE: u32 = 0;
+const PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION: u32 = 1;
+const CANDIDATE_VISIBILITY_HIDDEN: u8 = 0;
+
+fn trace_event(event: &str) {
+    let Some(path) = std::env::var_os("FCITX5_TSF_TRACE_PATH") else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{event}");
+    }
+}
+
+fn trace_wide_event(prefix: &str, value: &[u16]) {
+    if std::env::var_os("FCITX5_TSF_TRACE_PATH").is_none() {
+        return;
+    }
+    match String::from_utf16(value) {
+        Ok(value) => trace_event(&format!("{prefix}={value}")),
+        Err(_) => trace_event(&format!("{prefix}=<invalid-utf16>")),
+    }
+}
 
 fn activation_guard_disabled() -> bool {
     std::env::var_os("FCITX5_TEST_DATA_ROOT")
         .map(PathBuf::from)
         .map(|root| root.join("recovery").join("tsf-activation-disabled.v1"))
         .is_some_and(|marker| marker.exists())
+}
+
+#[derive(Clone, Debug, Default)]
+struct CurrentIdentity {
+    service_account: u8,
+    secure_desktop: u8,
+    session_id: u32,
+    user_sid: Vec<u16>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EngineContextState {
+    composition_id: u64,
+    revision: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CandidateUiRecord {
+    text: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EngineKeyResult {
+    handled: bool,
+    commit: String,
+    preedit: String,
+    candidates: Vec<CandidateUiRecord>,
+    selected_candidate: u32,
+    candidate_page: u32,
+    candidate_visibility: u8,
+    delete_surrounding_text: bool,
+    delete_surrounding_offset: i32,
+    delete_surrounding_size: u32,
+    forward_key: bool,
+}
+
+#[derive(Clone, Debug)]
+struct CachedKeyResult {
+    context_id: u64,
+    virtual_key: u32,
+    key_flags: u32,
+    result: EngineKeyResult,
+}
+
+struct PipeHandle(*mut c_void);
+
+impl PipeHandle {
+    fn invalid() -> *mut c_void {
+        -1_isize as *mut c_void
+    }
+
+    fn is_valid(handle: *mut c_void) -> bool {
+        !handle.is_null() && handle != Self::invalid()
+    }
+}
+
+impl Drop for PipeHandle {
+    fn drop(&mut self) {
+        if Self::is_valid(self.0) {
+            common::fcitx5_windows_common_close_pipe_client(self.0);
+        }
+    }
+}
+
+#[derive(Default)]
+struct EngineClient {
+    pipe_name: Vec<u16>,
+    launcher_pipe_name: Vec<u16>,
+    expected_engine_path: Vec<u16>,
+    expected_launcher_path: Vec<u16>,
+    identity: CurrentIdentity,
+    pipe: Option<PipeHandle>,
+    handshake_complete: bool,
+    engine_epoch: u64,
+    contexts: HashMap<u64, EngineContextState>,
+}
+
+impl EngineClient {
+    fn new_for_current_module(module_path: &[u16]) -> Option<Self> {
+        let identity = query_current_identity()?;
+        if identity.session_id == 0 || identity.user_sid.is_empty() {
+            return None;
+        }
+        let generation = query_wide_string(|output, capacity| {
+            // SAFETY: `module_path` is a live UTF-16 slice for the duration of
+            // this call; output/capacity are supplied by `query_wide_string`.
+            unsafe {
+                common::fcitx5_windows_common_current_generation_for_module_utf16(
+                    module_path.as_ptr(),
+                    module_path.len(),
+                    output,
+                    capacity,
+                )
+            }
+        })
+        .or_else(|| {
+            query_wide_string(|output, capacity| {
+                // SAFETY: output/capacity are supplied by `query_wide_string`.
+                unsafe { common::fcitx5_windows_common_current_generation_utf16(output, capacity) }
+            })
+        })?;
+        let test_namespace = query_wide_string(|output, capacity| {
+            // SAFETY: output/capacity are supplied by `query_wide_string`.
+            unsafe { common::fcitx5_windows_common_local_test_namespace_utf16(output, capacity) }
+        })
+        .unwrap_or_default();
+        let engine_channel: Vec<u16> = "engine".encode_utf16().collect();
+        let pipe_name =
+            Self::endpoint_name(&identity, &generation, &test_namespace, &engine_channel)?;
+        let launcher_channel: Vec<u16> = "launcher".encode_utf16().collect();
+        let launcher_pipe_name =
+            Self::endpoint_name(&identity, &generation, &test_namespace, &launcher_channel)?;
+        let expected_engine_path = expected_engine_path_for_module(module_path).unwrap_or_default();
+        let expected_launcher_path =
+            expected_launcher_path_for_module(module_path, &expected_engine_path)
+                .unwrap_or_default();
+        trace_wide_event("engine_client_generation", &generation);
+        trace_wide_event("engine_client_pipe", &pipe_name);
+        trace_wide_event("engine_client_launcher_pipe", &launcher_pipe_name);
+        trace_wide_event("engine_client_expected_engine", &expected_engine_path);
+        trace_wide_event("engine_client_expected_launcher", &expected_launcher_path);
+        Some(Self {
+            pipe_name,
+            launcher_pipe_name,
+            expected_engine_path,
+            expected_launcher_path,
+            identity,
+            ..Self::default()
+        })
+    }
+
+    fn endpoint_name(
+        identity: &CurrentIdentity,
+        generation: &[u16],
+        test_namespace: &[u16],
+        channel: &[u16],
+    ) -> Option<Vec<u16>> {
+        query_wide_string(|output, capacity| {
+            // SAFETY: all UTF-16 slices live for this call and no pointer is
+            // retained by the common helper.
+            unsafe {
+                common::fcitx5_windows_common_local_name_utf16(
+                    0,
+                    identity.user_sid.as_ptr(),
+                    identity.user_sid.len(),
+                    identity.session_id,
+                    generation.as_ptr(),
+                    generation.len(),
+                    channel.as_ptr(),
+                    channel.len(),
+                    test_namespace.as_ptr(),
+                    test_namespace.len(),
+                    output,
+                    capacity,
+                )
+            }
+        })
+    }
+
+    fn disconnect(&mut self) {
+        self.pipe = None;
+        self.handshake_complete = false;
+        self.engine_epoch = 0;
+        self.contexts.clear();
+    }
+
+    fn connect(&mut self, deadline: u64) -> bool {
+        if self.pipe.is_some() {
+            return true;
+        }
+        if self.pipe_name.is_empty()
+            || self.identity.service_account != 0
+            || self.identity.secure_desktop != 0
+        {
+            trace_event("engine_client_connect_rejected_identity_or_pipe");
+            return false;
+        }
+        // SAFETY: `pipe_name` is a live UTF-16 slice. The returned HANDLE-like
+        // pointer is closed by `PipeHandle`.
+        let pipe = unsafe {
+            common::fcitx5_windows_common_open_pipe_client_utf16(
+                self.pipe_name.as_ptr(),
+                self.pipe_name.len(),
+                deadline,
+                1,
+            )
+        };
+        if !PipeHandle::is_valid(pipe) {
+            trace_event("engine_client_open_pipe_failed");
+            return false;
+        }
+        let policy_mode = if self.expected_engine_path.is_empty() {
+            PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION
+        } else {
+            PEER_POLICY_EXACT_EXECUTABLE
+        };
+        let development_exception_enabled = u8::from(self.expected_engine_path.is_empty());
+        // SAFETY: The pipe handle is live; identity and expected-path buffers
+        // are valid for this call and are not retained.
+        let verified = unsafe {
+            common::fcitx5_windows_common_verify_pipe_server_peer_utf16(
+                pipe,
+                self.identity.service_account,
+                self.identity.session_id,
+                self.identity.secure_desktop,
+                self.identity.user_sid.as_ptr(),
+                self.identity.user_sid.len(),
+                policy_mode,
+                self.expected_engine_path.as_ptr(),
+                self.expected_engine_path.len(),
+                development_exception_enabled,
+            )
+        };
+        if verified == 0 {
+            trace_event("engine_client_verify_peer_failed");
+            common::fcitx5_windows_common_close_pipe_client(pipe);
+            return false;
+        }
+        self.pipe = Some(PipeHandle(pipe));
+        trace_event("engine_client_connect_success");
+        true
+    }
+
+    fn launcher_policy(&self) -> (u32, u8) {
+        if self.expected_launcher_path.is_empty() {
+            (PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION, 1)
+        } else {
+            (PEER_POLICY_EXACT_EXECUTABLE, 0)
+        }
+    }
+
+    fn request_launcher_start(&mut self, deadline: u64) -> bool {
+        if self.launcher_pipe_name.is_empty()
+            || self.identity.service_account != 0
+            || self.identity.secure_desktop != 0
+        {
+            trace_event("engine_client_launcher_rejected_identity_or_pipe");
+            return false;
+        }
+        // SAFETY: `launcher_pipe_name` is a live UTF-16 slice. The returned
+        // pipe handle is wrapped and closed by `PipeHandle`.
+        let pipe = unsafe {
+            common::fcitx5_windows_common_open_pipe_client_utf16(
+                self.launcher_pipe_name.as_ptr(),
+                self.launcher_pipe_name.len(),
+                deadline,
+                0,
+            )
+        };
+        if !PipeHandle::is_valid(pipe) {
+            trace_event("engine_client_open_launcher_pipe_failed");
+            return false;
+        }
+        let pipe = PipeHandle(pipe);
+        let (policy_mode, development_exception_enabled) = self.launcher_policy();
+        // SAFETY: The pipe handle is live; identity and expected-path buffers
+        // are valid for this call and are not retained.
+        let verified = unsafe {
+            common::fcitx5_windows_common_verify_pipe_server_peer_utf16(
+                pipe.0,
+                self.identity.service_account,
+                self.identity.session_id,
+                self.identity.secure_desktop,
+                self.identity.user_sid.as_ptr(),
+                self.identity.user_sid.len(),
+                policy_mode,
+                self.expected_launcher_path.as_ptr(),
+                self.expected_launcher_path.len(),
+                development_exception_enabled,
+            )
+        };
+        if verified == 0 {
+            trace_event("engine_client_verify_launcher_peer_failed");
+            return false;
+        }
+        let request_id = common::fcitx5_windows_common_next_launcher_request_id();
+        let request = protocol::LauncherRequest {
+            metadata: protocol::Metadata {
+                request_id,
+                session_id: self.identity.session_id,
+                ..protocol::Metadata::default()
+            },
+            command: protocol::LauncherCommand::StartDemand,
+        };
+        let Some(request) = protocol::encode_launcher_request(&request) else {
+            trace_event("engine_client_launcher_encode_failed");
+            return false;
+        };
+        let mut response = vec![0_u8; protocol::MAX_FRAME_SIZE];
+        // SAFETY: pipe is live, request is readable, response is writable.
+        let transferred = unsafe {
+            common::fcitx5_windows_common_pipe_transact_with_error(
+                pipe.0,
+                request.as_ptr(),
+                request.len(),
+                response.as_mut_ptr(),
+                response.len(),
+                deadline,
+            )
+        };
+        if transferred.status == 0
+            || transferred.response_len < protocol::HEADER_SIZE
+            || transferred.response_len > response.len()
+        {
+            trace_event(&format!(
+                "engine_client_launcher_transact_failed status={} error={} response_len={}",
+                transferred.status, transferred.failure_error, transferred.response_len
+            ));
+            return false;
+        }
+        response.truncate(transferred.response_len);
+        let Some(frame) = protocol::decode_frame(&response) else {
+            trace_event("engine_client_launcher_frame_decode_failed");
+            return false;
+        };
+        let Some(decoded) = protocol::decode_launcher_response(&frame) else {
+            trace_event("engine_client_launcher_decode_failed");
+            return false;
+        };
+        let scalars = common::fcitx5_windows_common_apply_launcher_response_scalars(
+            common::Fcitx5WindowsCommonLauncherResponseScalarInput {
+                request_id: decoded.metadata.request_id,
+                response_to: decoded.metadata.response_to,
+                engine_epoch: decoded.metadata.engine_epoch,
+                session_id: decoded.metadata.session_id,
+                context_id: decoded.metadata.context_id,
+                composition_id: decoded.metadata.composition_id,
+                revision: decoded.metadata.revision,
+                status: decoded.status as u32,
+                launcher_state: decoded.launcher_state,
+                engine_state: decoded.engine_state,
+                start_disposition: decoded.start_disposition,
+                safe_mode: u8::from(decoded.safe_mode),
+                retry_after_milliseconds: decoded.retry_after_milliseconds,
+                expected_request_id: request_id,
+                expected_session_id: self.identity.session_id,
+            },
+        );
+        let ok = scalars.status != 0
+            && common::fcitx5_windows_common_ipc_status_ok(scalars.response_status) != 0;
+        trace_event(if ok {
+            "engine_client_launcher_start_success"
+        } else {
+            "engine_client_launcher_start_rejected"
+        });
+        ok
+    }
+
+    fn start_launcher_process(&self) -> bool {
+        if self.identity.service_account != 0 || self.identity.secure_desktop != 0 {
+            trace_event("engine_client_launcher_process_rejected_identity");
+            return false;
+        }
+        if self.expected_launcher_path.is_empty() {
+            trace_event("engine_client_launcher_process_missing_path");
+            return false;
+        }
+        let Ok(path) = String::from_utf16(&self.expected_launcher_path) else {
+            trace_event("engine_client_launcher_process_invalid_path");
+            return false;
+        };
+        let path = PathBuf::from(path);
+        if path.file_name().and_then(|name| name.to_str()) != Some("fcitx5-launcher.exe")
+            || !path.is_absolute()
+            || !path.is_file()
+        {
+            trace_event("engine_client_launcher_process_rejected_path");
+            return false;
+        }
+        match Command::new(&path).arg("--background").spawn() {
+            Ok(_) => {
+                trace_event("engine_client_launcher_process_started");
+                true
+            }
+            Err(_) => {
+                trace_event("engine_client_launcher_process_start_failed");
+                false
+            }
+        }
+    }
+
+    fn ensure_engine_available(&mut self, deadline: u64) -> bool {
+        if self.connect(deadline) {
+            return true;
+        }
+        if self.request_launcher_start(deadline) && self.connect(deadline) {
+            return true;
+        }
+        if !self.start_launcher_process() {
+            return false;
+        }
+        while common::fcitx5_windows_common_deadline_has_time(deadline) != 0 {
+            if self.connect(deadline) {
+                return true;
+            }
+            let _ = self.request_launcher_start(deadline);
+            if self.connect(deadline) {
+                return true;
+            }
+            sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    fn transact(&mut self, request: Vec<u8>, deadline: u64) -> Option<Vec<u8>> {
+        if request.is_empty() || request.len() > protocol::MAX_FRAME_SIZE {
+            self.disconnect();
+            return None;
+        }
+        let pipe = self.pipe.as_ref()?.0;
+        let mut response = vec![0_u8; protocol::MAX_FRAME_SIZE];
+        // SAFETY: pipe is live, request is readable, response is writable.
+        let transferred = unsafe {
+            common::fcitx5_windows_common_pipe_transact(
+                pipe,
+                request.as_ptr(),
+                request.len(),
+                response.as_mut_ptr(),
+                response.len(),
+                deadline,
+            )
+        };
+        if transferred.status == 0
+            || transferred.response_len < protocol::HEADER_SIZE
+            || transferred.response_len > response.len()
+        {
+            trace_event(&format!(
+                "engine_client_transact_failed status={} response_len={}",
+                transferred.status, transferred.response_len
+            ));
+            self.disconnect();
+            return None;
+        }
+        response.truncate(transferred.response_len);
+        Some(response)
+    }
+
+    fn handshake(&mut self, deadline: u64) -> bool {
+        if self.handshake_complete {
+            return true;
+        }
+        let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
+        let request = protocol::HelloRequest {
+            metadata: protocol::Metadata {
+                request_id,
+                session_id: self.identity.session_id,
+                ..protocol::Metadata::default()
+            },
+            client_architecture_bits: (std::mem::size_of::<usize>() * 8) as u32,
+            client_process_id: common::fcitx5_windows_common_current_process_id(),
+        };
+        let Some(request) = protocol::encode_hello_request(&request) else {
+            trace_event("engine_client_hello_encode_failed");
+            self.disconnect();
+            return false;
+        };
+        let Some(response_bytes) = self.transact(request, deadline) else {
+            trace_event("engine_client_hello_transact_failed");
+            return false;
+        };
+        let Some(frame) = protocol::decode_frame(&response_bytes) else {
+            trace_event("engine_client_hello_frame_decode_failed");
+            self.disconnect();
+            return false;
+        };
+        let Some(response) = protocol::decode_hello_response(&frame) else {
+            trace_event("engine_client_hello_decode_failed");
+            self.disconnect();
+            return false;
+        };
+        let scalars = common::fcitx5_windows_common_apply_hello_response_scalars(
+            response.metadata.response_to,
+            response.metadata.engine_epoch,
+            response.metadata.session_id,
+            response.status as u32,
+            request_id,
+            self.identity.session_id,
+        );
+        if scalars.status == 0 {
+            trace_event("engine_client_hello_scalar_rejected");
+            self.disconnect();
+            return false;
+        }
+        self.engine_epoch = scalars.engine_epoch;
+        self.handshake_complete = scalars.handshake_complete != 0;
+        trace_event("engine_client_hello_success");
+        self.handshake_complete
+    }
+
+    fn process_key(
+        &mut self,
+        context_id: u64,
+        virtual_key: u32,
+        key_flags: u32,
+        keyboard_layout: u64,
+        scan_code: u32,
+        extended_key: bool,
+        popup_allowed: bool,
+        surrounding: SurroundingSnapshot,
+    ) -> Option<EngineKeyResult> {
+        let new_context = !self.contexts.contains_key(&context_id);
+        trace_event(&format!(
+            "engine_client_process_key vk={} flags={} release={} new_context={} revision={}",
+            virtual_key,
+            key_flags,
+            (key_flags & protocol::KEY_FLAG_RELEASE) != 0,
+            new_context,
+            self.contexts
+                .get(&context_id)
+                .map(|state| state.revision)
+                .unwrap_or_default()
+        ));
+        let deadline = common::fcitx5_windows_common_deadline_after_milliseconds(if new_context {
+            COLD_LAUNCH_DEADLINE_MILLISECONDS
+        } else {
+            INPUT_DEADLINE_MILLISECONDS
+        });
+        if !self.ensure_engine_available(deadline) || !self.handshake(deadline) {
+            self.disconnect();
+            return None;
+        }
+        let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
+        let mut context_state = self.contexts.get(&context_id).cloned().unwrap_or_default();
+        let request = protocol::KeyRequest {
+            metadata: protocol::Metadata {
+                request_id,
+                engine_epoch: self.engine_epoch,
+                session_id: self.identity.session_id,
+                context_id,
+                composition_id: context_state.composition_id,
+                revision: context_state.revision,
+                ..protocol::Metadata::default()
+            },
+            virtual_key,
+            key_flags,
+            scan_code,
+            extended_key,
+            popup_allowed,
+            keyboard_layout,
+            logical_text_utf8: logical_text_for_key(virtual_key, key_flags).into_bytes(),
+            input_method_utf8: Vec::new(),
+            surrounding_text_valid: surrounding.valid,
+            surrounding_text_utf8: surrounding.text.into_bytes(),
+            surrounding_cursor: surrounding.cursor,
+            surrounding_anchor: surrounding.anchor,
+            caret: surrounding.caret,
+        };
+        trace_event(&format!(
+            "engine_client_request logical_len={} surrounding_valid={} caret_valid={} caret_source={}",
+            request.logical_text_utf8.len(),
+            request.surrounding_text_valid,
+            request.caret.valid,
+            surrounding.caret_source
+        ));
+        let Some(request) = protocol::encode_key_request(&request) else {
+            self.disconnect();
+            return None;
+        };
+        let Some(response_bytes) = self.transact(request, deadline) else {
+            return None;
+        };
+        let Some(frame) = protocol::decode_frame(&response_bytes) else {
+            self.disconnect();
+            return None;
+        };
+        let Some(response) = protocol::decode_key_response(&frame) else {
+            self.disconnect();
+            return None;
+        };
+        let scalars = common::fcitx5_windows_common_apply_key_response_scalars(
+            common::Fcitx5WindowsCommonKeyResponseScalarInput {
+                response_to: response.metadata.response_to,
+                engine_epoch: response.metadata.engine_epoch,
+                session_id: response.metadata.session_id,
+                context_id: response.metadata.context_id,
+                composition_id: response.metadata.composition_id,
+                revision: response.metadata.revision,
+                status: response.status as u32,
+                expected_request_id: request_id,
+                expected_engine_epoch: self.engine_epoch,
+                expected_session_id: self.identity.session_id,
+                expected_context_id: context_id,
+                previous_revision: context_state.revision,
+                handled: response.handled as u8,
+                selected_candidate: response.selected_candidate,
+                candidate_page: response.candidate_page,
+                candidate_total: response.candidate_total,
+                candidate_visibility: response.candidate_visibility,
+                delete_surrounding_text: response.delete_surrounding_text as u8,
+                delete_surrounding_offset: response.delete_surrounding_offset,
+                delete_surrounding_size: response.delete_surrounding_size,
+                forward_key: response.forward_key as u8,
+                forward_key_sym: response.forward_key_sym,
+                forward_key_states: response.forward_key_states,
+                forward_key_code: response.forward_key_code,
+                forward_key_release: response.forward_key_release as u8,
+                caret_valid: response.caret.valid as u8,
+                caret_left: response.caret.left,
+                caret_top: response.caret.top,
+                caret_right: response.caret.right,
+                caret_bottom: response.caret.bottom,
+                caret_dpi: response.caret.dpi,
+            },
+        );
+        if scalars.status == 0 {
+            trace_event("engine_client_key_scalar_rejected");
+            self.disconnect();
+            return None;
+        }
+        context_state.composition_id = scalars.context_composition_id;
+        context_state.revision = scalars.context_revision;
+        self.contexts.insert(context_id, context_state);
+        self.engine_epoch = scalars.engine_epoch;
+        let commit = String::from_utf8(response.commit_utf8).ok()?;
+        let preedit = String::from_utf8(response.preedit_utf8).ok()?;
+        let mut candidates = Vec::with_capacity(response.candidates.len());
+        for candidate in response.candidates {
+            let text = String::from_utf8(candidate.text_utf8).ok()?;
+            candidates.push(CandidateUiRecord { text });
+        }
+        Some(
+            EngineKeyResult {
+                handled: scalars.handled != 0,
+                commit,
+                preedit,
+                candidates,
+                selected_candidate: scalars.selected_candidate,
+                candidate_page: scalars.candidate_page,
+                candidate_visibility: scalars.candidate_visibility,
+                delete_surrounding_text: scalars.delete_surrounding_text != 0,
+                delete_surrounding_offset: scalars.delete_surrounding_offset,
+                delete_surrounding_size: scalars.delete_surrounding_size,
+                forward_key: scalars.forward_key != 0,
+            }
+            .tap_trace(),
+        )
+    }
+}
+
+trait TraceEngineKeyResult {
+    fn tap_trace(self) -> Self;
+}
+
+impl TraceEngineKeyResult for EngineKeyResult {
+    fn tap_trace(self) -> Self {
+        trace_event(&format!(
+            "engine_client_key_result handled={} commit_len={} preedit_len={} candidates={} visibility={}",
+            self.handled,
+            self.commit.chars().count(),
+            self.preedit.chars().count(),
+            self.candidates.len(),
+            self.candidate_visibility
+        ));
+        self
+    }
+}
+
+fn query_wide_string(mut fill: impl FnMut(*mut u16, usize) -> usize) -> Option<Vec<u16>> {
+    let len = fill(std::ptr::null_mut(), 0);
+    if len == 0 {
+        return None;
+    }
+    let mut buffer = vec![0_u16; len];
+    let filled = fill(buffer.as_mut_ptr(), buffer.len());
+    if filled != len {
+        return None;
+    }
+    Some(buffer)
+}
+
+fn query_current_identity() -> Option<CurrentIdentity> {
+    // SAFETY: null output pointers with zero capacity perform a size query.
+    let query = unsafe {
+        common::fcitx5_windows_common_current_identity_with_executable_file_utf16(
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if query.status == 0 || query.user_sid_len == 0 {
+        return None;
+    }
+    let mut user_sid = vec![0_u16; query.user_sid_len];
+    let mut executable_path = vec![0_u16; query.executable_path_len];
+    let mut executable_final_path = vec![0_u16; query.executable_final_path_len];
+    // SAFETY: the buffers have exactly the queried capacities and are used only
+    // for this call.
+    let filled = unsafe {
+        common::fcitx5_windows_common_current_identity_with_executable_file_utf16(
+            user_sid.as_mut_ptr(),
+            user_sid.len(),
+            executable_path.as_mut_ptr(),
+            executable_path.len(),
+            executable_final_path.as_mut_ptr(),
+            executable_final_path.len(),
+        )
+    };
+    if filled.status == 0 || filled.user_sid_len != user_sid.len() {
+        return None;
+    }
+    Some(CurrentIdentity {
+        service_account: filled.service_account,
+        secure_desktop: filled.secure_desktop,
+        session_id: filled.session_id,
+        user_sid,
+    })
+}
+
+fn expected_engine_path_for_module(module_path: &[u16]) -> Option<Vec<u16>> {
+    if let Some(path) = std::env::var_os("FCITX5_TEST_ENGINE_PATH") {
+        return Some(path.to_string_lossy().encode_utf16().collect());
+    }
+    let generation = query_wide_string(|output, capacity| {
+        // SAFETY: `module_path` is valid for this call and output/capacity are
+        // managed by `query_wide_string`.
+        unsafe {
+            common::fcitx5_windows_common_current_generation_for_module_utf16(
+                module_path.as_ptr(),
+                module_path.len(),
+                output,
+                capacity,
+            )
+        }
+    });
+    let root = query_wide_string(|output, capacity| {
+        // SAFETY: `module_path` is valid for this call and output/capacity are
+        // managed by `query_wide_string`.
+        unsafe {
+            common::fcitx5_windows_common_installation_root_for_module_utf16(
+                module_path.as_ptr(),
+                module_path.len(),
+                output,
+                capacity,
+            )
+        }
+    })?;
+    let root = PathBuf::from(String::from_utf16(&root).ok()?);
+    if let Some(generation) = generation.and_then(|value| String::from_utf16(&value).ok()) {
+        let runtime_engine = root
+            .join("runtime")
+            .join(generation)
+            .join("bin")
+            .join("fcitx5-engine.exe");
+        if runtime_engine.is_file() {
+            return Some(
+                runtime_engine
+                    .as_os_str()
+                    .to_string_lossy()
+                    .encode_utf16()
+                    .collect(),
+            );
+        }
+    }
+    Some(
+        root.join("bin")
+            .join("fcitx5-engine.exe")
+            .as_os_str()
+            .to_string_lossy()
+            .encode_utf16()
+            .collect(),
+    )
+}
+
+fn expected_launcher_path_for_module(
+    module_path: &[u16],
+    expected_engine_path: &[u16],
+) -> Option<Vec<u16>> {
+    if let Some(path) = std::env::var_os("FCITX5_TEST_LAUNCHER_PATH") {
+        return Some(path.to_string_lossy().encode_utf16().collect());
+    }
+    if !expected_engine_path.is_empty() {
+        let engine = PathBuf::from(String::from_utf16(expected_engine_path).ok()?);
+        let launcher = engine.parent()?.join("fcitx5-launcher.exe");
+        if launcher.is_file() {
+            return Some(
+                launcher
+                    .as_os_str()
+                    .to_string_lossy()
+                    .encode_utf16()
+                    .collect(),
+            );
+        }
+    }
+    let root = query_wide_string(|output, capacity| {
+        // SAFETY: `module_path` is valid for this call and output/capacity are
+        // managed by `query_wide_string`.
+        unsafe {
+            common::fcitx5_windows_common_installation_root_for_module_utf16(
+                module_path.as_ptr(),
+                module_path.len(),
+                output,
+                capacity,
+            )
+        }
+    })?;
+    let root = PathBuf::from(String::from_utf16(&root).ok()?);
+    let launcher = root.join("bin").join("fcitx5-launcher.exe");
+    Some(
+        launcher
+            .as_os_str()
+            .to_string_lossy()
+            .encode_utf16()
+            .collect(),
+    )
+}
+
+fn logical_text_for_key(virtual_key: u32, key_flags: u32) -> String {
+    if (b'A' as u32..=b'Z' as u32).contains(&virtual_key)
+        && key_flags
+            & (protocol::KEY_FLAG_CONTROL | protocol::KEY_FLAG_ALT | protocol::KEY_FLAG_SUPER)
+            == 0
+    {
+        let base = if key_flags & protocol::KEY_FLAG_SHIFT != 0 {
+            b'A'
+        } else {
+            b'a'
+        };
+        return char::from(base + (virtual_key as u8 - b'A')).to_string();
+    }
+    String::new()
 }
 
 #[derive(Default)]
@@ -955,6 +1820,9 @@ struct TsfRuntimeState {
     candidate_ui_element_id: u32,
     candidate_ui_element: Option<ITfCandidateListUIElement>,
     composition: Option<ITfComposition>,
+    engine_client: Option<EngineClient>,
+    pending_key: Option<CachedKeyResult>,
+    popup_allowed: bool,
 }
 
 impl TsfRuntimeState {
@@ -971,6 +1839,9 @@ impl TsfRuntimeState {
         self.candidate_ui_element_id = TF_INVALID_UIELEMENTID;
         self.candidate_ui_element = None;
         self.composition = None;
+        self.engine_client = None;
+        self.pending_key = None;
+        self.popup_allowed = true;
     }
 }
 
@@ -990,12 +1861,18 @@ impl ITfCompositionSink_Impl for Fcitx5CompositionSink_Impl {
 #[implement(ITfUIElement, ITfCandidateListUIElement)]
 struct Fcitx5CandidateListUiElement {
     shown: RefCell<BOOL>,
+    candidates: Vec<CandidateUiRecord>,
+    selection: u32,
+    page_start: u32,
 }
 
 impl Fcitx5CandidateListUiElement {
-    fn new() -> Self {
+    fn new(candidates: Vec<CandidateUiRecord>, selection: u32, page_start: u32) -> Self {
         Self {
             shown: RefCell::new(BOOL(0)),
+            candidates,
+            selection,
+            page_start,
         }
     }
 }
@@ -1029,19 +1906,19 @@ impl ITfCandidateListUIElement_Impl for Fcitx5CandidateListUiElement_Impl {
     }
 
     fn GetCount(&self) -> Result<u32> {
-        Ok(1)
+        Ok(self.candidates.len() as u32)
     }
 
     fn GetSelection(&self) -> Result<u32> {
-        Ok(0)
+        Ok(self.selection)
     }
 
     fn GetString(&self, index: u32) -> Result<BSTR> {
-        if index == 0 {
-            Ok(BSTR::from("你"))
-        } else {
-            Err(E_INVALIDARG.into())
-        }
+        let candidate = self
+            .candidates
+            .get(index as usize)
+            .ok_or_else(|| windows_core::Error::from(E_INVALIDARG))?;
+        Ok(BSTR::from(candidate.text.as_str()))
     }
 
     fn GetPageIndex(&self, page_index: *mut u32, size: u32, page_count: *mut u32) -> Result<()> {
@@ -1053,7 +1930,7 @@ impl ITfCandidateListUIElement_Impl for Fcitx5CandidateListUiElement_Impl {
         if !page_index.is_null() && size != 0 {
             // SAFETY: page_index points to a caller-provided array of at least
             // `size` elements by COM contract; we write only the first page start.
-            unsafe { page_index.write(0) };
+            unsafe { page_index.write(self.page_start) };
         }
         Ok(())
     }
@@ -1069,10 +1946,195 @@ impl ITfCandidateListUIElement_Impl for Fcitx5CandidateListUiElement_Impl {
 
 #[derive(Clone)]
 enum TextEditAction {
-    DeletePrevious,
-    Preedit(&'static str),
-    Commit(&'static str),
+    ApplyEngineResult(EngineKeyResult),
     ClearComposition,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SurroundingSnapshot {
+    valid: bool,
+    text: String,
+    cursor: u32,
+    anchor: u32,
+    caret: protocol::CaretRect,
+    caret_source: &'static str,
+}
+
+#[implement(ITfEditSession)]
+struct Fcitx5ReadSurroundingSession {
+    context: ITfContext,
+    snapshot: Rc<RefCell<SurroundingSnapshot>>,
+}
+
+impl Fcitx5ReadSurroundingSession {
+    fn new(context: ITfContext, snapshot: Rc<RefCell<SurroundingSnapshot>>) -> Self {
+        Self { context, snapshot }
+    }
+
+    fn selection_range(&self, edit_cookie: u32) -> Result<ITfRange> {
+        let mut selection = [TF_SELECTION::default()];
+        let mut fetched = 0u32;
+        // SAFETY: The selection array and fetched pointer are valid writable
+        // storage for a single synchronous TSF edit-session call.
+        unsafe {
+            self.context.GetSelection(
+                edit_cookie,
+                TF_DEFAULT_SELECTION,
+                &mut selection,
+                &mut fetched,
+            )?;
+        }
+        if fetched != 1 {
+            return Err(E_FAIL.into());
+        }
+        // SAFETY: GetSelection initialized the COM-owned range slot. Taking it
+        // once transfers the AddRef'ed interface into Rust.
+        let range = unsafe { std::mem::ManuallyDrop::take(&mut selection[0].range) };
+        range.ok_or_else(|| E_FAIL.into())
+    }
+
+    fn rect_to_caret(rect: RECT, dpi: u32) -> Option<protocol::CaretRect> {
+        if rect.bottom <= rect.top || rect.right < rect.left {
+            return None;
+        }
+        Some(protocol::CaretRect {
+            valid: true,
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            dpi: if dpi == 0 { 96 } else { dpi },
+        })
+    }
+
+    fn gui_thread_caret_rect(&self) -> Option<protocol::CaretRect> {
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..GUITHREADINFO::default()
+        };
+        // SAFETY: `info` has the required cbSize value and points to valid
+        // writable storage for the current GUI thread query.
+        if unsafe { GetGUIThreadInfo(0, &mut info) }.is_err() {
+            return None;
+        }
+        let window = if !info.hwndCaret.is_invalid() {
+            info.hwndCaret
+        } else if !info.hwndFocus.is_invalid() {
+            info.hwndFocus
+        } else {
+            // SAFETY: GetFocus only reads the focus HWND for the current
+            // calling thread.
+            unsafe { GetFocus() }
+        };
+        if window.is_invalid() {
+            return None;
+        }
+        let mut top_left = POINT {
+            x: info.rcCaret.left,
+            y: info.rcCaret.top,
+        };
+        let mut bottom_right = POINT {
+            x: info.rcCaret.right,
+            y: info.rcCaret.bottom,
+        };
+        // SAFETY: `window` is the current GUI caret/focus window and the POINT
+        // values are valid writable stack locations.
+        if !unsafe { ClientToScreen(window, &mut top_left) }.as_bool() {
+            return None;
+        }
+        // SAFETY: Same preconditions as the top-left ClientToScreen call.
+        if !unsafe { ClientToScreen(window, &mut bottom_right) }.as_bool() {
+            return None;
+        }
+        let rect = RECT {
+            left: top_left.x,
+            top: top_left.y,
+            right: bottom_right.x,
+            bottom: bottom_right.y,
+        };
+        // SAFETY: `window` is a live HWND selected from the current GUI thread.
+        let dpi = unsafe { GetDpiForWindow(window) };
+        Self::rect_to_caret(rect, dpi)
+    }
+
+    fn caret_rect(
+        &self,
+        edit_cookie: u32,
+        range: &ITfRange,
+    ) -> (protocol::CaretRect, &'static str) {
+        let Ok(view) = (unsafe {
+            // SAFETY: The context belongs to this synchronous TSF read edit
+            // session and returns a live view interface when the host supports
+            // screen-coordinate text extents.
+            self.context.GetActiveView()
+        }) else {
+            return self
+                .gui_thread_caret_rect()
+                .map_or((protocol::CaretRect::default(), "none"), |caret| {
+                    (caret, "gui-thread")
+                });
+        };
+        let mut rect = RECT::default();
+        let mut clipped = BOOL(0);
+        let text_ext = unsafe {
+            // SAFETY: `range` is valid for the current edit cookie and `rect` /
+            // `clipped` are writable out parameters for this call.
+            view.GetTextExt(edit_cookie, range, &mut rect, &mut clipped)
+        };
+        if text_ext.is_ok() {
+            if let Some(caret) = Self::rect_to_caret(rect, 96) {
+                return (caret, "tsf-text-ext");
+            }
+        }
+        self.gui_thread_caret_rect()
+            .map_or((protocol::CaretRect::default(), "none"), |caret| {
+                (caret, "gui-thread")
+            })
+    }
+}
+
+impl ITfEditSession_Impl for Fcitx5ReadSurroundingSession_Impl {
+    fn DoEditSession(&self, edit_cookie: u32) -> Result<()> {
+        let selection_range = self.selection_range(edit_cookie)?;
+        let (caret, caret_source) = self.caret_rect(edit_cookie, &selection_range);
+        let before_range = unsafe {
+            // SAFETY: The selection range is valid during this edit session; the
+            // cloned range is released by the COM wrapper.
+            selection_range.Clone()?
+        };
+        let mut shifted = 0i32;
+        // SAFETY: The cloned range is valid during this edit session and the
+        // halt condition may be null.
+        unsafe {
+            before_range.ShiftStart(
+                edit_cookie,
+                -SURROUNDING_LIMIT_UTF16,
+                &mut shifted,
+                std::ptr::null(),
+            )?;
+        }
+        let mut buffer = vec![0_u16; SURROUNDING_LIMIT_UTF16 as usize];
+        let mut fetched = 0u32;
+        // SAFETY: buffer is valid writable UTF-16 storage for the duration of
+        // the call.
+        unsafe {
+            before_range.GetText(edit_cookie, 0, &mut buffer, &mut fetched)?;
+        }
+        buffer.truncate(fetched as usize);
+        let Ok(text) = String::from_utf16(&buffer) else {
+            return Err(E_FAIL.into());
+        };
+        let cursor = text.encode_utf16().count() as u32;
+        *self.snapshot.borrow_mut() = SurroundingSnapshot {
+            valid: true,
+            text,
+            cursor,
+            anchor: cursor,
+            caret,
+            caret_source,
+        };
+        Ok(())
+    }
 }
 
 #[implement(ITfEditSession)]
@@ -1153,36 +2215,70 @@ impl ITfEditSession_Impl for Fcitx5TextEditSession_Impl {
     fn DoEditSession(&self, edit_cookie: u32) -> Result<()> {
         let selection_range = self.selection_range(edit_cookie)?;
         match self.action.clone() {
-            TextEditAction::DeletePrevious => {
-                let mut shifted = 0i32;
-                // SAFETY: The cloned range is valid for this edit session. The
-                // null halt condition matches the existing C++ behavior.
-                unsafe {
-                    selection_range.ShiftStart(edit_cookie, -1, &mut shifted, std::ptr::null())?;
+            TextEditAction::ApplyEngineResult(result) => {
+                if result.delete_surrounding_text
+                    && result.delete_surrounding_offset == -1
+                    && result.delete_surrounding_size == 1
+                {
+                    let mut shifted = 0i32;
+                    // SAFETY: The cloned range is valid for this edit session.
+                    // The null halt condition matches the existing C++ behavior.
+                    unsafe {
+                        selection_range.ShiftStart(
+                            edit_cookie,
+                            -1,
+                            &mut shifted,
+                            std::ptr::null(),
+                        )?;
+                    }
+                    Fcitx5TextEditSession::set_range_text(&selection_range, edit_cookie, "")?;
+                } else if result.delete_surrounding_text {
+                    return Err(E_NOTIMPL.into());
                 }
-                Fcitx5TextEditSession::set_range_text(&selection_range, edit_cookie, "")?;
-                *self.resulting_composition.borrow_mut() = self.current_composition.clone();
-            }
-            TextEditAction::Preedit(text) => {
-                let composition = self.start_or_get_composition(edit_cookie, &selection_range)?;
-                // SAFETY: The composition belongs to this active edit session.
-                let composition_range = unsafe { composition.GetRange()? };
-                Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, text)?;
-                *self.resulting_composition.borrow_mut() = Some(composition);
-            }
-            TextEditAction::Commit(text) => {
-                if let Some(composition) = &self.current_composition {
-                    // SAFETY: The composition belongs to this active edit
-                    // session and its range remains valid until it is ended.
+
+                if !result.commit.is_empty() {
+                    if let Some(composition) = &self.current_composition {
+                        // SAFETY: The composition belongs to this active edit
+                        // session and its range remains valid until it is ended.
+                        let composition_range = unsafe { composition.GetRange()? };
+                        Fcitx5TextEditSession::set_range_text(
+                            &composition_range,
+                            edit_cookie,
+                            &result.commit,
+                        )?;
+                        // SAFETY: Ending the current composition is required
+                        // after committing its text.
+                        unsafe { composition.EndComposition(edit_cookie)? };
+                    } else {
+                        Fcitx5TextEditSession::set_range_text(
+                            &selection_range,
+                            edit_cookie,
+                            &result.commit,
+                        )?;
+                    }
+                    *self.resulting_composition.borrow_mut() = None;
+                } else if !result.preedit.is_empty() {
+                    let composition =
+                        self.start_or_get_composition(edit_cookie, &selection_range)?;
+                    // SAFETY: The composition belongs to this active edit session.
                     let composition_range = unsafe { composition.GetRange()? };
-                    Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, text)?;
-                    // SAFETY: Ending the current composition is required after
-                    // committing its text.
+                    Fcitx5TextEditSession::set_range_text(
+                        &composition_range,
+                        edit_cookie,
+                        &result.preedit,
+                    )?;
+                    *self.resulting_composition.borrow_mut() = Some(composition);
+                } else if let Some(composition) = &self.current_composition {
+                    // SAFETY: The composition belongs to this active edit session.
+                    let composition_range = unsafe { composition.GetRange()? };
+                    Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, "")?;
+                    // SAFETY: Empty engine preedit ends the existing local
+                    // composition.
                     unsafe { composition.EndComposition(edit_cookie)? };
+                    *self.resulting_composition.borrow_mut() = None;
                 } else {
-                    Fcitx5TextEditSession::set_range_text(&selection_range, edit_cookie, text)?;
+                    *self.resulting_composition.borrow_mut() = None;
                 }
-                *self.resulting_composition.borrow_mut() = None;
             }
             TextEditAction::ClearComposition => {
                 if let Some(composition) = &self.current_composition {
@@ -1252,6 +2348,7 @@ impl Fcitx5TsfService {
             state: RefCell::default(),
             runtime: RefCell::new(TsfRuntimeState {
                 candidate_ui_element_id: TF_INVALID_UIELEMENTID,
+                popup_allowed: true,
                 ..TsfRuntimeState::default()
             }),
             composition_sink: sink.to_interface::<ITfCompositionSink>(),
@@ -1289,11 +2386,13 @@ impl Fcitx5TsfService {
         thread_manager: Ref<ITfThreadMgr>,
         client_id: u32,
     ) -> Result<()> {
+        trace_event("activate_runtime_enter");
         if thread_manager.is_null() || client_id == TF_CLIENTID_NULL {
             let mut runtime = self.runtime.borrow_mut();
             runtime.reset_local_state();
             runtime.guard_fail_open = true;
             self.state.borrow_mut().deactivate();
+            trace_event("activate_runtime_fail_open_invalid_thread_manager");
             return Ok(());
         }
         let mut runtime = self.runtime.borrow_mut();
@@ -1304,6 +2403,7 @@ impl Fcitx5TsfService {
             runtime.reset_local_state();
             runtime.guard_fail_open = true;
             self.state.borrow_mut().deactivate();
+            trace_event("activate_runtime_guard_disabled");
             return Ok(());
         }
 
@@ -1311,6 +2411,12 @@ impl Fcitx5TsfService {
         let keystroke_manager: ITfKeystrokeMgr = thread_manager_ref.cast()?;
         let source: ITfSource = thread_manager_ref.cast()?;
         let ui_element_manager: Option<ITfUIElementMgr> = thread_manager_ref.cast().ok();
+        let engine_client = current_module_path()
+            .ok()
+            .and_then(|module_path| EngineClient::new_for_current_module(&module_path));
+        if let Some(client) = &engine_client {
+            let _ = client.start_launcher_process();
+        }
 
         let key_sink = service.to_interface::<ITfKeyEventSink>();
         let thread_event_sink = service.to_interface::<ITfThreadMgrEventSink>();
@@ -1345,7 +2451,10 @@ impl Fcitx5TsfService {
         runtime.keystroke_manager = Some(keystroke_manager);
         runtime.source = Some(source);
         runtime.ui_element_manager = ui_element_manager;
+        runtime.engine_client = engine_client;
+        runtime.popup_allowed = true;
         self.state.borrow_mut().activate();
+        trace_event("activate_runtime_success");
         Ok(())
     }
 
@@ -1389,12 +2498,213 @@ impl Fcitx5TsfService {
             return false;
         }
         let value = wparam.0 as u16;
-        value == b'N' as u16
-            || value == b'D' as u16
-            || value == b'F' as u16
-            || value == b'A' as u16
+        (b'A' as u16..=b'Z' as u16).contains(&value)
+            || (b'0' as u16..=b'9' as u16).contains(&value)
             || value == VK_SPACE.0
             || value == VK_OEM_COMMA.0
+    }
+
+    fn context_id(context: &ITfContext) -> u64 {
+        windows_core::Interface::as_raw(context) as usize as u64
+    }
+
+    fn context_has_sensitive_input_scope(context: &ITfContext) -> bool {
+        // SAFETY: The context is supplied by TSF for this callback. The GUID
+        // pointer is valid for the call.
+        let Ok(property) = (unsafe { context.GetAppProperty(&GUID_PROP_INPUTSCOPE) }) else {
+            return false;
+        };
+        // SAFETY: A null range requests the app-level input-scope value.
+        let Ok(mut variant) = (unsafe { property.GetValue(0, None::<&ITfRange>) }) else {
+            return false;
+        };
+        // SAFETY: Reading the discriminant is valid for an initialized VARIANT.
+        let vt = unsafe { variant.Anonymous.Anonymous.vt };
+        if vt == VT_EMPTY {
+            return false;
+        }
+        if vt != VT_UNKNOWN {
+            // SAFETY: VARIANT was initialized by COM and is not otherwise moved.
+            let _ = unsafe { VariantClear(&mut variant) };
+            return false;
+        }
+        // SAFETY: The VARIANT contains VT_UNKNOWN, so reading the `punkVal` arm
+        // is valid. Clone adds a Rust-owned COM reference before VariantClear
+        // releases the original VARIANT reference.
+        let unknown = unsafe { (&*variant.Anonymous.Anonymous.Anonymous.punkVal).clone() };
+        // SAFETY: VARIANT was initialized by COM and is not otherwise moved.
+        let _ = unsafe { VariantClear(&mut variant) };
+        let Some(unknown) = unknown else {
+            return false;
+        };
+        let Ok(input_scope) = unknown.cast::<ITfInputScope>() else {
+            return false;
+        };
+        let mut scopes = std::ptr::null_mut::<InputScope>();
+        let mut count = 0u32;
+        // SAFETY: `scopes` and `count` are writable out parameters. COM returns
+        // a CoTaskMemAlloc buffer that is released below.
+        if unsafe { input_scope.GetInputScopes(&mut scopes, &mut count) }.is_err() {
+            return false;
+        }
+        if scopes.is_null() || count == 0 {
+            return false;
+        }
+        // SAFETY: ITfInputScope returned `count` initialized InputScope values
+        // in a CoTaskMemAlloc buffer.
+        let sensitive = unsafe { std::slice::from_raw_parts(scopes, count as usize) }
+            .iter()
+            .copied()
+            .any(is_sensitive_input_scope);
+        // SAFETY: The buffer was allocated by COM for GetInputScopes.
+        unsafe { CoTaskMemFree(Some(scopes.cast::<c_void>())) };
+        sensitive
+    }
+
+    fn read_surrounding_snapshot(&self, context: &ITfContext) -> SurroundingSnapshot {
+        let client_id = self.runtime.borrow().client_id;
+        if client_id == TF_CLIENTID_NULL {
+            return SurroundingSnapshot::default();
+        }
+        let snapshot = Rc::new(RefCell::new(SurroundingSnapshot::default()));
+        let session = ComObject::new(Fcitx5ReadSurroundingSession::new(
+            context.clone(),
+            snapshot.clone(),
+        ));
+        let edit_session = session.to_interface::<ITfEditSession>();
+        // SAFETY: The edit session is a live COM object and TF_ES_SYNC keeps the
+        // borrowed state valid until it returns.
+        let session_result = unsafe {
+            context.RequestEditSession(client_id, &edit_session, TF_ES_SYNC | TF_ES_READ)
+        };
+        if session_result.is_err() {
+            return SurroundingSnapshot::default();
+        }
+        let result = snapshot.borrow().clone();
+        result
+    }
+
+    fn keyboard_state_flags(release: bool) -> u32 {
+        fn pressed(key: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> bool {
+            // SAFETY: GetKeyState reads process keyboard state for the supplied
+            // virtual key and has no pointer preconditions.
+            unsafe { GetKeyState(key.0 as i32) < 0 }
+        }
+        let mut flags = 0u32;
+        if pressed(VK_SHIFT) {
+            flags |= protocol::KEY_FLAG_SHIFT;
+        }
+        if pressed(VK_CONTROL) {
+            flags |= protocol::KEY_FLAG_CONTROL;
+        }
+        if pressed(VK_MENU) {
+            flags |= protocol::KEY_FLAG_ALT;
+        }
+        if pressed(VK_LWIN) || pressed(VK_RWIN) {
+            flags |= protocol::KEY_FLAG_SUPER;
+        }
+        if release {
+            flags |= protocol::KEY_FLAG_RELEASE;
+        }
+        flags
+    }
+
+    fn physical_key_fields(wparam: WPARAM, lparam: LPARAM) -> (u32, u32, bool, u64) {
+        let virtual_key = wparam.0 as u32;
+        let mut scan_code = ((lparam.0 as u64 >> 16) & 0xff) as u32;
+        let extended_key = ((lparam.0 as u64 >> 24) & 1) != 0;
+        // SAFETY: GetKeyboardLayout and MapVirtualKeyExW have no pointer
+        // preconditions. A zero thread id selects the current thread.
+        let layout = unsafe { GetKeyboardLayout(0) };
+        if scan_code == 0 {
+            scan_code = unsafe { MapVirtualKeyExW(virtual_key, MAPVK_VK_TO_VSC_EX, Some(layout)) };
+        }
+        (virtual_key, scan_code, extended_key, layout.0 as u64)
+    }
+
+    fn engine_key_result(
+        &self,
+        context: &ITfContext,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        release: bool,
+    ) -> Option<EngineKeyResult> {
+        let context_id = Self::context_id(context);
+        let key_flags = Self::keyboard_state_flags(release);
+        let (virtual_key, scan_code, extended_key, keyboard_layout) =
+            Self::physical_key_fields(wparam, lparam);
+        let popup_allowed = self.runtime.borrow().popup_allowed;
+        let surrounding = self.read_surrounding_snapshot(context);
+        let mut runtime = self.runtime.borrow_mut();
+        let client = runtime.engine_client.as_mut()?;
+        client.process_key(
+            context_id,
+            virtual_key,
+            key_flags,
+            keyboard_layout,
+            scan_code,
+            extended_key,
+            popup_allowed,
+            surrounding,
+        )
+    }
+
+    fn cached_key_result(&self, context: &ITfContext, wparam: WPARAM) -> Option<EngineKeyResult> {
+        let context_id = Self::context_id(context);
+        let virtual_key = wparam.0 as u32;
+        let key_flags = Self::keyboard_state_flags(false);
+        let mut runtime = self.runtime.borrow_mut();
+        let cached = runtime.pending_key.take()?;
+        if cached.context_id == context_id
+            && cached.virtual_key == virtual_key
+            && cached.key_flags == key_flags
+        {
+            return Some(cached.result);
+        }
+        runtime.pending_key = Some(cached);
+        None
+    }
+
+    fn store_pending_key(&self, context: &ITfContext, wparam: WPARAM, result: EngineKeyResult) {
+        let context_id = Self::context_id(context);
+        self.runtime.borrow_mut().pending_key = Some(CachedKeyResult {
+            context_id,
+            virtual_key: wparam.0 as u32,
+            key_flags: Self::keyboard_state_flags(false),
+            result,
+        });
+    }
+
+    fn apply_engine_result(&self, context: &ITfContext, result: EngineKeyResult) -> Result<bool> {
+        if result.forward_key {
+            self.state
+                .borrow_mut()
+                .key_down(EngineResult::ok(true, "", ""));
+            return Ok(false);
+        }
+        let has_text_change = result.delete_surrounding_text
+            || !result.commit.is_empty()
+            || !result.preedit.is_empty()
+            || self.runtime.borrow().composition.is_some();
+        let applied = if has_text_change {
+            self.request_edit(context, TextEditAction::ApplyEngineResult(result.clone()))?
+        } else {
+            result.handled
+        };
+        if applied && result.candidate_visibility != CANDIDATE_VISIBILITY_HIDDEN {
+            self.begin_candidate_ui(&result);
+        } else if result.candidate_visibility == CANDIDATE_VISIBILITY_HIDDEN
+            || !result.commit.is_empty()
+            || result.preedit.is_empty()
+        {
+            self.end_candidate_ui();
+        }
+        self.state.borrow_mut().key_down(EngineResult::ok(
+            applied || result.handled,
+            &result.commit,
+            &result.preedit,
+        ));
+        Ok(applied || result.handled)
     }
 
     fn request_edit(&self, context: &ITfContext, action: TextEditAction) -> Result<bool> {
@@ -1428,8 +2738,18 @@ impl Fcitx5TsfService {
         Ok(true)
     }
 
-    fn begin_candidate_ui(&self) {
-        let candidate = ComObject::new(Fcitx5CandidateListUiElement::new());
+    fn begin_candidate_ui(&self, result: &EngineKeyResult) {
+        if result.candidates.is_empty()
+            || result.candidate_visibility == CANDIDATE_VISIBILITY_HIDDEN
+        {
+            self.end_candidate_ui();
+            return;
+        }
+        let candidate = ComObject::new(Fcitx5CandidateListUiElement::new(
+            result.candidates.clone(),
+            result.selected_candidate,
+            result.candidate_page,
+        ));
         let candidate_list = candidate.to_interface::<ITfCandidateListUIElement>();
         let candidate_ui = candidate.to_interface::<ITfUIElement>();
         let mut runtime = self.runtime.borrow_mut();
@@ -1448,6 +2768,7 @@ impl Fcitx5TsfService {
                 // SAFETY: The UI element is still live and records whether the
                 // host allowed popup display.
                 let _ = unsafe { candidate_ui.Show(show.as_bool()) };
+                runtime.popup_allowed = show.as_bool();
                 runtime.candidate_ui_element_id = id;
                 runtime.candidate_ui_element = Some(candidate_list);
             }
@@ -1558,12 +2879,48 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
         &self,
         context: Ref<ITfContext>,
         wparam: WPARAM,
-        _lparam: LPARAM,
+        lparam: LPARAM,
     ) -> Result<BOOL> {
+        trace_event("on_test_key_down_enter");
         if context.is_null() || !self.runtime.borrow().active {
+            trace_event("on_test_key_down_inactive");
             return Ok(BOOL(0));
         }
-        Ok(BOOL(self.should_test_eat_key(wparam) as i32))
+        let context = context.ok()?;
+        if self.runtime.borrow().guard_fail_open
+            || Fcitx5TsfService::context_has_sensitive_input_scope(context)
+            || !self.should_test_eat_key(wparam)
+        {
+            trace_event("on_test_key_down_passthrough");
+            return Ok(BOOL(0));
+        }
+        if let Some(cached) = &self.runtime.borrow().pending_key {
+            let context_id = Fcitx5TsfService::context_id(context);
+            let key_flags = Fcitx5TsfService::keyboard_state_flags(false);
+            if cached.context_id == context_id
+                && cached.virtual_key == wparam.0 as u32
+                && cached.key_flags == key_flags
+            {
+                trace_event(if cached.result.handled {
+                    "on_test_key_down_cached_handled"
+                } else {
+                    "on_test_key_down_cached_not_handled"
+                });
+                return Ok(BOOL(cached.result.handled as i32));
+            }
+        }
+        let Some(result) = self.engine_key_result(context, wparam, lparam, false) else {
+            trace_event("on_test_key_down_no_engine_result");
+            return Ok(BOOL(0));
+        };
+        let handled = result.handled || wparam.0 as u16 == VK_OEM_COMMA.0;
+        self.store_pending_key(context, wparam, result);
+        trace_event(if handled {
+            "on_test_key_down_handled"
+        } else {
+            "on_test_key_down_not_handled"
+        });
+        Ok(BOOL(handled as i32))
     }
 
     fn OnTestKeyUp(
@@ -1575,61 +2932,55 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
         Ok(BOOL(0))
     }
 
-    fn OnKeyDown(&self, context: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+    fn OnKeyDown(&self, context: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        trace_event("on_key_down_enter");
         if context.is_null() || self.runtime.borrow().guard_fail_open {
+            trace_event("on_key_down_passthrough_inactive_or_guard");
             return Ok(BOOL(0));
         }
         let context = context.ok()?;
-        let eaten = match wparam.0 as u16 {
-            value if value == b'D' as u16 => {
-                let applied = self.request_edit(context, TextEditAction::DeletePrevious)?;
-                self.state
-                    .borrow_mut()
-                    .key_down(EngineResult::ok(applied, "", ""));
-                applied
-            }
-            value if value == b'F' as u16 => {
-                self.state
-                    .borrow_mut()
-                    .key_down(EngineResult::ok(true, "", ""));
-                false
-            }
-            value if value == b'N' as u16 => {
-                let applied = self.request_edit(context, TextEditAction::Preedit("ni"))?;
-                if applied {
-                    self.begin_candidate_ui();
-                }
-                self.state
-                    .borrow_mut()
-                    .key_down(EngineResult::ok(applied, "", "ni"));
-                applied
-            }
-            value if value == VK_SPACE.0 => {
-                let applied = self.request_edit(context, TextEditAction::Commit("你"))?;
-                if applied {
-                    self.end_candidate_ui();
-                }
-                self.state
-                    .borrow_mut()
-                    .key_down(EngineResult::ok(applied, "你", ""));
-                applied
-            }
-            value if value == b'A' as u16 => {
-                let applied = self.request_edit(context, TextEditAction::Commit("a"))?;
-                self.state
-                    .borrow_mut()
-                    .key_down(EngineResult::ok(applied, "a", ""));
-                applied
-            }
-            _ => {
-                self.state.borrow_mut().key_down(EngineResult::malformed());
-                false
-            }
+        if Fcitx5TsfService::context_has_sensitive_input_scope(context)
+            || !self.should_test_eat_key(wparam)
+        {
+            trace_event("on_key_down_passthrough_scope_or_key");
+            return Ok(BOOL(0));
+        }
+        let result = self
+            .cached_key_result(context, wparam)
+            .or_else(|| self.engine_key_result(context, wparam, lparam, false));
+        let Some(result) = result else {
+            self.state.borrow_mut().key_down(EngineResult::timeout());
+            trace_event("on_key_down_no_engine_result");
+            return Ok(BOOL(0));
         };
+        trace_event(&format!(
+            "on_key_down_engine_result handled={} commit_len={} preedit_len={} candidates={}",
+            result.handled,
+            result.commit.chars().count(),
+            result.preedit.chars().count(),
+            result.candidates.len()
+        ));
+        let eaten = self.apply_engine_result(context, result)?;
+        trace_event(if eaten {
+            "on_key_down_eaten"
+        } else {
+            "on_key_down_not_eaten"
+        });
         Ok(BOOL(eaten as i32))
     }
 
-    fn OnKeyUp(&self, _context: Ref<ITfContext>, _wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+    fn OnKeyUp(&self, context: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        trace_event("on_key_up_enter");
+        if !context.is_null()
+            && self.runtime.borrow().active
+            && !self.runtime.borrow().guard_fail_open
+        {
+            if let Ok(context) = context.ok() {
+                if !Fcitx5TsfService::context_has_sensitive_input_scope(context) {
+                    let _ = self.engine_key_result(context, wparam, lparam, true);
+                }
+            }
+        }
         self.state.borrow_mut().key_up();
         Ok(BOOL(0))
     }
@@ -1785,6 +3136,7 @@ where
 /// Exported for the Windows COM loader. It does not dereference caller-owned
 /// pointers and must never unwind across the DLL boundary.
 pub unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
+    trace_event("dll_can_unload_now_enter");
     panic_to_hresult(dll_can_unload_now_impl)
 }
 
@@ -1800,6 +3152,7 @@ pub unsafe extern "system" fn DllGetClassObject(
     interface_id: *const GUID,
     object: *mut *mut c_void,
 ) -> HRESULT {
+    trace_event("dll_get_class_object_enter");
     panic_to_hresult(|| unsafe { dll_get_class_object_impl(class_id, interface_id, object) })
 }
 
@@ -1810,6 +3163,7 @@ pub unsafe extern "system" fn DllGetClassObject(
 /// COM initialization and all failures are returned as `HRESULT`; this function
 /// must never unwind across the DLL boundary.
 pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
+    trace_event("dll_register_server_enter");
     panic_to_hresult(register_text_service_impl)
 }
 
@@ -1819,6 +3173,7 @@ pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
 /// Exported for the elevated register helper. Unregistration is best-effort and
 /// returns `HRESULT`; this function must never unwind across the DLL boundary.
 pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
+    trace_event("dll_unregister_server_enter");
     panic_to_hresult(unregister_text_service_impl)
 }
 

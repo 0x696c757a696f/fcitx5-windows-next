@@ -197,7 +197,17 @@ int wmain(int argc, wchar_t** argv) {
     if (safeMode && firstRunRime) return 1;
     Process process;
     const auto startupBegin = std::chrono::steady_clock::now();
-    if (!startEngine(argv[1], 1, safeMode, 0U, process)) return 1;
+    const std::filesystem::path engineStderrPath =
+        std::filesystem::temp_directory_path() /
+        (L"fcitx5-real-engine-" + std::to_wstring(GetCurrentProcessId()) + L".stderr.log");
+    const auto dumpEngineStderr = [&] {
+        std::ifstream log(engineStderrPath, std::ios::binary);
+        if (!log) return;
+        std::string text((std::istreambuf_iterator<char>(log)),
+                         std::istreambuf_iterator<char>());
+        if (!text.empty()) std::cerr << "real-engine-stderr:\n" << text << '\n';
+    };
+    if (!startEngine(argv[1], 1, safeMode, 0U, process, engineStderrPath.c_str())) return 1;
     const auto startupDuration = std::chrono::steady_clock::now() - startupBegin;
 
     FILETIME creationBefore{}, exitBefore{}, kernelBefore{}, userBefore{};
@@ -431,12 +441,16 @@ int wmain(int argc, wchar_t** argv) {
             fcitx::windows::protocol::kKeyFlagShift;
         if (!client.processKey(conversionContext, 'F', conversionFlags, result) ||
             !result.handled) {
-            std::cerr << "chttrans toggle hotkey was not handled\n";
+            std::wcerr << L"chttrans toggle hotkey was not handled: handled="
+                       << result.handled << L" preedit=" << result.preedit
+                       << L" commit=" << result.commit << L'\n';
+            dumpEngineStderr();
             return 1;
         }
         for (const std::uint32_t key : {'S', 'H', 'U'}) {
             if (!client.processKey(conversionContext, key, 0, result) || !result.handled) {
                 std::cerr << "chttrans pinyin input failed\n";
+                dumpEngineStderr();
                 return 1;
             }
         }
@@ -444,11 +458,13 @@ int wmain(int argc, wchar_t** argv) {
             result.commit != L"書") {
             std::wcerr << L"chttrans did not convert the committed word: "
                        << result.commit << L'\n';
+            dumpEngineStderr();
             return 1;
         }
         if (!client.processKey(conversionContext, 'F', conversionFlags, result) ||
             !result.handled) {
             std::cerr << "chttrans restore hotkey was not handled\n";
+            dumpEngineStderr();
             return 1;
         }
     }
@@ -502,6 +518,7 @@ int wmain(int argc, wchar_t** argv) {
                        << L" preedit=" << result.preedit << L" commit=" << result.commit
                        << L" candidates=" << result.candidates.size()
                        << L" selected=" << result.selectedCandidate << L'\n';
+            dumpEngineStderr();
             return 1;
         }
     }
@@ -720,6 +737,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!repeatOk || !result.handled) {
             std::cerr << "60 Hz key-repeat request failed at " << index
                       << " ipc=" << repeatOk << " handled=" << result.handled << '\n';
+            dumpEngineStderr();
             return 1;
         }
         std::this_thread::sleep_until(deadline);
@@ -737,11 +755,16 @@ int wmain(int argc, wchar_t** argv) {
     process.requestStop();
     if (WaitForSingleObject(process.handle, 5000) != WAIT_OBJECT_0) {
         std::cerr << "real engine did not stop after test client disconnected\n";
+        dumpEngineStderr();
         return 1;
     }
     DWORD exitCode = 1;
     GetExitCodeProcess(process.handle, &exitCode);
-    if (exitCode != 0 || firstEpoch == 0) return 1;
+    if (exitCode != 0 || firstEpoch == 0) {
+        dumpEngineStderr();
+        return 1;
+    }
+    (void)DeleteFileW(engineStderrPath.c_str());
 
     Process restarted;
     if (!startEngine(argv[1], 2, safeMode, 1U, restarted)) return 1;

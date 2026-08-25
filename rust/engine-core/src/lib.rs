@@ -690,12 +690,14 @@ pub fn accept_frame_sequence(request_id: u64, last_request_id: u64) -> bool {
 /// Key-request dispatcher deadline in milliseconds (mirrors the
 /// `FcitxRuntime::processKey` timeout policy in `handleRequest`): a cold
 /// context (revision 0) gets the widened first-context deadline, warm keys
-/// the tight input deadline.
+/// the tight input deadline. The warm deadline intentionally matches the IPC
+/// client hot-path bound so the engine dispatcher does not drop a valid input
+/// request before the caller's bounded wait expires.
 pub fn key_request_timeout_ms(revision: u64) -> u32 {
     if revision == 0 {
         2500
     } else {
-        75
+        250
     }
 }
 

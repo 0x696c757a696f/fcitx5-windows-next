@@ -600,15 +600,19 @@ class FcitxRuntime::Impl final {
                 (void)instance->inputMethodEngine(id);
             }
         }
-        std::string selected = previousDefault;
-        if (!contains(selected)) {
-            selected.clear();
-            for (const std::string& fallback : config.enabled) {
-                if (contains(fallback)) {
-                    selected = fallback;
-                    break;
-                }
-            }
+        std::string selected;
+        if (!previousDefault.empty() && previousDefault != "keyboard-us" &&
+            contains(previousDefault)) {
+            selected = previousDefault;
+        }
+        const std::string configuredDefault = config.defaultInputMethod.value_or("");
+        if (selected.empty() && !configuredDefault.empty() && contains(configuredDefault)) {
+            selected = configuredDefault;
+        }
+        for (auto fallback = config.enabled.begin();
+             selected.empty() && fallback != config.enabled.end(); ++fallback) {
+            if (contains(*fallback))
+                selected = *fallback;
         }
         if (selected.empty())
             return;

@@ -14,8 +14,8 @@
 
 namespace fcitx::windows::ipc {
 
-inline constexpr DWORD kInputDeadlineMilliseconds = 100;
-// The hot input path stays at 100 ms. A brand-new TSF context is allowed a
+inline constexpr DWORD kInputDeadlineMilliseconds = 250;
+// The hot input path stays bounded at 250 ms. A brand-new TSF context is allowed a
 // wider, still bounded startup window because some Fcitx addons lazily create
 // per-user cache/config state on first focus in an empty FCITX_USER_DATA_ROOT.
 // This replaces the old synthetic "n" warmup: correctness first, no fake user

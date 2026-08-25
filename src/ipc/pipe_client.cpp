@@ -420,7 +420,8 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
                             std::uint32_t surroundingAnchor) noexcept {
     result = {};
     try {
-        const bool newContext = contexts_.find(contextId) == contexts_.end();
+        const auto existingContext = contexts_.find(contextId);
+        const bool newContext = existingContext == contexts_.end();
         const std::uint64_t deadline = fcitx5_windows_common_deadline_after_milliseconds(
             newContext ? kContextStartDeadlineMilliseconds : kInputDeadlineMilliseconds);
         if (!connect(deadline)) {
@@ -432,7 +433,7 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
             return false;
         }
         const auto requestId = fcitx5_windows_common_next_pipe_client_request_id();
-        auto& contextState = contexts_[contextId];
+        ContextState contextState = newContext ? ContextState{} : existingContext->second;
         protocol::KeyRequest request{
             protocol::Metadata{requestId, 0, engineEpoch_, sessionId_, contextId,
                                contextState.compositionId, contextState.revision},
@@ -451,6 +452,7 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
             disconnect();
             return false;
         }
+        contexts_[contextId] = contextState;
         return true;
     } catch (...) {
         disconnect();

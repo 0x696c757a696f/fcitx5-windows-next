@@ -132,8 +132,9 @@ Key keyFromRequest(const protocol::KeyRequest& request) {
         break;
     }
     if (vk >= 'A' && vk <= 'Z') {
-        return Key(static_cast<KeySym>(FcitxKey_a + (vk - 'A')), states,
-                   static_cast<int>(request.scanCode));
+        const bool shifted = (request.keyFlags & protocol::kKeyFlagShift) != 0;
+        return Key(static_cast<KeySym>((shifted ? FcitxKey_A : FcitxKey_a) + (vk - 'A')),
+                   states, static_cast<int>(request.scanCode));
     }
     if (vk >= '0' && vk <= '9') {
         return Key(static_cast<KeySym>(FcitxKey_0 + (vk - '0')), states,

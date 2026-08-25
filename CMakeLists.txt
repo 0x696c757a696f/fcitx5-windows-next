@@ -658,6 +658,7 @@ add_custom_command(
 
 add_custom_target(
   fcitx5_tsf
+  ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
@@ -673,7 +674,15 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/tsf.rc"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/resource.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5-tsf.ico"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-poc/build.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-poc/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-poc/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/src/lib.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust shipping fcitx5-tsf.dll")
 set(FCITX_SHIPPING_TSF_DLL "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll")
