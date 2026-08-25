@@ -1868,6 +1868,8 @@ int main(int argc, char** argv) {
     const auto configPocManifest = read_text(sourceRoot / "rust/config-poc/Cargo.toml");
     const auto configRustDifferentialScript =
         read_text(sourceRoot / "tools/test-config-rust-side-by-side.ps1");
+    const auto configRustShippingLineageScript =
+        read_text(sourceRoot / "tools/test-config-rust-shipping-lineage.ps1");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     const auto controlPackageIntegrationSource =
         read_text(sourceRoot / "tests/integration/control_package_integration_test.cpp");
@@ -2015,6 +2017,8 @@ int main(int argc, char** argv) {
         configQaSource.find("shared_theme_pixels") == std::string::npos ||
         configPocSource.find("fcitx5-config-poc") == std::string::npos ||
         configPocSource.find("fcitx5-config-rust") == std::string::npos ||
+        configPocSource.find("CONFIG_SHIPPING_COMPONENT") == std::string::npos ||
+        configPocSource.find("fcitx5-config") == std::string::npos ||
         configPocSource.find("--window-smoke") == std::string::npos ||
         configPocSource.find("CreateWindowExW") == std::string::npos ||
         configPocSource.find("rust-config-poc-window-smoke") == std::string::npos ||
@@ -2187,6 +2191,8 @@ int main(int argc, char** argv) {
         cmakeSource.find("config-rust-side-by-side-differential") == std::string::npos ||
         cmakeSource.find("config-rust-side-by-side-report.json") == std::string::npos ||
         cmakeSource.find("config-rust-side-by-side-differential.json") == std::string::npos ||
+        cmakeSource.find("config-rust-shipping-lineage") == std::string::npos ||
+        cmakeSource.find("test-config-rust-shipping-lineage.ps1") == std::string::npos ||
         cmakeSource.find("fcitx5-config-rust --target") == std::string::npos ||
         configRustDifferentialScript.find("cpp-config-visual") == std::string::npos ||
         configRustDifferentialScript.find("cpp-config-live-preview") == std::string::npos ||
@@ -2208,6 +2214,15 @@ int main(int argc, char** argv) {
         configRustDifferentialScript.find("candidate_preview_candidate_core_scenarios") ==
             std::string::npos ||
         configRustDifferentialScript.find("candidate_preview_dpi_parity_scale_percents") ==
+            std::string::npos ||
+        configRustShippingLineageScript.find("fcitx5-config.exe") == std::string::npos ||
+        configRustShippingLineageScript.find("fcitx5-config-rust.exe") ==
+            std::string::npos ||
+        configRustShippingLineageScript.find("component -ne 'fcitx5-config'") ==
+            std::string::npos ||
+        configRustShippingLineageScript.find("shipping_config_replaced -ne $false") ==
+            std::string::npos ||
+        configRustShippingLineageScript.find("shipping-candidate-real-preview-host-path") ==
             std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||

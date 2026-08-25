@@ -1,0 +1,125 @@
+param(
+  [Parameter(Mandatory = $true)] [string] $CargoExecutable,
+  [Parameter(Mandatory = $true)] [string] $CargoTarget,
+  [Parameter(Mandatory = $true)] [string] $OutputDirectory,
+  [Parameter(Mandatory = $true)] [string] $Report
+)
+
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$OutputEncoding = [System.Text.UTF8Encoding]::new()
+
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$cargo = [IO.Path]::GetFullPath($CargoExecutable)
+$outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
+$reportPath = [IO.Path]::GetFullPath($Report)
+$reportDirectory = Split-Path -Parent $reportPath
+if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) {
+  throw "Cargo executable is missing: $cargo"
+}
+if (-not (Test-Path -LiteralPath $reportDirectory -PathType Container)) {
+  New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
+}
+if (-not (Test-Path -LiteralPath $outputRoot -PathType Container)) {
+  New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+}
+
+function Invoke-CheckedProcess {
+  param(
+    [Parameter(Mandatory = $true)] [string] $FilePath,
+    [Parameter(Mandatory = $true)] [string[]] $Arguments,
+    [Parameter(Mandatory = $true)] [string] $Name
+  )
+
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $FilePath
+  foreach ($argument in $Arguments) {
+    [void] $startInfo.ArgumentList.Add($argument)
+  }
+  $startInfo.UseShellExecute = $false
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.CreateNoWindow = $true
+
+  $process = [Diagnostics.Process]::Start($startInfo)
+  $stdout = $process.StandardOutput.ReadToEnd()
+  $stderr = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+  if ($process.ExitCode -ne 0) {
+    throw "$Name failed with exit code $($process.ExitCode): $stderr $stdout"
+  }
+  return [ordered]@{
+    name = $Name
+    arguments = $Arguments
+    exit_code = $process.ExitCode
+  }
+}
+
+$cargoArguments = @(
+  'build',
+  '--locked',
+  '--manifest-path',
+  (Join-Path $repoRoot 'Cargo.toml'),
+  '-p',
+  'fcitx5-config-poc',
+  '--bin',
+  'fcitx5-config-rust',
+  '--target',
+  $CargoTarget
+)
+[void] (Invoke-CheckedProcess -FilePath $cargo -Arguments $cargoArguments -Name 'build-rust-config-shipping-lineage')
+
+$targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+  Join-Path $repoRoot 'out\toolchains\rust\target'
+} else {
+  [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+}
+$rustSideBySide = Join-Path $targetRoot "$CargoTarget\debug\fcitx5-config-rust.exe"
+if (-not (Test-Path -LiteralPath $rustSideBySide -PathType Leaf)) {
+  throw "Rust Config side-by-side executable was not built: $rustSideBySide"
+}
+
+$shippingExe = Join-Path $outputRoot 'fcitx5-config.exe'
+Copy-Item -LiteralPath $rustSideBySide -Destination $shippingExe -Force
+if (-not (Test-Path -LiteralPath $shippingExe -PathType Leaf)) {
+  throw "Rust Config shipping-lineage executable is missing: $shippingExe"
+}
+
+$rustReport = Join-Path $reportDirectory 'config-rust-shipping-lineage-self-check.json'
+[void] (Invoke-CheckedProcess -FilePath $shippingExe -Arguments @('--self-check', '--report', $rustReport) -Name 'rust-config-shipping-lineage-self-check')
+
+$rust = Get-Content -LiteralPath $rustReport -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($rust.component -ne 'fcitx5-config') {
+  throw "Rust shipping-lineage report did not run under the shipping component name: $($rust.component)"
+}
+if ($rust.rust_shipping_target_name -ne 'fcitx5-config.exe') {
+  throw "Rust shipping-lineage report lost the shipping executable name"
+}
+if ($rust.preserves_product_binary_name -ne $true) {
+  throw "Rust shipping-lineage report did not preserve the product binary name"
+}
+if ($rust.shipping_config_replaced -ne $false) {
+  throw "Rust shipping-lineage check must not claim the CMake shipping target has been cut over yet"
+}
+if ($rust.permanent_runtime_selector -ne $false) {
+  throw "Rust shipping-lineage report must not declare a permanent runtime selector"
+}
+if ($rust.candidate_preview_renderer_contract -ne 'shipping-candidate-real-preview-host-path') {
+  throw "Rust shipping-lineage report did not preserve the Candidate preview host contract"
+}
+
+$reportObject = [ordered]@{
+  component = 'fcitx5-config'
+  kind = 'config-rust-shipping-lineage'
+  rust_source_executable = $rustSideBySide
+  rust_shipping_lineage_executable = $shippingExe
+  rust_report = $rustReport
+  rust_shipping_target_name = 'fcitx5-config.exe'
+  preserves_product_binary_name = $true
+  shipping_config_replaced = $false
+  permanent_runtime_selector = $false
+  result = 'PASS'
+}
+$reportObject | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+Write-Host "config-rust-shipping-lineage-report=$reportPath result=PASS"

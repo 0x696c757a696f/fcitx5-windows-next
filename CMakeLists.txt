@@ -1085,6 +1085,19 @@ if(BUILD_TESTING)
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                                   TIMEOUT 45)
   add_test(
+    NAME config-rust-shipping-lineage
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-shipping-lineage.ps1"
+      -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
+      "${FCITX_RUST_TARGET}" -OutputDirectory
+      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage" -Report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage.json")
+  set_tests_properties(config-rust-shipping-lineage
+                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                                  TIMEOUT 45)
+  add_test(
     NAME rust-config-poc-window-smoke
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}

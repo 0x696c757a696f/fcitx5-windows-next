@@ -12,6 +12,7 @@ use fcitx5_package_core::{
 
 const CONFIG_POC_COMPONENT: &str = "fcitx5-config-poc";
 const CONFIG_SIDE_BY_SIDE_COMPONENT: &str = "fcitx5-config-rust";
+const CONFIG_SHIPPING_COMPONENT: &str = "fcitx5-config";
 const CONFIG_SHIPPING_BINARY_NAME: &str = "fcitx5-config.exe";
 const CANDIDATE_PREVIEW_HOST_KIND: &str = "config-child-candidate-renderer-host";
 const CANDIDATE_PREVIEW_RENDERER_CONTRACT: &str = "shipping-candidate-real-preview-host-path";
@@ -500,11 +501,11 @@ fn current_component_name() -> &'static str {
     else {
         return CONFIG_POC_COMPONENT;
     };
-    if stem
-        .to_string_lossy()
-        .eq_ignore_ascii_case(CONFIG_SIDE_BY_SIDE_COMPONENT)
-    {
+    let stem = stem.to_string_lossy();
+    if stem.eq_ignore_ascii_case(CONFIG_SIDE_BY_SIDE_COMPONENT) {
         CONFIG_SIDE_BY_SIDE_COMPONENT
+    } else if stem.eq_ignore_ascii_case(CONFIG_SHIPPING_COMPONENT) {
+        CONFIG_SHIPPING_COMPONENT
     } else {
         CONFIG_POC_COMPONENT
     }
