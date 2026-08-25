@@ -638,6 +638,34 @@ add_custom_command(
           "$<TARGET_FILE_DIR:fcitx5_config_app>/locales"
   VERBATIM)
 
+set(FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5-config-rust.exe")
+add_custom_target(
+  fcitx5_config_rust_side_by_side
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-config-rust.exe"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
+    fcitx5-config-rust --target "${FCITX_RUST_TARGET}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different
+    "${FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE}"
+    "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-config-rust.exe"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building side-by-side Rust fcitx5-config-rust executable")
+
 add_library(fcitx5_candidate_layout INTERFACE)
 add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
 target_compile_features(fcitx5_candidate_layout INTERFACE cxx_std_20)
@@ -1038,18 +1066,29 @@ if(BUILD_TESTING)
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --target
-      "${FCITX_RUST_TARGET}" -- --self-check --report
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
+      fcitx5-config-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
       "${CMAKE_CURRENT_BINARY_DIR}/config-poc-report.json")
   set_tests_properties(rust-config-poc-contract PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(
+    NAME rust-config-side-by-side-contract
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
+      fcitx5-config-rust --target "${FCITX_RUST_TARGET}" -- --self-check
+      --report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-side-by-side-report.json")
+  set_tests_properties(rust-config-side-by-side-contract
+                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(
     NAME rust-config-poc-window-smoke
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --target
-      "${FCITX_RUST_TARGET}" -- --window-smoke --report
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
+      fcitx5-config-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke --report
       "${CMAKE_CURRENT_BINARY_DIR}/config-poc-window-smoke.json")
   set_tests_properties(rust-config-poc-window-smoke PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

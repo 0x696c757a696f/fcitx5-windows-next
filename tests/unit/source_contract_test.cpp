@@ -1996,6 +1996,7 @@ int main(int argc, char** argv) {
         configQaSource.find("assert_preview_matches_candidate_theme") == std::string::npos ||
         configQaSource.find("shared_theme_pixels") == std::string::npos ||
         configPocSource.find("fcitx5-config-poc") == std::string::npos ||
+        configPocSource.find("fcitx5-config-rust") == std::string::npos ||
         configPocSource.find("--window-smoke") == std::string::npos ||
         configPocSource.find("CreateWindowExW") == std::string::npos ||
         configPocSource.find("rust-config-poc-window-smoke") == std::string::npos ||
@@ -2006,6 +2007,10 @@ int main(int argc, char** argv) {
         configPocSource.find("validate_config_rust_cutover_plan") == std::string::npos ||
         configPocSource.find("config_rust_cutover_plan") == std::string::npos ||
         configPocSource.find("frozen_corpus_from_config_ux_009") == std::string::npos ||
+        configPocSource.find("side_by_side_executable_name") == std::string::npos ||
+        configPocSource.find("side_by_side_executable_target_declared") ==
+            std::string::npos ||
+        configPocSource.find("side_by_side_uses_frozen_corpus") == std::string::npos ||
         configPocSource.find("side_by_side_differential_required") == std::string::npos ||
         configPocSource.find("permanent_runtime_selector") == std::string::npos ||
         configPocSource.find("typed_control_only") == std::string::npos ||
@@ -2059,6 +2064,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configPocManifest.find("fcitx5-control-core") == std::string::npos ||
         configPocManifest.find("fcitx5-package-core") == std::string::npos ||
+        configPocManifest.find("name = \"fcitx5-config-rust\"") == std::string::npos ||
         configPocSource.find("control_schema_json") == std::string::npos ||
         configPocSource.find("parse_manifest") == std::string::npos ||
         configPocSource.find("parse_repository_index") == std::string::npos ||
@@ -2099,6 +2105,12 @@ int main(int argc, char** argv) {
         controlPackageIntegrationSource.find("presentation readback must replay the persisted font") ==
             std::string::npos ||
         cmakeSource.find("rust-config-poc-contract") == std::string::npos ||
+        cmakeSource.find("fcitx5_config_rust_side_by_side") == std::string::npos ||
+        cmakeSource.find("Building side-by-side Rust fcitx5-config-rust executable") ==
+            std::string::npos ||
+        cmakeSource.find("rust-config-side-by-side-contract") == std::string::npos ||
+        cmakeSource.find("config-rust-side-by-side-report.json") == std::string::npos ||
+        cmakeSource.find("fcitx5-config-rust --target") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||

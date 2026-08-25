@@ -7,6 +7,10 @@ edition = "2021"
 name = "fcitx5-config-poc"
 path = "src/main.rs"
 
+[[bin]]
+name = "fcitx5-config-rust"
+path = "src/bin/fcitx5_config_rust.rs"
+
 [dependencies]
 fcitx5-control-core = { path = "../control-core" }
 fcitx5-package-core = { path = "../package-core" }

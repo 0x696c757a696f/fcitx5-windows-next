@@ -1,8 +1,8 @@
 # Current Truth Snapshot
 
-Date: 2026-08-25 (updated after CONFIG-UX-009 completion and CONFIG-RUST-CUTOVER-001 start)
+Date: 2026-08-25 (updated after CONFIG-RUST-CUTOVER-001 side-by-side Rust Settings target)
 
-HEAD recorded at snapshot refresh: `b7e78dc5859d18d4a34097b147c62071126fffd9`
+HEAD recorded at snapshot refresh: `009eb0f7ed2f6d4601c46c9a3537fa6adef35447`
 
 Working tree at snapshot refresh: clean after archiving `CONFIG-UX-009`.
 
@@ -32,7 +32,7 @@ Windows host
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
 | Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter |
-| Config | C++ WTL/Win32 shell remains only as a temporary shipping adapter; `CONFIG-UX-009` froze the Settings UX/theme/preview/package/localization/no-overlap corpus; Rust config PoC/control/theme operation owners exist | Current task: move shipping `fcitx5-config.exe` to Rust through `CONFIG-RUST-CUTOVER-001` cutover slices |
+| Config | C++ WTL/Win32 shell remains only as a temporary shipping adapter; `CONFIG-UX-009` froze the Settings UX/theme/preview/package/localization/no-overlap corpus; Rust config PoC/control/theme operation owners exist; side-by-side `fcitx5-config-rust.exe` now builds against that corpus | Current task: move shipping `fcitx5-config.exe` to Rust through `CONFIG-RUST-CUTOVER-001` cutover slices |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
 | Package/provider/downloader/updater/deployer | Package/provider/deployer/updater/downloader Rust CLIs and Rust package-core are wired; adapters remain where needed | Rust authority |
@@ -43,7 +43,7 @@ Windows host
 | PoC / migration lane | State | Exit condition |
 |---|---|---|
 | Rust TSF | `SHIPPING-AUTOMATED-GREEN` / real-host matrix pending | Full host matrix evidence before release readiness |
-| Rust Config | `CUTOVER-AUTHORIZED / UX-CORPUS-FROZEN / INITIAL-CUTOVER` | Build Rust shipping Config side-by-side against the frozen `CONFIG-UX-009` corpus, run differential/visual/accessibility/package evidence, then cut over and delete the old C++ WTL shell |
+| Rust Config | `CUTOVER-AUTHORIZED / UX-CORPUS-FROZEN / SIDE-BY-SIDE-RUST-SETTINGS-TARGET-GREEN` | Run side-by-side differential/visual/accessibility/package evidence, then cut over `fcitx5-config.exe` and delete the old C++ WTL shell |
 | Candidate Rust core | `SHIPPING-DOMAIN` | Remove duplicated C++ validation/state, preserve renderer evidence, add candidate-action/upstream alignment |
 | Rust package/update/control/launcher cores | `SHIPPING-DOMAIN` where already cut over, `MIGRATION-CANDIDATE` where shell remains | Delete replaced C++ authoritative implementation and keep adapter thin |
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
