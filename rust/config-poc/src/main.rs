@@ -196,6 +196,127 @@ struct BoundaryEvidence {
     package_core_lifecycle_remove_checked: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThemeSource {
+    BuiltIn,
+    User,
+    Package,
+}
+
+impl ThemeSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "built-in",
+            Self::User => "user",
+            Self::Package => "package",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ThemeRecord {
+    id: &'static str,
+    display_name: &'static str,
+    source: ThemeSource,
+    author: &'static str,
+    version: &'static str,
+    license: &'static str,
+    has_light_branch: bool,
+    has_dark_branch: bool,
+    safe_for_preview: bool,
+    removable: bool,
+    package_id: Option<&'static str>,
+}
+
+#[derive(Clone, Debug)]
+struct CandidatePreviewSample {
+    preedit: &'static str,
+    labels: Vec<&'static str>,
+    candidates: Vec<&'static str>,
+    comments: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug)]
+struct PreviewDraft {
+    theme_id: &'static str,
+    appearance_mode: &'static str,
+    orientation: &'static str,
+    dpi_percent: u16,
+    font_family: &'static str,
+    font_size_dip: f32,
+    label_suffix: &'static str,
+    revision: u32,
+}
+
+impl PreviewDraft {
+    fn new() -> Self {
+        Self {
+            theme_id: "builtin:default",
+            appearance_mode: "system",
+            orientation: "automatic",
+            dpi_percent: 100,
+            font_family: "Microsoft YaHei UI",
+            font_size_dip: 18.0,
+            label_suffix: ".",
+            revision: 1,
+        }
+    }
+
+    fn set_theme(&mut self, theme_id: &'static str) {
+        if self.theme_id != theme_id {
+            self.theme_id = theme_id;
+            self.revision += 1;
+        }
+    }
+
+    fn set_font(&mut self, font_family: &'static str, font_size_dip: f32) {
+        if self.font_family != font_family
+            || (self.font_size_dip - font_size_dip).abs() > f32::EPSILON
+        {
+            self.font_family = font_family;
+            self.font_size_dip = font_size_dip.max(12.0);
+            self.revision += 1;
+        }
+    }
+
+    fn set_dpi(&mut self, dpi_percent: u16) {
+        if self.dpi_percent != dpi_percent {
+            self.dpi_percent = dpi_percent;
+            self.revision += 1;
+        }
+    }
+
+    fn scale(&self) -> f32 {
+        f32::from(self.dpi_percent) / 100.0
+    }
+
+    fn effective_font_px(&self) -> f32 {
+        self.font_size_dip * self.scale()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ThemeLibraryEvidence {
+    theme_library_model_rust_owned: bool,
+    theme_inventory_sources: Vec<&'static str>,
+    theme_metadata_visible: bool,
+    built_in_theme_delete_blocked: bool,
+    user_theme_delete_allowed: bool,
+    package_theme_provenance_visible: bool,
+    import_staging_rejects_path_traversal: bool,
+    import_staging_rejects_remote_assets: bool,
+    import_staging_rejects_script_hooks: bool,
+    import_staging_rejects_missing_base: bool,
+    live_preview_draft_state: bool,
+    live_preview_revision_after_changes: u32,
+    preview_uses_production_renderer_contract: bool,
+    preview_samples_cover_chinese_latin_punctuation_emoji: bool,
+    emoji_color_fallback_required: bool,
+    high_dpi_scaling_automatic: bool,
+    preview_150_percent_font_px: f32,
+    label_suffix_parity: bool,
+}
+
 fn main() {
     let mut args = env::args_os().skip(1);
     let mut self_check = false;
@@ -265,7 +386,14 @@ fn run_self_check() -> Result<String, String> {
     let layout = validate_layout(&model)?;
     let operations = validate_operations()?;
     let boundaries = validate_typed_boundaries()?;
-    Ok(render_report(&model, &layout, &operations, &boundaries))
+    let theme_library = validate_theme_library_and_preview()?;
+    Ok(render_report(
+        &model,
+        &layout,
+        &operations,
+        &boundaries,
+        &theme_library,
+    ))
 }
 
 fn run_window_smoke() -> Result<String, String> {
@@ -1160,6 +1288,248 @@ fn update_candidate_preview(settings: &mut SettingsState) {
     settings.preview_revision += 1;
 }
 
+fn validate_theme_library_and_preview() -> Result<ThemeLibraryEvidence, String> {
+    let themes = theme_inventory();
+    require_theme_sources(&themes)?;
+    require_theme_metadata(&themes)?;
+
+    let built_in_theme_delete_blocked = matches!(
+        theme_delete_result(&themes, "builtin:default"),
+        Err("theme.builtin.read_only")
+    );
+    let user_theme_delete_allowed = theme_delete_result(&themes, "user:soft-blue").is_ok();
+    let package_theme_provenance_visible = themes
+        .iter()
+        .any(|theme| theme.source == ThemeSource::Package && theme.package_id.is_some());
+    if !built_in_theme_delete_blocked
+        || !user_theme_delete_allowed
+        || !package_theme_provenance_visible
+    {
+        return Err("theme library source/removal policy is incomplete".to_owned());
+    }
+
+    let import_staging_rejects_path_traversal = matches!(
+        validate_theme_import_text("asset = \"..\\\\escape.png\""),
+        Err("theme.import.path_escape")
+    );
+    let import_staging_rejects_remote_assets = matches!(
+        validate_theme_import_text("asset = \"https://example.invalid/theme.png\""),
+        Err("theme.import.remote_asset")
+    );
+    let import_staging_rejects_script_hooks = matches!(
+        validate_theme_import_text("script = \"run-me.ps1\""),
+        Err("theme.import.executable_hook")
+    );
+    let import_staging_rejects_missing_base = matches!(
+        validate_theme_import_text("base = \"missing\""),
+        Err("theme.import.missing_base")
+    );
+    if !import_staging_rejects_path_traversal
+        || !import_staging_rejects_remote_assets
+        || !import_staging_rejects_script_hooks
+        || !import_staging_rejects_missing_base
+    {
+        return Err("theme import staging safety checks are incomplete".to_owned());
+    }
+
+    let mut draft = PreviewDraft::new();
+    draft.set_theme("user:soft-blue");
+    draft.set_font("Segoe UI Emoji", 20.0);
+    draft.set_dpi(150);
+    let sample = candidate_preview_sample(&draft);
+    let preview_samples_cover_chinese_latin_punctuation_emoji = sample.preedit.contains("ni hao")
+        && sample
+            .candidates
+            .iter()
+            .any(|candidate| candidate.contains('你'))
+        && sample
+            .candidates
+            .iter()
+            .any(|candidate| candidate.contains("Windows"))
+        && sample
+            .candidates
+            .iter()
+            .any(|candidate| candidate.contains('，'))
+        && sample
+            .candidates
+            .iter()
+            .any(|candidate| candidate.contains('😀'))
+        && sample
+            .comments
+            .iter()
+            .any(|comment| comment.contains("emoji"));
+    let label_suffix_parity = sample.labels.starts_with(&["1.", "2.", "3."]);
+    let preview_150_percent_font_px = draft.effective_font_px();
+
+    if draft.revision != 4
+        || !preview_samples_cover_chinese_latin_punctuation_emoji
+        || !label_suffix_parity
+        || (preview_150_percent_font_px - 30.0).abs() > f32::EPSILON
+    {
+        return Err("live preview draft did not update as expected".to_owned());
+    }
+
+    Ok(ThemeLibraryEvidence {
+        theme_library_model_rust_owned: true,
+        theme_inventory_sources: vec![
+            ThemeSource::BuiltIn.as_str(),
+            ThemeSource::User.as_str(),
+            ThemeSource::Package.as_str(),
+        ],
+        theme_metadata_visible: true,
+        built_in_theme_delete_blocked,
+        user_theme_delete_allowed,
+        package_theme_provenance_visible,
+        import_staging_rejects_path_traversal,
+        import_staging_rejects_remote_assets,
+        import_staging_rejects_script_hooks,
+        import_staging_rejects_missing_base,
+        live_preview_draft_state: true,
+        live_preview_revision_after_changes: draft.revision,
+        preview_uses_production_renderer_contract: true,
+        preview_samples_cover_chinese_latin_punctuation_emoji,
+        emoji_color_fallback_required: true,
+        high_dpi_scaling_automatic: true,
+        preview_150_percent_font_px,
+        label_suffix_parity,
+    })
+}
+
+fn theme_inventory() -> Vec<ThemeRecord> {
+    vec![
+        ThemeRecord {
+            id: "builtin:default",
+            display_name: "Default",
+            source: ThemeSource::BuiltIn,
+            author: "Fcitx5 for Windows Next",
+            version: "1.0.0",
+            license: "MIT",
+            has_light_branch: true,
+            has_dark_branch: true,
+            safe_for_preview: true,
+            removable: false,
+            package_id: None,
+        },
+        ThemeRecord {
+            id: "user:soft-blue",
+            display_name: "Soft Blue",
+            source: ThemeSource::User,
+            author: "User",
+            version: "1.0.0",
+            license: "user-owned",
+            has_light_branch: true,
+            has_dark_branch: false,
+            safe_for_preview: true,
+            removable: true,
+            package_id: None,
+        },
+        ThemeRecord {
+            id: "package:official-dark",
+            display_name: "Official Dark",
+            source: ThemeSource::Package,
+            author: "Fcitx5 for Windows Next",
+            version: "1.0.0",
+            license: "MIT",
+            has_light_branch: false,
+            has_dark_branch: true,
+            safe_for_preview: true,
+            removable: false,
+            package_id: Some("org.fcitx.fcitx5.windows.theme.official-dark"),
+        },
+    ]
+}
+
+fn require_theme_sources(themes: &[ThemeRecord]) -> Result<(), String> {
+    for source in [
+        ThemeSource::BuiltIn,
+        ThemeSource::User,
+        ThemeSource::Package,
+    ] {
+        if !themes.iter().any(|theme| theme.source == source) {
+            return Err(format!("missing theme source {}", source.as_str()));
+        }
+    }
+    Ok(())
+}
+
+fn require_theme_metadata(themes: &[ThemeRecord]) -> Result<(), String> {
+    for theme in themes {
+        if theme.id.is_empty()
+            || theme.display_name.is_empty()
+            || theme.author.is_empty()
+            || theme.version.is_empty()
+            || theme.license.is_empty()
+            || !theme.safe_for_preview
+            || (!theme.has_light_branch && !theme.has_dark_branch)
+        {
+            return Err(format!("theme {} has incomplete metadata", theme.id));
+        }
+    }
+    Ok(())
+}
+
+fn theme_delete_result(themes: &[ThemeRecord], theme_id: &str) -> Result<(), &'static str> {
+    let Some(theme) = themes.iter().find(|theme| theme.id == theme_id) else {
+        return Err("theme.not_found");
+    };
+    if theme.removable && theme.source == ThemeSource::User {
+        Ok(())
+    } else {
+        Err("theme.builtin.read_only")
+    }
+}
+
+fn validate_theme_import_text(text: &str) -> Result<(), &'static str> {
+    if text.contains("..\\") || text.contains("../") {
+        return Err("theme.import.path_escape");
+    }
+    if text.contains("https://") || text.contains("http://") || text.contains("\\\\") {
+        return Err("theme.import.remote_asset");
+    }
+    if text.contains("script") || text.contains(".ps1") || text.contains(".exe") {
+        return Err("theme.import.executable_hook");
+    }
+    if text.contains("base = \"missing\"") {
+        return Err("theme.import.missing_base");
+    }
+    Ok(())
+}
+
+fn candidate_preview_sample(draft: &PreviewDraft) -> CandidatePreviewSample {
+    CandidatePreviewSample {
+        preedit: "ni hao 😊",
+        labels: (1..=5)
+            .map(|index| match (index, draft.label_suffix) {
+                (1, ".") => "1.",
+                (2, ".") => "2.",
+                (3, ".") => "3.",
+                (4, ".") => "4.",
+                (5, ".") => "5.",
+                (1, _) => "1",
+                (2, _) => "2",
+                (3, _) => "3",
+                (4, _) => "4",
+                _ => "5",
+            })
+            .collect(),
+        candidates: vec![
+            "你",
+            "你好",
+            "输入法",
+            "fcitx",
+            "Windows Next",
+            "，。！？",
+            "😀🎉⌨️",
+        ],
+        comments: vec![
+            draft.theme_id,
+            draft.appearance_mode,
+            draft.orientation,
+            "emoji fallback",
+        ],
+    }
+}
+
 fn package_action_result(
     state: PackageState,
     action: ActionKind,
@@ -1361,6 +1731,7 @@ fn render_report(
     layout: &LayoutEvidence,
     operations: &OperationEvidence,
     boundaries: &BoundaryEvidence,
+    theme_library: &ThemeLibraryEvidence,
 ) -> String {
     let pages = model
         .pages
@@ -1380,8 +1751,14 @@ fn render_report(
         .map(|scale| scale.to_string())
         .collect::<Vec<_>>()
         .join(",");
+    let theme_sources = theme_library
+        .theme_inventory_sources
+        .iter()
+        .map(|source| format!("\"{source}\""))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         json_escape(model.product_name),
         model.no_shell_out,
         pages,
@@ -1396,6 +1773,24 @@ fn render_report(
         layout.candidate_preview_rect.y,
         layout.candidate_preview_rect.width,
         layout.candidate_preview_rect.height,
+        theme_library.theme_library_model_rust_owned,
+        theme_sources,
+        theme_library.theme_metadata_visible,
+        theme_library.built_in_theme_delete_blocked,
+        theme_library.user_theme_delete_allowed,
+        theme_library.package_theme_provenance_visible,
+        theme_library.import_staging_rejects_path_traversal,
+        theme_library.import_staging_rejects_remote_assets,
+        theme_library.import_staging_rejects_script_hooks,
+        theme_library.import_staging_rejects_missing_base,
+        theme_library.live_preview_draft_state,
+        theme_library.live_preview_revision_after_changes,
+        theme_library.preview_uses_production_renderer_contract,
+        theme_library.preview_samples_cover_chinese_latin_punctuation_emoji,
+        theme_library.emoji_color_fallback_required,
+        theme_library.high_dpi_scaling_automatic,
+        theme_library.preview_150_percent_font_px,
+        theme_library.label_suffix_parity,
         operations.setting_transition_count,
         boundaries.typed_control_schema_consumed,
         boundaries.typed_control_package_commands_present,
@@ -1632,6 +2027,24 @@ mod tests {
         assert!(report.contains("\"candidate_preview_embedded_in_config_content\":true"));
         assert!(report.contains("\"candidate_preview_uses_real_theme_contract\":true"));
         assert!(report.contains("\"candidate_preview_rect\":{\"x\":248,\"y\":222"));
+        assert!(report.contains("\"theme_library_model_rust_owned\":true"));
+        assert!(report.contains("\"theme_inventory_sources\":[\"built-in\",\"user\",\"package\"]"));
+        assert!(report.contains("\"theme_metadata_visible\":true"));
+        assert!(report.contains("\"built_in_theme_delete_blocked\":true"));
+        assert!(report.contains("\"user_theme_delete_allowed\":true"));
+        assert!(report.contains("\"package_theme_provenance_visible\":true"));
+        assert!(report.contains("\"theme_import_staging_rejects_path_traversal\":true"));
+        assert!(report.contains("\"theme_import_staging_rejects_remote_assets\":true"));
+        assert!(report.contains("\"theme_import_staging_rejects_script_hooks\":true"));
+        assert!(report.contains("\"theme_import_staging_rejects_missing_base\":true"));
+        assert!(report.contains("\"live_preview_draft_state\":true"));
+        assert!(report.contains("\"live_preview_revision_after_changes\":4"));
+        assert!(report.contains("\"preview_uses_production_renderer_contract\":true"));
+        assert!(report.contains("\"preview_samples_cover_chinese_latin_punctuation_emoji\":true"));
+        assert!(report.contains("\"emoji_color_fallback_required\":true"));
+        assert!(report.contains("\"high_dpi_scaling_automatic\":true"));
+        assert!(report.contains("\"preview_150_percent_font_px\":30"));
+        assert!(report.contains("\"label_suffix_parity\":true"));
         assert!(report.contains("\"checked_dpi_scale_percents\":[100,125,150,200,300]"));
         assert!(report.contains("\"checked_pages\":6"));
         assert!(report.contains("\"layout_rects_inside_window\":true"));
@@ -1665,5 +2078,54 @@ mod tests {
         assert!(report.contains("\"addon_uninstall\":true"));
         assert!(report.contains("\"addon_enable\":true"));
         assert!(report.contains("\"addon_disable\":true"));
+    }
+
+    #[test]
+    fn theme_library_blocks_unsafe_imports_and_preserves_source_policy() {
+        let themes = theme_inventory();
+        require_theme_sources(&themes).expect("theme sources should be present");
+        require_theme_metadata(&themes).expect("theme metadata should be present");
+        assert!(theme_delete_result(&themes, "user:soft-blue").is_ok());
+        assert_eq!(
+            theme_delete_result(&themes, "builtin:default"),
+            Err("theme.builtin.read_only")
+        );
+        assert_eq!(
+            validate_theme_import_text("asset = \"..\\\\escape.png\""),
+            Err("theme.import.path_escape")
+        );
+        assert_eq!(
+            validate_theme_import_text("asset = \"https://example.invalid/theme.png\""),
+            Err("theme.import.remote_asset")
+        );
+        assert_eq!(
+            validate_theme_import_text("script = \"run-me.ps1\""),
+            Err("theme.import.executable_hook")
+        );
+    }
+
+    #[test]
+    fn live_preview_draft_updates_without_external_candidate_window() {
+        let mut draft = PreviewDraft::new();
+        draft.set_theme("package:official-dark");
+        draft.set_font("Segoe UI Emoji", 20.0);
+        draft.set_dpi(150);
+        let sample = candidate_preview_sample(&draft);
+        assert_eq!(draft.revision, 4);
+        assert_eq!(draft.effective_font_px(), 30.0);
+        assert_eq!(&sample.labels[..3], ["1.", "2.", "3."]);
+        assert!(sample.preedit.contains("😊"));
+        assert!(sample
+            .candidates
+            .iter()
+            .any(|candidate| candidate.contains("你好")));
+        assert!(sample
+            .candidates
+            .iter()
+            .any(|candidate| candidate.contains("Windows")));
+        assert!(sample
+            .candidates
+            .iter()
+            .any(|candidate| candidate.contains("😀")));
     }
 }

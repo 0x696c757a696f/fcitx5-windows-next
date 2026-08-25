@@ -1979,6 +1979,26 @@ int main(int argc, char** argv) {
         configPocSource.find("candidate_preview_uses_real_theme_contract") ==
             std::string::npos ||
         configPocSource.find("candidate_preview_renderer_contract") == std::string::npos ||
+        configPocSource.find("ThemeLibraryEvidence") == std::string::npos ||
+        configPocSource.find("theme_library_model_rust_owned") == std::string::npos ||
+        configPocSource.find("theme_inventory_sources") == std::string::npos ||
+        configPocSource.find("ThemeSource::BuiltIn") == std::string::npos ||
+        configPocSource.find("ThemeSource::User") == std::string::npos ||
+        configPocSource.find("ThemeSource::Package") == std::string::npos ||
+        configPocSource.find("theme_import_staging_rejects_path_traversal") ==
+            std::string::npos ||
+        configPocSource.find("theme_import_staging_rejects_remote_assets") ==
+            std::string::npos ||
+        configPocSource.find("theme_import_staging_rejects_script_hooks") ==
+            std::string::npos ||
+        configPocSource.find("theme_import_staging_rejects_missing_base") ==
+            std::string::npos ||
+        configPocSource.find("live_preview_draft_state") == std::string::npos ||
+        configPocSource.find("preview_samples_cover_chinese_latin_punctuation_emoji") ==
+            std::string::npos ||
+        configPocSource.find("emoji_color_fallback_required") == std::string::npos ||
+        configPocSource.find("high_dpi_scaling_automatic") == std::string::npos ||
+        configPocSource.find("label_suffix_parity") == std::string::npos ||
         configPocSource.find("checked_dpi_scale_percents") == std::string::npos ||
         configPocSource.find("layout_rects_inside_window") == std::string::npos ||
         configPocSource.find("layout_rects_non_overlapping") == std::string::npos ||
