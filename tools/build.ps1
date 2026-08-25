@@ -259,7 +259,8 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
   } elseif ($env:GITHUB_ACTIONS -eq 'true' -or $TargetArchitecture -eq 'arm64') {
     # GitHub's Windows runners intermittently drop the sccache server when it
     # wraps clang-cl PCH compilation. Keep CI deterministic and still use
-    # clang-cl/lld/Ninja; Rust builds may continue to use RUSTC_WRAPPER.
+    # clang-cl/lld/Ninja; CMake may also narrow Rust sccache on fragile
+    # cross lanes such as CI ARM64.
     # Local x64/x86 developer builds can still opt into the C/C++ launcher.
     $configureArguments += @(
       '-DCMAKE_C_COMPILER_LAUNCHER=',

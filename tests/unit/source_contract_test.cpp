@@ -2453,6 +2453,8 @@ int main(int argc, char** argv) {
         cmakeSource.find("src/pch/fcitx_windows_pch.h") == std::string::npos ||
         cmakeSource.find("FCITX_RUST_BUILD_ENV") == std::string::npos ||
         cmakeSource.find("FCITX_SCCACHE_EXECUTABLE") == std::string::npos ||
+        cmakeSource.find("FCITX_RUST_ENABLE_SCCACHE") == std::string::npos ||
+        cmakeSource.find("--unset=RUSTC_WRAPPER") == std::string::npos ||
         cmakeSource.find("RUSTC_WRAPPER=${FCITX_SCCACHE_EXECUTABLE}") == std::string::npos ||
         cmakeSource.find("SCCACHE_DIR=$ENV{SCCACHE_DIR}") == std::string::npos ||
         cmakeSource.find("FCITX_EFFECTIVE_TARGET_ARCH") == std::string::npos ||
