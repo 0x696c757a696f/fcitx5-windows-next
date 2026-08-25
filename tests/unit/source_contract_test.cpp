@@ -2118,7 +2118,17 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configPocManifest.find("fcitx5-control-core") == std::string::npos ||
         configPocManifest.find("fcitx5-package-core") == std::string::npos ||
+        configPocManifest.find("fcitx5-candidate-core") == std::string::npos ||
         configPocManifest.find("name = \"fcitx5-config-rust\"") == std::string::npos ||
+        configPocSource.find("run_candidate_poc_self_check") == std::string::npos ||
+        configPocSource.find("candidate_preview_candidate_core_self_check") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_candidate_core_scenarios") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_candidate_core_color_font_scenario_present") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_candidate_core_uiless_scenario_present") ==
+            std::string::npos ||
         configPocSource.find("control_schema_json") == std::string::npos ||
         configPocSource.find("parse_manifest") == std::string::npos ||
         configPocSource.find("parse_repository_index") == std::string::npos ||
@@ -2181,6 +2191,10 @@ int main(int argc, char** argv) {
         configRustDifferentialScript.find("candidate_preview_settings_only_fake_renderer") ==
             std::string::npos ||
         configRustDifferentialScript.find("candidate_preview_static_screenshot_preview") ==
+            std::string::npos ||
+        configRustDifferentialScript.find("candidate_preview_candidate_core_self_check") ==
+            std::string::npos ||
+        configRustDifferentialScript.find("candidate_preview_candidate_core_scenarios") ==
             std::string::npos ||
         configRustDifferentialScript.find("candidate_preview_dpi_parity_scale_percents") ==
             std::string::npos ||

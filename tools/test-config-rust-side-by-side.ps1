@@ -112,6 +112,9 @@ $requiredTrueFields = @(
   'candidate_preview_uses_resolved_theme_snapshot',
   'candidate_preview_layout_driven_paint',
   'candidate_preview_final_pixels_from_renderer_path',
+  'candidate_preview_candidate_core_self_check',
+  'candidate_preview_candidate_core_color_font_scenario_present',
+  'candidate_preview_candidate_core_uiless_scenario_present',
   'candidate_preview_layout_rects_inside_window',
   'candidate_preview_layout_rects_non_overlapping',
   'candidate_preview_font_fallback_parity',
@@ -172,6 +175,9 @@ if ($rust.candidate_preview_theme_snapshot_source -ne 'resolved-theme-snapshot-s
 }
 if ($rust.candidate_preview_model_contract -ne 'candidate-model-layout-render-segments') {
   throw "Rust side-by-side report did not consume the CandidateModel/layout/render contract"
+}
+if ($rust.candidate_preview_candidate_core_scenarios -lt 5) {
+  throw "Rust side-by-side report did not consume the full Candidate Core scenario corpus"
 }
 if ($rust.candidate_preview_settings_only_fake_renderer -ne $false) {
   throw 'Rust side-by-side report must not allow a Settings-only fake renderer'

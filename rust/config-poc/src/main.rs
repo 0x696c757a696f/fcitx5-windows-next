@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use fcitx5_candidate_core::run_candidate_poc_self_check;
 use fcitx5_control_core::{control_schema_json, control_usage_text};
 use fcitx5_package_core::{
     finalize_package_removal_entries, find_repository_package, mark_package_for_removal_entries,
@@ -290,6 +291,10 @@ struct CandidatePreviewHostEvidence {
     uses_resolved_theme_snapshot: bool,
     layout_driven_paint: bool,
     final_pixels_from_renderer_path: bool,
+    candidate_core_self_check_passed: bool,
+    candidate_core_scenarios: usize,
+    candidate_core_color_font_scenario_present: bool,
+    candidate_core_uiless_scenario_present: bool,
     layout_rects_inside_window: bool,
     layout_rects_non_overlapping: bool,
     dpi_parity_scale_percents: Vec<u16>,
@@ -1658,6 +1663,19 @@ fn validate_candidate_preview_host(
     layout: &LayoutEvidence,
     theme_library: &ThemeLibraryEvidence,
 ) -> Result<CandidatePreviewHostEvidence, String> {
+    let candidate_core_report = run_candidate_poc_self_check()
+        .map_err(|error| format!("candidate preview host cannot run candidate core: {error}"))?;
+    let candidate_core_self_check_passed = candidate_core_report.contains("\"result\":\"PASS\"")
+        && candidate_core_report.contains("\"component\":\"fcitx5-candidate-poc\"")
+        && candidate_core_report.contains("\"kind\":\"rust-out-of-process-headless-poc\"")
+        && candidate_core_report.contains("\"send_input\":false")
+        && candidate_core_report.contains("\"global_hooks\":false")
+        && candidate_core_report.contains("\"process_injection\":false");
+    let candidate_core_scenarios = candidate_core_report.matches("\"name\"").count();
+    let candidate_core_color_font_scenario_present =
+        candidate_core_report.contains("\"color_font_candidate_present\":true");
+    let candidate_core_uiless_scenario_present =
+        candidate_core_report.contains("\"host\":\"mock-vscode-uiless\"");
     let evidence = CandidatePreviewHostEvidence {
         host_kind: CANDIDATE_PREVIEW_HOST_KIND,
         renderer_contract: CANDIDATE_PREVIEW_RENDERER_CONTRACT,
@@ -1675,6 +1693,10 @@ fn validate_candidate_preview_host(
         uses_resolved_theme_snapshot: layout.candidate_preview_uses_real_theme_contract,
         layout_driven_paint: true,
         final_pixels_from_renderer_path: true,
+        candidate_core_self_check_passed,
+        candidate_core_scenarios,
+        candidate_core_color_font_scenario_present,
+        candidate_core_uiless_scenario_present,
         layout_rects_inside_window: layout.layout_rects_inside_window,
         layout_rects_non_overlapping: layout.layout_rects_non_overlapping,
         dpi_parity_scale_percents: layout.checked_dpi_scale_percents.clone(),
@@ -1701,6 +1723,9 @@ fn validate_candidate_preview_host(
         || !evidence.uses_resolved_theme_snapshot
         || !evidence.layout_driven_paint
         || !evidence.final_pixels_from_renderer_path
+        || !evidence.candidate_core_self_check_passed
+        || !evidence.candidate_core_color_font_scenario_present
+        || !evidence.candidate_core_uiless_scenario_present
         || !evidence.layout_rects_inside_window
         || !evidence.layout_rects_non_overlapping
         || !evidence.font_fallback_parity
@@ -1709,6 +1734,11 @@ fn validate_candidate_preview_host(
     {
         return Err(
             "candidate preview host does not preserve the real embedded renderer path".to_owned(),
+        );
+    }
+    if evidence.candidate_core_scenarios < 5 {
+        return Err(
+            "candidate preview host did not consume the full candidate core corpus".to_owned(),
         );
     }
     if evidence.settings_only_fake_renderer
@@ -2082,6 +2112,8 @@ fn validate_config_rust_cutover_plan(
         || preview_host.renderer_contract != CANDIDATE_PREVIEW_RENDERER_CONTRACT
         || !preview_host.embedded_child_surface
         || !preview_host.uses_shipping_candidate_renderer_path
+        || !preview_host.candidate_core_self_check_passed
+        || preview_host.candidate_core_scenarios < 5
         || preview_host.settings_only_fake_renderer
         || preview_host.static_screenshot_preview
     {
@@ -2193,7 +2225,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         cutover.frozen_corpus_from_config_ux_009,
@@ -2235,6 +2267,10 @@ fn render_report(
         preview_host.uses_resolved_theme_snapshot,
         preview_host.layout_driven_paint,
         preview_host.final_pixels_from_renderer_path,
+        preview_host.candidate_core_self_check_passed,
+        preview_host.candidate_core_scenarios,
+        preview_host.candidate_core_color_font_scenario_present,
+        preview_host.candidate_core_uiless_scenario_present,
         preview_host.layout_rects_inside_window,
         preview_host.layout_rects_non_overlapping,
         preview_host_dpi_scales,
