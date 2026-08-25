@@ -204,7 +204,7 @@ add_dependencies(fcitx5_windows_common fcitx5_windows_common_rustlib)
 target_include_directories(
   fcitx5_windows_common
   INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>")
-target_link_libraries(fcitx5_windows_common INTERFACE ws2_32 userenv ntdll bcrypt advapi32 shell32 ole32)
+target_link_libraries(fcitx5_windows_common INTERFACE ws2_32 userenv ntdll bcrypt advapi32 shell32 ole32 gdi32)
 
 add_library(fcitx5_protocol STATIC protocol/protocol.cpp)
 add_library(fcitx5::protocol ALIAS fcitx5_protocol)

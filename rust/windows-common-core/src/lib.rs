@@ -23,6 +23,8 @@ const ERROR_TIMEOUT: u32 = 1460;
 const KF_FLAG_CREATE: u32 = 0x0000_8000;
 const RRF_RT_REG_DWORD: u32 = 0x0000_0010;
 const HKEY_CURRENT_USER: *mut c_void = 0x8000_0001usize as *mut c_void;
+const DEFAULT_CHARSET: u8 = 1;
+const LF_FACESIZE: usize = 32;
 static NEXT_LAUNCHER_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_PIPE_CLIENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -32,6 +34,45 @@ struct Guid {
     data2: u16,
     data3: u16,
     data4: [u8; 8],
+}
+
+#[repr(C)]
+struct LogFontW {
+    height: i32,
+    width: i32,
+    escapement: i32,
+    orientation: i32,
+    weight: i32,
+    italic: u8,
+    underline: u8,
+    strike_out: u8,
+    char_set: u8,
+    out_precision: u8,
+    clip_precision: u8,
+    quality: u8,
+    pitch_and_family: u8,
+    face_name: [u16; LF_FACESIZE],
+}
+
+impl Default for LogFontW {
+    fn default() -> Self {
+        Self {
+            height: 0,
+            width: 0,
+            escapement: 0,
+            orientation: 0,
+            weight: 0,
+            italic: 0,
+            underline: 0,
+            strike_out: 0,
+            char_set: DEFAULT_CHARSET,
+            out_precision: 0,
+            clip_precision: 0,
+            quality: 0,
+            pitch_and_family: 0,
+            face_name: [0; LF_FACESIZE],
+        }
+    }
 }
 
 const FOLDERID_LOCAL_APP_DATA: Guid = Guid {
@@ -469,6 +510,114 @@ fn system_uses_dark_appearance() -> bool {
     status == ERROR_SUCCESS && size == std::mem::size_of::<u32>() as u32 && light == 0
 }
 
+fn add_unique_font_family(fonts: &mut Vec<String>, family: &str) {
+    let candidate = family.trim();
+    if candidate.is_empty() || candidate.starts_with('@') {
+        return;
+    }
+    if fonts
+        .iter()
+        .any(|existing| existing.to_lowercase() == candidate.to_lowercase())
+    {
+        return;
+    }
+    fonts.push(candidate.to_owned());
+}
+
+fn font_face_name(log_font: &LogFontW) -> String {
+    let len = log_font
+        .face_name
+        .iter()
+        .position(|code_unit| *code_unit == 0)
+        .unwrap_or(log_font.face_name.len());
+    String::from_utf16_lossy(&log_font.face_name[..len])
+}
+
+unsafe extern "system" fn collect_font_family(
+    log_font: *const LogFontW,
+    _text_metric: *const c_void,
+    _font_type: u32,
+    data: isize,
+) -> i32 {
+    if log_font.is_null() || data == 0 {
+        return 0;
+    }
+    // SAFETY: `data` is the Vec<String> pointer supplied to EnumFontFamiliesExW
+    // by `discover_system_font_families`, and it remains live for the duration
+    // of the synchronous enumeration callback.
+    let fonts = unsafe { &mut *(data as *mut Vec<String>) };
+    // SAFETY: Windows invokes the callback with a valid LOGFONTW pointer for
+    // the current font family entry.
+    let family = font_face_name(unsafe { &*log_font });
+    add_unique_font_family(fonts, &family);
+    i32::from(fonts.len() < 512)
+}
+
+fn discover_system_font_families() -> Vec<String> {
+    let mut discovered = Vec::new();
+    // SAFETY: Passing a null HWND requests a screen DC. The returned handle is
+    // released with the same null HWND below.
+    let dc = unsafe { GetDC(std::ptr::null_mut()) };
+    if !dc.is_null() {
+        let mut query = LogFontW::default();
+        // SAFETY: `query` and `discovered` are live for the synchronous GDI
+        // enumeration. The callback does not retain pointers.
+        unsafe {
+            EnumFontFamiliesExW(
+                dc,
+                &mut query,
+                Some(collect_font_family),
+                (&mut discovered as *mut Vec<String>) as isize,
+                0,
+            );
+        }
+        // SAFETY: Releases the DC acquired from GetDC(null).
+        unsafe {
+            ReleaseDC(std::ptr::null_mut(), dc);
+        }
+    }
+    discovered
+}
+
+fn ordered_system_font_families(discovered: &[String]) -> Vec<String> {
+    let mut discovered = discovered.to_owned();
+    discovered.sort_by_key(|family| family.to_lowercase());
+
+    let mut ordered = Vec::new();
+    for preset in [
+        "Microsoft YaHei",
+        "Segoe UI",
+        "Segoe UI Emoji",
+        "Noto Sans CJK SC",
+        "Cascadia Mono",
+        "Consolas",
+    ] {
+        if let Some(font) = discovered
+            .iter()
+            .find(|family| family.to_lowercase() == preset.to_lowercase())
+        {
+            add_unique_font_family(&mut ordered, font);
+        }
+    }
+    for font in &discovered {
+        add_unique_font_family(&mut ordered, font);
+    }
+    if ordered.is_empty() {
+        add_unique_font_family(&mut ordered, "Segoe UI");
+    }
+    ordered
+}
+
+fn system_font_family_payload() -> Vec<u16> {
+    let ordered = ordered_system_font_families(&discover_system_font_families());
+    let mut payload = Vec::new();
+    for family in ordered {
+        payload.extend(family.encode_utf16());
+        payload.push(0);
+    }
+    payload
+}
+
 const SDDL_REVISION_1: u32 = 1;
 
 #[link(name = "advapi32")]
@@ -578,6 +727,8 @@ unsafe extern "system" {
 
 #[link(name = "user32")]
 unsafe extern "system" {
+    fn GetDC(window: *mut c_void) -> *mut c_void;
+    fn ReleaseDC(window: *mut c_void, dc: *mut c_void) -> i32;
     fn OpenInputDesktop(flags: u32, inherit: i32, desired_access: u32) -> *mut c_void;
     fn GetUserObjectInformationW(
         object: *mut c_void,
@@ -587,6 +738,19 @@ unsafe extern "system" {
         length_needed: *mut u32,
     ) -> i32;
     fn CloseDesktop(desktop: *mut c_void) -> i32;
+}
+
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    fn EnumFontFamiliesExW(
+        dc: *mut c_void,
+        log_font: *mut LogFontW,
+        callback: Option<
+            unsafe extern "system" fn(*const LogFontW, *const c_void, u32, isize) -> i32,
+        >,
+        data: isize,
+        flags: u32,
+    ) -> i32;
 }
 
 #[link(name = "shell32")]
@@ -3234,6 +3398,14 @@ pub extern "C" fn fcitx5_windows_common_system_uses_dark_appearance() -> u8 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_system_font_families_utf16(
+    output: *mut u16,
+    capacity: usize,
+) -> usize {
+    write_wide_units(&system_font_family_payload(), output, capacity)
+}
+
+#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `pipe_name` must be null only when `pipe_name_len` is zero, or point to a
@@ -4395,6 +4567,50 @@ mod tests {
             0 | 1
         ));
         assert!(matches!(system_uses_dark_appearance(), false | true));
+    }
+
+    #[test]
+    fn system_font_family_ordering_matches_cpp_contract() {
+        let fonts = ordered_system_font_families(&[
+            "Consolas".to_owned(),
+            "@Arial".to_owned(),
+            "Segoe UI Emoji".to_owned(),
+            "Arial".to_owned(),
+            "arial".to_owned(),
+            "Microsoft YaHei".to_owned(),
+        ]);
+        assert_eq!(fonts[0], "Microsoft YaHei");
+        assert_eq!(fonts[1], "Segoe UI Emoji");
+        assert_eq!(fonts[2], "Consolas");
+        assert!(fonts.iter().any(|family| family == "Arial"));
+        assert_eq!(
+            fonts
+                .iter()
+                .filter(|family| family.eq_ignore_ascii_case("Arial"))
+                .count(),
+            1
+        );
+        assert!(!fonts.iter().any(|family| family.starts_with('@')));
+    }
+
+    #[test]
+    fn system_font_families_utf16_returns_picker_payload() {
+        let required = fcitx5_windows_common_system_font_families_utf16(std::ptr::null_mut(), 0);
+        assert!(required > 0);
+
+        let mut payload = vec![0_u16; required];
+        let filled =
+            fcitx5_windows_common_system_font_families_utf16(payload.as_mut_ptr(), payload.len());
+        assert_eq!(filled, required);
+        assert_eq!(payload.last(), Some(&0));
+
+        let families = payload
+            .split(|code_unit| *code_unit == 0)
+            .filter(|slice| !slice.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect::<Vec<_>>();
+        assert!(!families.is_empty());
+        assert!(!families.iter().any(|family| family.starts_with('@')));
     }
 
     #[test]

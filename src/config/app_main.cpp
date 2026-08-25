@@ -443,6 +443,8 @@ extern "C" Fcitx5WindowsCommonWideToUtf8 fcitx5_windows_common_wide_utf16_to_utf
     const std::uint16_t* input, std::size_t inputLen, std::uint8_t* output,
     std::size_t capacity);
 extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
+extern "C" std::size_t fcitx5_windows_common_system_font_families_utf16(
+    std::uint16_t* output, std::size_t capacity);
 extern "C" Fcitx5ControlParsedConfigCommandLine
 fcitx5_control_parse_config_command_line_utf16(Fcitx5ControlUtf16 commandLine,
                                                std::uint16_t* commandOut,
@@ -1128,55 +1130,29 @@ bool parseThemes(std::wstring_view output, std::vector<ThemeRow>& rows) {
     }
 }
 
-void addUniqueFontFamily(std::vector<std::wstring>& fonts, std::wstring_view family) {
-    if (family.empty() || family.front() == L'@')
-        return;
-    const std::wstring candidate(family);
-    for (const auto& font : fonts) {
-        if (_wcsicmp(font.c_str(), candidate.c_str()) == 0)
-            return;
-    }
-    fonts.push_back(candidate);
-}
+std::vector<std::wstring> enumerateFontFamilies() {
+    const std::size_t required =
+        fcitx5_windows_common_system_font_families_utf16(nullptr, 0);
+    if (required == 0)
+        return {L"Segoe UI"};
+    std::wstring payload(required, L'\0');
+    const std::size_t filled = fcitx5_windows_common_system_font_families_utf16(
+        reinterpret_cast<std::uint16_t*>(payload.data()), payload.size());
+    if (filled != required)
+        return {L"Segoe UI"};
 
-int CALLBACK collectFontFamily(const LOGFONTW* logFont, const TEXTMETRICW*, DWORD, LPARAM data) {
-    auto* fonts = reinterpret_cast<std::vector<std::wstring>*>(data);
-    if (!fonts || !logFont)
-        return 0;
-    addUniqueFontFamily(*fonts, logFont->lfFaceName);
-    return fonts->size() < 512U ? 1 : 0;
-}
-
-std::vector<std::wstring> enumerateFontFamilies(HWND owner) {
-    std::vector<std::wstring> discovered;
-    HDC dc = owner ? ::GetDC(owner) : nullptr;
-    if (dc) {
-        LOGFONTW query{};
-        query.lfCharSet = DEFAULT_CHARSET;
-        EnumFontFamiliesExW(dc, &query, collectFontFamily,
-                            reinterpret_cast<LPARAM>(&discovered), 0);
-        ::ReleaseDC(owner, dc);
+    std::vector<std::wstring> fonts;
+    std::size_t begin = 0;
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+        if (payload[index] != L'\0')
+            continue;
+        if (index > begin)
+            fonts.emplace_back(payload.substr(begin, index - begin));
+        begin = index + 1;
     }
-    std::sort(discovered.begin(), discovered.end(),
-              [](const std::wstring& left, const std::wstring& right) {
-                  return _wcsicmp(left.c_str(), right.c_str()) < 0;
-              });
-
-    std::vector<std::wstring> ordered;
-    for (const wchar_t* preset : {L"Microsoft YaHei", L"Segoe UI", L"Segoe UI Emoji",
-                                  L"Noto Sans CJK SC", L"Cascadia Mono", L"Consolas"}) {
-        for (const auto& font : discovered) {
-            if (_wcsicmp(font.c_str(), preset) == 0) {
-                addUniqueFontFamily(ordered, font);
-                break;
-            }
-        }
-    }
-    for (const auto& font : discovered)
-        addUniqueFontFamily(ordered, font);
-    if (ordered.empty())
-        addUniqueFontFamily(ordered, L"Segoe UI");
-    return ordered;
+    if (fonts.empty())
+        fonts.push_back(L"Segoe UI");
+    return fonts;
 }
 
 std::wstring localeValue(const Strings& strings, const char* key,
@@ -2562,7 +2538,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         add(L"STATIC", get("font.label"), 0, 250, 148, 150, 24, kFontLabel);
         add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 420, 142, 330,
             220, kFont);
-        for (const auto& fontFamily : enumerateFontFamilies(m_hWnd)) {
+        for (const auto& fontFamily : enumerateFontFamilies()) {
             SendMessageW(control(kFont), CB_ADDSTRING, 0,
                          reinterpret_cast<LPARAM>(fontFamily.c_str()));
         }

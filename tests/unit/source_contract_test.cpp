@@ -1246,9 +1246,16 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustWindowsCommonCore.find("fcitx5_windows_common_system_uses_dark_appearance") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("fcitx5_windows_common_system_font_families_utf16") ==
+            std::string::npos ||
         rustWindowsCommonCore.find(
             "system_dark_appearance_registry_policy_matches_cpp_contract") ==
             std::string::npos ||
+        rustWindowsCommonCore.find("system_font_family_ordering_matches_cpp_contract") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("system_font_families_utf16_returns_picker_payload") ==
+            std::string::npos ||
+        rustWindowsCommonCore.find("EnumFontFamiliesExW") == std::string::npos ||
         rustWindowsCommonCore.find("AppsUseLightTheme") == std::string::npos ||
         rustWindowsCommonCore.find("ipc_response_header_body_size") ==
             std::string::npos ||
@@ -1874,6 +1881,10 @@ int main(int argc, char** argv) {
         configSource.find("SHGetKnownFolderPath") != std::string::npos ||
         configSource.find("CoTaskMemFree") != std::string::npos ||
         configSource.find("FOLDERID_LocalAppData") != std::string::npos ||
+        configSource.find("EnumFontFamiliesExW") != std::string::npos ||
+        configSource.find("collectFontFamily") != std::string::npos ||
+        configSource.find("fcitx5_windows_common_system_font_families_utf16") ==
+            std::string::npos ||
         configSource.find("queryCurrentIdentity(identity)") == std::string::npos ||
         configSource.find("installationRootForModule") == std::string::npos ||
         configSource.find("defaultDataRootForModule") == std::string::npos ||
