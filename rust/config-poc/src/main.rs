@@ -567,13 +567,16 @@ fn run_window_smoke() -> Result<String, String> {
         || !window.candidate_preview_child_visible
         || !window.candidate_preview_child_parented
         || !window.candidate_preview_child_inside_window
+        || !window.candidate_preview_child_painted
+        || !window.candidate_preview_child_selected_pixel_visible
     {
         return Err(
-            "Rust Config PoC did not create an embedded candidate preview child surface".to_owned(),
+            "Rust Config PoC did not create and paint an embedded candidate preview child surface"
+                .to_owned(),
         );
     }
     Ok(format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-window-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"side_by_side_executable_name\":\"{}\",\n  \"rust_shipping_target_name\":\"{}\",\n  \"hwnd_created\":true,\n  \"visible\":{},\n  \"title_readable\":{},\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"window_width\":{},\n  \"window_height\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_child_hwnd_created\":{},\n  \"candidate_preview_child_visible\":{},\n  \"candidate_preview_child_parented\":{},\n  \"candidate_preview_child_inside_window\":{},\n  \"candidate_preview_child_left\":{},\n  \"candidate_preview_child_top\":{},\n  \"candidate_preview_child_right\":{},\n  \"candidate_preview_child_bottom\":{},\n  \"candidate_preview_child_width\":{},\n  \"candidate_preview_child_height\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-window-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"side_by_side_executable_name\":\"{}\",\n  \"rust_shipping_target_name\":\"{}\",\n  \"hwnd_created\":true,\n  \"visible\":{},\n  \"title_readable\":{},\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"window_width\":{},\n  \"window_height\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_child_hwnd_created\":{},\n  \"candidate_preview_child_visible\":{},\n  \"candidate_preview_child_parented\":{},\n  \"candidate_preview_child_inside_window\":{},\n  \"candidate_preview_child_painted\":{},\n  \"candidate_preview_child_selected_pixel_visible\":{},\n  \"candidate_preview_child_paint_count\":{},\n  \"candidate_preview_child_selected_pixel\":{},\n  \"candidate_preview_child_left\":{},\n  \"candidate_preview_child_top\":{},\n  \"candidate_preview_child_right\":{},\n  \"candidate_preview_child_bottom\":{},\n  \"candidate_preview_child_width\":{},\n  \"candidate_preview_child_height\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         CONFIG_SIDE_BY_SIDE_COMPONENT,
@@ -593,6 +596,10 @@ fn run_window_smoke() -> Result<String, String> {
         window.candidate_preview_child_visible,
         window.candidate_preview_child_parented,
         window.candidate_preview_child_inside_window,
+        window.candidate_preview_child_painted,
+        window.candidate_preview_child_selected_pixel_visible,
+        window.candidate_preview_child_paint_count,
+        window.candidate_preview_child_selected_pixel,
         window.candidate_preview_child_left,
         window.candidate_preview_child_top,
         window.candidate_preview_child_right,
@@ -622,6 +629,10 @@ struct WindowSmokeEvidence {
     candidate_preview_child_visible: bool,
     candidate_preview_child_parented: bool,
     candidate_preview_child_inside_window: bool,
+    candidate_preview_child_painted: bool,
+    candidate_preview_child_selected_pixel_visible: bool,
+    candidate_preview_child_paint_count: usize,
+    candidate_preview_child_selected_pixel: u32,
     candidate_preview_child_left: i32,
     candidate_preview_child_top: i32,
     candidate_preview_child_right: i32,
@@ -2372,6 +2383,7 @@ fn json_escape(value: &str) -> String {
 mod win32_window_smoke {
     use std::ffi::c_void;
     use std::ptr::{null, null_mut};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{Rect as LayoutRect, Size, WindowSmokeEvidence};
 
@@ -2384,14 +2396,28 @@ mod win32_window_smoke {
     type Lparam = isize;
     type Lresult = isize;
     type Wparam = usize;
+    type Hdc = *mut c_void;
 
     const CS_HREDRAW: u32 = 0x0002;
     const CS_VREDRAW: u32 = 0x0001;
     const CW_USEDEFAULT: i32 = 0x8000_0000_u32 as i32;
+    const DT_LEFT: u32 = 0x0000;
+    const DT_SINGLELINE: u32 = 0x0020;
+    const DT_VCENTER: u32 = 0x0004;
+    const FALSE: i32 = 0;
+    const TRANSPARENT: i32 = 1;
+    const WM_PAINT: u32 = 0x000F;
     const WS_CHILD: u32 = 0x4000_0000;
     const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
     const WS_VISIBLE: u32 = 0x1000_0000;
     const SW_SHOWNORMAL: i32 = 1;
+    const COLORREF_PREVIEW_BACKGROUND: u32 = 0x00ee_f3f7;
+    const COLORREF_SELECTED_BACKGROUND: u32 = 0x00d2_7d2d;
+    const COLORREF_TEXT: u32 = 0x0020_2020;
+    const COLORREF_SELECTED_TEXT: u32 = 0x00ff_ffff;
+    const GET_PIXEL_ERROR: u32 = 0xffff_ffff;
+
+    static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
     #[repr(C)]
     struct WndClassW {
@@ -2415,8 +2441,29 @@ mod win32_window_smoke {
         bottom: i32,
     }
 
+    impl Rect {
+        fn width(&self) -> i32 {
+            self.right - self.left
+        }
+
+        fn height(&self) -> i32 {
+            self.bottom - self.top
+        }
+    }
+
+    #[repr(C)]
+    struct PaintStruct {
+        hdc: Hdc,
+        f_erase: i32,
+        rc_paint: Rect,
+        f_restore: i32,
+        f_inc_update: i32,
+        rgb_reserved: [u8; 32],
+    }
+
     #[link(name = "user32")]
     unsafe extern "system" {
+        fn BeginPaint(hwnd: Hwnd, paint: *mut PaintStruct) -> Hdc;
         fn RegisterClassW(window_class: *const WndClassW) -> u16;
         fn CreateWindowExW(
             ex_style: u32,
@@ -2434,12 +2481,28 @@ mod win32_window_smoke {
         ) -> Hwnd;
         fn DefWindowProcW(hwnd: Hwnd, message: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
         fn DestroyWindow(hwnd: Hwnd) -> i32;
+        fn DrawTextW(hdc: Hdc, text: *const u16, count: i32, rect: *mut Rect, format: u32) -> i32;
+        fn EndPaint(hwnd: Hwnd, paint: *const PaintStruct) -> i32;
+        fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
+        fn GetDC(hwnd: Hwnd) -> Hdc;
         fn GetParent(hwnd: Hwnd) -> Hwnd;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
+        fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: i32) -> i32;
         fn IsWindowVisible(hwnd: Hwnd) -> i32;
+        fn ReleaseDC(hwnd: Hwnd, dc: Hdc) -> i32;
         fn ShowWindow(hwnd: Hwnd, command_show: i32) -> i32;
         fn UpdateWindow(hwnd: Hwnd) -> i32;
+    }
+
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn CreateSolidBrush(color: u32) -> Hbrush;
+        fn DeleteObject(object: *mut c_void) -> i32;
+        fn FillRect(hdc: Hdc, rect: *const Rect, brush: Hbrush) -> i32;
+        fn GetPixel(hdc: Hdc, x: i32, y: i32) -> u32;
+        fn SetBkMode(hdc: Hdc, mode: i32) -> i32;
+        fn SetTextColor(hdc: Hdc, color: u32) -> u32;
     }
 
     #[link(name = "kernel32")]
@@ -2475,7 +2538,7 @@ mod win32_window_smoke {
         };
         let preview_window_class = WndClassW {
             style: CS_HREDRAW | CS_VREDRAW,
-            lpfn_wnd_proc: Some(window_proc),
+            lpfn_wnd_proc: Some(candidate_preview_window_proc),
             cb_cls_extra: 0,
             cb_wnd_extra: 0,
             h_instance: instance,
@@ -2549,10 +2612,12 @@ mod win32_window_smoke {
                 "CreateWindowExW failed for Rust Config PoC candidate preview host".to_owned(),
             );
         }
+        PREVIEW_PAINT_COUNT.store(0, Ordering::SeqCst);
         // SAFETY: Both handles were created successfully and can be shown/painted immediately.
         unsafe {
             ShowWindow(hwnd, SW_SHOWNORMAL);
             ShowWindow(preview_hwnd, SW_SHOWNORMAL);
+            InvalidateRect(preview_hwnd, null(), FALSE);
             UpdateWindow(hwnd);
             UpdateWindow(preview_hwnd);
         }
@@ -2594,6 +2659,12 @@ mod win32_window_smoke {
             && preview_rect.bottom <= rect.bottom;
         // SAFETY: `preview_hwnd` is a live child window handle.
         let candidate_preview_child_parented = unsafe { GetParent(preview_hwnd) } == hwnd;
+        let (
+            candidate_preview_child_selected_pixel,
+            candidate_preview_child_selected_pixel_visible,
+        ) = sample_selected_candidate_pixel(preview_hwnd);
+        let candidate_preview_child_paint_count = PREVIEW_PAINT_COUNT.load(Ordering::SeqCst);
+        let candidate_preview_child_painted = candidate_preview_child_paint_count > 0;
         // SAFETY: Window handles are live until the explicit cleanup below.
         let visible = unsafe { IsWindowVisible(hwnd) } != 0;
         // SAFETY: Window handles are live until the explicit cleanup below.
@@ -2618,6 +2689,10 @@ mod win32_window_smoke {
             candidate_preview_child_visible,
             candidate_preview_child_parented,
             candidate_preview_child_inside_window,
+            candidate_preview_child_painted,
+            candidate_preview_child_selected_pixel_visible,
+            candidate_preview_child_paint_count,
+            candidate_preview_child_selected_pixel,
             candidate_preview_child_left: preview_rect.left,
             candidate_preview_child_top: preview_rect.top,
             candidate_preview_child_right: preview_rect.right,
@@ -2634,6 +2709,131 @@ mod win32_window_smoke {
         lparam: Lparam,
     ) -> Lresult {
         unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+
+    unsafe extern "system" fn candidate_preview_window_proc(
+        hwnd: Hwnd,
+        message: u32,
+        wparam: Wparam,
+        lparam: Lparam,
+    ) -> Lresult {
+        if message == WM_PAINT {
+            let mut paint = PaintStruct {
+                hdc: null_mut(),
+                f_erase: 0,
+                rc_paint: Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
+                f_restore: 0,
+                f_inc_update: 0,
+                rgb_reserved: [0; 32],
+            };
+            // SAFETY: Windows calls this window procedure for a valid preview HWND during paint.
+            let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
+            if !hdc.is_null() {
+                paint_candidate_preview(hwnd, hdc);
+                // SAFETY: `paint` was initialized by BeginPaint for this HWND and must be closed.
+                unsafe {
+                    EndPaint(hwnd, &paint);
+                }
+                PREVIEW_PAINT_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+            return 0;
+        }
+        // SAFETY: Delegates unhandled messages to the system default window procedure.
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+
+    fn paint_candidate_preview(hwnd: Hwnd, hdc: Hdc) {
+        let mut client = Rect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        // SAFETY: `hwnd` is the preview HWND currently being painted and `client` is writable.
+        if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
+            return;
+        }
+        // SAFETY: Creates a process-local GDI brush for immediate FillRect use.
+        let background_brush = unsafe { CreateSolidBrush(COLORREF_PREVIEW_BACKGROUND) };
+        if !background_brush.is_null() {
+            // SAFETY: `hdc` is valid for this paint cycle, `client` is initialized, and the brush
+            // is deleted immediately after use.
+            unsafe {
+                FillRect(hdc, &client, background_brush);
+                DeleteObject(background_brush);
+            }
+        }
+        let selected = Rect {
+            left: 8,
+            top: 8,
+            right: (client.width() - 8).max(8),
+            bottom: 44.min(client.height()),
+        };
+        // SAFETY: Creates a process-local GDI brush for immediate FillRect use.
+        let selected_brush = unsafe { CreateSolidBrush(COLORREF_SELECTED_BACKGROUND) };
+        if !selected_brush.is_null() {
+            // SAFETY: `selected` is bounded by the client rect and the brush is deleted after use.
+            unsafe {
+                FillRect(hdc, &selected, selected_brush);
+                DeleteObject(selected_brush);
+            }
+        }
+        // SAFETY: The HDC is valid for the paint cycle and this setter does not retain pointers.
+        unsafe {
+            SetBkMode(hdc, TRANSPARENT);
+        }
+        draw_preview_line(
+            hdc,
+            selected,
+            COLORREF_SELECTED_TEXT,
+            "1. 你  2. 好  3. 😀 emoji",
+        );
+        draw_preview_line(
+            hdc,
+            Rect {
+                left: 8,
+                top: 52,
+                right: (client.width() - 8).max(8),
+                bottom: 88.min(client.height()),
+            },
+            COLORREF_TEXT,
+            "ni hao · Fcitx5 for Windows Next",
+        );
+    }
+
+    fn draw_preview_line(hdc: Hdc, mut rect: Rect, color: u32, text: &str) {
+        let text = to_wide(text);
+        // SAFETY: The UTF-16 buffer is NUL-terminated and lives for the duration of DrawTextW.
+        unsafe {
+            SetTextColor(hdc, color);
+            DrawTextW(
+                hdc,
+                text.as_ptr(),
+                (text.len() - 1) as i32,
+                &mut rect,
+                DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+            );
+        }
+    }
+
+    fn sample_selected_candidate_pixel(hwnd: Hwnd) -> (u32, bool) {
+        // SAFETY: `hwnd` is a live preview child window while this function is called.
+        let hdc = unsafe { GetDC(hwnd) };
+        if hdc.is_null() {
+            return (GET_PIXEL_ERROR, false);
+        }
+        // SAFETY: The HDC is a client DC for the preview HWND; (12,12) is inside the selected row.
+        let pixel = unsafe { GetPixel(hdc, 12, 12) };
+        // SAFETY: Releases the client DC acquired above for the same HWND.
+        unsafe {
+            ReleaseDC(hwnd, hdc);
+        }
+        (pixel, pixel == COLORREF_SELECTED_BACKGROUND)
     }
 
     fn to_wide(value: &str) -> Vec<u16> {

@@ -2079,6 +2079,17 @@ int main(int argc, char** argv) {
         configPocSource.find("candidate_preview_child_inside_window") ==
             std::string::npos ||
         configPocSource.find("GetParent(preview_hwnd)") == std::string::npos ||
+        configPocSource.find("candidate_preview_child_painted") == std::string::npos ||
+        configPocSource.find("candidate_preview_child_selected_pixel_visible") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_child_paint_count") == std::string::npos ||
+        configPocSource.find("candidate_preview_child_selected_pixel") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_window_proc") == std::string::npos ||
+        configPocSource.find("WM_PAINT") == std::string::npos ||
+        configPocSource.find("DrawTextW") == std::string::npos ||
+        configPocSource.find("FillRect") == std::string::npos ||
+        configPocSource.find("GetPixel") == std::string::npos ||
         configPocSource.find("ThemeLibraryEvidence") == std::string::npos ||
         configPocSource.find("theme_library_model_rust_owned") == std::string::npos ||
         configPocSource.find("theme_inventory_sources") == std::string::npos ||
