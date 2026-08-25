@@ -43,7 +43,7 @@ Windows host
 | PoC / migration lane | State | Exit condition |
 |---|---|---|
 | Rust TSF | `SHIPPING-AUTOMATED-GREEN` / real-host matrix pending | Full host matrix evidence before release readiness |
-| Rust Config | `CUTOVER-AUTHORIZED / UX-CORPUS-FROZEN / SIDE-BY-SIDE-DIFFERENTIAL-GREEN / REAL-CANDIDATE-PREVIEW-HOST-REQUIRED` | Replace model-only preview evidence with embedded real Candidate UI renderer/preview-host evidence, run visual/accessibility/DPI/package evidence, then cut over `fcitx5-config.exe` and delete the old C++ WTL shell |
+| Rust Config | `CUTOVER-AUTHORIZED / STAGE-1-CORE-GREEN / STAGE-2-BACKEND-SHIPPING-IN-PROGRESS / STAGE-4-GUI-CUTOVER-PENDING` | Stage 2 may ship only when non-interactive Config paths are Rust-owned with no legacy C++ GUI fallback. Stage 4 remains required before claiming full Config migration: real interactive Settings GUI, navigation, controls, embedded candidate preview, plugin pages, DPI/dark-mode/keyboard/accessibility, persistence, and real Windows QA must be green before deleting/reducing the old C++ WTL shell |
 | Candidate Rust core | `SHIPPING-DOMAIN` | Remove duplicated C++ validation/state, preserve renderer evidence, add candidate-action/upstream alignment |
 | Rust package/update/control/launcher cores | `SHIPPING-DOMAIN` where already cut over, `MIGRATION-CANDIDATE` where shell remains | Delete replaced C++ authoritative implementation and keep adapter thin |
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
@@ -71,6 +71,13 @@ Windows host
   FUTURE-GATED duplicates are not active queue items. `CONFIG-UX-009` is completed and archived
   with staged-app QA evidence. Current product work is `CONFIG-RUST-CUTOVER-001` for the shipping
   Config Rust cutover.
+- Rust Config now has explicit shipping vocabulary: Stage 2 is `Rust Config Backend Shipped`
+  (`fcitx5-config.exe` headless/test CLI, package/install/update/remove, import/export,
+  config read/write, schema validation, migration, diagnostics, and CI automation are Rust-owned
+  with no fallback to the old GUI implementation). Stage 4 is `Rust Config Cutover Complete` and
+  is not claimable until the real Settings GUI and candidate preview pass Windows QA. Release notes
+  must say “Rust configuration backend is now shipping; interactive settings UI migration is still
+  in progress” for Stage 2, not “Config fully migrated to Rust.”
 - The TSF profile boundary is now frozen in `docs/tsf-profile-boundary.md`: Windows exposes only the single product profile `Fcitx5`; internal engines/addons remain Fcitx state; obsolete dynamic profile data is cleanup input only.
 - `rust/protocol-core` is now the single authoritative FCW4 codec: `protocol/protocol.cpp` is a thin marshalling adapter over the C ABI (`protocol/protocol_ffi.h`, typed encode/decode + `decode_header` in `capi.rs`), and `protocol-differential-contract` pins the pre-cutover wire bytes via `tests/unit/protocol_wire_golden.inc` (19 samples). C++ `protocol.h` API and all call sites are unchanged; see `docs/fcitx-upstream-rebaseline-audit.md` for the Fcitx5 upstream baseline audit (fork is official `ebf24ddc` + 41 lines; all three Windows-local changes are not yet upstream; 1 of 6 patches applies clean to master).
 

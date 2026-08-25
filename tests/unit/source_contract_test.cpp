@@ -31,6 +31,7 @@ int main(int argc, char** argv) {
     const auto engineBoundarySource = read_text(sourceRoot / "docs/engine-boundary.md");
     const auto tsfProfileBoundarySource = read_text(sourceRoot / "docs/tsf-profile-boundary.md");
     const auto taskRebaselineSource = read_text(sourceRoot / "docs/tasks/rebaseline.md");
+    const auto taskPlanSource = read_text(sourceRoot / "docs/tasks/PLAN.md");
     const auto runtimeSecurityScript =
         read_text(sourceRoot / "tools/check-runtime-security.ps1");
     const auto installerSource = read_text(sourceRoot / "installer/fcitx5-windows.iss");
@@ -51,14 +52,29 @@ int main(int argc, char** argv) {
             std::string::npos ||
         specSource.find("字号等数值设置允许直接输入数字") == std::string::npos ||
         specSource.find("字体 picker 必须来自当前系统字体枚举") == std::string::npos ||
+        specSource.find("Rust Config Backend Shipped") == std::string::npos ||
+        specSource.find("Rust Config Cutover Complete") == std::string::npos ||
+        specSource.find("Config fully migrated to Rust") == std::string::npos ||
         currentTruthSource.find("system-font-backed font selection") == std::string::npos ||
+        currentTruthSource.find("STAGE-2-BACKEND-SHIPPING-IN-PROGRESS") ==
+            std::string::npos ||
+        currentTruthSource.find("interactive settings UI migration") ==
+            std::string::npos ||
         currentTaskSource.find("editable numeric controls for appearance values") ==
             std::string::npos ||
         currentTaskSource.find("current system font family inventory") ==
             std::string::npos ||
         currentTaskSource.find("editor/preview/real-window rendering from one resolved snapshot") ==
+            std::string::npos ||
+        currentTaskSource.find("Stage 2 — Rust Config Backend Shipped") ==
+            std::string::npos ||
+        currentTaskSource.find("Stage 4 — Rust Config Cutover Complete") ==
+            std::string::npos ||
+        taskPlanSource.find("Rust Config Backend Shipped") ==
+            std::string::npos ||
+        cmakeSource.find("config-rust-legacy-headless-cli") ==
             std::string::npos) {
-        return fail("CONFIG-RUST-CUTOVER-001: WindInput-derived theme lessons, numeric input validation, and system-font picker requirements must stay documented");
+        return fail("CONFIG-RUST-CUTOVER-001: WindInput-derived theme lessons, staged Rust Config backend/full cutover language, numeric input validation, and system-font picker requirements must stay documented");
     }
     if (upstreamBoundaryAdr.find("Fcitx Upstream Boundary and Rust Product Plane") ==
             std::string::npos ||
@@ -1870,6 +1886,8 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "tools/test-config-rust-side-by-side.ps1");
     const auto configRustShippingLineageScript =
         read_text(sourceRoot / "tools/test-config-rust-shipping-lineage.ps1");
+    const auto configRustLegacyCliScript =
+        read_text(sourceRoot / "tools/test-config-rust-legacy-cli.ps1");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     const auto controlPackageIntegrationSource =
         read_text(sourceRoot / "tests/integration/control_package_integration_test.cpp");
@@ -2142,6 +2160,22 @@ int main(int argc, char** argv) {
         configPocManifest.find("fcitx5-package-core") == std::string::npos ||
         configPocManifest.find("fcitx5-candidate-core") == std::string::npos ||
         configPocManifest.find("name = \"fcitx5-config-rust\"") == std::string::npos ||
+        configPocSource.find("legacy_config_cli_compat") == std::string::npos ||
+        configPocSource.find("LegacyHeadlessMode") == std::string::npos ||
+        configPocSource.find("--self-test") == std::string::npos ||
+        configPocSource.find("--check-i18n") == std::string::npos ||
+        configPocSource.find("--check-resources") == std::string::npos ||
+        configPocSource.find("--ui-contract-test") == std::string::npos ||
+        configPocSource.find("--ui-visual-contract-test") == std::string::npos ||
+        configPocSource.find("--ui-live-preview-contract-test") == std::string::npos ||
+        configPocSource.find("--ui-interaction-test") == std::string::npos ||
+        cmakeSource.find("config-rust-legacy-headless-cli") == std::string::npos ||
+        cmakeSource.find("test-config-rust-legacy-cli.ps1") == std::string::npos ||
+        configRustLegacyCliScript.find("legacy_config_cli_compat") == std::string::npos ||
+        configRustLegacyCliScript.find("rust_config_self_check_reused") ==
+            std::string::npos ||
+        configRustLegacyCliScript.find("--ui-live-preview-contract-test") ==
+            std::string::npos ||
         configPocSource.find("run_candidate_poc_self_check") == std::string::npos ||
         configPocSource.find("candidate_preview_candidate_core_self_check") ==
             std::string::npos ||

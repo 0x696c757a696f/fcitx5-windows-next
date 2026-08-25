@@ -14,6 +14,33 @@ preserve.
 The existing C++ Config implementation is therefore a regression baseline and temporary adapter, not
 a durable architecture choice.
 
+## Staged shipping gates
+
+This task allows an explicit intermediate shipping milestone without weakening the final cutover:
+
+- Stage 0 — Legacy Config: the C++ GUI remains the shipping authority.
+- Stage 1 — Rust Config Core: Rust owns typed models, schemas, validation, migrations, and
+  operation planning, but shipping may still be side-by-side.
+- Stage 2 — Rust Config Backend Shipped: non-interactive production paths are Rust-owned and may
+  ship under the product binary/automation surface. This includes headless/test CLI, package
+  install/update/remove state handling, import/export, config read/write, schema validation,
+  migration, diagnostics, CI automation, atomic writes, rollback, permissions, and abnormal-input
+  regressions. Once this stage is claimed, these paths must not fall back to the legacy C++ GUI
+  implementation.
+- Stage 3 — Rust Settings UI Preview: a real Rust settings window is available for QA, but the
+  interactive GUI is not yet declared complete.
+- Stage 4 — Rust Config Cutover Complete: the real interactive Settings GUI, navigation, controls,
+  candidate preview, plugin configuration pages, DPI/dark-mode/keyboard/accessibility behavior,
+  crash containment, persistence/restart consistency, and real Windows QA are green.
+- Stage 5 — Legacy Config Removed: the old authoritative C++ Config shell is deleted or reduced to
+  explicitly non-authoritative transitional assets.
+
+Release notes may describe Stage 2 only as “Rust configuration backend is now shipping; interactive
+settings UI migration is still in progress.” They must not claim “Config fully migrated to Rust”
+until Stage 4 is green. Candidate preview belongs to the Stage 4 full-GUI cutover gate because it
+validates the full Rust config model → UI binding → theme/config serialization → candidate renderer
+product chain.
+
 ## Scope
 
 Replace the shipping Settings executable with a Rust-owned implementation in vertical slices:

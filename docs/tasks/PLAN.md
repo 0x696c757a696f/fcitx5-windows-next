@@ -23,6 +23,13 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   for the direct Fcitx-facing Engine adapter island; any remaining Win32/COM/D2D/WTL code is a
   temporary native adapter/host that must delegate product semantics to Rust and be queued for
   removal or replacement once equivalent evidence exists.
+- Config migration uses explicit stages: Stage 2 `Rust Config Backend Shipped` may ship
+  non-interactive Rust-owned Config paths (`fcitx5-config.exe` headless/test CLI,
+  package/install/update/remove, import/export, config read/write, schema validation, migration,
+  diagnostics, CI automation) with no fallback to the old GUI implementation; Stage 4
+  `Rust Config Cutover Complete` is reserved for the real interactive Settings GUI, controls,
+  embedded candidate preview, plugin pages, DPI/dark-mode/keyboard/accessibility, persistence, and
+  real Windows QA. Stage 2 release notes must not claim full Config migration.
 - Already-cut-over Rust components must not be reverted to C++ because of historical task wording.
 - `R3-03` is the current task only for remaining TSF real-host/manual evidence and focused
   package-candidate usability regressions.
@@ -85,7 +92,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | R3-03 | RUST-R3-TSF-POC | MANUAL-PENDING / USER-GATE-OVERRIDE / USER-SHIPPING-CUTOVER-OVERRIDE / SHIPPING-RUST-TSF-X64-X86-GREEN / CXX-SHIPPING-TSF-DELETED / TSF-SUPPORT-ACTIVATION-GUARD-RUST-GREEN / REAL-HOST-MATRIX-PENDING | User explicitly allowed opening this gate and later explicitly authorized deleting/replacing shipping C++ TSF; automated x64/x86 Rust shipping TSF gates and TSF activation-guard Rust support cutover are green, but real host matrix evidence remains MANUAL-PENDING | completed/RUST-R3-TSF-POC.md |
 | 047 | CONFIG-UX-009 | COMPLETED / FONT-PERSISTENCE-PACKAGE-GATE-GREEN / RUST-SYSTEM-FONT-PICKER-GREEN / STAGED-APP-QA-GREEN | R3-03 automated package/candidate smoke green; real-host matrix may remain MANUAL-PENDING because this is Settings/Candidate UX product work, not release certification | completed/047-CONFIG-UX-009.md |
 | 048 | CONFIG-RUST-CUTOVER-001 | IN-PROGRESS / SIDE-BY-SIDE-DIFFERENTIAL-GREEN / REAL-CANDIDATE-PREVIEW-HOST-REQUIRED | 047 theme/preview/operation contract green; user authorized non-Engine Rust cutover; shipping Config C++ shell is temporary only | current.md |
-| 049 | PLUGIN-LIFECYCLE-STABILITY-001 | TODO | 048 Rust Config cutover green unless plugin lifecycle blocks Config itself; production online endpoint/key evidence may remain MANUAL-PENDING | queue/049-PLUGIN-LIFECYCLE-STABILITY-001.md |
+| 049 | PLUGIN-LIFECYCLE-STABILITY-001 | TODO | 048 Stage 2 Rust Config Backend Shipped green unless plugin lifecycle blocks Config itself; full Stage 4 interactive GUI cutover/candidate-preview QA may remain in 048; production online endpoint/key evidence may remain MANUAL-PENDING | queue/049-PLUGIN-LIFECYCLE-STABILITY-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED | All stabilization tasks + required external evidence + intended Rust cutovers | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes

@@ -444,17 +444,107 @@ struct ConfigRustCutoverEvidence {
     old_cxx_shell_deletion_required: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunMode {
+    SelfCheck,
+    WindowSmoke,
+    LegacyHeadless(LegacyHeadlessMode),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LegacyHeadlessMode {
+    SelfTest,
+    CheckI18n,
+    CheckResources,
+    UiContract,
+    UiVisualContract,
+    UiLivePreviewContract,
+    UiInteraction,
+}
+
+impl LegacyHeadlessMode {
+    fn argument(self) -> &'static str {
+        match self {
+            Self::SelfTest => "--self-test",
+            Self::CheckI18n => "--check-i18n",
+            Self::CheckResources => "--check-resources",
+            Self::UiContract => "--ui-contract-test",
+            Self::UiVisualContract => "--ui-visual-contract-test",
+            Self::UiLivePreviewContract => "--ui-live-preview-contract-test",
+            Self::UiInteraction => "--ui-interaction-test",
+        }
+    }
+
+    fn evidence_kind(self) -> &'static str {
+        match self {
+            Self::SelfTest => "rust-config-legacy-self-test",
+            Self::CheckI18n => "rust-config-legacy-i18n-check",
+            Self::CheckResources => "rust-config-legacy-resource-check",
+            Self::UiContract => "rust-config-legacy-ui-contract",
+            Self::UiVisualContract => "rust-config-legacy-ui-visual-contract",
+            Self::UiLivePreviewContract => "rust-config-legacy-ui-live-preview-contract",
+            Self::UiInteraction => "rust-config-legacy-ui-interaction-contract",
+        }
+    }
+
+    fn corpus_marker(self) -> &'static str {
+        match self {
+            Self::SelfTest => "i18n-and-resource-corpus",
+            Self::CheckI18n => "localized-settings-corpus",
+            Self::CheckResources => "bundled-settings-resource-corpus",
+            Self::UiContract => "settings-operation-corpus",
+            Self::UiVisualContract => "settings-layout-visual-corpus",
+            Self::UiLivePreviewContract => "settings-live-preview-corpus",
+            Self::UiInteraction => "settings-keyboard-interaction-corpus",
+        }
+    }
+}
+
 fn main() {
     let mut args = env::args_os().skip(1);
-    let mut self_check = false;
-    let mut window_smoke = false;
+    let mut mode: Option<RunMode> = None;
     let mut report: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         if arg == "--self-check" {
-            self_check = true;
+            set_run_mode(&mut mode, RunMode::SelfCheck);
         } else if arg == "--window-smoke" {
-            window_smoke = true;
+            set_run_mode(&mut mode, RunMode::WindowSmoke);
+        } else if arg == "--self-test" {
+            set_run_mode(
+                &mut mode,
+                RunMode::LegacyHeadless(LegacyHeadlessMode::SelfTest),
+            );
+        } else if arg == "--check-i18n" {
+            set_run_mode(
+                &mut mode,
+                RunMode::LegacyHeadless(LegacyHeadlessMode::CheckI18n),
+            );
+        } else if arg == "--check-resources" {
+            set_run_mode(
+                &mut mode,
+                RunMode::LegacyHeadless(LegacyHeadlessMode::CheckResources),
+            );
+        } else if arg == "--ui-contract-test" {
+            set_run_mode(
+                &mut mode,
+                RunMode::LegacyHeadless(LegacyHeadlessMode::UiContract),
+            );
+        } else if arg == "--ui-visual-contract-test" {
+            set_run_mode(
+                &mut mode,
+                RunMode::LegacyHeadless(LegacyHeadlessMode::UiVisualContract),
+            );
+        } else if arg == "--ui-live-preview-contract-test" {
+            set_run_mode(
+                &mut mode,
+                RunMode::LegacyHeadless(LegacyHeadlessMode::UiLivePreviewContract),
+            );
+        } else if arg == "--ui-interaction-test" {
+            set_run_mode(
+                &mut mode,
+                RunMode::LegacyHeadless(LegacyHeadlessMode::UiInteraction),
+            );
         } else if arg == "--report" {
             let Some(path) = args.next() else {
                 eprintln!("--report requires a path");
@@ -467,15 +557,17 @@ fn main() {
         }
     }
 
-    if self_check == window_smoke {
-        eprintln!("usage: fcitx5-config-poc (--self-check | --window-smoke) [--report PATH]");
+    let Some(mode) = mode else {
+        eprintln!(
+            "usage: fcitx5-config-poc (--self-check | --window-smoke | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test) [--report PATH]"
+        );
         std::process::exit(2);
-    }
+    };
 
-    let result = if self_check {
-        run_self_check()
-    } else {
-        run_window_smoke()
+    let result = match mode {
+        RunMode::SelfCheck => run_self_check(),
+        RunMode::WindowSmoke => run_window_smoke(),
+        RunMode::LegacyHeadless(legacy) => run_legacy_headless_check(legacy),
     };
 
     match result {
@@ -491,6 +583,13 @@ fn main() {
             eprintln!("{error}");
             std::process::exit(1);
         }
+    }
+}
+
+fn set_run_mode(mode: &mut Option<RunMode>, next: RunMode) {
+    if mode.replace(next).is_some() {
+        eprintln!("expected exactly one Config test mode");
+        std::process::exit(2);
     }
 }
 
@@ -543,6 +642,66 @@ fn run_self_check() -> Result<String, String> {
         &preview_host,
         &cutover,
     ))
+}
+
+fn run_legacy_headless_check(mode: LegacyHeadlessMode) -> Result<String, String> {
+    let self_check = run_self_check()?;
+    if !self_check.contains("\"result\":\"PASS\"") {
+        return Err("Rust Config legacy headless mode requires a green self-check".to_owned());
+    }
+    for marker in legacy_headless_required_markers(mode) {
+        if !self_check.contains(marker) {
+            return Err(format!(
+                "Rust Config legacy headless mode {} missing marker {marker}",
+                mode.argument()
+            ));
+        }
+    }
+    Ok(format!(
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"{}\",\n  \"legacy_config_cli_compat\":true,\n  \"legacy_argument\":\"{}\",\n  \"legacy_corpus_marker\":\"{}\",\n  \"rust_config_self_check_reused\":true,\n  \"shipping_config_replaced\":false,\n  \"result\":\"PASS\"\n}}",
+        current_component_name(),
+        mode.evidence_kind(),
+        mode.argument(),
+        mode.corpus_marker(),
+    ))
+}
+
+fn legacy_headless_required_markers(mode: LegacyHeadlessMode) -> &'static [&'static str] {
+    match mode {
+        LegacyHeadlessMode::SelfTest => &[
+            "\"language_selector\":true",
+            "\"localized_dialogs\":true",
+            "\"theme_inventory_sources\":[\"built-in\",\"user\",\"package\"]",
+        ],
+        LegacyHeadlessMode::CheckI18n => {
+            &["\"language_selector\":true", "\"localized_dialogs\":true"]
+        }
+        LegacyHeadlessMode::CheckResources => &[
+            "\"theme_inventory_sources\":[\"built-in\",\"user\",\"package\"]",
+            "\"package_core_manifest_parsed\":true",
+        ],
+        LegacyHeadlessMode::UiContract => &[
+            "\"settings_operation_state_machine\":true",
+            "\"theme_action_state_machine\":true",
+            "\"package_action_state_machine\":true",
+        ],
+        LegacyHeadlessMode::UiVisualContract => &[
+            "\"checked_dpi_scale_percents\":[100,125,150,200,300]",
+            "\"layout_rects_inside_window\":true",
+            "\"layout_rects_non_overlapping\":true",
+        ],
+        LegacyHeadlessMode::UiLivePreviewContract => &[
+            "\"live_preview_draft_state\":true",
+            "\"preview_uses_production_renderer_contract\":true",
+            "\"candidate_preview_embedded_in_config_content\":true",
+        ],
+        LegacyHeadlessMode::UiInteraction => &[
+            "\"setting_transition_count\":4",
+            "\"theme_transition_count\":5",
+            "\"package_transition_count\":5",
+            "\"addon_action_row_rects\":50",
+        ],
+    }
 }
 
 fn run_window_smoke() -> Result<String, String> {
@@ -2938,6 +3097,31 @@ mod tests {
         assert!(report.contains("\"addon_uninstall\":true"));
         assert!(report.contains("\"addon_enable\":true"));
         assert!(report.contains("\"addon_disable\":true"));
+    }
+
+    #[test]
+    fn legacy_headless_modes_reuse_rust_self_check_corpus() {
+        let modes = [
+            LegacyHeadlessMode::SelfTest,
+            LegacyHeadlessMode::CheckI18n,
+            LegacyHeadlessMode::CheckResources,
+            LegacyHeadlessMode::UiContract,
+            LegacyHeadlessMode::UiVisualContract,
+            LegacyHeadlessMode::UiLivePreviewContract,
+            LegacyHeadlessMode::UiInteraction,
+        ];
+        for mode in modes {
+            let report =
+                run_legacy_headless_check(mode).expect("legacy headless check should pass");
+            assert!(report.contains("\"legacy_config_cli_compat\":true"));
+            assert!(report.contains(&format!("\"legacy_argument\":\"{}\"", mode.argument())));
+            assert!(report.contains(&format!(
+                "\"legacy_corpus_marker\":\"{}\"",
+                mode.corpus_marker()
+            )));
+            assert!(report.contains("\"rust_config_self_check_reused\":true"));
+            assert!(report.contains("\"result\":\"PASS\""));
+        }
     }
 
     #[test]

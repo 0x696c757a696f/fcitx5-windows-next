@@ -3212,6 +3212,23 @@ Codex 在读取/执行用户请求后先内部归类为 RESEARCH、REVIEW、CHAN
 | IPC                | versioned binary IPC v2 + request_id/epoch + bounded timeout + peer attestation | 只有在上游提供成熟跨平台 IPC abstraction 时重新评估                   |
 | Engine lifecycle   | per-user/session launcher + warmup + backoff + SafeMode                         | Windows 提供更合适的官方 per-user text-service host 模型              |
 
+- Config migration uses staged shipping language. Stage 2 `Rust Config Backend Shipped` may be
+  released when non-interactive configuration paths are Rust-owned and production-ready:
+  `fcitx5-config.exe` headless/test CLI, package install/update/remove state handling,
+  import/export, config read/write, schema validation, migration, diagnostics, CI automation,
+  atomic writes, rollback, permissions, and abnormal-input regressions. These Stage 2 paths must
+  not fall back to the legacy C++ GUI implementation after the stage is claimed.
+- Stage 4 `Rust Config Cutover Complete` requires the real interactive Settings GUI to pass real
+  Windows QA: real window launch, primary navigation, all configuration controls read/write
+  consistently, immediate/correct persistence, restart consistency, disabled/hidden/dependent
+  setting behavior, DPI/dark-mode/keyboard/accessibility coverage, candidate preview parity with
+  the actual Candidate UI, plug-in configuration page loading, and crash containment for malformed
+  configuration.
+- Candidate preview belongs to the Stage 4 full-GUI cutover gate because it validates the product
+  chain from Rust config model to UI binding to theme/config serialization to candidate renderer.
+  Stage 2 release notes may say “Rust configuration backend is now shipping; interactive settings
+  UI migration is still in progress.” They must not say “Config fully migrated to Rust.”
+
 - 外观默认跟随系统：System / Light / Dark；High Contrast 优先级最高。
 - 字体按 UI / Candidate / Annotation / Monospace 四类 surface 管理，Candidate 字体缺 glyph 必须交给 DirectWrite/system fallback。
 - ICO/PNG 为基础视觉资源；SVG 为可选矢量资源，不进入 Win7 候选热路径硬依赖。

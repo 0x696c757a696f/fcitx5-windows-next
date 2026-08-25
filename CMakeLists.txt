@@ -1098,6 +1098,18 @@ if(BUILD_TESTING)
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                                   TIMEOUT 45)
   add_test(
+    NAME config-rust-legacy-headless-cli
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-legacy-cli.ps1"
+      -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
+      "${FCITX_RUST_TARGET}" -Report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-legacy-headless-cli.json")
+  set_tests_properties(config-rust-legacy-headless-cli
+                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                                  TIMEOUT 45)
+  add_test(
     NAME rust-config-poc-window-smoke
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
