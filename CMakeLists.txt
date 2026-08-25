@@ -1058,7 +1058,8 @@ if(BUILD_TESTING)
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
       "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-qa --target
       "${FCITX_RUST_TARGET}" -- --config-exe
-      "$<TARGET_FILE_DIR:fcitx5_config_app>/fcitx5-config-rust.exe" --out
+      "$<TARGET_FILE_DIR:fcitx5_config_app>/fcitx5-config-rust.exe"
+      --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
       "${CMAKE_CURRENT_BINARY_DIR}/rust-config-ui-preview-qa")
   set_tests_properties(rust-config-ui-preview-qa PROPERTIES TIMEOUT 30)
   add_test(

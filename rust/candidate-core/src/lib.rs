@@ -1752,7 +1752,7 @@ pub fn candidate_preview_paint_plan(
     Ok(CandidatePreviewPaintPlan {
         dpi_scale,
         background_color: 0x00ee_f3f7,
-        selected_background_color: 0x00d2_7d2d,
+        selected_background_color: 0x006f_a700,
         text_color: 0x0020_2020,
         selected_text_color: 0x00ff_ffff,
         items,
@@ -3046,7 +3046,7 @@ mod tests {
     fn config_preview_paint_plan_preserves_labels_emoji_and_bounds() {
         let plan =
             candidate_preview_paint_plan(1.0, 596.0, 166.0).expect("candidate preview paint plan");
-        assert_eq!(plan.selected_background_color, 0x00d2_7d2d);
+        assert_eq!(plan.selected_background_color, 0x006f_a700);
         assert_eq!(plan.items.len(), 3);
         assert!(plan.items[0].selected);
         assert!(plan.items.iter().any(|item| item.text.contains("1.")));

@@ -3173,6 +3173,8 @@ mod win32_window_smoke {
         preview_class_name: &[u16],
         candidate_preview_rect: LayoutRect,
     ) -> Result<(), String> {
+        let preview_left = candidate_preview_rect.x.max(420);
+        let preview_width = candidate_preview_rect.width.min(440);
         let static_class = to_wide("STATIC");
         let button_class = to_wide("BUTTON");
         create_child_control(
@@ -3269,9 +3271,9 @@ mod win32_window_smoke {
                 preview_class_name.as_ptr(),
                 preview_title.as_ptr(),
                 WS_CHILD | WS_VISIBLE | WS_BORDER,
-                candidate_preview_rect.x,
+                preview_left,
                 candidate_preview_rect.y,
-                candidate_preview_rect.width,
+                preview_width,
                 candidate_preview_rect.height,
                 hwnd,
                 control_id_handle(K_PREVIEW),
