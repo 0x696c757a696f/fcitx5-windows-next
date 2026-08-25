@@ -89,8 +89,28 @@ jobs:
               ./tools/verify-product.ps1 pr -Architecture ${{ matrix.architecture }}
             }
           }
+          function Restart-Sccache {
+            $sccache = Get-Command sccache -ErrorAction SilentlyContinue
+            if ($sccache) {
+              & $sccache.Source --stop-server 2>$null
+              Start-Sleep -Seconds 2
+              & $sccache.Source --start-server
+            }
+          }
           try {
-            Invoke-CoreGate
+            $maxAttempts = 2
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              try {
+                Invoke-CoreGate
+                break
+              } catch {
+                if ($attempt -ge $maxAttempts) {
+                  throw
+                }
+                Write-Host "Core gate attempt $attempt failed; restarting sccache and retrying once."
+                Restart-Sccache
+              }
+            }
           } catch {
             function Convert-GitHubCommandValue([string] $Value) {
               return $Value.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')

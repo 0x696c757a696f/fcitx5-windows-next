@@ -2475,6 +2475,7 @@ int main(int argc, char** argv) {
         buildScript.find("ninja") == std::string::npos ||
         buildScript.find("sccachePath = [System.IO.Path]::GetFullPath") ==
             std::string::npos ||
+        buildScript.find("SCCACHE_IGNORE_SERVER_IO_ERROR") == std::string::npos ||
         buildScript.find("CMAKE_C_COMPILER_LAUNCHER=$sccachePath") ==
             std::string::npos ||
         buildScript.find("$env:GITHUB_ACTIONS -eq 'true' -or $TargetArchitecture -eq 'arm64'") !=
@@ -2486,6 +2487,11 @@ int main(int argc, char** argv) {
         ciCacheScript.find("SCCACHE_IGNORE_SERVER_IO_ERROR = '1'") == std::string::npos ||
         ciCacheScript.find("ACTIONS_RUNTIME_TOKEN") == std::string::npos ||
         ciCacheScript.find("GITHUB_ACTIONS") == std::string::npos ||
+        coreWorkflow.find("Restart-Sccache") == std::string::npos ||
+        coreWorkflow.find("--stop-server") == std::string::npos ||
+        coreWorkflow.find("--start-server") == std::string::npos ||
+        coreWorkflow.find("retrying once") == std::string::npos ||
+        coreWorkflow.find("$maxAttempts = 2") == std::string::npos ||
         cargoManifest.find("debug = \"line-tables-only\"") == std::string::npos ||
         cargoManifest.find("[profile.dev.package.\"*\"]") == std::string::npos ||
         cargoConfig.find("rustc-wrapper = \"sccache\"") == std::string::npos ||

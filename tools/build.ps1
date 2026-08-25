@@ -251,6 +251,9 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
       throw 'FCITX_ENABLE_SCCACHE=1 requires sccache on PATH.'
     }
     $sccachePath = [System.IO.Path]::GetFullPath($sccacheCommand.Source)
+    if ([string]::IsNullOrWhiteSpace($env:SCCACHE_IGNORE_SERVER_IO_ERROR)) {
+      $env:SCCACHE_IGNORE_SERVER_IO_ERROR = '1'
+    }
     $configureArguments += @(
       "-DCMAKE_C_COMPILER_LAUNCHER=$sccachePath",
       "-DCMAKE_CXX_COMPILER_LAUNCHER=$sccachePath"
