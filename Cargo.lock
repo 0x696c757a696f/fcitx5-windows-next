@@ -66,6 +66,7 @@ dependencies = [
  "fcitx5-candidate-core",
  "fcitx5-control-core",
  "fcitx5-package-core",
+ "fcitx5-windows-common-core",
 ]
 
 [[package]]

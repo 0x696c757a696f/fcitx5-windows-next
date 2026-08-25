@@ -2792,6 +2792,11 @@ mod win32_window_smoke {
     const DT_LEFT: u32 = 0x0000;
     const DT_SINGLELINE: u32 = 0x0020;
     const DT_VCENTER: u32 = 0x0004;
+    const CBN_SELCHANGE: u16 = 1;
+    const CB_ADDSTRING: u32 = 0x0143;
+    const CB_SETCURSEL: u32 = 0x014E;
+    const CBS_DROPDOWNLIST: u32 = 0x0003;
+    const CBS_HASSTRINGS: u32 = 0x0200;
     const EN_CHANGE: u16 = 0x0300;
     const ES_AUTOHSCROLL: u32 = 0x0080;
     const FALSE: i32 = 0;
@@ -2803,6 +2808,7 @@ mod win32_window_smoke {
     const WS_BORDER: u32 = 0x0080_0000;
     const WS_CHILD: u32 = 0x4000_0000;
     const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
+    const WS_VSCROLL: u32 = 0x0020_0000;
     const WS_VISIBLE: u32 = 0x1000_0000;
     const SW_SHOWNORMAL: i32 = 1;
     const GET_PIXEL_ERROR: u32 = 0xffff_ffff;
@@ -2819,6 +2825,7 @@ mod win32_window_smoke {
     const K_PAGE_TITLE: i32 = 140;
     const K_APPEARANCE_FONT_SIZE: i32 = 150;
     const K_APPEARANCE_OPACITY: i32 = 151;
+    const K_APPEARANCE_FONT_FAMILY: i32 = 152;
     const K_SAVE_STATUS: i32 = 206;
 
     static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -2916,6 +2923,7 @@ mod win32_window_smoke {
         fn IsWindowVisible(hwnd: Hwnd) -> i32;
         fn PostQuitMessage(exit_code: i32);
         fn ReleaseDC(hwnd: Hwnd, dc: Hdc) -> i32;
+        fn SendMessageW(hwnd: Hwnd, message: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
         fn SetWindowTextW(hwnd: Hwnd, text: Lpcwstr) -> i32;
         fn ShowWindow(hwnd: Hwnd, command_show: i32) -> i32;
         fn TranslateMessage(message: *const Msg) -> i32;
@@ -3224,6 +3232,9 @@ mod win32_window_smoke {
             if hiword(wparam) == EN_CHANGE && handle_numeric_edit_change(hwnd, command_id) {
                 return 0;
             }
+            if hiword(wparam) == CBN_SELCHANGE && handle_font_family_change(hwnd, command_id) {
+                return 0;
+            }
         }
         if message == WM_CLOSE {
             // SAFETY: Windows delivered WM_CLOSE for this live HWND; DestroyWindow starts normal
@@ -3387,6 +3398,7 @@ mod win32_window_smoke {
         let static_class = to_wide("STATIC");
         let button_class = to_wide("BUTTON");
         let edit_class = to_wide("EDIT");
+        let combo_class = to_wide("COMBOBOX");
         create_child_control(
             hwnd,
             instance,
@@ -3495,6 +3507,31 @@ mod win32_window_smoke {
             28,
             WS_BORDER | ES_AUTOHSCROLL,
         )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            0,
+            "Candidate font",
+            220,
+            200,
+            180,
+            24,
+            0,
+        )?;
+        let font_combo = create_child_control(
+            hwnd,
+            instance,
+            &combo_class,
+            K_APPEARANCE_FONT_FAMILY,
+            "",
+            220,
+            228,
+            180,
+            128,
+            WS_BORDER | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+        )?;
+        populate_system_font_picker(font_combo)?;
         for (index, (id, label)) in [
             (K_NAV_GENERAL, "Input methods"),
             (K_NAV_APPEARANCE, "Appearance"),
@@ -3687,6 +3724,67 @@ mod win32_window_smoke {
             K_APPEARANCE_OPACITY => Some(AppearanceNumericField::Opacity),
             _ => None,
         }
+    }
+
+    fn handle_font_family_change(hwnd: Hwnd, command_id: u16) -> bool {
+        if i32::from(command_id) != K_APPEARANCE_FONT_FAMILY {
+            return false;
+        }
+        set_child_text(
+            hwnd,
+            K_SAVE_STATUS,
+            "font_family accepted: system font picker refreshed preview",
+        );
+        invalidate_preview(hwnd);
+        true
+    }
+
+    fn populate_system_font_picker(combo: Hwnd) -> Result<(), String> {
+        let mut fonts = system_font_families_for_picker();
+        if fonts.is_empty() {
+            fonts.push("Segoe UI".to_owned());
+        }
+        for family in &fonts {
+            let family = to_wide(family);
+            // SAFETY: `combo` is a live combobox HWND and the UTF-16 string buffer lives for the
+            // synchronous CB_ADDSTRING message.
+            unsafe {
+                SendMessageW(combo, CB_ADDSTRING, 0, family.as_ptr() as Lparam);
+            }
+        }
+        // SAFETY: `combo` is a live combobox HWND; selecting the first item initializes the
+        // visible current system-font choice for QA and users.
+        unsafe {
+            SendMessageW(combo, CB_SETCURSEL, 0, 0);
+        }
+        Ok(())
+    }
+
+    fn system_font_families_for_picker() -> Vec<String> {
+        let required = fcitx5_windows_common_core::fcitx5_windows_common_system_font_families_utf16(
+            null_mut(),
+            0,
+        );
+        if required == 0 {
+            return Vec::new();
+        }
+        let mut payload = vec![0u16; required];
+        let written = fcitx5_windows_common_core::fcitx5_windows_common_system_font_families_utf16(
+            payload.as_mut_ptr(),
+            payload.len(),
+        )
+        .min(payload.len());
+        let mut fonts = Vec::new();
+        let mut start = 0usize;
+        for index in 0..written {
+            if payload[index] == 0 {
+                if index > start {
+                    fonts.push(String::from_utf16_lossy(&payload[start..index]));
+                }
+                start = index + 1;
+            }
+        }
+        fonts
     }
 
     fn child_text(hwnd: Hwnd) -> String {

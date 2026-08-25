@@ -32,6 +32,8 @@ const WM_GETTEXT: Uint = 0x000D;
 const WM_GETTEXTLENGTH: Uint = 0x000E;
 const WM_PRINT: Uint = 0x0317;
 const WM_PRINTCLIENT: Uint = 0x0318;
+const CB_GETCOUNT: Uint = 0x0146;
+const CB_SETCURSEL: Uint = 0x014E;
 const PRF_CHECKVISIBLE: Lparam = 0x0000_0001;
 const PRF_NONCLIENT: Lparam = 0x0000_0002;
 const PRF_CLIENT: Lparam = 0x0000_0004;
@@ -51,7 +53,9 @@ const K_PACKAGES: i32 = 113;
 const K_PACKAGE_DETAIL: i32 = 127;
 const K_APPEARANCE_FONT_SIZE: i32 = 150;
 const K_APPEARANCE_OPACITY: i32 = 151;
+const K_APPEARANCE_FONT_FAMILY: i32 = 152;
 const K_SAVE_STATUS: i32 = 206;
+const CBN_SELCHANGE: Wparam = 1;
 const EN_CHANGE: Wparam = 0x0300;
 
 const PAGES: &[Page] = &[
@@ -63,7 +67,12 @@ const PAGES: &[Page] = &[
     Page {
         id: K_NAV_APPEARANCE,
         slug: "appearance",
-        controls: &[K_PAGE_TITLE, K_PREVIEW, K_SAVE_STATUS],
+        controls: &[
+            K_PAGE_TITLE,
+            K_PREVIEW,
+            K_APPEARANCE_FONT_FAMILY,
+            K_SAVE_STATUS,
+        ],
     },
     Page {
         id: K_NAV_SHORTCUTS,
@@ -280,6 +289,12 @@ fn run() -> Result<(), String> {
                 verify_appearance_numeric_inputs(hwnd)?;
                 report.push_str("| appearance-numeric-inputs | ok | Rust schema validation |\n");
             }
+            if rust_config_exe(&args.config_exe) || has_child(hwnd, K_APPEARANCE_FONT_FAMILY) {
+                verify_system_font_picker(hwnd)?;
+                report.push_str(
+                    "| appearance-system-font-picker | ok | Rust system font inventory |\n",
+                );
+            }
         }
         report.push_str(&format!("| {} | ok | `{}` |\n", page.slug, file_name));
     }
@@ -474,6 +489,25 @@ fn verify_appearance_numeric_inputs(hwnd: Hwnd) -> Result<(), String> {
     Ok(())
 }
 
+fn verify_system_font_picker(hwnd: Hwnd) -> Result<(), String> {
+    let combo = unsafe { GetDlgItem(hwnd, K_APPEARANCE_FONT_FAMILY) };
+    if combo.is_null() {
+        return Err("missing system font picker combobox".to_string());
+    }
+    let count = unsafe { SendMessageW(combo, CB_GETCOUNT, 0, 0) };
+    if count <= 0 {
+        return Err("system font picker did not expose current system fonts".to_string());
+    }
+    let selected = if count > 1 { 1 } else { 0 };
+    let selected_result = unsafe { SendMessageW(combo, CB_SETCURSEL, selected as Wparam, 0) };
+    if selected_result < 0 {
+        return Err("system font picker rejected selection".to_string());
+    }
+    notify_combo_selection(hwnd, K_APPEARANCE_FONT_FAMILY);
+    require_status_contains(hwnd, "font_family accepted")?;
+    Ok(())
+}
+
 fn has_child(hwnd: Hwnd, id: i32) -> bool {
     !unsafe { GetDlgItem(hwnd, id) }.is_null()
 }
@@ -505,6 +539,13 @@ fn set_child_text(hwnd: Hwnd, id: i32, value: &str) -> Result<(), String> {
 
 fn notify_control_change(hwnd: Hwnd, id: i32) {
     let wparam = ((EN_CHANGE & 0xffff) << 16) | ((id as Wparam) & 0xffff);
+    unsafe {
+        SendMessageW(hwnd, WM_COMMAND, wparam, 0);
+    }
+}
+
+fn notify_combo_selection(hwnd: Hwnd, id: i32) {
+    let wparam = ((CBN_SELCHANGE & 0xffff) << 16) | ((id as Wparam) & 0xffff);
     unsafe {
         SendMessageW(hwnd, WM_COMMAND, wparam, 0);
     }
