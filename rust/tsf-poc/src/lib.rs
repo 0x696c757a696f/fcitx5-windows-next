@@ -11,15 +11,18 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::OnceLock;
 use windows::Win32::Foundation::{
-    CLASS_E_CLASSNOTAVAILABLE, E_FAIL, E_INVALIDARG, E_NOTIMPL, E_POINTER, E_UNEXPECTED, S_OK,
-    WIN32_ERROR,
+    CLASS_E_CLASSNOTAVAILABLE, E_FAIL, E_INVALIDARG, E_NOTIMPL, E_POINTER, E_UNEXPECTED, HMODULE,
+    S_OK, WIN32_ERROR,
 };
 use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_NOINTERFACE, LPARAM, S_FALSE, WPARAM};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, IClassFactory, IClassFactory_Impl,
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
-use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
+use windows::Win32::System::LibraryLoader::{
+    GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE,
     KEY_WRITE, REG_OPEN_CREATE_OPTIONS, REG_SZ,
@@ -171,10 +174,28 @@ fn wide_from_str(value: &str) -> Vec<u16> {
 }
 
 fn current_module_path() -> Result<Vec<u16>> {
+    // The TSF DLL can be loaded into another host (the elevated register
+    // helper loads it and calls DllRegisterServer), so
+    // `GetModuleFileNameW(None)` would name the host executable instead of
+    // this DLL. Resolve this module's own handle from this function's address
+    // so InprocServer32/RegisterProfile record the real fcitx5-tsf.dll path.
+    let mut module: HMODULE = HMODULE(null_mut());
+    // SAFETY: `current_module_path`'s own address identifies this DLL module;
+    // the unchanged-refcount flag avoids leaking the extra module reference.
+    let resolved = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            PCWSTR(current_module_path as *const () as *const u16),
+            &mut module,
+        )
+    };
+    if resolved.is_err() || module.0.is_null() {
+        return Err(E_FAIL.into());
+    }
     let mut buffer = vec![0u16; 32768];
-    // SAFETY: The buffer is valid writable memory and the null module handle asks
-    // Windows for this DLL/executable module path in the current process.
-    let length = unsafe { GetModuleFileNameW(None, &mut buffer) };
+    // SAFETY: The buffer is valid writable memory and the module handle names
+    // this TSF DLL in the current process.
+    let length = unsafe { GetModuleFileNameW(Some(module), &mut buffer) };
     if length == 0 || length as usize >= buffer.len() {
         return Err(E_FAIL.into());
     }
