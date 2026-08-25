@@ -25,9 +25,9 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 - Fcitx core and upstream addon semantics remain upstream-owned.
 - Engine is not permanently all C++; it converges to Rust Engine Product Core plus a thin C++ Fcitx adapter.
 - Product-owned non-Engine surfaces continue moving toward Rust authority through gated cutovers.
-- New product-owned Windows code defaults to Rust. C++ is allowed only for the direct Fcitx-facing
-  Engine adapter island and narrowly justified Win32/COM/D2D/WTL adapter seams while migration
-  evidence is built.
+- New product-owned Windows code defaults to Rust. Already Rust-owned components must not regress
+  to C++. C++ is allowed only for direct Fcitx-facing Engine object manipulation, plus temporary
+  native adapter/host seams that delegate product semantics to Rust and are tracked until cutover.
 - Already-cut-over Rust components must not be reverted to C++ because an older task/spec paragraph
   described a former C++ baseline.
 - Plugins/addons must support static/built-in and dynamic/package-loaded models, not `Addon == DLL`.

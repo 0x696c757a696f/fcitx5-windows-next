@@ -34,9 +34,10 @@ Architecture defaults:
 - The only durable C++ island is direct Engine integration with Fcitx5 core/addon objects:
   `fcitx::Instance`, `InputContext`, addon/config objects, `InputPanel`, `CandidateList`,
   and the thin conversion/adapter code required to consume upstream Fcitx semantics.
-- New product-owned Windows code defaults to Rust. Use C++ only when the current task proves it is
-  a necessary Win32/Fcitx/COM adapter boundary or when a recorded product decision explicitly keeps
-  that adapter C++ for compatibility.
+- New product-owned Windows code defaults to Rust. Do not add new C++ product-state, validation,
+  operation, parsing, package/update, settings, candidate-domain, TSF, or UI-domain logic. Use C++
+  only for the direct Fcitx-facing Engine adapter island, or for a tiny native adapter seam that
+  delegates its product semantics to Rust and is recorded as temporary evidence.
 - Do not regress a component that has already cut over to Rust back to C++ merely because older task
   text called the C++ implementation the baseline. Historical C++ behavior remains a corpus/reference,
   not the target language.
@@ -46,7 +47,9 @@ Architecture defaults:
 - Current state: Candidate model/layout/interaction are Rust-owned; Win32/D2D/DWrite drawing code is
   only a renderer/window adapter until a renderer migration task has equivalent visual/DPI evidence.
 - Current state: Config still has a WTL/Win32 shipping shell, but new Settings state, validation,
-  preview, package/update/control orchestration, and future UI domain code should be Rust-first.
+  preview contracts, package/update/control orchestration, operation models, and future UI-domain
+  code must be Rust-first. Existing C++ shell code is an adapter/host, not a reason to add new C++
+  product ownership.
 - Rust migration still needs contract/golden/fuzz or equivalent regression evidence before replacing
   behavior. Do not change semantics and language in one opaque step.
 - Do not create a permanent old/new protocol dual stack.

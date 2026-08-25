@@ -18,9 +18,10 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 - `001` is archived as completed.
 - `001` through `036`, `RUST-R1-*`, `RUST-R2-*`, and the current automated parts of
   `RUST-R3-*` have been rebaselined against the 2026-08-24 Engine/Fcitx upstream guidance.
-- New product-owned Windows code defaults to Rust. C++ is reserved for the Fcitx-facing Engine
-  adapter island and narrowly justified Win32/COM/D2D/WTL adapter seams while migration evidence is
-  built.
+- New product-owned Windows code defaults to Rust. Already-cut-over Rust code must not be changed
+  back to C++ because an older task file called the C++ implementation a baseline. C++ is reserved
+  for the direct Fcitx-facing Engine adapter island; any remaining Win32/COM/D2D/WTL code is a
+  temporary native adapter/host that must delegate product semantics to Rust.
 - Already-cut-over Rust components must not be reverted to C++ because of historical task wording.
 - `R3-03` is the current task only for remaining TSF real-host/manual evidence and focused
   package-candidate usability regressions.
@@ -90,7 +91,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 - `004` and `019` are intentionally separate: `004` establishes the **single Windows TSF profile identity/metadata contract**; `019` finalizes the **penguin brand assets and shell presentation**.
 - `014` freezes Windows path semantics before Rust R1.
 - `020` freezes TSF generation-draining semantics before the Rust updater/downloader cutover.
-- Long-term language direction: direct Fcitx-facing Engine object manipulation remains the C++ Fcitx5 adapter island; Engine product protocol/state/validation/revision/generation/policy/IPC/diagnostics moves toward Rust. TSF, Candidate, Config, package/update/launcher/control/provider/diagnostics and other product-owned layers should move toward Rust only through explicit gated migration tasks with differential evidence.
+- Long-term language direction: direct Fcitx-facing Engine object manipulation remains the C++ Fcitx5 adapter island; Engine product protocol/state/validation/revision/generation/policy/IPC/diagnostics moves toward Rust. TSF, Candidate, Config, package/update/launcher/control/provider/diagnostics and other product-owned layers default to Rust for new code, with gated differential evidence before replacing any remaining shipping adapter.
 - `R3-01`/`R3-02`/`R3-03` are interpreted against current reality, not their old FUTURE-GATED
   wording: TSF shipping has cut over to Rust; Candidate domain model/layout/interaction are
   Rust-owned; Config remains a WTL/Win32 shell with Rust product logic/PoC evidence. Historical C++

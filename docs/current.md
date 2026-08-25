@@ -20,9 +20,10 @@ Windows host
 - Windows exposes one product TSF profile: `Fcitx5`.
 - TSF, UI, Config, Launcher, Control, package/update/provider/deployer are product-owned Windows surfaces and continue moving toward Rust authority.
 - Engine is not a permanent all-C++ exception. Its direct Fcitx object adapter remains C++; its product protocol, state, validation, IPC, deadline/fail-open, generation, revision, snapshot and diagnostics logic should move to Rust.
-- New product-owned Windows code defaults to Rust. C++ is reserved for the direct Fcitx-facing
-  Engine adapter island and narrowly justified native adapter seams. Already-cut-over Rust
-  components must not be rewritten back to C++ because of stale historical task text.
+- New product-owned Windows code defaults to Rust. Already Rust-owned components must not regress
+  to C++ because older audit text described a C++ baseline. C++ is reserved for direct
+  Fcitx-facing Engine object manipulation; remaining native code is an adapter/host that must
+  delegate product semantics to Rust.
 
 ## Language Map
 

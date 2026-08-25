@@ -1993,6 +1993,10 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configPocSource.find("theme_import_staging_rejects_missing_base") ==
             std::string::npos ||
+        configPocSource.find("theme_import_staging_rejects_invalid_toml") ==
+            std::string::npos ||
+        configPocSource.find("theme_import_staging_rejects_cyclic_base") ==
+            std::string::npos ||
         configPocSource.find("live_preview_draft_state") == std::string::npos ||
         configPocSource.find("preview_samples_cover_chinese_latin_punctuation_emoji") ==
             std::string::npos ||
@@ -2038,6 +2042,10 @@ int main(int argc, char** argv) {
         englishLocale.find("\"nav.repair\": \"Repair\"") != std::string::npos ||
         englishLocale.find("\"appearance.more\"") == std::string::npos ||
         englishLocale.find("\"candidate.automatic\"") == std::string::npos ||
+        englishLocale.find("\"theme.security.script_blocked\"") == std::string::npos ||
+        englishLocale.find("\"theme.security.network_blocked\"") == std::string::npos ||
+        englishLocale.find("\"theme.security.path_scope.theme_directory\"") ==
+            std::string::npos ||
         englishLocale.find("\"nav.packages\": \"Add-ons & Extensions\"") ==
             std::string::npos ||
         englishLocale.find("\"updates.title\": \"Updates\"") == std::string::npos) {

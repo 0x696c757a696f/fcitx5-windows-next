@@ -1,6 +1,6 @@
 # CONFIG-UX-009 WindInput-inspired Settings theme library and embedded live preview
 
-**State:** IN-PROGRESS / RUST-THEME-PREVIEW-CONTRACT-GREEN
+**State:** IN-PROGRESS / RUST-THEME-PREVIEW-CONTRACT-GREEN / RUST-FIRST-DOCS-AND-THEME-IMPORT-I18N-GREEN
 
 ## Context
 
@@ -21,6 +21,12 @@ Reference refresh performed on 2026-08-25:
 
 These references may guide product structure and tests. Do not copy non-trivial code unless the
 copying task explicitly records license attribution and NOTICE updates.
+
+Language baseline for this task: already Rust-owned Settings/Candidate/TSF/package/control logic
+must not be moved back to C++. New Settings product logic, preview contracts, theme/package
+operation models, validation, and testable UI-domain behavior default to Rust. The existing
+WTL/Win32/D2D Config code is only a shipping host/adapter unless a later task records explicit
+cutover evidence for replacing it.
 
 ## Scope
 

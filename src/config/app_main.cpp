@@ -1296,6 +1296,18 @@ std::wstring themeListLabel(const ThemeRow& theme, const Strings& strings) {
     return label;
 }
 
+std::wstring themeSecurityPathScopeLabel(std::wstring_view scope, const Strings& strings) {
+    if (scope == L"theme-directory")
+        return localeValue(strings, "theme.security.path_scope.theme_directory",
+                           L"theme directory only");
+    if (scope == L"package-directory")
+        return localeValue(strings, "theme.security.path_scope.package_directory",
+                           L"package directory only");
+    if (scope == L"none")
+        return localeValue(strings, "theme.security.path_scope.none", L"no external paths");
+    return std::wstring(scope);
+}
+
 std::wstring jsonStringOrNull(const nlohmann::json& object, const char* key) {
     return object.contains(key) && !object.at(key).is_null()
                ? widen(object.at(key).get<std::string>())
@@ -2882,11 +2894,24 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                           L": " + std::to_wstring(editableFields);
                 detail += L"\r\n" + localeValue(strings_, "theme.detail.security", L"Security") +
                           L": ";
-                detail += security.at("script_allowed").get<bool>() ? L"script" : L"no script";
+                detail +=
+                    security.at("script_allowed").get<bool>()
+                        ? localeValue(strings_, "theme.security.script_allowed",
+                                      L"script hooks allowed")
+                        : localeValue(strings_, "theme.security.script_blocked",
+                                      L"no script hooks");
                 detail += L", ";
-                detail += security.at("network_allowed").get<bool>() ? L"network" : L"no network";
+                detail +=
+                    security.at("network_allowed").get<bool>()
+                        ? localeValue(strings_, "theme.security.network_allowed",
+                                      L"network assets allowed")
+                        : localeValue(strings_, "theme.security.network_blocked",
+                                      L"no network assets");
                 detail += L", ";
-                detail += widen(security.at("path_scope").get<std::string>());
+                detail += localeValue(strings_, "theme.security.path_scope", L"path scope") +
+                          L": " +
+                          themeSecurityPathScopeLabel(
+                              widen(security.at("path_scope").get<std::string>()), strings_);
             } catch (const nlohmann::json::exception&) {
                 detail += L"\r\n" + localeValue(strings_, "theme.detail_limited",
                                                  L"Detailed theme metadata is unavailable.");
