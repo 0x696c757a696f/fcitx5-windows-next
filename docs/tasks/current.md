@@ -1,39 +1,80 @@
-# RUST-R3-TSF-POC Rust TSF differential PoC
+# CONFIG-UX-009 WindInput-inspired Settings theme library and embedded live preview
 
-**State:** MANUAL-PENDING / USER-GATE-OVERRIDE / USER-SHIPPING-CUTOVER-OVERRIDE / SHIPPING-RUST-TSF-X64-X86-GREEN / PACKAGE-COLD-START-CANDIDATE-UI-GREEN / PACKAGE-MULTICHAR-COMMIT-GREEN / CXX-SHIPPING-TSF-DELETED / CXX-UILESS-CANDIDATE-DELETED / CXX-INPUT-SCOPE-GUIDS-DELETED / CXX-PROFILE-HELPERS-DELETED / DEPLOYMENT-SRC-HEADER-DELETED / TSF-SUPPORT-ACTIVATION-GUARD-RUST-GREEN / ACTIVATABLE-EMPTY-TIP-GREEN / BEHAVIOR-CORPUS-GREEN / CPP-BASELINE-CORPUS-GREEN / RUST-BEHAVIOR-ABI-REPORT-GREEN / ARTIFACT-AUDIT-GREEN / COM-FAIL-OPEN-GREEN / REFERENCE-REFRESH-GREEN / REFERENCE-CORPUS-GREEN / SERVICE-LIFECYCLE-STATE-GREEN / PROFILE-IDENTITY-ABI-GREEN / IPC-BOUNDARY-GREEN / COMPOSITION-TRANSCRIPT-GREEN / ARM64-BUILD-ENV-PREFLIGHT-GREEN / ARM64-CI-ARTIFACT-GREEN / DIFFERENTIAL-SUMMARY-GREEN / PRODUCT-DECISION-RECORDED / REAL-HOST-MATRIX-PENDING
+**State:** TODO
 
-## Gate override
+## Context
 
-The original queued task required frozen C++ TSF behavior corpus and real host matrix evidence before implementation. On 2026-08-22 the user explicitly allowed opening this gate.
+The current Settings surface is visually acceptable as a direction, but it is still too close to a
+traditional Win32 configuration tool. User review specifically called out:
 
-On 2026-08-23 the user explicitly clarified that replacing and deleting the shipping C++ TSF is authorized. This task is therefore allowed to cut the shipping `fcitx5-tsf.dll` target over to Rust and remove the old shipping C++ TSF implementation.
+- skin/theme management is too thin;
+- the candidate preview is not live enough and must stay inside the Settings window;
+- enabled input methods, font selection, advanced appearance, localization, plug-in/download
+  states, and dialogs need complete operation logic;
+- candidate text, labels, emoji, and controls must never overlap or clip.
 
-This override does **not** mark the unrun real-host matrix as passed and does **not** unblock release by itself.
+Reference refresh performed on 2026-08-25:
+
+- `huanfeng/WindInput` at `2214bede43b4153f0fdc463928cf3c50184ec2ef`;
+- `huanfeng/wind-ui-rust` at `8ce94a46900a414612ead96438c770cb49eefdea`;
+- `huanfeng/wind-setting` was not publicly available from GitHub at review time.
+
+These references may guide product structure and tests. Do not copy non-trivial code unless the
+copying task explicitly records license attribution and NOTICE updates.
 
 ## Scope
 
-- Build the shipping Rust `fcitx5-tsf.dll` using `windows-rs`/COM/TSF bindings directly, without C++ FFI.
-- Remove the old shipping C++ TSF implementation instead of keeping a permanent old/new runtime selector.
-- Implement only the minimal path needed for `ITfTextInputProcessorEx`, key event sink, composition/commit, activation guard fail-open, candidate UI metadata, single `Fcitx5` profile registration model, and clean deactivate/unadvise/unload behavior.
-- Contain every COM callback behind a panic boundary that returns `HRESULT`, resets local TSF state where needed, and fails open instead of aborting the host.
-- Keep `unsafe` limited to small COM/Win32 adapter modules; domain state should use typed Rust models.
+Implement the next Settings UX vertical slice that makes theme/appearance changes feel like a real
+product surface:
+
+- Theme Library page with built-in/user/package theme inventory, metadata, source badges, safety
+  status, duplicate/import/export/delete affordances, and trusted-package provenance where present.
+- Embedded candidate preview surface inside `fcitx5-config.exe`; it must use the production
+  CandidateModel/layout/render contract rather than a separate fake drawing path.
+- Live preview draft state for theme, light/dark mode, layout, page size, scroll mode, font family,
+  font size, opacity, corner radius, spacing/padding, label style, comment style, and preedit
+  placement where those renderer keys are already supported.
+- Font selection through a real picker or system font enumeration, including CJK display names when
+  available.
+- Emoji fallback evidence: preview sample must include color-emoji candidates and detect/report
+  monochrome fallback as a visible limitation.
+- High-DPI behavior is automatic by default; do not add a “high DPI mode” switch. Advanced scale
+  overrides are allowed only as user preference, not as the primary fix.
+- Localized inline status/dialog text for every new operation.
+- No-overlap and no-clipping tests for all added page states.
 
 ## Must not do
 
-- Do not add global hooks, `SendInput` emulation, process injection, anti-cheat bypass, credential access, or external exploitation.
-- Do not link Fcitx/libime or package/update/config dependencies into the TSF DLL.
-- Do not create a permanent runtime selector.
+- Do not start a full Settings framework rewrite unless a later Rust Config cutover task explicitly
+  authorizes it.
+- Do not show fake online “official plug-ins.” Online items require signed repository metadata and
+  trusted keys.
+- Do not use global hooks, `SendInput` emulation, process injection, credential access, or external
+  exploitation.
+- Do not keep an external floating candidate preview as the only preview path.
 
 ## Required validation
 
-- C++ TSF vs Rust TSF differential against the same mock engine and behavior corpus.
-- x86/x64 build and export checks for TSF DLL shape.
-- Panic-containment regression for forced internal failure, malformed IPC, unexpected COM state, and engine timeout.
-- Real host matrix comparison before any cutover decision.
-- Dependency, PE import, min-OS, binary-size, COM refcount/sink cleanup, and unload checks.
+- Settings visual contract at 100%, 150%, and 200% DPI.
+- English and Simplified Chinese localization check for every added label/status/dialog.
+- Interaction coverage for every new command button, combo/list item, slider/edit, and destructive
+  confirmation.
+- Candidate preview parity check proving the embedded surface consumes the same model/layout/render
+  contract as the shipping candidate UI.
+- Theme import/delete path safety tests: path traversal, unknown executable/script hooks, remote
+  assets, invalid TOML, missing base theme, and cyclic base references.
+- Font selection persistence and preview refresh test.
+- Package build smoke for the same artifact lineage before handing a package to the user.
 
 ## Done when
 
-- The Rust TSF shipping DLL has objective automated differential/export/artifact/security evidence recorded for x64/x86.
-- The old shipping C++ TSF implementation is deleted and no permanent runtime selector remains.
-- Real-host matrix evidence is either recorded green or this task is archived as `MANUAL-PENDING` with exact missing evidence.
+- A user can browse, select, preview, duplicate/import/export/delete themes from Settings with clear
+  source/trust labels.
+- Changing any supported Appearance or Advanced Appearance field updates the embedded preview
+  immediately without opening the floating candidate window.
+- The preview visibly covers Chinese, Latin, punctuation, labels with the configured suffix, comments,
+  preedit text, and emoji.
+- Font selection is mouse/keyboard usable and persists after reopening Settings.
+- High-DPI readability is automatic and covered by tests.
+- All new UI strings and operation results are localized.
+- Added controls and preview content pass no-overlap/no-clipping checks.
