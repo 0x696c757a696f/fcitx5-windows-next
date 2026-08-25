@@ -549,8 +549,8 @@ fn split_windows_argument_string(input: &[u16]) -> Vec<Vec<u16>> {
                 index += 1;
             }
             if index < input.len() && input[index] == b'"' as u16 {
-                argument.extend(std::iter::repeat(b'\\' as u16).take(backslashes / 2));
-                if backslashes % 2 == 0 {
+                argument.extend(std::iter::repeat_n(b'\\' as u16, backslashes / 2));
+                if backslashes.is_multiple_of(2) {
                     quoted = !quoted;
                 } else {
                     argument.push(b'"' as u16);
@@ -558,7 +558,7 @@ fn split_windows_argument_string(input: &[u16]) -> Vec<Vec<u16>> {
                 index += 1;
                 continue;
             }
-            argument.extend(std::iter::repeat(b'\\' as u16).take(backslashes));
+            argument.extend(std::iter::repeat_n(b'\\' as u16, backslashes));
             if index >= input.len() {
                 break;
             }
@@ -1915,7 +1915,7 @@ fn required_theme_string(table: &toml_edit::Table, key: &str) -> Option<String> 
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn theme_common_table<'a>(root: &'a toml_edit::Table) -> Option<Option<&'a toml_edit::Table>> {
+fn theme_common_table(root: &toml_edit::Table) -> Option<Option<&toml_edit::Table>> {
     let Some(common) = root.get("common") else {
         return Some(None);
     };

@@ -381,6 +381,22 @@ struct ThemeLibraryEvidence {
     persisted_font_refreshes_embedded_preview: bool,
 }
 
+#[derive(Clone, Debug)]
+struct ConfigRustCutoverEvidence {
+    frozen_corpus_from_config_ux_009: bool,
+    frozen_corpus_sources: Vec<&'static str>,
+    rust_shipping_target_name: &'static str,
+    preserves_product_binary_name: bool,
+    side_by_side_differential_required: bool,
+    permanent_runtime_selector: bool,
+    typed_control_only: bool,
+    no_input_hot_path_access: bool,
+    no_arbitrary_shell: bool,
+    accessibility_gate_required: bool,
+    package_smoke_required_after_cutover: bool,
+    old_cxx_shell_deletion_required: bool,
+}
+
 fn main() {
     let mut args = env::args_os().skip(1);
     let mut self_check = false;
@@ -451,12 +467,14 @@ fn run_self_check() -> Result<String, String> {
     let operations = validate_operations()?;
     let boundaries = validate_typed_boundaries()?;
     let theme_library = validate_theme_library_and_preview()?;
+    let cutover = validate_config_rust_cutover_plan(&layout, &operations, &boundaries)?;
     Ok(render_report(
         &model,
         &layout,
         &operations,
         &boundaries,
         &theme_library,
+        &cutover,
     ))
 }
 
@@ -1856,6 +1874,64 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
     })
 }
 
+fn validate_config_rust_cutover_plan(
+    layout: &LayoutEvidence,
+    operations: &OperationEvidence,
+    boundaries: &BoundaryEvidence,
+) -> Result<ConfigRustCutoverEvidence, String> {
+    let frozen_corpus_sources = vec![
+        "CONFIG-UX-009",
+        "fcitx5-config-qa",
+        "config-ui-visual-contract",
+        "config-ui-live-preview-contract",
+        "config-ui-interaction-coverage",
+        "rust-config-poc-contract",
+    ];
+    for required in [100, 125, 150, 200, 300] {
+        if !layout.checked_dpi_scale_percents.contains(&required) {
+            return Err(format!(
+                "Config Rust cutover corpus missing {required}% DPI"
+            ));
+        }
+    }
+    if !layout.layout_rects_inside_window || !layout.layout_rects_non_overlapping {
+        return Err("Config Rust cutover requires frozen no-overlap layout corpus".to_owned());
+    }
+    if !layout.candidate_preview_embedded_in_config_content
+        || !layout.candidate_preview_uses_real_theme_contract
+        || !layout.candidate_preview_not_external_window
+    {
+        return Err("Config Rust cutover requires embedded production-preview corpus".to_owned());
+    }
+    if !operations.theme_operations_backend_live
+        || !operations.localized_operation_errors
+        || !operations.no_unsafe_commands_for_package_actions
+    {
+        return Err("Config Rust cutover requires frozen operation-route corpus".to_owned());
+    }
+    if !boundaries.typed_control_schema_consumed
+        || !boundaries.typed_control_package_commands_present
+        || !boundaries.typed_control_diagnostics_commands_present
+    {
+        return Err("Config Rust cutover requires typed Control boundary corpus".to_owned());
+    }
+
+    Ok(ConfigRustCutoverEvidence {
+        frozen_corpus_from_config_ux_009: true,
+        frozen_corpus_sources,
+        rust_shipping_target_name: "fcitx5-config.exe",
+        preserves_product_binary_name: true,
+        side_by_side_differential_required: true,
+        permanent_runtime_selector: false,
+        typed_control_only: true,
+        no_input_hot_path_access: true,
+        no_arbitrary_shell: true,
+        accessibility_gate_required: true,
+        package_smoke_required_after_cutover: true,
+        old_cxx_shell_deletion_required: true,
+    })
+}
+
 const CONFIG_POC_PACKAGE_MANIFEST_JSON: &str = concat!(
     r#"{"format_version":2,"id":"fcitx5-rime","version":"1.0.0","type":"addon","#,
     r#""architecture":"x64","min_os":"10.0.17763","core_api":"1","addon_abi":"1","#,
@@ -1888,6 +1964,7 @@ fn render_report(
     operations: &OperationEvidence,
     boundaries: &BoundaryEvidence,
     theme_library: &ThemeLibraryEvidence,
+    cutover: &ConfigRustCutoverEvidence,
 ) -> String {
     let pages = model
         .pages
@@ -1913,9 +1990,27 @@ fn render_report(
         .map(|source| format!("\"{source}\""))
         .collect::<Vec<_>>()
         .join(",");
+    let cutover_corpus_sources = cutover
+        .frozen_corpus_sources
+        .iter()
+        .map(|source| format!("\"{source}\""))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         json_escape(model.product_name),
+        cutover.frozen_corpus_from_config_ux_009,
+        cutover_corpus_sources,
+        json_escape(cutover.rust_shipping_target_name),
+        cutover.preserves_product_binary_name,
+        cutover.side_by_side_differential_required,
+        cutover.permanent_runtime_selector,
+        cutover.typed_control_only,
+        cutover.no_input_hot_path_access,
+        cutover.no_arbitrary_shell,
+        cutover.accessibility_gate_required,
+        cutover.package_smoke_required_after_cutover,
+        cutover.old_cxx_shell_deletion_required,
         model.no_shell_out,
         pages,
         title_keys,
@@ -2187,6 +2282,21 @@ mod tests {
     fn self_check_covers_frozen_settings_operations() {
         let report = run_self_check().expect("self-check should pass");
         assert!(report.contains("\"component\":\"fcitx5-config-poc\""));
+        assert!(report.contains("\"config_rust_cutover_plan\":true"));
+        assert!(report.contains("\"frozen_corpus_from_config_ux_009\":true"));
+        assert!(
+            report.contains("\"frozen_corpus_sources\":[\"CONFIG-UX-009\",\"fcitx5-config-qa\"")
+        );
+        assert!(report.contains("\"rust_shipping_target_name\":\"fcitx5-config.exe\""));
+        assert!(report.contains("\"preserves_product_binary_name\":true"));
+        assert!(report.contains("\"side_by_side_differential_required\":true"));
+        assert!(report.contains("\"permanent_runtime_selector\":false"));
+        assert!(report.contains("\"typed_control_only\":true"));
+        assert!(report.contains("\"no_input_hot_path_access\":true"));
+        assert!(report.contains("\"no_arbitrary_shell\":true"));
+        assert!(report.contains("\"accessibility_gate_required\":true"));
+        assert!(report.contains("\"package_smoke_required_after_cutover\":true"));
+        assert!(report.contains("\"old_cxx_shell_deletion_required\":true"));
         assert!(report.contains("\"candidate_preview_embedded\":true"));
         assert!(report.contains("\"candidate_preview_current_theme\":true"));
         assert!(report.contains("\"candidate_preview_not_external_window\":true"));

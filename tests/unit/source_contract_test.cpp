@@ -2002,6 +2002,15 @@ int main(int argc, char** argv) {
         cmakeSource.find("rust-config-poc-window-smoke") == std::string::npos ||
         cmakeSource.find("config-poc-window-smoke.json") == std::string::npos ||
         configPocSource.find("Fcitx5 for Windows Next") == std::string::npos ||
+        configPocSource.find("ConfigRustCutoverEvidence") == std::string::npos ||
+        configPocSource.find("validate_config_rust_cutover_plan") == std::string::npos ||
+        configPocSource.find("config_rust_cutover_plan") == std::string::npos ||
+        configPocSource.find("frozen_corpus_from_config_ux_009") == std::string::npos ||
+        configPocSource.find("side_by_side_differential_required") == std::string::npos ||
+        configPocSource.find("permanent_runtime_selector") == std::string::npos ||
+        configPocSource.find("typed_control_only") == std::string::npos ||
+        configPocSource.find("no_input_hot_path_access") == std::string::npos ||
+        configPocSource.find("old_cxx_shell_deletion_required") == std::string::npos ||
         configPocSource.find("candidate_preview_embedded") == std::string::npos ||
         configPocSource.find("candidate_preview_current_theme") == std::string::npos ||
         configPocSource.find("candidate_preview_not_external_window") == std::string::npos ||

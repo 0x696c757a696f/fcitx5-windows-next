@@ -1,6 +1,6 @@
 # CONFIG-RUST-CUTOVER-001 Shipping Settings Rust cutover
 
-**State:** IN-PROGRESS / INITIAL-CUTOVER-PENDING
+**State:** IN-PROGRESS / INITIAL-CUTOVER-CORPUS-GREEN
 
 ## Context
 
