@@ -734,95 +734,6 @@ bool runControl(const std::vector<std::wstring>& arguments, std::wstring& output
         executableDirectory() / L"fcitx5-control.exe", arguments, output);
 }
 
-bool checkI18n() {
-    Strings english;
-    Strings chinese;
-    const fs::path localeDirectory = executableDirectory() / L"locales";
-    if (!loadLocale(localeDirectory / L"en-US.json", english) ||
-        !loadLocale(localeDirectory / L"zh-CN.json", chinese) || english.size() != chinese.size())
-        return false;
-    for (const auto& [key, value] : english) {
-        if (value.empty() || !chinese.contains(key) || chinese.at(key).empty())
-            return false;
-    }
-    static constexpr std::array requiredKeys{
-        "language.hint",
-        "language.selector",
-        "language.option.system",
-        "language.option.en-US",
-        "language.option.zh-CN",
-        "language.restart_required",
-        "operation.status.idle",
-        "operation.status.running",
-        "operation.status.success",
-        "operation.status.warning",
-        "operation.status.failure",
-        "operation.settings.operation_inventory",
-        "operation.input_methods.refresh",
-        "operation.input_methods.set_default",
-        "operation.appearance.apply",
-        "operation.appearance.reset",
-        "operation.packages.refresh_local",
-        "operation.packages.refresh_online",
-        "operation.packages.install_update",
-        "operation.packages.enable_disable",
-        "operation.packages.remove",
-        "operation.diagnostics.recheck",
-        "operation.diagnostics.repair",
-        "packages.official_unconfigured",
-        "packages.missing_key",
-        "packages.trust_failed",
-        "packages.revoked_key",
-        "packages.rollback_blocked",
-        "packages.state.bundled",
-        "packages.state.disabled",
-        "packages.state.enabled",
-        "packages.state.update_available",
-        "packages.state.available_online",
-        "packages.state.trust_failed",
-        "packages.state.incompatible",
-        "packages.state.pending_restart",
-        "packages.state.unavailable",
-        "theme.action.duplicate",
-        "theme.action.import",
-        "theme.action.export",
-        "theme.action.delete",
-        "theme.operation.delete_readonly",
-        "theme.operation.duplicated",
-        "theme.operation.imported",
-        "theme.operation.exported",
-        "theme.operation.deleted",
-        "theme.dialog.import.title",
-        "theme.dialog.export.title",
-        "theme.dialog.delete.title",
-        "theme.dialog.delete.body",
-        "dialog.reset_appearance.title",
-        "dialog.reset_appearance.body",
-        "dialog.remove_package.title",
-        "dialog.remove_package.body",
-        "dialog.repair.title",
-        "dialog.repair.body",
-        "dialog.language_restart.title",
-        "dialog.language_restart.body",
-        "dialog.trust_failure.title",
-        "dialog.trust_failure.body",
-        "dialog.button.ok",
-        "dialog.button.cancel",
-        "dialog.button.continue"};
-    for (const auto* key : requiredKeys) {
-        if (!english.contains(key) || !chinese.contains(key) || english.at(key).empty() ||
-            chinese.at(key).empty())
-            return false;
-    }
-    return true;
-}
-
-bool checkResources() {
-    std::wstring output;
-    return fcitx::windows::config::runExecutable(
-        executableDirectory() / L"fcitx5-ui.exe", {L"--self-test", L"--safe-mode"}, output);
-}
-
 constexpr int kStartup = 100;
 constexpr int kAppearance = 101;
 constexpr int kTheme = 102;
@@ -5011,6 +4922,23 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
 
 CAppModule _Module;
 
+bool isRustConfigBackendHeadlessCommand(std::wstring_view command) {
+    return command == L"--check-i18n" || command == L"--check-resources" ||
+           command == L"--self-test" || command == L"--ui-contract-test" ||
+           command == L"--ui-interaction-test" || command == L"--ui-visual-contract-test" ||
+           command == L"--ui-live-preview-contract-test";
+}
+
+int runRustConfigBackendHeadless(std::wstring_view command) {
+    if (command.empty())
+        return 1;
+    const auto backend = executableDirectory() / L"fcitx5-config-rust.exe";
+    std::wstring ignoredOutput;
+    const bool passed = fcitx::windows::config::runExecutable(
+        backend, {std::wstring(command)}, ignoredOutput, 120'000, 2U * 1024U * 1024U);
+    return passed ? 0 : 2;
+}
+
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR commandLine,
                     _In_ int showCommand) {
     enableDpiAwareness();
@@ -5019,12 +4947,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     if (!parsedCommandLine.valid)
         return 1;
     const std::wstring_view command(parsedCommandLine.command);
-    if (command == L"--check-i18n")
-        return checkI18n() ? 0 : 2;
-    if (command == L"--check-resources")
-        return checkResources() ? 0 : 2;
-    if (command == L"--self-test")
-        return checkI18n() && checkResources() ? 0 : 2;
+    if (isRustConfigBackendHeadlessCommand(command))
+        return runRustConfigBackendHeadless(command);
     const bool uiContractTest = command == L"--ui-contract-test";
     const bool uiInteractionTest = command == L"--ui-interaction-test";
     const bool uiVisualContractTest = command == L"--ui-visual-contract-test";

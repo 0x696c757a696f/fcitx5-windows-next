@@ -1888,6 +1888,7 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "tools/test-config-rust-shipping-lineage.ps1");
     const auto configRustLegacyCliScript =
         read_text(sourceRoot / "tools/test-config-rust-legacy-cli.ps1");
+    const auto stagePackageScript = read_text(sourceRoot / "tools/stage-package.ps1");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     const auto controlPackageIntegrationSource =
         read_text(sourceRoot / "tests/integration/control_package_integration_test.cpp");
@@ -1896,7 +1897,6 @@ int main(int argc, char** argv) {
         configSource.find("--ui-visual-contract-test") == std::string::npos ||
         configSource.find("--ui-live-preview-contract-test") == std::string::npos ||
         configSource.find("ensureProductionPreview()") == std::string::npos ||
-        configSource.find("fcitx5-ui.exe") == std::string::npos ||
         configSource.find("#include \"candidate_layout.h\"") != std::string::npos ||
         configSource.find("#include \"config_model.h\"") == std::string::npos ||
         configSource.find("fcitx::windows::ui::layout(input)") == std::string::npos ||
@@ -2169,6 +2169,17 @@ int main(int argc, char** argv) {
         configPocSource.find("--ui-visual-contract-test") == std::string::npos ||
         configPocSource.find("--ui-live-preview-contract-test") == std::string::npos ||
         configPocSource.find("--ui-interaction-test") == std::string::npos ||
+        configSource.find("isRustConfigBackendHeadlessCommand") == std::string::npos ||
+        configSource.find("runRustConfigBackendHeadless") == std::string::npos ||
+        configSource.find("fcitx5-config-rust.exe") == std::string::npos ||
+        configSource.find("bool checkI18n()") != std::string::npos ||
+        configSource.find("bool checkResources()") != std::string::npos ||
+        configSource.find("return checkI18n() ? 0 : 2") != std::string::npos ||
+        configSource.find("return checkI18n() && checkResources() ? 0 : 2") !=
+            std::string::npos ||
+        cmakeSource.find("add_dependencies(fcitx5_config_app fcitx5_config_rust_side_by_side)") ==
+            std::string::npos ||
+        stagePackageScript.find("fcitx5-config-rust.exe") == std::string::npos ||
         cmakeSource.find("config-rust-legacy-headless-cli") == std::string::npos ||
         cmakeSource.find("test-config-rust-legacy-cli.ps1") == std::string::npos ||
         configRustLegacyCliScript.find("legacy_config_cli_compat") == std::string::npos ||

@@ -654,6 +654,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building side-by-side Rust fcitx5-config-rust executable")
+add_dependencies(fcitx5_config_app fcitx5_config_rust_side_by_side)
 
 add_library(fcitx5_candidate_layout INTERFACE)
 add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
