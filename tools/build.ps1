@@ -245,7 +245,7 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
   $preset = Get-PresetName $TargetArchitecture
   $analyzeValue = if ($Analyze) { 'ON' } else { 'OFF' }
   $configureArguments = @('--preset', $preset, "-DFCITX_ENABLE_MSVC_ANALYZE=$analyzeValue")
-  if ($env:FCITX_ENABLE_SCCACHE -eq '1') {
+  if ($env:FCITX_ENABLE_SCCACHE -eq '1' -and $TargetArchitecture -ne 'arm64') {
     $sccacheCommand = Get-Command sccache -ErrorAction SilentlyContinue
     if (-not $sccacheCommand) {
       throw 'FCITX_ENABLE_SCCACHE=1 requires sccache on PATH.'
@@ -254,6 +254,15 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
     $configureArguments += @(
       "-DCMAKE_C_COMPILER_LAUNCHER=$sccachePath",
       "-DCMAKE_CXX_COMPILER_LAUNCHER=$sccachePath"
+    )
+  } elseif ($TargetArchitecture -eq 'arm64') {
+    # GitHub's x64 Windows runners cross-compile ARM64 with clang-cl and PCH.
+    # sccache 0.17.0 can intermittently drop that server connection, causing
+    # the policy lane to fail before tests are reached. Keep ARM64 deterministic
+    # and still use clang-cl/lld/Ninja; x64/x86 retain the compiler cache.
+    $configureArguments += @(
+      '-DCMAKE_C_COMPILER_LAUNCHER=',
+      '-DCMAKE_CXX_COMPILER_LAUNCHER='
     )
   }
   Invoke-Native $cmake $configureArguments

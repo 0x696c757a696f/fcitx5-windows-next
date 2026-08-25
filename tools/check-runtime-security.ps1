@@ -32,8 +32,21 @@ if (-not $SourceOnly) {
     Select-Object -First 1 -ExpandProperty FullName
   if (-not $dumpbin) { throw 'dumpbin.exe was not found in the pinned Visual Studio toolset.' }
 
-  $presetKind = if ($Configuration -eq 'Release') { 'release' } else { 'dev' }
-  $binaryRoot = Join-Path $repoRoot "out/build/windows-$Architecture-$presetKind/$Configuration"
+  $presetKinds = if ($Configuration -eq 'Release') { @('release', 'dev') } else { @('dev') }
+  $binaryRoot = $null
+  foreach ($presetKind in $presetKinds) {
+    $candidateRoot = Join-Path $repoRoot "out/build/windows-$Architecture-$presetKind/$Configuration"
+    if (Test-Path -LiteralPath $candidateRoot -PathType Container) {
+      $binaryRoot = $candidateRoot
+      break
+    }
+  }
+  if (-not $binaryRoot) {
+    $expected = ($presetKinds | ForEach-Object {
+        Join-Path $repoRoot "out/build/windows-$Architecture-$_/$Configuration"
+      }) -join ', '
+    throw "Build output directory is missing for PE audit; expected one of: $expected"
+  }
   $binaries = @(
     (Join-Path $binaryRoot 'fcitx5-tsf.dll'),
     (Join-Path $binaryRoot 'fcitx5-launcher.exe'),
