@@ -28,11 +28,13 @@ $environment = [ordered]@{
   FCITX_ENABLE_SCCACHE = '1'
   SCCACHE_CACHE_SIZE = '30G'
   SCCACHE_IGNORE_SERVER_IO_ERROR = '1'
+  SCCACHE_IDLE_TIMEOUT = '0'
 }
 
 if ($useGitHubSccache) {
   $environment.RUSTC_WRAPPER = 'sccache'
   $environment.SCCACHE_GHA_ENABLED = 'true'
+  $environment.FCITX_CMAKE_BUILD_PARALLEL = '2'
 } else {
   [Environment]::SetEnvironmentVariable('CARGO_INCREMENTAL', $null, 'Process')
   Remove-Item Env:CARGO_INCREMENTAL -ErrorAction SilentlyContinue

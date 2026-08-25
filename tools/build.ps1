@@ -262,8 +262,15 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
   Invoke-Native $cmake $configureArguments
   # Keep MSVC child-process pressure bounded. Unbounded --parallel can fail
   # nondeterministically with D8040 on constrained runners.
+  $buildParallel = 4
+  if (-not [string]::IsNullOrWhiteSpace($env:FCITX_CMAKE_BUILD_PARALLEL)) {
+    if (-not [int]::TryParse($env:FCITX_CMAKE_BUILD_PARALLEL, [ref] $buildParallel) -or
+        $buildParallel -lt 1 -or $buildParallel -gt 64) {
+      throw 'FCITX_CMAKE_BUILD_PARALLEL must be an integer from 1 through 64.'
+    }
+  }
   Invoke-Native $cmake @('--build', (Get-BuildDirectory $TargetArchitecture), '--config',
-                         $Configuration, '--parallel', '4')
+                         $Configuration, '--parallel', ([string] $buildParallel))
 }
 
 function Invoke-Tests([string] $TargetArchitecture) {

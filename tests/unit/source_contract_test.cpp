@@ -2478,6 +2478,8 @@ int main(int argc, char** argv) {
         buildScript.find("SCCACHE_IGNORE_SERVER_IO_ERROR") == std::string::npos ||
         buildScript.find("CMAKE_C_COMPILER_LAUNCHER=$sccachePath") ==
             std::string::npos ||
+        buildScript.find("FCITX_CMAKE_BUILD_PARALLEL") == std::string::npos ||
+        buildScript.find("must be an integer from 1 through 64") == std::string::npos ||
         buildScript.find("$env:GITHUB_ACTIONS -eq 'true' -or $TargetArchitecture -eq 'arm64'") !=
             std::string::npos ||
         buildScript.find("'-DCMAKE_C_COMPILER_LAUNCHER='") != std::string::npos ||
@@ -2485,11 +2487,15 @@ int main(int argc, char** argv) {
         ciCacheScript.find("CARGO_INCREMENTAL = '0'") != std::string::npos ||
         ciCacheScript.find("SCCACHE_CACHE_SIZE = '30G'") == std::string::npos ||
         ciCacheScript.find("SCCACHE_IGNORE_SERVER_IO_ERROR = '1'") == std::string::npos ||
+        ciCacheScript.find("SCCACHE_IDLE_TIMEOUT = '0'") == std::string::npos ||
+        ciCacheScript.find("FCITX_CMAKE_BUILD_PARALLEL = '2'") == std::string::npos ||
         ciCacheScript.find("ACTIONS_RUNTIME_TOKEN") == std::string::npos ||
         ciCacheScript.find("GITHUB_ACTIONS") == std::string::npos ||
         coreWorkflow.find("Restart-Sccache") == std::string::npos ||
         coreWorkflow.find("--stop-server") == std::string::npos ||
         coreWorkflow.find("--start-server") == std::string::npos ||
+        coreWorkflow.find("Restart-Sccache\n                Invoke-CoreGate") ==
+            std::string::npos ||
         coreWorkflow.find("retrying once") == std::string::npos ||
         coreWorkflow.find("$maxAttempts = 2") == std::string::npos ||
         cargoManifest.find("debug = \"line-tables-only\"") == std::string::npos ||

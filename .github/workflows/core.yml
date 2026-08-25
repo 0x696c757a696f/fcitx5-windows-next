@@ -101,6 +101,7 @@ jobs:
             $maxAttempts = 2
             for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
               try {
+                Restart-Sccache
                 Invoke-CoreGate
                 break
               } catch {
