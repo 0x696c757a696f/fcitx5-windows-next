@@ -482,6 +482,69 @@ int runCorpus() {
             "absent pending snapshot must not be taken");
     }
 
+    // E4-3: per-connection session state (handshake + frame validation +
+    // request completion; mirrors the frozen C++ `handleRequest` behavior).
+    {
+        void* session = fcitx5_engine_core_session_create();
+        failures += !expect(session != nullptr, "session create must succeed");
+        // Null destroy is a no-op; null session operations fail closed.
+        fcitx5_engine_core_session_destroy(nullptr);
+        failures += !expect(
+            fcitx5_engine_core_session_begin_hello(nullptr, 1, 77, 77, 100, 100) == 0,
+            "null session hello must fail closed");
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(nullptr, 1, 77, 77, 42, 42) == 0,
+            "null session frame must fail closed");
+        failures += !expect(
+            fcitx5_engine_core_session_complete_request(nullptr, 1) == 0,
+            "null session complete must fail closed");
+        // Hello handshake: session/process mismatch and stale ids rejected.
+        failures += !expect(
+            fcitx5_engine_core_session_begin_hello(session, 1, 78, 77, 100, 100) == 0,
+            "hello with mismatched frame session id must be rejected");
+        failures += !expect(
+            fcitx5_engine_core_session_begin_hello(session, 1, 77, 77, 101, 100) == 0,
+            "hello with mismatched process id must be rejected");
+        failures += !expect(
+            fcitx5_engine_core_session_begin_hello(session, 1, 77, 77, 100, 100) == 1,
+            "valid hello must be accepted");
+        failures += !expect(
+            fcitx5_engine_core_session_begin_hello(session, 2, 77, 77, 100, 100) == 0,
+            "repeat handshake must be rejected");
+        // Non-hello frames require handshake + epoch + session + ordering.
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 43, 42) == 0,
+            "frame with mismatched epoch must be rejected");
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(session, 2, 78, 77, 42, 42) == 0,
+            "frame with mismatched session id must be rejected");
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 42, 42) == 1,
+            "valid frame must be accepted");
+        // Accepted but not completed: retryable (mirrors a dropped request).
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 42, 42) == 1,
+            "uncompleted frame id must remain retryable");
+        failures += !expect(fcitx5_engine_core_session_complete_request(session, 2) == 1,
+                            "completed request must be recorded");
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 42, 42) == 0,
+            "completed request id must be stale");
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(session, 1, 77, 77, 42, 42) == 0,
+            "stale request id must be rejected");
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(session, 3, 77, 77, 42, 42) == 1,
+            "newer request id must be accepted");
+        // A fresh session starts unhandshaken.
+        void* fresh = fcitx5_engine_core_session_create();
+        failures += !expect(
+            fcitx5_engine_core_session_accept_frame(fresh, 1, 77, 77, 42, 42) == 0,
+            "unhandshaken session must reject frames");
+        fcitx5_engine_core_session_destroy(fresh);
+        fcitx5_engine_core_session_destroy(session);
+    }
+
     return failures;
 }
 

@@ -1229,6 +1229,90 @@ fn key_request_timeout_policy() {
 }
 
 // ---------------------------------------------------------------------------
+// E4-3: per-connection session state
+// ---------------------------------------------------------------------------
+
+use super::session::ConnectionSession;
+
+#[test]
+fn session_hello_accepts_valid_first_request() {
+    let mut session = ConnectionSession::new();
+    assert!(session.begin_hello(1, 77, 77, 100, 100));
+    // The hello request id is now the last accepted id; the next frame with a
+    // matching epoch/session and a strictly newer id is accepted.
+    assert!(session.accept_frame(2, 77, 77, 42, 42));
+}
+
+#[test]
+fn session_hello_rejects_repeat_handshake() {
+    let mut session = ConnectionSession::new();
+    assert!(session.begin_hello(1, 77, 77, 100, 100));
+    assert!(!session.begin_hello(2, 77, 77, 100, 100));
+}
+
+#[test]
+fn session_hello_rejects_session_mismatch() {
+    let mut session = ConnectionSession::new();
+    assert!(!session.begin_hello(1, 78, 77, 100, 100)); // frame session differs
+    assert!(!session.begin_hello(1, 77, 78, 100, 100)); // client session differs
+}
+
+#[test]
+fn session_hello_rejects_process_mismatch() {
+    let mut session = ConnectionSession::new();
+    assert!(!session.begin_hello(1, 77, 77, 101, 100));
+}
+
+#[test]
+fn session_hello_rejects_stale_request_id() {
+    let mut session = ConnectionSession::new();
+    assert!(session.begin_hello(5, 77, 77, 100, 100));
+    assert!(!session.begin_hello(5, 77, 77, 100, 100)); // duplicate
+    assert!(!session.begin_hello(4, 77, 77, 100, 100)); // stale
+}
+
+#[test]
+fn session_accept_frame_requires_handshake() {
+    let session = ConnectionSession::new();
+    assert!(!session.accept_frame(1, 77, 77, 42, 42));
+}
+
+#[test]
+fn session_accept_frame_checks_epoch_and_session() {
+    let mut session = ConnectionSession::new();
+    assert!(session.begin_hello(1, 77, 77, 100, 100));
+    assert!(!session.accept_frame(2, 77, 77, 43, 42)); // epoch mismatch
+    assert!(!session.accept_frame(2, 78, 77, 42, 42)); // session mismatch
+    assert!(session.accept_frame(2, 77, 77, 42, 42));
+}
+
+#[test]
+fn session_accept_frame_rejects_stale_after_complete() {
+    let mut session = ConnectionSession::new();
+    assert!(session.begin_hello(1, 77, 77, 100, 100));
+    assert!(session.accept_frame(3, 77, 77, 42, 42));
+    // Accepted but not completed yet: retryable (mirrors a dropped request).
+    assert!(session.accept_frame(3, 77, 77, 42, 42));
+    session.complete_request(3);
+    assert!(!session.accept_frame(3, 77, 77, 42, 42)); // duplicate
+    assert!(!session.accept_frame(2, 77, 77, 42, 42)); // stale
+    assert!(session.accept_frame(4, 77, 77, 42, 42));
+}
+
+#[test]
+fn session_complete_request_advances_last_accepted_id() {
+    let mut session = ConnectionSession::new();
+    assert!(session.begin_hello(1, 77, 77, 100, 100));
+    // A frame can be accepted but never completed (dropped) without advancing
+    // the last accepted id, so its id can be retried.
+    assert!(session.accept_frame(2, 77, 77, 42, 42));
+    assert!(session.accept_frame(2, 77, 77, 42, 42)); // still accepted (not completed)
+    session.complete_request(2);
+    assert!(!session.accept_frame(2, 77, 77, 42, 42)); // now stale
+    assert!(session.accept_frame(3, 77, 77, 42, 42));
+}
+
+// ---------------------------------------------------------------------------
 // E5-1: snapshot/status canonicalization
 // ---------------------------------------------------------------------------
 

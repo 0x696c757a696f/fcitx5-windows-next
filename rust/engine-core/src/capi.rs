@@ -251,6 +251,144 @@ pub extern "C" fn fcitx5_engine_core_key_request_timeout_ms(revision: u64) -> u3
 }
 
 // ---------------------------------------------------------------------------
+// E4-3: per-connection session state
+//
+// The engine server's per-connection session (handshake completion and last
+// accepted request id) is Rust-owned; `fcitx_engine_main.cpp`
+// (`handleRequest`/`serve`) only creates the session per connection and
+// applies it through the ABI below. Every entry point is contained behind a
+// panic boundary that fails closed (returns 0) instead of unwinding across
+// the FFI edge, and null sessions are rejected.
+// ---------------------------------------------------------------------------
+
+/// Creates a per-connection engine session. Returns an opaque handle the
+/// caller must free with `fcitx5_engine_core_session_destroy`, or null when
+/// allocation fails.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_engine_core_session_create() -> *mut c_void {
+    let result = panic::catch_unwind(|| {
+        Box::into_raw(Box::new(crate::session::ConnectionSession::new())) as *mut c_void
+    });
+    result.unwrap_or(std::ptr::null_mut())
+}
+
+/// Frees a session created by `fcitx5_engine_core_session_create`. Null is a
+/// no-op.
+///
+/// # Safety
+/// `session` must be null or a pointer returned by
+/// `fcitx5_engine_core_session_create` that has not been freed before.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_session_destroy(session: *mut c_void) {
+    if session.is_null() {
+        return;
+    }
+    let _ = panic::catch_unwind(|| {
+        // SAFETY: caller guarantees the handle came from `session_create`.
+        unsafe {
+            drop(Box::from_raw(
+                session as *mut crate::session::ConnectionSession,
+            ));
+        }
+    });
+}
+
+/// Hello handshake through the Rust session. Returns 1 when the hello is
+/// accepted (the session becomes handshake-complete and the request id is
+/// recorded), 0 on rejection (session already complete, stale request id,
+/// session/process mismatch) or a null session.
+///
+/// # Safety
+/// `session` must be a valid live handle or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_session_begin_hello(
+    session: *mut c_void,
+    request_id: u64,
+    frame_session_id: u64,
+    client_session_id: u64,
+    request_process_id: u32,
+    client_process_id: u32,
+) -> i32 {
+    if session.is_null() {
+        return 0;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller guarantees the handle came from `session_create`.
+        let session = unsafe { &mut *(session as *mut crate::session::ConnectionSession) };
+        session.begin_hello(
+            request_id,
+            frame_session_id,
+            client_session_id,
+            request_process_id,
+            client_process_id,
+        )
+    }));
+    match result {
+        Ok(true) => 1,
+        Ok(false) | Err(_) => 0,
+    }
+}
+
+/// Accepts a non-hello frame through the Rust session. Returns 1 when the
+/// frame passes the handshake-complete / epoch / session-id / ordering
+/// checks, 0 otherwise (or a null session).
+///
+/// # Safety
+/// `session` must be a valid live handle or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_session_accept_frame(
+    session: *mut c_void,
+    request_id: u64,
+    frame_session_id: u64,
+    client_session_id: u64,
+    frame_epoch: u64,
+    engine_epoch: u64,
+) -> i32 {
+    if session.is_null() {
+        return 0;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller guarantees the handle came from `session_create`.
+        let session = unsafe { &*(session as *const crate::session::ConnectionSession) };
+        session.accept_frame(
+            request_id,
+            frame_session_id,
+            client_session_id,
+            frame_epoch,
+            engine_epoch,
+        )
+    }));
+    match result {
+        Ok(true) => 1,
+        Ok(false) | Err(_) => 0,
+    }
+}
+
+/// Records a successfully processed request id through the Rust session.
+/// Returns 1 when recorded, 0 for a null session.
+///
+/// # Safety
+/// `session` must be a valid live handle or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_session_complete_request(
+    session: *mut c_void,
+    request_id: u64,
+) -> i32 {
+    if session.is_null() {
+        return 0;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller guarantees the handle came from `session_create`.
+        let session = unsafe { &mut *(session as *mut crate::session::ConnectionSession) };
+        session.complete_request(request_id);
+    }));
+    match result {
+        Ok(()) => 1,
+        Err(_) => 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // E5-1: snapshot/status canonicalization
 // ---------------------------------------------------------------------------
 

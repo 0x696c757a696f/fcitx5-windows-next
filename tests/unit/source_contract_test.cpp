@@ -227,16 +227,25 @@ int main(int argc, char** argv) {
         nativeEngineCmakeSource.find("x86_64-pc-windows-gnu") == std::string::npos) {
         return fail("ENGINE-E2: native-engine lane must link the Rust protocol/engine staticlibs (GNU ABI)");
     }
-    // ENGINE-E4: the engine-server session epoch, request ordering, and key
-    // deadline policy must stay Rust-owned in `fcitx_engine_main.cpp`.
+    // ENGINE-E4: the engine-server session epoch, request ordering, deadline
+    // policy, and per-connection session state must stay Rust-owned in
+    // `fcitx_engine_main.cpp`. The per-connection session (handshake
+    // completion + last accepted request id) is a Rust session object; the
+    // epoch/ordering validators are no longer called directly from C++.
     const auto engineMainSource = read_text(sourceRoot / "src/engine/fcitx_engine_main.cpp");
     if (engineMainSource.find("fcitx5_engine_core_generate_engine_epoch") == std::string::npos ||
-        engineMainSource.find("fcitx5_engine_core_validate_engine_epoch") == std::string::npos ||
-        engineMainSource.find("fcitx5_engine_core_accept_frame_sequence") == std::string::npos ||
         engineMainSource.find("fcitx5_engine_core_key_request_timeout_ms") == std::string::npos ||
+        engineMainSource.find("fcitx5_engine_core_session_create") == std::string::npos ||
+        engineMainSource.find("fcitx5_engine_core_session_accept_frame") == std::string::npos ||
+        engineMainSource.find("fcitx5_engine_core_session_begin_hello") == std::string::npos ||
+        engineMainSource.find("fcitx5_engine_core_session_complete_request") == std::string::npos ||
+        engineMainSource.find("bool handshakeComplete") != std::string::npos ||
+        engineMainSource.find("std::uint64_t lastRequestId") != std::string::npos ||
         engineMainSource.find("GetSystemTimeAsFileTime") != std::string::npos ||
-        engineMainSource.find("frame.metadata.requestId <= lastRequestId") != std::string::npos) {
-        return fail("ENGINE-E4: engine-server session epoch, request ordering, and deadline policy must be Rust-owned in fcitx_engine_main.cpp");
+        engineMainSource.find("frame.metadata.requestId <= lastRequestId") != std::string::npos ||
+        engineMainSource.find("fcitx5_engine_core_validate_engine_epoch") != std::string::npos ||
+        engineMainSource.find("fcitx5_engine_core_accept_frame_sequence") != std::string::npos) {
+        return fail("ENGINE-E4: engine-server session epoch, request ordering, deadline policy, and per-connection session state must be Rust-owned in fcitx_engine_main.cpp");
     }
     const auto uiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
     const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");

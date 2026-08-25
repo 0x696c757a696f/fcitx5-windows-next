@@ -183,35 +183,41 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
                                         std::atomic<std::uint64_t>& nextResponseId,
                                         const platform::ProcessIdentity& clientIdentity,
                                         std::uint64_t connectionId,
-                                        bool& handshakeComplete, std::uint64_t& lastRequestId,
+                                        void* session,
                                         engine::FcitxDispatcher& dispatcher,
                                         engine::PresentationPublisher& presentation,
                                         const platform::RuntimeIdentity& serverIdentity,
                                         const std::wstring& uiExecutable) {
     protocol::FrameView frame;
-    // E4-2: request ordering is Rust-owned (strictly newer ids accepted).
-    if (!protocol::decodeFrame(requestBytes, frame) ||
-        fcitx5_engine_core_accept_frame_sequence(frame.metadata.requestId, lastRequestId) == 0) {
+    if (!protocol::decodeFrame(requestBytes, frame)) {
         return {};
     }
     if (frame.type == protocol::MessageType::helloRequest) {
         protocol::HelloRequest request;
-        if (!protocol::decode(frame, request) || handshakeComplete ||
-            request.metadata.sessionId != clientIdentity.sessionId ||
-            request.clientProcessId != clientIdentity.processId) {
+        // E4-3: the hello handshake is Rust-owned (repeat handshake, stale
+        // request id, and session/process mismatch are rejected; on success
+        // the session becomes handshake-complete and records the request id).
+        if (!protocol::decode(frame, request) ||
+            fcitx5_engine_core_session_begin_hello(
+                session, request.metadata.requestId, request.metadata.sessionId,
+                clientIdentity.sessionId, request.clientProcessId,
+                clientIdentity.processId) == 0) {
             return {};
         }
-        handshakeComplete = true;
-        lastRequestId = request.metadata.requestId;
         return protocol::encode(protocol::HelloResponse{
             protocol::Metadata{nextResponseId.fetch_add(1), request.metadata.requestId, engineEpoch,
                                request.metadata.sessionId, 0, 0, 0},
             protocol::Status::ok, 64});
     }
-    if (!handshakeComplete)
+    // E4-3: every non-hello frame is validated by the Rust per-connection
+    // session (handshake complete, engine-epoch match, session-id match, and
+    // strictly-newer request id); the C++ handshakeComplete/lastRequestId
+    // locals are deleted.
+    if (fcitx5_engine_core_session_accept_frame(
+            session, frame.metadata.requestId, frame.metadata.sessionId,
+            clientIdentity.sessionId, frame.metadata.engineEpoch, engineEpoch) == 0) {
         return {};
-    if (fcitx5_engine_core_validate_engine_epoch(frame.metadata.engineEpoch, engineEpoch) == 0 ||
-        frame.metadata.sessionId != clientIdentity.sessionId) return {};
+    }
 
     if (frame.type == protocol::MessageType::keyRequest) {
         protocol::KeyRequest request;
@@ -223,7 +229,8 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
                 engine::ClientContextKey{clientIdentity.processId, connectionId,
                                          request.metadata.contextId},
                 request, runtimeResult, timeout)) return {};
-        lastRequestId = request.metadata.requestId;
+        fcitx5_engine_core_session_complete_request(session,
+                                                    request.metadata.requestId);
         auto response = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
                                           engineEpoch, runtimeResult);
         presentation.publish(response);
@@ -237,7 +244,8 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
             !protocol::decode(frame, request) ||
             !dispatcher.selectCandidate(request.targetProcessId, request, runtimeResult,
                                         std::chrono::milliseconds(75))) return {};
-        lastRequestId = request.metadata.requestId;
+        fcitx5_engine_core_session_complete_request(session,
+                                                    request.metadata.requestId);
         auto state = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
                                        engineEpoch, runtimeResult);
         presentation.publish(state);
@@ -259,7 +267,8 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
                 engine::ClientContextKey{clientIdentity.processId, connectionId,
                                          request.metadata.contextId},
                 request, runtimeResult, std::chrono::milliseconds(75))) return {};
-        lastRequestId = request.metadata.requestId;
+        fcitx5_engine_core_session_complete_request(session,
+                                                    request.metadata.requestId);
         return protocol::encode(makeStateResponse(
             request.metadata, nextResponseId.fetch_add(1), engineEpoch, runtimeResult));
     }
@@ -270,7 +279,8 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
             !dispatcher.queryInputMethodStatus(status, std::chrono::milliseconds(75))) {
             return {};
         }
-        lastRequestId = request.metadata.requestId;
+        fcitx5_engine_core_session_complete_request(session,
+                                                    request.metadata.requestId);
         return protocol::encode(makeEngineStatusResponse(
             request.metadata, nextResponseId.fetch_add(1), engineEpoch, status));
     }
@@ -372,20 +382,21 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                 if (ipc::verifyPipeClient(pipe, identity, &clientIdentity)) {
                     const std::uint64_t connectionId =
                         nextConnectionId.fetch_add(1, std::memory_order_relaxed);
-                    bool handshakeComplete = false;
-                    std::uint64_t lastRequestId = 0;
+                    // E4-3: one Rust-owned session per connection
+                    // (handshake completion + last accepted request id).
+                    void* session = fcitx5_engine_core_session_create();
                     std::vector<std::uint8_t> request;
                     while (readFrame(pipe, request, stopEvent)) {
                         auto response = handleRequest(request, engineEpoch, nextResponseId,
                                                       clientIdentity, connectionId,
-                                                      handshakeComplete,
-                                                      lastRequestId, dispatcher, presentation,
+                                                      session, dispatcher, presentation,
                                                       identity, uiExecutable);
                         if (response.empty() || !transfer(pipe, true, response.data(),
                                                           response.size(), 100, stopEvent)) {
                             break;
                         }
                     }
+                    fcitx5_engine_core_session_destroy(session);
                     dispatcher.forgetConnection(connectionId);
                 }
                 DisconnectNamedPipe(pipe);

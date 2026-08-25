@@ -633,6 +633,7 @@ mod tests;
 
 pub mod capi;
 pub mod navigation;
+pub mod session;
 pub mod snapshot;
 
 // ---------------------------------------------------------------------------

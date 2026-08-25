@@ -901,3 +901,126 @@ fn validate_snapshot_c_abi() {
         0
     );
 }
+
+// ---------------------------------------------------------------------------
+// E4-3: per-connection session ABI
+// ---------------------------------------------------------------------------
+
+use super::{
+    fcitx5_engine_core_session_accept_frame, fcitx5_engine_core_session_begin_hello,
+    fcitx5_engine_core_session_complete_request, fcitx5_engine_core_session_create,
+    fcitx5_engine_core_session_destroy,
+};
+
+fn new_session() -> *mut std::ffi::c_void {
+    fcitx5_engine_core_session_create()
+}
+
+fn free_session(session: *mut std::ffi::c_void) {
+    unsafe { fcitx5_engine_core_session_destroy(session) };
+}
+
+#[test]
+fn session_c_abi_create_destroy_roundtrip() {
+    let session = new_session();
+    assert!(!session.is_null());
+    free_session(session);
+    // Null destroy is a no-op.
+    unsafe { fcitx5_engine_core_session_destroy(std::ptr::null_mut()) };
+}
+
+#[test]
+fn session_c_abi_hello_then_frame() {
+    let session = new_session();
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_begin_hello(session, 1, 77, 77, 100, 100) },
+        1
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 42, 42) },
+        1
+    );
+    // Duplicate handshake rejected.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_begin_hello(session, 3, 77, 77, 100, 100) },
+        0
+    );
+    // Accepted but not completed: still retryable.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 42, 42) },
+        1
+    );
+    // Completed: the same id is now stale.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_complete_request(session, 2) },
+        1
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 42, 42) },
+        0
+    );
+    free_session(session);
+}
+
+#[test]
+fn session_c_abi_handshake_rejections() {
+    let session = new_session();
+    // Session mismatch.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_begin_hello(session, 1, 78, 77, 100, 100) },
+        0
+    );
+    // Process mismatch.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_begin_hello(session, 1, 77, 77, 101, 100) },
+        0
+    );
+    // Valid hello still possible after rejections.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_begin_hello(session, 1, 77, 77, 100, 100) },
+        1
+    );
+    free_session(session);
+}
+
+#[test]
+fn session_c_abi_fails_closed_on_null() {
+    assert_eq!(
+        unsafe {
+            fcitx5_engine_core_session_begin_hello(std::ptr::null_mut(), 1, 77, 77, 100, 100)
+        },
+        0
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_accept_frame(std::ptr::null_mut(), 1, 77, 77, 42, 42) },
+        0
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_complete_request(std::ptr::null_mut(), 1) },
+        0
+    );
+}
+
+#[test]
+fn session_c_abi_complete_request_advances_last_id() {
+    let session = new_session();
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_begin_hello(session, 1, 77, 77, 100, 100) },
+        1
+    );
+    // Accepted but not completed: retryable.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 42, 42) },
+        1
+    );
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_complete_request(session, 2) },
+        1
+    );
+    // Now stale.
+    assert_eq!(
+        unsafe { fcitx5_engine_core_session_accept_frame(session, 2, 77, 77, 42, 42) },
+        0
+    );
+    free_session(session);
+}

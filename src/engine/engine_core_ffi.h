@@ -244,6 +244,31 @@ int fcitx5_engine_core_accept_frame_sequence(std::uint64_t requestId,
                                              std::uint64_t lastRequestId);
 std::uint32_t fcitx5_engine_core_key_request_timeout_ms(std::uint64_t revision);
 
+// E4-3: per-connection session state. The engine server creates one opaque
+// session per connection (`session_create`, freed with `session_destroy`);
+// `begin_hello` performs the hello handshake (rejects repeat handshake,
+// session/process mismatch and stale request ids, then marks the session
+// complete), `accept_frame` validates every non-hello frame (handshake
+// complete, epoch match, session id match, strictly-newer request id), and
+// `complete_request` records a successfully processed request id so its id
+// cannot be retried. All functions return 1 on acceptance and 0 on rejection
+// or a null session; the C++ `handshakeComplete`/`lastRequestId` locals are
+// deleted.
+void* fcitx5_engine_core_session_create(void);
+void fcitx5_engine_core_session_destroy(void* session);
+int fcitx5_engine_core_session_begin_hello(void* session, std::uint64_t requestId,
+                                           std::uint64_t frameSessionId,
+                                           std::uint64_t clientSessionId,
+                                           std::uint32_t requestProcessId,
+                                           std::uint32_t clientProcessId);
+int fcitx5_engine_core_session_accept_frame(void* session, std::uint64_t requestId,
+                                            std::uint64_t frameSessionId,
+                                            std::uint64_t clientSessionId,
+                                            std::uint64_t frameEpoch,
+                                            std::uint64_t engineEpoch);
+int fcitx5_engine_core_session_complete_request(void* session,
+                                                std::uint64_t requestId);
+
 // E5-1: snapshot/status canonicalization. `content_locale_for_input_method`
 // maps an input-method id to the canonical content-locale code;
 // `status_short_label` writes the canonical short label (two ASCII bytes or
