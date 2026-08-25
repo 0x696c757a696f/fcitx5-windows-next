@@ -105,6 +105,18 @@ $requiredTrueFields = @(
   'candidate_preview_not_external_window',
   'candidate_preview_embedded_in_config_content',
   'candidate_preview_uses_real_theme_contract',
+  'candidate_preview_embedded_child_surface',
+  'candidate_preview_not_external_popup_window',
+  'candidate_preview_uses_shipping_candidate_renderer_path',
+  'candidate_preview_consumes_candidate_model_layout_render_contract',
+  'candidate_preview_uses_resolved_theme_snapshot',
+  'candidate_preview_layout_driven_paint',
+  'candidate_preview_final_pixels_from_renderer_path',
+  'candidate_preview_layout_rects_inside_window',
+  'candidate_preview_layout_rects_non_overlapping',
+  'candidate_preview_font_fallback_parity',
+  'candidate_preview_emoji_color_render_path_parity',
+  'candidate_preview_sample_input_only_synthetic',
   'theme_library_model_rust_owned',
   'font_selection',
   'advanced_appearance_controls',
@@ -145,6 +157,37 @@ if ($rust.rust_shipping_target_name -ne 'fcitx5-config.exe') {
 }
 if ($rust.permanent_runtime_selector -ne $false) {
   throw 'Rust side-by-side report must not declare a permanent runtime selector'
+}
+if ($rust.candidate_preview_renderer_contract -ne 'shipping-candidate-real-preview-host-path') {
+  throw "Rust side-by-side report did not use the real Candidate UI preview host contract"
+}
+if ($rust.candidate_preview_host_kind -ne 'config-child-candidate-renderer-host') {
+  throw "Rust side-by-side report did not declare the Config child Candidate renderer host"
+}
+if ($rust.candidate_preview_window_ownership -ne 'config-content-child-surface') {
+  throw "Rust side-by-side report did not keep the preview surface owned by Config content"
+}
+if ($rust.candidate_preview_theme_snapshot_source -ne 'resolved-theme-snapshot-shared-with-candidate-ui') {
+  throw "Rust side-by-side report did not share the resolved Candidate UI theme snapshot"
+}
+if ($rust.candidate_preview_model_contract -ne 'candidate-model-layout-render-segments') {
+  throw "Rust side-by-side report did not consume the CandidateModel/layout/render contract"
+}
+if ($rust.candidate_preview_settings_only_fake_renderer -ne $false) {
+  throw 'Rust side-by-side report must not allow a Settings-only fake renderer'
+}
+if ($rust.candidate_preview_static_screenshot_preview -ne $false) {
+  throw 'Rust side-by-side report must not allow static screenshot preview'
+}
+if ($rust.candidate_preview_send_input -ne $false -or
+    $rust.candidate_preview_global_hooks -ne $false -or
+    $rust.candidate_preview_process_injection -ne $false) {
+  throw 'Rust side-by-side report must not use input simulation or injection for preview'
+}
+foreach ($dpi in 100, 125, 150, 200, 300) {
+  if ($rust.candidate_preview_dpi_parity_scale_percents -notcontains $dpi) {
+    throw "Rust side-by-side report is missing $dpi percent Candidate preview DPI parity"
+  }
 }
 
 $reportObject = [ordered]@{

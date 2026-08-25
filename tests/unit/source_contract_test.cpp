@@ -2043,6 +2043,33 @@ int main(int argc, char** argv) {
         configPocSource.find("candidate_preview_uses_real_theme_contract") ==
             std::string::npos ||
         configPocSource.find("candidate_preview_renderer_contract") == std::string::npos ||
+        configPocSource.find("shipping-candidate-synthetic-preview-path") !=
+            std::string::npos ||
+        configPocSource.find("CandidatePreviewHostEvidence") == std::string::npos ||
+        configPocSource.find("validate_candidate_preview_host") == std::string::npos ||
+        configPocSource.find("config-child-candidate-renderer-host") == std::string::npos ||
+        configPocSource.find("shipping-candidate-real-preview-host-path") ==
+            std::string::npos ||
+        configPocSource.find("config-content-child-surface") == std::string::npos ||
+        configPocSource.find("resolved-theme-snapshot-shared-with-candidate-ui") ==
+            std::string::npos ||
+        configPocSource.find("candidate-model-layout-render-segments") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_settings_only_fake_renderer") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_static_screenshot_preview") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_uses_shipping_candidate_renderer_path") ==
+            std::string::npos ||
+        configPocSource.find(
+            "candidate_preview_consumes_candidate_model_layout_render_contract") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_layout_driven_paint") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_final_pixels_from_renderer_path") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_dpi_parity_scale_percents") ==
+            std::string::npos ||
         configPocSource.find("ThemeLibraryEvidence") == std::string::npos ||
         configPocSource.find("theme_library_model_rust_owned") == std::string::npos ||
         configPocSource.find("theme_inventory_sources") == std::string::npos ||
@@ -2138,6 +2165,16 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configRustDifferentialScript.find("permanent_runtime_selector") == std::string::npos ||
         configRustDifferentialScript.find("layout_rects_non_overlapping") == std::string::npos ||
+        configRustDifferentialScript.find("shipping-candidate-real-preview-host-path") ==
+            std::string::npos ||
+        configRustDifferentialScript.find("shipping-candidate-synthetic-preview-path") !=
+            std::string::npos ||
+        configRustDifferentialScript.find("candidate_preview_settings_only_fake_renderer") ==
+            std::string::npos ||
+        configRustDifferentialScript.find("candidate_preview_static_screenshot_preview") ==
+            std::string::npos ||
+        configRustDifferentialScript.find("candidate_preview_dpi_parity_scale_percents") ==
+            std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||
