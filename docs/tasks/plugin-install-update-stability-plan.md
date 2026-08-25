@@ -2,9 +2,11 @@
 
 **Scope:** Fcitx5 for Windows Next package/add-on lifecycle stability.
 **Created from HEAD:** `d557e4809cb26c0697169c49294fff2cd8126061`
-**Execution state:** PLANNED / not yet executed.
+**Execution state:** QUEUED as `049-PLUGIN-LIFECYCLE-STABILITY-001` / not yet executed.
 
-This plan is intentionally separate from the reopened `REG-CONFIG-VISUAL-001` task. It should be executed after the current Config visual/functionality slice is green, unless a package/add-on failure blocks Config itself.
+This plan is intentionally separate from the current `CONFIG-UX-009` and
+`CONFIG-RUST-CUTOVER-001` tasks. It should be executed after the Config theme/preview behavior
+contract and Rust Config cutover are green, unless a package/add-on failure blocks Config itself.
 
 ## User concern
 
@@ -57,6 +59,20 @@ The repository already has focused lifecycle coverage:
   - updater cleanup of previous generations/artifacts.
 - `package-manifest-path-fuzz-smoke` and `package-path-corpus-fuzz-smoke`
   - package path hardening smoke coverage.
+
+Retained requirements from the removed historical Phase 7 acceptance record:
+
+- package core must reject unknown fields, traversal, ADS/UNC/absolute paths, symlinks, encrypted
+  entries, duplicates, undeclared files, excessive counts/sizes, revoked keys, hash/signature
+  mismatch, architecture/Core API/addon ABI mismatch, missing/cyclic/inexact dependencies, and
+  rollback/downgrade sequences;
+- downloader remains the only component with the package network boundary; package, updater,
+  deployer, provider, engine, UI, Config, and TSF must not receive realtime input data through the
+  package path;
+- update followed by uninstall must remove executable payloads while preserving user-owned and
+  policy-protected package data;
+- online refresh remains blocked unless a production endpoint and trusted keyring are provisioned
+  and verified by the package gate.
 
 ## Execution order
 

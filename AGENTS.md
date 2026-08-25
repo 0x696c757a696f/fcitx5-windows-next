@@ -46,12 +46,14 @@ Architecture defaults:
   explicitly opens more TSF scope.
 - Current state: Candidate model/layout/interaction are Rust-owned; Win32/D2D/DWrite drawing code is
   only a renderer/window adapter until a renderer migration task has equivalent visual/DPI evidence.
-- Current state: Config still has a WTL/Win32 shipping shell, but new Settings state, validation,
-  preview contracts, package/update/control orchestration, operation models, and future UI-domain
-  code must be Rust-first. Existing C++ shell code is an adapter/host, not a reason to add new C++
-  product ownership.
+- Current state: Config still has a WTL/Win32 shipping shell only as a temporary migration adapter.
+  It is not a durable C++ exception. New Settings state, validation, preview contracts,
+  package/update/control orchestration, operation models, and UI-domain code must be Rust-owned.
+  The task queue must keep shrinking and then replacing the C++ Config shell once behavior,
+  accessibility, DPI, localization, and visual-regression evidence are frozen.
 - Rust migration still needs contract/golden/fuzz or equivalent regression evidence before replacing
-  behavior. Do not change semantics and language in one opaque step.
+  behavior. Do not change semantics and language in one opaque step; split large GUI migrations into
+  executable cutover slices that preserve user-visible behavior while moving ownership to Rust.
 - Do not create a permanent old/new protocol dual stack.
 
 ## Testing
@@ -84,7 +86,7 @@ For an `EXTERNAL_EVIDENCE` task, perform every reachable automated preparation/c
 
 ## Rust migration rule
 
-For each R1/R2 component:
+For each R1/R2/R3 or later Rust migration component:
 
 C++ semantics fixed
 → contract/golden/fuzz corpus frozen

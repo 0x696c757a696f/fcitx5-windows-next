@@ -75,7 +75,8 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
     r#""status","diagnostics_plan","restart_engine","shutdown","validate_config","apply_config","#,
     r#""reset_config","reset_presentation","get_startup","set_startup","#,
     r#""get_presentation","set_presentation","get_input_methods","set_input_method","#,
-    r#""themes_list","themes_detail","addons_list","packages_list","packages_detail","#,
+    r#""themes_list","themes_detail","themes_export","themes_export_to","themes_import","#,
+    r#""themes_duplicate","themes_delete","addons_list","packages_list","packages_detail","#,
     r#""packages_refresh","packages_install","packages_update","packages_state","#,
     r#""packages_remove","packages_repair","get_tsf_guard","reset_tsf_guard"],"#,
     r#""sensitive_input":false,"package_network_owner":"fcitx5-downloader.exe"}"#
@@ -89,7 +90,9 @@ const CONTROL_USAGE_TEXT: &str = concat!(
     "--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT ",
     "[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP ",
     "FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW OPACITY PREEDIT_MODE]|",
-    "--themes-list|--themes-detail ID|",
+    "--themes-list|--themes-detail ID|--themes-export ID|--themes-export-to ID FILE|",
+    "--themes-import FILE|",
+    "--themes-duplicate SOURCE_ID NEW_ID|--themes-delete ID|",
     "--addons-list|",
     "--packages-list|--packages-detail ID|--packages-refresh [HTTPS_BASE]|",
     "--packages-install ID|--packages-update ID|",
@@ -170,6 +173,17 @@ const CONTROL_PACKAGE_ACTION_PACKAGES_UPDATE: u32 = 8;
 const CONTROL_PACKAGE_ACTION_PACKAGES_STATE: u32 = 9;
 const CONTROL_PACKAGE_ACTION_PACKAGES_REMOVE: u32 = 10;
 const CONTROL_PACKAGE_ACTION_PACKAGES_REPAIR: u32 = 11;
+const CONTROL_PACKAGE_ACTION_THEMES_EXPORT: u32 = 12;
+const CONTROL_PACKAGE_ACTION_THEMES_IMPORT: u32 = 13;
+const CONTROL_PACKAGE_ACTION_THEMES_DUPLICATE: u32 = 14;
+const CONTROL_PACKAGE_ACTION_THEMES_DELETE: u32 = 15;
+const CONTROL_PACKAGE_ACTION_THEMES_EXPORT_TO: u32 = 16;
+const CONTROL_THEME_OPERATION_INVALID: i32 = 1;
+const CONTROL_THEME_OPERATION_NOT_FOUND: i32 = 2;
+const CONTROL_THEME_OPERATION_IO_ERROR: i32 = 3;
+const CONTROL_THEME_OPERATION_READ_ONLY: i32 = 4;
+const CONTROL_THEME_OPERATION_UNSAFE_IMPORT: i32 = 5;
+const CONTROL_THEME_OPERATION_ALREADY_EXISTS: i32 = 6;
 const LAUNCHER_COMMAND_START_DEMAND: u32 = 1;
 const LAUNCHER_COMMAND_USER_STOP: u32 = 2;
 const LAUNCHER_COMMAND_RESUME: u32 = 3;
@@ -1664,6 +1678,135 @@ fn resolve_theme_path(
     )
 }
 
+fn user_theme_file(data_root: &std::path::Path, id: &str) -> Option<PathBuf> {
+    if !theme_id_valid(id) {
+        return None;
+    }
+    Some(user_themes_dir(data_root)?.join(id).join(THEME_FILE_NAME))
+}
+
+fn theme_operation_ok_json(id: &str, operation: &str) -> Vec<u8> {
+    format!(
+        "{{\"format_version\":1,\"operation\":\"{}\",\"theme\":\"{}\",\"result\":\"ok\"}}",
+        operation, id
+    )
+    .into_bytes()
+}
+
+fn validate_theme_import_text(text: &[u8]) -> Result<ThemeSummary, i32> {
+    let summary = parse_theme_summary(text).ok_or(CONTROL_THEME_OPERATION_UNSAFE_IMPORT)?;
+    let text = std::str::from_utf8(text).map_err(|_| CONTROL_THEME_OPERATION_UNSAFE_IMPORT)?;
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("..\\")
+        || lower.contains("../")
+        || lower.contains("http://")
+        || lower.contains("https://")
+        || lower.contains("\\\\")
+        || lower.contains(".ps1")
+        || lower.contains(".exe")
+    {
+        return Err(CONTROL_THEME_OPERATION_UNSAFE_IMPORT);
+    }
+    Ok(summary)
+}
+
+fn rewrite_theme_id(text: &[u8], new_id: &str) -> Option<Vec<u8>> {
+    if !theme_id_valid(new_id) {
+        return None;
+    }
+    let mut document = parse_theme_document(text)?;
+    let metadata = document["theme"].as_table_mut()?;
+    metadata["id"] = toml_edit::value(new_id);
+    Some(document.to_string().into_bytes())
+}
+
+fn export_theme(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    id: &str,
+) -> Result<Vec<u8>, i32> {
+    let builtin = id == "builtin:default";
+    if !builtin && !theme_id_valid(id) {
+        return Err(CONTROL_THEME_OPERATION_INVALID);
+    }
+    let path = resolve_theme_path(install_root, data_root, id, builtin)
+        .ok_or(CONTROL_THEME_OPERATION_INVALID)?;
+    read_file_bounded(path, 512 * 1024).map_err(|status| {
+        if status == CONTROL_FILE_READ_INVALID_FILE {
+            CONTROL_THEME_OPERATION_NOT_FOUND
+        } else {
+            CONTROL_THEME_OPERATION_IO_ERROR
+        }
+    })
+}
+
+fn import_theme(
+    data_root: &std::path::Path,
+    source_path: &std::path::Path,
+) -> Result<Vec<u8>, i32> {
+    let text = read_file_bounded(source_path.to_path_buf(), 512 * 1024)
+        .map_err(|_| CONTROL_THEME_OPERATION_IO_ERROR)?;
+    let summary = validate_theme_import_text(&text)?;
+    let destination =
+        user_theme_file(data_root, &summary.id).ok_or(CONTROL_THEME_OPERATION_INVALID)?;
+    if destination.exists() {
+        return Err(CONTROL_THEME_OPERATION_ALREADY_EXISTS);
+    }
+    atomic_write_utf8_file(destination, &text).map_err(|_| CONTROL_THEME_OPERATION_IO_ERROR)?;
+    Ok(theme_operation_ok_json(&summary.id, "import"))
+}
+
+fn export_theme_to_file(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    id: &str,
+    destination_path: &std::path::Path,
+) -> Result<Vec<u8>, i32> {
+    let text = export_theme(install_root, data_root, id)?;
+    atomic_write_utf8_file(destination_path.to_path_buf(), &text)
+        .map_err(|_| CONTROL_THEME_OPERATION_IO_ERROR)?;
+    Ok(theme_operation_ok_json(id, "export"))
+}
+
+fn duplicate_theme(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    source_id: &str,
+    new_id: &str,
+) -> Result<Vec<u8>, i32> {
+    if !theme_id_valid(new_id) {
+        return Err(CONTROL_THEME_OPERATION_INVALID);
+    }
+    let destination = user_theme_file(data_root, new_id).ok_or(CONTROL_THEME_OPERATION_INVALID)?;
+    if destination.exists() {
+        return Err(CONTROL_THEME_OPERATION_ALREADY_EXISTS);
+    }
+    let source = export_theme(install_root, data_root, source_id)?;
+    validate_theme_import_text(&source)?;
+    let rewritten =
+        rewrite_theme_id(&source, new_id).ok_or(CONTROL_THEME_OPERATION_UNSAFE_IMPORT)?;
+    atomic_write_utf8_file(destination, &rewritten)
+        .map_err(|_| CONTROL_THEME_OPERATION_IO_ERROR)?;
+    Ok(theme_operation_ok_json(new_id, "duplicate"))
+}
+
+fn delete_theme(data_root: &std::path::Path, id: &str) -> Result<Vec<u8>, i32> {
+    let theme_dir = theme_id_valid(id)
+        .then(|| user_themes_dir(data_root).map(|dir| dir.join(id)))
+        .flatten()
+        .ok_or(CONTROL_THEME_OPERATION_READ_ONLY)?;
+    if !theme_dir.exists() {
+        return Err(CONTROL_THEME_OPERATION_NOT_FOUND);
+    }
+    let metadata =
+        std::fs::symlink_metadata(&theme_dir).map_err(|_| CONTROL_THEME_OPERATION_IO_ERROR)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(CONTROL_THEME_OPERATION_INVALID);
+    }
+    std::fs::remove_dir_all(&theme_dir).map_err(|_| CONTROL_THEME_OPERATION_IO_ERROR)?;
+    Ok(theme_operation_ok_json(id, "delete"))
+}
+
 fn is_lower_theme_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
@@ -2450,6 +2593,9 @@ fn package_action(command: &[u16], argc: usize, state: Option<&[u16]>) -> u32 {
             CONTROL_PACKAGE_ACTION_PACKAGES_REFRESH
         }
         2 if ascii_utf16_eq(command, b"--themes-detail") => CONTROL_PACKAGE_ACTION_THEMES_DETAIL,
+        2 if ascii_utf16_eq(command, b"--themes-export") => CONTROL_PACKAGE_ACTION_THEMES_EXPORT,
+        2 if ascii_utf16_eq(command, b"--themes-import") => CONTROL_PACKAGE_ACTION_THEMES_IMPORT,
+        2 if ascii_utf16_eq(command, b"--themes-delete") => CONTROL_PACKAGE_ACTION_THEMES_DELETE,
         2 if ascii_utf16_eq(command, b"--packages-detail") => {
             CONTROL_PACKAGE_ACTION_PACKAGES_DETAIL
         }
@@ -2461,6 +2607,12 @@ fn package_action(command: &[u16], argc: usize, state: Option<&[u16]>) -> u32 {
         }
         2 if ascii_utf16_eq(command, b"--packages-remove") => {
             CONTROL_PACKAGE_ACTION_PACKAGES_REMOVE
+        }
+        3 if ascii_utf16_eq(command, b"--themes-duplicate") => {
+            CONTROL_PACKAGE_ACTION_THEMES_DUPLICATE
+        }
+        3 if ascii_utf16_eq(command, b"--themes-export-to") => {
+            CONTROL_PACKAGE_ACTION_THEMES_EXPORT_TO
         }
         3 if ascii_utf16_eq(command, b"--packages-state")
             && state.is_some_and(|value| {
@@ -3827,6 +3979,200 @@ pub unsafe extern "C" fn fcitx5_control_resolve_theme_path_utf16(
         return 0;
     };
     write_wide_path(&path, output, capacity)
+}
+
+/// # Safety
+///
+/// `install_root`, `data_root`, and `requested_id` must remain valid for the
+/// duration of the call when their pointers are non-null. `out_ptr` and
+/// `out_len` must point to writable storage. Any returned buffer must be freed
+/// with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_export_utf8(
+    install_root: Fcitx5ControlUtf16,
+    data_root: Fcitx5ControlUtf16,
+    requested_id: Fcitx5ControlUtf8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return CONTROL_THEME_OPERATION_IO_ERROR;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(install_root) = string_from_utf16(install_root) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(requested_id) = utf8_slice(requested_id).and_then(|id| std::str::from_utf8(id).ok())
+    else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    match export_theme(
+        &PathBuf::from(install_root),
+        &PathBuf::from(data_root),
+        requested_id,
+    ) {
+        Ok(bytes) => boxed_utf8_result(bytes, out_ptr, out_len),
+        Err(status) => status,
+    }
+}
+
+/// # Safety
+///
+/// `data_root` and `source_path` must remain valid for the duration of the
+/// call. `out_ptr` and `out_len` must point to writable storage. Any returned
+/// buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_import_file_utf16(
+    data_root: Fcitx5ControlUtf16,
+    source_path: Fcitx5ControlUtf16,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return CONTROL_THEME_OPERATION_IO_ERROR;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(source_path) = string_from_utf16(source_path) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    match import_theme(&PathBuf::from(data_root), &PathBuf::from(source_path)) {
+        Ok(bytes) => boxed_utf8_result(bytes, out_ptr, out_len),
+        Err(status) => status,
+    }
+}
+
+/// # Safety
+///
+/// `install_root`, `data_root`, `requested_id`, and `destination_path` must
+/// remain valid for the duration of the call. `out_ptr` and `out_len` must
+/// point to writable storage. Any returned buffer must be freed with
+/// `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_export_file_utf16(
+    install_root: Fcitx5ControlUtf16,
+    data_root: Fcitx5ControlUtf16,
+    requested_id: Fcitx5ControlUtf8,
+    destination_path: Fcitx5ControlUtf16,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return CONTROL_THEME_OPERATION_IO_ERROR;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(install_root) = string_from_utf16(install_root) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(requested_id) = utf8_slice(requested_id).and_then(|id| std::str::from_utf8(id).ok())
+    else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(destination_path) = string_from_utf16(destination_path) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    match export_theme_to_file(
+        &PathBuf::from(install_root),
+        &PathBuf::from(data_root),
+        requested_id,
+        &PathBuf::from(destination_path),
+    ) {
+        Ok(bytes) => boxed_utf8_result(bytes, out_ptr, out_len),
+        Err(status) => status,
+    }
+}
+
+/// # Safety
+///
+/// `install_root`, `data_root`, `source_id`, and `new_id` must remain valid for
+/// the duration of the call. `out_ptr` and `out_len` must point to writable
+/// storage. Any returned buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_duplicate_utf8(
+    install_root: Fcitx5ControlUtf16,
+    data_root: Fcitx5ControlUtf16,
+    source_id: Fcitx5ControlUtf8,
+    new_id: Fcitx5ControlUtf8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return CONTROL_THEME_OPERATION_IO_ERROR;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(install_root) = string_from_utf16(install_root) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(source_id) = utf8_slice(source_id).and_then(|id| std::str::from_utf8(id).ok()) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(new_id) = utf8_slice(new_id).and_then(|id| std::str::from_utf8(id).ok()) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    match duplicate_theme(
+        &PathBuf::from(install_root),
+        &PathBuf::from(data_root),
+        source_id,
+        new_id,
+    ) {
+        Ok(bytes) => boxed_utf8_result(bytes, out_ptr, out_len),
+        Err(status) => status,
+    }
+}
+
+/// # Safety
+///
+/// `data_root` and `requested_id` must remain valid for the duration of the
+/// call. `out_ptr` and `out_len` must point to writable storage. Any returned
+/// buffer must be freed with `fcitx5_control_utf8_free`.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_control_theme_delete_utf8(
+    data_root: Fcitx5ControlUtf16,
+    requested_id: Fcitx5ControlUtf8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return CONTROL_THEME_OPERATION_IO_ERROR;
+    }
+    unsafe {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(data_root) = string_from_utf16(data_root) else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    let Some(requested_id) = utf8_slice(requested_id).and_then(|id| std::str::from_utf8(id).ok())
+    else {
+        return CONTROL_THEME_OPERATION_INVALID;
+    };
+    match delete_theme(&PathBuf::from(data_root), requested_id) {
+        Ok(bytes) => boxed_utf8_result(bytes, out_ptr, out_len),
+        Err(status) => status,
+    }
 }
 
 /// # Safety
@@ -5325,6 +5671,129 @@ version = "1"
 "##
         )
         .is_none());
+    }
+
+    #[test]
+    fn theme_file_operations_are_rust_owned_and_scoped_to_user_theme_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-control-core-theme-ops-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let install = root.join("install");
+        let data = root.join("data");
+        let builtin_dir = install.join("resources").join("themes").join("default");
+        std::fs::create_dir_all(&builtin_dir).expect("create builtin theme");
+        let builtin_text = br##"
+format_version = 1
+
+[theme]
+id = "builtin.default"
+name = "Default"
+version = "1"
+license = "MIT"
+
+[light.candidate.colors]
+background = "#ffffffff"
+"##;
+        std::fs::write(builtin_dir.join(THEME_FILE_NAME), builtin_text)
+            .expect("write builtin theme");
+
+        let imported = root.join("imported.toml");
+        let imported_text = br##"
+format_version = 1
+
+[theme]
+id = "soft-blue"
+name = "Soft Blue"
+version = "1"
+license = "MIT"
+
+[dark.candidate.colors]
+background = "#101820ff"
+"##;
+        std::fs::write(&imported, imported_text).expect("write imported theme");
+        let import_json = import_theme(&data, &imported).expect("import user theme");
+        assert!(String::from_utf8(import_json)
+            .expect("json")
+            .contains(r#""operation":"import""#));
+        assert!(data
+            .join("themes")
+            .join("soft-blue")
+            .join(THEME_FILE_NAME)
+            .exists());
+
+        let exported = export_theme(&install, &data, "soft-blue").expect("export user theme");
+        assert!(std::str::from_utf8(&exported)
+            .expect("utf-8")
+            .contains("Soft Blue"));
+        let exported_file = root.join("exported-soft-blue.toml");
+        let export_json = export_theme_to_file(&install, &data, "soft-blue", &exported_file)
+            .expect("export user theme to file");
+        assert!(String::from_utf8(export_json)
+            .expect("json")
+            .contains(r#""operation":"export""#));
+        assert!(std::fs::read_to_string(&exported_file)
+            .expect("read exported theme")
+            .contains("Soft Blue"));
+
+        duplicate_theme(&install, &data, "builtin:default", "default-copy")
+            .expect("duplicate builtin theme into user scope");
+        let copied = std::fs::read_to_string(
+            data.join("themes")
+                .join("default-copy")
+                .join(THEME_FILE_NAME),
+        )
+        .expect("read duplicate");
+        assert!(copied.contains("id = \"default-copy\""));
+        assert_eq!(
+            duplicate_theme(&install, &data, "builtin:default", "default-copy"),
+            Err(CONTROL_THEME_OPERATION_ALREADY_EXISTS)
+        );
+
+        assert_eq!(
+            delete_theme(&data, "builtin:default"),
+            Err(CONTROL_THEME_OPERATION_READ_ONLY)
+        );
+        delete_theme(&data, "soft-blue").expect("delete user theme");
+        assert!(!data.join("themes").join("soft-blue").exists());
+
+        let unsafe_import = root.join("unsafe.toml");
+        std::fs::write(
+            &unsafe_import,
+            br##"
+format_version = 1
+[theme]
+id = "unsafe-theme"
+name = "Unsafe"
+version = "1"
+license = "MIT"
+script = "run-me.ps1"
+"##,
+        )
+        .expect("write unsafe theme");
+        assert_eq!(
+            import_theme(&data, &unsafe_import),
+            Err(CONTROL_THEME_OPERATION_UNSAFE_IMPORT)
+        );
+
+        let description_import = root.join("description.toml");
+        std::fs::write(
+            &description_import,
+            br##"
+format_version = 1
+[theme]
+id = "description-ok"
+name = "Description OK"
+version = "1"
+license = "MIT"
+description = "description is ordinary theme metadata"
+"##,
+        )
+        .expect("write description theme");
+        import_theme(&data, &description_import)
+            .expect("description metadata must not trip executable hook checks");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

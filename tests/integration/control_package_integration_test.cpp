@@ -448,6 +448,68 @@ int wmain(int argc, wchar_t** argv) {
                theme_detail.find("\"network_allowed\":false") != std::string::npos,
            "theme detail did not expose the safe editor surface: " + theme_detail);
 
+    std::string theme_export;
+    const DWORD theme_export_exit = run_process_capture(
+        control, {L"--data-root", data_root.wstring(), L"--themes-export", L"eosphoros-night"},
+        theme_export);
+    expect(theme_export_exit == 0 && theme_export.find("Eosphoros Night") != std::string::npos,
+           "theme export must return the selected user theme TOML: " + theme_export);
+    const auto theme_export_path = temporary.path() / L"exported-eosphoros-night.toml";
+    std::string theme_export_to;
+    const DWORD theme_export_to_exit = run_process_capture(
+        control,
+        {L"--data-root", data_root.wstring(), L"--themes-export-to", L"eosphoros-night",
+         theme_export_path.wstring()},
+        theme_export_to);
+    expect(theme_export_to_exit == 0 &&
+               theme_export_to.find("\"operation\":\"export\"") != std::string::npos &&
+               read_text(theme_export_path).find("Eosphoros Night") != std::string::npos,
+           "theme export-to must atomically write the selected user theme: " +
+               theme_export_to);
+
+    write_text(temporary.path() / L"theme-import.toml", theme_fixture("soft-blue", "Soft Blue"));
+    std::string theme_import;
+    const DWORD theme_import_exit = run_process_capture(
+        control,
+        {L"--data-root", data_root.wstring(), L"--themes-import",
+         (temporary.path() / L"theme-import.toml").wstring()},
+        theme_import);
+    expect(theme_import_exit == 0 &&
+               theme_import.find("\"operation\":\"import\"") != std::string::npos &&
+               fs::exists(data_root / L"themes/soft-blue/theme.toml"),
+           "theme import must publish a validated user theme: " + theme_import);
+
+    std::string theme_duplicate;
+    const DWORD theme_duplicate_exit =
+        run_process_capture(control,
+                            {L"--data-root", data_root.wstring(), L"--themes-duplicate",
+                             L"builtin:default", L"default-copy"},
+                            theme_duplicate);
+    expect(theme_duplicate_exit == 0 &&
+               theme_duplicate.find("\"operation\":\"duplicate\"") != std::string::npos &&
+               fs::exists(data_root / L"themes/default-copy/theme.toml"),
+           "theme duplicate must copy a builtin theme into user scope: " + theme_duplicate);
+
+    std::string theme_delete_readonly;
+    const DWORD theme_delete_readonly_exit =
+        run_process_capture(control,
+                            {L"--data-root", data_root.wstring(), L"--themes-delete",
+                             L"builtin:default"},
+                            theme_delete_readonly);
+    expect(theme_delete_readonly_exit != 0,
+           "theme delete must reject the read-only builtin theme");
+
+    std::string theme_delete;
+    const DWORD theme_delete_exit =
+        run_process_capture(control,
+                            {L"--data-root", data_root.wstring(), L"--themes-delete",
+                             L"soft-blue"},
+                            theme_delete);
+    expect(theme_delete_exit == 0 &&
+               theme_delete.find("\"operation\":\"delete\"") != std::string::npos &&
+               !fs::exists(data_root / L"themes/soft-blue"),
+           "theme delete must remove only user-owned theme directories: " + theme_delete);
+
     std::string addons_list;
     const DWORD addons_list_exit =
         run_process_capture(control, {L"--data-root", data_root.wstring(), L"--addons-list"},

@@ -32,7 +32,8 @@ if (-not $SourceOnly) {
     Select-Object -First 1 -ExpandProperty FullName
   if (-not $dumpbin) { throw 'dumpbin.exe was not found in the pinned Visual Studio toolset.' }
 
-  $binaryRoot = Join-Path $repoRoot "out/build/windows-$Architecture-dev/$Configuration"
+  $presetKind = if ($Configuration -eq 'Release') { 'release' } else { 'dev' }
+  $binaryRoot = Join-Path $repoRoot "out/build/windows-$Architecture-$presetKind/$Configuration"
   $binaries = @(
     (Join-Path $binaryRoot 'fcitx5-tsf.dll'),
     (Join-Path $binaryRoot 'fcitx5-launcher.exe'),

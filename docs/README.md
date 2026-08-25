@@ -1,58 +1,56 @@
 # 工程文档入口
 
-状态：current  
-更新：2026-08-20
+状态：current
+更新：2026-08-25
 
-这里是 Fcitx5 for Windows Next 的工程导航。当前只有一条执行路线：冻结的 v1.7 规格。
-旧聊天记录、旧 stage、旧测试绿灯、v1.5/v1.6 的局部结论都不能单独证明当前实现完成。
+这里是 Fcitx5 for Windows Next 的工程导航。当前执行入口是 v1.8 queue：
+`docs/tasks/PLAN.md`、`docs/tasks/current.md`、`docs/tasks/status.md` 与
+`docs/current.md`。
+
+旧聊天记录、旧 stage、旧测试绿灯、v1.5/v1.6/v1.7 的局部结论都不能单独证明当前实现完成。
 
 ## 必读顺序
 
-1. [current-task-summary.md](current-task-summary.md)
-   当前唯一执行入口：目标、环境约束、红灯、下一步、哪些证据已经过期。
+1. [current.md](current.md)
+   当前真实架构、语言边界、红灯和下一步。
 
-2. [technical-program-plan.md](technical-program-plan.md)
-   v1.7 的 Phase 0 → 8 路线、运行拓扑、dispatcher 语义、Rust 迁移门槛、
-   Advanced/config surface 和 generation draining。
+2. [spec-v1.8.md](spec-v1.8.md)
+   当前长期规格和工程/产品评审基线。若它与任务队列冲突，以任务队列的当前解释为准。
 
-3. [reference-baseline.md](reference-baseline.md)
+3. [tasks/PLAN.md](tasks/PLAN.md)、[tasks/current.md](tasks/current.md)、
+   [tasks/status.md](tasks/status.md)
+   自动执行队列、当前授权任务、执行证据和 manual-pending/blocker 记录。
+
+4. [technical-program-plan.md](technical-program-plan.md)
+   历史路线和运行拓扑参考；不能覆盖当前 Rust-first queue。
+
+5. [reference-baseline.md](reference-baseline.md)
    Phase 0 参考仓库、pin、许可证边界和“能借鉴什么 / 不能继承什么”。
 
-4. [reference-review-windows-chewing-tsf.md](reference-review-windows-chewing-tsf.md)
+6. [reference-review-windows-chewing-tsf.md](reference-review-windows-chewing-tsf.md)
    Windows TSF 主教材审计。
 
-5. [reference-review-win-mcbopomofo.md](reference-review-win-mcbopomofo.md)
+7. [reference-review-win-mcbopomofo.md](reference-review-win-mcbopomofo.md)
    thin client/server 输入法结构参考。
 
-6. [macos-config-reference.md](macos-config-reference.md)
+8. [macos-config-reference.md](macos-config-reference.md)
    fcitx5-macos、fcitx-contrib 和 Rime 相关配置能力的产品化参考。
 
-7. [theme-ui-ux-product-plan.md](theme-ui-ux-product-plan.md)
+9. [theme-ui-ux-product-plan.md](theme-ui-ux-product-plan.md)
    主题、插件管理器、候选窗、高分屏、可视编辑器和导入器的统筹方案。
 
-8. [product-test-plan.md](product-test-plan.md) 与
+10. [product-test-plan.md](product-test-plan.md) 与
    [ssdlc-verification-matrix.md](ssdlc-verification-matrix.md)
    测试、SSDLC、发布和证据门禁。
 
-9. [adr](adr)
+11. [adr](adr)
    已接受的架构决策。修改对应边界前先读相关 ADR。
-
-10. `phase-*-acceptance.md`
-    阶段验收记录。它们是证据，不是反向修改路线的授权。
 
 ## 外部权威规格
 
-唯一现行外部规格：
-
-`D:\Desktop\Fcitx5_for_Windows_工程规格_现代软件工程_轻量SSDLC_DevSecOps_Codex执行版_v1.7.md`
-
-SHA-256：
-
-`740878ebe3084a0817d404ca2052c6e433bc53b102c883f680fda4c480d0e0ab`
-
-如果仓库文档和这份规格冲突，先以
-[current-task-summary.md](current-task-summary.md) 中已经 reconciliation 的内容为准；未
-reconciliation 的冲突要标红，不要靠猜测继续执行。
+外部桌面规格/评审文件只能作为设计输入。仓库内当前执行权威是
+`docs/tasks/PLAN.md`、`docs/tasks/current.md`、`docs/tasks/status.md`、`docs/current.md`
+和 `docs/spec-v1.8.md`。
 
 ## 文档状态约定
 
@@ -64,20 +62,20 @@ reconciliation 的冲突要标红，不要靠猜测继续执行。
 
 ## 当前冻结边界
 
-- TSF：C++/Win32/COM/TSF；宿主内只做 TSF、UILess、EditSession 和有界 IPC。
-- Engine：C++/Fcitx5；InputContext、CandidateModel、输入语义和配置权威所有者。
-- Candidate UI：C++/Win32/D2D/DWrite；按需渲染不可变快照。
-- Launcher：per-user/per-session；负责托盘、Engine/UI 生命周期和恢复。
-- Config：C++/WTL/ATL；只通过 typed Control/config API 变更状态。
+- TSF：shipping Rust；宿主内只做 TSF、UILess、EditSession 和有界 IPC；release-ready 仍需真实 host matrix。
+- Engine：直接 Fcitx5 core/addon object adapter 保留 C++；产品 protocol/state/IPC/policy 继续 Rust 化。
+- Candidate UI：domain/model/layout/interaction Rust-owned；当前 Win32/D2D/DWrite renderer/window 是临时 adapter。
+- Launcher/Control：Rust core owns product state/policy；剩余 C++ shell 继续收缩。
+- Config：当前 C++/WTL/ATL shell 只是临时 shipping adapter；`CONFIG-RUST-CUTOVER-001` 将执行 Rust shipping cutover。
 - Theme：strict `theme.toml` + 有限 assets；第三方主题不可执行代码。
-- Package/Updater：签名仓库、事务、回滚、generation-aware draining。
+- Package/Updater/Downloader/Provider/Deployer/Register/Bootstrap：Rust-owned 或 Rust CLI cutover；不复活旧 C++ authority。
 
 ## 已废弃路线
 
 以下内容不得重新作为实现路线：
 
 - v1.4/v1.5 作为现行规格；
-- aardio/CI Bridge、Slint、wxWidgets、Qt、Tauri、WebView2、Rust Candidate UI；
+- aardio/CI Bridge、无证据的重 GUI runtime、WebView2/Tauri/Qt 作为默认设置器路线；
 - UI Automation、AutoHotkey、坐标点击、Hook、SendInput、注入或未公开窗口消息作为输入/
   提交/构建路径；
 - TSF DLL 加载 Fcitx addon、Rime、Lua、下载器、解压器或 GUI；

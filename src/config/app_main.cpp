@@ -6,6 +6,7 @@
 #include "runtime_identity.h"
 
 #include <Windows.h>
+#include <CommDlg.h>
 #include <CommCtrl.h>
 #include <d2d1.h>
 #include <dwrite.h>
@@ -784,8 +785,15 @@ bool checkI18n() {
         "theme.action.import",
         "theme.action.export",
         "theme.action.delete",
-        "theme.operation.backend_pending",
         "theme.operation.delete_readonly",
+        "theme.operation.duplicated",
+        "theme.operation.imported",
+        "theme.operation.exported",
+        "theme.operation.deleted",
+        "theme.dialog.import.title",
+        "theme.dialog.export.title",
+        "theme.dialog.delete.title",
+        "theme.dialog.delete.body",
         "dialog.reset_appearance.title",
         "dialog.reset_appearance.body",
         "dialog.remove_package.title",
@@ -3313,6 +3321,146 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         refreshPackages(false);
     }
 
+    [[nodiscard]] std::optional<fs::path> chooseThemeImportPath() const {
+        std::array<wchar_t, 32768> file{};
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = m_hWnd;
+        dialog.lpstrFilter = L"Fcitx5 theme (*.toml)\0*.toml\0All files (*.*)\0*.*\0";
+        dialog.lpstrFile = file.data();
+        dialog.nMaxFile = static_cast<DWORD>(file.size());
+        dialog.lpstrTitle = get("theme.dialog.import.title");
+        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR |
+                       OFN_HIDEREADONLY;
+        if (!GetOpenFileNameW(&dialog))
+            return std::nullopt;
+        return fs::path(file.data());
+    }
+
+    [[nodiscard]] std::optional<fs::path> chooseThemeExportPath(std::wstring_view id) const {
+        std::array<wchar_t, 32768> file{};
+        std::wstring suggested(id);
+        for (auto& ch : suggested) {
+            if (ch == L':' || ch == L'\\' || ch == L'/' || ch == L'*' || ch == L'?' ||
+                ch == L'"' || ch == L'<' || ch == L'>' || ch == L'|') {
+                ch = L'-';
+            }
+        }
+        if (suggested.empty())
+            suggested = L"theme";
+        suggested += L".toml";
+        wcsncpy_s(file.data(), file.size(), suggested.c_str(), _TRUNCATE);
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = m_hWnd;
+        dialog.lpstrFilter = L"Fcitx5 theme (*.toml)\0*.toml\0All files (*.*)\0*.*\0";
+        dialog.lpstrFile = file.data();
+        dialog.nMaxFile = static_cast<DWORD>(file.size());
+        dialog.lpstrTitle = get("theme.dialog.export.title");
+        dialog.lpstrDefExt = L"toml";
+        dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+        if (!GetSaveFileNameW(&dialog))
+            return std::nullopt;
+        return fs::path(file.data());
+    }
+
+    [[nodiscard]] std::wstring themeOperationId(std::wstring_view output) const {
+        try {
+            const auto document = nlohmann::json::parse(narrow(output));
+            if (!document.is_object() || !document.contains("theme") ||
+                !document.at("theme").is_string()) {
+                return {};
+            }
+            return widen(document.at("theme").get<std::string>());
+        } catch (const nlohmann::json::exception&) {
+            return {};
+        }
+    }
+
+    [[nodiscard]] std::wstring duplicateThemeId(std::wstring_view source) const {
+        std::wstring base(source);
+        if (base.starts_with(L"builtin:"))
+            base.erase(0, 8);
+        for (auto& ch : base) {
+            const bool valid = (ch >= L'a' && ch <= L'z') || (ch >= L'0' && ch <= L'9') ||
+                               ch == L'.' || ch == L'-' || ch == L'_';
+            if (!valid)
+                ch = L'-';
+        }
+        if (base.empty())
+            base = L"theme";
+        for (int suffix = 1; suffix <= 99; ++suffix) {
+            std::wstring candidate = base + (suffix == 1 ? L"-copy"
+                                                         : L"-copy-" + std::to_wstring(suffix));
+            const bool exists = std::any_of(
+                themes_.begin(), themes_.end(),
+                [&](const ThemeRow& theme) { return theme.id == candidate; });
+            if (!exists)
+                return candidate;
+        }
+        return base + L"-copy";
+    }
+
+    void runThemeOperation(const std::vector<std::wstring>& arguments,
+                           std::wstring_view selectedAfter, const char* successKey,
+                           bool applyPreview) {
+        std::wstring output;
+        const bool ok = runControl(arguments, output);
+        if (!ok) {
+            setSaveStatus(get("error.command"));
+            return;
+        }
+        const std::wstring id = selectedAfter.empty() ? themeOperationId(output) :
+                                                        std::wstring(selectedAfter);
+        refreshThemes(id.empty() ? selectedThemeId() : id);
+        updateThemeDetail();
+        if (applyPreview)
+            liveApplyPresentation();
+        setSaveStatus(get(successKey));
+    }
+
+    void duplicateSelectedTheme() {
+        if (themes_.empty())
+            return;
+        const auto& theme = themes_[static_cast<std::size_t>(selectedThemeIndex())];
+        const std::wstring newId = duplicateThemeId(theme.id);
+        runThemeOperation({L"--themes-duplicate", theme.id, newId}, newId,
+                          "theme.operation.duplicated", true);
+    }
+
+    void importThemeFromDialog() {
+        const auto path = chooseThemeImportPath();
+        if (!path)
+            return;
+        runThemeOperation({L"--themes-import", path->wstring()}, L"",
+                          "theme.operation.imported", true);
+    }
+
+    void exportSelectedTheme() {
+        if (themes_.empty())
+            return;
+        const auto& theme = themes_[static_cast<std::size_t>(selectedThemeIndex())];
+        const auto path = chooseThemeExportPath(theme.id);
+        if (!path)
+            return;
+        runThemeOperation({L"--themes-export-to", theme.id, path->wstring()}, theme.id,
+                          "theme.operation.exported", false);
+    }
+
+    void deleteSelectedTheme() {
+        if (themes_.empty())
+            return;
+        const auto& theme = themes_[static_cast<std::size_t>(selectedThemeIndex())];
+        if (theme.source != L"user") {
+            setSaveStatus(get("theme.operation.delete_readonly"));
+            return;
+        }
+        if (!confirmDialog("theme.dialog.delete.title", "theme.dialog.delete.body"))
+            return;
+        runThemeOperation({L"--themes-delete", theme.id}, L"builtin:default",
+                          "theme.operation.deleted", true);
+    }
+
     void stopProductionPreview() {
         previewActiveForContract_ = false;
     }
@@ -4516,27 +4664,26 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         case ModernAction::themeDuplicate:
             if (interactionTest_)
                 cover(kCoveredThemeDuplicate);
-            setSaveStatus(get("theme.operation.backend_pending"));
+            else
+                duplicateSelectedTheme();
             break;
         case ModernAction::themeImport:
             if (interactionTest_)
                 cover(kCoveredThemeImport);
-            setSaveStatus(get("theme.operation.backend_pending"));
+            else
+                importThemeFromDialog();
             break;
         case ModernAction::themeExport:
             if (interactionTest_)
                 cover(kCoveredThemeExport);
-            setSaveStatus(get("theme.operation.backend_pending"));
+            else
+                exportSelectedTheme();
             break;
         case ModernAction::themeDelete:
             if (interactionTest_) {
                 cover(kCoveredThemeDelete);
-            }
-            if (!themes_.empty() &&
-                themes_[static_cast<std::size_t>(selectedThemeIndex())].source != L"user") {
-                setSaveStatus(get("theme.operation.delete_readonly"));
             } else {
-                setSaveStatus(get("theme.operation.backend_pending"));
+                deleteSelectedTheme();
             }
             break;
         case ModernAction::packageRefresh:

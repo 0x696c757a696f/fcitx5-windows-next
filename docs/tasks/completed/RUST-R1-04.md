@@ -1,7 +1,7 @@
 # RUST-R1-04 Rust provider policy/runner
 
 **State:** COMPLETED
-**Canonical task:** `docs/tasks/rust/R1-04-PROVIDER.md`
+**Historical source task:** archived here; the obsolete standalone R1 provider task source was removed after the Rust-first queue cleanup.
 
 ## Completed slice
 
@@ -20,4 +20,3 @@
 - Job-contained suspended launch with timeout termination.
 - Non-zero child exit code propagation.
 - No live key/preedit/candidate/commit content is routed to provider paths.
-

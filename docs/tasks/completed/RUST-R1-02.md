@@ -1,7 +1,7 @@
 # RUST-R1-02 Rust repository metadata / anti-rollback model
 
-**State:** FUTURE-GATED
-**Canonical task:** `docs/tasks/rust/R1-02-REPOSITORY.md`
+**State:** COMPLETED
+**Historical source task:** archived here; the obsolete standalone R1 repository task source was removed after the Rust-first queue cleanup.
 
 ## Gate
 

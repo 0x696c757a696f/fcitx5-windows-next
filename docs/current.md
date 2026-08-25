@@ -22,8 +22,9 @@ Windows host
 - Engine is not a permanent all-C++ exception. Its direct Fcitx object adapter remains C++; its product protocol, state, validation, IPC, deadline/fail-open, generation, revision, snapshot and diagnostics logic should move to Rust.
 - New product-owned Windows code defaults to Rust. Already Rust-owned components must not regress
   to C++ because older audit text described a C++ baseline. C++ is reserved for direct
-  Fcitx-facing Engine object manipulation; remaining native code is an adapter/host that must
-  delegate product semantics to Rust.
+  Fcitx-facing Engine object manipulation. Remaining native code is temporary adapter/host code that
+  must delegate product semantics to Rust and be retired once equivalent regression, accessibility,
+  DPI, localization, visual, and package evidence exists.
 
 ## Language Map
 
@@ -32,7 +33,7 @@ Windows host
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
 | Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter |
-| Config | C++ WTL/Win32 shell; Rust config PoC and Rust text/process adapters exist | New Settings product logic defaults to Rust; WTL/Win32 remains adapter/shell unless a time-boxed spike/ADR proves otherwise |
+| Config | C++ WTL/Win32 shell remains only as a temporary shipping adapter; Rust config PoC/control/theme operation owners exist | Move shipping `fcitx5-config.exe` to Rust through explicit cutover slices after the current UX contract is frozen |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
 | Package/provider/downloader/updater/deployer | Package/provider/deployer/updater/downloader Rust CLIs and Rust package-core are wired; adapters remain where needed | Rust authority |
@@ -43,7 +44,7 @@ Windows host
 | PoC / migration lane | State | Exit condition |
 |---|---|---|
 | Rust TSF | `SHIPPING-AUTOMATED-GREEN` / real-host matrix pending | Full host matrix evidence before release readiness |
-| Rust Config | `MIGRATION-CANDIDATE` | Time-boxed product spike or explicit ADR choosing WTL+D2D vs Rust native Config |
+| Rust Config | `CUTOVER-AUTHORIZED / CONTRACT-FIRST` | Freeze current Settings/theme/preview behavior, build Rust shipping Config side-by-side, run differential/visual/accessibility/package evidence, then delete the old C++ WTL shell |
 | Candidate Rust core | `SHIPPING-DOMAIN` | Remove duplicated C++ validation/state, preserve renderer evidence, add candidate-action/upstream alignment |
 | Rust package/update/control/launcher cores | `SHIPPING-DOMAIN` where already cut over, `MIGRATION-CANDIDATE` where shell remains | Delete replaced C++ authoritative implementation and keep adapter thin |
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
@@ -63,20 +64,19 @@ Windows host
 - Engine product state is migrating to Rust: E1 protocol codec, E2 ledger, E3 event/action decisions, E4 epoch/request/session policy, and E5 snapshot/pending-state policy are cut over (`CUTOVER-GREEN` where recorded). The Fcitx adapter and remaining Windows process/transport shell shrink remain.
 - Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
 - The executable queue has been re-cleaned after the 2026-08-24 review: completed/current R3
-  FUTURE-GATED duplicates are not active queue items; the next staged product task is
-  `CONFIG-UX-009` for WindInput-inspired theme library and embedded live Settings preview.
+  FUTURE-GATED duplicates are not active queue items. Current product work is `CONFIG-UX-009` for
+  WindInput-inspired theme library and embedded live Settings preview, followed by
+  `CONFIG-RUST-CUTOVER-001` for the shipping Config Rust cutover.
 - The TSF profile boundary is now frozen in `docs/tsf-profile-boundary.md`: Windows exposes only the single product profile `Fcitx5`; internal engines/addons remain Fcitx state; obsolete dynamic profile data is cleanup input only.
 - `rust/protocol-core` is now the single authoritative FCW4 codec: `protocol/protocol.cpp` is a thin marshalling adapter over the C ABI (`protocol/protocol_ffi.h`, typed encode/decode + `decode_header` in `capi.rs`), and `protocol-differential-contract` pins the pre-cutover wire bytes via `tests/unit/protocol_wire_golden.inc` (19 samples). C++ `protocol.h` API and all call sites are unchanged; see `docs/fcitx-upstream-rebaseline-audit.md` for the Fcitx5 upstream baseline audit (fork is official `ebf24ddc` + 41 lines; all three Windows-local changes are not yet upstream; 1 of 6 patches applies clean to master).
 
 ## Next Five Code/Design Tasks
 
-1. Finish the currently reachable `RUST-R3-TSF-POC` automated package/candidate usability evidence
-   and keep the broader real-host matrix manual-pending until actually run.
-2. Execute `CONFIG-UX-009`: Theme Library, embedded live production-renderer preview, font/emoji
+1. Execute `CONFIG-UX-009`: Theme Library, embedded live production-renderer preview, font/emoji
    handling, automatic high-DPI readability, localization, and no-overlap Settings gates.
-3. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression
-   evidence already exist.
-4. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core`
+2. Execute `CONFIG-RUST-CUTOVER-001` after `CONFIG-UX-009` is green: replace the shipping C++ WTL
+   Config shell with Rust while preserving the frozen Settings behavior corpus.
+3. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core`
    stop-aware pipe primitives, keeping direct Fcitx object ownership in the C++ adapter.
-5. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
+4. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
    release-readiness claim.

@@ -1,7 +1,7 @@
 # RUST-R1-03 Rust updater/downloader transaction
 
-**State:** FUTURE-GATED
-**Canonical task:** `docs/tasks/rust/R1-03-UPDATER-DOWNLOADER.md`
+**State:** COMPLETED
+**Historical source task:** archived here; the obsolete standalone R1 updater/downloader task source was removed after the Rust-first queue cleanup.
 
 ## Gate
 

@@ -1,6 +1,6 @@
 # ADR 0003: WTL configuration frontend
 
-- Status: Accepted
+- Status: Superseded for future Config ownership; retained as historical baseline
 - Date: 2026-08-17
 - Decider: Project owner
 - Governing specification: Frozen v1.6 (decision retained)
@@ -8,8 +8,10 @@
 > 2026-08-25 status: partially superseded by the current Rust migration policy in
 > `docs/current.md` and `docs/tasks/rebaseline.md`. The WTL/Win32 Config shell remains the current
 > shipping adapter, but this ADR no longer defines the language map for TSF, Candidate, Launcher,
-> package, updater, or new product-owned Settings logic. New product-owned code defaults to Rust
-> unless it is a narrowly justified native adapter or direct Fcitx-facing Engine island.
+> package, updater, or Config ownership. New product-owned code defaults to Rust unless it is the
+> direct Fcitx-facing Engine island or a temporary native adapter with a queued cutover/removal path.
+> Owner update: Config is now explicitly authorized for Rust shipping cutover after the current
+> Settings/theme/preview behavior contract is frozen.
 
 ## Context
 
@@ -21,7 +23,7 @@ stacks that are not needed by this Windows-only management surface.
 
 ## Decision
 
-`fcitx5-config.exe` uses C++ with WTL 10.1/ATL and native Win32 controls. WTL is
+Historical decision: `fcitx5-config.exe` uses C++ with WTL 10.1/ATL and native Win32 controls. WTL is
 restored from the pinned NuGet package published for the official WTL 10.01
 release and verified by size and SHA-256. ATL is an explicit Visual Studio Build
 Tools component checked by bootstrap. No IDE wizard, designer, GUI automation,
@@ -33,7 +35,7 @@ or publish step is part of the build.
 | Engine | Rust product core + thin C++ Fcitx5 object adapter |
 | Candidate UI | Rust model/layout/interaction + Win32/Direct2D/DirectWrite renderer adapter |
 | Skin system | Strict TOML + bounded assets |
-| Config | Current shell: C++ / WTL / ATL / Win32; new product logic defaults to Rust |
+| Config | Temporary current shell: C++ / WTL / ATL / Win32; shipping cutover to Rust is authorized |
 | Candidate preview | Production Candidate renderer with synthetic data |
 | Launcher/package/updater | Superseded: Rust-owned product logic with remaining native/process adapters |
 | Animation | DirectComposition, optional and deferred |
@@ -60,4 +62,6 @@ network operations.
   engine, or Candidate rendering hot paths.
 - The first surface remains Basic appearance/settings plus Diagnostics and Repair.
 - Theme preview must reuse the production renderer instead of forking paint logic.
-- Reconsideration requires the evidence listed in specification v1.6 section 13.6.2.
+- Replacement requires a frozen Settings behavior corpus plus Rust shipping Config evidence for
+  keyboard/focus accessibility, DPI/no-clipping, localization, embedded candidate preview parity,
+  package smoke, and deletion of the old authoritative C++ WTL shell.

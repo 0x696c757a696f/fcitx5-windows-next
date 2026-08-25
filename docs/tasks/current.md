@@ -1,6 +1,6 @@
 # CONFIG-UX-009 WindInput-inspired Settings theme library and embedded live preview
 
-**State:** IN-PROGRESS / RUST-THEME-PREVIEW-CONTRACT-GREEN / RUST-FIRST-DOCS-AND-THEME-IMPORT-I18N-GREEN / THEME-ACTIONS-AFFORDANCE-NO-CLIP-GREEN
+**State:** IN-PROGRESS / RUST-THEME-PREVIEW-CONTRACT-GREEN / RUST-FIRST-DOCS-AND-THEME-IMPORT-I18N-GREEN / THEME-ACTIONS-AFFORDANCE-NO-CLIP-GREEN / THEME-FILE-OPERATIONS-BACKEND-LIVE-PACKAGE-GREEN
 
 ## Context
 
@@ -25,8 +25,9 @@ copying task explicitly records license attribution and NOTICE updates.
 Language baseline for this task: already Rust-owned Settings/Candidate/TSF/package/control logic
 must not be moved back to C++. New Settings product logic, preview contracts, theme/package
 operation models, validation, and testable UI-domain behavior default to Rust. The existing
-WTL/Win32/D2D Config code is only a shipping host/adapter unless a later task records explicit
-cutover evidence for replacing it.
+WTL/Win32/D2D Config code is only a temporary shipping host/adapter. It is not a durable exception:
+once this UX/operation contract is green, the queue must advance toward a Rust shipping Config
+cutover with differential behavior, accessibility, DPI, localization, visual, and package evidence.
 
 ## Scope
 
@@ -46,13 +47,18 @@ product surface:
   monochrome fallback as a visible limitation.
 - High-DPI behavior is automatic by default; do not add a “high DPI mode” switch. Advanced scale
   overrides are allowed only as user preference, not as the primary fix.
+- Retained Hi-DPI requirements from the removed historical plan: Settings layout must scale from
+  DPI-derived DIP metrics, not fixed physical pixels; cross-monitor `WM_DPICHANGED`/equivalent
+  behavior must reflow controls without blur, overlap, or clipping; candidate preview and real
+  candidate UI must follow caret/display DPI consistently.
 - Localized inline status/dialog text for every new operation.
 - No-overlap and no-clipping tests for all added page states.
 
 ## Must not do
 
-- Do not start a full Settings framework rewrite unless a later Rust Config cutover task explicitly
-  authorizes it.
+- Do not start the full Settings framework rewrite inside this theme-library slice. The owner has
+  authorized the Rust Config cutover direction; execute it as a separate gated task after the
+  current theme/preview behavior contract is frozen.
 - Do not show fake online “official plug-ins.” Online items require signed repository metadata and
   trusted keys.
 - Do not use global hooks, `SendInput` emulation, process injection, credential access, or external
@@ -62,6 +68,8 @@ product surface:
 ## Required validation
 
 - Settings visual contract at 100%, 150%, and 200% DPI.
+- Retain 125% and 300% DPI as future visual-regression expansion points for the Rust Config cutover
+  even if this slice only gates 100/150/200.
 - English and Simplified Chinese localization check for every added label/status/dialog.
 - Interaction coverage for every new command button, combo/list item, slider/edit, and destructive
   confirmation.

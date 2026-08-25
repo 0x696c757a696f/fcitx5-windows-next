@@ -1,7 +1,7 @@
 # RUST-R1-01 Rust workspace + package core/path model
 
-**State:** CURRENT
-**Canonical task:** `docs/tasks/rust/R1-01-PACKAGE-CORE.md`
+**State:** COMPLETED
+**Historical source task:** archived here; the obsolete standalone R1 package-core task source was removed after the Rust-first queue cleanup.
 
 ## Gate
 

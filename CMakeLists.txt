@@ -611,7 +611,7 @@ target_link_libraries(
   fcitx5_config_app
   PRIVATE fcitx5::windows_common fcitx5::release_identity fcitx5::config
           fcitx5::platform fcitx5_process_execution_core_rust d2d1 dwrite shell32 user32 comctl32
-          advapi32 ole32)
+          comdlg32 advapi32 ole32)
 add_dependencies(fcitx5_config_app fcitx5_process_execution_core_rustlib)
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
 target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
@@ -772,7 +772,7 @@ target_link_libraries(
 add_dependencies(fcitx5_package_core fcitx5_package_core_rustlib)
 
 add_custom_target(
-  fcitx5_downloader
+  fcitx5_downloader ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
@@ -828,7 +828,7 @@ add_custom_target(
   COMMENT "Building Rust fcitx5-provider CLI")
 
 add_custom_target(
-  fcitx5_updater
+  fcitx5_updater ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-updater.exe"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}

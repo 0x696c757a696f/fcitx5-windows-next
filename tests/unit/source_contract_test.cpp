@@ -560,6 +560,12 @@ int main(int argc, char** argv) {
         controlSource.find("fcitx5_control_theme_discovery_free") == std::string::npos ||
         controlSource.find("fcitx5_control_parse_theme_summary_utf8") == std::string::npos ||
         controlSource.find("fcitx5_control_theme_summary_free") == std::string::npos ||
+        controlSource.find("fcitx5_control_theme_export_utf8") == std::string::npos ||
+        controlSource.find("fcitx5_control_theme_export_file_utf16") ==
+            std::string::npos ||
+        controlSource.find("fcitx5_control_theme_import_file_utf16") == std::string::npos ||
+        controlSource.find("fcitx5_control_theme_duplicate_utf8") == std::string::npos ||
+        controlSource.find("fcitx5_control_theme_delete_utf8") == std::string::npos ||
         controlSource.find("fcitx5_control_theme_record_matches_requested_id_utf8") ==
             std::string::npos ||
         controlSource.find("fcitx5_control_native_package_architecture_utf8") ==
@@ -747,6 +753,17 @@ int main(int argc, char** argv) {
             std::string::npos ||
         rustControlCoreSource.find("fcitx5_control_resolve_theme_path_utf16") ==
             std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_theme_export_utf8") == std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_theme_export_file_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_theme_import_file_utf16") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_theme_duplicate_utf8") ==
+            std::string::npos ||
+        rustControlCoreSource.find("fcitx5_control_theme_delete_utf8") == std::string::npos ||
+        rustControlCoreSource.find(
+            "theme_file_operations_are_rust_owned_and_scoped_to_user_theme_dir") ==
+            std::string::npos ||
         rustControlCoreSource.find("theme_path_resolve_matches_windinput_style_contract") ==
             std::string::npos ||
         rustControlCoreSource.find("native_package_architecture_matches_target_contract") ==
@@ -790,7 +807,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         controlSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
             std::string::npos) {
-        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, optional config reads, installed manifest reads, addon metadata vocabulary/bool policy, theme vocabulary/storage/discovery/summary/resolve/match policy, package config surface policy, repository error classification, bundled package probe inventory, package type/native architecture/match/update/lifecycle/transaction policy, repository release-sequence/metadata/default URL policy, repository/package cache staging/publication, and atomic config file writes must be Rust-owned");
+        return fail("CONTROL-COMMON-RUST: Control text conversion, deadline, executable path, default data-root discovery, bounded file reads, optional config reads, installed manifest reads, addon metadata vocabulary/bool policy, theme vocabulary/storage/discovery/summary/resolve/match/file-operation policy, package config surface policy, repository error classification, bundled package probe inventory, package type/native architecture/match/update/lifecycle/transaction policy, repository release-sequence/metadata/default URL policy, repository/package cache staging/publication, and atomic config file writes must be Rust-owned");
     }
     if (controlSource.find("CreateProcessW(") != std::string::npos ||
         controlSource.find("WaitForSingleObject(process.hProcess") != std::string::npos) {
@@ -2009,8 +2026,7 @@ int main(int argc, char** argv) {
         configPocSource.find("addon_action_row_rects") == std::string::npos ||
         configPocSource.find("settings_operation_state_machine") == std::string::npos ||
         configPocSource.find("theme_action_state_machine") == std::string::npos ||
-        configPocSource.find("theme_operations_backend_pending_without_file_mutation") ==
-            std::string::npos ||
+        configPocSource.find("theme_operations_backend_live") == std::string::npos ||
         configPocSource.find("ThemeActionResult::Blocked(\"theme.read_only\")") ==
             std::string::npos ||
         configPocManifest.find("fcitx5-control-core") == std::string::npos ||
@@ -2043,6 +2059,10 @@ int main(int argc, char** argv) {
         configSource.find("ModernAction::themeImport") == std::string::npos ||
         configSource.find("ModernAction::themeExport") == std::string::npos ||
         configSource.find("ModernAction::themeDelete") == std::string::npos ||
+        configSource.find("--themes-duplicate") == std::string::npos ||
+        configSource.find("--themes-import") == std::string::npos ||
+        configSource.find("--themes-export-to") == std::string::npos ||
+        configSource.find("--themes-delete") == std::string::npos ||
         cmakeSource.find("rust-config-poc-contract") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
@@ -2056,8 +2076,15 @@ int main(int argc, char** argv) {
         englishLocale.find("\"theme.security.path_scope.theme_directory\"") ==
             std::string::npos ||
         englishLocale.find("\"theme.action.duplicate\"") == std::string::npos ||
-        englishLocale.find("\"theme.operation.backend_pending\"") == std::string::npos ||
         englishLocale.find("\"theme.operation.delete_readonly\"") == std::string::npos ||
+        englishLocale.find("\"theme.operation.duplicated\"") == std::string::npos ||
+        englishLocale.find("\"theme.operation.imported\"") == std::string::npos ||
+        englishLocale.find("\"theme.operation.exported\"") == std::string::npos ||
+        englishLocale.find("\"theme.operation.deleted\"") == std::string::npos ||
+        englishLocale.find("\"theme.dialog.import.title\"") == std::string::npos ||
+        englishLocale.find("\"theme.dialog.export.title\"") == std::string::npos ||
+        englishLocale.find("\"theme.dialog.delete.title\"") == std::string::npos ||
+        englishLocale.find("\"theme.dialog.delete.body\"") == std::string::npos ||
         englishLocale.find("\"nav.packages\": \"Add-ons & Extensions\"") ==
             std::string::npos ||
         englishLocale.find("\"updates.title\": \"Updates\"") == std::string::npos) {

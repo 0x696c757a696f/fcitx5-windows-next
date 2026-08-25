@@ -185,7 +185,7 @@ struct OperationEvidence {
     theme_duplicate_affordance_present: bool,
     theme_import_export_affordance_present: bool,
     theme_delete_readonly_blocked: bool,
-    theme_operations_backend_pending_without_file_mutation: bool,
+    theme_operations_backend_live: bool,
     localized_operation_errors: bool,
     no_unsafe_commands_for_package_actions: bool,
 }
@@ -252,7 +252,7 @@ enum ThemeAction {
 enum ThemeActionResult {
     Applied(&'static str),
     Blocked(&'static str),
-    PendingBackend(&'static str),
+    BackendReady(&'static str),
 }
 
 #[derive(Clone, Debug)]
@@ -1274,20 +1274,20 @@ fn validate_operations() -> Result<OperationEvidence, String> {
     theme_transition_count += 1;
     let theme_duplicate_affordance_present = matches!(
         theme_action_result(ThemeSource::BuiltIn, ThemeAction::Duplicate),
-        ThemeActionResult::PendingBackend("theme.backend.pending")
+        ThemeActionResult::BackendReady("theme.backend.ready")
     );
     if !theme_duplicate_affordance_present {
-        return Err("theme duplicate operation must be visible and backend-gated".to_owned());
+        return Err("theme duplicate operation must be visible and backend-backed".to_owned());
     }
     theme_transition_count += 1;
     let import_pending = matches!(
         theme_action_result(ThemeSource::User, ThemeAction::Import),
-        ThemeActionResult::PendingBackend("theme.backend.pending")
+        ThemeActionResult::BackendReady("theme.backend.ready")
     );
     theme_transition_count += 1;
     let export_pending = matches!(
         theme_action_result(ThemeSource::User, ThemeAction::Export),
-        ThemeActionResult::PendingBackend("theme.backend.pending")
+        ThemeActionResult::BackendReady("theme.backend.ready")
     );
     theme_transition_count += 1;
     let theme_import_export_affordance_present = import_pending && export_pending;
@@ -1317,7 +1317,7 @@ fn validate_operations() -> Result<OperationEvidence, String> {
         theme_duplicate_affordance_present,
         theme_import_export_affordance_present,
         theme_delete_readonly_blocked,
-        theme_operations_backend_pending_without_file_mutation: true,
+        theme_operations_backend_live: true,
         localized_operation_errors: true,
         no_unsafe_commands_for_package_actions: true,
     })
@@ -1327,10 +1327,10 @@ fn theme_action_result(source: ThemeSource, action: ThemeAction) -> ThemeActionR
     match action {
         ThemeAction::Select => ThemeActionResult::Applied("theme.selected"),
         ThemeAction::Duplicate | ThemeAction::Import | ThemeAction::Export => {
-            ThemeActionResult::PendingBackend("theme.backend.pending")
+            ThemeActionResult::BackendReady("theme.backend.ready")
         }
         ThemeAction::Delete if source == ThemeSource::User => {
-            ThemeActionResult::PendingBackend("theme.backend.pending")
+            ThemeActionResult::BackendReady("theme.backend.ready")
         }
         ThemeAction::Delete => ThemeActionResult::Blocked("theme.read_only"),
     }
@@ -1710,12 +1710,20 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
         "\"packages_state\"",
         "\"packages_remove\"",
         "\"packages_repair\"",
+        "\"themes_export\"",
+        "\"themes_export_to\"",
+        "\"themes_import\"",
+        "\"themes_duplicate\"",
+        "\"themes_delete\"",
     ]
     .iter()
     .all(|marker| schema.contains(marker))
         && usage.contains("--packages-install ID")
         && usage.contains("--packages-state ID enabled|disabled")
-        && usage.contains("--packages-remove ID");
+        && usage.contains("--packages-remove ID")
+        && usage.contains("--themes-export-to ID FILE")
+        && usage.contains("--themes-import FILE")
+        && usage.contains("--themes-delete ID");
     let typed_control_diagnostics_commands_present =
         schema.contains("\"diagnostics_plan\"") && usage.contains("--diagnostics-plan");
     let typed_control_package_network_owner =
@@ -1857,7 +1865,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_pending_without_file_mutation\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         json_escape(model.product_name),
         model.no_shell_out,
         pages,
@@ -1898,7 +1906,7 @@ fn render_report(
         operations.theme_duplicate_affordance_present,
         operations.theme_import_export_affordance_present,
         operations.theme_delete_readonly_blocked,
-        operations.theme_operations_backend_pending_without_file_mutation,
+        operations.theme_operations_backend_live,
         boundaries.typed_control_schema_consumed,
         boundaries.typed_control_package_commands_present,
         boundaries.typed_control_diagnostics_commands_present,
@@ -2167,7 +2175,7 @@ mod tests {
         assert!(report.contains("\"theme_duplicate_affordance_present\":true"));
         assert!(report.contains("\"theme_import_export_affordance_present\":true"));
         assert!(report.contains("\"theme_delete_readonly_blocked\":true"));
-        assert!(report.contains("\"theme_operations_backend_pending_without_file_mutation\":true"));
+        assert!(report.contains("\"theme_operations_backend_live\":true"));
         assert!(report.contains("\"typed_control_schema_consumed\":true"));
         assert!(report.contains("\"typed_control_package_commands_present\":true"));
         assert!(report.contains("\"typed_control_diagnostics_commands_present\":true"));
@@ -2229,22 +2237,22 @@ mod tests {
     }
 
     #[test]
-    fn theme_action_model_is_rust_owned_and_file_safe_until_backend_cutover() {
+    fn theme_action_model_is_rust_owned_and_file_safe_after_backend_cutover() {
         assert_eq!(
             theme_action_result(ThemeSource::BuiltIn, ThemeAction::Select),
             ThemeActionResult::Applied("theme.selected")
         );
         assert_eq!(
             theme_action_result(ThemeSource::BuiltIn, ThemeAction::Duplicate),
-            ThemeActionResult::PendingBackend("theme.backend.pending")
+            ThemeActionResult::BackendReady("theme.backend.ready")
         );
         assert_eq!(
             theme_action_result(ThemeSource::User, ThemeAction::Import),
-            ThemeActionResult::PendingBackend("theme.backend.pending")
+            ThemeActionResult::BackendReady("theme.backend.ready")
         );
         assert_eq!(
             theme_action_result(ThemeSource::User, ThemeAction::Export),
-            ThemeActionResult::PendingBackend("theme.backend.pending")
+            ThemeActionResult::BackendReady("theme.backend.ready")
         );
         assert_eq!(
             theme_action_result(ThemeSource::BuiltIn, ThemeAction::Delete),
@@ -2256,7 +2264,7 @@ mod tests {
         );
         assert_eq!(
             theme_action_result(ThemeSource::User, ThemeAction::Delete),
-            ThemeActionResult::PendingBackend("theme.backend.pending")
+            ThemeActionResult::BackendReady("theme.backend.ready")
         );
     }
 

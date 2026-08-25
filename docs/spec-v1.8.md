@@ -18,9 +18,9 @@ Codex 执行版 · 个人项目模式
 
 **本版重点：**v1.8 继续以 `d12474cc2ad541c6ae3824b701c8408a22e74500`（2026-08-19）作为**可重放的完整源码审计基线**，同时在 2026-08-20 重新核对公开 `main` 的 Config/Candidate 当前代码以吸收其已出现的 UI 实现变化；**不得把 `d12474c...` 误写成永远的“最新 HEAD”**。真正开始实现前必须先记录本地 `git rev-parse HEAD`，若 HEAD 已前进，则只对受影响 subsystem 做增量审计并记录新 SHA。在 v1.7 风险驱动 Rust 迁移原则不变的前提下，正式补齐 **Config UI/UX、Candidate UI/UX、Design System、企鹅品牌/任务栏/TSF 图标、单一 TSF profile 与默认显示名、TSF in-use DLL 更新 / Generation Draining** 的产品规格。Windows 侧只注册并维护 **一个 Fcitx5 TSF profile**；Rime、拼音、Mozc、Hangul、m17n 等输入法/引擎只在 Fcitx5 内部切换，不为每个 engine 创建 Windows TSF profile。直接操作 Fcitx5 core/addon 对象的 Engine adapter 是长期 C++ island；其它产品自有 Windows 逻辑默认 Rust-first，已切到 Rust 的组件不得因旧基线文字倒退回 C++。现有 Win32/COM/D2D/WTL 代码只在被当前证据证明为必要 adapter/shell 时保留。
 
-**2026-08-25 现状覆盖：**本长规格包含历史基线语言；当前执行以 `docs/current.md`、`docs/tasks/rebaseline.md`、`docs/engine-boundary.md`、`docs/tasks/PLAN.md` 为准。当前 shipping TSF DLL 已是 Rust，Candidate model/layout/interaction 已 Rust-owned，Config 仍有 WTL/Win32 shell 但新 Settings 产品逻辑默认 Rust。不要把本文件中描述旧 C++ baseline 的段落解释为重新引入 C++ ownership 的授权。
+**2026-08-25 现状覆盖：**本长规格包含历史基线语言；当前执行以 `docs/current.md`、`docs/tasks/rebaseline.md`、`docs/engine-boundary.md`、`docs/tasks/PLAN.md` 为准。当前 shipping TSF DLL 已是 Rust，Candidate model/layout/interaction 已 Rust-owned，Config 仍有 WTL/Win32 shell 但只是临时 shipping adapter，不是不迁移的 C++ 例外。不要把本文件中描述旧 C++ baseline 的段落解释为重新引入 C++ ownership 的授权；除直接操作 Fcitx5 core/addon 对象的 Engine adapter 岛外，不保留不必要的 C++ 产品逻辑，新代码默认 Rust。
 
-**规格冻结规则：**从 v1.8 起再次冻结。只有真实实现、测试失败、平台/工具链行为、安全事件或可验证的产品需求才能解冻；不得因为“Rust/GUI 框架更潮”扩大迁移面。UI 改进必须优先复用现有 WTL/Win32/D2D/DWrite 技术栈，不以换框架作为美观方案。
+**规格冻结规则：**从 v1.8 起再次冻结。只有真实实现、测试失败、平台/工具链行为、安全事件或可验证的产品需求才能解冻；不得因为“Rust/GUI 框架更潮”扩大迁移面。UI 改进必须优先保留已验证的用户语义、无障碍、DPI、主题与测试证据；产品状态/校验/操作模型默认 Rust-owned，WTL/Win32/D2D/DWrite 只作为有证据的临时 native adapter 或 renderer seam，不以换框架作为美观方案。
 
 **目标：**构建一个 Windows 原生 TSF 前端，使 Fcitx5 核心与其 addon 生态在 Windows 上可长期维护地运行，同时保证输入隐私、宿主进程稳定、单一 Windows TSF profile 下的多语言 engine 语义正确、插件隔离、原子且可验证的更新，以及现代、克制、低认知负担的设置与候选体验；Windows 10/11 为持续演进主线，Win7 SP1 作为有明确边界的 Legacy compatibility lane。
 
@@ -257,16 +257,16 @@ Windows Application
 ▼
 ┌───────────────────────┐
 │ fcitx5-ui.exe │
-│ C++ / Win32 / D2D / DWrite │
+│ Rust-owned candidate domain + native renderer adapter │
 └───────────────────────┘
 
 Management plane
 ┌───────────────────────┐
-│ fcitx5-config.exe │ C++ / WTL
+│ fcitx5-config.exe │ Rust-owned settings domain + temporary native shell
 └──────────┬────────────┘
 ▼
 ┌───────────────────────┐
-│ fcitx5-package.exe │ C++ current → Rust R1 / verify/resolve/stage/activate
+│ fcitx5-package.exe │ Rust R1 / verify/resolve/stage/activate
 └──────┬─────────┬──────┘
 │ └────► deployer / provider adapters
 └──────────────► updater / repositories
@@ -528,13 +528,13 @@ CandidateModel
 
 | **部分** | **选择** | **理由** |
 |----------|----------|----------|
-| 候选窗 | **C++ + Win32 + Direct2D + DirectWrite** | Windows 原生、Win7→Win11 工具链/调试经验最成熟；低常驻开销；Unicode/字体 fallback、DPI、device loss 与皮肤渲染可精确控制 |
-| 配置器 | **C++ + WTL/ATL + Win32** | Windows-only、轻量、成熟、可无人值守 CMake/MSVC 构建；不进入输入热路径；复杂视觉仅做必要 owner-draw/D2D |
+| 候选窗 | **Rust-owned Candidate domain + Win32/Direct2D/DirectWrite renderer adapter** | Rust 负责 model/layout/interaction/preview contract；native renderer adapter 保留 Windows Unicode/字体 fallback、DPI、device loss 与皮肤渲染证据，直到等价 renderer 迁移任务通过 |
+| 配置器 | **Rust-owned Settings domain + temporary WTL/ATL/Win32 shell** | typed settings、validation、operation orchestration、preview state、theme/package/control 行为归 Rust；现有 native shell 只作为 shipping adapter，后续按 Config Rust cutover 任务替换 |
 | 候选预览 | 复用真实 Candidate renderer 的 preview host / presentation path | 避免 WTL 再实现第二套候选渲染，保证配置预览与真实皮肤一致 |
 | WebView2 / Web UI | 不作为默认依赖 | 配置器无需浏览器 runtime；未来只有明确、不可替代的管理 UI 需求才重新评估 |
-| 其他 GUI framework | 当前不采用 | 现有 WTL + 原生 renderer 已满足 Windows-only、Legacy lane、CI/CD 与美观需求；禁止无证据重复换框架 |
+| 其他 GUI framework | 当前不采用为默认重写理由 | 禁止无证据重复换框架；若 Rust Config cutover 选择新 GUI runtime，必须先证明 a11y、DPI、输入、CI/CD、包体与 Legacy/Modern 影响 |
 
-Candidate renderer 的内存安全主要通过**进程隔离 + RAII + smart COM pointer + bounded IPC + fuzz/ASan/Verifier + 明确 state owner**保证。不得为了“语言更安全”引入需要自行维护 Tier-3 Legacy toolchain 的复杂度，除非真实缺陷数据证明收益高于成本。
+Candidate renderer 的内存安全主要通过**进程隔离 + Rust-owned state/layout + RAII/smart COM pointer native seam + bounded IPC + fuzz/ASan/Verifier + 明确 state owner**保证。不得为了“语言更安全”一次性重写尚未冻结证据的 renderer seam；但已迁 Rust 的 Candidate/Settings/TSF/package/control 语义不得回退到 C++。
 
 ## 5.3 皮肤包
 
@@ -3044,7 +3044,7 @@ D2D device loss
 | Phase 4：CandidateModel + 独立 C++ D2D UI + UILess | 保留 C++ Win32/D2D/DWrite renderer；把 UILess `popup_allowed/presentation_mode` 做成跨进程 context policy；修正 `(epoch, context, composition, revision)` 作用域和 A→B→A；DWrite locale 跟 active Fcitx input method/content locale/文本语言走；配置 reload 由 generation/broadcast 驱动、文件时间仅低频 fallback。继续 DPI、多屏、device loss、无障碍、theme/golden。**不因 Rust 可写 D2D 而重写 renderer。** | Word/UILess host 返回 `show=false` 时独立 popup 不显示而 UIElement/a11y 仍可用；A→B→A 不误丢合法 snapshot；非 zh-CN internal engine/content locale 字体/locale 正确；125/150/200%/多屏/device-loss/High Contrast 通过；隐藏时无持续 render loop/输入频率磁盘 polling。 |
 | **Milestone D0.1：First Usable / Dogfood Build** | **停止增加平台能力，打出一个供维护者日常使用的 Developer Preview。** 允许开发安装脚本/手工安装；不要求插件商店、自动更新、Plum GUI、winget/Chocolatey 或完整 package repository。把 League of Legends + Vanguard 提前作为一等真实宿主：只验证正规 TSF/Windows 系统兼容路径，不为游戏新增 Hook/SendInput/注入/规避。 | 能在日常 Windows 环境持续使用：x86/x64、真实 Fcitx5、真实候选 UI、基本字体/主题/横竖排；Notepad/Word/Chrome/VS Code 可输入；LoL 游戏内聊天至少完成 composition/candidate/commit、Alt+Tab 恢复和控制键 passthrough smoke，Vanguard 正常且无特殊规避代码；engine/UI 故障不拖垮宿主。达到后先 dogfood 和修真实问题，再进入 Phase 5。 |
 | Phase 5：可靠性、安全与兼容 + R2 前置 | 基于真实宿主补 Weasel/Rabbit/Moqi/WindInput/host-side regression；完成 launcher crash ledger、Control/Config authoritative process execution、peer identity、register/bootstrap side-effect containment、LoL/Vanguard、老游戏、RDP、Win7 Legacy VM。全部 C++ 语义稳定后，才允许按 R2 对 launcher/control/diagnostics 做 side-by-side Rust PoC。 | engine/UI crash 不杀宿主；launcher 自身重启不能绕过 SafeMode；64KiB/1MiB child output/hang/cancel 测试通过；Win7 VM + Office/terminal/老 x86/LoL 核心矩阵通过；R2 若启动必须 differential 通过且未引入 anti-cheat/Legacy 回归。 |
-| Phase 6：Config UI/UX、安装与 i18n | 保持 WTL/Win32 宿主并引入**小型、产品专用** D2D/DWrite Settings Component System；Config 只走 typed API；production Candidate Preview inline/live；System/Light/Dark/High Contrast；按“输入法/外观/快捷键/插件与扩展/更新/诊断与修复”组织。自绘交互控件同步实现 keyboard/focus/UI Automation；无法做到等价 a11y 的控件退回 native HWND。完成 Penguin-first Product Icon、固定 micro-penguin TSF icon/name、稳定 AppUserModelID 与统一 resource pipeline。Inno/Control 明确 per-machine program/system registration 与 per-user startup/session/config owner。 | Config 不再呈现传统属性页/裸表单观感；Design Tokens/组件复用、DPI/keyboard/UIA/Narrator/NVDA/theme smoke 通过；Windows 输入法列表只出现一个名为 `Fcitx5` 的固定 profile/icon；Config 是正常任务栏应用，Candidate/Launcher/Engine/后台 helpers 无额外 taskbar/Alt+Tab surface；默认无额外常驻 tray icon；切换内部 engine 不新增 profile；跨账户 UAC uninstall 正确。 |
+| Phase 6：Config UI/UX、安装与 i18n | WTL/Win32 宿主只作为临时 shipping adapter；Settings typed state、validation、operation orchestration、theme/package/control 行为、preview contract 与可测试 UI-domain 逻辑默认 Rust-owned。production Candidate Preview inline/live；System/Light/Dark/High Contrast；按“输入法/外观/快捷键/插件与扩展/更新/诊断与修复”组织。自绘交互控件同步实现 keyboard/focus/UI Automation；无法做到等价 a11y 的控件退回 native HWND。完成 Penguin-first Product Icon、固定 micro-penguin TSF icon/name、稳定 AppUserModelID 与统一 resource pipeline。Inno/Control 明确 per-machine program/system registration 与 per-user startup/session/config owner。 | Config 不再呈现传统属性页/裸表单观感；Design Tokens/组件复用、DPI/keyboard/UIA/Narrator/NVDA/theme smoke 通过；Rust Config cutover 任务替换临时 C++ shell 前需冻结等价行为/无障碍/DPI/本地化/视觉证据；Windows 输入法列表只出现一个名为 `Fcitx5` 的固定 profile/icon；Config 是正常任务栏应用，Candidate/Launcher/Engine/后台 helpers 无额外 taskbar/Alt+Tab surface；默认无额外常驻 tray icon；切换内部 engine 不新增 profile；跨账户 UAC uninstall 正确。 |
 | Phase 7：Package / Addon / Provider + Rust R1 | 先以现有 C++ package/repository/update 实现和 hostile corpus 固定正确行为，再为 Modern lane 逐组件实现 Rust R1：package core/repository/updater/downloader/provider，deployer 仅在权限/Legacy toolchain 证据充分时迁。加入 Cargo lock/advisory/license/source/SBOM gates；同一 wire/manifest/path corpus 做 C++↔Rust differential。实现 TSF in-use DLL 的 generation-specific staging/activation/drain，不把 Rust 迁移与协议兼容混在一起。 | staging+verify+atomic activation/previous-known-good 不回退；DOS device/case/reparse/path corpus、签名/hash/rollback/corrupt-sequence、archive budgets fuzz 通过；`REG-UPDATE-TSF-001/002` 通过；Rust artifact 在 clean runner/package/update smoke 通过；cutover 后删除旧 C++ authoritative implementation；Legacy 未证明 Rust Win7 时继续其 C++ lineage。 |
 | Phase 8：分发与公开发布 | Stable/Beta/Nightly identity；签名、统一 C++/Cargo SBOM、release gate、Chocolatey/winget；每条 Modern/Legacy artifact lineage Build Once。验证 mixed-toolchain provenance、previous-known-good、key rotation/revocation；不得在 signing job 重编 C++ 或 Rust。 | 最终发布 bytes 的 hash/signature/SBOM/provenance 对得上 source commit + locked MSVC/MSYS2/Cargo toolchains；坏 release 可整套回退；系统包管理器与 builtin updater 不抢 Core 更新权；Rust/C++ release 依赖与许可证均无 inventory blind spot。 |
 
@@ -3182,8 +3182,8 @@ Codex 在读取/执行用户请求后先内部归类为 RESEARCH、REVIEW、CHAN
 | **Decision**       | **当前选择**                                                                    | **重新评估触发条件**                                                  |
 |--------------------|---------------------------------------------------------------------------------|-----------------------------------------------------------------------|
 | Windows Frontend   | 正式 TSF                                                                        | 仅在 Microsoft 平台模型发生根本变化时                                 |
-| Candidate Renderer | 独立 ui.exe：C++ / Win32 / Direct2D / DirectWrite；TSF 仅提供 UIElement/布局桥接 | 仅在 D2D/DWrite 出现无法解决的兼容/性能/无障碍问题，或 Legacy lane 结束且 Rust PoC 有明确收益时重新评估 |
-| Config UI          | C++ + WTL/ATL + Win32（Phase 6 后进入）                                          | WTL 无法满足已验证的产品/无障碍需求，且替换收益明显高于局部扩展成本    |
+| Candidate Renderer | Rust-owned Candidate model/layout/interaction + 独立 native Win32/D2D/DWrite renderer adapter；TSF 仅提供 UIElement/布局桥接 | renderer seam 只有在等价视觉/DPI/无障碍/性能证据通过后替换；Candidate 语义不回退到 C++ |
+| Config UI          | Rust-owned Settings domain + temporary WTL/ATL/Win32 shell adapter              | 已排队 Rust Config cutover；替换前冻结等价行为/无障碍/DPI/本地化/视觉证据，不保留不必要 C++ |
 | Core Update        | 版本目录 + 事务切换                                                             | 未来统一系统包管理有更强原子机制                                      |
 | Plugin API         | Fcitx addon API                                                                 | upstream 明确提供新的跨平台 ABI                                       |
 | Portable           | Self-contained + TSF 注册                                                       | Windows 提供真正免注册 IME 模型                                       |

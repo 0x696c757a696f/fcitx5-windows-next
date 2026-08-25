@@ -267,6 +267,26 @@ int fcitx5_control_themes_json_utf8(const Fcitx5ControlThemeRecord* themes,
                                     std::size_t* out_len);
 int fcitx5_control_theme_detail_json_utf8(const Fcitx5ControlThemeDetail* detail,
                                           char** out_ptr, std::size_t* out_len);
+int fcitx5_control_theme_export_utf8(Fcitx5ControlUtf16 install_root,
+                                     Fcitx5ControlUtf16 data_root,
+                                     Fcitx5ControlUtf8 requested_id, char** out_ptr,
+                                     std::size_t* out_len);
+int fcitx5_control_theme_export_file_utf16(Fcitx5ControlUtf16 install_root,
+                                           Fcitx5ControlUtf16 data_root,
+                                           Fcitx5ControlUtf8 requested_id,
+                                           Fcitx5ControlUtf16 destination_path,
+                                           char** out_ptr, std::size_t* out_len);
+int fcitx5_control_theme_import_file_utf16(Fcitx5ControlUtf16 data_root,
+                                           Fcitx5ControlUtf16 source_path, char** out_ptr,
+                                           std::size_t* out_len);
+int fcitx5_control_theme_duplicate_utf8(Fcitx5ControlUtf16 install_root,
+                                        Fcitx5ControlUtf16 data_root,
+                                        Fcitx5ControlUtf8 source_id,
+                                        Fcitx5ControlUtf8 new_id, char** out_ptr,
+                                        std::size_t* out_len);
+int fcitx5_control_theme_delete_utf8(Fcitx5ControlUtf16 data_root,
+                                     Fcitx5ControlUtf8 requested_id, char** out_ptr,
+                                     std::size_t* out_len);
 int fcitx5_control_packages_list_json_utf8(const Fcitx5ControlPackagesList* list,
                                            char** out_ptr, std::size_t* out_len);
 int fcitx5_control_package_dependencies_json_utf8(
@@ -534,6 +554,13 @@ constexpr std::uint32_t kPackageActionPackagesUpdate = 8;
 constexpr std::uint32_t kPackageActionPackagesState = 9;
 constexpr std::uint32_t kPackageActionPackagesRemove = 10;
 constexpr std::uint32_t kPackageActionPackagesRepair = 11;
+constexpr std::uint32_t kPackageActionThemesExport = 12;
+constexpr std::uint32_t kPackageActionThemesImport = 13;
+constexpr std::uint32_t kPackageActionThemesDuplicate = 14;
+constexpr std::uint32_t kPackageActionThemesDelete = 15;
+constexpr std::uint32_t kPackageActionThemesExportTo = 16;
+constexpr int kThemeOperationOk = 0;
+constexpr int kThemeOperationReadOnly = 4;
 
 std::string narrow(std::wstring_view value) {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
@@ -1384,6 +1411,72 @@ void printThemeDetail(const fs::path& dataRoot, std::string_view id) {
     std::cout << themeDetailJson(*theme) << '\n';
 }
 
+int printThemeOperationResult(int status, char* bytes, std::size_t length) {
+    if (status == kThemeOperationOk) {
+        const std::string output = takeRustUtf8(bytes, length);
+        std::cout << output;
+        if (output.empty() || output.back() != '\n')
+            std::cout << '\n';
+        return 0;
+    }
+    fcitx5_control_utf8_free(bytes, length);
+    std::cerr << "theme_operation_failed: " << status << '\n';
+    return status == kThemeOperationReadOnly ? 3 : 5;
+}
+
+int exportTheme(const fs::path& dataRoot, std::string_view id) {
+    const std::wstring installRootText = installationRoot().wstring();
+    const std::wstring dataRootText = dataRoot.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_theme_export_utf8(
+        nativeView(installRootText), nativeView(dataRootText), utf8View(id), &bytes, &length);
+    return printThemeOperationResult(status, bytes, length);
+}
+
+int importTheme(const fs::path& dataRoot, const fs::path& sourcePath) {
+    const std::wstring dataRootText = dataRoot.wstring();
+    const std::wstring sourcePathText = sourcePath.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_theme_import_file_utf16(
+        nativeView(dataRootText), nativeView(sourcePathText), &bytes, &length);
+    return printThemeOperationResult(status, bytes, length);
+}
+
+int exportThemeToFile(const fs::path& dataRoot, std::string_view id,
+                      const fs::path& destinationPath) {
+    const std::wstring installRootText = installationRoot().wstring();
+    const std::wstring dataRootText = dataRoot.wstring();
+    const std::wstring destinationPathText = destinationPath.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_theme_export_file_utf16(
+        nativeView(installRootText), nativeView(dataRootText), utf8View(id),
+        nativeView(destinationPathText), &bytes, &length);
+    return printThemeOperationResult(status, bytes, length);
+}
+
+int duplicateTheme(const fs::path& dataRoot, std::string_view sourceId, std::string_view newId) {
+    const std::wstring installRootText = installationRoot().wstring();
+    const std::wstring dataRootText = dataRoot.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_theme_duplicate_utf8(
+        nativeView(installRootText), nativeView(dataRootText), utf8View(sourceId),
+        utf8View(newId), &bytes, &length);
+    return printThemeOperationResult(status, bytes, length);
+}
+
+int deleteTheme(const fs::path& dataRoot, std::string_view id) {
+    const std::wstring dataRootText = dataRoot.wstring();
+    char* bytes = nullptr;
+    std::size_t length = 0;
+    const int status = fcitx5_control_theme_delete_utf8(
+        nativeView(dataRootText), utf8View(id), &bytes, &length);
+    return printThemeOperationResult(status, bytes, length);
+}
+
 fs::path defaultDataRoot() {
     fcitx::windows::platform::RuntimeIdentity identity;
     if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
@@ -1947,6 +2040,16 @@ int wmain(int argc, wchar_t** argv) {
             printThemeDetail(dataRoot, narrow(arguments[1]));
             return 0;
         }
+        if (packageCommand == kPackageActionThemesExport)
+            return exportTheme(dataRoot, narrow(arguments[1]));
+        if (packageCommand == kPackageActionThemesImport)
+            return importTheme(dataRoot, fs::path(arguments[1]));
+        if (packageCommand == kPackageActionThemesExportTo)
+            return exportThemeToFile(dataRoot, narrow(arguments[1]), fs::path(arguments[2]));
+        if (packageCommand == kPackageActionThemesDuplicate)
+            return duplicateTheme(dataRoot, narrow(arguments[1]), narrow(arguments[2]));
+        if (packageCommand == kPackageActionThemesDelete)
+            return deleteTheme(dataRoot, narrow(arguments[1]));
         if (packageCommand == kPackageActionAddonsList) {
             printAddons();
             return 0;
