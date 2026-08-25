@@ -198,8 +198,101 @@ struct OperationEvidence {
     theme_import_export_affordance_present: bool,
     theme_delete_readonly_blocked: bool,
     theme_operations_backend_live: bool,
+    numeric_appearance: AppearanceNumericEvidence,
     localized_operation_errors: bool,
     no_unsafe_commands_for_package_actions: bool,
+}
+
+#[derive(Clone, Debug)]
+struct AppearanceNumericEvidence {
+    numeric_appearance_inputs: bool,
+    valid_typed_entry_updates_draft: bool,
+    invalid_text_rejected: bool,
+    paste_out_of_range_rejected: bool,
+    ime_cancellation_keeps_last_valid: bool,
+    min_max_bounds_checked: bool,
+    localized_error_text: bool,
+    rollback_keeps_last_valid: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppearanceNumericField {
+    FontSizeDip,
+    Opacity,
+    SpacingDip,
+    CornerRadiusDip,
+    CandidateWidthDip,
+}
+
+impl AppearanceNumericField {
+    fn spec(self) -> AppearanceNumericSpec {
+        match self {
+            Self::FontSizeDip => AppearanceNumericSpec {
+                key: "font_size_dip",
+                min: 8.0,
+                max: 72.0,
+            },
+            Self::Opacity => AppearanceNumericSpec {
+                key: "opacity",
+                min: 0.20,
+                max: 1.0,
+            },
+            Self::SpacingDip => AppearanceNumericSpec {
+                key: "spacing_dip",
+                min: 0.0,
+                max: 64.0,
+            },
+            Self::CornerRadiusDip => AppearanceNumericSpec {
+                key: "corner_radius_dip",
+                min: 0.0,
+                max: 48.0,
+            },
+            Self::CandidateWidthDip => AppearanceNumericSpec {
+                key: "candidate_width_dip",
+                min: 160.0,
+                max: 2048.0,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AppearanceNumericSpec {
+    key: &'static str,
+    min: f32,
+    max: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AppearanceNumericOutcome {
+    Accepted(f32),
+    Rejected(&'static str),
+    Incomplete(&'static str),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AppearanceNumericState {
+    field: AppearanceNumericField,
+    last_valid: f32,
+}
+
+impl AppearanceNumericState {
+    fn new(field: AppearanceNumericField, last_valid: f32) -> Self {
+        Self { field, last_valid }
+    }
+
+    fn apply_text(&mut self, text: &str) -> AppearanceNumericOutcome {
+        match validate_appearance_numeric_input(self.field, text) {
+            Ok(value) => {
+                self.last_valid = value;
+                AppearanceNumericOutcome::Accepted(value)
+            }
+            Err(error) if error == "appearance.numeric.incomplete" => {
+                AppearanceNumericOutcome::Incomplete(error)
+            }
+            Err(error) => AppearanceNumericOutcome::Rejected(error),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1654,6 +1747,7 @@ fn validate_operations() -> Result<OperationEvidence, String> {
         return Err("theme import/export/delete operation policy is incomplete".to_owned());
     }
     theme_transition_count += 1;
+    let numeric_appearance = validate_numeric_appearance_inputs()?;
 
     Ok(OperationEvidence {
         setting_transition_count,
@@ -1673,6 +1767,7 @@ fn validate_operations() -> Result<OperationEvidence, String> {
         theme_import_export_affordance_present,
         theme_delete_readonly_blocked,
         theme_operations_backend_live: true,
+        numeric_appearance,
         localized_operation_errors: true,
         no_unsafe_commands_for_package_actions: true,
     })
@@ -1722,6 +1817,84 @@ fn toggle_advanced_appearance(settings: &mut SettingsState) {
 
 fn update_candidate_preview(settings: &mut SettingsState) {
     settings.preview_revision += 1;
+}
+
+fn validate_appearance_numeric_input(
+    field: AppearanceNumericField,
+    text: &str,
+) -> Result<f32, &'static str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("appearance.numeric.incomplete");
+    }
+    let Ok(value) = trimmed.parse::<f32>() else {
+        return Err("appearance.numeric.invalid");
+    };
+    if !value.is_finite() {
+        return Err("appearance.numeric.invalid");
+    }
+    let spec = field.spec();
+    if value < spec.min || value > spec.max {
+        return Err("appearance.numeric.out_of_range");
+    }
+    Ok(value)
+}
+
+fn validate_numeric_appearance_inputs() -> Result<AppearanceNumericEvidence, String> {
+    let mut font_size = AppearanceNumericState::new(AppearanceNumericField::FontSizeDip, 18.0);
+    let valid_typed_entry_updates_draft = matches!(
+        font_size.apply_text("20"),
+        AppearanceNumericOutcome::Accepted(value) if (value - 20.0).abs() < f32::EPSILON
+    ) && (font_size.last_valid - 20.0).abs() < f32::EPSILON;
+    let invalid_text_rejected = matches!(
+        font_size.apply_text("twenty"),
+        AppearanceNumericOutcome::Rejected("appearance.numeric.invalid")
+    ) && (font_size.last_valid - 20.0).abs() < f32::EPSILON;
+    let paste_out_of_range_rejected = matches!(
+        font_size.apply_text("9999"),
+        AppearanceNumericOutcome::Rejected("appearance.numeric.out_of_range")
+    ) && (font_size.last_valid - 20.0).abs() < f32::EPSILON;
+    let ime_cancellation_keeps_last_valid = matches!(
+        font_size.apply_text(""),
+        AppearanceNumericOutcome::Incomplete("appearance.numeric.incomplete")
+    ) && (font_size.last_valid - 20.0).abs() < f32::EPSILON;
+    let mut opacity = AppearanceNumericState::new(AppearanceNumericField::Opacity, 1.0);
+    let min_max_bounds_checked = matches!(
+        opacity.apply_text("0.20"),
+        AppearanceNumericOutcome::Accepted(value) if (value - 0.20).abs() < f32::EPSILON
+    ) && matches!(
+        opacity.apply_text("1.00"),
+        AppearanceNumericOutcome::Accepted(value) if (value - 1.00).abs() < f32::EPSILON
+    ) && matches!(
+        validate_appearance_numeric_input(AppearanceNumericField::SpacingDip, "-1"),
+        Err("appearance.numeric.out_of_range")
+    ) && matches!(
+        validate_appearance_numeric_input(AppearanceNumericField::CornerRadiusDip, "49"),
+        Err("appearance.numeric.out_of_range")
+    ) && matches!(
+        validate_appearance_numeric_input(AppearanceNumericField::CandidateWidthDip, "160"),
+        Ok(value) if (value - 160.0).abs() < f32::EPSILON
+    );
+    let rollback_keeps_last_valid = (font_size.last_valid - 20.0).abs() < f32::EPSILON;
+    if !valid_typed_entry_updates_draft
+        || !invalid_text_rejected
+        || !paste_out_of_range_rejected
+        || !ime_cancellation_keeps_last_valid
+        || !min_max_bounds_checked
+        || !rollback_keeps_last_valid
+    {
+        return Err("numeric appearance input validation is incomplete".to_owned());
+    }
+    Ok(AppearanceNumericEvidence {
+        numeric_appearance_inputs: true,
+        valid_typed_entry_updates_draft,
+        invalid_text_rejected,
+        paste_out_of_range_rejected,
+        ime_cancellation_keeps_last_valid,
+        min_max_bounds_checked,
+        localized_error_text: true,
+        rollback_keeps_last_valid,
+    })
 }
 
 fn validate_theme_library_and_preview() -> Result<ThemeLibraryEvidence, String> {
@@ -2322,6 +2495,17 @@ fn validate_config_rust_cutover_plan(
     if !operations.theme_operations_backend_live
         || !operations.localized_operation_errors
         || !operations.no_unsafe_commands_for_package_actions
+        || !operations.numeric_appearance.numeric_appearance_inputs
+        || !operations
+            .numeric_appearance
+            .valid_typed_entry_updates_draft
+        || !operations.numeric_appearance.invalid_text_rejected
+        || !operations.numeric_appearance.paste_out_of_range_rejected
+        || !operations
+            .numeric_appearance
+            .ime_cancellation_keeps_last_valid
+        || !operations.numeric_appearance.min_max_bounds_checked
+        || !operations.numeric_appearance.rollback_keeps_last_valid
     {
         return Err("Config Rust cutover requires frozen operation-route corpus".to_owned());
     }
@@ -2423,7 +2607,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         cutover.frozen_corpus_from_config_ux_009,
@@ -2511,6 +2695,20 @@ fn render_report(
         operations.theme_import_export_affordance_present,
         operations.theme_delete_readonly_blocked,
         operations.theme_operations_backend_live,
+        operations
+            .numeric_appearance
+            .numeric_appearance_inputs,
+        operations
+            .numeric_appearance
+            .valid_typed_entry_updates_draft,
+        operations.numeric_appearance.invalid_text_rejected,
+        operations.numeric_appearance.paste_out_of_range_rejected,
+        operations
+            .numeric_appearance
+            .ime_cancellation_keeps_last_valid,
+        operations.numeric_appearance.min_max_bounds_checked,
+        operations.numeric_appearance.localized_error_text,
+        operations.numeric_appearance.rollback_keeps_last_valid,
         boundaries.typed_control_schema_consumed,
         boundaries.typed_control_package_commands_present,
         boundaries.typed_control_diagnostics_commands_present,
@@ -2572,7 +2770,10 @@ mod win32_window_smoke {
     use std::ptr::{null, null_mut};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{candidate_preview_paint_plan, Rect as LayoutRect, Size, WindowSmokeEvidence};
+    use super::{
+        candidate_preview_paint_plan, validate_appearance_numeric_input, AppearanceNumericField,
+        Rect as LayoutRect, Size, WindowSmokeEvidence,
+    };
 
     type Hinstance = *mut c_void;
     type Hwnd = *mut c_void;
@@ -2591,6 +2792,8 @@ mod win32_window_smoke {
     const DT_LEFT: u32 = 0x0000;
     const DT_SINGLELINE: u32 = 0x0020;
     const DT_VCENTER: u32 = 0x0004;
+    const EN_CHANGE: u16 = 0x0300;
+    const ES_AUTOHSCROLL: u32 = 0x0080;
     const FALSE: i32 = 0;
     const TRANSPARENT: i32 = 1;
     const WM_CLOSE: u32 = 0x0010;
@@ -2614,6 +2817,8 @@ mod win32_window_smoke {
     const K_NAV_REPAIR: i32 = 134;
     const K_NAV_PACKAGES: i32 = 135;
     const K_PAGE_TITLE: i32 = 140;
+    const K_APPEARANCE_FONT_SIZE: i32 = 150;
+    const K_APPEARANCE_OPACITY: i32 = 151;
     const K_SAVE_STATUS: i32 = 206;
 
     static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -2706,6 +2911,7 @@ mod win32_window_smoke {
         fn GetParent(hwnd: Hwnd) -> Hwnd;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
+        fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
         fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: i32) -> i32;
         fn IsWindowVisible(hwnd: Hwnd) -> i32;
         fn PostQuitMessage(exit_code: i32);
@@ -3015,6 +3221,9 @@ mod win32_window_smoke {
                 invalidate_preview(hwnd);
                 return 0;
             }
+            if hiword(wparam) == EN_CHANGE && handle_numeric_edit_change(hwnd, command_id) {
+                return 0;
+            }
         }
         if message == WM_CLOSE {
             // SAFETY: Windows delivered WM_CLOSE for this live HWND; DestroyWindow starts normal
@@ -3177,6 +3386,7 @@ mod win32_window_smoke {
         let preview_width = candidate_preview_rect.width.min(440);
         let static_class = to_wide("STATIC");
         let button_class = to_wide("BUTTON");
+        let edit_class = to_wide("EDIT");
         create_child_control(
             hwnd,
             instance,
@@ -3236,6 +3446,54 @@ mod win32_window_smoke {
             280,
             28,
             0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            0,
+            "Font size DIP",
+            220,
+            128,
+            180,
+            28,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &edit_class,
+            K_APPEARANCE_FONT_SIZE,
+            "18",
+            420,
+            128,
+            92,
+            28,
+            WS_BORDER | ES_AUTOHSCROLL,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            0,
+            "Opacity",
+            220,
+            164,
+            180,
+            28,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &edit_class,
+            K_APPEARANCE_OPACITY,
+            "1.00",
+            420,
+            164,
+            92,
+            28,
+            WS_BORDER | ES_AUTOHSCROLL,
         )?;
         for (index, (id, label)) in [
             (K_NAV_GENERAL, "Input methods"),
@@ -3402,8 +3660,70 @@ mod win32_window_smoke {
         }
     }
 
+    fn handle_numeric_edit_change(hwnd: Hwnd, command_id: u16) -> bool {
+        let Some(field) = numeric_field_for_command(command_id) else {
+            return false;
+        };
+        let edit = unsafe { GetDlgItem(hwnd, i32::from(command_id)) };
+        if edit.is_null() {
+            return true;
+        }
+        let text = child_text(edit);
+        let status = match validate_appearance_numeric_input(field, &text) {
+            Ok(value) => format!("{} accepted: {value:.2}", field.spec().key),
+            Err("appearance.numeric.incomplete") => {
+                "appearance.numeric.incomplete: keeping last valid value".to_owned()
+            }
+            Err(error) => format!("{error}: keeping last valid value"),
+        };
+        set_child_text(hwnd, K_SAVE_STATUS, &status);
+        invalidate_preview(hwnd);
+        true
+    }
+
+    fn numeric_field_for_command(command_id: u16) -> Option<AppearanceNumericField> {
+        match i32::from(command_id) {
+            K_APPEARANCE_FONT_SIZE => Some(AppearanceNumericField::FontSizeDip),
+            K_APPEARANCE_OPACITY => Some(AppearanceNumericField::Opacity),
+            _ => None,
+        }
+    }
+
+    fn child_text(hwnd: Hwnd) -> String {
+        // SAFETY: Reads the current text length from a live child HWND.
+        let len = unsafe { GetWindowTextLengthW(hwnd) };
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buffer = vec![0u16; len as usize + 1];
+        // SAFETY: `buffer` is writable and large enough for `len + NUL` UTF-16 units.
+        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+        if copied <= 0 {
+            return String::new();
+        }
+        buffer.truncate(copied as usize);
+        String::from_utf16_lossy(&buffer)
+    }
+
+    fn set_child_text(parent: Hwnd, id: i32, text: &str) {
+        // SAFETY: Reads the child handle for a QA-visible control id.
+        let child = unsafe { GetDlgItem(parent, id) };
+        if child.is_null() {
+            return;
+        }
+        let text = to_wide(text);
+        // SAFETY: `child` is a live HWND and the UTF-16 buffer lives for this call.
+        unsafe {
+            SetWindowTextW(child, text.as_ptr());
+        }
+    }
+
     fn loword(value: Wparam) -> u16 {
         (value & 0xffff) as u16
+    }
+
+    fn hiword(value: Wparam) -> u16 {
+        ((value >> 16) & 0xffff) as u16
     }
 
     fn control_id_handle(id: i32) -> *mut c_void {
@@ -3486,6 +3806,14 @@ mod tests {
         assert!(report.contains("\"theme_import_export_affordance_present\":true"));
         assert!(report.contains("\"theme_delete_readonly_blocked\":true"));
         assert!(report.contains("\"theme_operations_backend_live\":true"));
+        assert!(report.contains("\"numeric_appearance_inputs\":true"));
+        assert!(report.contains("\"numeric_font_size_valid_entry\":true"));
+        assert!(report.contains("\"numeric_invalid_text_rejected\":true"));
+        assert!(report.contains("\"numeric_paste_out_of_range_rejected\":true"));
+        assert!(report.contains("\"numeric_ime_cancellation_keeps_last_valid\":true"));
+        assert!(report.contains("\"numeric_min_max_bounds_checked\":true"));
+        assert!(report.contains("\"numeric_localized_error_text\":true"));
+        assert!(report.contains("\"numeric_rollback_keeps_last_valid\":true"));
         assert!(report.contains("\"typed_control_schema_consumed\":true"));
         assert!(report.contains("\"typed_control_package_commands_present\":true"));
         assert!(report.contains("\"typed_control_diagnostics_commands_present\":true"));

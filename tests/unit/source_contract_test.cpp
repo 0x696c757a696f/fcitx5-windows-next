@@ -2046,10 +2046,22 @@ int main(int argc, char** argv) {
         configPocSource.find("K_NAV_APPEARANCE") == std::string::npos ||
         configPocSource.find("K_NAV_PACKAGES") == std::string::npos ||
         configPocSource.find("K_PAGE_TITLE") == std::string::npos ||
+        configPocSource.find("K_APPEARANCE_FONT_SIZE") == std::string::npos ||
+        configPocSource.find("K_APPEARANCE_OPACITY") == std::string::npos ||
         configPocSource.find("K_SAVE_STATUS") == std::string::npos ||
         configPocSource.find("WM_COMMAND") == std::string::npos ||
         configPocSource.find("GetDlgItem(hwnd, K_PAGE_TITLE)") == std::string::npos ||
         configPocSource.find("get_dlg_item_visible_controls") == std::string::npos ||
+        configPocSource.find("AppearanceNumericField") == std::string::npos ||
+        configPocSource.find("validate_appearance_numeric_input") == std::string::npos ||
+        configPocSource.find("appearance.numeric.out_of_range") == std::string::npos ||
+        configPocSource.find("numeric_ime_cancellation_keeps_last_valid") ==
+            std::string::npos ||
+        configQaSource.find("verify_appearance_numeric_inputs") == std::string::npos ||
+        configQaSource.find("K_APPEARANCE_FONT_SIZE") == std::string::npos ||
+        configQaSource.find("WM_SETTEXT") == std::string::npos ||
+        configQaSource.find("WM_GETTEXT") == std::string::npos ||
+        configQaSource.find("rust_config_exe") == std::string::npos ||
         configPocSource.find("--window-smoke") == std::string::npos ||
         configPocSource.find("CreateWindowExW") == std::string::npos ||
         configPocSource.find("rust-config-poc-window-smoke") == std::string::npos ||

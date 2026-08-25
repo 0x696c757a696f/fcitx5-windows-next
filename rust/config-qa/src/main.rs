@@ -27,6 +27,9 @@ const CAPTUREBLT: Dword = 0x4000_0000;
 const SRCCOPY: Dword = 0x00CC_0020;
 const WM_COMMAND: Uint = 0x0111;
 const WM_CLOSE: Uint = 0x0010;
+const WM_SETTEXT: Uint = 0x000C;
+const WM_GETTEXT: Uint = 0x000D;
+const WM_GETTEXTLENGTH: Uint = 0x000E;
 const WM_PRINT: Uint = 0x0317;
 const WM_PRINTCLIENT: Uint = 0x0318;
 const PRF_CHECKVISIBLE: Lparam = 0x0000_0001;
@@ -46,7 +49,10 @@ const K_STATUS: i32 = 110;
 const K_PREVIEW: i32 = 112;
 const K_PACKAGES: i32 = 113;
 const K_PACKAGE_DETAIL: i32 = 127;
+const K_APPEARANCE_FONT_SIZE: i32 = 150;
+const K_APPEARANCE_OPACITY: i32 = 151;
 const K_SAVE_STATUS: i32 = 206;
+const EN_CHANGE: Wparam = 0x0300;
 
 const PAGES: &[Page] = &[
     Page {
@@ -124,8 +130,6 @@ extern "system" {
     fn GetDC(hwnd: Hwnd) -> Hdc;
     fn GetWindowDC(hwnd: Hwnd) -> Hdc;
     fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
-    fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
-    fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
     fn GetWindowThreadProcessId(hwnd: Hwnd, process_id: *mut Dword) -> Dword;
     fn IsWindow(hwnd: Hwnd) -> Bool;
     fn IsWindowVisible(hwnd: Hwnd) -> Bool;
@@ -271,6 +275,10 @@ fn run() -> Result<(), String> {
                     "| appearance-preview | ok: shared theme pixels {} | `{}` |\n",
                     preview_stats.shared_theme_pixels, preview_name
                 ));
+            }
+            if rust_config_exe(&args.config_exe) || has_child(hwnd, K_APPEARANCE_FONT_SIZE) {
+                verify_appearance_numeric_inputs(hwnd)?;
+                report.push_str("| appearance-numeric-inputs | ok | Rust schema validation |\n");
             }
         }
         report.push_str(&format!("| {} | ok | `{}` |\n", page.slug, file_name));
@@ -420,17 +428,100 @@ fn child_text(hwnd: Hwnd, id: i32) -> Result<String, String> {
     if child.is_null() {
         return Ok(String::new());
     }
-    let len = unsafe { GetWindowTextLengthW(child) };
+    let len = unsafe { SendMessageW(child, WM_GETTEXTLENGTH, 0, 0) as i32 };
     if len <= 0 {
         return Ok(String::new());
     }
     let mut buffer = vec![0u16; len as usize + 1];
-    let copied = unsafe { GetWindowTextW(child, buffer.as_mut_ptr(), buffer.len() as i32) };
+    let copied = unsafe {
+        SendMessageW(
+            child,
+            WM_GETTEXT,
+            buffer.len() as Wparam,
+            buffer.as_mut_ptr() as Lparam,
+        ) as i32
+    };
     if copied <= 0 {
         return Ok(String::new());
     }
     buffer.truncate(copied as usize);
     Ok(String::from_utf16_lossy(&buffer))
+}
+
+fn verify_appearance_numeric_inputs(hwnd: Hwnd) -> Result<(), String> {
+    set_child_text(hwnd, K_APPEARANCE_FONT_SIZE, "20")?;
+    notify_control_change(hwnd, K_APPEARANCE_FONT_SIZE);
+    require_status_contains(hwnd, "font_size_dip accepted")?;
+
+    set_child_text(hwnd, K_APPEARANCE_FONT_SIZE, "9999")?;
+    notify_control_change(hwnd, K_APPEARANCE_FONT_SIZE);
+    require_status_contains(hwnd, "appearance.numeric.out_of_range")?;
+
+    set_child_text(hwnd, K_APPEARANCE_FONT_SIZE, "")?;
+    notify_control_change(hwnd, K_APPEARANCE_FONT_SIZE);
+    require_status_contains(hwnd, "appearance.numeric.incomplete")?;
+
+    set_child_text(hwnd, K_APPEARANCE_OPACITY, "0.20")?;
+    notify_control_change(hwnd, K_APPEARANCE_OPACITY);
+    require_status_contains(hwnd, "opacity accepted")?;
+
+    set_child_text(hwnd, K_APPEARANCE_OPACITY, "not-a-number")?;
+    notify_control_change(hwnd, K_APPEARANCE_OPACITY);
+    require_status_contains(hwnd, "appearance.numeric.invalid")?;
+
+    set_child_text(hwnd, K_APPEARANCE_FONT_SIZE, "18")?;
+    notify_control_change(hwnd, K_APPEARANCE_FONT_SIZE);
+    Ok(())
+}
+
+fn has_child(hwnd: Hwnd, id: i32) -> bool {
+    !unsafe { GetDlgItem(hwnd, id) }.is_null()
+}
+
+fn rust_config_exe(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.eq_ignore_ascii_case("fcitx5-config-rust"))
+        .unwrap_or(false)
+}
+
+fn set_child_text(hwnd: Hwnd, id: i32, value: &str) -> Result<(), String> {
+    let child = unsafe { GetDlgItem(hwnd, id) };
+    if child.is_null() {
+        return Err(format!("missing editable appearance control {id}"));
+    }
+    let text = to_wide(value);
+    if unsafe { SendMessageW(child, WM_SETTEXT, 0, text.as_ptr() as Lparam) } == 0 {
+        return Err(format!("set editable appearance control {id}"));
+    }
+    let updated = child_text(hwnd, id)?;
+    if updated != value {
+        return Err(format!(
+            "editable appearance control {id} kept `{updated}` after setting `{value}`"
+        ));
+    }
+    Ok(())
+}
+
+fn notify_control_change(hwnd: Hwnd, id: i32) {
+    let wparam = ((EN_CHANGE & 0xffff) << 16) | ((id as Wparam) & 0xffff);
+    unsafe {
+        SendMessageW(hwnd, WM_COMMAND, wparam, 0);
+    }
+}
+
+fn require_status_contains(hwnd: Hwnd, expected: &str) -> Result<(), String> {
+    let status = child_text(hwnd, K_SAVE_STATUS)?;
+    if !status.contains(expected) {
+        return Err(format!(
+            "appearance numeric status `{status}` did not contain `{expected}`"
+        ));
+    }
+    Ok(())
+}
+
+fn to_wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn intersects(left: Rect, right: Rect) -> bool {

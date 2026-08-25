@@ -1050,7 +1050,7 @@ if(BUILD_TESTING)
       "${FCITX_RUST_TARGET}" -- --config-exe "$<TARGET_FILE:fcitx5_config_app>"
       --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
       "${CMAKE_CURRENT_BINARY_DIR}/config-ui-preview-fidelity-qa")
-  set_tests_properties(config-ui-preview-fidelity-qa PROPERTIES TIMEOUT 30)
+  set_tests_properties(config-ui-preview-fidelity-qa PROPERTIES TIMEOUT 60)
   add_test(
     NAME rust-config-ui-preview-qa
     COMMAND
@@ -1061,7 +1061,7 @@ if(BUILD_TESTING)
       "$<TARGET_FILE_DIR:fcitx5_config_app>/fcitx5-config-rust.exe"
       --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
       "${CMAKE_CURRENT_BINARY_DIR}/rust-config-ui-preview-qa")
-  set_tests_properties(rust-config-ui-preview-qa PROPERTIES TIMEOUT 30)
+  set_tests_properties(rust-config-ui-preview-qa PROPERTIES TIMEOUT 60)
   add_test(
     NAME rust-config-poc-contract
     COMMAND
