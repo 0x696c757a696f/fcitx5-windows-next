@@ -1,8 +1,15 @@
 # Rust TSF PoC decision — 2026-08-22
 
-## Decision
+> 2026-08-25 status: superseded by the user-approved Rust TSF shipping cutover recorded in
+> `docs/tasks/current.md`, `docs/tasks/PLAN.md`, `docs/tasks/rebaseline.md`, and `docs/current.md`.
+> This file remains historical decision evidence only. It must not be read as a current instruction
+> to keep the shipping TSF implementation in C++.
 
-Continue the isolated Rust TSF PoC. Do not cut over from the shipping C++ TSF yet.
+## Historical decision
+
+At the time of this decision, the project continued the isolated Rust TSF PoC and deferred shipping
+cutover. That decision has since been superseded by the 2026-08-23 user-approved Rust TSF shipping
+cutover.
 
 ## Evidence available
 
@@ -23,6 +30,8 @@ Continue the isolated Rust TSF PoC. Do not cut over from the shipping C++ TSF ye
 - Host-level C++↔Rust differential is still missing for real TSF activation, key, composition, commit, IPC, sink, profile, unload, DPI, UILess, and long-running host behavior.
 - No shipping installer/registration path points to the Rust TSF PoC.
 
-## Required next decision point
+## Historical next decision point
 
-Create a separate cutover task only after ARM64 artifact evidence, real host matrix evidence, and full host-level C++↔Rust differential are green. Until then, the C++ TSF remains authoritative.
+At the time of writing, the next decision point was a separate cutover task after ARM64 artifact
+evidence, real host matrix evidence, and full host-level differential evidence. Current task files
+record the later cutover override and the remaining real-host/manual evidence blocker.

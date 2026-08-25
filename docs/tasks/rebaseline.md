@@ -1,10 +1,11 @@
 # Task Queue Rebaseline
 
-Date: 2026-08-24
+Date: 2026-08-25
 
-HEAD at rebaseline start: `9d5e4d38e180a7d84f8e3986ce24766399ad9c2e`
+HEAD at rebaseline refresh: `8a99b8db4cca72cdac10dea1229a3b3f09b8f152`
 
-Working tree at rebaseline start: clean.
+Working tree at rebaseline refresh: dirty with in-progress TSF/candidate fixes and task-governance
+updates; preserve those changes.
 
 Purpose: interpret the old v1.8 queue against the current repository truth. The old task files remain historical evidence. This file is the current queue interpretation until a later rebaseline replaces it.
 
@@ -24,9 +25,25 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 - Fcitx core and upstream addon semantics remain upstream-owned.
 - Engine is not permanently all C++; it converges to Rust Engine Product Core plus a thin C++ Fcitx adapter.
 - Product-owned non-Engine surfaces continue moving toward Rust authority through gated cutovers.
+- New product-owned Windows code defaults to Rust. C++ is allowed only for the direct Fcitx-facing
+  Engine adapter island and narrowly justified Win32/COM/D2D/WTL adapter seams while migration
+  evidence is built.
+- Already-cut-over Rust components must not be reverted to C++ because an older task/spec paragraph
+  described a former C++ baseline.
 - Plugins/addons must support static/built-in and dynamic/package-loaded models, not `Addon == DLL`.
 - Candidate actions and surrounding-text/text-edit operations must stay capability-aware instead of freezing today's Fcitx API shape.
 - Real-host evidence is never inferred from CTest.
+
+2026-08-25 refresh:
+
+- The old R3 FUTURE-GATED queue files have been superseded by completed/current task files and
+  should not remain as executable queue entries.
+- The only new executable queue item currently staged under `docs/tasks/queue/` is
+  `047-CONFIG-UX-009.md`, which implements the Settings/theme/candidate-preview product work
+  derived from the review plus WindInput/清风 reference inspection.
+- Current execution still starts from `docs/tasks/current.md` (`RUST-R3-TSF-POC`) to record all
+  reachable automated TSF/candidate evidence, then may advance to `047` while real-host matrix
+  evidence remains `MANUAL-PENDING`.
 
 ## P0 Guidance Tasks
 
@@ -88,14 +105,17 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 | R2-01 `RUST-R2-01` | `PARTIAL` | Launcher state/path/tray/command/frame policy is Rust-owned, but process/job/tray/window/pipe serving shell remains C++. | Continue launcher shell cutover where behavior corpus is frozen. |
 | R2-02 `RUST-R2-02` | `PARTIAL` | Control/process execution has many Rust-owned slices, but remaining Control/config/package command shell surfaces are still C++. | Continue non-Engine C++ shrink through focused slices. |
 | R2-03 `RUST-R2-03` | `PARTIAL` | Diagnostics/status JSON and shared common-core slices exist, but diagnostics product surface is not fully Rust-owned. | Continue as product-owned Rust migration. |
-| R3-01 `RUST-R3-CANDIDATE-POC` | `PARTIAL` | Candidate model/layout/interaction are Rust-owned and old C++ domain headers/tests are deleted; C++ D2D/DWrite renderer/window remains. | Current guidance supports keeping renderer C++ for now while shrinking duplicate state. |
-| R3-02 `RUST-R3-CONFIG-POC` | `PARTIAL` | Rust Config PoC and QA are green, but shipping Config is still C++/WTL and guidance requires a formal technology spike/ADR. | Create Config spike/ADR task before cutover. |
+| R3-01 `RUST-R3-CANDIDATE-POC` | `PARTIAL` | Candidate model/layout/interaction are Rust-owned and old C++ domain headers/tests are deleted; C++ D2D/DWrite renderer/window remains as adapter. | New candidate domain code defaults to Rust; renderer/window C++ is tolerated only as a visual adapter until equivalent renderer migration evidence exists. |
+| R3-02 `RUST-R3-CONFIG-POC` | `PARTIAL` | Rust Config PoC and QA are green, but shipping Config still has a C++/WTL shell. | New Settings product logic defaults to Rust; WTL/Win32 should remain adapter/shell only unless a future ADR proves otherwise. |
 | R3-03 `RUST-R3-TSF-POC` | `MANUAL-PENDING` | Shipping Rust TSF automated gates are green and old C++ TSF sources are deleted; real-host matrix remains missing. | Do not declare release-ready until real-host evidence is recorded. |
 | REL-01 `RELEASE-01` | `BLOCKED` | Real-host, installer/UAC, plugin lifecycle, generation-drain, Config product polish, and release signing/provenance evidence remain incomplete. | Release gate cannot advance. |
 
 ## Next Eligible Work
 
-1. Continue non-Engine C++ shrink only where Rust owner and regression evidence already exist.
-2. Prepare P0-6 real generation-drain E2E and Rust TSF host matrix evidence.
-3. Start Engine E1 planning only from the frozen call graph/schema in `docs/engine-boundary.md`.
-4. Prepare Config technology/product spike before adding more Config UI controls.
+1. Finish the reachable automated evidence for current `RUST-R3-TSF-POC` package candidate
+   usability regressions, then archive it as `MANUAL-PENDING` if the remaining blocker is only
+   real-host matrix coverage.
+2. Execute `047-CONFIG-UX-009`: WindInput-inspired Theme Library, embedded production-renderer
+   candidate preview, font/emoji/high-DPI/no-overlap Settings work.
+3. Continue non-Engine C++ shrink only where a Rust owner and regression evidence already exist.
+4. Prepare P0-6 real generation-drain E2E and Rust TSF host matrix evidence.

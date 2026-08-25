@@ -1415,13 +1415,28 @@ bool writeVisualConfig(const fs::path& destination, std::string_view text) {
     return true;
 }
 
+fs::path launcherPeerPath(const fcitx::windows::platform::RuntimeIdentity& identity) {
+    const fs::path fallback = executableDirectory() / L"fcitx5-launcher.exe";
+    const fs::path installRoot =
+        fcitx::windows::platform::installationRootForModule(identity.executablePath);
+    const std::wstring generation =
+        fcitx::windows::platform::currentRuntimeGenerationForModule(identity.executablePath);
+    if (!installRoot.empty() && !generation.empty()) {
+        const fs::path generationLauncher =
+            installRoot / L"runtime" / generation / L"bin" / L"fcitx5-launcher.exe";
+        if (fs::is_regular_file(generationLauncher))
+            return generationLauncher;
+    }
+    return fallback;
+}
+
 bool launcherCommand(fcitx::windows::protocol::LauncherCommand command,
                      fcitx::windows::protocol::LauncherResponse& response) {
     fcitx::windows::platform::RuntimeIdentity identity;
     if (!fcitx::windows::platform::queryCurrentIdentity(identity))
         return false;
-    const auto policy = fcitx::windows::ipc::PeerPolicy::exact(
-        (executableDirectory() / L"fcitx5-launcher.exe").wstring());
+    const auto policy =
+        fcitx::windows::ipc::PeerPolicy::exact(launcherPeerPath(identity).wstring());
     return fcitx::windows::ipc::sendLauncherCommand(
         identity, fcitx5_windows_common_deadline_after_milliseconds(1000), policy, command,
         response);

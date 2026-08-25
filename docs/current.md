@@ -1,10 +1,11 @@
 # Current Truth Snapshot
 
-Date: 2026-08-25 (updated after the Rust TSF package cold-start candidate UI fix)
+Date: 2026-08-25 (updated after task-queue and WindInput/清风 Settings UX rebaseline)
 
-HEAD recorded at snapshot start: `d018f1bc4b2301051e687ff4311736ba36067b29`
+HEAD recorded at snapshot refresh: `8a99b8db4cca72cdac10dea1229a3b3f09b8f152`
 
-Working tree at snapshot start: clean.
+Working tree at snapshot refresh: dirty with in-progress TSF/candidate fixes and task-governance
+updates; preserve those changes until committed.
 
 ## Shipping Architecture
 
@@ -19,6 +20,9 @@ Windows host
 - Windows exposes one product TSF profile: `Fcitx5`.
 - TSF, UI, Config, Launcher, Control, package/update/provider/deployer are product-owned Windows surfaces and continue moving toward Rust authority.
 - Engine is not a permanent all-C++ exception. Its direct Fcitx object adapter remains C++; its product protocol, state, validation, IPC, deadline/fail-open, generation, revision, snapshot and diagnostics logic should move to Rust.
+- New product-owned Windows code defaults to Rust. C++ is reserved for the direct Fcitx-facing
+  Engine adapter island and narrowly justified native adapter seams. Already-cut-over Rust
+  components must not be rewritten back to C++ because of stale historical task text.
 
 ## Language Map
 
@@ -27,7 +31,7 @@ Windows host
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
 | Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter |
-| Config | C++ WTL/Win32 shell; Rust config PoC and Rust text/process adapters exist | Rust product logic with native adapter or time-boxed product spike decision |
+| Config | C++ WTL/Win32 shell; Rust config PoC and Rust text/process adapters exist | New Settings product logic defaults to Rust; WTL/Win32 remains adapter/shell unless a time-boxed spike/ADR proves otherwise |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
 | Package/provider/downloader/updater/deployer | Package/provider/deployer/updater/downloader Rust CLIs and Rust package-core are wired; adapters remain where needed | Rust authority |
@@ -57,13 +61,21 @@ Windows host
 - Runtime security now has explicit `Win10` and `Win7` lanes. The modern `Win10` lane remains the default full PE/source audit; product networking is enforced through source-boundary scanning plus PE blocking for explicit HTTP/URL stacks because Rust-linked MSVC binaries import `WS2_32.dll` through Rust std even without product network code. The legacy `Win7` lane is expected to stay red until the launcher/Rust runtime hard import of `GetSystemTimePreciseAsFileTime` is removed or a separate legacy strategy is implemented.
 - Engine product state is migrating to Rust: E1 protocol codec, E2 ledger, E3 event/action decisions, E4 epoch/request/session policy, and E5 snapshot/pending-state policy are cut over (`CUTOVER-GREEN` where recorded). The Fcitx adapter and remaining Windows process/transport shell shrink remain.
 - Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
+- The executable queue has been re-cleaned after the 2026-08-24 review: completed/current R3
+  FUTURE-GATED duplicates are not active queue items; the next staged product task is
+  `CONFIG-UX-009` for WindInput-inspired theme library and embedded live Settings preview.
 - The TSF profile boundary is now frozen in `docs/tsf-profile-boundary.md`: Windows exposes only the single product profile `Fcitx5`; internal engines/addons remain Fcitx state; obsolete dynamic profile data is cleanup input only.
 - `rust/protocol-core` is now the single authoritative FCW4 codec: `protocol/protocol.cpp` is a thin marshalling adapter over the C ABI (`protocol/protocol_ffi.h`, typed encode/decode + `decode_header` in `capi.rs`), and `protocol-differential-contract` pins the pre-cutover wire bytes via `tests/unit/protocol_wire_golden.inc` (19 samples). C++ `protocol.h` API and all call sites are unchanged; see `docs/fcitx-upstream-rebaseline-audit.md` for the Fcitx5 upstream baseline audit (fork is official `ebf24ddc` + 41 lines; all three Windows-local changes are not yet upstream; 1 of 6 patches applies clean to master).
 
 ## Next Five Code/Design Tasks
 
-1. Prepare and run real-host evidence for TSF generation draining and the Rust TSF host matrix; do not declare release readiness from Notepad-only evidence.
-2. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression evidence already exist.
-3. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core` stop-aware pipe primitives, keeping direct Fcitx object ownership in the C++ adapter.
-4. Prepare the Config technology spike/ADR instead of adding more raw WTL controls.
-5. Keep single-profile TSF registration guarded while installer/UAC, plugin lifecycle, generation-drain, and host evidence are collected.
+1. Finish the currently reachable `RUST-R3-TSF-POC` automated package/candidate usability evidence
+   and keep the broader real-host matrix manual-pending until actually run.
+2. Execute `CONFIG-UX-009`: Theme Library, embedded live production-renderer preview, font/emoji
+   handling, automatic high-DPI readability, localization, and no-overlap Settings gates.
+3. Continue shrinking non-Engine product C++ adapters only where a Rust owner and regression
+   evidence already exist.
+4. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core`
+   stop-aware pipe primitives, keeping direct Fcitx object ownership in the C++ adapter.
+5. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
+   release-readiness claim.

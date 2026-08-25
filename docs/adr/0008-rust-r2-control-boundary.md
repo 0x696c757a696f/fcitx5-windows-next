@@ -8,6 +8,11 @@
 
 RUST-R2-02 requires the Control CLI/shared process execution boundary to move to Rust after the C++ drain/timeout/cancel semantics are frozen. The v1.8 specification also keeps several Windows-facing or domain-owned surfaces in C++ for this stabilization gate:
 
+> 2026-08-25 status: the list below is historical context for R2-02. Current execution follows
+> `docs/current.md` and `docs/tasks/rebaseline.md`: shipping TSF is Rust, new product-owned
+> Control/Config/package/update logic defaults to Rust, and C++ is allowed only for thin native
+> adapter seams or the direct Fcitx-facing Engine island.
+
 - WTL/Config remains C++ and consumes typed Control/config/package boundaries.
 - TSF activation guard helpers remain C++ because they are linked into the TSF DLL boundary.
 - Launcher IPC and existing Win32 process hosting remain small C++ adapters around typed state machines/protocols.

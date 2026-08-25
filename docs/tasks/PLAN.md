@@ -16,7 +16,16 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 ## Advancement policy
 
 - `001` is archived as completed.
-- `R1-01` through `R1-04` are completed; `R1-05` is the current gated task.
+- `001` through `036`, `RUST-R1-*`, `RUST-R2-*`, and the current automated parts of
+  `RUST-R3-*` have been rebaselined against the 2026-08-24 Engine/Fcitx upstream guidance.
+- New product-owned Windows code defaults to Rust. C++ is reserved for the Fcitx-facing Engine
+  adapter island and narrowly justified Win32/COM/D2D/WTL adapter seams while migration evidence is
+  built.
+- Already-cut-over Rust components must not be reverted to C++ because of historical task wording.
+- `R3-03` is the current task only for remaining TSF real-host/manual evidence and focused
+  package-candidate usability regressions.
+- `047-CONFIG-UX-009` is the next eligible code/product task once the currently reachable
+  R3-03 automated checks are recorded; `R3-03` real-host evidence may remain `MANUAL-PENDING`.
 - After an automatable task is green, archive it, update `status.md`, copy the next eligible task into `current.md`, and continue.
 - Task `015` contains real-host evidence. Run everything reachable; unavailable cases become `MANUAL-PENDING`. Tasks `016–020` may continue because they are code/product work, but **final stabilization/release cannot be declared complete** until required real-host evidence is actually green.
 - Rust R1 starts only after its named C++ semantic/corpus prerequisites are green.
@@ -61,7 +70,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 033 | TRUST-005 | COMPLETED | 031/032 | completed/033-TRUST-005.md |
 | 034 | TRUST-006 | COMPLETED | 026 + 031 | completed/034-TRUST-006.md |
 | 035 | PLUGIN-LIFECYCLE-001 | MANUAL-PENDING | 026 + 031/033 where real online install is exercised | completed/035-PLUGIN-LIFECYCLE-001.md |
-| R1-01 | RUST-R1-01 | COMPLETED | 014 corpus green; 009 repository-state semantics available where shared | current.md |
+| R1-01 | RUST-R1-01 | COMPLETED | 014 corpus green; 009 repository-state semantics available where shared | completed/RUST-R1-01.md |
 | R1-02 | RUST-R1-02 | COMPLETED | RUST-R1-01 + 009 complete | completed/RUST-R1-02.md |
 | R1-03 | RUST-R1-03 | COMPLETED | 020 generation contract + R1-01/02 | completed/RUST-R1-03.md |
 | R1-04 | RUST-R1-04 | COMPLETED | 008 process execution semantics + R1-01 | completed/RUST-R1-04.md |
@@ -72,6 +81,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | R3-01 | RUST-R3-CANDIDATE-POC | MANUAL-PENDING / AUTOMATED-POC-GREEN / CONFIG-EMBEDDED-EMOJI-PREVIEW-GREEN / CANDIDATE-MODEL-RUST-CUTOVER-GREEN / CANDIDATE-MODEL-HEADER-DELETED / CANDIDATE-INTERACTION-RUST-CUTOVER-GREEN / CANDIDATE-INTERACTION-HEADER-DELETED / CANDIDATE-LAYOUT-RUST-CUTOVER-GREEN / CANDIDATE-LAYOUT-HEADER-DELETED | Candidate UX/layout/UILess contracts frozen; R1/R2 not blocked; user explicitly opened R3 gate; candidate model, interaction, and layout/render-segment semantics are Rust-owned and old C++ sources/obsolete headers/tests/benches are deleted where their Rust corpus is authoritative | completed/RUST-R3-CANDIDATE-POC.md |
 | R3-02 | RUST-R3-CONFIG-POC | COMPLETED / AUTOMATED-POC-GREEN | Settings operation model and typed Control/config/package boundaries frozen; R1/R2 not blocked | completed/RUST-R3-CONFIG-POC.md |
 | R3-03 | RUST-R3-TSF-POC | MANUAL-PENDING / USER-GATE-OVERRIDE / USER-SHIPPING-CUTOVER-OVERRIDE / SHIPPING-RUST-TSF-X64-X86-GREEN / CXX-SHIPPING-TSF-DELETED / TSF-SUPPORT-ACTIVATION-GUARD-RUST-GREEN / REAL-HOST-MATRIX-PENDING | User explicitly allowed opening this gate and later explicitly authorized deleting/replacing shipping C++ TSF; automated x64/x86 Rust shipping TSF gates and TSF activation-guard Rust support cutover are green, but real host matrix evidence remains MANUAL-PENDING | current.md |
+| 047 | CONFIG-UX-009 | TODO | R3-03 automated package/candidate smoke green; real-host matrix may remain MANUAL-PENDING because this is Settings/Candidate UX product work, not release certification | queue/047-CONFIG-UX-009.md |
 | REL-01 | RELEASE-01 | FUTURE-GATED | All stabilization tasks + required external evidence + intended R1/R2 cutovers | release/REL-01-RELEASE-GATE.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED | All stabilization tasks + required external evidence + intended R1/R2 cutovers | release/REL-01-RELEASE-GATE.md |
 
@@ -81,5 +91,8 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 - `014` freezes Windows path semantics before Rust R1.
 - `020` freezes TSF generation-draining semantics before the Rust updater/downloader cutover.
 - Long-term language direction: direct Fcitx-facing Engine object manipulation remains the C++ Fcitx5 adapter island; Engine product protocol/state/validation/revision/generation/policy/IPC/diagnostics moves toward Rust. TSF, Candidate, Config, package/update/launcher/control/provider/diagnostics and other product-owned layers should move toward Rust only through explicit gated migration tasks with differential evidence.
-- `R3-01`/`R3-02`/`R3-03` keep Candidate, Config, and TSF Rust paths open without destabilizing the current C++ baselines. They are PoC/differential gates, not authorization to rewrite those components during R1/R2.
+- `R3-01`/`R3-02`/`R3-03` are interpreted against current reality, not their old FUTURE-GATED
+  wording: TSF shipping has cut over to Rust; Candidate domain model/layout/interaction are
+  Rust-owned; Config remains a WTL/Win32 shell with Rust product logic/PoC evidence. Historical C++
+  baselines are regression corpora, not a reason to reintroduce C++ ownership.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

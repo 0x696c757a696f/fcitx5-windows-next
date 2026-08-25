@@ -31,12 +31,24 @@ Implement the smallest correct vertical slice that satisfies the current task. N
 Do not perform unrelated cleanup, framework migration, dependency churn, naming changes, or future tasks.
 
 Architecture defaults:
-- Fcitx-facing Engine stays C++ as the long-term Fcitx5 island.
-- Everything else that is owned by this Windows product should move toward Rust when an explicit gated task exists and the relevant C++ behavior corpus is frozen.
-- TSF DLL currently stays C++/Win32/COM/TSF and minimal as the shipping stable baseline, but it is not permanently exempt from Rust. Rust TSF work requires an explicitly gated TSF Rust PoC task with panic/COM/host-matrix evidence before cutover.
-- Candidate renderer currently stays C++/Win32/D2D/DWrite until UX/layout/UILess contracts are frozen; future Candidate Rust migration should use IPC/differential tests, not C++ FFI.
-- Config currently keeps WTL/Win32 hosting plus the product-specific D2D/DWrite settings layer until the Settings operation model is frozen; future Config Rust migration should consume the typed Control/config/package boundaries.
-- Rust starts only in tasks explicitly marked `RUST-R1`, `RUST-R2`, or a later explicitly gated Rust PoC/migration task.
+- The only durable C++ island is direct Engine integration with Fcitx5 core/addon objects:
+  `fcitx::Instance`, `InputContext`, addon/config objects, `InputPanel`, `CandidateList`,
+  and the thin conversion/adapter code required to consume upstream Fcitx semantics.
+- New product-owned Windows code defaults to Rust. Use C++ only when the current task proves it is
+  a necessary Win32/Fcitx/COM adapter boundary or when a recorded product decision explicitly keeps
+  that adapter C++ for compatibility.
+- Do not regress a component that has already cut over to Rust back to C++ merely because older task
+  text called the C++ implementation the baseline. Historical C++ behavior remains a corpus/reference,
+  not the target language.
+- Current state: the shipping TSF DLL is Rust; the old shipping C++ TSF implementation has been
+  deleted. Remaining TSF work is real-host/manual evidence and focused bug fixes unless a new task
+  explicitly opens more TSF scope.
+- Current state: Candidate model/layout/interaction are Rust-owned; Win32/D2D/DWrite drawing code is
+  only a renderer/window adapter until a renderer migration task has equivalent visual/DPI evidence.
+- Current state: Config still has a WTL/Win32 shipping shell, but new Settings state, validation,
+  preview, package/update/control orchestration, and future UI domain code should be Rust-first.
+- Rust migration still needs contract/golden/fuzz or equivalent regression evidence before replacing
+  behavior. Do not change semantics and language in one opaque step.
 - Do not create a permanent old/new protocol dual stack.
 
 ## Testing

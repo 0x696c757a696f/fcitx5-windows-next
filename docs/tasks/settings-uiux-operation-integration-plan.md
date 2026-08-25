@@ -28,6 +28,76 @@ Applicable guidance for Fcitx5 for Windows Next:
 - every pre-delivery Settings check must include contrast, focus, scaling,
   localization, and no-overlap verification.
 
+## WindInput / 清风 reference refresh
+
+Reference reviewed on 2026-08-25:
+
+- `huanfeng/WindInput` at `2214bede43b4153f0fdc463928cf3c50184ec2ef`;
+- `huanfeng/wind-ui-rust` at `8ce94a46900a414612ead96438c770cb49eefdea`;
+- `huanfeng/wind-setting` was not publicly available from GitHub at review time, so Settings UI source could not be inspected directly.
+
+Use these repositories as UI/product and architecture references only unless a later task
+explicitly vendors or copies code and records the required license notices. `WindInput`
+is MIT-licensed; `wind-ui-rust` exposes MIT and Apache-2.0 license files.
+
+Applicable product lessons for Fcitx5 for Windows Next:
+
+- theme management should be data-driven, not a pile of hard-coded UI controls;
+- theme discovery should merge user themes first and bundled themes second, while clearly
+  labeling source, author, version, license, and whether the theme is built-in or removable;
+- theme preview should be a read-only operation that returns the normalized/merged theme
+  contract consumed by the production candidate renderer;
+- editing or importing the currently active theme must trigger an immediate re-resolve and
+  preview refresh, instead of requiring the user to switch themes or restart;
+- font selection should enumerate real system font families and show localized display names
+  where available;
+- the candidate renderer should own DPI scaling by default. High-DPI support is not an
+  optional user switch. Settings may expose an advanced scale/size override, but the product
+  must render correctly at 100%, 150%, and 200% without user intervention;
+- preview samples must include Chinese, Latin text, punctuation, candidate labels, comments,
+  and emoji so fallback problems are visible before the user saves;
+- candidate label style must be explicit. If labels are rendered as `1.`/`2.` in the theme,
+  the dot is part of the preview contract and must match the real candidate window;
+- Settings should separate basic Appearance, Theme Library, and Advanced Appearance rather
+  than hiding all renderer knobs behind one crowded page;
+- external/floating demo windows may remain a diagnostic action, but they cannot be the main
+  preview path because users need immediate in-window feedback while changing settings.
+
+Concrete WindInput-inspired surface for this project:
+
+1. **Theme Library**
+   - list built-in, user, and package-provided themes;
+   - show theme source, display name, author, version, license, light/dark support, and safety
+     status;
+   - allow selecting a theme, duplicating a built-in theme to a user-editable copy, importing a
+     theme file/text through staging, exporting user theme text, and deleting only user themes;
+   - reject path traversal, unknown executable/script hooks, remote assets, and unresolved base
+     theme chains before a theme becomes selectable.
+
+2. **Embedded live preview**
+   - render inside the Settings content pane using the same CandidateModel/layout/renderer
+     contract as the shipping candidate window;
+   - update immediately on theme, light/dark mode, orientation, page size, scroll mode, font,
+     font size, opacity, corner radius, padding/spacing, label style, comment style, preedit
+     placement, and advanced color changes;
+   - preserve draft changes separately from committed configuration, so Cancel/Revert restores
+     the last saved renderer state;
+   - never spawn the normal floating candidate UI for routine preview.
+
+3. **Font and emoji handling**
+   - expose a real font picker or enumerated list, with search and keyboard navigation;
+   - show the selected primary font and the effective fallback chain used by preview;
+   - prefer color emoji-capable fallback for emoji samples, and mark monochrome emoji as a
+     regression or explicit fallback limitation.
+
+4. **No-overlap visual gate**
+   - measure every preview segment separately: label, candidate text, comment, preedit, emoji,
+     page indicator, and action/status rows;
+   - test horizontal, vertical, scroll-expanded, long text, large emoji, Chinese UI, English UI,
+     100%, 150%, and 200% DPI;
+   - page content must scroll inside the content pane instead of shrinking into overlap at the
+     minimum supported window size.
+
 ## User-visible gaps being addressed
 
 This plan directly covers the gaps reported during review:

@@ -16,7 +16,9 @@ Codex 执行版 · 个人项目模式
 
 **文档版本：v1.8**
 
-**本版重点：**v1.8 继续以 `d12474cc2ad541c6ae3824b701c8408a22e74500`（2026-08-19）作为**可重放的完整源码审计基线**，同时在 2026-08-20 重新核对公开 `main` 的 Config/Candidate 当前代码以吸收其已出现的 UI 实现变化；**不得把 `d12474c...` 误写成永远的“最新 HEAD”**。真正开始实现前必须先记录本地 `git rev-parse HEAD`，若 HEAD 已前进，则只对受影响 subsystem 做增量审计并记录新 SHA。在 v1.7 风险驱动 Rust 迁移原则不变的前提下，正式补齐 **Config UI/UX、Candidate UI/UX、Design System、企鹅品牌/任务栏/TSF 图标、单一 TSF profile 与默认显示名、TSF in-use DLL 更新 / Generation Draining** 的产品规格。Windows 侧只注册并维护 **一个 Fcitx5 TSF profile**；Rime、拼音、Mozc、Hangul、m17n 等输入法/引擎只在 Fcitx5 内部切换，不为每个 engine 创建 Windows TSF profile。TSF DLL、Fcitx Engine、现有 D2D/DWrite Candidate UI、WTL 宿主与最薄的 Windows register/bootstrap 层不为“界面现代化”或 Rust 重写。
+**本版重点：**v1.8 继续以 `d12474cc2ad541c6ae3824b701c8408a22e74500`（2026-08-19）作为**可重放的完整源码审计基线**，同时在 2026-08-20 重新核对公开 `main` 的 Config/Candidate 当前代码以吸收其已出现的 UI 实现变化；**不得把 `d12474c...` 误写成永远的“最新 HEAD”**。真正开始实现前必须先记录本地 `git rev-parse HEAD`，若 HEAD 已前进，则只对受影响 subsystem 做增量审计并记录新 SHA。在 v1.7 风险驱动 Rust 迁移原则不变的前提下，正式补齐 **Config UI/UX、Candidate UI/UX、Design System、企鹅品牌/任务栏/TSF 图标、单一 TSF profile 与默认显示名、TSF in-use DLL 更新 / Generation Draining** 的产品规格。Windows 侧只注册并维护 **一个 Fcitx5 TSF profile**；Rime、拼音、Mozc、Hangul、m17n 等输入法/引擎只在 Fcitx5 内部切换，不为每个 engine 创建 Windows TSF profile。直接操作 Fcitx5 core/addon 对象的 Engine adapter 是长期 C++ island；其它产品自有 Windows 逻辑默认 Rust-first，已切到 Rust 的组件不得因旧基线文字倒退回 C++。现有 Win32/COM/D2D/WTL 代码只在被当前证据证明为必要 adapter/shell 时保留。
+
+**2026-08-25 现状覆盖：**本长规格包含历史基线语言；当前执行以 `docs/current.md`、`docs/tasks/rebaseline.md`、`docs/engine-boundary.md`、`docs/tasks/PLAN.md` 为准。当前 shipping TSF DLL 已是 Rust，Candidate model/layout/interaction 已 Rust-owned，Config 仍有 WTL/Win32 shell 但新 Settings 产品逻辑默认 Rust。不要把本文件中描述旧 C++ baseline 的段落解释为重新引入 C++ ownership 的授权。
 
 **规格冻结规则：**从 v1.8 起再次冻结。只有真实实现、测试失败、平台/工具链行为、安全事件或可验证的产品需求才能解冻；不得因为“Rust/GUI 框架更潮”扩大迁移面。UI 改进必须优先复用现有 WTL/Win32/D2D/DWrite 技术栈，不以换框架作为美观方案。
 
@@ -555,7 +557,9 @@ theme-package/
 
 UILess 不是“以后补的无障碍特性”，而是 Windows TSF、游戏、屏幕阅读器和某些宿主兼容性的共同能力。CandidateModel 必须同时支持自绘 UI 与 ITfCandidateListUIElement 等 TSF UIElement 表达。
 
-- 最终候选窗口不放在 TSF DLL 内。采用独立 `fcitx5-ui.exe`：C++ + Win32 + Direct2D + DirectWrite；TSF/engine 只发送 candidate snapshot、caret/layout 与语义事件。
+- 最终候选窗口不放在 TSF DLL 内。采用独立 `fcitx5-ui.exe`；当前 Win32 + Direct2D + DirectWrite
+  drawing/window code 是 renderer adapter，Candidate model/layout/interaction 与 preview/domain
+  policy保持 Rust authority。TSF/engine 只发送 candidate snapshot、caret/layout 与语义事件。
 
 - 候选/tooltip renderer 崩溃或卡顿不得阻塞 key processing；Presentation channel 在协议层与 Input/Control message 区分，必要时可独立队列或独立连接。
 
@@ -1698,7 +1702,9 @@ publish exact tested artifacts
 - 所有 C++/WTL/Rust targets 都必须由顶层 `build.ps1` 驱动；开发者不需要手工打开 Visual Studio、WTL wizard、IDE designer 或执行单独“cargo release”仪式。
 - C++ toolset、Windows SDK、CMake、WTL、MSYS2/Fcitx source pins 与第三方 dependencies 必须 pin；Rust 新增 `rust-toolchain.toml` 精确 channel/toolchain、提交 `Cargo.lock`，CI/release 使用 `cargo --locked`/等价 frozen resolution。
 - Rust workspace **只在第一个真实 R1 target 的同一 PR 创建**，禁止提前搭空 workspace。crate 以实际进程/安全边界组织，不为共享几行 helper 制造 C++↔Rust FFI。
-- TSF DLL 不链接 Rust staticlib/dylib，不引入 Rust panic/runtime/allocator 边界；Fcitx Engine 不为调用 Rust 重包 Fcitx C++ API。C++↔Rust 优先以既有 versioned IPC/wire contract 隔离。
+- TSF DLL 当前已切为 Rust shipping target；其 COM/Win32 `unsafe` 必须保持在最小 adapter
+  边界并有 panic/HRESULT fail-open 证据。Fcitx Engine 不为调用 Rust 重包 Fcitx C++ API。
+  C++↔Rust 优先以既有 versioned IPC/wire contract 或窄 C ABI 隔离。
 - Rust protocol codec 独立实现同一 language-neutral wire spec，并与 C++ codec 共享 golden/invalid/fuzz corpus；不得把 C++ protocol 库经 FFI 拉进 Rust，也不得悄悄定义第二套协议语义。
 - R1/R2 Rust 代码使用 `#![deny(unsafe_op_in_unsafe_fn)]`；`unsafe` 只允许在最小 Win32/FFI platform adapter，并要求邻近 safety comment/test。业务层 package/path/repository/state machine 默认 safe Rust；不追求不现实的“仓库 0 unsafe”数字。
 - Candidate UI、launcher/package/updater 当前 C++ 代码在迁移前继续使用 RAII、有界容器、smart COM/HANDLE owner、显式长度和成熟 parser；**发现 C++ bug 不等于获得 rewrite 授权**。

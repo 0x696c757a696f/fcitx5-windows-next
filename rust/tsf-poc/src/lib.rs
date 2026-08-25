@@ -41,7 +41,9 @@ use windows::Win32::System::Variant::{VariantClear, VT_EMPTY, VT_UNKNOWN};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, GetKeyState, GetKeyboardLayout, MapVirtualKeyExW, HKL, MAPVK_VK_TO_VSC_EX,
-    VK_CONTROL, VK_LWIN, VK_MENU, VK_OEM_COMMA, VK_RWIN, VK_SHIFT, VK_SPACE,
+    VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_OEM_1, VK_OEM_4,
+    VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR,
+    VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::TextServices::{
     CLSID_TF_CategoryMgr, CLSID_TF_InputProcessorProfiles, ITfActiveLanguageProfileNotifySink,
@@ -1806,6 +1808,32 @@ fn logical_text_for_key(virtual_key: u32, key_flags: u32) -> String {
     String::new()
 }
 
+fn is_text_or_candidate_key(virtual_key: u16) -> bool {
+    (b'A' as u16..=b'Z' as u16).contains(&virtual_key)
+        || (b'0' as u16..=b'9' as u16).contains(&virtual_key)
+        || matches!(
+            virtual_key,
+            key if key == VK_SPACE.0
+                || key == VK_RETURN.0
+                || key == VK_LEFT.0
+                || key == VK_RIGHT.0
+                || key == VK_UP.0
+                || key == VK_DOWN.0
+                || key == VK_PRIOR.0
+                || key == VK_NEXT.0
+                || key == VK_HOME.0
+                || key == VK_END.0
+                || key == VK_OEM_PLUS.0
+                || key == VK_OEM_MINUS.0
+                || key == VK_OEM_COMMA.0
+                || key == VK_OEM_PERIOD.0
+                || key == VK_OEM_1.0
+                || key == VK_OEM_4.0
+                || key == VK_OEM_6.0
+                || key == VK_OEM_7.0
+        )
+}
+
 #[derive(Default)]
 struct TsfRuntimeState {
     client_id: u32,
@@ -2082,7 +2110,16 @@ impl Fcitx5ReadSurroundingSession {
             view.GetTextExt(edit_cookie, range, &mut rect, &mut clipped)
         };
         if text_ext.is_ok() {
-            if let Some(caret) = Self::rect_to_caret(rect, 96) {
+            let dpi = unsafe {
+                // SAFETY: `view` is the active TSF context view for this edit
+                // session. `GetWnd` only queries the owner HWND; `GetDpiForWindow`
+                // reads DPI for a live HWND and returns 0 on failure.
+                view.GetWnd()
+                    .ok()
+                    .filter(|window| !window.is_invalid())
+                    .map_or(96, |window| GetDpiForWindow(window))
+            };
+            if let Some(caret) = Self::rect_to_caret(rect, dpi) {
                 return (caret, "tsf-text-ext");
             }
         }
@@ -2497,11 +2534,7 @@ impl Fcitx5TsfService {
         if runtime.guard_fail_open {
             return false;
         }
-        let value = wparam.0 as u16;
-        (b'A' as u16..=b'Z' as u16).contains(&value)
-            || (b'0' as u16..=b'9' as u16).contains(&value)
-            || value == VK_SPACE.0
-            || value == VK_OEM_COMMA.0
+        is_text_or_candidate_key(wparam.0 as u16)
     }
 
     fn context_id(context: &ITfContext) -> u64 {
@@ -3366,6 +3399,51 @@ mod tests {
         ] {
             assert!(!is_sensitive_input_scope(scope));
         }
+    }
+
+    #[test]
+    fn key_filter_accepts_text_and_candidate_navigation_keys() {
+        for key in [
+            b'N' as u16,
+            b'2' as u16,
+            VK_SPACE.0,
+            VK_RETURN.0,
+            VK_LEFT.0,
+            VK_RIGHT.0,
+            VK_UP.0,
+            VK_DOWN.0,
+            VK_PRIOR.0,
+            VK_NEXT.0,
+            VK_HOME.0,
+            VK_END.0,
+            VK_OEM_PLUS.0,
+            VK_OEM_MINUS.0,
+            VK_OEM_COMMA.0,
+            VK_OEM_PERIOD.0,
+            VK_OEM_1.0,
+            VK_OEM_4.0,
+            VK_OEM_6.0,
+            VK_OEM_7.0,
+        ] {
+            assert!(is_text_or_candidate_key(key));
+        }
+        assert!(!is_text_or_candidate_key(VK_CONTROL.0));
+        assert!(!is_text_or_candidate_key(VK_MENU.0));
+    }
+
+    #[test]
+    fn text_ext_caret_preserves_host_dpi_for_candidate_scaling() {
+        let caret = Fcitx5ReadSurroundingSession::rect_to_caret(
+            RECT {
+                left: 10,
+                top: 20,
+                right: 10,
+                bottom: 44,
+            },
+            192,
+        )
+        .expect("valid caret rect");
+        assert_eq!(caret.dpi, 192);
     }
 
     #[test]

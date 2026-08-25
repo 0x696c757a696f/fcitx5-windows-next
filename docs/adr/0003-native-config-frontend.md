@@ -5,6 +5,12 @@
 - Decider: Project owner
 - Governing specification: Frozen v1.6 (decision retained)
 
+> 2026-08-25 status: partially superseded by the current Rust migration policy in
+> `docs/current.md` and `docs/tasks/rebaseline.md`. The WTL/Win32 Config shell remains the current
+> shipping adapter, but this ADR no longer defines the language map for TSF, Candidate, Launcher,
+> package, updater, or new product-owned Settings logic. New product-owned code defaults to Rust
+> unless it is a narrowly justified native adapter or direct Fcitx-facing Engine island.
+
 ## Context
 
 Phase 6 requires an on-demand native settings application that participates in
@@ -23,13 +29,13 @@ or publish step is part of the build.
 
 | Component | Implementation |
 |---|---|
-| TSF | C++ / Win32 / COM / TSF |
-| Engine | C++ / Fcitx5 |
-| Candidate UI | C++ / Win32 / Direct2D / DirectWrite |
+| TSF | Superseded: shipping Rust TSF with Win32/COM adapter boundaries |
+| Engine | Rust product core + thin C++ Fcitx5 object adapter |
+| Candidate UI | Rust model/layout/interaction + Win32/Direct2D/DirectWrite renderer adapter |
 | Skin system | Strict TOML + bounded assets |
-| Config | C++ / WTL / ATL / Win32 |
+| Config | Current shell: C++ / WTL / ATL / Win32; new product logic defaults to Rust |
 | Candidate preview | Production Candidate renderer with synthetic data |
-| Launcher/package/updater | C++ |
+| Launcher/package/updater | Superseded: Rust-owned product logic with remaining native/process adapters |
 | Animation | DirectComposition, optional and deferred |
 
 Config calls only the typed Control/config API. It does not parse a second
