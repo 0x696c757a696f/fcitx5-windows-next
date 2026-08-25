@@ -118,6 +118,7 @@ Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整
 2. **各 addon upstream：插件语义权威。** Rime、Mozc、Hangul、m17n、Keyman、Bamboo、Chinese Addons 等不做 Windows 私有 Rust rewrite；Windows 产品层只适配、打包、隔离和呈现。
 3. **`chewing/windows-chewing-tsf`、`openvanilla/win-mcbopomofo`、Weasel 等：Windows TSF/兼容病例教材。** 只学习 TSF lifecycle、UILess、out-of-process UI、host compatibility 和失败病例，不继承其产品架构。
 4. **`fcitx-contrib/fcitx5-plugins`：跨平台插件构建与依赖清单参考。** 它不是 addon 语义权威；具体语义仍以各 addon upstream 为准。
+5. **`huanfeng/WindInput`：主题管理、设置分级、主题编辑器与候选窗视觉病例参考。** 只吸收其可验证的主题 schema、base/resolve、DPI 单位、预览一致性、受众分级与配置守门纪律；不继承其输入架构、插件体系或任何与本项目安全/隐私边界冲突的实现。
 
 专项参考只在对应问题出现后读取：**WindInput** 用于 overlapped IPC/timeout/stale response，**Moqi** 用于 request sequence/launcher/crash lifecycle，**Rabbit** 用于 caret/focus/password/game 用例，**PIME/libIME2/Cassotis** 用于 thin backend、x86/x64 与历史架构对照。
 
@@ -811,7 +812,9 @@ Appearance 是最能体现产品完成度的页面，第一屏 SHOULD 包含：
 ```
 
 - Preview 必须复用 production Candidate renderer/layout/theme model；不得维护第二套“看起来差不多”的模拟 renderer。
-- 当前 `fcitx5-ui.exe --demo` 可作为阶段性实现；最终 SHOULD 支持嵌入/托管 production renderer 或通过明确 PreviewHost 协议实现 inline live preview。
+- 候选预览的输入样例可以是固定测试 `CandidateModel`，但渲染本身必须走真实
+  Candidate UI 的 production renderer / preview host / 主题 / DPI / 字体 fallback 管线，并嵌入在
+  Config 窗口内容区内；不得用“看起来差不多”的第二套 Settings 绘制代码、静态截图或外部浮窗替代。
 - 字体、主题、布局、圆角、阴影等可逆外观变化默认 `Live`；不得强迫用户反复 `Apply → Preview → 修改 → Apply`。
 - `max width`、`scroll cell width`、padding、row/column gap 等 renderer 工程参数不得默认暴露。普通用户只看到主题、字号、字体、布局等高价值选项；高级参数折叠到“高级外观”，完整能力仍可由 `theme.toml` 提供。
 - ThemeCard/输入法卡片/Toggle/SegmentedControl 等组件必须复用 Design System，不允许每页自行 owner-draw 一套近似控件。
@@ -1998,7 +2001,9 @@ Rust workspace 承载产品自有 Rust authority；CMake/build.ps1 仍是顶层 
 - 若继续 WTL 路线，WTL 只用于 `fcitx5-config.exe` / 必要 management windows；它不是 Candidate renderer，也不进入 TSF/engine 输入热路径。
 - Config UI 采用任务导向的原生/轻量自绘 Settings Surface：EDIT/复杂文本输入/系统 dialog 等可保持 native HWND；NavigationItem、SettingRow、Toggle、SegmentedControl、Slider、ThemeCard、InputMethodCard、Banner、Preview 等由小型可复用 component layer按需实现。该层只服务本产品，不演化成通用 GUI framework；每个自绘交互组件必须提供 keyboard/focus/UI Automation/High Contrast 等价语义。
 - Config 不读取实时按键/preedit/commit history；网络操作通过 package/updater domain；配置语义通过 typed Control API/共享 schema 获得。
-- 候选皮肤预览不得重写第二套 renderer。调用真实 Candidate renderer 的 synthetic preview path，只发送固定测试 CandidateModel/theme snapshot。
+- 候选皮肤预览不得重写第二套 renderer。可以发送固定测试 CandidateModel/theme snapshot，
+  但像素输出、布局、主题解析、DPI、字体 fallback 与 emoji 渲染必须来自真实 Candidate UI
+  production renderer / preview host，并且预览必须托管在 Config 窗口内。
 - Config/Control 的 child-process execution 必须只有一个 authoritative primitive：并发 drain stdout/stderr、bounded output、timeout、取消/Job containment；禁止复制“先 wait child 再读 pipe”的实现。
 - Config Rust cutover 必须先有 UIA、DPI、High Contrast、keyboard-only、typed API、startup/perf 和 Legacy/Win7 决策证据；不得长期保留 WTL shipping、Rust PoC 和第三套 UI。
 
@@ -2161,7 +2166,8 @@ Rust 的目标是让产品自有 Windows 逻辑成为 memory-safe、typed、可�
 
 - 候选皮肤由 `theme.toml + assets` 定义，renderer 使用现有 D2D/DWrite；第三方主题纯数据，不执行 JS/DLL/Slint code。
 - WTL Config 默认使用系统原生控件与固定 spacing/type scale/design tokens；只对确实影响产品观感的区域做 owner-draw/D2D。
-- Config 候选预览走真实 Candidate renderer 的 synthetic preview path，避免预览与实际候选窗漂移。
+- Config 候选预览走真实 Candidate UI renderer / preview host；固定测试数据只作为输入，
+  不能成为独立模拟 renderer。预览必须在 Config 内实时显示当前主题，避免预览与实际候选窗漂移。
 - 后期如需要 fade/selection transition 等动画，优先评估 DirectComposition；不因皮肤能力迁移整个 renderer。
 
 ### 13.6.2 Rust cutover 触发与停止条件
@@ -2710,6 +2716,11 @@ selected_candidate_text = "#202124FF"
 - 合并顺序固定为 `common → active appearance branch → user override → accessibility override`。
 - 不支持主题之间 `extends` / include；要复用就复制/生成完整主题，避免形成第二套依赖系统。
 - asset 只能是 package-relative path 或 `builtin:*`，并受 5.6 的尺寸、路径、SVG 安全限制。
+- 借鉴 WindInput 的可取纪律：主题文件是 authoring 形态，必须先归一化/resolve 成 renderer 唯一消费的 typed snapshot；Config、主题编辑器、候选预览和真实候选窗口不得各自维护一套解析/派生/默认值。
+- 主题 capability 必须端到端接线：schema 有字段时，resolve、render、Config 控件、预览、导入导出和测试都必须消费；禁止保留“字段存在但渲染层不生效”的死字段。
+- Light/Dark/High Contrast 分支要按语义 token 成组处理；派生主题若改 selection、hover、border、shadow、text 等成套语义，不得只改主色导致暗色、高对比或 hover/selected 状态撞色。
+- 几何单位必须区分 DIP/dp、device pixel 与百分比。Config Basic 只暴露用户能理解的字号、间距、圆角、透明度等少数项；高级外观中的工程项也必须走同一 typed validation。
+- 候选窗固定位置/偏移类主题能力只作用于明确的定位策略，必须受 work-area clamp、DPI scaling、multi-monitor reflow 和 caret 安全距离约束，不能把候选窗渲染到 Config 外作为预览。
 
 ### 13.9.7 v1 数值与枚举范围
 
@@ -2736,6 +2747,9 @@ selected_candidate_text = "#202124FF"
 - 手工配置超范围直接报错，不自动改成最近合法值。
 - 若真实主题证明某个范围不足，修改**当前 v1 schema 和测试**即可；不因此保留旧范围分支或兼容代码。
 - High Contrast、work-area clamp、DPI rounding 等系统级运行时保护仍可覆盖最终 paint 结果，但不回写用户配置。
+- GUI 中的字号、透明度、圆角、间距、宽度等视觉数值项可以同时提供 slider/spinbox/文本数字输入，但写回前必须经过同一 typed schema parse/validate/clamp 或 reject 路径；非法输入显示本地化错误并保持上一合法值，不写入半合法配置。
+- 数字输入必须支持键盘、粘贴、IME 文本组合取消、失焦提交/回滚和屏幕阅读器 RangeValue/Value 语义；不得用手写 ad-hoc parser 绕过 schema。
+- 字体选择必须枚举当前系统字体族并按本地化排序显示；保存稳定 family name，若字体卸载或当前 glyph 缺失，预览与真实候选窗口都通过 DirectWrite/system fallback 可见显示并在 Config 中提示 fallback 状态。
 
 ### 13.9.8 JSON 文件规则
 
@@ -2827,7 +2841,7 @@ GUI、日志、诊断页只能读取这些 owner，不维护影子副本。
 信息层级仍然只有 `Basic / Advanced / Diagnostics`，但它们是**渐进披露层级**，不是必须直接显示给用户的三个大标签页。
 
 - `输入法`：当前 Fcitx input methods、启用/禁用、排序、默认项；使用卡片/列表，不暴露 TSF profile GUID。
-- `外观`：production Candidate Preview、主题、System/Light/Dark、Auto/Horizontal/Vertical、字号、字体；Theme library 作为该页子区域，不作为平级一级导航。
+- `外观`：production Candidate Preview、主题、System/Light/Dark、Auto/Horizontal/Vertical、字号、字体；Theme library 作为该页子区域，不作为平级一级导航。字号等数值设置允许直接输入数字，但必须有范围、单位、实时错误和回滚；字体 picker 必须来自当前系统字体枚举，不要求用户手输 family。
 - `快捷键`：面向用户任务组织；具体 Fcitx key binding 由 Fcitx Config API authoritative ownership。
 - `插件与扩展`：普通用户显示友好 addon/input-method 信息；Advanced 提供 generic Fcitx metadata/config schema view，避免巨大硬编码映射。
 - `更新`：channel、版本、检查/安装、previous-known-good 状态；网络/签名技术字段只在 Details。
@@ -2838,6 +2852,10 @@ GUI、日志、诊断页只能读取这些 owner，不维护影子副本。
 - WTL/Win32 负责 window/message/native integration；D2D/DWrite Settings Surface 负责主要视觉组件。
 - 建立单一 `DesignTokens` 与可复用 `SettingRow/Section/Toggle/SegmentedControl/Slider/ThemeCard/InputMethodCard/Banner/StatusBadge/CandidatePreview`；禁止每页手工造近似控件。
 - Config 自身 MUST 支持 System/Light/Dark/High Contrast。
+- 主题管理吸收 WindInput 的正向经验但按本项目边界重写：内置主题可有 base/variant 概念，导入主题必须变成完整 typed snapshot 后再预览/安装；主题编辑、导入、复制、删除、重命名、导出都必须通过同一 validation、resource budget、signature/package policy 和 atomic write 路径。
+- Candidate Preview 必须是 Config 内嵌的真实 Candidate UI renderer/preview-host，不是主题编辑器模拟、静态截图或外部浮窗；Config 预览、真实候选窗口和未来主题编辑器必须共享同一 resolved theme snapshot 与 layout/render contract。
+- Theme Card 应显示名称、作者、来源、Light/Dark 兼容状态、资源/签名/安装状态和可预览缩略信息；错误主题显示可恢复诊断，不让坏主题影响输入主链。
+- 设置分级采用 common/advanced/diagnostics 的渐进披露：普通页只放高频用户任务，高风险/工程项进入高级外观或详情；每个新增设置键必须说明用户价值、owner、默认值、范围、是否 live、生效边界和测试。
 - 不创建 `TSF`、`IPC`、`Renderer`、`Launcher` 等普通设置页面。
 - 每个 setting 只有一个 authoritative owner 和一个主要 UI 入口。其他页面需要引用时使用导航/摘要，不复制第二个可编辑控件。
 - `config.toml` 是 sparse override；普通用户不需要打开它。GUI 使用 picker、preview、enum、slider 等受约束控件生成合法配置。
@@ -2863,6 +2881,9 @@ GUI、日志、诊断页只能读取这些 owner，不维护影子副本。
 - 构建默认禁止访问公网拉取 `latest`。确需下载的工具/依赖必须版本固定并验证 hash/signature。
 - Release metadata 至少记录 source commit、submodule/dependency lock、toolchain versions、build flags、target architecture 与最终 artifact hash。
 - 对无法做到 byte-for-byte reproducible 的 PE/签名产物，不伪称“可复现”；目标是 **reproducible inputs + traceable lineage + same-artifact promotion**。
+- Windows 本地与 CI 的默认快速工具链为 pinned CMake + Ninja + clang-cl + lld-link + sccache；MSVC/Windows SDK 仍提供 ABI/headers/runtime 基线，但不把 Visual Studio/MSBuild 作为默认开发构建入口。
+- x64/x86/arm64 都必须走同一加速策略：Ninja 并行、C/C++ launcher cache、Rust `RUSTC_WRAPPER=sccache`、固定 Cargo target/cache 目录、locked Cargo build。不得为了 arm64 或 CI 静默禁用缓存/快速链接；若 runner/toolchain 缺失，应报告缺失组件而不是降级成慢路径。
+- C++ 保留岛的编译加速优先级：减少 include 耦合、使用 PCH/forward declaration/显式模板实例化等可维护手段；只有存在真实收益和可维护证据时再引入 C++20 Modules。不得为了编译速度扩大 C++ 代码面。
 
 ### 13.10.2 边界契约测试（Contract Testing）
 

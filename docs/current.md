@@ -1,6 +1,6 @@
 # Current Truth Snapshot
 
-Date: 2026-08-25 (updated after CONFIG-RUST-CUTOVER-001 side-by-side Rust Settings target)
+Date: 2026-08-25 (updated after CONFIG-RUST-CUTOVER-001 side-by-side differential and preview/plugin/theme requirement refresh)
 
 HEAD recorded at snapshot refresh: `d230b47fdee7d63255e3869c1fbc402b97d88dd3`
 
@@ -32,7 +32,7 @@ Windows host
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
 | Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter |
-| Config | C++ WTL/Win32 shell remains only as a temporary shipping adapter; `CONFIG-UX-009` froze the Settings UX/theme/preview/package/localization/no-overlap corpus; Rust config PoC/control/theme operation owners exist; side-by-side `fcitx5-config-rust.exe` now builds against that corpus | Current task: move shipping `fcitx5-config.exe` to Rust through `CONFIG-RUST-CUTOVER-001` cutover slices |
+| Config | C++ WTL/Win32 shell remains only as a temporary shipping adapter; `CONFIG-UX-009` froze the Settings UX/theme/package/localization/no-overlap corpus; Rust config PoC/control/theme operation owners exist; side-by-side `fcitx5-config-rust.exe` now builds and differentially checks against the C++ contract corpus; the remaining preview gate requires an embedded real Candidate UI renderer/preview host, not Settings-only simulation; appearance numeric input and font picker behavior must be Rust-typed, validated, localized, and system-font-backed | Current task: move shipping `fcitx5-config.exe` to Rust through `CONFIG-RUST-CUTOVER-001` cutover slices |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
 | Package/provider/downloader/updater/deployer | Package/provider/deployer/updater/downloader Rust CLIs and Rust package-core are wired; adapters remain where needed | Rust authority |
@@ -43,7 +43,7 @@ Windows host
 | PoC / migration lane | State | Exit condition |
 |---|---|---|
 | Rust TSF | `SHIPPING-AUTOMATED-GREEN` / real-host matrix pending | Full host matrix evidence before release readiness |
-| Rust Config | `CUTOVER-AUTHORIZED / UX-CORPUS-FROZEN / SIDE-BY-SIDE-RUST-SETTINGS-TARGET-GREEN` | Run side-by-side differential/visual/accessibility/package evidence, then cut over `fcitx5-config.exe` and delete the old C++ WTL shell |
+| Rust Config | `CUTOVER-AUTHORIZED / UX-CORPUS-FROZEN / SIDE-BY-SIDE-DIFFERENTIAL-GREEN / REAL-CANDIDATE-PREVIEW-HOST-REQUIRED` | Replace model-only preview evidence with embedded real Candidate UI renderer/preview-host evidence, run visual/accessibility/DPI/package evidence, then cut over `fcitx5-config.exe` and delete the old C++ WTL shell |
 | Candidate Rust core | `SHIPPING-DOMAIN` | Remove duplicated C++ validation/state, preserve renderer evidence, add candidate-action/upstream alignment |
 | Rust package/update/control/launcher cores | `SHIPPING-DOMAIN` where already cut over, `MIGRATION-CANDIDATE` where shell remains | Delete replaced C++ authoritative implementation and keep adapter thin |
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
@@ -62,6 +62,11 @@ Windows host
 - Runtime security now has explicit `Win10` and `Win7` lanes. The modern `Win10` lane remains the default full PE/source audit; product networking is enforced through source-boundary scanning plus PE blocking for explicit HTTP/URL stacks because Rust-linked MSVC binaries import `WS2_32.dll` through Rust std even without product network code. The legacy `Win7` lane is expected to stay red until the launcher/Rust runtime hard import of `GetSystemTimePreciseAsFileTime` is removed or a separate legacy strategy is implemented.
 - Engine product state is migrating to Rust: E1 protocol codec, E2 ledger, E3 event/action decisions, E4 epoch/request/session policy, and E5 snapshot/pending-state policy are cut over (`CUTOVER-GREEN` where recorded). The Fcitx adapter and remaining Windows process/transport shell shrink remain.
 - Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
+- WindInput was reviewed only as a public reference for Settings/theme management discipline. Useful
+  retained constraints now live in `docs/spec-v1.8.md` and `docs/tasks/current.md`: task-oriented
+  common/advanced settings, typed theme resolve before render, no dead theme fields, Light/Dark token
+  parity, unit-aware geometry, one renderer-backed candidate preview path, validated numeric inputs,
+  and system-font-backed font selection.
 - The executable queue has been re-cleaned after the 2026-08-24 review: completed/current R3
   FUTURE-GATED duplicates are not active queue items. `CONFIG-UX-009` is completed and archived
   with staged-app QA evidence. Current product work is `CONFIG-RUST-CUTOVER-001` for the shipping
@@ -77,3 +82,6 @@ Windows host
    stop-aware pipe primitives, keeping direct Fcitx object ownership in the C++ adapter.
 3. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
    release-readiness claim.
+4. For official add-ons/plugins, build reviewed Windows package artifacts in this project, publish
+   them as signed GitHub Release-backed repository assets, and let Settings install only through
+   verified package metadata.

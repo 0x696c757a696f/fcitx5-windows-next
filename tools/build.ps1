@@ -245,8 +245,7 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
   $preset = Get-PresetName $TargetArchitecture
   $analyzeValue = if ($Analyze) { 'ON' } else { 'OFF' }
   $configureArguments = @('--preset', $preset, "-DFCITX_ENABLE_MSVC_ANALYZE=$analyzeValue")
-  if ($env:FCITX_ENABLE_SCCACHE -eq '1' -and $env:GITHUB_ACTIONS -ne 'true' -and
-      $TargetArchitecture -ne 'arm64') {
+  if ($env:FCITX_ENABLE_SCCACHE -eq '1') {
     $sccacheCommand = Get-Command sccache -ErrorAction SilentlyContinue
     if (-not $sccacheCommand) {
       throw 'FCITX_ENABLE_SCCACHE=1 requires sccache on PATH.'
@@ -255,16 +254,6 @@ function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze)
     $configureArguments += @(
       "-DCMAKE_C_COMPILER_LAUNCHER=$sccachePath",
       "-DCMAKE_CXX_COMPILER_LAUNCHER=$sccachePath"
-    )
-  } elseif ($env:GITHUB_ACTIONS -eq 'true' -or $TargetArchitecture -eq 'arm64') {
-    # GitHub's Windows runners intermittently drop the sccache server when it
-    # wraps clang-cl PCH compilation. Keep CI deterministic and still use
-    # clang-cl/lld/Ninja; CMake may also narrow Rust sccache on fragile
-    # cross lanes such as CI ARM64.
-    # Local x64/x86 developer builds can still opt into the C/C++ launcher.
-    $configureArguments += @(
-      '-DCMAKE_C_COMPILER_LAUNCHER=',
-      '-DCMAKE_CXX_COMPILER_LAUNCHER='
     )
   }
   Invoke-Native $cmake $configureArguments

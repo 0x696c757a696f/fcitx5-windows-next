@@ -119,16 +119,7 @@ set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-ho
 set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
 set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
 set(FCITX_RUST_BUILD_ENV)
-set(FCITX_RUST_ENABLE_SCCACHE ON)
 if("$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND
-   FCITX_EFFECTIVE_TARGET_ARCH STREQUAL "arm64")
-  # The GitHub Windows ARM64 cross lane has repeatedly failed inside Cargo
-  # build scripts when Rust is wrapped by sccache. Keep the deterministic
-  # clang-cl/lld/Ninja lane, but run Cargo/Rust directly for this cross build.
-  set(FCITX_RUST_ENABLE_SCCACHE OFF)
-endif()
-if(FCITX_RUST_ENABLE_SCCACHE AND
-   "$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND
    NOT "$ENV{ACTIONS_RUNTIME_TOKEN}" STREQUAL "" AND
    (NOT "$ENV{ACTIONS_CACHE_URL}" STREQUAL "" OR
     NOT "$ENV{ACTIONS_RESULTS_URL}" STREQUAL ""))
@@ -142,9 +133,7 @@ list(APPEND FCITX_RUST_BUILD_ENV
      "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
      "CARGO_HOME=${FCITX_CARGO_HOME}"
      "CARGO_TARGET_DIR=${FCITX_CARGO_TARGET_DIR}")
-if(NOT FCITX_RUST_ENABLE_SCCACHE)
-  list(APPEND FCITX_RUST_BUILD_ENV "--unset=RUSTC_WRAPPER")
-elseif(NOT "$ENV{RUSTC_WRAPPER}" STREQUAL "")
+if(NOT "$ENV{RUSTC_WRAPPER}" STREQUAL "")
   list(APPEND FCITX_RUST_BUILD_ENV "RUSTC_WRAPPER=$ENV{RUSTC_WRAPPER}")
 elseif(FCITX_SCCACHE_EXECUTABLE)
   list(APPEND FCITX_RUST_BUILD_ENV "RUSTC_WRAPPER=${FCITX_SCCACHE_EXECUTABLE}")
@@ -1082,6 +1071,19 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-side-by-side-report.json")
   set_tests_properties(rust-config-side-by-side-contract
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(
+    NAME config-rust-side-by-side-differential
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-side-by-side.ps1"
+      -CppConfigExe "$<TARGET_FILE:fcitx5_config_app>"
+      -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
+      "${FCITX_RUST_TARGET}" -Report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-side-by-side-differential.json")
+  set_tests_properties(config-rust-side-by-side-differential
+                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                                  TIMEOUT 45)
   add_test(
     NAME rust-config-poc-window-smoke
     COMMAND

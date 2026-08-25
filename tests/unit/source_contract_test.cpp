@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
     const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
     const auto specSource = read_text(sourceRoot / "docs/spec-v1.8.md");
     const auto currentTruthSource = read_text(sourceRoot / "docs/current.md");
+    const auto currentTaskSource = read_text(sourceRoot / "docs/tasks/current.md");
     const auto engineBoundarySource = read_text(sourceRoot / "docs/engine-boundary.md");
     const auto tsfProfileBoundarySource = read_text(sourceRoot / "docs/tsf-profile-boundary.md");
     const auto taskRebaselineSource = read_text(sourceRoot / "docs/tasks/rebaseline.md");
@@ -43,6 +44,21 @@ int main(int argc, char** argv) {
         programPlanSource.find("fcitx-contrib/fcitx5-windows") != std::string::npos ||
         referenceBaselineSource.find("fcitx-contrib/fcitx5-windows") != std::string::npos) {
         return fail("FCITX-UPSTREAM-BOUNDARY: fcitx-contrib/fcitx5-windows must not be an architecture reference");
+    }
+    if (specSource.find("huanfeng/WindInput") == std::string::npos ||
+        specSource.find("typed snapshot") == std::string::npos ||
+        specSource.find("schema 有字段时，resolve、render、Config 控件、预览、导入导出和测试都必须消费") ==
+            std::string::npos ||
+        specSource.find("字号等数值设置允许直接输入数字") == std::string::npos ||
+        specSource.find("字体 picker 必须来自当前系统字体枚举") == std::string::npos ||
+        currentTruthSource.find("system-font-backed font selection") == std::string::npos ||
+        currentTaskSource.find("editable numeric controls for appearance values") ==
+            std::string::npos ||
+        currentTaskSource.find("current system font family inventory") ==
+            std::string::npos ||
+        currentTaskSource.find("editor/preview/real-window rendering from one resolved snapshot") ==
+            std::string::npos) {
+        return fail("CONFIG-RUST-CUTOVER-001: WindInput-derived theme lessons, numeric input validation, and system-font picker requirements must stay documented");
     }
     if (upstreamBoundaryAdr.find("Fcitx Upstream Boundary and Rust Product Plane") ==
             std::string::npos ||
@@ -1850,6 +1866,8 @@ int main(int argc, char** argv) {
     const auto configQaSource = read_text(sourceRoot / "rust/config-qa/src/main.rs");
     const auto configPocSource = read_text(sourceRoot / "rust/config-poc/src/main.rs");
     const auto configPocManifest = read_text(sourceRoot / "rust/config-poc/Cargo.toml");
+    const auto configRustDifferentialScript =
+        read_text(sourceRoot / "tools/test-config-rust-side-by-side.ps1");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     const auto controlPackageIntegrationSource =
         read_text(sourceRoot / "tests/integration/control_package_integration_test.cpp");
@@ -2109,8 +2127,17 @@ int main(int argc, char** argv) {
         cmakeSource.find("Building side-by-side Rust fcitx5-config-rust executable") ==
             std::string::npos ||
         cmakeSource.find("rust-config-side-by-side-contract") == std::string::npos ||
+        cmakeSource.find("config-rust-side-by-side-differential") == std::string::npos ||
         cmakeSource.find("config-rust-side-by-side-report.json") == std::string::npos ||
+        cmakeSource.find("config-rust-side-by-side-differential.json") == std::string::npos ||
         cmakeSource.find("fcitx5-config-rust --target") == std::string::npos ||
+        configRustDifferentialScript.find("cpp-config-visual") == std::string::npos ||
+        configRustDifferentialScript.find("cpp-config-live-preview") == std::string::npos ||
+        configRustDifferentialScript.find("cpp-config-interaction") == std::string::npos ||
+        configRustDifferentialScript.find("side_by_side_uses_frozen_corpus") ==
+            std::string::npos ||
+        configRustDifferentialScript.find("permanent_runtime_selector") == std::string::npos ||
+        configRustDifferentialScript.find("layout_rects_non_overlapping") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||
@@ -2450,6 +2477,9 @@ int main(int argc, char** argv) {
             std::string::npos ||
         buildScript.find("CMAKE_C_COMPILER_LAUNCHER=$sccachePath") ==
             std::string::npos ||
+        buildScript.find("$env:GITHUB_ACTIONS -eq 'true' -or $TargetArchitecture -eq 'arm64'") !=
+            std::string::npos ||
+        buildScript.find("'-DCMAKE_C_COMPILER_LAUNCHER='") != std::string::npos ||
         ciCacheScript.find("RUSTC_WRAPPER = 'sccache'") == std::string::npos ||
         ciCacheScript.find("CARGO_INCREMENTAL = '0'") != std::string::npos ||
         ciCacheScript.find("SCCACHE_CACHE_SIZE = '30G'") == std::string::npos ||
@@ -2476,8 +2506,8 @@ int main(int argc, char** argv) {
         cmakeSource.find("src/pch/fcitx_windows_pch.h") == std::string::npos ||
         cmakeSource.find("FCITX_RUST_BUILD_ENV") == std::string::npos ||
         cmakeSource.find("FCITX_SCCACHE_EXECUTABLE") == std::string::npos ||
-        cmakeSource.find("FCITX_RUST_ENABLE_SCCACHE") == std::string::npos ||
-        cmakeSource.find("--unset=RUSTC_WRAPPER") == std::string::npos ||
+        cmakeSource.find("FCITX_RUST_ENABLE_SCCACHE") != std::string::npos ||
+        cmakeSource.find("--unset=RUSTC_WRAPPER") != std::string::npos ||
         cmakeSource.find("RUSTC_WRAPPER=${FCITX_SCCACHE_EXECUTABLE}") == std::string::npos ||
         cmakeSource.find("SCCACHE_DIR=$ENV{SCCACHE_DIR}") == std::string::npos ||
         cmakeSource.find("FCITX_EFFECTIVE_TARGET_ARCH") == std::string::npos ||

@@ -1,6 +1,6 @@
 # CONFIG-RUST-CUTOVER-001 Shipping Settings Rust cutover
 
-**State:** IN-PROGRESS / SIDE-BY-SIDE-RUST-SETTINGS-TARGET-GREEN
+**State:** IN-PROGRESS / SIDE-BY-SIDE-DIFFERENTIAL-GREEN / REAL-CANDIDATE-PREVIEW-HOST-REQUIRED
 
 ## Context
 
@@ -22,6 +22,9 @@ Replace the shipping Settings executable with a Rust-owned implementation in ver
   navigation, theme library, embedded candidate preview, enabled input methods, font selection,
   advanced appearance, package state, diagnostics/repair, localization, keyboard/focus behavior, and
   no-overlap/no-clipping geometry;
+- preserve the useful Settings/theme lessons from `huanfeng/WindInput`: task-oriented common vs
+  advanced settings, typed theme schema/resolve before render, no dead theme fields, Light/Dark token
+  parity, unit-aware geometry, and editor/preview/real-window rendering from one resolved snapshot;
 - retain the useful Hi-DPI requirements from the removed historical plan: DPI-derived DIP layout,
   scaled fonts, cross-monitor reflow on DPI changes, no fixed-physical-pixel control grids, and
   candidate-preview DPI parity with the real candidate window;
@@ -31,6 +34,17 @@ Replace the shipping Settings executable with a Rust-owned implementation in ver
   boundaries when invoking product helpers;
 - implement a Rust Settings executable that preserves the product binary name and consumes the
   existing typed Control/config/package/theme boundaries instead of reimplementing them in C++;
+- replace model-only/synthetic Settings preview evidence with an embedded real Candidate UI
+  renderer/preview-host path: fixed sample candidates are allowed as input, but layout, theme,
+  DPI, font fallback, emoji rendering, and final pixels must come from the same candidate UI
+  renderer path used by the product, inside the Config window;
+- implement editable numeric controls for appearance values such as font size, opacity, spacing,
+  corner radius, and candidate width: slider/spinbox/text entry must stay synchronized, validate
+  through the Rust-owned typed schema, report localized errors, and never write invalid or
+  half-parsed values;
+- implement font selection from the current system font family inventory through the Rust system font
+  boundary; persist stable family names, show fallback status when a font disappears or lacks glyphs,
+  and keep Config preview and the real candidate window on the same DWrite/system fallback path;
 - keep any native Windows calls as small Rust or temporary adapter seams with explicit safety and
   failure handling;
 - run side-by-side differential tests against the frozen C++ behavior corpus until the Rust
@@ -58,8 +72,16 @@ Replace the shipping Settings executable with a Rust-owned implementation in ver
   covered for all primary pages.
 - 100%, 125%, 150%, 200%, and 300% DPI layout checks prove no added control, label, candidate text,
   emoji, or preview content overlaps or clips.
+- Numeric appearance input checks cover valid typed entry, invalid text, paste, IME cancellation,
+  min/max/out-of-range values, localized error text, keyboard focus, and rollback to the last valid
+  value without corrupting `config.toml`.
+- Font picker checks prove the list is populated from current system fonts, persisted selection
+  round-trips, missing fonts degrade to fallback with a visible Settings status, and emoji/CJK glyphs
+  remain visible in both preview and real candidate UI.
 - Embedded candidate preview consumes the same CandidateModel/layout/render contract as the shipping
-  candidate UI and never opens an external floating preview as the only preview path.
+  candidate UI, is rendered inside Config by the real Candidate UI renderer/preview host, and never
+  uses a Settings-only fake renderer, static screenshot, or external floating preview as the preview
+  path.
 - Theme import/export/duplicate/delete, font persistence, package trust blocking, diagnostics, and
   repair operation paths remain routed through Rust-owned typed boundaries.
 - Package smoke from `out/package` passes after cutover.
