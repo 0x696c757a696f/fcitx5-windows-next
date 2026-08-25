@@ -2070,6 +2070,15 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configPocSource.find("candidate_preview_dpi_parity_scale_percents") ==
             std::string::npos ||
+        configPocSource.find("Fcitx5ConfigPocCandidatePreviewHost") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_child_hwnd_created") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_child_visible") == std::string::npos ||
+        configPocSource.find("candidate_preview_child_parented") == std::string::npos ||
+        configPocSource.find("candidate_preview_child_inside_window") ==
+            std::string::npos ||
+        configPocSource.find("GetParent(preview_hwnd)") == std::string::npos ||
         configPocSource.find("ThemeLibraryEvidence") == std::string::npos ||
         configPocSource.find("theme_library_model_rust_owned") == std::string::npos ||
         configPocSource.find("theme_inventory_sources") == std::string::npos ||

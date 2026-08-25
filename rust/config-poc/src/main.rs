@@ -545,7 +545,11 @@ fn run_window_smoke() -> Result<String, String> {
     let layout = validate_layout(&model)?;
     let _operations = validate_operations()?;
     let _boundaries = validate_typed_boundaries()?;
-    let window = create_config_window_smoke(model.product_name, layout.minimum_window_dip)?;
+    let window = create_config_window_smoke(
+        model.product_name,
+        layout.minimum_window_dip,
+        layout.candidate_preview_rect,
+    )?;
     if !window.visible || !window.title_readable {
         return Err("Rust Config PoC window was not visible/readable".to_owned());
     }
@@ -554,8 +558,17 @@ fn run_window_smoke() -> Result<String, String> {
     {
         return Err("Rust Config PoC window is smaller than the modeled minimum".to_owned());
     }
+    if !window.candidate_preview_child_hwnd_created
+        || !window.candidate_preview_child_visible
+        || !window.candidate_preview_child_parented
+        || !window.candidate_preview_child_inside_window
+    {
+        return Err(
+            "Rust Config PoC did not create an embedded candidate preview child surface".to_owned(),
+        );
+    }
     Ok(format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-window-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"side_by_side_executable_name\":\"{}\",\n  \"rust_shipping_target_name\":\"{}\",\n  \"hwnd_created\":true,\n  \"visible\":{},\n  \"title_readable\":{},\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"window_width\":{},\n  \"window_height\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-window-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"side_by_side_executable_name\":\"{}\",\n  \"rust_shipping_target_name\":\"{}\",\n  \"hwnd_created\":true,\n  \"visible\":{},\n  \"title_readable\":{},\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"window_width\":{},\n  \"window_height\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_child_hwnd_created\":{},\n  \"candidate_preview_child_visible\":{},\n  \"candidate_preview_child_parented\":{},\n  \"candidate_preview_child_inside_window\":{},\n  \"candidate_preview_child_left\":{},\n  \"candidate_preview_child_top\":{},\n  \"candidate_preview_child_right\":{},\n  \"candidate_preview_child_bottom\":{},\n  \"candidate_preview_child_width\":{},\n  \"candidate_preview_child_height\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         CONFIG_SIDE_BY_SIDE_COMPONENT,
@@ -571,6 +584,16 @@ fn run_window_smoke() -> Result<String, String> {
         layout.minimum_window_dip.width,
         layout.minimum_window_dip.height,
         layout.candidate_preview_embedded_in_config_content,
+        window.candidate_preview_child_hwnd_created,
+        window.candidate_preview_child_visible,
+        window.candidate_preview_child_parented,
+        window.candidate_preview_child_inside_window,
+        window.candidate_preview_child_left,
+        window.candidate_preview_child_top,
+        window.candidate_preview_child_right,
+        window.candidate_preview_child_bottom,
+        window.candidate_preview_child_width,
+        window.candidate_preview_child_height,
         layout.candidate_preview_rect.x,
         layout.candidate_preview_rect.y,
         layout.candidate_preview_rect.width,
@@ -590,20 +613,32 @@ struct WindowSmokeEvidence {
     height: i32,
     visible: bool,
     title_readable: bool,
+    candidate_preview_child_hwnd_created: bool,
+    candidate_preview_child_visible: bool,
+    candidate_preview_child_parented: bool,
+    candidate_preview_child_inside_window: bool,
+    candidate_preview_child_left: i32,
+    candidate_preview_child_top: i32,
+    candidate_preview_child_right: i32,
+    candidate_preview_child_bottom: i32,
+    candidate_preview_child_width: i32,
+    candidate_preview_child_height: i32,
 }
 
 #[cfg(windows)]
 fn create_config_window_smoke(
     title: &str,
     minimum_window_dip: Size,
+    candidate_preview_rect: Rect,
 ) -> Result<WindowSmokeEvidence, String> {
-    win32_window_smoke::create(title, minimum_window_dip)
+    win32_window_smoke::create(title, minimum_window_dip, candidate_preview_rect)
 }
 
 #[cfg(not(windows))]
 fn create_config_window_smoke(
     _title: &str,
     _minimum_window_dip: Size,
+    _candidate_preview_rect: Rect,
 ) -> Result<WindowSmokeEvidence, String> {
     Err("Rust Config PoC window smoke requires Windows".to_owned())
 }
@@ -2302,7 +2337,7 @@ mod win32_window_smoke {
     use std::ffi::c_void;
     use std::ptr::{null, null_mut};
 
-    use super::{Size, WindowSmokeEvidence};
+    use super::{Rect as LayoutRect, Size, WindowSmokeEvidence};
 
     type Hinstance = *mut c_void;
     type Hwnd = *mut c_void;
@@ -2317,6 +2352,7 @@ mod win32_window_smoke {
     const CS_HREDRAW: u32 = 0x0002;
     const CS_VREDRAW: u32 = 0x0001;
     const CW_USEDEFAULT: i32 = 0x8000_0000_u32 as i32;
+    const WS_CHILD: u32 = 0x4000_0000;
     const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
     const WS_VISIBLE: u32 = 0x1000_0000;
     const SW_SHOWNORMAL: i32 = 1;
@@ -2362,6 +2398,7 @@ mod win32_window_smoke {
         ) -> Hwnd;
         fn DefWindowProcW(hwnd: Hwnd, message: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
         fn DestroyWindow(hwnd: Hwnd) -> i32;
+        fn GetParent(hwnd: Hwnd) -> Hwnd;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
         fn IsWindowVisible(hwnd: Hwnd) -> i32;
@@ -2374,9 +2411,16 @@ mod win32_window_smoke {
         fn GetModuleHandleW(module_name: Lpcwstr) -> Hinstance;
     }
 
-    pub fn create(title: &str, minimum_window_dip: Size) -> Result<WindowSmokeEvidence, String> {
+    pub fn create(
+        title: &str,
+        minimum_window_dip: Size,
+        candidate_preview_rect: LayoutRect,
+    ) -> Result<WindowSmokeEvidence, String> {
         let class_name = to_wide("Fcitx5ConfigPocWindow");
+        let preview_class_name = to_wide("Fcitx5ConfigPocCandidatePreviewHost");
         let title = to_wide(title);
+        let preview_title = to_wide("Candidate Preview");
+        // SAFETY: A null module name asks Windows for the current process module handle.
         let instance = unsafe { GetModuleHandleW(null()) };
         if instance.is_null() {
             return Err("GetModuleHandleW failed for Rust Config PoC".to_owned());
@@ -2393,10 +2437,34 @@ mod win32_window_smoke {
             lpsz_menu_name: null(),
             lpsz_class_name: class_name.as_ptr(),
         };
+        let preview_window_class = WndClassW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfn_wnd_proc: Some(window_proc),
+            cb_cls_extra: 0,
+            cb_wnd_extra: 0,
+            h_instance: instance,
+            h_icon: null_mut(),
+            h_cursor: null_mut(),
+            hbr_background: null_mut(),
+            lpsz_menu_name: null(),
+            lpsz_class_name: preview_class_name.as_ptr(),
+        };
+        // SAFETY: The class descriptors reference live UTF-16 buffers for this call and use a
+        // window procedure with the expected system ABI.
         let atom = unsafe { RegisterClassW(&window_class) };
         if atom == 0 {
             return Err("RegisterClassW failed for Rust Config PoC".to_owned());
         }
+        // SAFETY: The class descriptor references live UTF-16 buffers for this call and uses a
+        // window procedure with the expected system ABI.
+        let preview_atom = unsafe { RegisterClassW(&preview_window_class) };
+        if preview_atom == 0 {
+            return Err(
+                "RegisterClassW failed for Rust Config PoC candidate preview host".to_owned(),
+            );
+        }
+        // SAFETY: All UTF-16 class/title pointers stay alive for the duration of this call. Parent,
+        // menu, and parameter handles are null because this creates the top-level smoke window.
         let hwnd = unsafe {
             CreateWindowExW(
                 0,
@@ -2416,9 +2484,41 @@ mod win32_window_smoke {
         if hwnd.is_null() {
             return Err("CreateWindowExW failed for Rust Config PoC".to_owned());
         }
+        // SAFETY: The preview class/title pointers stay alive for the call, and `hwnd` is a live
+        // top-level window handle created above. The child coordinates come from the validated
+        // layout model.
+        let preview_hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                preview_class_name.as_ptr(),
+                preview_title.as_ptr(),
+                WS_CHILD | WS_VISIBLE,
+                candidate_preview_rect.x,
+                candidate_preview_rect.y,
+                candidate_preview_rect.width,
+                candidate_preview_rect.height,
+                hwnd,
+                null_mut(),
+                instance,
+                null_mut(),
+            )
+        };
+        if preview_hwnd.is_null() {
+            // SAFETY: `hwnd` is a live window handle created above and is being cleaned up on the
+            // failure path.
+            unsafe {
+                DestroyWindow(hwnd);
+            }
+            return Err(
+                "CreateWindowExW failed for Rust Config PoC candidate preview host".to_owned(),
+            );
+        }
+        // SAFETY: Both handles were created successfully and can be shown/painted immediately.
         unsafe {
             ShowWindow(hwnd, SW_SHOWNORMAL);
+            ShowWindow(preview_hwnd, SW_SHOWNORMAL);
             UpdateWindow(hwnd);
+            UpdateWindow(preview_hwnd);
         }
         let mut rect = Rect {
             left: 0,
@@ -2426,15 +2526,47 @@ mod win32_window_smoke {
             right: 0,
             bottom: 0,
         };
+        let mut preview_rect = Rect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        // SAFETY: `hwnd` is a live window handle and `rect` points to writable memory.
         if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+            // SAFETY: Handles were created above and are being destroyed on this failure path.
             unsafe {
+                DestroyWindow(preview_hwnd);
                 DestroyWindow(hwnd);
             }
             return Err("GetWindowRect failed for Rust Config PoC".to_owned());
         }
+        // SAFETY: `preview_hwnd` is a live child window handle and `preview_rect` is writable.
+        if unsafe { GetWindowRect(preview_hwnd, &mut preview_rect) } == 0 {
+            // SAFETY: Handles were created above and are being destroyed on this failure path.
+            unsafe {
+                DestroyWindow(preview_hwnd);
+                DestroyWindow(hwnd);
+            }
+            return Err(
+                "GetWindowRect failed for Rust Config PoC candidate preview host".to_owned(),
+            );
+        }
+        let candidate_preview_child_inside_window = preview_rect.left >= rect.left
+            && preview_rect.top >= rect.top
+            && preview_rect.right <= rect.right
+            && preview_rect.bottom <= rect.bottom;
+        // SAFETY: `preview_hwnd` is a live child window handle.
+        let candidate_preview_child_parented = unsafe { GetParent(preview_hwnd) } == hwnd;
+        // SAFETY: Window handles are live until the explicit cleanup below.
         let visible = unsafe { IsWindowVisible(hwnd) } != 0;
+        // SAFETY: Window handles are live until the explicit cleanup below.
+        let candidate_preview_child_visible = unsafe { IsWindowVisible(preview_hwnd) } != 0;
+        // SAFETY: `hwnd` is live until the explicit cleanup below.
         let title_readable = unsafe { GetWindowTextLengthW(hwnd) } > 0;
+        // SAFETY: Handles were created above and are destroyed before returning.
         unsafe {
+            DestroyWindow(preview_hwnd);
             DestroyWindow(hwnd);
         }
         Ok(WindowSmokeEvidence {
@@ -2446,6 +2578,16 @@ mod win32_window_smoke {
             height: rect.bottom - rect.top,
             visible,
             title_readable,
+            candidate_preview_child_hwnd_created: true,
+            candidate_preview_child_visible,
+            candidate_preview_child_parented,
+            candidate_preview_child_inside_window,
+            candidate_preview_child_left: preview_rect.left,
+            candidate_preview_child_top: preview_rect.top,
+            candidate_preview_child_right: preview_rect.right,
+            candidate_preview_child_bottom: preview_rect.bottom,
+            candidate_preview_child_width: preview_rect.right - preview_rect.left,
+            candidate_preview_child_height: preview_rect.bottom - preview_rect.top,
         })
     }
 
