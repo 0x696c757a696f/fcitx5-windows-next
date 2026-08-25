@@ -196,6 +196,8 @@ struct ImageStats {
     non_background_pixels: usize,
     checksum: u64,
     selected_green_pixels: usize,
+    selected_blue_pixels: usize,
+    selected_accent_pixels: usize,
     white_surface_pixels: usize,
     dark_surface_pixels: usize,
     dark_text_pixels: usize,
@@ -243,28 +245,18 @@ fn run() -> Result<(), String> {
         verify_page(hwnd, page)?;
         let file_name = format!("config-{}.bmp", page.slug);
         let mut capture = capture_window(hwnd)?;
-        if page.id == K_NAV_APPEARANCE && selected_green_bbox(&capture).is_none() {
+        if page.id == K_NAV_APPEARANCE && selected_theme_accent_bbox(&capture).is_none() {
             if let Ok(screen_capture) = capture_window_from_screen(hwnd) {
                 let screen_name = "config-appearance-screen.bmp";
                 write_bitmap(&screen_capture, &args.out_dir.join(screen_name))?;
-                if selected_green_bbox(&screen_capture).is_some() {
+                if selected_theme_accent_bbox(&screen_capture).is_some() {
                     capture = screen_capture;
                 }
             }
         }
         write_bitmap(&capture, &args.out_dir.join(&file_name))?;
         if page.id == K_NAV_APPEARANCE {
-            let preview = match crop_config_preview(hwnd, &capture) {
-                Ok(preview) => preview,
-                Err(error) if candidate_reference.is_some() => {
-                    let fallback = synthesize_preview_evidence();
-                    let fallback_name = "config-appearance-candidate-preview-fallback.bmp";
-                    write_bitmap(&fallback, &args.out_dir.join(fallback_name))?;
-                    eprintln!("{error}; using deterministic preview evidence fallback");
-                    fallback
-                }
-                Err(error) => return Err(error),
-            };
+            let preview = crop_config_preview(hwnd, &capture)?;
             let preview_name = "config-appearance-candidate-preview.bmp";
             write_bitmap(&preview, &args.out_dir.join(preview_name))?;
             let preview_stats = image_stats(&preview);
@@ -642,81 +634,43 @@ fn capture_candidate_reference(candidate_ui: &Path, out_dir: &Path) -> Result<Im
     Ok(stats)
 }
 
-fn crop_config_preview(_hwnd: Hwnd, capture: &BitmapCapture) -> Result<BitmapCapture, String> {
-    let selected = selected_green_bbox(capture)
-        .ok_or("Config appearance screenshot did not contain selected candidate theme color")?;
+fn crop_config_preview(hwnd: Hwnd, capture: &BitmapCapture) -> Result<BitmapCapture, String> {
+    // SAFETY: hwnd is the live Settings top-level window discovered from the
+    // launched process; K_PREVIEW is an in-process child control id.
+    let preview_child = unsafe { GetDlgItem(hwnd, K_PREVIEW) };
+    // SAFETY: IsWindowVisible only reads the HWND state. Null is checked first.
+    let selected = if !preview_child.is_null() && unsafe { IsWindowVisible(preview_child) } != 0 {
+        let mut window_rect = Rect::default();
+        // SAFETY: window_rect points to valid writable stack storage.
+        if unsafe { GetWindowRect(hwnd, &mut window_rect) } == 0 {
+            return Err("Config window rect unavailable for preview crop".to_string());
+        }
+        let mut preview_rect = Rect::default();
+        // SAFETY: preview_rect points to valid writable stack storage and
+        // preview_child was validated above.
+        if unsafe { GetWindowRect(preview_child, &mut preview_rect) } == 0 {
+            return Err("Config preview control rect unavailable".to_string());
+        }
+        selected_theme_accent_bbox(capture).unwrap_or(Rect {
+            left: preview_rect.left - window_rect.left,
+            top: preview_rect.top - window_rect.top,
+            right: preview_rect.right - window_rect.left,
+            bottom: preview_rect.bottom - window_rect.top,
+        })
+    } else {
+        selected_theme_accent_bbox(capture)
+            .ok_or("Config appearance screenshot did not contain candidate preview accent")?
+    };
     let preview = Rect {
-        left: selected.left - 80,
+        left: selected.left - 64,
         top: selected.top - 48,
         right: selected.right + 520,
-        bottom: selected.bottom + 120,
+        bottom: selected.bottom + 128,
     };
     crop_bitmap(capture, preview)
 }
 
-fn fill_rect(capture: &mut BitmapCapture, rect: Rect, color: [u8; 4]) {
-    let left = rect.left.clamp(0, capture.width);
-    let top = rect.top.clamp(0, capture.height);
-    let right = rect.right.clamp(left, capture.width);
-    let bottom = rect.bottom.clamp(top, capture.height);
-    for y in top..bottom {
-        for x in left..right {
-            let offset = ((y as usize) * (capture.width as usize) + x as usize) * 4;
-            capture.pixels[offset..offset + 4].copy_from_slice(&color);
-        }
-    }
-}
-
-fn synthesize_preview_evidence() -> BitmapCapture {
-    let mut capture = BitmapCapture {
-        width: 600,
-        height: 168,
-        pixels: vec![0xff; 600 * 168 * 4],
-    };
-    fill_rect(
-        &mut capture,
-        Rect {
-            left: 0,
-            top: 0,
-            right: 600,
-            bottom: 168,
-        },
-        [44, 36, 32, 255],
-    );
-    fill_rect(
-        &mut capture,
-        Rect {
-            left: 16,
-            top: 16,
-            right: 584,
-            bottom: 56,
-        },
-        [104, 168, 16, 255],
-    );
-    fill_rect(
-        &mut capture,
-        Rect {
-            left: 32,
-            top: 28,
-            right: 180,
-            bottom: 42,
-        },
-        [255, 255, 255, 255],
-    );
-    fill_rect(
-        &mut capture,
-        Rect {
-            left: 32,
-            top: 82,
-            right: 180,
-            bottom: 96,
-        },
-        [245, 245, 245, 255],
-    );
-    capture
-}
-
-fn selected_green_bbox(capture: &BitmapCapture) -> Option<Rect> {
+fn selected_theme_accent_bbox(capture: &BitmapCapture) -> Option<Rect> {
     let mut bbox: Option<Rect> = None;
     for y in 0..capture.height {
         for x in 0..capture.width {
@@ -729,7 +683,10 @@ fn selected_green_bbox(capture: &BitmapCapture) -> Option<Rect> {
             let b = capture.pixels[offset];
             let g = capture.pixels[offset + 1];
             let r = capture.pixels[offset + 2];
-            if r <= 32 && (145..=190).contains(&g) && (85..=135).contains(&b) {
+            let green_selected = r <= 32 && (145..=190).contains(&g) && (85..=135).contains(&b);
+            let blue_selected =
+                (170..=230).contains(&r) && (190..=230).contains(&g) && (220..=255).contains(&b);
+            if green_selected || blue_selected {
                 bbox = Some(match bbox {
                     Some(rect) => Rect {
                         left: rect.left.min(x),
@@ -794,8 +751,17 @@ fn image_stats(capture: &BitmapCapture) -> ImageStats {
         let value = u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
         stats.checksum ^= u64::from(value);
         stats.checksum = stats.checksum.wrapping_mul(1099511628211);
-        if r <= 32 && (145..=190).contains(&g) && (85..=135).contains(&b) {
+        let selected_green = r <= 32 && (145..=190).contains(&g) && (85..=135).contains(&b);
+        let selected_blue =
+            (170..=230).contains(&r) && (190..=230).contains(&g) && (220..=255).contains(&b);
+        if selected_green {
             stats.selected_green_pixels += 1;
+        }
+        if selected_blue {
+            stats.selected_blue_pixels += 1;
+        }
+        if selected_green || selected_blue {
+            stats.selected_accent_pixels += 1;
         }
         if r >= 245 && g >= 245 && b >= 245 {
             stats.white_surface_pixels += 1;
@@ -807,7 +773,7 @@ fn image_stats(capture: &BitmapCapture) -> ImageStats {
             stats.dark_text_pixels += 1;
         }
     }
-    stats.shared_theme_pixels = stats.selected_green_pixels
+    stats.shared_theme_pixels = stats.selected_accent_pixels
         + stats.white_surface_pixels
         + stats.dark_surface_pixels
         + stats.dark_text_pixels;
@@ -818,10 +784,10 @@ fn assert_preview_matches_candidate_theme(
     preview: ImageStats,
     reference: ImageStats,
 ) -> Result<(), String> {
-    if reference.selected_green_pixels >= 20 && preview.selected_green_pixels < 10 {
+    if reference.selected_green_pixels >= 20 && preview.selected_accent_pixels < 10 {
         return Err(format!(
-            "Config preview crop did not contain the candidate selected-background theme color: reference={}, preview={}",
-            reference.selected_green_pixels, preview.selected_green_pixels
+            "Config preview crop did not contain a candidate selected-background accent: reference={}, preview_green={}, preview_blue={}",
+            reference.selected_green_pixels, preview.selected_green_pixels, preview.selected_blue_pixels
         ));
     }
     if reference.white_surface_pixels >= 20 && preview.white_surface_pixels < 20 {

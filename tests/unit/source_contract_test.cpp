@@ -1990,7 +1990,9 @@ int main(int argc, char** argv) {
         configQaSource.find("--candidate-ui-exe") == std::string::npos ||
         configQaSource.find("candidate-ui-demo-reference.bmp") == std::string::npos ||
         configQaSource.find("config-appearance-candidate-preview.bmp") == std::string::npos ||
-        configQaSource.find("selected_green_bbox") == std::string::npos ||
+        configQaSource.find("selected_theme_accent_bbox") == std::string::npos ||
+        configQaSource.find("selected_accent_pixels") == std::string::npos ||
+        configQaSource.find("synthesize_preview_evidence") != std::string::npos ||
         configQaSource.find("assert_preview_matches_candidate_theme") == std::string::npos ||
         configQaSource.find("shared_theme_pixels") == std::string::npos ||
         configPocSource.find("fcitx5-config-poc") == std::string::npos ||
