@@ -2008,6 +2008,11 @@ int main(int argc, char** argv) {
         configPocSource.find("layout_rects_non_overlapping") == std::string::npos ||
         configPocSource.find("addon_action_row_rects") == std::string::npos ||
         configPocSource.find("settings_operation_state_machine") == std::string::npos ||
+        configPocSource.find("theme_action_state_machine") == std::string::npos ||
+        configPocSource.find("theme_operations_backend_pending_without_file_mutation") ==
+            std::string::npos ||
+        configPocSource.find("ThemeActionResult::Blocked(\"theme.read_only\")") ==
+            std::string::npos ||
         configPocManifest.find("fcitx5-control-core") == std::string::npos ||
         configPocManifest.find("fcitx5-package-core") == std::string::npos ||
         configPocSource.find("control_schema_json") == std::string::npos ||
@@ -2034,6 +2039,10 @@ int main(int argc, char** argv) {
         configPocSource.find("UninstallAddon") == std::string::npos ||
         configPocSource.find("EnableAddon") == std::string::npos ||
         configPocSource.find("DisableAddon") == std::string::npos ||
+        configSource.find("ModernAction::themeDuplicate") == std::string::npos ||
+        configSource.find("ModernAction::themeImport") == std::string::npos ||
+        configSource.find("ModernAction::themeExport") == std::string::npos ||
+        configSource.find("ModernAction::themeDelete") == std::string::npos ||
         cmakeSource.find("rust-config-poc-contract") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
@@ -2046,6 +2055,9 @@ int main(int argc, char** argv) {
         englishLocale.find("\"theme.security.network_blocked\"") == std::string::npos ||
         englishLocale.find("\"theme.security.path_scope.theme_directory\"") ==
             std::string::npos ||
+        englishLocale.find("\"theme.action.duplicate\"") == std::string::npos ||
+        englishLocale.find("\"theme.operation.backend_pending\"") == std::string::npos ||
+        englishLocale.find("\"theme.operation.delete_readonly\"") == std::string::npos ||
         englishLocale.find("\"nav.packages\": \"Add-ons & Extensions\"") ==
             std::string::npos ||
         englishLocale.find("\"updates.title\": \"Updates\"") == std::string::npos) {

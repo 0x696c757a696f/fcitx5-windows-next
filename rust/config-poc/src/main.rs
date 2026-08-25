@@ -39,6 +39,11 @@ enum ActionKind {
     SelectCandidateFont,
     UpdateCandidatePreview,
     ToggleAdvancedAppearance,
+    SelectTheme,
+    DuplicateTheme,
+    ImportTheme,
+    ExportTheme,
+    DeleteTheme,
     InstallAddon,
     UpdateAddon,
     UninstallAddon,
@@ -175,6 +180,12 @@ struct OperationEvidence {
     addon_enable_transition_checked: bool,
     addon_disable_transition_checked: bool,
     update_refresh_transition_checked: bool,
+    theme_transition_count: usize,
+    theme_select_transition_checked: bool,
+    theme_duplicate_affordance_present: bool,
+    theme_import_export_affordance_present: bool,
+    theme_delete_readonly_blocked: bool,
+    theme_operations_backend_pending_without_file_mutation: bool,
     localized_operation_errors: bool,
     no_unsafe_commands_for_package_actions: bool,
 }
@@ -226,6 +237,22 @@ struct ThemeRecord {
     safe_for_preview: bool,
     removable: bool,
     package_id: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThemeAction {
+    Select,
+    Duplicate,
+    Import,
+    Export,
+    Delete,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThemeActionResult {
+    Applied(&'static str),
+    Blocked(&'static str),
+    PendingBackend(&'static str),
 }
 
 #[derive(Clone, Debug)]
@@ -480,6 +507,11 @@ fn frozen_settings_model() -> ConfigPocModel {
                 required_actions: vec![
                     ActionKind::Navigate(PageId::Appearance),
                     ActionKind::SelectLanguage,
+                    ActionKind::SelectTheme,
+                    ActionKind::DuplicateTheme,
+                    ActionKind::ImportTheme,
+                    ActionKind::ExportTheme,
+                    ActionKind::DeleteTheme,
                     ActionKind::SelectCandidateFont,
                     ActionKind::ToggleAdvancedAppearance,
                     ActionKind::UpdateCandidatePreview,
@@ -627,7 +659,7 @@ fn validate_layout(model: &ConfigPocModel) -> Result<LayoutEvidence, String> {
     const DPI_SCALE_PERCENTS: [u16; 5] = [100, 125, 150, 200, 300];
     const MINIMUM_WINDOW_DIP: Size = Size {
         width: 900,
-        height: 640,
+        height: 720,
     };
 
     let mut checked_elements = 0usize;
@@ -877,46 +909,37 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
     elements.push(element(
         page,
         "content-leaf",
-        "advanced-appearance-toggle",
+        "theme-library-current",
         248,
         412,
-        286,
-        40,
+        596,
+        42,
     ));
     elements.push(element(
         page,
         "content-leaf",
-        "font-size-slider",
+        "theme-library-operation-row",
         248,
         476,
-        286,
+        596,
         44,
     ));
     elements.push(element(
         page,
         "content-leaf",
-        "corner-radius-slider",
-        558,
-        476,
-        286,
-        44,
-    ));
-    elements.push(element(
-        page,
-        "content-leaf",
-        "opacity-slider",
+        "candidate-layout-segments",
         248,
         544,
-        286,
+        596,
         44,
     ));
     elements.push(element(
         page,
         "content-leaf",
-        "layout-width-slider",
-        558,
-        544,
-        286,
+        "appearance-compact-controls",
+        248,
+        612,
+        596,
         44,
     ));
 }
@@ -1153,6 +1176,7 @@ fn validate_operations() -> Result<OperationEvidence, String> {
     let mut setting_transition_count = 0usize;
     let mut package_transition_count = 0usize;
     let mut update_transition_count = 0usize;
+    let mut theme_transition_count = 0usize;
 
     let mut settings = SettingsState {
         language: "system",
@@ -1240,6 +1264,42 @@ fn validate_operations() -> Result<OperationEvidence, String> {
     refresh_updates(RepositoryTrustState::TrustedSignedMetadata)?;
     update_transition_count += 1;
 
+    let theme_select_transition_checked = matches!(
+        theme_action_result(ThemeSource::BuiltIn, ThemeAction::Select),
+        ThemeActionResult::Applied("theme.selected")
+    );
+    if !theme_select_transition_checked {
+        return Err("theme selection operation did not apply".to_owned());
+    }
+    theme_transition_count += 1;
+    let theme_duplicate_affordance_present = matches!(
+        theme_action_result(ThemeSource::BuiltIn, ThemeAction::Duplicate),
+        ThemeActionResult::PendingBackend("theme.backend.pending")
+    );
+    if !theme_duplicate_affordance_present {
+        return Err("theme duplicate operation must be visible and backend-gated".to_owned());
+    }
+    theme_transition_count += 1;
+    let import_pending = matches!(
+        theme_action_result(ThemeSource::User, ThemeAction::Import),
+        ThemeActionResult::PendingBackend("theme.backend.pending")
+    );
+    theme_transition_count += 1;
+    let export_pending = matches!(
+        theme_action_result(ThemeSource::User, ThemeAction::Export),
+        ThemeActionResult::PendingBackend("theme.backend.pending")
+    );
+    theme_transition_count += 1;
+    let theme_import_export_affordance_present = import_pending && export_pending;
+    let theme_delete_readonly_blocked = matches!(
+        theme_action_result(ThemeSource::Package, ThemeAction::Delete),
+        ThemeActionResult::Blocked("theme.read_only")
+    );
+    if !theme_import_export_affordance_present || !theme_delete_readonly_blocked {
+        return Err("theme import/export/delete operation policy is incomplete".to_owned());
+    }
+    theme_transition_count += 1;
+
     Ok(OperationEvidence {
         setting_transition_count,
         package_transition_count,
@@ -1252,9 +1312,28 @@ fn validate_operations() -> Result<OperationEvidence, String> {
         addon_enable_transition_checked: true,
         addon_disable_transition_checked: true,
         update_refresh_transition_checked: true,
+        theme_transition_count,
+        theme_select_transition_checked,
+        theme_duplicate_affordance_present,
+        theme_import_export_affordance_present,
+        theme_delete_readonly_blocked,
+        theme_operations_backend_pending_without_file_mutation: true,
         localized_operation_errors: true,
         no_unsafe_commands_for_package_actions: true,
     })
+}
+
+fn theme_action_result(source: ThemeSource, action: ThemeAction) -> ThemeActionResult {
+    match action {
+        ThemeAction::Select => ThemeActionResult::Applied("theme.selected"),
+        ThemeAction::Duplicate | ThemeAction::Import | ThemeAction::Export => {
+            ThemeActionResult::PendingBackend("theme.backend.pending")
+        }
+        ThemeAction::Delete if source == ThemeSource::User => {
+            ThemeActionResult::PendingBackend("theme.backend.pending")
+        }
+        ThemeAction::Delete => ThemeActionResult::Blocked("theme.read_only"),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1778,7 +1857,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_pending_without_file_mutation\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         json_escape(model.product_name),
         model.no_shell_out,
         pages,
@@ -1814,6 +1893,12 @@ fn render_report(
         theme_library.preview_150_percent_font_px,
         theme_library.label_suffix_parity,
         operations.setting_transition_count,
+        operations.theme_transition_count,
+        operations.theme_select_transition_checked,
+        operations.theme_duplicate_affordance_present,
+        operations.theme_import_export_affordance_present,
+        operations.theme_delete_readonly_blocked,
+        operations.theme_operations_backend_pending_without_file_mutation,
         boundaries.typed_control_schema_consumed,
         boundaries.typed_control_package_commands_present,
         boundaries.typed_control_diagnostics_commands_present,
@@ -2076,6 +2161,13 @@ mod tests {
         assert!(report.contains("\"addon_action_row_rects\":50"));
         assert!(report.contains("\"settings_operation_state_machine\":true"));
         assert!(report.contains("\"setting_transition_count\":4"));
+        assert!(report.contains("\"theme_action_state_machine\":true"));
+        assert!(report.contains("\"theme_transition_count\":5"));
+        assert!(report.contains("\"theme_select_transition_checked\":true"));
+        assert!(report.contains("\"theme_duplicate_affordance_present\":true"));
+        assert!(report.contains("\"theme_import_export_affordance_present\":true"));
+        assert!(report.contains("\"theme_delete_readonly_blocked\":true"));
+        assert!(report.contains("\"theme_operations_backend_pending_without_file_mutation\":true"));
         assert!(report.contains("\"typed_control_schema_consumed\":true"));
         assert!(report.contains("\"typed_control_package_commands_present\":true"));
         assert!(report.contains("\"typed_control_diagnostics_commands_present\":true"));
@@ -2133,6 +2225,38 @@ mod tests {
         assert_eq!(
             validate_theme_import_text("id = \"loop\"\nbase = \"loop\""),
             Err("theme.import.cyclic_base")
+        );
+    }
+
+    #[test]
+    fn theme_action_model_is_rust_owned_and_file_safe_until_backend_cutover() {
+        assert_eq!(
+            theme_action_result(ThemeSource::BuiltIn, ThemeAction::Select),
+            ThemeActionResult::Applied("theme.selected")
+        );
+        assert_eq!(
+            theme_action_result(ThemeSource::BuiltIn, ThemeAction::Duplicate),
+            ThemeActionResult::PendingBackend("theme.backend.pending")
+        );
+        assert_eq!(
+            theme_action_result(ThemeSource::User, ThemeAction::Import),
+            ThemeActionResult::PendingBackend("theme.backend.pending")
+        );
+        assert_eq!(
+            theme_action_result(ThemeSource::User, ThemeAction::Export),
+            ThemeActionResult::PendingBackend("theme.backend.pending")
+        );
+        assert_eq!(
+            theme_action_result(ThemeSource::BuiltIn, ThemeAction::Delete),
+            ThemeActionResult::Blocked("theme.read_only")
+        );
+        assert_eq!(
+            theme_action_result(ThemeSource::Package, ThemeAction::Delete),
+            ThemeActionResult::Blocked("theme.read_only")
+        );
+        assert_eq!(
+            theme_action_result(ThemeSource::User, ThemeAction::Delete),
+            ThemeActionResult::PendingBackend("theme.backend.pending")
         );
     }
 

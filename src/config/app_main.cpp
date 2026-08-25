@@ -780,6 +780,12 @@ bool checkI18n() {
         "packages.state.incompatible",
         "packages.state.pending_restart",
         "packages.state.unavailable",
+        "theme.action.duplicate",
+        "theme.action.import",
+        "theme.action.export",
+        "theme.action.delete",
+        "theme.operation.backend_pending",
+        "theme.operation.delete_readonly",
         "dialog.reset_appearance.title",
         "dialog.reset_appearance.body",
         "dialog.remove_package.title",
@@ -917,6 +923,11 @@ enum class ModernAction {
     editFont,
     preview,
     resetAppearance,
+    themeSelectNext,
+    themeDuplicate,
+    themeImport,
+    themeExport,
+    themeDelete,
     packageRefresh,
     packageInstallOrUpdate,
     packageToggle,
@@ -1348,8 +1359,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         GetMonitorInfoW(monitor, &monitorInfo);
         const int workWidth = monitorInfo.rcWork.right - monitorInfo.rcWork.left;
         const int workHeight = monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
-        const int desiredWidth = (std::min)(scale(1100), (std::max)(scale(860), workWidth - 80));
-        const int desiredHeight = (std::min)(scale(720), (std::max)(scale(600), workHeight - 80));
+            const int desiredWidth = (std::min)(scale(1100), (std::max)(scale(900), workWidth - 80));
+            const int desiredHeight = (std::min)(scale(760), (std::max)(scale(720), workHeight - 80));
         ResizeClient(desiredWidth, desiredHeight);
         layoutControls();
     }
@@ -1544,8 +1555,21 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             return visible(kBrandIcon);
         };
         const auto textAreasDoNotOverlap = [&](std::initializer_list<RECT> areas) {
+            RECT client{};
+            GetClientRect(&client);
             std::vector<RECT> rectangles(areas);
             for (std::size_t outer = 0; outer < rectangles.size(); ++outer) {
+                if (rectangles[outer].left < client.left || rectangles[outer].top < client.top ||
+                    rectangles[outer].right > client.right ||
+                    rectangles[outer].bottom > client.bottom) {
+                    std::cerr << "Modern Config text/display area clipped: area " << outer
+                              << " [" << rectangles[outer].left << ',' << rectangles[outer].top
+                              << ',' << rectangles[outer].right << ','
+                              << rectangles[outer].bottom << "] outside client ["
+                              << client.left << ',' << client.top << ',' << client.right << ','
+                              << client.bottom << "]\n";
+                    return false;
+                }
                 for (std::size_t inner = outer + 1; inner < rectangles.size(); ++inner) {
                     if (intersects(rectangles[outer], rectangles[inner])) {
                         std::cerr << "Modern Config text/display areas overlap: area "
@@ -1626,7 +1650,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                  cardTitle(x0, 490, x1 + cardWidth), cardValue(x0, 490, x1 + cardWidth),
                  logicalHitRect(x0, 552, rowRight, 584)});
         };
-        ResizeClient(scale(860), scale(600));
+        ResizeClient(scale(900), scale(720));
         layoutControls();
         for (const int page : {kNavGeneral, kNavAppearance, kNavTheme, kNavDiagnostics,
                                kNavRepair, kNavPackages}) {
@@ -1650,21 +1674,53 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             !advancedCompactAreasDoNotOverlap()) {
             return false;
         }
-        const auto appearance476 = rowText(476);
-        const auto appearance552 = rowText(552);
-        const auto appearance628 = rowText(628);
+        const int appearanceRowRight = static_cast<int>(modernRowRight());
+        const int appearanceCardWidth = (appearanceRowRight - 288 - 24) / 3;
+        const int appearanceX0 = 288;
+        const int appearanceX1 = appearanceX0 + appearanceCardWidth + 12;
+        const int appearanceX2 = appearanceX1 + appearanceCardWidth + 12;
+        const int themeButtonWidth = (appearanceRowRight - 288 - 36) / 4;
+        const int themeX0 = 288;
+        const int themeX1 = themeX0 + themeButtonWidth + 12;
+        const int themeX2 = themeX1 + themeButtonWidth + 12;
+        const int themeX3 = themeX2 + themeButtonWidth + 12;
+        const auto compactTitle = [&](int left, int top, int right) {
+            return logicalHitRect(left + 14, top + 8, right - 14, top + 25);
+        };
+        const auto compactValue = [&](int left, int top, int right) {
+            return logicalHitRect(left + 14, top + 26, right - 14, top + 46);
+        };
         if (!textAreasDoNotOverlap({logicalHitRect(288, 64,
                                                    static_cast<int>(modernRowRight()), 102),
                                     logicalHitRect(288, 114,
                                                    static_cast<int>(modernRowRight()), 142),
                                     logicalHitRect(288, 270,
                                                    static_cast<int>(modernRowRight()), 298),
-                                    logicalHitRect(288, 346,
-                                                   static_cast<int>(modernRowRight()), 374),
-                                    logicalHitRect(288, 374, 920, 396),
-                                    appearance476[0], appearance476[1], appearance476[2],
-                                    appearance552[0], appearance552[1], appearance552[2],
-                                    appearance628[0], appearance628[1], appearance628[2]}))
+                                    logicalHitRect(288, 350,
+                                                   static_cast<int>(modernRowRight()), 378),
+                                    compactTitle(288, 382, appearanceRowRight),
+                                    compactValue(288, 382, appearanceRowRight),
+                                    compactTitle(themeX0, 444, themeX0 + themeButtonWidth),
+                                    compactValue(themeX0, 444, themeX0 + themeButtonWidth),
+                                    compactTitle(themeX1, 444, themeX1 + themeButtonWidth),
+                                    compactValue(themeX1, 444, themeX1 + themeButtonWidth),
+                                    compactTitle(themeX2, 444, themeX2 + themeButtonWidth),
+                                    compactValue(themeX2, 444, themeX2 + themeButtonWidth),
+                                    compactTitle(themeX3, 444, appearanceRowRight),
+                                    compactValue(themeX3, 444, appearanceRowRight),
+                                    logicalHitRect(288, 510,
+                                                   static_cast<int>(modernRowRight()), 538),
+                                    logicalHitRect(288, 538, appearanceRowRight, 560),
+                                    compactTitle(appearanceX0, 620,
+                                                 appearanceX0 + appearanceCardWidth),
+                                    compactValue(appearanceX0, 620,
+                                                 appearanceX0 + appearanceCardWidth),
+                                    compactTitle(appearanceX1, 620,
+                                                 appearanceX1 + appearanceCardWidth),
+                                    compactValue(appearanceX1, 620,
+                                                 appearanceX1 + appearanceCardWidth),
+                                    compactTitle(appearanceX2, 620, appearanceRowRight),
+                                    compactValue(appearanceX2, 620, appearanceRowRight)}))
             return false;
         const auto update148 = rowText(148);
         const auto update224 = rowText(224);
@@ -1923,6 +1979,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         SendMessageW(control(kFont), CB_SETCURSEL, fontCount > 1 ? 1 : 0, 0);
         if (!notify(kFont, CBN_SELCHANGE) || visible(kFont))
             return false;
+        invokeModernAction(ModernHitTarget{{}, ModernAction::themeSelectNext});
+        invokeModernAction(ModernHitTarget{{}, ModernAction::themeDuplicate});
+        invokeModernAction(ModernHitTarget{{}, ModernAction::themeImport});
+        invokeModernAction(ModernHitTarget{{}, ModernAction::themeExport});
+        invokeModernAction(ModernHitTarget{{}, ModernAction::themeDelete});
 
         if (!click(kNavTheme))
             return false;
@@ -2052,6 +2113,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         constexpr unsigned long long expected =
             kCoveredGeneralApply |
             kCoveredRestart | kCoveredDiagnostics | kCoveredRepair | kCoveredPreview |
+            kCoveredThemeSelect | kCoveredThemeDuplicate | kCoveredThemeImport |
+            kCoveredThemeExport | kCoveredThemeDelete |
             kCoveredPackageRefresh | kCoveredPackageInstall | kCoveredPackageUpdate |
             kCoveredPackageDisable | kCoveredPackageEnable | kCoveredPackageRemove |
             kCoveredAppearanceReset | kCoveredAppearanceAdvanced | kCoveredFontSize |
@@ -2143,6 +2206,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     static constexpr unsigned long long kCoveredFontEdit = 1ULL << 16U;
     static constexpr unsigned long long kCoveredInputMethodRefresh = 1ULL << 17U;
     static constexpr unsigned long long kCoveredInputMethodSetDefault = 1ULL << 18U;
+    static constexpr unsigned long long kCoveredThemeSelect = 1ULL << 19U;
+    static constexpr unsigned long long kCoveredThemeDuplicate = 1ULL << 20U;
+    static constexpr unsigned long long kCoveredThemeImport = 1ULL << 21U;
+    static constexpr unsigned long long kCoveredThemeExport = 1ULL << 22U;
+    static constexpr unsigned long long kCoveredThemeDelete = 1ULL << 23U;
 
     void cover(unsigned long long action) noexcept { actionCoverage_ |= action; }
     const wchar_t* get(const char* key) const {
@@ -2235,6 +2303,18 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         return selected == CB_ERR || static_cast<std::size_t>(selected) >= themes_.size()
                    ? L"builtin:default"
                    : themes_[static_cast<std::size_t>(selected)].id;
+    }
+    [[nodiscard]] int selectedThemeIndex() const {
+        const LRESULT selected = SendMessageW(control(kTheme), CB_GETCURSEL, 0, 0);
+        return selected == CB_ERR || static_cast<std::size_t>(selected) >= themes_.size()
+                   ? 0
+                   : static_cast<int>(selected);
+    }
+    [[nodiscard]] std::wstring selectedThemeLabel() const {
+        const int selected = selectedThemeIndex();
+        return themes_.empty() || static_cast<std::size_t>(selected) >= themes_.size()
+                   ? get("theme.default")
+                   : themeListLabel(themes_[static_cast<std::size_t>(selected)], strings_);
     }
     [[nodiscard]] bool selectComboText(int id, std::wstring_view value) const {
         const HWND combo = control(id);
@@ -2591,8 +2671,8 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     }
     LRESULT onGetMinMaxInfo(UINT, WPARAM, LPARAM lparam, BOOL&) {
         auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
-        limits->ptMinTrackSize.x = scale(860);
-        limits->ptMinTrackSize.y = scale(600);
+        limits->ptMinTrackSize.x = scale(900);
+        limits->ptMinTrackSize.y = scale(720);
         return 0;
     }
     LRESULT onDpiChanged(UINT, WPARAM wparam, LPARAM lparam, BOOL&) {
@@ -3910,7 +3990,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             drawModernAdvancedAppearance(brush, rowRight);
             return;
         }
-        drawSectionTitle(brush, modernText(L"Theme", L"主题"), 270);
+        drawSectionTitle(brush, modernText(L"Appearance mode", L"外观模式"), 270);
         const float segmentWidth = (std::min)(174.0F, (rowRight - 288.0F - 32.0F) / 3.0F);
         drawSegment(brush, modernText(L"Follow system", L"跟随系统"), 288, 302,
                     288 + segmentWidth, mode == 0,
@@ -3921,27 +4001,45 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         drawSegment(brush, modernText(L"Dark", L"深色"), 320 + (segmentWidth * 2), 302,
                     320 + (segmentWidth * 3), mode == 2,
                     ModernAction::selectModeDark);
-        drawSectionTitle(brush, modernText(L"Candidate layout", L"候选布局"), 346);
+        drawSectionTitle(brush, get("theme.library"), 350);
+        drawCompactSetting(brush, modernText(L"Selected theme", L"当前主题"),
+                           selectedThemeLabel(), 288, 382, rowRight,
+                           ModernAction::themeSelectNext);
+        const float themeGap = 12.0F;
+        const float themeButtonWidth = (rowRight - 288.0F - (themeGap * 3.0F)) / 4.0F;
+        const float themeX0 = 288.0F;
+        const float themeX1 = themeX0 + themeButtonWidth + themeGap;
+        const float themeX2 = themeX1 + themeButtonWidth + themeGap;
+        const float themeX3 = themeX2 + themeButtonWidth + themeGap;
+        drawCompactSetting(brush, get("theme.action.duplicate"), L"›", themeX0, 444,
+                           themeX0 + themeButtonWidth, ModernAction::themeDuplicate);
+        drawCompactSetting(brush, get("theme.action.import"), L"›", themeX1, 444,
+                           themeX1 + themeButtonWidth, ModernAction::themeImport);
+        drawCompactSetting(brush, get("theme.action.export"), L"›", themeX2, 444,
+                           themeX2 + themeButtonWidth, ModernAction::themeExport);
+        drawCompactSetting(brush, get("theme.action.delete"), L"›", themeX3, 444, rowRight,
+                           ModernAction::themeDelete);
+        drawSectionTitle(brush, modernText(L"Candidate layout", L"候选布局"), 510);
         brush->SetColor(d2dColor(designTokens().subtleText));
         drawText(brush, modernText(L"Automatically adapts to input method and candidate content.",
                                    L"根据输入法和候选内容自动选择。"),
-                 288, 374, 920, 396, 12);
-        drawSegment(brush, get("candidate.automatic"), 288, 410, 420, automatic,
+                 288, 538, 920, 560, 12);
+        drawSegment(brush, get("candidate.automatic"), 288, 568, 420, automatic,
                     ModernAction::selectLayoutAutomatic);
-        drawSegment(brush, get("candidate.horizontal"), 436, 410, 568,
+        drawSegment(brush, get("candidate.horizontal"), 436, 568, 568,
                     !automatic && !vertical, ModernAction::selectLayoutHorizontal);
-        drawSegment(brush, get("candidate.vertical"), 584, 410, 716, !automatic && vertical,
+        drawSegment(brush, get("candidate.vertical"), 584, 568, 716, !automatic && vertical,
                     ModernAction::selectLayoutVertical);
-        drawSettingRow(brush, modernText(L"Text size", L"文字大小"),
-                       modernText(L"Candidate text size.", L"候选文字大小。"),
-                       comboText(kFontSize), 476, ModernAction::cycleFontSize);
-        drawSettingRow(brush, modernText(L"Font", L"字体"),
-                       modernText(L"Preview exposes CJK and emoji fallback.",
-                                  L"预览会暴露中文和 emoji fallback。"),
-                       comboText(kFont), 552, ModernAction::editFont);
-        drawSettingRow(brush, modernText(L"Advanced appearance", L"高级外观"),
-                       modernText(L"Expand supported renderer tuning.", L"展开已支持的渲染参数。"),
-                       L"›", 628, ModernAction::toggleTechnicalDetails);
+        const float bottomCardWidth = (rowRight - 288.0F - 24.0F) / 3.0F;
+        const float bottomX1 = 288.0F + bottomCardWidth + 12.0F;
+        const float bottomX2 = bottomX1 + bottomCardWidth + 12.0F;
+        drawCompactSetting(brush, modernText(L"Text size", L"文字大小"),
+                           comboText(kFontSize), 288, 620, 288 + bottomCardWidth,
+                           ModernAction::cycleFontSize);
+        drawCompactSetting(brush, modernText(L"Font", L"字体"), comboText(kFont), bottomX1, 620,
+                           bottomX1 + bottomCardWidth, ModernAction::editFont);
+        drawCompactSetting(brush, modernText(L"Advanced", L"高级外观"), L"›", bottomX2, 620,
+                           rowRight, ModernAction::toggleTechnicalDetails);
     }
     void drawModernShortcuts(ID2D1SolidColorBrush* brush) {
         drawSectionTitle(brush, modernText(L"Keyboard shortcuts", L"快捷键"), 114);
@@ -4403,6 +4501,43 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             break;
         case ModernAction::resetAppearance:
             (void)onResetAppearance(0, 0, nullptr, handled);
+            break;
+        case ModernAction::themeSelectNext:
+            if (interactionTest_)
+                cover(kCoveredThemeSelect);
+            cycleComboAndApply(kTheme);
+            if (!themes_.empty()) {
+                const LRESULT selected = SendMessageW(control(kTheme), CB_GETCURSEL, 0, 0);
+                SendMessageW(control(kThemeLibrary), LB_SETCURSEL,
+                             selected == CB_ERR ? 0 : static_cast<WPARAM>(selected), 0);
+                updateThemeDetail();
+            }
+            break;
+        case ModernAction::themeDuplicate:
+            if (interactionTest_)
+                cover(kCoveredThemeDuplicate);
+            setSaveStatus(get("theme.operation.backend_pending"));
+            break;
+        case ModernAction::themeImport:
+            if (interactionTest_)
+                cover(kCoveredThemeImport);
+            setSaveStatus(get("theme.operation.backend_pending"));
+            break;
+        case ModernAction::themeExport:
+            if (interactionTest_)
+                cover(kCoveredThemeExport);
+            setSaveStatus(get("theme.operation.backend_pending"));
+            break;
+        case ModernAction::themeDelete:
+            if (interactionTest_) {
+                cover(kCoveredThemeDelete);
+            }
+            if (!themes_.empty() &&
+                themes_[static_cast<std::size_t>(selectedThemeIndex())].source != L"user") {
+                setSaveStatus(get("theme.operation.delete_readonly"));
+            } else {
+                setSaveStatus(get("theme.operation.backend_pending"));
+            }
             break;
         case ModernAction::packageRefresh:
             (void)onPackageRefresh(0, 0, nullptr, handled);
