@@ -510,6 +510,35 @@ int wmain(int argc, wchar_t** argv) {
                !fs::exists(data_root / L"themes/soft-blue"),
            "theme delete must remove only user-owned theme directories: " + theme_delete);
 
+    std::string presentation_set;
+    const DWORD presentation_set_exit = run_process_capture(
+        control,
+        {L"--data-root", data_root.wstring(), L"--set-presentation", L"dark",
+         L"builtin:default", L"horizontal", L"enabled", L"7", L"Segoe UI Emoji", L"860",
+         L"96", L"20", L"16", L"enabled", L"0.95", L"panel"},
+        presentation_set);
+    expect(presentation_set_exit == 0,
+           "presentation update must persist the selected candidate font: " +
+               presentation_set);
+    const std::string persisted_config = read_text(data_root / L"config.toml");
+    expect(persisted_config.find("Segoe UI Emoji") != std::string::npos &&
+               persisted_config.find("size_dip = 20") != std::string::npos,
+           "presentation config did not persist candidate font family and size: " +
+               persisted_config);
+    std::string presentation_get;
+    const DWORD presentation_get_exit = run_process_capture(
+        control, {L"--data-root", data_root.wstring(), L"--get-presentation"},
+        presentation_get);
+    expect(presentation_get_exit == 0 &&
+               presentation_get.find(R"("candidate_font":"Segoe UI Emoji")") !=
+                   std::string::npos &&
+               presentation_get.find(R"("candidate_font_size_dip":"20")") !=
+                   std::string::npos &&
+               presentation_get.find(R"("theme":"builtin:default")") !=
+                   std::string::npos,
+           "presentation readback must replay the persisted font for Config reopen: " +
+               presentation_get);
+
     std::string addons_list;
     const DWORD addons_list_exit =
         run_process_capture(control, {L"--data-root", data_root.wstring(), L"--addons-list"},

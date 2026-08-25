@@ -323,6 +323,39 @@ impl PreviewDraft {
 }
 
 #[derive(Clone, Debug)]
+struct PersistedPresentation {
+    theme_id: &'static str,
+    appearance_mode: &'static str,
+    orientation: &'static str,
+    font_family: &'static str,
+    font_size_dip: f32,
+}
+
+impl PersistedPresentation {
+    fn from_draft(draft: &PreviewDraft) -> Self {
+        Self {
+            theme_id: draft.theme_id,
+            appearance_mode: draft.appearance_mode,
+            orientation: draft.orientation,
+            font_family: draft.font_family,
+            font_size_dip: draft.font_size_dip,
+        }
+    }
+
+    fn reopen_preview_draft(&self, dpi_percent: u16) -> PreviewDraft {
+        let mut draft = PreviewDraft::new();
+        draft.theme_id = self.theme_id;
+        draft.appearance_mode = self.appearance_mode;
+        draft.orientation = self.orientation;
+        draft.font_family = self.font_family;
+        draft.font_size_dip = self.font_size_dip;
+        draft.dpi_percent = dpi_percent;
+        draft.revision = 1;
+        draft
+    }
+}
+
+#[derive(Clone, Debug)]
 struct ThemeLibraryEvidence {
     theme_library_model_rust_owned: bool,
     theme_inventory_sources: Vec<&'static str>,
@@ -344,6 +377,8 @@ struct ThemeLibraryEvidence {
     high_dpi_scaling_automatic: bool,
     preview_150_percent_font_px: f32,
     label_suffix_parity: bool,
+    font_selection_persists_after_reopen: bool,
+    persisted_font_refreshes_embedded_preview: bool,
 }
 
 fn main() {
@@ -1451,11 +1486,23 @@ fn validate_theme_library_and_preview() -> Result<ThemeLibraryEvidence, String> 
             .any(|comment| comment.contains("emoji"));
     let label_suffix_parity = sample.labels.starts_with(&["1.", "2.", "3."]);
     let preview_150_percent_font_px = draft.effective_font_px();
+    let persisted = PersistedPresentation::from_draft(&draft);
+    let reopened_draft = persisted.reopen_preview_draft(150);
+    let reopened_sample = candidate_preview_sample(&reopened_draft);
+    let font_selection_persists_after_reopen =
+        reopened_draft.font_family == "Segoe UI Emoji" && reopened_draft.font_size_dip == 20.0;
+    let persisted_font_refreshes_embedded_preview = reopened_draft.effective_font_px()
+        == preview_150_percent_font_px
+        && reopened_sample.preedit == sample.preedit
+        && reopened_sample.labels == sample.labels
+        && reopened_sample.candidates == sample.candidates;
 
     if draft.revision != 4
         || !preview_samples_cover_chinese_latin_punctuation_emoji
         || !label_suffix_parity
         || (preview_150_percent_font_px - 30.0).abs() > f32::EPSILON
+        || !font_selection_persists_after_reopen
+        || !persisted_font_refreshes_embedded_preview
     {
         return Err("live preview draft did not update as expected".to_owned());
     }
@@ -1485,6 +1532,8 @@ fn validate_theme_library_and_preview() -> Result<ThemeLibraryEvidence, String> 
         high_dpi_scaling_automatic: true,
         preview_150_percent_font_px,
         label_suffix_parity,
+        font_selection_persists_after_reopen,
+        persisted_font_refreshes_embedded_preview,
     })
 }
 
@@ -1865,7 +1914,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"fcitx5-config-poc\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":false,\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"shipping-candidate-synthetic-preview-path\",\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         json_escape(model.product_name),
         model.no_shell_out,
         pages,
@@ -1900,6 +1949,8 @@ fn render_report(
         theme_library.high_dpi_scaling_automatic,
         theme_library.preview_150_percent_font_px,
         theme_library.label_suffix_parity,
+        theme_library.font_selection_persists_after_reopen,
+        theme_library.persisted_font_refreshes_embedded_preview,
         operations.setting_transition_count,
         operations.theme_transition_count,
         operations.theme_select_transition_checked,
@@ -2162,6 +2213,8 @@ mod tests {
         assert!(report.contains("\"high_dpi_scaling_automatic\":true"));
         assert!(report.contains("\"preview_150_percent_font_px\":30"));
         assert!(report.contains("\"label_suffix_parity\":true"));
+        assert!(report.contains("\"font_selection_persists_after_reopen\":true"));
+        assert!(report.contains("\"persisted_font_refreshes_embedded_preview\":true"));
         assert!(report.contains("\"checked_dpi_scale_percents\":[100,125,150,200,300]"));
         assert!(report.contains("\"checked_pages\":6"));
         assert!(report.contains("\"layout_rects_inside_window\":true"));
@@ -2275,8 +2328,12 @@ mod tests {
         draft.set_font("Segoe UI Emoji", 20.0);
         draft.set_dpi(150);
         let sample = candidate_preview_sample(&draft);
+        let reopened = PersistedPresentation::from_draft(&draft).reopen_preview_draft(150);
         assert_eq!(draft.revision, 4);
+        assert_eq!(reopened.revision, 1);
+        assert_eq!(reopened.font_family, "Segoe UI Emoji");
         assert_eq!(draft.effective_font_px(), 30.0);
+        assert_eq!(reopened.effective_font_px(), 30.0);
         assert_eq!(&sample.labels[..3], ["1.", "2.", "3."]);
         assert!(sample.preedit.contains("😊"));
         assert!(sample

@@ -1844,6 +1844,8 @@ int main(int argc, char** argv) {
     const auto configPocSource = read_text(sourceRoot / "rust/config-poc/src/main.rs");
     const auto configPocManifest = read_text(sourceRoot / "rust/config-poc/Cargo.toml");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
+    const auto controlPackageIntegrationSource =
+        read_text(sourceRoot / "tests/integration/control_package_integration_test.cpp");
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
         configSource.find("--ui-visual-contract-test") == std::string::npos ||
@@ -2017,6 +2019,10 @@ int main(int argc, char** argv) {
         configPocSource.find("live_preview_draft_state") == std::string::npos ||
         configPocSource.find("preview_samples_cover_chinese_latin_punctuation_emoji") ==
             std::string::npos ||
+        configPocSource.find("PersistedPresentation") == std::string::npos ||
+        configPocSource.find("font_selection_persists_after_reopen") == std::string::npos ||
+        configPocSource.find("persisted_font_refreshes_embedded_preview") ==
+            std::string::npos ||
         configPocSource.find("emoji_color_fallback_required") == std::string::npos ||
         configPocSource.find("high_dpi_scaling_automatic") == std::string::npos ||
         configPocSource.find("label_suffix_parity") == std::string::npos ||
@@ -2063,6 +2069,13 @@ int main(int argc, char** argv) {
         configSource.find("--themes-import") == std::string::npos ||
         configSource.find("--themes-export-to") == std::string::npos ||
         configSource.find("--themes-delete") == std::string::npos ||
+        configSource.find("presentation.find(\"candidate_font\")") == std::string::npos ||
+        configSource.find("user.candidateFont.families = std::vector<std::string>{narrow(font)}") ==
+            std::string::npos ||
+        controlPackageIntegrationSource.find("\"candidate_font\":\"Segoe UI Emoji\"") ==
+            std::string::npos ||
+        controlPackageIntegrationSource.find("presentation readback must replay the persisted font") ==
+            std::string::npos ||
         cmakeSource.find("rust-config-poc-contract") == std::string::npos ||
         configSource.find("--set-presentation") == std::string::npos ||
         configSource.find("--reset-presentation") == std::string::npos ||
