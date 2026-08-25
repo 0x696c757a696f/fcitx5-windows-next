@@ -1653,12 +1653,110 @@ pub struct PocScenarioEvidence {
     pub color_font_candidate_present: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CandidatePreviewPaintItem {
+    pub text: String,
+    pub bounds: Rect,
+    pub selected: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CandidatePreviewPaintPlan {
+    pub dpi_scale: f32,
+    pub background_color: u32,
+    pub selected_background_color: u32,
+    pub text_color: u32,
+    pub selected_text_color: u32,
+    pub items: Vec<CandidatePreviewPaintItem>,
+}
+
 pub fn run_candidate_poc_self_check() -> Result<String, String> {
     let mut evidence = Vec::new();
     for scenario in candidate_poc_scenarios() {
         evidence.push(check_candidate_poc_scenario(&scenario)?);
     }
     Ok(render_candidate_poc_report(&evidence))
+}
+
+pub fn candidate_preview_paint_plan(
+    dpi_scale: f32,
+    width: f32,
+    height: f32,
+) -> Result<CandidatePreviewPaintPlan, String> {
+    if !dpi_scale.is_finite() || !(0.5..=4.0).contains(&dpi_scale) {
+        return Err("candidate preview DPI scale must be finite and within 0.5..=4.0".to_owned());
+    }
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err("candidate preview paint plan requires a positive finite surface".to_owned());
+    }
+    let candidates = vec![
+        poc_candidate("1.", "你", ""),
+        poc_candidate("2.", "好", ""),
+        poc_candidate("3.", "😀", "emoji"),
+    ];
+    let item_sizes = candidates
+        .iter()
+        .map(|candidate| measure_candidate(candidate, dpi_scale))
+        .collect::<Vec<_>>();
+    let result = layout(&LayoutInput {
+        orientation: Orientation::Horizontal,
+        items: item_sizes,
+        caret: Point { x: 0.0, y: 0.0 },
+        caret_height: 0.0,
+        work_area: Rect {
+            left: 0.0,
+            top: 0.0,
+            right: width,
+            bottom: height,
+        },
+        max_width: width,
+        padding_x: 8.0 * dpi_scale,
+        padding_y: 8.0 * dpi_scale,
+        row_gap: 4.0 * dpi_scale,
+        column_gap: 8.0 * dpi_scale,
+        placement: Placement::Below,
+        scroll_mode: false,
+        scroll_columns: 6,
+        scroll_visible_rows: 6,
+        selected: 0,
+        scroll_cell_width: 96.0 * dpi_scale,
+    });
+    if result.items.is_empty() {
+        return Err("candidate preview paint plan produced no visible candidates".to_owned());
+    }
+    let mut items = Vec::with_capacity(result.items.len());
+    for (visible_index, (candidate_index, bounds)) in result
+        .item_indices
+        .iter()
+        .copied()
+        .zip(result.items.iter().copied())
+        .enumerate()
+    {
+        let candidate = candidates
+            .get(candidate_index)
+            .ok_or_else(|| "candidate preview paint plan produced an invalid index".to_owned())?;
+        if bounds.left < 0.0 || bounds.top < 0.0 || bounds.right > width || bounds.bottom > height {
+            return Err("candidate preview paint plan produced an out-of-bounds item".to_owned());
+        }
+        items.push(CandidatePreviewPaintItem {
+            text: format!(
+                "{} {} {}",
+                candidate.label, candidate.text, candidate.comment
+            )
+            .trim()
+            .to_owned(),
+            bounds,
+            selected: visible_index == 0,
+        });
+    }
+    Ok(CandidatePreviewPaintPlan {
+        dpi_scale,
+        background_color: 0x00ee_f3f7,
+        selected_background_color: 0x00d2_7d2d,
+        text_color: 0x0020_2020,
+        selected_text_color: 0x00ff_ffff,
+        items,
+    })
 }
 
 pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
@@ -2942,5 +3040,29 @@ mod tests {
         assert!(report.contains("\"color_font_candidate_present\":true"));
         assert!(report.contains("\"dpi_scale\":2.00"));
         assert!(report.contains("\"result\":\"PASS\""));
+    }
+
+    #[test]
+    fn config_preview_paint_plan_preserves_labels_emoji_and_bounds() {
+        let plan =
+            candidate_preview_paint_plan(1.0, 596.0, 166.0).expect("candidate preview paint plan");
+        assert_eq!(plan.selected_background_color, 0x00d2_7d2d);
+        assert_eq!(plan.items.len(), 3);
+        assert!(plan.items[0].selected);
+        assert!(plan.items.iter().any(|item| item.text.contains("1.")));
+        assert!(plan.items.iter().any(|item| item.text.contains('你')));
+        assert!(plan.items.iter().any(|item| item.text.contains('好')));
+        assert!(plan.items.iter().any(|item| item.text.contains('😀')));
+        for item in &plan.items {
+            assert!(rect_inside(
+                item.bounds,
+                Rect {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 596.0,
+                    bottom: 166.0,
+                }
+            ));
+        }
     }
 }

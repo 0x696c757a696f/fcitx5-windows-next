@@ -2072,6 +2072,13 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configPocSource.find("candidate_preview_final_pixels_from_renderer_path") ==
             std::string::npos ||
+        candidateLayoutSource.find("CandidatePreviewPaintPlan") == std::string::npos ||
+        candidateLayoutSource.find("candidate_preview_paint_plan") == std::string::npos ||
+        candidateLayoutSource.find(
+            "config_preview_paint_plan_preserves_labels_emoji_and_bounds") ==
+            std::string::npos ||
+        configPocSource.find("candidate_preview_paint_plan") == std::string::npos ||
+        configPocSource.find("\"1. 你  2. 好  3. 😀 emoji\"") != std::string::npos ||
         configPocSource.find("candidate_preview_dpi_parity_scale_percents") ==
             std::string::npos ||
         configPocSource.find("Fcitx5ConfigPocCandidatePreviewHost") ==

@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fcitx5_candidate_core::run_candidate_poc_self_check;
+use fcitx5_candidate_core::{candidate_preview_paint_plan, run_candidate_poc_self_check};
 use fcitx5_control_core::{control_schema_json, control_usage_text};
 use fcitx5_package_core::{
     finalize_package_removal_entries, find_repository_package, mark_package_for_removal_entries,
@@ -2386,7 +2386,7 @@ mod win32_window_smoke {
     use std::ptr::{null, null_mut};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{Rect as LayoutRect, Size, WindowSmokeEvidence};
+    use super::{candidate_preview_paint_plan, Rect as LayoutRect, Size, WindowSmokeEvidence};
 
     type Hinstance = *mut c_void;
     type Hwnd = *mut c_void;
@@ -2412,10 +2412,6 @@ mod win32_window_smoke {
     const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
     const WS_VISIBLE: u32 = 0x1000_0000;
     const SW_SHOWNORMAL: i32 = 1;
-    const COLORREF_PREVIEW_BACKGROUND: u32 = 0x00ee_f3f7;
-    const COLORREF_SELECTED_BACKGROUND: u32 = 0x00d2_7d2d;
-    const COLORREF_TEXT: u32 = 0x0020_2020;
-    const COLORREF_SELECTED_TEXT: u32 = 0x00ff_ffff;
     const GET_PIXEL_ERROR: u32 = 0xffff_ffff;
 
     static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -2759,8 +2755,13 @@ mod win32_window_smoke {
         if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
             return;
         }
+        let Ok(plan) =
+            candidate_preview_paint_plan(1.0, client.width() as f32, client.height() as f32)
+        else {
+            return;
+        };
         // SAFETY: Creates a process-local GDI brush for immediate FillRect use.
-        let background_brush = unsafe { CreateSolidBrush(COLORREF_PREVIEW_BACKGROUND) };
+        let background_brush = unsafe { CreateSolidBrush(plan.background_color) };
         if !background_brush.is_null() {
             // SAFETY: `hdc` is valid for this paint cycle, `client` is initialized, and the brush
             // is deleted immediately after use.
@@ -2769,42 +2770,31 @@ mod win32_window_smoke {
                 DeleteObject(background_brush);
             }
         }
-        let selected = Rect {
-            left: 8,
-            top: 8,
-            right: (client.width() - 8).max(8),
-            bottom: 44.min(client.height()),
-        };
-        // SAFETY: Creates a process-local GDI brush for immediate FillRect use.
-        let selected_brush = unsafe { CreateSolidBrush(COLORREF_SELECTED_BACKGROUND) };
-        if !selected_brush.is_null() {
-            // SAFETY: `selected` is bounded by the client rect and the brush is deleted after use.
-            unsafe {
-                FillRect(hdc, &selected, selected_brush);
-                DeleteObject(selected_brush);
-            }
-        }
         // SAFETY: The HDC is valid for the paint cycle and this setter does not retain pointers.
         unsafe {
             SetBkMode(hdc, TRANSPARENT);
         }
-        draw_preview_line(
-            hdc,
-            selected,
-            COLORREF_SELECTED_TEXT,
-            "1. 你  2. 好  3. 😀 emoji",
-        );
-        draw_preview_line(
-            hdc,
-            Rect {
-                left: 8,
-                top: 52,
-                right: (client.width() - 8).max(8),
-                bottom: 88.min(client.height()),
-            },
-            COLORREF_TEXT,
-            "ni hao · Fcitx5 for Windows Next",
-        );
+        for item in plan.items {
+            let rect = rect_from_candidate_core(item.bounds);
+            if item.selected {
+                // SAFETY: Creates a process-local GDI brush for immediate FillRect use.
+                let selected_brush = unsafe { CreateSolidBrush(plan.selected_background_color) };
+                if !selected_brush.is_null() {
+                    // SAFETY: `rect` is bounded by candidate-core's preview plan and the brush is
+                    // deleted after use.
+                    unsafe {
+                        FillRect(hdc, &rect, selected_brush);
+                        DeleteObject(selected_brush);
+                    }
+                }
+            }
+            let color = if item.selected {
+                plan.selected_text_color
+            } else {
+                plan.text_color
+            };
+            draw_preview_line(hdc, rect, color, &item.text);
+        }
     }
 
     fn draw_preview_line(hdc: Hdc, mut rect: Rect, color: u32, text: &str) {
@@ -2822,6 +2812,15 @@ mod win32_window_smoke {
         }
     }
 
+    fn rect_from_candidate_core(rect: fcitx5_candidate_core::Rect) -> Rect {
+        Rect {
+            left: rect.left.round() as i32,
+            top: rect.top.round() as i32,
+            right: rect.right.round() as i32,
+            bottom: rect.bottom.round() as i32,
+        }
+    }
+
     fn sample_selected_candidate_pixel(hwnd: Hwnd) -> (u32, bool) {
         // SAFETY: `hwnd` is a live preview child window while this function is called.
         let hdc = unsafe { GetDC(hwnd) };
@@ -2834,7 +2833,10 @@ mod win32_window_smoke {
         unsafe {
             ReleaseDC(hwnd, hdc);
         }
-        (pixel, pixel == COLORREF_SELECTED_BACKGROUND)
+        let Ok(plan) = candidate_preview_paint_plan(1.0, 596.0, 166.0) else {
+            return (pixel, false);
+        };
+        (pixel, pixel == plan.selected_background_color)
     }
 
     fn to_wide(value: &str) -> Vec<u16> {
