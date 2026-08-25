@@ -2,7 +2,7 @@
 
 Date: 2026-08-25 (updated after CONFIG-RUST-CUTOVER-001 side-by-side Rust Settings target)
 
-HEAD recorded at snapshot refresh: `009eb0f7ed2f6d4601c46c9a3537fa6adef35447`
+HEAD recorded at snapshot refresh: `d230b47fdee7d63255e3869c1fbc402b97d88dd3`
 
 Working tree at snapshot refresh: clean after archiving `CONFIG-UX-009`.
 
