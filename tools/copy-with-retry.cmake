@@ -1,0 +1,55 @@
+if(DEFINED FCFW_COPY_FROM AND NOT DEFINED FCITX_COPY_FROM)
+  set(FCITX_COPY_FROM "${FCFW_COPY_FROM}")
+endif()
+if(DEFINED FCFW_COPY_TO AND NOT DEFINED FCITX_COPY_TO)
+  set(FCITX_COPY_TO "${FCFW_COPY_TO}")
+endif()
+
+if(NOT DEFINED FCITX_COPY_FROM)
+  message(FATAL_ERROR "FCITX_COPY_FROM is required")
+endif()
+if(NOT DEFINED FCITX_COPY_TO)
+  message(FATAL_ERROR "FCITX_COPY_TO is required")
+endif()
+if(NOT DEFINED ATTEMPTS)
+  set(ATTEMPTS 5)
+endif()
+if(NOT DEFINED DELAY_SECONDS)
+  set(DELAY_SECONDS 1)
+endif()
+
+if(ATTEMPTS LESS 1)
+  message(FATAL_ERROR "ATTEMPTS must be at least 1")
+endif()
+if(DELAY_SECONDS LESS 0)
+  message(FATAL_ERROR "DELAY_SECONDS must not be negative")
+endif()
+if(NOT EXISTS "${FCITX_COPY_FROM}")
+  message(FATAL_ERROR "Copy source does not exist: ${FCITX_COPY_FROM}")
+endif()
+
+get_filename_component(destination_directory "${FCITX_COPY_TO}" DIRECTORY)
+if(NOT destination_directory STREQUAL "")
+  file(MAKE_DIRECTORY "${destination_directory}")
+endif()
+
+set(last_result 1)
+set(last_output "")
+foreach(attempt RANGE 1 ${ATTEMPTS})
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E copy "${FCITX_COPY_FROM}" "${FCITX_COPY_TO}"
+    RESULT_VARIABLE copy_result
+    OUTPUT_VARIABLE copy_output
+    ERROR_VARIABLE copy_error)
+  if(copy_result EQUAL 0)
+    return()
+  endif()
+  set(last_result "${copy_result}")
+  set(last_output "${copy_output}${copy_error}")
+  if(attempt LESS ATTEMPTS)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep "${DELAY_SECONDS}")
+  endif()
+endforeach()
+
+message(FATAL_ERROR
+  "Could not copy '${FCITX_COPY_FROM}' to '${FCITX_COPY_TO}' after ${ATTEMPTS} attempt(s): ${last_output}")

@@ -87,12 +87,12 @@ function Invoke-Native {
         '(FAILED:|(^|\s)error:|fatal error|LINK : fatal|LNK\d{4}|lld-link: error|' +
         'clang-cl: error|ninja: error|ninja: build stopped|undefined symbol|' +
         'unresolved external|cannot open file|(^|\s)C\d{4}:|MSB\d+:|error\[E\d+\])'
-      $errorLines = $allLines | Where-Object { $_ -match $errorPattern } | Select-Object -First 120
+      $errorLines = @($allLines | Where-Object { $_ -match $errorPattern } | Select-Object -First 120)
       if ($errorLines.Count -ne 0) {
         $message = ($errorLines -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
         Write-Host "::error title=Native command failed errors::$message"
       }
-      $tail = $allLines | Select-Object -Last 120
+      $tail = @($allLines | Select-Object -Last 120)
       if ($tail.Count -ne 0) {
         $message = ($tail -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
         Write-Host "::error title=Native command failed tail::$message"

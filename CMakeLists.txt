@@ -115,6 +115,7 @@ find_program(
   NO_DEFAULT_PATH)
 find_program(FCITX_SCCACHE_EXECUTABLE sccache)
 find_program(FCITX_PWSH_EXECUTABLE pwsh powershell REQUIRED)
+file(TO_CMAKE_PATH "${FCITX_PWSH_EXECUTABLE}" FCITX_PWSH_COMMAND)
 set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
 set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
 set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
@@ -699,16 +700,12 @@ add_custom_target(
   ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll"
   COMMAND
-    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-poc --lib --target
-    "${FCITX_RUST_TARGET}"
-  COMMAND
-    "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
-  COMMAND
-    "${CMAKE_COMMAND}" -E copy_if_different "${FCITX_RUST_TSF_POC_DLL}"
-    "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll"
+    "${CMAKE_COMMAND}" -DFCFW_COPY_FROM=${FCITX_RUST_TSF_POC_DLL}
+    -DFCFW_COPY_TO=${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll
+    -DATTEMPTS=8 -DDELAY_SECONDS=1 -P
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/copy-with-retry.cmake"
   DEPENDS
+    fcitx5_tsf_poc_rustdll
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/tsf.rc"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/resource.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5-tsf.ico"
@@ -721,6 +718,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/copy-with-retry.cmake"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust shipping fcitx5-tsf.dll")
 set(FCITX_SHIPPING_TSF_DLL "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll")
@@ -730,7 +728,7 @@ add_custom_target(
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-register.exe"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${FCITX_PWSH_COMMAND}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-register-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
@@ -751,7 +749,7 @@ add_custom_target(
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
-    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${FCITX_PWSH_COMMAND}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-bootstrap-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
@@ -771,7 +769,7 @@ add_custom_target(
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
-    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${FCITX_PWSH_COMMAND}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-package-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
@@ -816,7 +814,7 @@ add_custom_target(
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
-    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${FCITX_PWSH_COMMAND}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-downloader-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
@@ -837,7 +835,7 @@ add_custom_target(
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
-    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${FCITX_PWSH_COMMAND}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-deployer-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
@@ -858,7 +856,7 @@ add_custom_target(
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
-    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${FCITX_PWSH_COMMAND}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-provider-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
@@ -872,7 +870,7 @@ add_custom_target(
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
     "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
-    "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+    "${FCITX_PWSH_COMMAND}" -NoLogo -NoProfile -ExecutionPolicy Bypass -File
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-updater-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
