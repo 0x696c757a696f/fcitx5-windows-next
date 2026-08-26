@@ -21,6 +21,14 @@
 #include <thread>
 #include <vector>
 
+extern "C" std::uint64_t fcitx5_windows_common_deadline_after_milliseconds(
+    std::uint32_t milliseconds);
+extern "C" std::uint8_t fcitx5_windows_common_pipe_transfer_with_stop(
+    void* pipe, std::uint8_t write, void* data, std::size_t size, std::uint64_t deadline,
+    void* stop_handle);
+extern "C" std::uint8_t fcitx5_windows_common_pipe_connect_client(
+    void* pipe, std::uint64_t deadline, void* stop_handle);
+
 namespace {
 
 using namespace fcitx::windows;
@@ -40,68 +48,14 @@ std::string jsonString(std::string_view value) {
 
 bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeout,
               HANDLE stopEvent) {
-    auto* cursor = static_cast<std::uint8_t*>(data);
-    std::size_t completed = 0;
-    while (completed < size) {
-        HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!event)
-            return false;
-        OVERLAPPED operation{};
-        operation.hEvent = event;
-        DWORD transferred = 0;
-        const DWORD requested = static_cast<DWORD>(size - completed);
-        const BOOL immediate =
-            write ? WriteFile(pipe, cursor + completed, requested, &transferred, &operation)
-                  : ReadFile(pipe, cursor + completed, requested, &transferred, &operation);
-        bool success = immediate != FALSE;
-        if (!success && GetLastError() == ERROR_IO_PENDING) {
-            const std::array<HANDLE, 2> waits{event, stopEvent};
-            const DWORD waitResult =
-                WaitForMultipleObjects(stopEvent ? 2U : 1U, waits.data(), FALSE, timeout);
-            if (waitResult == WAIT_OBJECT_0) {
-                success = GetOverlappedResult(pipe, &operation, &transferred, FALSE) != FALSE;
-            } else {
-                CancelIoEx(pipe, &operation);
-                GetOverlappedResult(pipe, &operation, &transferred, TRUE);
-                success = false;
-            }
-        }
-        CloseHandle(event);
-        if (!success || transferred == 0)
-            return false;
-        completed += transferred;
-    }
-    return true;
+    const std::uint64_t deadline = fcitx5_windows_common_deadline_after_milliseconds(timeout);
+    return fcitx5_windows_common_pipe_transfer_with_stop(
+               pipe, write ? 1 : 0, data, size, deadline, stopEvent) != 0;
 }
 
 bool connectClient(HANDLE pipe, HANDLE stopEvent) {
-    HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (!event)
-        return false;
-    OVERLAPPED operation{};
-    operation.hEvent = event;
-    const BOOL immediate = ConnectNamedPipe(pipe, &operation);
-    bool connected = immediate != FALSE;
-    if (!connected) {
-        const DWORD error = GetLastError();
-        if (error == ERROR_PIPE_CONNECTED) {
-            connected = true;
-        } else if (error == ERROR_IO_PENDING) {
-            const std::array<HANDLE, 2> waits{event, stopEvent};
-            const DWORD waitResult =
-                WaitForMultipleObjects(stopEvent ? 2U : 1U, waits.data(), FALSE, 60'000);
-            if (waitResult == WAIT_OBJECT_0) {
-                DWORD transferred = 0;
-                connected = GetOverlappedResult(pipe, &operation, &transferred, FALSE) != FALSE;
-            } else {
-                CancelIoEx(pipe, &operation);
-                DWORD transferred = 0;
-                GetOverlappedResult(pipe, &operation, &transferred, TRUE);
-            }
-        }
-    }
-    CloseHandle(event);
-    return connected;
+    const std::uint64_t deadline = fcitx5_windows_common_deadline_after_milliseconds(60'000);
+    return fcitx5_windows_common_pipe_connect_client(pipe, deadline, stopEvent) != 0;
 }
 
 bool readFrame(HANDLE pipe, std::vector<std::uint8_t>& bytes, HANDLE stopEvent) {

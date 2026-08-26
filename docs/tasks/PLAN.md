@@ -94,7 +94,8 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 048 | CONFIG-RUST-CUTOVER-001 | MANUAL-PENDING / STAGE2-RUST-CONFIG-BACKEND-SHIPPED-GREEN / SHIPPING-RUST-CONFIG-EXE-GREEN / PACKAGE-CONFIG-SMOKE-GREEN / SIDE-BY-SIDE-DIFFERENTIAL-GREEN / RUST-SETTINGS-UI-PREVIEW-QA-GREEN / RUST-CANDIDATE-PREVIEW-FIDELITY-QA-GREEN / RUST-NUMERIC-APPEARANCE-QA-GREEN / RUST-SYSTEM-FONT-PICKER-QA-GREEN / RUST-FONT-PERSISTENCE-RESTART-QA-GREEN / RUST-ADVANCED-NUMERIC-APPEARANCE-QA-GREEN / RUST-PAGE-VISIBILITY-INPUTMETHODS-QA-GREEN / RUST-LANGUAGE-SELECTOR-QA-GREEN / RUST-PACKAGE-PLUGIN-PAGE-QA-GREEN / RUST-KEYBOARD-TABSTOP-QA-GREEN / STAGE4-REAL-GUI-CUTOVER-PENDING / PACKAGE-GATE-ENGINE-IDLE-BLOCKED | 047 theme/preview/operation contract green; user authorized non-Engine Rust cutover; Stage 2 shipping is green and legacy C++ Config is non-authoritative baseline only; full Stage 4 GUI/release evidence remains pending | completed/048-CONFIG-RUST-CUTOVER-001.md |
 | 049 | PLUGIN-LIFECYCLE-STABILITY-001 | MANUAL-PENDING / AUTOMATED-LIFECYCLE-GREEN / CONFIG-PACKAGE-ACTIONS-QA-GREEN / PACKAGE-CONFIG-SMOKE-GREEN / ONLINE-RELEASE-ASSETS-PENDING / PACKAGE-GATE-ENGINE-IDLE-BLOCKED | 048 Stage 2 Rust Config Backend Shipped green unless plugin lifecycle blocks Config itself; full Stage 4 interactive GUI cutover/candidate-preview QA may remain in 048; production online endpoint/key evidence may remain MANUAL-PENDING | completed/049-PLUGIN-LIFECYCLE-STABILITY-001.md |
 | 050 | ENGINE-IDLE-PACKAGE-GATE-050 | COMPLETED / PACKAGE-GATE-GREEN / REAL-ENGINE-X64-X86-GREEN | 049 automated lifecycle evidence green; fixes the package/release gate blocker before `REL-01` | completed/050-ENGINE-IDLE-PACKAGE-GATE-050.md |
-| REL-01 | RELEASE-01 | RELEASE-GATED | 050 + required external evidence + intended Rust cutovers | release/REL-01-RELEASE-GATE.md |
+| REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers | release/REL-01-RELEASE-GATE.md |
+| 051 | ENGINE-E4-TRANSPORT-FRAMING-001 | COMPLETED / E4-SERVER-PIPE-TRANSPORT-RUST-GREEN | `REL-01` is parked on external/manual evidence; PLAN permits later code-only Engine Rust-migration work to continue without claiming release readiness | completed/051-ENGINE-E4-TRANSPORT-FRAMING-001.md |
 
 ## Important dependency notes
 
@@ -112,4 +113,9 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   Rust-owned; Config remains a WTL/Win32 shell only as a temporary migration host with Rust product
   logic/PoC evidence. Historical C++ baselines are regression corpora, not a reason to reintroduce
   C++ ownership.
+- `REL-01` is parked as release-gated until production release assets, signing/key evidence, and
+  required real-host/manual compatibility evidence exist. Code-only migration tasks may continue
+  while preserving that release gate; do not claim release readiness from local CTest/package smoke.
+- No later code-only queue file is currently selected. The next current task returns to `REL-01`
+  until a new explicit queue item is added.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

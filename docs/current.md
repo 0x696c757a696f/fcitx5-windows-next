@@ -1,6 +1,6 @@
 # Current Truth Snapshot
 
-Date: 2026-08-26 (updated after ENGINE-IDLE-PACKAGE-GATE-050 package-gate fix)
+Date: 2026-08-26 (updated after ENGINE-E4-TRANSPORT-FRAMING-001)
 
 HEAD recorded at snapshot refresh: `24d69699aa265a1c510fa256fd6270891f81885c`
 
@@ -49,7 +49,7 @@ Windows host
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
 | Engine E2 `engine-core` ledger | `CUTOVER-GREEN` (Rust authoritative; ledger + carets/popupAllowed/selectedOverride/inputMethodOverridden cut over, C++ maps deleted) | — |
 | Engine E3 Event→Action | `CUTOVER-GREEN` (unified `handle_key_event` entry; 4 product decisions Rust-owned, `processKey` executes the returned decision) | — |
-| Engine E4 IPC scope | `PARTIAL` (engine epoch, request ordering, key deadline policy, and per-connection session state are Rust-owned; transport/framing primitives are partially prepared in `windows-common-core`) | Remaining E4: server-side transport/framing consolidation; `Generation` stays release-platform scope |
+| Engine E4 IPC scope | `CUTOVER-GREEN FOR CURRENT E4 SCOPE` (engine epoch, request ordering, key deadline policy, per-connection session state, and production server-side pipe connect/byte transfer are Rust-owned) | `Generation` stays release-platform scope; direct Fcitx object dispatch remains in the C++ adapter |
 | Engine E5 snapshot/status canonicalization | `CUTOVER-GREEN` (canonicalization + typed `EngineSnapshot` DTO limits + `pendingStates` store Rust-owned; `collectResult`/`selectCandidate`/`takePendingState` apply them) | — |
 | Engine E6 C++ product-state deletion | `CUTOVER-GREEN` (`candidate_navigation.h` + unit test deleted; scroll label offset Rust-owned; only Fcitx adapter + Windows process shell remain) | — |
 
@@ -64,7 +64,7 @@ Windows host
 - Strict direct clippy with `-D warnings` still hits existing `too_many_arguments` helpers in `rust/windows-common-core`; adjusted clippy with that existing lint allowed is green.
 - Cargo registry crates are checked against `third_party/dependencies.json` by name and version before dependency checks and SBOM generation. Advisory review for the declared dependency set remains an external process.
 - Runtime security now has explicit `Win10` and `Win7` lanes. The modern `Win10` lane remains the default full PE/source audit; product networking is enforced through source-boundary scanning plus PE blocking for explicit HTTP/URL stacks because Rust-linked MSVC binaries import `WS2_32.dll` through Rust std even without product network code. The legacy `Win7` lane is expected to stay red until the launcher/Rust runtime hard import of `GetSystemTimePreciseAsFileTime` is removed or a separate legacy strategy is implemented.
-- Engine product state is migrating to Rust: E1 protocol codec, E2 ledger, E3 event/action decisions, E4 epoch/request/session policy, and E5 snapshot/pending-state policy are cut over (`CUTOVER-GREEN` where recorded). The Fcitx adapter and remaining Windows process/transport shell shrink remain.
+- Engine product state is migrating to Rust: E1 protocol codec, E2 ledger, E3 event/action decisions, E4 epoch/request/session/deadline plus production server pipe connect/transfer, and E5 snapshot/pending-state policy are cut over (`CUTOVER-GREEN` where recorded). The Fcitx adapter and remaining Windows process shell shrink remain.
 - Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
 - WindInput was reviewed only as a public reference for Settings/theme management discipline. Useful
   retained constraints now live in `docs/spec-v1.8.md` and `docs/tasks/current.md`: task-oriented
@@ -87,14 +87,14 @@ Windows host
 
 ## Next Five Code/Design Tasks
 
-1. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core`
-   stop-aware pipe primitives, keeping direct Fcitx object ownership in the C++ adapter.
-2. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
+1. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
    release-readiness claim.
-3. For official add-ons/plugins, build reviewed Windows package artifacts in this project, publish
+2. For official add-ons/plugins, build reviewed Windows package artifacts in this project, publish
    them as signed GitHub Release-backed repository assets, and let Settings install only through
    verified package metadata.
-4. Execute `RELEASE-01` only after required manual/production evidence
+3. Execute `RELEASE-01` only after required manual/production evidence
    are green.
-5. Continue Stage 4 Rust Config GUI cutover only under an explicit eligible task; Stage 2 backend
+4. Continue Stage 4 Rust Config GUI cutover only under an explicit eligible task; Stage 2 backend
    shipping remains the current release-note claim.
+5. Continue shrinking non-Engine product-owned C++ shells only under explicit Rust migration tasks
+   with frozen behavior and regression evidence.

@@ -273,6 +273,9 @@ int main(int argc, char** argv) {
     // `fcitx_engine_main.cpp`. The per-connection session (handshake
     // completion + last accepted request id) is a Rust session object; the
     // epoch/ordering validators are no longer called directly from C++.
+    // Production server-side pipe connect/transfer also delegates to the
+    // Rust-owned windows-common-core primitives rather than re-owning
+    // overlapped read/write/connect loops in this C++ shell.
     const auto engineMainSource = read_text(sourceRoot / "src/engine/fcitx_engine_main.cpp");
     if (engineMainSource.find("fcitx5_engine_core_generate_engine_epoch") == std::string::npos ||
         engineMainSource.find("fcitx5_engine_core_key_request_timeout_ms") == std::string::npos ||
@@ -280,13 +283,25 @@ int main(int argc, char** argv) {
         engineMainSource.find("fcitx5_engine_core_session_accept_frame") == std::string::npos ||
         engineMainSource.find("fcitx5_engine_core_session_begin_hello") == std::string::npos ||
         engineMainSource.find("fcitx5_engine_core_session_complete_request") == std::string::npos ||
+        engineMainSource.find("fcitx5_windows_common_deadline_after_milliseconds") ==
+            std::string::npos ||
+        engineMainSource.find("fcitx5_windows_common_pipe_transfer_with_stop") ==
+            std::string::npos ||
+        engineMainSource.find("fcitx5_windows_common_pipe_connect_client") ==
+            std::string::npos ||
         engineMainSource.find("bool handshakeComplete") != std::string::npos ||
         engineMainSource.find("std::uint64_t lastRequestId") != std::string::npos ||
         engineMainSource.find("GetSystemTimeAsFileTime") != std::string::npos ||
         engineMainSource.find("frame.metadata.requestId <= lastRequestId") != std::string::npos ||
         engineMainSource.find("fcitx5_engine_core_validate_engine_epoch") != std::string::npos ||
-        engineMainSource.find("fcitx5_engine_core_accept_frame_sequence") != std::string::npos) {
-        return fail("ENGINE-E4: engine-server session epoch, request ordering, deadline policy, and per-connection session state must be Rust-owned in fcitx_engine_main.cpp");
+        engineMainSource.find("fcitx5_engine_core_accept_frame_sequence") != std::string::npos ||
+        engineMainSource.find("ConnectNamedPipe") != std::string::npos ||
+        engineMainSource.find("ReadFile(") != std::string::npos ||
+        engineMainSource.find("WriteFile(") != std::string::npos ||
+        engineMainSource.find("GetOverlappedResult") != std::string::npos ||
+        engineMainSource.find("CancelIoEx") != std::string::npos ||
+        engineMainSource.find("WaitForMultipleObjects") != std::string::npos) {
+        return fail("ENGINE-E4: engine-server session, deadline policy, and production pipe transport/framing must be Rust-owned in fcitx_engine_main.cpp");
     }
     const auto uiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
     const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");

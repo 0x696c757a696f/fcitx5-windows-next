@@ -13,8 +13,8 @@ selected Rust cutovers are complete.
 
 ## Current blocker
 
-The code-only package blocker `ENGINE-IDLE-PACKAGE-GATE-050` is fixed and archived, and
-`tools/build.ps1 package -Architecture all -Configuration Release` passed locally. Release still
+The code-only package blocker `ENGINE-IDLE-PACKAGE-GATE-050` is fixed and archived,
+`ENGINE-E4-TRANSPORT-FRAMING-001` is green, and local package/build evidence exists. Release still
 must not proceed or be declared complete until the remaining required external evidence exists:
 
 - production GitHub Release-backed official add-on package assets;
