@@ -2805,6 +2805,7 @@ mod win32_window_smoke {
     const EN_CHANGE: u16 = 0x0300;
     const ES_AUTOHSCROLL: u32 = 0x0080;
     const FALSE: i32 = 0;
+    const LB_ADDSTRING: u32 = 0x0180;
     const TRANSPARENT: i32 = 1;
     const WM_CLOSE: u32 = 0x0010;
     const WM_COMMAND: u32 = 0x0111;
@@ -2815,7 +2816,9 @@ mod win32_window_smoke {
     const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
     const WS_VSCROLL: u32 = 0x0020_0000;
     const WS_VISIBLE: u32 = 0x1000_0000;
+    const SW_HIDE: i32 = 0;
     const SW_SHOWNORMAL: i32 = 1;
+    const SW_SHOW: i32 = 5;
     const GET_PIXEL_ERROR: u32 = 0xffff_ffff;
     const K_STATUS: i32 = 110;
     const K_PREVIEW: i32 = 112;
@@ -2834,6 +2837,14 @@ mod win32_window_smoke {
     const K_APPEARANCE_SPACING: i32 = 153;
     const K_APPEARANCE_CORNER_RADIUS: i32 = 154;
     const K_APPEARANCE_CANDIDATE_WIDTH: i32 = 155;
+    const K_INPUT_METHOD_LIST: i32 = 156;
+    const K_LABEL_FONT_SIZE: i32 = 160;
+    const K_LABEL_OPACITY: i32 = 161;
+    const K_LABEL_CANDIDATE_FONT: i32 = 162;
+    const K_LABEL_SPACING: i32 = 163;
+    const K_LABEL_CORNER_RADIUS: i32 = 164;
+    const K_LABEL_CANDIDATE_WIDTH: i32 = 165;
+    const K_LABEL_INPUT_METHODS: i32 = 166;
     const K_SAVE_STATUS: i32 = 206;
     const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
@@ -3256,6 +3267,7 @@ mod win32_window_smoke {
             let command_id = loword(wparam);
             if let Some(title) = page_title_for_command(command_id) {
                 update_page_title(hwnd, title);
+                apply_page_visibility(hwnd, i32::from(command_id));
                 invalidate_preview(hwnd);
                 return 0;
             }
@@ -3429,6 +3441,7 @@ mod win32_window_smoke {
         let button_class = to_wide("BUTTON");
         let edit_class = to_wide("EDIT");
         let combo_class = to_wide("COMBOBOX");
+        let listbox_class = to_wide("LISTBOX");
         create_child_control(
             hwnd,
             instance,
@@ -3493,7 +3506,32 @@ mod win32_window_smoke {
             hwnd,
             instance,
             &static_class,
+            K_LABEL_INPUT_METHODS,
+            "Enabled input methods",
+            220,
+            128,
+            620,
+            24,
             0,
+        )?;
+        let input_methods = create_child_control(
+            hwnd,
+            instance,
+            &listbox_class,
+            K_INPUT_METHOD_LIST,
+            "",
+            220,
+            160,
+            620,
+            96,
+            WS_BORDER | WS_VSCROLL,
+        )?;
+        populate_enabled_input_methods(input_methods);
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            K_LABEL_FONT_SIZE,
             "Font size DIP",
             220,
             128,
@@ -3517,7 +3555,7 @@ mod win32_window_smoke {
             hwnd,
             instance,
             &static_class,
-            0,
+            K_LABEL_OPACITY,
             "Opacity",
             220,
             164,
@@ -3541,7 +3579,7 @@ mod win32_window_smoke {
             hwnd,
             instance,
             &static_class,
-            0,
+            K_LABEL_SPACING,
             "Spacing DIP",
             540,
             128,
@@ -3565,7 +3603,7 @@ mod win32_window_smoke {
             hwnd,
             instance,
             &static_class,
-            0,
+            K_LABEL_CORNER_RADIUS,
             "Corner DIP",
             540,
             164,
@@ -3589,11 +3627,11 @@ mod win32_window_smoke {
             hwnd,
             instance,
             &static_class,
-            0,
+            K_LABEL_CANDIDATE_WIDTH,
             "Width DIP",
             768,
             128,
-            96,
+            84,
             28,
             0,
         )?;
@@ -3613,7 +3651,7 @@ mod win32_window_smoke {
             hwnd,
             instance,
             &static_class,
-            0,
+            K_LABEL_CANDIDATE_FONT,
             "Candidate font",
             220,
             200,
@@ -3686,6 +3724,7 @@ mod win32_window_smoke {
             InvalidateRect(preview_hwnd, null(), FALSE);
             UpdateWindow(preview_hwnd);
         }
+        apply_page_visibility(hwnd, K_NAV_GENERAL);
         Ok(())
     }
 
@@ -3771,6 +3810,73 @@ mod win32_window_smoke {
         // SAFETY: `title_hwnd` is a live child control and the UTF-16 buffer lives for this call.
         unsafe {
             SetWindowTextW(title_hwnd, title.as_ptr());
+        }
+    }
+
+    fn apply_page_visibility(hwnd: Hwnd, active_page: i32) {
+        for control in [
+            K_LABEL_INPUT_METHODS,
+            K_INPUT_METHOD_LIST,
+            K_LABEL_FONT_SIZE,
+            K_APPEARANCE_FONT_SIZE,
+            K_LABEL_OPACITY,
+            K_APPEARANCE_OPACITY,
+            K_LABEL_SPACING,
+            K_APPEARANCE_SPACING,
+            K_LABEL_CORNER_RADIUS,
+            K_APPEARANCE_CORNER_RADIUS,
+            K_LABEL_CANDIDATE_WIDTH,
+            K_APPEARANCE_CANDIDATE_WIDTH,
+            K_LABEL_CANDIDATE_FONT,
+            K_APPEARANCE_FONT_FAMILY,
+            K_PREVIEW,
+            K_PACKAGES,
+            K_PACKAGE_DETAIL,
+            K_STATUS,
+            K_SAVE_STATUS,
+        ] {
+            show_child_control(
+                hwnd,
+                control,
+                controls_for_page(active_page).contains(&control),
+            );
+        }
+    }
+
+    fn controls_for_page(active_page: i32) -> &'static [i32] {
+        match active_page {
+            K_NAV_GENERAL => &[K_LABEL_INPUT_METHODS, K_INPUT_METHOD_LIST, K_SAVE_STATUS],
+            K_NAV_APPEARANCE => &[
+                K_LABEL_FONT_SIZE,
+                K_APPEARANCE_FONT_SIZE,
+                K_LABEL_OPACITY,
+                K_APPEARANCE_OPACITY,
+                K_LABEL_SPACING,
+                K_APPEARANCE_SPACING,
+                K_LABEL_CORNER_RADIUS,
+                K_APPEARANCE_CORNER_RADIUS,
+                K_LABEL_CANDIDATE_WIDTH,
+                K_APPEARANCE_CANDIDATE_WIDTH,
+                K_LABEL_CANDIDATE_FONT,
+                K_APPEARANCE_FONT_FAMILY,
+                K_PREVIEW,
+                K_SAVE_STATUS,
+            ],
+            K_NAV_PACKAGES => &[K_PACKAGES, K_PACKAGE_DETAIL, K_STATUS],
+            K_NAV_SHORTCUTS | K_NAV_UPDATES | K_NAV_REPAIR => &[K_STATUS],
+            _ => &[K_SAVE_STATUS],
+        }
+    }
+
+    fn show_child_control(parent: Hwnd, id: i32, visible: bool) {
+        // SAFETY: Reads the child handle for a QA-visible control id.
+        let child = unsafe { GetDlgItem(parent, id) };
+        if child.is_null() {
+            return;
+        }
+        // SAFETY: `child` is a live HWND and ShowWindow only changes its visibility.
+        unsafe {
+            ShowWindow(child, if visible { SW_SHOW } else { SW_HIDE });
         }
     }
 
@@ -3904,6 +4010,17 @@ mod win32_window_smoke {
             }
         }
         fonts
+    }
+
+    fn populate_enabled_input_methods(listbox: Hwnd) {
+        for input_method in ["Pinyin - 中文", "Rime - 中州韵", "Keyboard - English (US)"] {
+            let input_method = to_wide(input_method);
+            // SAFETY: `listbox` is a live LISTBOX HWND and the UTF-16 buffer lives for this
+            // synchronous LB_ADDSTRING message.
+            unsafe {
+                SendMessageW(listbox, LB_ADDSTRING, 0, input_method.as_ptr() as Lparam);
+            }
+        }
     }
 
     fn preview_state_path() -> Option<PathBuf> {

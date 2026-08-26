@@ -37,6 +37,7 @@ const CB_GETCURSEL: Uint = 0x0147;
 const CB_GETLBTEXT: Uint = 0x0148;
 const CB_GETLBTEXTLEN: Uint = 0x0149;
 const CB_SETCURSEL: Uint = 0x014E;
+const LB_GETCOUNT: Uint = 0x018B;
 const PRF_CHECKVISIBLE: Lparam = 0x0000_0001;
 const PRF_NONCLIENT: Lparam = 0x0000_0002;
 const PRF_CLIENT: Lparam = 0x0000_0004;
@@ -60,6 +61,14 @@ const K_APPEARANCE_FONT_FAMILY: i32 = 152;
 const K_APPEARANCE_SPACING: i32 = 153;
 const K_APPEARANCE_CORNER_RADIUS: i32 = 154;
 const K_APPEARANCE_CANDIDATE_WIDTH: i32 = 155;
+const K_INPUT_METHOD_LIST: i32 = 156;
+const K_LABEL_FONT_SIZE: i32 = 160;
+const K_LABEL_OPACITY: i32 = 161;
+const K_LABEL_CANDIDATE_FONT: i32 = 162;
+const K_LABEL_SPACING: i32 = 163;
+const K_LABEL_CORNER_RADIUS: i32 = 164;
+const K_LABEL_CANDIDATE_WIDTH: i32 = 165;
+const K_LABEL_INPUT_METHODS: i32 = 166;
 const K_SAVE_STATUS: i32 = 206;
 const CBN_SELCHANGE: Wparam = 1;
 const EN_CHANGE: Wparam = 0x0300;
@@ -69,7 +78,12 @@ const PAGES: &[Page] = &[
     Page {
         id: K_NAV_GENERAL,
         slug: "input-methods",
-        controls: &[K_PAGE_TITLE, K_SAVE_STATUS],
+        controls: &[
+            K_PAGE_TITLE,
+            K_LABEL_INPUT_METHODS,
+            K_INPUT_METHOD_LIST,
+            K_SAVE_STATUS,
+        ],
     },
     Page {
         id: K_NAV_APPEARANCE,
@@ -77,11 +91,17 @@ const PAGES: &[Page] = &[
         controls: &[
             K_PAGE_TITLE,
             K_PREVIEW,
+            K_LABEL_FONT_SIZE,
             K_APPEARANCE_FONT_SIZE,
+            K_LABEL_OPACITY,
             K_APPEARANCE_OPACITY,
+            K_LABEL_CANDIDATE_FONT,
             K_APPEARANCE_FONT_FAMILY,
+            K_LABEL_SPACING,
             K_APPEARANCE_SPACING,
+            K_LABEL_CORNER_RADIUS,
             K_APPEARANCE_CORNER_RADIUS,
+            K_LABEL_CANDIDATE_WIDTH,
             K_APPEARANCE_CANDIDATE_WIDTH,
             K_SAVE_STATUS,
         ],
@@ -275,6 +295,10 @@ fn run() -> Result<(), String> {
         navigate(hwnd, page.id)?;
         thread::sleep(Duration::from_millis(200));
         verify_page(hwnd, page)?;
+        if page.id == K_NAV_GENERAL && (rust_config || has_child(hwnd, K_INPUT_METHOD_LIST)) {
+            verify_enabled_input_method_list(hwnd)?;
+            report.push_str("| input-methods-enabled-list | ok | non-empty Rust UI list |\n");
+        }
         let file_name = format!("config-{}.bmp", page.slug);
         let mut capture = capture_window(hwnd)?;
         if page.id == K_NAV_APPEARANCE && selected_theme_accent_bbox(&capture).is_none() {
@@ -526,6 +550,20 @@ fn verify_appearance_numeric_inputs(hwnd: Hwnd) -> Result<(), String> {
 
     set_child_text(hwnd, K_APPEARANCE_FONT_SIZE, "18")?;
     notify_control_change(hwnd, K_APPEARANCE_FONT_SIZE);
+    Ok(())
+}
+
+fn verify_enabled_input_method_list(hwnd: Hwnd) -> Result<(), String> {
+    let listbox = unsafe { GetDlgItem(hwnd, K_INPUT_METHOD_LIST) };
+    if listbox.is_null() {
+        return Err("missing enabled input method list".to_string());
+    }
+    let count = unsafe { SendMessageW(listbox, LB_GETCOUNT, 0, 0) };
+    if count < 2 {
+        return Err(format!(
+            "enabled input method list had {count} entries, expected multiple visible methods"
+        ));
+    }
     Ok(())
 }
 
