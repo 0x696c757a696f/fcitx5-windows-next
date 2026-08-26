@@ -2227,6 +2227,8 @@ int main(int argc, char** argv) {
             std::string::npos ||
         cmakeSource.find("-ShippingConfigExe \"${FCITX_CONFIG_SHIPPING_EXE}\"") ==
             std::string::npos ||
+        cmakeSource.find("-SideBySideConfigExe") == std::string::npos ||
+        cmakeSource.find("\"${FCITX_CONFIG_SIDE_BY_SIDE_EXE}\"") == std::string::npos ||
         configSource.find("bool checkI18n()") != std::string::npos ||
         configSource.find("bool checkResources()") != std::string::npos ||
         configSource.find("return checkI18n() ? 0 : 2") != std::string::npos ||
@@ -2324,6 +2326,7 @@ int main(int argc, char** argv) {
         configRustShippingLineageScript.find("fcitx5-config-rust.exe") ==
             std::string::npos ||
         configRustShippingLineageScript.find("ShippingConfigExe") == std::string::npos ||
+        configRustShippingLineageScript.find("SideBySideConfigExe") == std::string::npos ||
         configRustShippingLineageScript.find("Get-FileHash") == std::string::npos ||
         configRustShippingLineageScript.find("component -ne 'fcitx5-config'") ==
             std::string::npos ||

@@ -1121,7 +1121,8 @@ if(BUILD_TESTING)
       -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-shipping-lineage.ps1"
       -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
       "${FCITX_RUST_TARGET}" -ShippingConfigExe "${FCITX_CONFIG_SHIPPING_EXE}" -OutputDirectory
-      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage" -Report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage" -SideBySideConfigExe
+      "${FCITX_CONFIG_SIDE_BY_SIDE_EXE}" -Report
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage.json")
   set_tests_properties(config-rust-shipping-lineage
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

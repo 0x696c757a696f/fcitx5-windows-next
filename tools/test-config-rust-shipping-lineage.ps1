@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory = $true)] [string] $CargoTarget,
   [Parameter(Mandatory = $true)] [string] $OutputDirectory,
   [string] $ShippingConfigExe = '',
+  [string] $SideBySideConfigExe = '',
   [Parameter(Mandatory = $true)] [string] $Report
 )
 
@@ -57,26 +58,30 @@ function Invoke-CheckedProcess {
   }
 }
 
-$cargoArguments = @(
-  'build',
-  '--locked',
-  '--manifest-path',
-  (Join-Path $repoRoot 'Cargo.toml'),
-  '-p',
-  'fcitx5-config-poc',
-  '--bin',
-  'fcitx5-config-rust',
-  '--target',
-  $CargoTarget
-)
-[void] (Invoke-CheckedProcess -FilePath $cargo -Arguments $cargoArguments -Name 'build-rust-config-shipping-lineage')
+$rustSideBySide = if ([string]::IsNullOrWhiteSpace($SideBySideConfigExe)) {
+  $cargoArguments = @(
+    'build',
+    '--locked',
+    '--manifest-path',
+    (Join-Path $repoRoot 'Cargo.toml'),
+    '-p',
+    'fcitx5-config-poc',
+    '--bin',
+    'fcitx5-config-rust',
+    '--target',
+    $CargoTarget
+  )
+  [void] (Invoke-CheckedProcess -FilePath $cargo -Arguments $cargoArguments -Name 'build-rust-config-shipping-lineage')
 
-$targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
-  Join-Path $repoRoot 'out\toolchains\rust\target'
+  $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+    Join-Path $repoRoot 'out\toolchains\rust\target'
+  } else {
+    [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+  }
+  Join-Path $targetRoot "$CargoTarget\debug\fcitx5-config-rust.exe"
 } else {
-  [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+  [IO.Path]::GetFullPath($SideBySideConfigExe)
 }
-$rustSideBySide = Join-Path $targetRoot "$CargoTarget\debug\fcitx5-config-rust.exe"
 if (-not (Test-Path -LiteralPath $rustSideBySide -PathType Leaf)) {
   throw "Rust Config side-by-side executable was not built: $rustSideBySide"
 }
