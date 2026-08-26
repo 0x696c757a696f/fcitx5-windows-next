@@ -39,6 +39,7 @@ const CB_GETLBTEXT: Uint = 0x0148;
 const CB_GETLBTEXTLEN: Uint = 0x0149;
 const CB_SETCURSEL: Uint = 0x014E;
 const LB_GETCOUNT: Uint = 0x018B;
+const LB_SETCURSEL: Uint = 0x0186;
 const PRF_CHECKVISIBLE: Lparam = 0x0000_0001;
 const PRF_NONCLIENT: Lparam = 0x0000_0002;
 const PRF_CLIENT: Lparam = 0x0000_0004;
@@ -77,7 +78,12 @@ const K_PACKAGE_INSTALL: i32 = 170;
 const K_PACKAGE_UPDATE: i32 = 171;
 const K_PACKAGE_REMOVE: i32 = 172;
 const K_PACKAGE_CONFIGURE: i32 = 173;
+const K_PACKAGE_REFRESH: i32 = 174;
+const K_PACKAGE_DETAILS: i32 = 175;
+const K_PACKAGE_ENABLE_DISABLE: i32 = 176;
+const K_PACKAGE_REPAIR: i32 = 177;
 const K_SAVE_STATUS: i32 = 206;
+const LBN_SELCHANGE: Wparam = 1;
 const CBN_SELCHANGE: Wparam = 1;
 const EN_CHANGE: Wparam = 0x0300;
 const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
@@ -142,6 +148,10 @@ const PAGES: &[Page] = &[
             K_PACKAGE_UPDATE,
             K_PACKAGE_REMOVE,
             K_PACKAGE_CONFIGURE,
+            K_PACKAGE_REFRESH,
+            K_PACKAGE_DETAILS,
+            K_PACKAGE_ENABLE_DISABLE,
+            K_PACKAGE_REPAIR,
             K_STATUS,
         ],
     },
@@ -540,6 +550,10 @@ fn is_keyboard_focus_control(control: i32) -> bool {
             | K_PACKAGE_UPDATE
             | K_PACKAGE_REMOVE
             | K_PACKAGE_CONFIGURE
+            | K_PACKAGE_REFRESH
+            | K_PACKAGE_DETAILS
+            | K_PACKAGE_ENABLE_DISABLE
+            | K_PACKAGE_REPAIR
     )
 }
 
@@ -657,15 +671,33 @@ fn verify_package_page(hwnd: Hwnd) -> Result<(), String> {
         ));
     }
     for (button, expected) in [
+        (K_PACKAGE_REFRESH, "package.refresh planned"),
+        (K_PACKAGE_DETAILS, "package.details loaded"),
         (K_PACKAGE_INSTALL, "signed repository metadata required"),
         (K_PACKAGE_UPDATE, "package.update planned"),
+        (K_PACKAGE_ENABLE_DISABLE, "package.enable_disable planned"),
         (K_PACKAGE_REMOVE, "package.remove planned"),
         (K_PACKAGE_CONFIGURE, "plugin_config loaded"),
+        (K_PACKAGE_REPAIR, "package.repair planned"),
     ] {
         unsafe {
             SendMessageW(hwnd, WM_COMMAND, button as Wparam, 0);
         }
         require_status_contains(hwnd, expected)?;
+    }
+    if count > 1 {
+        let selected_result = unsafe { SendMessageW(packages, LB_SETCURSEL, 1, 0) };
+        if selected_result < 0 {
+            return Err("packages list rejected selection change".to_string());
+        }
+        notify_listbox_selection(hwnd, K_PACKAGES);
+        require_status_contains(hwnd, "package.selection changed")?;
+        let detail = child_text(hwnd, K_PACKAGE_DETAIL)?;
+        if !detail.contains("fcitx5-chinese-addons") || !detail.contains("refresh/details") {
+            return Err(format!(
+                "package details did not refresh from selected package: `{detail}`"
+            ));
+        }
     }
     Ok(())
 }
@@ -796,6 +828,13 @@ fn notify_control_change(hwnd: Hwnd, id: i32) {
 
 fn notify_combo_selection(hwnd: Hwnd, id: i32) {
     let wparam = ((CBN_SELCHANGE & 0xffff) << 16) | ((id as Wparam) & 0xffff);
+    unsafe {
+        SendMessageW(hwnd, WM_COMMAND, wparam, 0);
+    }
+}
+
+fn notify_listbox_selection(hwnd: Hwnd, id: i32) {
+    let wparam = ((LBN_SELCHANGE & 0xffff) << 16) | ((id as Wparam) & 0xffff);
     unsafe {
         SendMessageW(hwnd, WM_COMMAND, wparam, 0);
     }

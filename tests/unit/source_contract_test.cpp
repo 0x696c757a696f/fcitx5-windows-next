@@ -28,6 +28,8 @@ int main(int argc, char** argv) {
     const auto specSource = read_text(sourceRoot / "docs/spec-v1.8.md");
     const auto currentTruthSource = read_text(sourceRoot / "docs/current.md");
     const auto currentTaskSource = read_text(sourceRoot / "docs/tasks/current.md");
+    const auto completedConfigCutoverTaskSource =
+        read_text(sourceRoot / "docs/tasks/completed/048-CONFIG-RUST-CUTOVER-001.md");
     const auto engineBoundarySource = read_text(sourceRoot / "docs/engine-boundary.md");
     const auto tsfProfileBoundarySource = read_text(sourceRoot / "docs/tsf-profile-boundary.md");
     const auto taskRebaselineSource = read_text(sourceRoot / "docs/tasks/rebaseline.md");
@@ -56,19 +58,20 @@ int main(int argc, char** argv) {
         specSource.find("Rust Config Cutover Complete") == std::string::npos ||
         specSource.find("Config fully migrated to Rust") == std::string::npos ||
         currentTruthSource.find("system-font-backed font selection") == std::string::npos ||
-        currentTruthSource.find("STAGE-2-BACKEND-SHIPPING-IN-PROGRESS") ==
+        currentTruthSource.find("STAGE-2-BACKEND-SHIPPED-GREEN") ==
             std::string::npos ||
         currentTruthSource.find("interactive settings UI migration") ==
             std::string::npos ||
-        currentTaskSource.find("editable numeric controls for appearance values") ==
+        completedConfigCutoverTaskSource.find("editable numeric controls for appearance values") ==
             std::string::npos ||
-        currentTaskSource.find("current system font family inventory") ==
+        completedConfigCutoverTaskSource.find("current system font family inventory") ==
             std::string::npos ||
-        currentTaskSource.find("editor/preview/real-window rendering from one resolved snapshot") ==
+        completedConfigCutoverTaskSource.find(
+            "editor/preview/real-window rendering from one resolved snapshot") ==
             std::string::npos ||
-        currentTaskSource.find("Stage 2 — Rust Config Backend Shipped") ==
+        completedConfigCutoverTaskSource.find("Stage 2 — Rust Config Backend Shipped") ==
             std::string::npos ||
-        currentTaskSource.find("Stage 4 — Rust Config Cutover Complete") ==
+        completedConfigCutoverTaskSource.find("Stage 4 — Rust Config Cutover Complete") ==
             std::string::npos ||
         taskPlanSource.find("Rust Config Backend Shipped") ==
             std::string::npos ||

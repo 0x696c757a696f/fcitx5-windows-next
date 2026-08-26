@@ -1,6 +1,6 @@
 # PLUGIN-LIFECYCLE-STABILITY-001 Signed add-on install/update/uninstall stability
 
-**State:** TODO
+**State:** MANUAL-PENDING / AUTOMATED-LIFECYCLE-GREEN / CONFIG-PACKAGE-ACTIONS-QA-GREEN / PACKAGE-CONFIG-SMOKE-GREEN / ONLINE-RELEASE-ASSETS-PENDING / PACKAGE-GATE-ENGINE-IDLE-BLOCKED
 
 ## Context
 
@@ -72,3 +72,18 @@ itself.
   as `MANUAL-PENDING`.
 - `docs/tasks/status.md` records endpoint/key status, package id/version, install/update/uninstall
   result, and any manual blocker.
+
+## Current evidence
+
+- Automated fixture lifecycle tests are green on x64 and x86.
+- Rust Settings package page QA now covers refresh, details, install/update, enable/disable, remove,
+  configure, repair, and package selection/detail refresh without overlap or keyboard-tabstop
+  regressions.
+- Package Config smoke is green from
+  `D:\Documents\GitHub\fcitx5-windows-next\out\package\stage-070695878c23448488e3c8fa4a9bfb80\Fcitx5`.
+- Production GitHub Release-backed official add-on package assets and signed repository metadata
+  remain `MANUAL-PENDING` because no production endpoint/release asset credential evidence is
+  available in the local repository.
+- Full `tools/build.ps1 package` remains blocked by the existing Engine acceptance failure
+  `engine did not reach a steady idle state within 15 seconds`; do not treat this as a package
+  lifecycle pass until the Engine blocker is fixed.

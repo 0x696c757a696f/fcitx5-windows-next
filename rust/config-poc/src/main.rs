@@ -2812,7 +2812,12 @@ mod win32_window_smoke {
     const EN_CHANGE: u16 = 0x0300;
     const ES_AUTOHSCROLL: u32 = 0x0080;
     const FALSE: i32 = 0;
+    const LBN_SELCHANGE: u16 = 1;
     const LB_ADDSTRING: u32 = 0x0180;
+    const LB_SETCURSEL: u32 = 0x0186;
+    const LB_GETCURSEL: u32 = 0x0188;
+    const LB_GETTEXT: u32 = 0x0189;
+    const LB_GETTEXTLEN: u32 = 0x018A;
     const TRANSPARENT: i32 = 1;
     const WM_CLOSE: u32 = 0x0010;
     const WM_COMMAND: u32 = 0x0111;
@@ -2859,6 +2864,10 @@ mod win32_window_smoke {
     const K_PACKAGE_UPDATE: i32 = 171;
     const K_PACKAGE_REMOVE: i32 = 172;
     const K_PACKAGE_CONFIGURE: i32 = 173;
+    const K_PACKAGE_REFRESH: i32 = 174;
+    const K_PACKAGE_DETAILS: i32 = 175;
+    const K_PACKAGE_ENABLE_DISABLE: i32 = 176;
+    const K_PACKAGE_REPAIR: i32 = 177;
     const K_SAVE_STATUS: i32 = 206;
     const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
@@ -3294,6 +3303,10 @@ mod win32_window_smoke {
             if hiword(wparam) == CBN_SELCHANGE && handle_language_change(hwnd, command_id) {
                 return 0;
             }
+            if hiword(wparam) == LBN_SELCHANGE && handle_package_selection_change(hwnd, command_id)
+            {
+                return 0;
+            }
             if handle_package_action(hwnd, command_id) {
                 return 0;
             }
@@ -3556,6 +3569,54 @@ mod win32_window_smoke {
             600,
             244,
             128,
+            34,
+            WS_TABSTOP,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &button_class,
+            K_PACKAGE_REFRESH,
+            "Refresh",
+            220,
+            292,
+            112,
+            34,
+            WS_TABSTOP,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &button_class,
+            K_PACKAGE_DETAILS,
+            "Details",
+            344,
+            292,
+            112,
+            34,
+            WS_TABSTOP,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &button_class,
+            K_PACKAGE_ENABLE_DISABLE,
+            "Enable / Disable",
+            468,
+            292,
+            128,
+            34,
+            WS_TABSTOP,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &button_class,
+            K_PACKAGE_REPAIR,
+            "Repair",
+            608,
+            292,
+            112,
             34,
             WS_TABSTOP,
         )?;
@@ -3932,6 +3993,10 @@ mod win32_window_smoke {
             K_PACKAGE_UPDATE,
             K_PACKAGE_REMOVE,
             K_PACKAGE_CONFIGURE,
+            K_PACKAGE_REFRESH,
+            K_PACKAGE_DETAILS,
+            K_PACKAGE_ENABLE_DISABLE,
+            K_PACKAGE_REPAIR,
             K_STATUS,
             K_SAVE_STATUS,
         ] {
@@ -3975,6 +4040,10 @@ mod win32_window_smoke {
                 K_PACKAGE_UPDATE,
                 K_PACKAGE_REMOVE,
                 K_PACKAGE_CONFIGURE,
+                K_PACKAGE_REFRESH,
+                K_PACKAGE_DETAILS,
+                K_PACKAGE_ENABLE_DISABLE,
+                K_PACKAGE_REPAIR,
                 K_STATUS,
             ],
             K_NAV_SHORTCUTS | K_NAV_UPDATES | K_NAV_REPAIR => &[K_STATUS],
@@ -4083,14 +4152,27 @@ mod win32_window_smoke {
 
     fn handle_package_action(hwnd: Hwnd, command_id: u16) -> bool {
         let status = match i32::from(command_id) {
+            K_PACKAGE_REFRESH => {
+                Some("package.refresh planned: trusted repository metadata required")
+            }
+            K_PACKAGE_DETAILS => {
+                update_package_detail_from_selection(hwnd);
+                Some("package.details loaded: selected component metadata")
+            }
             K_PACKAGE_INSTALL => {
                 Some("package.install planned: signed repository metadata required before download")
             }
             K_PACKAGE_UPDATE => Some("package.update planned: Rust package-core transaction"),
+            K_PACKAGE_ENABLE_DISABLE => {
+                Some("package.enable_disable planned: Rust package-core state")
+            }
             K_PACKAGE_REMOVE => {
                 Some("package.remove planned: rollback-safe Rust package-core state")
             }
             K_PACKAGE_CONFIGURE => Some("plugin_config loaded: fcitx5-rime settings surface"),
+            K_PACKAGE_REPAIR => {
+                Some("package.repair planned: verify and restore installed payloads")
+            }
             _ => None,
         };
         let Some(status) = status else {
@@ -4099,6 +4181,37 @@ mod win32_window_smoke {
         set_child_text(hwnd, K_STATUS, status);
         set_child_text(hwnd, K_SAVE_STATUS, status);
         true
+    }
+
+    fn handle_package_selection_change(hwnd: Hwnd, command_id: u16) -> bool {
+        if i32::from(command_id) != K_PACKAGES {
+            return false;
+        }
+        update_package_detail_from_selection(hwnd);
+        set_child_text(
+            hwnd,
+            K_STATUS,
+            "package.selection changed: details refreshed",
+        );
+        set_child_text(
+            hwnd,
+            K_SAVE_STATUS,
+            "package.selection changed: details refreshed",
+        );
+        true
+    }
+
+    fn update_package_detail_from_selection(hwnd: Hwnd) {
+        let packages = unsafe { GetDlgItem(hwnd, K_PACKAGES) };
+        let selected =
+            selected_listbox_text(packages).unwrap_or_else(|| "fcitx5-rime — installed".to_owned());
+        set_child_text(
+            hwnd,
+            K_PACKAGE_DETAIL,
+            &format!(
+                "{selected}: type=addon, source=official signed fixture, actions=refresh/details/install/update/enable-disable/remove/repair"
+            ),
+        );
     }
 
     fn populate_system_font_picker(
@@ -4185,6 +4298,11 @@ mod win32_window_smoke {
                 SendMessageW(listbox, LB_ADDSTRING, 0, package.as_ptr() as Lparam);
             }
         }
+        // SAFETY: `listbox` is a live LISTBOX HWND. Selecting the first item gives details and
+        // selection-change QA a deterministic starting point without running package operations.
+        unsafe {
+            SendMessageW(listbox, LB_SETCURSEL, 0, 0);
+        }
     }
 
     fn populate_language_selector(combo: Hwnd) {
@@ -4263,6 +4381,37 @@ mod win32_window_smoke {
             SendMessageW(
                 combo,
                 CB_GETLBTEXT,
+                selected as Wparam,
+                buffer.as_mut_ptr() as Lparam,
+            )
+        };
+        if copied <= 0 {
+            return None;
+        }
+        buffer.truncate(copied as usize);
+        Some(String::from_utf16_lossy(&buffer))
+    }
+
+    fn selected_listbox_text(listbox: Hwnd) -> Option<String> {
+        if listbox.is_null() {
+            return None;
+        }
+        // SAFETY: `listbox` is a live listbox HWND.
+        let selected = unsafe { SendMessageW(listbox, LB_GETCURSEL, 0, 0) };
+        if selected < 0 {
+            return None;
+        }
+        // SAFETY: `listbox` is a live listbox HWND and `selected` is the current selection index.
+        let len = unsafe { SendMessageW(listbox, LB_GETTEXTLEN, selected as Wparam, 0) };
+        if len <= 0 {
+            return None;
+        }
+        let mut buffer = vec![0u16; len as usize + 1];
+        // SAFETY: `buffer` is writable and large enough for the selected list item plus NUL.
+        let copied = unsafe {
+            SendMessageW(
+                listbox,
+                LB_GETTEXT,
                 selected as Wparam,
                 buffer.as_mut_ptr() as Lparam,
             )
