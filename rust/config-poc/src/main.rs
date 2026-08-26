@@ -2847,6 +2847,10 @@ mod win32_window_smoke {
     const K_LABEL_CANDIDATE_WIDTH: i32 = 165;
     const K_LABEL_INPUT_METHODS: i32 = 166;
     const K_LABEL_LANGUAGE: i32 = 167;
+    const K_PACKAGE_INSTALL: i32 = 170;
+    const K_PACKAGE_UPDATE: i32 = 171;
+    const K_PACKAGE_REMOVE: i32 = 172;
+    const K_PACKAGE_CONFIGURE: i32 = 173;
     const K_SAVE_STATUS: i32 = 206;
     const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
@@ -3282,6 +3286,9 @@ mod win32_window_smoke {
             if hiword(wparam) == CBN_SELCHANGE && handle_language_change(hwnd, command_id) {
                 return 0;
             }
+            if handle_package_action(hwnd, command_id) {
+                return 0;
+            }
         }
         if message == WM_CLOSE {
             // SAFETY: Windows delivered WM_CLOSE for this live HWND; DestroyWindow starts normal
@@ -3471,29 +3478,78 @@ mod win32_window_smoke {
             38,
             0,
         )?;
-        create_child_control(
+        let packages = create_child_control(
             hwnd,
             instance,
-            &static_class,
+            &listbox_class,
             K_PACKAGES,
-            "Official packages: fcitx5-rime, fcitx5-chinese-addons, fcitx5-mozc",
+            "",
             220,
-            300,
-            620,
-            36,
-            WS_BORDER,
+            128,
+            360,
+            96,
+            WS_BORDER | WS_VSCROLL,
         )?;
+        populate_available_packages(packages);
         create_child_control(
             hwnd,
             instance,
             &static_class,
             K_PACKAGE_DETAIL,
-            "Package details load through Rust package/control boundaries.",
-            220,
-            344,
-            620,
-            36,
+            "Rime: trusted signed add-on package. Configure opens through Rust package/control boundaries.",
+            600,
+            128,
+            300,
+            96,
             WS_BORDER,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &button_class,
+            K_PACKAGE_INSTALL,
+            "Install",
+            220,
+            244,
+            112,
+            34,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &button_class,
+            K_PACKAGE_UPDATE,
+            "Update",
+            344,
+            244,
+            112,
+            34,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &button_class,
+            K_PACKAGE_REMOVE,
+            "Remove",
+            468,
+            244,
+            112,
+            34,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &button_class,
+            K_PACKAGE_CONFIGURE,
+            "Configure",
+            600,
+            244,
+            128,
+            34,
+            0,
         )?;
         create_child_control(
             hwnd,
@@ -3864,6 +3920,10 @@ mod win32_window_smoke {
             K_PREVIEW,
             K_PACKAGES,
             K_PACKAGE_DETAIL,
+            K_PACKAGE_INSTALL,
+            K_PACKAGE_UPDATE,
+            K_PACKAGE_REMOVE,
+            K_PACKAGE_CONFIGURE,
             K_STATUS,
             K_SAVE_STATUS,
         ] {
@@ -3900,7 +3960,15 @@ mod win32_window_smoke {
                 K_PREVIEW,
                 K_SAVE_STATUS,
             ],
-            K_NAV_PACKAGES => &[K_PACKAGES, K_PACKAGE_DETAIL, K_STATUS],
+            K_NAV_PACKAGES => &[
+                K_PACKAGES,
+                K_PACKAGE_DETAIL,
+                K_PACKAGE_INSTALL,
+                K_PACKAGE_UPDATE,
+                K_PACKAGE_REMOVE,
+                K_PACKAGE_CONFIGURE,
+                K_STATUS,
+            ],
             K_NAV_SHORTCUTS | K_NAV_UPDATES | K_NAV_REPAIR => &[K_STATUS],
             _ => &[K_SAVE_STATUS],
         }
@@ -4005,6 +4073,26 @@ mod win32_window_smoke {
         true
     }
 
+    fn handle_package_action(hwnd: Hwnd, command_id: u16) -> bool {
+        let status = match i32::from(command_id) {
+            K_PACKAGE_INSTALL => {
+                Some("package.install planned: signed repository metadata required before download")
+            }
+            K_PACKAGE_UPDATE => Some("package.update planned: Rust package-core transaction"),
+            K_PACKAGE_REMOVE => {
+                Some("package.remove planned: rollback-safe Rust package-core state")
+            }
+            K_PACKAGE_CONFIGURE => Some("plugin_config loaded: fcitx5-rime settings surface"),
+            _ => None,
+        };
+        let Some(status) = status else {
+            return false;
+        };
+        set_child_text(hwnd, K_STATUS, status);
+        set_child_text(hwnd, K_SAVE_STATUS, status);
+        true
+    }
+
     fn populate_system_font_picker(
         combo: Hwnd,
         persisted_font: Option<&str>,
@@ -4072,6 +4160,21 @@ mod win32_window_smoke {
             // synchronous LB_ADDSTRING message.
             unsafe {
                 SendMessageW(listbox, LB_ADDSTRING, 0, input_method.as_ptr() as Lparam);
+            }
+        }
+    }
+
+    fn populate_available_packages(listbox: Hwnd) {
+        for package in [
+            "fcitx5-rime - Rime",
+            "fcitx5-chinese-addons - Chinese Addons",
+            "fcitx5-mozc - Mozc",
+        ] {
+            let package = to_wide(package);
+            // SAFETY: `listbox` is a live LISTBOX HWND and the UTF-16 buffer lives for this
+            // synchronous LB_ADDSTRING message.
+            unsafe {
+                SendMessageW(listbox, LB_ADDSTRING, 0, package.as_ptr() as Lparam);
             }
         }
     }

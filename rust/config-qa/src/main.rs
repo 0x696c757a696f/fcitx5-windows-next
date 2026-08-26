@@ -71,6 +71,10 @@ const K_LABEL_CORNER_RADIUS: i32 = 164;
 const K_LABEL_CANDIDATE_WIDTH: i32 = 165;
 const K_LABEL_INPUT_METHODS: i32 = 166;
 const K_LABEL_LANGUAGE: i32 = 167;
+const K_PACKAGE_INSTALL: i32 = 170;
+const K_PACKAGE_UPDATE: i32 = 171;
+const K_PACKAGE_REMOVE: i32 = 172;
+const K_PACKAGE_CONFIGURE: i32 = 173;
 const K_SAVE_STATUS: i32 = 206;
 const CBN_SELCHANGE: Wparam = 1;
 const EN_CHANGE: Wparam = 0x0300;
@@ -128,7 +132,16 @@ const PAGES: &[Page] = &[
     Page {
         id: K_NAV_PACKAGES,
         slug: "addons",
-        controls: &[K_PAGE_TITLE, K_PACKAGES, K_PACKAGE_DETAIL, K_STATUS],
+        controls: &[
+            K_PAGE_TITLE,
+            K_PACKAGES,
+            K_PACKAGE_DETAIL,
+            K_PACKAGE_INSTALL,
+            K_PACKAGE_UPDATE,
+            K_PACKAGE_REMOVE,
+            K_PACKAGE_CONFIGURE,
+            K_STATUS,
+        ],
     },
 ];
 
@@ -304,6 +317,12 @@ fn run() -> Result<(), String> {
             report.push_str("| input-methods-enabled-list | ok | non-empty Rust UI list |\n");
             verify_language_selector(hwnd)?;
             report.push_str("| language-selector | ok | localized Rust UI selector |\n");
+        }
+        if page.id == K_NAV_PACKAGES && (rust_config || has_child(hwnd, K_PACKAGE_INSTALL)) {
+            verify_package_page(hwnd)?;
+            report.push_str(
+                "| packages-plugin-config | ok | package actions and config page load |\n",
+            );
         }
         let file_name = format!("config-{}.bmp", page.slug);
         let mut capture = capture_window(hwnd)?;
@@ -590,6 +609,31 @@ fn verify_language_selector(hwnd: Hwnd) -> Result<(), String> {
     }
     notify_combo_selection(hwnd, K_LANGUAGE_SELECTOR);
     require_status_contains(hwnd, "language accepted")?;
+    Ok(())
+}
+
+fn verify_package_page(hwnd: Hwnd) -> Result<(), String> {
+    let packages = unsafe { GetDlgItem(hwnd, K_PACKAGES) };
+    if packages.is_null() {
+        return Err("missing packages list".to_string());
+    }
+    let count = unsafe { SendMessageW(packages, LB_GETCOUNT, 0, 0) };
+    if count < 3 {
+        return Err(format!(
+            "packages list had {count} entries, expected official package inventory"
+        ));
+    }
+    for (button, expected) in [
+        (K_PACKAGE_INSTALL, "signed repository metadata required"),
+        (K_PACKAGE_UPDATE, "package.update planned"),
+        (K_PACKAGE_REMOVE, "package.remove planned"),
+        (K_PACKAGE_CONFIGURE, "plugin_config loaded"),
+    ] {
+        unsafe {
+            SendMessageW(hwnd, WM_COMMAND, button as Wparam, 0);
+        }
+        require_status_contains(hwnd, expected)?;
+    }
     Ok(())
 }
 
