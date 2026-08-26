@@ -1,6 +1,10 @@
 # PLUGIN-LIFECYCLE-STABILITY-001 Signed add-on install/update/uninstall stability
 
-**State:** MANUAL-PENDING / AUTOMATED-LIFECYCLE-GREEN / CONFIG-PACKAGE-ACTIONS-QA-GREEN / PACKAGE-CONFIG-SMOKE-GREEN / ONLINE-RELEASE-ASSETS-PENDING / PACKAGE-GATE-ENGINE-IDLE-BLOCKED
+**State:** MANUAL-PENDING / AUTOMATED-LIFECYCLE-GREEN / CONFIG-PACKAGE-ACTIONS-QA-GREEN / PACKAGE-CONFIG-SMOKE-GREEN / ONLINE-RELEASE-ASSETS-PENDING / PACKAGE-GATE-ENGINE-IDLE-FIXED-BY-050
+
+**Current supersession note:** the package gate Engine idle blocker recorded
+during this task was fixed by `050`. Production GitHub Release-backed add-on
+assets and signed repository metadata remain manual/external evidence.
 
 ## Context
 

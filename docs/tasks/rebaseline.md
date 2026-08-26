@@ -1,11 +1,10 @@
 # Task Queue Rebaseline
 
-Date: 2026-08-25
+Date: 2026-08-26
 
-HEAD at rebaseline refresh: `8a99b8db4cca72cdac10dea1229a3b3f09b8f152`
+HEAD at rebaseline refresh: `d1c87129d03b6460222534b130b016d32348aad2`
 
-Working tree at rebaseline refresh: dirty with in-progress TSF/candidate fixes and task-governance
-updates; preserve those changes.
+Working tree at rebaseline refresh: clean after `CONFIG-WINDUI-SETTINGS-SHELL-001` commit/push.
 
 Purpose: interpret the old v1.8 queue against the current repository truth. The old task files remain historical evidence. This file is the current queue interpretation until a later rebaseline replaces it.
 
@@ -36,24 +35,21 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 - Candidate actions and surrounding-text/text-edit operations must stay capability-aware instead of freezing today's Fcitx API shape.
 - Real-host evidence is never inferred from CTest.
 
-2026-08-25 refresh:
+2026-08-26 refresh:
 
-- The old R3 FUTURE-GATED queue files have been superseded by completed/current task files and
-  should not remain as executable queue entries.
-- The executable queue items currently staged under `docs/tasks/queue/` are
-  `047-CONFIG-UX-009.md`, which freezes the Settings/theme/candidate-preview product contract, and
-  `048-CONFIG-RUST-CUTOVER-001.md`, which replaces the temporary C++ Config shell with a Rust
-  shipping implementation after 047 is green.
-- Current execution is on `docs/tasks/current.md` (`CONFIG-UX-009`). `RUST-R3-TSF-POC` reachable
-  automated evidence has been recorded; its real-host matrix remains `MANUAL-PENDING` and does not
-  block this Settings UX/Rust cutover path.
+- The old R3 FUTURE-GATED queue files and old Config UX source tasks have been superseded by
+  completed task files and are not executable queue entries.
+- `047` through `058` have completed the reachable code-only Settings path through a vendored
+  `huanfeng/wind-ui-rust` default Settings shell.
+- Current execution is on `docs/tasks/current.md` (`RELEASE-01`), which is parked on external/manual
+  evidence. No local CTest/package/screenshot result may mark it complete.
 
 ## P0 Guidance Tasks
 
 | Current-guidance task | Rebaseline state | Evidence | Next action |
 |---|---|---|---|
 | P0-0 Engine Rust/C++ boundary freeze | `ALREADY-GREEN` | `docs/engine-boundary.md` records Fcitx owners, Rust product-state owners, current call graph, current IPC schema, current lack of Engine Rust ABI, and Fcitx/addon patch inventory; source-contract guards representative markers. | Start Engine E1 only after choosing the Rust protocol/core crate boundary. |
-| P0-1 Current HEAD truth | `ALREADY-GREEN` | `docs/current.md` records current shipping architecture, language map, PoC states, red lights, and next tasks. | Update only when the real state changes materially. |
+| P0-1 Current HEAD truth | `ALREADY-GREEN` | `docs/current.md` records current shipping architecture, language map, PoC states, red lights, windui Config shell status, and next tasks. | Update only when the real state changes materially. |
 | P0-2 Old queue rebaseline | `ALREADY-GREEN` | This file classifies the old queue against current `HEAD`. | Keep PLAN pointed here before automatic advancement decisions. |
 | P0-3 Rust dependency/license/SBOM lockstep | `ALREADY-GREEN` | `tools/cargo-inventory.ps1`, `tools/check-dependencies.ps1`, and `tools/generate-sbom.ps1` verify Cargo registry packages against `third_party/dependencies.json`; status records SBOM evidence. | External advisory review remains outside automation. |
 | P0-4 Runtime-security scans Rust | `ALREADY-GREEN` | `tools/check-runtime-security.ps1` scans C++ and Rust source and has explicit `Win10`/`Win7` min-OS lanes. | Keep `Win7` lane visibly red until the Rust/MSVC hard import strategy is solved. |
@@ -79,19 +75,19 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 | 013 `STAB-CAND-LOCALE-013` | `ALREADY-GREEN` | Candidate UI drives DWrite locale from snapshot content metadata; source-contract blocks metadata polling and hardcoded `zh-CN`. | Current green. |
 | 014 `REG-PKG-WINPATH-001` | `ALREADY-GREEN` | Rust package-core/path corpus and dependency checks are current. | New package path work must extend the Rust corpus. |
 | 015 `STAB-HOST-MATRIX-015` | `MANUAL-PENDING` | Historical task records missing real-host matrix. | Final stabilization/release remains gated. |
-| 016 `REG-CONFIG-VISUAL-001` | `PARTIAL` | Automated Config visual/resource/live preview evidence exists, but current guidance says Config UX still needs product-level technology choice and polish. | Do not treat old green as product-ready Config. |
+| 016 `REG-CONFIG-VISUAL-001` | `ALREADY-GREEN` | Automated Config visual/resource/live preview evidence exists, and later `052` through `058` added redraw, design tokens, windui code adoption, default windui Settings shell, and screenshot/source-contract evidence. | Release readiness still requires manual/real-host evidence, but this old visual task is no longer the active Config technology blocker. |
 | 017 `REG-CONFIG-LIVE-001` | `ALREADY-GREEN` | Config live preview tests and Candidate preview integration are recorded. | Preserve while deciding Config implementation route. |
 | 018 `REG-CAND-UX` | `ALREADY-GREEN` | Candidate UX/orientation/scroll/presentation contracts are green and Rust candidate core owns model/layout/interaction. | Future work is boundary consolidation and candidate-action upstream alignment. |
 | 019 `REG-BRAND-001` | `MANUAL-PENDING` | Assets exist, but public brand/manual presentation evidence remains pending. | Product polish remains P2. |
 | 020 `REG-UPDATE-TSF` | `MANUAL-PENDING` | Automated generation model exists, but current guidance requires real old/new TSF generation host E2E. | Covered by P0-6. |
-| 021 `CONFIG-UX-001` | `PARTIAL` | Old Config UX slices completed, but current guidance says current Config remains too engineering-oriented. | Fold into Config technology/product spike. |
-| 022 `CONFIG-UX-002` | `PARTIAL` | Same evidence class as 021. | Fold into Config technology/product spike. |
-| 023 `CONFIG-UX-003` | `PARTIAL` | Same evidence class as 021. | Fold into Config technology/product spike. |
-| 024 `CONFIG-UX-004` | `PARTIAL` | Same evidence class as 021. | Fold into Config technology/product spike. |
-| 025 `CONFIG-UX-005` | `PARTIAL` | Same evidence class as 021. | Fold into Config technology/product spike. |
-| 026 `CONFIG-UX-006` | `PARTIAL` | Same evidence class as 021, with package/update surface dependencies. | Fold into Config technology/product spike and plugin/update UX. |
-| 027 `CONFIG-UX-007` | `PARTIAL` | Same evidence class as 021. | Fold into Config technology/product spike. |
-| 028 `CONFIG-UX-008` | `PARTIAL` | Same evidence class as 021. | Fold into Config technology/product spike. |
+| 021 `CONFIG-UX-001` | `ALREADY-GREEN` | Old Config UX slices are completed and later 047/052-058 replaced the engineering-oriented default with a windui Settings shell. | Future UX changes are new tasks, not a rerun of this old item. |
+| 022 `CONFIG-UX-002` | `ALREADY-GREEN` | Same evidence class as 021 plus windui default shell evidence. | Current green for old queue interpretation. |
+| 023 `CONFIG-UX-003` | `ALREADY-GREEN` | Same evidence class as 021 plus windui default shell evidence. | Current green for old queue interpretation. |
+| 024 `CONFIG-UX-004` | `ALREADY-GREEN` | Same evidence class as 021 plus windui default shell evidence. | Current green for old queue interpretation. |
+| 025 `CONFIG-UX-005` | `ALREADY-GREEN` | Same evidence class as 021 plus windui default shell evidence. | Current green for old queue interpretation. |
+| 026 `CONFIG-UX-006` | `ALREADY-GREEN` | Package/update surface automation is covered by 049; shell polish is covered by 058. | Production online package evidence remains manual under plugin/release gates. |
+| 027 `CONFIG-UX-007` | `ALREADY-GREEN` | Same evidence class as 021 plus windui default shell evidence. | Current green for old queue interpretation. |
+| 028 `CONFIG-UX-008` | `ALREADY-GREEN` | Same evidence class as 021 plus package smoke/plugin lifecycle automation. | Production online evidence remains manual under plugin/release gates. |
 | 029 `TRUST-001` | `ALREADY-GREEN` | Trust design and package-core trust implementation are recorded. | Current green. |
 | 030 `TRUST-002` | `ALREADY-GREEN` | Trust follow-up recorded. | Current green. |
 | 031 `TRUST-003` | `ALREADY-GREEN` | Verifier decision and implementation evidence recorded. | Current green. |
@@ -109,16 +105,16 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 | R2-02 `RUST-R2-02` | `PARTIAL` | Control/process execution has many Rust-owned slices, but remaining Control/config/package command shell surfaces are still C++. | Continue non-Engine C++ shrink through focused slices. |
 | R2-03 `RUST-R2-03` | `PARTIAL` | Diagnostics/status JSON and shared common-core slices exist, but diagnostics product surface is not fully Rust-owned. | Continue as product-owned Rust migration. |
 | R3-01 `RUST-R3-CANDIDATE-POC` | `PARTIAL` | Candidate model/layout/interaction are Rust-owned and old C++ domain headers/tests are deleted; C++ D2D/DWrite renderer/window remains as adapter. | New candidate domain code defaults to Rust; renderer/window C++ is tolerated only as a visual adapter until equivalent renderer migration evidence exists. |
-| R3-02 `RUST-R3-CONFIG-POC` | `PARTIAL` | Rust Config PoC and QA are green, but shipping Config still has a C++/WTL shell. | New Settings product logic defaults to Rust; WTL/Win32 is a temporary adapter/shell and must be replaced by the queued Rust Config cutover after the UX contract is frozen. |
+| R3-02 `RUST-R3-CONFIG-POC` | `ALREADY-GREEN` | Shipping Config uses Rust for the product executable and default interactive GUI shell; the vendored windui Settings shell is the no-argument route, while legacy C++ WTL and Rust Win32/D2D hosts are regression/QA-only. | Full release claims still depend on Stage 4 manual/real-host evidence. |
 | R3-03 `RUST-R3-TSF-POC` | `MANUAL-PENDING` | Shipping Rust TSF automated gates are green and old C++ TSF sources are deleted; real-host matrix remains missing. | Do not declare release-ready until real-host evidence is recorded. |
-| REL-01 `RELEASE-01` | `BLOCKED` | Real-host, installer/UAC, plugin lifecycle, generation-drain, Config product polish, and release signing/provenance evidence remain incomplete. | Release gate cannot advance. |
+| REL-01 `RELEASE-01` | `BLOCKED` | Real-host, installer/UAC, production plugin lifecycle assets, generation-drain, Narrator/NVDA, and release signing/provenance evidence remain incomplete. Config code-only shell polish is green through 058. | Release gate cannot advance from local-only evidence. |
 
 ## Next Eligible Work
 
-1. Execute `047-CONFIG-UX-009`: WindInput-inspired Theme Library, embedded production-renderer
-   candidate preview, font/emoji/high-DPI/no-overlap Settings work.
-2. Execute `048-CONFIG-RUST-CUTOVER-001`: shipping Config Rust cutover, differential behavior,
-   accessibility, DPI, localization, visual, and package evidence; then delete the old C++ WTL
-   shell.
-3. Continue non-Engine C++ shrink only where a Rust owner and regression evidence already exist.
-4. Prepare P0-6 real generation-drain E2E and Rust TSF host matrix evidence.
+1. `REL-01` is the selected current task and is externally gated.
+2. Prepare P0-6 real generation-drain E2E, installer/UAC, plugin lifecycle, Narrator/NVDA, and Rust
+   TSF host matrix evidence before any release-readiness claim.
+3. Continue non-Engine C++ shrink only when PLAN adds an explicit Rust migration task with a frozen
+   behavior corpus and regression evidence.
+4. Future Config work should build on the vendored windui shell, not re-open the old Win32 default
+   host.
