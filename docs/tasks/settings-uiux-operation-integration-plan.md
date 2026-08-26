@@ -98,6 +98,15 @@ Reference reviewed: `nextlevelbuilder/ui-ux-pro-max-skill`.
 Use it only as product/design guidance. Do not vendor or install external skill
 code into this repository as part of the Settings task queue.
 
+Skill search refresh on 2026-08-26:
+
+- `npx skills find "win32 rust ui ux design system direct2d"` did not find a mature,
+  high-install, purpose-built Win32 + Rust + Direct2D Settings skill.
+- The returned generic UI/design skills had low install counts and no clear Windows native
+  adapter specialization, so they are not adopted as project dependencies.
+- The project-owned path is therefore explicit: keep a small Rust Settings UI kit/design-token
+  layer in this repository and treat outside material as review input only.
+
 Applicable guidance for Fcitx5 for Windows Next:
 
 - text, chips, badges, status rows, and labels must reflow without clipping;
@@ -714,6 +723,34 @@ Required command categories:
 Each command must have a deterministic success/failure result suitable for localized UI rendering and automated interaction tests.
 
 ## Implementation slices
+
+### CONFIG-UIKIT-DESIGN-TOKENS-001 — Rust Settings design tokens
+
+- define one Rust-owned token source for spacing, sidebar/content geometry, control heights,
+  type scale, palette, focus ring, and disabled state;
+- route layout evidence and Win32 adapter paint through that token source;
+- keep native HWND controls for behavior-sensitive inputs;
+- preserve no-overlap and embedded candidate-preview contracts;
+- do not adopt a low-confidence external UI skill or create a generic framework.
+
+### CONFIG-WINDOW-EFFECTS-ADAPTER-001 — OS visual capability adapter
+
+- add one Rust-owned progressive enhancement boundary for Win7/Win10/Win11 visual effects;
+- keep unsupported DWM effects optional and fail-soft;
+- do not scatter OS-version checks through Settings page code.
+
+### CONFIG-D2D-SETTINGS-SURFACE-001 — bounded D2D/DWrite Settings surface
+
+- render only product-specific visual components: NavigationItem, Card/Section, SettingRow,
+  Banner/status row, and PreviewSurface;
+- keep Edit/ComboBox/List/ListView native where they provide important behavior;
+- clear and repaint each assigned rect so page switches cannot leave stale pixels.
+
+### CONFIG-STAGE4-A11Y-DPI-QA-001 — real GUI cutover QA gate
+
+- require keyboard/focus/UIA/high contrast/DPI/no-overlap/candidate-preview evidence before
+  claiming `Rust Config Cutover Complete`;
+- mark Narrator/NVDA and real-host evidence `MANUAL-PENDING` when unavailable.
 
 ### CONFIG-UX-001 — Settings operation inventory and localized status
 

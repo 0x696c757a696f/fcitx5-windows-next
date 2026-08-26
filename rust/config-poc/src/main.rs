@@ -106,13 +106,13 @@ struct ConfigPocModel {
     no_shell_out: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Size {
     width: i32,
     height: i32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Rect {
     x: i32,
     y: i32,
@@ -145,6 +145,104 @@ impl Rect {
             && self.right() > other.x
             && self.y < other.bottom()
             && self.bottom() > other.y
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SettingsPalette {
+    background: u32,
+    sidebar: u32,
+    content: u32,
+    header: u32,
+    accent: u32,
+    nav_selected: u32,
+    text_primary: u32,
+    focus_ring: u32,
+    disabled_surface: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DesignTokens {
+    spacing_4: i32,
+    spacing_8: i32,
+    spacing_12: i32,
+    spacing_16: i32,
+    spacing_24: i32,
+    radius_4: i32,
+    radius_8: i32,
+    control_height: i32,
+    comfortable_control_height: i32,
+    sidebar_width: i32,
+    sidebar_margin_left: i32,
+    sidebar_nav_top: i32,
+    nav_item_width: i32,
+    nav_item_height: i32,
+    nav_item_step: i32,
+    nav_accent_width: i32,
+    header_height: i32,
+    content_x: i32,
+    content_width: i32,
+    content_right_margin: i32,
+    content_bottom_margin: i32,
+    title_font_height: i32,
+    body_font_height: i32,
+    title_weight: i32,
+    body_weight: i32,
+    focus_ring_width: i32,
+    minimum_window: Size,
+    candidate_preview: Rect,
+    palette: SettingsPalette,
+}
+
+fn design_tokens() -> DesignTokens {
+    DesignTokens {
+        spacing_4: 4,
+        spacing_8: 8,
+        spacing_12: 12,
+        spacing_16: 16,
+        spacing_24: 24,
+        radius_4: 4,
+        radius_8: 8,
+        control_height: 32,
+        comfortable_control_height: 36,
+        sidebar_width: 204,
+        sidebar_margin_left: 24,
+        sidebar_nav_top: 84,
+        nav_item_width: 176,
+        nav_item_height: 42,
+        nav_item_step: 54,
+        nav_accent_width: 4,
+        header_height: 72,
+        content_x: 248,
+        content_width: 596,
+        content_right_margin: 18,
+        content_bottom_margin: 18,
+        title_font_height: 26,
+        body_font_height: 18,
+        title_weight: 600,
+        body_weight: 400,
+        focus_ring_width: 2,
+        minimum_window: Size {
+            width: 900,
+            height: 720,
+        },
+        candidate_preview: Rect {
+            x: 248,
+            y: 222,
+            width: 596,
+            height: 166,
+        },
+        palette: SettingsPalette {
+            background: 0x00f6_f4_f1,
+            sidebar: 0x00fb_f9_f7,
+            content: 0x00ff_ff_ff,
+            header: 0x00ff_f7_ee,
+            accent: 0x00eb_9b_25,
+            nav_selected: 0x00ff_ff_ff,
+            text_primary: 0x0024_24_24,
+            focus_ring: 0x00c4_72_00,
+            disabled_surface: 0x00ef_ef_ef,
+        },
     }
 }
 
@@ -1111,10 +1209,7 @@ fn require_package_states(model: &ConfigPocModel) -> Result<(), String> {
 
 fn validate_layout(model: &ConfigPocModel) -> Result<LayoutEvidence, String> {
     const DPI_SCALE_PERCENTS: [u16; 5] = [100, 125, 150, 200, 300];
-    const MINIMUM_WINDOW_DIP: Size = Size {
-        width: 900,
-        height: 720,
-    };
+    let tokens = design_tokens();
 
     let mut checked_elements = 0usize;
     let mut addon_action_row_rects = 0usize;
@@ -1127,14 +1222,14 @@ fn validate_layout(model: &ConfigPocModel) -> Result<LayoutEvidence, String> {
     let window_dip = Rect {
         x: 0,
         y: 0,
-        width: MINIMUM_WINDOW_DIP.width,
-        height: MINIMUM_WINDOW_DIP.height,
+        width: tokens.minimum_window.width,
+        height: tokens.minimum_window.height,
     };
     for dpi_scale_percent in DPI_SCALE_PERCENTS {
         for page in model.pages.iter().map(|page| page.id) {
             let scenario = LayoutScenario {
                 dpi_scale_percent,
-                window: MINIMUM_WINDOW_DIP,
+                window: tokens.minimum_window,
                 page,
             };
             let elements = layout_elements_for_scenario(scenario);
@@ -1178,7 +1273,7 @@ fn validate_layout(model: &ConfigPocModel) -> Result<LayoutEvidence, String> {
         checked_pages: model.pages.len(),
         checked_scenarios: model.pages.len() * DPI_SCALE_PERCENTS.len(),
         checked_elements,
-        minimum_window_dip: MINIMUM_WINDOW_DIP,
+        minimum_window_dip: tokens.minimum_window,
         candidate_preview_rect,
         addon_action_row_rects,
         layout_rects_inside_window: true,
@@ -1211,8 +1306,17 @@ fn scale_dip(value: i32, percent: u16) -> i32 {
 }
 
 fn common_layout_elements(page: PageId) -> Vec<LayoutElement> {
+    let tokens = design_tokens();
     let mut elements = Vec::new();
-    elements.push(element(page, "nav", "nav-shell", 16, 20, 192, 568));
+    elements.push(element(
+        page,
+        "nav",
+        "nav-shell",
+        tokens.spacing_16,
+        tokens.spacing_24 - tokens.spacing_4,
+        tokens.sidebar_width - tokens.spacing_12,
+        568,
+    ));
     for (index, name) in [
         "nav-input-methods",
         "nav-appearance",
@@ -1228,19 +1332,19 @@ fn common_layout_elements(page: PageId) -> Vec<LayoutElement> {
             page,
             "nav-item",
             name,
-            24,
-            84 + (index as i32 * 54),
-            176,
-            42,
+            tokens.sidebar_margin_left,
+            tokens.sidebar_nav_top + (index as i32 * tokens.nav_item_step),
+            tokens.nav_item_width,
+            tokens.nav_item_height,
         ));
     }
     elements.push(element(
         page,
         "content-title",
         "page-title",
-        248,
+        tokens.content_x,
         28,
-        596,
+        tokens.content_width,
         38,
     ));
     elements
@@ -1288,11 +1392,12 @@ fn input_method_layout(elements: &mut Vec<LayoutElement>) {
 
 fn appearance_layout(elements: &mut Vec<LayoutElement>) {
     let page = PageId::Appearance;
+    let tokens = design_tokens();
     elements.push(element(
         page,
         "content-leaf",
         "language-selector",
-        248,
+        tokens.content_x,
         92,
         280,
         42,
@@ -1310,19 +1415,19 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
         page,
         "content-leaf",
         "theme-mode-segments",
-        248,
+        tokens.content_x,
         154,
-        596,
+        tokens.content_width,
         44,
     ));
     elements.push(element(
         page,
         "content-leaf",
         "candidate-preview-surface",
-        248,
-        222,
-        596,
-        166,
+        tokens.candidate_preview.x,
+        tokens.candidate_preview.y,
+        tokens.candidate_preview.width,
+        tokens.candidate_preview.height,
     ));
     elements.push(element(
         page,
@@ -1364,36 +1469,36 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
         page,
         "content-leaf",
         "theme-library-current",
-        248,
+        tokens.content_x,
         412,
-        596,
+        tokens.content_width,
         42,
     ));
     elements.push(element(
         page,
         "content-leaf",
         "theme-library-operation-row",
-        248,
+        tokens.content_x,
         476,
-        596,
+        tokens.content_width,
         44,
     ));
     elements.push(element(
         page,
         "content-leaf",
         "candidate-layout-segments",
-        248,
+        tokens.content_x,
         544,
-        596,
+        tokens.content_width,
         44,
     ));
     elements.push(element(
         page,
         "content-leaf",
         "appearance-compact-controls",
-        248,
+        tokens.content_x,
         612,
-        596,
+        tokens.content_width,
         44,
     ));
 }
@@ -2780,8 +2885,8 @@ mod win32_window_smoke {
     use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicUsize, Ordering};
 
     use super::{
-        candidate_preview_paint_plan, validate_appearance_numeric_input, AppearanceNumericField,
-        Rect as LayoutRect, Size, WindowSmokeEvidence,
+        candidate_preview_paint_plan, design_tokens, validate_appearance_numeric_input,
+        AppearanceNumericField, Rect as LayoutRect, Size, WindowSmokeEvidence,
     };
 
     type Hinstance = *mut c_void;
@@ -2814,8 +2919,6 @@ mod win32_window_smoke {
     const EN_CHANGE: u16 = 0x0300;
     const ES_AUTOHSCROLL: u32 = 0x0080;
     const FALSE: i32 = 0;
-    const FW_SEMIBOLD: i32 = 600;
-    const FW_NORMAL: i32 = 400;
     const TRUE: i32 = 1;
     const LBN_SELCHANGE: u16 = 1;
     const LB_ADDSTRING: u32 = 0x0180;
@@ -2885,14 +2988,6 @@ mod win32_window_smoke {
     const K_PACKAGE_REPAIR: i32 = 177;
     const K_SAVE_STATUS: i32 = 206;
     const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
-    const COLOR_SETTINGS_BACKGROUND: u32 = 0x00f6_f4_f1;
-    const COLOR_SETTINGS_SIDEBAR: u32 = 0x00fb_f9_f7;
-    const COLOR_SETTINGS_CONTENT: u32 = 0x00ff_ff_ff;
-    const COLOR_SETTINGS_HEADER: u32 = 0x00ff_f7_ee;
-    const COLOR_SETTINGS_NAV_ACCENT: u32 = 0x00eb_9b_25;
-    const COLOR_SETTINGS_NAV_SELECTED: u32 = 0x00ff_ff_ff;
-    const COLOR_SETTINGS_TEXT_PRIMARY: u32 = 0x0024_24_24;
-
     static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
     static ACTIVE_NAV_PAGE: AtomicI32 = AtomicI32::new(K_NAV_GENERAL);
     static SETTINGS_UI_FONT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
@@ -3416,7 +3511,7 @@ mod win32_window_smoke {
             unsafe {
                 SetBkMode(hdc, OPAQUE);
                 SetBkColor(hdc, background_color);
-                SetTextColor(hdc, COLOR_SETTINGS_TEXT_PRIMARY);
+                SetTextColor(hdc, design_tokens().palette.text_primary);
                 return brush as Lresult;
             }
         }
@@ -3457,6 +3552,7 @@ mod win32_window_smoke {
         if hdc.is_null() {
             return;
         }
+        let tokens = design_tokens();
         let mut client = Rect {
             left: 0,
             top: 0,
@@ -3467,36 +3563,36 @@ mod win32_window_smoke {
         if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
             return;
         }
-        fill_rect(hdc, &client, COLOR_SETTINGS_BACKGROUND);
+        fill_rect(hdc, &client, tokens.palette.background);
         let sidebar = Rect {
             left: client.left,
             top: client.top,
-            right: client.left + 204,
+            right: client.left + tokens.sidebar_width,
             bottom: client.bottom,
         };
-        fill_rect(hdc, &sidebar, COLOR_SETTINGS_SIDEBAR);
+        fill_rect(hdc, &sidebar, tokens.palette.sidebar);
         let header = Rect {
             left: sidebar.right,
             top: client.top,
             right: client.right,
-            bottom: client.top + 72,
+            bottom: client.top + tokens.header_height,
         };
-        fill_rect(hdc, &header, COLOR_SETTINGS_HEADER);
+        fill_rect(hdc, &header, tokens.palette.header);
         let accent = Rect {
-            left: 16,
-            top: 18,
-            right: 20,
+            left: tokens.spacing_16,
+            top: tokens.spacing_24 - tokens.spacing_8 + tokens.spacing_4 / 2,
+            right: tokens.spacing_16 + tokens.nav_accent_width,
             bottom: 278,
         };
-        fill_rect(hdc, &accent, COLOR_SETTINGS_NAV_ACCENT);
+        fill_rect(hdc, &accent, tokens.palette.accent);
         let content = Rect {
-            left: sidebar.right + 16,
-            top: header.bottom + 12,
-            right: client.right - 18,
-            bottom: client.bottom - 18,
+            left: sidebar.right + tokens.spacing_16,
+            top: header.bottom + tokens.spacing_12,
+            right: client.right - tokens.content_right_margin,
+            bottom: client.bottom - tokens.content_bottom_margin,
         };
         if content.right > content.left && content.bottom > content.top {
-            fill_rect(hdc, &content, COLOR_SETTINGS_CONTENT);
+            fill_rect(hdc, &content, tokens.palette.content);
         }
     }
 
@@ -3527,21 +3623,22 @@ mod win32_window_smoke {
         }
 
         let selected = ACTIVE_NAV_PAGE.load(Ordering::SeqCst) == control_id;
+        let tokens = design_tokens();
         let background = if selected {
-            COLOR_SETTINGS_NAV_SELECTED
+            tokens.palette.nav_selected
         } else {
-            COLOR_SETTINGS_SIDEBAR
+            tokens.palette.sidebar
         };
         fill_rect(item.hdc, &item.rc_item, background);
 
         if selected {
             let accent = Rect {
                 left: item.rc_item.left,
-                top: item.rc_item.top + 7,
-                right: item.rc_item.left + 5,
-                bottom: item.rc_item.bottom - 7,
+                top: item.rc_item.top + tokens.spacing_8 - 1,
+                right: item.rc_item.left + tokens.nav_accent_width + 1,
+                bottom: item.rc_item.bottom - tokens.spacing_8 + 1,
             };
-            fill_rect(item.hdc, &accent, COLOR_SETTINGS_NAV_ACCENT);
+            fill_rect(item.hdc, &accent, tokens.palette.accent);
         }
 
         let font = settings_ui_font();
@@ -3564,7 +3661,7 @@ mod win32_window_smoke {
         // NUL-terminated and lives through DrawTextW.
         unsafe {
             SetBkMode(item.hdc, TRANSPARENT);
-            SetTextColor(item.hdc, COLOR_SETTINGS_TEXT_PRIMARY);
+            SetTextColor(item.hdc, tokens.palette.text_primary);
             DrawTextW(
                 item.hdc,
                 text.as_ptr(),
@@ -3592,15 +3689,16 @@ mod win32_window_smoke {
     }
 
     fn static_control_background(control_id: i32) -> (u32, Hbrush) {
+        let tokens = design_tokens();
         if control_id == K_PAGE_TITLE {
             (
-                COLOR_SETTINGS_HEADER,
-                cached_solid_brush(&SETTINGS_HEADER_BRUSH, COLOR_SETTINGS_HEADER),
+                tokens.palette.header,
+                cached_solid_brush(&SETTINGS_HEADER_BRUSH, tokens.palette.header),
             )
         } else {
             (
-                COLOR_SETTINGS_CONTENT,
-                cached_solid_brush(&SETTINGS_CONTENT_BRUSH, COLOR_SETTINGS_CONTENT),
+                tokens.palette.content,
+                cached_solid_brush(&SETTINGS_CONTENT_BRUSH, tokens.palette.content),
             )
         }
     }
@@ -3626,17 +3724,18 @@ mod win32_window_smoke {
         if !existing.is_null() {
             return existing;
         }
+        let tokens = design_tokens();
         let face_name = to_wide("Segoe UI");
         // SAFETY: The face name buffer is NUL-terminated and lives for the duration of the call.
         // The created HFONT intentionally lives until process exit so all child HWNDs can keep
         // using it without a dangling GDI handle.
         let created = unsafe {
             CreateFontW(
-                -21,
+                -tokens.body_font_height,
                 0,
                 0,
                 0,
-                FW_NORMAL,
+                tokens.body_weight,
                 0,
                 0,
                 0,
@@ -3660,15 +3759,16 @@ mod win32_window_smoke {
         if !existing.is_null() {
             return existing;
         }
+        let tokens = design_tokens();
         let face_name = to_wide("Segoe UI");
         // SAFETY: Same lifetime contract as settings_ui_font; this title font is process-owned.
         let created = unsafe {
             CreateFontW(
-                -34,
+                -tokens.title_font_height,
                 0,
                 0,
                 0,
-                FW_SEMIBOLD,
+                tokens.title_weight,
                 0,
                 0,
                 0,
@@ -4931,6 +5031,37 @@ mod win32_window_smoke {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn design_tokens_cover_modern_settings_surface_contract() {
+        let tokens = design_tokens();
+        assert_eq!(
+            [
+                tokens.spacing_4,
+                tokens.spacing_8,
+                tokens.spacing_12,
+                tokens.spacing_16,
+                tokens.spacing_24
+            ],
+            [4, 8, 12, 16, 24]
+        );
+        assert_eq!([tokens.radius_4, tokens.radius_8], [4, 8]);
+        assert_eq!(tokens.control_height, 32);
+        assert_eq!(tokens.comfortable_control_height, 36);
+        assert_eq!(tokens.sidebar_width, 204);
+        assert_eq!(tokens.content_x, 248);
+        assert_eq!(tokens.content_width, 596);
+        assert_eq!(tokens.minimum_window.width, 900);
+        assert_eq!(tokens.minimum_window.height, 720);
+        assert_eq!(tokens.candidate_preview.width, tokens.content_width);
+        assert!(tokens.candidate_preview.height >= 160);
+        assert_ne!(tokens.palette.background, tokens.palette.sidebar);
+        assert_ne!(tokens.palette.accent, tokens.palette.content);
+        assert_ne!(tokens.palette.focus_ring, tokens.palette.disabled_surface);
+        assert!(tokens.focus_ring_width >= 2);
+        assert!(tokens.body_font_height >= 18);
+        assert!(tokens.title_font_height > tokens.body_font_height);
+    }
 
     #[test]
     fn self_check_covers_frozen_settings_operations() {

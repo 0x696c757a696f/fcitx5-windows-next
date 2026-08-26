@@ -1916,6 +1916,35 @@ int main(int argc, char** argv) {
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
     const auto controlPackageIntegrationSource =
         read_text(sourceRoot / "tests/integration/control_package_integration_test.cpp");
+    if (configPocSource.find("struct SettingsPalette") == std::string::npos ||
+        configPocSource.find("struct DesignTokens") == std::string::npos ||
+        configPocSource.find("fn design_tokens() -> DesignTokens") == std::string::npos ||
+        configPocSource.find("spacing_4") == std::string::npos ||
+        configPocSource.find("spacing_8") == std::string::npos ||
+        configPocSource.find("spacing_12") == std::string::npos ||
+        configPocSource.find("spacing_16") == std::string::npos ||
+        configPocSource.find("spacing_24") == std::string::npos ||
+        configPocSource.find("radius_4") == std::string::npos ||
+        configPocSource.find("radius_8") == std::string::npos ||
+        configPocSource.find("control_height") == std::string::npos ||
+        configPocSource.find("comfortable_control_height") == std::string::npos ||
+        configPocSource.find("sidebar_width") == std::string::npos ||
+        configPocSource.find("content_width") == std::string::npos ||
+        configPocSource.find("title_font_height") == std::string::npos ||
+        configPocSource.find("body_font_height") == std::string::npos ||
+        configPocSource.find("focus_ring_width") == std::string::npos ||
+        configPocSource.find("focus_ring") == std::string::npos ||
+        configPocSource.find("disabled_surface") == std::string::npos ||
+        configPocSource.find("tokens.palette.background") == std::string::npos ||
+        configPocSource.find("tokens.palette.sidebar") == std::string::npos ||
+        configPocSource.find("tokens.palette.content") == std::string::npos ||
+        configPocSource.find("tokens.palette.header") == std::string::npos ||
+        configPocSource.find("tokens.palette.accent") == std::string::npos ||
+        configPocSource.find("tokens.palette.text_primary") == std::string::npos ||
+        configPocSource.find("tokens.candidate_preview.width") == std::string::npos ||
+        configPocSource.find("COLOR_SETTINGS_") != std::string::npos) {
+        return fail("CONFIG-UIKIT-DESIGN-TOKENS-001: Rust Config must keep one Settings design-token source for layout, palette, typography, focus, and disabled states");
+    }
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
         configSource.find("--ui-visual-contract-test") == std::string::npos ||

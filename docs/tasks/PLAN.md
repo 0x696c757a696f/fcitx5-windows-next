@@ -96,6 +96,10 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 050 | ENGINE-IDLE-PACKAGE-GATE-050 | COMPLETED / PACKAGE-GATE-GREEN / REAL-ENGINE-X64-X86-GREEN | 049 automated lifecycle evidence green; fixes the package/release gate blocker before `REL-01` | completed/050-ENGINE-IDLE-PACKAGE-GATE-050.md |
 | 051 | ENGINE-E4-TRANSPORT-FRAMING-001 | COMPLETED / E4-SERVER-PIPE-TRANSPORT-RUST-GREEN | `REL-01` is parked on external/manual evidence; PLAN permits later code-only Engine Rust-migration work to continue without claiming release readiness | completed/051-ENGINE-E4-TRANSPORT-FRAMING-001.md |
 | 052 | CONFIG-STAGE4-VISUAL-REDRAW-001 | COMPLETED / VISUAL-REDRAW-QA-GREEN | `REL-01` is parked on external/manual evidence; fixed real Rust Settings visual ghosting/重影 class, owner-drawn navigation, and embedded preview clipping evidence | completed/052-CONFIG-STAGE4-VISUAL-REDRAW-001.md |
+| 053 | CONFIG-UIKIT-DESIGN-TOKENS-001 | COMPLETED / RUST-SETTINGS-DESIGN-TOKENS-GREEN | `REL-01` is parked on external/manual evidence; established Rust-owned design tokens before further Win32/D2D visual slices so Config does not keep growing by scattered raw constants | completed/053-CONFIG-UIKIT-DESIGN-TOKENS-001.md |
+| 054 | CONFIG-WINDOW-EFFECTS-ADAPTER-001 | TODO | 053; add Rust-owned Win7/Win10/Win11 progressive-enhancement adapter contract before using dark titlebar, rounded corners, Mica/system backdrop, or version-specific DWM attributes | 054-CONFIG-WINDOW-EFFECTS-ADAPTER-001.md |
+| 055 | CONFIG-D2D-SETTINGS-SURFACE-001 | TODO | 053/054; introduce bounded D2D/DWrite Settings Surface components while retaining native HWND controls where behavior/a11y/IME semantics matter | 055-CONFIG-D2D-SETTINGS-SURFACE-001.md |
+| 056 | CONFIG-STAGE4-A11Y-DPI-QA-001 | TODO | 053/055; freeze automated and manual QA gates for keyboard/focus/UIA/high contrast/DPI/no-overlap/candidate-preview parity before claiming Stage 4 Config cutover | 056-CONFIG-STAGE4-A11Y-DPI-QA-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
@@ -117,6 +121,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 - `REL-01` is parked as release-gated until production release assets, signing/key evidence, and
   required real-host/manual compatibility evidence exist. Code-only migration tasks may continue
   while preserving that release gate; do not claim release readiness from local CTest/package smoke.
-- No later code-only queue file is currently selected. The next current task returns to `REL-01`
-  until a new explicit queue item is added.
+- `053` through `056` are the current code-only Settings modernization queue opened from the
+  modern native Win32 + Rust + Direct2D design direction. They do not make `REL-01` releasable;
+  release remains gated on external/manual evidence and production signed artifacts.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.
