@@ -1,38 +1,40 @@
-# Current Task — CONFIG-WINDOW-EFFECTS-ADAPTER-001
+# Current Task — CONFIG-D2D-SETTINGS-SURFACE-001
 
 **Mode:** IMPLEMENTATION
-**Task ID:** `054-CONFIG-WINDOW-EFFECTS-ADAPTER-001`
-**Prerequisite:** `053-CONFIG-UIKIT-DESIGN-TOKENS-001`
-**Evidence class:** automated code/product contract.
+**Task ID:** `055-CONFIG-D2D-SETTINGS-SURFACE-001`
+**Prerequisite:** `053-CONFIG-UIKIT-DESIGN-TOKENS-001`, `054-CONFIG-WINDOW-EFFECTS-ADAPTER-001`
+**Evidence class:** automated code/product contract plus screenshot evidence.
 
 ## Goal
 
-Add a Rust-owned Windows visual capability adapter for progressive enhancement across Win7,
-Win10, and Win11 without scattering OS-version checks through the Config UI.
+Move the Rust Settings visual surface from GDI/owner-draw polish toward a bounded D2D/DWrite
+Settings Surface for cards, section rows, navigation items, and preview containers while preserving
+native HWND controls for behavior-sensitive input.
 
 ## Specification references
 
 - `docs/spec-v1.8.md` §5.5.8 Config UI/UX.
-- `docs/tasks/settings-uiux-operation-integration-plan.md` Config platform architecture.
+- `docs/spec-v1.8.md` §5.5.10 Appearance 页面与 Live Preview.
+- `docs/tasks/settings-uiux-operation-integration-plan.md` Shared visual contract.
 
 ## Required behavior / implementation contract
 
-- Define a bounded `WindowEffects`/capability model in Rust Config for:
-  - native baseline;
-  - dark titlebar where available;
-  - corner preference where available;
-  - system backdrop/Mica where available.
-- Capability detection must fail soft and keep Win7-compatible startup.
-- Actual DWM calls, if added in this slice, must be runtime guarded and optional.
-- Do not add WinUI/WPF/WebView runtime dependency.
+- Use the design tokens from `053`; do not introduce new raw visual constants.
+- Render only bounded product components: NavigationItem, Section/Card, SettingRow container,
+  Banner/status row, and PreviewSurface.
+- Keep native Edit/ComboBox/ListBox/ListView where IME, keyboard, font picker, selection, or UIA
+  behavior matters.
+- Ensure every custom-painted area clears its assigned rect before drawing.
+- Device-loss/repaint must fail soft; stale pixels/重影 are regressions.
 
 ## Required validation
 
-- Rust unit tests for capability mapping using fake OS/capability inputs.
-- Existing Rust Config UI preview/self-check source contracts remain green.
-- Runtime security/source checks still pass.
+- Existing x64/x86 Rust Config preview QA remains green.
+- Screenshot evidence proves page surfaces do not overlap or leave stale pixels.
+- Source contract prevents growing a generic UI framework.
 
 ## Done when
 
-- Later Settings UI slices can request visual effects through one adapter boundary.
-- Unsupported OS builds keep the native Settings window with no startup failure.
+- Main Settings chrome/cards are visually modern through the product Settings Surface, not through
+  bare VC6-style label/control grids.
+- Candidate preview remains embedded and uses the production candidate preview contract.

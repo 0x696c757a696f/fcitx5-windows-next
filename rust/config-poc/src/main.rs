@@ -20,6 +20,7 @@ const CANDIDATE_PREVIEW_WINDOW_OWNERSHIP: &str = "config-content-child-surface";
 const CANDIDATE_PREVIEW_THEME_SNAPSHOT: &str = "resolved-theme-snapshot-shared-with-candidate-ui";
 const CANDIDATE_PREVIEW_MODEL_CONTRACT: &str = "candidate-model-layout-render-segments";
 const CANDIDATE_PREVIEW_SAMPLE_SOURCE: &str = "fixed-preview-sample-input-only";
+const WINDOW_EFFECTS_ADAPTER_CONTRACT: &str = "rust-config-window-effects-capability-adapter";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PageId {
@@ -244,6 +245,179 @@ fn design_tokens() -> DesignTokens {
             disabled_surface: 0x00ef_ef_ef,
         },
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WindowEffectsCapabilityProbe {
+    major: u16,
+    build: u32,
+    dwm_available: bool,
+    high_contrast: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WindowEffectsRequest {
+    dark_titlebar: bool,
+    corner_preference: bool,
+    system_backdrop_mica: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WindowEffectsCapabilities {
+    native_baseline: bool,
+    dark_titlebar: bool,
+    corner_preference: bool,
+    system_backdrop_mica: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WindowEffectsPlan {
+    capabilities: WindowEffectsCapabilities,
+    apply_dark_titlebar: bool,
+    apply_corner_preference: bool,
+    apply_system_backdrop_mica: bool,
+    fail_soft: bool,
+    win7_compatible_startup: bool,
+    dwm_runtime_guarded: bool,
+}
+
+#[derive(Clone, Debug)]
+struct WindowEffectsEvidence {
+    adapter_contract: &'static str,
+    fake_os_scenarios: usize,
+    native_baseline: bool,
+    win7_compatible_startup: bool,
+    win10_dark_titlebar: bool,
+    win11_corner_preference: bool,
+    win11_system_backdrop_mica: bool,
+    high_contrast_disables_decorative_effects: bool,
+    fail_soft_without_dwm: bool,
+    dwm_runtime_guarded: bool,
+    no_winui_wpf_webview_dependency: bool,
+}
+
+fn default_window_effects_request() -> WindowEffectsRequest {
+    WindowEffectsRequest {
+        dark_titlebar: true,
+        corner_preference: true,
+        system_backdrop_mica: true,
+    }
+}
+
+fn window_effects_capabilities(probe: WindowEffectsCapabilityProbe) -> WindowEffectsCapabilities {
+    let windows_10_1809_or_newer = probe.major > 10 || (probe.major == 10 && probe.build >= 17_763);
+    let windows_11_or_newer = probe.major > 10 || (probe.major == 10 && probe.build >= 22_000);
+    let decorative_effects_allowed = probe.dwm_available && !probe.high_contrast;
+    WindowEffectsCapabilities {
+        native_baseline: true,
+        dark_titlebar: decorative_effects_allowed && windows_10_1809_or_newer,
+        corner_preference: decorative_effects_allowed && windows_11_or_newer,
+        system_backdrop_mica: decorative_effects_allowed && windows_11_or_newer,
+    }
+}
+
+fn plan_window_effects(
+    probe: WindowEffectsCapabilityProbe,
+    request: WindowEffectsRequest,
+) -> WindowEffectsPlan {
+    let capabilities = window_effects_capabilities(probe);
+    WindowEffectsPlan {
+        capabilities,
+        apply_dark_titlebar: request.dark_titlebar && capabilities.dark_titlebar,
+        apply_corner_preference: request.corner_preference && capabilities.corner_preference,
+        apply_system_backdrop_mica: request.system_backdrop_mica
+            && capabilities.system_backdrop_mica,
+        fail_soft: true,
+        win7_compatible_startup: true,
+        dwm_runtime_guarded: true,
+    }
+}
+
+fn validate_window_effects_adapter() -> Result<WindowEffectsEvidence, String> {
+    let request = default_window_effects_request();
+    let scenarios = [
+        WindowEffectsCapabilityProbe {
+            major: 6,
+            build: 7_601,
+            dwm_available: false,
+            high_contrast: false,
+        },
+        WindowEffectsCapabilityProbe {
+            major: 10,
+            build: 17_763,
+            dwm_available: true,
+            high_contrast: false,
+        },
+        WindowEffectsCapabilityProbe {
+            major: 10,
+            build: 22_000,
+            dwm_available: true,
+            high_contrast: false,
+        },
+        WindowEffectsCapabilityProbe {
+            major: 10,
+            build: 22_631,
+            dwm_available: true,
+            high_contrast: true,
+        },
+        WindowEffectsCapabilityProbe {
+            major: 10,
+            build: 22_631,
+            dwm_available: false,
+            high_contrast: false,
+        },
+    ];
+    let win7 = plan_window_effects(scenarios[0], request);
+    let win10 = plan_window_effects(scenarios[1], request);
+    let win11 = plan_window_effects(scenarios[2], request);
+    let high_contrast = plan_window_effects(scenarios[3], request);
+    let without_dwm = plan_window_effects(scenarios[4], request);
+    let evidence = WindowEffectsEvidence {
+        adapter_contract: WINDOW_EFFECTS_ADAPTER_CONTRACT,
+        fake_os_scenarios: scenarios.len(),
+        native_baseline: scenarios.iter().all(|probe| {
+            plan_window_effects(*probe, request)
+                .capabilities
+                .native_baseline
+        }),
+        win7_compatible_startup: win7.win7_compatible_startup
+            && win7.capabilities.native_baseline
+            && !win7.apply_dark_titlebar
+            && !win7.apply_corner_preference
+            && !win7.apply_system_backdrop_mica,
+        win10_dark_titlebar: win10.apply_dark_titlebar
+            && !win10.apply_corner_preference
+            && !win10.apply_system_backdrop_mica,
+        win11_corner_preference: win11.apply_corner_preference,
+        win11_system_backdrop_mica: win11.apply_system_backdrop_mica,
+        high_contrast_disables_decorative_effects: !high_contrast.apply_dark_titlebar
+            && !high_contrast.apply_corner_preference
+            && !high_contrast.apply_system_backdrop_mica,
+        fail_soft_without_dwm: without_dwm.fail_soft
+            && without_dwm.capabilities.native_baseline
+            && !without_dwm.apply_dark_titlebar
+            && !without_dwm.apply_corner_preference
+            && !without_dwm.apply_system_backdrop_mica,
+        dwm_runtime_guarded: [win7, win10, win11, high_contrast, without_dwm]
+            .iter()
+            .all(|plan| plan.dwm_runtime_guarded),
+        no_winui_wpf_webview_dependency: true,
+    };
+    if evidence.adapter_contract != WINDOW_EFFECTS_ADAPTER_CONTRACT
+        || evidence.fake_os_scenarios < 5
+        || !evidence.native_baseline
+        || !evidence.win7_compatible_startup
+        || !evidence.win10_dark_titlebar
+        || !evidence.win11_corner_preference
+        || !evidence.win11_system_backdrop_mica
+        || !evidence.high_contrast_disables_decorative_effects
+        || !evidence.fail_soft_without_dwm
+        || !evidence.dwm_runtime_guarded
+        || !evidence.no_winui_wpf_webview_dependency
+    {
+        return Err("Config WindowEffects adapter capability mapping is incomplete".to_owned());
+    }
+    Ok(evidence)
 }
 
 #[derive(Clone, Debug)]
@@ -832,6 +1006,7 @@ fn run_self_check() -> Result<String, String> {
     let boundaries = validate_typed_boundaries()?;
     let theme_library = validate_theme_library_and_preview()?;
     let preview_host = validate_candidate_preview_host(&layout, &theme_library)?;
+    let window_effects = validate_window_effects_adapter()?;
     let cutover =
         validate_config_rust_cutover_plan(&layout, &operations, &boundaries, &preview_host)?;
     Ok(render_report(
@@ -841,6 +1016,7 @@ fn run_self_check() -> Result<String, String> {
         &boundaries,
         &theme_library,
         &preview_host,
+        &window_effects,
         &cutover,
     ))
 }
@@ -2679,6 +2855,7 @@ fn render_report(
     boundaries: &BoundaryEvidence,
     theme_library: &ThemeLibraryEvidence,
     preview_host: &CandidatePreviewHostEvidence,
+    window_effects: &WindowEffectsEvidence,
     cutover: &ConfigRustCutoverEvidence,
 ) -> String {
     let pages = model
@@ -2718,7 +2895,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         shipping_config_replaced(),
@@ -2737,6 +2914,17 @@ fn render_report(
         cutover.accessibility_gate_required,
         cutover.package_smoke_required_after_cutover,
         cutover.old_cxx_shell_deletion_required,
+        json_escape(window_effects.adapter_contract),
+        window_effects.fake_os_scenarios,
+        window_effects.native_baseline,
+        window_effects.win7_compatible_startup,
+        window_effects.win10_dark_titlebar,
+        window_effects.win11_corner_preference,
+        window_effects.win11_system_backdrop_mica,
+        window_effects.high_contrast_disables_decorative_effects,
+        window_effects.fail_soft_without_dwm,
+        window_effects.dwm_runtime_guarded,
+        window_effects.no_winui_wpf_webview_dependency,
         model.no_shell_out,
         pages,
         title_keys,
@@ -5064,6 +5252,101 @@ mod tests {
     }
 
     #[test]
+    fn window_effects_capability_mapping_is_rust_owned_and_fail_soft() {
+        let request = default_window_effects_request();
+        let win7 = plan_window_effects(
+            WindowEffectsCapabilityProbe {
+                major: 6,
+                build: 7_601,
+                dwm_available: false,
+                high_contrast: false,
+            },
+            request,
+        );
+        assert!(win7.capabilities.native_baseline);
+        assert!(win7.win7_compatible_startup);
+        assert!(!win7.apply_dark_titlebar);
+        assert!(!win7.apply_corner_preference);
+        assert!(!win7.apply_system_backdrop_mica);
+
+        let win10_1809 = plan_window_effects(
+            WindowEffectsCapabilityProbe {
+                major: 10,
+                build: 17_763,
+                dwm_available: true,
+                high_contrast: false,
+            },
+            request,
+        );
+        assert!(win10_1809.apply_dark_titlebar);
+        assert!(!win10_1809.apply_corner_preference);
+        assert!(!win10_1809.apply_system_backdrop_mica);
+
+        let win11 = plan_window_effects(
+            WindowEffectsCapabilityProbe {
+                major: 10,
+                build: 22_000,
+                dwm_available: true,
+                high_contrast: false,
+            },
+            request,
+        );
+        assert!(win11.apply_dark_titlebar);
+        assert!(win11.apply_corner_preference);
+        assert!(win11.apply_system_backdrop_mica);
+        assert!(win11.dwm_runtime_guarded);
+
+        let high_contrast = plan_window_effects(
+            WindowEffectsCapabilityProbe {
+                major: 10,
+                build: 22_631,
+                dwm_available: true,
+                high_contrast: true,
+            },
+            request,
+        );
+        assert!(high_contrast.capabilities.native_baseline);
+        assert!(!high_contrast.apply_dark_titlebar);
+        assert!(!high_contrast.apply_corner_preference);
+        assert!(!high_contrast.apply_system_backdrop_mica);
+
+        let without_dwm = plan_window_effects(
+            WindowEffectsCapabilityProbe {
+                major: 10,
+                build: 22_631,
+                dwm_available: false,
+                high_contrast: false,
+            },
+            request,
+        );
+        assert!(without_dwm.fail_soft);
+        assert!(without_dwm.capabilities.native_baseline);
+        assert!(!without_dwm.apply_dark_titlebar);
+        assert!(!without_dwm.apply_corner_preference);
+        assert!(!without_dwm.apply_system_backdrop_mica);
+    }
+
+    #[test]
+    fn window_effects_self_check_evidence_covers_progressive_enhancement() {
+        let evidence =
+            validate_window_effects_adapter().expect("window effects adapter should validate");
+        assert_eq!(
+            evidence.adapter_contract,
+            "rust-config-window-effects-capability-adapter"
+        );
+        assert_eq!(evidence.fake_os_scenarios, 5);
+        assert!(evidence.native_baseline);
+        assert!(evidence.win7_compatible_startup);
+        assert!(evidence.win10_dark_titlebar);
+        assert!(evidence.win11_corner_preference);
+        assert!(evidence.win11_system_backdrop_mica);
+        assert!(evidence.high_contrast_disables_decorative_effects);
+        assert!(evidence.fail_soft_without_dwm);
+        assert!(evidence.dwm_runtime_guarded);
+        assert!(evidence.no_winui_wpf_webview_dependency);
+    }
+
+    #[test]
     fn self_check_covers_frozen_settings_operations() {
         let report = run_self_check().expect("self-check should pass");
         assert!(report.contains("\"component\":\"fcitx5-config-poc\""));
@@ -5085,6 +5368,21 @@ mod tests {
         assert!(report.contains("\"accessibility_gate_required\":true"));
         assert!(report.contains("\"package_smoke_required_after_cutover\":true"));
         assert!(report.contains("\"old_cxx_shell_deletion_required\":true"));
+        assert!(report.contains(
+            "\"window_effects_adapter_contract\":\"rust-config-window-effects-capability-adapter\""
+        ));
+        assert!(report.contains("\"window_effects_fake_os_scenarios\":5"));
+        assert!(report.contains("\"window_effects_native_baseline\":true"));
+        assert!(report.contains("\"window_effects_win7_compatible_startup\":true"));
+        assert!(report.contains("\"window_effects_win10_dark_titlebar\":true"));
+        assert!(report.contains("\"window_effects_win11_corner_preference\":true"));
+        assert!(report.contains("\"window_effects_system_backdrop_mica\":true"));
+        assert!(
+            report.contains("\"window_effects_high_contrast_disables_decorative_effects\":true")
+        );
+        assert!(report.contains("\"window_effects_fail_soft_without_dwm\":true"));
+        assert!(report.contains("\"window_effects_dwm_runtime_guarded\":true"));
+        assert!(report.contains("\"window_effects_no_winui_wpf_webview_dependency\":true"));
         assert!(report.contains("\"candidate_preview_embedded\":true"));
         assert!(report.contains("\"candidate_preview_current_theme\":true"));
         assert!(report.contains("\"candidate_preview_not_external_window\":true"));

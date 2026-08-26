@@ -1945,6 +1945,22 @@ int main(int argc, char** argv) {
         configPocSource.find("COLOR_SETTINGS_") != std::string::npos) {
         return fail("CONFIG-UIKIT-DESIGN-TOKENS-001: Rust Config must keep one Settings design-token source for layout, palette, typography, focus, and disabled states");
     }
+    if (configPocSource.find("struct WindowEffectsCapabilityProbe") == std::string::npos ||
+        configPocSource.find("struct WindowEffectsRequest") == std::string::npos ||
+        configPocSource.find("struct WindowEffectsCapabilities") == std::string::npos ||
+        configPocSource.find("struct WindowEffectsPlan") == std::string::npos ||
+        configPocSource.find("struct WindowEffectsEvidence") == std::string::npos ||
+        configPocSource.find("WINDOW_EFFECTS_ADAPTER_CONTRACT") == std::string::npos ||
+        configPocSource.find("fn window_effects_capabilities(") == std::string::npos ||
+        configPocSource.find("fn plan_window_effects(") == std::string::npos ||
+        configPocSource.find("fn validate_window_effects_adapter(") == std::string::npos ||
+        configPocSource.find("window_effects_win7_compatible_startup") ==
+            std::string::npos ||
+        configPocSource.find("window_effects_system_backdrop_mica") == std::string::npos ||
+        configPocSource.find("window_effects_no_winui_wpf_webview_dependency") ==
+            std::string::npos) {
+        return fail("054-CONFIG-WINDOW-EFFECTS-ADAPTER-001: Rust Config must own a bounded WindowEffects capability adapter with fake OS evidence");
+    }
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
         configSource.find("--ui-visual-contract-test") == std::string::npos ||
@@ -1974,6 +1990,8 @@ int main(int argc, char** argv) {
         configSource.find("FOLDERID_LocalAppData") != std::string::npos ||
         configSource.find("EnumFontFamiliesExW") != std::string::npos ||
         configSource.find("collectFontFamily") != std::string::npos ||
+        configSource.find("enableNativeWindowEffects") != std::string::npos ||
+        configSource.find("DwmSetWindowAttribute") != std::string::npos ||
         configSource.find("fcitx5_windows_common_system_font_families_utf16") ==
             std::string::npos ||
         configSource.find("queryCurrentIdentity(identity)") == std::string::npos ||

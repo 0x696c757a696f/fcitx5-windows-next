@@ -482,26 +482,6 @@ void enableDpiAwareness() noexcept {
         (void)SetProcessDPIAware();
 }
 
-void enableNativeWindowEffects(HWND window) noexcept {
-    const HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
-    if (!dwm)
-        return;
-    using SetAttribute = HRESULT(WINAPI*)(HWND, DWORD, const void*, DWORD);
-    const auto setAttribute = resolveProcAddress<SetAttribute>(dwm, "DwmSetWindowAttribute");
-    if (setAttribute) {
-        constexpr DWORD kCornerPreference = 33;
-        constexpr DWORD kCaptionColor = 35;
-        constexpr DWORD kTextColor = 36;
-        constexpr DWORD kRound = 2;
-        constexpr COLORREF kWhite = RGB(255, 255, 255);
-        constexpr COLORREF kDarkText = RGB(32, 34, 37);
-        (void)setAttribute(window, kCornerPreference, &kRound, sizeof(kRound));
-        (void)setAttribute(window, kCaptionColor, &kWhite, sizeof(kWhite));
-        (void)setAttribute(window, kTextColor, &kDarkText, sizeof(kDarkText));
-    }
-    FreeLibrary(dwm);
-}
-
 void setCurrentProcessAppUserModelId(const wchar_t* appId) noexcept {
     const HMODULE shell = LoadLibraryW(L"shell32.dll");
     if (!shell)
@@ -4975,7 +4955,6 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         _Module.Term();
         return 4;
     }
-    enableNativeWindowEffects(window);
     window.resizeToDefaultClient();
     window.CenterWindow();
     if (uiContractTest || uiInteractionTest || uiVisualContractTest ||
