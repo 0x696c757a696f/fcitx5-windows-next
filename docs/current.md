@@ -32,7 +32,7 @@ Windows host
 |---|---|---|
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
-| Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter |
+| Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter; next renderer work must preserve configurable label/ordinal slots, selected-row/column label reveal, and stable text-column alignment |
 | Config | Stage 2 Rust Config backend is shipping, and the default interactive `fcitx5-config.exe` window now opens the vendored `huanfeng/wind-ui-rust` Settings shell. The old C++ WTL/Win32 shell remains `fcitx5-config-legacy.exe` as an `EXCLUDE_FROM_ALL` regression baseline; the old Rust Win32/D2D preview host is QA-only behind `FCITX5_CONFIG_RUST_PREVIEW_STATE` or explicit smoke/test modes. | Do not claim release readiness or final Stage 4 completion until real Settings GUI persistence/plugin pages, DPI/dark-mode/keyboard/accessibility, candidate preview parity, Narrator/NVDA, and real Win7/Win10/Win11 evidence are green |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
@@ -67,16 +67,24 @@ Windows host
 - Runtime security now has explicit `Win10` and `Win7` lanes. The modern `Win10` lane remains the default full PE/source audit; product networking is enforced through source-boundary scanning plus PE blocking for explicit HTTP/URL stacks because Rust-linked MSVC binaries import `WS2_32.dll` through Rust std even without product network code. The legacy `Win7` lane is expected to stay red until the launcher/Rust runtime hard import of `GetSystemTimePreciseAsFileTime` is removed or a separate legacy strategy is implemented.
 - Engine product state is migrating to Rust: E1 protocol codec, E2 ledger, E3 event/action decisions, E4 epoch/request/session/deadline plus production server pipe connect/transfer, and E5 snapshot/pending-state policy are cut over (`CUTOVER-GREEN` where recorded). The Fcitx adapter and remaining Windows process shell shrink remain.
 - Existing long-form specs may contain historical task text. ADR 0009, this snapshot, `docs/engine-boundary.md`, and `docs/tasks/rebaseline.md` control the current Fcitx/Rust boundary and task interpretation.
+- `fcitx-contrib/fcitx5-windows` is explicitly excluded from architecture authority. Current Engine,
+  Package, Candidate, Config, and addon decisions use `fcitx/fcitx5` core plus each addon upstream
+  for semantics; Windows ports are compatibility case studies only.
 - WindInput remains a Settings/theme management discipline reference. The retained constraints are
   task-oriented common/advanced settings, typed theme resolve before render, no dead theme fields,
   Light/Dark token parity, unit-aware geometry, one renderer-backed candidate preview path,
   validated numeric inputs, and system-font-backed font selection. `huanfeng/wind-ui-rust` is now a
   vendored Rust Config GUI dependency, not merely a reference: `fcitx5-config.exe` no-argument launch
   uses a real `windui::App` Settings shell aligned with upstream `settings-input.png`.
+- Candidate label/ordinal UX has been tightened: labels are user-configurable presentation, not
+  input semantics; every horizontal/vertical/grid cell reserves a label slot computed from the
+  widest resolved label in scope; labels right-align inside that slot; candidate text begins after a
+  stable gap; selected-row/column/item reveal modes keep hidden labels occupying the same space so
+  rows and columns do not shift when `1.`/custom labels appear.
 - The executable queue has been re-cleaned after the 2026-08-24 review: completed/current R3
   FUTURE-GATED duplicates are not active queue items. Completed queue source files are removed from
-  `docs/tasks/queue` after their task files are archived. The next queue item is `RELEASE-01`, but
-  it is gated on external/manual evidence.
+  `docs/tasks/queue` after their task files are archived. The next local code-only queue item is
+  `059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001`; `RELEASE-01` stays gated on external/manual evidence.
 - Rust Config Stage 2 and the code-only default GUI shell cutover are green. `fcitx5_config_app`
   builds the Rust binary into the shipping `fcitx5-config.exe` product name; no-argument launch now
   opens the vendored `windui` Settings shell; `fcitx5_config_legacy_app` emits
@@ -99,5 +107,7 @@ Windows host
    are green.
 4. Continue deeper Stage 4 Rust Config binding work only under an explicit eligible task; the
    current code-only shell cutover is green, while release remains manual/real-host gated.
-5. Continue shrinking non-Engine product-owned C++ shells only under explicit Rust migration tasks
+5. Continue Candidate renderer Rust drawing work under an explicit task that freezes screenshot/golden
+   evidence for configurable label slots and row/column alignment before deleting the native adapter.
+6. Continue shrinking non-Engine product-owned C++ shells only under explicit Rust migration tasks
    with frozen behavior and regression evidence.

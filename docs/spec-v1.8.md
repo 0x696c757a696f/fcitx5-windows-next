@@ -112,7 +112,7 @@ Codex 执行版 · 个人项目模式
 
 ## 0.4 Codex 参考学习顺序：上游语义与 Windows 病例分离
 
-Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整体照抄**。Fcitx 语义只以 `fcitx/fcitx5` core 和各 addon upstream 为权威；现有 Windows port 只可作为兼容病例或历史实现对照，不是架构依据。已排除的 Windows prototype 不得回到 Engine/Package/Candidate 架构参考链。
+Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整体照抄**。Fcitx 语义只以 `fcitx/fcitx5` core 和各 addon upstream 为权威；现有 Windows port 只可作为兼容病例或历史实现对照，不是架构依据。已排除的 fcitx-contrib Windows prototype 不能作为 Engine、Package、Candidate、Config 或插件边界的架构依据；已排除的 Windows prototype 不得回到 Engine/Package/Candidate 架构参考链。
 
 1. **`fcitx/fcitx5`：Fcitx core 语义权威。** 重点跟踪 `Instance`、`InputContext`、`AddonManager`、`InputPanel`、`CandidateList`、config/event、candidate action、surrounding-text capability 和 addon factory 机制。
 2. **各 addon upstream：插件语义权威。** Rime、Mozc、Hangul、m17n、Keyman、Bamboo、Chinese Addons 等不做 Windows 私有 Rust rewrite；Windows 产品层只适配、打包、隔离和呈现。
@@ -525,6 +525,14 @@ CandidateModel
 - 候选窗不抢焦点、不进 Alt+Tab，处理 WS_EX_NOACTIVATE 等窗口属性。
 
 - 候选定位必须处理无效 caret、TS_E_NOLAYOUT、last-valid rect、work-area clamp、上下方位置锁定。
+
+- 候选序号/label 是可配置的 presentation 字段，不是候选语义 owner。selection keys、page size、candidate order、commit key 仍由 Fcitx config / upstream addon 语义拥有；Rust Candidate 只接收可显示 label/action DTO 和用户 intent。
+
+- 横排、竖排和多列候选都必须把 label slot 与 candidate text slot 分开 measure。每个 row/cell 左侧先预留 label slot，slot 宽度按当前 page/grid 最大可见 label 模板计算，例如 `1.`、`10.`、自定义 prefix/suffix 或 circled label；label 在 slot 内右对齐，候选文本从固定 gap 后开始。隐藏 label 时也保留同一 slot，避免跳行、换列或当前项变化导致文本列抖动。
+
+- 支持 `always`、`selected_scope`、`hidden` 等 label display mode。`selected_scope` 表示仅当前行/列/项显示数字加点或自定义序号，但其它行/列仍占据同样的 label slot；长候选文本、annotation 或 emoji 只能在 candidate text/comment 区域 wrap、clip 或 ellipsis，不得挤占 label slot，也不得破坏上下/左右对齐。
+
+- Candidate drawing 的产品方向是 Rust-owned。现有 Win32/D2D/DWrite 代码只作为 renderer/window adapter 保留到等价 Rust drawing、DPI、font fallback、a11y、performance 和 screenshot/golden evidence 通过；新增 layout、label、theme、interaction 与 drawing-state 逻辑默认进入 Rust。
 
 ## 5.2 渲染技术
 
@@ -2608,6 +2616,14 @@ visible = true
 style = "dot"                   # plain | dot | paren | bracket | circled
 font_scale = 0.85
 gap_dip = 4.0
+display = "always"              # always | selected_scope | hidden
+scope = "item"                  # item | row | column
+reserve_when_hidden = true
+align = "right"                 # right | left | center
+width_strategy = "page_max"     # fixed | page_max | grid_max
+min_width_dip = 0.0
+custom_prefix = ""
+custom_suffix = "."
 
 [fonts.ui]
 families = ["system"]
@@ -2645,6 +2661,7 @@ shadow = "#00000066"
 - 颜色只接受 `#RRGGBB` / `#RRGGBBAA`；不接受 CSS 名称、HSL、表达式或 `rgba()`，避免多套 parser。
 - GUI 可以只暴露高价值字段；高级用户手改 TOML 能使用完整 v1 schema。
 - `page_size`、selection keys、candidate order、commit key **不在这里**；它们由 Fcitx Config API 拥有。
+- 候选序号可以配置显示模式、scope、prefix/suffix、对齐和保留槽宽；renderer 必须先 resolve 成 typed label layout snapshot，再 measure/paint。`selected_scope` 隐藏非当前行/列/项的 label 时仍保留 slot，保证候选文本列稳定对齐。
 
 ### 13.9.6 `theme.toml` v1 正式结构
 
@@ -2695,6 +2712,11 @@ scale = 0.80
 visible = true
 style = "dot"
 font_scale = 0.85
+display = "always"
+scope = "item"
+reserve_when_hidden = true
+align = "right"
+width_strategy = "page_max"
 
 [light.candidate.colors]
 background = "#FFFFFFFF"
@@ -2713,6 +2735,7 @@ selected_candidate_text = "#202124FF"
 
 - Theme **可以**设置 candidate layout、字体/fallback/字号、颜色、label/序号外观、geometry、shadow、opacity 和 assets。
 - Theme 不能出现 `page_size`、selection key、commit、network、command、addon、engine option；这些属于输入语义或其他 owner。
+- Theme 可以决定 label 样式、prefix/suffix、显示时机、scope、对齐、最小槽宽和隐藏时是否保留槽宽；但不得改变 selection key 与候选提交语义。候选 label slot 与 candidate text slot 必须独立，长文本不得挤占序号槽。
 - `theme.*` authoring metadata 是主题作者唯一元数据 source of truth；打包生成的 `manifest.json` 不反向成为作者配置。
 - 合并顺序固定为 `common → active appearance branch → user override → accessibility override`。
 - 不支持主题之间 `extends` / include；要复用就复制/生成完整主题，避免形成第二套依赖系统。
@@ -2731,6 +2754,10 @@ selected_candidate_text = "#202124FF"
 |---|---|
 | `appearance.mode` | `system | light | dark` |
 | `candidate.orientation` | `vertical | horizontal` |
+| `candidate.label.display` | `always | selected_scope | hidden` |
+| `candidate.label.scope` | `item | row | column` |
+| `candidate.label.align` | `right | left | center` |
+| `candidate.label.width_strategy` | `fixed | page_max | grid_max` |
 | `candidate.max_width_dip` | 160–2048 DIP |
 | `candidate.opacity` | 0.20–1.00 |
 | padding / gap | 0–64 DIP |

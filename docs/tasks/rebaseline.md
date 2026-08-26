@@ -33,7 +33,21 @@ The 2026-08-24 guidance changes how this queue is interpreted:
   described a former C++ baseline.
 - Plugins/addons must support static/built-in and dynamic/package-loaded models, not `Addon == DLL`.
 - Candidate actions and surrounding-text/text-edit operations must stay capability-aware instead of freezing today's Fcitx API shape.
+- `fcitx-contrib/fcitx5-windows` is completely excluded from architecture authority. Use
+  `fcitx/fcitx5` core and each addon upstream for Fcitx semantics; use Windows ports only as
+  compatibility case studies when the current task requires them.
+- Candidate label/ordinal UX is now frozen as a Rust-owned presentation/layout requirement:
+  configurable labels, reserved per-row/per-cell label slots, right-aligned labels inside the slot,
+  stable candidate text columns, and selected row/column/item reveal without layout shift.
 - Real-host evidence is never inferred from CTest.
+
+Local execution overlay:
+
+- PowerShell commands use `D:\Program Files\PowerShell\7\pwsh.exe`.
+- Python commands use `D:\Dev\pixi\envs\python\python.exe`.
+- Rust commands use repo-local Cargo from
+  `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\rustup-home\toolchains\1.98.0-x86_64-pc-windows-msvc\bin\cargo.exe`.
+- Prefer repo-local `out\toolchains\sccache` on `PATH` where build/test scripts support it.
 
 2026-08-26 refresh:
 
@@ -41,8 +55,9 @@ The 2026-08-24 guidance changes how this queue is interpreted:
   completed task files and are not executable queue entries.
 - `047` through `058` have completed the reachable code-only Settings path through a vendored
   `huanfeng/wind-ui-rust` default Settings shell.
-- Current execution is on `docs/tasks/current.md` (`RELEASE-01`), which is parked on external/manual
-  evidence. No local CTest/package/screenshot result may mark it complete.
+- Current execution may move to `059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001` for a code-only
+  Candidate UX/Rust drawing slice while `RELEASE-01` remains parked on external/manual evidence.
+  No local CTest/package/screenshot result may mark `REL-01` complete.
 
 ## P0 Guidance Tasks
 
@@ -107,11 +122,13 @@ The 2026-08-24 guidance changes how this queue is interpreted:
 | R3-01 `RUST-R3-CANDIDATE-POC` | `PARTIAL` | Candidate model/layout/interaction are Rust-owned and old C++ domain headers/tests are deleted; C++ D2D/DWrite renderer/window remains as adapter. | New candidate domain code defaults to Rust; renderer/window C++ is tolerated only as a visual adapter until equivalent renderer migration evidence exists. |
 | R3-02 `RUST-R3-CONFIG-POC` | `ALREADY-GREEN` | Shipping Config uses Rust for the product executable and default interactive GUI shell; the vendored windui Settings shell is the no-argument route, while legacy C++ WTL and Rust Win32/D2D hosts are regression/QA-only. | Full release claims still depend on Stage 4 manual/real-host evidence. |
 | R3-03 `RUST-R3-TSF-POC` | `MANUAL-PENDING` | Shipping Rust TSF automated gates are green and old C++ TSF sources are deleted; real-host matrix remains missing. | Do not declare release-ready until real-host evidence is recorded. |
+| 059 `CANDIDATE-LABEL-SLOT-RUST-DRAWING-001` | `TODO` | User explicitly required configurable candidate numbers, every row/column/cell reserving label space, selected row/column label reveal, stable left/right alignment, and Rust drawing. Long-form spec now records this as Candidate label slot UX. | Implement as the next code-only Candidate Rust slice with screenshot/golden evidence; do not add C++ candidate-domain ownership. |
 | REL-01 `RELEASE-01` | `BLOCKED` | Real-host, installer/UAC, production plugin lifecycle assets, generation-drain, Narrator/NVDA, and release signing/provenance evidence remain incomplete. Config code-only shell polish is green through 058. | Release gate cannot advance from local-only evidence. |
 
 ## Next Eligible Work
 
-1. `REL-01` is the selected current task and is externally gated.
+1. `059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001` is the next eligible code-only task while `REL-01`
+   stays externally gated.
 2. Prepare P0-6 real generation-drain E2E, installer/UAC, plugin lifecycle, Narrator/NVDA, and Rust
    TSF host matrix evidence before any release-readiness claim.
 3. Continue non-Engine C++ shrink only when PLAN adds an explicit Rust migration task with a frozen
