@@ -57,6 +57,9 @@ const K_PACKAGE_DETAIL: i32 = 127;
 const K_APPEARANCE_FONT_SIZE: i32 = 150;
 const K_APPEARANCE_OPACITY: i32 = 151;
 const K_APPEARANCE_FONT_FAMILY: i32 = 152;
+const K_APPEARANCE_SPACING: i32 = 153;
+const K_APPEARANCE_CORNER_RADIUS: i32 = 154;
+const K_APPEARANCE_CANDIDATE_WIDTH: i32 = 155;
 const K_SAVE_STATUS: i32 = 206;
 const CBN_SELCHANGE: Wparam = 1;
 const EN_CHANGE: Wparam = 0x0300;
@@ -74,7 +77,12 @@ const PAGES: &[Page] = &[
         controls: &[
             K_PAGE_TITLE,
             K_PREVIEW,
+            K_APPEARANCE_FONT_SIZE,
+            K_APPEARANCE_OPACITY,
             K_APPEARANCE_FONT_FAMILY,
+            K_APPEARANCE_SPACING,
+            K_APPEARANCE_CORNER_RADIUS,
+            K_APPEARANCE_CANDIDATE_WIDTH,
             K_SAVE_STATUS,
         ],
     },
@@ -503,6 +511,18 @@ fn verify_appearance_numeric_inputs(hwnd: Hwnd) -> Result<(), String> {
     set_child_text(hwnd, K_APPEARANCE_OPACITY, "not-a-number")?;
     notify_control_change(hwnd, K_APPEARANCE_OPACITY);
     require_status_contains(hwnd, "appearance.numeric.invalid")?;
+
+    set_child_text(hwnd, K_APPEARANCE_SPACING, "16")?;
+    notify_control_change(hwnd, K_APPEARANCE_SPACING);
+    require_status_contains(hwnd, "spacing_dip accepted")?;
+
+    set_child_text(hwnd, K_APPEARANCE_CORNER_RADIUS, "49")?;
+    notify_control_change(hwnd, K_APPEARANCE_CORNER_RADIUS);
+    require_status_contains(hwnd, "appearance.numeric.out_of_range")?;
+
+    set_child_text(hwnd, K_APPEARANCE_CANDIDATE_WIDTH, "160")?;
+    notify_control_change(hwnd, K_APPEARANCE_CANDIDATE_WIDTH);
+    require_status_contains(hwnd, "candidate_width_dip accepted")?;
 
     set_child_text(hwnd, K_APPEARANCE_FONT_SIZE, "18")?;
     notify_control_change(hwnd, K_APPEARANCE_FONT_SIZE);

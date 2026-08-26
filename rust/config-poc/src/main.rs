@@ -2831,6 +2831,9 @@ mod win32_window_smoke {
     const K_APPEARANCE_FONT_SIZE: i32 = 150;
     const K_APPEARANCE_OPACITY: i32 = 151;
     const K_APPEARANCE_FONT_FAMILY: i32 = 152;
+    const K_APPEARANCE_SPACING: i32 = 153;
+    const K_APPEARANCE_CORNER_RADIUS: i32 = 154;
+    const K_APPEARANCE_CANDIDATE_WIDTH: i32 = 155;
     const K_SAVE_STATUS: i32 = 206;
     const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
@@ -3539,6 +3542,78 @@ mod win32_window_smoke {
             instance,
             &static_class,
             0,
+            "Spacing DIP",
+            540,
+            128,
+            112,
+            28,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &edit_class,
+            K_APPEARANCE_SPACING,
+            "8",
+            660,
+            128,
+            92,
+            28,
+            WS_BORDER | ES_AUTOHSCROLL,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            0,
+            "Corner DIP",
+            540,
+            164,
+            112,
+            28,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &edit_class,
+            K_APPEARANCE_CORNER_RADIUS,
+            "12",
+            660,
+            164,
+            92,
+            28,
+            WS_BORDER | ES_AUTOHSCROLL,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            0,
+            "Width DIP",
+            768,
+            128,
+            96,
+            28,
+            0,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &edit_class,
+            K_APPEARANCE_CANDIDATE_WIDTH,
+            "420",
+            860,
+            128,
+            92,
+            28,
+            WS_BORDER | ES_AUTOHSCROLL,
+        )?;
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            0,
             "Candidate font",
             220,
             200,
@@ -3749,6 +3824,9 @@ mod win32_window_smoke {
         match i32::from(command_id) {
             K_APPEARANCE_FONT_SIZE => Some(AppearanceNumericField::FontSizeDip),
             K_APPEARANCE_OPACITY => Some(AppearanceNumericField::Opacity),
+            K_APPEARANCE_SPACING => Some(AppearanceNumericField::SpacingDip),
+            K_APPEARANCE_CORNER_RADIUS => Some(AppearanceNumericField::CornerRadiusDip),
+            K_APPEARANCE_CANDIDATE_WIDTH => Some(AppearanceNumericField::CandidateWidthDip),
             _ => None,
         }
     }
