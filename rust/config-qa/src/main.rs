@@ -62,6 +62,7 @@ const K_APPEARANCE_SPACING: i32 = 153;
 const K_APPEARANCE_CORNER_RADIUS: i32 = 154;
 const K_APPEARANCE_CANDIDATE_WIDTH: i32 = 155;
 const K_INPUT_METHOD_LIST: i32 = 156;
+const K_LANGUAGE_SELECTOR: i32 = 157;
 const K_LABEL_FONT_SIZE: i32 = 160;
 const K_LABEL_OPACITY: i32 = 161;
 const K_LABEL_CANDIDATE_FONT: i32 = 162;
@@ -69,6 +70,7 @@ const K_LABEL_SPACING: i32 = 163;
 const K_LABEL_CORNER_RADIUS: i32 = 164;
 const K_LABEL_CANDIDATE_WIDTH: i32 = 165;
 const K_LABEL_INPUT_METHODS: i32 = 166;
+const K_LABEL_LANGUAGE: i32 = 167;
 const K_SAVE_STATUS: i32 = 206;
 const CBN_SELCHANGE: Wparam = 1;
 const EN_CHANGE: Wparam = 0x0300;
@@ -82,6 +84,8 @@ const PAGES: &[Page] = &[
             K_PAGE_TITLE,
             K_LABEL_INPUT_METHODS,
             K_INPUT_METHOD_LIST,
+            K_LABEL_LANGUAGE,
+            K_LANGUAGE_SELECTOR,
             K_SAVE_STATUS,
         ],
     },
@@ -298,6 +302,8 @@ fn run() -> Result<(), String> {
         if page.id == K_NAV_GENERAL && (rust_config || has_child(hwnd, K_INPUT_METHOD_LIST)) {
             verify_enabled_input_method_list(hwnd)?;
             report.push_str("| input-methods-enabled-list | ok | non-empty Rust UI list |\n");
+            verify_language_selector(hwnd)?;
+            report.push_str("| language-selector | ok | localized Rust UI selector |\n");
         }
         let file_name = format!("config-{}.bmp", page.slug);
         let mut capture = capture_window(hwnd)?;
@@ -564,6 +570,26 @@ fn verify_enabled_input_method_list(hwnd: Hwnd) -> Result<(), String> {
             "enabled input method list had {count} entries, expected multiple visible methods"
         ));
     }
+    Ok(())
+}
+
+fn verify_language_selector(hwnd: Hwnd) -> Result<(), String> {
+    let combo = unsafe { GetDlgItem(hwnd, K_LANGUAGE_SELECTOR) };
+    if combo.is_null() {
+        return Err("missing language selector".to_string());
+    }
+    let count = unsafe { SendMessageW(combo, CB_GETCOUNT, 0, 0) };
+    if count < 3 {
+        return Err(format!(
+            "language selector had {count} entries, expected system/en-US/zh-CN"
+        ));
+    }
+    let selected_result = unsafe { SendMessageW(combo, CB_SETCURSEL, 2, 0) };
+    if selected_result < 0 {
+        return Err("language selector rejected Simplified Chinese selection".to_string());
+    }
+    notify_combo_selection(hwnd, K_LANGUAGE_SELECTOR);
+    require_status_contains(hwnd, "language accepted")?;
     Ok(())
 }
 

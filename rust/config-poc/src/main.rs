@@ -2838,6 +2838,7 @@ mod win32_window_smoke {
     const K_APPEARANCE_CORNER_RADIUS: i32 = 154;
     const K_APPEARANCE_CANDIDATE_WIDTH: i32 = 155;
     const K_INPUT_METHOD_LIST: i32 = 156;
+    const K_LANGUAGE_SELECTOR: i32 = 157;
     const K_LABEL_FONT_SIZE: i32 = 160;
     const K_LABEL_OPACITY: i32 = 161;
     const K_LABEL_CANDIDATE_FONT: i32 = 162;
@@ -2845,6 +2846,7 @@ mod win32_window_smoke {
     const K_LABEL_CORNER_RADIUS: i32 = 164;
     const K_LABEL_CANDIDATE_WIDTH: i32 = 165;
     const K_LABEL_INPUT_METHODS: i32 = 166;
+    const K_LABEL_LANGUAGE: i32 = 167;
     const K_SAVE_STATUS: i32 = 206;
     const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
@@ -3277,6 +3279,9 @@ mod win32_window_smoke {
             if hiword(wparam) == CBN_SELCHANGE && handle_font_family_change(hwnd, command_id) {
                 return 0;
             }
+            if hiword(wparam) == CBN_SELCHANGE && handle_language_change(hwnd, command_id) {
+                return 0;
+            }
         }
         if message == WM_CLOSE {
             // SAFETY: Windows delivered WM_CLOSE for this live HWND; DestroyWindow starts normal
@@ -3527,6 +3532,31 @@ mod win32_window_smoke {
             WS_BORDER | WS_VSCROLL,
         )?;
         populate_enabled_input_methods(input_methods);
+        create_child_control(
+            hwnd,
+            instance,
+            &static_class,
+            K_LABEL_LANGUAGE,
+            "Language / 语言",
+            220,
+            272,
+            180,
+            24,
+            0,
+        )?;
+        let language_selector = create_child_control(
+            hwnd,
+            instance,
+            &combo_class,
+            K_LANGUAGE_SELECTOR,
+            "",
+            420,
+            268,
+            220,
+            96,
+            WS_BORDER | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+        )?;
+        populate_language_selector(language_selector);
         create_child_control(
             hwnd,
             instance,
@@ -3817,6 +3847,8 @@ mod win32_window_smoke {
         for control in [
             K_LABEL_INPUT_METHODS,
             K_INPUT_METHOD_LIST,
+            K_LABEL_LANGUAGE,
+            K_LANGUAGE_SELECTOR,
             K_LABEL_FONT_SIZE,
             K_APPEARANCE_FONT_SIZE,
             K_LABEL_OPACITY,
@@ -3845,7 +3877,13 @@ mod win32_window_smoke {
 
     fn controls_for_page(active_page: i32) -> &'static [i32] {
         match active_page {
-            K_NAV_GENERAL => &[K_LABEL_INPUT_METHODS, K_INPUT_METHOD_LIST, K_SAVE_STATUS],
+            K_NAV_GENERAL => &[
+                K_LABEL_INPUT_METHODS,
+                K_INPUT_METHOD_LIST,
+                K_LABEL_LANGUAGE,
+                K_LANGUAGE_SELECTOR,
+                K_SAVE_STATUS,
+            ],
             K_NAV_APPEARANCE => &[
                 K_LABEL_FONT_SIZE,
                 K_APPEARANCE_FONT_SIZE,
@@ -3952,6 +3990,21 @@ mod win32_window_smoke {
         true
     }
 
+    fn handle_language_change(hwnd: Hwnd, command_id: u16) -> bool {
+        if i32::from(command_id) != K_LANGUAGE_SELECTOR {
+            return false;
+        }
+        let language_selector = unsafe { GetDlgItem(hwnd, K_LANGUAGE_SELECTOR) };
+        let selected =
+            selected_combo_text(language_selector).unwrap_or_else(|| "System default".to_owned());
+        set_child_text(
+            hwnd,
+            K_SAVE_STATUS,
+            &format!("language accepted: {selected}"),
+        );
+        true
+    }
+
     fn populate_system_font_picker(
         combo: Hwnd,
         persisted_font: Option<&str>,
@@ -4020,6 +4073,22 @@ mod win32_window_smoke {
             unsafe {
                 SendMessageW(listbox, LB_ADDSTRING, 0, input_method.as_ptr() as Lparam);
             }
+        }
+    }
+
+    fn populate_language_selector(combo: Hwnd) {
+        for language in ["System default", "English (United States)", "简体中文"] {
+            let language = to_wide(language);
+            // SAFETY: `combo` is a live combobox HWND and the UTF-16 string buffer lives for the
+            // synchronous CB_ADDSTRING message.
+            unsafe {
+                SendMessageW(combo, CB_ADDSTRING, 0, language.as_ptr() as Lparam);
+            }
+        }
+        // SAFETY: `combo` is a live combobox HWND; selecting index 0 initializes the system
+        // language policy.
+        unsafe {
+            SendMessageW(combo, CB_SETCURSEL, 0, 0);
         }
     }
 
