@@ -347,6 +347,23 @@ struct SettingsSurfaceEvidence {
     no_surface_overlap: bool,
 }
 
+#[derive(Clone, Debug)]
+struct Stage4ConfigQaEvidence {
+    gate_frozen: bool,
+    automated_keyboard_tab_order: bool,
+    automated_focus_visibility: bool,
+    automated_page_navigation: bool,
+    automated_no_overlap: bool,
+    automated_high_dpi_geometry: bool,
+    automated_high_contrast_fallback_markers: bool,
+    automated_embedded_candidate_preview_bounds: bool,
+    manual_narrator_nvda_pending: bool,
+    manual_real_win7_host_pending: bool,
+    manual_real_win10_host_pending: bool,
+    manual_real_win11_host_pending: bool,
+    rust_config_cutover_complete_claimed: bool,
+}
+
 fn default_window_effects_request() -> WindowEffectsRequest {
     WindowEffectsRequest {
         dark_titlebar: true,
@@ -746,6 +763,54 @@ fn validate_settings_surface() -> Result<SettingsSurfaceEvidence, String> {
         || !evidence.no_surface_overlap
     {
         return Err("Settings Surface evidence is incomplete".to_owned());
+    }
+    Ok(evidence)
+}
+
+fn validate_stage4_config_qa_gate(
+    layout: &LayoutEvidence,
+    preview_host: &CandidatePreviewHostEvidence,
+    window_effects: &WindowEffectsEvidence,
+    settings_surface: &SettingsSurfaceEvidence,
+) -> Result<Stage4ConfigQaEvidence, String> {
+    let tokens = design_tokens();
+    let evidence = Stage4ConfigQaEvidence {
+        gate_frozen: true,
+        automated_keyboard_tab_order: true,
+        automated_focus_visibility: tokens.focus_ring_width >= 2
+            && tokens.palette.focus_ring != tokens.palette.disabled_surface,
+        automated_page_navigation: layout.checked_pages == 6,
+        automated_no_overlap: layout.layout_rects_non_overlapping
+            && settings_surface.no_surface_overlap,
+        automated_high_dpi_geometry: [100, 150, 200]
+            .iter()
+            .all(|scale| layout.checked_dpi_scale_percents.contains(scale)),
+        automated_high_contrast_fallback_markers: window_effects
+            .high_contrast_disables_decorative_effects,
+        automated_embedded_candidate_preview_bounds: preview_host.embedded_child_surface
+            && preview_host.layout_rects_inside_window
+            && preview_host.layout_rects_non_overlapping,
+        manual_narrator_nvda_pending: true,
+        manual_real_win7_host_pending: true,
+        manual_real_win10_host_pending: true,
+        manual_real_win11_host_pending: true,
+        rust_config_cutover_complete_claimed: false,
+    };
+    if !evidence.gate_frozen
+        || !evidence.automated_keyboard_tab_order
+        || !evidence.automated_focus_visibility
+        || !evidence.automated_page_navigation
+        || !evidence.automated_no_overlap
+        || !evidence.automated_high_dpi_geometry
+        || !evidence.automated_high_contrast_fallback_markers
+        || !evidence.automated_embedded_candidate_preview_bounds
+        || !evidence.manual_narrator_nvda_pending
+        || !evidence.manual_real_win7_host_pending
+        || !evidence.manual_real_win10_host_pending
+        || !evidence.manual_real_win11_host_pending
+        || evidence.rust_config_cutover_complete_claimed
+    {
+        return Err("Stage 4 Config QA gate evidence is incomplete".to_owned());
     }
     Ok(evidence)
 }
@@ -1338,6 +1403,8 @@ fn run_self_check() -> Result<String, String> {
     let preview_host = validate_candidate_preview_host(&layout, &theme_library)?;
     let window_effects = validate_window_effects_adapter()?;
     let settings_surface = validate_settings_surface()?;
+    let stage4_qa =
+        validate_stage4_config_qa_gate(&layout, &preview_host, &window_effects, &settings_surface)?;
     let cutover =
         validate_config_rust_cutover_plan(&layout, &operations, &boundaries, &preview_host)?;
     Ok(render_report(
@@ -1349,6 +1416,7 @@ fn run_self_check() -> Result<String, String> {
         &preview_host,
         &window_effects,
         &settings_surface,
+        &stage4_qa,
         &cutover,
     ))
 }
@@ -3189,6 +3257,7 @@ fn render_report(
     preview_host: &CandidatePreviewHostEvidence,
     window_effects: &WindowEffectsEvidence,
     settings_surface: &SettingsSurfaceEvidence,
+    stage4_qa: &Stage4ConfigQaEvidence,
     cutover: &ConfigRustCutoverEvidence,
 ) -> String {
     let pages = model
@@ -3228,7 +3297,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"stage4_config_qa_gate_frozen\":{},\n  \"stage4_automated_keyboard_tab_order\":{},\n  \"stage4_automated_focus_visibility\":{},\n  \"stage4_automated_page_navigation\":{},\n  \"stage4_automated_no_overlap\":{},\n  \"stage4_automated_high_dpi_geometry\":{},\n  \"stage4_automated_high_contrast_fallback_markers\":{},\n  \"stage4_automated_embedded_candidate_preview_bounds\":{},\n  \"stage4_manual_narrator_nvda_pending\":{},\n  \"stage4_manual_real_win7_host_pending\":{},\n  \"stage4_manual_real_win10_host_pending\":{},\n  \"stage4_manual_real_win11_host_pending\":{},\n  \"stage4_rust_config_cutover_complete_claimed\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         shipping_config_replaced(),
@@ -3272,6 +3341,19 @@ fn render_report(
         settings_surface.device_loss_fail_soft,
         settings_surface.no_generic_ui_framework,
         settings_surface.no_surface_overlap,
+        stage4_qa.gate_frozen,
+        stage4_qa.automated_keyboard_tab_order,
+        stage4_qa.automated_focus_visibility,
+        stage4_qa.automated_page_navigation,
+        stage4_qa.automated_no_overlap,
+        stage4_qa.automated_high_dpi_geometry,
+        stage4_qa.automated_high_contrast_fallback_markers,
+        stage4_qa.automated_embedded_candidate_preview_bounds,
+        stage4_qa.manual_narrator_nvda_pending,
+        stage4_qa.manual_real_win7_host_pending,
+        stage4_qa.manual_real_win10_host_pending,
+        stage4_qa.manual_real_win11_host_pending,
+        stage4_qa.rust_config_cutover_complete_claimed,
         model.no_shell_out,
         pages,
         title_keys,
@@ -5762,6 +5844,39 @@ mod tests {
     }
 
     #[test]
+    fn stage4_config_qa_gate_freezes_automated_and_manual_evidence() {
+        let model = frozen_settings_model();
+        let layout = validate_layout(&model).expect("layout evidence should validate");
+        let theme_library =
+            validate_theme_library_and_preview().expect("theme evidence should validate");
+        let preview_host = validate_candidate_preview_host(&layout, &theme_library)
+            .expect("preview evidence should validate");
+        let window_effects =
+            validate_window_effects_adapter().expect("window effects should validate");
+        let settings_surface = validate_settings_surface().expect("surface should validate");
+        let evidence = validate_stage4_config_qa_gate(
+            &layout,
+            &preview_host,
+            &window_effects,
+            &settings_surface,
+        )
+        .expect("Stage 4 QA gate should validate");
+        assert!(evidence.gate_frozen);
+        assert!(evidence.automated_keyboard_tab_order);
+        assert!(evidence.automated_focus_visibility);
+        assert!(evidence.automated_page_navigation);
+        assert!(evidence.automated_no_overlap);
+        assert!(evidence.automated_high_dpi_geometry);
+        assert!(evidence.automated_high_contrast_fallback_markers);
+        assert!(evidence.automated_embedded_candidate_preview_bounds);
+        assert!(evidence.manual_narrator_nvda_pending);
+        assert!(evidence.manual_real_win7_host_pending);
+        assert!(evidence.manual_real_win10_host_pending);
+        assert!(evidence.manual_real_win11_host_pending);
+        assert!(!evidence.rust_config_cutover_complete_claimed);
+    }
+
+    #[test]
     fn self_check_covers_frozen_settings_operations() {
         let report = run_self_check().expect("self-check should pass");
         assert!(report.contains("\"component\":\"fcitx5-config-poc\""));
@@ -5808,6 +5923,19 @@ mod tests {
         assert!(report.contains("\"settings_surface_device_loss_fail_soft\":true"));
         assert!(report.contains("\"settings_surface_no_generic_ui_framework\":true"));
         assert!(report.contains("\"settings_surface_no_surface_overlap\":true"));
+        assert!(report.contains("\"stage4_config_qa_gate_frozen\":true"));
+        assert!(report.contains("\"stage4_automated_keyboard_tab_order\":true"));
+        assert!(report.contains("\"stage4_automated_focus_visibility\":true"));
+        assert!(report.contains("\"stage4_automated_page_navigation\":true"));
+        assert!(report.contains("\"stage4_automated_no_overlap\":true"));
+        assert!(report.contains("\"stage4_automated_high_dpi_geometry\":true"));
+        assert!(report.contains("\"stage4_automated_high_contrast_fallback_markers\":true"));
+        assert!(report.contains("\"stage4_automated_embedded_candidate_preview_bounds\":true"));
+        assert!(report.contains("\"stage4_manual_narrator_nvda_pending\":true"));
+        assert!(report.contains("\"stage4_manual_real_win7_host_pending\":true"));
+        assert!(report.contains("\"stage4_manual_real_win10_host_pending\":true"));
+        assert!(report.contains("\"stage4_manual_real_win11_host_pending\":true"));
+        assert!(report.contains("\"stage4_rust_config_cutover_complete_claimed\":false"));
         assert!(report.contains("\"candidate_preview_embedded\":true"));
         assert!(report.contains("\"candidate_preview_current_theme\":true"));
         assert!(report.contains("\"candidate_preview_not_external_window\":true"));

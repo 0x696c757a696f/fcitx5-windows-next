@@ -1961,6 +1961,27 @@ int main(int argc, char** argv) {
             std::string::npos) {
         return fail("054-CONFIG-WINDOW-EFFECTS-ADAPTER-001: Rust Config must own a bounded WindowEffects capability adapter with fake OS evidence");
     }
+    if (configPocSource.find("struct Stage4ConfigQaEvidence") == std::string::npos ||
+        configPocSource.find("fn validate_stage4_config_qa_gate(") == std::string::npos ||
+        configPocSource.find("stage4_automated_keyboard_tab_order") == std::string::npos ||
+        configPocSource.find("stage4_automated_focus_visibility") == std::string::npos ||
+        configPocSource.find("stage4_automated_page_navigation") == std::string::npos ||
+        configPocSource.find("stage4_automated_no_overlap") == std::string::npos ||
+        configPocSource.find("stage4_automated_high_dpi_geometry") == std::string::npos ||
+        configPocSource.find("stage4_automated_high_contrast_fallback_markers") ==
+            std::string::npos ||
+        configPocSource.find("stage4_automated_embedded_candidate_preview_bounds") ==
+            std::string::npos ||
+        configPocSource.find("stage4_manual_narrator_nvda_pending") == std::string::npos ||
+        configPocSource.find("stage4_manual_real_win7_host_pending") == std::string::npos ||
+        configPocSource.find("stage4_manual_real_win10_host_pending") == std::string::npos ||
+        configPocSource.find("stage4_manual_real_win11_host_pending") == std::string::npos ||
+        configPocSource.find("stage4_rust_config_cutover_complete_claimed") ==
+            std::string::npos ||
+        configPocSource.find("rust_config_cutover_complete_claimed: false") ==
+            std::string::npos) {
+        return fail("056-CONFIG-STAGE4-A11Y-DPI-QA-001: Stage 4 Config QA gate must freeze automated coverage while leaving unavailable real-host/Narrator/NVDA evidence manual-pending");
+    }
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
         configSource.find("--ui-visual-contract-test") == std::string::npos ||
