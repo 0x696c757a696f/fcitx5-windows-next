@@ -33,6 +33,9 @@ const WM_GETTEXTLENGTH: Uint = 0x000E;
 const WM_PRINT: Uint = 0x0317;
 const WM_PRINTCLIENT: Uint = 0x0318;
 const CB_GETCOUNT: Uint = 0x0146;
+const CB_GETCURSEL: Uint = 0x0147;
+const CB_GETLBTEXT: Uint = 0x0148;
+const CB_GETLBTEXTLEN: Uint = 0x0149;
 const CB_SETCURSEL: Uint = 0x014E;
 const PRF_CHECKVISIBLE: Lparam = 0x0000_0001;
 const PRF_NONCLIENT: Lparam = 0x0000_0002;
@@ -57,6 +60,7 @@ const K_APPEARANCE_FONT_FAMILY: i32 = 152;
 const K_SAVE_STATUS: i32 = 206;
 const CBN_SELCHANGE: Wparam = 1;
 const EN_CHANGE: Wparam = 0x0300;
+const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
 const PAGES: &[Page] = &[
     Page {
@@ -242,7 +246,13 @@ fn run() -> Result<(), String> {
         Some(candidate_ui) => Some(capture_candidate_reference(candidate_ui, &args.out_dir)?),
         None => None,
     };
-    let child = Command::new(&args.config_exe)
+    let rust_config = rust_config_exe(&args.config_exe);
+    let preview_state_path = args.out_dir.join("config-rust-preview-state.txt");
+    let mut command = Command::new(&args.config_exe);
+    if rust_config {
+        command.env(PREVIEW_STATE_ENV, &preview_state_path);
+    }
+    let child = command
         .spawn()
         .map_err(|error| format!("launch {}: {error}", args.config_exe.display()))?;
     let guard = ProcessGuard { child };
@@ -252,6 +262,7 @@ fn run() -> Result<(), String> {
     report.push_str(&format!("- exe: `{}`\n", args.config_exe.display()));
     report.push_str(&format!("- pid: `{}`\n\n", guard.child.id()));
     report.push_str("| Page | Result | Screenshot |\n|---|---|---|\n");
+    let mut persisted_font_family = None;
     for page in PAGES {
         navigate(hwnd, page.id)?;
         thread::sleep(Duration::from_millis(200));
@@ -290,13 +301,22 @@ fn run() -> Result<(), String> {
                 report.push_str("| appearance-numeric-inputs | ok | Rust schema validation |\n");
             }
             if rust_config_exe(&args.config_exe) || has_child(hwnd, K_APPEARANCE_FONT_FAMILY) {
-                verify_system_font_picker(hwnd)?;
+                let font_family = verify_system_font_picker(hwnd)?;
+                persisted_font_family = Some(font_family);
                 report.push_str(
                     "| appearance-system-font-picker | ok | Rust system font inventory |\n",
                 );
             }
         }
         report.push_str(&format!("| {} | ok | `{}` |\n", page.slug, file_name));
+    }
+    if rust_config {
+        let font_family = persisted_font_family
+            .as_deref()
+            .ok_or("Rust Config font picker did not run before persistence check")?;
+        verify_system_font_picker_persistence(&args.config_exe, &preview_state_path, font_family)?;
+        report
+            .push_str("| appearance-system-font-picker-persistence | ok | restart round-trip |\n");
     }
     fs::write(args.out_dir.join("config-ui-qa.md"), report)
         .map_err(|error| format!("write report: {error}"))?;
@@ -489,7 +509,7 @@ fn verify_appearance_numeric_inputs(hwnd: Hwnd) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_system_font_picker(hwnd: Hwnd) -> Result<(), String> {
+fn verify_system_font_picker(hwnd: Hwnd) -> Result<String, String> {
     let combo = unsafe { GetDlgItem(hwnd, K_APPEARANCE_FONT_FAMILY) };
     if combo.is_null() {
         return Err("missing system font picker combobox".to_string());
@@ -503,9 +523,75 @@ fn verify_system_font_picker(hwnd: Hwnd) -> Result<(), String> {
     if selected_result < 0 {
         return Err("system font picker rejected selection".to_string());
     }
+    let selected_family = combo_selected_text(combo)?;
     notify_combo_selection(hwnd, K_APPEARANCE_FONT_FAMILY);
     require_status_contains(hwnd, "font_family accepted")?;
+    Ok(selected_family)
+}
+
+fn verify_system_font_picker_persistence(
+    config_exe: &Path,
+    preview_state_path: &Path,
+    expected_family: &str,
+) -> Result<(), String> {
+    let state = fs::read_to_string(preview_state_path).map_err(|error| {
+        format!(
+            "read persisted Rust Config font state {}: {error}",
+            preview_state_path.display()
+        )
+    })?;
+    if !state.contains(&format!(
+        "font_family={}",
+        expected_family.replace('\\', "\\\\").replace('\n', "\\n")
+    )) {
+        return Err(format!(
+            "persisted font state `{state}` did not contain selected family `{expected_family}`"
+        ));
+    }
+    let child = Command::new(config_exe)
+        .env(PREVIEW_STATE_ENV, preview_state_path)
+        .spawn()
+        .map_err(|error| format!("relaunch {}: {error}", config_exe.display()))?;
+    let guard = ProcessGuard { child };
+    let hwnd = wait_for_window(guard.child.id(), Duration::from_secs(10))?;
+    navigate(hwnd, K_NAV_APPEARANCE)?;
+    thread::sleep(Duration::from_millis(200));
+    let combo = unsafe { GetDlgItem(hwnd, K_APPEARANCE_FONT_FAMILY) };
+    if combo.is_null() {
+        return Err("reopened Rust Config is missing system font picker".to_string());
+    }
+    let reopened_family = combo_selected_text(combo)?;
+    if !reopened_family.eq_ignore_ascii_case(expected_family) {
+        return Err(format!(
+            "reopened Rust Config selected `{reopened_family}` instead of persisted `{expected_family}`"
+        ));
+    }
     Ok(())
+}
+
+fn combo_selected_text(combo: Hwnd) -> Result<String, String> {
+    let selected = unsafe { SendMessageW(combo, CB_GETCURSEL, 0, 0) };
+    if selected < 0 {
+        return Err("system font picker has no selected item".to_string());
+    }
+    let len = unsafe { SendMessageW(combo, CB_GETLBTEXTLEN, selected as Wparam, 0) };
+    if len <= 0 {
+        return Err("system font picker selected item has no text".to_string());
+    }
+    let mut buffer = vec![0u16; len as usize + 1];
+    let copied = unsafe {
+        SendMessageW(
+            combo,
+            CB_GETLBTEXT,
+            selected as Wparam,
+            buffer.as_mut_ptr() as Lparam,
+        )
+    };
+    if copied <= 0 {
+        return Err("system font picker selected text could not be read".to_string());
+    }
+    buffer.truncate(copied as usize);
+    Ok(String::from_utf16_lossy(&buffer))
 }
 
 fn has_child(hwnd: Hwnd, id: i32) -> bool {

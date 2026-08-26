@@ -2767,6 +2767,8 @@ fn json_escape(value: &str) -> String {
 #[cfg(windows)]
 mod win32_window_smoke {
     use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
     use std::ptr::{null, null_mut};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2794,6 +2796,9 @@ mod win32_window_smoke {
     const DT_VCENTER: u32 = 0x0004;
     const CBN_SELCHANGE: u16 = 1;
     const CB_ADDSTRING: u32 = 0x0143;
+    const CB_GETCURSEL: u32 = 0x0147;
+    const CB_GETLBTEXT: u32 = 0x0148;
+    const CB_GETLBTEXTLEN: u32 = 0x0149;
     const CB_SETCURSEL: u32 = 0x014E;
     const CBS_DROPDOWNLIST: u32 = 0x0003;
     const CBS_HASSTRINGS: u32 = 0x0200;
@@ -2827,6 +2832,7 @@ mod win32_window_smoke {
     const K_APPEARANCE_OPACITY: i32 = 151;
     const K_APPEARANCE_FONT_FAMILY: i32 = 152;
     const K_SAVE_STATUS: i32 = 206;
+    const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
     static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -2888,6 +2894,20 @@ mod win32_window_smoke {
         pt: Point,
     }
 
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct ControlUtf16 {
+        ptr: *const u16,
+        len: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct ControlUtf8 {
+        ptr: *const u8,
+        len: usize,
+    }
+
     #[link(name = "user32")]
     unsafe extern "system" {
         fn BeginPaint(hwnd: Hwnd, paint: *mut PaintStruct) -> Hdc;
@@ -2943,6 +2963,13 @@ mod win32_window_smoke {
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn GetModuleHandleW(module_name: Lpcwstr) -> Hinstance;
+    }
+
+    unsafe extern "C" {
+        fn fcitx5_control_atomic_write_utf8_file_utf16(
+            destination: ControlUtf16,
+            content: ControlUtf8,
+        ) -> i32;
     }
 
     pub fn create(
@@ -3531,7 +3558,7 @@ mod win32_window_smoke {
             128,
             WS_BORDER | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
         )?;
-        populate_system_font_picker(font_combo)?;
+        populate_system_font_picker(font_combo, preview_state_font_family().as_deref())?;
         for (index, (id, label)) in [
             (K_NAV_GENERAL, "Input methods"),
             (K_NAV_APPEARANCE, "Appearance"),
@@ -3730,21 +3757,35 @@ mod win32_window_smoke {
         if i32::from(command_id) != K_APPEARANCE_FONT_FAMILY {
             return false;
         }
-        set_child_text(
-            hwnd,
-            K_SAVE_STATUS,
-            "font_family accepted: system font picker refreshed preview",
-        );
+        let font_family = unsafe { GetDlgItem(hwnd, K_APPEARANCE_FONT_FAMILY) };
+        let selected = selected_combo_text(font_family).unwrap_or_else(|| "unknown".to_owned());
+        let status = match persist_preview_font_family(&selected) {
+            Ok(()) => format!("font_family accepted: {selected}"),
+            Err(error) => format!("font_family persistence failed: {error}"),
+        };
+        set_child_text(hwnd, K_SAVE_STATUS, &status);
         invalidate_preview(hwnd);
         true
     }
 
-    fn populate_system_font_picker(combo: Hwnd) -> Result<(), String> {
+    fn populate_system_font_picker(
+        combo: Hwnd,
+        persisted_font: Option<&str>,
+    ) -> Result<(), String> {
         let mut fonts = system_font_families_for_picker();
         if fonts.is_empty() {
             fonts.push("Segoe UI".to_owned());
         }
+        let mut selected_index = 0usize;
         for family in &fonts {
+            if let Some(persisted_font) = persisted_font {
+                if family.eq_ignore_ascii_case(persisted_font) {
+                    selected_index = fonts
+                        .iter()
+                        .position(|candidate| candidate.eq_ignore_ascii_case(persisted_font))
+                        .unwrap_or(0);
+                }
+            }
             let family = to_wide(family);
             // SAFETY: `combo` is a live combobox HWND and the UTF-16 string buffer lives for the
             // synchronous CB_ADDSTRING message.
@@ -3755,7 +3796,7 @@ mod win32_window_smoke {
         // SAFETY: `combo` is a live combobox HWND; selecting the first item initializes the
         // visible current system-font choice for QA and users.
         unsafe {
-            SendMessageW(combo, CB_SETCURSEL, 0, 0);
+            SendMessageW(combo, CB_SETCURSEL, selected_index, 0);
         }
         Ok(())
     }
@@ -3785,6 +3826,103 @@ mod win32_window_smoke {
             }
         }
         fonts
+    }
+
+    fn preview_state_path() -> Option<PathBuf> {
+        std::env::var_os(PREVIEW_STATE_ENV).map(PathBuf::from)
+    }
+
+    fn preview_state_font_family() -> Option<String> {
+        let path = preview_state_path()?;
+        let text = std::fs::read_to_string(path).ok()?;
+        text.lines()
+            .find_map(|line| line.strip_prefix("font_family="))
+            .map(unescape_state_value)
+    }
+
+    fn persist_preview_font_family(font_family: &str) -> Result<(), String> {
+        let Some(path) = preview_state_path() else {
+            return Ok(());
+        };
+        let content = format!("font_family={}\n", escape_state_value(font_family));
+        atomic_write_utf8_file(&path, &content)
+    }
+
+    fn atomic_write_utf8_file(path: &Path, content: &str) -> Result<(), String> {
+        let wide_path = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        let destination = ControlUtf16 {
+            ptr: wide_path.as_ptr(),
+            len: wide_path.len(),
+        };
+        let content = ControlUtf8 {
+            ptr: content.as_bytes().as_ptr(),
+            len: content.len(),
+        };
+        // SAFETY: The UTF-16 path and UTF-8 content buffers live for this synchronous Rust Control
+        // ABI call. The callee does not retain pointers and performs the atomic file replacement.
+        let status = unsafe { fcitx5_control_atomic_write_utf8_file_utf16(destination, content) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err("atomic_write_utf8_file".to_owned())
+        }
+    }
+
+    fn selected_combo_text(combo: Hwnd) -> Option<String> {
+        if combo.is_null() {
+            return None;
+        }
+        // SAFETY: `combo` is a live combobox HWND.
+        let selected = unsafe { SendMessageW(combo, CB_GETCURSEL, 0, 0) };
+        if selected < 0 {
+            return None;
+        }
+        // SAFETY: `combo` is a live combobox HWND and `selected` is the current selection index.
+        let len = unsafe { SendMessageW(combo, CB_GETLBTEXTLEN, selected as Wparam, 0) };
+        if len <= 0 {
+            return None;
+        }
+        let mut buffer = vec![0u16; len as usize + 1];
+        // SAFETY: `buffer` is writable and large enough for the selected list item plus NUL.
+        let copied = unsafe {
+            SendMessageW(
+                combo,
+                CB_GETLBTEXT,
+                selected as Wparam,
+                buffer.as_mut_ptr() as Lparam,
+            )
+        };
+        if copied <= 0 {
+            return None;
+        }
+        buffer.truncate(copied as usize);
+        Some(String::from_utf16_lossy(&buffer))
+    }
+
+    fn escape_state_value(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('\n', "\\n")
+    }
+
+    fn unescape_state_value(value: &str) -> String {
+        let mut result = String::new();
+        let mut escaped = false;
+        for character in value.chars() {
+            if escaped {
+                match character {
+                    'n' => result.push('\n'),
+                    other => result.push(other),
+                }
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else {
+                result.push(character);
+            }
+        }
+        if escaped {
+            result.push('\\');
+        }
+        result
     }
 
     fn child_text(hwnd: Hwnd) -> String {
