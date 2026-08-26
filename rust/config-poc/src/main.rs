@@ -2777,7 +2777,7 @@ mod win32_window_smoke {
     use std::os::windows::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
     use std::ptr::{null, null_mut};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicUsize, Ordering};
 
     use super::{
         candidate_preview_paint_plan, validate_appearance_numeric_input, AppearanceNumericField,
@@ -2789,6 +2789,8 @@ mod win32_window_smoke {
     type Hicon = *mut c_void;
     type Hcursor = *mut c_void;
     type Hbrush = *mut c_void;
+    type Hfont = *mut c_void;
+    type HgdiObj = *mut c_void;
     type Lpcwstr = *const u16;
     type Lparam = isize;
     type Lresult = isize;
@@ -2812,6 +2814,9 @@ mod win32_window_smoke {
     const EN_CHANGE: u16 = 0x0300;
     const ES_AUTOHSCROLL: u32 = 0x0080;
     const FALSE: i32 = 0;
+    const FW_SEMIBOLD: i32 = 600;
+    const FW_NORMAL: i32 = 400;
+    const TRUE: i32 = 1;
     const LBN_SELCHANGE: u16 = 1;
     const LB_ADDSTRING: u32 = 0x0180;
     const LB_SETCURSEL: u32 = 0x0186;
@@ -2819,12 +2824,22 @@ mod win32_window_smoke {
     const LB_GETTEXT: u32 = 0x0189;
     const LB_GETTEXTLEN: u32 = 0x018A;
     const TRANSPARENT: i32 = 1;
+    const OPAQUE: i32 = 2;
+    const WM_CTLCOLORSTATIC: u32 = 0x0138;
     const WM_CLOSE: u32 = 0x0010;
     const WM_COMMAND: u32 = 0x0111;
     const WM_DESTROY: u32 = 0x0002;
+    const WM_DRAWITEM: u32 = 0x002B;
+    const WM_ERASEBKGND: u32 = 0x0014;
     const WM_PAINT: u32 = 0x000F;
+    const WM_PRINTCLIENT: u32 = 0x0318;
+    const WM_SETFONT: u32 = 0x0030;
+    const WM_SIZE: u32 = 0x0005;
     const WS_BORDER: u32 = 0x0080_0000;
+    const BS_FLAT: u32 = 0x8000;
+    const BS_OWNERDRAW: u32 = 0x000B;
     const WS_CHILD: u32 = 0x4000_0000;
+    const WS_CLIPCHILDREN: u32 = 0x0200_0000;
     const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
     const WS_TABSTOP: u32 = 0x0001_0000;
     const WS_VSCROLL: u32 = 0x0020_0000;
@@ -2870,8 +2885,20 @@ mod win32_window_smoke {
     const K_PACKAGE_REPAIR: i32 = 177;
     const K_SAVE_STATUS: i32 = 206;
     const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
+    const COLOR_SETTINGS_BACKGROUND: u32 = 0x00f6_f4_f1;
+    const COLOR_SETTINGS_SIDEBAR: u32 = 0x00fb_f9_f7;
+    const COLOR_SETTINGS_CONTENT: u32 = 0x00ff_ff_ff;
+    const COLOR_SETTINGS_HEADER: u32 = 0x00ff_f7_ee;
+    const COLOR_SETTINGS_NAV_ACCENT: u32 = 0x00eb_9b_25;
+    const COLOR_SETTINGS_NAV_SELECTED: u32 = 0x00ff_ff_ff;
+    const COLOR_SETTINGS_TEXT_PRIMARY: u32 = 0x0024_24_24;
 
     static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static ACTIVE_NAV_PAGE: AtomicI32 = AtomicI32::new(K_NAV_GENERAL);
+    static SETTINGS_UI_FONT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+    static SETTINGS_TITLE_FONT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+    static SETTINGS_HEADER_BRUSH: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+    static SETTINGS_CONTENT_BRUSH: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
     #[repr(C)]
     struct WndClassW {
@@ -2932,6 +2959,19 @@ mod win32_window_smoke {
     }
 
     #[repr(C)]
+    struct DrawItemStruct {
+        ctl_type: u32,
+        ctl_id: u32,
+        item_id: u32,
+        item_action: u32,
+        item_state: u32,
+        hwnd_item: Hwnd,
+        hdc: Hdc,
+        rc_item: Rect,
+        item_data: usize,
+    }
+
+    #[repr(C)]
     #[derive(Clone, Copy)]
     struct ControlUtf16 {
         ptr: *const u16,
@@ -2970,6 +3010,7 @@ mod win32_window_smoke {
         fn EndPaint(hwnd: Hwnd, paint: *const PaintStruct) -> i32;
         fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn GetDC(hwnd: Hwnd) -> Hdc;
+        fn GetDlgCtrlID(hwnd: Hwnd) -> i32;
         fn GetDlgItem(hwnd: Hwnd, item_id: i32) -> Hwnd;
         fn GetMessageW(message: *mut Msg, hwnd: Hwnd, min_filter: u32, max_filter: u32) -> i32;
         fn GetParent(hwnd: Hwnd) -> Hwnd;
@@ -2989,10 +3030,28 @@ mod win32_window_smoke {
 
     #[link(name = "gdi32")]
     unsafe extern "system" {
+        fn CreateFontW(
+            height: i32,
+            width: i32,
+            escapement: i32,
+            orientation: i32,
+            weight: i32,
+            italic: u32,
+            underline: u32,
+            strike_out: u32,
+            char_set: u32,
+            output_precision: u32,
+            clip_precision: u32,
+            quality: u32,
+            pitch_and_family: u32,
+            face_name: Lpcwstr,
+        ) -> Hfont;
         fn CreateSolidBrush(color: u32) -> Hbrush;
         fn DeleteObject(object: *mut c_void) -> i32;
         fn FillRect(hdc: Hdc, rect: *const Rect, brush: Hbrush) -> i32;
         fn GetPixel(hdc: Hdc, x: i32, y: i32) -> u32;
+        fn SelectObject(hdc: Hdc, object: HgdiObj) -> HgdiObj;
+        fn SetBkColor(hdc: Hdc, color: u32) -> u32;
         fn SetBkMode(hdc: Hdc, mode: i32) -> i32;
         fn SetTextColor(hdc: Hdc, color: u32) -> u32;
     }
@@ -3068,7 +3127,7 @@ mod win32_window_smoke {
                 0,
                 class_name.as_ptr(),
                 title.as_ptr(),
-                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 minimum_window_dip.width,
@@ -3257,7 +3316,7 @@ mod win32_window_smoke {
                 0,
                 class_name.as_ptr(),
                 title.as_ptr(),
-                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 minimum_window_dip.width,
@@ -3289,8 +3348,10 @@ mod win32_window_smoke {
         if message == WM_COMMAND {
             let command_id = loword(wparam);
             if let Some(title) = page_title_for_command(command_id) {
+                ACTIVE_NAV_PAGE.store(i32::from(command_id), Ordering::SeqCst);
                 update_page_title(hwnd, title);
                 apply_page_visibility(hwnd, i32::from(command_id));
+                repaint_settings_window(hwnd);
                 invalidate_preview(hwnd);
                 return 0;
             }
@@ -3311,6 +3372,11 @@ mod win32_window_smoke {
                 return 0;
             }
         }
+        if message == WM_DRAWITEM {
+            if draw_modern_nav_item(lparam as *const DrawItemStruct) {
+                return 1;
+            }
+        }
         if message == WM_CLOSE {
             // SAFETY: Windows delivered WM_CLOSE for this live HWND; DestroyWindow starts normal
             // teardown and leads to WM_DESTROY.
@@ -3327,8 +3393,298 @@ mod win32_window_smoke {
             }
             return 0;
         }
+        if message == WM_SIZE {
+            repaint_settings_window(hwnd);
+            invalidate_preview(hwnd);
+        }
+        if message == WM_ERASEBKGND {
+            paint_settings_background(hwnd, wparam as Hdc);
+            return 1;
+        }
+        if message == WM_CTLCOLORSTATIC {
+            let hdc = wparam as Hdc;
+            let child = lparam as Hwnd;
+            let control_id = if child.is_null() {
+                0
+            } else {
+                // SAFETY: `child` is the control HWND provided by WM_CTLCOLORSTATIC.
+                unsafe { GetDlgCtrlID(child) }
+            };
+            let (background_color, brush) = static_control_background(control_id);
+            // SAFETY: The HDC is provided by Windows for child static-control painting and these
+            // calls only affect drawing attributes for this paint cycle.
+            unsafe {
+                SetBkMode(hdc, OPAQUE);
+                SetBkColor(hdc, background_color);
+                SetTextColor(hdc, COLOR_SETTINGS_TEXT_PRIMARY);
+                return brush as Lresult;
+            }
+        }
+        if message == WM_PRINTCLIENT {
+            paint_settings_background(hwnd, wparam as Hdc);
+            return 0;
+        }
+        if message == WM_PAINT {
+            let mut paint = PaintStruct {
+                hdc: null_mut(),
+                f_erase: 0,
+                rc_paint: Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
+                f_restore: 0,
+                f_inc_update: 0,
+                rgb_reserved: [0; 32],
+            };
+            // SAFETY: Windows calls this procedure for a valid top-level Settings HWND.
+            let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
+            if !hdc.is_null() {
+                paint_settings_background(hwnd, hdc);
+                // SAFETY: `paint` was initialized by BeginPaint for this HWND and must be closed.
+                unsafe {
+                    EndPaint(hwnd, &paint);
+                }
+            }
+            return 0;
+        }
         // SAFETY: Delegates unhandled messages to the system default window procedure.
         unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+
+    fn paint_settings_background(hwnd: Hwnd, hdc: Hdc) {
+        if hdc.is_null() {
+            return;
+        }
+        let mut client = Rect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        // SAFETY: `hwnd` is a live top-level Settings HWND and `client` is writable.
+        if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
+            return;
+        }
+        fill_rect(hdc, &client, COLOR_SETTINGS_BACKGROUND);
+        let sidebar = Rect {
+            left: client.left,
+            top: client.top,
+            right: client.left + 204,
+            bottom: client.bottom,
+        };
+        fill_rect(hdc, &sidebar, COLOR_SETTINGS_SIDEBAR);
+        let header = Rect {
+            left: sidebar.right,
+            top: client.top,
+            right: client.right,
+            bottom: client.top + 72,
+        };
+        fill_rect(hdc, &header, COLOR_SETTINGS_HEADER);
+        let accent = Rect {
+            left: 16,
+            top: 18,
+            right: 20,
+            bottom: 278,
+        };
+        fill_rect(hdc, &accent, COLOR_SETTINGS_NAV_ACCENT);
+        let content = Rect {
+            left: sidebar.right + 16,
+            top: header.bottom + 12,
+            right: client.right - 18,
+            bottom: client.bottom - 18,
+        };
+        if content.right > content.left && content.bottom > content.top {
+            fill_rect(hdc, &content, COLOR_SETTINGS_CONTENT);
+        }
+    }
+
+    fn fill_rect(hdc: Hdc, rect: &Rect, color: u32) {
+        // SAFETY: Creates a process-local GDI brush for immediate FillRect use.
+        let brush = unsafe { CreateSolidBrush(color) };
+        if brush.is_null() {
+            return;
+        }
+        // SAFETY: The HDC is valid for the current paint/print cycle, `rect` is initialized, and
+        // the brush is deleted immediately after use.
+        unsafe {
+            FillRect(hdc, rect, brush);
+            DeleteObject(brush);
+        }
+    }
+
+    fn draw_modern_nav_item(draw_item: *const DrawItemStruct) -> bool {
+        if draw_item.is_null() {
+            return false;
+        }
+        // SAFETY: WM_DRAWITEM provides a live DRAWITEMSTRUCT pointer for the duration of message
+        // dispatch. We copy only POD fields and do not retain borrowed handles.
+        let item = unsafe { &*draw_item };
+        let control_id = item.ctl_id as i32;
+        if !is_nav_control(control_id) || item.hdc.is_null() {
+            return false;
+        }
+
+        let selected = ACTIVE_NAV_PAGE.load(Ordering::SeqCst) == control_id;
+        let background = if selected {
+            COLOR_SETTINGS_NAV_SELECTED
+        } else {
+            COLOR_SETTINGS_SIDEBAR
+        };
+        fill_rect(item.hdc, &item.rc_item, background);
+
+        if selected {
+            let accent = Rect {
+                left: item.rc_item.left,
+                top: item.rc_item.top + 7,
+                right: item.rc_item.left + 5,
+                bottom: item.rc_item.bottom - 7,
+            };
+            fill_rect(item.hdc, &accent, COLOR_SETTINGS_NAV_ACCENT);
+        }
+
+        let font = settings_ui_font();
+        let old_font = if font.is_null() {
+            null_mut()
+        } else {
+            // SAFETY: The process-owned font is valid for this draw cycle and restored below.
+            unsafe { SelectObject(item.hdc, font.cast::<c_void>()) }
+        };
+
+        let text = child_text(item.hwnd_item);
+        let text = to_wide(&text);
+        let mut text_rect = Rect {
+            left: item.rc_item.left + 18,
+            top: item.rc_item.top,
+            right: item.rc_item.right - 12,
+            bottom: item.rc_item.bottom,
+        };
+        // SAFETY: The HDC belongs to this owner-draw callback. The UTF-16 buffer is
+        // NUL-terminated and lives through DrawTextW.
+        unsafe {
+            SetBkMode(item.hdc, TRANSPARENT);
+            SetTextColor(item.hdc, COLOR_SETTINGS_TEXT_PRIMARY);
+            DrawTextW(
+                item.hdc,
+                text.as_ptr(),
+                -1,
+                &mut text_rect,
+                DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+            );
+            if !old_font.is_null() {
+                SelectObject(item.hdc, old_font);
+            }
+        }
+        true
+    }
+
+    fn is_nav_control(control_id: i32) -> bool {
+        matches!(
+            control_id,
+            K_NAV_GENERAL
+                | K_NAV_APPEARANCE
+                | K_NAV_SHORTCUTS
+                | K_NAV_UPDATES
+                | K_NAV_REPAIR
+                | K_NAV_PACKAGES
+        )
+    }
+
+    fn static_control_background(control_id: i32) -> (u32, Hbrush) {
+        if control_id == K_PAGE_TITLE {
+            (
+                COLOR_SETTINGS_HEADER,
+                cached_solid_brush(&SETTINGS_HEADER_BRUSH, COLOR_SETTINGS_HEADER),
+            )
+        } else {
+            (
+                COLOR_SETTINGS_CONTENT,
+                cached_solid_brush(&SETTINGS_CONTENT_BRUSH, COLOR_SETTINGS_CONTENT),
+            )
+        }
+    }
+
+    fn cached_solid_brush(slot: &AtomicPtr<c_void>, color: u32) -> Hbrush {
+        let existing = slot.load(Ordering::SeqCst);
+        if !existing.is_null() {
+            return existing.cast();
+        }
+        // SAFETY: Creates a process-local solid brush retained until process exit. Returning a
+        // stable brush handle is required by WM_CTLCOLORSTATIC; a temporary brush would be invalid
+        // after the message returns.
+        let created = unsafe { CreateSolidBrush(color) };
+        if created.is_null() {
+            return null_mut();
+        }
+        slot.store(created.cast::<c_void>(), Ordering::SeqCst);
+        created
+    }
+
+    fn settings_ui_font() -> Hfont {
+        let existing = SETTINGS_UI_FONT.load(Ordering::SeqCst);
+        if !existing.is_null() {
+            return existing;
+        }
+        let face_name = to_wide("Segoe UI");
+        // SAFETY: The face name buffer is NUL-terminated and lives for the duration of the call.
+        // The created HFONT intentionally lives until process exit so all child HWNDs can keep
+        // using it without a dangling GDI handle.
+        let created = unsafe {
+            CreateFontW(
+                -21,
+                0,
+                0,
+                0,
+                FW_NORMAL,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                5,
+                0,
+                face_name.as_ptr(),
+            )
+        };
+        if created.is_null() {
+            return null_mut();
+        }
+        SETTINGS_UI_FONT.store(created.cast::<c_void>(), Ordering::SeqCst);
+        created
+    }
+
+    fn settings_title_font() -> Hfont {
+        let existing = SETTINGS_TITLE_FONT.load(Ordering::SeqCst);
+        if !existing.is_null() {
+            return existing;
+        }
+        let face_name = to_wide("Segoe UI");
+        // SAFETY: Same lifetime contract as settings_ui_font; this title font is process-owned.
+        let created = unsafe {
+            CreateFontW(
+                -34,
+                0,
+                0,
+                0,
+                FW_SEMIBOLD,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                5,
+                0,
+                face_name.as_ptr(),
+            )
+        };
+        if created.is_null() {
+            return null_mut();
+        }
+        SETTINGS_TITLE_FONT.store(created.cast::<c_void>(), Ordering::SeqCst);
+        created
     }
 
     unsafe extern "system" fn candidate_preview_window_proc(
@@ -3397,6 +3753,14 @@ mod win32_window_smoke {
         unsafe {
             SetBkMode(hdc, TRANSPARENT);
         }
+        let font = settings_ui_font();
+        let old_font = if font.is_null() {
+            null_mut()
+        } else {
+            // SAFETY: The font is process-owned and valid for this paint cycle; the old font is
+            // restored after drawing the preview text.
+            unsafe { SelectObject(hdc, font.cast::<c_void>()) }
+        };
         for item in plan.items {
             let rect = rect_from_candidate_core(item.bounds);
             if item.selected {
@@ -3417,6 +3781,12 @@ mod win32_window_smoke {
                 plan.text_color
             };
             draw_preview_line(hdc, rect, color, &item.text);
+        }
+        if !old_font.is_null() {
+            // SAFETY: Restores the GDI object returned by SelectObject for this HDC.
+            unsafe {
+                SelectObject(hdc, old_font);
+            }
         }
     }
 
@@ -3468,8 +3838,8 @@ mod win32_window_smoke {
         preview_class_name: &[u16],
         candidate_preview_rect: LayoutRect,
     ) -> Result<(), String> {
-        let preview_left = candidate_preview_rect.x.max(420);
-        let preview_width = candidate_preview_rect.width.min(440);
+        let preview_left = candidate_preview_rect.x;
+        let preview_width = candidate_preview_rect.width;
         let static_class = to_wide("STATIC");
         let button_class = to_wide("BUTTON");
         let edit_class = to_wide("EDIT");
@@ -3481,10 +3851,10 @@ mod win32_window_smoke {
             &static_class,
             K_PAGE_TITLE,
             "Input methods",
-            220,
-            24,
-            420,
-            34,
+            248,
+            28,
+            596,
+            48,
             0,
         )?;
         create_child_control(
@@ -3493,10 +3863,10 @@ mod win32_window_smoke {
             &static_class,
             K_STATUS,
             "Ready. Rust Settings UI Preview is running inside the Config process.",
-            220,
-            398,
-            620,
-            38,
+            248,
+            596,
+            596,
+            36,
             0,
         )?;
         let packages = create_child_control(
@@ -3505,10 +3875,10 @@ mod win32_window_smoke {
             &listbox_class,
             K_PACKAGES,
             "",
-            220,
+            248,
             128,
             360,
-            96,
+            126,
             WS_BORDER | WS_VSCROLL | WS_TABSTOP,
         )?;
         populate_available_packages(packages);
@@ -3518,10 +3888,10 @@ mod win32_window_smoke {
             &static_class,
             K_PACKAGE_DETAIL,
             "Rime: trusted signed add-on package. Configure opens through Rust package/control boundaries.",
-            600,
+            626,
             128,
-            300,
-            96,
+            218,
+            126,
             WS_BORDER,
         )?;
         create_child_control(
@@ -3530,10 +3900,10 @@ mod win32_window_smoke {
             &button_class,
             K_PACKAGE_INSTALL,
             "Install",
-            220,
-            244,
+            248,
+            276,
             112,
-            34,
+            38,
             WS_TABSTOP,
         )?;
         create_child_control(
@@ -3542,10 +3912,10 @@ mod win32_window_smoke {
             &button_class,
             K_PACKAGE_UPDATE,
             "Update",
-            344,
-            244,
+            372,
+            276,
             112,
-            34,
+            38,
             WS_TABSTOP,
         )?;
         create_child_control(
@@ -3554,10 +3924,10 @@ mod win32_window_smoke {
             &button_class,
             K_PACKAGE_REMOVE,
             "Remove",
-            468,
-            244,
+            496,
+            276,
             112,
-            34,
+            38,
             WS_TABSTOP,
         )?;
         create_child_control(
@@ -3566,10 +3936,10 @@ mod win32_window_smoke {
             &button_class,
             K_PACKAGE_CONFIGURE,
             "Configure",
-            600,
-            244,
+            626,
+            276,
             128,
-            34,
+            38,
             WS_TABSTOP,
         )?;
         create_child_control(
@@ -3578,10 +3948,10 @@ mod win32_window_smoke {
             &button_class,
             K_PACKAGE_REFRESH,
             "Refresh",
-            220,
-            292,
+            248,
+            328,
             112,
-            34,
+            38,
             WS_TABSTOP,
         )?;
         create_child_control(
@@ -3590,10 +3960,10 @@ mod win32_window_smoke {
             &button_class,
             K_PACKAGE_DETAILS,
             "Details",
-            344,
-            292,
+            372,
+            328,
             112,
-            34,
+            38,
             WS_TABSTOP,
         )?;
         create_child_control(
@@ -3602,10 +3972,10 @@ mod win32_window_smoke {
             &button_class,
             K_PACKAGE_ENABLE_DISABLE,
             "Enable / Disable",
-            468,
-            292,
+            496,
+            328,
             128,
-            34,
+            38,
             WS_TABSTOP,
         )?;
         create_child_control(
@@ -3614,10 +3984,10 @@ mod win32_window_smoke {
             &button_class,
             K_PACKAGE_REPAIR,
             "Repair",
-            608,
-            292,
+            636,
+            328,
             112,
-            34,
+            38,
             WS_TABSTOP,
         )?;
         create_child_control(
@@ -3626,10 +3996,10 @@ mod win32_window_smoke {
             &static_class,
             K_SAVE_STATUS,
             "No pending changes",
-            220,
-            88,
-            280,
-            28,
+            248,
+            640,
+            596,
+            36,
             0,
         )?;
         create_child_control(
@@ -3638,10 +4008,10 @@ mod win32_window_smoke {
             &static_class,
             K_LABEL_INPUT_METHODS,
             "Enabled input methods",
-            220,
-            128,
-            620,
-            24,
+            248,
+            112,
+            596,
+            30,
             0,
         )?;
         let input_methods = create_child_control(
@@ -3650,10 +4020,10 @@ mod win32_window_smoke {
             &listbox_class,
             K_INPUT_METHOD_LIST,
             "",
-            220,
-            160,
-            620,
-            96,
+            248,
+            154,
+            596,
+            132,
             WS_BORDER | WS_VSCROLL | WS_TABSTOP,
         )?;
         populate_enabled_input_methods(input_methods);
@@ -3663,10 +4033,10 @@ mod win32_window_smoke {
             &static_class,
             K_LABEL_LANGUAGE,
             "Language / 语言",
-            220,
-            272,
+            248,
+            314,
             180,
-            24,
+            30,
             0,
         )?;
         let language_selector = create_child_control(
@@ -3675,9 +4045,9 @@ mod win32_window_smoke {
             &combo_class,
             K_LANGUAGE_SELECTOR,
             "",
-            420,
-            268,
-            220,
+            248,
+            350,
+            280,
             96,
             WS_BORDER | WS_VSCROLL | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
         )?;
@@ -3688,9 +4058,9 @@ mod win32_window_smoke {
             &static_class,
             K_LABEL_FONT_SIZE,
             "Font size DIP",
-            220,
-            128,
-            180,
+            248,
+            104,
+            116,
             28,
             0,
         )?;
@@ -3700,10 +4070,10 @@ mod win32_window_smoke {
             &edit_class,
             K_APPEARANCE_FONT_SIZE,
             "18",
-            420,
-            128,
+            248,
+            134,
             92,
-            28,
+            34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
@@ -3712,9 +4082,9 @@ mod win32_window_smoke {
             &static_class,
             K_LABEL_OPACITY,
             "Opacity",
-            220,
-            164,
-            180,
+            374,
+            104,
+            92,
             28,
             0,
         )?;
@@ -3724,10 +4094,10 @@ mod win32_window_smoke {
             &edit_class,
             K_APPEARANCE_OPACITY,
             "1.00",
-            420,
-            164,
+            374,
+            134,
             92,
-            28,
+            34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
@@ -3736,8 +4106,8 @@ mod win32_window_smoke {
             &static_class,
             K_LABEL_SPACING,
             "Spacing DIP",
-            540,
-            128,
+            500,
+            104,
             112,
             28,
             0,
@@ -3748,10 +4118,10 @@ mod win32_window_smoke {
             &edit_class,
             K_APPEARANCE_SPACING,
             "8",
-            660,
-            128,
+            500,
+            134,
             92,
-            28,
+            34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
@@ -3760,8 +4130,8 @@ mod win32_window_smoke {
             &static_class,
             K_LABEL_CORNER_RADIUS,
             "Corner DIP",
-            540,
-            164,
+            626,
+            104,
             112,
             28,
             0,
@@ -3772,10 +4142,10 @@ mod win32_window_smoke {
             &edit_class,
             K_APPEARANCE_CORNER_RADIUS,
             "12",
-            660,
-            164,
+            626,
+            134,
             92,
-            28,
+            34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
@@ -3784,8 +4154,8 @@ mod win32_window_smoke {
             &static_class,
             K_LABEL_CANDIDATE_WIDTH,
             "Width DIP",
-            768,
-            128,
+            752,
+            104,
             84,
             28,
             0,
@@ -3796,10 +4166,10 @@ mod win32_window_smoke {
             &edit_class,
             K_APPEARANCE_CANDIDATE_WIDTH,
             "420",
-            860,
-            128,
+            752,
+            134,
             92,
-            28,
+            34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
@@ -3808,10 +4178,10 @@ mod win32_window_smoke {
             &static_class,
             K_LABEL_CANDIDATE_FONT,
             "Candidate font",
-            220,
-            200,
+            248,
+            178,
             180,
-            24,
+            28,
             0,
         )?;
         let font_combo = create_child_control(
@@ -3820,9 +4190,9 @@ mod win32_window_smoke {
             &combo_class,
             K_APPEARANCE_FONT_FAMILY,
             "",
-            220,
-            228,
-            180,
+            428,
+            174,
+            280,
             128,
             WS_BORDER | WS_VSCROLL | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
         )?;
@@ -3845,9 +4215,9 @@ mod win32_window_smoke {
                 *id,
                 label,
                 24,
-                24 + (index as i32 * 44),
-                164,
-                34,
+                84 + (index as i32 * 54),
+                176,
+                42,
                 WS_TABSTOP,
             )?;
         }
@@ -3860,7 +4230,7 @@ mod win32_window_smoke {
                 0,
                 preview_class_name.as_ptr(),
                 preview_title.as_ptr(),
-                WS_CHILD | WS_VISIBLE | WS_BORDER,
+                WS_CHILD | WS_VISIBLE,
                 preview_left,
                 candidate_preview_rect.y,
                 preview_width,
@@ -3894,8 +4264,23 @@ mod win32_window_smoke {
         y: i32,
         width: i32,
         height: i32,
-        extra_style: u32,
+        mut extra_style: u32,
     ) -> Result<Hwnd, String> {
+        if is_nav_control(id) {
+            extra_style |= BS_OWNERDRAW;
+        } else if matches!(
+            id,
+            K_PACKAGE_INSTALL
+                | K_PACKAGE_UPDATE
+                | K_PACKAGE_REMOVE
+                | K_PACKAGE_CONFIGURE
+                | K_PACKAGE_REFRESH
+                | K_PACKAGE_DETAILS
+                | K_PACKAGE_ENABLE_DISABLE
+                | K_PACKAGE_REPAIR
+        ) {
+            extra_style |= BS_FLAT;
+        }
         let text = to_wide(text);
         // SAFETY: The class/text UTF-16 buffers live for this call, `parent` is the live top-level
         // window, and the positive child id is passed through Win32's HMENU/id slot.
@@ -3919,6 +4304,18 @@ mod win32_window_smoke {
             return Err(format!(
                 "CreateWindowExW failed for Rust Settings UI Preview child control {id}"
             ));
+        }
+        let font = if id == K_PAGE_TITLE {
+            settings_title_font()
+        } else {
+            settings_ui_font()
+        };
+        if !font.is_null() {
+            // SAFETY: `hwnd` is a live child control. WM_SETFONT stores the HFONT handle but does
+            // not take ownership; settings_ui_font keeps the process-wide font alive until exit.
+            unsafe {
+                SendMessageW(hwnd, WM_SETFONT, font as Wparam, TRUE as Lparam);
+            }
         }
         Ok(hwnd)
     }
@@ -4006,6 +4403,8 @@ mod win32_window_smoke {
                 controls_for_page(active_page).contains(&control),
             );
         }
+        repaint_navigation(hwnd);
+        repaint_settings_window(hwnd);
     }
 
     fn controls_for_page(active_page: i32) -> &'static [i32] {
@@ -4073,6 +4472,37 @@ mod win32_window_smoke {
         unsafe {
             InvalidateRect(preview_hwnd, null(), FALSE);
             UpdateWindow(preview_hwnd);
+        }
+    }
+
+    fn repaint_navigation(hwnd: Hwnd) {
+        for control in [
+            K_NAV_GENERAL,
+            K_NAV_APPEARANCE,
+            K_NAV_SHORTCUTS,
+            K_NAV_UPDATES,
+            K_NAV_REPAIR,
+            K_NAV_PACKAGES,
+        ] {
+            // SAFETY: Reads known child HWNDs and invalidates only those that exist.
+            let child = unsafe { GetDlgItem(hwnd, control) };
+            if child.is_null() {
+                continue;
+            }
+            // SAFETY: The child HWND is live and can be repainted immediately.
+            unsafe {
+                InvalidateRect(child, null(), TRUE);
+                UpdateWindow(child);
+            }
+        }
+    }
+
+    fn repaint_settings_window(hwnd: Hwnd) {
+        // SAFETY: Invalidates the entire top-level Settings client area with erase so hidden child
+        // controls cannot leave stale pixels during navigation or resize.
+        unsafe {
+            InvalidateRect(hwnd, null(), TRUE);
+            UpdateWindow(hwnd);
         }
     }
 

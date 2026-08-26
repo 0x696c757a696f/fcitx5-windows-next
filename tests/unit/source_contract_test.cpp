@@ -2166,6 +2166,22 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configPocSource.find("candidate_preview_window_proc") == std::string::npos ||
         configPocSource.find("WM_PAINT") == std::string::npos ||
+        configPocSource.find("WM_ERASEBKGND") == std::string::npos ||
+        configPocSource.find("WM_PRINTCLIENT") == std::string::npos ||
+        configPocSource.find("WM_CTLCOLORSTATIC") == std::string::npos ||
+        configPocSource.find("WM_DRAWITEM") == std::string::npos ||
+        configPocSource.find("WM_SETFONT") == std::string::npos ||
+        configPocSource.find("WS_CLIPCHILDREN") == std::string::npos ||
+        configPocSource.find("BS_OWNERDRAW") == std::string::npos ||
+        configPocSource.find("draw_modern_nav_item") == std::string::npos ||
+        configPocSource.find("settings_ui_font") == std::string::npos ||
+        configPocSource.find("settings_title_font") == std::string::npos ||
+        configPocSource.find("Segoe UI") == std::string::npos ||
+        configPocSource.find("paint_settings_background") == std::string::npos ||
+        configPocSource.find("repaint_settings_window") == std::string::npos ||
+        configQaSource.find("verify_modern_settings_surface") == std::string::npos ||
+        configQaSource.find("verify_no_legacy_static_ghosting") == std::string::npos ||
+        configQaSource.find("preview_region_has_candidate_accent") == std::string::npos ||
         configPocSource.find("DrawTextW") == std::string::npos ||
         configPocSource.find("FillRect") == std::string::npos ||
         configPocSource.find("GetPixel") == std::string::npos ||

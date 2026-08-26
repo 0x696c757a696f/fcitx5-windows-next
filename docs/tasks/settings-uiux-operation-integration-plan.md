@@ -7,6 +7,90 @@
 
 This is the single planning document for the modern Settings surface. Every visible control must have a defined operation, every operation must have localized feedback, and every page must satisfy the no-overlap visual contract.
 
+## Config platform architecture
+
+`fcitx5-config` is a Rust-owned configuration platform, not merely one Settings
+window. The GUI, headless CLI, package/install/update/remove flows, CI checks,
+diagnostics, and tests must converge on the same Config Core semantics.
+
+```text
+fcitx5-config-core (Rust)
+  schema / validate / diff
+  store / transaction / migration
+  import / export / rollback
+  plugin metadata / package lifecycle
+  candidate theme / preview state
+  diagnostics / fail-soft recovery
+        |
+        +-- fcitx5-config.exe GUI
+        +-- fcitx5-config CLI/headless
+        +-- tests / CI / package automation
+```
+
+The core rule is `Config Core != Config GUI`:
+
+- GUI controls bind to `DraftConfig`, not directly to files;
+- validation produces a typed `ConfigDiff`;
+- commit uses a transaction: write temporary files, validate, atomically replace,
+  record previous-known-good, then notify the engine/UI to reload;
+- cancel discards Draft only; reset changes Draft only until Apply/commit;
+- live preview reads Draft but must not pollute the saved Current config;
+- CLI, GUI, and automated tests must use the same validation and transaction
+  path.
+
+Rust Config shipping remains staged:
+
+1. **Config Core shipping** — non-interactive backend, CLI/package/test/CI paths
+   are Rust-owned and do not fall back to old GUI implementation.
+2. **Config GUI shipping** — the real Settings window can navigate, modify and
+   persist configuration, manage packages, and preview candidate themes through
+   the production preview path.
+3. **Config Cutover Complete** — Win7/10/11, DPI, localization, keyboard, UIA/NVDA,
+   embedded Candidate Preview, plug-in install/update/remove/rollback, and
+   fail-soft QA are green; only then may old authoritative Config implementation
+   be deleted.
+
+The presentation layer must be Win7-compatible, but that does not mean it may look
+or behave like a VC6 dialog-resource property sheet. The target structure is an
+automatic layout tree:
+
+```text
+NavigationLayout
+  Sidebar
+  ScrollArea
+    VerticalStack
+      SettingSection
+      SettingRow(title, description, control)
+      ThemeCard
+      CandidatePreviewHost
+```
+
+Avoid absolute `x/y/width/height` as the long-term page model. A temporary Win32
+adapter may still use coordinates internally while it is being cut over, but the
+authoritative layout contract is rows, cards, scroll regions, logical DIP units,
+and responsive wrapping for longer localized text.
+
+For the current Win32-compatible Rust Settings stage, “modern” means:
+
+- Rust owns design tokens, page state, layout contracts, validation, and repaint
+  policy; HWND controls are adapter endpoints, not the product model;
+- navigation uses owner-drawn/list-style items with selected/hover/focus states,
+  not raised grey dialog buttons;
+- page bodies use section/card/setting-row composition, with enough typography
+  scale and line height for Chinese, Latin text, emoji, and longer localized
+  strings;
+- parent surfaces paint and erase deterministically, and child controls use
+  opaque matching backgrounds unless the child clears its own full drawing
+  surface before every frame;
+- candidate preview must be rendered in the Config content tree from the same
+  candidate/theme contract as the shipping candidate UI, never as an external
+  popup or static bitmap.
+
+Full WinUI 3 or a richer compositor-backed frontend can be considered after the
+compatibility gate changes. Until then, the Rust-owned Win32 adapter must still
+meet modern Settings behavior: no stale pixels, no overlap, no clipped text,
+keyboard access, localized feedback, and readable DPI-scaled controls.
+
 ## External UI/UX reference
 
 Reference reviewed: `nextlevelbuilder/ui-ux-pro-max-skill`.
@@ -33,7 +117,7 @@ Applicable guidance for Fcitx5 for Windows Next:
 Reference reviewed on 2026-08-25:
 
 - `huanfeng/WindInput` at `2214bede43b4153f0fdc463928cf3c50184ec2ef`;
-- `huanfeng/wind-ui-rust` at `8ce94a46900a414612ead96438c770cb49eefdea`;
+- `huanfeng/wind-ui-rust` at `62241e25e762df154c1b1f855b4db57533e516fc`;
 - `huanfeng/wind-setting` was not publicly available from GitHub at review time, so Settings UI source could not be inspected directly.
 
 Use these repositories as UI/product and architecture references only unless a later task
@@ -42,6 +126,15 @@ is MIT-licensed; `wind-ui-rust` exposes MIT and Apache-2.0 license files.
 
 Applicable product lessons for Fcitx5 for Windows Next:
 
+- separate `measure -> arrange -> paint`; controls report intrinsic size, the
+  layout owner positions them, and paint only draws inside assigned bounds;
+- use logical coordinates and scale to physical pixels at the rendering seam;
+- clear/invalidate dirty regions explicitly so runtime theme, page, and visibility
+  changes cannot leave stale pixels or ghosting/重影;
+- use shared theme/design tokens for palette, spacing, radius, typography, hover,
+  focus, card, form row, and list surfaces; do not hard-code each control's visual
+  constants independently;
+- prefer card/setting-row/list-pill composition over raw label-control grids;
 - theme management should be data-driven, not a pile of hard-coded UI controls;
 - theme discovery should merge user themes first and bundled themes second, while clearly
   labeling source, author, version, license, and whether the theme is built-in or removable;
@@ -115,7 +208,10 @@ This plan directly covers the gaps reported during review:
 ## Product decisions
 
 - Keep the new modern Settings visual direction.
-- Keep WTL/Win32 hosting plus the product-specific D2D/DWrite Settings layer.
+- Use a Rust-owned Config Core with a thin Win7-compatible Win32 presentation
+  adapter until a fuller Rust GUI layer has equivalent evidence.
+- Do not keep WTL/C++ Config as a durable product-logic owner. Existing native
+  presentation code is temporary adapter/shell code only.
 - Do not expose the old raw Win32/package-manager surface as the default UX.
 - Implement full operation coverage behind the modern surface.
 - Use localized inline status for routine feedback.

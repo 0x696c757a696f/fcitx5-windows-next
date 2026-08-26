@@ -2057,12 +2057,12 @@ fn poc_candidate(label: &str, text: &str, comment: &str) -> PocCandidate {
 }
 
 fn measure_candidate(candidate: &PocCandidate, scale: f32) -> Size {
-    let label = text_units(&candidate.label) * 8.0 * scale;
-    let text = text_units(&candidate.text) * 16.0 * scale;
-    let comment = text_units(&candidate.comment) * 9.0 * scale;
+    let label = text_units(&candidate.label) * 10.0 * scale;
+    let text = text_units(&candidate.text) * 18.0 * scale;
+    let comment = text_units(&candidate.comment) * 14.0 * scale;
     Size {
-        width: (label + 10.0 * scale + text + comment + 24.0 * scale).max(40.0 * scale),
-        height: 34.0 * scale,
+        width: (label + 14.0 * scale + text + comment + 48.0 * scale).max(64.0 * scale),
+        height: 42.0 * scale,
     }
 }
 
@@ -3053,6 +3053,13 @@ mod tests {
         assert!(plan.items.iter().any(|item| item.text.contains('你')));
         assert!(plan.items.iter().any(|item| item.text.contains('好')));
         assert!(plan.items.iter().any(|item| item.text.contains('😀')));
+        let emoji_item = plan
+            .items
+            .iter()
+            .find(|item| item.text == "3. 😀 emoji")
+            .expect("emoji preview candidate");
+        assert!(emoji_item.bounds.right - emoji_item.bounds.left >= 128.0);
+        assert!(emoji_item.bounds.bottom - emoji_item.bounds.top >= 42.0);
         for item in &plan.items {
             assert!(rect_inside(
                 item.bounds,

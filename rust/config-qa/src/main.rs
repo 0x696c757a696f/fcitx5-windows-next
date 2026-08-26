@@ -86,7 +86,13 @@ const K_SAVE_STATUS: i32 = 206;
 const LBN_SELCHANGE: Wparam = 1;
 const CBN_SELCHANGE: Wparam = 1;
 const EN_CHANGE: Wparam = 0x0300;
+const SWP_NOMOVE: Uint = 0x0002;
+const SWP_NOZORDER: Uint = 0x0004;
+const SWP_NOACTIVATE: Uint = 0x0010;
 const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
+const COLOR_SETTINGS_BACKGROUND: (u8, u8, u8) = (241, 244, 246);
+const COLOR_SETTINGS_SIDEBAR: (u8, u8, u8) = (247, 249, 251);
+const COLOR_SETTINGS_CONTENT: (u8, u8, u8) = (255, 255, 255);
 
 const PAGES: &[Page] = &[
     Page {
@@ -207,6 +213,15 @@ extern "system" {
     fn PrintWindow(hwnd: Hwnd, hdc: Hdc, flags: Uint) -> Bool;
     fn ReleaseDC(hwnd: Hwnd, hdc: Hdc) -> i32;
     fn SendMessageW(hwnd: Hwnd, msg: Uint, wparam: Wparam, lparam: Lparam) -> Lresult;
+    fn SetWindowPos(
+        hwnd: Hwnd,
+        hwnd_insert_after: Hwnd,
+        x: i32,
+        y: i32,
+        cx: i32,
+        cy: i32,
+        flags: Uint,
+    ) -> Bool;
 }
 
 #[link(name = "gdi32")]
@@ -277,6 +292,9 @@ struct ImageStats {
     dark_surface_pixels: usize,
     dark_text_pixels: usize,
     shared_theme_pixels: usize,
+    settings_background_pixels: usize,
+    settings_sidebar_pixels: usize,
+    settings_content_pixels: usize,
 }
 
 struct ProcessGuard {
@@ -315,6 +333,9 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("launch {}: {error}", args.config_exe.display()))?;
     let guard = ProcessGuard { child };
     let hwnd = wait_for_window(guard.child.id(), Duration::from_secs(10))?;
+    if rust_config {
+        verify_resize_repaint(hwnd)?;
+    }
     let mut report = String::new();
     report.push_str("# Config UI QA\n\n");
     report.push_str(&format!("- exe: `{}`\n", args.config_exe.display()));
@@ -349,6 +370,13 @@ fn run() -> Result<(), String> {
             }
         }
         write_bitmap(&capture, &args.out_dir.join(&file_name))?;
+        let stats = image_stats(&capture);
+        if rust_config {
+            verify_modern_settings_surface(page, stats)?;
+            if page.id == K_NAV_APPEARANCE {
+                verify_no_legacy_static_ghosting(&capture)?;
+            }
+        }
         if page.id == K_NAV_APPEARANCE {
             let preview = crop_config_preview(hwnd, &capture)?;
             let preview_name = "config-appearance-candidate-preview.bmp";
@@ -377,6 +405,11 @@ fn run() -> Result<(), String> {
                     "| appearance-system-font-picker | ok | Rust system font inventory |\n",
                 );
             }
+        } else if preview_region_has_candidate_accent(hwnd, page, &capture)? {
+            return Err(format!(
+                "{} page retained stale candidate preview accent pixels after navigation",
+                page.slug
+            ));
         }
         report.push_str(&format!("| {} | ok | `{}` |\n", page.slug, file_name));
     }
@@ -532,6 +565,93 @@ fn verify_page(hwnd: Hwnd, page: &Page) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn verify_resize_repaint(hwnd: Hwnd) -> Result<(), String> {
+    // SAFETY: `hwnd` is the live top-level Settings window. NOZORDER/NOACTIVATE keep this QA
+    // resize local to the test process and avoid stealing activation.
+    if unsafe {
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            980,
+            560,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    } == 0
+    {
+        return Err("Config window resize for repaint QA failed".to_string());
+    }
+    thread::sleep(Duration::from_millis(150));
+    let capture = capture_window(hwnd)?;
+    verify_modern_settings_surface(
+        &Page {
+            id: K_NAV_GENERAL,
+            slug: "resize-repaint",
+            controls: &[],
+        },
+        image_stats(&capture),
+    )
+}
+
+fn verify_modern_settings_surface(page: &Page, stats: ImageStats) -> Result<(), String> {
+    if stats.settings_background_pixels < 512 {
+        return Err(format!(
+            "{} page did not repaint the modern Settings background surface",
+            page.slug
+        ));
+    }
+    if stats.settings_sidebar_pixels < 512 {
+        return Err(format!(
+            "{} page did not repaint the modern Settings sidebar surface",
+            page.slug
+        ));
+    }
+    if stats.settings_content_pixels < 512 {
+        return Err(format!(
+            "{} page did not repaint the modern Settings content card surface",
+            page.slug
+        ));
+    }
+    Ok(())
+}
+
+fn verify_no_legacy_static_ghosting(capture: &BitmapCapture) -> Result<(), String> {
+    let stale_left_gutter = Rect {
+        left: 220,
+        top: 24,
+        right: 247,
+        bottom: 190,
+    };
+    let dark_pixels = dark_text_pixels_in_rect(capture, stale_left_gutter);
+    if dark_pixels > 8 {
+        return Err(format!(
+            "appearance page left stale-text gutter contains {dark_pixels} dark pixels; likely transparent STATIC ghosting from the previous page"
+        ));
+    }
+    Ok(())
+}
+
+fn dark_text_pixels_in_rect(capture: &BitmapCapture, rect: Rect) -> usize {
+    let left = rect.left.clamp(0, capture.width);
+    let top = rect.top.clamp(0, capture.height);
+    let right = rect.right.clamp(left, capture.width);
+    let bottom = rect.bottom.clamp(top, capture.height);
+    let mut count = 0usize;
+    for y in top..bottom {
+        for x in left..right {
+            let offset = ((y as usize) * (capture.width as usize) + x as usize) * 4;
+            let b = capture.pixels[offset];
+            let g = capture.pixels[offset + 1];
+            let r = capture.pixels[offset + 2];
+            if (28..=60).contains(&r) && (28..=62).contains(&g) && (30..=66).contains(&b) {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 fn is_keyboard_focus_control(control: i32) -> bool {
@@ -1091,6 +1211,61 @@ fn crop_config_preview(hwnd: Hwnd, capture: &BitmapCapture) -> Result<BitmapCapt
     crop_bitmap(capture, preview)
 }
 
+fn preview_region_has_candidate_accent(
+    hwnd: Hwnd,
+    page: &Page,
+    capture: &BitmapCapture,
+) -> Result<bool, String> {
+    let preview_child = unsafe { GetDlgItem(hwnd, K_PREVIEW) };
+    if preview_child.is_null() {
+        return Ok(false);
+    }
+    let mut window_rect = Rect::default();
+    // SAFETY: `window_rect` points to valid writable stack storage and `hwnd` is a live top-level
+    // Settings window discovered from the launched process.
+    if unsafe { GetWindowRect(hwnd, &mut window_rect) } == 0 {
+        return Err("Config window rect unavailable for stale preview check".to_string());
+    }
+    let mut preview_rect = Rect::default();
+    // SAFETY: `preview_rect` points to valid writable stack storage and `preview_child` is a child
+    // HWND returned by GetDlgItem.
+    if unsafe { GetWindowRect(preview_child, &mut preview_rect) } == 0 {
+        return Err("Config preview control rect unavailable for stale preview check".to_string());
+    }
+    let preview = Rect {
+        left: preview_rect.left - window_rect.left,
+        top: preview_rect.top - window_rect.top,
+        right: preview_rect.right - window_rect.left,
+        bottom: preview_rect.bottom - window_rect.top,
+    };
+    for &control in page.controls {
+        if control == K_PREVIEW {
+            continue;
+        }
+        let child = unsafe { GetDlgItem(hwnd, control) };
+        if child.is_null() || unsafe { IsWindowVisible(child) } == 0 {
+            continue;
+        }
+        let mut child_rect = Rect::default();
+        // SAFETY: `child_rect` points to valid writable storage and `child` is a visible child
+        // handle returned by GetDlgItem.
+        if unsafe { GetWindowRect(child, &mut child_rect) } == 0 {
+            continue;
+        }
+        let child_capture_rect = Rect {
+            left: child_rect.left - window_rect.left,
+            top: child_rect.top - window_rect.top,
+            right: child_rect.right - window_rect.left,
+            bottom: child_rect.bottom - window_rect.top,
+        };
+        if intersects(preview, child_capture_rect) {
+            return Ok(false);
+        }
+    }
+    let crop = crop_bitmap(capture, preview)?;
+    Ok(image_stats(&crop).selected_accent_pixels >= 8)
+}
+
 fn selected_theme_accent_bbox(capture: &BitmapCapture) -> Option<Rect> {
     let mut bbox: Option<Rect> = None;
     for y in 0..capture.height {
@@ -1193,12 +1368,27 @@ fn image_stats(capture: &BitmapCapture) -> ImageStats {
         if (28..=60).contains(&r) && (28..=62).contains(&g) && (30..=66).contains(&b) {
             stats.dark_text_pixels += 1;
         }
+        if close_rgb(r, g, b, COLOR_SETTINGS_BACKGROUND, 2) {
+            stats.settings_background_pixels += 1;
+        }
+        if close_rgb(r, g, b, COLOR_SETTINGS_SIDEBAR, 2) {
+            stats.settings_sidebar_pixels += 1;
+        }
+        if close_rgb(r, g, b, COLOR_SETTINGS_CONTENT, 0) {
+            stats.settings_content_pixels += 1;
+        }
     }
     stats.shared_theme_pixels = stats.selected_accent_pixels
         + stats.white_surface_pixels
         + stats.dark_surface_pixels
         + stats.dark_text_pixels;
     stats
+}
+
+fn close_rgb(r: u8, g: u8, b: u8, expected: (u8, u8, u8), tolerance: u8) -> bool {
+    r.abs_diff(expected.0) <= tolerance
+        && g.abs_diff(expected.1) <= tolerance
+        && b.abs_diff(expected.2) <= tolerance
 }
 
 fn assert_preview_matches_candidate_theme(
