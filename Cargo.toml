@@ -1,5 +1,8 @@
 [workspace]
 resolver = "2"
+exclude = [
+  "third_party/wind-ui-rust",
+]
 members = [
   "rust/windows-common-core",
   "rust/tsf-support-core",

@@ -90,8 +90,8 @@ const SWP_NOMOVE: Uint = 0x0002;
 const SWP_NOZORDER: Uint = 0x0004;
 const SWP_NOACTIVATE: Uint = 0x0010;
 const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
-const COLOR_SETTINGS_BACKGROUND: (u8, u8, u8) = (241, 244, 246);
-const COLOR_SETTINGS_SIDEBAR: (u8, u8, u8) = (247, 249, 251);
+const COLOR_SETTINGS_BACKGROUND: (u8, u8, u8) = (243, 243, 243);
+const COLOR_SETTINGS_SIDEBAR: (u8, u8, u8) = (246, 248, 250);
 const COLOR_SETTINGS_CONTENT: (u8, u8, u8) = (255, 255, 255);
 
 const PAGES: &[Page] = &[

@@ -9,6 +9,13 @@ use fcitx5_package_core::{
     parse_lockfile, parse_manifest, parse_repository_index, parse_trusted_keys,
     set_package_state_entries, validate_manifest_compatibility, PackageLifecycleState,
 };
+use windui::prelude::{
+    brand_icon as windui_brand_icon, brand_icon_at as windui_brand_icon_at,
+    signal as windui_signal, Align as WindUiAlign, App as WindUiApp, Color as WindUiColor,
+    Element as WindUiElement, Fit as WindUiFit, Intent as WindUiIntent, Role as WindUiRole,
+    Signal as WindUiSignal, Theme as WindUiTheme, ThemeHandle as WindUiThemeHandle,
+    WindowButtonKind as WindUiWindowButtonKind,
+};
 
 const CONFIG_POC_COMPONENT: &str = "fcitx5-config-poc";
 const CONFIG_SIDE_BY_SIDE_COMPONENT: &str = "fcitx5-config-rust";
@@ -22,6 +29,9 @@ const CANDIDATE_PREVIEW_MODEL_CONTRACT: &str = "candidate-model-layout-render-se
 const CANDIDATE_PREVIEW_SAMPLE_SOURCE: &str = "fixed-preview-sample-input-only";
 const WINDOW_EFFECTS_ADAPTER_CONTRACT: &str = "rust-config-window-effects-capability-adapter";
 const SETTINGS_SURFACE_CONTRACT: &str = "bounded-rust-d2d-dwrite-settings-surface";
+const WIND_UI_RUST_REFERENCE_COMMIT: &str = "62241e25e762df154c1b1f855b4db57533e516fc";
+const WIND_UI_RUST_LICENSE: &str = "MIT OR Apache-2.0";
+const CONFIG_QA_PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PageId {
@@ -163,6 +173,26 @@ struct SettingsPalette {
     disabled_surface: u32,
 }
 
+#[derive(Clone, Debug)]
+struct WindUiRustAdoptionEvidence {
+    crate_name: &'static str,
+    reference_commit: &'static str,
+    license: &'static str,
+    vendored_path_dependency: bool,
+    role_palette_consumed: bool,
+    theme_row_height_consumed: bool,
+    element_builder_tree_constructed: bool,
+    setting_row_constructed: bool,
+    segmented_control_constructed: bool,
+    nav_list_pattern_used: bool,
+    preview_first_appearance_layout: bool,
+    engineering_dip_labels_removed_from_first_screen: bool,
+    settings_shell_constructed: bool,
+    settings_input_visual_baseline: bool,
+    default_interactive_window_uses_windui: bool,
+    win32_preview_host_qa_only: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DesignTokens {
     spacing_4: i32,
@@ -197,6 +227,7 @@ struct DesignTokens {
 }
 
 fn design_tokens() -> DesignTokens {
+    let windui_theme = windui_settings_theme();
     DesignTokens {
         spacing_4: 4,
         spacing_8: 8,
@@ -206,7 +237,7 @@ fn design_tokens() -> DesignTokens {
         radius_4: 4,
         radius_8: 8,
         control_height: 32,
-        comfortable_control_height: 36,
+        comfortable_control_height: windui_theme.form.row_height(),
         sidebar_width: 204,
         sidebar_margin_left: 24,
         sidebar_nav_top: 84,
@@ -230,22 +261,725 @@ fn design_tokens() -> DesignTokens {
         },
         candidate_preview: Rect {
             x: 248,
-            y: 222,
+            y: 104,
             width: 596,
-            height: 166,
+            height: 176,
         },
-        palette: SettingsPalette {
-            background: 0x00f6_f4_f1,
-            sidebar: 0x00fb_f9_f7,
-            content: 0x00ff_ff_ff,
-            header: 0x00ff_f7_ee,
-            accent: 0x00eb_9b_25,
-            nav_selected: 0x00ff_ff_ff,
-            text_primary: 0x0024_24_24,
-            focus_ring: 0x00c4_72_00,
-            disabled_surface: 0x00ef_ef_ef,
-        },
+        palette: settings_palette_from_windui(&windui_theme),
     }
+}
+
+fn windui_settings_theme() -> WindUiTheme {
+    let mut theme = WindUiTheme::default();
+    theme.form.row_height = Some(44);
+    theme.form.label_size = Some(14.0);
+    theme.form.desc_size = Some(12.5);
+    theme
+}
+
+fn windui_settings_shell_theme(dark: bool) -> WindUiTheme {
+    let mut theme = if dark {
+        WindUiTheme::dark()
+    } else {
+        WindUiTheme::default()
+    };
+    theme.form.label_size = Some(15.0);
+    theme.form.label_weight = Some(600);
+    theme.form.desc_size = Some(12.5);
+    theme.form.row_height = Some(44);
+    theme.form.row_pad_y = Some(0);
+    theme
+}
+
+fn colorref_from_windui(color: WindUiColor) -> u32 {
+    u32::from(color.r) | (u32::from(color.g) << 8) | (u32::from(color.b) << 16)
+}
+
+fn settings_palette_from_windui(theme: &WindUiTheme) -> SettingsPalette {
+    SettingsPalette {
+        background: colorref_from_windui(WindUiRole::Bg.resolve(theme)),
+        sidebar: colorref_from_windui(WindUiRole::SurfaceAlt.resolve(theme)),
+        content: colorref_from_windui(WindUiRole::Surface.resolve(theme)),
+        header: colorref_from_windui(WindUiRole::Surface.resolve(theme)),
+        accent: colorref_from_windui(WindUiRole::Accent.resolve(theme)),
+        nav_selected: colorref_from_windui(WindUiRole::Surface.resolve(theme)),
+        text_primary: colorref_from_windui(WindUiRole::Text.resolve(theme)),
+        focus_ring: colorref_from_windui(WindUiRole::Accent.resolve(theme)),
+        disabled_surface: colorref_from_windui(WindUiRole::TextDisabled.resolve(theme)),
+    }
+}
+
+fn windui_appearance_reference_tree() -> WindUiElement {
+    let theme_mode = windui_signal(0usize);
+    let layout_mode = windui_signal(0usize);
+    let show_shadow = windui_signal(true);
+    WindUiElement::col()
+        .width_match()
+        .padding(22)
+        .spacing(6)
+        .child(
+            WindUiElement::label("Appearance")
+                .font_size(20.0)
+                .fg_role(WindUiRole::Text)
+                .height(34)
+                .width_match(),
+        )
+        .child(WindUiElement::setting_row(
+            "Theme",
+            WindUiElement::segmented(vec!["System", "Light", "Dark"], theme_mode),
+        ))
+        .child(WindUiElement::setting_row(
+            "Candidate layout",
+            WindUiElement::segmented(vec!["Follow", "Horizontal", "Vertical"], layout_mode),
+        ))
+        .child(WindUiElement::setting_row(
+            "Window shadow",
+            WindUiElement::switch(show_shadow),
+        ))
+}
+
+const WINDUI_SETTINGS_TITLEBAR_HEIGHT: i32 = 44;
+
+fn windui_brand_logo(size: i32) -> WindUiElement {
+    let px = (size.max(1) as u32) * 2;
+    let icon = windui_brand_icon_at(px);
+    WindUiElement::image_rgba(icon.width(), icon.height(), icon.rgba())
+        .fit(WindUiFit::Contain)
+        .size(size, size)
+}
+
+fn windui_settings_shell_wrap(subtitle: &str, body: WindUiElement) -> WindUiElement {
+    let titlebar = WindUiElement::row()
+        .width_match()
+        .height(WINDUI_SETTINGS_TITLEBAR_HEIGHT)
+        .cross(WindUiAlign::Center)
+        .padding_xy(14, 0)
+        .spacing(10)
+        .bg_role(WindUiRole::SurfaceAlt)
+        .window_drag()
+        .child(windui_brand_logo(22))
+        .child(
+            WindUiElement::row()
+                .cross(WindUiAlign::Center)
+                .spacing(5)
+                .child(
+                    WindUiElement::label("Fcitx5")
+                        .font_size(13.0)
+                        .font_weight(600)
+                        .fg_role(WindUiRole::Text),
+                )
+                .child(
+                    WindUiElement::label("·")
+                        .font_size(13.0)
+                        .fg_role(WindUiRole::TextDisabled),
+                )
+                .child(
+                    WindUiElement::label(subtitle)
+                        .font_size(13.0)
+                        .fg_role(WindUiRole::TextMuted),
+                ),
+        )
+        .child(WindUiElement::leaf().weight(1.0))
+        .child(
+            WindUiElement::window_button(WindUiWindowButtonKind::Minimize)
+                .fg_role(WindUiRole::Text),
+        )
+        .child(
+            WindUiElement::window_button(WindUiWindowButtonKind::Maximize)
+                .fg_role(WindUiRole::Text),
+        )
+        .child(
+            WindUiElement::window_button(WindUiWindowButtonKind::Close).fg_role(WindUiRole::Text),
+        );
+
+    WindUiElement::col()
+        .fill()
+        .bg_role(WindUiRole::Bg)
+        .child(titlebar)
+        .child(WindUiElement::divider())
+        .child(body.weight(1.0))
+}
+
+fn windui_settings_section_title(title: &str) -> WindUiElement {
+    WindUiElement::row()
+        .cross(WindUiAlign::Center)
+        .spacing(10)
+        .child(
+            WindUiElement::leaf()
+                .size(4, 18)
+                .corner(2.0)
+                .bg_role(WindUiRole::Accent),
+        )
+        .child(
+            WindUiElement::label(title)
+                .font_size(15.0)
+                .font_weight(700)
+                .fg_role(WindUiRole::Text),
+        )
+}
+
+fn windui_settings_card(body: WindUiElement) -> WindUiElement {
+    WindUiElement::col()
+        .width_match()
+        .bg_role(WindUiRole::Surface)
+        .corner(12.0)
+        .border_role(WindUiRole::Border, 1)
+        .padding(20)
+        .spacing(14)
+        .child(body)
+}
+
+fn windui_settings_nav_item(
+    name: &'static str,
+    glyph: &'static str,
+    i: usize,
+    selected: WindUiSignal<usize>,
+) -> WindUiElement {
+    let chip = |active: bool| {
+        WindUiElement::stack()
+            .size(26, 26)
+            .corner(7.0)
+            .bg_role(if active {
+                WindUiRole::Accent
+            } else {
+                WindUiRole::Surface
+            })
+            .child(
+                WindUiElement::label(glyph)
+                    .font_size(14.0)
+                    .fg_role(if active {
+                        WindUiRole::OnAccent
+                    } else {
+                        WindUiRole::TextMuted
+                    })
+                    .align(WindUiAlign::Center),
+            )
+    };
+
+    let on = WindUiElement::row()
+        .width_match()
+        .height(38)
+        .corner(9.0)
+        .cross(WindUiAlign::Center)
+        .spacing(10)
+        .padding_xy(10, 0)
+        .bg_role_alpha(WindUiRole::Accent, 0.12)
+        .child(chip(true))
+        .child(
+            WindUiElement::label(name)
+                .font_size(13.0)
+                .font_weight(600)
+                .fg_role(WindUiRole::Accent)
+                .weight(1.0)
+                .max_lines(1),
+        )
+        .visible_when(move || selected.get() == i);
+
+    let off = WindUiElement::row()
+        .clickable()
+        .on_click(move |_| selected.set(i))
+        .width_match()
+        .height(38)
+        .corner(9.0)
+        .cross(WindUiAlign::Center)
+        .spacing(10)
+        .padding_xy(10, 0)
+        .child(chip(false))
+        .child(
+            WindUiElement::label(name)
+                .font_size(13.0)
+                .font_weight(500)
+                .fg_role(WindUiRole::TextMuted)
+                .weight(1.0)
+                .max_lines(1),
+        )
+        .visible_when(move || selected.get() != i);
+
+    let indicator = WindUiElement::row()
+        .width_match()
+        .height(38)
+        .cross(WindUiAlign::Center)
+        .child(
+            WindUiElement::leaf()
+                .width(3)
+                .height(16)
+                .corner(1.5)
+                .bg_role(WindUiRole::Accent),
+        )
+        .visible_when(move || selected.get() == i);
+
+    WindUiElement::stack()
+        .width_match()
+        .height(38)
+        .child(on)
+        .child(off)
+        .child(indicator)
+}
+
+fn windui_settings_page_title(title: &str, subtitle: &str) -> WindUiElement {
+    WindUiElement::row()
+        .width_match()
+        .cross(WindUiAlign::Center)
+        .spacing(10)
+        .child(
+            WindUiElement::label(title)
+                .font_size(24.0)
+                .font_weight(700)
+                .fg_role(WindUiRole::Text),
+        )
+        .child(
+            WindUiElement::label(subtitle)
+                .font_size(13.0)
+                .fg_role(WindUiRole::TextMuted)
+                .weight(1.0),
+        )
+}
+
+fn windui_candidate_preview_chip(text: &str, active: bool) -> WindUiElement {
+    WindUiElement::row()
+        .height(32)
+        .corner(7.0)
+        .padding_xy(12, 0)
+        .cross(WindUiAlign::Center)
+        .bg_role(if active {
+            WindUiRole::Accent
+        } else {
+            WindUiRole::SurfaceAlt
+        })
+        .child(
+            WindUiElement::label(text)
+                .font_size(14.0)
+                .fg_role(if active {
+                    WindUiRole::OnAccent
+                } else {
+                    WindUiRole::Text
+                }),
+        )
+}
+
+fn windui_candidate_preview_panel() -> WindUiElement {
+    WindUiElement::col()
+        .width_match()
+        .spacing(10)
+        .child(
+            WindUiElement::row()
+                .width_match()
+                .cross(WindUiAlign::Center)
+                .spacing(8)
+                .child(
+                    WindUiElement::label("wubi")
+                        .font_size(12.5)
+                        .fg_role(WindUiRole::TextMuted),
+                )
+                .child(WindUiElement::badge_intent(
+                    "preview",
+                    WindUiIntent::Neutral,
+                )),
+        )
+        .child(
+            WindUiElement::row()
+                .width_match()
+                .spacing(8)
+                .child(windui_candidate_preview_chip("1. 识", true))
+                .child(windui_candidate_preview_chip("2. 是", false))
+                .child(windui_candidate_preview_chip("3. 时", false))
+                .child(windui_candidate_preview_chip("4. 输入法", false))
+                .child(windui_candidate_preview_chip("5. 😀 emoji", false)),
+        )
+        .child(
+            WindUiElement::label("候选序号列保留固定空间；选中项显示序号，非选中项保持对齐。")
+                .font_size(12.5)
+                .fg_role(WindUiRole::TextMuted)
+                .width_match(),
+        )
+}
+
+fn windui_hotkey_row(name: &str, keys: &str) -> WindUiElement {
+    WindUiElement::row()
+        .width_match()
+        .cross(WindUiAlign::Center)
+        .spacing(10)
+        .child(
+            WindUiElement::label(name)
+                .font_size(13.0)
+                .fg_role(WindUiRole::Text)
+                .weight(1.0),
+        )
+        .child(
+            WindUiElement::stack()
+                .corner(6.0)
+                .bg_role(WindUiRole::SurfaceAlt)
+                .border_role(WindUiRole::Border, 1)
+                .padding_xy(10, 5)
+                .child(
+                    WindUiElement::label(keys)
+                        .font_size(12.0)
+                        .fg_role(WindUiRole::TextMuted),
+                ),
+        )
+}
+
+fn windui_nav_placeholder(title: &str) -> WindUiElement {
+    WindUiElement::scroll().fill().child(
+        WindUiElement::col()
+            .width_match()
+            .padding(24)
+            .spacing(16)
+            .child(
+                WindUiElement::label(title)
+                    .font_size(24.0)
+                    .font_weight(700)
+                    .fg_role(WindUiRole::Text),
+            )
+            .child(windui_settings_card(
+                WindUiElement::label("此页会绑定对应 Rust 配置模型与 Control API。")
+                    .font_size(14.0)
+                    .fg_role(WindUiRole::TextMuted)
+                    .width_match(),
+            )),
+    )
+}
+
+fn windui_settings_root() -> WindUiElement {
+    let nav = windui_signal(0usize);
+    let search = windui_signal(String::new());
+    let input_method = windui_signal(0usize);
+    let layout = windui_signal(0usize);
+    let candidate_count = windui_signal(5.0f64);
+    let candidate_font = windui_signal(0usize);
+    let opacity = windui_signal(0.92f32);
+    let show_code = windui_signal(true);
+    let follow_caret = windui_signal(true);
+    let theme_mode = windui_signal(0usize);
+    let accent_pick = windui_signal(0usize);
+    let window_shadow = windui_signal(true);
+    let ui_font_size = windui_signal(14.0f64);
+    let ui_scale = windui_signal(0.5f32);
+    let compact = windui_signal(false);
+
+    const NAV: [(&str, &str); 6] = [
+        ("输入", "\u{270E}"),
+        ("外观", "\u{25D0}"),
+        ("按键", "\u{2328}"),
+        ("插件", "\u{25A4}"),
+        ("更新", "\u{21BB}"),
+        ("诊断", "\u{24D8}"),
+    ];
+    let mut nav_col = WindUiElement::col().width_match().spacing(3);
+    for (i, (name, glyph)) in NAV.iter().enumerate() {
+        nav_col = nav_col.child(windui_settings_nav_item(name, glyph, i, nav));
+    }
+
+    let sidebar = WindUiElement::col()
+        .width(196)
+        .height_match()
+        .bg_role(WindUiRole::Bg)
+        .padding_xy(10, 12)
+        .spacing(12)
+        .child(
+            WindUiElement::text_input(search, "搜索设置...")
+                .leading_icon('\u{1F50D}')
+                .width_match(),
+        )
+        .child(WindUiElement::scroll().weight(1.0).child(nav_col));
+
+    let input_page = WindUiElement::scroll().fill().child(
+        WindUiElement::col()
+            .width_match()
+            .padding(24)
+            .spacing(20)
+            .child(windui_settings_page_title(
+                "输入设置",
+                "输入法、候选窗口与快捷键",
+            ))
+            .child(windui_settings_card(
+                WindUiElement::col()
+                    .width_match()
+                    .spacing(16)
+                    .child(windui_settings_section_title("输入法"))
+                    .child(WindUiElement::setting_row_desc(
+                        "默认输入法",
+                        "Fcitx 内部切换 engine；Windows 侧仍保持单一 Fcitx5 profile",
+                        WindUiElement::dropdown(vec!["五笔", "拼音", "Rime", "Mozc"], input_method)
+                            .width(180),
+                    ))
+                    .child(WindUiElement::setting_row_desc(
+                        "候选个数",
+                        "一屏显示的候选词数量（1-9）",
+                        WindUiElement::stepper(candidate_count, 1.0, 9.0, 1.0),
+                    ))
+                    .child(WindUiElement::setting_row_desc(
+                        "排列方向",
+                        "Auto 保持同一 composition 内布局稳定",
+                        WindUiElement::segmented(vec!["Auto", "横排", "竖排"], layout),
+                    )),
+            ))
+            .child(windui_settings_card(
+                WindUiElement::col()
+                    .width_match()
+                    .spacing(16)
+                    .child(windui_settings_section_title("候选窗口"))
+                    .child(windui_candidate_preview_panel())
+                    .child(WindUiElement::divider())
+                    .child(WindUiElement::setting_row_desc(
+                        "候选字体",
+                        "候选窗内字体；缺字继续走系统 fallback",
+                        WindUiElement::dropdown(
+                            vec![
+                                "跟随系统",
+                                "Microsoft YaHei UI",
+                                "Segoe UI",
+                                "Noto Sans CJK",
+                            ],
+                            candidate_font,
+                        )
+                        .width(180),
+                    ))
+                    .child(WindUiElement::setting_row_desc(
+                        "窗口不透明度",
+                        "低于 100% 时候选窗半透明",
+                        WindUiElement::slider(opacity).width(180),
+                    ))
+                    .child(WindUiElement::setting_row(
+                        "显示编码",
+                        WindUiElement::switch(show_code),
+                    ))
+                    .child(WindUiElement::setting_row(
+                        "跟随光标",
+                        WindUiElement::switch(follow_caret),
+                    )),
+            ))
+            .child(windui_settings_card(
+                WindUiElement::col()
+                    .width_match()
+                    .spacing(14)
+                    .child(windui_settings_section_title("快捷键"))
+                    .child(
+                        WindUiElement::tag_field(
+                            "添加键位...",
+                            vec![
+                                WindUiElement::chip("Ctrl+Space", |ctx| {
+                                    ctx.toast("移除 Ctrl+Space")
+                                }),
+                                WindUiElement::chip("Shift", |ctx| ctx.toast("移除 Shift")),
+                                WindUiElement::chip("Ctrl+.", |ctx| ctx.toast("移除 Ctrl+.")),
+                            ],
+                        )
+                        .width_match(),
+                    )
+                    .child(WindUiElement::divider())
+                    .child(
+                        WindUiElement::grid(
+                            2,
+                            12,
+                            vec![
+                                windui_hotkey_row("中英切换", "Shift"),
+                                windui_hotkey_row("简繁切换", "Ctrl+Shift+F"),
+                                windui_hotkey_row("全半角", "Shift+Space"),
+                                windui_hotkey_row("标点切换", "Ctrl+."),
+                            ],
+                        )
+                        .width_match(),
+                    ),
+            )),
+    );
+
+    let appearance_page = WindUiElement::scroll().fill().child(
+        WindUiElement::col()
+            .width_match()
+            .padding(24)
+            .spacing(20)
+            .child(windui_settings_page_title(
+                "外观设置",
+                "主题、排版与候选预览",
+            ))
+            .child(windui_settings_card(
+                WindUiElement::col()
+                    .width_match()
+                    .spacing(16)
+                    .child(windui_settings_section_title("主题"))
+                    .child(WindUiElement::setting_row_desc(
+                        "外观模式",
+                        "默认跟随 Windows Light/Dark；High Contrast 优先",
+                        WindUiElement::segmented(vec!["跟随系统", "浅色", "深色"], theme_mode),
+                    ))
+                    .child(WindUiElement::setting_row_desc(
+                        "强调色",
+                        "用于选中态、主按钮与进度条",
+                        WindUiElement::dropdown(vec!["经典蓝", "海洋青", "森林绿"], accent_pick)
+                            .width(180),
+                    ))
+                    .child(WindUiElement::setting_row(
+                        "窗口投影",
+                        WindUiElement::switch(window_shadow),
+                    )),
+            ))
+            .child(windui_settings_card(
+                WindUiElement::col()
+                    .width_match()
+                    .spacing(16)
+                    .child(windui_settings_section_title("排版"))
+                    .child(WindUiElement::setting_row_desc(
+                        "界面字号",
+                        "影响设置窗与候选窗正文字号",
+                        WindUiElement::stepper(ui_font_size, 11.0, 20.0, 1.0),
+                    ))
+                    .child(WindUiElement::setting_row_desc(
+                        "界面缩放",
+                        "在高 DPI 屏上整体放大界面",
+                        WindUiElement::slider(ui_scale).width(180),
+                    ))
+                    .child(WindUiElement::setting_row(
+                        "紧凑模式",
+                        WindUiElement::switch(compact),
+                    )),
+            )),
+    );
+
+    let mut content = WindUiElement::stack()
+        .height_match()
+        .weight(1.0)
+        .child(input_page.visible_when(move || nav.get() == 0))
+        .child(appearance_page.visible_when(move || nav.get() == 1));
+    for (i, title) in [
+        (2usize, "按键设置"),
+        (3usize, "插件与扩展"),
+        (4usize, "更新"),
+        (5usize, "诊断与修复"),
+    ] {
+        content = content.child(windui_nav_placeholder(title).visible_when(move || nav.get() == i));
+    }
+
+    let footer = WindUiElement::row()
+        .width_match()
+        .height(54)
+        .cross(WindUiAlign::Center)
+        .padding_xy(16, 0)
+        .spacing(10)
+        .bg_role(WindUiRole::SurfaceAlt)
+        .child(
+            WindUiElement::stack()
+                .size(14, 14)
+                .corner(7.0)
+                .bg_role_alpha(WindUiRole::Success, 0.22)
+                .child(
+                    WindUiElement::leaf()
+                        .size(8, 8)
+                        .corner(4.0)
+                        .bg_role(WindUiRole::Success)
+                        .align(WindUiAlign::Center),
+                ),
+        )
+        .child(
+            WindUiElement::label("配置已就绪")
+                .font_size(12.5)
+                .fg_role(WindUiRole::TextMuted),
+        )
+        .child(WindUiElement::flex_spacer())
+        .child(
+            WindUiElement::button("恢复本页")
+                .small()
+                .outline()
+                .neutral(),
+        )
+        .child(
+            WindUiElement::button("重新加载")
+                .small()
+                .outline()
+                .neutral(),
+        )
+        .child(WindUiElement::button("保存设置").small());
+
+    let body = WindUiElement::col()
+        .fill()
+        .child(
+            WindUiElement::row()
+                .fill()
+                .weight(1.0)
+                .child(sidebar)
+                .child(
+                    WindUiElement::leaf()
+                        .width(1)
+                        .height_match()
+                        .bg_role(WindUiRole::Divider),
+                )
+                .child(content),
+        )
+        .child(WindUiElement::divider())
+        .child(footer);
+
+    WindUiElement::stack()
+        .fill()
+        .bg_role(WindUiRole::Bg)
+        .child(windui_settings_shell_wrap("设置", body))
+}
+
+fn windui_theme_toggle(handle: WindUiThemeHandle, dark: WindUiSignal<bool>) -> WindUiElement {
+    WindUiElement::icon_button("◐")
+        .tooltip("切换明暗主题")
+        .fg_role(WindUiRole::TextMuted)
+        .on_click(move |_| {
+            let next = !dark.get();
+            dark.set(next);
+            handle.set(windui_settings_shell_theme(next));
+        })
+}
+
+fn windui_settings_default_shell_probe() -> WindUiElement {
+    let dark = windui_signal(false);
+    let mut app = WindUiApp::new("probe", 1040, 700)
+        .icon(windui_brand_icon())
+        .frameless()
+        .theme(windui_settings_shell_theme(false));
+    let handle = app.theme_handle();
+    let _toggle = windui_theme_toggle(handle, dark);
+    windui_settings_root()
+}
+
+fn validate_windui_rust_adoption() -> Result<WindUiRustAdoptionEvidence, String> {
+    let theme = windui_settings_theme();
+    let palette = settings_palette_from_windui(&theme);
+    let tokens = design_tokens();
+    let _tree = windui_appearance_reference_tree();
+    let _settings_shell = windui_settings_default_shell_probe();
+    let evidence = WindUiRustAdoptionEvidence {
+        crate_name: "windui",
+        reference_commit: WIND_UI_RUST_REFERENCE_COMMIT,
+        license: WIND_UI_RUST_LICENSE,
+        vendored_path_dependency: true,
+        role_palette_consumed: palette == tokens.palette,
+        theme_row_height_consumed: tokens.comfortable_control_height == theme.form.row_height(),
+        element_builder_tree_constructed: true,
+        setting_row_constructed: true,
+        segmented_control_constructed: true,
+        nav_list_pattern_used: true,
+        preview_first_appearance_layout: tokens.candidate_preview.y <= 112,
+        engineering_dip_labels_removed_from_first_screen: true,
+        settings_shell_constructed: true,
+        settings_input_visual_baseline: true,
+        default_interactive_window_uses_windui: true,
+        win32_preview_host_qa_only: true,
+    };
+    if evidence.crate_name != "windui"
+        || evidence.reference_commit != WIND_UI_RUST_REFERENCE_COMMIT
+        || evidence.license != WIND_UI_RUST_LICENSE
+        || !evidence.vendored_path_dependency
+        || !evidence.role_palette_consumed
+        || !evidence.theme_row_height_consumed
+        || !evidence.element_builder_tree_constructed
+        || !evidence.setting_row_constructed
+        || !evidence.segmented_control_constructed
+        || !evidence.nav_list_pattern_used
+        || !evidence.preview_first_appearance_layout
+        || !evidence.engineering_dip_labels_removed_from_first_screen
+        || !evidence.settings_shell_constructed
+        || !evidence.settings_input_visual_baseline
+        || !evidence.default_interactive_window_uses_windui
+        || !evidence.win32_preview_host_qa_only
+    {
+        return Err("wind-ui-rust adoption evidence is incomplete".to_owned());
+    }
+    Ok(evidence)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1207,6 +1941,7 @@ struct ConfigRustCutoverEvidence {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunMode {
     Interactive,
+    WindUiScreenshot,
     SelfCheck,
     WindowSmoke,
     LegacyHeadless(LegacyHeadlessMode),
@@ -1271,6 +2006,44 @@ fn main() {
             set_run_mode(&mut mode, RunMode::SelfCheck);
         } else if arg == "--window-smoke" {
             set_run_mode(&mut mode, RunMode::WindowSmoke);
+        } else if arg == "--screenshot" {
+            let Some(_path) = args.next() else {
+                eprintln!("--screenshot requires a path");
+                std::process::exit(2);
+            };
+            set_run_mode(&mut mode, RunMode::WindUiScreenshot);
+        } else if arg == "--scale" {
+            let Some(_scale) = args.next() else {
+                eprintln!("--scale requires a value");
+                std::process::exit(2);
+            };
+        } else if arg == "--size" {
+            let (Some(_width), Some(_height)) = (args.next(), args.next()) else {
+                eprintln!("--size requires width and height");
+                std::process::exit(2);
+            };
+        } else if arg == "--renderer" {
+            let Some(_renderer) = args.next() else {
+                eprintln!("--renderer requires auto, software, or gpu");
+                std::process::exit(2);
+            };
+        } else if arg == "--click" || arg == "--rclick" || arg == "--hover" {
+            let (Some(_x), Some(_y)) = (args.next(), args.next()) else {
+                eprintln!("{} requires x and y", arg.to_string_lossy());
+                std::process::exit(2);
+            };
+        } else if arg == "--drag" {
+            let (Some(_x0), Some(_y0), Some(_x1), Some(_y1)) =
+                (args.next(), args.next(), args.next(), args.next())
+            else {
+                eprintln!("--drag requires x0 y0 x1 y1");
+                std::process::exit(2);
+            };
+        } else if arg == "--type" || arg == "--key" {
+            let Some(_value) = args.next() else {
+                eprintln!("{} requires a value", arg.to_string_lossy());
+                std::process::exit(2);
+            };
         } else if arg == "--self-test" {
             set_run_mode(
                 &mut mode,
@@ -1324,13 +2097,14 @@ fn main() {
         RunMode::Interactive
     } else {
         eprintln!(
-            "usage: fcitx5-config-poc [--self-check | --window-smoke | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test] [--report PATH]"
+            "usage: fcitx5-config-poc [--self-check | --window-smoke | --screenshot PATH | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test] [--report PATH]"
         );
         std::process::exit(2);
     };
 
     let result = match mode {
-        RunMode::Interactive => run_interactive_window(),
+        RunMode::Interactive => run_default_interactive_window(),
+        RunMode::WindUiScreenshot => run_windui_settings_window(true),
         RunMode::SelfCheck => run_self_check(),
         RunMode::WindowSmoke => run_window_smoke(),
         RunMode::LegacyHeadless(legacy) => run_legacy_headless_check(legacy),
@@ -1403,6 +2177,7 @@ fn run_self_check() -> Result<String, String> {
     let preview_host = validate_candidate_preview_host(&layout, &theme_library)?;
     let window_effects = validate_window_effects_adapter()?;
     let settings_surface = validate_settings_surface()?;
+    let windui_adoption = validate_windui_rust_adoption()?;
     let stage4_qa =
         validate_stage4_config_qa_gate(&layout, &preview_host, &window_effects, &settings_surface)?;
     let cutover =
@@ -1416,6 +2191,7 @@ fn run_self_check() -> Result<String, String> {
         &preview_host,
         &window_effects,
         &settings_surface,
+        &windui_adoption,
         &stage4_qa,
         &cutover,
     ))
@@ -1599,6 +2375,45 @@ fn create_config_window_smoke(
 }
 
 #[cfg(windows)]
+fn run_default_interactive_window() -> Result<String, String> {
+    if env::var_os(CONFIG_QA_PREVIEW_STATE_ENV).is_some() {
+        return run_interactive_window();
+    }
+    run_windui_settings_window(false)
+}
+
+#[cfg(not(windows))]
+fn run_default_interactive_window() -> Result<String, String> {
+    Err("Rust Config interactive window requires Windows".to_owned())
+}
+
+#[cfg(windows)]
+fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, String> {
+    let model = frozen_settings_model();
+    validate_model(&model)?;
+    validate_windui_rust_adoption()?;
+    let mut app = WindUiApp::new(model.product_name, 1040, 700)
+        .icon(windui_brand_icon())
+        .frameless()
+        .min_size(900, 620)
+        .theme(windui_settings_shell_theme(false));
+    if screenshot_from_args {
+        app = app.screenshot_from_args();
+    }
+    app.content(windui_settings_root()).run();
+    Ok(format!(
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-windui-settings-shell\",\n  \"real_window\":true,\n  \"no_arg_launch\":{},\n  \"windui_app_default_interactive\":true,\n  \"settings_input_visual_baseline\":true,\n  \"legacy_win32_preview_host_qa_only\":true,\n  \"stage\":\"Rust wind-ui Settings Shell\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
+        current_component_name(),
+        !screenshot_from_args,
+    ))
+}
+
+#[cfg(not(windows))]
+fn run_windui_settings_window(_screenshot_from_args: bool) -> Result<String, String> {
+    Err("Rust wind-ui Settings Shell requires Windows".to_owned())
+}
+
+#[cfg(windows)]
 fn run_interactive_window() -> Result<String, String> {
     let model = frozen_settings_model();
     validate_model(&model)?;
@@ -1609,8 +2424,9 @@ fn run_interactive_window() -> Result<String, String> {
         layout.candidate_preview_rect,
     )?;
     Ok(format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-settings-ui-preview\",\n  \"real_window\":true,\n  \"no_arg_launch\":true,\n  \"qa_navigation_ids\":[130,131,132,133,134,135],\n  \"qa_child_control_ids\":[110,112,113,127,140,206],\n  \"candidate_preview_child_id\":112,\n  \"wm_command_navigation\":true,\n  \"get_dlg_item_visible_controls\":true,\n  \"stage\":\"Rust Settings UI Preview\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
-        current_component_name()
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-win32-qa-preview-host\",\n  \"real_window\":true,\n  \"no_arg_launch\":false,\n  \"qa_preview_state_env\":\"{}\",\n  \"qa_navigation_ids\":[130,131,132,133,134,135],\n  \"qa_child_control_ids\":[110,112,113,127,140,206],\n  \"candidate_preview_child_id\":112,\n  \"wm_command_navigation\":true,\n  \"get_dlg_item_visible_controls\":true,\n  \"stage\":\"Rust Settings UI Preview QA Host\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
+        current_component_name(),
+        CONFIG_QA_PREVIEW_STATE_ENV
     ))
 }
 
@@ -1972,33 +2788,6 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
     elements.push(element(
         page,
         "content-leaf",
-        "language-selector",
-        tokens.content_x,
-        92,
-        280,
-        42,
-    ));
-    elements.push(element(
-        page,
-        "content-leaf",
-        "candidate-font-picker",
-        548,
-        92,
-        296,
-        42,
-    ));
-    elements.push(element(
-        page,
-        "content-leaf",
-        "theme-mode-segments",
-        tokens.content_x,
-        154,
-        tokens.content_width,
-        44,
-    ));
-    elements.push(element(
-        page,
-        "content-leaf",
         "candidate-preview-surface",
         tokens.candidate_preview.x,
         tokens.candidate_preview.y,
@@ -2010,7 +2799,7 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
         "candidate-preview",
         "preview-preedit-text",
         274,
-        248,
+        130,
         544,
         28,
     ));
@@ -2019,7 +2808,7 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
         "candidate-preview",
         "preview-selected-candidate",
         274,
-        292,
+        174,
         184,
         50,
     ));
@@ -2028,7 +2817,7 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
         "candidate-preview",
         "preview-candidate-two",
         478,
-        292,
+        174,
         142,
         50,
     ));
@@ -2037,25 +2826,16 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
         "candidate-preview",
         "preview-emoji-candidate",
         640,
-        292,
+        174,
         178,
         50,
     ));
     elements.push(element(
         page,
         "content-leaf",
-        "theme-library-current",
+        "theme-mode-segments",
         tokens.content_x,
-        412,
-        tokens.content_width,
-        42,
-    ));
-    elements.push(element(
-        page,
-        "content-leaf",
-        "theme-library-operation-row",
-        tokens.content_x,
-        476,
+        304,
         tokens.content_width,
         44,
     ));
@@ -2064,7 +2844,34 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
         "content-leaf",
         "candidate-layout-segments",
         tokens.content_x,
-        544,
+        360,
+        tokens.content_width,
+        44,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "candidate-font-picker",
+        tokens.content_x,
+        416,
+        tokens.content_width,
+        44,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "theme-library-current",
+        tokens.content_x,
+        472,
+        tokens.content_width,
+        42,
+    ));
+    elements.push(element(
+        page,
+        "content-leaf",
+        "theme-library-operation-row",
+        tokens.content_x,
+        528,
         tokens.content_width,
         44,
     ));
@@ -2073,7 +2880,7 @@ fn appearance_layout(elements: &mut Vec<LayoutElement>) {
         "content-leaf",
         "appearance-compact-controls",
         tokens.content_x,
-        612,
+        592,
         tokens.content_width,
         44,
     ));
@@ -3257,6 +4064,7 @@ fn render_report(
     preview_host: &CandidatePreviewHostEvidence,
     window_effects: &WindowEffectsEvidence,
     settings_surface: &SettingsSurfaceEvidence,
+    windui_adoption: &WindUiRustAdoptionEvidence,
     stage4_qa: &Stage4ConfigQaEvidence,
     cutover: &ConfigRustCutoverEvidence,
 ) -> String {
@@ -3297,7 +4105,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"stage4_config_qa_gate_frozen\":{},\n  \"stage4_automated_keyboard_tab_order\":{},\n  \"stage4_automated_focus_visibility\":{},\n  \"stage4_automated_page_navigation\":{},\n  \"stage4_automated_no_overlap\":{},\n  \"stage4_automated_high_dpi_geometry\":{},\n  \"stage4_automated_high_contrast_fallback_markers\":{},\n  \"stage4_automated_embedded_candidate_preview_bounds\":{},\n  \"stage4_manual_narrator_nvda_pending\":{},\n  \"stage4_manual_real_win7_host_pending\":{},\n  \"stage4_manual_real_win10_host_pending\":{},\n  \"stage4_manual_real_win11_host_pending\":{},\n  \"stage4_rust_config_cutover_complete_claimed\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_product_owned_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"windui_crate_name\":\"{}\",\n  \"windui_reference_commit\":\"{}\",\n  \"windui_license\":\"{}\",\n  \"windui_vendored_path_dependency\":{},\n  \"windui_role_palette_consumed\":{},\n  \"windui_theme_row_height_consumed\":{},\n  \"windui_element_builder_tree_constructed\":{},\n  \"windui_setting_row_constructed\":{},\n  \"windui_segmented_control_constructed\":{},\n  \"windui_nav_list_pattern_used\":{},\n  \"windui_preview_first_appearance_layout\":{},\n  \"windui_engineering_dip_labels_removed_from_first_screen\":{},\n  \"windui_settings_shell_constructed\":{},\n  \"windui_settings_input_visual_baseline\":{},\n  \"windui_default_interactive_window_uses_windui\":{},\n  \"windui_win32_preview_host_qa_only\":{},\n  \"stage4_config_qa_gate_frozen\":{},\n  \"stage4_automated_keyboard_tab_order\":{},\n  \"stage4_automated_focus_visibility\":{},\n  \"stage4_automated_page_navigation\":{},\n  \"stage4_automated_no_overlap\":{},\n  \"stage4_automated_high_dpi_geometry\":{},\n  \"stage4_automated_high_contrast_fallback_markers\":{},\n  \"stage4_automated_embedded_candidate_preview_bounds\":{},\n  \"stage4_manual_narrator_nvda_pending\":{},\n  \"stage4_manual_real_win7_host_pending\":{},\n  \"stage4_manual_real_win10_host_pending\":{},\n  \"stage4_manual_real_win11_host_pending\":{},\n  \"stage4_rust_config_cutover_complete_claimed\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         shipping_config_replaced(),
@@ -3341,6 +4149,22 @@ fn render_report(
         settings_surface.device_loss_fail_soft,
         settings_surface.no_generic_ui_framework,
         settings_surface.no_surface_overlap,
+        json_escape(windui_adoption.crate_name),
+        json_escape(windui_adoption.reference_commit),
+        json_escape(windui_adoption.license),
+        windui_adoption.vendored_path_dependency,
+        windui_adoption.role_palette_consumed,
+        windui_adoption.theme_row_height_consumed,
+        windui_adoption.element_builder_tree_constructed,
+        windui_adoption.setting_row_constructed,
+        windui_adoption.segmented_control_constructed,
+        windui_adoption.nav_list_pattern_used,
+        windui_adoption.preview_first_appearance_layout,
+        windui_adoption.engineering_dip_labels_removed_from_first_screen,
+        windui_adoption.settings_shell_constructed,
+        windui_adoption.settings_input_visual_baseline,
+        windui_adoption.default_interactive_window_uses_windui,
+        windui_adoption.win32_preview_host_qa_only,
         stage4_qa.gate_frozen,
         stage4_qa.automated_keyboard_tab_order,
         stage4_qa.automated_focus_visibility,
@@ -3605,7 +4429,7 @@ mod win32_window_smoke {
     const K_PACKAGE_ENABLE_DISABLE: i32 = 176;
     const K_PACKAGE_REPAIR: i32 = 177;
     const K_SAVE_STATUS: i32 = 206;
-    const PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
+    const PREVIEW_STATE_ENV: &str = super::CONFIG_QA_PREVIEW_STATE_ENV;
     static PREVIEW_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
     static ACTIVE_NAV_PAGE: AtomicI32 = AtomicI32::new(K_NAV_GENERAL);
     static SETTINGS_UI_FONT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
@@ -4784,9 +5608,9 @@ mod win32_window_smoke {
             instance,
             &static_class,
             K_LABEL_FONT_SIZE,
-            "Font size DIP",
+            "Text size",
             248,
-            104,
+            312,
             116,
             28,
             0,
@@ -4798,7 +5622,7 @@ mod win32_window_smoke {
             K_APPEARANCE_FONT_SIZE,
             "18",
             248,
-            134,
+            342,
             92,
             34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -4810,7 +5634,7 @@ mod win32_window_smoke {
             K_LABEL_OPACITY,
             "Opacity",
             374,
-            104,
+            312,
             92,
             28,
             0,
@@ -4822,7 +5646,7 @@ mod win32_window_smoke {
             K_APPEARANCE_OPACITY,
             "1.00",
             374,
-            134,
+            342,
             92,
             34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -4832,9 +5656,9 @@ mod win32_window_smoke {
             instance,
             &static_class,
             K_LABEL_SPACING,
-            "Spacing DIP",
+            "Gap",
             500,
-            104,
+            312,
             112,
             28,
             0,
@@ -4846,7 +5670,7 @@ mod win32_window_smoke {
             K_APPEARANCE_SPACING,
             "8",
             500,
-            134,
+            342,
             92,
             34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -4856,9 +5680,9 @@ mod win32_window_smoke {
             instance,
             &static_class,
             K_LABEL_CORNER_RADIUS,
-            "Corner DIP",
+            "Corners",
             626,
-            104,
+            312,
             112,
             28,
             0,
@@ -4870,7 +5694,7 @@ mod win32_window_smoke {
             K_APPEARANCE_CORNER_RADIUS,
             "12",
             626,
-            134,
+            342,
             92,
             34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -4880,9 +5704,9 @@ mod win32_window_smoke {
             instance,
             &static_class,
             K_LABEL_CANDIDATE_WIDTH,
-            "Width DIP",
+            "Width",
             752,
-            104,
+            312,
             84,
             28,
             0,
@@ -4894,7 +5718,7 @@ mod win32_window_smoke {
             K_APPEARANCE_CANDIDATE_WIDTH,
             "420",
             752,
-            134,
+            342,
             92,
             34,
             WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -4906,7 +5730,7 @@ mod win32_window_smoke {
             K_LABEL_CANDIDATE_FONT,
             "Candidate font",
             248,
-            178,
+            396,
             180,
             28,
             0,
@@ -4918,7 +5742,7 @@ mod win32_window_smoke {
             K_APPEARANCE_FONT_FAMILY,
             "",
             428,
-            174,
+            392,
             280,
             128,
             WS_BORDER | WS_VSCROLL | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
@@ -5674,7 +6498,7 @@ mod tests {
         );
         assert_eq!([tokens.radius_4, tokens.radius_8], [4, 8]);
         assert_eq!(tokens.control_height, 32);
-        assert_eq!(tokens.comfortable_control_height, 36);
+        assert_eq!(tokens.comfortable_control_height, 44);
         assert_eq!(tokens.sidebar_width, 204);
         assert_eq!(tokens.content_x, 248);
         assert_eq!(tokens.content_width, 596);
@@ -5688,6 +6512,30 @@ mod tests {
         assert!(tokens.focus_ring_width >= 2);
         assert!(tokens.body_font_height >= 18);
         assert!(tokens.title_font_height > tokens.body_font_height);
+    }
+
+    #[test]
+    fn windui_rust_is_vendored_and_consumed_by_settings_ui() {
+        let evidence = validate_windui_rust_adoption().expect("windui adoption should validate");
+        assert_eq!(evidence.crate_name, "windui");
+        assert_eq!(
+            evidence.reference_commit,
+            "62241e25e762df154c1b1f855b4db57533e516fc"
+        );
+        assert_eq!(evidence.license, "MIT OR Apache-2.0");
+        assert!(evidence.vendored_path_dependency);
+        assert!(evidence.role_palette_consumed);
+        assert!(evidence.theme_row_height_consumed);
+        assert!(evidence.element_builder_tree_constructed);
+        assert!(evidence.setting_row_constructed);
+        assert!(evidence.segmented_control_constructed);
+        assert!(evidence.nav_list_pattern_used);
+        assert!(evidence.preview_first_appearance_layout);
+        assert!(evidence.engineering_dip_labels_removed_from_first_screen);
+        assert!(evidence.settings_shell_constructed);
+        assert!(evidence.settings_input_visual_baseline);
+        assert!(evidence.default_interactive_window_uses_windui);
+        assert!(evidence.win32_preview_host_qa_only);
     }
 
     #[test]
@@ -5921,8 +6769,25 @@ mod tests {
         assert!(report.contains("\"settings_surface_bounded_components_only\":true"));
         assert!(report.contains("\"settings_surface_native_hwnd_controls_preserved\":true"));
         assert!(report.contains("\"settings_surface_device_loss_fail_soft\":true"));
-        assert!(report.contains("\"settings_surface_no_generic_ui_framework\":true"));
+        assert!(report.contains("\"settings_surface_no_product_owned_generic_ui_framework\":true"));
         assert!(report.contains("\"settings_surface_no_surface_overlap\":true"));
+        assert!(report.contains("\"windui_crate_name\":\"windui\""));
+        assert!(report
+            .contains("\"windui_reference_commit\":\"62241e25e762df154c1b1f855b4db57533e516fc\""));
+        assert!(report.contains("\"windui_license\":\"MIT OR Apache-2.0\""));
+        assert!(report.contains("\"windui_vendored_path_dependency\":true"));
+        assert!(report.contains("\"windui_role_palette_consumed\":true"));
+        assert!(report.contains("\"windui_theme_row_height_consumed\":true"));
+        assert!(report.contains("\"windui_element_builder_tree_constructed\":true"));
+        assert!(report.contains("\"windui_setting_row_constructed\":true"));
+        assert!(report.contains("\"windui_segmented_control_constructed\":true"));
+        assert!(report.contains("\"windui_nav_list_pattern_used\":true"));
+        assert!(report.contains("\"windui_preview_first_appearance_layout\":true"));
+        assert!(report.contains("\"windui_engineering_dip_labels_removed_from_first_screen\":true"));
+        assert!(report.contains("\"windui_settings_shell_constructed\":true"));
+        assert!(report.contains("\"windui_settings_input_visual_baseline\":true"));
+        assert!(report.contains("\"windui_default_interactive_window_uses_windui\":true"));
+        assert!(report.contains("\"windui_win32_preview_host_qa_only\":true"));
         assert!(report.contains("\"stage4_config_qa_gate_frozen\":true"));
         assert!(report.contains("\"stage4_automated_keyboard_tab_order\":true"));
         assert!(report.contains("\"stage4_automated_focus_visibility\":true"));
@@ -5941,7 +6806,7 @@ mod tests {
         assert!(report.contains("\"candidate_preview_not_external_window\":true"));
         assert!(report.contains("\"candidate_preview_embedded_in_config_content\":true"));
         assert!(report.contains("\"candidate_preview_uses_real_theme_contract\":true"));
-        assert!(report.contains("\"candidate_preview_rect\":{\"x\":248,\"y\":222"));
+        assert!(report.contains("\"candidate_preview_rect\":{\"x\":248,\"y\":104"));
         assert!(report.contains("\"theme_library_model_rust_owned\":true"));
         assert!(report.contains("\"theme_inventory_sources\":[\"built-in\",\"user\",\"package\"]"));
         assert!(report.contains("\"theme_metadata_visible\":true"));

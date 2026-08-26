@@ -38,28 +38,35 @@ function Assert-CargoInventoryMatchesManifest {
   )
 
   $cargoPackages = @(Get-CargoRegistryPackages -CargoLockPath $CargoLockPath)
-  $manifestByName = @{}
+  $manifestByNameVersion = @{}
   foreach ($package in @($Manifest.packages)) {
     $packageName = [string]$package.name
     if (-not $packageName.StartsWith('rust-crate-', [StringComparison]::Ordinal)) {
       continue
     }
-    $crateName = $packageName.Substring('rust-crate-'.Length)
-    $normalized = $crateName.Replace('-', '_')
-    if ($manifestByName.ContainsKey($normalized)) {
-      throw "Duplicate Cargo dependency inventory records normalize to '$normalized'."
+    $crateName = if ($null -ne $package.PSObject.Properties['crate']) {
+      [string]$package.crate
+    } else {
+      $packageName.Substring('rust-crate-'.Length)
     }
-    $manifestByName[$normalized] = $package
+    $normalized = $crateName.Replace('-', '_')
+    $version = [string]$package.version
+    $key = "${normalized}@${version}"
+    if ($manifestByNameVersion.ContainsKey($key)) {
+      throw "Duplicate Cargo dependency inventory records normalize to '$key'."
+    }
+    $manifestByNameVersion[$key] = $package
   }
 
   $untrackedCargoPackages = [System.Collections.Generic.List[string]]::new()
   $mismatchedCargoPackages = [System.Collections.Generic.List[string]]::new()
   foreach ($package in $cargoPackages) {
-    if (-not $manifestByName.ContainsKey($package.NormalizedName)) {
+    $key = "$($package.NormalizedName)@$($package.Version)"
+    if (-not $manifestByNameVersion.ContainsKey($key)) {
       $untrackedCargoPackages.Add($package.Name)
       continue
     }
-    $manifestRecord = $manifestByName[$package.NormalizedName]
+    $manifestRecord = $manifestByNameVersion[$key]
     if ([string]$manifestRecord.version -ne $package.Version) {
       $mismatchedCargoPackages.Add(
         "$($package.Name) Cargo.lock=$($package.Version) inventory=$($manifestRecord.version)"

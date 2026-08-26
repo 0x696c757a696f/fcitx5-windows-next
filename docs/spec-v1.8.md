@@ -119,6 +119,7 @@ Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整
 3. **`chewing/windows-chewing-tsf`、`openvanilla/win-mcbopomofo`、Weasel 等：Windows TSF/兼容病例教材。** 只学习 TSF lifecycle、UILess、out-of-process UI、host compatibility 和失败病例，不继承其产品架构。
 4. **`fcitx-contrib/fcitx5-plugins`：跨平台插件构建与依赖清单参考。** 它不是 addon 语义权威；具体语义仍以各 addon upstream 为准。
 5. **`huanfeng/WindInput`：主题管理、设置分级、主题编辑器与候选窗视觉病例参考。** 只吸收其可验证的主题 schema、base/resolve、DPI 单位、预览一致性、受众分级与配置守门纪律；不继承其输入架构、插件体系或任何与本项目安全/隐私边界冲突的实现。
+6. **`huanfeng/wind-ui-rust`：Config 默认交互 GUI 的实际 Rust UI 代码基线。** 不是泛泛参考；Config 默认设置窗口必须直接消费 vendored `windui` crate，并以其 `settings-input.png` / settings 示例的窗口结构、左侧导航、设置分组卡片、segmented/switch/stepper/slider/dropdown/输入行密度和底部操作栏作为 Rust GUI/UX 基线。旧 Win32/WTL/D2D 设置宿主只可作为 QA、截图回归或临时 native adapter，不可继续作为普通用户默认交互界面。
 
 专项参考只在对应问题出现后读取：**WindInput** 用于 overlapped IPC/timeout/stale response，**Moqi** 用于 request sequence/launcher/crash lifecycle，**Rabbit** 用于 caret/focus/password/game 用例，**PIME/libIME2/Cassotis** 用于 thin backend、x86/x64 与历史架构对照。
 
@@ -3204,7 +3205,7 @@ Codex 在读取/执行用户请求后先内部归类为 RESEARCH、REVIEW、CHAN
 |--------------------|---------------------------------------------------------------------------------|-----------------------------------------------------------------------|
 | Windows Frontend   | 正式 TSF                                                                        | 仅在 Microsoft 平台模型发生根本变化时                                 |
 | Candidate Renderer | Rust-owned Candidate model/layout/interaction + 独立 native Win32/D2D/DWrite renderer adapter；TSF 仅提供 UIElement/布局桥接 | renderer seam 只有在等价视觉/DPI/无障碍/性能证据通过后替换；Candidate 语义不回退到 C++ |
-| Config UI          | Rust-owned Settings domain + temporary WTL/ATL/Win32 shell adapter              | 已排队 Rust Config cutover；替换前冻结等价行为/无障碍/DPI/本地化/视觉证据，不保留不必要 C++ |
+| Config UI          | Rust-owned Settings domain + vendored `wind-ui-rust` default interactive shell；temporary WTL/ATL/Win32 shell adapter only for QA/regression/native gaps | 默认 GUI 必须走 Rust `windui` 设置壳；Win32/WTL/D2D 宿主只在等价行为/无障碍/DPI/本地化/视觉证据缺口处临时保留，不保留不必要 C++ |
 | Core Update        | 版本目录 + 事务切换                                                             | 未来统一系统包管理有更强原子机制                                      |
 | Plugin API         | Fcitx addon API                                                                 | upstream 明确提供新的跨平台 ABI                                       |
 | Portable           | Self-contained + TSF 注册                                                       | Windows 提供真正免注册 IME 模型                                       |
@@ -3228,6 +3229,10 @@ Codex 在读取/执行用户请求后先内部归类为 RESEARCH、REVIEW、CHAN
   chain from Rust config model to UI binding to theme/config serialization to candidate renderer.
   Stage 2 release notes may say “Rust configuration backend is now shipping; interactive settings
   UI migration is still in progress.” They must not say “Config fully migrated to Rust.”
+- Config 默认交互窗口的视觉目标以 vendored `wind-ui-rust` settings shell 为准：左侧搜索/导航、
+  右侧页面标题与说明、圆角设置分组、库原生 `setting_row_desc`、`segmented`、`switch`、
+  `stepper`、`slider`、`dropdown`、`text_input`、底部状态/保存栏。普通无参数启动不得继续
+  展示旧 Win32 裸控件/调试 DIP 表单；旧宿主只能通过 QA/preview 环境或显式测试入口使用。
 
 - 外观默认跟随系统：System / Light / Dark；High Contrast 优先级最高。
 - 字体按 UI / Candidate / Annotation / Monospace 四类 surface 管理，Candidate 字体缺 glyph 必须交给 DirectWrite/system fallback。

@@ -30,6 +30,11 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   `Rust Config Cutover Complete` is reserved for the real interactive Settings GUI, controls,
   embedded candidate preview, plugin pages, DPI/dark-mode/keyboard/accessibility, persistence, and
   real Windows QA. Stage 2 release notes must not claim full Config migration.
+- The default interactive Config GUI must consume the vendored `huanfeng/wind-ui-rust` code path,
+  not merely copy its palette or mention it as a reference. Its first shipped Rust shell must follow
+  the `settings-input.png` settings layout family: titlebar, left search/navigation, right
+  settings pages, grouped cards, native windui controls, and a bottom status/action bar. The old
+  Win32/WTL/D2D Settings host remains only a QA/regression/native-gap adapter until replaced.
 - Already-cut-over Rust components must not be reverted to C++ because of historical task wording.
 - `R3-03` is the current task only for remaining TSF real-host/manual evidence and focused
   package-candidate usability regressions.
@@ -99,7 +104,9 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 053 | CONFIG-UIKIT-DESIGN-TOKENS-001 | COMPLETED / RUST-SETTINGS-DESIGN-TOKENS-GREEN | `REL-01` is parked on external/manual evidence; established Rust-owned design tokens before further Win32/D2D visual slices so Config does not keep growing by scattered raw constants | completed/053-CONFIG-UIKIT-DESIGN-TOKENS-001.md |
 | 054 | CONFIG-WINDOW-EFFECTS-ADAPTER-001 | COMPLETED / RUST-WINDOW-EFFECTS-ADAPTER-GREEN | 053; added Rust-owned Win7/Win10/Win11 progressive-enhancement adapter contract before using dark titlebar, rounded corners, Mica/system backdrop, or version-specific DWM attributes | completed/054-CONFIG-WINDOW-EFFECTS-ADAPTER-001.md |
 | 055 | CONFIG-D2D-SETTINGS-SURFACE-001 | COMPLETED / RUST-SETTINGS-SURFACE-QA-GREEN | 053/054; introduced bounded Settings Surface paint-plan components while retaining native HWND controls where behavior/a11y/IME semantics matter | completed/055-CONFIG-D2D-SETTINGS-SURFACE-001.md |
-| 056 | CONFIG-STAGE4-A11Y-DPI-QA-001 | MANUAL-PENDING / AUTOMATED-STAGE4-QA-GREEN | 053/055; automated keyboard/focus/page/no-overlap/DPI/high-contrast-marker/candidate-preview gates are frozen, but Narrator/NVDA and real Win7/Win10/Win11 host evidence remain unavailable locally | 056-CONFIG-STAGE4-A11Y-DPI-QA-001.md |
+| 056 | CONFIG-STAGE4-A11Y-DPI-QA-001 | MANUAL-PENDING / AUTOMATED-STAGE4-QA-GREEN | 053/055; automated keyboard/focus/page/no-overlap/DPI/high-contrast-marker/candidate-preview gates are frozen, but Narrator/NVDA and real Win7/Win10/Win11 host evidence remain unavailable locally | completed/056-CONFIG-STAGE4-A11Y-DPI-QA-001.md |
+| 057 | CONFIG-WINDUI-ADOPTION-001 | COMPLETED / WINDUI-RUST-CODE-CONSUMED-GREEN / DEFAULT-SHELL-PENDING | User explicitly required actual `huanfeng/wind-ui-rust` code adoption for ugly Config GUI/UX while 056 real-host evidence remains parked; vendored windui is now a Rust path dependency and self-check consumes actual windui element construction, but no-arg default GUI cutover is owned by 058 | completed/057-CONFIG-WINDUI-ADOPTION-001.md |
+| 058 | CONFIG-WINDUI-SETTINGS-SHELL-001 | COMPLETED / WINDUI-SETTINGS-SHELL-DEFAULT-GREEN | 057; 056 real-host evidence may remain MANUAL-PENDING because this is a code-only GUI cutover slice | completed/058-CONFIG-WINDUI-SETTINGS-SHELL-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
@@ -121,7 +128,9 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 - `REL-01` is parked as release-gated until production release assets, signing/key evidence, and
   required real-host/manual compatibility evidence exist. Code-only migration tasks may continue
   while preserving that release gate; do not claim release readiness from local CTest/package smoke.
-- `053` through `056` are the current code-only Settings modernization queue opened from the
-  modern native Win32 + Rust + Direct2D design direction. They do not make `REL-01` releasable;
-  release remains gated on external/manual evidence and production signed artifacts.
+- `053` through `058` are the current code-only Settings modernization queue opened from the
+  Rust-owned Config GUI direction. `057` vendors and consumes `wind-ui-rust`; `058` makes its
+  settings-shell code path the default interactive GUI and keeps the old Win32 host as QA/regression
+  scaffolding only. They do not make `REL-01` releasable; release remains gated on external/manual
+  evidence and production signed artifacts.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

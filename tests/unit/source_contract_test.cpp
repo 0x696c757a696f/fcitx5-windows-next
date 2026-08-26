@@ -1906,6 +1906,10 @@ int main(int argc, char** argv) {
     const auto configQaSource = read_text(sourceRoot / "rust/config-qa/src/main.rs");
     const auto configPocSource = read_text(sourceRoot / "rust/config-poc/src/main.rs");
     const auto configPocManifest = read_text(sourceRoot / "rust/config-poc/Cargo.toml");
+    const auto windUiManifest = read_text(sourceRoot / "third_party/wind-ui-rust/Cargo.toml");
+    const auto windUiSegmented =
+        read_text(sourceRoot / "third_party/wind-ui-rust/src/ui/segmented.rs");
+    const auto windUiTheme = read_text(sourceRoot / "third_party/wind-ui-rust/src/theme.rs");
     const auto configRustDifferentialScript =
         read_text(sourceRoot / "tools/test-config-rust-side-by-side.ps1");
     const auto configRustShippingLineageScript =
@@ -1981,6 +1985,54 @@ int main(int argc, char** argv) {
         configPocSource.find("rust_config_cutover_complete_claimed: false") ==
             std::string::npos) {
         return fail("056-CONFIG-STAGE4-A11Y-DPI-QA-001: Stage 4 Config QA gate must freeze automated coverage while leaving unavailable real-host/Narrator/NVDA evidence manual-pending");
+    }
+    if (configPocManifest.find("windui = { path = \"../../third_party/wind-ui-rust\", default-features = false }") ==
+            std::string::npos ||
+        windUiManifest.find("name = \"windui\"") == std::string::npos ||
+        windUiManifest.find("license = \"MIT OR Apache-2.0\"") == std::string::npos ||
+        windUiSegmented.find("pub struct SegmentedControl") == std::string::npos ||
+        windUiSegmented.find("canvas.fill_round_rect") == std::string::npos ||
+        windUiTheme.find("pub struct Palette") == std::string::npos ||
+        windUiTheme.find("pub struct Theme") == std::string::npos ||
+        configPocSource.find("use windui::prelude") == std::string::npos ||
+        configPocSource.find("WIND_UI_RUST_REFERENCE_COMMIT") == std::string::npos ||
+        configPocSource.find("62241e25e762df154c1b1f855b4db57533e516fc") ==
+            std::string::npos ||
+        configPocSource.find("fn windui_appearance_reference_tree() -> WindUiElement") ==
+            std::string::npos ||
+        configPocSource.find("fn windui_settings_root() -> WindUiElement") ==
+            std::string::npos ||
+        configPocSource.find("fn windui_settings_shell_wrap(") == std::string::npos ||
+        configPocSource.find("WindUiApp::new") == std::string::npos ||
+        configPocSource.find(".frameless()") == std::string::npos ||
+        configPocSource.find("WindUiElement::setting_row") == std::string::npos ||
+        configPocSource.find("WindUiElement::setting_row_desc") == std::string::npos ||
+        configPocSource.find("WindUiElement::segmented") == std::string::npos ||
+        configPocSource.find("WindUiElement::switch") == std::string::npos ||
+        configPocSource.find("WindUiElement::stepper") == std::string::npos ||
+        configPocSource.find("WindUiElement::slider") == std::string::npos ||
+        configPocSource.find("WindUiElement::dropdown") == std::string::npos ||
+        configPocSource.find("WindUiElement::text_input") == std::string::npos ||
+        configPocSource.find("WindUiRole::Bg.resolve(theme)") == std::string::npos ||
+        configPocSource.find("settings_palette_from_windui") == std::string::npos ||
+        configPocSource.find("windui_role_palette_consumed") == std::string::npos ||
+        configPocSource.find("windui_preview_first_appearance_layout") ==
+            std::string::npos ||
+        configPocSource.find("windui_default_interactive_window_uses_windui") ==
+            std::string::npos ||
+        configPocSource.find("windui_win32_preview_host_qa_only") == std::string::npos ||
+        configPocSource.find("run_default_interactive_window") == std::string::npos ||
+        configPocSource.find("run_windui_settings_window") == std::string::npos ||
+        configPocSource.find("CONFIG_QA_PREVIEW_STATE_ENV") == std::string::npos ||
+        configPocSource.find("rust-config-windui-settings-shell") == std::string::npos ||
+        configPocSource.find("rust-config-win32-qa-preview-host") == std::string::npos ||
+        configPocSource.find("RunMode::WindUiScreenshot") == std::string::npos ||
+        configPocSource.find("--screenshot") == std::string::npos ||
+        configPocSource.find("\"Font size DIP\"") != std::string::npos ||
+        configPocSource.find("\"Spacing DIP\"") != std::string::npos ||
+        configPocSource.find("\"Corner DIP\"") != std::string::npos ||
+        configPocSource.find("\"Width DIP\"") != std::string::npos) {
+        return fail("CONFIG-WINDUI-ADOPTION-001/058: Rust Config must consume vendored wind-ui-rust code and make its settings shell the default interactive GUI while keeping Win32 only as QA host");
     }
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
@@ -2130,7 +2182,7 @@ int main(int argc, char** argv) {
         configPocSource.find("CONFIG_SHIPPING_COMPONENT") == std::string::npos ||
         configPocSource.find("fcitx5-config") == std::string::npos ||
         configPocSource.find("RunMode::Interactive") == std::string::npos ||
-        configPocSource.find("rust-config-settings-ui-preview") == std::string::npos ||
+        configPocSource.find("rust-config-win32-qa-preview-host") == std::string::npos ||
         configPocSource.find("no_arg_launch") == std::string::npos ||
         configPocSource.find("qa_navigation_ids") == std::string::npos ||
         configPocSource.find("qa_child_control_ids") == std::string::npos ||
@@ -2260,7 +2312,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configPocSource.find("SettingsSurfaceComponentKind::PreviewSurface") ==
             std::string::npos ||
-        configPocSource.find("settings_surface_no_generic_ui_framework") ==
+        configPocSource.find("settings_surface_no_product_owned_generic_ui_framework") ==
             std::string::npos ||
         configPocSource.find("GenericWidget") != std::string::npos ||
         configPocSource.find("trait Widget") != std::string::npos ||

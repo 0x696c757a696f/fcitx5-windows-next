@@ -270,6 +270,471 @@
       "version": "0.2.1",
       "source": "https://github.com/microsoft/windows-rs",
       "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "wind-ui-rust",
+      "version": "0.14.0+62241e25",
+      "source": "https://github.com/huanfeng/wind-ui-rust/tree/62241e25e762df154c1b1f855b4db57533e516fc",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-adler2",
+      "version": "2.0.1",
+      "source": "https://github.com/oyvindln/adler2",
+      "license": "0BSD OR MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-bitflags",
+      "version": "2.13.1",
+      "source": "https://github.com/bitflags/bitflags",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-block2",
+      "version": "0.6.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-bumpalo",
+      "version": "3.20.3",
+      "source": "https://github.com/fitzgen/bumpalo",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-bytemuck",
+      "version": "1.25.2",
+      "source": "https://github.com/Lokathor/bytemuck",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-crc32fast",
+      "version": "1.5.1",
+      "source": "https://github.com/srijs/rust-crc32fast",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-dispatch2",
+      "version": "0.3.1",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-embed-resource",
+      "version": "3.0.11",
+      "source": "https://github.com/nabijaczleweli/rust-embed-resource",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-fdeflate",
+      "version": "0.3.7",
+      "source": "https://github.com/image-rs/fdeflate",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-flate2",
+      "version": "1.1.9",
+      "source": "https://github.com/rust-lang/flate2-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-futures-core",
+      "version": "0.3.34",
+      "source": "https://github.com/rust-lang/futures-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-futures-task",
+      "version": "0.3.34",
+      "source": "https://github.com/rust-lang/futures-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-futures-util",
+      "version": "0.3.34",
+      "source": "https://github.com/rust-lang/futures-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-js-sys",
+      "version": "0.3.104",
+      "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-libc",
+      "version": "0.2.189",
+      "source": "https://github.com/rust-lang/libc",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-log",
+      "version": "0.4.34",
+      "source": "https://github.com/rust-lang/log",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-miniz_oxide",
+      "version": "0.8.9",
+      "source": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide",
+      "license": "MIT OR Zlib OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-objc2",
+      "version": "0.6.4",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-objc2-app-kit",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-cloud-kit",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-core-data",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-core-foundation",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-core-graphics",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-core-image",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-core-text",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-core-video",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-encode",
+      "version": "4.1.0",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-objc2-exception-helper",
+      "version": "0.1.1",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-foundation",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-objc2-io-surface",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-metal",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-objc2-quartz-core",
+      "version": "0.3.2",
+      "source": "https://github.com/madsmtm/objc2",
+      "license": "Zlib OR Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-once_cell",
+      "version": "1.21.4",
+      "source": "https://github.com/matklad/once_cell",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-percent-encoding",
+      "version": "2.3.2",
+      "source": "https://github.com/servo/rust-url/",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-pin-project-lite",
+      "version": "0.2.17",
+      "source": "https://github.com/taiki-e/pin-project-lite",
+      "license": "Apache-2.0 OR MIT"
+    },
+    {
+      "name": "rust-crate-png",
+      "version": "0.18.1",
+      "source": "https://github.com/image-rs/image-png",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-raw-window-handle",
+      "version": "0.6.2",
+      "source": "https://github.com/rust-windowing/raw-window-handle",
+      "license": "MIT OR Apache-2.0 OR Zlib"
+    },
+    {
+      "name": "rust-crate-rfd",
+      "version": "0.17.2",
+      "source": "https://github.com/PolyMeilex/rfd",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-rustc_version",
+      "version": "0.4.1",
+      "source": "https://github.com/djc/rustc-version-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-rustversion",
+      "version": "1.0.23",
+      "source": "https://github.com/dtolnay/rustversion",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-semver",
+      "version": "1.0.28",
+      "source": "https://github.com/dtolnay/semver",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-serde",
+      "version": "1.0.229",
+      "source": "https://github.com/serde-rs/serde",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-serde_core",
+      "version": "1.0.229",
+      "source": "https://github.com/serde-rs/serde",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-serde_derive",
+      "version": "1.0.229",
+      "source": "https://github.com/serde-rs/serde",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-serde_spanned",
+      "version": "1.1.1",
+      "source": "https://github.com/toml-rs/toml",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-simd-adler32",
+      "version": "0.3.10",
+      "source": "https://github.com/mcountryman/simd-adler32",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-slab",
+      "version": "0.4.12",
+      "source": "https://github.com/tokio-rs/slab",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-strict-num",
+      "version": "0.1.1",
+      "source": "https://github.com/RazrFalcon/strict-num",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-syn-3.0.4",
+      "version": "3.0.4",
+      "source": "https://github.com/dtolnay/syn",
+      "license": "MIT OR Apache-2.0",
+      "crate": "syn"
+    },
+    {
+      "name": "rust-crate-tiny-skia",
+      "version": "0.12.0",
+      "source": "https://github.com/linebender/tiny-skia",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "rust-crate-tiny-skia-path",
+      "version": "0.12.0",
+      "source": "https://github.com/linebender/tiny-skia/tree/master/path",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "rust-crate-toml",
+      "version": "1.1.4+spec-1.1.0",
+      "source": "https://github.com/toml-rs/toml",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-toml_datetime",
+      "version": "1.1.1+spec-1.1.0",
+      "source": "https://github.com/toml-rs/toml",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-toml_parser",
+      "version": "1.1.3+spec-1.1.0",
+      "source": "https://github.com/toml-rs/toml",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-toml_writer",
+      "version": "1.1.2+spec-1.1.0",
+      "source": "https://github.com/toml-rs/toml",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-vswhom",
+      "version": "0.1.0",
+      "source": "https://github.com/nabijaczleweli/vswhom.rs",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-vswhom-sys",
+      "version": "0.1.3",
+      "source": "https://github.com/nabijaczleweli/vswhom-sys.rs",
+      "license": "MIT"
+    },
+    {
+      "name": "rust-crate-wasm-bindgen",
+      "version": "0.2.127",
+      "source": "https://github.com/wasm-bindgen/wasm-bindgen",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-wasm-bindgen-futures",
+      "version": "0.4.77",
+      "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-wasm-bindgen-macro",
+      "version": "0.2.127",
+      "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-wasm-bindgen-macro-support",
+      "version": "0.2.127",
+      "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-wasm-bindgen-shared",
+      "version": "0.2.127",
+      "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-web-sys",
+      "version": "0.3.104",
+      "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-sys",
+      "version": "0.59.0",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows-sys-0.61.2",
+      "version": "0.61.2",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0",
+      "crate": "windows-sys"
+    },
+    {
+      "name": "rust-crate-windows-targets",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows_aarch64_gnullvm",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows_aarch64_msvc",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows_i686_gnu",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows_i686_gnullvm",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows_i686_msvc",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows_x86_64_gnu",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows_x86_64_gnullvm",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-windows_x86_64_msvc",
+      "version": "0.52.6",
+      "source": "https://github.com/microsoft/windows-rs",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "rust-crate-winnow-1.0.4",
+      "version": "1.0.4",
+      "source": "https://github.com/winnow-rs/winnow",
+      "license": "MIT",
+      "crate": "winnow"
+    },
+    {
+      "name": "rust-crate-winreg",
+      "version": "0.55.0",
+      "source": "https://github.com/gentoo90/winreg-rs",
+      "license": "MIT"
     }
   ]
 }

@@ -20,3 +20,8 @@ pinned upstream release assets with SHA-256 verification.
 
 Repositories listed only in `docs/reference-baseline.md` remain design and behavior
 references unless they also appear in the dependency manifest.
+
+wind-ui-rust is vendored under `third_party/wind-ui-rust` and consumed by the
+Rust Config Settings UI prototype as a path dependency. It is licensed
+MIT OR Apache-2.0; local Windows x86 compatibility fixes are kept in the
+vendored source until they can be reconciled upstream.
