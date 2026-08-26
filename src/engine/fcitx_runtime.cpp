@@ -28,6 +28,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -60,7 +61,26 @@ Function resolveProcAddress(HMODULE module, const char* name) noexcept {
     return function;
 }
 
+std::filesystem::path pathFromUtf8(std::string_view value) {
+    if (value.empty())
+        return {};
+    const int size =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                            static_cast<int>(value.size()), nullptr, 0);
+    if (size <= 0)
+        return {};
+    std::wstring wide(static_cast<std::size_t>(size), L'\0');
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                               static_cast<int>(value.size()), wide.data(), size) == size
+               ? std::filesystem::path(wide)
+               : std::filesystem::path{};
+}
+
 std::filesystem::path localDataDirectory() {
+    if (const auto dataRoot = getEnvironment("FCITX_USER_DATA_ROOT");
+        dataRoot && !dataRoot->empty()) {
+        return pathFromUtf8(*dataRoot) / "Fcitx5";
+    }
     std::wstring modulePath(32'768, L'\0');
     const DWORD size =
         GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
@@ -136,6 +156,36 @@ EngineConfig readEngineConfig() {
     if (!config.hotkeyNext)
         config.hotkeyNext = "Ctrl+Shift";
     return config;
+}
+
+std::string startupAddonList(const EngineConfig& config) {
+    std::set<std::string> addons{
+        "windowskeyboard",
+        "pinyin",
+        "punctuation",
+        "pinyinhelper",
+        "chttrans",
+        "luaaddonloader",
+        "imeapi",
+    };
+    for (const auto& id : config.enabled) {
+        if (id == "pinyin") {
+            addons.insert("pinyin");
+            addons.insert("punctuation");
+            addons.insert("pinyinhelper");
+        } else if (id == "rime" || id.starts_with("rime-")) {
+            addons.insert("rime");
+        } else if (id == "wbx" || id == "table" || id.starts_with("table-")) {
+            addons.insert("table");
+        }
+    }
+    std::string joined;
+    for (const auto& addon : addons) {
+        if (!joined.empty())
+            joined.push_back(',');
+        joined.append(addon);
+    }
+    return joined;
 }
 
 std::string utf8Path(const std::filesystem::path& path) {
@@ -882,15 +932,27 @@ bool FcitxRuntime::initialize(bool safeMode) {
     try {
         if (!setupEnvironment())
             return false;
+        impl_->config = readEngineConfig();
+        std::string enabledAddons;
+        std::vector<std::string> arguments;
         if (safeMode) {
-            char executable[] = "fcitx5-engine";
-            char disable[] = "--disable=all";
-            char enable[] = "--enable=windowskeyboard,pinyin,punctuation";
-            char* arguments[]{executable, disable, enable};
-            impl_->instance = std::make_unique<Instance>(3, arguments);
+            enabledAddons = "windowskeyboard,pinyin,punctuation";
         } else {
-            impl_->instance = std::make_unique<Instance>(0, nullptr);
+            // Do not let the set of installed optional addons decide the
+            // product startup surface. A clean Windows profile defaults to
+            // pinyin-only, so normal startup explicitly enables the adapter
+            // and addons needed by the configured input methods/tests instead
+            // of loading every bundled on-demand addon (for example Rime,
+            // table, or spell) before the first TSF client can type.
+            enabledAddons = startupAddonList(impl_->config);
         }
+        arguments = {"fcitx5-engine", "--disable=all", "--enable=" + enabledAddons};
+        std::vector<char*> argv;
+        argv.reserve(arguments.size());
+        for (auto& argument : arguments)
+            argv.push_back(argument.data());
+        impl_->instance =
+            std::make_unique<Instance>(static_cast<int>(argv.size()), argv.data());
         impl_->instance->addonManager().registerDefaultLoader(nullptr);
         impl_->instance->initialize();
         impl_->ensureInputMethods();

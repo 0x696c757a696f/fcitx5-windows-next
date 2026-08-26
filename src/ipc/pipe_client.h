@@ -21,7 +21,7 @@ inline constexpr DWORD kInputDeadlineMilliseconds = 250;
 // This replaces the old synthetic "n" warmup: correctness first, no fake user
 // key, but the first real context is not dropped solely because initialization
 // crossed the hot-path deadline.
-inline constexpr DWORD kContextStartDeadlineMilliseconds = 3000;
+inline constexpr DWORD kContextStartDeadlineMilliseconds = 7500;
 
 struct KeyResult {
     struct Candidate {

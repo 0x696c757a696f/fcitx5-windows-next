@@ -256,6 +256,12 @@ int main(int argc, char** argv) {
         runtimeSource.find("statusShortLabel") != std::string::npos) {
         return fail("ENGINE-E2/E3/E5: ledger, per-context product state, Event→Action decisions, and snapshot/status canonicalization must be Rust-owned in fcitx_runtime.cpp");
     }
+    if (runtimeSource.find("getEnvironment(\"FCITX_USER_DATA_ROOT\")") == std::string::npos ||
+        runtimeSource.find("startupAddonList") == std::string::npos ||
+        runtimeSource.find("\"--disable=all\"") == std::string::npos ||
+        runtimeSource.find("std::make_unique<Instance>(0, nullptr)") != std::string::npos) {
+        return fail("ENGINE-STARTUP-ISOLATION: Engine startup must honor FCITX_USER_DATA_ROOT and explicitly enable only configured product addon surfaces");
+    }
     const auto nativeEngineCmakeSource = read_text(sourceRoot / "native-engine/CMakeLists.txt");
     if (nativeEngineCmakeSource.find("fcitx5_protocol_core_rust") == std::string::npos ||
         nativeEngineCmakeSource.find("fcitx5_engine_core_rust") == std::string::npos ||

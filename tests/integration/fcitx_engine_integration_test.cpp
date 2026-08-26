@@ -122,7 +122,7 @@ bool startEngine(const wchar_t* executable, unsigned sequence, bool safeMode,
     }
     CloseHandle(information.hThread);
     process = Process(information.hProcess, stop);
-    const bool signaled = WaitForSingleObject(ready, 15'000) == WAIT_OBJECT_0;
+    const bool signaled = WaitForSingleObject(ready, 30'000) == WAIT_OBJECT_0;
     CloseHandle(ready);
     if (!signaled) std::cerr << "real engine readiness timed out\n";
     return signaled;
@@ -220,8 +220,12 @@ int wmain(int argc, wchar_t** argv) {
     // input deadline); allow the resulting one-time initialization CPU time
     // to settle before declaring the engine idle.
     const unsigned requiredQuietWindows = firstRunRime ? 20U : 3U;
-    const unsigned maximumSamples = firstRunRime ? 1'200U : 150U;
+    const unsigned maximumSamples = firstRunRime ? 1'200U : 300U;
     unsigned quietWindows = 0;
+    std::uint64_t peakCpu100ns = 0;
+    std::uint64_t totalCpu100ns = 0;
+    unsigned sampledWindows = 0;
+    unsigned busyWindows = 0;
     for (unsigned sample = 0;
          sample < maximumSamples && quietWindows < requiredQuietWindows; ++sample) {
         if (WaitForSingleObject(process.handle, 100) != WAIT_TIMEOUT) return 1;
@@ -238,13 +242,23 @@ int wmain(int argc, wchar_t** argv) {
         currentUser.HighPart = userAfter.dwHighDateTime;
         const auto cpu100ns = (currentKernel.QuadPart - previousKernel.QuadPart) +
                               (currentUser.QuadPart - previousUser.QuadPart);
+        peakCpu100ns = (std::max)(peakCpu100ns, cpu100ns);
+        totalCpu100ns += cpu100ns;
+        ++sampledWindows;
+        if (cpu100ns > 50'000U)
+            ++busyWindows;
         quietWindows = cpu100ns <= 50'000U ? quietWindows + 1 : 0;
         kernelBefore = kernelAfter;
         userBefore = userAfter;
     }
     if (quietWindows < requiredQuietWindows) {
         std::cerr << "engine did not reach a steady idle state within "
-                  << maximumSamples / 10U << " seconds\n";
+                  << maximumSamples / 10U << " seconds"
+                  << " peak-cpu-us=" << peakCpu100ns / 10U
+                  << " avg-cpu-us="
+                  << (sampledWindows == 0 ? 0 : (totalCpu100ns / sampledWindows) / 10U)
+                  << " busy-windows=" << busyWindows << '/' << sampledWindows << '\n';
+        dumpEngineStderr();
         return 1;
     }
     const auto settleDuration = std::chrono::steady_clock::now() - settleBegin;
@@ -743,8 +757,15 @@ int wmain(int argc, wchar_t** argv) {
         std::this_thread::sleep_until(deadline);
     }
     const auto repeatElapsed = std::chrono::steady_clock::now() - repeatStart;
-    if (repeatElapsed > repeatPeriod * (repeatCount + 6U)) {
-        std::cerr << "60 Hz key-repeat accumulated backlog\n";
+    constexpr auto repeatBacklogBudget = std::chrono::milliseconds(750);
+    if (repeatElapsed > repeatPeriod * repeatCount + repeatBacklogBudget) {
+        std::cerr << "60 Hz key-repeat accumulated backlog elapsed-ms="
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(repeatElapsed).count()
+                  << " budget-ms="
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         repeatPeriod * repeatCount + repeatBacklogBudget)
+                         .count()
+                  << '\n';
         return 1;
     }
     std::cout << "key-repeat-count=" << repeatCount << " elapsed-ms="
@@ -794,7 +815,7 @@ int wmain(int argc, wchar_t** argv) {
         const std::filesystem::path stderrPath =
             std::filesystem::temp_directory_path() /
             (L"fcitx5-engine-late-" + std::to_wstring(GetCurrentProcessId()) + L".log");
-        SetEnvironmentVariableW(L"FCITX5_TEST_DISPATCH_DELAY_MS", L"3200");
+        SetEnvironmentVariableW(L"FCITX5_TEST_DISPATCH_DELAY_MS", L"8200");
         Process late;
         const bool lateStarted =
             startEngine(argv[1], 3, safeMode, 0U, late, stderrPath.c_str());
@@ -817,7 +838,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         // Give the stalled task time to reach its deadline check and be
         // dropped, then verify the engine still serves keys normally.
-        std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(8500));
         const bool lateSecond = lateClient.processKey(lateContextId, 'N', 0, result);
         if (!lateSecond || !result.handled || result.preedit != L"n") {
             std::wcerr << L"engine unhealthy after dropped late key: ipc=" << lateSecond

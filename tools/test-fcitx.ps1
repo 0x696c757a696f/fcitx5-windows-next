@@ -131,6 +131,14 @@ try {
   $luaExtensionDirectory = Join-Path $rimeTestDataRoot 'Fcitx5/lua/imeapi/extensions'
   $rimeUserDirectory = Join-Path $rimeTestDataRoot 'Fcitx5/rime'
   New-Item -ItemType Directory -Force -Path $luaExtensionDirectory, $rimeUserDirectory | Out-Null
+  Set-Content -LiteralPath (Join-Path $rimeTestDataRoot 'Fcitx5/config.toml') -Encoding utf8NoBOM `
+    -Value @'
+format_version = 1
+
+[input_methods]
+enabled = ["rime"]
+default = "rime"
+'@
   Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/fcitx5-lua/functional.lua') `
     -Destination $luaExtensionDirectory -Force
   $rimeLuaMarker = Join-Path $rimeTestDataRoot 'fcitx5-lua.marker'

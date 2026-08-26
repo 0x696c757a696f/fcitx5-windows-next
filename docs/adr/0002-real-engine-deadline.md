@@ -1,6 +1,6 @@
 # ADR 0002: Real-engine input deadline and cold-context budget
 
-- Status: accepted for Phase 3; measure again after Candidate UI integration
+- Status: updated for 2026-08-26 package-gate Engine idle evidence
 - Date: 2026-08-17
 - Scope: TSF client to native Fcitx5 engine
 
@@ -14,10 +14,12 @@ Warm keys measured 1.1–1.5 ms and commits 0.25–0.41 ms on the reference mach
 
 ## Decision
 
-Keep 25 ms as the absolute deadline for established input contexts. Permit 100 ms only for the
+Keep 250 ms as the absolute deadline for established input contexts. Permit 7500 ms only for the
 first request of a newly observed context; this is a bounded cold-context budget, not a retry or a
-general deadline increase. The engine completes addon loading and one warm-up key before its ready
-event. Timeout remains fail-open and disconnects the protocol state.
+general deadline increase. The engine completes configured addon loading and a side-effect-free
+warm-up context before accepting clients, but current libime/pinyin can still lazily create per-user
+cache/config state on the first real focused context in an empty `FCITX_USER_DATA_ROOT`. Timeout
+remains fail-open and disconnects the protocol state.
 
 ## Consequences
 

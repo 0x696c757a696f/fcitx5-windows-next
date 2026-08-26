@@ -405,10 +405,10 @@ int runCorpus() {
                 fcitx5_engine_core_accept_frame_sequence(4, 5) == 0,
             "request ordering must accept only strictly newer ids");
         failures += !expect(
-            fcitx5_engine_core_key_request_timeout_ms(0) == 2500 &&
+            fcitx5_engine_core_key_request_timeout_ms(0) == 7500 &&
                 fcitx5_engine_core_key_request_timeout_ms(1) == 250 &&
                 fcitx5_engine_core_key_request_timeout_ms(42) == 250,
-            "key request deadline policy must be 2500 ms cold / 250 ms warm");
+            "key request deadline policy must be 7500 ms cold / 250 ms warm");
     }
 
     // E5-1: snapshot/status canonicalization.

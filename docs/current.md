@@ -1,10 +1,10 @@
 # Current Truth Snapshot
 
-Date: 2026-08-26 (updated after PLUGIN-LIFECYCLE-STABILITY-001 automated evidence archive and Engine idle blocker task selection)
+Date: 2026-08-26 (updated after ENGINE-IDLE-PACKAGE-GATE-050 package-gate fix)
 
 HEAD recorded at snapshot refresh: `24d69699aa265a1c510fa256fd6270891f81885c`
 
-Working tree at snapshot refresh: clean before selecting `ENGINE-IDLE-PACKAGE-GATE-050`.
+Working tree at snapshot refresh: pending commit after `ENGINE-IDLE-PACKAGE-GATE-050` validation.
 
 ## Shipping Architecture
 
@@ -32,7 +32,7 @@ Windows host
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
 | Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter |
-| Config | Stage 2 Rust Config backend is shipping: packaged `fcitx5-config.exe` is byte-identical to the Rust `fcitx5-config-rust.exe` build output, headless/test CLI paths report `shipping_config_replaced=true`, and final package staging no longer ships a second `fcitx5-config-rust.exe` entry point. The old C++ WTL/Win32 shell is reduced to `fcitx5-config-legacy.exe` as an `EXCLUDE_FROM_ALL` regression baseline for differential tests only. Stage 4 real interactive GUI cutover remains pending. | Plugin lifecycle automated evidence is archived; current task is the Engine idle package-gate blocker. Do not claim “Config fully migrated to Rust” until Stage 4 GUI/preview/navigation/control/DPI/dark-mode/accessibility/real-Windows QA is green |
+| Config | Stage 2 Rust Config backend is shipping: packaged `fcitx5-config.exe` is byte-identical to the Rust `fcitx5-config-rust.exe` build output, headless/test CLI paths report `shipping_config_replaced=true`, and final package staging no longer ships a second `fcitx5-config-rust.exe` entry point. The old C++ WTL/Win32 shell is reduced to `fcitx5-config-legacy.exe` as an `EXCLUDE_FROM_ALL` regression baseline for differential tests only. Stage 4 real interactive GUI cutover remains pending. | Plugin lifecycle automated evidence and the Engine idle package-gate blocker are archived; do not claim “Config fully migrated to Rust” until Stage 4 GUI/preview/navigation/control/DPI/dark-mode/accessibility/real-Windows QA is green |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
 | Package/provider/downloader/updater/deployer | Package/provider/deployer/updater/downloader Rust CLIs and Rust package-core are wired; adapters remain where needed | Rust authority |
@@ -56,10 +56,10 @@ Windows host
 ## Current Red Lights
 
 - Real-host matrix for Rust TSF remains manual-pending.
-- Full `tools/build.ps1 package -Architecture all -Configuration Release` currently reaches x64/x86
-  Release builds and runtime security, then fails in `tools/test-fcitx.ps1` because the Engine
-  integration test reports `engine did not reach a steady idle state within 15 seconds`. This is a
-  release/package-gate blocker, not a Config shipping lineage failure.
+- Full `tools/build.ps1 package -Architecture all -Configuration Release` passed locally after
+  `ENGINE-IDLE-PACKAGE-GATE-050`. The tested package stage was
+  `D:\Documents\GitHub\fcitx5-windows-next\out\package\stage-dee8db43e74d4793b0e4ecca2dc5a4e9\Fcitx5`;
+  artifacts were emitted under `D:\Documents\GitHub\fcitx5-windows-next\out\package\artifacts`.
 - Package cold-start candidate UI is green on local Notepad x64: final package stage `D:\Documents\GitHub\fcitx5-windows-next\out\package\stage-389ce50e5e5b4981ae3527bc18053fc6\Fcitx5` contains rebuilt x64/x86 Rust TSF DLLs; `--candidate-window` smoke sees `candidates=128 visibility=1`; `nihao + Space` commits `你好`.
 - Strict direct clippy with `-D warnings` still hits existing `too_many_arguments` helpers in `rust/windows-common-core`; adjusted clippy with that existing lint allowed is green.
 - Cargo registry crates are checked against `third_party/dependencies.json` by name and version before dependency checks and SBOM generation. Advisory review for the declared dependency set remains an external process.
@@ -73,8 +73,8 @@ Windows host
   and system-font-backed font selection.
 - The executable queue has been re-cleaned after the 2026-08-24 review: completed/current R3
   FUTURE-GATED duplicates are not active queue items. Completed queue source files are removed from
-  `docs/tasks/queue` after their task files are archived. Current product work is
-  `ENGINE-IDLE-PACKAGE-GATE-050`.
+  `docs/tasks/queue` after their task files are archived. The next queue item is `RELEASE-01`, but
+  it is gated on external/manual evidence.
 - Rust Config Stage 2 is green. `fcitx5_config_app` now builds the Rust binary into the shipping
   `fcitx5-config.exe` product name; `fcitx5_config_legacy_app` emits `fcitx5-config-legacy.exe`
   only as an `EXCLUDE_FROM_ALL` differential-test baseline; `stage-package.ps1` ships only
@@ -87,14 +87,14 @@ Windows host
 
 ## Next Five Code/Design Tasks
 
-1. Fix the release/package-gate Engine idle blocker in `tools/test-fcitx.ps1` /
-   `fcitx5_engine_integration_test.exe` so full package gate can pass again.
-2. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core`
+1. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core`
    stop-aware pipe primitives, keeping direct Fcitx object ownership in the C++ adapter.
-3. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
+2. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
    release-readiness claim.
-4. For official add-ons/plugins, build reviewed Windows package artifacts in this project, publish
+3. For official add-ons/plugins, build reviewed Windows package artifacts in this project, publish
    them as signed GitHub Release-backed repository assets, and let Settings install only through
    verified package metadata.
-5. Execute `RELEASE-01` only after the Engine idle gate plus required manual/production evidence
+4. Execute `RELEASE-01` only after required manual/production evidence
    are green.
+5. Continue Stage 4 Rust Config GUI cutover only under an explicit eligible task; Stage 2 backend
+   shipping remains the current release-note claim.

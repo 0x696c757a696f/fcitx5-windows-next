@@ -244,7 +244,7 @@ pub extern "C" fn fcitx5_engine_core_accept_frame_sequence(
 }
 
 /// Key-request dispatcher deadline in milliseconds (cold context revision 0
-/// gets 2500 ms, warm keys 250 ms).
+/// gets 7500 ms, warm keys 250 ms).
 #[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_engine_core_key_request_timeout_ms(revision: u64) -> u32 {
     panic::catch_unwind(|| crate::key_request_timeout_ms(revision)).unwrap_or(250)

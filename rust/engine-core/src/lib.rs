@@ -695,7 +695,7 @@ pub fn accept_frame_sequence(request_id: u64, last_request_id: u64) -> bool {
 /// request before the caller's bounded wait expires.
 pub fn key_request_timeout_ms(revision: u64) -> u32 {
     if revision == 0 {
-        2500
+        7500
     } else {
         250
     }

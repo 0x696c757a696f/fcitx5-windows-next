@@ -1,61 +1,57 @@
-# ENGINE-IDLE-PACKAGE-GATE-050 Real Engine idle package-gate fix
+# Current Task — RELEASE-01 Stable release pipeline / Build Once evidence
 
-**State:** TODO
+**Mode:** RELEASE
+**State:** RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING
+**Task ID:** `RELEASE-01`
+**Prerequisite:** All stabilization tasks + required external evidence + intended Rust cutovers
+**Evidence class:** `EXTERNAL_EVIDENCE` — never claim unrun real-host evidence passed.
 
-## Context
+## Goal
 
-`CONFIG-RUST-CUTOVER-001` and `PLUGIN-LIFECYCLE-STABILITY-001` both reached their automated
-Config/package evidence, but the full package gate is still blocked by the real Engine acceptance
-suite. `tools/build.ps1 package -Architecture all -Configuration Release` reaches the Release
-build/runtime-security phase and then fails through `tools/test-fcitx.ps1` because
-`fcitx5_engine_integration_test.exe` reports:
+Execute the final release gate only after stabilization, required external host evidence, and
+selected Rust cutovers are complete.
 
-```text
-engine did not reach a steady idle state within 15 seconds
-```
+## Current blocker
 
-This is now the next code-only release/package blocker. Do not treat plugin lifecycle or release
-readiness as complete until this gate passes.
+The code-only package blocker `ENGINE-IDLE-PACKAGE-GATE-050` is fixed and archived, and
+`tools/build.ps1 package -Architecture all -Configuration Release` passed locally. Release still
+must not proceed or be declared complete until the remaining required external evidence exists:
+
+- production GitHub Release-backed official add-on package assets;
+- signed repository/update metadata generated from those immutable release assets;
+- trusted production key/credential evidence for the release path;
+- required real-host/manual compatibility evidence.
 
 ## Specification references
 
-- `docs/spec-v1.8.md` sections 4.1, 4.3, 4.5, 4.6, 16, and the testing policy
-- `docs/engine-boundary.md` Engine E4/E5 current boundary notes
+- Phase 8
+- Build Once principle
+- Signing/SBOM/provenance sections
 
-## Scope
+## Required behavior / implementation contract
 
-- Reproduce the failing real Engine acceptance path from `tools/test-fcitx.ps1`.
-- Diagnose whether the idle failure comes from the test harness threshold, process/test isolation,
-  stale background processes, startup warm-up, addon initialization, or a real Engine busy loop.
-- Implement the smallest fix that preserves the bounded-input and fail-open guarantees.
-- Keep new product-owned logic Rust-owned where applicable; C++ changes are allowed only in the
-  existing integration harness or direct Fcitx-facing Engine adapter seam.
-- Preserve x64/x86 Release package acceptance; do not remove real-engine checks just to make the
-  package gate green.
-
-## Must not do
-
-- Do not fake the idle condition by deleting the acceptance check.
-- Do not hide failed Engine stderr or suppress failing subprocess exit codes.
-- Do not introduce input simulation through hooks, `SendInput`, process injection, anti-cheat
-  bypass, credential access, or external exploitation.
-- Do not broaden this task into unrelated Config, Candidate, package repository, or release work.
+- Build each declared Modern/Legacy lineage once from one source commit and locked toolchain.
+- Test/promote the same artifacts; do not recompile in signing/publish jobs.
+- Generate final hash/manifest/attestation for actual signed release bytes.
+- Unify C++/MSYS2/Cargo dependencies in SBOM/notices/provenance.
+- Validate channel identity, key rotation/revocation, rollback and package-manager ownership.
+- Retain the useful Phase 8 requirements from removed historical docs: `package` compiles one
+  x64-with-x86-TSF lineage and records its source commit; `release` promotes exactly that stage,
+  injects protected public keyring material, Authenticode-signs/timestamps PE files when
+  credentials exist, signs packages/installers, and never recompiles in the signing/publish job.
+- Release artifacts must include final hashes, signed manifest, SPDX SBOM from actual staged files
+  and dependency inventory, SLSA-shaped provenance, WinGet metadata, Chocolatey metadata, and final
+  smoke that rechecks hash/signature/SBOM consistency.
 
 ## Required validation
 
-- Focused build of `fcitx5_engine_integration_test` and any touched Engine/UI target.
-- Focused real-engine acceptance through `tools/test-fcitx.ps1 -Configuration Release` when local
-  prerequisites are available.
-- At minimum, direct failing mode reproduction plus a focused regression/diagnostic test if the full
-  package gate cannot complete locally for an external toolchain reason.
-- `tools/check-text-format.ps1`.
-- `git diff --check`.
+- Full declared host/release matrix.
+- Authenticode/timestamp where credentials are available.
+- Install/update/rollback/uninstall from final packaged bytes.
+- SBOM/provenance/hash/signature consistency.
 
 ## Done when
 
-- The real Engine idle acceptance no longer fails from the known steady-idle blocker, or the exact
-  remaining non-code/toolchain blocker is recorded as `MANUAL-PENDING`/`BLOCKED` in
-  `docs/tasks/status.md`.
-- Full package gate can continue past `tools/test-fcitx.ps1`, or a narrower local limitation is
-  documented with CI/host evidence requirements.
-- `docs/tasks/status.md` records HEAD, changed files, commands, results, and any remaining blocker.
+- No unresolved required `MANUAL-PENDING` compatibility evidence.
+- Final published artifacts trace to source commit and locked toolchains.
+- No signing-stage recompilation.

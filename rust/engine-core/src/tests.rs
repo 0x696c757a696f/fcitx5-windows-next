@@ -1222,7 +1222,7 @@ fn frame_sequence_accepts_strictly_newer_ids() {
 #[test]
 fn key_request_timeout_policy() {
     // Cold context (revision 0) gets the widened first-context deadline.
-    assert_eq!(key_request_timeout_ms(0), 2500);
+    assert_eq!(key_request_timeout_ms(0), 7500);
     // Warm keys get the tight input deadline shared with the IPC client.
     assert_eq!(key_request_timeout_ms(1), 250);
     assert_eq!(key_request_timeout_ms(42), 250);
