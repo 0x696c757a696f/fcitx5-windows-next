@@ -1,40 +1,36 @@
-# Current Task — CONFIG-D2D-SETTINGS-SURFACE-001
+# Current Task — CONFIG-STAGE4-A11Y-DPI-QA-001
 
 **Mode:** IMPLEMENTATION
-**Task ID:** `055-CONFIG-D2D-SETTINGS-SURFACE-001`
-**Prerequisite:** `053-CONFIG-UIKIT-DESIGN-TOKENS-001`, `054-CONFIG-WINDOW-EFFECTS-ADAPTER-001`
-**Evidence class:** automated code/product contract plus screenshot evidence.
+**Task ID:** `056-CONFIG-STAGE4-A11Y-DPI-QA-001`
+**Prerequisite:** `055-CONFIG-D2D-SETTINGS-SURFACE-001`
+**Evidence class:** automated checks plus manual/real-host evidence where automation cannot prove it.
 
 ## Goal
 
-Move the Rust Settings visual surface from GDI/owner-draw polish toward a bounded D2D/DWrite
-Settings Surface for cards, section rows, navigation items, and preview containers while preserving
-native HWND controls for behavior-sensitive input.
+Freeze the Stage 4 Rust Config GUI QA gate so “Rust Config Cutover Complete” cannot be claimed
+until the real interactive Settings UI, controls, candidate preview, DPI, localization, and
+accessibility evidence are green.
 
 ## Specification references
 
 - `docs/spec-v1.8.md` §5.5.8 Config UI/UX.
-- `docs/spec-v1.8.md` §5.5.10 Appearance 页面与 Live Preview.
-- `docs/tasks/settings-uiux-operation-integration-plan.md` Shared visual contract.
+- `docs/spec-v1.8.md` §3382 `REG-CONFIG-A11Y-001`.
+- `docs/tasks/settings-uiux-operation-integration-plan.md` Verification plan.
 
 ## Required behavior / implementation contract
 
-- Use the design tokens from `053`; do not introduce new raw visual constants.
-- Render only bounded product components: NavigationItem, Section/Card, SettingRow container,
-  Banner/status row, and PreviewSurface.
-- Keep native Edit/ComboBox/ListBox/ListView where IME, keyboard, font picker, selection, or UIA
-  behavior matters.
-- Ensure every custom-painted area clears its assigned rect before drawing.
-- Device-loss/repaint must fail soft; stale pixels/重影 are regressions.
+- Automated checks must cover keyboard tab order, focus visibility, page navigation, no-overlap,
+  high-DPI geometry, high contrast fallback markers, and embedded candidate preview bounds.
+- Manual evidence must be explicitly recorded for Narrator/NVDA, real Win7/Win10/Win11 host
+  behavior, and any OS behavior that cannot be automated in CI.
+- If manual evidence is unavailable, mark this task `MANUAL-PENDING`; do not mark Stage 4 complete.
 
 ## Required validation
 
-- Existing x64/x86 Rust Config preview QA remains green.
-- Screenshot evidence proves page surfaces do not overlap or leave stale pixels.
-- Source contract prevents growing a generic UI framework.
+- Rust Config QA and source contract tests.
+- x64/x86 Debug Config build and relevant CTest filter.
+- Manual evidence checklist recorded in `docs/tasks/status.md`.
 
 ## Done when
 
-- Main Settings chrome/cards are visually modern through the product Settings Surface, not through
-  bare VC6-style label/control grids.
-- Candidate preview remains embedded and uses the production candidate preview contract.
+- Stage 4 Config cutover language is backed by real GUI QA evidence, not by CLI/backend tests alone.

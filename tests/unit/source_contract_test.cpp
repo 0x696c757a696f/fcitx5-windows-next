@@ -2225,6 +2225,26 @@ int main(int argc, char** argv) {
         configPocSource.find("settings_title_font") == std::string::npos ||
         configPocSource.find("Segoe UI") == std::string::npos ||
         configPocSource.find("paint_settings_background") == std::string::npos ||
+        configPocSource.find("enum SettingsSurfaceComponentKind") == std::string::npos ||
+        configPocSource.find("SettingsSurfacePaintPlan") == std::string::npos ||
+        configPocSource.find("SETTINGS_SURFACE_CONTRACT") == std::string::npos ||
+        configPocSource.find("settings_surface_paint_plan(") == std::string::npos ||
+        configPocSource.find("SettingsSurfaceComponentKind::NavigationItem") ==
+            std::string::npos ||
+        configPocSource.find("SettingsSurfaceComponentKind::SectionCard") ==
+            std::string::npos ||
+        configPocSource.find("SettingsSurfaceComponentKind::SettingRowContainer") ==
+            std::string::npos ||
+        configPocSource.find("SettingsSurfaceComponentKind::BannerStatusRow") ==
+            std::string::npos ||
+        configPocSource.find("SettingsSurfaceComponentKind::PreviewSurface") ==
+            std::string::npos ||
+        configPocSource.find("settings_surface_no_generic_ui_framework") ==
+            std::string::npos ||
+        configPocSource.find("GenericWidget") != std::string::npos ||
+        configPocSource.find("trait Widget") != std::string::npos ||
+        configPocSource.find("fn paint_settings_background(hwnd: Hwnd, hdc: Hdc)") ==
+            std::string::npos ||
         configPocSource.find("repaint_settings_window") == std::string::npos ||
         configQaSource.find("verify_modern_settings_surface") == std::string::npos ||
         configQaSource.find("verify_no_legacy_static_ghosting") == std::string::npos ||

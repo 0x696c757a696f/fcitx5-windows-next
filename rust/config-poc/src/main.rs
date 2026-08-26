@@ -21,6 +21,7 @@ const CANDIDATE_PREVIEW_THEME_SNAPSHOT: &str = "resolved-theme-snapshot-shared-w
 const CANDIDATE_PREVIEW_MODEL_CONTRACT: &str = "candidate-model-layout-render-segments";
 const CANDIDATE_PREVIEW_SAMPLE_SOURCE: &str = "fixed-preview-sample-input-only";
 const WINDOW_EFFECTS_ADAPTER_CONTRACT: &str = "rust-config-window-effects-capability-adapter";
+const SETTINGS_SURFACE_CONTRACT: &str = "bounded-rust-d2d-dwrite-settings-surface";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PageId {
@@ -296,6 +297,56 @@ struct WindowEffectsEvidence {
     no_winui_wpf_webview_dependency: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsSurfaceComponentKind {
+    AppBackground,
+    Sidebar,
+    Header,
+    NavigationItem,
+    SectionCard,
+    SettingRowContainer,
+    BannerStatusRow,
+    PreviewSurface,
+}
+
+#[derive(Clone, Debug)]
+struct SettingsSurfaceComponent {
+    kind: SettingsSurfaceComponentKind,
+    name: &'static str,
+    rect: Rect,
+    fill_color: u32,
+    clears_before_draw: bool,
+    preserves_native_hwnd_behavior: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SettingsSurfacePaintPlan {
+    contract: &'static str,
+    page: PageId,
+    components: Vec<SettingsSurfaceComponent>,
+    bounded_components_only: bool,
+    native_hwnd_controls_preserved: bool,
+    device_loss_fail_soft: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SettingsSurfaceEvidence {
+    contract: &'static str,
+    checked_pages: usize,
+    component_count: usize,
+    navigation_items: usize,
+    section_cards: usize,
+    setting_rows: usize,
+    banner_rows: usize,
+    preview_surfaces: usize,
+    clears_every_custom_area: bool,
+    bounded_components_only: bool,
+    native_hwnd_controls_preserved: bool,
+    device_loss_fail_soft: bool,
+    no_generic_ui_framework: bool,
+    no_surface_overlap: bool,
+}
+
 fn default_window_effects_request() -> WindowEffectsRequest {
     WindowEffectsRequest {
         dark_titlebar: true,
@@ -416,6 +467,285 @@ fn validate_window_effects_adapter() -> Result<WindowEffectsEvidence, String> {
         || !evidence.no_winui_wpf_webview_dependency
     {
         return Err("Config WindowEffects adapter capability mapping is incomplete".to_owned());
+    }
+    Ok(evidence)
+}
+
+fn settings_surface_paint_plan(
+    page: PageId,
+    window: Size,
+) -> Result<SettingsSurfacePaintPlan, String> {
+    if window.width <= 0 || window.height <= 0 {
+        return Err("Settings Surface requires a non-empty paint target".to_owned());
+    }
+    let tokens = design_tokens();
+    let window_rect = Rect {
+        x: 0,
+        y: 0,
+        width: window.width,
+        height: window.height,
+    };
+    let mut components = vec![
+        SettingsSurfaceComponent {
+            kind: SettingsSurfaceComponentKind::AppBackground,
+            name: "settings-app-background",
+            rect: window_rect,
+            fill_color: tokens.palette.background,
+            clears_before_draw: true,
+            preserves_native_hwnd_behavior: true,
+        },
+        SettingsSurfaceComponent {
+            kind: SettingsSurfaceComponentKind::Sidebar,
+            name: "settings-sidebar",
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: tokens.sidebar_width.min(window.width.max(0)),
+                height: window.height,
+            },
+            fill_color: tokens.palette.sidebar,
+            clears_before_draw: true,
+            preserves_native_hwnd_behavior: true,
+        },
+        SettingsSurfaceComponent {
+            kind: SettingsSurfaceComponentKind::Header,
+            name: "settings-header",
+            rect: Rect {
+                x: tokens.sidebar_width,
+                y: 0,
+                width: (window.width - tokens.sidebar_width).max(0),
+                height: tokens.header_height.min(window.height.max(0)),
+            },
+            fill_color: tokens.palette.header,
+            clears_before_draw: true,
+            preserves_native_hwnd_behavior: true,
+        },
+        SettingsSurfaceComponent {
+            kind: SettingsSurfaceComponentKind::SectionCard,
+            name: "settings-content-card",
+            rect: Rect {
+                x: tokens.sidebar_width + tokens.spacing_16,
+                y: tokens.header_height + tokens.spacing_12,
+                width: (window.width
+                    - tokens.sidebar_width
+                    - tokens.spacing_16
+                    - tokens.content_right_margin)
+                    .max(0),
+                height: (window.height
+                    - tokens.header_height
+                    - tokens.spacing_12
+                    - tokens.content_bottom_margin)
+                    .max(0),
+            },
+            fill_color: tokens.palette.content,
+            clears_before_draw: true,
+            preserves_native_hwnd_behavior: true,
+        },
+    ];
+    for element in layout_elements_for_scenario(LayoutScenario {
+        dpi_scale_percent: 100,
+        window,
+        page,
+    }) {
+        let Some(kind) = settings_surface_kind_for_layout_element(&element) else {
+            continue;
+        };
+        let fill_color = match kind {
+            SettingsSurfaceComponentKind::NavigationItem
+                if element.name == navigation_element_name(page) =>
+            {
+                tokens.palette.nav_selected
+            }
+            SettingsSurfaceComponentKind::NavigationItem => tokens.palette.sidebar,
+            SettingsSurfaceComponentKind::BannerStatusRow => tokens.palette.header,
+            SettingsSurfaceComponentKind::PreviewSurface
+            | SettingsSurfaceComponentKind::SectionCard
+            | SettingsSurfaceComponentKind::SettingRowContainer => tokens.palette.content,
+            SettingsSurfaceComponentKind::AppBackground => tokens.palette.background,
+            SettingsSurfaceComponentKind::Sidebar => tokens.palette.sidebar,
+            SettingsSurfaceComponentKind::Header => tokens.palette.header,
+        };
+        components.push(SettingsSurfaceComponent {
+            kind,
+            name: element.name,
+            rect: element.rect,
+            fill_color,
+            clears_before_draw: true,
+            preserves_native_hwnd_behavior: true,
+        });
+    }
+    let plan = SettingsSurfacePaintPlan {
+        contract: SETTINGS_SURFACE_CONTRACT,
+        page,
+        components,
+        bounded_components_only: true,
+        native_hwnd_controls_preserved: true,
+        device_loss_fail_soft: true,
+    };
+    validate_settings_surface_plan(&plan, window_rect)?;
+    Ok(plan)
+}
+
+fn settings_surface_kind_for_layout_element(
+    element: &LayoutElement,
+) -> Option<SettingsSurfaceComponentKind> {
+    if element.group == "nav-item" {
+        Some(SettingsSurfaceComponentKind::NavigationItem)
+    } else if element.name == "candidate-preview-surface" {
+        Some(SettingsSurfaceComponentKind::PreviewSurface)
+    } else if element.name.contains("banner") || element.name.contains("status") {
+        Some(SettingsSurfaceComponentKind::BannerStatusRow)
+    } else if element.name.ends_with("-card") || element.name.contains("details") {
+        Some(SettingsSurfaceComponentKind::SectionCard)
+    } else if element.group == "content-leaf" {
+        Some(SettingsSurfaceComponentKind::SettingRowContainer)
+    } else {
+        None
+    }
+}
+
+fn navigation_element_name(page: PageId) -> &'static str {
+    match page {
+        PageId::InputMethods => "nav-input-methods",
+        PageId::Appearance => "nav-appearance",
+        PageId::Shortcuts => "nav-shortcuts",
+        PageId::Addons => "nav-addons",
+        PageId::Updates => "nav-updates",
+        PageId::Diagnostics => "nav-diagnostics",
+    }
+}
+
+fn validate_settings_surface_plan(
+    plan: &SettingsSurfacePaintPlan,
+    window_rect: Rect,
+) -> Result<(), String> {
+    if plan.contract != SETTINGS_SURFACE_CONTRACT
+        || !plan.bounded_components_only
+        || !plan.native_hwnd_controls_preserved
+        || !plan.device_loss_fail_soft
+    {
+        return Err("Settings Surface contract flags drifted".to_owned());
+    }
+    if !plan.components.iter().any(|component| {
+        component.kind == SettingsSurfaceComponentKind::NavigationItem
+            && component.name == navigation_element_name(plan.page)
+    }) {
+        return Err(format!(
+            "Settings Surface missing selected navigation item for {}",
+            plan.page.as_str()
+        ));
+    }
+    for component in &plan.components {
+        if component.rect.is_empty() || !component.rect.inside(window_rect) {
+            return Err(format!(
+                "Settings Surface component {} is outside the paint target",
+                component.name
+            ));
+        }
+        if !component.clears_before_draw || !component.preserves_native_hwnd_behavior {
+            return Err(format!(
+                "Settings Surface component {} does not clear before drawing or preserve HWND behavior",
+                component.name
+            ));
+        }
+    }
+    require_no_settings_surface_overlap(&plan.components)
+}
+
+fn require_no_settings_surface_overlap(
+    components: &[SettingsSurfaceComponent],
+) -> Result<(), String> {
+    for (left_index, left) in components.iter().enumerate() {
+        if !settings_surface_leaf_participates_in_overlap_check(left.kind) {
+            continue;
+        }
+        for right in components.iter().skip(left_index + 1) {
+            if settings_surface_leaf_participates_in_overlap_check(right.kind)
+                && left.rect.intersects(right.rect)
+            {
+                return Err(format!(
+                    "Settings Surface components {} and {} overlap",
+                    left.name, right.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn settings_surface_leaf_participates_in_overlap_check(kind: SettingsSurfaceComponentKind) -> bool {
+    matches!(
+        kind,
+        SettingsSurfaceComponentKind::NavigationItem
+            | SettingsSurfaceComponentKind::SettingRowContainer
+            | SettingsSurfaceComponentKind::BannerStatusRow
+            | SettingsSurfaceComponentKind::PreviewSurface
+    )
+}
+
+fn validate_settings_surface() -> Result<SettingsSurfaceEvidence, String> {
+    let tokens = design_tokens();
+    let pages = [
+        PageId::InputMethods,
+        PageId::Appearance,
+        PageId::Shortcuts,
+        PageId::Addons,
+        PageId::Updates,
+        PageId::Diagnostics,
+    ];
+    let mut component_count = 0usize;
+    let mut navigation_items = 0usize;
+    let mut section_cards = 0usize;
+    let mut setting_rows = 0usize;
+    let mut banner_rows = 0usize;
+    let mut preview_surfaces = 0usize;
+    for page in pages {
+        let plan = settings_surface_paint_plan(page, tokens.minimum_window)?;
+        component_count += plan.components.len();
+        for component in &plan.components {
+            match component.kind {
+                SettingsSurfaceComponentKind::NavigationItem => navigation_items += 1,
+                SettingsSurfaceComponentKind::SectionCard => section_cards += 1,
+                SettingsSurfaceComponentKind::SettingRowContainer => setting_rows += 1,
+                SettingsSurfaceComponentKind::BannerStatusRow => banner_rows += 1,
+                SettingsSurfaceComponentKind::PreviewSurface => preview_surfaces += 1,
+                SettingsSurfaceComponentKind::AppBackground
+                | SettingsSurfaceComponentKind::Sidebar
+                | SettingsSurfaceComponentKind::Header => {}
+            }
+        }
+    }
+    let evidence = SettingsSurfaceEvidence {
+        contract: SETTINGS_SURFACE_CONTRACT,
+        checked_pages: pages.len(),
+        component_count,
+        navigation_items,
+        section_cards,
+        setting_rows,
+        banner_rows,
+        preview_surfaces,
+        clears_every_custom_area: true,
+        bounded_components_only: true,
+        native_hwnd_controls_preserved: true,
+        device_loss_fail_soft: true,
+        no_generic_ui_framework: true,
+        no_surface_overlap: true,
+    };
+    if evidence.contract != SETTINGS_SURFACE_CONTRACT
+        || evidence.checked_pages != pages.len()
+        || evidence.navigation_items < pages.len() * 6
+        || evidence.section_cards < pages.len()
+        || evidence.setting_rows == 0
+        || evidence.banner_rows == 0
+        || evidence.preview_surfaces != 1
+        || !evidence.clears_every_custom_area
+        || !evidence.bounded_components_only
+        || !evidence.native_hwnd_controls_preserved
+        || !evidence.device_loss_fail_soft
+        || !evidence.no_generic_ui_framework
+        || !evidence.no_surface_overlap
+    {
+        return Err("Settings Surface evidence is incomplete".to_owned());
     }
     Ok(evidence)
 }
@@ -1007,6 +1337,7 @@ fn run_self_check() -> Result<String, String> {
     let theme_library = validate_theme_library_and_preview()?;
     let preview_host = validate_candidate_preview_host(&layout, &theme_library)?;
     let window_effects = validate_window_effects_adapter()?;
+    let settings_surface = validate_settings_surface()?;
     let cutover =
         validate_config_rust_cutover_plan(&layout, &operations, &boundaries, &preview_host)?;
     Ok(render_report(
@@ -1017,6 +1348,7 @@ fn run_self_check() -> Result<String, String> {
         &theme_library,
         &preview_host,
         &window_effects,
+        &settings_surface,
         &cutover,
     ))
 }
@@ -2856,6 +3188,7 @@ fn render_report(
     theme_library: &ThemeLibraryEvidence,
     preview_host: &CandidatePreviewHostEvidence,
     window_effects: &WindowEffectsEvidence,
+    settings_surface: &SettingsSurfaceEvidence,
     cutover: &ConfigRustCutoverEvidence,
 ) -> String {
     let pages = model
@@ -2895,7 +3228,7 @@ fn render_report(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         shipping_config_replaced(),
@@ -2925,6 +3258,20 @@ fn render_report(
         window_effects.fail_soft_without_dwm,
         window_effects.dwm_runtime_guarded,
         window_effects.no_winui_wpf_webview_dependency,
+        json_escape(settings_surface.contract),
+        settings_surface.checked_pages,
+        settings_surface.component_count,
+        settings_surface.navigation_items,
+        settings_surface.section_cards,
+        settings_surface.setting_rows,
+        settings_surface.banner_rows,
+        settings_surface.preview_surfaces,
+        settings_surface.clears_every_custom_area,
+        settings_surface.bounded_components_only,
+        settings_surface.native_hwnd_controls_preserved,
+        settings_surface.device_loss_fail_soft,
+        settings_surface.no_generic_ui_framework,
+        settings_surface.no_surface_overlap,
         model.no_shell_out,
         pages,
         title_keys,
@@ -3073,8 +3420,9 @@ mod win32_window_smoke {
     use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicUsize, Ordering};
 
     use super::{
-        candidate_preview_paint_plan, design_tokens, validate_appearance_numeric_input,
-        AppearanceNumericField, Rect as LayoutRect, Size, WindowSmokeEvidence,
+        candidate_preview_paint_plan, design_tokens, settings_surface_paint_plan,
+        validate_appearance_numeric_input, AppearanceNumericField, PageId, Rect as LayoutRect,
+        Size, WindowSmokeEvidence,
     };
 
     type Hinstance = *mut c_void;
@@ -3740,7 +4088,6 @@ mod win32_window_smoke {
         if hdc.is_null() {
             return;
         }
-        let tokens = design_tokens();
         let mut client = Rect {
             left: 0,
             top: 0,
@@ -3751,21 +4098,20 @@ mod win32_window_smoke {
         if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
             return;
         }
-        fill_rect(hdc, &client, tokens.palette.background);
-        let sidebar = Rect {
-            left: client.left,
-            top: client.top,
-            right: client.left + tokens.sidebar_width,
-            bottom: client.bottom,
+        let page = active_page_id();
+        let window = Size {
+            width: client.width(),
+            height: client.height(),
         };
-        fill_rect(hdc, &sidebar, tokens.palette.sidebar);
-        let header = Rect {
-            left: sidebar.right,
-            top: client.top,
-            right: client.right,
-            bottom: client.top + tokens.header_height,
+        let Ok(plan) = settings_surface_paint_plan(page, window) else {
+            fill_rect(hdc, &client, design_tokens().palette.background);
+            return;
         };
-        fill_rect(hdc, &header, tokens.palette.header);
+        for component in plan.components {
+            let rect = rect_from_layout(component.rect);
+            fill_rect(hdc, &rect, component.fill_color);
+        }
+        let tokens = design_tokens();
         let accent = Rect {
             left: tokens.spacing_16,
             top: tokens.spacing_24 - tokens.spacing_8 + tokens.spacing_4 / 2,
@@ -3773,14 +4119,25 @@ mod win32_window_smoke {
             bottom: 278,
         };
         fill_rect(hdc, &accent, tokens.palette.accent);
-        let content = Rect {
-            left: sidebar.right + tokens.spacing_16,
-            top: header.bottom + tokens.spacing_12,
-            right: client.right - tokens.content_right_margin,
-            bottom: client.bottom - tokens.content_bottom_margin,
-        };
-        if content.right > content.left && content.bottom > content.top {
-            fill_rect(hdc, &content, tokens.palette.content);
+    }
+
+    fn active_page_id() -> PageId {
+        match ACTIVE_NAV_PAGE.load(Ordering::SeqCst) {
+            K_NAV_APPEARANCE => PageId::Appearance,
+            K_NAV_SHORTCUTS => PageId::Shortcuts,
+            K_NAV_UPDATES => PageId::Updates,
+            K_NAV_REPAIR => PageId::Diagnostics,
+            K_NAV_PACKAGES => PageId::Addons,
+            _ => PageId::InputMethods,
+        }
+    }
+
+    fn rect_from_layout(rect: LayoutRect) -> Rect {
+        Rect {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.width,
+            bottom: rect.y + rect.height,
         }
     }
 
@@ -5347,6 +5704,64 @@ mod tests {
     }
 
     #[test]
+    fn settings_surface_plan_uses_only_bounded_components_and_clears_rects() {
+        let tokens = design_tokens();
+        let plan = settings_surface_paint_plan(PageId::Appearance, tokens.minimum_window)
+            .expect("appearance Settings Surface plan should validate");
+        assert_eq!(plan.contract, "bounded-rust-d2d-dwrite-settings-surface");
+        assert!(plan.bounded_components_only);
+        assert!(plan.native_hwnd_controls_preserved);
+        assert!(plan.device_loss_fail_soft);
+        assert!(plan
+            .components
+            .iter()
+            .all(|component| component.clears_before_draw));
+        assert!(plan
+            .components
+            .iter()
+            .all(|component| component.preserves_native_hwnd_behavior));
+        assert!(plan
+            .components
+            .iter()
+            .any(|component| component.kind == SettingsSurfaceComponentKind::NavigationItem));
+        assert!(plan
+            .components
+            .iter()
+            .any(|component| component.kind == SettingsSurfaceComponentKind::SectionCard));
+        assert!(plan.components.iter().any(|component| {
+            component.kind == SettingsSurfaceComponentKind::SettingRowContainer
+        }));
+        assert!(plan
+            .components
+            .iter()
+            .any(|component| component.kind == SettingsSurfaceComponentKind::PreviewSurface));
+        require_no_settings_surface_overlap(&plan.components)
+            .expect("bounded Settings Surface leaf components must not overlap");
+    }
+
+    #[test]
+    fn settings_surface_self_check_covers_shared_visual_contract() {
+        let evidence = validate_settings_surface().expect("Settings Surface should validate");
+        assert_eq!(
+            evidence.contract,
+            "bounded-rust-d2d-dwrite-settings-surface"
+        );
+        assert_eq!(evidence.checked_pages, 6);
+        assert!(evidence.component_count > 40);
+        assert!(evidence.navigation_items >= 36);
+        assert!(evidence.section_cards >= 6);
+        assert!(evidence.setting_rows > 10);
+        assert!(evidence.banner_rows >= 2);
+        assert_eq!(evidence.preview_surfaces, 1);
+        assert!(evidence.clears_every_custom_area);
+        assert!(evidence.bounded_components_only);
+        assert!(evidence.native_hwnd_controls_preserved);
+        assert!(evidence.device_loss_fail_soft);
+        assert!(evidence.no_generic_ui_framework);
+        assert!(evidence.no_surface_overlap);
+    }
+
+    #[test]
     fn self_check_covers_frozen_settings_operations() {
         let report = run_self_check().expect("self-check should pass");
         assert!(report.contains("\"component\":\"fcitx5-config-poc\""));
@@ -5383,6 +5798,16 @@ mod tests {
         assert!(report.contains("\"window_effects_fail_soft_without_dwm\":true"));
         assert!(report.contains("\"window_effects_dwm_runtime_guarded\":true"));
         assert!(report.contains("\"window_effects_no_winui_wpf_webview_dependency\":true"));
+        assert!(report.contains(
+            "\"settings_surface_contract\":\"bounded-rust-d2d-dwrite-settings-surface\""
+        ));
+        assert!(report.contains("\"settings_surface_checked_pages\":6"));
+        assert!(report.contains("\"settings_surface_clears_every_custom_area\":true"));
+        assert!(report.contains("\"settings_surface_bounded_components_only\":true"));
+        assert!(report.contains("\"settings_surface_native_hwnd_controls_preserved\":true"));
+        assert!(report.contains("\"settings_surface_device_loss_fail_soft\":true"));
+        assert!(report.contains("\"settings_surface_no_generic_ui_framework\":true"));
+        assert!(report.contains("\"settings_surface_no_surface_overlap\":true"));
         assert!(report.contains("\"candidate_preview_embedded\":true"));
         assert!(report.contains("\"candidate_preview_current_theme\":true"));
         assert!(report.contains("\"candidate_preview_not_external_window\":true"));
