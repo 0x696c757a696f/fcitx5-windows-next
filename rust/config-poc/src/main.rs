@@ -2814,6 +2814,7 @@ mod win32_window_smoke {
     const WS_BORDER: u32 = 0x0080_0000;
     const WS_CHILD: u32 = 0x4000_0000;
     const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
+    const WS_TABSTOP: u32 = 0x0001_0000;
     const WS_VSCROLL: u32 = 0x0020_0000;
     const WS_VISIBLE: u32 = 0x1000_0000;
     const SW_HIDE: i32 = 0;
@@ -3488,7 +3489,7 @@ mod win32_window_smoke {
             128,
             360,
             96,
-            WS_BORDER | WS_VSCROLL,
+            WS_BORDER | WS_VSCROLL | WS_TABSTOP,
         )?;
         populate_available_packages(packages);
         create_child_control(
@@ -3513,7 +3514,7 @@ mod win32_window_smoke {
             244,
             112,
             34,
-            0,
+            WS_TABSTOP,
         )?;
         create_child_control(
             hwnd,
@@ -3525,7 +3526,7 @@ mod win32_window_smoke {
             244,
             112,
             34,
-            0,
+            WS_TABSTOP,
         )?;
         create_child_control(
             hwnd,
@@ -3537,7 +3538,7 @@ mod win32_window_smoke {
             244,
             112,
             34,
-            0,
+            WS_TABSTOP,
         )?;
         create_child_control(
             hwnd,
@@ -3549,7 +3550,7 @@ mod win32_window_smoke {
             244,
             128,
             34,
-            0,
+            WS_TABSTOP,
         )?;
         create_child_control(
             hwnd,
@@ -3585,7 +3586,7 @@ mod win32_window_smoke {
             160,
             620,
             96,
-            WS_BORDER | WS_VSCROLL,
+            WS_BORDER | WS_VSCROLL | WS_TABSTOP,
         )?;
         populate_enabled_input_methods(input_methods);
         create_child_control(
@@ -3610,7 +3611,7 @@ mod win32_window_smoke {
             268,
             220,
             96,
-            WS_BORDER | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+            WS_BORDER | WS_VSCROLL | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
         )?;
         populate_language_selector(language_selector);
         create_child_control(
@@ -3635,7 +3636,7 @@ mod win32_window_smoke {
             128,
             92,
             28,
-            WS_BORDER | ES_AUTOHSCROLL,
+            WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
             hwnd,
@@ -3659,7 +3660,7 @@ mod win32_window_smoke {
             164,
             92,
             28,
-            WS_BORDER | ES_AUTOHSCROLL,
+            WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
             hwnd,
@@ -3683,7 +3684,7 @@ mod win32_window_smoke {
             128,
             92,
             28,
-            WS_BORDER | ES_AUTOHSCROLL,
+            WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
             hwnd,
@@ -3707,7 +3708,7 @@ mod win32_window_smoke {
             164,
             92,
             28,
-            WS_BORDER | ES_AUTOHSCROLL,
+            WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
             hwnd,
@@ -3731,7 +3732,7 @@ mod win32_window_smoke {
             128,
             92,
             28,
-            WS_BORDER | ES_AUTOHSCROLL,
+            WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
         )?;
         create_child_control(
             hwnd,
@@ -3755,7 +3756,7 @@ mod win32_window_smoke {
             228,
             180,
             128,
-            WS_BORDER | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+            WS_BORDER | WS_VSCROLL | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
         )?;
         populate_system_font_picker(font_combo, preview_state_font_family().as_deref())?;
         for (index, (id, label)) in [
@@ -3779,7 +3780,7 @@ mod win32_window_smoke {
                 24 + (index as i32 * 44),
                 164,
                 34,
-                0,
+                WS_TABSTOP,
             )?;
         }
         let preview_title = to_wide("Candidate Preview");

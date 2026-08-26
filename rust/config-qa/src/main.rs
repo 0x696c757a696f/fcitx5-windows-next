@@ -22,6 +22,7 @@ type Wparam = usize;
 
 const BI_RGB: Dword = 0;
 const DIB_RGB_COLORS: Uint = 0;
+const GWL_STYLE: i32 = -16;
 const PW_RENDERFULLCONTENT: Uint = 0x0000_0002;
 const CAPTUREBLT: Dword = 0x4000_0000;
 const SRCCOPY: Dword = 0x00CC_0020;
@@ -43,6 +44,7 @@ const PRF_NONCLIENT: Lparam = 0x0000_0002;
 const PRF_CLIENT: Lparam = 0x0000_0004;
 const PRF_ERASEBKGND: Lparam = 0x0000_0008;
 const PRF_CHILDREN: Lparam = 0x0000_0010;
+const WS_TABSTOP: u32 = 0x0001_0000;
 
 const K_NAV_GENERAL: i32 = 130;
 const K_NAV_APPEARANCE: i32 = 131;
@@ -186,6 +188,7 @@ extern "system" {
     fn EnumWindows(callback: extern "system" fn(Hwnd, Lparam) -> Bool, lparam: Lparam) -> Bool;
     fn GetDlgItem(hwnd: Hwnd, id: i32) -> Hwnd;
     fn GetDC(hwnd: Hwnd) -> Hdc;
+    fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
     fn GetWindowDC(hwnd: Hwnd) -> Hdc;
     fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
     fn GetWindowThreadProcessId(hwnd: Hwnd, process_id: *mut Dword) -> Dword;
@@ -500,6 +503,12 @@ fn verify_page(hwnd: Hwnd, page: &Page) -> Result<(), String> {
         if rect.right <= rect.left || rect.bottom <= rect.top {
             return Err(format!("{} control {control} has empty rect", page.slug));
         }
+        if is_keyboard_focus_control(control) && !has_tabstop(child) {
+            return Err(format!(
+                "{} control {control} is missing WS_TABSTOP keyboard focus style",
+                page.slug
+            ));
+        }
         rects.push((control, rect));
     }
     for outer in 0..rects.len() {
@@ -513,6 +522,30 @@ fn verify_page(hwnd: Hwnd, page: &Page) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn is_keyboard_focus_control(control: i32) -> bool {
+    matches!(
+        control,
+        K_INPUT_METHOD_LIST
+            | K_LANGUAGE_SELECTOR
+            | K_APPEARANCE_FONT_SIZE
+            | K_APPEARANCE_OPACITY
+            | K_APPEARANCE_FONT_FAMILY
+            | K_APPEARANCE_SPACING
+            | K_APPEARANCE_CORNER_RADIUS
+            | K_APPEARANCE_CANDIDATE_WIDTH
+            | K_PACKAGES
+            | K_PACKAGE_INSTALL
+            | K_PACKAGE_UPDATE
+            | K_PACKAGE_REMOVE
+            | K_PACKAGE_CONFIGURE
+    )
+}
+
+fn has_tabstop(hwnd: Hwnd) -> bool {
+    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32;
+    style & WS_TABSTOP == WS_TABSTOP
 }
 
 fn child_text(hwnd: Hwnd, id: i32) -> Result<String, String> {
