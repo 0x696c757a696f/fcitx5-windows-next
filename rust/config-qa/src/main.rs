@@ -762,7 +762,10 @@ fn has_child(hwnd: Hwnd, id: i32) -> bool {
 fn rust_config_exe(path: &Path) -> bool {
     path.file_stem()
         .and_then(|stem| stem.to_str())
-        .map(|stem| stem.eq_ignore_ascii_case("fcitx5-config-rust"))
+        .map(|stem| {
+            stem.eq_ignore_ascii_case("fcitx5-config-rust")
+                || stem.eq_ignore_ascii_case("fcitx5-config")
+        })
         .unwrap_or(false)
 }
 

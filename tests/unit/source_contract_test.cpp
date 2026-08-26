@@ -2195,17 +2195,20 @@ int main(int argc, char** argv) {
         configPocSource.find("--ui-visual-contract-test") == std::string::npos ||
         configPocSource.find("--ui-live-preview-contract-test") == std::string::npos ||
         configPocSource.find("--ui-interaction-test") == std::string::npos ||
-        configSource.find("isRustConfigBackendHeadlessCommand") == std::string::npos ||
-        configSource.find("runRustConfigBackendHeadless") == std::string::npos ||
-        configSource.find("fcitx5-config-rust.exe") == std::string::npos ||
+        cmakeSource.find("fcitx5_config_legacy_app EXCLUDE_FROM_ALL") == std::string::npos ||
+        cmakeSource.find("OUTPUT_NAME \"fcitx5-config-legacy\"") == std::string::npos ||
+        cmakeSource.find("set(FCITX_CONFIG_SHIPPING_EXE") == std::string::npos ||
+        cmakeSource.find("add_custom_target(fcitx5_config_app ALL") == std::string::npos ||
+        cmakeSource.find("Building Rust fcitx5-config.exe and side-by-side fcitx5-config-rust executable") ==
+            std::string::npos ||
+        cmakeSource.find("-ShippingConfigExe \"${FCITX_CONFIG_SHIPPING_EXE}\"") ==
+            std::string::npos ||
         configSource.find("bool checkI18n()") != std::string::npos ||
         configSource.find("bool checkResources()") != std::string::npos ||
         configSource.find("return checkI18n() ? 0 : 2") != std::string::npos ||
         configSource.find("return checkI18n() && checkResources() ? 0 : 2") !=
             std::string::npos ||
-        cmakeSource.find("add_dependencies(fcitx5_config_app fcitx5_config_rust_side_by_side)") ==
-            std::string::npos ||
-        stagePackageScript.find("fcitx5-config-rust.exe") == std::string::npos ||
+        stagePackageScript.find("fcitx5-config-rust.exe") != std::string::npos ||
         cmakeSource.find("config-rust-legacy-headless-cli") == std::string::npos ||
         cmakeSource.find("test-config-rust-legacy-cli.ps1") == std::string::npos ||
         configRustLegacyCliScript.find("legacy_config_cli_compat") == std::string::npos ||
@@ -2263,7 +2266,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         cmakeSource.find("rust-config-poc-contract") == std::string::npos ||
         cmakeSource.find("fcitx5_config_rust_side_by_side") == std::string::npos ||
-        cmakeSource.find("Building side-by-side Rust fcitx5-config-rust executable") ==
+        cmakeSource.find("Building Rust fcitx5-config.exe and side-by-side fcitx5-config-rust executable") ==
             std::string::npos ||
         cmakeSource.find("rust-config-side-by-side-contract") == std::string::npos ||
         cmakeSource.find("config-rust-side-by-side-differential") == std::string::npos ||
@@ -2296,9 +2299,11 @@ int main(int argc, char** argv) {
         configRustShippingLineageScript.find("fcitx5-config.exe") == std::string::npos ||
         configRustShippingLineageScript.find("fcitx5-config-rust.exe") ==
             std::string::npos ||
+        configRustShippingLineageScript.find("ShippingConfigExe") == std::string::npos ||
+        configRustShippingLineageScript.find("Get-FileHash") == std::string::npos ||
         configRustShippingLineageScript.find("component -ne 'fcitx5-config'") ==
             std::string::npos ||
-        configRustShippingLineageScript.find("shipping_config_replaced -ne $false") ==
+        configRustShippingLineageScript.find("shipping_config_replaced -ne $true") ==
             std::string::npos ||
         configRustShippingLineageScript.find("shipping-candidate-real-preview-host-path") ==
             std::string::npos ||

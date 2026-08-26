@@ -602,47 +602,57 @@ fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
 add_executable(
-  fcitx5_config_app WIN32
+  fcitx5_config_legacy_app EXCLUDE_FROM_ALL WIN32
   src/config/app_main.cpp
   resources/windows/app.rc)
-set_target_properties(fcitx5_config_app PROPERTIES OUTPUT_NAME "fcitx5-config")
+set_target_properties(fcitx5_config_legacy_app PROPERTIES OUTPUT_NAME "fcitx5-config-legacy")
 target_link_libraries(
-  fcitx5_config_app
+  fcitx5_config_legacy_app
   PRIVATE fcitx5::windows_common fcitx5::release_identity fcitx5::config
           fcitx5::platform fcitx5_process_execution_core_rust d2d1 dwrite shell32 user32 comctl32
           comdlg32 advapi32 ole32)
-add_dependencies(fcitx5_config_app fcitx5_process_execution_core_rustlib)
-target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
-target_include_directories(fcitx5_config_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
-target_include_directories(fcitx5_config_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
+add_dependencies(fcitx5_config_legacy_app fcitx5_process_execution_core_rustlib)
+target_include_directories(fcitx5_config_legacy_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
+target_include_directories(fcitx5_config_legacy_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+target_include_directories(fcitx5_config_legacy_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
 if(FCITX_COMPILER_IS_MSVC_CL)
-  target_compile_options(fcitx5_config_app PRIVATE /external:W0 /analyze:external-)
+  target_compile_options(fcitx5_config_legacy_app PRIVATE /external:W0 /analyze:external-)
 endif()
-fcitx_apply_project_options(fcitx5_config_app)
-fcitx_apply_binary_hardening(fcitx5_config_app)
+fcitx_apply_project_options(fcitx5_config_legacy_app)
+fcitx_apply_binary_hardening(fcitx5_config_legacy_app)
 add_custom_command(
-  TARGET fcitx5_config_app POST_BUILD
+  TARGET fcitx5_config_legacy_app POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/locales"
-          "$<TARGET_FILE_DIR:fcitx5_config_app>/locales"
+          "$<TARGET_FILE_DIR:fcitx5_config_legacy_app>/locales"
   VERBATIM)
 
 set(FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5-config-rust.exe")
+set(FCITX_CONFIG_APP_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+set(FCITX_CONFIG_SHIPPING_EXE "${FCITX_CONFIG_APP_OUTPUT_DIR}/fcitx5-config.exe")
+set(FCITX_CONFIG_SIDE_BY_SIDE_EXE "${FCITX_CONFIG_APP_OUTPUT_DIR}/fcitx5-config-rust.exe")
 add_custom_target(
   fcitx5_config_rust_side_by_side
-  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-config-rust.exe"
+  BYPRODUCTS "${FCITX_CONFIG_SIDE_BY_SIDE_EXE}" "${FCITX_CONFIG_SHIPPING_EXE}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
     fcitx5-config-rust --target "${FCITX_RUST_TARGET}"
   COMMAND
-    "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+    "${CMAKE_COMMAND}" -E make_directory "${FCITX_CONFIG_APP_OUTPUT_DIR}"
   COMMAND
     "${CMAKE_COMMAND}" -E copy_if_different
     "${FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE}"
-    "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-config-rust.exe"
+    "${FCITX_CONFIG_SIDE_BY_SIDE_EXE}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different
+    "${FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE}"
+    "${FCITX_CONFIG_SHIPPING_EXE}"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/locales"
+          "${FCITX_CONFIG_APP_OUTPUT_DIR}/locales"
   DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
@@ -653,8 +663,8 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Building side-by-side Rust fcitx5-config-rust executable")
-add_dependencies(fcitx5_config_app fcitx5_config_rust_side_by_side)
+  COMMENT "Building Rust fcitx5-config.exe and side-by-side fcitx5-config-rust executable")
+add_custom_target(fcitx5_config_app ALL DEPENDS fcitx5_config_rust_side_by_side)
 
 add_library(fcitx5_candidate_layout INTERFACE)
 add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
@@ -663,7 +673,7 @@ target_link_libraries(fcitx5_candidate_layout INTERFACE fcitx5_candidate_core_ru
                                                      ntdll)
 add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
 
-target_link_libraries(fcitx5_config_app PRIVATE fcitx5::candidate_layout)
+target_link_libraries(fcitx5_config_legacy_app PRIVATE fcitx5::candidate_layout)
 
 add_executable(
   fcitx5_ui WIN32
@@ -1031,23 +1041,23 @@ if(BUILD_TESTING)
            COMMAND fcitx5_control --data-root
                    "${CMAKE_CURRENT_BINARY_DIR}/control-test-data"
                    --apply-config "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml")
-  add_test(NAME config-ui-headless-smoke COMMAND fcitx5_config_app --self-test)
-  add_test(NAME config-ui-i18n-check COMMAND fcitx5_config_app --check-i18n)
-  add_test(NAME config-ui-resource-check COMMAND fcitx5_config_app --check-resources)
-  add_test(NAME config-ui-behavior-contract COMMAND fcitx5_config_app --ui-contract-test)
+  add_test(NAME config-ui-headless-smoke COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --self-test)
+  add_test(NAME config-ui-i18n-check COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --check-i18n)
+  add_test(NAME config-ui-resource-check COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --check-resources)
+  add_test(NAME config-ui-behavior-contract COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-contract-test)
   add_test(NAME config-ui-visual-contract
-           COMMAND fcitx5_config_app --ui-visual-contract-test)
+           COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-visual-contract-test)
   add_test(NAME config-ui-live-preview-contract
-           COMMAND fcitx5_config_app --ui-live-preview-contract-test)
+           COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-live-preview-contract-test)
   add_test(NAME config-ui-interaction-coverage
-           COMMAND fcitx5_config_app --ui-interaction-test)
+           COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-interaction-test)
   add_test(
     NAME config-ui-preview-fidelity-qa
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
       "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-qa --target
-      "${FCITX_RUST_TARGET}" -- --config-exe "$<TARGET_FILE:fcitx5_config_app>"
+      "${FCITX_RUST_TARGET}" -- --config-exe "${FCITX_CONFIG_SHIPPING_EXE}"
       --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
       "${CMAKE_CURRENT_BINARY_DIR}/config-ui-preview-fidelity-qa")
   set_tests_properties(config-ui-preview-fidelity-qa PROPERTIES TIMEOUT 60)
@@ -1058,7 +1068,7 @@ if(BUILD_TESTING)
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
       "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-qa --target
       "${FCITX_RUST_TARGET}" -- --config-exe
-      "$<TARGET_FILE_DIR:fcitx5_config_app>/fcitx5-config-rust.exe"
+      "${FCITX_CONFIG_SHIPPING_EXE}"
       --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
       "${CMAKE_CURRENT_BINARY_DIR}/rust-config-ui-preview-qa")
   set_tests_properties(rust-config-ui-preview-qa PROPERTIES TIMEOUT 60)
@@ -1084,18 +1094,27 @@ if(BUILD_TESTING)
   set_tests_properties(rust-config-side-by-side-contract
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(
+    NAME config-rust-legacy-baseline-build
+    COMMAND
+      "${CMAKE_COMMAND}" --build "${CMAKE_CURRENT_BINARY_DIR}" --config "$<CONFIG>"
+      --target fcitx5_config_legacy_app)
+  set_tests_properties(config-rust-legacy-baseline-build
+                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                                  TIMEOUT 120)
+  add_test(
     NAME config-rust-side-by-side-differential
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
       -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-side-by-side.ps1"
-      -CppConfigExe "$<TARGET_FILE:fcitx5_config_app>"
+      -CppConfigExe "$<TARGET_FILE:fcitx5_config_legacy_app>"
       -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
       "${FCITX_RUST_TARGET}" -Report
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-side-by-side-differential.json")
   set_tests_properties(config-rust-side-by-side-differential
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                                  TIMEOUT 45)
+                                  TIMEOUT 45
+                                  DEPENDS config-rust-legacy-baseline-build)
   add_test(
     NAME config-rust-shipping-lineage
     COMMAND
@@ -1103,7 +1122,7 @@ if(BUILD_TESTING)
       "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
       -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-shipping-lineage.ps1"
       -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
-      "${FCITX_RUST_TARGET}" -OutputDirectory
+      "${FCITX_RUST_TARGET}" -ShippingConfigExe "${FCITX_CONFIG_SHIPPING_EXE}" -OutputDirectory
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage" -Report
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage.json")
   set_tests_properties(config-rust-shipping-lineage

@@ -28,7 +28,6 @@ if ($Generation -notmatch '^[a-z0-9_-]{1,32}$') {
 $required = @(
   (Join-Path $core 'bin/fcitx5-engine.exe'),
   (Join-Path $x64 'fcitx5-config.exe'), (Join-Path $x64 'fcitx5-control.exe'),
-  (Join-Path $x64 'fcitx5-config-rust.exe'),
   (Join-Path $x64 'fcitx5-launcher.exe'), (Join-Path $x64 'fcitx5-ui.exe'),
   (Join-Path $x64 'fcitx5-package.exe'), (Join-Path $x64 'fcitx5-downloader.exe'),
   (Join-Path $x64 'fcitx5-deployer.exe'), (Join-Path $x64 'fcitx5-provider.exe'),
@@ -51,7 +50,7 @@ Get-ChildItem -LiteralPath (Join-Path $root 'lib/fcitx5') -Filter 'libtest*.dll'
   -ErrorAction SilentlyContinue | Remove-Item -Force
 
 $bin = Join-Path $root 'bin'
-foreach ($name in @('fcitx5-config.exe', 'fcitx5-config-rust.exe', 'fcitx5-control.exe', 'fcitx5-launcher.exe',
+foreach ($name in @('fcitx5-config.exe', 'fcitx5-control.exe', 'fcitx5-launcher.exe',
                      'fcitx5-ui.exe', 'fcitx5-register.exe', 'fcitx5-package.exe',
                      'fcitx5-downloader.exe', 'fcitx5-deployer.exe',
                      'fcitx5-provider.exe', 'fcitx5-updater.exe')) {

@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory = $true)] [string] $CargoExecutable,
   [Parameter(Mandatory = $true)] [string] $CargoTarget,
   [Parameter(Mandatory = $true)] [string] $OutputDirectory,
+  [string] $ShippingConfigExe = '',
   [Parameter(Mandatory = $true)] [string] $Report
 )
 
@@ -80,10 +81,20 @@ if (-not (Test-Path -LiteralPath $rustSideBySide -PathType Leaf)) {
   throw "Rust Config side-by-side executable was not built: $rustSideBySide"
 }
 
-$shippingExe = Join-Path $outputRoot 'fcitx5-config.exe'
-Copy-Item -LiteralPath $rustSideBySide -Destination $shippingExe -Force
+$shippingExe = if ([string]::IsNullOrWhiteSpace($ShippingConfigExe)) {
+  $lineageCopy = Join-Path $outputRoot 'fcitx5-config.exe'
+  Copy-Item -LiteralPath $rustSideBySide -Destination $lineageCopy -Force
+  $lineageCopy
+} else {
+  [IO.Path]::GetFullPath($ShippingConfigExe)
+}
 if (-not (Test-Path -LiteralPath $shippingExe -PathType Leaf)) {
   throw "Rust Config shipping-lineage executable is missing: $shippingExe"
+}
+$rustHash = (Get-FileHash -LiteralPath $rustSideBySide -Algorithm SHA256).Hash
+$shippingHash = (Get-FileHash -LiteralPath $shippingExe -Algorithm SHA256).Hash
+if ($rustHash -ne $shippingHash) {
+  throw "Shipping fcitx5-config.exe is not byte-identical to the Rust fcitx5-config-rust.exe build output"
 }
 
 $rustReport = Join-Path $reportDirectory 'config-rust-shipping-lineage-self-check.json'
@@ -99,8 +110,8 @@ if ($rust.rust_shipping_target_name -ne 'fcitx5-config.exe') {
 if ($rust.preserves_product_binary_name -ne $true) {
   throw "Rust shipping-lineage report did not preserve the product binary name"
 }
-if ($rust.shipping_config_replaced -ne $false) {
-  throw "Rust shipping-lineage check must not claim the CMake shipping target has been cut over yet"
+if ($rust.shipping_config_replaced -ne $true) {
+  throw "Rust shipping-lineage check must prove the CMake shipping target has been cut over"
 }
 if ($rust.permanent_runtime_selector -ne $false) {
   throw "Rust shipping-lineage report must not declare a permanent runtime selector"
@@ -114,10 +125,12 @@ $reportObject = [ordered]@{
   kind = 'config-rust-shipping-lineage'
   rust_source_executable = $rustSideBySide
   rust_shipping_lineage_executable = $shippingExe
+  rust_source_sha256 = $rustHash.ToLowerInvariant()
+  rust_shipping_sha256 = $shippingHash.ToLowerInvariant()
   rust_report = $rustReport
   rust_shipping_target_name = 'fcitx5-config.exe'
   preserves_product_binary_name = $true
-  shipping_config_replaced = $false
+  shipping_config_replaced = $true
   permanent_runtime_selector = $false
   result = 'PASS'
 }

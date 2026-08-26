@@ -32,7 +32,7 @@ Windows host
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
 | Candidate | Rust candidate-core owns model/layout/interaction; C++ UI window/renderer remains | Continue Rust authority and shrink adapter |
-| Config | C++ WTL/Win32 shell remains only as a temporary shipping adapter; `CONFIG-UX-009` froze the Settings UX/theme/package/localization/no-overlap corpus; Rust config PoC/control/theme operation owners exist; side-by-side `fcitx5-config-rust.exe` now builds and differentially checks against the C++ contract corpus; the remaining preview gate requires an embedded real Candidate UI renderer/preview host, not Settings-only simulation; appearance numeric input and font picker behavior must be Rust-typed, validated, localized, and system-font-backed | Current task: move shipping `fcitx5-config.exe` to Rust through `CONFIG-RUST-CUTOVER-001` cutover slices |
+| Config | Stage 2 Rust Config backend is shipping: packaged `fcitx5-config.exe` is byte-identical to the Rust `fcitx5-config-rust.exe` build output, headless/test CLI paths report `shipping_config_replaced=true`, and final package staging no longer ships a second `fcitx5-config-rust.exe` entry point. The old C++ WTL/Win32 shell is reduced to `fcitx5-config-legacy.exe` as an `EXCLUDE_FROM_ALL` regression baseline for differential tests only. Stage 4 real interactive GUI cutover remains pending. | Current task: continue plugin lifecycle stability after the Stage 2 Config backend gate; do not claim “Config fully migrated to Rust” until Stage 4 GUI/preview/navigation/control/DPI/dark-mode/accessibility/real-Windows QA is green |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
 | Package/provider/downloader/updater/deployer | Package/provider/deployer/updater/downloader Rust CLIs and Rust package-core are wired; adapters remain where needed | Rust authority |
@@ -43,7 +43,7 @@ Windows host
 | PoC / migration lane | State | Exit condition |
 |---|---|---|
 | Rust TSF | `SHIPPING-AUTOMATED-GREEN` / real-host matrix pending | Full host matrix evidence before release readiness |
-| Rust Config | `CUTOVER-AUTHORIZED / STAGE-1-CORE-GREEN / STAGE-2-BACKEND-SHIPPING-IN-PROGRESS / STAGE-4-GUI-CUTOVER-PENDING` | Stage 2 may ship only when non-interactive Config paths are Rust-owned with no legacy C++ GUI fallback. Stage 4 remains required before claiming full Config migration: real interactive Settings GUI, navigation, controls, embedded candidate preview, plugin pages, DPI/dark-mode/keyboard/accessibility, persistence, and real Windows QA must be green before deleting/reducing the old C++ WTL shell |
+| Rust Config | `CUTOVER-AUTHORIZED / STAGE-1-CORE-GREEN / STAGE-2-BACKEND-SHIPPED-GREEN / STAGE-4-GUI-CUTOVER-PENDING / PACKAGE-GATE-ENGINE-IDLE-BLOCKED` | Stage 2 is green: non-interactive Config paths are Rust-owned under the shipping `fcitx5-config.exe` name with no legacy C++ GUI fallback. Stage 4 remains required before claiming full Config migration: real interactive Settings GUI, navigation, controls, embedded candidate preview, plugin pages, DPI/dark-mode/keyboard/accessibility, persistence, and real Windows QA must be green. The C++ WTL shell is now non-authoritative legacy baseline only |
 | Candidate Rust core | `SHIPPING-DOMAIN` | Remove duplicated C++ validation/state, preserve renderer evidence, add candidate-action/upstream alignment |
 | Rust package/update/control/launcher cores | `SHIPPING-DOMAIN` where already cut over, `MIGRATION-CANDIDATE` where shell remains | Delete replaced C++ authoritative implementation and keep adapter thin |
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
@@ -56,6 +56,10 @@ Windows host
 ## Current Red Lights
 
 - Real-host matrix for Rust TSF remains manual-pending.
+- Full `tools/build.ps1 package -Architecture all -Configuration Release` currently reaches x64/x86
+  Release builds and runtime security, then fails in `tools/test-fcitx.ps1` because the Engine
+  integration test reports `engine did not reach a steady idle state within 15 seconds`. This is a
+  release/package-gate blocker, not a Config shipping lineage failure.
 - Package cold-start candidate UI is green on local Notepad x64: final package stage `D:\Documents\GitHub\fcitx5-windows-next\out\package\stage-389ce50e5e5b4981ae3527bc18053fc6\Fcitx5` contains rebuilt x64/x86 Rust TSF DLLs; `--candidate-window` smoke sees `candidates=128 visibility=1`; `nihao + Space` commits `你好`.
 - Strict direct clippy with `-D warnings` still hits existing `too_many_arguments` helpers in `rust/windows-common-core`; adjusted clippy with that existing lint allowed is green.
 - Cargo registry crates are checked against `third_party/dependencies.json` by name and version before dependency checks and SBOM generation. Advisory review for the declared dependency set remains an external process.
@@ -71,10 +75,10 @@ Windows host
   FUTURE-GATED duplicates are not active queue items. `CONFIG-UX-009` is completed and archived
   with staged-app QA evidence. Current product work is `CONFIG-RUST-CUTOVER-001` for the shipping
   Config Rust cutover.
-- Rust Config now has explicit shipping vocabulary: Stage 2 is `Rust Config Backend Shipped`
-  (`fcitx5-config.exe` headless/test CLI, package/install/update/remove, import/export,
-  config read/write, schema validation, migration, diagnostics, and CI automation are Rust-owned
-  with no fallback to the old GUI implementation). Stage 4 is `Rust Config Cutover Complete` and
+- Rust Config Stage 2 is green. `fcitx5_config_app` now builds the Rust binary into the shipping
+  `fcitx5-config.exe` product name; `fcitx5_config_legacy_app` emits `fcitx5-config-legacy.exe`
+  only as an `EXCLUDE_FROM_ALL` differential-test baseline; `stage-package.ps1` ships only
+  `fcitx5-config.exe`, not `fcitx5-config-rust.exe`. Stage 4 is `Rust Config Cutover Complete` and
   is not claimable until the real Settings GUI and candidate preview pass Windows QA. Release notes
   must say “Rust configuration backend is now shipping; interactive settings UI migration is still
   in progress” for Stage 2, not “Config fully migrated to Rust.”
@@ -83,12 +87,15 @@ Windows host
 
 ## Next Five Code/Design Tasks
 
-1. Execute `CONFIG-RUST-CUTOVER-001`: replace the shipping C++ WTL
-   Config shell with Rust while preserving the frozen Settings behavior corpus.
-2. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core`
+1. Execute `PLUGIN-LIFECYCLE-STABILITY-001`: signed add-on install/update/uninstall stability,
+   including GitHub Release-backed package repository metadata where credentials/endpoint evidence
+   exists.
+2. Fix the release/package-gate Engine idle blocker in `tools/test-fcitx.ps1` /
+   `fcitx5_engine_integration_test.exe` so full package gate can pass again.
+3. Continue Engine E4 transport/framing consolidation from the prepared `windows-common-core`
    stop-aware pipe primitives, keeping direct Fcitx object ownership in the C++ adapter.
-3. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
+4. Prepare/run generation-drain, installer/UAC, plugin lifecycle, and host evidence before any
    release-readiness claim.
-4. For official add-ons/plugins, build reviewed Windows package artifacts in this project, publish
+5. For official add-ons/plugins, build reviewed Windows package artifacts in this project, publish
    them as signed GitHub Release-backed repository assets, and let Settings install only through
    verified package metadata.
