@@ -4101,8 +4101,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         drawSegment(brush, get("candidate.vertical"), 584, 568, 716, !automatic && vertical,
                     ModernAction::selectLayoutVertical);
         drawCompactSetting(brush, modernText(L"Scroll mode", L"滚动模式"),
-                           boolText(SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) ==
-                                    BST_CHECKED),
+                           SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) == BST_CHECKED
+                               ? modernText(L"Enabled", L"已启用")
+                               : modernText(L"Disabled", L"已禁用"),
                            732, 568, rowRight, ModernAction::toggleScrollMode);
         const float bottomCardWidth = (rowRight - 288.0F - 24.0F) / 3.0F;
         const float bottomX1 = 288.0F + bottomCardWidth + 12.0F;

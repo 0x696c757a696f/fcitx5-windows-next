@@ -2202,6 +2202,7 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("SetDIBitsToDevice") == std::string::npos ||
         candidatePocBinary.find("SetProcessDpiAwarenessContext") == std::string::npos ||
         candidatePocBinary.find("SetProcessDPIAware") == std::string::npos ||
+        candidatePocBinary.find("InvalidateRect(hwnd, null(), 0)") == std::string::npos ||
         candidatePocBinary.find("Microsoft YaHei UI") == std::string::npos ||
         candidatePocBinary.find("WINDOW_WINDUI_DWRITE_TEXT_DRAW_USED") == std::string::npos ||
         candidatePocBinary.find(

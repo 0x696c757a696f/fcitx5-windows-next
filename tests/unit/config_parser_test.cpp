@@ -97,9 +97,9 @@ int main() {
     }
     const auto defaultLight = mergeConfig(defaultLightTheme, defaultUserConfig);
     const auto defaultDark = mergeConfig(defaultDarkTheme, defaultUserConfig);
-    if (defaultLight.colors.at("background") != "#FCFCFCFA" ||
-        defaultDark.colors.at("background") != "#242629F7" ||
-        defaultDark.colors.at("candidate_text") != "#FFFFFFFF") {
+    if (defaultLight.colors.at("background") != "#FFFFFFFF" ||
+        defaultDark.colors.at("background") != "#181818F7" ||
+        defaultDark.colors.at("candidate_text") != "#EDEDEDFF") {
         std::cerr << "default user config masked the selected theme appearance branch\n";
         return 1;
     }
@@ -111,13 +111,13 @@ int main() {
     if (darkResolved.orientation != Orientation::horizontal ||
         darkResolved.candidatePageSize != 6 ||
         darkResolved.colors.at("candidate_text") != "#112233FF" ||
-        darkResolved.colors.at("background") != "#242629F7") {
+        darkResolved.colors.at("background") != "#181818F7") {
         std::cerr << "theme/user merge order failed\n";
         return 1;
     }
     const auto resetResolved = defaultDarkTheme;
     if (resetResolved.orientation != Orientation::vertical ||
-        resetResolved.colors.at("candidate_text") != "#FFFFFFFF") {
+        resetResolved.colors.at("candidate_text") != "#EDEDEDFF") {
         std::cerr << "reset did not restore inherited theme value\n";
         return 1;
     }

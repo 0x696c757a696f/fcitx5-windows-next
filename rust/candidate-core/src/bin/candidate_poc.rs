@@ -428,6 +428,7 @@ mod window_smoke {
         fn GetWindowDC(hwnd: Hwnd) -> Hdc;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
         fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
+        fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: Bool) -> Bool;
         fn IsWindowVisible(hwnd: Hwnd) -> Bool;
         fn ReleaseDC(hwnd: Hwnd, hdc: Hdc) -> i32;
         fn RegisterClassW(class: *const WndClassW) -> u16;
@@ -953,6 +954,7 @@ mod window_smoke {
     fn inspect_window(hwnd: Hwnd, spec: InspectionSpec<'_>) -> Result<String, String> {
         unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            InvalidateRect(hwnd, null(), 0);
             UpdateWindow(hwnd);
         }
 
