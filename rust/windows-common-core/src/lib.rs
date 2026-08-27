@@ -402,6 +402,16 @@ fn default_data_root_for_module(module_path: &Path, data_directory: &Path) -> Op
     default_data_root_for_module_with_local(module_path, data_directory, local_app_data_root)
 }
 
+/// Returns the Fcitx5 user-data root for the current executable.
+///
+/// This follows the shared portable-install and LocalAppData policy used by the
+/// native adapters, so Rust product frontends do not derive a competing path.
+#[must_use]
+pub fn default_fcitx5_data_root_for_current_process() -> Option<PathBuf> {
+    let module_path = env::current_exe().ok()?;
+    default_data_root_for_module(&module_path, Path::new("Fcitx5"))
+}
+
 fn may_launch_user_engine(
     service_account: bool,
     session_id: u32,

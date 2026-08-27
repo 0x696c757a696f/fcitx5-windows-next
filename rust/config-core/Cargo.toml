@@ -1,0 +1,10 @@
+[package]
+name = "fcitx5-config-core"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1.1.4"

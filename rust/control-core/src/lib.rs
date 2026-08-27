@@ -73,8 +73,8 @@ const RUN_KEY: &[u16] = &[
 const CONTROL_SCHEMA_JSON: &str = concat!(
     r#"{"format_version":1,"commands":["#,
     r#""status","diagnostics_plan","restart_engine","shutdown","validate_config","apply_config","#,
-    r#""reset_config","reset_presentation","get_startup","set_startup","#,
-    r#""get_presentation","set_presentation","get_input_methods","set_input_method","#,
+    r#""reset_config","get_startup","set_startup","#,
+    r#""get_input_methods","set_input_method","#,
     r#""themes_list","themes_detail","themes_export","themes_export_to","themes_import","#,
     r#""themes_duplicate","themes_delete","addons_list","packages_list","packages_detail","#,
     r#""packages_refresh","packages_install","packages_update","packages_state","#,
@@ -84,12 +84,8 @@ const CONTROL_SCHEMA_JSON: &str = concat!(
 const CONTROL_USAGE_TEXT: &str = concat!(
     "Usage: fcitx5-control [--data-root PATH] ",
     "--status|--diagnostics-plan|--restart-engine|--validate-config FILE|--apply-config FILE|",
-    "--reset-config|--reset-presentation|--get-startup|--set-startup enabled|disabled|",
-    "--get-presentation|",
+    "--reset-config|--get-startup|--set-startup enabled|disabled|",
     "--get-input-methods|--set-input-method ID|--shutdown|",
-    "--set-presentation MODE THEME ORIENTATION SCROLL PAGE_SIZE FONT ",
-    "[MAX_WIDTH_DIP SCROLL_CELL_WIDTH_DIP ",
-    "FONT_SIZE_DIP CORNER_RADIUS_DIP SHADOW OPACITY PREEDIT_MODE]|",
     "--themes-list|--themes-detail ID|--themes-export ID|--themes-export-to ID FILE|",
     "--themes-import FILE|",
     "--themes-duplicate SOURCE_ID NEW_ID|--themes-delete ID|",
@@ -125,9 +121,6 @@ const CONTROL_CONFIG_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_CONFIG_ACTION_VALIDATE: u32 = 1;
 const CONTROL_CONFIG_ACTION_APPLY: u32 = 2;
 const CONTROL_CONFIG_ACTION_RESET_CONFIG: u32 = 3;
-const CONTROL_CONFIG_ACTION_RESET_PRESENTATION: u32 = 4;
-const CONTROL_CONFIG_ACTION_GET_PRESENTATION: u32 = 5;
-const CONTROL_CONFIG_ACTION_SET_PRESENTATION: u32 = 6;
 const CONTROL_PACKAGE_TYPE_CORE: u32 = 0;
 const CONTROL_PACKAGE_TYPE_ADDON: u32 = 1;
 const CONTROL_PACKAGE_TYPE_INPUT_METHOD_DATA: u32 = 2;
@@ -231,23 +224,6 @@ pub struct Fcitx5ControlParsedConfigCommandLine {
     status: u8,
     command_len: usize,
     locale_len: usize,
-}
-
-#[repr(C)]
-pub struct Fcitx5ControlPresentation {
-    appearance_mode: Fcitx5ControlUtf8,
-    theme: Fcitx5ControlUtf8,
-    orientation: Fcitx5ControlUtf8,
-    candidate_font: Fcitx5ControlUtf8,
-    candidate_page_size: Fcitx5ControlUtf8,
-    candidate_max_width_dip: Fcitx5ControlUtf8,
-    candidate_scroll_cell_width_dip: Fcitx5ControlUtf8,
-    candidate_font_size_dip: Fcitx5ControlUtf8,
-    candidate_corner_radius_dip: Fcitx5ControlUtf8,
-    candidate_opacity: Fcitx5ControlUtf8,
-    candidate_preedit_mode: Fcitx5ControlUtf8,
-    candidate_shadow: u8,
-    scroll_mode: u8,
 }
 
 #[repr(C)]
@@ -974,72 +950,6 @@ fn push_json_optional_reachable_string_field(
         output.extend_from_slice(b"null");
     }
     Some(())
-}
-
-fn presentation_json(presentation: &Fcitx5ControlPresentation) -> Option<Vec<u8>> {
-    let fields = [
-        (
-            b"\"appearance_mode\"".as_slice(),
-            utf8_slice(presentation.appearance_mode)?,
-        ),
-        (b"\"theme\"".as_slice(), utf8_slice(presentation.theme)?),
-        (
-            b"\"orientation\"".as_slice(),
-            utf8_slice(presentation.orientation)?,
-        ),
-        (
-            b"\"candidate_font\"".as_slice(),
-            utf8_slice(presentation.candidate_font)?,
-        ),
-        (
-            b"\"candidate_page_size\"".as_slice(),
-            utf8_slice(presentation.candidate_page_size)?,
-        ),
-        (
-            b"\"candidate_max_width_dip\"".as_slice(),
-            utf8_slice(presentation.candidate_max_width_dip)?,
-        ),
-        (
-            b"\"candidate_scroll_cell_width_dip\"".as_slice(),
-            utf8_slice(presentation.candidate_scroll_cell_width_dip)?,
-        ),
-        (
-            b"\"candidate_font_size_dip\"".as_slice(),
-            utf8_slice(presentation.candidate_font_size_dip)?,
-        ),
-        (
-            b"\"candidate_corner_radius_dip\"".as_slice(),
-            utf8_slice(presentation.candidate_corner_radius_dip)?,
-        ),
-        (
-            b"\"candidate_opacity\"".as_slice(),
-            utf8_slice(presentation.candidate_opacity)?,
-        ),
-        (
-            b"\"candidate_preedit_mode\"".as_slice(),
-            utf8_slice(presentation.candidate_preedit_mode)?,
-        ),
-    ];
-    let mut output = Vec::new();
-    output.extend_from_slice(br#"{"format_version":1"#);
-    for (name, value) in fields {
-        output.push(b',');
-        push_json_string_field(&mut output, name, value)?;
-    }
-    output.extend_from_slice(b",\"candidate_shadow\":");
-    output.extend_from_slice(if presentation.candidate_shadow != 0 {
-        b"true"
-    } else {
-        b"false"
-    });
-    output.extend_from_slice(b",\"scroll_mode\":");
-    output.extend_from_slice(if presentation.scroll_mode != 0 {
-        b"true"
-    } else {
-        b"false"
-    });
-    output.push(b'}');
-    Some(output)
 }
 
 fn status_json(status: &Fcitx5ControlStatus) -> Option<Vec<u8>> {
@@ -2526,17 +2436,8 @@ fn package_detail_json(detail: &Fcitx5ControlPackageDetail) -> Option<Vec<u8>> {
 fn config_action(command: &[u16], argc: usize) -> u32 {
     match argc {
         1 if ascii_utf16_eq(command, b"--reset-config") => CONTROL_CONFIG_ACTION_RESET_CONFIG,
-        1 if ascii_utf16_eq(command, b"--reset-presentation") => {
-            CONTROL_CONFIG_ACTION_RESET_PRESENTATION
-        }
-        1 if ascii_utf16_eq(command, b"--get-presentation") => {
-            CONTROL_CONFIG_ACTION_GET_PRESENTATION
-        }
         2 if ascii_utf16_eq(command, b"--validate-config") => CONTROL_CONFIG_ACTION_VALIDATE,
         2 if ascii_utf16_eq(command, b"--apply-config") => CONTROL_CONFIG_ACTION_APPLY,
-        7 | 9 | 12 | 14 if ascii_utf16_eq(command, b"--set-presentation") => {
-            CONTROL_CONFIG_ACTION_SET_PRESENTATION
-        }
         _ => CONTROL_CONFIG_ACTION_UNKNOWN,
     }
 }
@@ -3238,27 +3139,6 @@ pub unsafe extern "C" fn fcitx5_control_json_string_utf8(
     let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
     match json_string(bytes) {
         Some(escaped) => boxed_utf8_result(escaped, out_ptr, out_len),
-        None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
-    }
-}
-
-/// # Safety
-///
-/// All UTF-8 slices inside `presentation` must remain valid for the duration of
-/// the call. `out_ptr` and `out_len` must point to writable storage. Any
-/// returned buffer must be freed with `fcitx5_control_utf8_free`.
-#[no_mangle]
-pub unsafe extern "C" fn fcitx5_control_presentation_json_utf8(
-    presentation: *const Fcitx5ControlPresentation,
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
-    if presentation.is_null() {
-        return boxed_utf8_result(Vec::new(), out_ptr, out_len);
-    }
-    let presentation = unsafe { &*presentation };
-    match presentation_json(presentation) {
-        Some(json) => boxed_utf8_result(json, out_ptr, out_len),
         None => boxed_utf8_result(Vec::new(), out_ptr, out_len),
     }
 }
@@ -4882,30 +4762,14 @@ mod tests {
         assert_eq!(config_action(&reset, 1), CONTROL_CONFIG_ACTION_RESET_CONFIG);
         assert_eq!(
             config_action(&reset_presentation, 1),
-            CONTROL_CONFIG_ACTION_RESET_PRESENTATION
+            CONTROL_CONFIG_ACTION_UNKNOWN
         );
         assert_eq!(
             config_action(&get_presentation, 1),
-            CONTROL_CONFIG_ACTION_GET_PRESENTATION
+            CONTROL_CONFIG_ACTION_UNKNOWN
         );
         assert_eq!(
             config_action(&set_presentation, 7),
-            CONTROL_CONFIG_ACTION_SET_PRESENTATION
-        );
-        assert_eq!(
-            config_action(&set_presentation, 9),
-            CONTROL_CONFIG_ACTION_SET_PRESENTATION
-        );
-        assert_eq!(
-            config_action(&set_presentation, 12),
-            CONTROL_CONFIG_ACTION_SET_PRESENTATION
-        );
-        assert_eq!(
-            config_action(&set_presentation, 14),
-            CONTROL_CONFIG_ACTION_SET_PRESENTATION
-        );
-        assert_eq!(
-            config_action(&set_presentation, 8),
             CONTROL_CONFIG_ACTION_UNKNOWN
         );
         assert_eq!(config_action(&validate, 1), CONTROL_CONFIG_ACTION_UNKNOWN);
@@ -6296,7 +6160,7 @@ background = "${a}"
         assert_eq!(written, output.len());
         assert_eq!(
             String::from_utf16(&output).unwrap(),
-            "https://packages.fcitx5-windows.org/v1/dev"
+            "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v0.1.0"
         );
     }
 
@@ -6452,7 +6316,7 @@ background = "${a}"
     #[test]
     fn schema_documents_typed_control_commands() {
         assert!(CONTROL_SCHEMA_JSON.contains(r#""format_version":1"#));
-        assert!(CONTROL_SCHEMA_JSON.contains(r#""set_presentation""#));
+        assert!(!CONTROL_SCHEMA_JSON.contains(r#""set_presentation""#));
         assert!(CONTROL_SCHEMA_JSON.contains(r#""diagnostics_plan""#));
         assert!(CONTROL_SCHEMA_JSON.contains(r#""packages_repair""#));
         assert!(CONTROL_SCHEMA_JSON.contains(r#""package_network_owner":"fcitx5-downloader.exe""#));
@@ -6464,7 +6328,7 @@ background = "${a}"
         assert!(CONTROL_USAGE_TEXT.starts_with("Usage: fcitx5-control "));
         assert!(CONTROL_USAGE_TEXT.contains("--diagnostics-plan"));
         assert!(CONTROL_USAGE_TEXT.contains("--packages-install ID"));
-        assert!(CONTROL_USAGE_TEXT.contains("--set-presentation MODE THEME ORIENTATION"));
+        assert!(!CONTROL_USAGE_TEXT.contains("--set-presentation"));
         assert!(CONTROL_USAGE_TEXT.ends_with("--schema|--version\n"));
     }
 
@@ -6518,76 +6382,6 @@ background = "${a}"
             Some(&b"\"\xe4\xbc\x81\xe9\xb9\x85\""[..])
         );
         assert_eq!(json_string(&[0x01]), None);
-    }
-
-    #[test]
-    fn presentation_json_preserves_existing_control_contract() {
-        let mode = b"dark";
-        let theme = b"builtin:default";
-        let orientation = b"automatic";
-        let font = "微软雅黑".as_bytes();
-        let page = b"5";
-        let max_width = b"860";
-        let scroll_width = b"96";
-        let font_size = b"18";
-        let corner = b"12";
-        let opacity = b"1.000000";
-        let preedit = b"inline";
-        let presentation = Fcitx5ControlPresentation {
-            appearance_mode: Fcitx5ControlUtf8 {
-                ptr: mode.as_ptr(),
-                len: mode.len(),
-            },
-            theme: Fcitx5ControlUtf8 {
-                ptr: theme.as_ptr(),
-                len: theme.len(),
-            },
-            orientation: Fcitx5ControlUtf8 {
-                ptr: orientation.as_ptr(),
-                len: orientation.len(),
-            },
-            candidate_font: Fcitx5ControlUtf8 {
-                ptr: font.as_ptr(),
-                len: font.len(),
-            },
-            candidate_page_size: Fcitx5ControlUtf8 {
-                ptr: page.as_ptr(),
-                len: page.len(),
-            },
-            candidate_max_width_dip: Fcitx5ControlUtf8 {
-                ptr: max_width.as_ptr(),
-                len: max_width.len(),
-            },
-            candidate_scroll_cell_width_dip: Fcitx5ControlUtf8 {
-                ptr: scroll_width.as_ptr(),
-                len: scroll_width.len(),
-            },
-            candidate_font_size_dip: Fcitx5ControlUtf8 {
-                ptr: font_size.as_ptr(),
-                len: font_size.len(),
-            },
-            candidate_corner_radius_dip: Fcitx5ControlUtf8 {
-                ptr: corner.as_ptr(),
-                len: corner.len(),
-            },
-            candidate_opacity: Fcitx5ControlUtf8 {
-                ptr: opacity.as_ptr(),
-                len: opacity.len(),
-            },
-            candidate_preedit_mode: Fcitx5ControlUtf8 {
-                ptr: preedit.as_ptr(),
-                len: preedit.len(),
-            },
-            candidate_shadow: 1,
-            scroll_mode: 0,
-        };
-        let json = presentation_json(&presentation).expect("presentation should format");
-        let text = String::from_utf8(json).expect("presentation JSON should be UTF-8");
-        assert!(text.starts_with(r#"{"format_version":1"#));
-        assert!(text.contains(r#""candidate_font":"微软雅黑""#));
-        assert!(text.contains(r#""candidate_page_size":"5""#));
-        assert!(text.contains(r#""candidate_shadow":true"#));
-        assert!(text.contains(r#""scroll_mode":false"#));
     }
 
     #[test]

@@ -666,6 +666,9 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
@@ -1119,6 +1122,24 @@ if(BUILD_TESTING)
       fcitx5-config-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
       "${CMAKE_CURRENT_BINARY_DIR}/config-poc-report.json")
   set_tests_properties(rust-config-poc-contract PROPERTIES
+                       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(
+    NAME rust-config-core-transaction-contract
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-core --test
+      transaction_contract --target "${FCITX_RUST_TARGET}")
+  set_tests_properties(rust-config-core-transaction-contract PROPERTIES
+                       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(
+    NAME rust-config-core-cli-contract
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --test
+      config_core_cli_contract --target "${FCITX_RUST_TARGET}")
+  set_tests_properties(rust-config-core-cli-contract PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(
     NAME rust-config-side-by-side-contract

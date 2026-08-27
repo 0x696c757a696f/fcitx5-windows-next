@@ -13,6 +13,7 @@ members = [
   "rust/process-execution-core",
   "rust/register-core",
   "rust/config-qa",
+  "rust/config-core",
   "rust/config-poc",
   "rust/candidate-core",
   "rust/tsf-poc",

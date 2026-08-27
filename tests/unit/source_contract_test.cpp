@@ -2138,14 +2138,6 @@ int main(int argc, char** argv) {
         configPocSource.find("ScrollAutomatic") == std::string::npos ||
         configPocSource.find("ScrollHorizontal") == std::string::npos ||
         configPocSource.find("ScrollVertical") == std::string::npos ||
-        configPocSource.find("fn parse_control_candidate_presentation(") == std::string::npos ||
-        configPocSource.find("--get-presentation") == std::string::npos ||
-        configPocSource.find("--set-presentation") == std::string::npos ||
-        configPocSource.find("fn with_orientation(") == std::string::npos ||
-        configPocSource.find("fn with_scroll_mode(") == std::string::npos ||
-        configPocSource.find("fn windui_candidate_presentation_manager(") == std::string::npos ||
-        configPocSource.find("WindUiSignal<u8>") == std::string::npos ||
-        configPocSource.find("fn candidate_scroll_checkbox(") == std::string::npos ||
         configPocSource.find("WindUiElement::checkbox(\"启用\"") == std::string::npos ||
         configPocSource.find("\"卷轴模式\"") == std::string::npos ||
         configPocSource.find("fn windui_candidate_preview_panel(") == std::string::npos ||
@@ -2533,7 +2525,6 @@ int main(int argc, char** argv) {
         configPocSource.find("live_preview_draft_state") == std::string::npos ||
         configPocSource.find("preview_samples_cover_chinese_latin_punctuation_emoji") ==
             std::string::npos ||
-        configPocSource.find("PersistedPresentation") == std::string::npos ||
         configPocSource.find("font_selection_persists_after_reopen") == std::string::npos ||
         configPocSource.find("persisted_font_refreshes_embedded_preview") ==
             std::string::npos ||
@@ -2818,13 +2809,6 @@ int main(int argc, char** argv) {
         controlSource.find("kRootActionDiagnosticsPlan") == std::string::npos ||
         configSource.find("runControl({L\"--diagnostics-plan\"}") == std::string::npos) {
         return fail("RUST-R2-03: Diagnostics must use Rust typed dry-run plan through Control and Config");
-    }
-    if (controlSource.find("--reset-presentation") == std::string::npos ||
-        rustControlCoreSource.find("reset_presentation") == std::string::npos ||
-        configParserSource.find("resetPresentationToml") == std::string::npos ||
-        configParserSource.find("root.erase(\"appearance\")") == std::string::npos ||
-        configParserSource.find("orientation = \"automatic\"") == std::string::npos) {
-        return fail("REG-CONFIG-LIVE-001: Appearance reset must use typed sparse override removal");
     }
     const auto rustTsfPocManifest = read_text(sourceRoot / "rust/tsf-poc/Cargo.toml");
     const auto rustTsfPocSource = read_text(sourceRoot / "rust/tsf-poc/src/lib.rs");

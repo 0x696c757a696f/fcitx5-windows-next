@@ -13,6 +13,7 @@ path = "src/bin/fcitx5_config_rust.rs"
 
 [dependencies]
 fcitx5-candidate-core = { path = "../candidate-core" }
+fcitx5-config-core = { path = "../config-core" }
 fcitx5-control-core = { path = "../control-core" }
 fcitx5-package-core = { path = "../package-core" }
 fcitx5-process-execution-core = { path = "../process-execution-core" }

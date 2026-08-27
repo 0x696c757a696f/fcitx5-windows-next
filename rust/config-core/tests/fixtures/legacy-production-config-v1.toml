@@ -1,0 +1,65 @@
+format_version = 1
+
+[ui]
+language = "system"
+
+[appearance]
+mode = "system"
+theme = "builtin:default"
+
+[candidate]
+orientation = "automatic"
+page_size = 5
+scroll_mode = true
+max_width_dip = 860.0
+scroll_cell_width_dip = 96.0
+opacity = 1.0
+preedit_mode = "inline"
+
+[candidate.geometry]
+padding_x_dip = 10.0
+padding_y_dip = 6.0
+item_padding_x_dip = 8.0
+item_padding_y_dip = 4.0
+row_gap_dip = 1.0
+column_gap_dip = 12.0
+border_width_dip = 1.0
+corner_radius_dip = 12.0
+shadow = true
+
+[candidate.label]
+visible = true
+style = "dot"
+sequence = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+font_scale = 0.85
+gap_dip = 4.0
+
+[candidate.colors]
+background = "#FFFFFF"
+selected_background = "#07C160"
+
+[input_methods]
+enabled = ["pinyin", "rime", "wbx"]
+default = "pinyin"
+
+[hotkeys]
+toggle_input_method = "Ctrl+Space"
+next_input_method = "Ctrl+Shift"
+
+[future-addon]
+setting = "preserve-me"
+
+[fonts.ui]
+families = ["system"]
+
+[fonts.candidate]
+families = ["Microsoft YaHei", "system"]
+size_dip = 18.0
+weight = 400
+
+[fonts.annotation]
+families = ["inherit"]
+scale = 0.80
+
+[fonts.monospace]
+families = ["Cascadia Mono", "Consolas", "system"]

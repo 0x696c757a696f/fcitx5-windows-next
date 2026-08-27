@@ -74,21 +74,6 @@ Fcitx5WindowsCommonWideToUtf8 fcitx5_windows_common_wide_utf16_to_utf8(
     const std::uint16_t* input, std::size_t inputLen, std::uint8_t* output,
     std::size_t capacity);
 std::uint64_t fcitx5_windows_common_deadline_after_milliseconds(std::uint32_t milliseconds);
-struct Fcitx5ControlPresentation {
-    Fcitx5ControlUtf8 appearanceMode;
-    Fcitx5ControlUtf8 theme;
-    Fcitx5ControlUtf8 orientation;
-    Fcitx5ControlUtf8 candidateFont;
-    Fcitx5ControlUtf8 candidatePageSize;
-    Fcitx5ControlUtf8 candidateMaxWidthDip;
-    Fcitx5ControlUtf8 candidateScrollCellWidthDip;
-    Fcitx5ControlUtf8 candidateFontSizeDip;
-    Fcitx5ControlUtf8 candidateCornerRadiusDip;
-    Fcitx5ControlUtf8 candidateOpacity;
-    Fcitx5ControlUtf8 candidatePreeditMode;
-    std::uint8_t candidateShadow;
-    std::uint8_t scrollMode;
-};
 struct Fcitx5ControlStatus {
     std::uint8_t launcherReachable;
     std::int32_t launcherState;
@@ -237,8 +222,6 @@ std::size_t fcitx5_control_package_archive_cache_path_utf16(Fcitx5ControlUtf16 d
 int fcitx5_control_schema_json_utf8(const char** out_ptr, std::size_t* out_len);
 int fcitx5_control_usage_text_utf8(const char** out_ptr, std::size_t* out_len);
 std::uint8_t fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 id);
-int fcitx5_control_presentation_json_utf8(const Fcitx5ControlPresentation* presentation,
-                                          char** out_ptr, std::size_t* out_len);
 int fcitx5_control_status_json_utf8(const Fcitx5ControlStatus* status, char** out_ptr,
                                     std::size_t* out_len);
 int fcitx5_control_diagnostics_plan_json_utf8(const Fcitx5ControlStatus* status, char** out_ptr,
@@ -537,9 +520,6 @@ constexpr int kControlArchiveCacheInvalid = 1;
 constexpr std::uint32_t kConfigActionValidate = 1;
 constexpr std::uint32_t kConfigActionApply = 2;
 constexpr std::uint32_t kConfigActionResetConfig = 3;
-constexpr std::uint32_t kConfigActionResetPresentation = 4;
-constexpr std::uint32_t kConfigActionGetPresentation = 5;
-constexpr std::uint32_t kConfigActionSetPresentation = 6;
 constexpr std::uint32_t kEngineActionGetInputMethods = 1;
 constexpr std::uint32_t kEngineActionSetInputMethod = 2;
 constexpr std::uint32_t kPackageActionPackagesList = 1;
@@ -623,14 +603,6 @@ std::wstring takeRustWide(Producer producer) {
         return {};
     result.resize(written);
     return result;
-}
-
-std::string presentationJson(const Fcitx5ControlPresentation& presentation) {
-    char* bytes = nullptr;
-    std::size_t length = 0;
-    if (fcitx5_control_presentation_json_utf8(&presentation, &bytes, &length) != 0)
-        return {};
-    return takeRustUtf8(bytes, length);
 }
 
 std::string statusJson(const Fcitx5ControlStatus& status) {
@@ -1935,7 +1907,7 @@ bool setStartup(bool enabled) {
 
 void usage() {
     if (!printUsage())
-        std::cerr << "Usage: fcitx5-control --reset-presentation|--schema|--version\n";
+        std::cerr << "Usage: fcitx5-control --schema|--version\n";
 }
 
 } // namespace
@@ -2091,100 +2063,6 @@ int wmain(int argc, wchar_t** argv) {
     }
     const std::uint32_t controlConfigAction =
         arguments.empty() ? 0 : configAction(arguments[0], arguments.size());
-    if (controlConfigAction == kConfigActionGetPresentation) {
-        const fs::path configPath = dataRoot / L"config.toml";
-        std::string text;
-        if (readOptionalConfig(configPath, text) == OptionalConfigRead::error)
-            return 5;
-        ParseError error;
-        Config defaults;
-        if (!fcitx::windows::config::parseConfig(
-                fcitx::windows::config::defaultConfigToml(), defaults, error))
-            return 3;
-        Config user;
-        if (!text.empty() && !fcitx::windows::config::parseConfig(text, user, error))
-            return 3;
-        const Config config = fcitx::windows::config::mergeConfig(defaults, user);
-        const char* mode =
-            !config.appearanceMode ||
-                    *config.appearanceMode == fcitx::windows::config::AppearanceMode::system
-                ? "system"
-                : (*config.appearanceMode == fcitx::windows::config::AppearanceMode::light
-                       ? "light"
-                       : "dark");
-        const char* orientation =
-            !config.orientation ||
-                    *config.orientation == fcitx::windows::config::Orientation::automatic
-                ? "automatic"
-            : *config.orientation == fcitx::windows::config::Orientation::vertical ? "vertical"
-                                                                                   : "horizontal";
-        const std::string theme = config.theme.value_or(builtinThemeId());
-        const bool scrollMode = config.scrollMode.value_or(false);
-        const int pageSize = config.candidatePageSize.value_or(5);
-        const double maxWidth = config.maxWidth.value_or(860.0);
-        const double scrollCellWidth = config.scrollCellWidth.value_or(96.0);
-        const double opacity = config.opacity.value_or(1.0);
-        const double fontSize = config.candidateFont.size.value_or(18.0);
-        const double cornerRadius = config.geometry.cornerRadius.value_or(12.0);
-        const bool shadow = config.geometry.shadow.value_or(true);
-        const char* preeditMode =
-            config.preeditMode && *config.preeditMode == fcitx::windows::config::PreeditMode::panel
-                ? "panel"
-                : "inline";
-        const std::string font =
-            config.candidateFont.families && !config.candidateFont.families->empty()
-                ? config.candidateFont.families->front()
-                : "Microsoft YaHei";
-        const std::string pageSizeText = std::to_string(pageSize);
-        const std::string maxWidthText = std::to_string(static_cast<int>(maxWidth));
-        const std::string scrollCellWidthText =
-            std::to_string(static_cast<int>(scrollCellWidth));
-        const std::string fontSizeText = std::to_string(static_cast<int>(fontSize));
-        const std::string cornerRadiusText = std::to_string(static_cast<int>(cornerRadius));
-        const std::string opacityText = std::to_string(opacity);
-        const Fcitx5ControlPresentation presentation{
-            utf8View(mode),
-            utf8View(theme),
-            utf8View(orientation),
-            utf8View(font),
-            utf8View(pageSizeText),
-            utf8View(maxWidthText),
-            utf8View(scrollCellWidthText),
-            utf8View(fontSizeText),
-            utf8View(cornerRadiusText),
-            utf8View(opacityText),
-            utf8View(preeditMode),
-            static_cast<std::uint8_t>(shadow ? 1 : 0),
-            static_cast<std::uint8_t>(scrollMode ? 1 : 0)};
-        const std::string output = presentationJson(presentation);
-        if (output.empty())
-            return 5;
-        std::cout << output << '\n';
-        return 0;
-    }
-    if (controlConfigAction == kConfigActionSetPresentation) {
-        const fs::path configPath = dataRoot / L"config.toml";
-        std::string source = fcitx::windows::config::defaultConfigToml();
-        if (readOptionalConfig(configPath, source) == OptionalConfigRead::error)
-            return 5;
-        std::string updated;
-        ParseError error;
-        if (!fcitx::windows::config::updatePresentationToml(
-                source, narrow(arguments[1]), narrow(arguments[2]), narrow(arguments[3]),
-                narrow(arguments[4]), narrow(arguments[5]), narrow(arguments[6]), updated,
-                error, arguments.size() >= 9 ? narrow(arguments[7]) : std::string{},
-                arguments.size() >= 9 ? narrow(arguments[8]) : std::string{},
-                arguments.size() >= 12 ? narrow(arguments[9]) : std::string{},
-                arguments.size() >= 12 ? narrow(arguments[10]) : std::string{},
-                arguments.size() >= 12 ? narrow(arguments[11]) : std::string{},
-                arguments.size() == 14 ? narrow(arguments[12]) : std::string{},
-                arguments.size() == 14 ? narrow(arguments[13]) : std::string{})) {
-            std::cerr << "invalid presentation at " << error.line << ':' << error.column << ": "
-                      << error.message << '\n';
-            return 3;
-        }
-        return writeVisualConfig(configPath, updated) ? 0 : 5;
-    }
     if (rootCommand == kRootActionStatus || rootCommand == kRootActionDiagnosticsPlan) {
         fcitx::windows::protocol::LauncherResponse response;
         const bool reachable =
@@ -2238,20 +2116,6 @@ int wmain(int argc, wchar_t** argv) {
                                  fcitx::windows::config::defaultConfigToml())
                    ? 0
                    : 5;
-    }
-    if (controlConfigAction == kConfigActionResetPresentation) {
-        const fs::path configPath = dataRoot / L"config.toml";
-        std::string source = "format_version = 1\n";
-        if (readOptionalConfig(configPath, source) == OptionalConfigRead::error)
-            return 5;
-        std::string updated;
-        ParseError error;
-        if (!fcitx::windows::config::resetPresentationToml(source, updated, error)) {
-            std::cerr << "invalid presentation reset at " << error.line << ':' << error.column
-                      << ": " << error.message << '\n';
-            return 3;
-        }
-        return writeVisualConfig(configPath, updated) ? 0 : 5;
     }
     if (controlConfigAction == kConfigActionValidate ||
         controlConfigAction == kConfigActionApply) {

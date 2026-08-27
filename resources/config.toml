@@ -21,7 +21,11 @@ page_size = 5
 scroll_mode = true
 # 候选窗最大宽度，单位 DIP，范围 160–2048。
 max_width_dip = 860.0
+# 卷轴模式单个候选格子的目标宽度，单位 DIP，范围 40–160。
+scroll_cell_width_dip = 96.0
 opacity = 1.0 # 范围 0.20–1.00
+# 预编辑显示位置：inline 表示应用内 TSF composition；panel 表示候选窗顶部。
+preedit_mode = "inline"
 
 [candidate.geometry]
 # 以下尺寸均为 DIP，会随显示器 DPI 自动缩放。
@@ -39,6 +43,7 @@ shadow = true
 # 只改变序号外观，不改变真正的选词按键。
 visible = true
 style = "dot" # plain | dot | paren | bracket | circled
+sequence = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
 font_scale = 0.85
 gap_dip = 4.0
 

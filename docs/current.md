@@ -107,7 +107,7 @@ Windows host
   rows and columns do not shift when `1.`/custom labels appear. Settings keeps scroll mode visible
   in the main Candidate layout area, and the embedded preview passes that flag into Rust layout.
 - Candidate/Config palette and renderer-path requirement is implemented for the reachable code-only slice: project
-  defaults use WeChat IME green, with
+  defaults use WeChat-style `#07C160` IME green, with
   light green/white and dark green/black palettes. Qingfeng/WindInput upstream themes and variants
   are preserved; Candidate visual code directly ports WindInput/Qingfeng candidate window/view/theme
   tokens for the Rust PoC screenshots and renderer evidence.

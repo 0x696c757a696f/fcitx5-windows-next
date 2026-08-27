@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use fcitx5_candidate_core::{candidate_preview_paint_plan, run_candidate_poc_self_check};
+use fcitx5_config_core::{
+    ConfigCommand, ConfigCore, ConfigEdit, ConfigField, ConfigSnapshot, FileStore, RecoverySource,
+};
 use fcitx5_control_core::{control_schema_json, control_usage_text};
 use fcitx5_package_core::{
     finalize_package_removal_entries, find_repository_package, mark_package_for_removal_entries,
@@ -643,6 +646,7 @@ fn windui_candidate_preview_panel(
     layout: WindUiSignal<CandidateLayoutMode>,
     page_size: WindUiSignal<u8>,
     theme_mode: WindUiSignal<usize>,
+    draft_summary: WindUiSignal<String>,
 ) -> WindUiElement {
     let preview_description =
         page_size.map(move |page_size| layout.get().preview_description(*page_size));
@@ -679,6 +683,11 @@ fn windui_candidate_preview_panel(
             WindUiElement::label_signal(preview_description)
                 .font_size(12.5)
                 .fg_role(WindUiRole::Accent),
+        )
+        .child(
+            WindUiElement::label_signal(draft_summary)
+                .font_size(12.5)
+                .fg_role(WindUiRole::TextMuted),
         );
 
     let vertical = WindUiElement::col()
@@ -1244,187 +1253,6 @@ impl CandidateLayoutMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct ControlCandidatePresentation {
-    format_version: u32,
-    appearance_mode: String,
-    theme: String,
-    orientation: String,
-    candidate_font: String,
-    candidate_page_size: String,
-    candidate_max_width_dip: String,
-    candidate_scroll_cell_width_dip: String,
-    candidate_font_size_dip: String,
-    candidate_corner_radius_dip: String,
-    candidate_opacity: String,
-    candidate_preedit_mode: String,
-    candidate_shadow: bool,
-    scroll_mode: bool,
-}
-
-impl ControlCandidatePresentation {
-    fn page_size(&self) -> Result<u8, String> {
-        let value = self
-            .candidate_page_size
-            .parse::<u8>()
-            .map_err(|_| "Control returned an invalid candidate page size".to_owned())?;
-        if !(1..=9).contains(&value) {
-            return Err("Control returned an out-of-range candidate page size".to_owned());
-        }
-        Ok(value)
-    }
-
-    fn layout_mode(&self) -> Result<CandidateLayoutMode, String> {
-        match (self.orientation.as_str(), self.scroll_mode) {
-            ("automatic", false) => Ok(CandidateLayoutMode::Automatic),
-            ("horizontal", false) => Ok(CandidateLayoutMode::Horizontal),
-            ("vertical", false) => Ok(CandidateLayoutMode::Vertical),
-            ("automatic", true) => Ok(CandidateLayoutMode::ScrollAutomatic),
-            ("vertical", true) => Ok(CandidateLayoutMode::ScrollVertical),
-            ("horizontal", true) => Ok(CandidateLayoutMode::ScrollHorizontal),
-            _ => Err("Control returned an invalid candidate layout mode".to_owned()),
-        }
-    }
-
-    fn with_orientation(&self, orientation: CandidateOrientation) -> Self {
-        let mut next = self.clone();
-        next.orientation = orientation.control_value().to_owned();
-        next
-    }
-
-    fn with_scroll_mode(&self, enabled: bool) -> Self {
-        let mut next = self.clone();
-        next.scroll_mode = enabled;
-        next
-    }
-
-    fn with_layout_mode(&self, mode: CandidateLayoutMode) -> Self {
-        let mut next = self.with_orientation(mode.orientation());
-        next.scroll_mode = mode.scroll_mode();
-        next
-    }
-
-    fn set_arguments(&self) -> Vec<OsString> {
-        vec![
-            OsString::from("--set-presentation"),
-            OsString::from(&self.appearance_mode),
-            OsString::from(&self.theme),
-            OsString::from(&self.orientation),
-            OsString::from(if self.scroll_mode {
-                "enabled"
-            } else {
-                "disabled"
-            }),
-            OsString::from(&self.candidate_page_size),
-            OsString::from(&self.candidate_font),
-            OsString::from(&self.candidate_max_width_dip),
-            OsString::from(&self.candidate_scroll_cell_width_dip),
-            OsString::from(&self.candidate_font_size_dip),
-            OsString::from(&self.candidate_corner_radius_dip),
-            OsString::from(if self.candidate_shadow {
-                "enabled"
-            } else {
-                "disabled"
-            }),
-            OsString::from(&self.candidate_opacity),
-            OsString::from(&self.candidate_preedit_mode),
-        ]
-    }
-}
-
-fn parse_control_candidate_presentation(
-    output: &str,
-) -> Result<ControlCandidatePresentation, String> {
-    if output.len() > CONTROL_MAX_OUTPUT_BYTES {
-        return Err("Control returned an oversized candidate presentation".to_owned());
-    }
-    let presentation: ControlCandidatePresentation = serde_json::from_str(output)
-        .map_err(|error| format!("Control candidate presentation JSON is invalid: {error}"))?;
-    if presentation.format_version != 1
-        || !matches!(
-            presentation.appearance_mode.as_str(),
-            "system" | "light" | "dark"
-        )
-        || !matches!(
-            presentation.orientation.as_str(),
-            "automatic" | "horizontal" | "vertical"
-        )
-        || !matches!(
-            presentation.candidate_preedit_mode.as_str(),
-            "inline" | "panel"
-        )
-        || presentation.theme.is_empty()
-        || presentation.theme.len() > 256
-        || presentation.candidate_font.is_empty()
-        || presentation.candidate_font.len() > 256
-    {
-        return Err("Control returned invalid candidate presentation fields".to_owned());
-    }
-    let page_size = presentation.page_size()?;
-    let scroll_cell_width = presentation
-        .candidate_scroll_cell_width_dip
-        .parse::<f32>()
-        .map_err(|_| "Control returned an invalid scroll cell width".to_owned())?;
-    if !scroll_cell_width.is_finite() || !(40.0..=160.0).contains(&scroll_cell_width) {
-        return Err("Control returned an out-of-range scroll cell width".to_owned());
-    }
-    let _ = presentation.layout_mode()?;
-    let _ = page_size;
-    Ok(presentation)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CandidatePresentationOperation {
-    Load,
-    Save,
-}
-
-impl CandidatePresentationOperation {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Load => "Loading candidate layout",
-            Self::Save => "Saving candidate layout",
-        }
-    }
-}
-
-#[derive(Debug)]
-struct CandidatePresentationResponse {
-    operation: CandidatePresentationOperation,
-    result: Result<ControlCandidatePresentation, String>,
-}
-
-fn load_candidate_presentation() -> Result<ControlCandidatePresentation, String> {
-    parse_control_candidate_presentation(&run_control(&[OsString::from("--get-presentation")])?)
-}
-
-fn save_candidate_presentation(
-    presentation: &ControlCandidatePresentation,
-) -> Result<ControlCandidatePresentation, String> {
-    let _ = presentation.page_size()?;
-    let _ = presentation.layout_mode()?;
-    run_control(&presentation.set_arguments())?;
-    load_candidate_presentation()
-}
-
-fn spawn_candidate_presentation_operation(
-    sender: WindUiSender<CandidatePresentationResponse>,
-    operation: CandidatePresentationOperation,
-    presentation: Option<ControlCandidatePresentation>,
-) {
-    thread::spawn(move || {
-        let result = match operation {
-            CandidatePresentationOperation::Load => load_candidate_presentation(),
-            CandidatePresentationOperation::Save => presentation
-                .as_ref()
-                .ok_or_else(|| "Candidate layout save has no typed presentation".to_owned())
-                .and_then(save_candidate_presentation),
-        };
-        let _ = sender.send(CandidatePresentationResponse { operation, result });
-    });
-}
-
 fn execute_plugin_operation(operation: &PluginOperation) -> Result<PluginManagerSnapshot, String> {
     let arguments = plugin_control_arguments(operation)?;
     let output = run_control(&arguments)?;
@@ -1807,12 +1635,8 @@ fn windui_settings_root(
     plugin_busy: WindUiSignal<bool>,
     plugin_status: WindUiSignal<String>,
     plugin_sender: WindUiSender<PluginResponse>,
-    candidate_presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
-    candidate_layout: WindUiSignal<CandidateLayoutMode>,
-    candidate_page_size: WindUiSignal<u8>,
-    candidate_busy: WindUiSignal<bool>,
+    candidate_adapter: WindUiSignal<WindUiConfigAdapter>,
     candidate_status: WindUiSignal<String>,
-    candidate_sender: WindUiSender<CandidatePresentationResponse>,
 ) -> WindUiElement {
     let nav = windui_signal(0usize);
     let search = windui_signal(String::new());
@@ -1915,15 +1739,13 @@ fn windui_settings_root(
                 "外观设置",
                 "主题、排版与候选预览",
             ))
-            .child(windui_settings_card(windui_candidate_layout_controls(
-                candidate_presentation,
-                candidate_layout,
-                candidate_page_size,
-                candidate_busy,
-                candidate_status,
-                candidate_sender,
-                theme_mode,
-            )))
+            .child(windui_settings_card(
+                windui_config_core_candidate_layout_controls(
+                    candidate_adapter,
+                    candidate_status,
+                    theme_mode,
+                ),
+            ))
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
@@ -2099,104 +1921,88 @@ fn windui_plugin_manager(
     (snapshot, busy, status, sender)
 }
 
-fn windui_candidate_presentation_manager(
-    app: &mut WindUiApp,
-    initial_load: bool,
-) -> (
-    WindUiSignal<Option<ControlCandidatePresentation>>,
-    WindUiSignal<CandidateLayoutMode>,
-    WindUiSignal<u8>,
-    WindUiSignal<bool>,
-    WindUiSignal<String>,
-    WindUiSender<CandidatePresentationResponse>,
-) {
-    let presentation = windui_signal(None);
-    let layout = windui_signal(CandidateLayoutMode::Automatic);
-    let page_size = windui_signal(5u8);
-    let busy = windui_signal(initial_load);
-    let status = windui_signal(if initial_load {
-        "正在读取候选布局设置".to_owned()
-    } else {
-        "候选布局将通过 Control 保存".to_owned()
-    });
-    let sender = app.channel::<CandidatePresentationResponse>(move |ctx, response| {
-        busy.set(false);
-        match response.result {
-            Ok(next) => match (next.layout_mode(), next.page_size()) {
-                (Ok(next_layout), Ok(next_page_size)) => {
-                    presentation.set(Some(next));
-                    layout.set(next_layout);
-                    page_size.set(next_page_size);
-                    status.set(format!("{}完成", response.operation.label()));
-                    if response.operation == CandidatePresentationOperation::Save {
-                        ctx.toast_ok("候选布局已保存");
-                    }
-                }
-                (Err(error), _) | (_, Err(error)) => {
-                    status.set(error.clone());
-                    ctx.toast_err(error);
-                }
-            },
-            Err(error) => {
-                status.set(error.clone());
-                ctx.toast_err(error);
-            }
-        }
-    });
-    if initial_load {
-        spawn_candidate_presentation_operation(
-            sender.clone(),
-            CandidatePresentationOperation::Load,
-            None,
-        );
-    }
-    (presentation, layout, page_size, busy, status, sender)
+fn windui_candidate_config_manager(
+    path: PathBuf,
+) -> Result<(WindUiSignal<WindUiConfigAdapter>, WindUiSignal<String>), String> {
+    Ok((
+        windui_signal(WindUiConfigAdapter::load(path)?),
+        windui_signal("候选布局 Draft 已从 Config Core 读取".to_owned()),
+    ))
 }
 
-fn queue_candidate_presentation_save(
-    next: ControlCandidatePresentation,
-    busy: WindUiSignal<bool>,
+fn windui_config_path() -> Result<PathBuf, String> {
+    fcitx5_windows_common_core::default_fcitx5_data_root_for_current_process()
+        .map(|root| root.join("config.toml"))
+        .ok_or_else(|| "unable to resolve the Fcitx5 user configuration path".to_owned())
+}
+
+fn update_candidate_draft(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
-    sender: WindUiSender<CandidatePresentationResponse>,
+    label: &str,
+    edit: ConfigEdit,
 ) -> Result<(), String> {
-    if busy.get() {
-        return Err("候选布局仍在读取或保存".to_owned());
-    }
-    let mode = next.layout_mode()?;
-    let page_size = next.page_size()?;
-    busy.set(true);
-    status.set(format!("正在保存 {}", mode.display_label(page_size)));
-    spawn_candidate_presentation_operation(
-        sender,
-        CandidatePresentationOperation::Save,
-        Some(next),
-    );
+    let mut result = Ok(());
+    adapter.update(|adapter| result = adapter.set(edit));
+    result?;
+    status.set(format!("{label}已更新 Draft；点击应用后保存"));
     Ok(())
 }
 
-fn candidate_orientation_button(
+fn update_candidate_layout_draft(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+    mode: CandidateLayoutMode,
+) -> Result<(), String> {
+    let mut result = Ok(());
+    adapter.update(|adapter| result = adapter.set_layout_mode(mode));
+    result?;
+    status.set(format!(
+        "{}已更新 Draft；点击应用后保存",
+        mode.display_label(adapter.with(|adapter| adapter.preview().candidate().page_size()))
+    ));
+    Ok(())
+}
+
+fn apply_candidate_draft(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) -> Result<(), String> {
+    let mut result = Ok(());
+    adapter.update(|adapter| result = adapter.apply());
+    result?;
+    status.set("候选布局已应用并写入 Config Core".to_owned());
+    Ok(())
+}
+
+fn cancel_candidate_draft(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) {
+    adapter.update(WindUiConfigAdapter::cancel);
+    status.set("已放弃 Draft 更改".to_owned());
+}
+
+fn reset_candidate_draft(adapter: WindUiSignal<WindUiConfigAdapter>, status: WindUiSignal<String>) {
+    adapter.update(WindUiConfigAdapter::reset_candidate_layout);
+    status.set("候选布局 Draft 已恢复默认继承值".to_owned());
+}
+
+fn config_core_candidate_orientation_button(
     choice: CandidateOrientation,
     selected: WindUiSignal<CandidateLayoutMode>,
-    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
-    busy: WindUiSignal<bool>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
-    sender: WindUiSender<CandidatePresentationResponse>,
 ) -> WindUiElement {
-    let active_sender = sender.clone();
     let active = WindUiElement::button(choice.label())
         .small()
         .tooltip("选择候选窗口排列方式")
-        .enabled_when(move || !busy.get() && presentation.get().is_some())
         .on_click(move |ctx| {
-            let Some(current) = presentation.get() else {
-                ctx.toast_err("候选布局尚未从 Control 读取");
-                return;
-            };
-            if let Err(error) = queue_candidate_presentation_save(
-                current.with_orientation(choice),
-                busy,
+            if let Err(error) = update_candidate_draft(
+                adapter,
                 status,
-                active_sender.clone(),
+                "候选布局",
+                ConfigEdit::CandidateOrientation(choice.control_value().to_owned()),
             ) {
                 ctx.toast_err(error);
             }
@@ -2207,17 +2013,12 @@ fn candidate_orientation_button(
         .outline_soft()
         .neutral()
         .tooltip("选择候选窗口排列方式")
-        .enabled_when(move || !busy.get() && presentation.get().is_some())
         .on_click(move |ctx| {
-            let Some(current) = presentation.get() else {
-                ctx.toast_err("候选布局尚未从 Control 读取");
-                return;
-            };
-            if let Err(error) = queue_candidate_presentation_save(
-                current.with_orientation(choice),
-                busy,
+            if let Err(error) = update_candidate_draft(
+                adapter,
                 status,
-                sender.clone(),
+                "候选布局",
+                ConfigEdit::CandidateOrientation(choice.control_value().to_owned()),
             ) {
                 ctx.toast_err(error);
             }
@@ -2226,80 +2027,19 @@ fn candidate_orientation_button(
     WindUiElement::stack().child(active).child(inactive)
 }
 
-fn candidate_scroll_checkbox(
-    selected: WindUiSignal<CandidateLayoutMode>,
-    page_size: WindUiSignal<u8>,
-    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
-    busy: WindUiSignal<bool>,
-    status: WindUiSignal<String>,
-    sender: WindUiSender<CandidatePresentationResponse>,
-) -> WindUiElement {
-    let enabled = selected.map(|mode| mode.scroll_mode());
-    let mut layouts = WindUiElement::row().spacing(6);
-    for choice in [
-        CandidateLayoutMode::ScrollAutomatic,
-        CandidateLayoutMode::ScrollVertical,
-        CandidateLayoutMode::ScrollHorizontal,
-    ] {
-        layouts = layouts.child(candidate_scroll_layout_button(
-            choice,
-            selected,
-            page_size,
-            presentation,
-            busy,
-            status,
-            sender.clone(),
-        ));
-    }
-    let checkbox = WindUiElement::checkbox("启用", enabled)
-        .tooltip("启用卷轴模式")
-        .enabled_when(move || !busy.get() && presentation.get().is_some())
-        .on_toggle(move |ctx| {
-            let Some(current) = presentation.get() else {
-                ctx.toast_err("候选布局尚未从 Control 读取");
-                return;
-            };
-            if let Err(error) = queue_candidate_presentation_save(
-                current.with_scroll_mode(!current.scroll_mode),
-                busy,
-                status,
-                sender.clone(),
-            ) {
-                ctx.toast_err(error);
-            }
-        });
-    WindUiElement::col()
-        .spacing(6)
-        .child(checkbox)
-        .child(layouts.visible_when(move || selected.get().scroll_mode()))
-}
-
-fn candidate_scroll_layout_button(
+fn config_core_candidate_scroll_layout_button(
     choice: CandidateLayoutMode,
     selected: WindUiSignal<CandidateLayoutMode>,
     page_size: WindUiSignal<u8>,
-    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
-    busy: WindUiSignal<bool>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
-    sender: WindUiSender<CandidatePresentationResponse>,
 ) -> WindUiElement {
-    let label = page_size.map(move |value| choice.display_label(*value));
-    let active_sender = sender.clone();
-    let active = WindUiElement::button(label)
+    let active_label = page_size.map(move |value| choice.display_label(*value));
+    let active = WindUiElement::button(active_label)
         .small()
         .tooltip("选择卷轴候选布局")
-        .enabled_when(move || !busy.get() && presentation.get().is_some())
         .on_click(move |ctx| {
-            let Some(current) = presentation.get() else {
-                ctx.toast_err("候选布局尚未从 Control 读取");
-                return;
-            };
-            if let Err(error) = queue_candidate_presentation_save(
-                current.with_layout_mode(choice),
-                busy,
-                status,
-                active_sender.clone(),
-            ) {
+            if let Err(error) = update_candidate_layout_draft(adapter, status, choice) {
                 ctx.toast_err(error);
             }
         })
@@ -2310,18 +2050,8 @@ fn candidate_scroll_layout_button(
         .outline_soft()
         .neutral()
         .tooltip("选择卷轴候选布局")
-        .enabled_when(move || !busy.get() && presentation.get().is_some())
         .on_click(move |ctx| {
-            let Some(current) = presentation.get() else {
-                ctx.toast_err("候选布局尚未从 Control 读取");
-                return;
-            };
-            if let Err(error) = queue_candidate_presentation_save(
-                current.with_layout_mode(choice),
-                busy,
-                status,
-                sender.clone(),
-            ) {
+            if let Err(error) = update_candidate_layout_draft(adapter, status, choice) {
                 ctx.toast_err(error);
             }
         })
@@ -2329,28 +2059,58 @@ fn candidate_scroll_layout_button(
     WindUiElement::stack().child(active).child(inactive)
 }
 
-fn candidate_page_size_button(
+fn config_core_candidate_scroll_controls(
+    selected: WindUiSignal<CandidateLayoutMode>,
+    page_size: WindUiSignal<u8>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) -> WindUiElement {
+    let enabled = selected.map(|mode| mode.scroll_mode());
+    let mut layouts = WindUiElement::row().spacing(6);
+    for choice in [
+        CandidateLayoutMode::ScrollAutomatic,
+        CandidateLayoutMode::ScrollVertical,
+        CandidateLayoutMode::ScrollHorizontal,
+    ] {
+        layouts = layouts.child(config_core_candidate_scroll_layout_button(
+            choice, selected, page_size, adapter, status,
+        ));
+    }
+    let checkbox = WindUiElement::checkbox("启用", enabled)
+        .tooltip("启用卷轴模式")
+        .on_toggle(move |ctx| {
+            let scroll_mode = adapter.with(|adapter| adapter.preview().candidate().scroll_mode());
+            if let Err(error) = update_candidate_draft(
+                adapter,
+                status,
+                "卷轴模式",
+                ConfigEdit::CandidateScrollMode(!scroll_mode),
+            ) {
+                ctx.toast_err(error);
+            }
+        });
+    WindUiElement::col()
+        .spacing(6)
+        .child(checkbox)
+        .child(layouts.visible_when(move || selected.get().scroll_mode()))
+}
+
+fn config_core_candidate_page_size_button(
     value: u8,
     selected: WindUiSignal<u8>,
-    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
-    busy: WindUiSignal<bool>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
-    sender: WindUiSender<CandidatePresentationResponse>,
 ) -> WindUiElement {
-    let active_sender = sender.clone();
     let active = WindUiElement::button(value.to_string())
         .small()
         .tooltip("设置每页最大候选数")
-        .enabled_when(move || !busy.get() && presentation.get().is_some())
         .on_click(move |ctx| {
-            let Some(mut current) = presentation.get() else {
-                ctx.toast_err("候选个数尚未从 Control 读取");
-                return;
-            };
-            current.candidate_page_size = value.to_string();
-            if let Err(error) =
-                queue_candidate_presentation_save(current, busy, status, active_sender.clone())
-            {
+            if let Err(error) = update_candidate_draft(
+                adapter,
+                status,
+                "候选个数",
+                ConfigEdit::CandidatePageSize(value),
+            ) {
                 ctx.toast_err(error);
             }
         })
@@ -2360,16 +2120,13 @@ fn candidate_page_size_button(
         .outline_soft()
         .neutral()
         .tooltip("设置每页最大候选数")
-        .enabled_when(move || !busy.get() && presentation.get().is_some())
         .on_click(move |ctx| {
-            let Some(mut current) = presentation.get() else {
-                ctx.toast_err("候选个数尚未从 Control 读取");
-                return;
-            };
-            current.candidate_page_size = value.to_string();
-            if let Err(error) =
-                queue_candidate_presentation_save(current, busy, status, sender.clone())
-            {
+            if let Err(error) = update_candidate_draft(
+                adapter,
+                status,
+                "候选个数",
+                ConfigEdit::CandidatePageSize(value),
+            ) {
                 ctx.toast_err(error);
             }
         })
@@ -2377,40 +2134,41 @@ fn candidate_page_size_button(
     WindUiElement::stack().child(active).child(inactive)
 }
 
-fn windui_candidate_layout_controls(
-    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
-    layout: WindUiSignal<CandidateLayoutMode>,
-    page_size: WindUiSignal<u8>,
-    busy: WindUiSignal<bool>,
+fn windui_config_core_candidate_layout_controls(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
-    sender: WindUiSender<CandidatePresentationResponse>,
     theme_mode: WindUiSignal<usize>,
 ) -> WindUiElement {
+    let layout = adapter.map(|adapter| {
+        adapter
+            .layout_mode()
+            .unwrap_or(CandidateLayoutMode::Automatic)
+    });
+    let page_size = adapter.map(|adapter| adapter.preview().candidate().page_size());
+    let draft_summary = adapter.map(|adapter| {
+        let draft = PreviewRenderContext::from_draft(adapter.preview(), 150);
+        format!(
+            "Draft · {} · {:.0}px · {}",
+            draft.font_family(),
+            draft.effective_font_px(),
+            draft.draft.candidate().preedit_mode(),
+        )
+    });
     let mut orientations = WindUiElement::row().width_match().spacing(6);
     for choice in [
         CandidateOrientation::Automatic,
         CandidateOrientation::Horizontal,
         CandidateOrientation::Vertical,
     ] {
-        orientations = orientations.child(candidate_orientation_button(
-            choice,
-            layout,
-            presentation,
-            busy,
-            status,
-            sender.clone(),
+        orientations = orientations.child(config_core_candidate_orientation_button(
+            choice, layout, adapter, status,
         ));
     }
 
     let mut page_sizes = WindUiElement::row().spacing(4);
     for value in 1..=9 {
-        page_sizes = page_sizes.child(candidate_page_size_button(
-            value,
-            page_size,
-            presentation,
-            busy,
-            status,
-            sender.clone(),
+        page_sizes = page_sizes.child(config_core_candidate_page_size_button(
+            value, page_size, adapter, status,
         ));
     }
 
@@ -2426,14 +2184,7 @@ fn windui_candidate_layout_controls(
         .child(WindUiElement::setting_row_desc(
             "卷轴模式",
             "按当前排列方向显示候选内容",
-            candidate_scroll_checkbox(
-                layout,
-                page_size,
-                presentation,
-                busy,
-                status,
-                sender.clone(),
-            ),
+            config_core_candidate_scroll_controls(layout, page_size, adapter, status),
         ))
         .child(WindUiElement::setting_row_desc(
             "候选个数",
@@ -2441,8 +2192,36 @@ fn windui_candidate_layout_controls(
             page_sizes,
         ))
         .child(windui_candidate_preview_panel(
-            layout, page_size, theme_mode,
+            layout,
+            page_size,
+            theme_mode,
+            draft_summary,
         ))
+        .child(
+            WindUiElement::row()
+                .spacing(8)
+                .child(WindUiElement::button("应用").on_click(move |ctx| {
+                    if let Err(error) = apply_candidate_draft(adapter, status) {
+                        ctx.toast_err(error);
+                    } else {
+                        ctx.toast_ok("候选布局已应用");
+                    }
+                }))
+                .child(
+                    WindUiElement::button("取消")
+                        .outline_soft()
+                        .on_click(move |_| {
+                            cancel_candidate_draft(adapter, status);
+                        }),
+                )
+                .child(
+                    WindUiElement::button("重置")
+                        .outline_soft()
+                        .on_click(move |_| {
+                            reset_candidate_draft(adapter, status);
+                        }),
+                ),
+        )
         .child(
             WindUiElement::label_signal(status)
                 .font_size(12.5)
@@ -2459,25 +2238,16 @@ fn windui_settings_default_shell_probe() -> WindUiElement {
     let handle = app.theme_handle();
     let _toggle = windui_theme_toggle(handle, dark);
     let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, false);
-    let (
-        candidate_presentation,
-        candidate_layout,
-        candidate_page_size,
-        candidate_busy,
-        candidate_status,
-        candidate_sender,
-    ) = windui_candidate_presentation_manager(&mut app, false);
+    let (candidate_adapter, candidate_status) =
+        windui_candidate_config_manager(PathBuf::from("windui-settings-default-shell-probe.toml"))
+            .expect("compiled Config Core defaults should initialize the wind-ui probe");
     windui_settings_root(
         snapshot,
         busy,
         status,
         sender,
-        candidate_presentation,
-        candidate_layout,
-        candidate_page_size,
-        candidate_busy,
+        candidate_adapter,
         candidate_status,
-        candidate_sender,
     )
 }
 
@@ -3311,7 +3081,7 @@ struct CandidatePreviewSample {
     preedit: &'static str,
     labels: Vec<&'static str>,
     candidates: Vec<&'static str>,
-    comments: Vec<&'static str>,
+    comments: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -3347,53 +3117,14 @@ struct CandidatePreviewHostEvidence {
 }
 
 #[derive(Clone, Debug)]
-struct PreviewDraft {
-    theme_id: &'static str,
-    appearance_mode: &'static str,
-    orientation: &'static str,
+struct PreviewRenderContext {
+    draft: ConfigSnapshot,
     dpi_percent: u16,
-    font_family: &'static str,
-    font_size_dip: f32,
-    label_suffix: &'static str,
-    revision: u32,
 }
 
-impl PreviewDraft {
-    fn new() -> Self {
-        Self {
-            theme_id: "builtin:default",
-            appearance_mode: "system",
-            orientation: "automatic",
-            dpi_percent: 100,
-            font_family: "Microsoft YaHei",
-            font_size_dip: 18.0,
-            label_suffix: ".",
-            revision: 1,
-        }
-    }
-
-    fn set_theme(&mut self, theme_id: &'static str) {
-        if self.theme_id != theme_id {
-            self.theme_id = theme_id;
-            self.revision += 1;
-        }
-    }
-
-    fn set_font(&mut self, font_family: &'static str, font_size_dip: f32) {
-        if self.font_family != font_family
-            || (self.font_size_dip - font_size_dip).abs() > f32::EPSILON
-        {
-            self.font_family = font_family;
-            self.font_size_dip = font_size_dip.max(12.0);
-            self.revision += 1;
-        }
-    }
-
-    fn set_dpi(&mut self, dpi_percent: u16) {
-        if self.dpi_percent != dpi_percent {
-            self.dpi_percent = dpi_percent;
-            self.revision += 1;
-        }
+impl PreviewRenderContext {
+    fn from_draft(draft: ConfigSnapshot, dpi_percent: u16) -> Self {
+        Self { draft, dpi_percent }
     }
 
     fn scale(&self) -> f32 {
@@ -3401,40 +3132,106 @@ impl PreviewDraft {
     }
 
     fn effective_font_px(&self) -> f32 {
-        self.font_size_dip * self.scale()
+        self.draft.fonts().candidate().size_dip() * self.scale()
+    }
+
+    fn font_family(&self) -> &str {
+        self.draft
+            .fonts()
+            .candidate()
+            .families()
+            .first()
+            .map_or("system", String::as_str)
     }
 }
 
-#[derive(Clone, Debug)]
-struct PersistedPresentation {
-    theme_id: &'static str,
-    appearance_mode: &'static str,
-    orientation: &'static str,
-    font_family: &'static str,
-    font_size_dip: f32,
+/// Thin WindUI adapter over the sole Config Core state and transaction authority.
+#[derive(Debug)]
+struct WindUiConfigAdapter {
+    path: PathBuf,
+    store: FileStore,
+    core: ConfigCore,
 }
 
-impl PersistedPresentation {
-    fn from_draft(draft: &PreviewDraft) -> Self {
-        Self {
-            theme_id: draft.theme_id,
-            appearance_mode: draft.appearance_mode,
-            orientation: draft.orientation,
-            font_family: draft.font_family,
-            font_size_dip: draft.font_size_dip,
+impl WindUiConfigAdapter {
+    fn load(path: PathBuf) -> Result<Self, String> {
+        let store = FileStore::new();
+        let core = ConfigCore::recover(&store, &path)
+            .map_err(|error| error.to_string())?
+            .core;
+        Ok(Self { path, store, core })
+    }
+
+    #[cfg(test)]
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn preview(&self) -> ConfigSnapshot {
+        self.core.preview()
+    }
+
+    fn layout_mode(&self) -> Result<CandidateLayoutMode, String> {
+        candidate_layout_mode(&self.preview())
+    }
+
+    fn set(&mut self, edit: ConfigEdit) -> Result<(), String> {
+        self.core
+            .execute(ConfigCommand::Set(edit), &self.store, &self.path)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn set_layout_mode(&mut self, mode: CandidateLayoutMode) -> Result<(), String> {
+        self.set(ConfigEdit::CandidateOrientation(
+            mode.orientation().control_value().to_owned(),
+        ))?;
+        self.set(ConfigEdit::CandidateScrollMode(mode.scroll_mode()))
+    }
+
+    fn cancel(&mut self) {
+        self.core.cancel();
+    }
+
+    fn reset(&mut self, field: ConfigField) {
+        self.core.reset(field);
+    }
+
+    fn reset_candidate_layout(&mut self) {
+        for field in [
+            ConfigField::CandidateOrientation,
+            ConfigField::CandidateScrollMode,
+            ConfigField::CandidatePageSize,
+        ] {
+            self.reset(field);
         }
     }
 
-    fn reopen_preview_draft(&self, dpi_percent: u16) -> PreviewDraft {
-        let mut draft = PreviewDraft::new();
-        draft.theme_id = self.theme_id;
-        draft.appearance_mode = self.appearance_mode;
-        draft.orientation = self.orientation;
-        draft.font_family = self.font_family;
-        draft.font_size_dip = self.font_size_dip;
-        draft.dpi_percent = dpi_percent;
-        draft.revision = 1;
-        draft
+    fn apply(&mut self) -> Result<(), String> {
+        self.core
+            .apply(
+                &self.store,
+                &self.path,
+                fcitx5_config_core::CommitFault::None,
+            )
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn candidate_layout_mode(snapshot: &ConfigSnapshot) -> Result<CandidateLayoutMode, String> {
+    match (
+        snapshot.candidate().orientation(),
+        snapshot.candidate().scroll_mode(),
+    ) {
+        ("automatic", false) => Ok(CandidateLayoutMode::Automatic),
+        ("horizontal", false) => Ok(CandidateLayoutMode::Horizontal),
+        ("vertical", false) => Ok(CandidateLayoutMode::Vertical),
+        ("automatic", true) => Ok(CandidateLayoutMode::ScrollAutomatic),
+        ("horizontal", true) => Ok(CandidateLayoutMode::ScrollHorizontal),
+        ("vertical", true) => Ok(CandidateLayoutMode::ScrollVertical),
+        (orientation, _) => Err(format!(
+            "Config Core returned an invalid candidate orientation {orientation}"
+        )),
     }
 }
 
@@ -3483,13 +3280,14 @@ struct ConfigRustCutoverEvidence {
     old_cxx_shell_deletion_required: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 enum RunMode {
     Interactive,
     WindUiScreenshot,
     SelfCheck,
     WindowSmoke,
     LegacyHeadless(LegacyHeadlessMode),
+    ConfigCoreCli(ConfigCoreCli),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3501,6 +3299,24 @@ enum LegacyHeadlessMode {
     UiVisualContract,
     UiLivePreviewContract,
     UiInteraction,
+}
+
+#[derive(Debug)]
+struct ConfigCoreCli {
+    path: PathBuf,
+    action: ConfigCoreCliAction,
+}
+
+#[derive(Debug)]
+enum ConfigCoreCliAction {
+    Get,
+    Set(ConfigEdit),
+    Validate,
+    Diff(ConfigEdit),
+    Reset(ConfigField),
+    Import(PathBuf),
+    Export(PathBuf),
+    Doctor,
 }
 
 impl LegacyHeadlessMode {
@@ -3551,6 +3367,12 @@ fn main() {
             set_run_mode(&mut mode, RunMode::SelfCheck);
         } else if arg == "--window-smoke" {
             set_run_mode(&mut mode, RunMode::WindowSmoke);
+        } else if arg == "--config" {
+            let cli = parse_config_core_cli(&mut args).unwrap_or_else(|error| {
+                eprintln!("{error}");
+                std::process::exit(2);
+            });
+            set_run_mode(&mut mode, RunMode::ConfigCoreCli(cli));
         } else if arg == "--screenshot" {
             let Some(_path) = args.next() else {
                 eprintln!("--screenshot requires a path");
@@ -3653,6 +3475,7 @@ fn main() {
         RunMode::SelfCheck => run_self_check(),
         RunMode::WindowSmoke => run_window_smoke(),
         RunMode::LegacyHeadless(legacy) => run_legacy_headless_check(legacy),
+        RunMode::ConfigCoreCli(cli) => run_config_core_cli(cli),
     };
 
     match result {
@@ -3668,6 +3491,155 @@ fn main() {
             eprintln!("{error}");
             std::process::exit(1);
         }
+    }
+}
+
+fn parse_config_core_cli(
+    args: &mut impl Iterator<Item = OsString>,
+) -> Result<ConfigCoreCli, String> {
+    let path = PathBuf::from(
+        args.next()
+            .ok_or("--config requires CONFIG_PATH and COMMAND")?,
+    );
+    let command = config_core_cli_next(args, "command")?;
+    let action = match command.as_str() {
+        "get" => ConfigCoreCliAction::Get,
+        "validate" => ConfigCoreCliAction::Validate,
+        "doctor" => ConfigCoreCliAction::Doctor,
+        "set" | "diff" => {
+            let field = config_core_cli_next(args, &command)?;
+            let value = config_core_cli_next(args, &command)?;
+            let edit = ConfigEdit::from_cli(&field, &value).map_err(|error| error.to_string())?;
+            if command == "set" {
+                ConfigCoreCliAction::Set(edit)
+            } else {
+                ConfigCoreCliAction::Diff(edit)
+            }
+        }
+        "reset" => {
+            let field = config_core_cli_next(args, &command)?;
+            ConfigCoreCliAction::Reset(
+                ConfigField::from_cli(&field).map_err(|error| error.to_string())?,
+            )
+        }
+        "import" => {
+            ConfigCoreCliAction::Import(PathBuf::from(config_core_cli_next(args, &command)?))
+        }
+        "export" => {
+            ConfigCoreCliAction::Export(PathBuf::from(config_core_cli_next(args, &command)?))
+        }
+        _ => return Err(format!("unsupported --config command {command}")),
+    };
+    if args.next().is_some() {
+        return Err("--config received too many arguments".to_owned());
+    }
+    Ok(ConfigCoreCli { path, action })
+}
+
+fn config_core_cli_next(
+    args: &mut impl Iterator<Item = OsString>,
+    command: &str,
+) -> Result<String, String> {
+    args.next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| format!("--config {command} requires an argument"))
+}
+
+fn run_config_core_cli(cli: ConfigCoreCli) -> Result<String, String> {
+    let store = FileStore::new();
+    match cli.action {
+        ConfigCoreCliAction::Get => {
+            let mut core = recovered_config_core(&store, &cli.path)?;
+            match core
+                .execute(ConfigCommand::Get, &store, &cli.path)
+                .map_err(|error| error.to_string())?
+            {
+                fcitx5_config_core::CommandOutput::Snapshot(snapshot) => {
+                    serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())
+                }
+                _ => Err("Config Core get returned an unexpected result".to_owned()),
+            }
+        }
+        ConfigCoreCliAction::Set(edit) => {
+            let mut core = recovered_config_core(&store, &cli.path)?;
+            core.execute(ConfigCommand::Set(edit), &store, &cli.path)
+                .map_err(|error| error.to_string())?;
+            core.apply(&store, &cli.path, fcitx5_config_core::CommitFault::None)
+                .map_err(|error| error.to_string())?;
+            Ok("config-core set result=PASS".to_owned())
+        }
+        ConfigCoreCliAction::Validate => {
+            let recovery =
+                ConfigCore::recover(&store, &cli.path).map_err(|error| error.to_string())?;
+            if recovery.source != RecoverySource::Current {
+                return Err(format!(
+                    "config-core validate recovery={}",
+                    recovery_source_name(recovery.source)
+                ));
+            }
+            let mut core = recovery.core;
+            core.execute(ConfigCommand::Validate, &store, &cli.path)
+                .map_err(|error| error.to_string())?;
+            Ok("config-core validate result=PASS".to_owned())
+        }
+        ConfigCoreCliAction::Diff(edit) => {
+            let mut core = recovered_config_core(&store, &cli.path)?;
+            core.execute(ConfigCommand::Set(edit), &store, &cli.path)
+                .map_err(|error| error.to_string())?;
+            match core
+                .execute(ConfigCommand::Diff, &store, &cli.path)
+                .map_err(|error| error.to_string())?
+            {
+                fcitx5_config_core::CommandOutput::Diff(differences) => {
+                    Ok(format!("config-core diff fields={}", differences.len()))
+                }
+                _ => Err("Config Core diff returned an unexpected result".to_owned()),
+            }
+        }
+        ConfigCoreCliAction::Reset(field) => {
+            let mut core = recovered_config_core(&store, &cli.path)?;
+            core.execute(ConfigCommand::Reset(field), &store, &cli.path)
+                .map_err(|error| error.to_string())?;
+            core.apply(&store, &cli.path, fcitx5_config_core::CommitFault::None)
+                .map_err(|error| error.to_string())?;
+            Ok("config-core reset result=PASS".to_owned())
+        }
+        ConfigCoreCliAction::Import(import_path) => {
+            let mut core = recovered_config_core(&store, &cli.path)?;
+            core.import_from_path(&store, &import_path)
+                .map_err(|error| error.to_string())?;
+            core.apply(&store, &cli.path, fcitx5_config_core::CommitFault::None)
+                .map_err(|error| error.to_string())?;
+            Ok("config-core import result=PASS".to_owned())
+        }
+        ConfigCoreCliAction::Export(export_path) => {
+            let core = recovered_config_core(&store, &cli.path)?;
+            core.export_to(&store, &export_path)
+                .map_err(|error| error.to_string())?;
+            Ok("config-core export result=PASS".to_owned())
+        }
+        ConfigCoreCliAction::Doctor => {
+            let recovery =
+                ConfigCore::recover(&store, &cli.path).map_err(|error| error.to_string())?;
+            Ok(format!(
+                "config-core doctor recovery={}",
+                recovery_source_name(recovery.source)
+            ))
+        }
+    }
+}
+
+fn recovered_config_core(store: &FileStore, path: &Path) -> Result<ConfigCore, String> {
+    ConfigCore::recover(store, path)
+        .map(|recovery| recovery.core)
+        .map_err(|error| error.to_string())
+}
+
+fn recovery_source_name(source: RecoverySource) -> &'static str {
+    match source {
+        RecoverySource::Current => "current",
+        RecoverySource::LastKnownGood => "last-known-good",
+        RecoverySource::SafeDefaults => "compiled-safe-defaults",
     }
 }
 
@@ -3946,44 +3918,15 @@ fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, Stri
         app = app.screenshot_from_args();
     }
     let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, true);
-    let (
-        candidate_presentation,
-        candidate_layout,
-        candidate_page_size,
-        candidate_busy,
-        candidate_status,
-        candidate_sender,
-    ) = windui_candidate_presentation_manager(&mut app, !screenshot_from_args);
-    if screenshot_from_args {
-        match load_candidate_presentation().and_then(|presentation| {
-            let layout = presentation.layout_mode()?;
-            let page_size = presentation.page_size()?;
-            Ok((presentation, layout, page_size))
-        }) {
-            Ok((presentation, layout, page_size)) => {
-                candidate_presentation.set(Some(presentation));
-                candidate_layout.set(layout);
-                candidate_page_size.set(page_size);
-                candidate_busy.set(false);
-                candidate_status.set("已读取候选布局设置".to_owned());
-            }
-            Err(error) => {
-                candidate_busy.set(false);
-                candidate_status.set(error);
-            }
-        }
-    }
+    let (candidate_adapter, candidate_status) =
+        windui_candidate_config_manager(windui_config_path()?)?;
     app.content(windui_settings_root(
         snapshot,
         busy,
         status,
         sender,
-        candidate_presentation,
-        candidate_layout,
-        candidate_page_size,
-        candidate_busy,
+        candidate_adapter,
         candidate_status,
-        candidate_sender,
     ))
     .run();
     Ok(format!(
@@ -5030,10 +4973,19 @@ fn validate_theme_library_and_preview() -> Result<ThemeLibraryEvidence, String> 
         return Err("theme import staging safety checks are incomplete".to_owned());
     }
 
-    let mut draft = PreviewDraft::new();
-    draft.set_theme("user:soft-blue");
-    draft.set_font("Segoe UI Emoji", 20.0);
-    draft.set_dpi(150);
+    let store = FileStore::new();
+    let preview_path = Path::new("preview.toml");
+    let mut core = ConfigCore::compiled_defaults();
+    for edit in [
+        ConfigEdit::Theme("user:soft-blue".to_owned()),
+        ConfigEdit::CandidateFontFamilies(vec!["Segoe UI Emoji".to_owned()]),
+        ConfigEdit::CandidateFontSizeDip(20.0),
+    ] {
+        core.execute(ConfigCommand::Set(edit), &store, preview_path)
+            .map_err(|error| error.to_string())?;
+    }
+    core.validate().map_err(|error| error.to_string())?;
+    let draft = PreviewRenderContext::from_draft(core.preview(), 150);
     let sample = candidate_preview_sample(&draft);
     let preview_samples_cover_chinese_latin_punctuation_emoji = sample.preedit.contains("ni hao")
         && sample
@@ -5058,18 +5010,28 @@ fn validate_theme_library_and_preview() -> Result<ThemeLibraryEvidence, String> 
             .any(|comment| comment.contains("emoji"));
     let label_suffix_parity = sample.labels.starts_with(&["1.", "2.", "3."]);
     let preview_150_percent_font_px = draft.effective_font_px();
-    let persisted = PersistedPresentation::from_draft(&draft);
-    let reopened_draft = persisted.reopen_preview_draft(150);
+    let export = match core
+        .execute(ConfigCommand::Export, &store, preview_path)
+        .map_err(|error| error.to_string())?
+    {
+        fcitx5_config_core::CommandOutput::Export(text) => text,
+        _ => return Err("Config Core preview export returned an unexpected result".to_owned()),
+    };
+    let mut reopened_core = ConfigCore::compiled_defaults();
+    reopened_core
+        .execute(ConfigCommand::Import(export), &store, preview_path)
+        .map_err(|error| error.to_string())?;
+    let reopened_draft = PreviewRenderContext::from_draft(reopened_core.preview(), 150);
     let reopened_sample = candidate_preview_sample(&reopened_draft);
-    let font_selection_persists_after_reopen =
-        reopened_draft.font_family == "Segoe UI Emoji" && reopened_draft.font_size_dip == 20.0;
+    let font_selection_persists_after_reopen = reopened_draft.font_family() == "Segoe UI Emoji"
+        && reopened_draft.draft.fonts().candidate().size_dip() == 20.0;
     let persisted_font_refreshes_embedded_preview = reopened_draft.effective_font_px()
         == preview_150_percent_font_px
         && reopened_sample.preedit == sample.preedit
         && reopened_sample.labels == sample.labels
         && reopened_sample.candidates == sample.candidates;
 
-    if draft.revision != 4
+    if core.diff().len() != 3
         || !preview_samples_cover_chinese_latin_punctuation_emoji
         || !label_suffix_parity
         || (preview_150_percent_font_px - 30.0).abs() > f32::EPSILON
@@ -5097,7 +5059,7 @@ fn validate_theme_library_and_preview() -> Result<ThemeLibraryEvidence, String> 
         import_staging_rejects_invalid_toml,
         import_staging_rejects_cyclic_base,
         live_preview_draft_state: true,
-        live_preview_revision_after_changes: draft.revision,
+        live_preview_revision_after_changes: core.diff().len() as u32 + 1,
         preview_uses_production_renderer_contract: true,
         preview_samples_cover_chinese_latin_punctuation_emoji,
         emoji_color_fallback_required: true,
@@ -5315,23 +5277,10 @@ fn validate_theme_import_text(text: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn candidate_preview_sample(draft: &PreviewDraft) -> CandidatePreviewSample {
+fn candidate_preview_sample(draft: &PreviewRenderContext) -> CandidatePreviewSample {
     CandidatePreviewSample {
         preedit: "ni hao 😊",
-        labels: (1..=5)
-            .map(|index| match (index, draft.label_suffix) {
-                (1, ".") => "1.",
-                (2, ".") => "2.",
-                (3, ".") => "3.",
-                (4, ".") => "4.",
-                (5, ".") => "5.",
-                (1, _) => "1",
-                (2, _) => "2",
-                (3, _) => "3",
-                (4, _) => "4",
-                _ => "5",
-            })
-            .collect(),
+        labels: vec!["1.", "2.", "3.", "4.", "5."],
         candidates: vec![
             "你",
             "你好",
@@ -5342,10 +5291,10 @@ fn candidate_preview_sample(draft: &PreviewDraft) -> CandidatePreviewSample {
             "😀🎉⌨️",
         ],
         comments: vec![
-            draft.theme_id,
-            draft.appearance_mode,
-            draft.orientation,
-            "emoji fallback",
+            draft.draft.appearance().theme().to_owned(),
+            draft.draft.appearance().mode().to_owned(),
+            draft.draft.candidate().orientation().to_owned(),
+            "emoji fallback".to_owned(),
         ],
     }
 }
@@ -8068,63 +8017,45 @@ mod win32_window_smoke {
 mod tests {
     use super::*;
 
-    fn candidate_presentation_json(
-        orientation: &str,
-        scroll_mode: bool,
-        page_size: &str,
-        scroll_cell_width: &str,
-    ) -> String {
-        serde_json::json!({
-            "format_version": 1,
-            "appearance_mode": "dark",
-            "theme": "builtin:default",
-            "orientation": orientation,
-            "candidate_font": "Microsoft YaHei",
-            "candidate_page_size": page_size,
-            "candidate_max_width_dip": "860",
-            "candidate_scroll_cell_width_dip": scroll_cell_width,
-            "candidate_font_size_dip": "18",
-            "candidate_corner_radius_dip": "12",
-            "candidate_opacity": "1",
-            "candidate_preedit_mode": "inline",
-            "candidate_shadow": true,
-            "scroll_mode": scroll_mode,
-        })
-        .to_string()
+    struct TestDirectory(std::path::PathBuf);
+
+    impl TestDirectory {
+        fn new(name: &str) -> Self {
+            let thread_name = std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                        character
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>();
+            let path = std::env::temp_dir().join(format!(
+                "fcitx5-config-poc-{name}-{}-{}",
+                std::process::id(),
+                thread_name
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("test directory should be created");
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
     }
 
-    fn candidate_presentation(
-        orientation: &str,
-        scroll_mode: bool,
-        page_size: &str,
-    ) -> ControlCandidatePresentation {
-        parse_control_candidate_presentation(&candidate_presentation_json(
-            orientation,
-            scroll_mode,
-            page_size,
-            "96",
-        ))
-        .expect("fixture presentation should be valid")
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     #[test]
     fn candidate_layout_uses_normal_scroll_mode_names_and_preserves_direction() {
-        let automatic = candidate_presentation("automatic", true, "5");
-        let horizontal = candidate_presentation("horizontal", true, "5");
-        let vertical = candidate_presentation("vertical", true, "5");
-
-        assert_eq!(
-            automatic.layout_mode().expect("automatic scroll mode"),
-            CandidateLayoutMode::ScrollAutomatic
-        );
-        assert_eq!(
-            horizontal.layout_mode().expect("horizontal scroll mode"),
-            CandidateLayoutMode::ScrollHorizontal
-        );
-        assert_eq!(
-            vertical.layout_mode().expect("vertical scroll mode"),
-            CandidateLayoutMode::ScrollVertical
-        );
         assert_eq!(
             CandidateLayoutMode::ScrollAutomatic.display_label(5),
             "Scroll（自动卷轴）"
@@ -8143,46 +8074,23 @@ mod tests {
         assert!(CandidateLayoutMode::ScrollHorizontal
             .preview_description(7)
             .contains("6 x 7"));
-
-        let changed_direction = vertical.with_orientation(CandidateOrientation::Horizontal);
-        assert_eq!(changed_direction.orientation, "horizontal");
-        assert!(changed_direction.scroll_mode);
+        assert_eq!(
+            CandidateLayoutMode::ScrollVertical.orientation(),
+            CandidateOrientation::Vertical
+        );
+        assert!(CandidateLayoutMode::ScrollHorizontal.scroll_mode());
     }
 
     #[test]
     fn candidate_page_size_is_authoritative_and_strictly_bounded() {
-        for page_size in ["1", "5", "9"] {
-            let presentation = candidate_presentation("vertical", true, page_size);
-            let page_size = presentation.page_size().expect("in-range page size");
-            assert!(presentation
-                .layout_mode()
-                .expect("scroll layout")
-                .preview_description(page_size)
-                .contains(&page_size.to_string()));
-        }
-
         for page_size in 1..=9 {
             let visible_slots = (1..=9)
                 .filter(|slot| candidate_preview_slot_visible(page_size, *slot))
                 .count();
             assert_eq!(visible_slots, usize::from(page_size));
-        }
-
-        for page_size in ["0", "10", "invalid"] {
-            assert!(
-                parse_control_candidate_presentation(&candidate_presentation_json(
-                    "vertical", true, page_size, "96",
-                ))
-                .is_err()
-            );
-        }
-        for cell_width in ["39", "161", "not-a-number"] {
-            assert!(
-                parse_control_candidate_presentation(&candidate_presentation_json(
-                    "vertical", true, "5", cell_width,
-                ))
-                .is_err()
-            );
+            assert!(CandidateLayoutMode::ScrollVertical
+                .preview_description(page_size)
+                .contains(&page_size.to_string()));
         }
     }
 
@@ -8198,46 +8106,6 @@ mod tests {
                 format!("6 x {page_size}（横排卷轴）")
             );
         }
-    }
-
-    #[test]
-    fn candidate_presentation_save_preserves_typed_control_fields() {
-        let presentation = candidate_presentation("vertical", false, "5");
-        let updated = presentation
-            .with_orientation(CandidateOrientation::Horizontal)
-            .with_scroll_mode(true);
-        assert_eq!(
-            updated.layout_mode(),
-            Ok(CandidateLayoutMode::ScrollHorizontal)
-        );
-        assert_eq!(updated.candidate_page_size, "5");
-        assert_eq!(updated.candidate_font, "Microsoft YaHei");
-        assert_eq!(updated.candidate_scroll_cell_width_dip, "96");
-
-        let arguments: Vec<String> = updated
-            .set_arguments()
-            .iter()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            arguments,
-            vec![
-                "--set-presentation",
-                "dark",
-                "builtin:default",
-                "horizontal",
-                "enabled",
-                "5",
-                "Microsoft YaHei",
-                "860",
-                "96",
-                "18",
-                "12",
-                "enabled",
-                "1",
-                "inline",
-            ]
-        );
     }
 
     #[test]
@@ -8727,15 +8595,32 @@ mod tests {
 
     #[test]
     fn live_preview_draft_updates_without_external_candidate_window() {
-        let mut draft = PreviewDraft::new();
-        draft.set_theme("package:official-dark");
-        draft.set_font("Segoe UI Emoji", 20.0);
-        draft.set_dpi(150);
+        let store = FileStore::new();
+        let path = Path::new("preview.toml");
+        let mut core = ConfigCore::compiled_defaults();
+        for edit in [
+            ConfigEdit::AppearanceMode("dark".to_owned()),
+            ConfigEdit::CandidateFontFamilies(vec!["Segoe UI Emoji".to_owned()]),
+            ConfigEdit::CandidateFontSizeDip(20.0),
+        ] {
+            core.execute(ConfigCommand::Set(edit), &store, path)
+                .expect("GUI preview should edit only Config Core Draft");
+        }
+        let draft = PreviewRenderContext::from_draft(core.preview(), 150);
         let sample = candidate_preview_sample(&draft);
-        let reopened = PersistedPresentation::from_draft(&draft).reopen_preview_draft(150);
-        assert_eq!(draft.revision, 4);
-        assert_eq!(reopened.revision, 1);
-        assert_eq!(reopened.font_family, "Segoe UI Emoji");
+        let export = core
+            .execute(ConfigCommand::Export, &store, path)
+            .expect("GUI preview should export through Config Core");
+        let fcitx5_config_core::CommandOutput::Export(export) = export else {
+            panic!("Config Core export should return TOML");
+        };
+        let mut reopened_core = ConfigCore::compiled_defaults();
+        reopened_core
+            .execute(ConfigCommand::Import(export), &store, path)
+            .expect("GUI preview should import through Config Core");
+        let reopened = PreviewRenderContext::from_draft(reopened_core.preview(), 150);
+        assert_eq!(core.diff().len(), 3);
+        assert_eq!(reopened.font_family(), "Segoe UI Emoji");
         assert_eq!(draft.effective_font_px(), 30.0);
         assert_eq!(reopened.effective_font_px(), 30.0);
         assert_eq!(&sample.labels[..3], ["1.", "2.", "3."]);
@@ -8752,6 +8637,44 @@ mod tests {
             .candidates
             .iter()
             .any(|candidate| candidate.contains("😀")));
+    }
+
+    #[test]
+    fn windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply() {
+        let directory = TestDirectory::new("windui-candidate-adapter");
+        let path = directory.path().join("config.toml");
+        let mut adapter = WindUiConfigAdapter::load(path).expect("adapter should load defaults");
+
+        adapter
+            .set(ConfigEdit::CandidatePageSize(7))
+            .expect("GUI edit should update Draft");
+        assert_eq!(adapter.preview().candidate().page_size(), 7);
+        assert!(
+            !adapter.path().exists(),
+            "editing Draft must not write Current"
+        );
+
+        adapter.cancel();
+        assert_eq!(adapter.preview().candidate().page_size(), 5);
+        assert!(!adapter.path().exists(), "cancel must not write Current");
+
+        adapter
+            .set(ConfigEdit::CandidatePageSize(8))
+            .expect("GUI edit should update Draft");
+        adapter.reset(ConfigField::CandidatePageSize);
+        assert_eq!(adapter.preview().candidate().page_size(), 5);
+        assert!(!adapter.path().exists(), "reset must not write Current");
+
+        adapter
+            .set(ConfigEdit::CandidatePageSize(7))
+            .expect("GUI edit should update Draft");
+        adapter.apply().expect("apply should commit Draft");
+        assert_eq!(adapter.preview().candidate().page_size(), 7);
+        assert!(adapter.path().is_file(), "apply must create Current");
+        assert!(
+            FileStore::last_known_good_path(adapter.path()).is_file(),
+            "apply must create a usable LKG"
+        );
     }
 
     fn package_json(id: &str, installed: Option<&str>, state: Option<&str>) -> String {
