@@ -1,4 +1,4 @@
-# Current Task - Config Candidate and plugin usability correction
+# Task 064 - Config Candidate and plugin usability correction
 
 **Mode:** CODE / PRODUCT CORRECTION
 **Task ID:** `CONFIG-CANDIDATE-PLUGIN-USABILITY-CORRECTION-001`
