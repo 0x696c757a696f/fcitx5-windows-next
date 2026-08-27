@@ -2112,6 +2112,31 @@ int main(int argc, char** argv) {
         configPocSource.find("\"Width DIP\"") != std::string::npos) {
         return fail("CONFIG-WINDUI-ADOPTION-001/058: Rust Config must consume vendored wind-ui-rust code and make its settings shell the default interactive GUI while keeping Win32 only as QA host");
     }
+    if (configPocSource.find("enum CandidateOrientation") == std::string::npos ||
+        configPocSource.find("enum CandidateLayoutMode") == std::string::npos ||
+        configPocSource.find("ScrollAutomatic") == std::string::npos ||
+        configPocSource.find("ScrollHorizontal") == std::string::npos ||
+        configPocSource.find("ScrollVertical") == std::string::npos ||
+        configPocSource.find("fn parse_control_candidate_presentation(") == std::string::npos ||
+        configPocSource.find("--get-presentation") == std::string::npos ||
+        configPocSource.find("--set-presentation") == std::string::npos ||
+        configPocSource.find("fn with_orientation(") == std::string::npos ||
+        configPocSource.find("fn with_scroll_mode(") == std::string::npos ||
+        configPocSource.find("fn windui_candidate_presentation_manager(") == std::string::npos ||
+        configPocSource.find("WindUiSignal<u8>") == std::string::npos ||
+        configPocSource.find("fn candidate_scroll_checkbox(") == std::string::npos ||
+        configPocSource.find("WindUiElement::checkbox(\"启用\"") == std::string::npos ||
+        configPocSource.find("\"卷轴模式\"") == std::string::npos ||
+        configPocSource.find("fn windui_candidate_preview_panel(") == std::string::npos ||
+        configPocSource.find("page_size: WindUiSignal<u8>") == std::string::npos ||
+        configPocSource.find("RowsBySix") != std::string::npos ||
+        configPocSource.find("SixByColumns") != std::string::npos ||
+        configPocSource.find("N x 6") != std::string::npos ||
+        configPocSource.find("6 x N") != std::string::npos) {
+        return fail("CONFIG-CANDIDATE-PLUGIN-USABILITY-CORRECTION-001: WindUI Appearance must "
+                    "persist the authoritative candidate page size and expose scroll mode through "
+                    "normal direction controls");
+    }
     if (configPocManifest.find("fcitx5-process-execution-core = { path = \"../process-execution-core\" }") ==
             std::string::npos ||
         configPocSource.find("FCITX5_PLUGINS_REFERENCE_COMMIT") == std::string::npos ||

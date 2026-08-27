@@ -555,7 +555,15 @@ fn windui_settings_page_title(title: &str, subtitle: &str) -> WindUiElement {
         )
 }
 
-fn windui_candidate_preview_chip(text: &str, active: bool) -> WindUiElement {
+fn candidate_preview_slot_visible(page_size: u8, slot: u8) -> bool {
+    slot <= page_size
+}
+
+fn windui_candidate_preview_chip(
+    text: &str,
+    active: bool,
+    visible: WindUiSignal<bool>,
+) -> WindUiElement {
     WindUiElement::row()
         .height(32)
         .corner(7.0)
@@ -575,6 +583,7 @@ fn windui_candidate_preview_chip(text: &str, active: bool) -> WindUiElement {
                     WindUiRole::Text
                 }),
         )
+        .visible_when(move || visible.get())
 }
 
 fn windui_candidate_preview_row(
@@ -583,6 +592,7 @@ fn windui_candidate_preview_row(
     comment: &'static str,
     active: bool,
     dark: bool,
+    visible: WindUiSignal<bool>,
 ) -> WindUiElement {
     WindUiElement::row()
         .width_match()
@@ -626,12 +636,16 @@ fn windui_candidate_preview_row(
                     WindUiRole::TextMuted
                 }),
         )
+        .visible_when(move || visible.get())
 }
 
 fn windui_candidate_preview_panel(
-    layout: WindUiSignal<usize>,
+    layout: WindUiSignal<CandidateLayoutMode>,
+    page_size: WindUiSignal<u8>,
     theme_mode: WindUiSignal<usize>,
 ) -> WindUiElement {
+    let preview_description =
+        page_size.map(move |page_size| layout.get().preview_description(*page_size));
     let mode = WindUiElement::row()
         .cross(WindUiAlign::Center)
         .spacing(6)
@@ -660,27 +674,152 @@ fn windui_candidate_preview_panel(
                 .font_size(12.5)
                 .fg_role(WindUiRole::Accent)
                 .visible_when(move || theme_mode.get() == 2),
+        )
+        .child(
+            WindUiElement::label_signal(preview_description)
+                .font_size(12.5)
+                .fg_role(WindUiRole::Accent),
         );
 
     let vertical = WindUiElement::col()
         .width_match()
         .spacing(2)
-        .child(windui_candidate_preview_row("1.", "是", "", true, false))
-        .child(windui_candidate_preview_row("2.", "识", "", false, false))
-        .child(windui_candidate_preview_row("3.", "实", "", false, false))
-        .child(windui_candidate_preview_row("4.", "水", "~b", false, false))
-        .child(windui_candidate_preview_row("5.", "收", "~d", false, false))
-        .visible_when(move || layout.get() != 1);
+        .child(windui_candidate_preview_row(
+            "1.",
+            "是",
+            "",
+            true,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 1)),
+        ))
+        .child(windui_candidate_preview_row(
+            "2.",
+            "识",
+            "",
+            false,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 2)),
+        ))
+        .child(windui_candidate_preview_row(
+            "3.",
+            "实",
+            "",
+            false,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 3)),
+        ))
+        .child(windui_candidate_preview_row(
+            "4.",
+            "水",
+            "~b",
+            false,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 4)),
+        ))
+        .child(windui_candidate_preview_row(
+            "5.",
+            "收",
+            "~d",
+            false,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 5)),
+        ))
+        .child(windui_candidate_preview_row(
+            "6.",
+            "十",
+            "",
+            false,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 6)),
+        ))
+        .child(windui_candidate_preview_row(
+            "7.",
+            "诗",
+            "",
+            false,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 7)),
+        ))
+        .child(windui_candidate_preview_row(
+            "8.",
+            "式",
+            "",
+            false,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 8)),
+        ))
+        .child(windui_candidate_preview_row(
+            "9.",
+            "试",
+            "",
+            false,
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 9)),
+        ))
+        .visible_when(move || {
+            matches!(
+                layout.get(),
+                CandidateLayoutMode::Automatic
+                    | CandidateLayoutMode::Vertical
+                    | CandidateLayoutMode::ScrollAutomatic
+                    | CandidateLayoutMode::ScrollVertical
+            )
+        });
 
     let horizontal = WindUiElement::row()
         .width_match()
         .spacing(6)
-        .child(windui_candidate_preview_chip("1. 是", true))
-        .child(windui_candidate_preview_chip("2. 识", false))
-        .child(windui_candidate_preview_chip("3. 实", false))
-        .child(windui_candidate_preview_chip("4. 水 ~b", false))
-        .child(windui_candidate_preview_chip("5. 收 ~d", false))
-        .visible_when(move || layout.get() == 1);
+        .child(windui_candidate_preview_chip(
+            "1. 是",
+            true,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 1)),
+        ))
+        .child(windui_candidate_preview_chip(
+            "2. 识",
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 2)),
+        ))
+        .child(windui_candidate_preview_chip(
+            "3. 实",
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 3)),
+        ))
+        .child(windui_candidate_preview_chip(
+            "4. 水 ~b",
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 4)),
+        ))
+        .child(windui_candidate_preview_chip(
+            "5. 收 ~d",
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 5)),
+        ))
+        .child(windui_candidate_preview_chip(
+            "6. 十",
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 6)),
+        ))
+        .child(windui_candidate_preview_chip(
+            "7. 诗",
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 7)),
+        ))
+        .child(windui_candidate_preview_chip(
+            "8. 式",
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 8)),
+        ))
+        .child(windui_candidate_preview_chip(
+            "9. 试",
+            false,
+            page_size.map(|count| candidate_preview_slot_visible(*count, 9)),
+        ))
+        .visible_when(move || {
+            matches!(
+                layout.get(),
+                CandidateLayoutMode::Horizontal | CandidateLayoutMode::ScrollHorizontal
+            )
+        });
 
     WindUiElement::col()
         .width_match()
@@ -689,12 +828,10 @@ fn windui_candidate_preview_panel(
         .child(vertical)
         .child(horizontal)
         .child(
-            WindUiElement::label(
-                "候选序号列固定保留；正文与注释分别布局，长字不会被右侧注释裁掉。",
-            )
-            .font_size(12.5)
-            .fg_role(WindUiRole::TextMuted)
-            .width_match(),
+            WindUiElement::label("候选序号列固定保留；候选个数由当前设置决定，而不是主题。")
+                .font_size(12.5)
+                .fg_role(WindUiRole::TextMuted)
+                .width_match(),
         )
 }
 
@@ -1027,6 +1164,255 @@ fn run_control(arguments: &[OsString]) -> Result<String, String> {
             format!("fcitx5-control.exe 返回失败：{detail}")
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CandidateOrientation {
+    Automatic,
+    Horizontal,
+    Vertical,
+}
+
+impl CandidateOrientation {
+    fn control_value(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Horizontal => "horizontal",
+            Self::Vertical => "vertical",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "自动",
+            Self::Horizontal => "横排",
+            Self::Vertical => "竖排",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CandidateLayoutMode {
+    Automatic,
+    Horizontal,
+    Vertical,
+    ScrollAutomatic,
+    ScrollHorizontal,
+    ScrollVertical,
+}
+
+impl CandidateLayoutMode {
+    fn orientation(self) -> CandidateOrientation {
+        match self {
+            Self::Automatic | Self::ScrollAutomatic => CandidateOrientation::Automatic,
+            Self::Horizontal | Self::ScrollHorizontal => CandidateOrientation::Horizontal,
+            Self::Vertical | Self::ScrollVertical => CandidateOrientation::Vertical,
+        }
+    }
+
+    fn scroll_mode(self) -> bool {
+        matches!(
+            self,
+            Self::ScrollAutomatic | Self::ScrollHorizontal | Self::ScrollVertical
+        )
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "自动",
+            Self::Horizontal => "横排",
+            Self::Vertical => "竖排",
+            Self::ScrollAutomatic => "卷轴模式（自动）",
+            Self::ScrollHorizontal => "卷轴模式（横排）",
+            Self::ScrollVertical => "卷轴模式（竖排）",
+        }
+    }
+
+    fn preview_description(self, page_size: u8) -> String {
+        match self {
+            Self::Automatic => "自动布局".to_owned(),
+            Self::Horizontal => "横排布局".to_owned(),
+            Self::Vertical => "竖排布局".to_owned(),
+            Self::ScrollAutomatic => format!("卷轴模式（自动，每页最多 {page_size} 个候选）"),
+            Self::ScrollHorizontal => format!("卷轴模式（横排，每页最多 {page_size} 个候选）"),
+            Self::ScrollVertical => format!("卷轴模式（竖排，每页最多 {page_size} 个候选）"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ControlCandidatePresentation {
+    format_version: u32,
+    appearance_mode: String,
+    theme: String,
+    orientation: String,
+    candidate_font: String,
+    candidate_page_size: String,
+    candidate_max_width_dip: String,
+    candidate_scroll_cell_width_dip: String,
+    candidate_font_size_dip: String,
+    candidate_corner_radius_dip: String,
+    candidate_opacity: String,
+    candidate_preedit_mode: String,
+    candidate_shadow: bool,
+    scroll_mode: bool,
+}
+
+impl ControlCandidatePresentation {
+    fn page_size(&self) -> Result<u8, String> {
+        let value = self
+            .candidate_page_size
+            .parse::<u8>()
+            .map_err(|_| "Control returned an invalid candidate page size".to_owned())?;
+        if !(1..=9).contains(&value) {
+            return Err("Control returned an out-of-range candidate page size".to_owned());
+        }
+        Ok(value)
+    }
+
+    fn layout_mode(&self) -> Result<CandidateLayoutMode, String> {
+        match (self.orientation.as_str(), self.scroll_mode) {
+            ("automatic", false) => Ok(CandidateLayoutMode::Automatic),
+            ("horizontal", false) => Ok(CandidateLayoutMode::Horizontal),
+            ("vertical", false) => Ok(CandidateLayoutMode::Vertical),
+            ("automatic", true) => Ok(CandidateLayoutMode::ScrollAutomatic),
+            ("vertical", true) => Ok(CandidateLayoutMode::ScrollVertical),
+            ("horizontal", true) => Ok(CandidateLayoutMode::ScrollHorizontal),
+            _ => Err("Control returned an invalid candidate layout mode".to_owned()),
+        }
+    }
+
+    fn with_orientation(&self, orientation: CandidateOrientation) -> Self {
+        let mut next = self.clone();
+        next.orientation = orientation.control_value().to_owned();
+        next
+    }
+
+    fn with_scroll_mode(&self, enabled: bool) -> Self {
+        let mut next = self.clone();
+        next.scroll_mode = enabled;
+        next
+    }
+
+    fn set_arguments(&self) -> Vec<OsString> {
+        vec![
+            OsString::from("--set-presentation"),
+            OsString::from(&self.appearance_mode),
+            OsString::from(&self.theme),
+            OsString::from(&self.orientation),
+            OsString::from(if self.scroll_mode {
+                "enabled"
+            } else {
+                "disabled"
+            }),
+            OsString::from(&self.candidate_page_size),
+            OsString::from(&self.candidate_font),
+            OsString::from(&self.candidate_max_width_dip),
+            OsString::from(&self.candidate_scroll_cell_width_dip),
+            OsString::from(&self.candidate_font_size_dip),
+            OsString::from(&self.candidate_corner_radius_dip),
+            OsString::from(if self.candidate_shadow {
+                "enabled"
+            } else {
+                "disabled"
+            }),
+            OsString::from(&self.candidate_opacity),
+            OsString::from(&self.candidate_preedit_mode),
+        ]
+    }
+}
+
+fn parse_control_candidate_presentation(
+    output: &str,
+) -> Result<ControlCandidatePresentation, String> {
+    if output.len() > CONTROL_MAX_OUTPUT_BYTES {
+        return Err("Control returned an oversized candidate presentation".to_owned());
+    }
+    let presentation: ControlCandidatePresentation = serde_json::from_str(output)
+        .map_err(|error| format!("Control candidate presentation JSON is invalid: {error}"))?;
+    if presentation.format_version != 1
+        || !matches!(
+            presentation.appearance_mode.as_str(),
+            "system" | "light" | "dark"
+        )
+        || !matches!(
+            presentation.orientation.as_str(),
+            "automatic" | "horizontal" | "vertical"
+        )
+        || !matches!(
+            presentation.candidate_preedit_mode.as_str(),
+            "inline" | "panel"
+        )
+        || presentation.theme.is_empty()
+        || presentation.theme.len() > 256
+        || presentation.candidate_font.is_empty()
+        || presentation.candidate_font.len() > 256
+    {
+        return Err("Control returned invalid candidate presentation fields".to_owned());
+    }
+    let page_size = presentation.page_size()?;
+    let scroll_cell_width = presentation
+        .candidate_scroll_cell_width_dip
+        .parse::<f32>()
+        .map_err(|_| "Control returned an invalid scroll cell width".to_owned())?;
+    if !scroll_cell_width.is_finite() || !(40.0..=160.0).contains(&scroll_cell_width) {
+        return Err("Control returned an out-of-range scroll cell width".to_owned());
+    }
+    let _ = presentation.layout_mode()?;
+    let _ = page_size;
+    Ok(presentation)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CandidatePresentationOperation {
+    Load,
+    Save,
+}
+
+impl CandidatePresentationOperation {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Load => "Loading candidate layout",
+            Self::Save => "Saving candidate layout",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CandidatePresentationResponse {
+    operation: CandidatePresentationOperation,
+    result: Result<ControlCandidatePresentation, String>,
+}
+
+fn load_candidate_presentation() -> Result<ControlCandidatePresentation, String> {
+    parse_control_candidate_presentation(&run_control(&[OsString::from("--get-presentation")])?)
+}
+
+fn save_candidate_presentation(
+    presentation: &ControlCandidatePresentation,
+) -> Result<ControlCandidatePresentation, String> {
+    let _ = presentation.page_size()?;
+    let _ = presentation.layout_mode()?;
+    run_control(&presentation.set_arguments())?;
+    load_candidate_presentation()
+}
+
+fn spawn_candidate_presentation_operation(
+    sender: WindUiSender<CandidatePresentationResponse>,
+    operation: CandidatePresentationOperation,
+    presentation: Option<ControlCandidatePresentation>,
+) {
+    thread::spawn(move || {
+        let result = match operation {
+            CandidatePresentationOperation::Load => load_candidate_presentation(),
+            CandidatePresentationOperation::Save => presentation
+                .as_ref()
+                .ok_or_else(|| "Candidate layout save has no typed presentation".to_owned())
+                .and_then(save_candidate_presentation),
+        };
+        let _ = sender.send(CandidatePresentationResponse { operation, result });
+    });
 }
 
 fn execute_plugin_operation(operation: &PluginOperation) -> Result<PluginManagerSnapshot, String> {
@@ -1411,16 +1797,16 @@ fn windui_settings_root(
     plugin_busy: WindUiSignal<bool>,
     plugin_status: WindUiSignal<String>,
     plugin_sender: WindUiSender<PluginResponse>,
+    candidate_presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
+    candidate_layout: WindUiSignal<CandidateLayoutMode>,
+    candidate_page_size: WindUiSignal<u8>,
+    candidate_busy: WindUiSignal<bool>,
+    candidate_status: WindUiSignal<String>,
+    candidate_sender: WindUiSender<CandidatePresentationResponse>,
 ) -> WindUiElement {
     let nav = windui_signal(0usize);
     let search = windui_signal(String::new());
     let input_method = windui_signal(0usize);
-    let layout = windui_signal(0usize);
-    let candidate_count = windui_signal(5.0f64);
-    let candidate_font = windui_signal(0usize);
-    let opacity = windui_signal(0.92f32);
-    let show_code = windui_signal(true);
-    let follow_caret = windui_signal(true);
     let theme_mode = windui_signal(0usize);
     let accent_pick = windui_signal(0usize);
     let window_shadow = windui_signal(true);
@@ -1473,52 +1859,6 @@ fn windui_settings_root(
                         "Fcitx 内部切换 engine；Windows 侧仍保持单一 Fcitx5 profile",
                         WindUiElement::dropdown(vec!["五笔", "拼音", "Rime", "Mozc"], input_method)
                             .width(180),
-                    ))
-                    .child(WindUiElement::setting_row_desc(
-                        "候选个数",
-                        "一屏显示的候选词数量（1-9）",
-                        WindUiElement::stepper(candidate_count, 1.0, 9.0, 1.0),
-                    ))
-                    .child(WindUiElement::setting_row_desc(
-                        "排列方向",
-                        "Auto 保持同一 composition 内布局稳定",
-                        WindUiElement::segmented(vec!["Auto", "横排", "竖排"], layout),
-                    )),
-            ))
-            .child(windui_settings_card(
-                WindUiElement::col()
-                    .width_match()
-                    .spacing(16)
-                    .child(windui_settings_section_title("候选窗口"))
-                    .child(windui_candidate_preview_panel(layout, theme_mode))
-                    .child(WindUiElement::divider())
-                    .child(WindUiElement::setting_row_desc(
-                        "候选字体",
-                        "候选窗内字体；缺字继续走系统 fallback",
-                        WindUiElement::dropdown(
-                            vec![
-                                "跟随系统",
-                                "Microsoft YaHei",
-                                "Microsoft YaHei UI",
-                                "Segoe UI",
-                                "Noto Sans CJK",
-                            ],
-                            candidate_font,
-                        )
-                        .width(180),
-                    ))
-                    .child(WindUiElement::setting_row_desc(
-                        "窗口不透明度",
-                        "低于 100% 时候选窗半透明",
-                        WindUiElement::slider(opacity).width(180),
-                    ))
-                    .child(WindUiElement::setting_row(
-                        "显示编码",
-                        WindUiElement::switch(show_code),
-                    ))
-                    .child(WindUiElement::setting_row(
-                        "跟随光标",
-                        WindUiElement::switch(follow_caret),
                     )),
             ))
             .child(windui_settings_card(
@@ -1565,6 +1905,15 @@ fn windui_settings_root(
                 "外观设置",
                 "主题、排版与候选预览",
             ))
+            .child(windui_settings_card(windui_candidate_layout_controls(
+                candidate_presentation,
+                candidate_layout,
+                candidate_page_size,
+                candidate_busy,
+                candidate_status,
+                candidate_sender,
+                theme_mode,
+            )))
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
@@ -1740,6 +2089,274 @@ fn windui_plugin_manager(
     (snapshot, busy, status, sender)
 }
 
+fn windui_candidate_presentation_manager(
+    app: &mut WindUiApp,
+    initial_load: bool,
+) -> (
+    WindUiSignal<Option<ControlCandidatePresentation>>,
+    WindUiSignal<CandidateLayoutMode>,
+    WindUiSignal<u8>,
+    WindUiSignal<bool>,
+    WindUiSignal<String>,
+    WindUiSender<CandidatePresentationResponse>,
+) {
+    let presentation = windui_signal(None);
+    let layout = windui_signal(CandidateLayoutMode::Automatic);
+    let page_size = windui_signal(5u8);
+    let busy = windui_signal(initial_load);
+    let status = windui_signal(if initial_load {
+        "正在读取候选布局设置".to_owned()
+    } else {
+        "候选布局将通过 Control 保存".to_owned()
+    });
+    let sender = app.channel::<CandidatePresentationResponse>(move |ctx, response| {
+        busy.set(false);
+        match response.result {
+            Ok(next) => match (next.layout_mode(), next.page_size()) {
+                (Ok(next_layout), Ok(next_page_size)) => {
+                    presentation.set(Some(next));
+                    layout.set(next_layout);
+                    page_size.set(next_page_size);
+                    status.set(format!("{}完成", response.operation.label()));
+                    if response.operation == CandidatePresentationOperation::Save {
+                        ctx.toast_ok("候选布局已保存");
+                    }
+                }
+                (Err(error), _) | (_, Err(error)) => {
+                    status.set(error.clone());
+                    ctx.toast_err(error);
+                }
+            },
+            Err(error) => {
+                status.set(error.clone());
+                ctx.toast_err(error);
+            }
+        }
+    });
+    if initial_load {
+        spawn_candidate_presentation_operation(
+            sender.clone(),
+            CandidatePresentationOperation::Load,
+            None,
+        );
+    }
+    (presentation, layout, page_size, busy, status, sender)
+}
+
+fn queue_candidate_presentation_save(
+    next: ControlCandidatePresentation,
+    busy: WindUiSignal<bool>,
+    status: WindUiSignal<String>,
+    sender: WindUiSender<CandidatePresentationResponse>,
+) -> Result<(), String> {
+    if busy.get() {
+        return Err("候选布局仍在读取或保存".to_owned());
+    }
+    let mode = next.layout_mode()?;
+    let _ = next.page_size()?;
+    busy.set(true);
+    status.set(format!("正在保存 {}", mode.label()));
+    spawn_candidate_presentation_operation(
+        sender,
+        CandidatePresentationOperation::Save,
+        Some(next),
+    );
+    Ok(())
+}
+
+fn candidate_orientation_button(
+    choice: CandidateOrientation,
+    selected: WindUiSignal<CandidateLayoutMode>,
+    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
+    busy: WindUiSignal<bool>,
+    status: WindUiSignal<String>,
+    sender: WindUiSender<CandidatePresentationResponse>,
+) -> WindUiElement {
+    let active_sender = sender.clone();
+    let active = WindUiElement::button(choice.label())
+        .small()
+        .tooltip("选择候选窗口排列方式")
+        .enabled_when(move || !busy.get() && presentation.get().is_some())
+        .on_click(move |ctx| {
+            let Some(current) = presentation.get() else {
+                ctx.toast_err("候选布局尚未从 Control 读取");
+                return;
+            };
+            if let Err(error) = queue_candidate_presentation_save(
+                current.with_orientation(choice),
+                busy,
+                status,
+                active_sender.clone(),
+            ) {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || selected.get().orientation() == choice);
+    let inactive = WindUiElement::button(choice.label())
+        .small()
+        .outline_soft()
+        .neutral()
+        .tooltip("选择候选窗口排列方式")
+        .enabled_when(move || !busy.get() && presentation.get().is_some())
+        .on_click(move |ctx| {
+            let Some(current) = presentation.get() else {
+                ctx.toast_err("候选布局尚未从 Control 读取");
+                return;
+            };
+            if let Err(error) = queue_candidate_presentation_save(
+                current.with_orientation(choice),
+                busy,
+                status,
+                sender.clone(),
+            ) {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || selected.get().orientation() != choice);
+    WindUiElement::stack().child(active).child(inactive)
+}
+
+fn candidate_scroll_checkbox(
+    selected: WindUiSignal<CandidateLayoutMode>,
+    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
+    busy: WindUiSignal<bool>,
+    status: WindUiSignal<String>,
+    sender: WindUiSender<CandidatePresentationResponse>,
+) -> WindUiElement {
+    let enabled = selected.map(|mode| mode.scroll_mode());
+    WindUiElement::checkbox("启用", enabled)
+        .tooltip("启用卷轴模式")
+        .enabled_when(move || !busy.get() && presentation.get().is_some())
+        .on_toggle(move |ctx| {
+            let Some(current) = presentation.get() else {
+                ctx.toast_err("候选布局尚未从 Control 读取");
+                return;
+            };
+            if let Err(error) = queue_candidate_presentation_save(
+                current.with_scroll_mode(!current.scroll_mode),
+                busy,
+                status,
+                sender.clone(),
+            ) {
+                ctx.toast_err(error);
+            }
+        })
+}
+
+fn candidate_page_size_button(
+    value: u8,
+    selected: WindUiSignal<u8>,
+    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
+    busy: WindUiSignal<bool>,
+    status: WindUiSignal<String>,
+    sender: WindUiSender<CandidatePresentationResponse>,
+) -> WindUiElement {
+    let active_sender = sender.clone();
+    let active = WindUiElement::button(value.to_string())
+        .small()
+        .tooltip("设置每页最大候选数")
+        .enabled_when(move || !busy.get() && presentation.get().is_some())
+        .on_click(move |ctx| {
+            let Some(mut current) = presentation.get() else {
+                ctx.toast_err("候选个数尚未从 Control 读取");
+                return;
+            };
+            current.candidate_page_size = value.to_string();
+            if let Err(error) =
+                queue_candidate_presentation_save(current, busy, status, active_sender.clone())
+            {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || selected.get() == value);
+    let inactive = WindUiElement::button(value.to_string())
+        .small()
+        .outline_soft()
+        .neutral()
+        .tooltip("设置每页最大候选数")
+        .enabled_when(move || !busy.get() && presentation.get().is_some())
+        .on_click(move |ctx| {
+            let Some(mut current) = presentation.get() else {
+                ctx.toast_err("候选个数尚未从 Control 读取");
+                return;
+            };
+            current.candidate_page_size = value.to_string();
+            if let Err(error) =
+                queue_candidate_presentation_save(current, busy, status, sender.clone())
+            {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || selected.get() != value);
+    WindUiElement::stack().child(active).child(inactive)
+}
+
+fn windui_candidate_layout_controls(
+    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
+    layout: WindUiSignal<CandidateLayoutMode>,
+    page_size: WindUiSignal<u8>,
+    busy: WindUiSignal<bool>,
+    status: WindUiSignal<String>,
+    sender: WindUiSender<CandidatePresentationResponse>,
+    theme_mode: WindUiSignal<usize>,
+) -> WindUiElement {
+    let mut orientations = WindUiElement::row().width_match().spacing(6);
+    for choice in [
+        CandidateOrientation::Automatic,
+        CandidateOrientation::Horizontal,
+        CandidateOrientation::Vertical,
+    ] {
+        orientations = orientations.child(candidate_orientation_button(
+            choice,
+            layout,
+            presentation,
+            busy,
+            status,
+            sender.clone(),
+        ));
+    }
+
+    let mut page_sizes = WindUiElement::row().spacing(4);
+    for value in 1..=9 {
+        page_sizes = page_sizes.child(candidate_page_size_button(
+            value,
+            page_size,
+            presentation,
+            busy,
+            status,
+            sender.clone(),
+        ));
+    }
+
+    WindUiElement::col()
+        .width_match()
+        .spacing(14)
+        .child(windui_settings_section_title("候选窗口"))
+        .child(WindUiElement::setting_row_desc(
+            "候选布局",
+            "选择候选窗口的排列方向",
+            orientations,
+        ))
+        .child(WindUiElement::setting_row_desc(
+            "卷轴模式",
+            "按当前排列方向显示候选内容",
+            candidate_scroll_checkbox(layout, presentation, busy, status, sender.clone()),
+        ))
+        .child(WindUiElement::setting_row_desc(
+            "候选个数",
+            "每页最多显示的候选数（1-9）",
+            page_sizes,
+        ))
+        .child(windui_candidate_preview_panel(
+            layout, page_size, theme_mode,
+        ))
+        .child(
+            WindUiElement::label_signal(status)
+                .font_size(12.5)
+                .fg_role(WindUiRole::TextMuted),
+        )
+}
+
 fn windui_settings_default_shell_probe() -> WindUiElement {
     let dark = windui_signal(false);
     let mut app = WindUiApp::new("probe", 1040, 700)
@@ -1749,7 +2366,26 @@ fn windui_settings_default_shell_probe() -> WindUiElement {
     let handle = app.theme_handle();
     let _toggle = windui_theme_toggle(handle, dark);
     let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, false);
-    windui_settings_root(snapshot, busy, status, sender)
+    let (
+        candidate_presentation,
+        candidate_layout,
+        candidate_page_size,
+        candidate_busy,
+        candidate_status,
+        candidate_sender,
+    ) = windui_candidate_presentation_manager(&mut app, false);
+    windui_settings_root(
+        snapshot,
+        busy,
+        status,
+        sender,
+        candidate_presentation,
+        candidate_layout,
+        candidate_page_size,
+        candidate_busy,
+        candidate_status,
+        candidate_sender,
+    )
 }
 
 fn validate_windui_rust_adoption() -> Result<WindUiRustAdoptionEvidence, String> {
@@ -3217,8 +3853,46 @@ fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, Stri
         app = app.screenshot_from_args();
     }
     let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, true);
-    app.content(windui_settings_root(snapshot, busy, status, sender))
-        .run();
+    let (
+        candidate_presentation,
+        candidate_layout,
+        candidate_page_size,
+        candidate_busy,
+        candidate_status,
+        candidate_sender,
+    ) = windui_candidate_presentation_manager(&mut app, !screenshot_from_args);
+    if screenshot_from_args {
+        match load_candidate_presentation().and_then(|presentation| {
+            let layout = presentation.layout_mode()?;
+            let page_size = presentation.page_size()?;
+            Ok((presentation, layout, page_size))
+        }) {
+            Ok((presentation, layout, page_size)) => {
+                candidate_presentation.set(Some(presentation));
+                candidate_layout.set(layout);
+                candidate_page_size.set(page_size);
+                candidate_busy.set(false);
+                candidate_status.set("已读取候选布局设置".to_owned());
+            }
+            Err(error) => {
+                candidate_busy.set(false);
+                candidate_status.set(error);
+            }
+        }
+    }
+    app.content(windui_settings_root(
+        snapshot,
+        busy,
+        status,
+        sender,
+        candidate_presentation,
+        candidate_layout,
+        candidate_page_size,
+        candidate_busy,
+        candidate_status,
+        candidate_sender,
+    ))
+    .run();
     Ok(format!(
         "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-windui-settings-shell\",\n  \"real_window\":true,\n  \"no_arg_launch\":{},\n  \"windui_app_default_interactive\":true,\n  \"settings_input_visual_baseline\":true,\n  \"legacy_win32_preview_host_qa_only\":true,\n  \"stage\":\"Rust wind-ui Settings Shell\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
@@ -7300,6 +7974,161 @@ mod win32_window_smoke {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn candidate_presentation_json(
+        orientation: &str,
+        scroll_mode: bool,
+        page_size: &str,
+        scroll_cell_width: &str,
+    ) -> String {
+        serde_json::json!({
+            "format_version": 1,
+            "appearance_mode": "dark",
+            "theme": "builtin:default",
+            "orientation": orientation,
+            "candidate_font": "Microsoft YaHei",
+            "candidate_page_size": page_size,
+            "candidate_max_width_dip": "860",
+            "candidate_scroll_cell_width_dip": scroll_cell_width,
+            "candidate_font_size_dip": "18",
+            "candidate_corner_radius_dip": "12",
+            "candidate_opacity": "1",
+            "candidate_preedit_mode": "inline",
+            "candidate_shadow": true,
+            "scroll_mode": scroll_mode,
+        })
+        .to_string()
+    }
+
+    fn candidate_presentation(
+        orientation: &str,
+        scroll_mode: bool,
+        page_size: &str,
+    ) -> ControlCandidatePresentation {
+        parse_control_candidate_presentation(&candidate_presentation_json(
+            orientation,
+            scroll_mode,
+            page_size,
+            "96",
+        ))
+        .expect("fixture presentation should be valid")
+    }
+
+    #[test]
+    fn candidate_layout_uses_normal_scroll_mode_names_and_preserves_direction() {
+        let automatic = candidate_presentation("automatic", true, "5");
+        let horizontal = candidate_presentation("horizontal", true, "5");
+        let vertical = candidate_presentation("vertical", true, "5");
+
+        assert_eq!(
+            automatic.layout_mode().expect("automatic scroll mode"),
+            CandidateLayoutMode::ScrollAutomatic
+        );
+        assert_eq!(
+            horizontal.layout_mode().expect("horizontal scroll mode"),
+            CandidateLayoutMode::ScrollHorizontal
+        );
+        assert_eq!(
+            vertical.layout_mode().expect("vertical scroll mode"),
+            CandidateLayoutMode::ScrollVertical
+        );
+        assert_eq!(
+            CandidateLayoutMode::ScrollAutomatic.label(),
+            "卷轴模式（自动）"
+        );
+        assert_eq!(
+            CandidateLayoutMode::ScrollHorizontal.label(),
+            "卷轴模式（横排）"
+        );
+        assert_eq!(
+            CandidateLayoutMode::ScrollVertical.label(),
+            "卷轴模式（竖排）"
+        );
+        assert!(!CandidateLayoutMode::ScrollVertical
+            .preview_description(5)
+            .contains('x'));
+
+        let changed_direction = vertical.with_orientation(CandidateOrientation::Horizontal);
+        assert_eq!(changed_direction.orientation, "horizontal");
+        assert!(changed_direction.scroll_mode);
+    }
+
+    #[test]
+    fn candidate_page_size_is_authoritative_and_strictly_bounded() {
+        for page_size in ["1", "5", "9"] {
+            let presentation = candidate_presentation("vertical", true, page_size);
+            let page_size = presentation.page_size().expect("in-range page size");
+            assert!(presentation
+                .layout_mode()
+                .expect("scroll layout")
+                .preview_description(page_size)
+                .contains(&page_size.to_string()));
+        }
+
+        for page_size in 1..=9 {
+            let visible_slots = (1..=9)
+                .filter(|slot| candidate_preview_slot_visible(page_size, *slot))
+                .count();
+            assert_eq!(visible_slots, usize::from(page_size));
+        }
+
+        for page_size in ["0", "10", "invalid"] {
+            assert!(
+                parse_control_candidate_presentation(&candidate_presentation_json(
+                    "vertical", true, page_size, "96",
+                ))
+                .is_err()
+            );
+        }
+        for cell_width in ["39", "161", "not-a-number"] {
+            assert!(
+                parse_control_candidate_presentation(&candidate_presentation_json(
+                    "vertical", true, "5", cell_width,
+                ))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn candidate_presentation_save_preserves_typed_control_fields() {
+        let presentation = candidate_presentation("vertical", false, "5");
+        let updated = presentation
+            .with_orientation(CandidateOrientation::Horizontal)
+            .with_scroll_mode(true);
+        assert_eq!(
+            updated.layout_mode(),
+            Ok(CandidateLayoutMode::ScrollHorizontal)
+        );
+        assert_eq!(updated.candidate_page_size, "5");
+        assert_eq!(updated.candidate_font, "Microsoft YaHei");
+        assert_eq!(updated.candidate_scroll_cell_width_dip, "96");
+
+        let arguments: Vec<String> = updated
+            .set_arguments()
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            arguments,
+            vec![
+                "--set-presentation",
+                "dark",
+                "builtin:default",
+                "horizontal",
+                "enabled",
+                "5",
+                "Microsoft YaHei",
+                "860",
+                "96",
+                "18",
+                "12",
+                "enabled",
+                "1",
+                "inline",
+            ]
+        );
+    }
 
     #[test]
     fn design_tokens_cover_modern_settings_surface_contract() {
