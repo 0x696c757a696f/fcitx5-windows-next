@@ -2129,13 +2129,14 @@ int main(int argc, char** argv) {
         configPocSource.find("\"卷轴模式\"") == std::string::npos ||
         configPocSource.find("fn windui_candidate_preview_panel(") == std::string::npos ||
         configPocSource.find("page_size: WindUiSignal<u8>") == std::string::npos ||
-        configPocSource.find("RowsBySix") != std::string::npos ||
-        configPocSource.find("SixByColumns") != std::string::npos ||
-        configPocSource.find("N x 6") != std::string::npos ||
-        configPocSource.find("6 x N") != std::string::npos) {
+        configPocSource.find("display_label") == std::string::npos ||
+        configPocSource.find("Scroll（自动卷轴）") == std::string::npos ||
+        configPocSource.find("6 x {page_size}（横排卷轴）") == std::string::npos ||
+        configPocSource.find("{page_size} x 6（竖排卷轴）") == std::string::npos ||
+        configPocSource.find("scroll_layout_labels_follow_authoritative_page_size") ==
+            std::string::npos) {
         return fail("CONFIG-CANDIDATE-PLUGIN-USABILITY-CORRECTION-001: WindUI Appearance must "
-                    "persist the authoritative candidate page size and expose scroll mode through "
-                    "normal direction controls");
+                    "persist the authoritative candidate page size and expose Scroll, N x 6, and 6 x N");
     }
     if (configPocManifest.find("fcitx5-process-execution-core = { path = \"../process-execution-core\" }") ==
             std::string::npos ||

@@ -1217,14 +1217,14 @@ impl CandidateLayoutMode {
         )
     }
 
-    fn label(self) -> &'static str {
+    fn display_label(self, page_size: u8) -> String {
         match self {
-            Self::Automatic => "自动",
-            Self::Horizontal => "横排",
-            Self::Vertical => "竖排",
-            Self::ScrollAutomatic => "卷轴模式（自动）",
-            Self::ScrollHorizontal => "卷轴模式（横排）",
-            Self::ScrollVertical => "卷轴模式（竖排）",
+            Self::Automatic => "自动".to_owned(),
+            Self::Horizontal => "横排".to_owned(),
+            Self::Vertical => "竖排".to_owned(),
+            Self::ScrollAutomatic => "Scroll（自动卷轴）".to_owned(),
+            Self::ScrollHorizontal => format!("6 x {page_size}（横排卷轴）"),
+            Self::ScrollVertical => format!("{page_size} x 6（竖排卷轴）"),
         }
     }
 
@@ -1233,9 +1233,13 @@ impl CandidateLayoutMode {
             Self::Automatic => "自动布局".to_owned(),
             Self::Horizontal => "横排布局".to_owned(),
             Self::Vertical => "竖排布局".to_owned(),
-            Self::ScrollAutomatic => format!("卷轴模式（自动，每页最多 {page_size} 个候选）"),
-            Self::ScrollHorizontal => format!("卷轴模式（横排，每页最多 {page_size} 个候选）"),
-            Self::ScrollVertical => format!("卷轴模式（竖排，每页最多 {page_size} 个候选）"),
+            Self::ScrollAutomatic => format!("Scroll（自动，每页最多 {page_size} 个候选）"),
+            Self::ScrollHorizontal => {
+                format!("6 x {page_size}（横排卷轴，每页最多 {page_size} 个候选）")
+            }
+            Self::ScrollVertical => {
+                format!("{page_size} x 6（竖排卷轴，每页最多 {page_size} 个候选）")
+            }
         }
     }
 }
@@ -1292,6 +1296,12 @@ impl ControlCandidatePresentation {
     fn with_scroll_mode(&self, enabled: bool) -> Self {
         let mut next = self.clone();
         next.scroll_mode = enabled;
+        next
+    }
+
+    fn with_layout_mode(&self, mode: CandidateLayoutMode) -> Self {
+        let mut next = self.with_orientation(mode.orientation());
+        next.scroll_mode = mode.scroll_mode();
         next
     }
 
@@ -2153,9 +2163,9 @@ fn queue_candidate_presentation_save(
         return Err("候选布局仍在读取或保存".to_owned());
     }
     let mode = next.layout_mode()?;
-    let _ = next.page_size()?;
+    let page_size = next.page_size()?;
     busy.set(true);
-    status.set(format!("正在保存 {}", mode.label()));
+    status.set(format!("正在保存 {}", mode.display_label(page_size)));
     spawn_candidate_presentation_operation(
         sender,
         CandidatePresentationOperation::Save,
@@ -2218,13 +2228,30 @@ fn candidate_orientation_button(
 
 fn candidate_scroll_checkbox(
     selected: WindUiSignal<CandidateLayoutMode>,
+    page_size: WindUiSignal<u8>,
     presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
     busy: WindUiSignal<bool>,
     status: WindUiSignal<String>,
     sender: WindUiSender<CandidatePresentationResponse>,
 ) -> WindUiElement {
     let enabled = selected.map(|mode| mode.scroll_mode());
-    WindUiElement::checkbox("启用", enabled)
+    let mut layouts = WindUiElement::row().spacing(6);
+    for choice in [
+        CandidateLayoutMode::ScrollAutomatic,
+        CandidateLayoutMode::ScrollVertical,
+        CandidateLayoutMode::ScrollHorizontal,
+    ] {
+        layouts = layouts.child(candidate_scroll_layout_button(
+            choice,
+            selected,
+            page_size,
+            presentation,
+            busy,
+            status,
+            sender.clone(),
+        ));
+    }
+    let checkbox = WindUiElement::checkbox("启用", enabled)
         .tooltip("启用卷轴模式")
         .enabled_when(move || !busy.get() && presentation.get().is_some())
         .on_toggle(move |ctx| {
@@ -2240,7 +2267,66 @@ fn candidate_scroll_checkbox(
             ) {
                 ctx.toast_err(error);
             }
+        });
+    WindUiElement::col()
+        .spacing(6)
+        .child(checkbox)
+        .child(layouts.visible_when(move || selected.get().scroll_mode()))
+}
+
+fn candidate_scroll_layout_button(
+    choice: CandidateLayoutMode,
+    selected: WindUiSignal<CandidateLayoutMode>,
+    page_size: WindUiSignal<u8>,
+    presentation: WindUiSignal<Option<ControlCandidatePresentation>>,
+    busy: WindUiSignal<bool>,
+    status: WindUiSignal<String>,
+    sender: WindUiSender<CandidatePresentationResponse>,
+) -> WindUiElement {
+    let label = page_size.map(move |value| choice.display_label(*value));
+    let active_sender = sender.clone();
+    let active = WindUiElement::button(label)
+        .small()
+        .tooltip("选择卷轴候选布局")
+        .enabled_when(move || !busy.get() && presentation.get().is_some())
+        .on_click(move |ctx| {
+            let Some(current) = presentation.get() else {
+                ctx.toast_err("候选布局尚未从 Control 读取");
+                return;
+            };
+            if let Err(error) = queue_candidate_presentation_save(
+                current.with_layout_mode(choice),
+                busy,
+                status,
+                active_sender.clone(),
+            ) {
+                ctx.toast_err(error);
+            }
         })
+        .visible_when(move || selected.get() == choice);
+    let inactive_label = page_size.map(move |value| choice.display_label(*value));
+    let inactive = WindUiElement::button(inactive_label)
+        .small()
+        .outline_soft()
+        .neutral()
+        .tooltip("选择卷轴候选布局")
+        .enabled_when(move || !busy.get() && presentation.get().is_some())
+        .on_click(move |ctx| {
+            let Some(current) = presentation.get() else {
+                ctx.toast_err("候选布局尚未从 Control 读取");
+                return;
+            };
+            if let Err(error) = queue_candidate_presentation_save(
+                current.with_layout_mode(choice),
+                busy,
+                status,
+                sender.clone(),
+            ) {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || selected.get() != choice);
+    WindUiElement::stack().child(active).child(inactive)
 }
 
 fn candidate_page_size_button(
@@ -2340,7 +2426,14 @@ fn windui_candidate_layout_controls(
         .child(WindUiElement::setting_row_desc(
             "卷轴模式",
             "按当前排列方向显示候选内容",
-            candidate_scroll_checkbox(layout, presentation, busy, status, sender.clone()),
+            candidate_scroll_checkbox(
+                layout,
+                page_size,
+                presentation,
+                busy,
+                status,
+                sender.clone(),
+            ),
         ))
         .child(WindUiElement::setting_row_desc(
             "候选个数",
@@ -8033,20 +8126,23 @@ mod tests {
             CandidateLayoutMode::ScrollVertical
         );
         assert_eq!(
-            CandidateLayoutMode::ScrollAutomatic.label(),
-            "卷轴模式（自动）"
+            CandidateLayoutMode::ScrollAutomatic.display_label(5),
+            "Scroll（自动卷轴）"
         );
         assert_eq!(
-            CandidateLayoutMode::ScrollHorizontal.label(),
-            "卷轴模式（横排）"
+            CandidateLayoutMode::ScrollHorizontal.display_label(5),
+            "6 x 5（横排卷轴）"
         );
         assert_eq!(
-            CandidateLayoutMode::ScrollVertical.label(),
-            "卷轴模式（竖排）"
+            CandidateLayoutMode::ScrollVertical.display_label(5),
+            "5 x 6（竖排卷轴）"
         );
-        assert!(!CandidateLayoutMode::ScrollVertical
+        assert!(CandidateLayoutMode::ScrollVertical
             .preview_description(5)
-            .contains('x'));
+            .contains("5 x 6"));
+        assert!(CandidateLayoutMode::ScrollHorizontal
+            .preview_description(7)
+            .contains("6 x 7"));
 
         let changed_direction = vertical.with_orientation(CandidateOrientation::Horizontal);
         assert_eq!(changed_direction.orientation, "horizontal");
@@ -8086,6 +8182,20 @@ mod tests {
                     "vertical", true, "5", cell_width,
                 ))
                 .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_layout_labels_follow_authoritative_page_size() {
+        for page_size in [3, 5, 9] {
+            assert_eq!(
+                CandidateLayoutMode::ScrollVertical.display_label(page_size),
+                format!("{page_size} x 6（竖排卷轴）")
+            );
+            assert_eq!(
+                CandidateLayoutMode::ScrollHorizontal.display_label(page_size),
+                format!("6 x {page_size}（横排卷轴）")
             );
         }
     }
