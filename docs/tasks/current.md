@@ -1,57 +1,46 @@
-# Current Task - Config Candidate and plugin usability correction
+# Current Task - RELEASE-01 Stable release pipeline / Build Once evidence
 
-**Mode:** CODE / PRODUCT CORRECTION
-**Task ID:** `CONFIG-CANDIDATE-PLUGIN-USABILITY-CORRECTION-001`
-**Prerequisite:** 062 and 063 automated contracts green
+**Mode:** RELEASE
+**Task ID:** `RELEASE-01`
+**Prerequisite:** All stabilization tasks + required external evidence + intended Rust cutovers
+**Evidence class:** `EXTERNAL_EVIDENCE` - never claim unrun real-host evidence passed.
 
 ## Goal
 
-Correct two user-visible regressions in the default Rust WindUI Settings shell:
-
-- restore the complete Candidate layout mode selection, including Scroll, `N x 6`, and `6 x N`,
-  where `N` is derived from the authoritative maximum candidate/page-size setting;
-- make the plugin page complete one real supported Windows plugin lifecycle through a production
-  signed repository path instead of exposing a catalog whose default endpoint cannot serve assets.
+Execute the final release gate only after stabilization, required external host evidence, and selected Rust cutovers are complete.
 
 ## Specification references
 
-- Candidate Appearance basic/advanced settings and authoritative `page_size` ownership
-- Candidate horizontal, vertical, grid, and scroll layout contracts
-- Package repository v2 signatures, immutable assets, trust, install/update/remove, and rollback
-- Rust Config Stage 4 accessibility, DPI, persistence, and authoritative reread requirements
+- Phase 8
+- Build Once principle
+- Signing/SBOM/provenance sections
 
 ## Required behavior / implementation contract
 
-- The default WindUI Appearance page exposes all supported Candidate layout modes. Mode labels and
-  preview dimensions derive `N` from authoritative `candidate.page_size`; theme data must not own or
-  duplicate page size.
-- Layout mode, page size, and scroll-cell settings persist through the existing typed Control/config
-  path and survive authoritative reread/restart.
-- Keyboard, accessibility names, DPI layout, and embedded preview remain usable for every mode.
-- The plugin page preserves strict signature/trust checks and typed bounded operations. It must not
-  report fixture-only packages, local ignored keys, or an unreachable placeholder endpoint as a
-  production online lifecycle.
-- Produce at least one supported Windows plugin package plus v2 signed index/metadata through a
-  production-input build/publish path. Never commit a private signing key.
-- When external publication credentials or hosting are unavailable, complete all repository-side
-  package/sign/publish automation and record the exact publication step as `MANUAL-PENDING`; do not
-  claim an online install passed until the public immutable assets are actually reachable.
+- Build each declared Modern/Legacy lineage once from one source commit and locked toolchain.
+- Test/promote the same artifacts; do not recompile in signing/publish jobs.
+- Generate final hash/manifest/attestation for actual signed release bytes.
+- Unify C++/MSYS2/Cargo dependencies in SBOM/notices/provenance.
+- Validate channel identity, key rotation/revocation, rollback and package-manager ownership.
+- Retain the useful Phase 8 requirements from removed historical docs: `package` compiles one
+  x64-with-x86-TSF lineage and records its source commit; `release` promotes exactly that stage,
+  injects protected public keyring material, Authenticode-signs/timestamps PE files when
+  credentials exist, signs packages/installers, and never recompiles in the signing/publish job.
+- Release artifacts must include final hashes, signed manifest, SPDX SBOM from actual staged files
+  and dependency inventory, SLSA-shaped provenance, WinGet metadata, Chocolatey metadata, and final
+  smoke that rechecks hash/signature/SBOM consistency.
 
 ## Required validation
 
-- Focused x64/x86 Rust tests for mode mapping, `N` derivation, persistence, and preview geometry.
-- Fresh x64/x86 Appearance evidence covering Scroll, `N x 6`, and `6 x N`, including no clipping.
-- Package-core tests for signed v2 index/package verification and install/enable/disable/remove.
-- A real online lifecycle test against published immutable assets, or an exact `MANUAL-PENDING`
-  record when publication credentials/hosting are unavailable.
-- Source/security/license/dependency/text checks for changed boundaries.
+- Full declared host/release matrix.
+- Authenticode/timestamp where credentials are available.
+- Install/update/rollback/uninstall from final packaged bytes.
+- SBOM/provenance/hash/signature consistency.
 
 ## Done when
 
-- Candidate users can select and persist the requested modes in the default Settings UI.
-- At least one supported plugin can be discovered, downloaded, verified, installed, enabled,
-  disabled, and removed from the production repository path, or the only remaining gap is precisely
-  documented external publication that cannot be performed locally.
+- No unresolved required MANUAL-PENDING compatibility evidence.
+- Final published artifacts trace to source commit and locked toolchains.
+- No signing-stage recompilation.
 
-After completion, update `docs/tasks/status.md`, archive this task, and return `current.md` to the
-release gate according to `docs/tasks/PLAN.md`.
+After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.

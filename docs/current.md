@@ -1,11 +1,10 @@
 # Current Truth Snapshot
 
-Date: 2026-08-27 (updated for Candidate visual revalidation and WindUI plugin manager)
+Date: 2026-08-27 (updated for Candidate usability correction and production plugin inputs)
 
-HEAD recorded at snapshot refresh: `6ed75672c95e9b4ec5e82b764d4a0d251faff3dd`
+HEAD recorded at snapshot refresh: `881a8149fd6e4f5447af0ac5df418d400d1f345b`
 
-Working tree at snapshot refresh: only the user's untracked local helper
-`fcitx5_context_efficiency_v2.ps1`, excluded from repository work.
+Working tree at snapshot refresh: task completion documentation only.
 
 ## Shipping Architecture
 
@@ -32,8 +31,8 @@ Windows host
 |---|---|---|
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
-| Candidate | Rust candidate-core owns model/layout/interaction plus label formatting/slot planning/render-segment evidence; C++ UI window/renderer remains | Continue Rust authority and shrink adapter; preserve configurable label/ordinal slots, selected-row/column label reveal, stable text-column alignment, visible Settings scroll-mode control, and the WindInput/Qingfeng-derived WeChat-green visual contract |
-| Config | Stage 2 Rust Config backend is shipping, and the default interactive `fcitx5-config.exe` window opens the vendored `huanfeng/wind-ui-rust` Settings shell. The plugin page now consumes the pinned `fcitx5-plugins` catalog and real typed Control package operations through the bounded Rust process executor. The old C++ WTL/Win32 shell remains an `EXCLUDE_FROM_ALL` regression baseline; the old Rust Win32/D2D preview host is QA-only. | Default Config accent is WeChat-style `#07C160`; keep vendored/upstream themes intact. Unsupported plugin artifacts stay visibly unavailable. Do not claim release readiness or final Stage 4 completion until real online lifecycle, DPI/dark-mode/keyboard/accessibility, Narrator/NVDA, and real Win7/Win10/Win11 evidence are green |
+| Candidate | Rust candidate-core owns model/layout/interaction plus label formatting/slot planning/render-segment evidence; the default Settings shell exposes Automatic, Horizontal, Vertical, Scroll, `6 x N`, and `N x 6`, with `N` from authoritative page size; C++ UI window/renderer remains | Continue Rust authority and shrink adapter; preserve typed persistence, full-glyph evidence, stable label slots, and the WindInput/Qingfeng-derived WeChat-green visual contract |
+| Config | Stage 2 Rust Config backend is shipping, and the default interactive `fcitx5-config.exe` window opens the vendored `huanfeng/wind-ui-rust` Settings shell. The plugin page consumes the pinned `fcitx5-plugins` catalog and real typed Control package operations through the bounded Rust process executor. Production-input automation now generates a signed x64 Rime package and v2 immutable repository assets. The old C++ WTL/Win32 shell remains an `EXCLUDE_FROM_ALL` regression baseline; the old Rust Win32/D2D preview host is QA-only. | Unsupported plugin artifacts stay visibly unavailable. Do not claim release readiness or final Stage 4 completion until protected publication, real online lifecycle, DPI/dark-mode/keyboard/accessibility, Narrator/NVDA, and real Win7/Win10/Win11 evidence are green |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
 | Package/provider/downloader/updater/deployer | Package/provider/deployer/updater/downloader Rust CLIs and Rust package-core are wired; adapters remain where needed | Rust authority |
@@ -57,6 +56,10 @@ Windows host
 ## Current Red Lights
 
 - Real-host matrix for Rust TSF remains manual-pending.
+- Production plugin inputs are prepared but not published: the release environment still needs the
+  protected ML-DSA-65 secret and matching v2 keyring, Authenticode material, publication permission,
+  immutable GitHub Release assets, and real x64/x86 refresh/install/enable/disable/update/remove/restart
+  evidence. Local generation and verification do not count as an online production lifecycle.
 - Full `tools/build.ps1 package -Architecture all -Configuration Release` passed locally after
   `ENGINE-IDLE-PACKAGE-GATE-050`. The tested package stage was
   `D:\Documents\GitHub\fcitx5-windows-next\out\package\stage-dee8db43e74d4793b0e4ecca2dc5a4e9\Fcitx5`;
@@ -100,8 +103,8 @@ Windows host
 - The executable queue has been re-cleaned after the 2026-08-24 review: completed/current R3
   FUTURE-GATED duplicates are not active queue items. Completed queue source files are removed from
   `docs/tasks/queue` after their task files are archived. `059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001`
-  through `063-CONFIG-WINDUI-PLUGIN-MANAGER-001` are completed for Candidate geometry/typography and
-  the real WindUI plugin-management slice; `RELEASE-01` is current and remains gated on
+  through `064-CONFIG-CANDIDATE-PLUGIN-USABILITY-CORRECTION-001` are complete for reachable
+  automated Candidate and plugin work; `RELEASE-01` is current and remains gated on
   external/manual evidence.
 - Rust Config Stage 2 and the code-only default GUI shell cutover are green. `fcitx5_config_app`
   builds the Rust binary into the shipping `fcitx5-config.exe` product name; no-argument launch now
@@ -116,11 +119,10 @@ Windows host
 
 ## Next Five Code/Design Tasks
 
-1. Prepare/run generation-drain, installer/UAC, plugin lifecycle, Narrator/NVDA, and real
+1. Prepare/run generation-drain, installer/UAC, published plugin lifecycle, Narrator/NVDA, and real
    Win7/Win10/Win11 host evidence before any release-readiness claim.
-2. For official add-ons/plugins, build reviewed Windows package artifacts in this project, publish
-   them as signed GitHub Release-backed repository assets, and let Settings install only through
-   verified package metadata.
+2. Provision the protected release inputs and publish the prepared Rime package/index/signatures as
+   immutable GitHub Release assets; then run the real x64/x86 lifecycle through Settings.
 3. Execute `RELEASE-01` only after required manual/production evidence
    are green.
 4. Continue deeper Stage 4 Rust Config binding work only under an explicit eligible task; the
