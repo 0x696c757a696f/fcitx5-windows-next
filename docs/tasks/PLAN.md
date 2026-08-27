@@ -127,6 +127,11 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 062 | CANDIDATE-PRODUCTION-VERTICAL-TYPOGRAPHY-001 | COMPLETED / FULL-CJK-GLYPH-VISIBILITY-GREEN | Rejected the old non-overlap-only proof; shared width budgeting now includes the exact label/text gap, x64/x86 reports assert `typography_text_fits=true`, and fresh matching screenshots show complete rows 4/5 beside comments | completed/062-CANDIDATE-PRODUCTION-VERTICAL-TYPOGRAPHY-001.md |
 | 063 | CONFIG-WINDUI-PLUGIN-MANAGER-001 | COMPLETED / REAL-CONTROL-OPERATIONS-GREEN | Default windui Config shows the pinned 21-entry catalog, reads authoritative package state, and runs bounded refresh/install/update/state/remove/repair operations off the UI thread | completed/063-CONFIG-WINDUI-PLUGIN-MANAGER-001.md |
 | 064 | CONFIG-CANDIDATE-PLUGIN-USABILITY-CORRECTION-001 | MANUAL-PENDING / AUTOMATED-CORRECTION-GREEN / PRODUCTION-PUBLISH-INPUTS-PREPARED | 062 + 063; Candidate modes and production-input signed Rime repository lifecycle are implemented; protected signing/publication and real-host lifecycle evidence remain external | completed/064-CONFIG-CANDIDATE-PLUGIN-USABILITY-CORRECTION-001.md |
+| 065 | CONFIG-CORE-TRANSACTION-CONTRACT-001 | TODO / CODE-ONLY | 064 automated Config/package state is green; freeze and implement the missing shared Rust Config Current/Draft/Defaults transaction and recovery contract before adding more Settings binding | 065-CONFIG-CORE-TRANSACTION-CONTRACT-001.md |
+| 066 | CANDIDATE-SEMANTIC-A11Y-001 | TODO / CODE-ONLY | 065 contract green; CandidateModel already Rust-owned, but renderer/UIA/notification must consume one revisioned semantic source with sensitive-context suppression | 066-CANDIDATE-SEMANTIC-A11Y-001.md |
+| 067 | PLUGIN-PROVENANCE-DATA-BOUNDARY-001 | TODO / CODE-ONLY | 065 and existing signed v2 package path; freeze/implement runtime ABI/build/source provenance and durable user-data/version-directory separation | 067-PLUGIN-PROVENANCE-DATA-BOUNDARY-001.md |
+| 068 | REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001 | TODO / CODE-ONLY | 067 package metadata boundary green; extend current v2 repository verification with freshness, freeze/mix-and-match and mirror-identity corpus without claiming TUF | 068-REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001.md |
+| 069 | LOW-RESOURCE-SLO-CALIBRATION-001 | TODO / CODE-ONLY / EXTERNAL-EVIDENCE-PARTIAL | 066 semantics and 068 repository path green; add repeatable low-resource measurement harness and initial SLO evidence, leaving real 2-core/4-GB calibration manual-pending | 069-LOW-RESOURCE-SLO-CALIBRATION-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
@@ -168,4 +173,12 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 - `062` closes the remaining production-typography evidence gap: the Rust Qingfeng visual plan owns
   candidate/label/comment font-size and row-height tokens, and a five-candidate vertical screenshot
   proves right-aligned labels, annotations, stable text origins, and normal Windows IME density.
+- `065` through `069` are the post-release-parked code-only queue. They freeze and then implement
+  Config transaction/recovery, Candidate semantic accessibility, plugin provenance/data boundaries,
+  repository freshness/mirror identity, and measured low-resource gates in dependency order. They do
+  not claim ARM64, TUF, RemoteAddon/AppContainer, production signing, UAC, or real-host evidence.
+- Every future Rust task must use a worktree-local `CARGO_TARGET_DIR`; before implementation its
+  execution agent must fully read `ponytail`, `rust-skills`, and `tdd`. New product logic is Rust;
+  C++ is limited to the direct Fcitx adapter, upstream native addon, or a thin Windows ABI/renderer
+  adapter. Do not create a second Config truth, generic GUI framework, or permanent protocol dual stack.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

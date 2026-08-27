@@ -69,6 +69,20 @@ Local execution overlay:
   `062-CANDIDATE-PRODUCTION-VERTICAL-TYPOGRAPHY-001` is therefore the current code-only task while
   `RELEASE-01` remains parked on external/manual evidence.
 
+2026-08-27 requirements integration:
+
+- Fcitx5 Core and upstream addon semantics remain the authority. No addon enters the TSF host;
+  native in-process permission/capability metadata is not a sandbox. Core input stays offline.
+- Freeze one Rust Config Core contract for `Current`/`Draft`/`Defaults`, validate/diff/transaction,
+  read-only Draft preview, atomic commit, last-known-good and safe recovery. GUI, CLI and tests share
+  this contract; Rust backend shipping is not Config Cutover Complete.
+- Freeze CandidateModel as the single source for renderer/UIA/notification semantics, including stale
+  notification coalescing/cancellation and sensitive-context suppression. Accessibility is compositional,
+  and low-resource performance is a release gate.
+- Add follow-up work for plugin `runtime_abi`/`runtime_build`/provenance and separated user data,
+  repository freshness/freeze/mix-and-match/mirror identity, and measured 2-core/4-GB SLO calibration.
+  Current ML-DSA-65 v2 signing remains unchanged; ARM64/TUF/RemoteAddon/AppContainer remain future scope.
+
 ## P0 Guidance Tasks
 
 | Current-guidance task | Rebaseline state | Evidence | Next action |
@@ -140,6 +154,12 @@ Local execution overlay:
 | REL-01 `RELEASE-01` | `BLOCKED` | Real-host, installer/UAC, production plugin lifecycle assets, generation-drain, Narrator/NVDA, and release signing/provenance evidence remain incomplete. Config code-only shell polish is green through 058. | Release gate cannot advance from local-only evidence. |
 
 ## Next Eligible Work
+
+`RELEASE-01` stays parked. The first code-only task is `065-CONFIG-CORE-TRANSACTION-CONTRACT-001`,
+then `066-CANDIDATE-SEMANTIC-A11Y-001`, `067-PLUGIN-PROVENANCE-DATA-BOUNDARY-001`,
+`068-REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001`, and `069-LOW-RESOURCE-SLO-CALIBRATION-001`.
+These are Rust-first and must keep C++ limited to the direct Fcitx adapter, upstream native addon, or
+thin Windows ABI/renderer adapter.
 
 1. Prepare P0-6 real generation-drain E2E, installer/UAC, plugin lifecycle, Narrator/NVDA, and Rust
    TSF host matrix evidence before any release-readiness claim.

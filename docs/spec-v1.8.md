@@ -20,6 +20,8 @@ Codex 执行版 · 个人项目模式
 
 **2026-08-25 现状覆盖：**本长规格包含历史基线语言；当前执行以 `docs/current.md`、`docs/tasks/rebaseline.md`、`docs/engine-boundary.md`、`docs/tasks/PLAN.md` 为准。当前 shipping TSF DLL 已是 Rust，Candidate model/layout/interaction 已 Rust-owned，Config 仍有 WTL/Win32 shell 但只是临时 shipping adapter，不是不迁移的 C++ 例外。不要把本文件中描述旧 C++ baseline 的段落解释为重新引入 C++ ownership 的授权；除直接操作 Fcitx5 core/addon 对象的 Engine adapter 岛外，不保留不必要的 C++ 产品逻辑，新代码默认 Rust。
 
+**当前整合冻结（2026-08-27）：**Fcitx5 Core 与 upstream addon 语义仍是唯一核心来源；任何 addon 都不得进入 TSF host。原生 in-process addon 的 manifest/capability 声明是审计与装载策略元数据，不是沙箱或权限隔离；需要隔离的扩展必须使用另行定义的 remote boundary。核心输入链必须离线可用。语义模型先于像素：CandidateModel 是 renderer、UIA 与通知的单一来源。Config、插件、UI、更新任一失败都必须 fail-soft 到基础输入或可恢复状态。Rust Config Backend Shipped 与 Rust Config Cutover Complete 是不同 release gate。Accessibility 与低资源性能是 release gate；2-core/4-GB 指标及延迟/内存数值在实测校准前只能标为初始 SLO。当前签名方案是 ML-DSA-65 v2；不得以示例算法替换。ARM64、TUF、RemoteAddon/AppContainer 仍是未来/条件能力，不得伪装成当前支持。
+
 **规格冻结规则：**从 v1.8 起再次冻结。只有真实实现、测试失败、平台/工具链行为、安全事件或可验证的产品需求才能解冻；不得因为“Rust/GUI 框架更潮”扩大迁移面。UI 改进必须优先保留已验证的用户语义、无障碍、DPI、主题与测试证据；产品状态/校验/操作模型默认 Rust-owned，WTL/Win32/D2D/DWrite 只作为有证据的临时 native adapter 或 renderer seam，不以换框架作为美观方案。
 
 **目标：**构建一个 Windows 原生 TSF 前端，使 Fcitx5 核心与其 addon 生态在 Windows 上可长期维护地运行，同时保证输入隐私、宿主进程稳定、单一 Windows TSF profile 下的多语言 engine 语义正确、插件隔离、原子且可验证的更新，以及现代、克制、低认知负担的设置与候选体验；Windows 10/11 为持续演进主线，Win7 SP1 作为有明确边界的 Legacy compatibility lane。
@@ -574,6 +576,15 @@ UILess 不是“以后补的无障碍特性”，而是 Windows TSF、游戏、�
 - 候选/tooltip renderer 崩溃或卡顿不得阻塞 key processing；Presentation channel 在协议层与 Input/Control message 区分，必要时可独立队列或独立连接。
 
 - 为 NVDA/屏幕阅读器提供稳定的 composition、candidate count、selected candidate、candidate change 语义；不能只保证“肉眼看到 popup”。
+
+- `CandidateModel` 是 popup renderer、UIA tree 和 notification bridge 的单一语义来源。通知必须带
+  `(engine_epoch, context_id, composition_id, revision)`，按 revision 合并可合并的候选变化，取消或丢弃
+  stale notification，默认只播报必要的 selected/count/state 变化；不得让 renderer 或 speech bridge
+  派生另一套候选顺序/选择状态。
+
+- Candidate/UIA/notification 的能力按 capability 组合，不设计“残障模式”。键盘操作、UIA、Narrator、
+  NVDA、High Contrast、large text、reduced motion、reduced candidates 和 stable layout 各自可用并可组合；
+  自动化/语音/日志/网络路径不得在 password、PIN 或其它 sensitive context 读取、播报或记录原文。
 
 - 参考 win-mcbopomofo / windows-chewing-tsf 的 out-of-process candidate 思路；参考 Rabbit/WindInput/Weasel 的 layout、caret 和 D2D 经验，但不复制其 Hook/SendInput 或宿主内 UI 历史实现。
 
@@ -1234,6 +1245,15 @@ config tools macOS config Windows WTL config
 
 - 包 manifest 必须含 core_api、addon_abi、architecture、min_os、dependencies、license、source_commit。
 
+- Windows 插件 manifest 还必须声明 `runtime_abi`、`runtime_build`、构建来源/上游 provenance、包类型和
+  用户数据目录策略。`runtime_abi` 只在二进制契约改变时递增；`runtime_build` 用于精确诊断，不替代 ABI
+  检查。官方插件生态至少覆盖中文主路径、Rime/Lua 和一个非中文 addon，并使用上游标准 Fcitx addon
+  构建方式/build farm；不得为 Windows 另造第二套 addon 语义或永久 v2/v3 协议双栈。
+
+- 原生 in-process addon 的 capability/permission 字段只用于声明、审核、装载拒绝和诊断，**不是沙箱**。
+  未知 native 默认拒绝进入 engine；需要隔离的扩展另走受限 remote boundary。程序目录、版本目录与用户
+  词库/配置/缓存目录必须分离，卸载/升级不得删除不可再生用户数据。
+
 # 7. 包管理、方案、Plum 与更新
 
 ## 7.1 统一包类型
@@ -1276,6 +1296,12 @@ Package core 处理网络、archive、manifest、路径与事务状态，属于�
 - 未来只有真实部署需求证明 UAC helper 不够时，才重新评估 Windows Service；不得预防性增加高权限 daemon.
 
 ## 7.3 更新事务
+
+仓库元数据必须同时检查 channel/mirror identity、签名、单调 sequence、expiry/freshness，以及 targets
+的完整版本集合；拒绝 rollback、freeze 和 mix-and-match（例如把不同 snapshot/timestamp 或不同 mirror
+identity 的索引与包拼接）。镜像只提供同一已验证仓库身份的字节，不成为新的信任根。当前实现继续使用
+ML-DSA-65 v2；TUF 风格 root/targets/snapshot/timestamp 和 RemoteAddon/AppContainer 仅是后续任务，
+不得伪装为当前支持或形成永久双栈。
 
 Resolve
 ↓
@@ -2422,6 +2448,11 @@ Rust 的目标是让产品自有 Windows 逻辑成为 memory-safe、typed、可�
 
 ### 13.7.13 性能与复杂度的 CI / Release Gate
 
+发布前必须包含 2-core/4-GB、集成显卡、低速存储的低资源参考机（离线与受限网络两种场景）。当前
+延迟/内存表中的数值只是初始 SLO，用于建立可重复测量方法；在真实硬件、ETW/WPR 和 CI 性能机校准前，
+不得把它们写成已达成的产品事实。Core、TSF shim、Candidate UI 和插件 activation 预算分开记录，重型
+Rime/Mozc/Lua addon 不得掩盖 Core 基线。Accessibility 与低资源 gate 均为 release blocker。
+
 `tests/perf/` **随对应真实 target 出现逐步建立，不预建空 benchmark**：
 
 ```text
@@ -2897,6 +2928,19 @@ GUI、日志、诊断页只能读取这些 owner，不维护影子副本。
 - 不实现首次使用 wizard，除非未来出现无法从系统/默认值可靠得到的必填信息。
 - 设置搜索第一版可以不实现，但 setting 应具有稳定 ID、显示名称、关键词和页面归属，避免未来为了搜索重构整个配置模型。
 - Windows shell 只显示一个 `Fcitx5` TSF profile；Config 中切换 Rime/Mozc/拼音等不得触发 TSF profile 注册/注销。
+
+### 13.9.14 Config Core 当前事务契约
+
+- Rust Config Core 定义唯一的 `Current`、`Draft`、`Defaults` 三态：GUI、CLI 和测试都只通过同一 typed
+  model、`validate`、`diff` 与 transaction API；GUI 不直接读写配置文件，也不维护第二套 schema/default。
+- 控件只修改 `Draft`。Preview 是只读 Draft snapshot；Cancel 丢弃 Draft，Reset 恢复 Defaults/继承语义，
+  Apply 才执行完整 validate → diff → staged write → flush/close → reread/validate → atomic replace。
+  任一失败都保持原 Current 不变并返回可操作错误。
+- 每次成功 commit 保留一个 current 与一个 last-known-good/safe recovery 记录；启动验证、迁移或插件配置
+  失败时按 current → last-known-good → compiled safe defaults 降级，不 crash-loop，不自动猜测改写坏文件。
+  Safe recovery 关闭非必要第三方扩展但保持基础输入、TSF、候选和基本可访问性。
+- Rust backend shipping 只能宣称非交互 Config 路径已由 Rust 拥有；只有真实 Settings、preview、插件页、
+  persistence、DPI/keyboard/UIA/Narrator/NVDA 和 Win7/10/11 证据通过，才可宣称 Config Cutover Complete。
 
 
 ## 13.10 现代软件工程实践：确定性、契约、小批次与可诊断性

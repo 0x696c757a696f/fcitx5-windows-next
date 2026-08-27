@@ -6,6 +6,26 @@ HEAD recorded at snapshot refresh: `881a8149fd6e4f5447af0ac5df418d400d1f345b`
 
 Working tree at snapshot refresh: task completion documentation only.
 
+## 2026-08-27 Integration Freeze
+
+- Fcitx5 Core and upstream addon semantics remain authoritative. Addons never enter the TSF host;
+  native in-process capability/permission declarations are audit metadata, not a sandbox. Core input
+  remains offline-capable, and any Config, plugin, UI, or updater failure degrades fail-soft toward
+  basic input.
+- Rust Config uses one typed `Current`/`Draft`/`Defaults` model and shared validate/diff/transaction/
+  atomic-commit semantics for GUI, CLI, and tests. Preview is read-only Draft; successful commits keep
+  one last-known-good recovery state. Backend shipping is distinct from Config Cutover Complete.
+- CandidateModel is the single semantic source for renderer, UIA, and notifications. Notification
+  coalescing/cancellation must reject stale revisions; sensitive contexts never reach speech, logs, or
+  network paths. Accessibility is compositional (keyboard/UIA/Narrator/NVDA/High Contrast/large text/
+  reduced motion/reduced candidates/stable layout), not a mode.
+- Plugin metadata must carry `runtime_abi`, `runtime_build`, and source provenance; program/version
+  directories stay separate from user data. Repository freshness/freeze/mix-and-match and mirror
+  identity are explicit follow-up work. Current signing remains ML-DSA-65 v2; ARM64, TUF, and
+  RemoteAddon/AppContainer are not current support claims.
+- The 2-core/4-GB low-resource profile and latency/memory figures are initial SLOs pending real
+  hardware calibration; accessibility and low-resource evidence are release gates.
+
 ## Shipping Architecture
 
 ```text
@@ -131,3 +151,11 @@ Windows host
    of the native adapter while preserving the current label-slot and scroll evidence.
 6. Continue shrinking non-Engine product-owned C++ shells only under explicit Rust migration tasks
    with frozen behavior and regression evidence.
+
+## Next Code-Only Queue
+
+`RELEASE-01` remains parked on external evidence. The first eligible code-only task is
+`065-CONFIG-CORE-TRANSACTION-CONTRACT-001`, followed by Candidate notification/accessibility,
+plugin provenance/data-boundary, repository freshness, and low-resource evidence tasks. Each task
+is Rust-first: C++ is limited to the direct Fcitx adapter, upstream native addon, or a thin Windows
+ABI/renderer adapter; no second Config truth, generic GUI framework, or permanent protocol dual stack.
