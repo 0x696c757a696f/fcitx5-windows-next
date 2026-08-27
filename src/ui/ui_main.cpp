@@ -518,6 +518,8 @@ extern "C" void fcitx5_candidate_model_destroy(void* model);
 extern "C" void fcitx5_candidate_model_reset(void* model);
 extern "C" std::uint32_t fcitx5_candidate_model_apply(
     void* model, const Fcitx5CandidateModelSnapshot* snapshot);
+extern "C" std::uint8_t fcitx5_candidate_model_current(
+    void* model, Fcitx5CandidateModelSnapshot* output);
 extern "C" std::uint8_t fcitx5_candidate_content_locale_valid_utf8(
     Fcitx5CandidateUtf8 locale);
 extern "C" std::size_t fcitx5_candidate_content_locale_or_default_utf16(
@@ -584,6 +586,37 @@ extern "C" Fcitx5CandidateScrollLabel fcitx5_candidate_scroll_label_policy(
     };
 }
 
+[[nodiscard]] std::optional<Snapshot> fromRust(
+    const Fcitx5CandidateModelSnapshot& snapshot) {
+    const auto text = [](Fcitx5CandidateUtf8 value) {
+        return std::string(reinterpret_cast<const char*>(value.ptr), value.len);
+    };
+    if ((snapshot.candidateCount != 0U && snapshot.candidates == nullptr) ||
+        (snapshot.visibility > 2U))
+        return std::nullopt;
+    Snapshot result{
+        snapshot.engineEpoch,
+        snapshot.contextId,
+        snapshot.compositionId,
+        snapshot.revision,
+        text(snapshot.preedit),
+        text(snapshot.auxiliaryUp),
+        text(snapshot.auxiliaryDown),
+        {},
+        snapshot.hasSelected ? std::optional<std::size_t>{snapshot.selected} : std::nullopt,
+        snapshot.page,
+        snapshot.total,
+        static_cast<Visibility>(snapshot.visibility),
+        snapshot.popupAllowed != 0U,
+    };
+    result.candidates.reserve(snapshot.candidateCount);
+    for (std::size_t index = 0; index < snapshot.candidateCount; ++index) {
+        const auto& item = snapshot.candidates[index];
+        result.candidates.push_back({item.id, text(item.label), text(item.text), text(item.comment)});
+    }
+    return result;
+}
+
 } // namespace detail
 
 class CandidateModel final {
@@ -593,13 +626,19 @@ public:
     CandidateModel(const CandidateModel&) = delete;
     CandidateModel& operator=(const CandidateModel&) = delete;
 
-    [[nodiscard]] ApplyResult apply(Snapshot snapshot) {
+    [[nodiscard]] ApplyResult apply(const Snapshot& snapshot) {
         const auto candidates = detail::itemsToRust(snapshot);
         const auto rustSnapshot = detail::toRust(snapshot, candidates);
         switch (detail::fcitx5_candidate_model_apply(rustModel_, &rustSnapshot)) {
-        case 0U:
-            current_ = std::move(snapshot);
+        case 0U: {
+            detail::Fcitx5CandidateModelSnapshot current{};
+            if (detail::fcitx5_candidate_model_current(rustModel_, &current) == 0U)
+                return ApplyResult::invalid;
+            current_ = detail::fromRust(current);
+            if (!current_)
+                return ApplyResult::invalid;
             return ApplyResult::applied;
+        }
         case 1U:
             return ApplyResult::duplicate;
         case 2U:

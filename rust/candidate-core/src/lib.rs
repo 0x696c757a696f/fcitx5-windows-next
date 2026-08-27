@@ -413,11 +413,263 @@ struct Freshness {
 }
 
 #[derive(Default)]
-struct CandidateModel {
+pub struct CandidateModel {
     current: Option<CandidateSnapshot>,
+    ffi_items: Vec<Fcitx5CandidateModelItem>,
     engine_epoch: u64,
     freshness: HashMap<u64, Freshness>,
     freshness_order: VecDeque<u64>,
+}
+
+/// Identity attached to every candidate semantic snapshot and notification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct CandidateSnapshotIdentity {
+    pub engine_epoch: u64,
+    pub context_id: u64,
+    pub composition_id: u64,
+    pub revision: u64,
+}
+
+/// Independent presentation capabilities. They intentionally compose instead of
+/// selecting a mutually-exclusive accessibility mode.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CandidateCapabilities {
+    pub keyboard: bool,
+    pub uia: bool,
+    pub narrator_nvda: bool,
+    pub high_contrast: bool,
+    pub large_text: bool,
+    pub reduced_motion: bool,
+    pub reduced_candidates: bool,
+    pub stable_layout: bool,
+}
+
+/// Context classification used to enforce privacy at the semantic boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CandidatePrivacyContext {
+    #[default]
+    Normal,
+    Password,
+    Pin,
+    Sensitive,
+}
+
+impl CandidatePrivacyContext {
+    #[must_use]
+    pub const fn suppress_text(self) -> bool {
+        !matches!(self, Self::Normal)
+    }
+
+    #[must_use]
+    pub const fn policy(self) -> CandidatePrivacyPolicy {
+        if self.suppress_text() {
+            CandidatePrivacyPolicy {
+                allow_speech: false,
+                allow_text_logging: false,
+                allow_learning: false,
+                allow_network: false,
+            }
+        } else {
+            CandidatePrivacyPolicy {
+                allow_speech: true,
+                allow_text_logging: true,
+                allow_learning: true,
+                allow_network: true,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidatePrivacyPolicy {
+    allow_speech: bool,
+    allow_text_logging: bool,
+    allow_learning: bool,
+    allow_network: bool,
+}
+
+impl CandidatePrivacyPolicy {
+    #[must_use]
+    pub const fn allows_speech(self) -> bool {
+        self.allow_speech
+    }
+
+    #[must_use]
+    pub const fn allows_text_logging(self) -> bool {
+        self.allow_text_logging
+    }
+
+    #[must_use]
+    pub const fn allows_learning(self) -> bool {
+        self.allow_learning
+    }
+
+    #[must_use]
+    pub const fn allows_network(self) -> bool {
+        self.allow_network
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateSemanticItem {
+    pub id: u64,
+    pub label: String,
+    pub text: String,
+    pub comment: String,
+}
+
+/// Immutable semantic projection shared by renderer, UIA, and notifications.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateSemanticSnapshot {
+    pub identity: CandidateSnapshotIdentity,
+    pub preedit: String,
+    pub auxiliary_up: String,
+    pub auxiliary_down: String,
+    pub candidates: Vec<CandidateSemanticItem>,
+    pub selected: Option<usize>,
+    pub page: u32,
+    pub total: u32,
+    pub visibility: u8,
+    pub popup_allowed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateNotificationKind {
+    Snapshot,
+    Selection,
+    Count,
+    State,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateNotification {
+    pub identity: CandidateSnapshotIdentity,
+    pub kind: CandidateNotificationKind,
+    pub selected: Option<usize>,
+    pub count: usize,
+    pub visibility: u8,
+    pub text: Option<String>,
+}
+
+/// Deterministic revision-aware notification buffer.
+#[derive(Clone, Debug, Default)]
+pub struct CandidateNotificationQueue {
+    pending: VecDeque<CandidateNotification>,
+    latest: HashMap<(u64, u64), CandidateNotificationState>,
+    cancelled: Vec<CandidateSnapshotIdentity>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CandidateNotificationState {
+    identity: CandidateSnapshotIdentity,
+    selected: Option<usize>,
+    selected_text: Option<String>,
+    count: usize,
+    visibility: u8,
+}
+
+impl CandidateNotificationQueue {
+    pub fn enqueue(
+        &mut self,
+        snapshot: &CandidateSemanticSnapshot,
+        capabilities: CandidateCapabilities,
+        privacy: CandidatePrivacyContext,
+    ) {
+        let identity = snapshot.identity;
+        let scope = (identity.engine_epoch, identity.context_id);
+        if self.latest.get(&scope).is_some_and(|latest| {
+            identity.composition_id < latest.identity.composition_id
+                || (identity.composition_id == latest.identity.composition_id
+                    && identity.revision <= latest.identity.revision)
+        }) {
+            return;
+        }
+        let policy = privacy.policy();
+        let selected_text = if policy.allows_speech() {
+            snapshot
+                .selected
+                .and_then(|index| snapshot.candidates.get(index))
+                .map(|candidate| candidate.text.clone())
+        } else {
+            None
+        };
+        let state = CandidateNotificationState {
+            identity,
+            selected: snapshot.selected,
+            selected_text,
+            count: snapshot.total as usize,
+            visibility: snapshot.visibility,
+        };
+        let kinds = match self.latest.get(&scope) {
+            None => vec![CandidateNotificationKind::Snapshot],
+            Some(previous) => {
+                let mut kinds = Vec::with_capacity(3);
+                if previous.selected != state.selected
+                    || previous.selected_text != state.selected_text
+                {
+                    kinds.push(CandidateNotificationKind::Selection);
+                }
+                if previous.count != state.count {
+                    kinds.push(CandidateNotificationKind::Count);
+                }
+                if previous.visibility != state.visibility {
+                    kinds.push(CandidateNotificationKind::State);
+                }
+                kinds
+            }
+        };
+        self.pending.retain(|item| {
+            let item_scope = (item.identity.engine_epoch, item.identity.context_id);
+            item_scope != scope
+        });
+        for kind in kinds {
+            self.pending.push_back(CandidateNotification {
+                identity,
+                kind,
+                selected: state.selected,
+                count: state.count,
+                visibility: state.visibility,
+                text: (capabilities.narrator_nvda
+                    && policy.allows_speech()
+                    && matches!(
+                        kind,
+                        CandidateNotificationKind::Snapshot | CandidateNotificationKind::Selection
+                    ))
+                .then(|| state.selected_text.clone())
+                .flatten(),
+            });
+        }
+        self.cancelled
+            .retain(|cancelled| (cancelled.engine_epoch, cancelled.context_id) != scope);
+        self.latest.insert(scope, state);
+    }
+
+    pub fn cancel(&mut self, identity: CandidateSnapshotIdentity) {
+        self.cancelled.push(identity);
+        self.pending.retain(|item| item.identity != identity);
+    }
+
+    #[must_use]
+    pub fn drain_for(&mut self, identity: CandidateSnapshotIdentity) -> Vec<CandidateNotification> {
+        if self.cancelled.contains(&identity)
+            || self
+                .latest
+                .get(&(identity.engine_epoch, identity.context_id))
+                .is_none_or(|latest| latest.identity != identity)
+        {
+            return Vec::new();
+        }
+        let mut notifications = Vec::new();
+        self.pending.retain(|item| {
+            if item.identity == identity {
+                notifications.push(item.clone());
+                false
+            } else {
+                true
+            }
+        });
+        notifications
+    }
 }
 
 impl Default for LayoutResult {
@@ -861,7 +1113,129 @@ pub unsafe extern "C" fn fcitx5_candidate_model_apply(
     model.apply(snapshot)
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// `model` must be a valid pointer returned by `fcitx5_candidate_model_create`.
+/// `output` must point to writable storage for one snapshot. Its string and item
+/// pointers remain valid until the next model mutation or destruction.
+pub unsafe extern "C" fn fcitx5_candidate_model_current(
+    model: *mut c_void,
+    output: *mut Fcitx5CandidateModelSnapshot,
+) -> u8 {
+    if model.is_null() || output.is_null() {
+        return 0;
+    }
+    let model = unsafe { &mut *model.cast::<CandidateModel>() };
+    let Some(snapshot) = model.current.as_ref() else {
+        return 0;
+    };
+    let visibility = match snapshot.visibility {
+        Visibility::Hidden => 0,
+        Visibility::Composition => 1,
+        Visibility::Prediction => 2,
+    };
+    unsafe {
+        *output = Fcitx5CandidateModelSnapshot {
+            engine_epoch: snapshot.engine_epoch,
+            context_id: snapshot.context_id,
+            composition_id: snapshot.composition_id,
+            revision: snapshot.revision,
+            preedit: ffi_utf8(&snapshot.preedit),
+            auxiliary_up: ffi_utf8(&snapshot.auxiliary_up),
+            auxiliary_down: ffi_utf8(&snapshot.auxiliary_down),
+            candidates: model.ffi_items.as_ptr(),
+            candidate_count: model.ffi_items.len(),
+            selected: snapshot.selected.unwrap_or(0),
+            has_selected: u8::from(snapshot.selected.is_some()),
+            page: snapshot.page,
+            total: snapshot.total,
+            visibility,
+            popup_allowed: u8::from(snapshot.popup_allowed),
+        };
+    }
+    1
+}
+
+fn ffi_utf8(value: &[u8]) -> Fcitx5CandidateUtf8 {
+    Fcitx5CandidateUtf8 {
+        ptr: value.as_ptr(),
+        len: value.len(),
+    }
+}
+
 impl CandidateModel {
+    /// Applies an owned semantic snapshot and returns the stable FFI-compatible
+    /// result code: 0 applied, 1 duplicate, 2 stale, 3 invalid.
+    pub fn apply_semantic_snapshot(&mut self, snapshot: CandidateSemanticSnapshot) -> u32 {
+        let visibility = match snapshot.visibility {
+            0 => Visibility::Hidden,
+            1 => Visibility::Composition,
+            2 => Visibility::Prediction,
+            _ => return 3,
+        };
+        self.apply(CandidateSnapshot {
+            engine_epoch: snapshot.identity.engine_epoch,
+            context_id: snapshot.identity.context_id,
+            composition_id: snapshot.identity.composition_id,
+            revision: snapshot.identity.revision,
+            preedit: snapshot.preedit.into_bytes(),
+            auxiliary_up: snapshot.auxiliary_up.into_bytes(),
+            auxiliary_down: snapshot.auxiliary_down.into_bytes(),
+            candidates: snapshot
+                .candidates
+                .into_iter()
+                .map(|item| CandidateItem {
+                    id: item.id,
+                    label: item.label.into_bytes(),
+                    text: item.text.into_bytes(),
+                    comment: item.comment.into_bytes(),
+                })
+                .collect(),
+            selected: snapshot.selected,
+            page: snapshot.page,
+            total: snapshot.total,
+            visibility,
+            popup_allowed: snapshot.popup_allowed,
+        })
+    }
+
+    #[must_use]
+    pub fn semantic_snapshot(&self) -> Option<CandidateSemanticSnapshot> {
+        self.current
+            .as_ref()
+            .map(|snapshot| CandidateSemanticSnapshot {
+                identity: CandidateSnapshotIdentity {
+                    engine_epoch: snapshot.engine_epoch,
+                    context_id: snapshot.context_id,
+                    composition_id: snapshot.composition_id,
+                    revision: snapshot.revision,
+                },
+                preedit: String::from_utf8_lossy(&snapshot.preedit).into_owned(),
+                auxiliary_up: String::from_utf8_lossy(&snapshot.auxiliary_up).into_owned(),
+                auxiliary_down: String::from_utf8_lossy(&snapshot.auxiliary_down).into_owned(),
+                candidates: snapshot
+                    .candidates
+                    .iter()
+                    .map(|item| CandidateSemanticItem {
+                        id: item.id,
+                        label: String::from_utf8_lossy(&item.label).into_owned(),
+                        text: String::from_utf8_lossy(&item.text).into_owned(),
+                        comment: String::from_utf8_lossy(&item.comment).into_owned(),
+                    })
+                    .collect(),
+                selected: snapshot.selected,
+                page: snapshot.page,
+                total: snapshot.total,
+                visibility: match snapshot.visibility {
+                    Visibility::Hidden => 0,
+                    Visibility::Composition => 1,
+                    Visibility::Prediction => 2,
+                },
+                popup_allowed: snapshot.popup_allowed,
+            })
+    }
+
     fn apply(&mut self, snapshot: CandidateSnapshot) -> u32 {
         if !validate_snapshot(&snapshot) {
             return 3;
@@ -895,6 +1269,7 @@ impl CandidateModel {
         }
         self.remember_context(snapshot.context_id, &snapshot);
         self.current = Some(snapshot);
+        self.refresh_ffi_items();
         0
     }
 
@@ -922,9 +1297,29 @@ impl CandidateModel {
 
     fn reset(&mut self) {
         self.current = None;
+        self.ffi_items.clear();
         self.engine_epoch = 0;
         self.freshness.clear();
         self.freshness_order.clear();
+    }
+
+    fn refresh_ffi_items(&mut self) {
+        self.ffi_items = self
+            .current
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .candidates
+                    .iter()
+                    .map(|item| Fcitx5CandidateModelItem {
+                        id: item.id,
+                        label: ffi_utf8(&item.label),
+                        text: ffi_utf8(&item.text),
+                        comment: ffi_utf8(&item.comment),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
     }
 }
 
@@ -963,7 +1358,9 @@ fn validate_snapshot(snapshot: &CandidateSnapshot) -> bool {
 }
 
 fn valid_text(value: &[u8]) -> bool {
-    value.len() <= MAX_CANDIDATE_TEXT_UTF8 && !value.contains(&0)
+    value.len() <= MAX_CANDIDATE_TEXT_UTF8
+        && !value.contains(&0)
+        && std::str::from_utf8(value).is_ok()
 }
 
 unsafe fn snapshot_from_ffi(
@@ -2505,6 +2902,225 @@ mod tests {
             visibility: Visibility::Composition,
             popup_allowed: true,
         }
+    }
+
+    #[test]
+    fn semantic_snapshot_is_the_model_projection_for_all_consumers() {
+        let mut model = CandidateModel::default();
+        assert_eq!(model.apply(snapshot(1)), 0);
+        let semantic = model.semantic_snapshot().expect("semantic snapshot");
+        assert_eq!(semantic.identity.revision, 1);
+        assert_eq!(semantic.selected, Some(0));
+        assert_eq!(semantic.candidates[0].text, "你");
+    }
+
+    #[test]
+    fn semantic_snapshot_rejects_invalid_utf8_instead_of_replacing_text() {
+        let mut model = CandidateModel::default();
+        let mut invalid = snapshot(1);
+        invalid.candidates[0].text = vec![0xff];
+        assert_eq!(model.apply(invalid), 3);
+        assert!(model.semantic_snapshot().is_none());
+    }
+
+    #[test]
+    fn ffi_current_snapshot_is_the_model_projection_for_native_adapters() {
+        let mut model = CandidateModel::default();
+        assert_eq!(model.apply(snapshot(1)), 0);
+        let mut output = Fcitx5CandidateModelSnapshot {
+            engine_epoch: 0,
+            context_id: 0,
+            composition_id: 0,
+            revision: 0,
+            preedit: Fcitx5CandidateUtf8 {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
+            auxiliary_up: Fcitx5CandidateUtf8 {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
+            auxiliary_down: Fcitx5CandidateUtf8 {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
+            candidates: std::ptr::null(),
+            candidate_count: 0,
+            selected: 0,
+            has_selected: 0,
+            page: 0,
+            total: 0,
+            visibility: 0,
+            popup_allowed: 0,
+        };
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_model_current(
+                    (&mut model as *mut CandidateModel).cast(),
+                    &mut output,
+                )
+            },
+            1
+        );
+        assert_eq!(output.revision, 1);
+        assert_eq!(output.selected, 0);
+        assert_eq!(output.candidate_count, 2);
+        let first = unsafe { &*output.candidates };
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(first.text.ptr, first.text.len) },
+            "你".as_bytes()
+        );
+    }
+
+    #[test]
+    fn notification_queue_drops_stale_and_cancelled_revisions() {
+        let mut model = CandidateModel::default();
+        assert_eq!(model.apply(snapshot(1)), 0);
+        let first = model.semantic_snapshot().expect("first snapshot");
+        let mut changed = snapshot(2);
+        changed.selected = Some(1);
+        assert_eq!(model.apply(changed), 0);
+        let second = model.semantic_snapshot().expect("second snapshot");
+        let mut queue = CandidateNotificationQueue::default();
+        queue.enqueue(
+            &first,
+            CandidateCapabilities {
+                narrator_nvda: true,
+                ..Default::default()
+            },
+            CandidatePrivacyContext::Normal,
+        );
+        queue.enqueue(
+            &second,
+            CandidateCapabilities {
+                narrator_nvda: true,
+                ..Default::default()
+            },
+            CandidatePrivacyContext::Normal,
+        );
+        assert!(queue.drain_for(first.identity).is_empty());
+        let second_notifications = queue.drain_for(second.identity);
+        assert_eq!(second_notifications.len(), 1);
+        assert_eq!(
+            second_notifications[0].kind,
+            CandidateNotificationKind::Selection
+        );
+        queue.cancel(second.identity);
+        assert!(queue.drain_for(second.identity).is_empty());
+    }
+
+    #[test]
+    fn notification_queue_keeps_new_revision_when_context_returns_after_switch() {
+        let mut model = CandidateModel::default();
+        assert_eq!(model.apply(snapshot_with_identity(10, 20, 30, 1)), 0);
+        let a1 = model.semantic_snapshot().expect("A1");
+        assert_eq!(model.apply(snapshot_with_identity(10, 21, 40, 1)), 0);
+        let b1 = model.semantic_snapshot().expect("B1");
+        let mut returned = snapshot_with_identity(10, 20, 30, 2);
+        returned.selected = Some(1);
+        assert_eq!(model.apply(returned), 0);
+        let a2 = model.semantic_snapshot().expect("A2");
+        let mut queue = CandidateNotificationQueue::default();
+        let caps = CandidateCapabilities::default();
+        queue.enqueue(&a1, caps, CandidatePrivacyContext::Normal);
+        queue.enqueue(&b1, caps, CandidatePrivacyContext::Normal);
+        queue.enqueue(&a2, caps, CandidatePrivacyContext::Normal);
+        assert_eq!(queue.drain_for(a1.identity).len(), 0);
+        assert_eq!(queue.drain_for(b1.identity).len(), 1);
+        assert_eq!(queue.drain_for(a2.identity).len(), 1);
+    }
+
+    #[test]
+    fn notification_text_is_suppressed_for_sensitive_contexts() {
+        let mut model = CandidateModel::default();
+        assert_eq!(model.apply(snapshot(1)), 0);
+        let semantic = model.semantic_snapshot().expect("semantic snapshot");
+        let mut queue = CandidateNotificationQueue::default();
+        queue.enqueue(
+            &semantic,
+            CandidateCapabilities {
+                narrator_nvda: true,
+                ..Default::default()
+            },
+            CandidatePrivacyContext::Password,
+        );
+        let notification = queue
+            .drain_for(semantic.identity)
+            .pop()
+            .expect("notification");
+        assert!(notification.text.is_none());
+        assert!(CandidatePrivacyContext::Pin.suppress_text());
+        assert!(CandidatePrivacyContext::Sensitive.suppress_text());
+        assert_eq!(
+            CandidatePrivacyContext::Password.policy(),
+            CandidatePrivacyPolicy {
+                allow_speech: false,
+                allow_text_logging: false,
+                allow_learning: false,
+                allow_network: false,
+            }
+        );
+        let policy = CandidatePrivacyContext::Sensitive.policy();
+        assert!(!policy.allows_speech());
+        assert!(!policy.allows_text_logging());
+        assert!(!policy.allows_learning());
+        assert!(!policy.allows_network());
+    }
+
+    #[test]
+    fn notification_queue_emits_only_changed_selection_count_and_state() {
+        let mut model = CandidateModel::default();
+        assert_eq!(model.apply(snapshot(1)), 0);
+        let first = model.semantic_snapshot().expect("first snapshot");
+        let mut queue = CandidateNotificationQueue::default();
+        let capabilities = CandidateCapabilities {
+            narrator_nvda: true,
+            ..Default::default()
+        };
+        queue.enqueue(&first, capabilities, CandidatePrivacyContext::Normal);
+        assert_eq!(
+            queue.drain_for(first.identity)[0].kind,
+            CandidateNotificationKind::Snapshot
+        );
+
+        let mut changed = first.clone();
+        changed.identity.revision = 2;
+        changed.selected = Some(1);
+        changed.total += 1;
+        changed.visibility = 2;
+        queue.enqueue(&changed, capabilities, CandidatePrivacyContext::Normal);
+        let notifications = queue.drain_for(changed.identity);
+        assert_eq!(notifications.len(), 3);
+        assert_eq!(notifications[0].kind, CandidateNotificationKind::Selection);
+        assert_eq!(notifications[1].kind, CandidateNotificationKind::Count);
+        assert_eq!(notifications[2].kind, CandidateNotificationKind::State);
+        assert_eq!(notifications[0].text.as_deref(), Some("呢"));
+        assert!(notifications[1].text.is_none());
+        assert!(notifications[2].text.is_none());
+
+        let mut unchanged = changed.clone();
+        unchanged.identity.revision = 3;
+        queue.enqueue(&unchanged, capabilities, CandidatePrivacyContext::Normal);
+        assert!(queue.drain_for(unchanged.identity).is_empty());
+    }
+
+    #[test]
+    fn capability_flags_compose_without_a_disability_mode() {
+        let capabilities = CandidateCapabilities {
+            keyboard: true,
+            uia: true,
+            narrator_nvda: true,
+            high_contrast: true,
+            large_text: true,
+            reduced_motion: true,
+            reduced_candidates: true,
+            stable_layout: true,
+        };
+        assert!(capabilities.keyboard && capabilities.uia && capabilities.narrator_nvda);
+        assert!(
+            capabilities.high_contrast && capabilities.large_text && capabilities.reduced_motion
+        );
+        assert!(capabilities.reduced_candidates && capabilities.stable_layout);
     }
 
     fn width(result: &LayoutResult) -> f32 {

@@ -1,23 +1,24 @@
-# Task 066 - Candidate semantic accessibility contract
+# Task 067 - Plugin provenance and data boundary
 
 **Mode:** CHANGE / CODE-ONLY
-**Task ID:** `CANDIDATE-SEMANTIC-A11Y-001`
-**Prerequisite:** `065` automated contract green.
-**Evidence class:** automated x64/x86 semantic contract; real Narrator/NVDA hosts remain manual.
+**Task ID:** `PLUGIN-PROVENANCE-DATA-BOUNDARY-001`
+**Prerequisite:** `065` automated Config contract green.
+**Evidence class:** automated x64/x86 package contract; production publication remains manual.
 
 ## Goal
 
-Make Rust `CandidateModel` the explicit single semantic source for renderer, UIA, and notification,
-with revision-aware stale suppression and sensitive-context privacy enforcement.
+Extend the current Rust package path with verified plugin `runtime_abi`, `runtime_build`, source
+provenance, and explicit separation of versioned program packages from user data.
 
 ## Constraints and acceptance
 
-- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. Keep new domain
-  logic Rust-owned; native renderer/UIA adapters only consume the Rust semantic DTO.
-- Notifications carry snapshot identity, coalesce compatible changes, cancel/drop stale revisions, and
-  do not derive a separate candidate order or selection state.
-- Capabilities compose: keyboard, UIA, Narrator/NVDA compatibility, High Contrast, large text,
-  reduced motion, reduced candidates, and stable layout. Do not add a disability mode.
-- Password/PIN/sensitive contexts suppress speech, text logging, learning, and network access.
-- Add deterministic x64/x86 tests for stale/cancelled notifications, semantic parity, capabilities,
-  and sensitive-context suppression. Record real Narrator/NVDA/Win7/10/11 results as `MANUAL-PENDING`.
+- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. Preserve the
+  current ML-DSA-65 v2 verifier and upstream standard Fcitx addon/build-farm semantics.
+- Reject missing/malformed `runtime_build` or a value inconsistent with the signed manifest
+  provenance. `runtime_build` is diagnostic/provenance, not ABI equality; compatibility rejection
+  uses `runtime_abi`, `min_os`, `core_api`, `addon_abi`, and the existing architecture checks.
+  Metadata permissions are declarations and audit inputs, not a sandbox; addons remain outside TSF host.
+- Version install/remove/rollback never deletes user dictionary, Rime user data, or configuration.
+  This task's metadata corpus does not substitute for the real plugin ecosystem matrix in task 069.
+- Add deterministic x64/x86 verifier/path/lifecycle tests. Protected signing keys, release publication,
+  real online lifecycle, Authenticode, and UAC remain precisely `MANUAL-PENDING`.
