@@ -1307,7 +1307,7 @@ if(BUILD_TESTING)
           "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
           "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
           fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
-          --label-slot-snapshot "${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" --report
+          --label-slot-snapshot "${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" --dpi-scale 1.50 --report
           "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.json"
           --screenshot
           "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.bmp")

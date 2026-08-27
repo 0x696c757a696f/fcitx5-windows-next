@@ -172,10 +172,19 @@ mod window_smoke {
     use std::fs;
     use std::path::Path;
     use std::ptr::{null, null_mut};
-    use std::sync::OnceLock;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        OnceLock,
+    };
+    use tiny_skia::Pixmap;
+    use windui::geometry::{Color as WindColor, Rect as WindRect};
+    use windui::render::{Canvas, Paint as WindPaint, SkiaCanvas};
+    use windui::spec::Align as WindAlign;
+    use windui::text::{DWriteEngine, TextEngine, TextStyle as WindTextStyle};
 
     type Bool = i32;
     type Dword = u32;
+    type FarProc = *mut c_void;
     type Hbrush = *mut c_void;
     type Hbitmap = *mut c_void;
     type Hcursor = *mut c_void;
@@ -202,18 +211,10 @@ mod window_smoke {
     const COLORREF_TEXT: Dword = 0x004A_4A_4A;
     const CS_HREDRAW: Uint = 0x0002;
     const CS_VREDRAW: Uint = 0x0001;
-    const DT_LEFT: Uint = 0x0000;
-    const DT_RIGHT: Uint = 0x0002;
-    const DT_SINGLELINE: Uint = 0x0020;
-    const DT_VCENTER: Uint = 0x0004;
     const DIB_RGB_COLORS: Uint = 0;
     const OBJID_WINDOW: Dword = 0;
-    const PS_SOLID: i32 = 0;
     const SRCCOPY: Dword = 0x00CC_0020;
     const SW_SHOWNOACTIVATE: i32 = 4;
-    const TRANSPARENT: i32 = 1;
-    const NULL_BRUSH: i32 = 5;
-    const NULL_PEN: i32 = 8;
     const CLSCTX_INPROC_SERVER: Dword = 0x1;
     const CLIP_DEFAULT_PRECIS: Dword = 0;
     const CLEARTYPE_QUALITY: Dword = 5;
@@ -400,6 +401,8 @@ mod window_smoke {
     static WINDOW_LABEL_SLOT_PAINT: OnceLock<Vec<LabelSlotPaintItem>> = OnceLock::new();
     static WINDOW_LABEL_SLOT_THEME: OnceLock<LabelSlotPaintTheme> = OnceLock::new();
     static WINDOW_SELECTED_VISIBLE: OnceLock<Option<usize>> = OnceLock::new();
+    static WINDOW_DPI_SCALE: OnceLock<f32> = OnceLock::new();
+    static WINDOW_WINDUI_DWRITE_TEXT_DRAW_USED: AtomicBool = AtomicBool::new(false);
 
     #[link(name = "user32")]
     extern "system" {
@@ -420,9 +423,7 @@ mod window_smoke {
         ) -> Hwnd;
         fn DefWindowProcW(hwnd: Hwnd, message: Uint, wparam: Wparam, lparam: Lparam) -> Lresult;
         fn DestroyWindow(hwnd: Hwnd) -> Bool;
-        fn DrawTextW(hdc: Hdc, text: *const u16, count: i32, rect: *mut Rect, format: Uint) -> i32;
         fn EndPaint(hwnd: Hwnd, paint: *const PaintStruct) -> Bool;
-        fn FillRect(hdc: Hdc, rect: *const Rect, brush: Hbrush) -> i32;
         fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
         fn GetWindowDC(hwnd: Hwnd) -> Hdc;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
@@ -430,8 +431,7 @@ mod window_smoke {
         fn IsWindowVisible(hwnd: Hwnd) -> Bool;
         fn ReleaseDC(hwnd: Hwnd, hdc: Hdc) -> i32;
         fn RegisterClassW(class: *const WndClassW) -> u16;
-        fn SetBkMode(hdc: Hdc, mode: i32) -> i32;
-        fn SetTextColor(hdc: Hdc, color: Dword) -> Dword;
+        fn SetProcessDPIAware() -> Bool;
         fn ShowWindow(hwnd: Hwnd, command: i32) -> Bool;
         fn UpdateWindow(hwnd: Hwnd) -> Bool;
     }
@@ -467,8 +467,6 @@ mod window_smoke {
             pitch_and_family: Dword,
             face_name: *const u16,
         ) -> Hgdobj;
-        fn CreatePen(style: i32, width: i32, color: Dword) -> Hgdobj;
-        fn CreateSolidBrush(color: Dword) -> Hbrush;
         fn DeleteDC(hdc: Hdc) -> Bool;
         fn DeleteObject(object: *mut c_void) -> Bool;
         fn GetDIBits(
@@ -480,18 +478,22 @@ mod window_smoke {
             info: *mut BitmapInfo,
             usage: Uint,
         ) -> i32;
-        fn GetStockObject(object: i32) -> Hgdobj;
         fn GetTextFaceW(hdc: Hdc, count: i32, face_name: *mut u16) -> i32;
-        fn RoundRect(
-            hdc: Hdc,
-            left: i32,
-            top: i32,
-            right: i32,
-            bottom: i32,
-            width: i32,
-            height: i32,
-        ) -> Bool;
         fn SelectObject(hdc: Hdc, object: Hgdobj) -> Hgdobj;
+        fn SetDIBitsToDevice(
+            hdc: Hdc,
+            x_dest: i32,
+            y_dest: i32,
+            width: Dword,
+            height: Dword,
+            x_src: i32,
+            y_src: i32,
+            start_scan: Uint,
+            scan_lines: Uint,
+            bits: *const c_void,
+            info: *const BitmapInfo,
+            color_use: Uint,
+        ) -> i32;
     }
 
     #[link(name = "ole32")]
@@ -525,6 +527,7 @@ mod window_smoke {
 
     #[link(name = "kernel32")]
     extern "system" {
+        fn GetProcAddress(module: Hinstance, proc_name: *const u8) -> FarProc;
         fn GetModuleHandleW(module_name: *const u16) -> Hinstance;
     }
 
@@ -626,6 +629,7 @@ mod window_smoke {
                 "Rust Candidate PoC DPI scale must be finite and within 0.5..=4.0".to_owned(),
             );
         }
+        enable_dpi_awareness();
         let (
             layout,
             title,
@@ -881,6 +885,8 @@ mod window_smoke {
         let _ = WINDOW_LABEL_SLOT_PAINT.set(label_slot_paint);
         let _ = WINDOW_LABEL_SLOT_THEME.set(label_slot_theme);
         let _ = WINDOW_SELECTED_VISIBLE.set(selected_visible);
+        let _ = WINDOW_DPI_SCALE.set(effective_dpi_scale);
+        WINDOW_WINDUI_DWRITE_TEXT_DRAW_USED.store(false, Ordering::SeqCst);
 
         let instance = unsafe { GetModuleHandleW(null()) };
         let window_class = WndClassW {
@@ -1073,7 +1079,7 @@ mod window_smoke {
         if window_dc.is_null() {
             return Err("GetWindowDC failed for Rust Candidate PoC".to_owned());
         }
-        let candidate_font_name = wide("Microsoft YaHei");
+        let candidate_font_name = wide("Microsoft YaHei UI");
         let candidate_font = unsafe {
             CreateFontW(
                 -18,
@@ -1098,7 +1104,11 @@ mod window_smoke {
             unsafe { SelectObject(window_dc, candidate_font) }
         };
         let text_face = selected_text_face(window_dc);
-        if !text_face.eq_ignore_ascii_case("Microsoft YaHei") && text_face != "微软雅黑" {
+        if !text_face.eq_ignore_ascii_case("Microsoft YaHei UI")
+            && text_face != "微软雅黑 UI"
+            && !text_face.eq_ignore_ascii_case("Microsoft YaHei")
+            && text_face != "微软雅黑"
+        {
             unsafe {
                 if !old_window_font.is_null() {
                     SelectObject(window_dc, old_window_font);
@@ -1109,7 +1119,7 @@ mod window_smoke {
                 ReleaseDC(hwnd, window_dc);
             }
             return Err(format!(
-                "Rust Candidate PoC did not select a CJK-first Microsoft YaHei font, got '{text_face}'"
+                "Rust Candidate PoC did not select a Qingfeng-style CJK-first Microsoft YaHei UI font, got '{text_face}'"
             ));
         }
         let memory_dc = unsafe { CreateCompatibleDC(window_dc) };
@@ -1155,6 +1165,24 @@ mod window_smoke {
                 ReleaseDC(hwnd, window_dc);
             }
             return Err("BitBlt failed for Rust Candidate PoC".to_owned());
+        }
+        if !WINDOW_WINDUI_DWRITE_TEXT_DRAW_USED.load(Ordering::SeqCst) {
+            unsafe {
+                SelectObject(memory_dc, old_object);
+                DeleteObject(bitmap);
+                DeleteDC(memory_dc);
+                if !old_window_font.is_null() {
+                    SelectObject(window_dc, old_window_font);
+                }
+                if !candidate_font.is_null() {
+                    DeleteObject(candidate_font);
+                }
+                ReleaseDC(hwnd, window_dc);
+            }
+            return Err(
+                "Rust Candidate PoC screenshot text did not use the windui DirectWrite Microsoft YaHei UI renderer"
+                    .to_owned(),
+            );
         }
 
         let bytes_per_pixel = 4usize;
@@ -1226,6 +1254,207 @@ mod window_smoke {
             path: path.display().to_string(),
             text_face,
         })
+    }
+
+    fn render_windui_candidate_surface(client: &Rect) -> Option<Vec<u8>> {
+        let width = (client.right - client.left).max(1) as u32;
+        let height = (client.bottom - client.top).max(1) as u32;
+        let mut pixmap = Pixmap::new(width, height)?;
+        let mut text_engine = DWriteEngine::new();
+        text_engine.set_scale(1.0);
+        let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut text_engine, 1.0);
+        let theme = WINDOW_LABEL_SLOT_THEME.get().copied().unwrap_or_default();
+        let dpi_scale = WINDOW_DPI_SCALE.get().copied().unwrap_or(1.0);
+
+        canvas.fill_rect(
+            0.0,
+            0.0,
+            width as f32,
+            height as f32,
+            &WindPaint::fill(colorref_to_wind_color(theme.background)),
+        );
+
+        if let Some(items) = WINDOW_LABEL_SLOT_PAINT
+            .get()
+            .filter(|items| !items.is_empty())
+        {
+            canvas.stroke_round_rect(
+                0.5,
+                0.5,
+                width as f32 - 1.0,
+                height as f32 - 1.0,
+                theme.window_radius as f32,
+                1.0,
+                &WindPaint::fill(colorref_to_wind_color(theme.border)),
+            );
+            for item in items {
+                if item.selected {
+                    let rect = wind_rect_from_win_rect(&item.item_rect);
+                    canvas.fill_round_rect(
+                        rect.x as f32,
+                        rect.y as f32,
+                        rect.w as f32,
+                        rect.h as f32,
+                        item.item_radius as f32,
+                        &WindPaint::fill(colorref_to_wind_color(theme.selected_background)),
+                    );
+                }
+                draw_windui_text(
+                    &mut canvas,
+                    &item.label,
+                    &item.label_rect,
+                    theme.label,
+                    WindAlign::End,
+                    16.0 * dpi_scale,
+                );
+                draw_windui_text(
+                    &mut canvas,
+                    &item.text,
+                    &item.text_rect,
+                    if item.selected {
+                        theme.selected_text
+                    } else {
+                        theme.text
+                    },
+                    WindAlign::Start,
+                    18.0 * dpi_scale,
+                );
+                if let Some(comment_rect) = item.comment_rect {
+                    draw_windui_text(
+                        &mut canvas,
+                        &item.comment,
+                        &comment_rect,
+                        theme.label,
+                        WindAlign::Start,
+                        16.0 * dpi_scale,
+                    );
+                }
+            }
+        } else if let (Some(lines), Some(rects)) = (WINDOW_TEXT.get(), WINDOW_LAYOUT_RECTS.get()) {
+            let selected = WINDOW_SELECTED_VISIBLE.get().copied().flatten();
+            for (index, (text, layout_rect)) in lines.iter().zip(rects.iter()).enumerate() {
+                if selected == Some(index) {
+                    let rect = wind_rect_from_win_rect(layout_rect);
+                    canvas.fill_rect(
+                        rect.x as f32,
+                        rect.y as f32,
+                        rect.w as f32,
+                        rect.h as f32,
+                        &WindPaint::fill(colorref_to_wind_color(COLORREF_SELECTED_BACKGROUND)),
+                    );
+                }
+                let text_rect = Rect {
+                    left: layout_rect.left + 6,
+                    right: layout_rect.right - 6,
+                    ..*layout_rect
+                };
+                draw_windui_text(
+                    &mut canvas,
+                    text,
+                    &text_rect,
+                    COLORREF_TEXT,
+                    WindAlign::Start,
+                    18.0 * dpi_scale,
+                );
+            }
+        } else {
+            return None;
+        }
+
+        WINDOW_WINDUI_DWRITE_TEXT_DRAW_USED.store(true, Ordering::SeqCst);
+        drop(canvas);
+        Some(pixmap_to_bgra(&pixmap))
+    }
+
+    fn draw_windui_text(
+        canvas: &mut SkiaCanvas<'_>,
+        text: &[u16],
+        rect: &Rect,
+        color: Dword,
+        align: WindAlign,
+        size: f32,
+    ) {
+        let text = String::from_utf16_lossy(text.strip_suffix(&[0]).unwrap_or(text));
+        if text.is_empty() {
+            return;
+        }
+        let style = WindTextStyle {
+            family: Some("Microsoft YaHei UI"),
+            size,
+            weight: 400,
+            line_height: None,
+        };
+        let clip = wind_rect_from_win_rect(rect);
+        let layout = match align {
+            WindAlign::End => WindRect::new(clip.right() - 8192, clip.y, 8192, clip.h),
+            _ => WindRect::new(clip.x, clip.y, 8192, clip.h),
+        };
+        canvas.save();
+        canvas.clip_rect(clip);
+        canvas.draw_text(&text, layout, colorref_to_wind_color(color), align, &style);
+        canvas.restore();
+    }
+
+    fn wind_rect_from_win_rect(rect: &Rect) -> WindRect {
+        WindRect::new(
+            rect.left,
+            rect.top,
+            (rect.right - rect.left).max(0),
+            (rect.bottom - rect.top).max(0),
+        )
+    }
+
+    fn colorref_to_wind_color(color: Dword) -> WindColor {
+        WindColor::rgb(
+            (color & 0xFF) as u8,
+            ((color >> 8) & 0xFF) as u8,
+            ((color >> 16) & 0xFF) as u8,
+        )
+    }
+
+    fn pixmap_to_bgra(pixmap: &Pixmap) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(pixmap.data().len());
+        for pixel in pixmap.data().chunks_exact(4) {
+            pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+        pixels
+    }
+
+    fn blit_bgra_to_hdc(hdc: Hdc, client: &Rect, pixels: &[u8]) -> bool {
+        let width = (client.right - client.left).max(1);
+        let height = (client.bottom - client.top).max(1);
+        let info = BitmapInfo {
+            bmi_header: BitmapInfoHeader {
+                bi_size: std::mem::size_of::<BitmapInfoHeader>() as Dword,
+                bi_width: width,
+                bi_height: -height,
+                bi_planes: 1,
+                bi_bit_count: 32,
+                bi_compression: BI_RGB,
+                bi_size_image: pixels.len() as Dword,
+                bi_x_pels_per_meter: 0,
+                bi_y_pels_per_meter: 0,
+                bi_clr_used: 0,
+                bi_clr_important: 0,
+            },
+            bmi_colors: [0],
+        };
+        unsafe {
+            SetDIBitsToDevice(
+                hdc,
+                0,
+                0,
+                width as Dword,
+                height as Dword,
+                0,
+                0,
+                0,
+                height as Uint,
+                pixels.as_ptr().cast(),
+                &info,
+                DIB_RGB_COLORS,
+            ) != 0
+        }
     }
 
     fn write_bmp(path: &Path, width: i32, height: i32, pixels: &[u8]) -> Result<(), String> {
@@ -1480,155 +1709,10 @@ mod window_smoke {
                 };
                 let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
                 if !hdc.is_null() {
-                    let label_slot_theme =
-                        WINDOW_LABEL_SLOT_THEME.get().copied().unwrap_or_default();
-                    let brush = unsafe { CreateSolidBrush(label_slot_theme.background) };
-                    if !brush.is_null() {
-                        unsafe {
-                            FillRect(hdc, &paint.rc_paint, brush);
-                            DeleteObject(brush);
-                        }
-                    }
-                    if WINDOW_LABEL_SLOT_PAINT
-                        .get()
-                        .is_some_and(|items| !items.is_empty())
-                    {
-                        let mut client = Rect::default();
-                        if unsafe { GetClientRect(hwnd, &mut client) } != 0 {
-                            stroke_round_rect(
-                                hdc,
-                                &client,
-                                label_slot_theme.border,
-                                label_slot_theme.window_radius,
-                            );
-                        }
-                    }
-                    unsafe {
-                        SetBkMode(hdc, TRANSPARENT);
-                        SetTextColor(hdc, label_slot_theme.text);
-                    }
-                    let candidate_font_name = wide("Microsoft YaHei");
-                    let candidate_font = unsafe {
-                        CreateFontW(
-                            -18,
-                            0,
-                            0,
-                            0,
-                            FW_NORMAL,
-                            0,
-                            0,
-                            0,
-                            GB2312_CHARSET,
-                            OUT_DEFAULT_PRECIS,
-                            CLIP_DEFAULT_PRECIS,
-                            CLEARTYPE_QUALITY,
-                            DEFAULT_PITCH | FF_DONTCARE,
-                            candidate_font_name.as_ptr(),
-                        )
-                    };
-                    let old_font = if candidate_font.is_null() {
-                        null_mut()
-                    } else {
-                        unsafe { SelectObject(hdc, candidate_font) }
-                    };
-                    if let Some(label_slot_items) = WINDOW_LABEL_SLOT_PAINT
-                        .get()
-                        .filter(|items| !items.is_empty())
-                    {
-                        for item in label_slot_items {
-                            if item.selected {
-                                fill_round_rect(
-                                    hdc,
-                                    &item.item_rect,
-                                    label_slot_theme.selected_background,
-                                    item.item_radius,
-                                );
-                            }
-                            if item.label.len() > 1 {
-                                let mut label_rect = item.label_rect;
-                                unsafe {
-                                    SetTextColor(hdc, label_slot_theme.label);
-                                    DrawTextW(
-                                        hdc,
-                                        item.label.as_ptr(),
-                                        (item.label.len() - 1) as i32,
-                                        &mut label_rect,
-                                        DT_RIGHT | DT_SINGLELINE | DT_VCENTER,
-                                    );
-                                }
-                            }
-                            let mut text_rect = item.text_rect;
-                            unsafe {
-                                SetTextColor(
-                                    hdc,
-                                    if item.selected {
-                                        label_slot_theme.selected_text
-                                    } else {
-                                        label_slot_theme.text
-                                    },
-                                );
-                                DrawTextW(
-                                    hdc,
-                                    item.text.as_ptr(),
-                                    (item.text.len() - 1) as i32,
-                                    &mut text_rect,
-                                    DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-                                );
-                            }
-                            if let Some(mut comment_rect) = item.comment_rect {
-                                if item.comment.len() > 1 {
-                                    unsafe {
-                                        SetTextColor(hdc, label_slot_theme.label);
-                                        DrawTextW(
-                                            hdc,
-                                            item.comment.as_ptr(),
-                                            (item.comment.len() - 1) as i32,
-                                            &mut comment_rect,
-                                            DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    } else if let (Some(lines), Some(rects)) =
-                        (WINDOW_TEXT.get(), WINDOW_LAYOUT_RECTS.get())
-                    {
-                        let selected = WINDOW_SELECTED_VISIBLE.get().copied().flatten();
-                        for (index, (text, layout_rect)) in
-                            lines.iter().zip(rects.iter()).enumerate()
-                        {
-                            if selected == Some(index) {
-                                let brush =
-                                    unsafe { CreateSolidBrush(COLORREF_SELECTED_BACKGROUND) };
-                                if !brush.is_null() {
-                                    unsafe {
-                                        FillRect(hdc, layout_rect, brush);
-                                        DeleteObject(brush);
-                                    }
-                                }
-                            }
-                            let mut text_rect = *layout_rect;
-                            text_rect.left += 6;
-                            text_rect.right -= 6;
-                            unsafe {
-                                DrawTextW(
-                                    hdc,
-                                    text.as_ptr(),
-                                    (text.len() - 1) as i32,
-                                    &mut text_rect,
-                                    DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-                                );
-                            }
-                        }
-                    }
-                    if !old_font.is_null() {
-                        unsafe {
-                            SelectObject(hdc, old_font);
-                        }
-                    }
-                    if !candidate_font.is_null() {
-                        unsafe {
-                            DeleteObject(candidate_font);
+                    let mut client = Rect::default();
+                    if unsafe { GetClientRect(hwnd, &mut client) } != 0 {
+                        if let Some(pixels) = render_windui_candidate_surface(&client) {
+                            let _ = blit_bgra_to_hdc(hdc, &client, &pixels);
                         }
                     }
                     unsafe {
@@ -1644,6 +1728,26 @@ mod window_smoke {
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn enable_dpi_awareness() {
+        type SetProcessDpiAwarenessContext = unsafe extern "system" fn(isize) -> Bool;
+        let user32_name = wide("user32.dll");
+        let user32 = unsafe { GetModuleHandleW(user32_name.as_ptr()) };
+        if !user32.is_null() {
+            let proc =
+                unsafe { GetProcAddress(user32, c"SetProcessDpiAwarenessContext".as_ptr().cast()) };
+            if !proc.is_null() {
+                let set_context: SetProcessDpiAwarenessContext =
+                    unsafe { std::mem::transmute(proc) };
+                if unsafe { set_context(-4) } != 0 {
+                    return;
+                }
+            }
+        }
+        unsafe {
+            SetProcessDPIAware();
+        }
     }
 
     fn selected_text_face(hdc: Hdc) -> String {
@@ -2069,54 +2173,6 @@ mod window_smoke {
             top: rect.top.round() as i32,
             right: rect.right.round() as i32,
             bottom: rect.bottom.round() as i32,
-        }
-    }
-
-    fn fill_round_rect(hdc: Hdc, rect: &Rect, color: Dword, radius: i32) {
-        let brush = unsafe { CreateSolidBrush(color) };
-        if brush.is_null() {
-            return;
-        }
-        let null_pen = unsafe { GetStockObject(NULL_PEN) };
-        let old_brush = unsafe { SelectObject(hdc, brush.cast()) };
-        let old_pen = unsafe { SelectObject(hdc, null_pen) };
-        unsafe {
-            RoundRect(
-                hdc,
-                rect.left,
-                rect.top,
-                rect.right,
-                rect.bottom,
-                radius * 2,
-                radius * 2,
-            );
-            SelectObject(hdc, old_pen);
-            SelectObject(hdc, old_brush);
-            DeleteObject(brush);
-        }
-    }
-
-    fn stroke_round_rect(hdc: Hdc, rect: &Rect, color: Dword, radius: i32) {
-        let pen = unsafe { CreatePen(PS_SOLID, 1, color) };
-        if pen.is_null() {
-            return;
-        }
-        let null_brush = unsafe { GetStockObject(NULL_BRUSH) };
-        let old_pen = unsafe { SelectObject(hdc, pen) };
-        let old_brush = unsafe { SelectObject(hdc, null_brush) };
-        unsafe {
-            RoundRect(
-                hdc,
-                rect.left,
-                rect.top,
-                rect.right - 1,
-                rect.bottom - 1,
-                radius * 2,
-                radius * 2,
-            );
-            SelectObject(hdc, old_brush);
-            SelectObject(hdc, old_pen);
-            DeleteObject(pen.cast());
         }
     }
 

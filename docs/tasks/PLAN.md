@@ -52,7 +52,9 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   package-candidate usability regressions.
 - `047-CONFIG-UX-009` is the next eligible code/product task once the currently reachable
   R3-03 automated checks are recorded; `R3-03` real-host evidence may remain `MANUAL-PENDING`.
-- After an automatable task is green, archive it, update `status.md`, copy the next eligible task into `current.md`, and continue.
+- After an automatable task is green, archive it, update `status.md`, and copy the next eligible task into `current.md`.
+- Continue automatically only when the next task is tightly coupled to the same subsystem and materially reuses the context already loaded.
+- At a subsystem or phase boundary, record a minimal handoff in `status.md` and stop the session so the next task starts with fresh context; do not ask the user merely to advance the queue.
 - Task `015` contains real-host evidence. Run everything reachable; unavailable cases become `MANUAL-PENDING`. Tasks `016–020` may continue because they are code/product work, but **final stabilization/release cannot be declared complete** until required real-host evidence is actually green.
 - Rust R1 starts only after its named C++ semantic/corpus prerequisites are green.
 - Rust R2 starts only after launcher/process semantics are frozen in C++.
@@ -121,6 +123,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 058 | CONFIG-WINDUI-SETTINGS-SHELL-001 | COMPLETED / WINDUI-SETTINGS-SHELL-DEFAULT-GREEN | 057; 056 real-host evidence may remain MANUAL-PENDING because this is a code-only GUI cutover slice | completed/058-CONFIG-WINDUI-SETTINGS-SHELL-001.md |
 | 059 | CANDIDATE-LABEL-SLOT-RUST-DRAWING-001 | COMPLETED / CANDIDATE-LABEL-SLOT-RUST-DRAWING-GREEN / WINDINPUT-QINGFENG-VISUAL-FOLLOWUP-QUEUED | `REL-01` is parked on external/manual evidence; user explicitly required configurable candidate numbers, reserved row/column label space, stable alignment, Rust drawing, keeping scroll mode visible in Settings, and replacing PoC-level visuals with WindInput/Qingfeng-derived candidate rendering | completed/059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001.md |
 | 060 | CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001 | COMPLETED / WINDINPUT-QINGFENG-WECHAT-GREEN-VISUAL-GREEN | 059 label-slot contract green; product default must be WeChat-green light/dark while preserving Qingfeng/upstream theme sources and using actual WindInput candidate visual code where local quality falls short | completed/060-CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001.md |
+| 061 | CANDIDATE-MICROSOFT-YAHEI-RUST-TEXT-RENDERER-001 | COMPLETED / WINDUI-DWRITE-YAHEI-UI-150PCT-GREEN | 060 visual defaults green; Rust Candidate screenshots now use the Qingfeng windui DirectWrite path, per-monitor DPI awareness, DPI-scaled text, and 150% visual goldens | completed/061-CANDIDATE-MICROSOFT-YAHEI-RUST-TEXT-RENDERER-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
@@ -156,4 +159,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   upstream theme sources remain available. Candidate defaults must use a CJK-first font chain
   (`Microsoft YaHei`, `Microsoft YaHei UI`, `system`). Candidate screenshots must be driven by
   WindInput/Qingfeng candidate visual code/tokens, not a plain engineering proof window.
+- `061` hardens the Candidate screenshot text path itself: bitmap text must be drawn by the
+  Rust-owned renderer with a Microsoft YaHei CJK-first path, and source contracts must prevent
+  silent regression to rough GDI `DrawTextW` screenshot text.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

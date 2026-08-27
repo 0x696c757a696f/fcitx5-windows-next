@@ -5,6 +5,10 @@ edition = "2021"
 license = "LGPL-2.1-or-later"
 publish = false
 
+[dependencies]
+tiny-skia = "0.12"
+windui = { path = "../../third_party/wind-ui-rust", default-features = false }
+
 [lib]
 path = "src/lib.rs"
 crate-type = ["rlib", "staticlib"]

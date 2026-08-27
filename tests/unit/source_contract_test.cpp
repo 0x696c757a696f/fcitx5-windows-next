@@ -2171,6 +2171,10 @@ int main(int argc, char** argv) {
         candidateLayoutSource.find("global_hooks") == std::string::npos ||
         candidateLayoutSource.find("process_injection") == std::string::npos ||
         candidatePocManifest.find("name = \"fcitx5-candidate-poc\"") == std::string::npos ||
+        candidatePocManifest.find("tiny-skia = \"0.12\"") == std::string::npos ||
+        candidatePocManifest.find(
+            "windui = { path = \"../../third_party/wind-ui-rust\", default-features = false }") ==
+            std::string::npos ||
         candidatePocBinary.find("--self-check") == std::string::npos ||
         candidatePocBinary.find("--window-smoke") == std::string::npos ||
         candidatePocBinary.find("CreateWindowExW") == std::string::npos ||
@@ -2193,6 +2197,16 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("GB2312_CHARSET") == std::string::npos ||
         candidatePocBinary.find("GetTextFaceW") == std::string::npos ||
         candidatePocBinary.find("candidate_visual_text_face") == std::string::npos ||
+        candidatePocBinary.find("DWriteEngine") == std::string::npos ||
+        candidatePocBinary.find("SkiaCanvas::with_text") == std::string::npos ||
+        candidatePocBinary.find("SetDIBitsToDevice") == std::string::npos ||
+        candidatePocBinary.find("SetProcessDpiAwarenessContext") == std::string::npos ||
+        candidatePocBinary.find("SetProcessDPIAware") == std::string::npos ||
+        candidatePocBinary.find("Microsoft YaHei UI") == std::string::npos ||
+        candidatePocBinary.find("WINDOW_WINDUI_DWRITE_TEXT_DRAW_USED") == std::string::npos ||
+        candidatePocBinary.find(
+            "Rust Candidate PoC screenshot text did not use the windui DirectWrite Microsoft YaHei UI renderer") ==
+            std::string::npos ||
         candidatePocBinary.find("vertical-dark") == std::string::npos ||
         candidatePocBinary.find("horizontal-dark") == std::string::npos ||
         candidatePocBinary.find("grid-dark") == std::string::npos ||
