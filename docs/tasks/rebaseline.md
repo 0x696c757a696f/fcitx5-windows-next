@@ -84,6 +84,11 @@ Local execution overlay:
   build matrix, and measured 2-core/4-GB SLO calibration. `runtime_build` is signed provenance/
   diagnostic data, not an ABI equality gate. Current ML-DSA-65 v2 signing remains unchanged;
   ARM64/TUF/RemoteAddon/AppContainer remain future scope.
+- Add `071-RUST-TEST-AUTHORITY-CUTOVER-001` after the 065-070 product queue. All new tests default
+  to Rust, and Rust-owned product semantics require Rust-authoritative behavior/contract/property/
+  fault/fuzz/performance/source-structure coverage. Long-term C++ tests are limited to direct Fcitx
+  adapter tests, necessary Win32/COM/ABI adapter tests, and final mixed-binary integration/E2E;
+  migration-only differential/golden tests must have a cutover deletion condition.
 
 ## P0 Guidance Tasks
 
@@ -160,7 +165,8 @@ Local execution overlay:
 `RELEASE-01` stays parked. The first code-only task is `065-CONFIG-CORE-TRANSACTION-CONTRACT-001`,
 then `066-CANDIDATE-SEMANTIC-A11Y-001`, `067-PLUGIN-PROVENANCE-DATA-BOUNDARY-001`,
 `068-REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001`, `069-PLUGIN-ECOSYSTEM-BUILD-MATRIX-001`, and
-`070-LOW-RESOURCE-SLO-CALIBRATION-001`.
+`070-LOW-RESOURCE-SLO-CALIBRATION-001`. After those automated slices, the next eligible task is
+`071-RUST-TEST-AUTHORITY-CUTOVER-001`, subject to its explicit inventory and migration prerequisites.
 These are Rust-first and must keep C++ limited to the direct Fcitx adapter, upstream native addon, or
 thin Windows ABI/renderer adapter.
 

@@ -1833,6 +1833,24 @@ third_party/manifest.*      # 或等价机器可读 inventory
 | E2E           | 真实应用中输入、候选、commit、切焦点、崩溃恢复、DPI、多屏                   |
 | Release smoke | 安装、原子替换失败保护、卸载、Portable 修复、Chocolatey/winget wrapper            |
 
+### 12.1.1 测试代码所有权
+
+测试代码默认跟随被测产品语义的 owner；v1.8 之后所有新增测试默认使用 Rust。Config、Candidate、
+package/update、control、launcher、TSF product state、protocol 以及其它 Rust-owned Windows
+产品语义的 unit、contract、property/model、fault-injection、fuzz、performance 和 source-structure
+测试，必须由 Rust 提供权威覆盖。C++ 测试只有以下三类可以长期保留：
+
+1. 直接操作 `fcitx::Instance`、`InputContext`、`Addon`、`InputPanel`、`CandidateList` 等 Fcitx
+   对象及其薄 adapter 的测试；
+2. 必要的 Win32/COM/ABI adapter 测试；
+3. 验证最终 C++/Rust 混合二进制边界的 integration/E2E 测试。
+
+迁移期间允许 C++↔Rust differential/golden 测试临时存在，以保持冻结 corpus 的连续性；它们必须
+绑定到明确的 cutover 任务和删除条件。C++ source-string/source-contract 测试不能替代 Rust
+public-behavior 测试。每个既有 C++ test target/file 在修改前必须标记 `KEEP`、`MIGRATE` 或
+`DELETE`，并记录 owner、保留理由、Rust 替代物或删除证据；不得机械删除 Fcitx/Windows
+adapter 或最终混合二进制证据。
+
 ## 12.2 固定 Windows 应用矩阵
 
 | **类别** | **最低验证对象**       | **重点**                                 |
@@ -1936,6 +1954,9 @@ IME 的 bug 不一定只在 IME 一侧。对 Chrome/Edge、Firefox、Windows Ter
 - **fake boundary 优先。** TSF↔Engine 可使用确定性的 fake engine/pipe server 测协议、timeout、stale reply、crash；网络更新测试优先本地 fixture server。不要让核心回归依赖真实公网、真实云 API 或人工输入。
 - **禁止 flaky-by-retry。** 测试失败不能通过增加 sleep、扩大 retry 次数或反复重跑“修绿”；先找竞态/时序根因。
 - **停止规则适用于测试。** 已有足够证据覆盖当前变更后停止扩大矩阵；但不能用停止规则跳过本文明确列为 MUST 的 release/security gate。
+- **语言与路由。** 新测试默认写 Rust，并由受影响的 Cargo/顶层 `build.ps1` 路径执行；保留的
+  C++ adapter 测试和最终混合二进制 integration/E2E 继续经 CMake/CTest 路由。支持的 targets
+  必须分别保留 x64/x86 结果，不能用一个架构的通过替代另一个架构。
 
 ## 12.8 人因、外观与资源回归
 
@@ -2039,6 +2060,11 @@ Rust workspace 承载产品自有 Rust authority；CMake/build.ps1 仍是顶层 
 - 打开 /W4、/WX（可按第三方代码隔离）、/sdl、DEP/ASLR/CFG/CET 等工具链可用的安全选项。
 
 - 任何新增依赖必须说明：用途、许可证、最小 Windows、二进制体积、是否可访问网络/输入、是否支持目标工具链。
+
+- C++ 新测试不得成为 Rust-owned 产品语义的 authority。除直接 Fcitx adapter、必要
+  Win32/COM/ABI adapter、以及最终混合二进制 integration/E2E 外，测试必须迁移到 Rust；
+  source-string/source-contract 只能作为结构性辅助证据，不能替代 public behavior、contract
+  或 property 测试。
 
 ## 13.3 Config / Candidate UI / Rust 迁移边界
 

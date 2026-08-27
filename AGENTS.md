@@ -67,6 +67,16 @@ Delegation rules:
 - Do not spawn a subagent when describing and supervising the work would cost more context than doing it directly.
 - After two materially equivalent failures, stop repeating the same approach and reconsider the root-cause model.
 
+Execution environment for implementation agents:
+
+- Use PowerShell 7 at `D:\Program Files\PowerShell\7\pwsh.exe`.
+- Use the repository toolchain root `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains`.
+- Prefer the fast tools under `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast`.
+- Use the pinned repository Cargo at
+  `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home\bin\cargo.exe`
+  (or the exact pinned toolchain path selected by the task), and keep `CARGO_TARGET_DIR`
+  inside the agent worktree.
+
 ## Implementation rule
 
 Implement the smallest correct vertical slice that satisfies the current task. Necessary producer/consumer changes, protocol changes, fixtures, and regressions are in scope only when required for correctness.
@@ -99,11 +109,31 @@ Architecture defaults:
   executable cutover slices that preserve user-visible behavior while moving ownership to Rust.
 - Do not create a permanent old/new protocol dual stack.
 
+Test ownership follows product ownership. All new test code defaults to Rust. Rust-owned product
+semantics (including Config, Candidate, package/update, control, launcher, TSF product state, and
+protocols) require Rust-authoritative unit, contract, property/model, fault, fuzz, performance, and
+source-structure coverage. C++ tests may remain long-term only when they directly operate on
+`fcitx::Instance`, `InputContext`, `Addon`, `InputPanel`, `CandidateList`, or another direct Fcitx
+adapter boundary; verify a necessary Win32/COM/ABI adapter; or exercise the final mixed C++/Rust
+binary through an integration/E2E test. Migration-only C++/Rust differential or golden tests may
+coexist temporarily while a corpus is frozen, but the cutover task must delete the old C++ authority
+and tests that served only that authority. C++ source-string/source-contract tests never replace Rust
+public-behavior tests; classify each existing C++ test as `KEEP`, `MIGRATE`, or `DELETE` before
+changing it.
+
 ## Testing
 
 Run affected tests first. Expand only when the changed boundary requires it.
 
 Use deterministic barriers/fake clocks/fixtures where possible instead of arbitrary sleeps. A reproducible bug fix should leave a regression test.
+
+For every migration task, record test ownership and corpus continuity before editing tests. Move
+Rust-owned unit, contract, property/model, fault, fuzz, performance, and source-structure checks to
+Rust in bounded slices. Preserve only the three permitted long-term C++ categories above, and keep
+the CMake/CTest route for tests that remain or for final mixed-binary integration/E2E. Run and record
+both x64 and x86 lanes when the affected target supports them. A temporary differential or golden
+test must name the Rust cutover task that removes it; no permanent C++/Rust test authority or
+duplicate product contract is allowed.
 
 ## Automatic queue advancement
 

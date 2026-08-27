@@ -133,6 +133,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 068 | REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001 | TODO / CODE-ONLY | 067 package metadata boundary green; extend current v2 repository verification with freshness, freeze/mix-and-match and mirror-identity corpus without claiming TUF | 068-REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001.md |
 | 069 | PLUGIN-ECOSYSTEM-BUILD-MATRIX-001 | TODO / CODE-ONLY / EXTERNAL-EVIDENCE-PARTIAL | 067 provenance and 068 freshness contracts green; add Lua and one non-Chinese upstream addon as real pinned build/package/sign-input/install/load slices after the existing Rime production-input path | 069-PLUGIN-ECOSYSTEM-BUILD-MATRIX-001.md |
 | 070 | LOW-RESOURCE-SLO-CALIBRATION-001 | TODO / CODE-ONLY / EXTERNAL-EVIDENCE-PARTIAL | 066 semantics, 068 repository path, and 069 ecosystem matrix green; add repeatable low-resource measurement harness and initial SLO evidence, leaving real 2-core/4-GB calibration manual-pending | 070-LOW-RESOURCE-SLO-CALIBRATION-001.md |
+| 071 | RUST-TEST-AUTHORITY-CUTOVER-001 | TODO / CODE-ONLY / MIGRATION | 065-070 automated acceptance green; inventory and migrate C++ tests by ownership after the Rust product-plane queue, while preserving required adapter and final mixed-binary evidence | 071-RUST-TEST-AUTHORITY-CUTOVER-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
@@ -180,6 +181,12 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   low-resource gates in dependency order. `runtime_build` is signed provenance/diagnostic data, not
   an ABI equality gate. The queue does not claim ARM64, TUF, RemoteAddon/AppContainer, production
   signing, UAC, or real-host evidence.
+- `071` is deliberately after `070` and is not part of the 065-070 product slices. It inventories
+  every existing C++ test target/file as `KEEP`, `MIGRATE`, or `DELETE`, migrates Rust-owned unit,
+  contract, property, fault, fuzz, performance, and source-structure coverage to Rust in bounded
+  slices, and retains only direct Fcitx adapter, necessary Win32/COM/ABI adapter, and final
+  mixed-binary integration/E2E C++ tests. Temporary differential/golden tests require an explicit
+  deletion condition; CMake/CTest routing and x64/x86 continuity remain required.
 - Every future Rust task must use a worktree-local `CARGO_TARGET_DIR`; before implementation its
   execution agent must fully read `ponytail`, `rust-skills`, and `tdd`. New product logic is Rust;
   C++ is limited to the direct Fcitx adapter, upstream native addon, or a thin Windows ABI/renderer
