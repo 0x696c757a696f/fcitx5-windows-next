@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "packages": [
+    {
+      "id": "fcitx5-rime",
+      "title": "Rime",
+      "summary": "Rime input engine",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-rime.git",
+        "commit": "4e996319edea790495edc2c91893e9af4c4e6d6a"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "librime", "commit": "33e78140250125871856cdc5b42ddc6a5fcd3cd4", "license": "BSD-3-Clause"},
+          {"name": "librime-data", "version": "0.0.0.20251229-1", "license": "BSD-3-Clause"}
+        ]
+      },
+      "payload": [
+        "lib/fcitx5/librime.dll",
+        "share/fcitx5/addon/rime.conf"
+      ]
+    }
+  ]
+}

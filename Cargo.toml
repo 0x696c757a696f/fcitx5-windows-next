@@ -8,6 +8,7 @@ members = [
   "rust/tsf-support-core",
   "rust/launcher-core",
   "rust/package-core",
+  "rust/release-pqc-signer",
   "rust/control-core",
   "rust/process-execution-core",
   "rust/register-core",

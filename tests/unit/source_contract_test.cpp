@@ -292,11 +292,23 @@ int main(int argc, char** argv) {
         runtimeSource.find("std::make_unique<Instance>(0, nullptr)") != std::string::npos) {
         return fail("ENGINE-STARTUP-ISOLATION: Engine startup must honor FCITX_USER_DATA_ROOT and explicitly enable only configured product addon surfaces");
     }
+    if (runtimeSource.find("fcitx5_package_active_addon_dirs_utf16") == std::string::npos ||
+        runtimeSource.find("activePackageAddonDirectories") == std::string::npos) {
+        return fail("PLUGIN-LIFECYCLE: Engine must consume enabled package add-on directories through the Rust package boundary");
+    }
     const auto nativeEngineCmakeSource = read_text(sourceRoot / "native-engine/CMakeLists.txt");
     if (nativeEngineCmakeSource.find("fcitx5_protocol_core_rust") == std::string::npos ||
         nativeEngineCmakeSource.find("fcitx5_engine_core_rust") == std::string::npos ||
+        nativeEngineCmakeSource.find("fcitx5_package_core_rust") == std::string::npos ||
+        nativeEngineCmakeSource.find("LANGUAGES C CXX") == std::string::npos ||
+        nativeEngineCmakeSource.find("CC_x86_64_pc_windows_gnu=${CMAKE_C_COMPILER}") ==
+            std::string::npos ||
+        nativeEngineCmakeSource.find("CXX_x86_64_pc_windows_gnu=${CMAKE_CXX_COMPILER}") ==
+            std::string::npos ||
+        nativeEngineCmakeSource.find("AR_x86_64_pc_windows_gnu=${CMAKE_AR}") ==
+            std::string::npos ||
         nativeEngineCmakeSource.find("x86_64-pc-windows-gnu") == std::string::npos) {
-        return fail("ENGINE-E2: native-engine lane must link the Rust protocol/engine staticlibs (GNU ABI)");
+        return fail("ENGINE-E2: native-engine lane must discover GNU C/C++/AR and link Rust protocol/engine/package staticlibs");
     }
     // ENGINE-E4: the engine-server session epoch, request ordering, deadline
     // policy, and per-connection session state must stay Rust-owned in
@@ -761,6 +773,12 @@ int main(int argc, char** argv) {
         controlSource.find("baseUrl + L\"/index.sig\"") != std::string::npos ||
         controlSource.find("https://packages.fcitx5-windows.org/v1/") !=
             std::string::npos ||
+        controlSource.find("repository/index.sig.json") == std::string::npos ||
+        controlSource.find("index.sig.json") == std::string::npos ||
+        controlSource.find("verify_repository_index_envelope(") == std::string::npos ||
+        controlSource.find("read_signature_envelope(") != std::string::npos ||
+        controlSource.find("verify_signature_envelope(") != std::string::npos ||
+        controlSource.find("verify_repository_index_parsed_envelope") != std::string::npos ||
         controlSource.find("std::string(fcitx::windows::kReleaseIdentity.channel_name)") !=
             std::string::npos ||
         controlSource.find("\"pkg-\" + entry->sha256.substr(0U, 24U)") !=
@@ -1669,6 +1687,9 @@ int main(int argc, char** argv) {
         rustPackageCore.find("finalize_installed_package_removal") == std::string::npos ||
         rustPackageCore.find("validate_archive_inventory") == std::string::npos ||
         rustPackageCore.find("stage_validated_archive_zip") == std::string::npos ||
+        rustPackageCore.find("manifest.sig.json") == std::string::npos ||
+        rustPackageCore.find("official package archives require a v2 manifest") ==
+            std::string::npos ||
         rustPackageCore.find("unix_symlink") == std::string::npos ||
         rustPackageCore.find("manifest paths collide on Windows") == std::string::npos ||
         rustPackageCore.find("archive_zip_staging_matches_cpp_extraction_policy") ==

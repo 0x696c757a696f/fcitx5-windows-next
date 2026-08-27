@@ -532,7 +532,6 @@ constexpr std::uint32_t kRootActionStatus = 8;
 constexpr std::uint32_t kRootActionRestartEngine = 9;
 constexpr std::uint32_t kRootActionShutdown = 10;
 constexpr std::uint32_t kRootActionDiagnosticsPlan = 11;
-constexpr int kControlFileReadInvalidFile = 1;
 constexpr int kControlFileReadMissing = 3;
 constexpr int kControlArchiveCacheInvalid = 1;
 constexpr std::uint32_t kConfigActionValidate = 1;
@@ -748,23 +747,6 @@ OptionalConfigRead readOptionalConfig(const fs::path& path, std::string& text) {
     return OptionalConfigRead::present;
 }
 
-std::vector<std::byte> readBinary(const fs::path& path, std::size_t maximum) {
-    const std::wstring pathText = path.wstring();
-    char* bytes = nullptr;
-    std::size_t length = 0;
-    const int status = fcitx5_control_read_file_utf16(
-        {pathText.data(), pathText.size()}, maximum, &bytes, &length);
-    if (status == kControlFileReadInvalidFile)
-        throw fcitx::package::PackageError("invalid_file", "file is missing or too large");
-    if (status != 0)
-        throw fcitx::package::PackageError("io_error", "file read failed");
-    std::vector<std::byte> result(length);
-    if (bytes && length > 0)
-        std::memcpy(result.data(), bytes, length);
-    fcitx5_control_utf8_free(bytes, length);
-    return result;
-}
-
 fs::path executableDirectory() {
     fcitx::windows::platform::RuntimeIdentity identity;
     if (!fcitx::windows::platform::queryCurrentIdentity(identity) ||
@@ -792,7 +774,7 @@ struct RepositoryFiles {
 };
 
 RepositoryFiles repositoryFiles(const fs::path& dataRoot) {
-    return {dataRoot / L"repository/index.json", dataRoot / L"repository/index.sig",
+    return {dataRoot / L"repository/index.json", dataRoot / L"repository/index.sig.json",
             installationRoot() / L"security/trusted-keys.json"};
 }
 
@@ -963,8 +945,11 @@ fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
     if (!readUtf8(files.index, index))
         throw fcitx::package::PackageError("repository_unavailable",
                                            "repository cache is unavailable");
-    const auto signature = readBinary(files.signature, 16U * 1024U);
-    const auto repository = fcitx::package::verify_repository_index(
+    std::string signature;
+    if (!readUtf8(files.signature, signature))
+        throw fcitx::package::PackageError("invalid_signature",
+                                           "repository signature is unavailable");
+    const auto repository = fcitx::package::verify_repository_index_envelope(
         index, signature, fcitx::package::read_trusted_keys(files.keyring),
         fcitx::windows::kReleaseIdentity.channel_name);
     // Defense in depth: the cached index itself must not be an older
@@ -980,7 +965,7 @@ fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
 
 void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
     const auto indexUrl = repositoryMetadataUrl(baseUrl, "index.json");
-    const auto signatureUrl = repositoryMetadataUrl(baseUrl, "index.sig");
+    const auto signatureUrl = repositoryMetadataUrl(baseUrl, "index.sig.json");
     if (indexUrl.empty() || signatureUrl.empty())
         throw fcitx::package::PackageError("network_error", "repository metadata URL is invalid");
     const auto files = repositoryFiles(dataRoot);
@@ -1001,8 +986,10 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
     std::string index;
     if (!readUtf8(incomingIndex, index))
         throw fcitx::package::PackageError("invalid_repository", "repository index is unreadable");
-    const auto signature = readBinary(incomingSignature, 16U * 1024U);
-    const auto repository = fcitx::package::verify_repository_index(
+    std::string signature;
+    if (!readUtf8(incomingSignature, signature))
+        throw fcitx::package::PackageError("invalid_signature", "repository signature is unreadable");
+    const auto repository = fcitx::package::verify_repository_index_envelope(
         index, signature, fcitx::package::read_trusted_keys(files.keyring),
         fcitx::windows::kReleaseIdentity.channel_name);
     // Anti-rollback: reject an index whose release sequences are older than

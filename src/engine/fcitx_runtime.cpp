@@ -35,6 +35,10 @@
 #include <unordered_map>
 #include <utility>
 
+extern "C" std::size_t fcitx5_package_active_addon_dirs_utf16(
+    const wchar_t* install_root, std::size_t install_root_len, wchar_t* output,
+    std::size_t capacity);
+
 namespace fcitx::windows::engine {
 namespace {
 
@@ -205,6 +209,21 @@ std::string utf8Path(const std::filesystem::path& path) {
                : std::string{};
 }
 
+std::string activePackageAddonDirectories(const std::filesystem::path& dataRoot) {
+    const auto packageRoot = dataRoot / L"packages";
+    const std::size_t required = fcitx5_package_active_addon_dirs_utf16(
+        packageRoot.c_str(), packageRoot.native().size(), nullptr, 0);
+    if (required == 0)
+        return {};
+    std::wstring directories(required, L'\0');
+    if (fcitx5_package_active_addon_dirs_utf16(packageRoot.c_str(), packageRoot.native().size(),
+                                               directories.data(), directories.size()) !=
+        directories.size()) {
+        return {};
+    }
+    return utf8Path(std::filesystem::path(directories));
+}
+
 bool setupEnvironment() {
     std::wstring modulePath(32'768, L'\0');
     const DWORD size =
@@ -245,7 +264,12 @@ bool setupEnvironment() {
     const auto models = utf8Path(root / "lib" / "libime");
     if (addon.empty() || share.empty() || data.empty() || models.empty())
         return false;
-    setEnvironment("FCITX_ADDON_DIRS", addon.c_str());
+    std::string addonDirectories = addon;
+    if (const auto activePackages = activePackageAddonDirectories(localDataDirectory());
+        !activePackages.empty()) {
+        addonDirectories.append(";").append(activePackages);
+    }
+    setEnvironment("FCITX_ADDON_DIRS", addonDirectories.c_str());
     setEnvironment("XDG_DATA_DIRS", share.c_str());
     setEnvironment("FCITX_DATA_DIRS", data.c_str());
     setEnvironment("LIBIME_MODEL_DIRS", models.c_str());

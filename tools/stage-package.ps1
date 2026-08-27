@@ -33,6 +33,7 @@ $required = @(
   (Join-Path $x64 'fcitx5-deployer.exe'), (Join-Path $x64 'fcitx5-provider.exe'),
   (Join-Path $x64 'fcitx5-updater.exe'),
   (Join-Path $x64 'fcitx5-bootstrap.exe'),
+  (Join-Path $x64 'fcitx5-release-pqc-signer.exe'),
   (Join-Path $x64 'fcitx5-register.exe'), (Join-Path $x64 'fcitx5-tsf.dll'),
   (Join-Path $x86 'fcitx5-register.exe'), (Join-Path $x86 'fcitx5-tsf.dll'))
 foreach ($path in $required) {
@@ -78,6 +79,9 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'resources/themes/default') `
   -Destination (Join-Path $root 'themes') -Recurse
 Copy-Item -LiteralPath (Join-Path $repoRoot 'security/trusted-keys.template.json') `
   -Destination (Join-Path $root 'security/trusted-keys.json')
+[IO.Directory]::CreateDirectory((Join-Path $outRoot 'release-tools')) | Out-Null
+Copy-Item -LiteralPath (Join-Path $x64 'fcitx5-release-pqc-signer.exe') `
+  -Destination (Join-Path $outRoot 'release-tools/fcitx5-release-pqc-signer.exe') -Force
 [IO.File]::WriteAllText((Join-Path $root 'portable.flag'), "portable`n",
   [Text.UTF8Encoding]::new($false))
 

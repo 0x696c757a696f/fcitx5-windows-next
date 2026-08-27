@@ -1,0 +1,17 @@
+[package]
+name = "fcitx5-release-pqc-signer"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "fcitx5-release-pqc-signer"
+path = "src/main.rs"
+
+[dependencies]
+blake3 = { version = "=1.5.5", default-features = false, features = ["pure"] }
+
+[build-dependencies]
+cc = "=1.4.4"

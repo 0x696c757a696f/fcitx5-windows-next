@@ -188,6 +188,14 @@ name = "fcitx5-register-core"
 version = "0.1.0"
 
 [[package]]
+name = "fcitx5-release-pqc-signer"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "cc",
+]
+
+[[package]]
 name = "fcitx5-tsf-poc"
 version = "0.1.0"
 dependencies = [

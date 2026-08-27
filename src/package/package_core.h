@@ -302,6 +302,11 @@ extern "C" Fcitx5RepositoryIndexResult fcitx5_repository_verify_index_struct_utf
     std::size_t signature_len, const Fcitx5PackageTrustedKey* trusted_keys,
     std::size_t trusted_key_count, const std::uint8_t* expected_channel,
     std::size_t expected_channel_len);
+extern "C" Fcitx5RepositoryIndexResult fcitx5_repository_verify_index_envelope_struct_utf8(
+    const std::uint8_t* index_data, std::size_t index_len, const std::uint8_t* envelope_data,
+    std::size_t envelope_len, const Fcitx5PackageTrustedKey* trusted_keys,
+    std::size_t trusted_key_count, const std::uint8_t* expected_channel,
+    std::size_t expected_channel_len);
 extern "C" Fcitx5RepositoryIndexResult fcitx5_repository_verify_index_parsed_envelope_struct_utf8(
     const std::uint8_t* index_data, std::size_t index_len, std::uint32_t format_version,
     Fcitx5PackageByteSlice signed_object, Fcitx5PackageByteSlice canonicalization,
@@ -470,6 +475,18 @@ class RepositoryIndexResultGuard final {
       reinterpret_cast<const std::uint8_t*>(signature.data()), signature.size(),
       key_views.data(), key_views.size(),
       reinterpret_cast<const std::uint8_t*>(expectedChannel.data()), expectedChannel.size()));
+}
+
+[[nodiscard]] inline RepositoryIndex verify_repository_index_envelope(
+    std::string_view index_bytes, std::string_view envelope_bytes,
+    std::span<const TrustedKey> trusted_keys, std::string_view expectedChannel) {
+  const auto key_views = detail::rust_trusted_key_views(trusted_keys);
+  return detail::repository_result(
+      detail::fcitx5_repository_verify_index_envelope_struct_utf8(
+          reinterpret_cast<const std::uint8_t*>(index_bytes.data()), index_bytes.size(),
+          reinterpret_cast<const std::uint8_t*>(envelope_bytes.data()), envelope_bytes.size(),
+          key_views.data(), key_views.size(),
+          reinterpret_cast<const std::uint8_t*>(expectedChannel.data()), expectedChannel.size()));
 }
 
 [[nodiscard]] inline RepositoryIndex verify_repository_index(

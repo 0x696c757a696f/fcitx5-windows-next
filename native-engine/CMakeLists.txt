@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(fcitx5-windows-native-engine VERSION 0.1.0 LANGUAGES CXX)
+project(fcitx5-windows-native-engine VERSION 0.1.0 LANGUAGES C CXX)
 
 include(CTest)
 
@@ -71,6 +71,9 @@ set(FCITX_RUST_CARGO_ENV
     "RUSTUP_HOME=${FCITX_RUSTUP_HOME}"
     "CARGO_HOME=${FCITX_RUST_CARGO_HOME}"
     "CARGO_TARGET_DIR=${FCITX_RUST_TARGET_DIR}"
+    "CC_x86_64_pc_windows_gnu=${CMAKE_C_COMPILER}"
+    "CXX_x86_64_pc_windows_gnu=${CMAKE_CXX_COMPILER}"
+    "AR_x86_64_pc_windows_gnu=${CMAKE_AR}"
     "RUSTC_WRAPPER=")
 
 # Builds one Rust crate as a GNU staticlib and exposes it as
@@ -109,6 +112,7 @@ fcitx_add_rust_staticlib(fcitx5_engine_core fcitx5-engine-core engine-core)
 fcitx_add_rust_staticlib(fcitx5_windows_common_core fcitx5-windows-common-core
                          windows-common-core)
 fcitx_add_rust_staticlib(fcitx5_control_core fcitx5-control-core control-core)
+fcitx_add_rust_staticlib(fcitx5_package_core fcitx5-package-core package-core)
 
 add_executable(
   fcitx5_engine
@@ -146,8 +150,8 @@ target_link_libraries(
   fcitx5_engine
   PRIVATE Fcitx5::Core advapi32 user32
           fcitx5_protocol_core_rust fcitx5_engine_core_rust
-          fcitx5_windows_common_core_rust fcitx5_control_core_rust
-          ntdll ws2_32 userenv)
+          fcitx5_windows_common_core_rust fcitx5_control_core_rust fcitx5_package_core_rust
+          ntdll ws2_32 userenv bcrypt)
 fcitx_stage_native_runtime(fcitx5_engine)
 
 # Platform keyboard layer following the same design used by Fcitx5 Android:

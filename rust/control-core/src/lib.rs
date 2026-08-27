@@ -2322,8 +2322,13 @@ fn repository_default_base_url(channel: &[u8]) -> Option<Vec<u16>> {
     {
         return None;
     }
-    let mut result = b"https://packages.fcitx5-windows.org/v1/".to_vec();
-    result.extend_from_slice(channel);
+    let mut result =
+        b"https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v".to_vec();
+    result.extend_from_slice(
+        option_env!("FCITX_WINDOWS_VERSION")
+            .unwrap_or(env!("CARGO_PKG_VERSION"))
+            .as_bytes(),
+    );
     Some(result.into_iter().map(u16::from).collect())
 }
 
@@ -4682,7 +4687,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let index = root.join("repository").join("index.json");
-        let signature = root.join("repository").join("index.sig");
+        let signature = root.join("repository").join("index.sig.json");
         let incoming_index = repository_cache_incoming_path(&index).expect("incoming index path");
         let incoming_signature =
             repository_cache_incoming_path(&signature).expect("incoming signature path");
@@ -4694,7 +4699,7 @@ mod tests {
             incoming_signature
                 .file_name()
                 .and_then(|name| name.to_str()),
-            Some("index.sig.new")
+            Some("index.sig.json.new")
         );
 
         std::fs::create_dir_all(index.parent().expect("repository parent"))
@@ -6221,8 +6226,9 @@ background = "${a}"
             "https://packages.example/v1/dev/index.json"
         );
         assert_eq!(
-            String::from_utf16(&repository_metadata_url(&base, b"index.sig").unwrap()).unwrap(),
-            "https://packages.example/v1/dev/index.sig"
+            String::from_utf16(&repository_metadata_url(&base, b"index.sig.json").unwrap())
+                .unwrap(),
+            "https://packages.example/v1/dev/index.sig.json"
         );
         assert!(repository_metadata_url(&base, b"nested/index.json").is_none());
 
@@ -6264,11 +6270,11 @@ background = "${a}"
     fn repository_default_base_url_matches_cpp_contract() {
         assert_eq!(
             String::from_utf16(&repository_default_base_url(b"stable").unwrap()).unwrap(),
-            "https://packages.fcitx5-windows.org/v1/stable"
+            "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v0.1.0"
         );
         assert_eq!(
             String::from_utf16(&repository_default_base_url(b"").unwrap()).unwrap(),
-            "https://packages.fcitx5-windows.org/v1/"
+            "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v0.1.0"
         );
         assert!(repository_default_base_url(b"bad/channel").is_none());
 

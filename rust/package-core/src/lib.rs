@@ -780,6 +780,8 @@ mod repository_sequence_state_ffi {
         if ptr.is_null() {
             return None;
         }
+        // SAFETY: the exported ABI requires a non-null UTF-16 buffer with exactly
+        // `len` initialized code units.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         Some(PathBuf::from(OsString::from_wide(slice)))
     }
@@ -2661,6 +2663,31 @@ pub fn parse_signature_envelope(
     })
 }
 
+pub fn format_signature_envelope_v2(
+    signed_object: SignedObject,
+    key_id: &str,
+    algorithm: TrustAlgorithm,
+    signature: &[u8],
+) -> Result<String, SignatureEnvelopeError> {
+    let key_id = PackageId::parse(key_id)
+        .map_err(|_| signature_error("signature envelope key id is invalid"))?;
+    if algorithm != TrustAlgorithm::Mldsa65 || signature.len() != MLDSA65_SIGNATURE_BYTES {
+        return Err(signature_error(
+            "signature envelope requires one complete ML-DSA-65 signature",
+        ));
+    }
+    let envelope = format!(
+        "{{\"format_version\":2,\"signed_object\":\"{}\",\"canonicalization\":\"{}\",\"signatures\":[{{\"key_id\":\"{}\",\"algorithm\":\"{}\",\"signature_base64\":\"{}\"}}]}}\n",
+        signed_object.as_str(),
+        SIGNATURE_ENVELOPE_CANONICALIZATION,
+        key_id.as_str(),
+        algorithm.as_str(),
+        encode_base64(signature),
+    );
+    parse_signature_envelope(&envelope, signed_object)?;
+    Ok(envelope)
+}
+
 fn require_signature_string(
     object: &[(String, JsonValue)],
     key: &str,
@@ -3784,6 +3811,71 @@ mod repository_ffi {
             return error_result("invalid_signature", "signature envelope is invalid");
         };
         repository_result(verify_repository_index_envelope(
+            index_bytes,
+            &envelope,
+            &trusted_keys,
+            &expected_channel,
+        ))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_repository_verify_index_envelope_struct_utf8(
+        index_data: *const u8,
+        index_len: usize,
+        envelope_data: *const u8,
+        envelope_len: usize,
+        trusted_keys: *const Fcitx5TrustedKey,
+        trusted_key_count: usize,
+        expected_channel: *const u8,
+        expected_channel_len: usize,
+    ) -> Fcitx5RepositoryIndexResult {
+        let Some(index_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: index_data,
+            len: index_len,
+        }) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "repository index is not strict JSON",
+            );
+        };
+        let Some(envelope_bytes) = slice_from_raw(Fcitx5ByteSlice {
+            data: envelope_data,
+            len: envelope_len,
+        }) else {
+            return repository_index_error_result(
+                "invalid_signature",
+                "signature envelope is invalid",
+            );
+        };
+        let Some(expected_channel) = string_from_raw(Fcitx5ByteSlice {
+            data: expected_channel,
+            len: expected_channel_len,
+        }) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "repository identity is invalid",
+            );
+        };
+        let Some(trusted_keys) = trusted_keys_from_raw(trusted_keys, trusted_key_count) else {
+            return repository_index_error_result(
+                "invalid_repository",
+                "trusted repository key set is invalid",
+            );
+        };
+        let Ok(envelope_text) = std::str::from_utf8(envelope_bytes) else {
+            return repository_index_error_result(
+                "invalid_signature",
+                "signature envelope is invalid UTF-8",
+            );
+        };
+        let Ok(envelope) = parse_signature_envelope(envelope_text, SignedObject::RepositoryIndex)
+        else {
+            return repository_index_error_result(
+                "invalid_signature",
+                "signature envelope is invalid",
+            );
+        };
+        repository_index_result(verify_repository_index_envelope(
             index_bytes,
             &envelope,
             &trusted_keys,
@@ -5806,6 +5898,7 @@ pub fn stage_verified_payload_tree(
     payload_root: impl AsRef<Path>,
     install_root: impl AsRef<Path>,
     transaction_id: &str,
+    signature_file_name: &str,
     signature: &[u8],
 ) -> Result<PathBuf, StagingError> {
     PackageId::parse(transaction_id)
@@ -5841,7 +5934,7 @@ pub fn stage_verified_payload_tree(
             fs::copy(source, destination).map_err(staging_io_error)?;
         }
         fs::write(staged.join("manifest.json"), manifest_bytes).map_err(staging_io_error)?;
-        fs::write(staged.join("manifest.sig"), signature).map_err(staging_io_error)?;
+        fs::write(staged.join(signature_file_name), signature).map_err(staging_io_error)?;
         verify_payload_root(manifest, staged.join("payload"))?;
         Ok(staged.clone())
     })();
@@ -6359,23 +6452,44 @@ pub fn activate_staged_payload_tree(
     let manifest_text = std::str::from_utf8(&manifest_bytes)
         .map_err(|_| staging_error("invalid_manifest", "manifest is not valid UTF-8"))?;
     let manifest = parse_manifest(manifest_text).map_err(staging_from_manifest_error)?;
-    let trusted_key = trusted_keys
-        .iter()
-        .find(|candidate| candidate.id() == manifest.key_id())
-        .ok_or_else(|| staging_error("untrusted_key", "manifest key is not trusted"))?;
-    if fs::metadata(staged_root.join("manifest.sig"))
+    let signature_file_name = if manifest.format_version() == 2 {
+        "manifest.sig.json"
+    } else {
+        "manifest.sig"
+    };
+    if fs::metadata(staged_root.join(signature_file_name))
         .map_err(staging_io_error)?
         .len()
-        > MAX_SIGNATURE_BYTES
+        > MAX_MANIFEST_BYTES as u64
     {
         return Err(staging_error(
             "invalid_signature",
             "manifest signature is outside its resource budget",
         ));
     }
-    let signature = fs::read(staged_root.join("manifest.sig")).map_err(staging_io_error)?;
-    verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+    let signature = fs::read(staged_root.join(signature_file_name)).map_err(staging_io_error)?;
+    if manifest.format_version() == 2 {
+        let envelope_text = std::str::from_utf8(&signature).map_err(|_| {
+            staging_error("invalid_signature", "manifest signature is not valid UTF-8")
+        })?;
+        let envelope = parse_signature_envelope(envelope_text, SignedObject::PackageManifest)
+            .map_err(|error| staging_error(error.code(), error.to_string()))?;
+        verify_signature_envelope(
+            &manifest_bytes,
+            &envelope,
+            trusted_keys,
+            SignedObject::PackageManifest,
+            manifest.key_id(),
+        )
         .map_err(|error| staging_error(error.code, error.message))?;
+    } else {
+        let trusted_key = trusted_keys
+            .iter()
+            .find(|candidate| candidate.id() == manifest.key_id())
+            .ok_or_else(|| staging_error("untrusted_key", "manifest key is not trusted"))?;
+        verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+            .map_err(|error| staging_error(error.code, error.message))?;
+    }
     verify_payload_root(&manifest, staged_root.join("payload"))?;
     let active_before = read_installed_lockfile(install_root)
         .map_err(|error| staging_error(error.code, error.message))?;
@@ -6417,8 +6531,15 @@ pub fn activate_staged_payload_tree(
         &manifest_bytes,
     )
     .map_err(staging_io_error)?;
+    let installed_signature_name = signature_file_name
+        .strip_prefix("manifest.")
+        .ok_or_else(|| staging_error("invalid_signature", "manifest signature name is invalid"))?;
     fs::write(
-        metadata.join(format!("{}.sig", manifest.version())),
+        metadata.join(format!(
+            "{}.{}",
+            manifest.version(),
+            installed_signature_name
+        )),
         &signature,
     )
     .map_err(staging_io_error)?;
@@ -6972,7 +7093,6 @@ pub fn verify_installed_packages_for_repair(
     {
         let metadata = install_root.join("manifests").join(entry.id().as_str());
         let manifest_path = metadata.join(format!("{}.json", entry.version()));
-        let signature_path = metadata.join(format!("{}.sig", entry.version()));
         let manifest_bytes = read_repair_file_bounded(&manifest_path, MAX_MANIFEST_BYTES as u64)?;
         if sha256_digest(&manifest_bytes) != *entry.manifest_sha256() {
             return Err(lifecycle_error(
@@ -6990,18 +7110,43 @@ pub fn verify_installed_packages_for_repair(
                 "installed manifest identity differs from packages.lock",
             ));
         }
-        let trusted_key = trusted_keys
-            .iter()
-            .find(|candidate| candidate.id() == manifest.key_id())
-            .ok_or_else(|| {
-                lifecycle_error(
-                    "untrusted_key",
-                    "installed manifest key is no longer trusted",
-                )
+        let signature_path = metadata.join(format!(
+            "{}.{}",
+            entry.version(),
+            if manifest.format_version() == 2 {
+                "sig.json"
+            } else {
+                "sig"
+            }
+        ));
+        let signature = read_repair_file_bounded(&signature_path, MAX_MANIFEST_BYTES as u64)?;
+        if manifest.format_version() == 2 {
+            let envelope_text = std::str::from_utf8(&signature).map_err(|_| {
+                lifecycle_error("invalid_signature", "manifest signature is not valid UTF-8")
             })?;
-        let signature = read_repair_file_bounded(&signature_path, MAX_SIGNATURE_BYTES)?;
-        verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+            let envelope = parse_signature_envelope(envelope_text, SignedObject::PackageManifest)
+                .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+            verify_signature_envelope(
+                &manifest_bytes,
+                &envelope,
+                trusted_keys,
+                SignedObject::PackageManifest,
+                manifest.key_id(),
+            )
             .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+        } else {
+            let trusted_key = trusted_keys
+                .iter()
+                .find(|candidate| candidate.id() == manifest.key_id())
+                .ok_or_else(|| {
+                    lifecycle_error(
+                        "untrusted_key",
+                        "installed manifest key is no longer trusted",
+                    )
+                })?;
+            verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+                .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+        }
         verify_payload_root(
             &manifest,
             install_root
@@ -7033,7 +7178,6 @@ pub fn activate_installed_version_for_rollback(
     }
     let metadata = install_root.join("manifests").join(package_id.as_str());
     let manifest_path = metadata.join(format!("{version}.json"));
-    let signature_path = metadata.join(format!("{version}.sig"));
     let manifest_bytes = read_repair_file_bounded(&manifest_path, MAX_MANIFEST_BYTES as u64)?;
     let manifest_text = std::str::from_utf8(&manifest_bytes)
         .map_err(|_| lifecycle_error("invalid_manifest", "manifest is not valid UTF-8"))?;
@@ -7045,13 +7189,39 @@ pub fn activate_installed_version_for_rollback(
             "known-good manifest identity differs",
         ));
     }
-    let trusted_key = trusted_keys
-        .iter()
-        .find(|candidate| candidate.id() == manifest.key_id())
-        .ok_or_else(|| lifecycle_error("untrusted_key", "known-good key is no longer trusted"))?;
-    let signature = read_repair_file_bounded(&signature_path, MAX_SIGNATURE_BYTES)?;
-    verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+    let signature_path = metadata.join(format!(
+        "{version}.{}",
+        if manifest.format_version() == 2 {
+            "sig.json"
+        } else {
+            "sig"
+        }
+    ));
+    let signature = read_repair_file_bounded(&signature_path, MAX_MANIFEST_BYTES as u64)?;
+    if manifest.format_version() == 2 {
+        let envelope_text = std::str::from_utf8(&signature).map_err(|_| {
+            lifecycle_error("invalid_signature", "manifest signature is not valid UTF-8")
+        })?;
+        let envelope = parse_signature_envelope(envelope_text, SignedObject::PackageManifest)
+            .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+        verify_signature_envelope(
+            &manifest_bytes,
+            &envelope,
+            trusted_keys,
+            SignedObject::PackageManifest,
+            manifest.key_id(),
+        )
         .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+    } else {
+        let trusted_key = trusted_keys
+            .iter()
+            .find(|candidate| candidate.id() == manifest.key_id())
+            .ok_or_else(|| {
+                lifecycle_error("untrusted_key", "known-good key is no longer trusted")
+            })?;
+        verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
+            .map_err(|error| lifecycle_error(error.code(), error.to_string()))?;
+    }
     verify_payload_root(
         &manifest,
         install_root
@@ -7099,10 +7269,18 @@ pub fn repair_repository_sequence_state_for_repair(
     let Ok(index) = read_repair_file_bounded(index_path, MAX_MANIFEST_BYTES as u64) else {
         return reset();
     };
-    let Ok(signature) = read_repair_file_bounded(signature_path, MAX_SIGNATURE_BYTES) else {
+    let Ok(signature) = read_repair_file_bounded(signature_path, MAX_MANIFEST_BYTES as u64) else {
         return reset();
     };
-    let Ok(repository) = verify_repository_index(&index, &signature, trusted_keys, channel) else {
+    let Ok(envelope_text) = std::str::from_utf8(&signature) else {
+        return reset();
+    };
+    let Ok(envelope) = parse_signature_envelope(envelope_text, SignedObject::RepositoryIndex)
+    else {
+        return reset();
+    };
+    let Ok(repository) = verify_repository_index_envelope(&index, &envelope, trusted_keys, channel)
+    else {
         return reset();
     };
     let maximum = repository
@@ -7122,21 +7300,24 @@ mod repair_ffi {
     #![allow(unsafe_code)]
 
     use super::{
-        activate_installed_version_for_rollback, activate_staged_payload_tree,
-        parse_signature_envelope, parse_trusted_keys, resolve_exact_dependency_entries,
-        stage_validated_archive_zip, stage_verified_payload_tree,
+        activate_installed_version_for_rollback, activate_staged_payload_tree, parse_manifest,
+        parse_signature_envelope, parse_trusted_keys, read_installed_lockfile,
+        resolve_exact_dependency_entries, stage_validated_archive_zip, stage_verified_payload_tree,
         validate_manifest_compatibility_fields, verify_installed_packages_for_repair,
         verify_manifest_signature, verify_mldsa65_signature, verify_payload_root,
         DependencyResolutionDependency, DependencyResolutionEntry, HexDigest32, PackageId,
-        PackageType, PayloadHashes, SafeRelativePackagePath, SignedObject, TrustAlgorithm,
-        TrustedKey, VerifiedArtifact, MANIFEST_FORMAT_VERSION_V1, MANIFEST_FORMAT_VERSION_V2,
-        MAX_MANIFEST_BYTES,
+        PackageLifecycleState, PackageType, PayloadHashes, SafeRelativePackagePath, SignedObject,
+        TrustAlgorithm, TrustedKey, VerifiedArtifact, MANIFEST_FORMAT_VERSION_V1,
+        MANIFEST_FORMAT_VERSION_V2, MAX_MANIFEST_BYTES,
     };
     use std::ffi::OsString;
     use std::fs;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::PathBuf;
     use std::slice;
+
+    #[cfg(test)]
+    use super::{write_installed_lockfile_atomic, LockEntry};
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -7398,8 +7579,162 @@ mod repair_ffi {
         if ptr.is_null() {
             return None;
         }
+        // SAFETY: the exported ABI requires a non-null UTF-16 buffer with exactly
+        // `len` initialized code units.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         Some(PathBuf::from(OsString::from_wide(slice)))
+    }
+
+    fn active_addon_directory_list(install_root: &std::path::Path) -> Option<Vec<u16>> {
+        let entries = read_installed_lockfile(install_root).ok()?;
+        let mut directories = Vec::new();
+        for entry in entries {
+            if !matches!(
+                entry.state(),
+                PackageLifecycleState::Installed
+                    | PackageLifecycleState::Enabled
+                    | PackageLifecycleState::PendingUpdate
+            ) {
+                continue;
+            }
+            let manifest_path = install_root
+                .join("manifests")
+                .join(entry.id().as_str())
+                .join(format!("{}.json", entry.version()));
+            let manifest_text = fs::read_to_string(manifest_path).ok()?;
+            let manifest = parse_manifest(&manifest_text).ok()?;
+            if manifest.package_type() != &PackageType::Addon
+                || manifest.id() != entry.id()
+                || manifest.version() != entry.version()
+            {
+                return None;
+            }
+            let directory = install_root
+                .join("versions")
+                .join(entry.id().as_str())
+                .join(entry.version())
+                .join("lib")
+                .join("fcitx5");
+            if !directory.is_dir()
+                || super::path_contains_reparse_component(&directory).ok()?
+                || directory
+                    .as_os_str()
+                    .encode_wide()
+                    .any(|unit| unit == b';' as u16)
+            {
+                return None;
+            }
+            directories.push(directory);
+        }
+
+        let mut result = Vec::new();
+        for (index, directory) in directories.iter().enumerate() {
+            if index != 0 {
+                result.push(b';' as u16);
+            }
+            result.extend(directory.as_os_str().encode_wide());
+        }
+        Some(result)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fcitx5_package_active_addon_dirs_utf16(
+        install_root: *const u16,
+        install_root_len: usize,
+        output: *mut u16,
+        capacity: usize,
+    ) -> usize {
+        let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
+            return 0;
+        };
+        let Some(value) = active_addon_directory_list(&install_root) else {
+            return 0;
+        };
+        if output.is_null() {
+            return value.len();
+        }
+        if capacity != value.len() {
+            return 0;
+        }
+        // SAFETY: the ABI requires `output` to be writable for `capacity` code
+        // units, and the equality check above makes that exactly `value.len()`.
+        unsafe { std::ptr::copy_nonoverlapping(value.as_ptr(), output, value.len()) };
+        value.len()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn active_addon_directories_include_only_enabled_valid_addons() {
+            let root = std::env::temp_dir().join(format!(
+                "fcitx5-package-active-addons-{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            let architecture = if cfg!(target_pointer_width = "64") {
+                "x64"
+            } else {
+                "x86"
+            };
+            let manifest = |id: &str| {
+                format!(
+                    "{{\"format_version\":2,\"id\":\"{id}\",\"version\":\"1.0.0\",\"type\":\"addon\",\
+                     \"architecture\":\"{architecture}\",\"min_os\":\"6.1-sp1\",\"core_api\":\"1\",\
+                     \"addon_abi\":\"1\",\"dependencies\":[],\"license\":\"MIT\",\
+                     \"source_commit\":\"0123456789abcdef\",\"permissions\":[\"native-code\",\"input-data\"],\
+                     \"payload\":[{{\"path\":\"bin/addon.dll\",\"size\":1,\"hashes\":{{\"blake3\":\"{}\"}}}}],\
+                     \"key_id\":\"official-2026-mldsa65\"}}",
+                    "a".repeat(64)
+                )
+            };
+            for id in ["fcitx5-rime", "fcitx5-pinyin"] {
+                let manifest_path = root.join("manifests").join(id).join("1.0.0.json");
+                fs::create_dir_all(root.join("versions").join(id).join("1.0.0/lib/fcitx5"))
+                    .expect("addon directory should create");
+                fs::create_dir_all(
+                    manifest_path
+                        .parent()
+                        .expect("manifest parent should exist"),
+                )
+                .expect("manifest directory should create");
+                fs::write(manifest_path, manifest(id)).expect("manifest should write");
+            }
+            let lock = [
+                LockEntry::new(
+                    PackageId::parse("fcitx5-rime").expect("package id should parse"),
+                    "1.0.0".to_owned(),
+                    HexDigest32::parse(&"a".repeat(64)).expect("digest should parse"),
+                    PackageLifecycleState::Installed,
+                ),
+                LockEntry::new(
+                    PackageId::parse("fcitx5-pinyin").expect("package id should parse"),
+                    "1.0.0".to_owned(),
+                    HexDigest32::parse(&"b".repeat(64)).expect("digest should parse"),
+                    PackageLifecycleState::Disabled,
+                ),
+            ];
+            write_installed_lockfile_atomic(&root, &lock).expect("lockfile should write");
+
+            let directories = active_addon_directory_list(&root)
+                .expect("valid enabled addon directory should be listed");
+            let expected = root
+                .join("versions")
+                .join("fcitx5-rime")
+                .join("1.0.0")
+                .join("lib")
+                .join("fcitx5")
+                .as_os_str()
+                .encode_wide()
+                .collect::<Vec<_>>();
+            assert_eq!(directories, expected);
+
+            fs::write(root.join("manifests/fcitx5-rime/1.0.0.json"), "{}")
+                .expect("corrupt manifest should write");
+            assert!(active_addon_directory_list(&root).is_none());
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 
     fn slice_from_raw<'a>(slice: Fcitx5ByteSlice) -> Option<&'a [u8]> {
@@ -8514,6 +8849,7 @@ mod repair_ffi {
             payload_root,
             install_root,
             &transaction_id,
+            "manifest.sig",
             signature,
         ) {
             Ok(path) => stage_ok_result(path),
@@ -8864,7 +9200,7 @@ pub fn validate_archive_inventory(
         ));
     }
     let mut expected_casefold =
-        BTreeSet::from(["manifest.json".to_owned(), "manifest.sig".to_owned()]);
+        BTreeSet::from(["manifest.json".to_owned(), "manifest.sig.json".to_owned()]);
     let mut expected_files = Vec::<(String, u64)>::new();
     for file in manifest.files() {
         let archive_name = format!("payload/{}", file.path().as_str());
@@ -8892,7 +9228,7 @@ pub fn validate_archive_inventory(
             trimmed = logical_name.trim_end_matches('/').to_owned();
             logical_name = &trimmed;
         }
-        if logical_name != "manifest.json" && logical_name != "manifest.sig" {
+        if logical_name != "manifest.json" && logical_name != "manifest.sig.json" {
             let Some(payload_path) = logical_name.strip_prefix("payload/") else {
                 return Err(archive_error(
                     "unsafe_archive_path",
@@ -8984,20 +9320,32 @@ pub fn stage_validated_archive_zip(
     let signature = archive
         .extract(
             archive
-                .locate("manifest.sig")
+                .locate("manifest.sig.json")
                 .map_err(staging_from_archive_error)?,
-            MAX_SIGNATURE_BYTES,
+            MAX_MANIFEST_BYTES as u64,
         )
         .map_err(staging_from_archive_error)?;
     let manifest_text = std::str::from_utf8(&manifest_bytes)
         .map_err(|_| staging_error("invalid_manifest", "manifest is not valid UTF-8"))?;
     let manifest = parse_manifest(manifest_text).map_err(staging_from_manifest_error)?;
-    let trusted_key = trusted_keys
-        .iter()
-        .find(|candidate| candidate.id() == manifest.key_id())
-        .ok_or_else(|| staging_error("untrusted_key", "manifest key is not trusted"))?;
-    verify_manifest_signature(&manifest_bytes, &signature, trusted_key)
-        .map_err(|error| staging_error(error.code, error.message))?;
+    if manifest.format_version() != 2 {
+        return Err(staging_error(
+            "invalid_manifest",
+            "official package archives require a v2 manifest",
+        ));
+    }
+    let envelope_text = std::str::from_utf8(&signature)
+        .map_err(|_| staging_error("invalid_signature", "manifest signature is not valid UTF-8"))?;
+    let envelope = parse_signature_envelope(envelope_text, SignedObject::PackageManifest)
+        .map_err(|error| staging_error(error.code(), error.to_string()))?;
+    verify_signature_envelope(
+        &manifest_bytes,
+        &envelope,
+        trusted_keys,
+        SignedObject::PackageManifest,
+        manifest.key_id(),
+    )
+    .map_err(|error| staging_error(error.code, error.message))?;
     validate_manifest_compatibility(&manifest, current_runtime_architecture())
         .map_err(staging_from_compatibility_error)?;
     validate_archive_inventory(&manifest, &entries).map_err(staging_from_archive_error)?;
@@ -9021,7 +9369,7 @@ pub fn stage_validated_archive_zip(
     let result = (|| {
         fs::create_dir_all(extraction.join("payload")).map_err(staging_io_error)?;
         fs::write(extraction.join("manifest.json"), &manifest_bytes).map_err(staging_io_error)?;
-        fs::write(extraction.join("manifest.sig"), &signature).map_err(staging_io_error)?;
+        fs::write(extraction.join("manifest.sig.json"), &signature).map_err(staging_io_error)?;
         for file in manifest.files() {
             let archive_name = format!("payload/{}", file.path().as_str());
             let contents = archive
@@ -9452,6 +9800,29 @@ fn decode_base64(value: &str) -> Result<Vec<u8>, ()> {
         }
     }
     Ok(output)
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        output.push(ALPHABET[usize::from(first >> 2)] as char);
+        output.push(ALPHABET[usize::from((first & 0x03) << 4 | second >> 4)] as char);
+        output.push(if chunk.len() > 1 {
+            ALPHABET[usize::from((second & 0x0f) << 2 | third >> 6)] as char
+        } else {
+            '='
+        });
+        output.push(if chunk.len() > 2 {
+            ALPHABET[usize::from(third & 0x3f)] as char
+        } else {
+            '='
+        });
+    }
+    output
 }
 
 fn base64_value(byte: u8) -> Option<u8> {
@@ -10279,6 +10650,35 @@ mod tests {
         assert_signature_error(&malformed, SignedObject::PackageManifest);
     }
 
+    #[test]
+    fn signature_envelope_v2_formatter_owns_canonical_release_shape() {
+        let signature = vec![0x43; MLDSA65_SIGNATURE_BYTES];
+        let formatted = format_signature_envelope_v2(
+            SignedObject::RepositoryIndex,
+            "official-2026-mldsa65",
+            TrustAlgorithm::Mldsa65,
+            &signature,
+        )
+        .expect("release envelope should format");
+        assert_eq!(
+            formatted,
+            format!(
+                "{}\n",
+                signature_envelope(
+                    "repository-index",
+                    &[("official-2026-mldsa65", "mldsa65", signature.as_slice())],
+                )
+            )
+        );
+        assert!(format_signature_envelope_v2(
+            SignedObject::PackageManifest,
+            "official-2026-mldsa65",
+            TrustAlgorithm::Mldsa65,
+            &signature[..signature.len() - 1],
+        )
+        .is_err());
+    }
+
     #[cfg(windows)]
     #[test]
     fn repository_index_v1_matches_cpp_schema() {
@@ -10803,11 +11203,18 @@ mod tests {
 
     #[test]
     fn archive_inventory_matches_cpp_payload_entry_policy() {
-        let manifest = parse_manifest(&manifest_v1("fcitx5-rime", "1.0.0", &"a".repeat(64), 12))
-            .expect("manifest should parse");
+        let manifest = parse_manifest(&manifest_v2(
+            "fcitx5-rime",
+            "1.0.0",
+            &"a".repeat(64),
+            12,
+            "official-test-2026-mldsa65",
+            None,
+        ))
+        .expect("manifest should parse");
         let valid = [
             ArchiveEntry::file("manifest.json", 100),
-            ArchiveEntry::file("manifest.sig", 64),
+            ArchiveEntry::file("manifest.sig.json", 64),
             ArchiveEntry::file("payload/bin/addon.dll", 12),
         ];
         assert!(validate_archive_inventory(&manifest, &valid).is_ok());
@@ -10817,7 +11224,7 @@ mod tests {
             &manifest,
             &[
                 ArchiveEntry::file("manifest.json", 100),
-                ArchiveEntry::file("manifest.sig", 64),
+                ArchiveEntry::file("manifest.sig.json", 64),
             ],
         );
         assert_archive_error(
@@ -10825,7 +11232,7 @@ mod tests {
             &manifest,
             &[
                 ArchiveEntry::file("manifest.json", 100),
-                ArchiveEntry::file("manifest.sig", 64),
+                ArchiveEntry::file("manifest.sig.json", 64),
                 ArchiveEntry::file("payload/bin/addon.dll", 12),
                 ArchiveEntry::file("payload/../escape.dll", 6),
             ],
@@ -10835,7 +11242,7 @@ mod tests {
             &manifest,
             &[
                 ArchiveEntry::file("manifest.json", 100),
-                ArchiveEntry::file("manifest.sig", 64),
+                ArchiveEntry::file("manifest.sig.json", 64),
                 ArchiveEntry::file("payload/bin/addon.dll", 12),
                 ArchiveEntry::file("payload/BIN/ADDON.DLL", 12),
             ],
@@ -10845,7 +11252,7 @@ mod tests {
             &manifest,
             &[
                 ArchiveEntry::file("manifest.json", 100),
-                ArchiveEntry::file("manifest.sig", 64),
+                ArchiveEntry::file("manifest.sig.json", 64),
                 ArchiveEntry::file("payload/bin/addon.dll", 12),
                 ArchiveEntry::file("payload/bin/extra.dll", 12),
             ],
@@ -10855,7 +11262,7 @@ mod tests {
             &manifest,
             &[
                 ArchiveEntry::file("manifest.json", 100),
-                ArchiveEntry::file("manifest.sig", 64),
+                ArchiveEntry::file("manifest.sig.json", 64),
                 ArchiveEntry::file("payload/bin/addon.dll", 13),
             ],
         );
@@ -10864,7 +11271,7 @@ mod tests {
             &manifest,
             &[
                 ArchiveEntry::file("manifest.json", 100),
-                ArchiveEntry::file("manifest.sig", 64),
+                ArchiveEntry::file("manifest.sig.json", 64),
                 ArchiveEntry::file("payload/bin/addon.dll", 12).with_unix_symlink(),
             ],
         );
@@ -10898,12 +11305,13 @@ mod tests {
             temp.join("payload"),
             &install_root,
             "tx-one",
+            "manifest.sig.json",
             b"signature",
         )
         .expect("payload should stage");
         assert!(staged.join("payload/bin/addon.dll").exists());
         assert!(staged.join("manifest.json").exists());
-        assert!(staged.join("manifest.sig").exists());
+        assert!(staged.join("manifest.sig.json").exists());
         std::fs::write(temp.join("payload/bin/undeclared.dll"), b"oops")
             .expect("undeclared file should write");
         assert_eq!(
@@ -10920,50 +11328,49 @@ mod tests {
     fn archive_zip_staging_matches_cpp_extraction_policy() {
         let hello_blake3 = blake3_digest(b"hello");
         let hello_sha256 = sha256_digest(b"hello");
-        let signer = rsa_signing_fixture::RsaSigningFixture::new();
-        let trusted = rsa_trusted_key("release-2026", signer.public_blob());
         let manifest_text = manifest_v2(
             "fcitx5-rime",
             "1.0.0",
             hello_blake3.as_str(),
             5,
-            "release-2026",
+            "official-test-2026-mldsa65",
             Some(hello_sha256.as_str()),
         );
         let temp =
             std::env::temp_dir().join(format!("fcitx5-package-core-zip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp).expect("temp should create");
+        let Some((trusted, signature)) =
+            signed_package_manifest_fixture(&temp, "valid", &manifest_text)
+        else {
+            eprintln!("skipping v2 archive staging fixture: signer binary not built");
+            return;
+        };
         let valid_archive = temp.join("valid.fcpkg");
         write_store_zip_for_test(
             &valid_archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
+                ("manifest.sig.json", &signature),
                 ("payload/bin/addon.dll", b"hello"),
             ],
         );
         let install_root = temp.join("install");
-        let staged = stage_validated_archive_zip(
-            &valid_archive,
-            &install_root,
-            "tx-zip",
-            std::slice::from_ref(&trusted),
-        )
-        .expect("ZIP archive should stage");
+        let staged = stage_validated_archive_zip(&valid_archive, &install_root, "tx-zip", &trusted)
+            .expect("ZIP archive should stage");
         assert_eq!(
             std::fs::read(staged.join("payload/bin/addon.dll")).expect("payload should read"),
             b"hello"
         );
         assert!(staged.join("manifest.json").exists());
-        assert!(staged.join("manifest.sig").exists());
+        assert!(staged.join("manifest.sig.json").exists());
 
         let traversal_archive = temp.join("traversal.fcpkg");
         write_store_zip_for_test(
             &traversal_archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
+                ("manifest.sig.json", &signature),
                 ("payload/bin/addon.dll", b"hello"),
                 ("payload/../escape.dll", b"escape"),
             ],
@@ -10973,7 +11380,7 @@ mod tests {
                 &traversal_archive,
                 &install_root,
                 "tx-traversal",
-                std::slice::from_ref(&trusted),
+                &trusted,
             )
             .expect_err("traversal archive should fail")
             .code(),
@@ -10985,7 +11392,7 @@ mod tests {
             &collision_archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
+                ("manifest.sig.json", &signature),
                 ("payload/bin/addon.dll", b"hello"),
                 ("payload/BIN/ADDON.DLL", b"hello"),
             ],
@@ -10995,7 +11402,7 @@ mod tests {
                 &collision_archive,
                 &install_root,
                 "tx-collision",
-                std::slice::from_ref(&trusted),
+                &trusted,
             )
             .expect_err("case-collision archive should fail")
             .code(),
@@ -11007,18 +11414,13 @@ mod tests {
             &missing_archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
+                ("manifest.sig.json", &signature),
             ],
         );
         assert_eq!(
-            stage_validated_archive_zip(
-                &missing_archive,
-                &install_root,
-                "tx-missing",
-                std::slice::from_ref(&trusted),
-            )
-            .expect_err("missing payload archive should fail")
-            .code(),
+            stage_validated_archive_zip(&missing_archive, &install_root, "tx-missing", &trusted,)
+                .expect_err("missing payload archive should fail")
+                .code(),
             "invalid_archive"
         );
         let _ = std::fs::remove_dir_all(&temp);
@@ -11029,14 +11431,12 @@ mod tests {
     fn activation_publishes_payload_metadata_and_lockfile_like_cpp() {
         let hello_blake3 = blake3_digest(b"hello");
         let hello_sha256 = sha256_digest(b"hello");
-        let signer = rsa_signing_fixture::RsaSigningFixture::new();
-        let trusted = rsa_trusted_key("release-2026", signer.public_blob());
         let manifest_text = manifest_v2(
             "fcitx5-rime",
             "1.0.0",
             hello_blake3.as_str(),
             5,
-            "release-2026",
+            "official-test-2026-mldsa65",
             Some(hello_sha256.as_str()),
         );
         let temp = std::env::temp_dir().join(format!(
@@ -11045,24 +11445,25 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp).expect("temp should create");
+        let Some((trusted, signature)) =
+            signed_package_manifest_fixture(&temp, "valid", &manifest_text)
+        else {
+            eprintln!("skipping v2 activation fixture: signer binary not built");
+            return;
+        };
         let archive = temp.join("valid.fcpkg");
         write_store_zip_for_test(
             &archive,
             &[
                 ("manifest.json", manifest_text.as_bytes()),
-                ("manifest.sig", &signer.sign(manifest_text.as_bytes())),
+                ("manifest.sig.json", &signature),
                 ("payload/bin/addon.dll", b"hello"),
             ],
         );
         let install_root = temp.join("install");
-        let staged = stage_validated_archive_zip(
-            &archive,
-            &install_root,
-            "tx-activate",
-            std::slice::from_ref(&trusted),
-        )
-        .expect("archive should stage");
-        activate_staged_payload_tree(&staged, &install_root, std::slice::from_ref(&trusted))
+        let staged = stage_validated_archive_zip(&archive, &install_root, "tx-activate", &trusted)
+            .expect("archive should stage");
+        activate_staged_payload_tree(&staged, &install_root, &trusted)
             .expect("staged payload should activate");
         assert!(install_root
             .join("versions/fcitx5-rime/1.0.0/bin/addon.dll")
@@ -11071,7 +11472,7 @@ mod tests {
             .join("manifests/fcitx5-rime/1.0.0.json")
             .exists());
         assert!(install_root
-            .join("manifests/fcitx5-rime/1.0.0.sig")
+            .join("manifests/fcitx5-rime/1.0.0.sig.json")
             .exists());
         let lock = read_installed_lockfile(&install_root).expect("lockfile should parse");
         assert_eq!(lock.len(), 1);
@@ -11084,35 +11485,33 @@ mod tests {
             "1.1.0",
             hello_blake3.as_str(),
             5,
-            "release-2026",
+            "official-test-2026-mldsa65",
             Some(hello_sha256.as_str()),
         );
+        let Some((bad_trusted, bad_signature)) =
+            signed_package_manifest_fixture(&temp, "bad", &bad_manifest)
+        else {
+            eprintln!("skipping v2 activation fixture: signer binary not built");
+            return;
+        };
         let bad_archive = temp.join("bad.fcpkg");
         write_store_zip_for_test(
             &bad_archive,
             &[
                 ("manifest.json", bad_manifest.as_bytes()),
-                ("manifest.sig", &signer.sign(bad_manifest.as_bytes())),
+                ("manifest.sig.json", &bad_signature),
                 ("payload/bin/addon.dll", b"hello"),
             ],
         );
-        let bad_staged = stage_validated_archive_zip(
-            &bad_archive,
-            &install_root,
-            "tx-bad",
-            std::slice::from_ref(&trusted),
-        )
-        .expect("bad archive should stage before tamper");
+        let bad_staged =
+            stage_validated_archive_zip(&bad_archive, &install_root, "tx-bad", &bad_trusted)
+                .expect("bad archive should stage before tamper");
         std::fs::write(bad_staged.join("payload/bin/addon.dll"), b"tampered")
             .expect("tamper should write");
         assert_eq!(
-            activate_staged_payload_tree(
-                &bad_staged,
-                &install_root,
-                std::slice::from_ref(&trusted),
-            )
-            .expect_err("tampered staged payload should fail")
-            .code(),
+            activate_staged_payload_tree(&bad_staged, &install_root, &trusted,)
+                .expect_err("tampered staged payload should fail")
+                .code(),
             "payload_mismatch"
         );
         let lock_after_failure =
@@ -11343,15 +11742,51 @@ mod tests {
 
     #[cfg(windows)]
     fn pqc_fixture_signer_path() -> Option<std::path::PathBuf> {
-        [
-            "out/build/windows-x64-dev/Debug/fcitx5-pqc-fixture-signer.exe",
-            "out/build/windows-x86-dev/Debug/fcitx5-pqc-fixture-signer.exe",
-            "out/build/windows-x64-release/Release/fcitx5-pqc-fixture-signer.exe",
-            "out/build/windows-x86-release/Release/fcitx5-pqc-fixture-signer.exe",
-        ]
-        .iter()
-        .map(std::path::PathBuf::from)
-        .find(|path| path.is_file())
+        std::env::var_os("FCITX_PQC_FIXTURE_SIGNER")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_file())
+            .or_else(|| {
+                [
+                    "out/build/windows-x64-dev/Debug/fcitx5-pqc-fixture-signer.exe",
+                    "out/build/windows-x86-dev/Debug/fcitx5-pqc-fixture-signer.exe",
+                    "out/build/windows-x64-release/Release/fcitx5-pqc-fixture-signer.exe",
+                    "out/build/windows-x86-release/Release/fcitx5-pqc-fixture-signer.exe",
+                ]
+                .iter()
+                .map(std::path::PathBuf::from)
+                .find(|path| path.is_file())
+            })
+    }
+
+    #[cfg(windows)]
+    fn signed_package_manifest_fixture(
+        directory: &std::path::Path,
+        name: &str,
+        manifest: &str,
+    ) -> Option<(Vec<TrustedKey>, Vec<u8>)> {
+        let signer = pqc_fixture_signer_path()?;
+        let manifest_path = directory.join(format!("{name}.manifest.json"));
+        let signature_path = directory.join(format!("{name}.manifest.sig.json"));
+        let keyring_path = directory.join(format!("{name}.trusted-keys.json"));
+        std::fs::write(&manifest_path, manifest).expect("fixture manifest should write");
+        let output = std::process::Command::new(signer)
+            .arg("--sign")
+            .arg("package-manifest")
+            .arg(&manifest_path)
+            .arg(&signature_path)
+            .arg(&keyring_path)
+            .arg("official-test-2026-mldsa65")
+            .output()
+            .expect("fixture signer should run");
+        assert!(
+            output.status.success(),
+            "fixture signer failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let keyring = std::fs::read_to_string(keyring_path).expect("fixture keyring should read");
+        let keys = parse_trusted_keys(&keyring).expect("fixture keyring should parse");
+        let signature = std::fs::read(signature_path).expect("fixture signature should read");
+        Some((keys, signature))
     }
 
     fn assert_keyring_error(keyring: &str) {

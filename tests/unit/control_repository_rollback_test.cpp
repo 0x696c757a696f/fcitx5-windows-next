@@ -7,7 +7,6 @@
 #include "package_core.h"
 
 #include <windows.h>
-#include <bcrypt.h>
 #include <wincrypt.h>
 
 #include <array>
@@ -20,6 +19,12 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#define MLD_CONFIG_FILE "fcitx5_mldsa65_test_config.h"
+extern "C" {
+#include <mldsa/mldsa_native.h>
+}
+#undef MLD_CONFIG_FILE
 
 namespace {
 
@@ -42,61 +47,49 @@ std::string base64(std::span<const std::byte> value) {
   return result;
 }
 
-class SigningFixture final {
+class MldsaSigningFixture final {
  public:
-  SigningFixture() {
-    if (BCryptOpenAlgorithmProvider(&algorithm_, BCRYPT_RSA_ALGORITHM, nullptr, 0) < 0 ||
-        BCryptGenerateKeyPair(algorithm_, &key_, 2048U, 0) < 0 ||
-        BCryptFinalizeKeyPair(key_, 0) < 0) {
-      throw std::runtime_error("RSA fixture generation failed");
+  MldsaSigningFixture() {
+    std::array<std::uint8_t, MLDSA65_SEEDBYTES> seed{};
+    seed.fill(0x5AU);
+    if (fcitx5_mldsa65_test_keypair_internal(public_key_.data(), secret_key_.data(),
+                                             seed.data()) != 0) {
+      throw std::runtime_error("ML-DSA fixture key generation failed");
     }
+    public_key_bytes_.assign(reinterpret_cast<const std::byte*>(public_key_.data()),
+                             reinterpret_cast<const std::byte*>(public_key_.data() +
+                                                                public_key_.size()));
   }
-  ~SigningFixture() {
-    if (key_ != nullptr) BCryptDestroyKey(key_);
-    if (algorithm_ != nullptr) BCryptCloseAlgorithmProvider(algorithm_, 0);
-  }
-  SigningFixture(const SigningFixture&) = delete;
-  SigningFixture& operator=(const SigningFixture&) = delete;
+  MldsaSigningFixture(const MldsaSigningFixture&) = delete;
+  MldsaSigningFixture& operator=(const MldsaSigningFixture&) = delete;
 
-  [[nodiscard]] std::vector<std::byte> public_blob() const {
-    ULONG size = 0;
-    if (BCryptExportKey(key_, nullptr, BCRYPT_RSAPUBLIC_BLOB, nullptr, 0, &size, 0) < 0) {
-      throw std::runtime_error("RSA public key sizing failed");
-    }
-    std::vector<std::byte> result(size);
-    if (BCryptExportKey(key_, nullptr, BCRYPT_RSAPUBLIC_BLOB,
-                        reinterpret_cast<PUCHAR>(result.data()), size, &size, 0) < 0) {
-      throw std::runtime_error("RSA public key export failed");
-    }
-    result.resize(size);
-    return result;
+  [[nodiscard]] const std::vector<std::byte>& public_key() const noexcept {
+    return public_key_bytes_;
   }
 
   [[nodiscard]] std::vector<std::byte> sign(std::string_view bytes) const {
-    const auto digest = fcitx::package::sha256(std::as_bytes(std::span(bytes)));
-    BCRYPT_PKCS1_PADDING_INFO padding{BCRYPT_SHA256_ALGORITHM};
-    ULONG size = 0;
-    if (BCryptSignHash(key_, &padding,
-                       reinterpret_cast<PUCHAR>(const_cast<std::byte*>(digest.data())),
-                       static_cast<ULONG>(digest.size()), nullptr, 0, &size,
-                       BCRYPT_PAD_PKCS1) < 0) {
-      throw std::runtime_error("RSA signature sizing failed");
+    std::vector<std::byte> result(MLDSA65_BYTES);
+    std::array<std::uint8_t, MLDSA65_RNDBYTES> randomness{};
+    std::array<std::uint8_t, MLD_DOMAIN_SEPARATION_MAX_BYTES> prefix{};
+    const auto prefix_size = fcitx5_mldsa65_test_prepare_domain_separation_prefix(
+        prefix.data(), nullptr, 0U, nullptr, 0U, MLD_PREHASH_NONE);
+    if (prefix_size == 0U) {
+      throw std::runtime_error("ML-DSA fixture prefix preparation failed");
     }
-    std::vector<std::byte> result(size);
-    if (BCryptSignHash(key_, &padding,
-                       reinterpret_cast<PUCHAR>(const_cast<std::byte*>(digest.data())),
-                       static_cast<ULONG>(digest.size()),
-                       reinterpret_cast<PUCHAR>(result.data()), size, &size,
-                       BCRYPT_PAD_PKCS1) < 0) {
-      throw std::runtime_error("RSA signing failed");
+    randomness.fill(0x7BU);
+    if (fcitx5_mldsa65_test_signature_internal(
+            reinterpret_cast<std::uint8_t*>(result.data()),
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), prefix.data(),
+            prefix_size, randomness.data(), secret_key_.data(), 0) != 0) {
+      throw std::runtime_error("ML-DSA fixture signing failed");
     }
-    result.resize(size);
     return result;
   }
 
  private:
-  BCRYPT_ALG_HANDLE algorithm_{};
-  BCRYPT_KEY_HANDLE key_{};
+  std::vector<std::uint8_t> public_key_ = std::vector<std::uint8_t>(MLDSA65_PUBLICKEYBYTES);
+  std::vector<std::uint8_t> secret_key_ = std::vector<std::uint8_t>(MLDSA65_SECRETKEYBYTES);
+  std::vector<std::byte> public_key_bytes_;
 };
 
 void write_bytes(const fs::path& path, std::string_view bytes) {
@@ -108,7 +101,7 @@ void write_bytes(const fs::path& path, std::string_view bytes) {
 
 std::string index_json(std::string_view channel, std::uint64_t sequence) {
   return std::string("{\"format_version\":1,\"channel\":\"") + std::string(channel) +
-         "\",\"generated_at\":\"2026-08-17T00:00:00Z\",\"key_id\":\"release-2026\","
+         "\",\"generated_at\":\"2026-08-17T00:00:00Z\",\"key_id\":\"official-test-2026-mldsa65\","
          "\"packages\":[{\"id\":\"fcitx5-rime\",\"title\":\"Rime\","
          "\"summary\":\"Rime input engine\",\"version\":\"1.0.0\","
          "\"release_sequence\":" + std::to_string(sequence) +
@@ -174,14 +167,20 @@ bool repository_available(std::string_view output) {
   return output.find("repository_available\":true") != std::string_view::npos;
 }
 
-void write_repository(const fs::path& dataRoot, const SigningFixture& signer,
+std::string signature_envelope(std::span<const std::byte> signature) {
+  return "{\"format_version\":2,\"signed_object\":\"repository-index\","
+         "\"canonicalization\":\"fcitx5-windows-next-json-v1\",\"signatures\":[{"
+         "\"key_id\":\"official-test-2026-mldsa65\",\"algorithm\":\"mldsa65\","
+         "\"signature_base64\":\"" +
+         base64(signature) + "\"}]}";
+}
+
+void write_repository(const fs::path& dataRoot, const MldsaSigningFixture& signer,
                       std::string_view channel, std::uint64_t sequence) {
   const auto index = index_json(channel, sequence);
   write_bytes(dataRoot / "repository/index.json", index);
   const auto signature = signer.sign(index);
-  write_bytes(dataRoot / "repository/index.sig",
-              std::string_view(reinterpret_cast<const char*>(signature.data()),
-                               signature.size()));
+  write_bytes(dataRoot / "repository/index.sig.json", signature_envelope(signature));
 }
 
 void write_sequence(const fs::path& dataRoot, std::string_view text) {
@@ -211,12 +210,15 @@ int wmain(int argc, wchar_t** argv) {
   fs::remove_all(dataRoot, ignored);
 
   try {
-    SigningFixture signer;
+    MldsaSigningFixture signer;
     const auto keyring =
-        "{\n  \"format_version\": 1,\n  \"keys\": [\n"
-        "    {\"key_id\":\"release-2026\",\"algorithm\":\"rsa-2048-sha256\","
-        "\"status\":\"trusted\",\"public_key_base64\":\"" +
-        base64(signer.public_blob()) + "\"}\n  ]\n}\n";
+        "{\n  \"format_version\": 2,\n  \"policy\": {"
+        "\"official_required_signatures\":[\"mldsa65\"],"
+        "\"compatibility_hashes\":[\"sha256\"],\"default_payload_hash\":\"blake3\"},"
+        "\n  \"keys\": [\n    {\"key_id\":\"official-test-2026-mldsa65\","
+        "\"algorithm\":\"mldsa65\",\"status\":\"trusted\",\"public_key_base64\":\"" +
+        base64(signer.public_key()) +
+        "\",\"scope\":[\"repository\",\"package\"],\"channels\":[\"stable\"]}\n  ]\n}\n";
     write_bytes(keyringPath, keyring);
 
     // First-run with no repository cache and no sequence state is allowed to

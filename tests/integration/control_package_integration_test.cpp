@@ -1,9 +1,6 @@
 #include "package_core.h"
 
 #include <windows.h>
-#include <bcrypt.h>
-#include <wincrypt.h>
-
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -95,89 +92,6 @@ std::string theme_fixture(std::string_view id, std::string_view name) {
          "[dark.candidate.colors]\n"
          "background = \"#222222FF\"\n"
          "candidate_text = \"#FFFFFFFF\"\n";
-}
-
-class SigningFixture final {
- public:
-  SigningFixture() {
-    if (BCryptOpenAlgorithmProvider(&algorithm_, BCRYPT_RSA_ALGORITHM, nullptr, 0) < 0 ||
-        BCryptGenerateKeyPair(algorithm_, &key_, 2048U, 0) < 0 ||
-        BCryptFinalizeKeyPair(key_, 0) < 0) {
-      throw std::runtime_error("RSA fixture generation failed");
-    }
-  }
-
-  ~SigningFixture() {
-    if (key_ != nullptr) {
-      BCryptDestroyKey(key_);
-    }
-    if (algorithm_ != nullptr) {
-      BCryptCloseAlgorithmProvider(algorithm_, 0);
-    }
-  }
-
-  SigningFixture(const SigningFixture&) = delete;
-  SigningFixture& operator=(const SigningFixture&) = delete;
-
-  [[nodiscard]] std::vector<std::byte> public_blob() const {
-    ULONG size = 0;
-    if (BCryptExportKey(key_, nullptr, BCRYPT_RSAPUBLIC_BLOB, nullptr, 0, &size, 0) < 0) {
-      throw std::runtime_error("RSA public key sizing failed");
-    }
-    std::vector<std::byte> result(size);
-    if (BCryptExportKey(key_, nullptr, BCRYPT_RSAPUBLIC_BLOB,
-                        reinterpret_cast<PUCHAR>(result.data()), size, &size, 0) < 0) {
-      throw std::runtime_error("RSA public key export failed");
-    }
-    result.resize(size);
-    return result;
-  }
-
-  [[nodiscard]] std::vector<std::byte> sign(std::string_view bytes) const {
-    const auto digest = fcitx::package::sha256(std::as_bytes(std::span(bytes)));
-    BCRYPT_PKCS1_PADDING_INFO padding{BCRYPT_SHA256_ALGORITHM};
-    ULONG size = 0;
-    if (BCryptSignHash(key_, &padding,
-                       reinterpret_cast<PUCHAR>(const_cast<std::byte*>(digest.data())),
-                       static_cast<ULONG>(digest.size()), nullptr, 0, &size,
-                       BCRYPT_PAD_PKCS1) < 0) {
-      throw std::runtime_error("RSA signature sizing failed");
-    }
-    std::vector<std::byte> result(size);
-    if (BCryptSignHash(key_, &padding,
-                       reinterpret_cast<PUCHAR>(const_cast<std::byte*>(digest.data())),
-                       static_cast<ULONG>(digest.size()),
-                       reinterpret_cast<PUCHAR>(result.data()), size, &size,
-                       BCRYPT_PAD_PKCS1) < 0) {
-      throw std::runtime_error("RSA signing failed");
-    }
-    result.resize(size);
-    return result;
-  }
-
- private:
-  BCRYPT_ALG_HANDLE algorithm_{};
-  BCRYPT_KEY_HANDLE key_{};
-};
-
-std::string base64(std::span<const std::byte> value) {
-  DWORD size = 0;
-  if (!CryptBinaryToStringA(reinterpret_cast<const BYTE*>(value.data()),
-                            static_cast<DWORD>(value.size()),
-                            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &size) ||
-      size == 0U) {
-    throw std::runtime_error("base64 fixture sizing failed");
-  }
-  std::string result(size, '\0');
-  if (!CryptBinaryToStringA(reinterpret_cast<const BYTE*>(value.data()),
-                            static_cast<DWORD>(value.size()),
-                            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, result.data(), &size)) {
-    throw std::runtime_error("base64 fixture encoding failed");
-  }
-  if (!result.empty() && result.back() == '\0') {
-    result.pop_back();
-  }
-  return result;
 }
 
 using ArchiveEntry = std::pair<std::string, std::vector<std::byte>>;
@@ -318,10 +232,10 @@ std::string architecture() {
 #endif
 }
 
-std::string make_manifest(std::string_view version, std::string_view file_hash,
-                          std::uint64_t file_size) {
+std::string make_manifest(std::string_view version, std::string_view blake3_hash,
+                          std::string_view sha256_hash, std::uint64_t file_size) {
   return "{\n"
-         "  \"format_version\": 1,\n"
+         "  \"format_version\": 2,\n"
          "  \"id\": \"fcitx5-rime\",\n"
          "  \"version\": \"" +
          std::string(version) +
@@ -337,17 +251,18 @@ std::string make_manifest(std::string_view version, std::string_view file_hash,
          "  \"license\": \"MIT\",\n"
          "  \"source_commit\": \"0123456789abcdef\",\n"
          "  \"permissions\": [\"native-code\", \"input-data\"],\n"
-         "  \"files\": [{\"path\": \"bin/addon.dll\", \"size\": " +
-         std::to_string(file_size) + ", \"sha256\": \"" + std::string(file_hash) +
-         "\"}],\n"
-         "  \"key_id\": \"release-2026\"\n"
+         "  \"payload\": [{\"path\": \"bin/addon.dll\", \"size\": " +
+         std::to_string(file_size) + ", \"hashes\": {\"blake3\": \"" +
+         std::string(blake3_hash) + "\", \"sha256\": \"" + std::string(sha256_hash) +
+         "\"}}],\n"
+         "  \"key_id\": \"official-test-2026-mldsa65\"\n"
          "}\n";
 }
 
 std::string make_repository(std::string_view version, std::uint64_t release_sequence,
                             std::string_view archive_hash) {
   return "{\"format_version\":1,\"channel\":\"stable\","
-         "\"generated_at\":\"2026-08-18T00:00:00Z\",\"key_id\":\"release-2026\","
+         "\"generated_at\":\"2026-08-18T00:00:00Z\",\"key_id\":\"official-test-2026-mldsa65\","
          "\"packages\":[{\"id\":\"fcitx5-rime\",\"title\":\"Rime\","
          "\"summary\":\"Rime input engine\",\"version\":\"" +
          std::string(version) +
@@ -359,23 +274,49 @@ std::string make_repository(std::string_view version, std::uint64_t release_sequ
          std::string(archive_hash) + "\",\"dependencies\":[]}]}";
 }
 
+DWORD run_process(const fs::path& executable, const std::vector<std::wstring>& arguments);
+
+void run_required(const fs::path& executable, const std::vector<std::wstring>& arguments) {
+  if (run_process(executable, arguments) != 0U) {
+    throw std::runtime_error("required signing fixture command failed");
+  }
+}
+
 void publish_package_fixture(const fs::path& fixture_root, const fs::path& data_root,
-                             const SigningFixture& signer, std::string_view version,
+                             const fs::path& signer, std::string_view version,
                              std::uint64_t release_sequence, std::string_view payload) {
-  const auto payload_hash = fcitx::package::hex_sha256(
+  const auto payload_sha256 = fcitx::package::hex_sha256(
       fcitx::package::sha256(std::as_bytes(std::span(payload))));
-  const auto manifest = make_manifest(version, payload_hash, payload.size());
+  const auto payload_blake3 = fcitx::package::hex_blake3(
+      fcitx::package::blake3(std::as_bytes(std::span(payload))));
+  const auto manifest = make_manifest(version, payload_blake3, payload_sha256, payload.size());
   const std::wstring wide_version(version.begin(), version.end());
   const auto archive = fixture_root / (L"fcitx5-rime-" + wide_version + L".fcpkg");
+  const auto manifest_path = fixture_root / (L"manifest-" + wide_version + L".json");
+  const auto manifest_signature = fixture_root / (L"manifest-" + wide_version + L".sig.json");
+  const auto keyring = fixture_root / L"trusted-keys.json";
+  write_text(manifest_path, manifest);
+  run_required(signer, {L"--sign", L"package-manifest", manifest_path.wstring(),
+                        manifest_signature.wstring(), keyring.wstring(),
+                        L"official-test-2026-mldsa65"});
   create_archive(archive,
                  {{"manifest.json", as_bytes(manifest)},
-                  {"manifest.sig", signer.sign(manifest)},
+                  {"manifest.sig.json", as_bytes(read_text(manifest_signature))},
                   {"payload/bin/addon.dll", as_bytes(payload)}});
   const auto archive_hash =
       fcitx::package::hex_sha256(fcitx::package::sha256_file(archive));
   const auto repository = make_repository(version, release_sequence, archive_hash);
+  const auto index = fixture_root / L"index.json";
+  const auto index_signature = fixture_root / L"index.sig.json";
+  write_text(index, repository);
+  run_required(signer, {L"--sign", L"repository-index", index.wstring(),
+                        index_signature.wstring(), keyring.wstring(),
+                        L"official-test-2026-mldsa65"});
   write_text(data_root / L"repository/index.json", repository);
-  write_bytes(data_root / L"repository/index.sig", signer.sign(repository));
+  write_text(data_root / L"repository/index.sig.json", read_text(index_signature));
+  fs::create_directories(data_root / L"app-security");
+  fs::copy_file(keyring, data_root / L"app-security/trusted-keys.json",
+                fs::copy_options::overwrite_existing);
   write_text(data_root / L"repository/sequence-stable.json",
              "format_version=1\nchannel=stable\nmax_release_sequence=" +
                  std::to_string(release_sequence) + "\n");
@@ -389,11 +330,13 @@ void publish_package_fixture(const fs::path& fixture_root, const fs::path& data_
 
 int wmain(int argc, wchar_t** argv) {
   try {
-    expect(argc == 3, "expected control and downloader executable paths");
+    expect(argc == 4, "expected control, downloader, and signing fixture paths");
     const fs::path control_source = argv[1];
     const fs::path downloader_source = argv[2];
-    expect(fs::is_regular_file(control_source), "control executable is missing");
-    expect(fs::is_regular_file(downloader_source), "downloader executable is missing");
+    const fs::path signer = argv[3];
+    expect(fs::is_regular_file(control_source) && fs::is_regular_file(downloader_source) &&
+               fs::is_regular_file(signer),
+           "required package lifecycle executable is missing");
 
     TemporaryDirectory temporary;
     const auto app_root = temporary.path() / L"app";
@@ -404,6 +347,7 @@ int wmain(int argc, wchar_t** argv) {
     fs::copy_file(control_source, control, fs::copy_options::overwrite_existing);
     fs::copy_file(downloader_source, app_bin / L"fcitx5-downloader.exe",
                   fs::copy_options::overwrite_existing);
+    fs::create_directories(app_root / L"security");
     write_text(app_root / L"share/fcitx5/addon/pinyin.conf",
                "[Addon]\n"
                "Name=Pinyin\n"
@@ -554,18 +498,11 @@ int wmain(int argc, wchar_t** argv) {
            "addon descriptor inventory did not expose safe Advanced R1 surface: " +
                addons_list);
 
-    SigningFixture signer;
-    const auto public_key = signer.public_blob();
-    const auto keyring =
-        "{\n  \"format_version\": 1,\n  \"keys\": [\n"
-        "    {\"key_id\":\"release-2026\",\"algorithm\":\"rsa-2048-sha256\"," 
-        "\"status\":\"trusted\",\"public_key_base64\":\"" +
-        base64(public_key) + "\"}\n  ]\n}\n";
-    write_text(app_root / L"security/trusted-keys.json", keyring);
-
     constexpr std::string_view initial_payload = "verified control package fixture v1\n";
     publish_package_fixture(temporary.path(), data_root, signer, "1.0.0", 1U,
                             initial_payload);
+    fs::copy_file(data_root / L"app-security/trusted-keys.json",
+                  app_root / L"security/trusted-keys.json", fs::copy_options::overwrite_existing);
 
     std::string install_output;
     const DWORD install_exit =

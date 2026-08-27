@@ -13,6 +13,10 @@ on:
         default: stable
         type: choice
         options: [stable, beta, nightly]
+      plugin_release_sequence:
+        description: Monotonic release sequence for the official fcitx5-rime package
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -134,6 +138,7 @@ jobs:
           SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
           SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
           UPDATE_KEYRING_BASE64: ${{ secrets.UPDATE_KEYRING_BASE64 }}
+          PQC_SIGNING_SECRET_KEY_BASE64: ${{ secrets.PQC_SIGNING_SECRET_KEY_BASE64 }}
         run: |
           $stage = Get-ChildItem out/package -Directory -Filter 'stage-*' |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -144,18 +149,93 @@ jobs:
             [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/trusted-keys.json",
             [Convert]::FromBase64String($env:UPDATE_KEYRING_BASE64))
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/fcitx5-release-mldsa65.key",
+            [Convert]::FromBase64String($env:PQC_SIGNING_SECRET_KEY_BASE64))
           $secure = ConvertTo-SecureString $env:SIGNING_PFX_PASSWORD -AsPlainText -Force
           $certificate = Import-PfxCertificate -FilePath "$env:RUNNER_TEMP/signing.pfx" `
             -CertStoreLocation Cert:\CurrentUser\My -Password $secure
           "FCITX_RELEASE_CERT_THUMBPRINT=$($certificate.Thumbprint)" >> $env:GITHUB_ENV
           "FCITX_RELEASE_TRUSTED_KEYRING=$env:RUNNER_TEMP/trusted-keys.json" >> $env:GITHUB_ENV
+          "FCITX_RELEASE_PQC_SIGNING_KEY=$env:RUNNER_TEMP/fcitx5-release-mldsa65.key" >> $env:GITHUB_ENV
 
-      - name: Sign and promote without rebuilding
+      - name: Enforce monotonic official plugin sequence
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FCITX_RELEASE_PLUGIN_SEQUENCE: ${{ inputs.plugin_release_sequence }}
+          FCITX_RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          [UInt64] $requested = 0
+          if (-not [UInt64]::TryParse($env:FCITX_RELEASE_PLUGIN_SEQUENCE, [ref]$requested) -or
+              $requested -eq 0) {
+            throw 'plugin_release_sequence must be a positive unsigned integer.'
+          }
+          $stage = Get-ChildItem out/package -Directory -Filter 'stage-*' |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $stage) { throw 'Verified stage was not transferred.' }
+          $packageCli = Join-Path $stage.FullName 'bin/fcitx5-package.exe'
+          if (-not (Test-Path -LiteralPath $packageCli -PathType Leaf)) {
+            throw 'Verified Package CLI is missing from the build-once lineage.'
+          }
+          $repository = '0x696c757a696f/fcitx5-windows-next'
+          $pages = & gh api --paginate --slurp "repos/$repository/releases?per_page=100" |
+            ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read published release history.' }
+          $temporaryRoot = Join-Path $env:RUNNER_TEMP 'fcitx5-plugin-sequence-history'
+          [UInt64] $maximum = 0
+          try {
+            foreach ($page in @($pages)) {
+              foreach ($release in @($page)) {
+                $assets = @($release.assets | ForEach-Object name)
+                if ($assets -notcontains 'index.json' -or $assets -notcontains 'index.sig.json') {
+                  continue
+                }
+                $candidate = Join-Path $temporaryRoot ([string]$release.id)
+                New-Item -ItemType Directory -Force -Path $candidate | Out-Null
+                & gh release download $release.tag_name -R $repository -p index.json -p index.sig.json `
+                  -D $candidate --clobber
+                if ($LASTEXITCODE -ne 0) {
+                  throw "Could not download signed plugin metadata for $($release.tag_name)."
+                }
+                & $packageCli --verify-repository-v2 (Join-Path $candidate 'index.json') `
+                  (Join-Path $candidate 'index.sig.json') $env:FCITX_RELEASE_TRUSTED_KEYRING `
+                  $env:FCITX_RELEASE_CHANNEL
+                if ($LASTEXITCODE -ne 0) {
+                  throw "Published plugin metadata for $($release.tag_name) did not verify."
+                }
+                $index = Get-Content -LiteralPath (Join-Path $candidate 'index.json') -Raw |
+                  ConvertFrom-Json
+                $rime = @($index.packages | Where-Object { $_.id -eq 'fcitx5-rime' })
+                if ($rime.Count -ne 1) {
+                  throw "Published plugin metadata for $($release.tag_name) has no unique Rime entry."
+                }
+                [UInt64] $sequence = 0
+                if (-not [UInt64]::TryParse([string]$rime[0].release_sequence, [ref]$sequence)) {
+                  throw "Published plugin metadata for $($release.tag_name) has an invalid sequence."
+                }
+                if ($sequence -gt $maximum) { $maximum = $sequence }
+              }
+            }
+          } finally {
+            Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          if ($requested -le $maximum) {
+            throw "plugin_release_sequence $requested is not greater than published maximum $maximum."
+          }
+
+      - name: Sign and promote the verified lineage without rebuilding
         shell: pwsh
         env:
           FCITX_RELEASE_VERSION: ${{ inputs.version }}
           FCITX_RELEASE_CHANNEL: ${{ inputs.channel }}
-        run: ./tools/verify-product.ps1 release
+          FCITX_RELEASE_PLUGIN_SEQUENCE: ${{ inputs.plugin_release_sequence }}
+        run: |
+          ./tools/release.ps1 -Version $env:FCITX_RELEASE_VERSION `
+            -Channel $env:FCITX_RELEASE_CHANNEL `
+            -CertificateThumbprint $env:FCITX_RELEASE_CERT_THUMBPRINT `
+            -TrustedKeyring $env:FCITX_RELEASE_TRUSTED_KEYRING `
+            -PluginSigningKey $env:FCITX_RELEASE_PQC_SIGNING_KEY `
+            -PluginReleaseSequence $env:FCITX_RELEASE_PLUGIN_SEQUENCE
 
       - name: Publish exact release artifacts
         shell: pwsh
@@ -176,3 +256,4 @@ jobs:
           if ($env:FCITX_RELEASE_CERT_THUMBPRINT) {
             Remove-Item "Cert:\CurrentUser\My\$env:FCITX_RELEASE_CERT_THUMBPRINT" -Force
           }
+          Remove-Item "$env:RUNNER_TEMP/fcitx5-release-mldsa65.key" -Force -ErrorAction SilentlyContinue

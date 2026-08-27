@@ -5,7 +5,7 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use fcitx5_package_core::{
-    activate_staged_payload_tree, finalize_installed_package_removal,
+    activate_staged_payload_tree, finalize_installed_package_removal, format_signature_envelope_v2,
     is_safe_relative_package_path, mark_installed_package_for_removal, parse_manifest,
     parse_signature_envelope, parse_trusted_keys, read_installed_lockfile,
     set_installed_package_state, sha256_digest, stage_validated_archive_zip,
@@ -72,6 +72,45 @@ fn run() -> Result<(), Box<dyn Error>> {
                     manifest.key_id(),
                 )?;
                 println!("manifest_signature=verified");
+                return Ok(());
+            }
+            "--write-signature-envelope-v2" => {
+                let signed_object = match args
+                    .next()
+                    .as_deref()
+                    .ok_or("--write-signature-envelope-v2 requires OBJECT")?
+                {
+                    "repository-index" => SignedObject::RepositoryIndex,
+                    "package-manifest" => SignedObject::PackageManifest,
+                    _ => return Err("signature envelope object is invalid".into()),
+                };
+                let key_id = args
+                    .next()
+                    .ok_or("--write-signature-envelope-v2 requires KEY_ID")?;
+                let algorithm = match args
+                    .next()
+                    .as_deref()
+                    .ok_or("--write-signature-envelope-v2 requires ALGORITHM")?
+                {
+                    "mldsa65" => TrustAlgorithm::Mldsa65,
+                    _ => return Err("signature envelope algorithm is invalid".into()),
+                };
+                let raw_signature = read_bounded_bytes(
+                    args.next()
+                        .ok_or("--write-signature-envelope-v2 requires RAW_SIGNATURE")?,
+                    16 * 1024,
+                )?;
+                let output = args
+                    .next()
+                    .ok_or("--write-signature-envelope-v2 requires OUTPUT")?;
+                let envelope = format_signature_envelope_v2(
+                    signed_object,
+                    &key_id,
+                    algorithm,
+                    &raw_signature,
+                )?;
+                std::fs::write(output, envelope)?;
+                println!("signature_envelope=written");
                 return Ok(());
             }
             "--install" => {
@@ -523,7 +562,7 @@ fn read_u32(image: &[u8], offset: usize) -> Result<u32, Box<dyn Error>> {
 
 fn print_usage() {
     println!(
-        "Usage:\n  fcitx5-package --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package --validate-manifest MANIFEST\n  fcitx5-package --validate-keyring KEYRING\n  fcitx5-package --install ARCHIVE INSTALL_ROOT TRANSACTION_ID KEYRING\n  fcitx5-package --repair INSTALL_ROOT KEYRING\n  fcitx5-package --verify-repository INDEX SIGNATURE KEYRING [CHANNEL]\n  fcitx5-package --verify-repository-v2 INDEX SIG_JSON KEYRING [CHANNEL]\n  fcitx5-package --verify-manifest-v2 MANIFEST SIG_JSON KEYRING\n  fcitx5-package --list INSTALL_ROOT\n  fcitx5-package --state INSTALL_ROOT PACKAGE_ID STATE\n  fcitx5-package --mark-remove INSTALL_ROOT PACKAGE_ID\n  fcitx5-package --finalize-remove INSTALL_ROOT PACKAGE_ID"
+        "Usage:\n  fcitx5-package --self-check [--audit-self-pe] [--trusted-keys security/trusted-keys.template.json]\n  fcitx5-package --validate-manifest MANIFEST\n  fcitx5-package --validate-keyring KEYRING\n  fcitx5-package --write-signature-envelope-v2 OBJECT KEY_ID ALGORITHM RAW_SIGNATURE OUTPUT\n  fcitx5-package --install ARCHIVE INSTALL_ROOT TRANSACTION_ID KEYRING\n  fcitx5-package --repair INSTALL_ROOT KEYRING\n  fcitx5-package --verify-repository INDEX SIGNATURE KEYRING [CHANNEL]\n  fcitx5-package --verify-repository-v2 INDEX SIG_JSON KEYRING [CHANNEL]\n  fcitx5-package --verify-manifest-v2 MANIFEST SIG_JSON KEYRING\n  fcitx5-package --list INSTALL_ROOT\n  fcitx5-package --state INSTALL_ROOT PACKAGE_ID STATE\n  fcitx5-package --mark-remove INSTALL_ROOT PACKAGE_ID\n  fcitx5-package --finalize-remove INSTALL_ROOT PACKAGE_ID"
     );
 }
 

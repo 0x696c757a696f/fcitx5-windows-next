@@ -375,7 +375,8 @@ try {
     }
     'release' {
       foreach ($name in @('FCITX_RELEASE_VERSION', 'FCITX_RELEASE_CERT_THUMBPRINT',
-                           'FCITX_RELEASE_TRUSTED_KEYRING')) {
+                           'FCITX_RELEASE_TRUSTED_KEYRING', 'FCITX_RELEASE_PQC_SIGNING_KEY',
+                           'FCITX_RELEASE_PLUGIN_SEQUENCE')) {
         if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
           throw "Release requires environment variable $name. Run package first; release never rebuilds."
         }
@@ -385,7 +386,9 @@ try {
       & (Join-Path $PSScriptRoot 'release.ps1') `
         -Version $env:FCITX_RELEASE_VERSION -Channel $channel `
         -CertificateThumbprint $env:FCITX_RELEASE_CERT_THUMBPRINT `
-        -TrustedKeyring $env:FCITX_RELEASE_TRUSTED_KEYRING
+        -TrustedKeyring $env:FCITX_RELEASE_TRUSTED_KEYRING `
+        -PluginSigningKey $env:FCITX_RELEASE_PQC_SIGNING_KEY `
+        -PluginReleaseSequence $env:FCITX_RELEASE_PLUGIN_SEQUENCE
       if ($LASTEXITCODE -ne 0) { throw 'Release gate failed.' }
     }
   }

@@ -4,6 +4,8 @@ param(
   [ValidateSet('stable', 'beta', 'nightly')] [string] $Channel = 'stable',
   [Parameter(Mandatory)] [string] $CertificateThumbprint,
   [Parameter(Mandatory)] [string] $TrustedKeyring,
+  [Parameter(Mandatory)] [string] $PluginSigningKey,
+  [Parameter(Mandatory)] [ValidateRange(1, [UInt64]::MaxValue)] [UInt64] $PluginReleaseSequence,
   [string] $TimestampUrl = 'http://timestamp.digicert.com'
 )
 
@@ -41,6 +43,9 @@ $peFiles = @(Get-ChildItem -LiteralPath $stage -File -Recurse -Include *.exe,*.d
   Select-Object -ExpandProperty FullName)
 & (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths $peFiles `
   -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
+& (Join-Path $PSScriptRoot 'release-plugin-artifacts.ps1') `
+  -Version $Version -Channel $Channel -ReleaseSequence $PluginReleaseSequence -StageRoot $stage `
+  -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey
 
 $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse |
   Where-Object Name -ne 'manifest.json' | Sort-Object FullName | ForEach-Object {
@@ -68,7 +73,14 @@ $installer = Join-Path $artifacts "fcitx5-windows-$Version$suffix-setup.exe"
 $sbom = Join-Path $artifacts "fcitx5-windows-$Version$suffix.spdx.json"
 & (Join-Path $PSScriptRoot 'generate-sbom.ps1') -StageRoot $stage -OutputPath $sbom `
   -Version $Version -SourceCommit $sourceCommit
-$releaseFiles = @($portable, $installer, $sbom)
+$pluginReleaseFiles = @(
+  (Join-Path $artifacts "fcitx5-rime-$Version-x64.fcpkg"),
+  (Join-Path $artifacts 'index.json'),
+  (Join-Path $artifacts 'index.sig.json'))
+foreach ($path in $pluginReleaseFiles) {
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing signed plugin release asset: $path" }
+}
+$releaseFiles = @($portable, $installer, $sbom) + $pluginReleaseFiles
 $releaseManifest = [ordered]@{ format_version = 1; product = 'fcitx5-windows-next';
   version = $Version; channel = $Channel; source_commit = $sourceCommit;
   build_once_stage_manifest_sha256 = (Get-FileHash (Join-Path $stage 'manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant();
@@ -86,7 +98,7 @@ $cms.ComputeSignature([Security.Cryptography.Pkcs.CmsSigner]::new($cert))
 [IO.File]::WriteAllBytes($releaseManifestPath + '.p7s', $cms.Encode())
 & (Join-Path $PSScriptRoot 'generate-system-packages.ps1') `
   -ReleaseManifest $releaseManifestPath `
-  -BaseUrl "https://github.com/fcitx/fcitx5-windows/releases/download/v$Version" `
+  -BaseUrl "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v$Version" `
   -OutputDirectory (Join-Path $artifacts 'system-packages')
 $provenance = [ordered]@{ _type = 'https://in-toto.io/Statement/v1';
   subject = @($releaseManifest.artifacts | ForEach-Object { [ordered]@{ name = $_.name; digest = [ordered]@{ sha256 = $_.sha256 } } });

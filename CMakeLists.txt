@@ -265,6 +265,7 @@ add_custom_command(
   OUTPUT "${FCITX_RUST_CONTROL_CORE_STATICLIB}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_WINDOWS_VERSION=${PROJECT_VERSION}"
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-control-core --lib --target
     "${FCITX_RUST_TARGET}"
@@ -769,6 +770,28 @@ add_custom_target(
   COMMENT "Building Rust fcitx5-bootstrap CLI")
 
 add_custom_target(
+  fcitx5_release_pqc_signer ALL
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-release-pqc-signer.exe"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-release-pqc-signer --bin
+    fcitx5-release-pqc-signer --target "${FCITX_RUST_TARGET}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5-release-pqc-signer.exe"
+    "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-release-pqc-signer.exe"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/release-pqc-signer/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/release-pqc-signer/build.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/release-pqc-signer/src/main.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust release-only PQC signer")
+
+add_custom_target(
   fcitx5_package ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-package.exe"
   COMMAND
@@ -910,6 +933,11 @@ if(BUILD_TESTING)
   add_test(NAME brand-resource-contract
            COMMAND fcitx5_brand_resource_test "${CMAKE_CURRENT_SOURCE_DIR}")
 
+  add_test(NAME release-plugin-source-contract
+           COMMAND "${FCITX_PWSH_EXECUTABLE}"
+                   -NoProfile -File
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-release-plugin-artifacts.ps1")
+
   add_library(
     fcitx5_mldsa65_test_sign STATIC
     "${FCITX_MLDSA_NATIVE_SOURCE_DIR}/mldsa/mldsa_native.c")
@@ -967,14 +995,16 @@ if(BUILD_TESTING)
     fcitx5_control_package_integration_test
     PRIVATE fcitx5::package_core fcitx5_miniz bcrypt crypt32)
   add_dependencies(
-    fcitx5_control_package_integration_test fcitx5_control fcitx5_downloader)
+    fcitx5_control_package_integration_test fcitx5_control fcitx5_downloader
+    fcitx5_pqc_fixture_signer)
   fcitx_apply_project_options(fcitx5_control_package_integration_test)
   fcitx_apply_binary_hardening(fcitx5_control_package_integration_test)
   add_test(
     NAME control-package-stopped-service-contract
     COMMAND fcitx5_control_package_integration_test
             "$<TARGET_FILE:fcitx5_control>"
-            "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe")
+            "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe"
+            "$<TARGET_FILE:fcitx5_pqc_fixture_signer>")
   set_tests_properties(control-package-stopped-service-contract PROPERTIES TIMEOUT 30)
   add_test(NAME launcher-version COMMAND fcitx5_launcher --version)
   add_test(NAME mock-engine-version COMMAND fcitx5_mock_engine --version)
@@ -1032,9 +1062,13 @@ if(BUILD_TESTING)
                  tests/unit/control_repository_rollback_test.cpp)
   target_include_directories(
     fcitx5_control_repository_rollback_test SYSTEM PRIVATE
-    "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
+    "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}" "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
+  target_include_directories(
+    fcitx5_control_repository_rollback_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
   target_link_libraries(
-    fcitx5_control_repository_rollback_test PRIVATE fcitx5::package_core bcrypt crypt32)
+    fcitx5_control_repository_rollback_test PRIVATE fcitx5::package_core
+            fcitx5_mldsa65_test_sign crypt32)
   add_dependencies(fcitx5_control_repository_rollback_test fcitx5_control)
   fcitx_apply_project_options(fcitx5_control_repository_rollback_test)
   fcitx_apply_binary_hardening(fcitx5_control_repository_rollback_test)

@@ -639,11 +639,9 @@ int main(int argc, char** argv) {
         "\"signatures\":[{\"key_id\":\"official-2026-mldsa65\","
         "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
         base64(mldsa_repository_signature) + "\"}]}";
-    const auto mldsa_repository =
-        verify_repository_index(mldsa_repository_bytes,
-                                parse_signature_envelope(mldsa_repository_envelope_bytes,
-                                                         "repository-index"),
-                                std::span(&mldsa_trusted, 1U), "stable");
+    const auto mldsa_repository = verify_repository_index_envelope(
+        mldsa_repository_bytes, mldsa_repository_envelope_bytes,
+        std::span(&mldsa_trusted, 1U), "stable");
     expect(mldsa_repository.packages.size() == 1U,
            "ML-DSA repository signature did not verify");
     auto bad_mldsa_repository_signature = mldsa_repository_signature;
@@ -657,17 +655,15 @@ int main(int argc, char** argv) {
         "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
         base64(bad_mldsa_repository_signature) + "\"}]}";
     expect_error("invalid_signature", [&] {
-      static_cast<void>(verify_repository_index(
-          mldsa_repository_bytes,
-          parse_signature_envelope(bad_mldsa_repository_envelope_bytes, "repository-index"),
+      static_cast<void>(verify_repository_index_envelope(
+          mldsa_repository_bytes, bad_mldsa_repository_envelope_bytes,
           std::span(&mldsa_trusted, 1U), "stable"));
     });
     auto revoked_mldsa = mldsa_trusted;
     revoked_mldsa.revoked = true;
     expect_error("revoked_key", [&] {
-      static_cast<void>(verify_repository_index(
-          mldsa_repository_bytes,
-          parse_signature_envelope(mldsa_repository_envelope_bytes, "repository-index"),
+      static_cast<void>(verify_repository_index_envelope(
+          mldsa_repository_bytes, mldsa_repository_envelope_bytes,
           std::span(&revoked_mldsa, 1U), "stable"));
     });
     const auto wrong_key_repository_envelope_bytes =
@@ -679,9 +675,8 @@ int main(int argc, char** argv) {
         "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
         base64(other_mldsa_signer.sign(mldsa_repository_bytes)) + "\"}]}";
     expect_error("untrusted_key", [&] {
-      static_cast<void>(verify_repository_index(
-          mldsa_repository_bytes,
-          parse_signature_envelope(wrong_key_repository_envelope_bytes, "repository-index"),
+      static_cast<void>(verify_repository_index_envelope(
+          mldsa_repository_bytes, wrong_key_repository_envelope_bytes,
           std::span(&other_mldsa_trusted, 1U), "stable"));
     });
     auto mldsa_repository_beta = mldsa_repository_bytes;
@@ -698,13 +693,12 @@ int main(int argc, char** argv) {
         "\"algorithm\":\"mldsa65\",\"signature_base64\":\"" +
         base64(mldsa_beta_signature) + "\"}]}";
     expect_error("invalid_repository", [&] {
-      static_cast<void>(verify_repository_index(
-          mldsa_repository_beta,
-          parse_signature_envelope(mldsa_beta_envelope_bytes, "repository-index"),
+      static_cast<void>(verify_repository_index_envelope(
+          mldsa_repository_beta, mldsa_beta_envelope_bytes,
           std::span(&mldsa_trusted, 1U), "stable"));
     });
 
-    auto mldsa_manifest_bytes = manifest_bytes;
+    auto mldsa_manifest_bytes = manifest_v2_dual_hash;
     mldsa_manifest_bytes.replace(mldsa_manifest_bytes.find("\"key_id\": \"release-2026\""),
                                  std::strlen("\"key_id\": \"release-2026\""),
                                  "\"key_id\": \"official-2026-mldsa65\"");
@@ -778,22 +772,22 @@ int main(int argc, char** argv) {
 
     const auto archive_path = temporary.path() / "valid.fcpkg";
     create_archive(archive_path,
-                   {{"manifest.json", as_bytes(manifest_bytes)},
-                    {"manifest.sig", signature},
+                   {{"manifest.json", as_bytes(mldsa_manifest_bytes)},
+                    {"manifest.sig.json", as_bytes(mldsa_manifest_envelope_bytes)},
                     {"payload/bin/addon.dll", as_bytes(file_bytes)}});
     const auto archive_stage =
-        stage_verified_archive(archive_path, install, "tx-two", std::span(&trusted, 1U));
+        stage_verified_archive(archive_path, install, "tx-two", std::span(&mldsa_trusted, 1U));
     expect(std::filesystem::exists(archive_stage / "payload/bin/addon.dll"),
            "verified archive was not staged");
-    activate_staged_package(archive_stage, install, std::span(&trusted, 1U));
-    verify_installed_packages(install, std::span(&trusted, 1U));
+    activate_staged_package(archive_stage, install, std::span(&mldsa_trusted, 1U));
+    verify_installed_packages(install, std::span(&mldsa_trusted, 1U));
     set_package_state(install, "fcitx5-rime", "disabled");
     expect(read_lockfile(install).front().state == "disabled", "package state was not persisted");
-    activate_installed_version(install, "fcitx5-rime", "1.0.0", std::span(&trusted, 1U));
+    activate_installed_version(install, "fcitx5-rime", "2.0.1", std::span(&mldsa_trusted, 1U));
     expect(read_lockfile(install).front().state == "installed",
            "rollback activation did not restore installed state");
 
-    auto revoked = trusted;
+    auto revoked = mldsa_trusted;
     revoked.revoked = true;
     expect_error("revoked_key", [&] {
       static_cast<void>(
@@ -802,23 +796,23 @@ int main(int argc, char** argv) {
 
     const auto malicious_path = temporary.path() / "traversal.fcpkg";
     create_archive(malicious_path,
-                   {{"manifest.json", as_bytes(manifest_bytes)},
-                    {"manifest.sig", signature},
+                   {{"manifest.json", as_bytes(mldsa_manifest_bytes)},
+                    {"manifest.sig.json", as_bytes(mldsa_manifest_envelope_bytes)},
                     {"payload/bin/addon.dll", as_bytes(file_bytes)},
                     {"payload/../escape.dll", as_bytes("escape")}});
     expect_error("unsafe_archive_path", [&] {
       static_cast<void>(stage_verified_archive(malicious_path, install, "tx-traversal",
-                                                std::span(&trusted, 1U)));
+                                                std::span(&mldsa_trusted, 1U)));
     });
     const auto collision_path = temporary.path() / "case-collision.fcpkg";
     create_archive(collision_path,
-                   {{"manifest.json", as_bytes(manifest_bytes)},
-                    {"manifest.sig", signature},
+                   {{"manifest.json", as_bytes(mldsa_manifest_bytes)},
+                    {"manifest.sig.json", as_bytes(mldsa_manifest_envelope_bytes)},
                     {"payload/bin/addon.dll", as_bytes(file_bytes)},
                     {"payload/BIN/ADDON.DLL", as_bytes(file_bytes)}});
     expect_error("unsafe_archive_path", [&] {
       static_cast<void>(stage_verified_archive(collision_path, install, "tx-case",
-                                                std::span(&trusted, 1U)));
+                                                std::span(&mldsa_trusted, 1U)));
     });
 
     mark_package_for_removal(install, "fcitx5-rime");
