@@ -1,11 +1,11 @@
 # Current Truth Snapshot
 
-Date: 2026-08-26 (updated after CONFIG-WINDUI-SETTINGS-SHELL-001)
+Date: 2026-08-27 (updated for Candidate visual revalidation and WindUI plugin manager)
 
-HEAD recorded at snapshot refresh: `d1c87129d03b6460222534b130b016d32348aad2`
+HEAD recorded at snapshot refresh: `6ed75672c95e9b4ec5e82b764d4a0d251faff3dd`
 
-Working tree at snapshot refresh: clean after `CONFIG-WINDUI-SETTINGS-SHELL-001` validation,
-commit, and push.
+Working tree at snapshot refresh: only the user's untracked local helper
+`fcitx5_context_efficiency_v2.ps1`, excluded from repository work.
 
 ## Shipping Architecture
 
@@ -33,7 +33,7 @@ Windows host
 | TSF | Shipping Rust target is packaged for x64/x86; package cold-start Notepad candidate UI and `nihao + Space => 你好` smokes are green; real-host matrix remains pending | Rust product component gated by host evidence |
 | Engine | C++ Fcitx runtime owns direct Fcitx objects; product protocol/ledger/event decisions/session/snapshot/pending-state policy are Rust-owned | Continue shrinking toward Rust Engine Product Core + thin C++ Fcitx adapter |
 | Candidate | Rust candidate-core owns model/layout/interaction plus label formatting/slot planning/render-segment evidence; C++ UI window/renderer remains | Continue Rust authority and shrink adapter; preserve configurable label/ordinal slots, selected-row/column label reveal, stable text-column alignment, visible Settings scroll-mode control, and the WindInput/Qingfeng-derived WeChat-green visual contract |
-| Config | Stage 2 Rust Config backend is shipping, and the default interactive `fcitx5-config.exe` window now opens the vendored `huanfeng/wind-ui-rust` Settings shell. The old C++ WTL/Win32 shell remains `fcitx5-config-legacy.exe` as an `EXCLUDE_FROM_ALL` regression baseline; the old Rust Win32/D2D preview host is QA-only behind `FCITX5_CONFIG_RUST_PREVIEW_STATE` or explicit smoke/test modes. | Default Config accent is WeChat-style `#07C160`; keep vendored/upstream themes intact. Do not claim release readiness or final Stage 4 completion until real Settings GUI persistence/plugin pages, DPI/dark-mode/keyboard/accessibility, candidate preview parity, Narrator/NVDA, and real Win7/Win10/Win11 evidence are green |
+| Config | Stage 2 Rust Config backend is shipping, and the default interactive `fcitx5-config.exe` window opens the vendored `huanfeng/wind-ui-rust` Settings shell. The plugin page now consumes the pinned `fcitx5-plugins` catalog and real typed Control package operations through the bounded Rust process executor. The old C++ WTL/Win32 shell remains an `EXCLUDE_FROM_ALL` regression baseline; the old Rust Win32/D2D preview host is QA-only. | Default Config accent is WeChat-style `#07C160`; keep vendored/upstream themes intact. Unsupported plugin artifacts stay visibly unavailable. Do not claim release readiness or final Stage 4 completion until real online lifecycle, DPI/dark-mode/keyboard/accessibility, Narrator/NVDA, and real Win7/Win10/Win11 evidence are green |
 | Launcher | Rust launcher-core owns state/path/tray/command/frame policy; C++ shell remains | Continue Rust cutover |
 | Control | Rust control/package/process-exec cores linked; C++ command shell remains | Continue Rust cutover |
 | Package/provider/downloader/updater/deployer | Package/provider/deployer/updater/downloader Rust CLIs and Rust package-core are wired; adapters remain where needed | Rust authority |
@@ -45,7 +45,7 @@ Windows host
 |---|---|---|
 | Rust TSF | `SHIPPING-AUTOMATED-GREEN` / real-host matrix pending | Full host matrix evidence before release readiness |
 | Rust Config | `CUTOVER-AUTHORIZED / STAGE-1-CORE-GREEN / STAGE-2-BACKEND-SHIPPED-GREEN / WINDUI-DEFAULT-SHELL-GREEN / STAGE-4-REAL-HOST-EVIDENCE-PENDING` | Non-interactive Config paths are Rust-owned under the shipping `fcitx5-config.exe` name with no legacy C++ GUI fallback. The default GUI now uses the vendored `windui` Settings shell and has screenshot/source-contract evidence. Stage 4 still requires real interactive persistence/plugin-page/candidate-preview parity, DPI/dark-mode/keyboard/accessibility, and real Windows QA before “Config fully migrated to Rust” can be claimed. |
-| Candidate Rust core | `SHIPPING-DOMAIN / WINDINPUT-QINGFENG-WECHAT-GREEN-VISUAL-GREEN` | Remove duplicated C++ validation/state, preserve renderer evidence, add candidate-action/upstream alignment, and keep WindInput/Qingfeng-derived green visual evidence from regressing |
+| Candidate Rust core | `SHIPPING-DOMAIN / PRODUCTION-VERTICAL-TYPOGRAPHY-GREEN` | Preserve Rust model/layout/interaction, typed typography tokens, windui DirectWrite authority, and the full-glyph fit proof for commented rows |
 | Rust package/update/control/launcher cores | `SHIPPING-DOMAIN` where already cut over, `MIGRATION-CANDIDATE` where shell remains | Delete replaced C++ authoritative implementation and keep adapter thin |
 | Engine E1 `protocol-core` | `CUTOVER-GREEN` (Rust authoritative; C++ is a thin marshalling adapter) | Delete the old C++ codec internals (done); keep `protocol.h` API and call sites unchanged (done); future FCW4 wire changes must regenerate `protocol_wire_golden.inc` from the pre-change codec |
 | Engine E2 `engine-core` ledger | `CUTOVER-GREEN` (Rust authoritative; ledger + carets/popupAllowed/selectedOverride/inputMethodOverridden cut over, C++ maps deleted) | — |
@@ -82,11 +82,16 @@ Windows host
   stable gap; selected-row/column/item reveal modes keep hidden labels occupying the same space so
   rows and columns do not shift when `1.`/custom labels appear. Settings keeps scroll mode visible
   in the main Candidate layout area, and the embedded preview passes that flag into Rust layout.
-- Candidate/Config visual requirement is now implemented for the reachable code-only slice: project
-  defaults look like WeChat IME green, with
+- Candidate/Config palette and renderer-path requirement is implemented for the reachable code-only slice: project
+  defaults use WeChat IME green, with
   light green/white and dark green/black palettes. Qingfeng/WindInput upstream themes and variants
   are preserved; Candidate visual code directly ports WindInput/Qingfeng candidate window/view/theme
   tokens for the Rust PoC screenshots and renderer evidence.
+- Candidate production typography visual acceptance is green after rejecting the old
+  non-overlap-only proof. Rust owns independent candidate, label, and comment sizes plus row height;
+  the shared plan budgets full CJK advance without an unbudgeted text offset. Fresh x64/x86 reports
+  assert `typography_text_fits=true`, and matching 150% DPI screenshots show complete `水` and `收`
+  glyphs beside `~b` and `~d`.
 - Candidate default font must be CJK-first: `Microsoft YaHei` first, `Microsoft YaHei UI` and
   `system` only as fallback. Appearance tuning may use Rime/鼠须管 theme lessons, including
   `eosphoros-keytao` Squirrel color schemes, for spacing, label size, corner radius, border, line
@@ -95,8 +100,9 @@ Windows host
 - The executable queue has been re-cleaned after the 2026-08-24 review: completed/current R3
   FUTURE-GATED duplicates are not active queue items. Completed queue source files are removed from
   `docs/tasks/queue` after their task files are archived. `059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001`
-  and `060-CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001` are completed for the reachable Candidate
-  geometry/visual slices; `RELEASE-01` is current again and remains gated on external/manual evidence.
+  through `063-CONFIG-WINDUI-PLUGIN-MANAGER-001` are completed for Candidate geometry/typography and
+  the real WindUI plugin-management slice; `RELEASE-01` is current and remains gated on
+  external/manual evidence.
 - Rust Config Stage 2 and the code-only default GUI shell cutover are green. `fcitx5_config_app`
   builds the Rust binary into the shipping `fcitx5-config.exe` product name; no-argument launch now
   opens the vendored `windui` Settings shell; `fcitx5_config_legacy_app` emits

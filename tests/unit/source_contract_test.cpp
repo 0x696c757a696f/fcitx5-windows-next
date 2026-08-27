@@ -438,6 +438,11 @@ int main(int argc, char** argv) {
         rustCandidateQingfengSource.find("WINDINPUT_QINGFENG_CANDIDATE_SOURCE") ==
             std::string::npos ||
         rustCandidateQingfengSource.find("QingfengThemeMode::Dark") == std::string::npos ||
+        rustCandidateQingfengSource.find("QingfengCandidateTypography") == std::string::npos ||
+        rustCandidateQingfengSource.find("candidate_font_size") == std::string::npos ||
+        rustCandidateQingfengSource.find("label_font_size") == std::string::npos ||
+        rustCandidateQingfengSource.find("comment_font_size") == std::string::npos ||
+        rustCandidateQingfengSource.find("row_height") == std::string::npos ||
         rustCandidateQingfengSource.find("QingfengColor::rgb(7, 193, 96)") ==
             std::string::npos ||
         rustCandidateQingfengSource.find("QingfengColor::rgb(24, 24, 24)") ==
@@ -941,6 +946,10 @@ int main(int argc, char** argv) {
         cmakeSource.find("tests/unit/process_execution_test.cpp") != std::string::npos ||
         cmakeSource.find("fcitx5_process_execution_core_rust") == std::string::npos ||
         rustProcessExecutionSource.find("process_output_is_drained_bounded_and_failure_visible") ==
+            std::string::npos ||
+        rustProcessExecutionSource.find("pub fn run_process_bounded(") ==
+            std::string::npos ||
+        rustProcessExecutionSource.find("safe_api_rejects_oversized_output") ==
             std::string::npos ||
         rustProcessExecutionSource.find("timeout_kills_child_process_tree") == std::string::npos) {
         return fail("PROCESS-EXECUTION-RUST: process execution must be Rust-owned and the old C++ adapter/test must stay deleted");
@@ -2063,7 +2072,7 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configPocSource.find("fn windui_appearance_reference_tree() -> WindUiElement") ==
             std::string::npos ||
-        configPocSource.find("fn windui_settings_root() -> WindUiElement") ==
+        configPocSource.find("fn windui_settings_root(") ==
             std::string::npos ||
         configPocSource.find("fn windui_settings_shell_wrap(") == std::string::npos ||
         configPocSource.find("WindUiApp::new") == std::string::npos ||
@@ -2099,6 +2108,24 @@ int main(int argc, char** argv) {
         configPocSource.find("\"Corner DIP\"") != std::string::npos ||
         configPocSource.find("\"Width DIP\"") != std::string::npos) {
         return fail("CONFIG-WINDUI-ADOPTION-001/058: Rust Config must consume vendored wind-ui-rust code and make its settings shell the default interactive GUI while keeping Win32 only as QA host");
+    }
+    if (configPocManifest.find("fcitx5-process-execution-core = { path = \"../process-execution-core\" }") ==
+            std::string::npos ||
+        configPocSource.find("FCITX5_PLUGINS_REFERENCE_COMMIT") == std::string::npos ||
+        configPocSource.find("26a94720f0a01e106046f6a7607215ff96bf2f6f") ==
+            std::string::npos ||
+        configPocSource.find("const FCITX5_PLUGIN_CATALOG") == std::string::npos ||
+        configPocSource.find("fn parse_control_package_list(") == std::string::npos ||
+        configPocSource.find("fn plugin_control_arguments(") == std::string::npos ||
+        configPocSource.find("run_process_bounded(") == std::string::npos ||
+        configPocSource.find("app.channel::<PluginResponse>") == std::string::npos ||
+        configPocSource.find("PluginOperation::Install") == std::string::npos ||
+        configPocSource.find("PluginOperation::Update") == std::string::npos ||
+        configPocSource.find("PluginOperation::SetState") == std::string::npos ||
+        configPocSource.find("PluginOperation::Remove") == std::string::npos ||
+        configPocSource.find("PluginOperation::Repair") == std::string::npos ||
+        configPocSource.find("std::process::Command") != std::string::npos) {
+        return fail("063-CONFIG-WINDUI-PLUGIN-MANAGER-001: default Rust Settings must expose the pinned plugin catalog and use bounded typed Control operations without raw process spawning");
     }
     if (configSource.find("struct DesignTokens") == std::string::npos ||
         configSource.find("designTokens()") == std::string::npos ||
@@ -2189,6 +2216,7 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("--demo-snapshot") == std::string::npos ||
         candidatePocBinary.find("--scroll-demo-snapshot") == std::string::npos ||
         candidatePocBinary.find("--label-slot-snapshot") == std::string::npos ||
+        candidatePocBinary.find("--typography-snapshot") == std::string::npos ||
         candidatePocBinary.find("label_slot_window_scenario") == std::string::npos ||
         candidatePocBinary.find("label_slot_contract") == std::string::npos ||
         candidatePocBinary.find("windinput_qingfeng_candidate_renderer") == std::string::npos ||
@@ -2212,6 +2240,19 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("horizontal-dark") == std::string::npos ||
         candidatePocBinary.find("grid-dark") == std::string::npos ||
         candidatePocBinary.find("WINDOW_LABEL_SLOT_PAINT") == std::string::npos ||
+        candidatePocBinary.find("candidate_visual_typography_tokens") == std::string::npos ||
+        candidatePocBinary.find("candidate_font_size_physical_px") == std::string::npos ||
+        candidatePocBinary.find("typography_all_labels_shown") == std::string::npos ||
+        candidatePocBinary.find("typography_text_comment_non_overlapping") == std::string::npos ||
+        candidatePocBinary.find("typography_text_fits") == std::string::npos ||
+        candidatePocBinary.find("CandidateLabelDisplay::Always") == std::string::npos ||
+        candidatePocBinary.find("text: \"是\"") == std::string::npos ||
+        candidatePocBinary.find("text: \"识\"") == std::string::npos ||
+        candidatePocBinary.find("text: \"实\"") == std::string::npos ||
+        candidatePocBinary.find("text: \"水\"") == std::string::npos ||
+        candidatePocBinary.find("text: \"收\"") == std::string::npos ||
+        candidatePocBinary.find("\"~b\"") == std::string::npos ||
+        candidatePocBinary.find("\"~d\"") == std::string::npos ||
         candidatePocBinary.find("--host-snapshot") == std::string::npos ||
         candidatePocBinary.find("host_snapshot_scenario") == std::string::npos ||
         candidatePocBinary.find("--dpi-scale") == std::string::npos ||
@@ -2242,6 +2283,8 @@ int main(int argc, char** argv) {
         cmakeSource.find("candidate-poc-host-${FCITX_CANDIDATE_HOST_SNAPSHOT}.bmp") ==
             std::string::npos ||
         cmakeSource.find("rust-candidate-poc-dpi-smoke") == std::string::npos ||
+        cmakeSource.find("rust-candidate-poc-typography-vertical") == std::string::npos ||
+        cmakeSource.find("--typography-snapshot --dpi-scale 1.50") == std::string::npos ||
         cmakeSource.find("fcitx5_candidate_poc_rustbin") == std::string::npos ||
         cmakeSource.find("candidate-poc-window-smoke.bmp") == std::string::npos ||
         cmakeSource.find("config-ui-preview-fidelity-qa") == std::string::npos ||

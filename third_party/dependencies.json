@@ -146,6 +146,12 @@
       "license": "Apache-2.0 OR MIT"
     },
     {
+      "name": "rust-crate-itoa",
+      "version": "1.0.18",
+      "source": "https://github.com/dtolnay/itoa",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
       "name": "rust-crate-memchr",
       "version": "2.8.3",
       "source": "https://github.com/BurntSushi/memchr",
@@ -548,6 +554,12 @@
       "license": "MIT OR Apache-2.0"
     },
     {
+      "name": "rust-crate-serde_json",
+      "version": "1.0.151",
+      "source": "https://github.com/serde-rs/json",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
       "name": "rust-crate-serde_spanned",
       "version": "1.1.1",
       "source": "https://github.com/toml-rs/toml",
@@ -735,6 +747,12 @@
       "source": "https://github.com/winnow-rs/winnow",
       "license": "MIT",
       "crate": "winnow"
+    },
+    {
+      "name": "rust-crate-zmij",
+      "version": "1.0.23",
+      "source": "https://github.com/dtolnay/zmij",
+      "license": "MIT OR Apache-2.0"
     },
     {
       "name": "rust-crate-winreg",

@@ -2024,6 +2024,7 @@ Rust workspace 承载产品自有 Rust authority；CMake/build.ps1 仍是顶层 
 - Candidate 默认视觉采用微信输入法风格绿色：日间为绿白，夜间为绿黑；选中态、候选文字强调、Config 预览和真实候选窗口必须共享同一 resolved theme snapshot。清风/WindInput 自带主题和可保留 variant 不得被删除；项目默认色只是当前产品默认，不是对第三方主题的破坏性替换。
 - Candidate 视觉实现以 WindInput `wind-ui` 的 candidate window / view / `_qingfeng` theme 为实际代码基线。若本项目自写 renderer 不能达到同等视觉质量，必须直接采用或移植其 MIT 许可代码并保留来源/license 证据；不得停留在“参考其设计”的文档描述。
 - Candidate 默认字体链必须 CJK-first：`Microsoft YaHei` 优先，`Microsoft YaHei UI` 和 `system` 只作为 fallback；不能用 Latin-first 字体让中文候选退回难看的系统 fallback。外观调参吸收 Rime/鼠须管主题（包括 `eosphoros-keytao` 的 Squirrel 配色）的可取做法：候选格式、编号/候选间距、字号、编号字号、圆角、边框、行距、候选间距、亮/暗色 scheme 和高亮色都必须进入 typed theme snapshot，而不是在绘制代码里散落常量。
+- Candidate 的视觉验收不能只证明选中了某个字体或能画出单个候选。生产型竖排 corpus 必须覆盖至少五个同时可见候选、`1.` 到 `5.` 的固定右对齐 label slot、较弱的未选中序号、独立的 candidate/label/comment 字号、由字体测量驱动的 baseline/行高，以及选中态前后不变的正文起点。150% DPI 基准下，默认 Candidate 正文应接近 33 physical px、label 接近 27 physical px；不得退化为小字号工程演示窗、锐利像素字或把 label 与正文拼成一个无法独立对齐的字符串。
 - Fcitx-contrib theme docs (`import.html`, `adjust.html`, `css.html`) 只作为主题 UX/字段参考，不作为 Windows 架构依据。可吸收项包括：导入/导出前保护当前改动、覆盖默认值开关、布局/书写模式/卷轴模式约束、跟随系统深浅/强调色、背景透明/模糊/图片叠加、hover/highlight/scroll 状态类，以及 label/text/comment/mark/divider/paging 的结构化 styling。任何 CSS-like 或图片能力都必须先进入受限 schema、资源预算、路径校验和 typed snapshot；不得开放任意 JavaScript、远程资源或绕过 scroll 尺寸稳定约束。
 - 对 IPC/theme/assets 先校验长度、数量、维度、路径与资源预算；Device loss、DPI、多屏、font fallback、High Contrast、RDP/低性能降级有可重放测试。
 - Rust D2D renderer cutover 前必须已有 screenshot/golden/perf/a11y corpus；不能以 Rust rewrite 掩盖 UILess、A→B→A、locale、reload 等语义问题。

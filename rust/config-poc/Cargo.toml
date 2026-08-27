@@ -15,5 +15,8 @@ path = "src/bin/fcitx5_config_rust.rs"
 fcitx5-candidate-core = { path = "../candidate-core" }
 fcitx5-control-core = { path = "../control-core" }
 fcitx5-package-core = { path = "../package-core" }
+fcitx5-process-execution-core = { path = "../process-execution-core" }
 fcitx5-windows-common-core = { path = "../windows-common-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 windui = { path = "../../third_party/wind-ui-rust", default-features = false }

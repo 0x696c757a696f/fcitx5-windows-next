@@ -10,6 +10,7 @@ fn main() {
     let mut window_smoke = false;
     let mut demo_snapshot = false;
     let mut scroll_demo_snapshot = false;
+    let mut typography_snapshot = false;
     let mut label_slot_snapshot: Option<String> = None;
     let mut host_snapshot: Option<String> = None;
     let mut dpi_scale = 1.0_f32;
@@ -25,6 +26,8 @@ fn main() {
             demo_snapshot = true;
         } else if arg == "--scroll-demo-snapshot" {
             scroll_demo_snapshot = true;
+        } else if arg == "--typography-snapshot" {
+            typography_snapshot = true;
         } else if arg == "--label-slot-snapshot" {
             let Some(kind) = args.next() else {
                 eprintln!("--label-slot-snapshot requires vertical, horizontal, or grid");
@@ -68,12 +71,13 @@ fn main() {
 
     if self_check == window_smoke {
         eprintln!(
-            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot | --scroll-demo-snapshot | --label-slot-snapshot vertical|horizontal|grid | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
+            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot | --scroll-demo-snapshot | --typography-snapshot | --label-slot-snapshot vertical|horizontal|grid | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
         );
         std::process::exit(2);
     }
     let mode_count = usize::from(demo_snapshot)
         + usize::from(scroll_demo_snapshot)
+        + usize::from(typography_snapshot)
         + usize::from(label_slot_snapshot.is_some())
         + usize::from(host_snapshot.is_some());
     if mode_count > 1 {
@@ -88,6 +92,7 @@ fn main() {
             screenshot.as_deref(),
             demo_snapshot,
             scroll_demo_snapshot,
+            typography_snapshot,
             label_slot_snapshot.as_deref(),
             host_snapshot.as_deref(),
             dpi_scale,
@@ -128,6 +133,7 @@ fn run_window_smoke(
     screenshot: Option<&Path>,
     demo_snapshot: bool,
     scroll_demo_snapshot: bool,
+    typography_snapshot: bool,
     label_slot_snapshot: Option<&str>,
     host_snapshot: Option<&str>,
     dpi_scale: f32,
@@ -136,6 +142,7 @@ fn run_window_smoke(
         screenshot,
         demo_snapshot,
         scroll_demo_snapshot,
+        typography_snapshot,
         label_slot_snapshot,
         host_snapshot,
         dpi_scale,
@@ -147,6 +154,7 @@ fn run_window_smoke(
     _screenshot: Option<&Path>,
     _demo_snapshot: bool,
     _scroll_demo_snapshot: bool,
+    _typography_snapshot: bool,
     _label_slot_snapshot: Option<&str>,
     _host_snapshot: Option<&str>,
     _dpi_scale: f32,
@@ -160,8 +168,9 @@ mod window_smoke {
         candidate_label_slot_plan, candidate_poc_scenarios, candidate_render_segments,
         format_candidate_label, layout,
         qingfeng::{
-            qingfeng_candidate_visual_plan, QingfengCandidateVisualInput, QingfengOrientation,
-            QingfengRect, QingfengThemeMode, WINDINPUT_QINGFENG_CANDIDATE_SOURCE,
+            qingfeng_candidate_visual_plan, QingfengCandidateTheme, QingfengCandidateVisualInput,
+            QingfengOrientation, QingfengRect, QingfengThemeMode,
+            WINDINPUT_QINGFENG_CANDIDATE_SOURCE,
         },
         CandidateLabelAlign, CandidateLabelDisplay, CandidateLabelScope, CandidateLabelSlotConfig,
         CandidateLabelSlotSource, CandidateLabelStyle, CandidateLabelWidthStrategy,
@@ -570,6 +579,7 @@ mod window_smoke {
         selected_background: Dword,
         selected_text: Dword,
         window_radius: i32,
+        typography: fcitx5_candidate_core::qingfeng::QingfengCandidateTypography,
     }
 
     impl Default for LabelSlotPaintTheme {
@@ -582,6 +592,7 @@ mod window_smoke {
                 selected_background: COLORREF_SELECTED_BACKGROUND,
                 selected_text: COLORREF_SELECTED_TEXT,
                 window_radius: 12,
+                typography: QingfengCandidateTheme::light().typography,
             }
         }
     }
@@ -621,6 +632,7 @@ mod window_smoke {
         screenshot: Option<&Path>,
         demo_snapshot: bool,
         scroll_demo_snapshot: bool,
+        typography_snapshot: bool,
         label_slot_snapshot: Option<&str>,
         host_snapshot: Option<&str>,
         dpi_scale: f32,
@@ -697,6 +709,25 @@ mod window_smoke {
                 Vec::new(),
                 LabelSlotPaintTheme::default(),
                 String::new(),
+            )
+        } else if typography_snapshot {
+            let scenario = label_slot_window_scenario("typography", dpi_scale)?;
+            (
+                scenario.layout,
+                scenario.title,
+                scenario.text_lines,
+                scenario.snapshot_name,
+                scenario.orientation_name,
+                "typography",
+                "zh-CN",
+                true,
+                dpi_scale,
+                scenario.scroll_mode,
+                scenario.selected_candidate,
+                false,
+                scenario.paint_items,
+                scenario.paint_theme,
+                scenario.evidence_json,
             )
         } else if let Some(kind) = label_slot_snapshot {
             let scenario = label_slot_window_scenario(kind, dpi_scale)?;
@@ -1307,7 +1338,7 @@ mod window_smoke {
                     &item.label_rect,
                     theme.label,
                     WindAlign::End,
-                    16.0 * dpi_scale,
+                    theme.typography.label_font_size * dpi_scale,
                 );
                 draw_windui_text(
                     &mut canvas,
@@ -1319,7 +1350,7 @@ mod window_smoke {
                         theme.text
                     },
                     WindAlign::Start,
-                    18.0 * dpi_scale,
+                    theme.typography.candidate_font_size * dpi_scale,
                 );
                 if let Some(comment_rect) = item.comment_rect {
                     draw_windui_text(
@@ -1328,7 +1359,7 @@ mod window_smoke {
                         &comment_rect,
                         theme.label,
                         WindAlign::Start,
-                        16.0 * dpi_scale,
+                        theme.typography.comment_font_size * dpi_scale,
                     );
                 }
             }
@@ -1837,6 +1868,7 @@ mod window_smoke {
             slot: u32,
             label: &'static str,
             text: &'static str,
+            comment: &'static str,
         }
 
         let dark_mode = kind.ends_with("-dark");
@@ -1848,6 +1880,22 @@ mod window_smoke {
         };
         let (orientation, scroll_mode, columns, visible_rows, selected, display, scope, candidates) =
             match base_kind {
+                "typography" => (
+                    Orientation::Vertical,
+                    false,
+                    1usize,
+                    5usize,
+                    0usize,
+                    CandidateLabelDisplay::Always,
+                    CandidateLabelScope::Item,
+                    vec![
+                        DemoCandidate { slot: 1, label: "", text: "是", comment: "" },
+                        DemoCandidate { slot: 2, label: "", text: "识", comment: "" },
+                        DemoCandidate { slot: 3, label: "", text: "实", comment: "" },
+                        DemoCandidate { slot: 4, label: "", text: "水", comment: "~b" },
+                        DemoCandidate { slot: 5, label: "", text: "收", comment: "~d" },
+                    ],
+                ),
                 "vertical" => (
                     Orientation::Vertical,
                     false,
@@ -1861,16 +1909,19 @@ mod window_smoke {
                             slot: 1,
                             label: "",
                             text: "识别",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 10,
                             label: "",
                             text: "对齐很长的候选文本",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 3,
                             label: "",
                             text: "输入",
+                            comment: "",
                         },
                     ],
                 ),
@@ -1887,16 +1938,19 @@ mod window_smoke {
                             slot: 1,
                             label: "",
                             text: "识",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 2,
                             label: "",
                             text: "识别候选很长",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 10,
                             label: "",
                             text: "emoji 😀",
+                            comment: "",
                         },
                     ],
                 ),
@@ -1913,31 +1967,37 @@ mod window_smoke {
                             slot: 1,
                             label: "",
                             text: "识",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 2,
                             label: "",
                             text: "对齐",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 10,
                             label: "",
                             text: "很长的候选文本",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 4,
                             label: "",
                             text: "四",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 5,
                             label: "",
                             text: "五列保持",
+                            comment: "",
                         },
                         DemoCandidate {
                             slot: 6,
                             label: "",
                             text: "六",
+                            comment: "",
                         },
                     ],
                 ),
@@ -1960,16 +2020,18 @@ mod window_smoke {
                 )
             })
             .collect::<Vec<_>>();
+        let typography = QingfengCandidateTheme::light().typography;
         let item_sizes = candidates
             .iter()
             .zip(labels.iter())
             .map(|(candidate, label)| Size {
-                width: ((label.chars().count() as f32 * 11.0)
-                    + (candidate.text.chars().count() as f32 * 18.0)
-                    + 34.0)
+                width: ((label.chars().count() as f32 * typography.label_font_size * 0.62)
+                    + (candidate.text.chars().count() as f32
+                        * (typography.candidate_font_size + 2.0))
+                    + typography.candidate_font_size * 2.0)
                     .clamp(72.0, 220.0)
                     * dpi_scale,
-                height: 36.0 * dpi_scale,
+                height: typography.row_height * dpi_scale,
             })
             .collect::<Vec<_>>();
         let mut layout = layout(&LayoutInput {
@@ -2003,7 +2065,10 @@ mod window_smoke {
                 candidate_index: *candidate_index,
                 row: if scroll_mode { local / columns } else { local },
                 column: if scroll_mode { local % columns } else { local },
-                label_width: labels[*candidate_index].chars().count() as f32 * 11.0 * dpi_scale,
+                label_width: labels[*candidate_index].chars().count() as f32
+                    * typography.label_font_size
+                    * 0.62
+                    * dpi_scale,
             })
             .collect::<Vec<_>>();
         let slot_config = CandidateLabelSlotConfig {
@@ -2035,10 +2100,18 @@ mod window_smoke {
                         right: bounds.right - layout.window.left - 6.0 * dpi_scale,
                         bottom: bounds.bottom - layout.window.top - 4.0 * dpi_scale,
                     },
-                    label_width: label.chars().count() as f32 * 11.0 * dpi_scale,
+                    label_width: label.chars().count() as f32
+                        * typography.label_font_size
+                        * 0.62
+                        * dpi_scale,
                     label_gap: plan.label_gap,
-                    text_width: text.chars().count() as f32 * 18.0 * dpi_scale,
-                    comment_width: 0.0,
+                    text_width: text.chars().count() as f32
+                        * (typography.candidate_font_size + 2.0)
+                        * dpi_scale,
+                    comment_width: candidates[*candidate_index].comment.chars().count() as f32
+                        * typography.comment_font_size
+                        * 0.72
+                        * dpi_scale,
                     has_label: u8::from(plan.show_label),
                     reserve_label: u8::from(plan.reserve_label),
                 }
@@ -2058,7 +2131,7 @@ mod window_smoke {
             .map(|(candidate_index, plan)| QingfengCandidateVisualInput {
                 label: labels[*candidate_index].clone(),
                 text: candidates[*candidate_index].text.to_owned(),
-                comment: String::new(),
+                comment: candidates[*candidate_index].comment.to_owned(),
                 selected: *candidate_index == selected,
                 show_label: plan.show_label,
                 reserve_label: plan.reserve_label,
@@ -2079,6 +2152,7 @@ mod window_smoke {
             selected_background: visual_plan.theme.selected_background.colorref(),
             selected_text: visual_plan.theme.selected_text.colorref(),
             window_radius: visual_plan.theme.window_radius.round() as i32,
+            typography: visual_plan.theme.typography,
         };
         let window_left = layout.window.left;
         let window_top = layout.window.top;
@@ -2127,8 +2201,41 @@ mod window_smoke {
                 .collect::<Vec<_>>()
                 .windows(2)
                 .all(|pair| (pair[0] - pair[1]).abs() <= 0.5);
+        let typography = visual_plan.theme.typography;
+        let typography_text_comment_non_overlapping = visual_plan.items.iter().all(|item| {
+            item.comment_rect
+                .is_none_or(|comment| item.text_rect.right <= comment.left)
+        });
+        let typography_text_fits =
+            visual_plan
+                .items
+                .iter()
+                .zip(candidates.iter())
+                .all(|(item, candidate)| {
+                    item.text_rect.width()
+                        >= candidate.text.chars().count() as f32
+                            * typography.candidate_font_size
+                            * dpi_scale
+                });
+        let typography_contract = base_kind == "typography"
+            && candidates.len() == 5
+            && shown_label_count == 5
+            && candidates[0].text == "是"
+            && candidates[1].text == "识"
+            && candidates[2].text == "实"
+            && candidates[3].text == "水"
+            && candidates[4].text == "收"
+            && selected == 0;
+        if base_kind == "typography"
+            && (!typography_contract
+                || !stable_origins
+                || !typography_text_comment_non_overlapping
+                || !typography_text_fits)
+        {
+            return Err("Candidate production typography contract failed".to_owned());
+        }
         let evidence_json = format!(
-            "  \"label_slot_contract\":true,\n  \"label_slot_snapshot_kind\":\"{}\",\n  \"candidate_visual_theme_mode\":\"{}\",\n  \"candidate_visual_wechat_green\":true,\n  \"label_slot_width\":{:.2},\n  \"label_slot_reserved_count\":{},\n  \"label_slot_shown_count\":{},\n  \"label_slot_selected_scope_reveal\":{},\n  \"label_slot_stable_text_origins\":{},\n  \"label_slot_right_aligned\":true,\n  \"label_slot_rust_drawing\":true,\n  \"windinput_qingfeng_candidate_renderer\":true,\n  \"windinput_qingfeng_source\":\"{}\",\n",
+            "  \"label_slot_contract\":true,\n  \"label_slot_snapshot_kind\":\"{}\",\n  \"candidate_visual_theme_mode\":\"{}\",\n  \"candidate_visual_wechat_green\":true,\n  \"label_slot_width\":{:.2},\n  \"label_slot_reserved_count\":{},\n  \"label_slot_shown_count\":{},\n  \"label_slot_selected_scope_reveal\":{},\n  \"label_slot_stable_text_origins\":{},\n  \"label_slot_right_aligned\":true,\n  \"label_slot_rust_drawing\":true,\n  \"windinput_qingfeng_candidate_renderer\":true,\n  \"windinput_qingfeng_source\":\"{}\",\n  \"candidate_visual_typography_tokens\":true,\n  \"candidate_font_size\":{:.2},\n  \"label_font_size\":{:.2},\n  \"comment_font_size\":{:.2},\n  \"row_height\":{:.2},\n  \"candidate_font_size_physical_px\":{:.2},\n  \"label_font_size_physical_px\":{:.2},\n  \"typography_candidate_count\":{},\n  \"typography_all_labels_shown\":{},\n  \"typography_selected_first\":{},\n  \"typography_text_comment_non_overlapping\":{},\n  \"typography_text_fits\":{},\n",
             json_escape(kind),
             if dark_mode { "dark" } else { "light" },
             label_column_width,
@@ -2137,6 +2244,17 @@ mod window_smoke {
             if display == CandidateLabelDisplay::SelectedScope { "true" } else { "false" },
             if stable_origins { "true" } else { "false" },
             json_escape(WINDINPUT_QINGFENG_CANDIDATE_SOURCE),
+            typography.candidate_font_size,
+            typography.label_font_size,
+            typography.comment_font_size,
+            typography.row_height,
+            typography.candidate_font_size * dpi_scale,
+            typography.label_font_size * dpi_scale,
+            candidates.len(),
+            if typography_contract { "true" } else { "false" },
+            if typography_contract { "true" } else { "false" },
+            if typography_text_comment_non_overlapping { "true" } else { "false" },
+            if typography_text_fits { "true" } else { "false" },
         );
         Ok(LabelSlotWindowScenario {
             layout,
@@ -2144,9 +2262,12 @@ mod window_smoke {
             text_lines: candidates
                 .iter()
                 .zip(labels.iter())
-                .map(|(candidate, label)| wide(&format!("{label} {}", candidate.text)))
+                .map(|(candidate, label)| {
+                    wide(format!("{label} {} {}", candidate.text, candidate.comment).trim_end())
+                })
                 .collect(),
             snapshot_name: match kind {
+                "typography" => "typography-vertical",
                 "vertical-dark" => "label-slot-vertical-dark",
                 "horizontal-dark" => "label-slot-horizontal-dark",
                 "grid-dark" => "label-slot-grid-dark",

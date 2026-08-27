@@ -74,7 +74,27 @@ impl QingfengColor {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QingfengCandidateTypography {
+    pub candidate_font_size: f32,
+    pub label_font_size: f32,
+    pub comment_font_size: f32,
+    pub row_height: f32,
+}
+
+impl Default for QingfengCandidateTypography {
+    fn default() -> Self {
+        Self {
+            candidate_font_size: 22.0,
+            label_font_size: 18.0,
+            comment_font_size: 16.0,
+            row_height: 42.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QingfengCandidateTheme {
+    pub typography: QingfengCandidateTypography,
     pub window_padding: f32,
     pub window_radius: f32,
     pub window_border_width: f32,
@@ -104,6 +124,7 @@ impl QingfengCandidateTheme {
             item_radius: self.item_radius * scale,
             index_text_gap: self.index_text_gap * scale,
             comment_text_gap: self.comment_text_gap * scale,
+            typography: self.typography,
             ..self
         }
     }
@@ -119,6 +140,7 @@ impl QingfengCandidateTheme {
     pub fn light() -> Self {
         let background = QingfengColor::rgb(255, 255, 255);
         Self {
+            typography: QingfengCandidateTypography::default(),
             window_padding: 5.0,
             window_radius: 12.0,
             window_border_width: 1.0,
@@ -152,6 +174,7 @@ impl QingfengCandidateTheme {
     pub fn dark() -> Self {
         let background = QingfengColor::rgb(24, 24, 24);
         Self {
+            typography: QingfengCandidateTypography::default(),
             window_padding: 5.0,
             window_radius: 12.0,
             window_border_width: 1.0,
@@ -219,10 +242,11 @@ pub fn qingfeng_candidate_visual_plan(
         QingfengThemeMode::Dark => QingfengCandidateTheme::dark(),
     }
     .scaled(dpi_scale);
-    let row_h = 38.0 * dpi_scale.clamp(0.5, 4.0);
-    let text_char_w = 18.0 * dpi_scale.clamp(0.5, 4.0);
-    let label_char_w = 10.0 * dpi_scale.clamp(0.5, 4.0);
-    let comment_char_w = 13.0 * dpi_scale.clamp(0.5, 4.0);
+    let scale = dpi_scale.clamp(0.5, 4.0);
+    let row_h = theme.typography.row_height * scale;
+    let text_char_w = (theme.typography.candidate_font_size + 2.0) * scale;
+    let label_char_w = theme.typography.label_font_size * 0.62 * scale;
+    let comment_char_w = theme.typography.comment_font_size * 0.72 * scale;
     let gap = match orientation {
         QingfengOrientation::Vertical => 4.0,
         QingfengOrientation::Horizontal | QingfengOrientation::Grid => 10.0,
@@ -290,7 +314,7 @@ pub fn qingfeng_candidate_visual_plan(
             bottom: content_bottom,
         };
         let text_left = if label_w > 0.0 {
-            label.right + theme.index_text_gap + 3.0 * dpi_scale.clamp(0.5, 4.0)
+            label.right + theme.index_text_gap
         } else {
             item.left + theme.item_padding_x
         };
@@ -373,6 +397,25 @@ mod tests {
         assert_eq!(plan.theme.selected_text, QingfengColor::rgb(7, 193, 96));
         assert!(plan.items[0].label_rect.width() >= 30.0);
         assert!(plan.items[0].text_rect.left > plan.items[0].label_rect.right);
+    }
+
+    #[test]
+    fn cjk_text_rect_keeps_full_glyph_budget_beside_comment() {
+        let plan = qingfeng_candidate_visual_plan(
+            QingfengOrientation::Vertical,
+            QingfengThemeMode::Light,
+            &[QingfengCandidateVisualInput {
+                label: "4.".to_owned(),
+                text: "水".to_owned(),
+                comment: "~b".to_owned(),
+                selected: false,
+                show_label: true,
+                reserve_label: true,
+            }],
+            36.0,
+            1.5,
+        );
+        assert!(plan.items[0].text_rect.width() >= 22.0 * 1.5);
     }
 
     #[test]

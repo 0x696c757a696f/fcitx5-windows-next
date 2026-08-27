@@ -261,8 +261,9 @@ fn command_line(executable: &Path, arguments: &[OsString]) -> Vec<u16> {
     wide_z(&command)
 }
 
-fn drain_pipe(read_pipe: SendHandle, max_output_bytes: usize) -> Vec<u8> {
+fn drain_pipe(read_pipe: SendHandle, max_output_bytes: usize) -> (Vec<u8>, bool) {
     let mut bytes = Vec::new();
+    let mut truncated = false;
     let mut buffer = [0_u8; 2048];
     loop {
         let mut read = 0_u32;
@@ -278,12 +279,13 @@ fn drain_pipe(read_pipe: SendHandle, max_output_bytes: usize) -> Vec<u8> {
         if ok == FALSE || read == 0 {
             break;
         }
-        if bytes.len() < max_output_bytes {
-            let remaining = max_output_bytes - bytes.len();
+        let remaining = max_output_bytes.saturating_sub(bytes.len());
+        if remaining != 0 {
             bytes.extend_from_slice(&buffer[..remaining.min(read as usize)]);
         }
+        truncated |= read as usize > remaining;
     }
-    bytes
+    (bytes, truncated)
 }
 
 fn run_process(
@@ -291,9 +293,9 @@ fn run_process(
     arguments: &[OsString],
     timeout_ms: u32,
     max_output_bytes: usize,
-) -> io::Result<(bool, Vec<u16>)> {
+) -> io::Result<(bool, Vec<u16>, bool)> {
     if !executable.is_file() {
-        return Ok((false, Vec::new()));
+        return Ok((false, Vec::new(), false));
     }
     let mut job_limits = JobObjectExtendedLimitInformation {
         basic_limit_information: JobObjectBasicLimitInformation {
@@ -436,7 +438,7 @@ fn run_process(
     drop(attribute_list_guard);
     drop(write_pipe);
     if created == FALSE {
-        return Ok((false, Vec::new()));
+        return Ok((false, Vec::new(), false));
     }
     let process_handle =
         UniqueHandle::new(process_info.h_process).ok_or_else(io::Error::last_os_error)?;
@@ -447,14 +449,14 @@ fn run_process(
         unsafe {
             let _ = TerminateProcess(process_handle.get(), ERROR_ACCESS_DENIED);
         }
-        return Ok((false, Vec::new()));
+        return Ok((false, Vec::new(), false));
     }
     if unsafe { ResumeThread(thread_handle.get()) } == u32::MAX {
         unsafe {
             let _ = TerminateJobObject(job.get(), ERROR_ACCESS_DENIED);
             let _ = WaitForSingleObject(process_handle.get(), 5000);
         }
-        return Ok((false, Vec::new()));
+        return Ok((false, Vec::new(), false));
     }
 
     let reader_handle = SendHandle(read_pipe.get() as usize);
@@ -467,7 +469,7 @@ fn run_process(
         }
         final_wait = unsafe { WaitForSingleObject(process_handle.get(), 5000) };
     }
-    let bytes = reader.join().unwrap_or_default();
+    let (bytes, truncated) = reader.join().unwrap_or_default();
     let mut exit_code = 1_u32;
     unsafe {
         let _ = GetExitCodeProcess(process_handle.get(), &mut exit_code);
@@ -476,7 +478,40 @@ fn run_process(
     Ok((
         wait == WAIT_OBJECT_0 && final_wait == WAIT_OBJECT_0 && exit_code == 0,
         output,
+        truncated,
     ))
+}
+
+#[derive(Debug)]
+pub struct ProcessOutput {
+    pub success: bool,
+    pub output: String,
+}
+
+/// Runs a fixed executable with bounded combined stdout/stderr capture.
+///
+/// # Errors
+///
+/// Returns an I/O error when process setup fails or the captured output exceeds
+/// `max_output_bytes`.
+pub fn run_process_bounded(
+    executable: &Path,
+    arguments: &[OsString],
+    timeout_ms: u32,
+    max_output_bytes: usize,
+) -> io::Result<ProcessOutput> {
+    let (success, output, truncated) =
+        run_process(executable, arguments, timeout_ms, max_output_bytes)?;
+    if truncated {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "process output exceeded limit",
+        ));
+    }
+    Ok(ProcessOutput {
+        success,
+        output: String::from_utf16_lossy(&output),
+    })
 }
 
 fn output_to_result(success: bool, output: Vec<u16>, result: *mut Fcitx5ProcessRunResult) -> i32 {
@@ -540,7 +575,7 @@ pub unsafe extern "C" fn fcitx5_process_run_utf16(
             timeout_ms,
             max_output_bytes,
         ) {
-            Ok((success, output)) => output_to_result(success, output, result),
+            Ok((success, output, _)) => output_to_result(success, output, result),
             Err(_) => output_to_result(false, Vec::new(), result),
         }
     });
@@ -587,7 +622,7 @@ mod tests {
     }
 
     fn run_powershell(command: &str, timeout_ms: u32, max_output_bytes: usize) -> (bool, String) {
-        let (ok, output) = run_process(
+        let (ok, output, _) = run_process(
             &powershell(),
             &[
                 OsString::from("-NoProfile"),
@@ -630,6 +665,24 @@ mod tests {
         );
         assert!(ok);
         assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn safe_api_rejects_oversized_output() {
+        let result = run_process_bounded(
+            &powershell(),
+            &[
+                OsString::from("-NoProfile"),
+                OsString::from("-Command"),
+                OsString::from("'x' * 100"),
+            ],
+            30_000,
+            16,
+        );
+        assert_eq!(
+            result.expect_err("oversized output should fail").kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]

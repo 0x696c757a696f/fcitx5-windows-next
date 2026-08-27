@@ -1,10 +1,11 @@
 # Task Queue Rebaseline
 
-Date: 2026-08-26
+Date: 2026-08-27
 
-HEAD at rebaseline refresh: `d1c87129d03b6460222534b130b016d32348aad2`
+HEAD at rebaseline refresh: `6ed75672c95e9b4ec5e82b764d4a0d251faff3dd`
 
-Working tree at rebaseline refresh: clean after `CONFIG-WINDUI-SETTINGS-SHELL-001` commit/push.
+Working tree at rebaseline refresh: only the user's untracked local helper
+`fcitx5_context_efficiency_v2.ps1`; it is excluded from repository tasks and commits.
 
 Purpose: interpret the old v1.8 queue against the current repository truth. The old task files remain historical evidence. This file is the current queue interpretation until a later rebaseline replaces it.
 
@@ -56,16 +57,17 @@ Local execution overlay:
 - Prefer repo-local `out\toolchains\fast\sccache-0.17.0\sccache-v0.17.0-x86_64-pc-windows-msvc\sccache.exe`
   on `PATH` where build/test scripts support it.
 
-2026-08-26 refresh:
+2026-08-27 refresh:
 
 - The old R3 FUTURE-GATED queue files and old Config UX source tasks have been superseded by
   completed task files and are not executable queue entries.
 - `047` through `058` have completed the reachable code-only Settings path through a vendored
   `huanfeng/wind-ui-rust` default Settings shell.
-- `059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001` is green for label-slot geometry; current execution
-  moves to `060-CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001` for the WindInput/Qingfeng-derived
-  WeChat-green visual slice while `RELEASE-01` remains parked on external/manual evidence. No local
-  CTest/package/screenshot result may mark `REL-01` complete.
+- `059` through `061` are green for label-slot geometry, WindInput/Qingfeng visual adoption, and the
+  windui DirectWrite/YaHei text path. The latest visual audit shows that these checks did not prove
+  production-like five-candidate vertical density or typed candidate/label/comment typography.
+  `062-CANDIDATE-PRODUCTION-VERTICAL-TYPOGRAPHY-001` is therefore the current code-only task while
+  `RELEASE-01` remains parked on external/manual evidence.
 
 ## P0 Guidance Tasks
 
@@ -131,7 +133,10 @@ Local execution overlay:
 | R3-02 `RUST-R3-CONFIG-POC` | `ALREADY-GREEN` | Shipping Config uses Rust for the product executable and default interactive GUI shell; the vendored windui Settings shell is the no-argument route, while legacy C++ WTL and Rust Win32/D2D hosts are regression/QA-only. | Full release claims still depend on Stage 4 manual/real-host evidence. |
 | R3-03 `RUST-R3-TSF-POC` | `MANUAL-PENDING` | Shipping Rust TSF automated gates are green and old C++ TSF sources are deleted; real-host matrix remains missing. | Do not declare release-ready until real-host evidence is recorded. |
 | 059 `CANDIDATE-LABEL-SLOT-RUST-DRAWING-001` | `ALREADY-GREEN / VISUAL-FOLLOWUP-QUEUED` | Rust `candidate-core` now owns candidate label formatting, label-slot planning, reserved hidden labels, selected item/row/column reveal, render segments, and Rust PoC drawing evidence. The Settings Appearance page keeps scroll mode visible outside Advanced and the embedded preview passes the scroll-mode flag into Rust layout. | Preserve the Rust-owned label-slot/scroll evidence; 060 owns WindInput/Qingfeng-derived green visual adoption. |
-| 060 `CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001` | `CURRENT` | Project default Candidate/Config visuals must become WeChat-green light/dark while preserving Qingfeng/upstream themes and consuming WindInput/Qingfeng candidate visual code/tokens. | Finish automated light/dark screenshots and source-contract evidence before returning to release gate. |
+| 060 `CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001` | `ALREADY-GREEN` | WindInput/Qingfeng-derived Rust visual plan, WeChat-green light/dark defaults, and six layout/theme screenshots are recorded. | Preserve the third-party source/license and typed palette evidence. |
+| 061 `CANDIDATE-MICROSOFT-YAHEI-RUST-TEXT-RENDERER-001` | `ALREADY-GREEN` | Candidate PoC bitmap text uses the vendored windui DirectWrite path with Microsoft YaHei UI, DPI awareness, and 150% screenshot evidence. | Do not interpret renderer/font selection alone as proof of production typography quality. |
+| 062 `CANDIDATE-PRODUCTION-VERTICAL-TYPOGRAPHY-001` | `COMPLETED / FULL-CJK-GLYPH-VISIBILITY-GREEN` | Rust `QingfengCandidateTheme` owns typography and the shared visual plan no longer adds an unbudgeted text offset. x64/x86 reports assert `typography_text_fits=true`; matching screenshots visibly contain complete `水` and `收` glyphs beside `~b`/`~d`. | Preserve the full-glyph fail-fast contract; rectangle non-overlap alone is not acceptable evidence. |
+| 063 `CONFIG-WINDUI-PLUGIN-MANAGER-001` | `COMPLETED / REAL-CONTROL-OPERATIONS-GREEN` | Default Rust windui Config shows the pinned 21-entry catalog in a scrollable left pane, fixed details/actions on the right, and real package state/errors from bounded typed Control operations. | Production online install/update evidence remains manual until signed repository artifacts exist. |
 | REL-01 `RELEASE-01` | `BLOCKED` | Real-host, installer/UAC, production plugin lifecycle assets, generation-drain, Narrator/NVDA, and release signing/provenance evidence remain incomplete. Config code-only shell polish is green through 058. | Release gate cannot advance from local-only evidence. |
 
 ## Next Eligible Work

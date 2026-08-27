@@ -124,6 +124,8 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 059 | CANDIDATE-LABEL-SLOT-RUST-DRAWING-001 | COMPLETED / CANDIDATE-LABEL-SLOT-RUST-DRAWING-GREEN / WINDINPUT-QINGFENG-VISUAL-FOLLOWUP-QUEUED | `REL-01` is parked on external/manual evidence; user explicitly required configurable candidate numbers, reserved row/column label space, stable alignment, Rust drawing, keeping scroll mode visible in Settings, and replacing PoC-level visuals with WindInput/Qingfeng-derived candidate rendering | completed/059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001.md |
 | 060 | CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001 | COMPLETED / WINDINPUT-QINGFENG-WECHAT-GREEN-VISUAL-GREEN | 059 label-slot contract green; product default must be WeChat-green light/dark while preserving Qingfeng/upstream theme sources and using actual WindInput candidate visual code where local quality falls short | completed/060-CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001.md |
 | 061 | CANDIDATE-MICROSOFT-YAHEI-RUST-TEXT-RENDERER-001 | COMPLETED / WINDUI-DWRITE-YAHEI-UI-150PCT-GREEN | 060 visual defaults green; Rust Candidate screenshots now use the Qingfeng windui DirectWrite path, per-monitor DPI awareness, DPI-scaled text, and 150% visual goldens | completed/061-CANDIDATE-MICROSOFT-YAHEI-RUST-TEXT-RENDERER-001.md |
+| 062 | CANDIDATE-PRODUCTION-VERTICAL-TYPOGRAPHY-001 | COMPLETED / FULL-CJK-GLYPH-VISIBILITY-GREEN | Rejected the old non-overlap-only proof; shared width budgeting now includes the exact label/text gap, x64/x86 reports assert `typography_text_fits=true`, and fresh matching screenshots show complete rows 4/5 beside comments | completed/062-CANDIDATE-PRODUCTION-VERTICAL-TYPOGRAPHY-001.md |
+| 063 | CONFIG-WINDUI-PLUGIN-MANAGER-001 | COMPLETED / REAL-CONTROL-OPERATIONS-GREEN | Default windui Config shows the pinned 21-entry catalog, reads authoritative package state, and runs bounded refresh/install/update/state/remove/repair operations off the UI thread | completed/063-CONFIG-WINDUI-PLUGIN-MANAGER-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
@@ -162,4 +164,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 - `061` hardens the Candidate screenshot text path itself: bitmap text must be drawn by the
   Rust-owned renderer with a Microsoft YaHei CJK-first path, and source contracts must prevent
   silent regression to rough GDI `DrawTextW` screenshot text.
+- `062` closes the remaining production-typography evidence gap: the Rust Qingfeng visual plan owns
+  candidate/label/comment font-size and row-height tokens, and a five-candidate vertical screenshot
+  proves right-aligned labels, annotations, stable text origins, and normal Windows IME density.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

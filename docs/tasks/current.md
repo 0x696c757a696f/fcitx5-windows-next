@@ -1,9 +1,9 @@
-# Current Task — RELEASE-01 Stable release pipeline / Build Once evidence
+# Current Task - RELEASE-01 Stable release pipeline / Build Once evidence
 
 **Mode:** RELEASE
 **Task ID:** `RELEASE-01`
 **Prerequisite:** All stabilization tasks + required external evidence + intended Rust cutovers
-**Evidence class:** `EXTERNAL_EVIDENCE` — never claim unrun real-host evidence passed.
+**Evidence class:** `EXTERNAL_EVIDENCE` - never claim unrun real-host evidence passed.
 
 ## Goal
 

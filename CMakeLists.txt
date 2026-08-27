@@ -1315,6 +1315,19 @@ if(BUILD_TESTING)
         "rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endforeach()
+    add_test(
+      NAME rust-candidate-poc-typography-vertical
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
+        --typography-snapshot --dpi-scale 1.50 --report
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-typography-vertical.json" --screenshot
+        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-typography-vertical.bmp")
+    set_tests_properties(
+      rust-candidate-poc-typography-vertical PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     foreach(FCITX_CANDIDATE_HOST_SNAPSHOT mock-notepad mock-word mock-chromium mock-emoji-host)
       add_test(
         NAME "rust-candidate-poc-host-snapshot-${FCITX_CANDIDATE_HOST_SNAPSHOT}"

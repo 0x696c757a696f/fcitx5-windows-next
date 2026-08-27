@@ -1,6 +1,8 @@
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
 
 use fcitx5_candidate_core::{candidate_preview_paint_plan, run_candidate_poc_self_check};
 use fcitx5_control_core::{control_schema_json, control_usage_text};
@@ -9,12 +11,14 @@ use fcitx5_package_core::{
     parse_lockfile, parse_manifest, parse_repository_index, parse_trusted_keys,
     set_package_state_entries, validate_manifest_compatibility, PackageLifecycleState,
 };
+use fcitx5_process_execution_core::run_process_bounded;
+use serde::Deserialize;
 use windui::prelude::{
     brand_icon as windui_brand_icon, brand_icon_at as windui_brand_icon_at,
     signal as windui_signal, Align as WindUiAlign, App as WindUiApp, Color as WindUiColor,
     Element as WindUiElement, Fit as WindUiFit, Intent as WindUiIntent, Role as WindUiRole,
-    Signal as WindUiSignal, Theme as WindUiTheme, ThemeHandle as WindUiThemeHandle,
-    WindowButtonKind as WindUiWindowButtonKind,
+    Sender as WindUiSender, Signal as WindUiSignal, Theme as WindUiTheme,
+    ThemeHandle as WindUiThemeHandle, WindowButtonKind as WindUiWindowButtonKind,
 };
 
 const CONFIG_POC_COMPONENT: &str = "fcitx5-config-poc";
@@ -573,40 +577,786 @@ fn windui_candidate_preview_chip(text: &str, active: bool) -> WindUiElement {
         )
 }
 
-fn windui_candidate_preview_panel() -> WindUiElement {
+fn windui_candidate_preview_row(
+    label: &'static str,
+    text: &'static str,
+    comment: &'static str,
+    active: bool,
+    dark: bool,
+) -> WindUiElement {
+    WindUiElement::row()
+        .width_match()
+        .height(38)
+        .cross(WindUiAlign::Center)
+        .spacing(10)
+        .padding_xy(10, 0)
+        .bg_role(if active {
+            WindUiRole::Accent
+        } else if dark {
+            WindUiRole::SurfaceAlt
+        } else {
+            WindUiRole::Bg
+        })
+        .child(
+            WindUiElement::label(label)
+                .font_size(13.0)
+                .fg_role(if active {
+                    WindUiRole::OnAccent
+                } else {
+                    WindUiRole::TextMuted
+                })
+                .width(26),
+        )
+        .child(
+            WindUiElement::label(text)
+                .font_size(16.0)
+                .fg_role(if active {
+                    WindUiRole::OnAccent
+                } else {
+                    WindUiRole::Text
+                })
+                .weight(1.0),
+        )
+        .child(
+            WindUiElement::label(comment)
+                .font_size(12.0)
+                .fg_role(if active {
+                    WindUiRole::OnAccent
+                } else {
+                    WindUiRole::TextMuted
+                }),
+        )
+}
+
+fn windui_candidate_preview_panel(
+    layout: WindUiSignal<usize>,
+    theme_mode: WindUiSignal<usize>,
+) -> WindUiElement {
+    let mode = WindUiElement::row()
+        .cross(WindUiAlign::Center)
+        .spacing(6)
+        .child(
+            WindUiElement::label("wubi")
+                .font_size(12.5)
+                .fg_role(WindUiRole::TextMuted),
+        )
+        .child(WindUiElement::badge_intent(
+            "preview",
+            WindUiIntent::Neutral,
+        ))
+        .child(
+            WindUiElement::label(" · ")
+                .font_size(12.5)
+                .fg_role(WindUiRole::TextDisabled),
+        )
+        .child(
+            WindUiElement::label("浅色")
+                .font_size(12.5)
+                .fg_role(WindUiRole::Accent)
+                .visible_when(move || theme_mode.get() != 2),
+        )
+        .child(
+            WindUiElement::label("深色")
+                .font_size(12.5)
+                .fg_role(WindUiRole::Accent)
+                .visible_when(move || theme_mode.get() == 2),
+        );
+
+    let vertical = WindUiElement::col()
+        .width_match()
+        .spacing(2)
+        .child(windui_candidate_preview_row("1.", "是", "", true, false))
+        .child(windui_candidate_preview_row("2.", "识", "", false, false))
+        .child(windui_candidate_preview_row("3.", "实", "", false, false))
+        .child(windui_candidate_preview_row("4.", "水", "~b", false, false))
+        .child(windui_candidate_preview_row("5.", "收", "~d", false, false))
+        .visible_when(move || layout.get() != 1);
+
+    let horizontal = WindUiElement::row()
+        .width_match()
+        .spacing(6)
+        .child(windui_candidate_preview_chip("1. 是", true))
+        .child(windui_candidate_preview_chip("2. 识", false))
+        .child(windui_candidate_preview_chip("3. 实", false))
+        .child(windui_candidate_preview_chip("4. 水 ~b", false))
+        .child(windui_candidate_preview_chip("5. 收 ~d", false))
+        .visible_when(move || layout.get() == 1);
+
     WindUiElement::col()
         .width_match()
         .spacing(10)
+        .child(mode)
+        .child(vertical)
+        .child(horizontal)
+        .child(
+            WindUiElement::label(
+                "候选序号列固定保留；正文与注释分别布局，长字不会被右侧注释裁掉。",
+            )
+            .font_size(12.5)
+            .fg_role(WindUiRole::TextMuted)
+            .width_match(),
+        )
+}
+
+#[derive(Clone, Copy)]
+struct PluginCatalogEntry {
+    id: &'static str,
+    category: &'static str,
+    summary: &'static str,
+    windows_package: bool,
+}
+
+const FCITX5_PLUGINS_REFERENCE_COMMIT: &str = "26a94720f0a01e106046f6a7607215ff96bf2f6f";
+const CONTROL_TIMEOUT_MS: u32 = 120_000;
+const CONTROL_MAX_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+const FCITX5_PLUGIN_CATALOG: &[PluginCatalogEntry] = &[
+    PluginCatalogEntry {
+        id: "fcitx5-chinese-addons",
+        category: "中文",
+        summary: "拼音、双拼与词库扩展",
+        windows_package: true,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-table-extra",
+        category: "中文",
+        summary: "额外码表输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-chewing",
+        category: "中文",
+        summary: "Chewing 酷音输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "libime-jyutping",
+        category: "中文",
+        summary: "粤语拼音输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-zhuyin",
+        category: "中文",
+        summary: "注音输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-mozc",
+        category: "日文",
+        summary: "Mozc 日文输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-skk",
+        category: "日文",
+        summary: "SKK 日文输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-anthy",
+        category: "日文",
+        summary: "Anthy 日文输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-kkc",
+        category: "日文",
+        summary: "Kana Kanji 转换",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-cskk",
+        category: "日文",
+        summary: "libcskk 输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-hangul",
+        category: "韩文",
+        summary: "Hangul 输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-hallelujah",
+        category: "英文",
+        summary: "英文补全输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-sayura",
+        category: "僧伽罗文",
+        summary: "Sayura 输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-libthai",
+        category: "泰文",
+        summary: "泰文输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-bamboo",
+        category: "越南文",
+        summary: "Bamboo 输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-unikey",
+        category: "越南文",
+        summary: "Unikey 输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-rime",
+        category: "通用",
+        summary: "Rime 输入法与词库桥接",
+        windows_package: true,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-m17n",
+        category: "通用",
+        summary: "m17n 多语言输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-table-other",
+        category: "通用",
+        summary: "其它码表输入法",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-keyman",
+        category: "通用",
+        summary: "Keyman 输入法桥接",
+        windows_package: false,
+    },
+    PluginCatalogEntry {
+        id: "fcitx5-lua",
+        category: "其它",
+        summary: "Lua 扩展与脚本接口",
+        windows_package: true,
+    },
+];
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ControlPackage {
+    id: String,
+    title: String,
+    summary: String,
+    #[serde(rename = "type")]
+    package_type: String,
+    available_version: Option<String>,
+    installed_version: Option<String>,
+    state: Option<String>,
+    update_available: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ControlPackageList {
+    format_version: u32,
+    repository_available: bool,
+    repository_error: Option<String>,
+    packages: Vec<ControlPackage>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PluginManagerSnapshot {
+    loaded: bool,
+    repository_available: bool,
+    repository_error: Option<String>,
+    packages: Vec<ControlPackage>,
+}
+
+impl PluginManagerSnapshot {
+    fn package(&self, id: &str) -> Option<&ControlPackage> {
+        self.packages.iter().find(|package| package.id == id)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PluginOperation {
+    List,
+    Refresh,
+    Install(String),
+    Update(String),
+    SetState { id: String, enabled: bool },
+    Remove(String),
+    Repair,
+}
+
+impl PluginOperation {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::List => "读取",
+            Self::Refresh => "刷新",
+            Self::Install(_) => "安装",
+            Self::Update(_) => "更新",
+            Self::SetState { enabled: true, .. } => "启用",
+            Self::SetState { enabled: false, .. } => "禁用",
+            Self::Remove(_) => "卸载",
+            Self::Repair => "修复",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PluginResponse {
+    operation: PluginOperation,
+    result: Result<PluginManagerSnapshot, String>,
+}
+
+fn plugin_catalog_entry(id: &str) -> Option<&'static PluginCatalogEntry> {
+    FCITX5_PLUGIN_CATALOG.iter().find(|plugin| plugin.id == id)
+}
+
+fn plugin_control_arguments(operation: &PluginOperation) -> Result<Vec<OsString>, String> {
+    let package_id = |id: &str| {
+        plugin_catalog_entry(id)
+            .filter(|plugin| plugin.windows_package)
+            .map(|plugin| OsString::from(plugin.id))
+            .ok_or_else(|| format!("不受支持的 Windows 插件包：{id}"))
+    };
+    Ok(match operation {
+        PluginOperation::List => vec![OsString::from("--packages-list")],
+        PluginOperation::Refresh => vec![OsString::from("--packages-refresh")],
+        PluginOperation::Install(id) => {
+            vec![OsString::from("--packages-install"), package_id(id)?]
+        }
+        PluginOperation::Update(id) => {
+            vec![OsString::from("--packages-update"), package_id(id)?]
+        }
+        PluginOperation::SetState { id, enabled } => vec![
+            OsString::from("--packages-state"),
+            package_id(id)?,
+            OsString::from(if *enabled { "enabled" } else { "disabled" }),
+        ],
+        PluginOperation::Remove(id) => {
+            vec![OsString::from("--packages-remove"), package_id(id)?]
+        }
+        PluginOperation::Repair => vec![OsString::from("--packages-repair")],
+    })
+}
+
+fn parse_control_package_list(output: &str) -> Result<PluginManagerSnapshot, String> {
+    if output.len() > CONTROL_MAX_OUTPUT_BYTES {
+        return Err("Control 返回的插件目录超过大小限制".to_owned());
+    }
+    let parsed: ControlPackageList = serde_json::from_str(output)
+        .map_err(|error| format!("Control 插件目录 JSON 无效：{error}"))?;
+    if parsed.format_version != 1 || parsed.packages.len() > 4096 {
+        return Err("Control 插件目录版本或条目数无效".to_owned());
+    }
+    if parsed
+        .repository_error
+        .as_ref()
+        .is_some_and(|error| error.len() > 64)
+        || parsed.packages.iter().any(|package| {
+            package.id.is_empty()
+                || package.id.len() > 128
+                || !package
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                || package.title.is_empty()
+                || package.title.len() > 256
+                || package.summary.len() > 4096
+                || package.package_type.is_empty()
+                || package.package_type.len() > 64
+                || package
+                    .available_version
+                    .as_ref()
+                    .is_some_and(|version| version.is_empty() || version.len() > 128)
+                || package
+                    .installed_version
+                    .as_ref()
+                    .is_some_and(|version| version.is_empty() || version.len() > 128)
+                || package.state.as_deref().is_some_and(|state| {
+                    !matches!(
+                        state,
+                        "installed"
+                            | "enabled"
+                            | "disabled"
+                            | "pending_update"
+                            | "pending_remove"
+                            | "broken"
+                            | "quarantined"
+                            | "bundled"
+                            | "trust-failed"
+                            | "incompatible"
+                            | "pending-restart"
+                    )
+                })
+        })
+    {
+        return Err("Control 插件目录字段无效".to_owned());
+    }
+    Ok(PluginManagerSnapshot {
+        loaded: true,
+        repository_available: parsed.repository_available,
+        repository_error: parsed.repository_error,
+        packages: parsed.packages,
+    })
+}
+
+fn control_executable() -> Result<PathBuf, String> {
+    let executable = env::current_exe().map_err(|error| format!("无法定位配置程序：{error}"))?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| "配置程序路径没有父目录".to_owned())?;
+    Ok(directory.join("fcitx5-control.exe"))
+}
+
+fn run_control(arguments: &[OsString]) -> Result<String, String> {
+    let executable = control_executable()?;
+    let result = run_process_bounded(
+        &executable,
+        arguments,
+        CONTROL_TIMEOUT_MS,
+        CONTROL_MAX_OUTPUT_BYTES,
+    )
+    .map_err(|error| format!("运行 fcitx5-control.exe 失败：{error}"))?;
+    if result.success {
+        Ok(result.output)
+    } else {
+        let detail = result.output.trim();
+        Err(if detail.is_empty() {
+            "fcitx5-control.exe 返回失败".to_owned()
+        } else {
+            format!("fcitx5-control.exe 返回失败：{detail}")
+        })
+    }
+}
+
+fn execute_plugin_operation(operation: &PluginOperation) -> Result<PluginManagerSnapshot, String> {
+    let arguments = plugin_control_arguments(operation)?;
+    let output = run_control(&arguments)?;
+    if matches!(operation, PluginOperation::List) {
+        return parse_control_package_list(&output);
+    }
+    let list = run_control(&plugin_control_arguments(&PluginOperation::List)?)?;
+    parse_control_package_list(&list)
+}
+
+fn spawn_plugin_operation(sender: WindUiSender<PluginResponse>, operation: PluginOperation) {
+    thread::spawn(move || {
+        let result = execute_plugin_operation(&operation);
+        let _ = sender.send(PluginResponse { operation, result });
+    });
+}
+
+fn plugin_status(snapshot: &PluginManagerSnapshot, plugin: PluginCatalogEntry) -> String {
+    if !snapshot.loaded {
+        return "正在读取".to_owned();
+    }
+    let Some(package) = snapshot.package(plugin.id) else {
+        return if plugin.windows_package {
+            "当前仓库无包".to_owned()
+        } else {
+            "暂无 Windows 包".to_owned()
+        };
+    };
+    if package.update_available {
+        return "可更新".to_owned();
+    }
+    match package.state.as_deref() {
+        Some("bundled") => "已内置".to_owned(),
+        Some("disabled") => "已禁用".to_owned(),
+        Some("trust-failed") => "信任失败".to_owned(),
+        Some("incompatible") => "不兼容".to_owned(),
+        Some("pending-restart") => "等待重启".to_owned(),
+        _ if package.installed_version.is_some() => "已启用".to_owned(),
+        _ if package.available_version.is_some() => "可安装".to_owned(),
+        _ => "不可用".to_owned(),
+    }
+}
+
+fn package_allows_installed_action(package: &ControlPackage) -> bool {
+    package.installed_version.is_some()
+        && !matches!(
+            package.state.as_deref(),
+            Some("bundled" | "trust-failed" | "incompatible" | "pending-restart")
+        )
+}
+
+fn windui_plugin_row(
+    index: usize,
+    plugin: PluginCatalogEntry,
+    selected: WindUiSignal<usize>,
+    snapshot: WindUiSignal<PluginManagerSnapshot>,
+) -> WindUiElement {
+    let status = snapshot.map(move |state| plugin_status(state, plugin));
+    WindUiElement::row()
+        .clickable()
+        .on_click(move |_| selected.set(index))
+        .width_match()
+        .height(58)
+        .cross(WindUiAlign::Center)
+        .spacing(10)
+        .padding_xy(12, 4)
+        .bg_role(WindUiRole::SurfaceAlt)
+        .child(
+            WindUiElement::col()
+                .weight(1.0)
+                .spacing(2)
+                .child(
+                    WindUiElement::label(plugin.id)
+                        .font_size(13.5)
+                        .font_weight(600),
+                )
+                .child(
+                    WindUiElement::label(plugin.summary)
+                        .font_size(12.0)
+                        .fg_role(WindUiRole::TextMuted),
+                ),
+        )
+        .child(
+            WindUiElement::label(plugin.category)
+                .font_size(12.0)
+                .fg_role(WindUiRole::TextMuted)
+                .width(54),
+        )
+        .child(WindUiElement::badge_intent(
+            status,
+            if plugin.windows_package {
+                WindUiIntent::Primary
+            } else {
+                WindUiIntent::Neutral
+            },
+        ))
+}
+
+fn windui_plugin_action(
+    label: &'static str,
+    operation: impl Fn(&PluginManagerSnapshot, &str) -> Option<PluginOperation> + Copy + 'static,
+    selected: WindUiSignal<usize>,
+    snapshot: WindUiSignal<PluginManagerSnapshot>,
+    busy: WindUiSignal<bool>,
+    status: WindUiSignal<String>,
+    sender: WindUiSender<PluginResponse>,
+) -> WindUiElement {
+    let enabled_operation = move || {
+        let plugin = FCITX5_PLUGIN_CATALOG[selected.get()];
+        !busy.get() && operation(&snapshot.get(), plugin.id).is_some()
+    };
+    WindUiElement::button(label)
+        .small()
+        .outline()
+        .enabled_when(enabled_operation)
+        .on_click(move |_| {
+            let plugin = FCITX5_PLUGIN_CATALOG[selected.get()];
+            let Some(operation) = operation(&snapshot.get(), plugin.id) else {
+                return;
+            };
+            busy.set(true);
+            status.set(format!("正在{} {}", operation.label(), plugin.id));
+            spawn_plugin_operation(sender.clone(), operation);
+        })
+}
+
+fn windui_plugins_page(
+    snapshot: WindUiSignal<PluginManagerSnapshot>,
+    busy: WindUiSignal<bool>,
+    operation_status: WindUiSignal<String>,
+    sender: WindUiSender<PluginResponse>,
+) -> WindUiElement {
+    let selected = windui_signal(0usize);
+    let repository = snapshot.map(|state| {
+        if !state.loaded {
+            "官方仓库 · 正在读取".to_owned()
+        } else if state.repository_available {
+            "官方仓库 · 签名目录可用".to_owned()
+        } else {
+            format!(
+                "官方仓库 · 不可用{}",
+                state
+                    .repository_error
+                    .as_deref()
+                    .map(|error| format!("：{error}"))
+                    .unwrap_or_default()
+            )
+        }
+    });
+    let detail = selected.map(|index| {
+        let plugin = FCITX5_PLUGIN_CATALOG[*index];
+        format!("{} · {}", plugin.id, plugin.category)
+    });
+    let summary = selected.map(|index| {
+        let plugin = FCITX5_PLUGIN_CATALOG[*index];
+        plugin.summary.to_owned()
+    });
+    let mut list = WindUiElement::col().width_match().spacing(5);
+    for (index, plugin) in FCITX5_PLUGIN_CATALOG.iter().copied().enumerate() {
+        list = list.child(windui_plugin_row(index, plugin, selected, snapshot));
+    }
+    let refresh_sender = sender.clone();
+    let install_sender = sender.clone();
+    let update_sender = sender.clone();
+    let toggle_sender = sender.clone();
+    let remove_sender = sender.clone();
+    let actions = vec![
+        windui_plugin_action(
+            "安装",
+            |state, id| {
+                let package = state.package(id)?;
+                (state.repository_available
+                    && package.available_version.is_some()
+                    && package.installed_version.is_none()
+                    && !matches!(
+                        package.state.as_deref(),
+                        Some("trust-failed" | "incompatible" | "pending-restart")
+                    ))
+                .then(|| PluginOperation::Install(id.to_owned()))
+            },
+            selected,
+            snapshot,
+            busy,
+            operation_status,
+            install_sender,
+        ),
+        windui_plugin_action(
+            "更新",
+            |state, id| {
+                let package = state.package(id)?;
+                (state.repository_available
+                    && package.update_available
+                    && package_allows_installed_action(package))
+                .then(|| PluginOperation::Update(id.to_owned()))
+            },
+            selected,
+            snapshot,
+            busy,
+            operation_status,
+            update_sender,
+        ),
+        windui_plugin_action(
+            "启用/禁用",
+            |state, id| {
+                let package = state.package(id)?;
+                package_allows_installed_action(package).then(|| PluginOperation::SetState {
+                    id: id.to_owned(),
+                    enabled: package.state.as_deref() == Some("disabled"),
+                })
+            },
+            selected,
+            snapshot,
+            busy,
+            operation_status,
+            toggle_sender,
+        ),
+        windui_plugin_action(
+            "卸载",
+            |state, id| {
+                let package = state.package(id)?;
+                package_allows_installed_action(package)
+                    .then(|| PluginOperation::Remove(id.to_owned()))
+            },
+            selected,
+            snapshot,
+            busy,
+            operation_status,
+            remove_sender,
+        ),
+        WindUiElement::button("修复")
+            .small()
+            .outline()
+            .enabled_when(move || !busy.get())
+            .on_click(move |_| {
+                busy.set(true);
+                operation_status.set("正在修复插件包状态".to_owned());
+                spawn_plugin_operation(sender.clone(), PluginOperation::Repair);
+            }),
+    ];
+    let catalog_panel = windui_settings_card(
+        WindUiElement::col()
+            .fill()
+            .spacing(8)
+            .child(
+                WindUiElement::label(format!("插件目录 · {} 项", FCITX5_PLUGIN_CATALOG.len()))
+                    .font_size(15.0)
+                    .font_weight(700),
+            )
+            .child(WindUiElement::scroll().weight(1.0).child(list)),
+    )
+    .height_match()
+    .weight(1.0);
+    let detail_panel = windui_settings_card(
+        WindUiElement::col()
+            .fill()
+            .spacing(12)
+            .child(
+                WindUiElement::label_signal(detail)
+                    .font_size(13.0)
+                    .font_weight(700),
+            )
+            .child(
+                WindUiElement::label_signal(summary)
+                    .font_size(12.5)
+                    .fg_role(WindUiRole::TextMuted),
+            )
+            .child(WindUiElement::divider())
+            .child(WindUiElement::grid(2, 8, actions).width_match())
+            .child(
+                WindUiElement::label_signal(operation_status)
+                    .font_size(12.5)
+                    .fg_role(WindUiRole::TextMuted)
+                    .width_match(),
+            )
+            .child(WindUiElement::flex_spacer())
+            .child(
+                WindUiElement::label(format!(
+                    "固定清单：fcitx5-plugins@{}\n无签名 Windows 包的条目不会启用操作。",
+                    FCITX5_PLUGINS_REFERENCE_COMMIT
+                ))
+                .font_size(11.5)
+                .fg_role(WindUiRole::TextMuted)
+                .width_match(),
+            ),
+    )
+    .width(300)
+    .height_match();
+    WindUiElement::col()
+        .fill()
+        .padding(24)
+        .spacing(14)
+        .child(windui_settings_page_title(
+            "插件与扩展",
+            "fcitx5-plugins 目录与受信 Windows 包",
+        ))
         .child(
             WindUiElement::row()
                 .width_match()
                 .cross(WindUiAlign::Center)
-                .spacing(8)
+                .spacing(10)
                 .child(
-                    WindUiElement::label("wubi")
+                    WindUiElement::label_signal(repository)
                         .font_size(12.5)
-                        .fg_role(WindUiRole::TextMuted),
+                        .fg_role(WindUiRole::TextMuted)
+                        .weight(1.0),
                 )
-                .child(WindUiElement::badge_intent(
-                    "preview",
-                    WindUiIntent::Neutral,
-                )),
+                .child(
+                    WindUiElement::button("刷新插件目录")
+                        .small()
+                        .outline()
+                        .enabled_when(move || !busy.get())
+                        .on_click(move |_| {
+                            busy.set(true);
+                            operation_status.set("正在刷新签名插件目录".to_owned());
+                            spawn_plugin_operation(
+                                refresh_sender.clone(),
+                                PluginOperation::Refresh,
+                            );
+                        }),
+                ),
         )
         .child(
             WindUiElement::row()
                 .width_match()
-                .spacing(8)
-                .child(windui_candidate_preview_chip("1. 识", true))
-                .child(windui_candidate_preview_chip("2. 是", false))
-                .child(windui_candidate_preview_chip("3. 时", false))
-                .child(windui_candidate_preview_chip("4. 输入法", false))
-                .child(windui_candidate_preview_chip("5. 😀 emoji", false)),
-        )
-        .child(
-            WindUiElement::label("候选序号列保留固定空间；选中项显示序号，非选中项保持对齐。")
-                .font_size(12.5)
-                .fg_role(WindUiRole::TextMuted)
-                .width_match(),
+                .weight(1.0)
+                .spacing(12)
+                .child(catalog_panel)
+                .child(detail_panel),
         )
 }
 
@@ -656,7 +1406,12 @@ fn windui_nav_placeholder(title: &str) -> WindUiElement {
     )
 }
 
-fn windui_settings_root() -> WindUiElement {
+fn windui_settings_root(
+    plugin_snapshot: WindUiSignal<PluginManagerSnapshot>,
+    plugin_busy: WindUiSignal<bool>,
+    plugin_status: WindUiSignal<String>,
+    plugin_sender: WindUiSender<PluginResponse>,
+) -> WindUiElement {
     let nav = windui_signal(0usize);
     let search = windui_signal(String::new());
     let input_method = windui_signal(0usize);
@@ -735,7 +1490,7 @@ fn windui_settings_root() -> WindUiElement {
                     .width_match()
                     .spacing(16)
                     .child(windui_settings_section_title("候选窗口"))
-                    .child(windui_candidate_preview_panel())
+                    .child(windui_candidate_preview_panel(layout, theme_mode))
                     .child(WindUiElement::divider())
                     .child(WindUiElement::setting_row_desc(
                         "候选字体",
@@ -857,10 +1612,13 @@ fn windui_settings_root() -> WindUiElement {
         .height_match()
         .weight(1.0)
         .child(input_page.visible_when(move || nav.get() == 0))
-        .child(appearance_page.visible_when(move || nav.get() == 1));
+        .child(appearance_page.visible_when(move || nav.get() == 1))
+        .child(
+            windui_plugins_page(plugin_snapshot, plugin_busy, plugin_status, plugin_sender)
+                .visible_when(move || nav.get() == 3),
+        );
     for (i, title) in [
         (2usize, "按键设置"),
-        (3usize, "插件与扩展"),
         (4usize, "更新"),
         (5usize, "诊断与修复"),
     ] {
@@ -942,6 +1700,46 @@ fn windui_theme_toggle(handle: WindUiThemeHandle, dark: WindUiSignal<bool>) -> W
         })
 }
 
+fn windui_plugin_manager(
+    app: &mut WindUiApp,
+    initial_load: bool,
+) -> (
+    WindUiSignal<PluginManagerSnapshot>,
+    WindUiSignal<bool>,
+    WindUiSignal<String>,
+    WindUiSender<PluginResponse>,
+) {
+    let snapshot = windui_signal(PluginManagerSnapshot::default());
+    let busy = windui_signal(initial_load);
+    let status = windui_signal(if initial_load {
+        "正在通过 fcitx5-control.exe 读取插件状态".to_owned()
+    } else {
+        "选择插件后可执行受信包操作".to_owned()
+    });
+    let sender = app.channel::<PluginResponse>(move |ctx, response| {
+        busy.set(false);
+        match response.result {
+            Ok(next) => {
+                let count = next.packages.len();
+                status.set(format!(
+                    "{}完成，已从 Control 读取 {count} 个 Windows 包状态",
+                    response.operation.label()
+                ));
+                snapshot.set(next);
+                ctx.toast_ok(format!("插件{}完成", response.operation.label()));
+            }
+            Err(error) => {
+                status.set(error.clone());
+                ctx.toast_err(error);
+            }
+        }
+    });
+    if initial_load {
+        spawn_plugin_operation(sender.clone(), PluginOperation::List);
+    }
+    (snapshot, busy, status, sender)
+}
+
 fn windui_settings_default_shell_probe() -> WindUiElement {
     let dark = windui_signal(false);
     let mut app = WindUiApp::new("probe", 1040, 700)
@@ -950,7 +1748,8 @@ fn windui_settings_default_shell_probe() -> WindUiElement {
         .theme(windui_settings_shell_theme(false));
     let handle = app.theme_handle();
     let _toggle = windui_theme_toggle(handle, dark);
-    windui_settings_root()
+    let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, false);
+    windui_settings_root(snapshot, busy, status, sender)
 }
 
 fn validate_windui_rust_adoption() -> Result<WindUiRustAdoptionEvidence, String> {
@@ -2417,7 +3216,9 @@ fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, Stri
     if screenshot_from_args {
         app = app.screenshot_from_args();
     }
-    app.content(windui_settings_root()).run();
+    let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, true);
+    app.content(windui_settings_root(snapshot, busy, status, sender))
+        .run();
     Ok(format!(
         "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-windui-settings-shell\",\n  \"real_window\":true,\n  \"no_arg_launch\":{},\n  \"windui_app_default_interactive\":true,\n  \"settings_input_visual_baseline\":true,\n  \"legacy_win32_preview_host_qa_only\":true,\n  \"stage\":\"Rust wind-ui Settings Shell\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
@@ -7012,5 +7813,104 @@ mod tests {
             .candidates
             .iter()
             .any(|candidate| candidate.contains("😀")));
+    }
+
+    fn package_json(id: &str, installed: Option<&str>, state: Option<&str>) -> String {
+        format!(
+            r#"{{"format_version":1,"repository_available":true,"repository_error":null,"packages":[{{"id":"{id}","title":"Rime","summary":"Rime input method","type":"addon","available_version":"1.2.3","installed_version":{},"state":{},"update_available":false}}]}}"#,
+            installed
+                .map(|value| format!(r#""{value}""#))
+                .unwrap_or_else(|| "null".to_owned()),
+            state
+                .map(|value| format!(r#""{value}""#))
+                .unwrap_or_else(|| "null".to_owned()),
+        )
+    }
+
+    #[test]
+    fn pinned_plugin_catalog_is_complete_and_unique() {
+        assert_eq!(FCITX5_PLUGIN_CATALOG.len(), 21);
+        let mut ids = FCITX5_PLUGIN_CATALOG
+            .iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), FCITX5_PLUGIN_CATALOG.len());
+        assert_eq!(
+            FCITX5_PLUGIN_CATALOG
+                .iter()
+                .filter(|plugin| plugin.windows_package)
+                .map(|plugin| plugin.id)
+                .collect::<Vec<_>>(),
+            ["fcitx5-chinese-addons", "fcitx5-rime", "fcitx5-lua"]
+        );
+    }
+
+    #[test]
+    fn plugin_control_arguments_are_fixed_and_catalog_bounded() {
+        assert_eq!(
+            plugin_control_arguments(&PluginOperation::SetState {
+                id: "fcitx5-rime".to_owned(),
+                enabled: false,
+            })
+            .expect("supported package"),
+            ["--packages-state", "fcitx5-rime", "disabled"]
+                .map(OsString::from)
+                .to_vec()
+        );
+        assert!(plugin_control_arguments(&PluginOperation::Install(
+            "fcitx5-rime --packages-repair".to_owned()
+        ))
+        .is_err());
+        assert!(
+            plugin_control_arguments(&PluginOperation::Install("fcitx5-mozc".to_owned())).is_err()
+        );
+    }
+
+    #[test]
+    fn package_list_parser_rejects_malformed_and_oversized_control_data() {
+        assert!(parse_control_package_list("not json").is_err());
+        let unknown = package_json("fcitx5-rime", None, None).replace(
+            r#""update_available":false"#,
+            r#""update_available":false,"unexpected":true"#,
+        );
+        assert!(parse_control_package_list(&unknown).is_err());
+        assert!(parse_control_package_list(&package_json(
+            "fcitx5-rime",
+            Some("1.0.0"),
+            Some("mystery")
+        ))
+        .is_err());
+        assert!(parse_control_package_list(&"x".repeat(CONTROL_MAX_OUTPUT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn installed_plugin_actions_follow_control_state() {
+        let available = parse_control_package_list(&package_json("fcitx5-rime", None, None))
+            .expect("available package");
+        assert!(!package_allows_installed_action(
+            available.package("fcitx5-rime").expect("rime")
+        ));
+
+        let enabled = parse_control_package_list(&package_json(
+            "fcitx5-rime",
+            Some("1.0.0"),
+            Some("enabled"),
+        ))
+        .expect("enabled package");
+        assert!(package_allows_installed_action(
+            enabled.package("fcitx5-rime").expect("rime")
+        ));
+
+        let bundled = parse_control_package_list(&package_json(
+            "fcitx5-rime",
+            Some("1.0.0"),
+            Some("bundled"),
+        ))
+        .expect("bundled package");
+        assert!(!package_allows_installed_action(
+            bundled.package("fcitx5-rime").expect("rime")
+        ));
     }
 }
