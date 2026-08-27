@@ -1202,7 +1202,7 @@ if(BUILD_TESTING)
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --target
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --lib --target
         "${FCITX_RUST_TARGET}"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       DEPENDS fcitx5_pqc_fixture_signer
@@ -1226,7 +1226,7 @@ if(BUILD_TESTING)
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --target
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --lib --target
         "${FCITX_RUST_TARGET}")
     set_tests_properties(
       rust-package-core-differential PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
