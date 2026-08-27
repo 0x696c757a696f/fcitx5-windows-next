@@ -6,7 +6,7 @@ id = "builtin.default"
 name = "Fcitx5 Default"
 version = "1.0.0"
 license = "MIT"
-description = "Readable system-aware candidate theme"
+description = "WeChat-like green candidate theme"
 
 [common.candidate]
 orientation = "vertical" # vertical | horizontal
@@ -25,7 +25,7 @@ item_padding_x_dip = 8.0
 item_padding_y_dip = 4.0
 
 [common.fonts.candidate]
-families = ["Microsoft YaHei", "system"]
+families = ["Microsoft YaHei", "Microsoft YaHei UI", "system"]
 size_dip = 18.0
 weight = 400
 
@@ -40,23 +40,23 @@ style = "dot"
 font_scale = 0.85
 
 [light.candidate.colors]
-background = "#FCFCFCFA"
-border = "#D7D9DDFF"
-candidate_text = "#303236FF"
-label_text = "#85888DFF"
-comment_text = "#85888DFF"
-selected_background = "#00B578FF"
-selected_candidate_text = "#FFFFFFFF"
-selected_label_text = "#FFFFFFFF"
-selected_comment_text = "#E9FFF7FF"
+background = "#FFFFFFFF"
+border = "#EDEDEDFF"
+candidate_text = "#181818FF"
+label_text = "#7F7F7FFF"
+comment_text = "#7F7F7FFF"
+selected_background = "#07C1601A"
+selected_candidate_text = "#07C160FF"
+selected_label_text = "#07C160FF"
+selected_comment_text = "#07C160FF"
 
 [dark.candidate.colors]
-background = "#242629F7"
-border = "#4A4D52FF"
-candidate_text = "#FFFFFFFF"
-label_text = "#AEB2B8FF"
-comment_text = "#AEB2B8FF"
-selected_background = "#00A76FFF"
-selected_candidate_text = "#FFFFFFFF"
-selected_label_text = "#FFFFFFFF"
-selected_comment_text = "#E5FFF5FF"
+background = "#181818F7"
+border = "#303030FF"
+candidate_text = "#EDEDEDFF"
+label_text = "#7F7F7FFF"
+comment_text = "#7F7F7FFF"
+selected_background = "#07C16033"
+selected_candidate_text = "#07C160FF"
+selected_label_text = "#07C160FF"
+selected_comment_text = "#07C160FF"

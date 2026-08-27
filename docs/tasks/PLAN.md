@@ -35,11 +35,18 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   the `settings-input.png` settings layout family: titlebar, left search/navigation, right
   settings pages, grouped cards, native windui controls, and a bottom status/action bar. The old
   Win32/WTL/D2D Settings host remains only a QA/regression/native-gap adapter until replaced.
+- Config default accent is WeChat IME style green `#07C160`: light mode is green/white and dark
+  mode is green/black. Keep vendored/upstream Qingfeng and windui themes available; product default
+  palette overrides must not delete or rewrite third-party theme sources.
 - Candidate label/ordinal layout is now a frozen UX requirement: labels are configurable
   presentation only, every row/cell reserves a stable label slot, label text aligns inside that
   slot, candidate text starts after a fixed gap, and selected-row/column/item reveal modes must not
   shift neighboring rows or columns. Candidate drawing work defaults to Rust; remaining native
   renderer/window code is adapter-only until equivalent visual/DPI/a11y/perf evidence is green.
+- Candidate visual quality must use WindInput/Qingfeng's actual candidate-window/theme code path
+  when the local renderer cannot match it. Directly adopt or port the MIT-licensed `wind-ui`
+  candidate window/view/theme implementation with license/source evidence; do not satisfy this
+  requirement by saying the code is merely a reference.
 - Already-cut-over Rust components must not be reverted to C++ because of historical task wording.
 - `R3-03` is the current task only for remaining TSF real-host/manual evidence and focused
   package-candidate usability regressions.
@@ -112,7 +119,8 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 056 | CONFIG-STAGE4-A11Y-DPI-QA-001 | MANUAL-PENDING / AUTOMATED-STAGE4-QA-GREEN | 053/055; automated keyboard/focus/page/no-overlap/DPI/high-contrast-marker/candidate-preview gates are frozen, but Narrator/NVDA and real Win7/Win10/Win11 host evidence remain unavailable locally | completed/056-CONFIG-STAGE4-A11Y-DPI-QA-001.md |
 | 057 | CONFIG-WINDUI-ADOPTION-001 | COMPLETED / WINDUI-RUST-CODE-CONSUMED-GREEN / DEFAULT-SHELL-CLOSED-BY-058 | User explicitly required actual `huanfeng/wind-ui-rust` code adoption for ugly Config GUI/UX while 056 real-host evidence remains parked; vendored windui is now a Rust path dependency and self-check consumes actual windui element construction; 058 closes the no-arg default GUI cutover | completed/057-CONFIG-WINDUI-ADOPTION-001.md |
 | 058 | CONFIG-WINDUI-SETTINGS-SHELL-001 | COMPLETED / WINDUI-SETTINGS-SHELL-DEFAULT-GREEN | 057; 056 real-host evidence may remain MANUAL-PENDING because this is a code-only GUI cutover slice | completed/058-CONFIG-WINDUI-SETTINGS-SHELL-001.md |
-| 059 | CANDIDATE-LABEL-SLOT-RUST-DRAWING-001 | TODO | `REL-01` is parked on external/manual evidence; user explicitly required configurable candidate numbers, reserved row/column label space, stable alignment, and Rust drawing | 059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001.md |
+| 059 | CANDIDATE-LABEL-SLOT-RUST-DRAWING-001 | COMPLETED / CANDIDATE-LABEL-SLOT-RUST-DRAWING-GREEN / WINDINPUT-QINGFENG-VISUAL-FOLLOWUP-QUEUED | `REL-01` is parked on external/manual evidence; user explicitly required configurable candidate numbers, reserved row/column label space, stable alignment, Rust drawing, keeping scroll mode visible in Settings, and replacing PoC-level visuals with WindInput/Qingfeng-derived candidate rendering | completed/059-CANDIDATE-LABEL-SLOT-RUST-DRAWING-001.md |
+| 060 | CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001 | COMPLETED / WINDINPUT-QINGFENG-WECHAT-GREEN-VISUAL-GREEN | 059 label-slot contract green; product default must be WeChat-green light/dark while preserving Qingfeng/upstream theme sources and using actual WindInput candidate visual code where local quality falls short | completed/060-CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
@@ -143,4 +151,9 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   configurable ordinal style/display/scope, stable reserved label slots in horizontal/vertical/grid
   layouts, selected row/column reveal without text-column shift, screenshots across layouts, and no
   new C++ candidate-domain or drawing-state ownership.
+- `060` upgrades the reachable Candidate/Config visual defaults: Config and Candidate default to
+  WeChat-style green (`#07C160`) with light green/white and dark green/black, while Qingfeng and
+  upstream theme sources remain available. Candidate defaults must use a CJK-first font chain
+  (`Microsoft YaHei`, `Microsoft YaHei UI`, `system`). Candidate screenshots must be driven by
+  WindInput/Qingfeng candidate visual code/tokens, not a plain engineering proof window.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

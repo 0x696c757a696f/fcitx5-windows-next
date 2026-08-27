@@ -84,6 +84,7 @@ struct Fcitx5CandidateRenderItemInput {
     float textWidth{};
     float commentWidth{};
     std::uint8_t hasLabel{};
+    std::uint8_t reserveLabel{};
 };
 
 struct Fcitx5CandidateRenderItemOutput {
@@ -130,6 +131,11 @@ struct Fcitx5CandidateCommandLine {
     std::uint64_t candidateId{};
 };
 
+struct Fcitx5CandidateUtf16 {
+    const std::uint16_t* ptr{};
+    std::size_t len{};
+};
+
 struct Fcitx5WindowsCommonUtf8ToWide {
     std::uint8_t status;
     std::size_t utf16Len;
@@ -148,6 +154,10 @@ extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemI
                                                  std::uint8_t scrollMode,
                                                  Fcitx5CandidateRenderItemOutput* outItems,
                                                  float* outLabelColumnWidth);
+extern "C" std::size_t fcitx5_candidate_format_label_utf16(
+    std::uint32_t slot, std::uint32_t style, Fcitx5CandidateUtf16 sourceLabel,
+    Fcitx5CandidateUtf16 customPrefix, Fcitx5CandidateUtf16 customSuffix, std::uint16_t* output,
+    std::size_t outputCapacity);
 extern "C" std::uint8_t fcitx5_candidate_hit_test(const Fcitx5CandidateLayoutRect* rects,
                                                    std::size_t rectCount, float x, float y,
                                                    std::size_t* outIndex);
@@ -228,6 +238,7 @@ struct RenderItemInput {
     float textWidth{};
     float commentWidth{};
     bool hasLabel{};
+    bool reserveLabel{};
 };
 
 struct RenderItemSegments {
@@ -253,6 +264,11 @@ struct CandidateSelectionIntent {
 
 [[nodiscard]] inline std::uint32_t toRust(Orientation value) noexcept {
     return value == Orientation::horizontal ? 1U : 0U;
+}
+
+[[nodiscard]] inline detail::Fcitx5CandidateUtf16 toRust(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return {reinterpret_cast<const std::uint16_t*>(value.data()), value.size()};
 }
 
 [[nodiscard]] inline std::uint32_t toRust(Placement value) noexcept {
@@ -343,6 +359,7 @@ struct CandidateSelectionIntent {
             item.textWidth,
             item.commentWidth,
             static_cast<std::uint8_t>(item.hasLabel ? 1U : 0U),
+            static_cast<std::uint8_t>(item.reserveLabel ? 1U : 0U),
         });
     }
 
@@ -664,29 +681,36 @@ bool localePrefersCompactHorizontal(std::string_view locale) noexcept {
                candidate::detail::toRust(locale)) != 0;
 }
 
-std::wstring formatCandidateLabel(std::wstring_view label,
-                                  fcitx::windows::config::LabelStyle style) {
-    if (label.empty())
-        return {};
+std::uint32_t labelStyleToRust(fcitx::windows::config::LabelStyle style) noexcept {
     switch (style) {
     case fcitx::windows::config::LabelStyle::plain:
-        return std::wstring(label);
+        return 0;
     case fcitx::windows::config::LabelStyle::dot:
-        return std::wstring(label) + L".";
+        return 1;
     case fcitx::windows::config::LabelStyle::paren:
-        return L"(" + std::wstring(label) + L")";
+        return 2;
     case fcitx::windows::config::LabelStyle::bracket:
-        return L"[" + std::wstring(label) + L"]";
+        return 3;
     case fcitx::windows::config::LabelStyle::circled:
-        if (label.size() == 1 && label[0] >= L'1' && label[0] <= L'9')
-            return std::wstring(1, static_cast<wchar_t>(0x2460 + label[0] - L'1'));
-        return std::wstring(label);
+        return 4;
     }
-    return std::wstring(label);
+    return 1;
 }
 
-std::wstring fallbackCandidateLabel(std::uint32_t slot) {
-    return std::to_wstring(slot == 0 ? 1U : slot);
+std::wstring formatCandidateLabel(std::uint32_t slot, std::wstring_view label,
+                                  fcitx::windows::config::LabelStyle style) {
+    const fcitx::windows::ui::detail::Fcitx5CandidateUtf16 empty{};
+    const auto required = fcitx::windows::ui::detail::fcitx5_candidate_format_label_utf16(
+        slot, labelStyleToRust(style), fcitx::windows::ui::toRust(label), empty, empty, nullptr, 0);
+    if (required == 0)
+        return label.empty() ? std::to_wstring(slot == 0 ? 1U : slot) : std::wstring(label);
+    std::wstring result(required, L'\0');
+    const auto written = fcitx::windows::ui::detail::fcitx5_candidate_format_label_utf16(
+        slot, labelStyleToRust(style), fcitx::windows::ui::toRust(label), empty, empty,
+        reinterpret_cast<std::uint16_t*>(result.data()), result.size());
+    if (written != result.size())
+        return label.empty() ? std::to_wstring(slot == 0 ? 1U : slot) : std::wstring(label);
+    return result;
 }
 
 struct CandidateVisual {
@@ -1361,7 +1385,7 @@ class CandidateWindow final {
             utf8ToWide((*visualConfig_.label.sequence)[slot - 1U], label) && !label.empty()) {
             return label;
         }
-        return fallbackCandidateLabel(slot);
+        return std::to_wstring(slot == 0 ? 1U : slot);
     }
 
     void applyScrollLabelReservations() {
@@ -1386,7 +1410,8 @@ class CandidateWindow final {
                 index, *selected_, scrollColumns_, candidates_.size());
             if (policy.reserve == 0)
                 continue;
-            candidate.reservedLabel = formatCandidateLabel(configuredSequenceLabel(policy.slot),
+            candidate.reservedLabel = formatCandidateLabel(policy.slot,
+                                                          configuredSequenceLabel(policy.slot),
                                                           style);
             if (policy.show != 0)
                 candidate.label = candidate.reservedLabel;
@@ -1422,16 +1447,16 @@ class CandidateWindow final {
                                                           D2D1::ColorF(0.13F, 0.13F, 0.14F));
         const auto selectedBackground =
             highContrast ? D2D1::ColorF(GetRValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F,
-                                        GetGValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F,
-                                        GetBValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F)
+                                         GetGValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F,
+                                         GetBValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F)
                          : parseColor(visualConfig_, "selected_background",
-                                      D2D1::ColorF(0.82F, 0.89F, 0.99F));
+                                      D2D1::ColorF(0.027F, 0.757F, 0.376F, 0.10F));
         const auto selectedForeground =
             highContrast ? D2D1::ColorF(GetRValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F,
-                                        GetGValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F,
-                                        GetBValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F)
+                                         GetGValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F,
+                                         GetBValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F)
                          : parseColor(visualConfig_, "selected_candidate_text",
-                                      D2D1::ColorF(0.09F, 0.31F, 0.65F));
+                                      D2D1::ColorF(0.027F, 0.757F, 0.376F));
         renderTarget_->Clear(background);
         ComPtr<ID2D1SolidColorBrush> textBrush;
         ComPtr<ID2D1SolidColorBrush> labelBrush;
@@ -1511,7 +1536,8 @@ class CandidateWindow final {
                                            ? itemRects_[local]
                                            : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
             if (index >= lines.size()) {
-                renderInputs.push_back({toUiRect(bounds), 0.0F, labelGap, 0.0F, 0.0F, false});
+                renderInputs.push_back(
+                    {toUiRect(bounds), 0.0F, labelGap, 0.0F, 0.0F, false, false});
                 fallbackTop += 32.0F;
                 continue;
             }
@@ -1523,6 +1549,7 @@ class CandidateWindow final {
                  labelGap,
                  naturalTextWidth(candidate.text, textFormat_.Get(), height),
                  naturalTextWidth(candidate.comment, annotationFormat_.Get(), height),
+                 !candidate.label.empty(),
                  !candidate.reservedLabel.empty()});
             fallbackTop += 32.0F;
         }
@@ -1658,11 +1685,11 @@ class CandidateWindow final {
         const COLORREF selectedBackground =
             highContrast ? GetSysColor(COLOR_HIGHLIGHT)
                          : toColorRef(parseColor(visualConfig_, "selected_background",
-                                                 D2D1::ColorF(0.82F, 0.89F, 0.99F)));
+                                                 D2D1::ColorF(0.027F, 0.757F, 0.376F, 0.10F)));
         const COLORREF selectedForeground =
             highContrast ? GetSysColor(COLOR_HIGHLIGHTTEXT)
                          : toColorRef(parseColor(visualConfig_, "selected_candidate_text",
-                                                 D2D1::ColorF(0.09F, 0.31F, 0.65F)));
+                                                 D2D1::ColorF(0.027F, 0.757F, 0.376F)));
         HBRUSH backgroundBrush = CreateSolidBrush(background);
         HBRUSH selectedBrush = CreateSolidBrush(selectedBackground);
         if (!backgroundBrush || !selectedBrush) {
@@ -1835,6 +1862,7 @@ class CandidateWindow final {
             CandidateVisual visual;
             if (visualConfig_.label.visible.value_or(true) && !label.empty()) {
                 visual.label = formatCandidateLabel(
+                    0,
                     label,
                     visualConfig_.label.style.value_or(fcitx::windows::config::LabelStyle::dot));
                 visual.reservedLabel = visual.label;
@@ -2321,7 +2349,7 @@ class CandidateWindow final {
             FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                        reinterpret_cast<IUnknown**>(writeFactory_.GetAddressOf()))))
             return false;
-        std::wstring fontFamily = L"Segoe UI";
+        std::wstring fontFamily = L"Microsoft YaHei";
         if (visualConfig_.candidateFont.families) {
             for (const auto& family : *visualConfig_.candidateFont.families) {
                 if (family != "system" && family != "inherit" && utf8ToWide(family, fontFamily))

@@ -24,6 +24,7 @@ extern CAppModule _Module;
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -149,6 +150,7 @@ struct Fcitx5CandidateRenderItemInput {
     float textWidth{};
     float commentWidth{};
     std::uint8_t hasLabel{};
+    std::uint8_t reserveLabel{};
 };
 
 struct Fcitx5CandidateRenderItemOutput {
@@ -167,6 +169,11 @@ struct Fcitx5CandidateSelectionIntent {
     std::uint64_t candidateId{};
 };
 
+struct Fcitx5CandidateUtf16 {
+    const std::uint16_t* ptr{};
+    std::size_t len{};
+};
+
 extern "C" int fcitx5_candidate_layout_run(const Fcitx5CandidateLayoutInput* input,
                                             const Fcitx5CandidateLayoutSize* items,
                                             std::size_t itemCount,
@@ -180,6 +187,10 @@ extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemI
                                                  std::uint8_t scrollMode,
                                                  Fcitx5CandidateRenderItemOutput* outItems,
                                                  float* outLabelColumnWidth);
+extern "C" std::size_t fcitx5_candidate_format_label_utf16(
+    std::uint32_t slot, std::uint32_t style, Fcitx5CandidateUtf16 sourceLabel,
+    Fcitx5CandidateUtf16 customPrefix, Fcitx5CandidateUtf16 customSuffix, std::uint16_t* output,
+    std::size_t outputCapacity);
 extern "C" std::uint8_t fcitx5_candidate_hit_test(const Fcitx5CandidateLayoutRect* rects,
                                                    std::size_t rectCount, float x, float y,
                                                    std::size_t* outIndex);
@@ -243,6 +254,7 @@ struct RenderItemInput {
     float textWidth{};
     float commentWidth{};
     bool hasLabel{};
+    bool reserveLabel{};
 };
 
 struct RenderItemSegments {
@@ -296,6 +308,45 @@ struct CandidateSelectionIntent {
 [[nodiscard]] inline Rect rectFromRust(
     const detail::Fcitx5CandidateLayoutRect& value) noexcept {
     return {value.left, value.top, value.right, value.bottom};
+}
+
+[[nodiscard]] inline detail::Fcitx5CandidateUtf16 toRust(std::wstring_view value) noexcept {
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    return {reinterpret_cast<const std::uint16_t*>(value.data()), value.size()};
+}
+
+[[nodiscard]] inline std::uint32_t labelStyleToRust(
+    fcitx::windows::config::LabelStyle style) noexcept {
+    switch (style) {
+    case fcitx::windows::config::LabelStyle::plain:
+        return 0;
+    case fcitx::windows::config::LabelStyle::dot:
+        return 1;
+    case fcitx::windows::config::LabelStyle::paren:
+        return 2;
+    case fcitx::windows::config::LabelStyle::bracket:
+        return 3;
+    case fcitx::windows::config::LabelStyle::circled:
+        return 4;
+    }
+    return 1;
+}
+
+[[nodiscard]] inline std::wstring formatCandidateLabel(std::uint32_t slot,
+                                                       std::wstring_view label,
+                                                       fcitx::windows::config::LabelStyle style) {
+    const detail::Fcitx5CandidateUtf16 empty{};
+    const auto required = detail::fcitx5_candidate_format_label_utf16(
+        slot, labelStyleToRust(style), toRust(label), empty, empty, nullptr, 0);
+    if (required == 0)
+        return label.empty() ? std::to_wstring(slot == 0 ? 1U : slot) : std::wstring(label);
+    std::wstring result(required, L'\0');
+    const auto written = detail::fcitx5_candidate_format_label_utf16(
+        slot, labelStyleToRust(style), toRust(label), empty, empty,
+        reinterpret_cast<std::uint16_t*>(result.data()), result.size());
+    if (written != result.size())
+        return label.empty() ? std::to_wstring(slot == 0 ? 1U : slot) : std::wstring(label);
+    return result;
 }
 
 [[nodiscard]] inline LayoutResult layout(const LayoutInput& input) {
@@ -358,6 +409,7 @@ struct CandidateSelectionIntent {
             item.textWidth,
             item.commentWidth,
             static_cast<std::uint8_t>(item.hasLabel ? 1U : 0U),
+            static_cast<std::uint8_t>(item.reserveLabel ? 1U : 0U),
         });
     }
 
@@ -791,8 +843,8 @@ struct DesignTokens {
     COLORREF surface{RGB(255, 255, 255)};
     COLORREF text{RGB(48, 50, 54)};
     COLORREF subtleText{RGB(63, 66, 71)};
-    COLORREF accent{RGB(0, 122, 82)};
-    COLORREF focus{RGB(0, 95, 184)};
+    COLORREF accent{RGB(7, 193, 96)};
+    COLORREF focus{RGB(6, 173, 86)};
 };
 
 enum class ModernAction {
@@ -2161,6 +2213,16 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                      reinterpret_cast<LPARAM>(text.data()));
         return std::wstring(text.data());
     }
+    [[nodiscard]] int comboInteger(int id, int fallback) const {
+        const std::wstring text = comboText(id);
+        if (text.empty())
+            return fallback;
+        wchar_t* end = nullptr;
+        const long value = std::wcstol(text.c_str(), &end, 10);
+        if (end == text.c_str() || value <= 0 || value > 10000)
+            return fallback;
+        return static_cast<int>(value);
+    }
     [[nodiscard]] std::wstring windowText(int id) const {
         const HWND child = control(id);
         if (!child)
@@ -3365,7 +3427,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
             return nullptr;
         IDWriteTextFormat* format = nullptr;
         const std::wstring fontFamily =
-            family.empty() ? std::wstring(L"Segoe UI") : std::wstring(family);
+            family.empty() ? std::wstring(L"Microsoft YaHei") : std::wstring(family);
         if (FAILED(writeFactory_->CreateTextFormat(
                 fontFamily.c_str(), nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL, px(size), L"", &format))) {
@@ -3380,14 +3442,14 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                                       DWRITE_TEXT_ALIGNMENT_LEADING,
                                   DWRITE_PARAGRAPH_ALIGNMENT paragraph =
                                       DWRITE_PARAGRAPH_ALIGNMENT_NEAR) {
-        return makeFormat(L"Segoe UI", size, weight, alignment, paragraph);
+        return makeFormat(L"Microsoft YaHei", size, weight, alignment, paragraph);
     }
     void drawText(ID2D1SolidColorBrush* brush, std::wstring_view text, float left, float top,
                   float right, float bottom, float size,
                   DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL,
                   DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING,
                   DWRITE_PARAGRAPH_ALIGNMENT paragraph = DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-                  std::wstring_view family = L"Segoe UI") {
+                  std::wstring_view family = L"Microsoft YaHei") {
         if (!target_ || !brush || text.empty())
             return;
         IDWriteTextFormat* format = makeFormat(family, size, weight, alignment, paragraph);
@@ -3657,7 +3719,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
     [[nodiscard]] std::wstring previewFontFamily(
         const fcitx::windows::config::Config& visualConfig,
         const fcitx::windows::config::Font& font) const {
-        std::wstring family = L"Segoe UI";
+        std::wstring family = L"Microsoft YaHei";
         if (visualConfig.candidateFont.families) {
             for (const auto& candidate : *visualConfig.candidateFont.families) {
                 const std::wstring candidateFamily = widen(candidate);
@@ -3745,11 +3807,11 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const auto selectionFill =
             highContrast ? d2dColor(GetSysColor(COLOR_HIGHLIGHT))
                          : parseD2DColor(visualConfig, "selected_background",
-                                         D2D1::ColorF(0.82F, 0.89F, 0.99F));
+                                         D2D1::ColorF(0.027F, 0.757F, 0.376F, 0.10F));
         const auto selectedText =
             highContrast ? d2dColor(GetSysColor(COLOR_HIGHLIGHTTEXT))
                          : parseD2DColor(visualConfig, "selected_candidate_text",
-                                         D2D1::ColorF(0.09F, 0.31F, 0.65F));
+                                         D2D1::ColorF(0.027F, 0.757F, 0.376F));
         const auto labelText =
             highContrast ? foreground : parseD2DColor(visualConfig, "label_text", foreground);
         const auto commentText =
@@ -3778,22 +3840,9 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
         const auto previewLabel = [&](std::wstring_view label) {
             if (!visualConfig.label.visible.value_or(true) || label.empty())
                 return std::wstring{};
-            using fcitx::windows::config::LabelStyle;
-            switch (visualConfig.label.style.value_or(LabelStyle::dot)) {
-            case LabelStyle::plain:
-                return std::wstring(label);
-            case LabelStyle::dot:
-                return std::wstring(label) + L".";
-            case LabelStyle::paren:
-                return L"(" + std::wstring(label) + L")";
-            case LabelStyle::bracket:
-                return L"[" + std::wstring(label) + L"]";
-            case LabelStyle::circled:
-                if (label.size() == 1 && label[0] >= L'1' && label[0] <= L'9')
-                    return std::wstring(1, static_cast<wchar_t>(0x2460 + label[0] - L'1'));
-                return std::wstring(label);
-            }
-            return std::wstring(label) + L".";
+            return fcitx::windows::ui::formatCandidateLabel(
+                0, label,
+                visualConfig.label.style.value_or(fcitx::windows::config::LabelStyle::dot));
         };
         const auto previewComment = [](std::wstring_view comment) {
             return comment.empty() ? std::wstring{} : L"  " + std::wstring(comment);
@@ -3845,7 +3894,12 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                 static_cast<float>(visualConfig.geometry.paddingY.value_or(6.0)),
                 static_cast<float>(visualConfig.geometry.rowGap.value_or(2.0)),
                 static_cast<float>(visualConfig.geometry.columnGap.value_or(8.0)),
-                fcitx::windows::ui::Placement::below};
+                fcitx::windows::ui::Placement::below,
+                SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) == BST_CHECKED,
+                static_cast<std::size_t>(comboInteger(kPageSize, 6)),
+                6U,
+                0U,
+                static_cast<float>(comboInteger(kScrollCellWidth, 96))};
             const auto layout = fcitx::windows::ui::layout(input);
             std::vector<fcitx::windows::ui::RenderItemInput> renderInputs;
             renderInputs.reserve(layout.items.size());
@@ -3870,6 +3924,7 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                                      DWRITE_FONT_WEIGHT_SEMI_BOLD, fontFamily),
                     measureTextWidth(candidate.comment, previewCommentSize,
                                      DWRITE_FONT_WEIGHT_NORMAL, fontFamily),
+                    !candidate.label.empty(),
                     !candidate.label.empty(),
                 });
             }
@@ -4045,6 +4100,10 @@ class ConfigWindow final : public CWindowImpl<ConfigWindow> {
                     !automatic && !vertical, ModernAction::selectLayoutHorizontal);
         drawSegment(brush, get("candidate.vertical"), 584, 568, 716, !automatic && vertical,
                     ModernAction::selectLayoutVertical);
+        drawCompactSetting(brush, modernText(L"Scroll mode", L"滚动模式"),
+                           boolText(SendMessageW(control(kScrollMode), BM_GETCHECK, 0, 0) ==
+                                    BST_CHECKED),
+                           732, 568, rowRight, ModernAction::toggleScrollMode);
         const float bottomCardWidth = (rowRight - 288.0F - 24.0F) / 3.0F;
         const float bottomX1 = 288.0F + bottomCardWidth + 12.0F;
         const float bottomX2 = bottomX1 + bottomCardWidth + 12.0F;

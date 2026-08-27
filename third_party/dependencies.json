@@ -278,6 +278,12 @@
       "license": "MIT OR Apache-2.0"
     },
     {
+      "name": "windinput-qingfeng-candidate-visual-port",
+      "version": "2214bede43b4153f0fdc463928cf3c50184ec2ef",
+      "source": "https://github.com/huanfeng/WindInput/tree/2214bede43b4153f0fdc463928cf3c50184ec2ef",
+      "license": "MIT"
+    },
+    {
       "name": "rust-crate-adler2",
       "version": "2.0.1",
       "source": "https://github.com/oyvindln/adler2",

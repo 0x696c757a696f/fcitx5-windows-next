@@ -317,6 +317,12 @@ add_custom_command(
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --lib --target
     "${FCITX_RUST_TARGET}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/qingfeng.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-candidate-core staticlib")
 add_custom_target(fcitx5_candidate_core_rustlib
@@ -1293,6 +1299,22 @@ if(BUILD_TESTING)
     set_tests_properties(
       rust-candidate-poc-scroll-demo-snapshot PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    foreach(FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT vertical horizontal grid vertical-dark horizontal-dark grid-dark)
+      add_test(
+        NAME "rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}"
+        COMMAND
+          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+          "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+          fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
+          --label-slot-snapshot "${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" --report
+          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.json"
+          --screenshot
+          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.bmp")
+      set_tests_properties(
+        "rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endforeach()
     foreach(FCITX_CANDIDATE_HOST_SNAPSHOT mock-notepad mock-word mock-chromium mock-emoji-host)
       add_test(
         NAME "rust-candidate-poc-host-snapshot-${FCITX_CANDIDATE_HOST_SNAPSHOT}"

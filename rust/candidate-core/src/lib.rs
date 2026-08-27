@@ -3,6 +3,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 
+pub mod qingfeng;
+
 const MAX_CANDIDATES: usize = 128;
 const MAX_CANDIDATE_TEXT_UTF8: usize = 4096;
 const MAX_TRACKED_CONTEXTS: usize = 64;
@@ -228,6 +230,7 @@ pub struct Fcitx5CandidateRenderItemInput {
     pub text_width: f32,
     pub comment_width: f32,
     pub has_label: u8,
+    pub reserve_label: u8,
 }
 
 #[repr(C)]
@@ -245,6 +248,93 @@ pub struct Fcitx5CandidateScrollLabel {
     pub reserve: u8,
     pub show: u8,
     pub slot: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateLabelStyle {
+    Plain,
+    Dot,
+    Paren,
+    Bracket,
+    Circled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateLabelDisplay {
+    Always,
+    SelectedScope,
+    Hidden,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateLabelScope {
+    Item,
+    Row,
+    Column,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateLabelAlign {
+    Right,
+    Left,
+    Center,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateLabelWidthStrategy {
+    Fixed,
+    PageMax,
+    GridMax,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CandidateLabelSlotConfig {
+    pub display: CandidateLabelDisplay,
+    pub scope: CandidateLabelScope,
+    pub reserve_when_hidden: bool,
+    pub align: CandidateLabelAlign,
+    pub width_strategy: CandidateLabelWidthStrategy,
+    pub min_width: f32,
+    pub gap: f32,
+}
+
+impl Default for CandidateLabelSlotConfig {
+    fn default() -> Self {
+        Self {
+            display: CandidateLabelDisplay::Always,
+            scope: CandidateLabelScope::Item,
+            reserve_when_hidden: true,
+            align: CandidateLabelAlign::Right,
+            width_strategy: CandidateLabelWidthStrategy::PageMax,
+            min_width: 0.0,
+            gap: 4.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CandidateLabelSlotSource {
+    pub candidate_index: usize,
+    pub row: usize,
+    pub column: usize,
+    pub label_width: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CandidateLabelSlotPlanItem {
+    pub reserve_label: bool,
+    pub show_label: bool,
+    pub label_slot_width: f32,
+    pub label_gap: f32,
+    pub label_align: CandidateLabelAlign,
+    pub text_origin_offset: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CandidateLabelSlotPlan {
+    pub label_slot_width: f32,
+    pub items: Vec<CandidateLabelSlotPlanItem>,
+    pub stable_text_origin: bool,
 }
 
 #[repr(C)]
@@ -512,6 +602,107 @@ fn scroll_label_policy(
         reserve: 1,
         show: (candidate_index / page_size == selected_index / page_size) as u8,
         slot: slot.min(u32::MAX as usize) as u32,
+    }
+}
+
+pub fn format_candidate_label(
+    slot: u32,
+    source_label: &str,
+    style: CandidateLabelStyle,
+    custom_prefix: &str,
+    custom_suffix: &str,
+) -> String {
+    let label = if source_label.is_empty() {
+        (slot == 0).then_some(1).unwrap_or(slot).to_string()
+    } else {
+        source_label.to_owned()
+    };
+    if !custom_prefix.is_empty() || !custom_suffix.is_empty() {
+        return format!("{custom_prefix}{label}{custom_suffix}");
+    }
+    match style {
+        CandidateLabelStyle::Plain => label,
+        CandidateLabelStyle::Dot => format!("{label}."),
+        CandidateLabelStyle::Paren => format!("({label})"),
+        CandidateLabelStyle::Bracket => format!("[{label}]"),
+        CandidateLabelStyle::Circled => {
+            let mut chars = label.chars();
+            match (chars.next(), chars.next()) {
+                (Some(character @ '1'..='9'), None) => {
+                    char::from_u32(0x2460 + character as u32 - '1' as u32)
+                        .unwrap_or(character)
+                        .to_string()
+                }
+                _ => label,
+            }
+        }
+    }
+}
+
+pub fn candidate_label_slot_plan(
+    config: CandidateLabelSlotConfig,
+    sources: &[CandidateLabelSlotSource],
+    selected_index: usize,
+) -> CandidateLabelSlotPlan {
+    let widest_label = sources.iter().fold(0.0_f32, |width, source| {
+        if source.label_width.is_finite() && source.label_width > 0.0 {
+            width.max(source.label_width)
+        } else {
+            width
+        }
+    });
+    let label_slot_width = match config.width_strategy {
+        CandidateLabelWidthStrategy::Fixed => config.min_width.max(0.0),
+        CandidateLabelWidthStrategy::PageMax | CandidateLabelWidthStrategy::GridMax => {
+            config.min_width.max(0.0).max(widest_label)
+        }
+    };
+    let selected = sources
+        .iter()
+        .find(|source| source.candidate_index == selected_index)
+        .copied();
+    let label_gap = config.gap.max(0.0);
+    let items = sources
+        .iter()
+        .map(|source| {
+            let selected_scope = match (config.scope, selected) {
+                (CandidateLabelScope::Item, _) => source.candidate_index == selected_index,
+                (CandidateLabelScope::Row, Some(selected)) => source.row == selected.row,
+                (CandidateLabelScope::Column, Some(selected)) => source.column == selected.column,
+                (_, None) => false,
+            };
+            let show_label = match config.display {
+                CandidateLabelDisplay::Always => true,
+                CandidateLabelDisplay::SelectedScope => selected_scope,
+                CandidateLabelDisplay::Hidden => false,
+            };
+            let reserve_label = show_label || config.reserve_when_hidden;
+            let text_origin_offset = if reserve_label && label_slot_width > 0.0 {
+                label_slot_width + label_gap
+            } else {
+                0.0
+            };
+            CandidateLabelSlotPlanItem {
+                reserve_label,
+                show_label,
+                label_slot_width,
+                label_gap: if reserve_label { label_gap } else { 0.0 },
+                label_align: config.align,
+                text_origin_offset,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut text_origins = items
+        .iter()
+        .filter(|item| item.reserve_label)
+        .map(|item| item.text_origin_offset);
+    let first_origin = text_origins.next();
+    let stable_text_origin = first_origin
+        .is_none_or(|first| text_origins.all(|origin| (origin - first).abs() <= f32::EPSILON));
+    CandidateLabelSlotPlan {
+        label_slot_width,
+        items,
+        stable_text_origin,
     }
 }
 
@@ -832,6 +1023,27 @@ unsafe fn bytes_from_ffi(value: Fcitx5CandidateUtf8) -> Option<&'static [u8]> {
     Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
 }
 
+unsafe fn utf16_from_ffi(value: Fcitx5CandidateUtf16) -> Option<&'static [u16]> {
+    if value.len == 0 {
+        return Some(&[]);
+    }
+    if value.ptr.is_null() {
+        return None;
+    }
+    Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
+}
+
+fn label_style_from_ffi(value: u32) -> Option<CandidateLabelStyle> {
+    match value {
+        0 => Some(CandidateLabelStyle::Plain),
+        1 => Some(CandidateLabelStyle::Dot),
+        2 => Some(CandidateLabelStyle::Paren),
+        3 => Some(CandidateLabelStyle::Bracket),
+        4 => Some(CandidateLabelStyle::Circled),
+        _ => None,
+    }
+}
+
 #[no_mangle]
 /// # Safety
 ///
@@ -1082,6 +1294,105 @@ pub extern "C" fn fcitx5_candidate_scroll_label_policy(
     scroll_label_policy(candidate_index, selected_index, page_size, total_candidates)
 }
 
+/// # Safety
+///
+/// `source_label`, `custom_prefix`, and `custom_suffix` must point to readable
+/// UTF-16 buffers for their declared lengths, or be null only when the length
+/// is zero. `output` may be null for size queries or point to writable UTF-16
+/// storage for `output_capacity` code units. No pointer is retained.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_candidate_format_label_utf16(
+    slot: u32,
+    style: u32,
+    source_label: Fcitx5CandidateUtf16,
+    custom_prefix: Fcitx5CandidateUtf16,
+    custom_suffix: Fcitx5CandidateUtf16,
+    output: *mut u16,
+    output_capacity: usize,
+) -> usize {
+    let Some(style) = label_style_from_ffi(style) else {
+        return 0;
+    };
+    let Some(source_label) = (unsafe { utf16_from_ffi(source_label) }) else {
+        return 0;
+    };
+    let Some(custom_prefix) = (unsafe { utf16_from_ffi(custom_prefix) }) else {
+        return 0;
+    };
+    let Some(custom_suffix) = (unsafe { utf16_from_ffi(custom_suffix) }) else {
+        return 0;
+    };
+    let source_label = String::from_utf16_lossy(source_label);
+    let custom_prefix = String::from_utf16_lossy(custom_prefix);
+    let custom_suffix = String::from_utf16_lossy(custom_suffix);
+    let formatted =
+        format_candidate_label(slot, &source_label, style, &custom_prefix, &custom_suffix);
+    write_wide_units(
+        &formatted.encode_utf16().collect::<Vec<_>>(),
+        output,
+        output_capacity,
+    )
+}
+
+pub fn candidate_render_segments(
+    items: &[Fcitx5CandidateRenderItemInput],
+) -> (Vec<Fcitx5CandidateRenderItemOutput>, f32) {
+    const LABEL_CELL_SAFETY_PADDING: f32 = 2.0;
+    let label_column_width = items.iter().fold(0.0_f32, |width, item| {
+        if item.reserve_label != 0 || item.has_label != 0 {
+            width.max(item.label_width.max(0.0) + LABEL_CELL_SAFETY_PADDING)
+        } else {
+            width
+        }
+    });
+    let outputs = items
+        .iter()
+        .map(|source| {
+            let reserve_label = source.reserve_label != 0 || source.has_label != 0;
+            let effective_label_column_width = if reserve_label {
+                label_column_width
+            } else {
+                0.0
+            };
+            let label_gap = if reserve_label && label_column_width > 0.0 {
+                source.label_gap.max(0.0)
+            } else {
+                0.0
+            };
+            let text_left = source.bounds.left + effective_label_column_width + label_gap;
+            let text_available = (source.bounds.right - text_left).max(1.0);
+            let text_draw_width = source.text_width.max(0.0).min(text_available);
+            let comment_left = text_left + text_draw_width + 4.0;
+            let comment_available = (source.bounds.right - comment_left).max(1.0);
+            let draw_comment = u8::from(
+                source.comment_width <= 0.0 || source.comment_width <= comment_available + 2.0,
+            );
+            Fcitx5CandidateRenderItemOutput {
+                label: Fcitx5CandidateLayoutRect {
+                    left: source.bounds.left,
+                    top: source.bounds.top,
+                    right: source.bounds.left + effective_label_column_width,
+                    bottom: source.bounds.bottom,
+                },
+                text: Fcitx5CandidateLayoutRect {
+                    left: text_left,
+                    top: source.bounds.top,
+                    right: source.bounds.right,
+                    bottom: source.bounds.bottom,
+                },
+                comment: Fcitx5CandidateLayoutRect {
+                    left: comment_left,
+                    top: source.bounds.top,
+                    right: source.bounds.right,
+                    bottom: source.bounds.bottom,
+                },
+                draw_comment,
+            }
+        })
+        .collect::<Vec<_>>();
+    (outputs, label_column_width)
+}
+
 #[no_mangle]
 /// # Safety
 ///
@@ -1090,8 +1401,8 @@ pub extern "C" fn fcitx5_candidate_scroll_label_policy(
 pub unsafe extern "C" fn fcitx5_candidate_render_segments(
     items: *const Fcitx5CandidateRenderItemInput,
     item_count: usize,
-    horizontal_layout: u8,
-    scroll_mode: u8,
+    _horizontal_layout: u8,
+    _scroll_mode: u8,
     out_items: *mut Fcitx5CandidateRenderItemOutput,
     out_label_column_width: *mut f32,
 ) -> i32 {
@@ -1110,59 +1421,11 @@ pub unsafe extern "C" fn fcitx5_candidate_render_segments(
     } else {
         unsafe { std::slice::from_raw_parts_mut(out_items, item_count) }
     };
-    const LABEL_CELL_SAFETY_PADDING: f32 = 2.0;
-    let label_column_width = items.iter().fold(0.0_f32, |width, item| {
-        if item.has_label != 0 {
-            width.max(item.label_width + LABEL_CELL_SAFETY_PADDING)
-        } else {
-            width
-        }
-    });
+    let (segments, label_column_width) = candidate_render_segments(items);
     unsafe {
         *out_label_column_width = label_column_width;
     }
-    for (source, target) in items.iter().zip(out_items.iter_mut()) {
-        let reserve_label = !(scroll_mode != 0 && horizontal_layout == 0 && source.has_label == 0);
-        let effective_label_column_width = if reserve_label {
-            label_column_width
-        } else {
-            0.0
-        };
-        let label_gap = if reserve_label && label_column_width > 0.0 {
-            source.label_gap.max(0.0)
-        } else {
-            0.0
-        };
-        let text_left = source.bounds.left + effective_label_column_width + label_gap;
-        let text_available = (source.bounds.right - text_left).max(1.0);
-        let text_draw_width = source.text_width.max(0.0).min(text_available);
-        let comment_left = text_left + text_draw_width + 4.0;
-        let comment_available = (source.bounds.right - comment_left).max(1.0);
-        let draw_comment = u8::from(
-            source.comment_width <= 0.0 || source.comment_width <= comment_available + 2.0,
-        );
-        *target = Fcitx5CandidateRenderItemOutput {
-            label: Fcitx5CandidateLayoutRect {
-                left: source.bounds.left,
-                top: source.bounds.top,
-                right: source.bounds.left + label_column_width,
-                bottom: source.bounds.bottom,
-            },
-            text: Fcitx5CandidateLayoutRect {
-                left: text_left,
-                top: source.bounds.top,
-                right: source.bounds.right,
-                bottom: source.bounds.bottom,
-            },
-            comment: Fcitx5CandidateLayoutRect {
-                left: comment_left,
-                top: source.bounds.top,
-                right: source.bounds.right,
-                bottom: source.bounds.bottom,
-            },
-            draw_comment,
-        };
-    }
+    out_items.copy_from_slice(&segments);
     0
 }
 
@@ -2396,6 +2659,147 @@ mod tests {
     }
 
     #[test]
+    fn candidate_label_formatting_supports_custom_ordinals() {
+        assert_eq!(
+            format_candidate_label(1, "", CandidateLabelStyle::Dot, "", ""),
+            "1."
+        );
+        assert_eq!(
+            format_candidate_label(10, "", CandidateLabelStyle::Dot, "", ""),
+            "10."
+        );
+        assert_eq!(
+            format_candidate_label(10, "", CandidateLabelStyle::Dot, "#", ":"),
+            "#10:"
+        );
+        assert_eq!(
+            format_candidate_label(3, "abc", CandidateLabelStyle::Bracket, "", ""),
+            "[abc]"
+        );
+        assert_eq!(
+            format_candidate_label(1, "1", CandidateLabelStyle::Circled, "", ""),
+            "①"
+        );
+    }
+
+    #[test]
+    fn candidate_label_slot_plan_keeps_hidden_labels_aligned() {
+        let sources = [
+            CandidateLabelSlotSource {
+                candidate_index: 0,
+                row: 0,
+                column: 0,
+                label_width: 12.0,
+            },
+            CandidateLabelSlotSource {
+                candidate_index: 1,
+                row: 1,
+                column: 0,
+                label_width: 28.0,
+            },
+            CandidateLabelSlotSource {
+                candidate_index: 2,
+                row: 2,
+                column: 0,
+                label_width: 20.0,
+            },
+        ];
+        let plan = candidate_label_slot_plan(
+            CandidateLabelSlotConfig {
+                display: CandidateLabelDisplay::SelectedScope,
+                scope: CandidateLabelScope::Item,
+                reserve_when_hidden: true,
+                align: CandidateLabelAlign::Right,
+                width_strategy: CandidateLabelWidthStrategy::PageMax,
+                min_width: 0.0,
+                gap: 4.0,
+            },
+            &sources,
+            1,
+        );
+        assert_eq!(plan.label_slot_width, 28.0);
+        assert!(plan.stable_text_origin);
+        assert_eq!(
+            plan.items
+                .iter()
+                .map(|item| item.show_label)
+                .collect::<Vec<_>>(),
+            vec![false, true, false]
+        );
+        assert!(plan.items.iter().all(|item| item.reserve_label));
+        assert!(plan
+            .items
+            .iter()
+            .all(|item| (item.text_origin_offset - 32.0).abs() <= f32::EPSILON));
+    }
+
+    #[test]
+    fn candidate_label_slot_plan_reveals_selected_rows_and_columns() {
+        let sources = [
+            CandidateLabelSlotSource {
+                candidate_index: 0,
+                row: 0,
+                column: 0,
+                label_width: 10.0,
+            },
+            CandidateLabelSlotSource {
+                candidate_index: 1,
+                row: 0,
+                column: 1,
+                label_width: 10.0,
+            },
+            CandidateLabelSlotSource {
+                candidate_index: 2,
+                row: 1,
+                column: 0,
+                label_width: 24.0,
+            },
+            CandidateLabelSlotSource {
+                candidate_index: 3,
+                row: 1,
+                column: 1,
+                label_width: 24.0,
+            },
+        ];
+        let row_plan = candidate_label_slot_plan(
+            CandidateLabelSlotConfig {
+                display: CandidateLabelDisplay::SelectedScope,
+                scope: CandidateLabelScope::Row,
+                ..CandidateLabelSlotConfig::default()
+            },
+            &sources,
+            2,
+        );
+        assert_eq!(
+            row_plan
+                .items
+                .iter()
+                .map(|item| item.show_label)
+                .collect::<Vec<_>>(),
+            vec![false, false, true, true]
+        );
+        let column_plan = candidate_label_slot_plan(
+            CandidateLabelSlotConfig {
+                display: CandidateLabelDisplay::SelectedScope,
+                scope: CandidateLabelScope::Column,
+                ..CandidateLabelSlotConfig::default()
+            },
+            &sources,
+            1,
+        );
+        assert_eq!(
+            column_plan
+                .items
+                .iter()
+                .map(|item| item.show_label)
+                .collect::<Vec<_>>(),
+            vec![false, true, false, true]
+        );
+        assert!(row_plan.stable_text_origin);
+        assert!(column_plan.stable_text_origin);
+    }
+
+    #[test]
     fn interaction_helpers_match_cpp_contract() {
         let rectangles = [
             Fcitx5CandidateLayoutRect {
@@ -2487,6 +2891,7 @@ mod tests {
                 text_width: 80.0,
                 comment_width: 40.0,
                 has_label: 1,
+                reserve_label: 1,
             },
             Fcitx5CandidateRenderItemInput {
                 bounds: Fcitx5CandidateLayoutRect {
@@ -2500,6 +2905,7 @@ mod tests {
                 text_width: 96.0,
                 comment_width: 20.0,
                 has_label: 1,
+                reserve_label: 1,
             },
         ];
         let mut output = [Fcitx5CandidateRenderItemOutput::default(); 2];
@@ -2534,6 +2940,7 @@ mod tests {
             text_width: 80.0,
             comment_width: 0.0,
             has_label: 0,
+            reserve_label: 0,
         }];
         let mut no_label_output = [Fcitx5CandidateRenderItemOutput::default(); 1];
         assert_eq!(
@@ -2551,6 +2958,33 @@ mod tests {
         );
         assert_eq!(label_column, 0.0);
         assert_eq!(no_label_output[0].text.left, 10.0);
+
+        let hidden_label = [Fcitx5CandidateRenderItemInput {
+            bounds: input[0].bounds,
+            label_width: 18.0,
+            label_gap: 4.0,
+            text_width: 80.0,
+            comment_width: 0.0,
+            has_label: 0,
+            reserve_label: 1,
+        }];
+        let mut hidden_output = [Fcitx5CandidateRenderItemOutput::default(); 1];
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_render_segments(
+                    hidden_label.as_ptr(),
+                    hidden_label.len(),
+                    1,
+                    0,
+                    hidden_output.as_mut_ptr(),
+                    &mut label_column,
+                )
+            },
+            0
+        );
+        assert_eq!(label_column, 20.0);
+        assert_eq!(hidden_output[0].label.right, 30.0);
+        assert_eq!(hidden_output[0].text.left, 34.0);
     }
 
     #[test]

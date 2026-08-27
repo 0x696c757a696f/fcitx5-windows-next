@@ -27,7 +27,11 @@ int main(int argc, char** argv) {
     const auto cmakeSource = read_text(sourceRoot / "CMakeLists.txt");
     const auto specSource = read_text(sourceRoot / "docs/spec-v1.8.md");
     const auto currentTruthSource = read_text(sourceRoot / "docs/current.md");
-    const auto currentTaskSource = read_text(sourceRoot / "docs/tasks/current.md");
+    const auto defaultThemeSource = read_text(sourceRoot / "resources/themes/default/theme.toml");
+    const auto thirdPartyDependenciesSource =
+        read_text(sourceRoot / "third_party/dependencies.json");
+    const auto completedCandidateGreenVisualTaskSource =
+        read_text(sourceRoot / "docs/tasks/completed/060-CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001.md");
     const auto completedConfigCutoverTaskSource =
         read_text(sourceRoot / "docs/tasks/completed/048-CONFIG-RUST-CUTOVER-001.md");
     const auto engineBoundarySource = read_text(sourceRoot / "docs/engine-boundary.md");
@@ -78,6 +82,32 @@ int main(int argc, char** argv) {
         cmakeSource.find("config-rust-legacy-headless-cli") ==
             std::string::npos) {
         return fail("CONFIG-RUST-CUTOVER-001: WindInput-derived theme lessons, staged Rust Config backend/full cutover language, numeric input validation, and system-font picker requirements must stay documented");
+    }
+    if (specSource.find("#07C160") == std::string::npos ||
+        specSource.find("绿白") == std::string::npos ||
+        specSource.find("绿黑") == std::string::npos ||
+        specSource.find("直接采用或移植其 MIT 许可") == std::string::npos ||
+        taskPlanSource.find("CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001") ==
+            std::string::npos ||
+        completedCandidateGreenVisualTaskSource.find("CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001") ==
+            std::string::npos ||
+        completedCandidateGreenVisualTaskSource.find("Microsoft YaHei") == std::string::npos ||
+        currentTruthSource.find("WeChat-style `#07C160`") == std::string::npos ||
+        taskRebaselineSource.find("Qingfeng/WindInput upstream themes and variants remain available") ==
+            std::string::npos ||
+        thirdPartyDependenciesSource.find("windinput-qingfeng-candidate-visual-port") ==
+            std::string::npos ||
+        thirdPartyDependenciesSource.find("2214bede43b4153f0fdc463928cf3c50184ec2ef") ==
+            std::string::npos ||
+        defaultThemeSource.find("#07C160") == std::string::npos ||
+        defaultThemeSource.find("#181818") == std::string::npos ||
+        defaultThemeSource.find("\"Microsoft YaHei\", \"Microsoft YaHei UI\", \"system\"") ==
+            std::string::npos ||
+        specSource.find("Candidate 默认字体链必须 CJK-first") == std::string::npos ||
+        specSource.find("eosphoros-keytao") == std::string::npos ||
+        currentTruthSource.find("Candidate default font must be CJK-first") ==
+            std::string::npos) {
+        return fail("CANDIDATE-WINDINPUT-QINGFENG-GREEN-VISUAL-001: WeChat-green light/dark defaults, Qingfeng preservation, and direct WindInput adoption requirement must stay documented");
     }
     if (upstreamBoundaryAdr.find("Fcitx Upstream Boundary and Rust Product Plane") ==
             std::string::npos ||
@@ -306,6 +336,8 @@ int main(int argc, char** argv) {
     const auto uiSource = read_text(sourceRoot / "src/ui/ui_main.cpp");
     const auto configAppSource = read_text(sourceRoot / "src/config/app_main.cpp");
     const auto rustCandidateCoreSource = read_text(sourceRoot / "rust/candidate-core/src/lib.rs");
+    const auto rustCandidateQingfengSource =
+        read_text(sourceRoot / "rust/candidate-core/src/qingfeng.rs");
     const auto configParserCandidateSource =
         read_text(sourceRoot / "src/config/config_parser.cpp");
     if (uiSource.find("L\"zh-CN\", &format") != std::string::npos) {
@@ -380,20 +412,51 @@ int main(int argc, char** argv) {
         uiSource.find("DWRITE_TEXT_ALIGNMENT_TRAILING") == std::string::npos ||
         uiSource.find("DWRITE_TRIMMING_GRANULARITY_NONE") == std::string::npos ||
         uiSource.find("DT_END_ELLIPSIS") != std::string::npos ||
+        uiSource.find("fcitx5_candidate_format_label_utf16") == std::string::npos ||
         uiSource.find("fcitx5_candidate_scroll_label_policy") == std::string::npos ||
+        uiSource.find("reserveLabel") == std::string::npos ||
+        uiSource.find("L\"Microsoft YaHei\"") == std::string::npos ||
         rustCandidateCoreSource.find("fcitx5_candidate_scroll_label_policy") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("fcitx5_candidate_format_label_utf16") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("candidate_label_slot_plan") == std::string::npos ||
+        rustCandidateCoreSource.find("format_candidate_label") == std::string::npos ||
+        rustCandidateCoreSource.find("candidate_label_slot_plan_keeps_hidden_labels_aligned") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("candidate_label_slot_plan_reveals_selected_rows_and_columns") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("candidate_label_formatting_supports_custom_ordinals") ==
             std::string::npos ||
         rustCandidateCoreSource.find("label_gap") == std::string::npos ||
         rustCandidateCoreSource.find("LABEL_CELL_SAFETY_PADDING") == std::string::npos ||
         rustCandidateCoreSource.find("source.label_gap.max") == std::string::npos ||
         rustCandidateCoreSource.find("scroll_label_policy_reserves_and_shows_current_row_or_column") ==
             std::string::npos ||
+        rustCandidateQingfengSource.find("WindInput wind-ui candidate window/theme behavior") ==
+            std::string::npos ||
+        rustCandidateQingfengSource.find("WINDINPUT_QINGFENG_CANDIDATE_SOURCE") ==
+            std::string::npos ||
+        rustCandidateQingfengSource.find("QingfengThemeMode::Dark") == std::string::npos ||
+        rustCandidateQingfengSource.find("QingfengColor::rgb(7, 193, 96)") ==
+            std::string::npos ||
+        rustCandidateQingfengSource.find("QingfengColor::rgb(24, 24, 24)") ==
+            std::string::npos ||
         configAppSource.find("labelGap") == std::string::npos ||
         configAppSource.find("DWRITE_TEXT_ALIGNMENT_TRAILING") == std::string::npos ||
+        configAppSource.find("fcitx5_candidate_format_label_utf16") == std::string::npos ||
+        configAppSource.find("reserveLabel") == std::string::npos ||
+        configAppSource.find("L\"Microsoft YaHei\"") == std::string::npos ||
+        configAppSource.find("732, 568, rowRight, ModernAction::toggleScrollMode") ==
+            std::string::npos ||
+        cmakeSource.find("rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}") ==
+            std::string::npos ||
+        cmakeSource.find("vertical-dark horizontal-dark grid-dark") == std::string::npos ||
+        cmakeSource.find("--label-slot-snapshot") == std::string::npos ||
         configParserCandidateSource.find("\"sequence\"") == std::string::npos ||
         configParserCandidateSource.find("candidate label sequence must contain 1 to 9 strings") ==
             std::string::npos) {
-        return fail("CANDIDATE-UI-SCROLL-LABELS: Candidate UI must reserve configurable row/column labels through Rust policy and draw right-aligned label cells");
+        return fail("CANDIDATE-UI-SCROLL-LABELS: Candidate UI must keep scroll mode visible, reserve configurable row/column labels through Rust policy, and draw right-aligned label cells");
     }
     if (uiSource.find("CommandLineToArgvW") != std::string::npos ||
         uiSource.find("GetCommandLineW") != std::string::npos ||
@@ -2015,6 +2078,9 @@ int main(int argc, char** argv) {
         configPocSource.find("WindUiElement::text_input") == std::string::npos ||
         configPocSource.find("WindUiRole::Bg.resolve(theme)") == std::string::npos ||
         configPocSource.find("settings_palette_from_windui") == std::string::npos ||
+        configPocSource.find("apply_wechat_green_palette") == std::string::npos ||
+        configPocSource.find("WindUiColor::hex(0x07C160)") == std::string::npos ||
+        configPocSource.find("\"Microsoft YaHei\",") == std::string::npos ||
         configPocSource.find("windui_role_palette_consumed") == std::string::npos ||
         configPocSource.find("windui_preview_first_appearance_layout") ==
             std::string::npos ||
@@ -2118,6 +2184,19 @@ int main(int argc, char** argv) {
         candidatePocBinary.find("--screenshot") == std::string::npos ||
         candidatePocBinary.find("--demo-snapshot") == std::string::npos ||
         candidatePocBinary.find("--scroll-demo-snapshot") == std::string::npos ||
+        candidatePocBinary.find("--label-slot-snapshot") == std::string::npos ||
+        candidatePocBinary.find("label_slot_window_scenario") == std::string::npos ||
+        candidatePocBinary.find("label_slot_contract") == std::string::npos ||
+        candidatePocBinary.find("windinput_qingfeng_candidate_renderer") == std::string::npos ||
+        candidatePocBinary.find("candidate_visual_wechat_green") == std::string::npos ||
+        candidatePocBinary.find("Microsoft YaHei") == std::string::npos ||
+        candidatePocBinary.find("GB2312_CHARSET") == std::string::npos ||
+        candidatePocBinary.find("GetTextFaceW") == std::string::npos ||
+        candidatePocBinary.find("candidate_visual_text_face") == std::string::npos ||
+        candidatePocBinary.find("vertical-dark") == std::string::npos ||
+        candidatePocBinary.find("horizontal-dark") == std::string::npos ||
+        candidatePocBinary.find("grid-dark") == std::string::npos ||
+        candidatePocBinary.find("WINDOW_LABEL_SLOT_PAINT") == std::string::npos ||
         candidatePocBinary.find("--host-snapshot") == std::string::npos ||
         candidatePocBinary.find("host_snapshot_scenario") == std::string::npos ||
         candidatePocBinary.find("--dpi-scale") == std::string::npos ||

@@ -10,6 +10,7 @@ fn main() {
     let mut window_smoke = false;
     let mut demo_snapshot = false;
     let mut scroll_demo_snapshot = false;
+    let mut label_slot_snapshot: Option<String> = None;
     let mut host_snapshot: Option<String> = None;
     let mut dpi_scale = 1.0_f32;
     let mut report: Option<PathBuf> = None;
@@ -24,6 +25,12 @@ fn main() {
             demo_snapshot = true;
         } else if arg == "--scroll-demo-snapshot" {
             scroll_demo_snapshot = true;
+        } else if arg == "--label-slot-snapshot" {
+            let Some(kind) = args.next() else {
+                eprintln!("--label-slot-snapshot requires vertical, horizontal, or grid");
+                std::process::exit(2);
+            };
+            label_slot_snapshot = Some(kind.to_string_lossy().into_owned());
         } else if arg == "--host-snapshot" {
             let Some(host) = args.next() else {
                 eprintln!("--host-snapshot requires a mock host name");
@@ -61,12 +68,13 @@ fn main() {
 
     if self_check == window_smoke {
         eprintln!(
-            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot | --scroll-demo-snapshot | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
+            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot | --scroll-demo-snapshot | --label-slot-snapshot vertical|horizontal|grid | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
         );
         std::process::exit(2);
     }
     let mode_count = usize::from(demo_snapshot)
         + usize::from(scroll_demo_snapshot)
+        + usize::from(label_slot_snapshot.is_some())
         + usize::from(host_snapshot.is_some());
     if mode_count > 1 {
         eprintln!("snapshot modes are mutually exclusive");
@@ -80,6 +88,7 @@ fn main() {
             screenshot.as_deref(),
             demo_snapshot,
             scroll_demo_snapshot,
+            label_slot_snapshot.as_deref(),
             host_snapshot.as_deref(),
             dpi_scale,
         )
@@ -119,6 +128,7 @@ fn run_window_smoke(
     screenshot: Option<&Path>,
     demo_snapshot: bool,
     scroll_demo_snapshot: bool,
+    label_slot_snapshot: Option<&str>,
     host_snapshot: Option<&str>,
     dpi_scale: f32,
 ) -> Result<String, String> {
@@ -126,6 +136,7 @@ fn run_window_smoke(
         screenshot,
         demo_snapshot,
         scroll_demo_snapshot,
+        label_slot_snapshot,
         host_snapshot,
         dpi_scale,
     )
@@ -136,6 +147,7 @@ fn run_window_smoke(
     _screenshot: Option<&Path>,
     _demo_snapshot: bool,
     _scroll_demo_snapshot: bool,
+    _label_slot_snapshot: Option<&str>,
     _host_snapshot: Option<&str>,
     _dpi_scale: f32,
 ) -> Result<String, String> {
@@ -145,8 +157,16 @@ fn run_window_smoke(
 #[cfg(windows)]
 mod window_smoke {
     use fcitx5_candidate_core::{
-        candidate_poc_scenarios, layout, LayoutInput, Orientation, PocCandidate, PocScenario,
-        Point, Rect as CoreRect, Size,
+        candidate_label_slot_plan, candidate_poc_scenarios, candidate_render_segments,
+        format_candidate_label, layout,
+        qingfeng::{
+            qingfeng_candidate_visual_plan, QingfengCandidateVisualInput, QingfengOrientation,
+            QingfengRect, QingfengThemeMode, WINDINPUT_QINGFENG_CANDIDATE_SOURCE,
+        },
+        CandidateLabelAlign, CandidateLabelDisplay, CandidateLabelScope, CandidateLabelSlotConfig,
+        CandidateLabelSlotSource, CandidateLabelStyle, CandidateLabelWidthStrategy,
+        Fcitx5CandidateLayoutRect, Fcitx5CandidateRenderItemInput, LayoutInput, Orientation,
+        PocCandidate, PocScenario, Point, Rect as CoreRect, Size,
     };
     use std::ffi::c_void;
     use std::fs;
@@ -174,20 +194,34 @@ mod window_smoke {
     const CHILDID_SELF: i32 = 0;
     const BI_RGB: Dword = 0;
     const COINIT_APARTMENTTHREADED: Dword = 0x2;
-    const COLORREF_BACKGROUND: Dword = 0x00F8_F6F2;
-    const COLORREF_SELECTED_BACKGROUND: Dword = 0x00D9_F2E4;
-    const COLORREF_TEXT: Dword = 0x0022_2222;
+    const COLORREF_BACKGROUND: Dword = 0x00FF_FF_FF;
+    const COLORREF_BORDER: Dword = 0x00EB_E5_E2;
+    const COLORREF_LABEL: Dword = 0x00AE_A0_9A;
+    const COLORREF_SELECTED_BACKGROUND: Dword = 0x00F0_FA_E7;
+    const COLORREF_SELECTED_TEXT: Dword = 0x0060_C1_07;
+    const COLORREF_TEXT: Dword = 0x004A_4A_4A;
     const CS_HREDRAW: Uint = 0x0002;
     const CS_VREDRAW: Uint = 0x0001;
     const DT_LEFT: Uint = 0x0000;
+    const DT_RIGHT: Uint = 0x0002;
     const DT_SINGLELINE: Uint = 0x0020;
     const DT_VCENTER: Uint = 0x0004;
     const DIB_RGB_COLORS: Uint = 0;
     const OBJID_WINDOW: Dword = 0;
+    const PS_SOLID: i32 = 0;
     const SRCCOPY: Dword = 0x00CC_0020;
     const SW_SHOWNOACTIVATE: i32 = 4;
     const TRANSPARENT: i32 = 1;
+    const NULL_BRUSH: i32 = 5;
+    const NULL_PEN: i32 = 8;
     const CLSCTX_INPROC_SERVER: Dword = 0x1;
+    const CLIP_DEFAULT_PRECIS: Dword = 0;
+    const CLEARTYPE_QUALITY: Dword = 5;
+    const DEFAULT_PITCH: Dword = 0;
+    const FF_DONTCARE: Dword = 0;
+    const FW_NORMAL: i32 = 400;
+    const GB2312_CHARSET: Dword = 134;
+    const OUT_DEFAULT_PRECIS: Dword = 0;
     const UIA_CONTROL_TYPE_PROPERTY_ID: i32 = 30003;
     const UIA_NAME_PROPERTY_ID: i32 = 30005;
     const UIA_WINDOW_CONTROL_TYPE_ID: i32 = 50032;
@@ -363,6 +397,8 @@ mod window_smoke {
 
     static WINDOW_TEXT: OnceLock<Vec<Vec<u16>>> = OnceLock::new();
     static WINDOW_LAYOUT_RECTS: OnceLock<Vec<Rect>> = OnceLock::new();
+    static WINDOW_LABEL_SLOT_PAINT: OnceLock<Vec<LabelSlotPaintItem>> = OnceLock::new();
+    static WINDOW_LABEL_SLOT_THEME: OnceLock<LabelSlotPaintTheme> = OnceLock::new();
     static WINDOW_SELECTED_VISIBLE: OnceLock<Option<usize>> = OnceLock::new();
 
     #[link(name = "user32")]
@@ -387,6 +423,7 @@ mod window_smoke {
         fn DrawTextW(hdc: Hdc, text: *const u16, count: i32, rect: *mut Rect, format: Uint) -> i32;
         fn EndPaint(hwnd: Hwnd, paint: *const PaintStruct) -> Bool;
         fn FillRect(hdc: Hdc, rect: *const Rect, brush: Hbrush) -> i32;
+        fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
         fn GetWindowDC(hwnd: Hwnd) -> Hdc;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> Bool;
         fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
@@ -414,6 +451,23 @@ mod window_smoke {
         ) -> Bool;
         fn CreateCompatibleBitmap(hdc: Hdc, cx: i32, cy: i32) -> Hbitmap;
         fn CreateCompatibleDC(hdc: Hdc) -> Hdc;
+        fn CreateFontW(
+            height: i32,
+            width: i32,
+            escapement: i32,
+            orientation: i32,
+            weight: i32,
+            italic: Dword,
+            underline: Dword,
+            strike_out: Dword,
+            charset: Dword,
+            out_precision: Dword,
+            clip_precision: Dword,
+            quality: Dword,
+            pitch_and_family: Dword,
+            face_name: *const u16,
+        ) -> Hgdobj;
+        fn CreatePen(style: i32, width: i32, color: Dword) -> Hgdobj;
         fn CreateSolidBrush(color: Dword) -> Hbrush;
         fn DeleteDC(hdc: Hdc) -> Bool;
         fn DeleteObject(object: *mut c_void) -> Bool;
@@ -426,6 +480,17 @@ mod window_smoke {
             info: *mut BitmapInfo,
             usage: Uint,
         ) -> i32;
+        fn GetStockObject(object: i32) -> Hgdobj;
+        fn GetTextFaceW(hdc: Hdc, count: i32, face_name: *mut u16) -> i32;
+        fn RoundRect(
+            hdc: Hdc,
+            left: i32,
+            top: i32,
+            right: i32,
+            bottom: i32,
+            width: i32,
+            height: i32,
+        ) -> Bool;
         fn SelectObject(hdc: Hdc, object: Hgdobj) -> Hgdobj;
     }
 
@@ -468,6 +533,7 @@ mod window_smoke {
         non_background_pixels: usize,
         checksum: u64,
         path: String,
+        text_face: String,
     }
 
     struct LayoutEvidence {
@@ -476,6 +542,57 @@ mod window_smoke {
         rects_inside_window: bool,
         rects_non_overlapping: bool,
         layout_driven_paint: bool,
+    }
+
+    #[derive(Clone)]
+    struct LabelSlotPaintItem {
+        label: Vec<u16>,
+        text: Vec<u16>,
+        comment: Vec<u16>,
+        item_rect: Rect,
+        label_rect: Rect,
+        text_rect: Rect,
+        comment_rect: Option<Rect>,
+        selected: bool,
+        item_radius: i32,
+    }
+
+    #[derive(Clone, Copy)]
+    struct LabelSlotPaintTheme {
+        background: Dword,
+        border: Dword,
+        label: Dword,
+        text: Dword,
+        selected_background: Dword,
+        selected_text: Dword,
+        window_radius: i32,
+    }
+
+    impl Default for LabelSlotPaintTheme {
+        fn default() -> Self {
+            Self {
+                background: COLORREF_BACKGROUND,
+                border: COLORREF_BORDER,
+                label: COLORREF_LABEL,
+                text: COLORREF_TEXT,
+                selected_background: COLORREF_SELECTED_BACKGROUND,
+                selected_text: COLORREF_SELECTED_TEXT,
+                window_radius: 12,
+            }
+        }
+    }
+
+    struct LabelSlotWindowScenario {
+        layout: fcitx5_candidate_core::LayoutResult,
+        title: Vec<u16>,
+        text_lines: Vec<Vec<u16>>,
+        snapshot_name: &'static str,
+        orientation_name: &'static str,
+        scroll_mode: bool,
+        selected_candidate: usize,
+        paint_items: Vec<LabelSlotPaintItem>,
+        paint_theme: LabelSlotPaintTheme,
+        evidence_json: String,
     }
 
     struct InspectionSpec<'a> {
@@ -493,12 +610,14 @@ mod window_smoke {
         dpi_scale: f32,
         scroll_mode: bool,
         expects_emoji: bool,
+        label_slot_evidence_json: String,
     }
 
     pub fn run(
         screenshot: Option<&Path>,
         demo_snapshot: bool,
         scroll_demo_snapshot: bool,
+        label_slot_snapshot: Option<&str>,
         host_snapshot: Option<&str>,
         dpi_scale: f32,
     ) -> Result<String, String> {
@@ -520,6 +639,9 @@ mod window_smoke {
             scroll_mode,
             selected_candidate,
             emoji_candidate_render_path,
+            label_slot_paint,
+            label_slot_theme,
+            label_slot_evidence_json,
         ) = if scroll_demo_snapshot {
             let items = (0..60)
                 .map(|index| Size {
@@ -567,6 +689,28 @@ mod window_smoke {
                 true,
                 18,
                 false,
+                Vec::new(),
+                LabelSlotPaintTheme::default(),
+                String::new(),
+            )
+        } else if let Some(kind) = label_slot_snapshot {
+            let scenario = label_slot_window_scenario(kind, dpi_scale)?;
+            (
+                scenario.layout,
+                scenario.title,
+                scenario.text_lines,
+                scenario.snapshot_name,
+                scenario.orientation_name,
+                "label-slot",
+                "zh-CN",
+                true,
+                dpi_scale,
+                scenario.scroll_mode,
+                scenario.selected_candidate,
+                false,
+                scenario.paint_items,
+                scenario.paint_theme,
+                scenario.evidence_json,
             )
         } else if let Some(host) = host_snapshot {
             let scenario = host_snapshot_scenario(host)?;
@@ -618,6 +762,9 @@ mod window_smoke {
                     .candidates
                     .iter()
                     .any(|candidate| contains_non_bmp_or_zwj(&candidate.text)),
+                Vec::new(),
+                LabelSlotPaintTheme::default(),
+                String::new(),
             )
         } else if demo_snapshot {
             (
@@ -664,6 +811,9 @@ mod window_smoke {
                 false,
                 0,
                 false,
+                Vec::new(),
+                LabelSlotPaintTheme::default(),
+                String::new(),
             )
         } else {
             (
@@ -710,6 +860,9 @@ mod window_smoke {
                 false,
                 0,
                 true,
+                Vec::new(),
+                LabelSlotPaintTheme::default(),
+                String::new(),
             )
         };
         let total_candidate_count = text_lines.len();
@@ -725,6 +878,8 @@ mod window_smoke {
         let class_name = wide("Fcitx5CandidateRustPoc");
         let _ = WINDOW_TEXT.set(visible_text_lines);
         let _ = WINDOW_LAYOUT_RECTS.set(visible_rects);
+        let _ = WINDOW_LABEL_SLOT_PAINT.set(label_slot_paint);
+        let _ = WINDOW_LABEL_SLOT_THEME.set(label_slot_theme);
         let _ = WINDOW_SELECTED_VISIBLE.set(selected_visible);
 
         let instance = unsafe { GetModuleHandleW(null()) };
@@ -780,6 +935,7 @@ mod window_smoke {
                 dpi_scale: effective_dpi_scale,
                 scroll_mode,
                 expects_emoji: emoji_candidate_render_path,
+                label_slot_evidence_json,
             },
         );
         unsafe {
@@ -857,16 +1013,17 @@ mod window_smoke {
             },
             |capture| {
                 format!(
-                    "  \"screenshot_written\":true,\n  \"screenshot_path\":\"{}\",\n  \"screenshot_bytes\":{},\n  \"visual_non_background_pixels\":{},\n  \"visual_checksum\":{},\n",
+                    "  \"screenshot_written\":true,\n  \"screenshot_path\":\"{}\",\n  \"screenshot_bytes\":{},\n  \"visual_non_background_pixels\":{},\n  \"visual_checksum\":{},\n  \"candidate_visual_text_face\":\"{}\",\n",
                     json_escape(&capture.path),
                     capture.bytes,
                     capture.non_background_pixels,
-                    capture.checksum
+                    capture.checksum,
+                    json_escape(&capture.text_face)
                 )
             },
         );
         Ok(format!(
-            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"host\":\"{}\",\n  \"locale\":\"{}\",\n  \"popup_allowed\":{},\n  \"candidate_count\":{},\n  \"visible_candidate_rects\":{},\n  \"painted_candidate_rects\":{},\n  \"layout_driven_paint\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
+            "{{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-window-smoke\",\n  \"snapshot_name\":\"{}\",\n  \"orientation\":\"{}\",\n  \"host\":\"{}\",\n  \"locale\":\"{}\",\n  \"popup_allowed\":{},\n  \"candidate_count\":{},\n  \"visible_candidate_rects\":{},\n  \"painted_candidate_rects\":{},\n  \"layout_driven_paint\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"dpi_scale\":{:.2},\n  \"scroll_mode\":{},\n  \"hwnd_created\":true,\n  \"no_activate\":true,\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"visible\":true,\n  \"accessibility_title_readable\":true,\n  \"msaa_accessible_name_readable\":true,\n  \"uia_name_readable\":true,\n  \"uia_control_type\":{},\n{}{}  \"emoji_candidate_render_path\":{},\n  \"result\":\"PASS\"\n}}",
             json_escape(spec.snapshot_name),
             json_escape(spec.orientation_name),
             json_escape(spec.host_name),
@@ -898,6 +1055,7 @@ mod window_smoke {
             rect.bottom,
             uia.control_type,
             capture_json,
+            spec.label_slot_evidence_json,
             if spec.expects_emoji { "true" } else { "false" }
         ))
     }
@@ -915,9 +1073,54 @@ mod window_smoke {
         if window_dc.is_null() {
             return Err("GetWindowDC failed for Rust Candidate PoC".to_owned());
         }
+        let candidate_font_name = wide("Microsoft YaHei");
+        let candidate_font = unsafe {
+            CreateFontW(
+                -18,
+                0,
+                0,
+                0,
+                FW_NORMAL,
+                0,
+                0,
+                0,
+                GB2312_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                DEFAULT_PITCH | FF_DONTCARE,
+                candidate_font_name.as_ptr(),
+            )
+        };
+        let old_window_font = if candidate_font.is_null() {
+            null_mut()
+        } else {
+            unsafe { SelectObject(window_dc, candidate_font) }
+        };
+        let text_face = selected_text_face(window_dc);
+        if !text_face.eq_ignore_ascii_case("Microsoft YaHei") && text_face != "微软雅黑" {
+            unsafe {
+                if !old_window_font.is_null() {
+                    SelectObject(window_dc, old_window_font);
+                }
+                if !candidate_font.is_null() {
+                    DeleteObject(candidate_font);
+                }
+                ReleaseDC(hwnd, window_dc);
+            }
+            return Err(format!(
+                "Rust Candidate PoC did not select a CJK-first Microsoft YaHei font, got '{text_face}'"
+            ));
+        }
         let memory_dc = unsafe { CreateCompatibleDC(window_dc) };
         if memory_dc.is_null() {
             unsafe {
+                if !old_window_font.is_null() {
+                    SelectObject(window_dc, old_window_font);
+                }
+                if !candidate_font.is_null() {
+                    DeleteObject(candidate_font);
+                }
                 ReleaseDC(hwnd, window_dc);
             }
             return Err("CreateCompatibleDC failed for Rust Candidate PoC".to_owned());
@@ -926,6 +1129,12 @@ mod window_smoke {
         if bitmap.is_null() {
             unsafe {
                 DeleteDC(memory_dc);
+                if !old_window_font.is_null() {
+                    SelectObject(window_dc, old_window_font);
+                }
+                if !candidate_font.is_null() {
+                    DeleteObject(candidate_font);
+                }
                 ReleaseDC(hwnd, window_dc);
             }
             return Err("CreateCompatibleBitmap failed for Rust Candidate PoC".to_owned());
@@ -937,6 +1146,12 @@ mod window_smoke {
                 SelectObject(memory_dc, old_object);
                 DeleteObject(bitmap);
                 DeleteDC(memory_dc);
+                if !old_window_font.is_null() {
+                    SelectObject(window_dc, old_window_font);
+                }
+                if !candidate_font.is_null() {
+                    DeleteObject(candidate_font);
+                }
                 ReleaseDC(hwnd, window_dc);
             }
             return Err("BitBlt failed for Rust Candidate PoC".to_owned());
@@ -976,6 +1191,12 @@ mod window_smoke {
             SelectObject(memory_dc, old_object);
             DeleteObject(bitmap);
             DeleteDC(memory_dc);
+            if !old_window_font.is_null() {
+                SelectObject(window_dc, old_window_font);
+            }
+            if !candidate_font.is_null() {
+                DeleteObject(candidate_font);
+            }
             ReleaseDC(hwnd, window_dc);
         }
         if lines != height {
@@ -1003,6 +1224,7 @@ mod window_smoke {
             non_background_pixels,
             checksum,
             path: path.display().to_string(),
+            text_face,
         })
     }
 
@@ -1258,18 +1480,117 @@ mod window_smoke {
                 };
                 let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
                 if !hdc.is_null() {
-                    let brush = unsafe { CreateSolidBrush(COLORREF_BACKGROUND) };
+                    let label_slot_theme =
+                        WINDOW_LABEL_SLOT_THEME.get().copied().unwrap_or_default();
+                    let brush = unsafe { CreateSolidBrush(label_slot_theme.background) };
                     if !brush.is_null() {
                         unsafe {
                             FillRect(hdc, &paint.rc_paint, brush);
                             DeleteObject(brush);
                         }
                     }
+                    if WINDOW_LABEL_SLOT_PAINT
+                        .get()
+                        .is_some_and(|items| !items.is_empty())
+                    {
+                        let mut client = Rect::default();
+                        if unsafe { GetClientRect(hwnd, &mut client) } != 0 {
+                            stroke_round_rect(
+                                hdc,
+                                &client,
+                                label_slot_theme.border,
+                                label_slot_theme.window_radius,
+                            );
+                        }
+                    }
                     unsafe {
                         SetBkMode(hdc, TRANSPARENT);
-                        SetTextColor(hdc, COLORREF_TEXT);
+                        SetTextColor(hdc, label_slot_theme.text);
                     }
-                    if let (Some(lines), Some(rects)) =
+                    let candidate_font_name = wide("Microsoft YaHei");
+                    let candidate_font = unsafe {
+                        CreateFontW(
+                            -18,
+                            0,
+                            0,
+                            0,
+                            FW_NORMAL,
+                            0,
+                            0,
+                            0,
+                            GB2312_CHARSET,
+                            OUT_DEFAULT_PRECIS,
+                            CLIP_DEFAULT_PRECIS,
+                            CLEARTYPE_QUALITY,
+                            DEFAULT_PITCH | FF_DONTCARE,
+                            candidate_font_name.as_ptr(),
+                        )
+                    };
+                    let old_font = if candidate_font.is_null() {
+                        null_mut()
+                    } else {
+                        unsafe { SelectObject(hdc, candidate_font) }
+                    };
+                    if let Some(label_slot_items) = WINDOW_LABEL_SLOT_PAINT
+                        .get()
+                        .filter(|items| !items.is_empty())
+                    {
+                        for item in label_slot_items {
+                            if item.selected {
+                                fill_round_rect(
+                                    hdc,
+                                    &item.item_rect,
+                                    label_slot_theme.selected_background,
+                                    item.item_radius,
+                                );
+                            }
+                            if item.label.len() > 1 {
+                                let mut label_rect = item.label_rect;
+                                unsafe {
+                                    SetTextColor(hdc, label_slot_theme.label);
+                                    DrawTextW(
+                                        hdc,
+                                        item.label.as_ptr(),
+                                        (item.label.len() - 1) as i32,
+                                        &mut label_rect,
+                                        DT_RIGHT | DT_SINGLELINE | DT_VCENTER,
+                                    );
+                                }
+                            }
+                            let mut text_rect = item.text_rect;
+                            unsafe {
+                                SetTextColor(
+                                    hdc,
+                                    if item.selected {
+                                        label_slot_theme.selected_text
+                                    } else {
+                                        label_slot_theme.text
+                                    },
+                                );
+                                DrawTextW(
+                                    hdc,
+                                    item.text.as_ptr(),
+                                    (item.text.len() - 1) as i32,
+                                    &mut text_rect,
+                                    DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+                                );
+                            }
+                            if let Some(mut comment_rect) = item.comment_rect {
+                                if item.comment.len() > 1 {
+                                    unsafe {
+                                        SetTextColor(hdc, label_slot_theme.label);
+                                        DrawTextW(
+                                            hdc,
+                                            item.comment.as_ptr(),
+                                            (item.comment.len() - 1) as i32,
+                                            &mut comment_rect,
+                                            DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    } else if let (Some(lines), Some(rects)) =
                         (WINDOW_TEXT.get(), WINDOW_LAYOUT_RECTS.get())
                     {
                         let selected = WINDOW_SELECTED_VISIBLE.get().copied().flatten();
@@ -1300,6 +1621,16 @@ mod window_smoke {
                             }
                         }
                     }
+                    if !old_font.is_null() {
+                        unsafe {
+                            SelectObject(hdc, old_font);
+                        }
+                    }
+                    if !candidate_font.is_null() {
+                        unsafe {
+                            DeleteObject(candidate_font);
+                        }
+                    }
                     unsafe {
                         EndPaint(hwnd, &paint);
                     }
@@ -1313,6 +1644,20 @@ mod window_smoke {
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn selected_text_face(hdc: Hdc) -> String {
+        let mut face = [0_u16; 64];
+        let length = unsafe { GetTextFaceW(hdc, face.len() as i32, face.as_mut_ptr()) };
+        if length <= 0 {
+            return String::new();
+        }
+        let usable = face
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(length as usize)
+            .min(face.len());
+        String::from_utf16_lossy(&face[..usable])
     }
 
     fn visible_text_lines(text_lines: &[Vec<u16>], item_indices: &[usize]) -> Vec<Vec<u16>> {
@@ -1375,6 +1720,404 @@ mod window_smoke {
             rects_non_overlapping: true,
             layout_driven_paint: true,
         })
+    }
+
+    fn label_slot_window_scenario(
+        kind: &str,
+        dpi_scale: f32,
+    ) -> Result<LabelSlotWindowScenario, String> {
+        #[derive(Clone, Copy)]
+        struct DemoCandidate {
+            slot: u32,
+            label: &'static str,
+            text: &'static str,
+        }
+
+        let dark_mode = kind.ends_with("-dark");
+        let base_kind = kind.strip_suffix("-dark").unwrap_or(kind);
+        let theme_mode = if dark_mode {
+            QingfengThemeMode::Dark
+        } else {
+            QingfengThemeMode::Light
+        };
+        let (orientation, scroll_mode, columns, visible_rows, selected, display, scope, candidates) =
+            match base_kind {
+                "vertical" => (
+                    Orientation::Vertical,
+                    false,
+                    1usize,
+                    6usize,
+                    1usize,
+                    CandidateLabelDisplay::SelectedScope,
+                    CandidateLabelScope::Item,
+                    vec![
+                        DemoCandidate {
+                            slot: 1,
+                            label: "",
+                            text: "识别",
+                        },
+                        DemoCandidate {
+                            slot: 10,
+                            label: "",
+                            text: "对齐很长的候选文本",
+                        },
+                        DemoCandidate {
+                            slot: 3,
+                            label: "",
+                            text: "输入",
+                        },
+                    ],
+                ),
+                "horizontal" => (
+                    Orientation::Horizontal,
+                    false,
+                    3usize,
+                    1usize,
+                    0usize,
+                    CandidateLabelDisplay::SelectedScope,
+                    CandidateLabelScope::Item,
+                    vec![
+                        DemoCandidate {
+                            slot: 1,
+                            label: "",
+                            text: "识",
+                        },
+                        DemoCandidate {
+                            slot: 2,
+                            label: "",
+                            text: "识别候选很长",
+                        },
+                        DemoCandidate {
+                            slot: 10,
+                            label: "",
+                            text: "emoji 😀",
+                        },
+                    ],
+                ),
+                "grid" => (
+                    Orientation::Horizontal,
+                    true,
+                    3usize,
+                    2usize,
+                    1usize,
+                    CandidateLabelDisplay::SelectedScope,
+                    CandidateLabelScope::Column,
+                    vec![
+                        DemoCandidate {
+                            slot: 1,
+                            label: "",
+                            text: "识",
+                        },
+                        DemoCandidate {
+                            slot: 2,
+                            label: "",
+                            text: "对齐",
+                        },
+                        DemoCandidate {
+                            slot: 10,
+                            label: "",
+                            text: "很长的候选文本",
+                        },
+                        DemoCandidate {
+                            slot: 4,
+                            label: "",
+                            text: "四",
+                        },
+                        DemoCandidate {
+                            slot: 5,
+                            label: "",
+                            text: "五列保持",
+                        },
+                        DemoCandidate {
+                            slot: 6,
+                            label: "",
+                            text: "六",
+                        },
+                    ],
+                ),
+                _ => {
+                    return Err(
+                        "--label-slot-snapshot must be vertical, horizontal, grid, vertical-dark, horizontal-dark, or grid-dark".to_owned(),
+                    )
+                }
+            };
+
+        let labels = candidates
+            .iter()
+            .map(|candidate| {
+                format_candidate_label(
+                    candidate.slot,
+                    candidate.label,
+                    CandidateLabelStyle::Dot,
+                    "",
+                    "",
+                )
+            })
+            .collect::<Vec<_>>();
+        let item_sizes = candidates
+            .iter()
+            .zip(labels.iter())
+            .map(|(candidate, label)| Size {
+                width: ((label.chars().count() as f32 * 11.0)
+                    + (candidate.text.chars().count() as f32 * 18.0)
+                    + 34.0)
+                    .clamp(72.0, 220.0)
+                    * dpi_scale,
+                height: 36.0 * dpi_scale,
+            })
+            .collect::<Vec<_>>();
+        let mut layout = layout(&LayoutInput {
+            orientation,
+            items: item_sizes,
+            caret: Point { x: 100.0, y: 100.0 },
+            caret_height: 24.0 * dpi_scale,
+            work_area: CoreRect {
+                left: 0.0,
+                top: 0.0,
+                right: 1920.0,
+                bottom: 1080.0,
+            },
+            max_width: 720.0 * dpi_scale,
+            padding_x: 8.0 * dpi_scale,
+            padding_y: 6.0 * dpi_scale,
+            row_gap: 4.0 * dpi_scale,
+            column_gap: 10.0 * dpi_scale,
+            placement: fcitx5_candidate_core::Placement::Below,
+            scroll_mode,
+            scroll_columns: columns,
+            scroll_visible_rows: visible_rows,
+            selected,
+            scroll_cell_width: 160.0 * dpi_scale,
+        });
+        let visible_indices = layout.item_indices.clone();
+        let sources = visible_indices
+            .iter()
+            .enumerate()
+            .map(|(local, candidate_index)| CandidateLabelSlotSource {
+                candidate_index: *candidate_index,
+                row: if scroll_mode { local / columns } else { local },
+                column: if scroll_mode { local % columns } else { local },
+                label_width: labels[*candidate_index].chars().count() as f32 * 11.0 * dpi_scale,
+            })
+            .collect::<Vec<_>>();
+        let slot_config = CandidateLabelSlotConfig {
+            display,
+            scope,
+            reserve_when_hidden: true,
+            align: CandidateLabelAlign::Right,
+            width_strategy: if scroll_mode {
+                CandidateLabelWidthStrategy::GridMax
+            } else {
+                CandidateLabelWidthStrategy::PageMax
+            },
+            min_width: 0.0,
+            gap: 5.0 * dpi_scale,
+        };
+        let slot_plan = candidate_label_slot_plan(slot_config, &sources, selected);
+        let render_inputs = layout
+            .items
+            .iter()
+            .zip(visible_indices.iter())
+            .zip(slot_plan.items.iter())
+            .map(|((bounds, candidate_index), plan)| {
+                let label = &labels[*candidate_index];
+                let text = candidates[*candidate_index].text;
+                Fcitx5CandidateRenderItemInput {
+                    bounds: Fcitx5CandidateLayoutRect {
+                        left: bounds.left - layout.window.left + 6.0 * dpi_scale,
+                        top: bounds.top - layout.window.top + 4.0 * dpi_scale,
+                        right: bounds.right - layout.window.left - 6.0 * dpi_scale,
+                        bottom: bounds.bottom - layout.window.top - 4.0 * dpi_scale,
+                    },
+                    label_width: label.chars().count() as f32 * 11.0 * dpi_scale,
+                    label_gap: plan.label_gap,
+                    text_width: text.chars().count() as f32 * 18.0 * dpi_scale,
+                    comment_width: 0.0,
+                    has_label: u8::from(plan.show_label),
+                    reserve_label: u8::from(plan.reserve_label),
+                }
+            })
+            .collect::<Vec<_>>();
+        let (segments, label_column_width) = candidate_render_segments(&render_inputs);
+        let qingfeng_orientation = if scroll_mode {
+            QingfengOrientation::Grid
+        } else if orientation == Orientation::Vertical {
+            QingfengOrientation::Vertical
+        } else {
+            QingfengOrientation::Horizontal
+        };
+        let visual_inputs = visible_indices
+            .iter()
+            .zip(slot_plan.items.iter())
+            .map(|(candidate_index, plan)| QingfengCandidateVisualInput {
+                label: labels[*candidate_index].clone(),
+                text: candidates[*candidate_index].text.to_owned(),
+                comment: String::new(),
+                selected: *candidate_index == selected,
+                show_label: plan.show_label,
+                reserve_label: plan.reserve_label,
+            })
+            .collect::<Vec<_>>();
+        let visual_plan = qingfeng_candidate_visual_plan(
+            qingfeng_orientation,
+            theme_mode,
+            &visual_inputs,
+            label_column_width,
+            dpi_scale,
+        );
+        let paint_theme = LabelSlotPaintTheme {
+            background: visual_plan.theme.background.colorref(),
+            border: visual_plan.theme.border.colorref(),
+            label: visual_plan.theme.label.colorref(),
+            text: visual_plan.theme.text.colorref(),
+            selected_background: visual_plan.theme.selected_background.colorref(),
+            selected_text: visual_plan.theme.selected_text.colorref(),
+            window_radius: visual_plan.theme.window_radius.round() as i32,
+        };
+        let window_left = layout.window.left;
+        let window_top = layout.window.top;
+        layout.window.right = window_left + visual_plan.window.width();
+        layout.window.bottom = window_top + visual_plan.window.height();
+        layout.items = visual_plan
+            .items
+            .iter()
+            .map(|item| CoreRect {
+                left: window_left + item.item_rect.left,
+                top: window_top + item.item_rect.top,
+                right: window_left + item.item_rect.right,
+                bottom: window_top + item.item_rect.bottom,
+            })
+            .collect();
+        let paint_items = visual_plan
+            .items
+            .iter()
+            .map(|item| LabelSlotPaintItem {
+                label: wide(&item.label_text),
+                text: wide(&item.text),
+                comment: wide(&item.comment),
+                item_rect: qingfeng_rect_to_window(item.item_rect),
+                label_rect: qingfeng_rect_to_window(item.label_rect),
+                text_rect: qingfeng_rect_to_window(item.text_rect),
+                comment_rect: item.comment_rect.map(qingfeng_rect_to_window),
+                selected: item.selected,
+                item_radius: visual_plan.theme.item_radius.round() as i32,
+            })
+            .collect::<Vec<_>>();
+        let shown_label_count = slot_plan
+            .items
+            .iter()
+            .filter(|item| item.show_label)
+            .count();
+        let reserved_label_count = slot_plan
+            .items
+            .iter()
+            .filter(|item| item.reserve_label)
+            .count();
+        let stable_origins = slot_plan.stable_text_origin
+            && segments
+                .iter()
+                .zip(render_inputs.iter())
+                .map(|(segment, input)| segment.text.left - input.bounds.left)
+                .collect::<Vec<_>>()
+                .windows(2)
+                .all(|pair| (pair[0] - pair[1]).abs() <= 0.5);
+        let evidence_json = format!(
+            "  \"label_slot_contract\":true,\n  \"label_slot_snapshot_kind\":\"{}\",\n  \"candidate_visual_theme_mode\":\"{}\",\n  \"candidate_visual_wechat_green\":true,\n  \"label_slot_width\":{:.2},\n  \"label_slot_reserved_count\":{},\n  \"label_slot_shown_count\":{},\n  \"label_slot_selected_scope_reveal\":{},\n  \"label_slot_stable_text_origins\":{},\n  \"label_slot_right_aligned\":true,\n  \"label_slot_rust_drawing\":true,\n  \"windinput_qingfeng_candidate_renderer\":true,\n  \"windinput_qingfeng_source\":\"{}\",\n",
+            json_escape(kind),
+            if dark_mode { "dark" } else { "light" },
+            label_column_width,
+            reserved_label_count,
+            shown_label_count,
+            if display == CandidateLabelDisplay::SelectedScope { "true" } else { "false" },
+            if stable_origins { "true" } else { "false" },
+            json_escape(WINDINPUT_QINGFENG_CANDIDATE_SOURCE),
+        );
+        Ok(LabelSlotWindowScenario {
+            layout,
+            title: wide(&format!("Fcitx5 Candidate Label Slot - {kind}")),
+            text_lines: candidates
+                .iter()
+                .zip(labels.iter())
+                .map(|(candidate, label)| wide(&format!("{label} {}", candidate.text)))
+                .collect(),
+            snapshot_name: match kind {
+                "vertical-dark" => "label-slot-vertical-dark",
+                "horizontal-dark" => "label-slot-horizontal-dark",
+                "grid-dark" => "label-slot-grid-dark",
+                _ => match base_kind {
+                    "vertical" => "label-slot-vertical",
+                    "horizontal" => "label-slot-horizontal",
+                    _ => "label-slot-grid",
+                },
+            },
+            orientation_name: if orientation == Orientation::Vertical {
+                "vertical"
+            } else {
+                "horizontal"
+            },
+            scroll_mode,
+            selected_candidate: selected,
+            paint_items,
+            paint_theme,
+            evidence_json,
+        })
+    }
+
+    fn qingfeng_rect_to_window(rect: QingfengRect) -> Rect {
+        Rect {
+            left: rect.left.round() as i32,
+            top: rect.top.round() as i32,
+            right: rect.right.round() as i32,
+            bottom: rect.bottom.round() as i32,
+        }
+    }
+
+    fn fill_round_rect(hdc: Hdc, rect: &Rect, color: Dword, radius: i32) {
+        let brush = unsafe { CreateSolidBrush(color) };
+        if brush.is_null() {
+            return;
+        }
+        let null_pen = unsafe { GetStockObject(NULL_PEN) };
+        let old_brush = unsafe { SelectObject(hdc, brush.cast()) };
+        let old_pen = unsafe { SelectObject(hdc, null_pen) };
+        unsafe {
+            RoundRect(
+                hdc,
+                rect.left,
+                rect.top,
+                rect.right,
+                rect.bottom,
+                radius * 2,
+                radius * 2,
+            );
+            SelectObject(hdc, old_pen);
+            SelectObject(hdc, old_brush);
+            DeleteObject(brush);
+        }
+    }
+
+    fn stroke_round_rect(hdc: Hdc, rect: &Rect, color: Dword, radius: i32) {
+        let pen = unsafe { CreatePen(PS_SOLID, 1, color) };
+        if pen.is_null() {
+            return;
+        }
+        let null_brush = unsafe { GetStockObject(NULL_BRUSH) };
+        let old_pen = unsafe { SelectObject(hdc, pen) };
+        let old_brush = unsafe { SelectObject(hdc, null_brush) };
+        unsafe {
+            RoundRect(
+                hdc,
+                rect.left,
+                rect.top,
+                rect.right - 1,
+                rect.bottom - 1,
+                radius * 2,
+                radius * 2,
+            );
+            SelectObject(hdc, old_brush);
+            SelectObject(hdc, old_pen);
+            DeleteObject(pen.cast());
+        }
     }
 
     fn core_rect_inside(inner: CoreRect, outer: CoreRect) -> bool {

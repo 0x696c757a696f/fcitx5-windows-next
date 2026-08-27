@@ -271,6 +271,7 @@ fn design_tokens() -> DesignTokens {
 
 fn windui_settings_theme() -> WindUiTheme {
     let mut theme = WindUiTheme::default();
+    apply_wechat_green_palette(&mut theme, false);
     theme.form.row_height = Some(44);
     theme.form.label_size = Some(14.0);
     theme.form.desc_size = Some(12.5);
@@ -283,12 +284,27 @@ fn windui_settings_shell_theme(dark: bool) -> WindUiTheme {
     } else {
         WindUiTheme::default()
     };
+    apply_wechat_green_palette(&mut theme, dark);
     theme.form.label_size = Some(15.0);
     theme.form.label_weight = Some(600);
     theme.form.desc_size = Some(12.5);
     theme.form.row_height = Some(44);
     theme.form.row_pad_y = Some(0);
     theme
+}
+
+fn apply_wechat_green_palette(theme: &mut WindUiTheme, dark: bool) {
+    theme.palette.accent = WindUiColor::hex(0x07C160);
+    theme.palette.accent_hover = WindUiColor::hex(0x12D070);
+    theme.palette.accent_active = WindUiColor::hex(0x06AD56);
+    if dark {
+        theme.palette.bg = WindUiColor::hex(0x181818);
+        theme.palette.surface = WindUiColor::hex(0x1F1F1F);
+        theme.palette.surface_alt = WindUiColor::hex(0x262626);
+        theme.palette.border = WindUiColor::hex(0x303030);
+        theme.palette.track = WindUiColor::hex(0x303030);
+        theme.palette.divider = WindUiColor::hex(0x2A2A2A);
+    }
 }
 
 fn colorref_from_windui(color: WindUiColor) -> u32 {
@@ -727,6 +743,7 @@ fn windui_settings_root() -> WindUiElement {
                         WindUiElement::dropdown(
                             vec![
                                 "跟随系统",
+                                "Microsoft YaHei",
                                 "Microsoft YaHei UI",
                                 "Segoe UI",
                                 "Noto Sans CJK",
@@ -806,7 +823,7 @@ fn windui_settings_root() -> WindUiElement {
                     .child(WindUiElement::setting_row_desc(
                         "强调色",
                         "用于选中态、主按钮与进度条",
-                        WindUiElement::dropdown(vec!["经典蓝", "海洋青", "森林绿"], accent_pick)
+                        WindUiElement::dropdown(vec!["微信绿", "竹青", "墨绿"], accent_pick)
                             .width(180),
                     ))
                     .child(WindUiElement::setting_row(
@@ -1820,7 +1837,7 @@ impl PreviewDraft {
             appearance_mode: "system",
             orientation: "automatic",
             dpi_percent: 100,
-            font_family: "Microsoft YaHei UI",
+            font_family: "Microsoft YaHei",
             font_size_dip: 18.0,
             label_suffix: ".",
             revision: 1,
@@ -3122,7 +3139,7 @@ fn validate_operations() -> Result<OperationEvidence, String> {
 
     let mut settings = SettingsState {
         language: "system",
-        candidate_font: "Microsoft YaHei UI",
+        candidate_font: "Microsoft YaHei",
         advanced_appearance: false,
         preview_revision: 1,
     };

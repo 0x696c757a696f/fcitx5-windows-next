@@ -118,8 +118,8 @@ Codex **不得把所有参考仓库平均通读，也不得选择一个仓库整
 2. **各 addon upstream：插件语义权威。** Rime、Mozc、Hangul、m17n、Keyman、Bamboo、Chinese Addons 等不做 Windows 私有 Rust rewrite；Windows 产品层只适配、打包、隔离和呈现。
 3. **`chewing/windows-chewing-tsf`、`openvanilla/win-mcbopomofo`、Weasel 等：Windows TSF/兼容病例教材。** 只学习 TSF lifecycle、UILess、out-of-process UI、host compatibility 和失败病例，不继承其产品架构。
 4. **`fcitx-contrib/fcitx5-plugins`：跨平台插件构建与依赖清单参考。** 它不是 addon 语义权威；具体语义仍以各 addon upstream 为准。
-5. **`huanfeng/WindInput`：主题管理、设置分级、主题编辑器与候选窗视觉病例参考。** 只吸收其可验证的主题 schema、base/resolve、DPI 单位、预览一致性、受众分级与配置守门纪律；不继承其输入架构、插件体系或任何与本项目安全/隐私边界冲突的实现。
-6. **`huanfeng/wind-ui-rust`：Config 默认交互 GUI 的实际 Rust UI 代码基线。** 不是泛泛参考；Config 默认设置窗口必须直接消费 vendored `windui` crate，并以其 `settings-input.png` / settings 示例的窗口结构、左侧导航、设置分组卡片、segmented/switch/stepper/slider/dropdown/输入行密度和底部操作栏作为 Rust GUI/UX 基线。旧 Win32/WTL/D2D 设置宿主只可作为 QA、截图回归或临时 native adapter，不可继续作为普通用户默认交互界面。
+5. **`huanfeng/WindInput`：主题管理、设置分级、主题编辑器与候选窗视觉实现参考。** 只吸收其可验证的主题 schema、base/resolve、DPI 单位、预览一致性、受众分级与配置守门纪律；候选窗视觉在质量无法达到同等水准时，必须直接采用或移植其 MIT 许可的 `wind-ui` candidate window / view / theme 代码路径，而不是只写“参考”。不继承其输入架构、插件体系或任何与本项目安全/隐私边界冲突的实现。
+6. **`huanfeng/wind-ui-rust`：Config 默认交互 GUI 的实际 Rust UI 代码基线。** 不是泛泛参考；Config 默认设置窗口必须直接消费 vendored `windui` crate，并以其 `settings-input.png` / settings 示例的窗口结构、左侧导航、设置分组卡片、segmented/switch/stepper/slider/dropdown/输入行密度和底部操作栏作为 Rust GUI/UX 基线。项目默认强调色为微信输入法风格绿色 `#07C160`，Config 日间采用绿白，夜间采用绿黑；但 vendored/upstream 自带主题必须保留，不因项目默认色覆盖或删除。旧 Win32/WTL/D2D 设置宿主只可作为 QA、截图回归或临时 native adapter，不可继续作为普通用户默认交互界面。
 
 专项参考只在对应问题出现后读取：**WindInput** 用于 overlapped IPC/timeout/stale response，**Moqi** 用于 request sequence/launcher/crash lifecycle，**Rabbit** 用于 caret/focus/password/game 用例，**PIME/libIME2/Cassotis** 用于 thin backend、x86/x64 与历史架构对照。
 
@@ -935,7 +935,7 @@ DirectWrite system font fallback
 families = ["system"]
 
 [fonts.candidate]
-families = ["system"]
+families = ["Microsoft YaHei", "Microsoft YaHei UI", "system"]
 
 [fonts.annotation]
 families = ["inherit"]
@@ -2021,6 +2021,10 @@ Rust workspace 承载产品自有 Rust authority；CMake/build.ps1 仍是顶层 
 - Candidate model/layout/interaction、freshness/order、presentation policy、snapshot DTO 和用户 action intent 继续保持 Rust authority；Win32 + Direct2D + DirectWrite renderer 可阶段性保留为 adapter。
 - CandidateModel/theme/layout 与 renderer 分层；renderer 不拥有 authoritative candidate state。
 - Candidate semantics 跟随 upstream `CandidateList` 与 candidate action API；Rust 层不私有发明删除/忘记/固定候选等插件语义。
+- Candidate 默认视觉采用微信输入法风格绿色：日间为绿白，夜间为绿黑；选中态、候选文字强调、Config 预览和真实候选窗口必须共享同一 resolved theme snapshot。清风/WindInput 自带主题和可保留 variant 不得被删除；项目默认色只是当前产品默认，不是对第三方主题的破坏性替换。
+- Candidate 视觉实现以 WindInput `wind-ui` 的 candidate window / view / `_qingfeng` theme 为实际代码基线。若本项目自写 renderer 不能达到同等视觉质量，必须直接采用或移植其 MIT 许可代码并保留来源/license 证据；不得停留在“参考其设计”的文档描述。
+- Candidate 默认字体链必须 CJK-first：`Microsoft YaHei` 优先，`Microsoft YaHei UI` 和 `system` 只作为 fallback；不能用 Latin-first 字体让中文候选退回难看的系统 fallback。外观调参吸收 Rime/鼠须管主题（包括 `eosphoros-keytao` 的 Squirrel 配色）的可取做法：候选格式、编号/候选间距、字号、编号字号、圆角、边框、行距、候选间距、亮/暗色 scheme 和高亮色都必须进入 typed theme snapshot，而不是在绘制代码里散落常量。
+- Fcitx-contrib theme docs (`import.html`, `adjust.html`, `css.html`) 只作为主题 UX/字段参考，不作为 Windows 架构依据。可吸收项包括：导入/导出前保护当前改动、覆盖默认值开关、布局/书写模式/卷轴模式约束、跟随系统深浅/强调色、背景透明/模糊/图片叠加、hover/highlight/scroll 状态类，以及 label/text/comment/mark/divider/paging 的结构化 styling。任何 CSS-like 或图片能力都必须先进入受限 schema、资源预算、路径校验和 typed snapshot；不得开放任意 JavaScript、远程资源或绕过 scroll 尺寸稳定约束。
 - 对 IPC/theme/assets 先校验长度、数量、维度、路径与资源预算；Device loss、DPI、多屏、font fallback、High Contrast、RDP/低性能降级有可重放测试。
 - Rust D2D renderer cutover 前必须已有 screenshot/golden/perf/a11y corpus；不能以 Rust rewrite 掩盖 UILess、A→B→A、locale、reload 等语义问题。
 
@@ -2629,7 +2633,7 @@ custom_suffix = "."
 families = ["system"]
 
 [fonts.candidate]
-families = ["LXGW WenKai", "Microsoft YaHei", "system"]
+families = ["Microsoft YaHei", "Microsoft YaHei UI", "system"]
 size_dip = 16.0
 weight = 400
 
@@ -2700,7 +2704,7 @@ padding_y_dip = 6.0
 corner_radius_dip = 8.0
 
 [common.fonts.candidate]
-families = ["LXGW WenKai", "Microsoft YaHei", "system"]
+families = ["Microsoft YaHei", "Microsoft YaHei UI", "system"]
 size_dip = 16.0
 weight = 400
 
