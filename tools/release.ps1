@@ -24,8 +24,8 @@ $stagePrefix = [IO.Path]::GetFullPath($outRoot).TrimEnd('\') + '\'
 if (-not $stage.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase) -or
     -not (Test-Path -LiteralPath $stage -PathType Container)) { throw 'Stage pointer is outside the package output.' }
 $keyring = Get-Content -LiteralPath $TrustedKeyring -Raw | ConvertFrom-Json
-if ($keyring.format_version -ne 1 -or $keyring.keys.Count -lt 1) {
-  throw 'Stable release keyring must contain at least one trusted or revoked key.'
+if ($keyring.format_version -ne 2 -or $keyring.keys.Count -lt 1) {
+  throw 'Stable release keyring must be v2 and contain at least one trusted or revoked key.'
 }
 Copy-Item -LiteralPath $TrustedKeyring -Destination (Join-Path $stage 'security/trusted-keys.json') -Force
 & (Join-Path $stage 'bin/fcitx5-package.exe') --validate-keyring `

@@ -84,6 +84,17 @@ if ($userPlane.Count -ne 0) {
 
 $arguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                $PSCommandPath, '-Version', $Version, '-Elevated', '-ErrorLog', $childError)
+$stageRoot = Get-CurrentStageRoot
+foreach ($registration in @(
+    @{ Helper = 'bin/fcitx5-register.exe'; Dll = 'tsf/x64/fcitx5-tsf.dll' },
+    @{ Helper = 'bin/fcitx5-register-x86.exe'; Dll = 'tsf/x86/fcitx5-tsf.dll' }
+  )) {
+  & (Join-Path $stageRoot $registration.Helper) --remove-user-shadow --dll `
+    (Join-Path $stageRoot $registration.Dll)
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to remove the current-user TSF registration shadow.'
+  }
+}
 $administrator = Start-Process -FilePath 'D:\Program Files\PowerShell\7\pwsh.exe' `
   -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru
 if (-not $administrator.WaitForExit(600000)) {

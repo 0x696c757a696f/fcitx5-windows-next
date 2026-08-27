@@ -1156,6 +1156,9 @@ int main(int argc, char** argv) {
         rustRegisterCore.find("REGISTER_DLL_ARGUMENT_INVALID") == std::string::npos ||
         rustRegisterCore.find("REGISTER_EXPORT_UNREGISTER_SERVER") == std::string::npos ||
         rustRegisterCore.find("REGISTER_STATUS_PATH_MISMATCH") == std::string::npos ||
+        rustRegisterCore.find("HKEY_CURRENT_USER") == std::string::npos ||
+        rustRegisterCore.find("remove_current_user_registration_shadow") == std::string::npos ||
+        rustRegisterCli.find("--remove-user-shadow") == std::string::npos ||
         rustRegisterCore.find("fcitx5_register_is_elevated") == std::string::npos ||
         rustRegisterCore.find("fcitx5_register_invoke_registration_export") ==
             std::string::npos ||
@@ -2721,7 +2724,12 @@ int main(int argc, char** argv) {
     }
     const auto portableSmoke = read_text(sourceRoot / "tools/test-portable.ps1");
     const auto releaseSmoke = read_text(sourceRoot / "tools/test-release-artifacts.ps1");
+    const auto releaseScript = read_text(sourceRoot / "tools/release.ps1");
     const auto trustedKeyTemplate = read_text(sourceRoot / "security/trusted-keys.template.json");
+    if (releaseScript.find("$keyring.format_version -ne 2") == std::string::npos ||
+        releaseScript.find("$keyring.format_version -ne 1") != std::string::npos) {
+        return fail("RELEASE-01: protected release keyring must use the v2 verifier contract");
+    }
     if (portableSmoke.find("function Stop-PortableSmokeProcesses") == std::string::npos ||
         portableSmoke.find("Get-CimInstance Win32_Process") == std::string::npos ||
         portableSmoke.find("Test-PackageOutputWritable") == std::string::npos ||

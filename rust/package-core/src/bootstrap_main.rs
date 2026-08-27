@@ -49,12 +49,22 @@ fn run(args: Vec<OsString>) -> i32 {
         };
     }
     if args.len() == 2 && args[1] == "--elevated-register" {
+        if !clear_user_registration_shadows(&root) {
+            return 13;
+        }
         return run_registration(&root, false);
     }
     if args.len() == 2 && args[1] == "--elevated-unregister" {
+        if !clear_user_registration_shadows(&root) {
+            return 13;
+        }
         return run_registration(&root, true);
     }
     if args.len() == 2 && args[1] == "--repair-only" {
+        if !clear_user_registration_shadows(&root) {
+            error_box("The stale current-user TSF registration could not be removed.");
+            return 13;
+        }
         let result = elevate_registration(&executable, false);
         if result != 0 {
             error_box("Administrator approval is required to repair both TSF architectures.");
@@ -93,6 +103,10 @@ fn run(args: Vec<OsString>) -> i32 {
             0
         }
         Action::Unregister => {
+            if !clear_user_registration_shadows(&root) {
+                error_box("The stale current-user TSF registration could not be removed.");
+                return 13;
+            }
             let _ = win32::launch_and_wait(
                 &root.join("bin").join("fcitx5-control.exe"),
                 "--shutdown",
@@ -111,6 +125,10 @@ fn run(args: Vec<OsString>) -> i32 {
             0
         }
         Action::Start => {
+            if !clear_user_registration_shadows(&root) {
+                error_box("The stale current-user TSF registration could not be removed.");
+                return 13;
+            }
             if !registration_healthy(&root) {
                 let registration = elevate_registration(&executable, false);
                 if registration != 0 {
@@ -135,6 +153,24 @@ fn run(args: Vec<OsString>) -> i32 {
             0
         }
     }
+}
+
+fn clear_user_registration_shadows(root: &Path) -> bool {
+    let bin = root.join("bin");
+    let helpers = [
+        (
+            bin.join("fcitx5-register.exe"),
+            root.join("tsf").join("x64").join("fcitx5-tsf.dll"),
+        ),
+        (
+            bin.join("fcitx5-register-x86.exe"),
+            root.join("tsf").join("x86").join("fcitx5-tsf.dll"),
+        ),
+    ];
+    helpers.into_iter().all(|(helper, dll)| {
+        let arguments = format!("--remove-user-shadow --dll {}", quote(&dll));
+        win32::launch_and_wait(&helper, &arguments, 60_000) == Some(0)
+    })
 }
 
 fn run_registration(root: &Path, unregister: bool) -> i32 {

@@ -19,6 +19,7 @@ const FACILITY_WIN32: u32 = 7;
 const KEY_QUERY_VALUE: Dword = 0x0001;
 const LOAD_WITH_ALTERED_SEARCH_PATH: Dword = 0x00000008;
 const REG_SZ: Dword = 1;
+const HKEY_CURRENT_USER: Hkey = 0x8000_0001_usize as Hkey;
 const HKEY_LOCAL_MACHINE: Hkey = 0x8000_0002_usize as Hkey;
 const TSF_TEXT_SERVICE_CLSID: &str = "{3A21B9E2-4F47-4C36-8BFA-91D7D3B3E901}";
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x20;
@@ -44,6 +45,7 @@ pub const REGISTER_OPERATION_REPAIR: u32 = 2;
 pub const REGISTER_OPERATION_UNREGISTER: u32 = 3;
 pub const REGISTER_OPERATION_STATUS: u32 = 4;
 pub const REGISTER_OPERATION_VALIDATE_ARTIFACT: u32 = 5;
+pub const REGISTER_OPERATION_REMOVE_USER_SHADOW: u32 = 6;
 
 pub const REGISTER_DLL_ARGUMENT_OK: u32 = 0;
 pub const REGISTER_DLL_ARGUMENT_INVALID: u32 = 1;
@@ -85,6 +87,7 @@ unsafe extern "system" {
         sam_desired: Dword,
         result: *mut Hkey,
     ) -> Lstatus;
+    fn RegDeleteTreeW(h_key: Hkey, sub_key: *const u16) -> Lstatus;
     fn RegQueryValueExW(
         h_key: Hkey,
         value_name: *const u16,
@@ -241,6 +244,7 @@ pub fn parse_operation(operation: &OsStr) -> u32 {
         "--unregister" => REGISTER_OPERATION_UNREGISTER,
         "--status" => REGISTER_OPERATION_STATUS,
         "--validate-artifact" => REGISTER_OPERATION_VALIDATE_ARTIFACT,
+        "--remove-user-shadow" => REGISTER_OPERATION_REMOVE_USER_SHADOW,
         _ => REGISTER_OPERATION_UNKNOWN,
     }
 }
@@ -268,22 +272,14 @@ pub fn operation_export(operation: u32) -> u32 {
     }
 }
 
-fn registered_path() -> Option<PathBuf> {
+fn registered_path_at(root: Hkey) -> Option<PathBuf> {
     let key_path = OsString::from(format!(
         r"Software\Classes\CLSID\{}\InprocServer32",
         TSF_TEXT_SERVICE_CLSID
     ));
     let key_path = wide_z(&key_path);
     let mut raw_key: Hkey = std::ptr::null_mut();
-    let open = unsafe {
-        RegOpenKeyExW(
-            HKEY_LOCAL_MACHINE,
-            key_path.as_ptr(),
-            0,
-            KEY_QUERY_VALUE,
-            &mut raw_key,
-        )
-    };
+    let open = unsafe { RegOpenKeyExW(root, key_path.as_ptr(), 0, KEY_QUERY_VALUE, &mut raw_key) };
     if open == ERROR_FILE_NOT_FOUND {
         return None;
     }
@@ -327,6 +323,21 @@ fn registered_path() -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(OsString::from_wide(&value)))
+}
+
+fn registered_path() -> Option<PathBuf> {
+    registered_path_at(HKEY_CURRENT_USER).or_else(|| registered_path_at(HKEY_LOCAL_MACHINE))
+}
+
+pub fn remove_current_user_registration_shadow() -> bool {
+    let key_path = OsString::from(format!(
+        r"Software\Classes\CLSID\{}",
+        TSF_TEXT_SERVICE_CLSID
+    ));
+    let key_path = wide_z(&key_path);
+    // SAFETY: key_path is NUL-terminated and names the one fixed product CLSID subtree.
+    let result = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, key_path.as_ptr()) };
+    result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND
 }
 
 pub fn registered_path_for_display() -> Option<PathBuf> {
@@ -509,6 +520,10 @@ mod tests {
             REGISTER_OPERATION_VALIDATE_ARTIFACT
         );
         assert_eq!(
+            parse_operation(OsStr::new("--remove-user-shadow")),
+            REGISTER_OPERATION_REMOVE_USER_SHADOW
+        );
+        assert_eq!(
             parse_operation(OsStr::new("--bad")),
             REGISTER_OPERATION_UNKNOWN
         );
@@ -532,6 +547,10 @@ mod tests {
         assert_eq!(operation_requires_admin(REGISTER_OPERATION_REPAIR), 1);
         assert_eq!(operation_requires_admin(REGISTER_OPERATION_UNREGISTER), 1);
         assert_eq!(operation_requires_admin(REGISTER_OPERATION_STATUS), 0);
+        assert_eq!(
+            operation_requires_admin(REGISTER_OPERATION_REMOVE_USER_SHADOW),
+            0
+        );
         assert_eq!(
             operation_requires_admin(REGISTER_OPERATION_VALIDATE_ARTIFACT),
             0

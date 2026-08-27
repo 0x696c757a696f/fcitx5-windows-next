@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use fcitx5_register_core::{
     invoke_registration_export, is_elevated, operation_export, operation_requires_admin,
     parse_operation, registered_path_for_display, registration_status_for_dll,
-    validate_dll_argument, validate_product_artifact, REGISTER_ARTIFACT_CURRENT_DLL_MISSING,
-    REGISTER_ARTIFACT_DLL_OUTSIDE_PRODUCT, REGISTER_ARTIFACT_HELPER_LOCATION,
-    REGISTER_ARTIFACT_INVALID_ARGUMENT, REGISTER_ARTIFACT_OK, REGISTER_ARTIFACT_PAIRED_DLL_MISSING,
-    REGISTER_DLL_ARGUMENT_OK, REGISTER_OPERATION_REGISTER, REGISTER_OPERATION_REPAIR,
-    REGISTER_OPERATION_STATUS, REGISTER_OPERATION_UNREGISTER, REGISTER_OPERATION_VALIDATE_ARTIFACT,
+    remove_current_user_registration_shadow, validate_dll_argument, validate_product_artifact,
+    REGISTER_ARTIFACT_CURRENT_DLL_MISSING, REGISTER_ARTIFACT_DLL_OUTSIDE_PRODUCT,
+    REGISTER_ARTIFACT_HELPER_LOCATION, REGISTER_ARTIFACT_INVALID_ARGUMENT, REGISTER_ARTIFACT_OK,
+    REGISTER_ARTIFACT_PAIRED_DLL_MISSING, REGISTER_DLL_ARGUMENT_OK, REGISTER_OPERATION_REGISTER,
+    REGISTER_OPERATION_REMOVE_USER_SHADOW, REGISTER_OPERATION_REPAIR, REGISTER_OPERATION_STATUS,
+    REGISTER_OPERATION_UNREGISTER, REGISTER_OPERATION_VALIDATE_ARTIFACT,
     REGISTER_STATUS_NOT_REGISTERED, REGISTER_STATUS_PATH_MISMATCH, REGISTER_STATUS_REGISTERED,
 };
 
@@ -28,7 +29,7 @@ fn version() -> &'static str {
 
 fn usage() {
     eprintln!(
-        "Usage: fcitx5-register --register|--unregister|--repair|--status|--validate-artifact --dll ABSOLUTE_PATH"
+        "Usage: fcitx5-register --register|--unregister|--repair|--status|--validate-artifact|--remove-user-shadow --dll ABSOLUTE_PATH"
     );
 }
 
@@ -123,6 +124,15 @@ fn run(args: &[OsString]) -> i32 {
                 return 3;
             }
         }
+    }
+
+    if operation == REGISTER_OPERATION_REMOVE_USER_SHADOW {
+        if remove_current_user_registration_shadow() {
+            println!("user_shadow_removed");
+            return 0;
+        }
+        eprintln!("Current-user TSF registration shadow could not be removed.");
+        return 7;
     }
 
     if !matches!(
