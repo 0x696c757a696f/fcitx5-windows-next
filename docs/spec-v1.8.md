@@ -30,6 +30,17 @@ Codex 执行版 · 个人项目模式
 
 以下原则优先于后文任何历史描述。若后文与本节冲突，以本节为准，并立即删除冲突实现与文档，不保留旧路径。
 
+### 普遍可达文字表达工程宪法
+
+以下五项仅作为 architecture review 的否决条件，不是法律或营销声明：
+
+- **表达：**offline/basic input、semantic candidates 与 keyboard/AT 必须可用。
+- **自主：**network、learning、speech、plugins 必须 opt-in/可控，用户数据可导出。
+- **隐私：**sensitive context 禁止 learning、log、speech、network。
+- **可负担：**2-core/4-GB 是 release gate；不强制 cloud/subscription，Settings/Updater 不常驻。
+- **语言尊严：**低资源语言不因用户规模被排除；平台提供 build/sign/package 基础设施，CLDR keyboard
+  data 不等于完整 IME。
+
 1. **运行时不保留向后兼容。** 旧协议、旧内部 API、旧配置 schema、旧包格式、废弃 feature flag 和旧实现一旦不再属于当前需求就直接删除。Core runtime 禁止新增 compatibility shim、双协议解析、隐式 migration、legacy adapter、旧代码 fallback；版本不匹配时明确失败并要求组件同版。若公开 Stable 后确有必要转换用户人工维护且不可安全丢失的旧配置，可提供**独立、显式、一次性的离线转换工具/导入动作**：旧格式 parser 不进入正常 runtime、不长期双栈、不自动执行，并保留原文件供用户恢复。部署 rollback 与旧协议兼容是两件事，不受本条禁止。
 
 2. **选择能满足当前需求的最简单实现。** 不做预防性抽象，不为了“以后也许需要”增加配置层、接口层、注册中心、provider、factory、broker 或 manager。真实需求出现后再抽象。
@@ -1246,8 +1257,9 @@ config tools macOS config Windows WTL config
 - 包 manifest 必须含 core_api、addon_abi、architecture、min_os、dependencies、license、source_commit。
 
 - Windows 插件 manifest 还必须声明 `runtime_abi`、`runtime_build`、构建来源/上游 provenance、包类型和
-  用户数据目录策略。`runtime_abi` 只在二进制契约改变时递增；`runtime_build` 用于精确诊断，不替代 ABI
-  检查。官方插件生态至少覆盖中文主路径、Rime/Lua 和一个非中文 addon，并使用上游标准 Fcitx addon
+  用户数据目录策略。`runtime_abi` 只在二进制契约改变时递增；`runtime_build` 是精确 provenance/诊断字段，
+  不参与 ABI 相等比较。拒绝缺失、畸形或与已签 manifest provenance 不一致的 `runtime_build`；兼容性拒绝
+  由 `runtime_abi`、`min_os`、`core_api`、`addon_abi` 等字段承担。官方插件生态至少覆盖中文主路径、Rime/Lua 和一个非中文 addon，并使用上游标准 Fcitx addon
   构建方式/build farm；不得为 Windows 另造第二套 addon 语义或永久 v2/v3 协议双栈。
 
 - 原生 in-process addon 的 capability/permission 字段只用于声明、审核、装载拒绝和诊断，**不是沙箱**。
@@ -2933,6 +2945,9 @@ GUI、日志、诊断页只能读取这些 owner，不维护影子副本。
 
 - Rust Config Core 定义唯一的 `Current`、`Draft`、`Defaults` 三态：GUI、CLI 和测试都只通过同一 typed
   model、`validate`、`diff` 与 transaction API；GUI 不直接读写配置文件，也不维护第二套 schema/default。
+- CLI 是同一 typed Config Core 的一等 frontend：`get`/`set`/`validate`/`diff`/`reset`/`import`/`export`/
+  `doctor` 以及 plugin/theme 命令按已有能力逐步暴露，不得各自解析/写文件或复制 defaults；不要求把全部
+  命令强塞进同一个实现 slice。
 - 控件只修改 `Draft`。Preview 是只读 Draft snapshot；Cancel 丢弃 Draft，Reset 恢复 Defaults/继承语义，
   Apply 才执行完整 validate → diff → staged write → flush/close → reread/validate → atomic replace。
   任一失败都保持原 Current 不变并返回可操作错误。

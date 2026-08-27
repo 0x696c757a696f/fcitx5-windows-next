@@ -80,8 +80,10 @@ Local execution overlay:
   notification coalescing/cancellation and sensitive-context suppression. Accessibility is compositional,
   and low-resource performance is a release gate.
 - Add follow-up work for plugin `runtime_abi`/`runtime_build`/provenance and separated user data,
-  repository freshness/freeze/mix-and-match/mirror identity, and measured 2-core/4-GB SLO calibration.
-  Current ML-DSA-65 v2 signing remains unchanged; ARM64/TUF/RemoteAddon/AppContainer remain future scope.
+  repository freshness/freeze/mix-and-match/mirror identity, a real Lua/non-Chinese upstream addon
+  build matrix, and measured 2-core/4-GB SLO calibration. `runtime_build` is signed provenance/
+  diagnostic data, not an ABI equality gate. Current ML-DSA-65 v2 signing remains unchanged;
+  ARM64/TUF/RemoteAddon/AppContainer remain future scope.
 
 ## P0 Guidance Tasks
 
@@ -157,7 +159,8 @@ Local execution overlay:
 
 `RELEASE-01` stays parked. The first code-only task is `065-CONFIG-CORE-TRANSACTION-CONTRACT-001`,
 then `066-CANDIDATE-SEMANTIC-A11Y-001`, `067-PLUGIN-PROVENANCE-DATA-BOUNDARY-001`,
-`068-REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001`, and `069-LOW-RESOURCE-SLO-CALIBRATION-001`.
+`068-REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001`, `069-PLUGIN-ECOSYSTEM-BUILD-MATRIX-001`, and
+`070-LOW-RESOURCE-SLO-CALIBRATION-001`.
 These are Rust-first and must keep C++ limited to the direct Fcitx adapter, upstream native addon, or
 thin Windows ABI/renderer adapter.
 

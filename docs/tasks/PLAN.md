@@ -131,7 +131,8 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 066 | CANDIDATE-SEMANTIC-A11Y-001 | TODO / CODE-ONLY | 065 contract green; CandidateModel already Rust-owned, but renderer/UIA/notification must consume one revisioned semantic source with sensitive-context suppression | 066-CANDIDATE-SEMANTIC-A11Y-001.md |
 | 067 | PLUGIN-PROVENANCE-DATA-BOUNDARY-001 | TODO / CODE-ONLY | 065 and existing signed v2 package path; freeze/implement runtime ABI/build/source provenance and durable user-data/version-directory separation | 067-PLUGIN-PROVENANCE-DATA-BOUNDARY-001.md |
 | 068 | REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001 | TODO / CODE-ONLY | 067 package metadata boundary green; extend current v2 repository verification with freshness, freeze/mix-and-match and mirror-identity corpus without claiming TUF | 068-REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001.md |
-| 069 | LOW-RESOURCE-SLO-CALIBRATION-001 | TODO / CODE-ONLY / EXTERNAL-EVIDENCE-PARTIAL | 066 semantics and 068 repository path green; add repeatable low-resource measurement harness and initial SLO evidence, leaving real 2-core/4-GB calibration manual-pending | 069-LOW-RESOURCE-SLO-CALIBRATION-001.md |
+| 069 | PLUGIN-ECOSYSTEM-BUILD-MATRIX-001 | TODO / CODE-ONLY / EXTERNAL-EVIDENCE-PARTIAL | 067 provenance and 068 freshness contracts green; add Lua and one non-Chinese upstream addon as real pinned build/package/sign-input/install/load slices after the existing Rime production-input path | 069-PLUGIN-ECOSYSTEM-BUILD-MATRIX-001.md |
+| 070 | LOW-RESOURCE-SLO-CALIBRATION-001 | TODO / CODE-ONLY / EXTERNAL-EVIDENCE-PARTIAL | 066 semantics, 068 repository path, and 069 ecosystem matrix green; add repeatable low-resource measurement harness and initial SLO evidence, leaving real 2-core/4-GB calibration manual-pending | 070-LOW-RESOURCE-SLO-CALIBRATION-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
@@ -173,10 +174,12 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 - `062` closes the remaining production-typography evidence gap: the Rust Qingfeng visual plan owns
   candidate/label/comment font-size and row-height tokens, and a five-candidate vertical screenshot
   proves right-aligned labels, annotations, stable text origins, and normal Windows IME density.
-- `065` through `069` are the post-release-parked code-only queue. They freeze and then implement
+- `065` through `070` are the post-release-parked code-only queue. They freeze and then implement
   Config transaction/recovery, Candidate semantic accessibility, plugin provenance/data boundaries,
-  repository freshness/mirror identity, and measured low-resource gates in dependency order. They do
-  not claim ARM64, TUF, RemoteAddon/AppContainer, production signing, UAC, or real-host evidence.
+  repository freshness/mirror identity, a real upstream-addon ecosystem matrix, and measured
+  low-resource gates in dependency order. `runtime_build` is signed provenance/diagnostic data, not
+  an ABI equality gate. The queue does not claim ARM64, TUF, RemoteAddon/AppContainer, production
+  signing, UAC, or real-host evidence.
 - Every future Rust task must use a worktree-local `CARGO_TARGET_DIR`; before implementation its
   execution agent must fully read `ponytail`, `rust-skills`, and `tdd`. New product logic is Rust;
   C++ is limited to the direct Fcitx adapter, upstream native addon, or a thin Windows ABI/renderer

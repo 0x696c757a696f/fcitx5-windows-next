@@ -31,6 +31,10 @@ GUI/CLI/test contract.
 ## Required behavior
 
 - GUI, CLI, and tests use one typed model and the same `validate`/`diff`/transaction entry points.
+- CLI is a first-class frontend of that Core. Expose `get`/`set`/`validate`/`diff`/`reset`/`import`/
+  `export`/`doctor` and plugin/theme commands incrementally where the underlying capability exists;
+  commands must not parse/write files or duplicate defaults independently, and this task need not
+  implement every command.
 - `Current` is the committed state, `Draft` is editable and discardable, and `Defaults` has explicit
   reset/inheritance semantics. Apply validates the complete Draft before a staged write, reread,
   validation, and atomic replace; failure leaves Current unchanged.

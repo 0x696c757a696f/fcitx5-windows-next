@@ -1,8 +1,8 @@
-# Task 069 - Low-resource SLO calibration
+# Task 070 - Low-resource SLO calibration
 
 **Mode:** CHANGE / CODE-ONLY / EXTERNAL-EVIDENCE-PARTIAL
 **Task ID:** `LOW-RESOURCE-SLO-CALIBRATION-001`
-**Prerequisite:** `066` and `068` automated contracts green.
+**Prerequisite:** `066`, `068`, and `069` automated contracts green.
 **Evidence class:** repeatable local harness plus real 2-core/4-GB calibration manual evidence.
 
 ## Goal

@@ -19,10 +19,11 @@ Working tree at snapshot refresh: task completion documentation only.
   coalescing/cancellation must reject stale revisions; sensitive contexts never reach speech, logs, or
   network paths. Accessibility is compositional (keyboard/UIA/Narrator/NVDA/High Contrast/large text/
   reduced motion/reduced candidates/stable layout), not a mode.
-- Plugin metadata must carry `runtime_abi`, `runtime_build`, and source provenance; program/version
-  directories stay separate from user data. Repository freshness/freeze/mix-and-match and mirror
-  identity are explicit follow-up work. Current signing remains ML-DSA-65 v2; ARM64, TUF, and
-  RemoteAddon/AppContainer are not current support claims.
+- Plugin metadata must carry `runtime_abi`, `runtime_build`, and source provenance; `runtime_build`
+  is provenance/diagnostic rather than an ABI-equality gate. Program/version directories stay separate
+  from user data. Repository freshness/freeze/mix-and-match and mirror identity are explicit follow-up
+  work. Current signing remains ML-DSA-65 v2; ARM64, TUF, and RemoteAddon/AppContainer are not current
+  support claims.
 - The 2-core/4-GB low-resource profile and latency/memory figures are initial SLOs pending real
   hardware calibration; accessibility and low-resource evidence are release gates.
 
@@ -156,6 +157,7 @@ Windows host
 
 `RELEASE-01` remains parked on external evidence. The first eligible code-only task is
 `065-CONFIG-CORE-TRANSACTION-CONTRACT-001`, followed by Candidate notification/accessibility,
-plugin provenance/data-boundary, repository freshness, and low-resource evidence tasks. Each task
-is Rust-first: C++ is limited to the direct Fcitx adapter, upstream native addon, or a thin Windows
-ABI/renderer adapter; no second Config truth, generic GUI framework, or permanent protocol dual stack.
+plugin provenance/data-boundary, repository freshness, real plugin ecosystem build matrix, and
+low-resource evidence tasks. Each task is Rust-first: C++ is limited to the direct Fcitx adapter,
+upstream native addon, or a thin Windows ABI/renderer adapter; no second Config truth, generic GUI
+framework, or permanent protocol dual stack.
