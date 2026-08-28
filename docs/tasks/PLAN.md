@@ -138,7 +138,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 073 | FCITX-UPSTREAM-REBASELINE-BUILD-001 | COMPLETED / OFFICIAL-CLANG64-X64-BUILD-GREEN / MANUAL-PENDING | Official `fcitx/fcitx5` cdd0b9d and the explicit patch queue configure/build/install successfully through native-engine; x86 native lane and real host/release evidence remain external | completed/073-FCITX-UPSTREAM-REBASELINE-BUILD-001.md |
 | 074 | RELEASE-HOST-EVIDENCE-AND-SIGNING-UAC-001 | PREPARATION-GREEN / MANUAL-PENDING / CI-UNVERIFIABLE | 071-073 as applicable; reachable signing credential-separation, policy, measurement, and artifact checks are green; real hosts, protected production credentials, and CI visibility remain unavailable | 074-RELEASE-HOST-EVIDENCE-AND-SIGNING-UAC-001.md |
 | 075 | CONTROL-PACKAGE-STATE-RUST-CUTOVER-001 | COMPLETED / RUST-DEPENDENCY-SAFE-STATE-GREEN / MANUAL-PENDING | 067-069 and 071; 074 external evidence remains pending | completed/075-CONTROL-PACKAGE-STATE-RUST-CUTOVER-001.md |
-| 076 | CI-CANDIDATE-CONTROL-CONTRACT-REPAIR-001 | QUEUED | 075; correct-path CTest reproduced stale Candidate source markers and a removed presentation-font CLI assertion | 076-CI-CANDIDATE-CONTROL-CONTRACT-REPAIR-001.md |
+| 076 | CI-CANDIDATE-CONTROL-CONTRACT-REPAIR-001 | COMPLETED / X64-X86-CTEST-GREEN / RUST-CONTRACTS-GREEN | 075; stale Candidate source markers now assert Rust ownership and the stopped-service mixed E2E uses typed Config apply | completed/076-CI-CANDIDATE-CONTROL-CONTRACT-REPAIR-001.md |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
 ## Important dependency notes
