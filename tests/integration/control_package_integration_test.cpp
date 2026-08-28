@@ -467,6 +467,31 @@ int wmain(int argc, wchar_t** argv) {
                !fs::exists(data_root / L"themes/soft-blue"),
            "theme delete must remove only user-owned theme directories: " + theme_delete);
 
+    const auto config_update_path = temporary.path() / L"candidate-font-config.toml";
+    write_text(config_update_path,
+               "format_version = 1\n"
+               "[fonts.candidate]\n"
+               "families = [\"Segoe UI Emoji\", \"system\"]\n"
+               "size_dip = 20.0\n");
+    std::string config_validate;
+    const DWORD config_validate_exit = run_process_capture(
+        control, {L"--data-root", data_root.wstring(), L"--validate-config",
+                  config_update_path.wstring()},
+        config_validate);
+    expect(config_validate_exit == 0,
+           "typed Config validation must accept candidate font overrides: " + config_validate);
+    std::string config_apply;
+    const DWORD config_apply_exit = run_process_capture(
+        control, {L"--data-root", data_root.wstring(), L"--apply-config",
+                  config_update_path.wstring()},
+        config_apply);
+    expect(config_apply_exit == 0,
+           "typed Config apply must work with the launcher service stopped: " + config_apply);
+    const std::string persisted_config = read_text(data_root / L"config.toml");
+    expect(persisted_config.find("Segoe UI Emoji") != std::string::npos &&
+               persisted_config.find("size_dip = 20.0") != std::string::npos,
+           "typed Config apply did not persist candidate font overrides: " + persisted_config);
+
     std::string addons_list;
     const DWORD addons_list_exit =
         run_process_capture(control, {L"--data-root", data_root.wstring(), L"--addons-list"},

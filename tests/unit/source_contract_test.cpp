@@ -365,12 +365,18 @@ int main(int argc, char** argv) {
         return fail("STAB-CAND-LOCALE-013: Candidate UI must drive DWrite locale from candidate content metadata");
     }
     if (rustCandidateCoreSource.find("--candidate-ux-self-test") == std::string::npos ||
-        uiSource.find("resolveAutomaticPresentation") == std::string::npos ||
-        uiSource.find("compositionAutoOrientation_") == std::string::npos ||
-        uiSource.find("compositionStableWidth_") == std::string::npos ||
-        uiSource.find("REG-CAND-STABLE-001") == std::string::npos ||
-        uiSource.find("REG-CAND-AUTO-001") == std::string::npos) {
-        return fail("REG-CAND-UX: Candidate UI must have auto layout and composition-scoped width contract");
+        uiSource.find("fcitx5_candidate_presentation_resolve_orientation") ==
+            std::string::npos ||
+        uiSource.find("fcitx5_candidate_presentation_stable_window_width") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("fcitx5_candidate_presentation_resolve_orientation") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find("fcitx5_candidate_presentation_stable_window_width") ==
+            std::string::npos ||
+        rustCandidateCoreSource.find(
+            "automatic_orientation_and_width_stability_are_composition_scoped") ==
+            std::string::npos) {
+        return fail("REG-CAND-UX: Candidate presentation and composition scope must be Rust-owned");
     }
     if (uiSource.find("MultiByteToWideChar") != std::string::npos ||
         uiSource.find("MB_ERR_INVALID_CHARS") != std::string::npos ||
