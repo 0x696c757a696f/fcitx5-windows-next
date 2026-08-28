@@ -589,9 +589,16 @@ int main(int argc, char** argv) {
       static_cast<void>(
           parse_signature_envelope(malformed_signature_base64, "package-manifest"));
     });
+    const auto repository_target =
+        std::string("fcitx5-rime\t1.0.0\t1\tx64\t") + file_hash + "\n";
+    const auto repository_targets_sha256 = hex_sha256(
+        sha256(std::as_bytes(std::span(repository_target))));
     const auto repository_bytes =
         "{\"format_version\":1,\"channel\":\"stable\","
-        "\"generated_at\":\"2026-08-17T00:00:00Z\",\"key_id\":\"release-2026\","
+        "\"repository_id\":\"fcitx5-windows-next\",\"mirror_id\":\"official\","
+        "\"sequence\":1,\"generated_at\":\"2026-08-28T00:00:00Z\",\"expires_at\":\"2026-09-01T00:00:00Z\","
+        "\"key_id\":\"release-2026\",\"targets\":{\"count\":1,\"sha256\":\"" +
+        repository_targets_sha256 + "\"},"
         "\"packages\":[{\"id\":\"fcitx5-rime\",\"title\":\"Rime\","
         "\"summary\":\"Rime input engine\",\"version\":\"1.0.0\","
         "\"release_sequence\":1,\"type\":\"addon\",\"architecture\":\"x64\","
@@ -628,7 +635,10 @@ int main(int argc, char** argv) {
                                    other_mldsa_signer.public_key(), false};
     const auto mldsa_repository_bytes =
         "{\"format_version\":1,\"channel\":\"stable\","
-        "\"generated_at\":\"2026-08-17T00:00:00Z\",\"key_id\":\"official-2026-mldsa65\","
+        "\"repository_id\":\"fcitx5-windows-next\",\"mirror_id\":\"official\","
+        "\"sequence\":1,\"generated_at\":\"2026-08-28T00:00:00Z\",\"expires_at\":\"2026-09-01T00:00:00Z\","
+        "\"key_id\":\"official-2026-mldsa65\",\"targets\":{\"count\":1,\"sha256\":\"" +
+        repository_targets_sha256 + "\"},"
         "\"packages\":[{\"id\":\"fcitx5-rime\",\"title\":\"Rime\","
         "\"summary\":\"Rime input engine\",\"version\":\"1.0.0\","
         "\"release_sequence\":1,\"type\":\"addon\",\"architecture\":\"x64\","

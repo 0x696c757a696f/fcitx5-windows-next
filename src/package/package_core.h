@@ -141,9 +141,14 @@ struct RepositoryEntry {
 
 struct RepositoryIndex {
   std::uint32_t format_version{};
+  std::string repository_id;
   std::string channel;
+  std::string mirror_id;
+  std::uint64_t sequence{};
   std::string generated_at;
+  std::string expires_at;
   std::string key_id;
+  std::string targets_sha256;
   std::vector<RepositoryEntry> packages;
 };
 
@@ -282,9 +287,14 @@ struct Fcitx5RepositoryIndexResult {
   char error_code[64]{};
   char error_message[512]{};
   std::uint32_t format_version{};
+  Fcitx5PackageByteSlice repository_id{};
   Fcitx5PackageByteSlice channel{};
+  Fcitx5PackageByteSlice mirror_id{};
+  std::uint64_t sequence{};
   Fcitx5PackageByteSlice generated_at{};
+  Fcitx5PackageByteSlice expires_at{};
   Fcitx5PackageByteSlice key_id{};
+  Fcitx5PackageByteSlice targets_sha256{};
   Fcitx5RepositoryEntryResult* packages{};
   std::size_t package_count{};
 };
@@ -318,6 +328,8 @@ extern "C" Fcitx5RepositoryIndexResult fcitx5_repository_verify_index_parsed_env
     const Fcitx5PackageTrustedKey* trusted_keys, std::size_t trusted_key_count,
     const std::uint8_t* expected_channel,
     std::size_t expected_channel_len);
+extern "C" int fcitx5_repository_sequence_is_acceptable(
+    std::uint64_t sequence, std::uint64_t accepted_sequence, std::uint8_t require_new);
 extern "C" std::size_t fcitx5_repository_find_package_index_utf8(
     const Fcitx5RepositoryFindEntry* entries, std::size_t entry_count,
     const std::uint8_t* package_id, std::size_t package_id_len,
@@ -411,9 +423,14 @@ class RepositoryIndexResultGuard final {
   }
   RepositoryIndex parsed;
   parsed.format_version = verified.format_version;
+  parsed.repository_id = repository_string(verified.repository_id);
   parsed.channel = repository_string(verified.channel);
+  parsed.mirror_id = repository_string(verified.mirror_id);
+  parsed.sequence = verified.sequence;
   parsed.generated_at = repository_string(verified.generated_at);
+  parsed.expires_at = repository_string(verified.expires_at);
   parsed.key_id = repository_string(verified.key_id);
+  parsed.targets_sha256 = repository_string(verified.targets_sha256);
   if (verified.package_count != 0 && verified.packages == nullptr) {
     throw PackageError("invalid_repository", "verified repository package data is invalid");
   }

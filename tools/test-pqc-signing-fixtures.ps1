@@ -52,12 +52,20 @@ try {
   $index = Join-Path $work 'index.json'
   $indexSig = Join-Path $work 'index.sig.json'
   $keyring = Join-Path $work 'trusted-keys.json'
+  $packageSha256 = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+  $targetCanonical = "fcitx5-rime`t1.0.0`t1`tx64`t$packageSha256`n"
+  $targetSha256 = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($targetCanonical))) -Algorithm SHA256).Hash.ToLowerInvariant()
+  $generatedAt = [DateTimeOffset]::UtcNow
+  $expiresAt = $generatedAt.AddDays(7)
   [IO.File]::WriteAllText($index,
-    '{"format_version":1,"channel":"stable","generated_at":"2026-08-21T00:00:00Z",' +
-    '"key_id":"' + $keyId + '","packages":[{"id":"fcitx5-rime","title":"Rime",' +
+    '{"format_version":1,"repository_id":"fcitx5-windows-next","channel":"stable",' +
+    '"mirror_id":"official","sequence":1,"generated_at":"' + $generatedAt.ToString('yyyy-MM-ddTHH:mm:ssZ') +
+    '","expires_at":"' + $expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ') + '",' +
+    '"key_id":"' + $keyId + '","targets":{"count":1,"sha256":"' + $targetSha256 + '"},' +
+    '"packages":[{"id":"fcitx5-rime","title":"Rime",' +
     '"summary":"Rime input engine","version":"1.0.0","release_sequence":1,' +
     '"type":"addon","architecture":"x64","download_url":"https://packages.example.invalid/fcitx5-rime.fcpkg",' +
-    '"sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",' +
+    '"sha256":"' + $packageSha256 + '",' +
     '"dependencies":[]}]}',
     [Text.UTF8Encoding]::new($false))
 

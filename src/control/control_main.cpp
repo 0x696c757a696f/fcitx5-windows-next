@@ -881,6 +881,13 @@ std::uint64_t repositoryMaxReleaseSequence(const fcitx::package::RepositoryIndex
     return fcitx5_control_repository_max_release_sequence(data, sequences.size());
 }
 
+bool repositorySequenceIsAcceptable(std::uint64_t sequence, std::uint64_t accepted,
+                                    bool requireNew) {
+    return fcitx5_repository_sequence_is_acceptable(sequence, accepted,
+                                                    requireNew ? std::uint8_t{1} : std::uint8_t{0}) !=
+           0;
+}
+
 std::wstring repositoryMetadataUrl(std::wstring_view baseUrl, std::string_view metadataName) {
     const std::size_t required = fcitx5_control_repository_metadata_url_utf16(
         nativeView(baseUrl), utf8View(metadataName), nullptr, 0);
@@ -927,8 +934,9 @@ fcitx::package::RepositoryIndex loadRepository(const fs::path& dataRoot) {
     // Defense in depth: the cached index itself must not be an older
     // sequence than what was previously accepted, even if the cache file was
     // replaced outside the refresh path.
-    if (repositoryMaxReleaseSequence(repository) <
-        readMaxSequence(dataRoot, repository.channel, true))
+    const auto accepted = readMaxSequence(dataRoot, repository.channel, true);
+    if (!repositorySequenceIsAcceptable(repository.sequence, accepted, false) ||
+        !repositorySequenceIsAcceptable(repositoryMaxReleaseSequence(repository), accepted, false))
         throw fcitx::package::PackageError(
             "rollback_rejected",
             "cached repository index is older than the accepted release sequence");
@@ -973,7 +981,8 @@ void refreshRepository(const fs::path& dataRoot, std::wstring baseUrl) {
         dataRoot, repository.channel,
         fs::exists(files.index) ||
             readSequenceState(dataRoot, repository.channel).present);
-    if (maximum < accepted)
+    if (!repositorySequenceIsAcceptable(repository.sequence, accepted, true) ||
+        !repositorySequenceIsAcceptable(maximum, accepted, true))
         throw fcitx::package::PackageError("rollback_rejected",
                                            "repository index is older than the accepted "
                                            "release sequence");

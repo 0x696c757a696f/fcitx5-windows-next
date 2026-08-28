@@ -100,14 +100,24 @@ void write_bytes(const fs::path& path, std::string_view bytes) {
 }
 
 std::string index_json(std::string_view channel, std::uint64_t sequence) {
+  constexpr std::string_view archive_hash =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const auto target = "fcitx5-rime\t1.0.0\t" + std::to_string(sequence) +
+                      "\tany\t" + std::string(archive_hash) + "\n";
+  const auto target_hash = fcitx::package::hex_sha256(
+      fcitx::package::sha256(std::as_bytes(std::span(target))));
   return std::string("{\"format_version\":1,\"channel\":\"") + std::string(channel) +
-         "\",\"generated_at\":\"2026-08-17T00:00:00Z\",\"key_id\":\"official-test-2026-mldsa65\","
+         "\",\"repository_id\":\"fcitx5-windows-next\",\"mirror_id\":\"official\","
+         "\"sequence\":" + std::to_string(sequence) +
+         ",\"generated_at\":\"2026-08-28T00:00:00Z\",\"expires_at\":\"2026-09-01T00:00:00Z\","
+         "\"key_id\":\"official-test-2026-mldsa65\",\"targets\":{\"count\":1,\"sha256\":\"" +
+         target_hash + "\"},"
          "\"packages\":[{\"id\":\"fcitx5-rime\",\"title\":\"Rime\","
          "\"summary\":\"Rime input engine\",\"version\":\"1.0.0\","
          "\"release_sequence\":" + std::to_string(sequence) +
          ",\"type\":\"addon\",\"architecture\":\"any\","
          "\"download_url\":\"https://packages.example.invalid/fcitx5-rime.fcpkg\","
-         "\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\","
+         "\"sha256\":\"" + std::string(archive_hash) + "\","
          "\"dependencies\":[]}]}";
 }
 

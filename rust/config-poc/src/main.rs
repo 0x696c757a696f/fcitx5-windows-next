@@ -5578,8 +5578,9 @@ const CONFIG_POC_PACKAGE_MANIFEST_JSON: &str = concat!(
 );
 
 const CONFIG_POC_REPOSITORY_INDEX_JSON: &str = concat!(
-    r#"{"format_version":1,"channel":"stable","generated_at":"2026-08-22T00:00:00Z","#,
-    r#""key_id":"official-2026-mldsa65","packages":[{"id":"fcitx5-rime","title":"Rime","#,
+    r#"{"format_version":1,"repository_id":"fcitx5-windows-next","channel":"stable","#,
+    r#""mirror_id":"official","sequence":2,"generated_at":"2026-08-28T00:00:00Z","expires_at":"2026-09-01T00:00:00Z","#,
+    r#""key_id":"official-2026-mldsa65","targets":{"count":1,"sha256":"a4c2dfe432367402b14f15ed84e30ef894ac81ad3f76e49ed7fa17935ca53a00"},"packages":[{"id":"fcitx5-rime","title":"Rime","#,
     r#""summary":"Rime input method","version":"1.1.0","release_sequence":2,"type":"addon","#,
     r#""architecture":"x64","download_url":"https://packages.example.invalid/fcitx5-rime.fcpkg","#,
     r#""sha256":"0000000000000000000000000000000000000000000000000000000000000000","#,

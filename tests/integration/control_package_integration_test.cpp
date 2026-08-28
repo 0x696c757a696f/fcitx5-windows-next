@@ -265,8 +265,18 @@ std::string make_manifest(std::string_view version, std::string_view blake3_hash
 
 std::string make_repository(std::string_view version, std::uint64_t release_sequence,
                             std::string_view archive_hash) {
+  const auto target = "fcitx5-rime\t" + std::string(version) + "\t" +
+                      std::to_string(release_sequence) + "\t" + architecture() + "\t" +
+                      std::string(archive_hash) + "\n";
+  const auto target_hash = fcitx::package::hex_sha256(
+      fcitx::package::sha256(std::as_bytes(std::span(target))));
   return "{\"format_version\":1,\"channel\":\"stable\","
-         "\"generated_at\":\"2026-08-18T00:00:00Z\",\"key_id\":\"official-test-2026-mldsa65\","
+         "\"repository_id\":\"fcitx5-windows-next\",\"mirror_id\":\"official\","
+         "\"sequence\":" +
+         std::to_string(release_sequence) +
+         ",\"generated_at\":\"2026-08-28T00:00:00Z\",\"expires_at\":\"2026-09-01T00:00:00Z\","
+         "\"key_id\":\"official-test-2026-mldsa65\",\"targets\":{\"count\":1,\"sha256\":\"" +
+         target_hash + "\"},"
          "\"packages\":[{\"id\":\"fcitx5-rime\",\"title\":\"Rime\","
          "\"summary\":\"Rime input engine\",\"version\":\"" +
          std::string(version) +
@@ -274,8 +284,7 @@ std::string make_repository(std::string_view version, std::uint64_t release_sequ
          std::to_string(release_sequence) +
          ",\"type\":\"addon\",\"architecture\":\"" + architecture() +
          "\",\"download_url\":\"https://packages.example.invalid/fcitx5-rime.fcpkg\","
-         "\"sha256\":\"" +
-         std::string(archive_hash) + "\",\"dependencies\":[]}]}";
+         "\"sha256\":\"" + std::string(archive_hash) + "\",\"dependencies\":[]}]}";
 }
 
 DWORD run_process(const fs::path& executable, const std::vector<std::wstring>& arguments);

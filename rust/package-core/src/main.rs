@@ -10,10 +10,19 @@ use fcitx5_package_core::{
     parse_signature_envelope, parse_trusted_keys, read_installed_lockfile,
     set_installed_package_state, sha256_digest, stage_validated_archive_zip,
     upsert_installed_lock_entry, validate_manifest_compatibility, verify_manifest_signature,
-    verify_payload_root, verify_repository_index, verify_repository_index_envelope,
-    verify_signature_envelope, HexDigest32, PackageId, PackageLifecycleState, RepositoryIndex,
-    SignedObject, TrustAlgorithm, TrustedKey,
+    verify_payload_root, verify_repository_index_envelope_with_policy,
+    verify_repository_index_with_policy, verify_signature_envelope, HexDigest32, PackageId,
+    PackageLifecycleState, RepositoryIndex, RepositoryVerificationPolicy, SignedObject,
+    TrustAlgorithm, TrustedKey,
 };
+
+fn repository_policy(channel: &str) -> RepositoryVerificationPolicy<'_> {
+    let now_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    RepositoryVerificationPolicy::new("fcitx5-windows-next", channel, "official", now_seconds)
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -150,7 +159,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                 let index_bytes = read_bounded_bytes(index_path, 1024 * 1024)?;
                 let signature = read_bounded_bytes(signature_path, 16 * 1024)?;
                 let keys = read_trusted_keys(keyring_path)?;
-                let index = verify_repository_index(&index_bytes, &signature, &keys, &channel)?;
+                let policy = repository_policy(&channel);
+                let index =
+                    verify_repository_index_with_policy(&index_bytes, &signature, &keys, &policy)?;
                 print_repository_index(&index);
                 return Ok(());
             }
@@ -167,8 +178,13 @@ fn run() -> Result<(), Box<dyn Error>> {
                 let signature = read_bounded_text(signature_path, 1024 * 1024)?;
                 let envelope = parse_signature_envelope(&signature, SignedObject::RepositoryIndex)?;
                 let keys = read_trusted_keys(keyring_path)?;
-                let index =
-                    verify_repository_index_envelope(&index_bytes, &envelope, &keys, &channel)?;
+                let policy = repository_policy(&channel);
+                let index = verify_repository_index_envelope_with_policy(
+                    &index_bytes,
+                    &envelope,
+                    &keys,
+                    &policy,
+                )?;
                 print_repository_index(&index);
                 return Ok(());
             }

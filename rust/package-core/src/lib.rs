@@ -265,9 +265,14 @@ impl RepositoryEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepositoryIndex {
     format_version: u64,
+    repository_id: String,
     channel: String,
+    mirror_id: String,
+    sequence: u64,
     generated_at: String,
+    expires_at: String,
     key_id: String,
+    targets_sha256: HexDigest32,
     packages: Vec<RepositoryEntry>,
 }
 
@@ -276,20 +281,87 @@ impl RepositoryIndex {
         self.format_version
     }
 
+    pub fn repository_id(&self) -> &str {
+        &self.repository_id
+    }
+
     pub fn channel(&self) -> &str {
         &self.channel
+    }
+
+    pub fn mirror_id(&self) -> &str {
+        &self.mirror_id
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.sequence
     }
 
     pub fn generated_at(&self) -> &str {
         &self.generated_at
     }
 
+    pub fn expires_at(&self) -> &str {
+        &self.expires_at
+    }
+
     pub fn key_id(&self) -> &str {
         &self.key_id
     }
 
+    pub fn targets_sha256(&self) -> &HexDigest32 {
+        &self.targets_sha256
+    }
+
     pub fn packages(&self) -> &[RepositoryEntry] {
         &self.packages
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RepositoryVerificationPolicy<'a> {
+    expected_repository_id: &'a str,
+    expected_channel: &'a str,
+    expected_mirror_id: &'a str,
+    now_seconds: u64,
+    accepted_sequence: Option<u64>,
+    accepted_targets_sha256: Option<&'a str>,
+    require_new_sequence: bool,
+}
+
+impl<'a> RepositoryVerificationPolicy<'a> {
+    pub fn new(
+        expected_repository_id: &'a str,
+        expected_channel: &'a str,
+        expected_mirror_id: &'a str,
+        now_seconds: u64,
+    ) -> Self {
+        Self {
+            expected_repository_id,
+            expected_channel,
+            expected_mirror_id,
+            now_seconds,
+            accepted_sequence: None,
+            accepted_targets_sha256: None,
+            require_new_sequence: false,
+        }
+    }
+
+    pub fn for_refresh_after(self, accepted_sequence: u64) -> Self {
+        Self {
+            accepted_sequence: Some(accepted_sequence),
+            require_new_sequence: true,
+            ..self
+        }
+    }
+
+    pub fn for_cached(self, accepted_sequence: u64, accepted_targets_sha256: &'a str) -> Self {
+        Self {
+            accepted_sequence: Some(accepted_sequence),
+            accepted_targets_sha256: Some(accepted_targets_sha256),
+            require_new_sequence: false,
+            ..self
+        }
     }
 }
 
@@ -3175,9 +3247,93 @@ fn parse_repository_dependencies(
     Ok(result)
 }
 
-pub fn parse_repository_index(
+fn repository_targets_sha256(packages: &[RepositoryEntry]) -> HexDigest32 {
+    let mut targets: Vec<_> = packages.iter().collect();
+    targets.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then(left.architecture.cmp(&right.architecture))
+    });
+    let mut canonical = String::new();
+    for entry in targets {
+        canonical.push_str(&entry.id);
+        canonical.push('\t');
+        canonical.push_str(&entry.version);
+        canonical.push('\t');
+        canonical.push_str(&entry.release_sequence.to_string());
+        canonical.push('\t');
+        canonical.push_str(&entry.architecture);
+        canonical.push('\t');
+        canonical.push_str(entry.sha256.as_str());
+        canonical.push('\n');
+    }
+    sha256_digest(canonical.as_bytes())
+}
+
+fn repository_now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn parse_repository_time(value: &str) -> Option<u64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+        || !bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit()
+        })
+    {
+        return None;
+    }
+    let number = |start: usize, end: usize| value[start..end].parse::<u32>().ok();
+    let year = number(0, 4)?;
+    let month = number(5, 7)?;
+    let day = number(8, 10)?;
+    let hour = number(11, 13)?;
+    let minute = number(14, 16)?;
+    let second = number(17, 19)?;
+    let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let maximum_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if year < 1970
+        || !(1..=12).contains(&month)
+        || !(1..=maximum_day).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    let (year, month) = if month <= 2 {
+        (i64::from(year) - 1, i64::from(month + 12))
+    } else {
+        (i64::from(year), i64::from(month))
+    };
+    let era = year / 400;
+    let year_of_era = year % 400;
+    let day_of_year = (153 * (month - 3) + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146097 + day_of_era - 719468;
+    u64::try_from(days).ok().map(|days| {
+        days * 86_400 + u64::from(hour) * 3_600 + u64::from(minute) * 60 + u64::from(second)
+    })
+}
+
+pub fn parse_repository_index_with_policy(
     bytes: &str,
-    expected_channel: &str,
+    policy: &RepositoryVerificationPolicy<'_>,
 ) -> Result<RepositoryIndex, RepositoryError> {
     if bytes.is_empty() || bytes.len() > MAX_MANIFEST_BYTES {
         return Err(repository_error(
@@ -3194,9 +3350,14 @@ pub fn parse_repository_index(
         object,
         &[
             "format_version",
+            "repository_id",
             "channel",
+            "mirror_id",
+            "sequence",
             "generated_at",
+            "expires_at",
             "key_id",
+            "targets",
             "packages",
         ],
     )?;
@@ -3206,14 +3367,43 @@ pub fn parse_repository_index(
             "repository format_version must be exactly 1",
         ));
     }
+    let repository_id =
+        repository_require_string(object, "repository_id", MAX_PACKAGE_ID_BYTES, false)?;
     let channel = repository_require_string(object, "channel", 16, false)?;
-    let generated_at = repository_require_string(object, "generated_at", 64, false)?;
+    let mirror_id = repository_require_string(object, "mirror_id", MAX_PACKAGE_ID_BYTES, false)?;
+    let sequence = repository_require_unsigned(object, "sequence")?;
+    let generated_at = repository_require_string(object, "generated_at", 20, false)?;
+    let expires_at = repository_require_string(object, "expires_at", 20, false)?;
+    let generated_seconds = parse_repository_time(&generated_at)
+        .ok_or_else(|| repository_error("repository generated_at is invalid"))?;
+    let expires_seconds = parse_repository_time(&expires_at)
+        .ok_or_else(|| repository_error("repository expires_at is invalid"))?;
     let key_id = repository_require_string(object, "key_id", MAX_PACKAGE_ID_BYTES, false)?;
-    if channel != expected_channel || !is_ascii_token(&key_id, "-_.") {
+    if !is_ascii_token(&repository_id, "-_.")
+        || !is_ascii_token(&channel, "-_.")
+        || !is_ascii_token(&mirror_id, "-_.")
+        || !is_ascii_token(&key_id, "-_.")
+        || repository_id != policy.expected_repository_id
+        || channel != policy.expected_channel
+        || mirror_id != policy.expected_mirror_id
+        || sequence == 0
+        || generated_seconds > policy.now_seconds
+        || expires_seconds <= policy.now_seconds
+        || expires_seconds <= generated_seconds
+        || expires_seconds - generated_seconds > 14 * 24 * 60 * 60
+    {
         return Err(repository_error(
-            "repository identity is invalid or channel mismatch",
+            "repository identity, sequence, or freshness is invalid",
         ));
     }
+    let targets = object_get(object, "targets")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| repository_error("targets must be an object"))?;
+    repository_require_object_keys(targets, &["count", "sha256"])?;
+    let target_count = repository_require_unsigned(targets, "count")?;
+    let targets_sha256 =
+        HexDigest32::parse(&repository_require_string(targets, "sha256", 64, false)?)
+            .map_err(|_| repository_error("repository targets digest is invalid"))?;
 
     let packages = repository_require_array(object, "packages")?;
     if packages.len() > MAX_FILE_COUNT {
@@ -3277,14 +3467,59 @@ pub fn parse_repository_index(
             dependencies,
         });
     }
-    parsed.sort_by(|left, right| left.id.cmp(&right.id));
+    parsed.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then(left.architecture.cmp(&right.architecture))
+    });
+    if target_count != u64::try_from(parsed.len()).unwrap_or(u64::MAX)
+        || repository_targets_sha256(&parsed) != targets_sha256
+    {
+        return Err(repository_error(
+            "repository targets are incomplete or do not match package metadata",
+        ));
+    }
+    if let Some(accepted_sequence) = policy.accepted_sequence {
+        if (policy.require_new_sequence && sequence <= accepted_sequence)
+            || (!policy.require_new_sequence && sequence != accepted_sequence)
+        {
+            return Err(repository_error(
+                "repository sequence is stale, frozen, or inconsistent",
+            ));
+        }
+    }
+    if let Some(accepted_targets_sha256) = policy.accepted_targets_sha256 {
+        if targets_sha256.as_str() != accepted_targets_sha256 {
+            return Err(repository_error(
+                "repository targets do not match the accepted repository state",
+            ));
+        }
+    }
     Ok(RepositoryIndex {
         format_version,
+        repository_id,
         channel,
+        mirror_id,
+        sequence,
         generated_at,
+        expires_at,
         key_id,
+        targets_sha256,
         packages: parsed,
     })
+}
+
+pub fn parse_repository_index(
+    bytes: &str,
+    expected_channel: &str,
+) -> Result<RepositoryIndex, RepositoryError> {
+    let policy = RepositoryVerificationPolicy::new(
+        "fcitx5-windows-next",
+        expected_channel,
+        "official",
+        repository_now_seconds(),
+    );
+    parse_repository_index_with_policy(bytes, &policy)
 }
 
 pub fn verify_repository_index(
@@ -3293,9 +3528,24 @@ pub fn verify_repository_index(
     trusted_keys: &[TrustedKey],
     expected_channel: &str,
 ) -> Result<RepositoryIndex, RepositoryError> {
+    let policy = RepositoryVerificationPolicy::new(
+        "fcitx5-windows-next",
+        expected_channel,
+        "official",
+        repository_now_seconds(),
+    );
+    verify_repository_index_with_policy(index_bytes, signature, trusted_keys, &policy)
+}
+
+pub fn verify_repository_index_with_policy(
+    index_bytes: &[u8],
+    signature: &[u8],
+    trusted_keys: &[TrustedKey],
+    policy: &RepositoryVerificationPolicy<'_>,
+) -> Result<RepositoryIndex, RepositoryError> {
     let index_text = std::str::from_utf8(index_bytes)
         .map_err(|_| repository_error("repository index is not strict JSON"))?;
-    let result = parse_repository_index(index_text, expected_channel)?;
+    let result = parse_repository_index_with_policy(index_text, policy)?;
     let trusted_key = trusted_keys
         .iter()
         .find(|candidate| candidate.id().as_str() == result.key_id())
@@ -3311,9 +3561,24 @@ pub fn verify_repository_index_envelope(
     trusted_keys: &[TrustedKey],
     expected_channel: &str,
 ) -> Result<RepositoryIndex, RepositoryError> {
+    let policy = RepositoryVerificationPolicy::new(
+        "fcitx5-windows-next",
+        expected_channel,
+        "official",
+        repository_now_seconds(),
+    );
+    verify_repository_index_envelope_with_policy(index_bytes, envelope, trusted_keys, &policy)
+}
+
+pub fn verify_repository_index_envelope_with_policy(
+    index_bytes: &[u8],
+    envelope: &SignatureEnvelope,
+    trusted_keys: &[TrustedKey],
+    policy: &RepositoryVerificationPolicy<'_>,
+) -> Result<RepositoryIndex, RepositoryError> {
     let index_text = std::str::from_utf8(index_bytes)
         .map_err(|_| repository_error("repository index is not strict JSON"))?;
-    let result = parse_repository_index(index_text, expected_channel)?;
+    let result = parse_repository_index_with_policy(index_text, policy)?;
     let key_id = PackageId::parse(result.key_id()).map_err(|_| {
         repository_verify_error("invalid_signature", "signature envelope binding is invalid")
     })?;
@@ -3344,9 +3609,10 @@ mod repository_ffi {
     #![allow(unsafe_code)]
 
     use super::{
-        parse_signature_envelope, verify_repository_index, verify_repository_index_envelope,
-        PackageId, RepositoryEntry, RepositoryIndex, SignatureEnvelope, SignatureEnvelopeEntry,
-        SignedObject, TrustAlgorithm, TrustedKey, MAX_PACKAGE_ID_BYTES, MAX_SIGNATURE_BYTES,
+        parse_signature_envelope, verify_repository_index_envelope_with_policy,
+        verify_repository_index_with_policy, PackageId, RepositoryEntry, RepositoryIndex,
+        RepositoryVerificationPolicy, SignatureEnvelope, SignatureEnvelopeEntry, SignedObject,
+        TrustAlgorithm, TrustedKey, MAX_PACKAGE_ID_BYTES, MAX_SIGNATURE_BYTES,
     };
     use std::collections::BTreeSet;
     use std::fmt::Write as _;
@@ -3433,9 +3699,14 @@ mod repository_ffi {
         pub error_code: [u8; ERROR_CODE_BYTES],
         pub error_message: [u8; ERROR_MESSAGE_BYTES],
         pub format_version: u32,
+        pub repository_id: Fcitx5ByteSlice,
         pub channel: Fcitx5ByteSlice,
+        pub mirror_id: Fcitx5ByteSlice,
+        pub sequence: u64,
         pub generated_at: Fcitx5ByteSlice,
+        pub expires_at: Fcitx5ByteSlice,
         pub key_id: Fcitx5ByteSlice,
+        pub targets_sha256: Fcitx5ByteSlice,
         pub packages: *mut Fcitx5RepositoryEntryResult,
         pub package_count: usize,
     }
@@ -3566,6 +3837,15 @@ mod repository_ffi {
         raw.iter().map(key_from_raw).collect()
     }
 
+    fn repository_policy(channel: &str) -> RepositoryVerificationPolicy<'_> {
+        RepositoryVerificationPolicy::new(
+            "fcitx5-windows-next",
+            channel,
+            "official",
+            super::repository_now_seconds(),
+        )
+    }
+
     fn signature_algorithm_from_str(value: &str) -> Option<TrustAlgorithm> {
         match value {
             "mldsa65" => Some(TrustAlgorithm::Mldsa65),
@@ -3651,15 +3931,32 @@ mod repository_ffi {
         let mut output = String::new();
         output.push('{');
         output.push_str("\"format_version\":1");
+        output.push_str(",\"repository_id\":\"");
+        json_escape(index.repository_id(), &mut output);
+        output.push('"');
         output.push_str(",\"channel\":\"");
         json_escape(index.channel(), &mut output);
         output.push('"');
-        output.push_str(",\"generated_at\":\"");
-        json_escape(index.generated_at(), &mut output);
+        output.push_str(",\"mirror_id\":\"");
+        json_escape(index.mirror_id(), &mut output);
         output.push('"');
+        let _ = write!(
+            output,
+            ",\"sequence\":{},\"generated_at\":\"{}\",\"expires_at\":\"{}\"",
+            index.sequence(),
+            index.generated_at(),
+            index.expires_at()
+        );
         output.push_str(",\"key_id\":\"");
         json_escape(index.key_id(), &mut output);
         output.push('"');
+        output.push_str(",\"targets\":{\"count\":");
+        let _ = write!(
+            output,
+            "{},\"sha256\":\"{}\"}}",
+            index.packages().len(),
+            index.targets_sha256().as_str()
+        );
         output.push_str(",\"packages\":[");
         for (package_index, package) in index.packages().iter().enumerate() {
             if package_index != 0 {
@@ -3791,9 +4088,14 @@ mod repository_ffi {
             error_code,
             error_message,
             format_version: 0,
+            repository_id: empty_slice(),
             channel: empty_slice(),
+            mirror_id: empty_slice(),
+            sequence: 0,
             generated_at: empty_slice(),
+            expires_at: empty_slice(),
             key_id: empty_slice(),
+            targets_sha256: empty_slice(),
             packages: std::ptr::null_mut(),
             package_count: 0,
         }
@@ -3806,11 +4108,37 @@ mod repository_ffi {
             error_code: [0; ERROR_CODE_BYTES],
             error_message: [0; ERROR_MESSAGE_BYTES],
             format_version: index.format_version() as u32,
+            repository_id: owned_slice_from_str(index.repository_id()),
             channel: owned_slice_from_str(index.channel()),
+            mirror_id: owned_slice_from_str(index.mirror_id()),
+            sequence: index.sequence(),
             generated_at: owned_slice_from_str(index.generated_at()),
+            expires_at: owned_slice_from_str(index.expires_at()),
             key_id: owned_slice_from_str(index.key_id()),
+            targets_sha256: owned_slice_from_str(index.targets_sha256().as_str()),
             packages,
             package_count,
+        }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn fcitx5_repository_sequence_is_acceptable(
+        sequence: u64,
+        accepted_sequence: u64,
+        require_new: u8,
+    ) -> i32 {
+        if sequence == 0 {
+            return 0;
+        }
+        let acceptable = if require_new != 0 {
+            sequence > accepted_sequence
+        } else {
+            sequence >= accepted_sequence
+        };
+        if acceptable {
+            1
+        } else {
+            0
         }
     }
 
@@ -3909,11 +4237,12 @@ mod repository_ffi {
                 "trusted repository key set is invalid",
             );
         };
-        repository_result(verify_repository_index(
+        let policy = repository_policy(&expected_channel);
+        repository_result(verify_repository_index_with_policy(
             index_bytes,
             signature_bytes,
             &trusted_keys,
-            &expected_channel,
+            &policy,
         ))
     }
 
@@ -3961,11 +4290,12 @@ mod repository_ffi {
                 "trusted repository key set is invalid",
             );
         };
-        repository_index_result(verify_repository_index(
+        let policy = repository_policy(&expected_channel);
+        repository_index_result(verify_repository_index_with_policy(
             index_bytes,
             signature_bytes,
             &trusted_keys,
-            &expected_channel,
+            &policy,
         ))
     }
 
@@ -4011,11 +4341,12 @@ mod repository_ffi {
         else {
             return error_result("invalid_signature", "signature envelope is invalid");
         };
-        repository_result(verify_repository_index_envelope(
+        let policy = repository_policy(&expected_channel);
+        repository_result(verify_repository_index_envelope_with_policy(
             index_bytes,
             &envelope,
             &trusted_keys,
-            &expected_channel,
+            &policy,
         ))
     }
 
@@ -4076,11 +4407,12 @@ mod repository_ffi {
                 "signature envelope is invalid",
             );
         };
-        repository_index_result(verify_repository_index_envelope(
+        let policy = repository_policy(&expected_channel);
+        repository_index_result(verify_repository_index_envelope_with_policy(
             index_bytes,
             &envelope,
             &trusted_keys,
-            &expected_channel,
+            &policy,
         ))
     }
 
@@ -4135,11 +4467,12 @@ mod repository_ffi {
             canonicalization,
             signatures,
         };
-        repository_result(verify_repository_index_envelope(
+        let policy = repository_policy(&expected_channel);
+        repository_result(verify_repository_index_envelope_with_policy(
             index_bytes,
             &envelope,
             &trusted_keys,
-            &expected_channel,
+            &policy,
         ))
     }
 
@@ -4209,11 +4542,12 @@ mod repository_ffi {
             canonicalization,
             signatures,
         };
-        repository_index_result(verify_repository_index_envelope(
+        let policy = repository_policy(&expected_channel);
+        repository_index_result(verify_repository_index_envelope_with_policy(
             index_bytes,
             &envelope,
             &trusted_keys,
-            &expected_channel,
+            &policy,
         ))
     }
 
@@ -4226,8 +4560,12 @@ mod repository_ffi {
         }
         let index = unsafe { &*index };
         free_owned_slice(index.channel);
+        free_owned_slice(index.repository_id);
+        free_owned_slice(index.mirror_id);
         free_owned_slice(index.generated_at);
+        free_owned_slice(index.expires_at);
         free_owned_slice(index.key_id);
+        free_owned_slice(index.targets_sha256);
         if !index.packages.is_null() {
             unsafe {
                 let packages =
@@ -7600,7 +7938,14 @@ pub fn repair_repository_sequence_state_for_repair(
     else {
         return reset();
     };
-    let Ok(repository) = verify_repository_index_envelope(&index, &envelope, trusted_keys, channel)
+    let policy = RepositoryVerificationPolicy::new(
+        "fcitx5-windows-next",
+        channel,
+        "official",
+        repository_now_seconds(),
+    );
+    let Ok(repository) =
+        verify_repository_index_envelope_with_policy(&index, &envelope, trusted_keys, &policy)
     else {
         return reset();
     };
@@ -11256,88 +11601,236 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn repository_index_v1_matches_cpp_schema() {
-        let signer = rsa_signing_fixture::RsaSigningFixture::new();
-        let trusted = rsa_trusted_key("release-2026", signer.public_blob());
-        let repository = format!(
-            "{{\"format_version\":1,\"channel\":\"stable\",\"generated_at\":\"2026-08-17T00:00:00Z\",\
-             \"key_id\":\"release-2026\",\"packages\":[{{\"id\":\"fcitx5-rime\",\
-             \"title\":\"Rime\",\"summary\":\"Rime input engine\",\"version\":\"1.0.0\",\
-             \"release_sequence\":1,\"type\":\"addon\",\"architecture\":\"x64\",\
-             \"download_url\":\"https://packages.example.invalid/fcitx5-rime.fcpkg\",\
-             \"sha256\":\"{}\",\"dependencies\":[]}}]}}",
-            "a".repeat(64)
-        );
-        let signature = signer.sign(repository.as_bytes());
-        let parsed = verify_repository_index(
-            repository.as_bytes(),
-            &signature,
-            std::slice::from_ref(&trusted),
+    fn repository_v2_rejects_stale_identity_freeze_and_mixed_targets() {
+        const PACKAGE_SHA256: &str =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let target_line = format!("fcitx5-rime\t1.0.0\t7\tx64\t{PACKAGE_SHA256}\n");
+        let targets_sha256 = sha256_digest(target_line.as_bytes()).as_str().to_owned();
+        let repository = |repository_id: &str,
+                          channel: &str,
+                          mirror_id: &str,
+                          sequence: u64,
+                          expires_at: &str,
+                          target_count: u64,
+                          target_digest: &str| {
+            format!(
+                "{{\"format_version\":1,\"repository_id\":\"{repository_id}\",\
+                 \"channel\":\"{channel}\",\"mirror_id\":\"{mirror_id}\",\
+                 \"sequence\":{sequence},\"generated_at\":\"2023-11-14T22:13:20Z\",\
+                 \"expires_at\":\"{expires_at}\",\"key_id\":\"official-2026-mldsa65\",\
+                 \"targets\":{{\"count\":{target_count},\"sha256\":\"{target_digest}\"}},\
+                 \"packages\":[{{\"id\":\"fcitx5-rime\",\"title\":\"Rime\",\
+                 \"summary\":\"Rime input engine\",\"version\":\"1.0.0\",\
+                 \"release_sequence\":7,\"type\":\"addon\",\"architecture\":\"x64\",\
+                 \"download_url\":\"https://packages.example.invalid/fcitx5-rime.fcpkg\",\
+                 \"sha256\":\"{PACKAGE_SHA256}\",\"dependencies\":[]}}]}}"
+            )
+        };
+        let policy = RepositoryVerificationPolicy::new(
+            "fcitx5-windows-next",
             "stable",
-        )
-        .expect("repository index should verify");
-        assert_eq!(parsed.format_version(), 1);
-        assert_eq!(parsed.channel(), "stable");
+            "official",
+            1_700_000_100,
+        );
+        let valid = repository(
+            "fcitx5-windows-next",
+            "stable",
+            "official",
+            13,
+            "2023-11-14T22:16:40Z",
+            1,
+            &targets_sha256,
+        );
+        let parsed = parse_repository_index_with_policy(&valid, &policy.for_refresh_after(12))
+            .expect("fresh repository metadata should parse");
+        assert_eq!(parsed.sequence(), 13);
+        assert_eq!(parsed.targets_sha256().as_str(), targets_sha256);
+        let cached =
+            parse_repository_index_with_policy(&valid, &policy.for_cached(13, &targets_sha256))
+                .expect("accepted cached metadata should parse");
+        assert_eq!(cached.sequence(), 13);
+        let wrong_cached_targets = "b".repeat(64);
         assert_eq!(
-            find_repository_package(&parsed, "fcitx5-rime", "x64")
-                .expect("repository package should resolve")
-                .version(),
-            "1.0.0"
+            parse_repository_index_with_policy(
+                &valid,
+                &policy.for_cached(13, &wrong_cached_targets),
+            )
+            .expect_err("cached target mix-and-match must fail")
+            .code(),
+            "invalid_repository"
         );
 
-        let tampered = repository.replacen("Rime input", "Fake input", 1);
-        assert_eq!(
-            verify_repository_index(
-                tampered.as_bytes(),
-                &signature,
-                std::slice::from_ref(&trusted),
-                "stable",
-            )
-            .expect_err("tampered repository should fail")
-            .code(),
-            "invalid_signature"
-        );
+        let cases = [
+            (
+                repository(
+                    "other-repository",
+                    "stable",
+                    "official",
+                    13,
+                    "2023-11-14T22:16:40Z",
+                    1,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "repository identity mismatch",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "beta",
+                    "official",
+                    13,
+                    "2023-11-14T22:16:40Z",
+                    1,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "channel mismatch",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "untrusted-mirror",
+                    13,
+                    "2023-11-14T22:16:40Z",
+                    1,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "mirror identity mismatch",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "official",
+                    13,
+                    "2023-11-14T22:14:59Z",
+                    1,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "expired metadata",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "official",
+                    13,
+                    "2023-11-29T22:13:20Z",
+                    1,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "metadata validity window too long",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "official",
+                    13,
+                    "2023-11-14T22:15:00Z",
+                    1,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "metadata expiry boundary",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "official",
+                    13,
+                    "2023-11-14T22:16:40Z",
+                    1,
+                    &targets_sha256,
+                )
+                .replacen("2023-11-14T22:13:20Z", "2023-11-14T22:15:01Z", 1),
+                policy.for_refresh_after(12),
+                "future generated metadata",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "official",
+                    12,
+                    "2023-11-14T22:16:40Z",
+                    1,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "frozen metadata",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "official",
+                    11,
+                    "2023-11-14T22:16:40Z",
+                    1,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "rollback metadata",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "official",
+                    13,
+                    "2023-11-14T22:16:40Z",
+                    2,
+                    &targets_sha256,
+                ),
+                policy.for_refresh_after(12),
+                "incomplete targets",
+            ),
+            (
+                repository(
+                    "fcitx5-windows-next",
+                    "stable",
+                    "official",
+                    13,
+                    "2023-11-14T22:16:40Z",
+                    1,
+                    &"b".repeat(64),
+                ),
+                policy.for_refresh_after(12),
+                "mixed targets",
+            ),
+        ];
+        for (index, context, name) in cases {
+            assert_eq!(
+                parse_repository_index_with_policy(&index, &context)
+                    .expect_err(name)
+                    .code(),
+                "invalid_repository",
+                "{name} must fail closed"
+            );
+        }
+    }
 
-        let wrong_key = rsa_signing_fixture::RsaSigningFixture::new();
-        let wrong_trusted = rsa_trusted_key("release-2026-other", wrong_key.public_blob());
-        let wrong_signature = wrong_key.sign(repository.as_bytes());
-        assert_eq!(
-            verify_repository_index(
-                repository.as_bytes(),
-                &wrong_signature,
-                std::slice::from_ref(&wrong_trusted),
-                "stable",
-            )
-            .expect_err("wrong trusted key should fail")
-            .code(),
-            "untrusted_key"
+    #[cfg(windows)]
+    #[test]
+    fn repository_v1_index_is_not_an_accepted_protocol_path() {
+        let policy = RepositoryVerificationPolicy::new(
+            "fcitx5-windows-next",
+            "stable",
+            "official",
+            1_700_000_100,
         );
-
-        let mut revoked = trusted.clone();
-        revoked.revoked = true;
+        let repository = r#"{"format_version":1,"channel":"stable","generated_at":"2023-11-14T22:13:20Z","key_id":"release-2026","packages":[]}"#;
         assert_eq!(
-            verify_repository_index(
-                repository.as_bytes(),
-                &signature,
-                std::slice::from_ref(&revoked),
-                "stable",
-            )
-            .expect_err("revoked key should fail")
-            .code(),
-            "revoked_key"
-        );
-
-        let beta_repository = repository.replace("\"channel\":\"stable\"", "\"channel\":\"beta\"");
-        let beta_signature = signer.sign(beta_repository.as_bytes());
-        assert_eq!(
-            verify_repository_index(
-                beta_repository.as_bytes(),
-                &beta_signature,
-                std::slice::from_ref(&trusted),
-                "stable",
-            )
-            .expect_err("wrong channel should fail")
-            .code(),
+            parse_repository_index_with_policy(repository, &policy)
+                .expect_err("legacy repository index must fail closed")
+                .code(),
             "invalid_repository"
         );
     }
@@ -11403,11 +11896,17 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp).expect("fixture temp should create");
-        let repository = br#"{"format_version":1,"channel":"stable","generated_at":"2026-08-17T00:00:00Z","key_id":"official-2026-mldsa65","packages":[{"id":"fcitx5-rime","title":"Rime","summary":"Rime input engine","version":"1.0.0","release_sequence":1,"type":"addon","architecture":"x64","download_url":"https://packages.example.invalid/fcitx5-rime.fcpkg","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","dependencies":[]}]}"#;
+        let repository = repository_v2(
+            "fcitx5-windows-next",
+            "stable",
+            "official",
+            1,
+            "2026-08-31T00:00:00Z",
+        );
         let repository_path = temp.join("repository.json");
         let signature_path = temp.join("repository.sig.json");
         let keyring_path = temp.join("trusted-keys.json");
-        std::fs::write(&repository_path, repository).expect("repository should write");
+        std::fs::write(&repository_path, &repository).expect("repository should write");
         let output = std::process::Command::new(&signer)
             .arg("--sign")
             .arg("repository-index")
@@ -11428,41 +11927,63 @@ mod tests {
             std::fs::read_to_string(&signature_path).expect("signature envelope should read");
         let envelope = parse_signature_envelope(&envelope_text, SignedObject::RepositoryIndex)
             .expect("fixture repository envelope should parse");
-        let parsed = verify_repository_index_envelope(repository, &envelope, &keys, "stable")
-            .expect("repository v2 should verify");
+        let policy = RepositoryVerificationPolicy::new(
+            "fcitx5-windows-next",
+            "stable",
+            "official",
+            1_787_616_000,
+        );
+        let parsed = verify_repository_index_envelope_with_policy(
+            repository.as_bytes(),
+            &envelope,
+            &keys,
+            &policy,
+        )
+        .expect("repository v2 should verify");
+        assert_eq!(parsed.repository_id(), "fcitx5-windows-next");
+        assert_eq!(parsed.mirror_id(), "official");
+        assert_eq!(parsed.sequence(), 1);
+        assert_eq!(parsed.expires_at(), "2026-08-31T00:00:00Z");
         assert_eq!(parsed.key_id(), "official-2026-mldsa65");
         assert!(find_repository_package(&parsed, "fcitx5-rime", "x64").is_some());
 
-        let tampered = std::str::from_utf8(repository)
-            .expect("fixture repository should be UTF-8")
-            .replace("\"Rime\"", "\"Rime X\"");
+        let tampered = repository.replace("\"Rime\"", "\"Rime X\"");
         assert_eq!(
-            verify_repository_index_envelope(tampered.as_bytes(), &envelope, &keys, "stable")
-                .expect_err("tampered repository should fail")
-                .code(),
+            verify_repository_index_envelope_with_policy(
+                tampered.as_bytes(),
+                &envelope,
+                &keys,
+                &policy
+            )
+            .expect_err("tampered repository should fail")
+            .code(),
             "invalid_signature"
         );
         let mut revoked_keys = keys.clone();
         revoked_keys[0].revoked = true;
         assert_eq!(
-            verify_repository_index_envelope(repository, &envelope, &revoked_keys, "stable")
-                .expect_err("revoked repository key should fail")
-                .code(),
+            verify_repository_index_envelope_with_policy(
+                repository.as_bytes(),
+                &envelope,
+                &revoked_keys,
+                &policy
+            )
+            .expect_err("revoked repository key should fail")
+            .code(),
             "revoked_key"
         );
         assert_eq!(
-            verify_repository_index_envelope(repository, &envelope, &[], "stable")
-                .expect_err("untrusted repository key should fail")
-                .code(),
+            verify_repository_index_envelope_with_policy(
+                repository.as_bytes(),
+                &envelope,
+                &[],
+                &policy
+            )
+            .expect_err("untrusted repository key should fail")
+            .code(),
             "untrusted_key"
         );
-        let beta_repository = repository
-            .iter()
-            .copied()
-            .collect::<Vec<u8>>()
-            .into_iter()
-            .collect::<Vec<u8>>();
-        let mut beta_text = String::from_utf8(beta_repository).expect("repository should be UTF-8");
+        let mut beta_text = repository.clone();
         beta_text = beta_text.replace("\"channel\":\"stable\"", "\"channel\":\"beta\"");
         let beta_path = temp.join("repository-beta.json");
         std::fs::write(&beta_path, beta_text.as_bytes()).expect("beta repository should write");
@@ -11482,9 +12003,14 @@ mod tests {
             parse_signature_envelope(&beta_envelope_text, SignedObject::RepositoryIndex)
                 .expect("fixture repository envelope should parse");
         assert_eq!(
-            verify_repository_index_envelope(beta_text.as_bytes(), &beta_envelope, &keys, "stable")
-                .expect_err("wrong channel should fail")
-                .code(),
+            verify_repository_index_envelope_with_policy(
+                beta_text.as_bytes(),
+                &beta_envelope,
+                &keys,
+                &policy
+            )
+            .expect_err("wrong channel should fail")
+            .code(),
             "invalid_repository"
         );
         let _ = std::fs::remove_dir_all(&temp);
@@ -12374,6 +12900,30 @@ mod tests {
              \"canonicalization\":\"{SIGNATURE_ENVELOPE_CANONICALIZATION}\",\
              \"signatures\":[{}]}}",
             entries.join(",")
+        )
+    }
+
+    fn repository_v2(
+        repository_id: &str,
+        channel: &str,
+        mirror_id: &str,
+        sequence: u64,
+        expires_at: &str,
+    ) -> String {
+        let sha256 = "a".repeat(64);
+        let targets_sha256 =
+            sha256_digest(format!("fcitx5-rime\t1.0.0\t1\tx64\t{sha256}\n").as_bytes());
+        format!(
+            "{{\"format_version\":1,\"repository_id\":\"{repository_id}\",\
+             \"channel\":\"{channel}\",\"mirror_id\":\"{mirror_id}\",\
+             \"sequence\":{sequence},\"generated_at\":\"2026-08-17T00:00:00Z\",\
+             \"expires_at\":\"{expires_at}\",\"key_id\":\"official-2026-mldsa65\",\
+             \"targets\":{{\"count\":1,\"sha256\":\"{}\"}},\"packages\":[{{\
+             \"id\":\"fcitx5-rime\",\"title\":\"Rime\",\"summary\":\"Rime input engine\",\
+             \"version\":\"1.0.0\",\"release_sequence\":1,\"type\":\"addon\",\
+             \"architecture\":\"x64\",\"download_url\":\"https://packages.example.invalid/fcitx5-rime.fcpkg\",\
+             \"sha256\":\"{sha256}\",\"dependencies\":[]}}]}}",
+            targets_sha256.as_str()
         )
     }
 

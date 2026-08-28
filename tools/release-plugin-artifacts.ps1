@@ -153,11 +153,23 @@ try {
   Compress-Archive -Path (Join-Path $payloadRoot '*') -DestinationPath $archive -CompressionLevel Optimal
   $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
   $assetBase = "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v$Version"
+  $generatedAt = [DateTimeOffset]::UtcNow
+  $expiresAt = $generatedAt.AddDays(7)
+  $targetCanonical = "$($plugin.id)`t$Version`t$ReleaseSequence`t$($plugin.architecture)`t$archiveHash`n"
+  $targetSha256 = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($targetCanonical))) -Algorithm SHA256).Hash.ToLowerInvariant()
   $index = [ordered]@{
     format_version = 1
+    repository_id = 'fcitx5-windows-next'
     channel = $Channel
-    generated_at = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    mirror_id = 'official'
+    sequence = $ReleaseSequence
+    generated_at = $generatedAt.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    expires_at = $expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ')
     key_id = 'official-2026-mldsa65'
+    targets = [ordered]@{
+      count = 1
+      sha256 = $targetSha256
+    }
     packages = @([ordered]@{
       id = $plugin.id
       title = $plugin.title
