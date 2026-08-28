@@ -2331,6 +2331,7 @@ pub fn validate_manifest_compatibility_for_runtime(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_manifest_compatibility_fields(
     package_type: &PackageType,
     package_architecture: &str,
