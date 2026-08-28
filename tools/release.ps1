@@ -74,7 +74,7 @@ $sbom = Join-Path $artifacts "fcitx5-windows-$Version$suffix.spdx.json"
 & (Join-Path $PSScriptRoot 'generate-sbom.ps1') -StageRoot $stage -OutputPath $sbom `
   -Version $Version -SourceCommit $sourceCommit
 $pluginReleaseFiles = @(
-  (Join-Path $artifacts "fcitx5-rime-$Version-x64.fcpkg"),
+  (Get-ChildItem -LiteralPath $artifacts -Filter '*.fcpkg' -File | Select-Object -ExpandProperty FullName),
   (Join-Path $artifacts 'index.json'),
   (Join-Path $artifacts 'index.sig.json'))
 foreach ($path in $pluginReleaseFiles) {

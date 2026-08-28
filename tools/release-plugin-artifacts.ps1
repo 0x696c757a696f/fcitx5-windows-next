@@ -71,14 +71,14 @@ foreach ($key in @($templateKey, $protectedKey)) {
 
 $inventory = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release-plugin-inventory.json') -Raw |
   ConvertFrom-Json
-if ($inventory.format_version -ne 1 -or $inventory.packages.Count -ne 1) {
-  throw 'Release plugin inventory must contain the single reviewed production package.'
+if ($inventory.format_version -ne 1 -or @($inventory.packages).Count -lt 3) {
+  throw 'Release plugin inventory must contain the reviewed ecosystem packages.'
 }
-$plugin = $inventory.packages[0]
-if ($plugin.id -ne 'fcitx5-rime' -or $plugin.architecture -ne 'x64' -or
-    $plugin.source.commit -ne '4e996319edea790495edc2c91893e9af4c4e6d6a' -or
-    $plugin.build.script -ne 'tools/bootstrap-fcitx.ps1') {
-  throw 'Release plugin inventory is not the reviewed fcitx5-rime build input.'
+foreach ($plugin in @($inventory.packages)) {
+  if ($plugin.architecture -ne 'x64' -or $plugin.build.script -ne 'tools/bootstrap-fcitx.ps1' -or
+      [string]::IsNullOrWhiteSpace($plugin.source.commit)) {
+    throw "Invalid pinned build input for plugin $($plugin.id)."
+  }
 }
 
 $artifactRoot = Join-Path $packageRoot 'release-artifacts'
@@ -99,78 +99,77 @@ if (-not (Test-Path -LiteralPath $packageCli -PathType Leaf)) {
 
 try {
   New-Item -ItemType Directory -Force -Path $artifactRoot, $payloadRoot | Out-Null
-  $manifestFiles = @()
-  foreach ($relative in @($plugin.payload)) {
-    if ($relative -notmatch '^[a-z0-9][a-z0-9._/-]*$') { throw "Unsafe inventory path: $relative" }
-    $source = Join-Path $stage $relative.Replace('/', '\')
-    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing staged Rime input: $relative" }
-    $destination = Join-Path (Join-Path $payloadRoot 'payload') $relative.Replace('/', '\')
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
-    Copy-Item -LiteralPath $source -Destination $destination -Force
-    $manifestFiles += [ordered]@{
-      path = $relative
-      size = (Get-Item -LiteralPath $destination).Length
-      hashes = [ordered]@{
-        blake3 = Get-Blake3 $destination
-        sha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+  $archives = @()
+  $indexPackages = @()
+  foreach ($plugin in @($inventory.packages)) {
+    $pluginPayloadRoot = Join-Path $payloadRoot $plugin.id
+    New-Item -ItemType Directory -Force -Path $pluginPayloadRoot | Out-Null
+    $manifestFiles = @()
+    foreach ($relative in @($plugin.payload)) {
+      if ($relative -notmatch '^[a-z0-9][a-z0-9._/-]*$') { throw "Unsafe inventory path: $relative" }
+      $source = Join-Path $stage $relative.Replace('/', '\')
+      if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Missing staged $($plugin.id) input: $relative"
+      }
+      $destination = Join-Path (Join-Path $pluginPayloadRoot 'payload') $relative.Replace('/', '\')
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+      Copy-Item -LiteralPath $source -Destination $destination -Force
+      $manifestFiles += [ordered]@{
+        path = $relative
+        size = (Get-Item -LiteralPath $destination).Length
+        hashes = [ordered]@{
+          blake3 = Get-Blake3 $destination
+          sha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
       }
     }
-  }
-  $manifest = [ordered]@{
-    format_version = 2
-    id = $plugin.id
-    version = $Version
-    type = $plugin.type
-    architecture = $plugin.architecture
-    min_os = '6.1-sp1'
-    core_api = '1'
-    addon_abi = '1'
-    dependencies = @()
-    license = $plugin.license
-    source_commit = $plugin.source.commit
-    runtime_abi = '1'
-    runtime_build = "$($plugin.source.commit)+$($plugin.build.script)"
-    source = [ordered]@{
-      repository = $plugin.source.repository
-      commit = $plugin.source.commit
-      build_script = $plugin.build.script
+    $manifest = [ordered]@{
+      format_version = 2
+      id = $plugin.id
+      version = $Version
+      type = $plugin.type
+      architecture = $plugin.architecture
+      min_os = '6.1-sp1'
+      core_api = '1'
+      addon_abi = '1'
+      dependencies = @()
+      license = $plugin.license
+      source_commit = $plugin.source.commit
+      runtime_abi = '1'
+      runtime_build = "$($plugin.source.commit)+$($plugin.build.script)"
+      source = [ordered]@{
+        repository = $plugin.source.repository
+        commit = $plugin.source.commit
+        build_script = $plugin.build.script
+      }
+      data_policy = [ordered]@{
+        program = 'versioned'
+        user_data = 'durable'
+      }
+      permissions = @('native-code')
+      payload = @($manifestFiles)
+      key_id = 'official-2026-mldsa65'
     }
-    data_policy = [ordered]@{
-      program = 'versioned'
-      user_data = 'durable'
-    }
-    permissions = @('native-code')
-    payload = @($manifestFiles)
-    key_id = 'official-2026-mldsa65'
-  }
-  [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 8) + "`n"),
-    [Text.UTF8Encoding]::new($false))
-  Invoke-Checked $Signer @('--sign', $manifestPath, $manifestRawSignaturePath,
-    $SigningKey, $templateKey.public_key_base64)
-  Invoke-Checked $packageCli @('--write-signature-envelope-v2', 'package-manifest',
-    'official-2026-mldsa65', 'mldsa65', $manifestRawSignaturePath, $signaturePath)
-  Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
-  Compress-Archive -Path (Join-Path $payloadRoot '*') -DestinationPath $archive -CompressionLevel Optimal
-  $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-  $assetBase = "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v$Version"
-  $generatedAt = [DateTimeOffset]::UtcNow
-  $expiresAt = $generatedAt.AddDays(7)
-  $targetCanonical = "$($plugin.id)`t$Version`t$ReleaseSequence`t$($plugin.architecture)`t$archiveHash`n"
-  $targetSha256 = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($targetCanonical))) -Algorithm SHA256).Hash.ToLowerInvariant()
-  $index = [ordered]@{
-    format_version = 1
-    repository_id = 'fcitx5-windows-next'
-    channel = $Channel
-    mirror_id = 'official'
-    sequence = $ReleaseSequence
-    generated_at = $generatedAt.ToString('yyyy-MM-ddTHH:mm:ssZ')
-    expires_at = $expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ')
-    key_id = 'official-2026-mldsa65'
-    targets = [ordered]@{
-      count = 1
-      sha256 = $targetSha256
-    }
-    packages = @([ordered]@{
+    $pluginManifestPath = Join-Path $pluginPayloadRoot 'manifest.json'
+    $pluginSignaturePath = Join-Path $pluginPayloadRoot 'manifest.sig.json'
+    $pluginRawSignaturePath = Join-Path $pluginPayloadRoot 'manifest.sig.raw'
+    [IO.File]::WriteAllText($pluginManifestPath, (($manifest | ConvertTo-Json -Depth 8) + "`n"),
+      [Text.UTF8Encoding]::new($false))
+    Invoke-Checked $Signer @('--sign', $pluginManifestPath, $pluginRawSignaturePath,
+      $SigningKey, $templateKey.public_key_base64)
+    Invoke-Checked $packageCli @('--write-signature-envelope-v2', 'package-manifest',
+      'official-2026-mldsa65', 'mldsa65', $pluginRawSignaturePath, $pluginSignaturePath)
+    Remove-Item -LiteralPath $pluginRawSignaturePath -Force
+    $archiveName = "$($plugin.id)-$Version-$($plugin.architecture).fcpkg"
+    $archive = Join-Path $artifactRoot $archiveName
+    Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+    Compress-Archive -Path (Join-Path $pluginPayloadRoot '*') -DestinationPath $archive -CompressionLevel Optimal
+    $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $assetBase = "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v$Version"
+    $generatedAt = [DateTimeOffset]::UtcNow
+    $expiresAt = $generatedAt.AddDays(7)
+    $targetCanonical = "$($plugin.id)`t$Version`t$ReleaseSequence`t$($plugin.architecture)`t$archiveHash`n"
+    $indexPackages += [ordered]@{
       id = $plugin.id
       title = $plugin.title
       summary = $plugin.summary
@@ -181,7 +180,35 @@ try {
       download_url = "$assetBase/$archiveName"
       sha256 = $archiveHash
       dependencies = @()
-    })
+    }
+    $archives += [pscustomobject]@{
+      Plugin = $plugin
+      Archive = $archive
+      Manifest = $pluginManifestPath
+      Signature = $pluginSignaturePath
+    }
+  }
+  $generatedAt = [DateTimeOffset]::UtcNow
+  $expiresAt = $generatedAt.AddDays(7)
+  $targetCanonical = ($indexPackages | ForEach-Object {
+    "$($_.id)`t$Version`t$ReleaseSequence`t$($_.architecture)`t$($_.sha256)`n"
+  }) -join ''
+  $targetSha256 = (Get-FileHash -InputStream ([IO.MemoryStream]::new(
+    [Text.Encoding]::UTF8.GetBytes($targetCanonical))) -Algorithm SHA256).Hash.ToLowerInvariant()
+  $index = [ordered]@{
+    format_version = 1
+    repository_id = 'fcitx5-windows-next'
+    channel = $Channel
+    mirror_id = 'official'
+    sequence = $ReleaseSequence
+    generated_at = $generatedAt.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    expires_at = $expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    key_id = 'official-2026-mldsa65'
+    targets = [ordered]@{
+      count = $indexPackages.Count
+      sha256 = $targetSha256
+    }
+    packages = @($indexPackages)
   }
   [IO.File]::WriteAllText($indexPath, (($index | ConvertTo-Json -Depth 8 -Compress) + "`n"),
     [Text.UTF8Encoding]::new($false))
@@ -191,14 +218,16 @@ try {
     'official-2026-mldsa65', 'mldsa65', $indexRawSignaturePath, $indexSignaturePath)
   Invoke-Checked $packageCli @('--verify-repository-v2', $indexPath, $indexSignaturePath,
     $TrustedKeyring, $Channel)
-  Invoke-Checked $packageCli @('--install', $archive, $verificationRoot, 'release-rime',
-    $TrustedKeyring)
-  foreach ($path in @($manifestPath, $signaturePath, $indexPath, $indexSignaturePath)) {
+   foreach ($archiveInfo in $archives) {
+     Invoke-Checked $packageCli @('--install', $archiveInfo.Archive, $verificationRoot,
+       "release-$($archiveInfo.Plugin.id)", $TrustedKeyring)
+   }
+   foreach ($path in @($archives | ForEach-Object { $_.Manifest; $_.Signature }) + @($indexPath, $indexSignaturePath)) {
     if ((Get-Content -LiteralPath $path -Raw -Encoding UTF8) -match '(?i)(private_key|secret_key|seed_base64)') {
       throw "Private key marker found in generated metadata: $path"
     }
   }
-  Write-Host "Generated signed Rime package and repository index: $artifactRoot"
+   Write-Host "Generated signed plugin packages and repository index: $artifactRoot"
 } finally {
   if (Test-Path -LiteralPath $payloadRoot) { Remove-Item -LiteralPath $payloadRoot -Recurse -Force }
   if (Test-Path -LiteralPath $verificationRoot) { Remove-Item -LiteralPath $verificationRoot -Recurse -Force }

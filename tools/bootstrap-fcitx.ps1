@@ -20,6 +20,7 @@ $sourcePins = @(
   @{ Name = 'fcitx5-chinese-addons'; Url = 'https://github.com/fcitx/fcitx5-chinese-addons.git'; Commit = 'bc84e3acb022f5b6b5bed254b14ba19d05023645' },
   @{ Name = 'fcitx5-rime'; Url = 'https://github.com/fcitx/fcitx5-rime.git'; Commit = '4e996319edea790495edc2c91893e9af4c4e6d6a' },
   @{ Name = 'fcitx5-lua'; Url = 'https://github.com/fcitx/fcitx5-lua.git'; Commit = '05db9ee519d448a64ccbe216044e8e0342e8c536' },
+  @{ Name = 'fcitx5-unikey'; Url = 'https://github.com/fcitx/fcitx5-unikey.git'; Commit = '53f82a1e01dc0484f46dc8ed419d586cebd2f114' },
   @{ Name = 'librime'; Url = 'https://github.com/rime/librime.git'; Commit = '33e78140250125871856cdc5b42ddc6a5fcd3cd4' },
   @{ Name = 'librime-lua'; Url = 'https://github.com/hchunhui/librime-lua.git'; Commit = '68f9c364a2d25a04c7d4794981d7c796b05ab627' },
   @{ Name = 'librime-octagram'; Url = 'https://github.com/lotem/librime-octagram.git'; Commit = 'dfcc15115788c828d9dd7b4bff68067d3ce2ffb8' },
@@ -266,6 +267,7 @@ $libime = Join-Path $sources 'libime'
 $chinese = Join-Path $sources 'fcitx5-chinese-addons'
 $rime = Join-Path $sources 'fcitx5-rime'
 $lua = Join-Path $sources 'fcitx5-lua'
+$unikey = Join-Path $sources 'fcitx5-unikey'
 $fcitx = Join-Path $sources 'fcitx5'
 $librime = Join-Path $sources 'librime'
 Apply-PinnedPatch $fcitx `
@@ -297,6 +299,7 @@ Invoke-Msys "cmake -S '$msysSources/fcitx5-chinese-addons' -B '$msysRepo/out/bui
 Invoke-Msys "cmake -S '$msysSources/librime' -B '$msysRepo/out/build/librime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DCMAKE_DLL_NAME_WITH_SOVERSION=ON -DBUILD_TEST=OFF -DENABLE_LOGGING=OFF -DLUA_VERSION=lua5.4; cmake --build '$msysRepo/out/build/librime' --parallel; cmake --install '$msysRepo/out/build/librime'"
 Invoke-Msys "cmake -S '$msysSources/fcitx5-rime' -B '$msysRepo/out/build/fcitx5-rime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DRIME_DATA_DIR='$msysStage/share/rime-data'; cmake --build '$msysRepo/out/build/fcitx5-rime' --parallel; cmake --install '$msysRepo/out/build/fcitx5-rime'"
 Invoke-Msys "cmake -S '$msysSources/fcitx5-lua' -B '$msysRepo/out/build/fcitx5-lua' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DUSE_DLOPEN=OFF -DENABLE_TEST=OFF; cmake --build '$msysRepo/out/build/fcitx5-lua' --parallel; cmake --install '$msysRepo/out/build/fcitx5-lua'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5-unikey' -B '$msysRepo/out/build/fcitx5-unikey' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DENABLE_TEST=OFF; cmake --build '$msysRepo/out/build/fcitx5-unikey' --parallel; cmake --install '$msysRepo/out/build/fcitx5-unikey'"
 Invoke-Msys "cmake -S '$msysRepo/native-engine' -B '$msysRepo/out/build/native-engine' $common -DCMAKE_PREFIX_PATH='$msysStage'; cmake --build '$msysRepo/out/build/native-engine' --parallel; cmake --install '$msysRepo/out/build/native-engine'"
 
 $runtimeDlls = @('libc++.dll', 'libzstd.dll', 'libdl.dll', 'libintl-8.dll',

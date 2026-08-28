@@ -23,6 +23,50 @@
         "lib/fcitx5/librime.dll",
         "share/fcitx5/addon/rime.conf"
       ]
+    },
+    {
+      "id": "fcitx5-lua",
+      "title": "Fcitx5 Lua",
+      "summary": "Lua addon loader",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-lua.git",
+        "commit": "05db9ee519d448a64ccbe216044e8e0342e8c536"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "lua54", "version": "5.4.8-1", "license": "MIT"}
+        ]
+      },
+      "payload": [
+        "lib/fcitx5/libluaaddonloader.dll",
+        "share/fcitx5/addon/luaaddonloader.conf",
+        "share/fcitx5/addon/imeapi.conf",
+        "share/fcitx5/lua/imeapi/imeapi.lua"
+      ]
+    },
+    {
+      "id": "fcitx5-unikey",
+      "title": "Unikey",
+      "summary": "Vietnamese input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-2.0-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-unikey.git",
+        "commit": "53f82a1e01dc0484f46dc8ed419d586cebd2f114"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": []
+      },
+      "payload": [
+        "lib/fcitx5/unikey.dll",
+        "share/fcitx5/addon/unikey.conf"
+      ]
     }
   ]
 }

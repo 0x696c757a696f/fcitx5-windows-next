@@ -7,21 +7,41 @@ $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 
 $inventoryPath = Join-Path $PSScriptRoot 'release-plugin-inventory.json'
 $inventory = Get-Content -LiteralPath $inventoryPath -Raw | ConvertFrom-Json
-if ($inventory.format_version -ne 1 -or $inventory.packages.Count -ne 1) {
+if ($inventory.format_version -ne 1 -or @($inventory.packages).Count -ne 3) {
   throw 'Release plugin inventory shape is invalid.'
 }
-$plugin = $inventory.packages[0]
-if ($plugin.id -ne 'fcitx5-rime' -or $plugin.architecture -ne 'x64' -or
-    @($plugin.payload).Count -ne 2 -or
-    $plugin.payload[0] -ne 'lib/fcitx5/librime.dll' -or
-    $plugin.payload[1] -ne 'share/fcitx5/addon/rime.conf' -or
-    $plugin.source.commit -ne '4e996319edea790495edc2c91893e9af4c4e6d6a') {
-  throw 'Release plugin inventory no longer describes the reviewed Rime payload.'
+if ((@($inventory.packages.id) -join ',') -cne 'fcitx5-rime,fcitx5-lua,fcitx5-unikey') {
+  throw 'Release plugin inventory does not preserve the reviewed package order.'
+}
+$expectedCommits = @{
+  'fcitx5-rime' = '4e996319edea790495edc2c91893e9af4c4e6d6a'
+  'fcitx5-lua' = '05db9ee519d448a64ccbe216044e8e0342e8c536'
+  'fcitx5-unikey' = '53f82a1e01dc0484f46dc8ed419d586cebd2f114'
+}
+foreach ($plugin in @($inventory.packages)) {
+  if ($plugin.architecture -ne 'x64' -or $plugin.source.commit -ne $expectedCommits[$plugin.id] -or
+      $plugin.build.script -ne 'tools/bootstrap-fcitx.ps1' -or @($plugin.payload).Count -eq 0) {
+    throw "Release plugin inventory has an invalid pinned build contract: $($plugin.id)."
+  }
+}
+$lua = $inventory.packages | Where-Object id -eq 'fcitx5-lua'
+$unikey = $inventory.packages | Where-Object id -eq 'fcitx5-unikey'
+if (@($lua.payload) -notcontains 'lib/fcitx5/libluaaddonloader.dll' -or
+    @($lua.payload) -notcontains 'share/fcitx5/addon/luaaddonloader.conf' -or
+    @($unikey.payload) -notcontains 'lib/fcitx5/unikey.dll' -or
+    @($unikey.payload) -notcontains 'share/fcitx5/addon/unikey.conf') {
+  throw 'Lua or Unikey inventory payload does not match upstream install outputs.'
 }
 $bootstrap = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bootstrap-fcitx.ps1') -Raw
-if ($bootstrap.IndexOf("@{ Name = 'fcitx5-rime';", [StringComparison]::Ordinal) -lt 0 -or
-    $bootstrap.IndexOf($plugin.source.commit, [StringComparison]::Ordinal) -lt 0) {
-  throw 'Rime release inventory does not match the pinned bootstrap source.'
+foreach ($plugin in @($inventory.packages)) {
+  if ($bootstrap.IndexOf("@{ Name = '$($plugin.id)';", [StringComparison]::Ordinal) -lt 0 -or
+      $bootstrap.IndexOf($plugin.source.commit, [StringComparison]::Ordinal) -lt 0) {
+    throw "$($plugin.id) release inventory does not match the pinned bootstrap source."
+  }
+}
+if ($bootstrap.IndexOf("cmake -S '`$msysSources/fcitx5-lua'", [StringComparison]::Ordinal) -lt 0 -or
+    $bootstrap.IndexOf("cmake -S '`$msysSources/fcitx5-unikey'", [StringComparison]::Ordinal) -lt 0) {
+  throw 'Lua and Unikey must use the standard Fcitx CMake build-farm path.'
 }
 $generatorPath = Join-Path $PSScriptRoot 'release-plugin-artifacts.ps1'
 $tokens = $null
@@ -34,7 +54,8 @@ if ($parseErrors.Count -ne 0) {
 $generator = Get-Content -LiteralPath $generatorPath -Raw
 foreach ($required in @('4032-byte ML-DSA-65 key', 'official-2026-mldsa65',
     'releases/download/v$Version', 'manifest.sig.json', 'index.sig.json', 'release-tools',
-    '--write-signature-envelope-v2')) {
+    '--write-signature-envelope-v2', 'foreach ($plugin in @($inventory.packages))',
+    '--verify-repository-v2', '--install')) {
   if ($generator.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
     throw "Release plugin generator is missing required production contract: $required"
   }
