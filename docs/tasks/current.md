@@ -1,53 +1,43 @@
-# Task 074 - Release host, accessibility, signing, and UAC evidence
+# Task 075 - Control package-state Rust cutover
 
-**Task ID:** `RELEASE-HOST-EVIDENCE-AND-SIGNING-UAC-001`
-
-**Prerequisites:** `071`, `072`, and completed official x64 `073` stage.
-**Mode:** `EXTERNAL-EVIDENCE / PREPARATION + REAL-HOST VALIDATION`
-**Authorization:** Accessibility and production signing/UAC evidence work is authorized.
+**Task ID:** `CONTROL-PACKAGE-STATE-RUST-CUTOVER-001`
+**Mode:** CHANGE / RUST-FIRST
+**Prerequisite:** 067-069 and 071; 074 external rows may remain `MANUAL-PENDING`.
 
 ## Goal
 
-Close the release evidence gaps without converting fixture results into production claims. Use the
-same Build Once stage for every check and record the exact source commit, stage manifest, host,
-architecture, privilege, and credential class used.
+Move `fcitx5-control.exe --packages-state ID enabled|disabled` behavior to the Rust-owned
+Control/package boundary while preserving its command contract.
 
-## Reachable work
+## Scope and acceptance
 
-- Validate the official Fcitx5 stage and its manifest identity.
-- Run available Rust measurement, package, artifact, desktop, and UAC preparation checks.
-- Generate machine-readable evidence under `out/evidence`.
-- Verify disposable test credentials remain outside Git and cannot satisfy the production promotion
-  contract.
-- Inspect CI workflows and repair only a reproduced failure.
+- Freeze enabled/disabled, invalid ID/state, missing package, dependency-blocked, failed-write,
+  and successful atomic-publication behavior.
+- Add Rust behavior tests in `rust/control-core` and `rust/package-core`.
+- Extend only the narrow Rust action ABI required; C++ may marshal native calls but may not own
+  package-state policy or duplicate lifecycle logic.
+- Keep `tests/integration/control_package_integration_test.cpp` only as a final mixed-binary
+  boundary test; Rust is the behavior authority.
 
-## External evidence still required
+## Hard constraints
 
-- Real Narrator/NVDA/UI Automation client evidence, including keyboard traversal, names, bounds,
-  notifications, High Contrast, and privacy suppression.
-- Production Authenticode certificate/private-key and timestamp service, ML-DSA release key,
-  exact staged-byte signing, UAC install/repair/update/rollback/uninstall, and cross-account cleanup.
-- Real 2-core/4-GB and low-storage machine/VM, offline/constrained-network lifecycle evidence.
-- Windows 7 SP1 Legacy and Windows 10/11 Modern host matrix, supported architectures, DPI,
-  multi-monitor, Notepad/Office/browser/Terminal/VS Code, RDP where declared, and in-use TSF update.
-
-## Hard rules
-
-- `out/secure` contains disposable test inputs only and is never committed.
-- A self-signed or locally generated artifact is never called production-signed.
-- Local desktop/semantic/rectangle tests are not real accessibility evidence.
-- Do not claim Windows 7, low-resource, offline, production signing, UAC, or release readiness
-  without the corresponding host and credential evidence.
-- Keep `REL-01` release-gated until every required row is green and signed bytes match the manifest,
-  SBOM, provenance, and signatures.
+- Use PowerShell 7 at `D:\Program Files\PowerShell\7\pwsh.exe`.
+- Toolchain root: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains`; prefer `...\fast`.
+- Pinned Cargo: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home\bin\cargo.exe`.
+- `CARGO_TARGET_DIR` must be inside the implementation worktree.
+- New product code and tests are Rust. C++ is limited to native/ABI adapters and final mixed E2E.
+- Do not modify Candidate, Launcher, Engine, UI, repository trust, or unrelated plugin commands.
+- Do not claim real-host, signing, UAC, accessibility, Windows 7, offline, low-resource, or CI
+  evidence from local tests.
 
 ## Acceptance
 
-- Each workstream has a machine-readable record under `out/evidence` containing commit, stage
-  manifest hash, host/build, architecture, result, and limitations.
-- Reachable automated preparation passes are recorded; unavailable real-host rows are individually
-  `MANUAL-PENDING` with the exact missing prerequisite.
-- No release gate is promoted and no artifact is published by this task.
+- Rust tests cover enabled/disabled, invalid ID/state, missing package, dependency blocking,
+  failure without lockfile mutation, and atomic publication.
+- x64/x86 Rust tests, fmt, clippy where clean, relevant CTest/source-contract and mixed smoke
+  pass or exact environmental blockers are recorded.
+- Source-contract evidence prevents reintroducing C++ package-state authority.
+- `docs/tasks/status.md` records HEAD, files, tests, results, and limitations.
 
-On completion, update `docs/tasks/status.md`; if all automatable checks pass, archive this task and
-select the next eligible task from `docs/tasks/PLAN.md`, leaving external rows `MANUAL-PENDING`.
+On completion, archive this task and select the next eligible Rust-first migration task. Keep
+074 and `REL-01` release-gated while external evidence remains unavailable.
