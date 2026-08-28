@@ -100,6 +100,7 @@ struct Fcitx5PackageParsedManifestResult {
   Fcitx5ByteSlice min_os;
   Fcitx5ByteSlice core_api;
   Fcitx5ByteSlice addon_abi;
+  Fcitx5ByteSlice runtime_abi;
   Fcitx5PackageManifestDependency* dependencies;
   std::size_t dependency_count;
   Fcitx5ByteSlice license;
@@ -160,7 +161,8 @@ void fcitx5_package_signature_envelope_free(
     const Fcitx5PackageSignatureEnvelopeResult* envelope);
 Fcitx5PackageLifecycleResult fcitx5_package_validate_manifest_compatibility_utf8(
     std::uint32_t package_type, Fcitx5ByteSlice package_architecture,
-    Fcitx5ByteSlice core_api, Fcitx5ByteSlice addon_abi,
+    Fcitx5ByteSlice min_os, Fcitx5ByteSlice runtime_abi, Fcitx5ByteSlice core_api,
+    Fcitx5ByteSlice addon_abi, Fcitx5ByteSlice runtime_os,
     const std::uint8_t* runtime_architecture, std::size_t runtime_architecture_len);
 Fcitx5PackageDigestResult fcitx5_package_sha256_digest_utf8(
     const std::uint8_t* bytes, std::size_t len);
@@ -497,6 +499,7 @@ Manifest parse_manifest(std::string_view bytes) {
   result.min_os = ffi_manifest_string(manifest_result.min_os);
   result.core_api = ffi_manifest_string(manifest_result.core_api);
   result.addon_abi = ffi_manifest_string(manifest_result.addon_abi);
+  result.runtime_abi = ffi_manifest_string(manifest_result.runtime_abi);
   result.license = ffi_manifest_string(manifest_result.license);
   result.source_commit = ffi_manifest_string(manifest_result.source_commit);
   result.key_id = ffi_manifest_string(manifest_result.key_id);
@@ -534,9 +537,17 @@ Manifest parse_manifest(std::string_view bytes) {
 
 void validate_manifest_compatibility(const Manifest& manifest,
                                      std::string_view architecture) {
+  validate_manifest_compatibility(manifest, architecture, "win10");
+}
+
+void validate_manifest_compatibility(const Manifest& manifest,
+                                     std::string_view architecture,
+                                     std::string_view runtime_os) {
   require_lifecycle_ok(fcitx5_package_validate_manifest_compatibility_utf8(
       rust_package_type_code(manifest.type), ffi_slice(manifest.architecture),
+      ffi_slice(manifest.min_os), ffi_slice(manifest.runtime_abi),
       ffi_slice(manifest.core_api), ffi_slice(manifest.addon_abi),
+      Fcitx5ByteSlice{reinterpret_cast<const std::uint8_t*>(runtime_os.data()), runtime_os.size()},
       reinterpret_cast<const std::uint8_t*>(architecture.data()), architecture.size()));
 }
 

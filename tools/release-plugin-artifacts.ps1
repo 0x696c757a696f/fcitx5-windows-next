@@ -128,6 +128,17 @@ try {
     dependencies = @()
     license = $plugin.license
     source_commit = $plugin.source.commit
+    runtime_abi = '1'
+    runtime_build = "$($plugin.source.commit)+$($plugin.build.script)"
+    source = [ordered]@{
+      repository = $plugin.source.repository
+      commit = $plugin.source.commit
+      build_script = $plugin.build.script
+    }
+    data_policy = [ordered]@{
+      program = 'versioned'
+      user_data = 'durable'
+    }
     permissions = @('native-code')
     payload = @($manifestFiles)
     key_id = 'official-2026-mldsa65'

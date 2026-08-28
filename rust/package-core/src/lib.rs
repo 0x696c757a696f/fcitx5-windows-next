@@ -27,6 +27,7 @@ const MAX_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const SUPPORTED_CORE_API: &str = "1";
 const SUPPORTED_ADDON_ABI: &str = "1";
+const SUPPORTED_RUNTIME_ABI: &str = "1";
 const SIGNATURE_ENVELOPE_CANONICALIZATION: &str = "fcitx5-windows-next-json-v1";
 const MLDSA65_PUBLIC_KEY_BYTES: usize = 1952;
 const MLDSA65_SIGNATURE_BYTES: usize = 3309;
@@ -1911,6 +1912,106 @@ impl PackageType {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceProvenance {
+    repository: String,
+    commit: String,
+    build_script: String,
+}
+
+impl SourceProvenance {
+    pub fn repository(&self) -> &str {
+        &self.repository
+    }
+
+    pub fn commit(&self) -> &str {
+        &self.commit
+    }
+
+    pub fn build_script(&self) -> &str {
+        &self.build_script
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataBoundary {
+    program: String,
+    user_data: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RuntimeOs {
+    Win7,
+    Win10,
+    Win11,
+}
+
+impl RuntimeOs {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "win7" => Some(Self::Win7),
+            "win10" => Some(Self::Win10),
+            "win11" => Some(Self::Win11),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(windows)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramDataRoots {
+    program_root: PathBuf,
+    user_data_root: PathBuf,
+}
+
+#[cfg(windows)]
+impl ProgramDataRoots {
+    pub fn new(
+        program_root: impl AsRef<Path>,
+        user_data_root: impl AsRef<Path>,
+    ) -> Result<Self, LifecycleError> {
+        let program_root = canonical_root(program_root.as_ref())?;
+        let user_data_root = canonical_root(user_data_root.as_ref())?;
+        if roots_overlap(&program_root, &user_data_root) {
+            return Err(lifecycle_error(
+                "unsafe_path",
+                "program and durable data roots must be distinct and non-overlapping",
+            ));
+        }
+        Ok(Self {
+            program_root,
+            user_data_root,
+        })
+    }
+
+    pub fn program_root(&self) -> &Path {
+        &self.program_root
+    }
+
+    pub fn user_data_root(&self) -> &Path {
+        &self.user_data_root
+    }
+}
+
+impl Default for DataBoundary {
+    fn default() -> Self {
+        Self {
+            program: "versioned".to_owned(),
+            user_data: "durable".to_owned(),
+        }
+    }
+}
+
+impl DataBoundary {
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    pub fn user_data(&self) -> &str {
+        &self.user_data
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Dependency {
     id: PackageId,
     version: String,
@@ -1939,6 +2040,10 @@ pub struct Manifest {
     dependencies: Vec<Dependency>,
     license: String,
     source_commit: String,
+    runtime_abi: Option<String>,
+    runtime_build: Option<String>,
+    source_provenance: Option<SourceProvenance>,
+    data_boundary: Option<DataBoundary>,
     permissions: Vec<String>,
     files: Vec<VerifiedArtifact>,
     key_id: PackageId,
@@ -1987,6 +2092,22 @@ impl Manifest {
 
     pub fn source_commit(&self) -> &str {
         &self.source_commit
+    }
+
+    pub fn runtime_abi(&self) -> Option<&str> {
+        self.runtime_abi.as_deref()
+    }
+
+    pub fn runtime_build(&self) -> Option<&str> {
+        self.runtime_build.as_deref()
+    }
+
+    pub fn source_provenance(&self) -> Option<&SourceProvenance> {
+        self.source_provenance.as_ref()
+    }
+
+    pub fn data_boundary(&self) -> Option<&DataBoundary> {
+        self.data_boundary.as_ref()
     }
 
     pub fn permissions(&self) -> &[String] {
@@ -2056,27 +2177,27 @@ pub fn parse_manifest(bytes: &str) -> Result<Manifest, ManifestError> {
     let object = document
         .as_object()
         .ok_or_else(|| manifest_error("invalid_manifest", "expected a JSON object"))?;
-    require_object_keys(
-        object,
-        &[
-            "format_version",
-            "id",
-            "version",
-            "type",
-            "architecture",
-            "min_os",
-            "core_api",
-            "addon_abi",
-            "dependencies",
-            "license",
-            "source_commit",
-            "permissions",
-            "key_id",
-        ],
-        &["files", "payload"],
-    )?;
-
     let format_version = require_unsigned(object, "format_version", "unsupported_manifest")?;
+    let mut required_keys = vec![
+        "format_version",
+        "id",
+        "version",
+        "type",
+        "architecture",
+        "min_os",
+        "core_api",
+        "addon_abi",
+        "dependencies",
+        "license",
+        "source_commit",
+        "permissions",
+        "key_id",
+    ];
+    if format_version == MANIFEST_FORMAT_VERSION_V2 {
+        required_keys.extend(["runtime_abi", "runtime_build", "source", "data_policy"]);
+    }
+    require_object_keys(object, &required_keys, &["files", "payload"])?;
+
     if format_version != MANIFEST_FORMAT_VERSION_V1 && format_version != MANIFEST_FORMAT_VERSION_V2
     {
         return Err(manifest_error(
@@ -2111,6 +2232,47 @@ pub fn parse_manifest(bytes: &str) -> Result<Manifest, ManifestError> {
     let addon_abi = require_string(object, "addon_abi", MAX_VERSION_BYTES, true)?;
     let license = require_string(object, "license", MAX_METADATA_BYTES, false)?;
     let source_commit = require_string(object, "source_commit", 128, false)?;
+    let (runtime_abi, runtime_build, source_provenance, data_boundary) = if format_version
+        == MANIFEST_FORMAT_VERSION_V2
+    {
+        let runtime_abi = require_ascii_token_string(object, "runtime_abi", 32, ".+-_")?;
+        let source = require_object(object, "source")?;
+        require_object_keys(source, &["repository", "commit", "build_script"], &[])?;
+        let repository = require_provenance_repository(source)?;
+        let commit = require_ascii_hex_string(source, "commit", 64)?;
+        if commit != source_commit {
+            return Err(manifest_error(
+                "invalid_manifest",
+                "source commit differs from source provenance",
+            ));
+        }
+        let build_script = SafeRelativePackagePath::parse(&require_string(
+            source,
+            "build_script",
+            MAX_PACKAGE_PATH_BYTES,
+            false,
+        )?)
+        .map_err(|_| manifest_error("invalid_manifest", "source build script path is invalid"))?;
+        let runtime_build = require_runtime_build(object, &commit, build_script.as_str())?;
+        let data_policy = require_object(object, "data_policy")?;
+        require_object_keys(data_policy, &["program", "user_data"], &[])?;
+        let data_boundary = DataBoundary {
+            program: require_enum_string(data_policy, "program", "versioned")?,
+            user_data: require_enum_string(data_policy, "user_data", "durable")?,
+        };
+        (
+            Some(runtime_abi),
+            Some(runtime_build),
+            Some(SourceProvenance {
+                repository,
+                commit,
+                build_script: build_script.as_str().to_owned(),
+            }),
+            Some(data_boundary),
+        )
+    } else {
+        (None, None, None, None)
+    };
     let key_id = PackageId::parse(&require_string(
         object,
         "key_id",
@@ -2135,6 +2297,10 @@ pub fn parse_manifest(bytes: &str) -> Result<Manifest, ManifestError> {
         dependencies,
         license,
         source_commit,
+        runtime_abi,
+        runtime_build,
+        source_provenance,
+        data_boundary,
         permissions,
         files,
         key_id,
@@ -2145,21 +2311,35 @@ pub fn validate_manifest_compatibility(
     manifest: &Manifest,
     architecture: &str,
 ) -> Result<(), CompatibilityError> {
+    validate_manifest_compatibility_for_runtime(manifest, architecture, RuntimeOs::Win10)
+}
+
+pub fn validate_manifest_compatibility_for_runtime(
+    manifest: &Manifest,
+    architecture: &str,
+    runtime_os: RuntimeOs,
+) -> Result<(), CompatibilityError> {
     validate_manifest_compatibility_fields(
         manifest.package_type(),
         manifest.architecture(),
+        manifest.min_os(),
+        manifest.runtime_abi(),
         manifest.core_api(),
         manifest.addon_abi(),
         architecture,
+        runtime_os,
     )
 }
 
 fn validate_manifest_compatibility_fields(
     package_type: &PackageType,
     package_architecture: &str,
+    min_os: &str,
+    runtime_abi: Option<&str>,
     core_api: &str,
     addon_abi: &str,
     architecture: &str,
+    runtime_os: RuntimeOs,
 ) -> Result<(), CompatibilityError> {
     if !matches!(architecture, "x64" | "x86") {
         return Err(compatibility_error("runtime architecture is invalid"));
@@ -2168,6 +2348,26 @@ fn validate_manifest_compatibility_fields(
         return Err(compatibility_error(
             "package architecture does not match this runtime",
         ));
+    }
+    if min_os != "6.1-sp1" && min_os != "10.0" {
+        return Err(compatibility_error("package minimum OS is invalid"));
+    }
+    let required_os = if min_os == "6.1-sp1" {
+        RuntimeOs::Win7
+    } else {
+        RuntimeOs::Win10
+    };
+    if required_os > runtime_os {
+        return Err(compatibility_error(
+            "package requires an unsupported minimum OS",
+        ));
+    }
+    if let Some(runtime_abi) = runtime_abi {
+        if runtime_abi != SUPPORTED_RUNTIME_ABI {
+            return Err(compatibility_error(
+                "runtime ABI does not match this engine",
+            ));
+        }
     }
     if core_api != SUPPORTED_CORE_API {
         return Err(compatibility_error(
@@ -6078,6 +6278,69 @@ fn path_contains_reparse_component(path: &Path) -> io::Result<bool> {
 }
 
 #[cfg(windows)]
+pub fn validate_program_install_root(path: impl AsRef<Path>) -> Result<(), LifecycleError> {
+    let path = path.as_ref();
+    if !path.is_absolute()
+        || !path.is_dir()
+        || path_contains_reparse_component(path).map_err(|error| {
+            lifecycle_error(
+                "unsafe_path",
+                format!("program root inspection failed: {error}"),
+            )
+        })?
+    {
+        return Err(lifecycle_error(
+            "unsafe_path",
+            "program root must be an absolute directory without reparse points",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn canonical_root(path: &Path) -> Result<PathBuf, LifecycleError> {
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(lifecycle_error(
+            "unsafe_path",
+            "program and durable data roots must be absolute directories",
+        ));
+    }
+    if path_contains_reparse_component(path).map_err(|error| {
+        lifecycle_error("unsafe_path", format!("root inspection failed: {error}"))
+    })? {
+        return Err(lifecycle_error(
+            "unsafe_path",
+            "program and durable data roots cannot contain reparse points",
+        ));
+    }
+    fs::canonicalize(path).map_err(|error| {
+        lifecycle_error(
+            "unsafe_path",
+            format!("root canonicalization failed: {error}"),
+        )
+    })
+}
+
+#[cfg(windows)]
+fn roots_overlap(left: &Path, right: &Path) -> bool {
+    let left = normalized_root_components(left);
+    let right = normalized_root_components(right);
+    path_is_prefix(&left, &right) || path_is_prefix(&right, &left)
+}
+
+#[cfg(windows)]
+fn normalized_root_components(path: &Path) -> Vec<String> {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+        .collect()
+}
+
+#[cfg(windows)]
+fn path_is_prefix(prefix: &[String], path: &[String]) -> bool {
+    prefix.len() <= path.len() && prefix.iter().zip(path).all(|(left, right)| left == right)
+}
+
+#[cfg(windows)]
 fn metadata_has_reparse_point(metadata: &fs::Metadata) -> bool {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
@@ -6434,6 +6697,11 @@ pub fn activate_staged_payload_tree(
 ) -> Result<(), StagingError> {
     let staged_root = staged_root.as_ref();
     let install_root = install_root.as_ref();
+    if !install_root.exists() {
+        fs::create_dir_all(install_root).map_err(staging_io_error)?;
+    }
+    validate_program_install_root(install_root)
+        .map_err(|error| staging_error(error.code(), error.to_string()))?;
     if path_contains_reparse_component(staged_root).map_err(staging_io_error)?
         || path_contains_reparse_component(install_root).map_err(staging_io_error)?
     {
@@ -6558,12 +6826,38 @@ pub fn activate_staged_payload_tree(
 }
 
 #[cfg(windows)]
+pub fn stage_validated_archive_zip_in_roots(
+    archive_path: impl AsRef<Path>,
+    roots: &ProgramDataRoots,
+    transaction_id: &str,
+    trusted_keys: &[TrustedKey],
+) -> Result<PathBuf, StagingError> {
+    stage_validated_archive_zip(
+        archive_path,
+        roots.program_root(),
+        transaction_id,
+        trusted_keys,
+    )
+}
+
+#[cfg(windows)]
+pub fn activate_staged_payload_tree_in_roots(
+    staged_root: impl AsRef<Path>,
+    roots: &ProgramDataRoots,
+    trusted_keys: &[TrustedKey],
+) -> Result<(), StagingError> {
+    activate_staged_payload_tree(staged_root, roots.program_root(), trusted_keys)
+}
+
+#[cfg(windows)]
 pub fn set_installed_package_state(
     install_root: impl AsRef<Path>,
     package_id: &str,
     state: PackageLifecycleState,
 ) -> Result<(), LifecycleError> {
     let install_root = install_root.as_ref();
+    validate_program_install_root(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
     let mut lock = read_installed_lockfile(install_root)
         .map_err(|error| lifecycle_error(error.code, error.message))?;
     set_package_state_entries(&mut lock, package_id, state)?;
@@ -6577,6 +6871,8 @@ pub fn mark_installed_package_for_removal(
     package_id: &str,
 ) -> Result<(), LifecycleError> {
     let install_root = install_root.as_ref();
+    validate_program_install_root(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
     let mut lock = read_installed_lockfile(install_root)
         .map_err(|error| lifecycle_error(error.code, error.message))?;
     let manifests = read_installed_manifests(install_root, &lock)?;
@@ -6591,6 +6887,8 @@ pub fn finalize_installed_package_removal(
     package_id: &str,
 ) -> Result<(), LifecycleError> {
     let install_root = install_root.as_ref();
+    validate_program_install_root(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
     let mut lock = read_installed_lockfile(install_root)
         .map_err(|error| lifecycle_error(error.code, error.message))?;
     finalize_package_removal_entries(&mut lock, package_id)?;
@@ -6612,6 +6910,14 @@ pub fn finalize_installed_package_removal(
         )
     })?;
     Ok(())
+}
+
+#[cfg(windows)]
+pub fn finalize_installed_package_removal_in_roots(
+    roots: &ProgramDataRoots,
+    package_id: &str,
+) -> Result<(), LifecycleError> {
+    finalize_installed_package_removal(roots.program_root(), package_id)
 }
 
 #[cfg(windows)]
@@ -7088,6 +7394,8 @@ pub fn verify_installed_packages_for_repair(
     trusted_keys: &[TrustedKey],
 ) -> Result<(), LifecycleError> {
     let install_root = install_root.as_ref();
+    validate_program_install_root(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
     for entry in read_installed_lockfile(install_root)
         .map_err(|error| lifecycle_error(error.code(), error.to_string()))?
     {
@@ -7167,6 +7475,8 @@ pub fn activate_installed_version_for_rollback(
     trusted_keys: &[TrustedKey],
 ) -> Result<(), LifecycleError> {
     let install_root = install_root.as_ref();
+    validate_program_install_root(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
     let package_id = PackageId::parse(package_id).map_err(|_| {
         lifecycle_error("invalid_identity", "known-good package identity is invalid")
     })?;
@@ -7242,6 +7552,16 @@ pub fn activate_installed_version_for_rollback(
     .map_err(|error| lifecycle_error(error.code, error.message))?;
     write_installed_lockfile_atomic(install_root, &lock)
         .map_err(|error| lifecycle_error(error.code, error.message))
+}
+
+#[cfg(windows)]
+pub fn activate_installed_version_for_rollback_in_roots(
+    roots: &ProgramDataRoots,
+    package_id: &str,
+    version: &str,
+    trusted_keys: &[TrustedKey],
+) -> Result<(), LifecycleError> {
+    activate_installed_version_for_rollback(roots.program_root(), package_id, version, trusted_keys)
 }
 
 #[cfg(windows)]
@@ -7431,6 +7751,7 @@ mod repair_ffi {
         pub min_os: Fcitx5ByteSlice,
         pub core_api: Fcitx5ByteSlice,
         pub addon_abi: Fcitx5ByteSlice,
+        pub runtime_abi: Fcitx5ByteSlice,
         pub dependencies: *mut Fcitx5PackageManifestDependency,
         pub dependency_count: usize,
         pub license: Fcitx5ByteSlice,
@@ -7683,7 +8004,11 @@ mod repair_ffi {
                     "{{\"format_version\":2,\"id\":\"{id}\",\"version\":\"1.0.0\",\"type\":\"addon\",\
                      \"architecture\":\"{architecture}\",\"min_os\":\"6.1-sp1\",\"core_api\":\"1\",\
                      \"addon_abi\":\"1\",\"dependencies\":[],\"license\":\"MIT\",\
-                     \"source_commit\":\"0123456789abcdef\",\"permissions\":[\"native-code\",\"input-data\"],\
+                     \"source_commit\":\"0123456789abcdef\",\"runtime_abi\":\"1\",\
+                     \"runtime_build\":\"0123456789abcdef+tools/bootstrap-fcitx.ps1\",\
+                     \"source\":{{\"repository\":\"https://github.com/fcitx/fcitx5-rime.git\",\"commit\":\"0123456789abcdef\",\"build_script\":\"tools/bootstrap-fcitx.ps1\"}},\
+                     \"data_policy\":{{\"program\":\"versioned\",\"user_data\":\"durable\"}},\
+                     \"permissions\":[\"native-code\",\"input-data\"],\
                      \"payload\":[{{\"path\":\"bin/addon.dll\",\"size\":1,\"hashes\":{{\"blake3\":\"{}\"}}}}],\
                      \"key_id\":\"official-2026-mldsa65\"}}",
                     "a".repeat(64)
@@ -7937,6 +8262,10 @@ mod repair_ffi {
             dependencies: Vec::new(),
             license: "unknown".to_owned(),
             source_commit: "unknown".to_owned(),
+            runtime_abi: None,
+            runtime_build: None,
+            source_provenance: None,
+            data_boundary: None,
             permissions: Vec::new(),
             files,
             key_id: package_id,
@@ -8013,6 +8342,7 @@ mod repair_ffi {
             min_os: empty_slice(),
             core_api: empty_slice(),
             addon_abi: empty_slice(),
+            runtime_abi: empty_slice(),
             dependencies: std::ptr::null_mut(),
             dependency_count: 0,
             license: empty_slice(),
@@ -8192,6 +8522,10 @@ mod repair_ffi {
             min_os: owned_slice_from_str(manifest.min_os()),
             core_api: owned_slice_from_str(manifest.core_api()),
             addon_abi: owned_slice_from_str(manifest.addon_abi()),
+            runtime_abi: manifest
+                .runtime_abi()
+                .map(owned_slice_from_str)
+                .unwrap_or_else(empty_slice),
             dependencies,
             dependency_count,
             license: owned_slice_from_str(manifest.license()),
@@ -8380,8 +8714,11 @@ mod repair_ffi {
     pub unsafe extern "C" fn fcitx5_package_validate_manifest_compatibility_utf8(
         package_type: u32,
         package_architecture: Fcitx5ByteSlice,
+        min_os: Fcitx5ByteSlice,
+        runtime_abi: Fcitx5ByteSlice,
         core_api: Fcitx5ByteSlice,
         addon_abi: Fcitx5ByteSlice,
+        runtime_os: Fcitx5ByteSlice,
         runtime_architecture: *const u8,
         runtime_architecture_len: usize,
     ) -> Fcitx5PackageRepairResult {
@@ -8403,11 +8740,29 @@ mod repair_ffi {
                 "parsed manifest contains invalid string data",
             );
         };
+        let Some(min_os) = string_from_raw(min_os) else {
+            return error_result(
+                "invalid_manifest",
+                "parsed manifest contains invalid string data",
+            );
+        };
+        let Some(runtime_abi) = string_from_raw(runtime_abi) else {
+            return error_result(
+                "invalid_manifest",
+                "parsed manifest contains invalid string data",
+            );
+        };
         let Some(addon_abi) = string_from_raw(addon_abi) else {
             return error_result(
                 "invalid_manifest",
                 "parsed manifest contains invalid string data",
             );
+        };
+        let Some(runtime_os) = string_from_raw(runtime_os) else {
+            return error_result("invalid_manifest", "runtime OS is invalid");
+        };
+        let Some(runtime_os) = super::RuntimeOs::parse(&runtime_os) else {
+            return error_result("incompatible_package", "runtime OS is invalid");
         };
         let Some(runtime_architecture) = string_from_raw(Fcitx5ByteSlice {
             data: runtime_architecture,
@@ -8418,9 +8773,12 @@ mod repair_ffi {
         match validate_manifest_compatibility_fields(
             &package_type,
             &package_architecture,
+            &min_os,
+            (!runtime_abi.is_empty()).then_some(runtime_abi.as_str()),
             &core_api,
             &addon_abi,
             &runtime_architecture,
+            runtime_os,
         ) {
             Ok(()) => ok_result(),
             Err(error) => error_result(error.code(), &error.to_string()),
@@ -8641,6 +8999,7 @@ mod repair_ffi {
         free_owned_slice(manifest.min_os);
         free_owned_slice(manifest.core_api);
         free_owned_slice(manifest.addon_abi);
+        free_owned_slice(manifest.runtime_abi);
         free_owned_slice(manifest.license);
         free_owned_slice(manifest.source_commit);
         free_owned_slice(manifest.key_id);
@@ -9669,6 +10028,72 @@ fn require_ascii_token_string(
     Ok(value)
 }
 
+fn require_ascii_hex_string(
+    object: &[(String, JsonValue)],
+    key: &str,
+    maximum: usize,
+) -> Result<String, ManifestError> {
+    let value = require_string(object, key, maximum, false)?;
+    if value.len() < 8 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(manifest_error(
+            "invalid_manifest",
+            format!("{key} is not a bounded hexadecimal commit"),
+        ));
+    }
+    Ok(value)
+}
+
+fn require_provenance_repository(object: &[(String, JsonValue)]) -> Result<String, ManifestError> {
+    let value = require_string(object, "repository", 256, false)?;
+    if !value.is_ascii()
+        || !(value.starts_with("https://") || value.starts_with("http://"))
+        || value.bytes().any(|byte| {
+            !(byte.is_ascii_alphanumeric() || b":/?#[]@!$&'()*+,;=.-_~".contains(&byte))
+        })
+    {
+        return Err(manifest_error(
+            "invalid_manifest",
+            "source repository provenance is invalid",
+        ));
+    }
+    Ok(value)
+}
+
+fn require_runtime_build(
+    object: &[(String, JsonValue)],
+    commit: &str,
+    build_script: &str,
+) -> Result<String, ManifestError> {
+    let value = require_string(object, "runtime_build", 192, false)?;
+    let expected = format!("{commit}+{build_script}");
+    if value != expected
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._+-/".contains(&byte))
+    {
+        return Err(manifest_error(
+            "invalid_manifest",
+            "runtime_build provenance is inconsistent",
+        ));
+    }
+    Ok(value)
+}
+
+fn require_enum_string(
+    object: &[(String, JsonValue)],
+    key: &str,
+    expected: &str,
+) -> Result<String, ManifestError> {
+    let value = require_ascii_token_string(object, key, 32, "_")?;
+    if value != expected {
+        return Err(manifest_error(
+            "invalid_manifest",
+            format!("{key} has an unsupported value"),
+        ));
+    }
+    Ok(value)
+}
+
 fn require_unsigned(
     object: &[(String, JsonValue)],
     key: &str,
@@ -10535,6 +10960,155 @@ mod tests {
     }
 
     #[test]
+    fn manifest_v2_requires_signed_provenance_and_data_boundary() {
+        let manifest = manifest_v2(
+            "fcitx5-rime",
+            "1.0.0",
+            &"b".repeat(64),
+            12,
+            "official-2026-mldsa65",
+            None,
+        )
+        .replace(
+            "\"key_id\":\"official-2026-mldsa65\"",
+            "\"runtime_abi\":\"1\",\"runtime_build\":\"0123456789abcdef+tools/bootstrap-fcitx.ps1\",\
+             \"source\":{\"repository\":\"https://github.com/fcitx/fcitx5-rime.git\",\
+             \"commit\":\"0123456789abcdef\",\"build_script\":\"tools/bootstrap-fcitx.ps1\"},\
+             \"data_policy\":{\"program\":\"versioned\",\"user_data\":\"durable\"},\
+             \"key_id\":\"official-2026-mldsa65\"",
+        );
+        let parsed = parse_manifest(&manifest).expect("v2 provenance manifest should parse");
+        assert_eq!(parsed.runtime_abi(), Some("1"));
+        assert_eq!(
+            parsed.runtime_build(),
+            Some("0123456789abcdef+tools/bootstrap-fcitx.ps1")
+        );
+        assert_eq!(
+            parsed.source_provenance().expect("source provenance"),
+            &SourceProvenance {
+                repository: "https://github.com/fcitx/fcitx5-rime.git".to_owned(),
+                commit: "0123456789abcdef".to_owned(),
+                build_script: "tools/bootstrap-fcitx.ps1".to_owned(),
+            }
+        );
+        assert_eq!(parsed.data_boundary(), Some(&DataBoundary::default()));
+
+        let missing_runtime_build = manifest.replace(
+            "\"runtime_build\":\"0123456789abcdef+tools/bootstrap-fcitx.ps1\",",
+            "",
+        );
+        assert_manifest_error("invalid_manifest", &missing_runtime_build);
+        let inconsistent_runtime_build = manifest.replace(
+            "0123456789abcdef+tools/bootstrap-fcitx.ps1",
+            "fedcba9876543210+tools/bootstrap-fcitx.ps1",
+        );
+        assert_manifest_error("invalid_manifest", &inconsistent_runtime_build);
+    }
+
+    #[test]
+    fn manifest_v2_compatibility_uses_abi_fields_but_not_runtime_build() {
+        let base = manifest_v2(
+            "fcitx5-rime",
+            "1.0.0",
+            &"b".repeat(64),
+            12,
+            "official-2026-mldsa65",
+            None,
+        )
+        .replace(
+            "\"key_id\":\"official-2026-mldsa65\"",
+            "\"runtime_abi\":\"1\",\"runtime_build\":\"0123456789abcdef+tools/bootstrap-fcitx.ps1\",\
+             \"source\":{\"repository\":\"https://github.com/fcitx/fcitx5-rime.git\",\
+             \"commit\":\"0123456789abcdef\",\"build_script\":\"tools/bootstrap-fcitx.ps1\"},\
+             \"data_policy\":{\"program\":\"versioned\",\"user_data\":\"durable\"},\
+             \"key_id\":\"official-2026-mldsa65\"",
+        );
+        let compatible = parse_manifest(&base).expect("valid v2 manifest");
+        validate_manifest_compatibility(&compatible, ARCHITECTURE)
+            .expect("matching v2 ABI fields should be compatible");
+        validate_manifest_compatibility_for_runtime(&compatible, ARCHITECTURE, RuntimeOs::Win7)
+            .expect("Windows 7 accepts a Windows 7 minimum OS");
+        validate_manifest_compatibility_for_runtime(&compatible, ARCHITECTURE, RuntimeOs::Win10)
+            .expect("Windows 10 accepts a Windows 7 minimum OS");
+        let alternate_build = base
+            .replace(
+                "tools/bootstrap-fcitx.ps1",
+                "tools/bootstrap-fcitx-release.ps1",
+            )
+            .replace(
+                "0123456789abcdef+tools/bootstrap-fcitx.ps1",
+                "0123456789abcdef+tools/bootstrap-fcitx-release.ps1",
+            );
+        let alternate = parse_manifest(&alternate_build)
+            .expect("a provenance-consistent diagnostic build label should parse");
+        validate_manifest_compatibility(&alternate, ARCHITECTURE)
+            .expect("runtime build must not be an ABI equality gate");
+        let bad_runtime_abi =
+            parse_manifest(&base.replace("\"runtime_abi\":\"1\"", "\"runtime_abi\":\"2\""))
+                .expect("runtime ABI remains syntactically valid");
+        assert_compatibility_error(&bad_runtime_abi, ARCHITECTURE);
+        let bad_min_os =
+            parse_manifest(&base.replace("\"min_os\":\"6.1-sp1\"", "\"min_os\":\"10.0\""))
+                .expect("min_os remains syntactically valid");
+        validate_manifest_compatibility_for_runtime(&bad_min_os, ARCHITECTURE, RuntimeOs::Win10)
+            .expect("Windows 10 accepts a Windows 10 minimum OS");
+        validate_manifest_compatibility_for_runtime(&bad_min_os, ARCHITECTURE, RuntimeOs::Win11)
+            .expect("Windows 11 accepts a Windows 10 minimum OS");
+        assert!(validate_manifest_compatibility_for_runtime(
+            &bad_min_os,
+            ARCHITECTURE,
+            RuntimeOs::Win7
+        )
+        .is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lifecycle_rejects_relative_or_reparse_program_roots_and_preserves_durable_data() {
+        assert!(validate_program_install_root("relative-root").is_err());
+        let program =
+            std::env::temp_dir().join(format!("fcitx5-package-program-{}", std::process::id()));
+        let data = std::env::temp_dir().join(format!("fcitx5-package-data-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&program);
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&program).expect("program root should create");
+        fs::create_dir_all(data.join("rime")).expect("data root should create");
+        fs::write(data.join("rime/user.dict.yaml"), b"keep").expect("dictionary should write");
+        fs::write(data.join("config.toml"), b"keep").expect("config should write");
+        let roots = ProgramDataRoots::new(&program, &data).expect("roots should be distinct");
+        assert_eq!(
+            roots.program_root(),
+            fs::canonicalize(&program).expect("program canonical")
+        );
+        assert_eq!(
+            roots.user_data_root(),
+            fs::canonicalize(&data).expect("data canonical")
+        );
+        assert!(ProgramDataRoots::new(&program, &program).is_err());
+        let nested = program.join("nested");
+        fs::create_dir_all(&nested).expect("nested program directory should create");
+        assert!(ProgramDataRoots::new(&program, &nested).is_err());
+        let data_alias = PathBuf::from(data.to_string_lossy().to_uppercase());
+        ProgramDataRoots::new(&program, &data_alias)
+            .expect("case aliases for distinct roots should remain valid");
+        let program_alias = PathBuf::from(program.to_string_lossy().to_uppercase());
+        assert!(ProgramDataRoots::new(&program, &program_alias).is_err());
+
+        let relative_data = PathBuf::from("relative-user-data");
+        assert!(ProgramDataRoots::new(&program, &relative_data).is_err());
+
+        let symlink =
+            std::env::temp_dir().join(format!("fcitx5-package-data-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&symlink);
+        if std::os::windows::fs::symlink_dir(&data, &symlink).is_ok() {
+            assert!(ProgramDataRoots::new(&program, &symlink).is_err());
+            let _ = fs::remove_dir(&symlink);
+        }
+        let _ = fs::remove_dir_all(&program);
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
     fn manifest_rejects_cpp_invalid_cases() {
         let unsupported = manifest_v1("fcitx5-rime", "1.0.0", &"a".repeat(64), 12)
             .replace("\"format_version\": 1", "\"format_version\": 99");
@@ -10858,8 +11432,11 @@ mod tests {
         assert_eq!(parsed.key_id(), "official-2026-mldsa65");
         assert!(find_repository_package(&parsed, "fcitx5-rime", "x64").is_some());
 
+        let tampered = std::str::from_utf8(repository)
+            .expect("fixture repository should be UTF-8")
+            .replace("\"Rime\"", "\"Rime X\"");
         assert_eq!(
-            verify_repository_index_envelope(b"tampered", &envelope, &keys, "stable")
+            verify_repository_index_envelope(tampered.as_bytes(), &envelope, &keys, "stable")
                 .expect_err("tampered repository should fail")
                 .code(),
             "invalid_signature"
@@ -11461,9 +12038,18 @@ mod tests {
             ],
         );
         let install_root = temp.join("install");
-        let staged = stage_validated_archive_zip(&archive, &install_root, "tx-activate", &trusted)
-            .expect("archive should stage");
-        activate_staged_payload_tree(&staged, &install_root, &trusted)
+        let user_data_root = temp.join("user-data");
+        std::fs::create_dir_all(&install_root).expect("program root should create");
+        std::fs::create_dir_all(user_data_root.join("rime")).expect("user data should create");
+        std::fs::write(user_data_root.join("rime/user.dict.yaml"), b"keep")
+            .expect("dictionary should write");
+        std::fs::write(user_data_root.join("config.toml"), b"keep").expect("config should write");
+        let roots = ProgramDataRoots::new(&install_root, &user_data_root)
+            .expect("program and user data roots should be distinct");
+        let staged =
+            stage_validated_archive_zip_in_roots(&archive, &roots, "tx-activate", &trusted)
+                .expect("archive should stage");
+        activate_staged_payload_tree_in_roots(&staged, &roots, &trusted)
             .expect("staged payload should activate");
         assert!(install_root
             .join("versions/fcitx5-rime/1.0.0/bin/addon.dll")
@@ -11504,7 +12090,7 @@ mod tests {
             ],
         );
         let bad_staged =
-            stage_validated_archive_zip(&bad_archive, &install_root, "tx-bad", &bad_trusted)
+            stage_validated_archive_zip_in_roots(&bad_archive, &roots, "tx-bad", &bad_trusted)
                 .expect("bad archive should stage before tamper");
         std::fs::write(bad_staged.join("payload/bin/addon.dll"), b"tampered")
             .expect("tamper should write");
@@ -11518,6 +12104,51 @@ mod tests {
             read_installed_lockfile(&install_root).expect("lockfile should still parse");
         assert_eq!(lock_after_failure.len(), 1);
         assert_eq!(lock_after_failure[0].version(), "1.0.0");
+        let update_manifest = manifest_v2(
+            "fcitx5-rime",
+            "1.1.0",
+            hello_blake3.as_str(),
+            5,
+            "official-test-2026-mldsa65",
+            Some(hello_sha256.as_str()),
+        );
+        let Some((update_trusted, update_signature)) =
+            signed_package_manifest_fixture(&temp, "update", &update_manifest)
+        else {
+            eprintln!("skipping v2 update fixture: signer binary not built");
+            return;
+        };
+        let update_archive = temp.join("update.fcpkg");
+        write_store_zip_for_test(
+            &update_archive,
+            &[
+                ("manifest.json", update_manifest.as_bytes()),
+                ("manifest.sig.json", &update_signature),
+                ("payload/bin/addon.dll", b"hello"),
+            ],
+        );
+        let update_staged = stage_validated_archive_zip_in_roots(
+            &update_archive,
+            &roots,
+            "tx-update",
+            &update_trusted,
+        )
+        .expect("update archive should stage");
+        activate_staged_payload_tree_in_roots(&update_staged, &roots, &update_trusted)
+            .expect("update should activate");
+        activate_installed_version_for_rollback_in_roots(&roots, "fcitx5-rime", "1.0.0", &trusted)
+            .expect("rollback should activate the known-good version");
+        assert_eq!(
+            read_installed_lockfile(&install_root).expect("lock should parse")[0].version(),
+            "1.0.0"
+        );
+        mark_installed_package_for_removal(&install_root, "fcitx5-rime")
+            .expect("package should enter pending removal");
+        finalize_installed_package_removal_in_roots(&roots, "fcitx5-rime")
+            .expect("package removal should delete only program versions");
+        assert!(!install_root.join("versions/fcitx5-rime").exists());
+        assert!(user_data_root.join("rime/user.dict.yaml").exists());
+        assert!(user_data_root.join("config.toml").exists());
         let _ = std::fs::remove_dir_all(&temp);
     }
 
@@ -11679,7 +12310,12 @@ mod tests {
             "{{\"format_version\": 2,\"id\":\"{id}\",\"version\":\"{version}\",\"type\":\"addon\",\
              \"architecture\":\"{ARCHITECTURE}\",\"min_os\":\"6.1-sp1\",\"core_api\":\"1\",\
              \"addon_abi\":\"1\",\"dependencies\":[],\"license\":\"MIT\",\
-             \"source_commit\":\"0123456789abcdef\",\"permissions\":[\"native-code\",\"input-data\"],\
+             \"source_commit\":\"0123456789abcdef\",\"runtime_abi\":\"1\",\
+             \"runtime_build\":\"0123456789abcdef+tools/bootstrap-fcitx.ps1\",\
+             \"source\":{{\"repository\":\"https://github.com/fcitx/fcitx5-rime.git\",\
+             \"commit\":\"0123456789abcdef\",\"build_script\":\"tools/bootstrap-fcitx.ps1\"}},\
+             \"data_policy\":{{\"program\":\"versioned\",\"user_data\":\"durable\"}},\
+             \"permissions\":[\"native-code\",\"input-data\"],\
              \"payload\":[{{\"path\":\"bin/addon.dll\",\"size\":{size},\
              \"hashes\":{{\"blake3\":\"{blake3}\"{sha256}}}}}],\"key_id\":\"{key_id}\"}}"
         )

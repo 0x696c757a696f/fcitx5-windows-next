@@ -72,6 +72,7 @@ struct Manifest {
   std::string min_os;
   std::string core_api;
   std::string addon_abi;
+  std::string runtime_abi;
   std::vector<Dependency> dependencies;
   std::string license;
   std::string source_commit;
@@ -149,6 +150,9 @@ struct RepositoryIndex {
 [[nodiscard]] Manifest parse_manifest(std::string_view bytes);
 void validate_manifest_compatibility(const Manifest& manifest,
                                      std::string_view architecture);
+void validate_manifest_compatibility(const Manifest& manifest,
+                                     std::string_view architecture,
+                                     std::string_view runtime_os);
 [[nodiscard]] bool is_safe_relative_package_path(std::string_view path) noexcept;
 [[nodiscard]] bool path_contains_reparse_point(const std::filesystem::path& path);
 [[nodiscard]] std::array<std::byte, 32> sha256(std::span<const std::byte> bytes);

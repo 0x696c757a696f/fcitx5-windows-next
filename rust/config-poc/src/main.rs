@@ -5565,8 +5565,11 @@ fn validate_config_rust_cutover_plan(
 
 const CONFIG_POC_PACKAGE_MANIFEST_JSON: &str = concat!(
     r#"{"format_version":2,"id":"fcitx5-rime","version":"1.0.0","type":"addon","#,
-    r#""architecture":"x64","min_os":"10.0.17763","core_api":"1","addon_abi":"1","#,
+    r#""architecture":"x64","min_os":"10.0","core_api":"1","addon_abi":"1","#,
     r#""dependencies":[],"license":"LGPL-2.1-or-later","source_commit":"0123456789abcdef","#,
+    r#""runtime_abi":"1","runtime_build":"0123456789abcdef+tools/bootstrap-fcitx.ps1","#,
+    r#""source":{"repository":"https://github.com/fcitx/fcitx5-rime.git","commit":"0123456789abcdef","build_script":"tools/bootstrap-fcitx.ps1"},"#,
+    r#""data_policy":{"program":"versioned","user_data":"durable"},"#,
     r#""permissions":["native-addon"],"key_id":"official-2026-mldsa65","payload":["#,
     r#"{"path":"bin/addon.dll","size":1,"hashes":{"blake3":"#,
     r#""0000000000000000000000000000000000000000000000000000000000000000","#,

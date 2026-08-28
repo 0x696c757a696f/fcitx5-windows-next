@@ -1,24 +1,22 @@
-# Task 067 - Plugin provenance and data boundary
+# Task 068 - Repository freshness and mirror identity
 
 **Mode:** CHANGE / CODE-ONLY
-**Task ID:** `PLUGIN-PROVENANCE-DATA-BOUNDARY-001`
-**Prerequisite:** `065` automated Config contract green.
-**Evidence class:** automated x64/x86 package contract; production publication remains manual.
+**Task ID:** `REPOSITORY-FRESHNESS-MIRROR-IDENTITY-001`
+**Prerequisite:** `067` automated package metadata boundary green.
+**Evidence class:** deterministic repository corpus; no TUF support claim.
 
 ## Goal
 
-Extend the current Rust package path with verified plugin `runtime_abi`, `runtime_build`, source
-provenance, and explicit separation of versioned program packages from user data.
+Harden the existing Rust ML-DSA-65 v2 repository protocol against stale/frozen/mixed metadata and
+bind mirrors to the same verified repository identity.
 
 ## Constraints and acceptance
 
-- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. Preserve the
-  current ML-DSA-65 v2 verifier and upstream standard Fcitx addon/build-farm semantics.
-- Reject missing/malformed `runtime_build` or a value inconsistent with the signed manifest
-  provenance. `runtime_build` is diagnostic/provenance, not ABI equality; compatibility rejection
-  uses `runtime_abi`, `min_os`, `core_api`, `addon_abi`, and the existing architecture checks.
-  Metadata permissions are declarations and audit inputs, not a sandbox; addons remain outside TSF host.
-- Version install/remove/rollback never deletes user dictionary, Rime user data, or configuration.
-  This task's metadata corpus does not substitute for the real plugin ecosystem matrix in task 069.
-- Add deterministic x64/x86 verifier/path/lifecycle tests. Protected signing keys, release publication,
-  real online lifecycle, Authenticode, and UAC remain precisely `MANUAL-PENDING`.
+- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. Extend the current
+  protocol in one versioned path; do not build permanent v2/v3 runtime dual stacks.
+- Verify monotonic sequence, expiry/freshness, channel identity, mirror identity, and coherent target
+  metadata before package selection. Reject rollback, freeze, and mix-and-match fixtures.
+- A mirror supplies bytes for an already verified identity and does not become a trust root. Do not
+  claim TUF root/snapshot/timestamp, RemoteAddon, AppContainer, or ARM64 support.
+- Add x64/x86 deterministic tests for all rejection cases and update production input generation only
+  when it remains ML-DSA-65 v2 compatible. Protected production signing/publication remains manual.

@@ -124,6 +124,10 @@ std::string make_manifest_v2(std::string_view id, std::string_view version,
          "  \"dependencies\": [],\n"
          "  \"license\": \"MIT\",\n"
          "  \"source_commit\": \"0123456789abcdef\",\n"
+         "  \"runtime_abi\": \"1\",\n"
+         "  \"runtime_build\": \"0123456789abcdef+tools/bootstrap-fcitx.ps1\",\n"
+         "  \"source\": {\"repository\": \"https://github.com/fcitx/fcitx5-rime.git\",\"commit\": \"0123456789abcdef\",\"build_script\": \"tools/bootstrap-fcitx.ps1\"},\n"
+         "  \"data_policy\": {\"program\": \"versioned\",\"user_data\": \"durable\"},\n"
          "  \"permissions\": [\"native-code\", \"input-data\"],\n"
          "  \"payload\": [{\"path\": \"bin/addon.dll\", \"size\": " +
          std::to_string(file_size) + ", \"hashes\": " + hashes +
