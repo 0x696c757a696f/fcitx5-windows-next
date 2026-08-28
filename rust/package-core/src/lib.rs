@@ -7199,7 +7199,8 @@ pub fn set_installed_package_state(
         .map_err(|error| lifecycle_error(error.code, error.message))?;
     let mut lock = read_installed_lockfile(install_root)
         .map_err(|error| lifecycle_error(error.code, error.message))?;
-    set_package_state_entries(&mut lock, package_id, state)?;
+    let manifests = read_installed_manifests(install_root, &lock)?;
+    set_package_state_entries_checked(&mut lock, &manifests, package_id, state)?;
     write_installed_lockfile_atomic(install_root, &lock)
         .map_err(|error| lifecycle_error(error.code, error.message))
 }
@@ -7586,6 +7587,86 @@ pub fn set_package_state_entries(
     let package_id = PackageId::parse(package_id).map_err(|_| {
         lifecycle_error("invalid_state", "package id or lifecycle state is invalid")
     })?;
+    let entry = lock
+        .iter_mut()
+        .find(|entry| entry.id() == &package_id)
+        .ok_or_else(|| lifecycle_error("package_not_found", "package is not installed"))?;
+    entry.state = state;
+    Ok(())
+}
+
+fn package_state_is_active(state: &PackageLifecycleState) -> bool {
+    matches!(
+        state,
+        PackageLifecycleState::Installed
+            | PackageLifecycleState::Enabled
+            | PackageLifecycleState::PendingUpdate
+    )
+}
+
+pub fn set_package_state_entries_checked(
+    lock: &mut [LockEntry],
+    installed_manifests: &[Manifest],
+    package_id: &str,
+    state: PackageLifecycleState,
+) -> Result<(), LifecycleError> {
+    let package_id = PackageId::parse(package_id).map_err(|_| {
+        lifecycle_error("invalid_state", "package id or lifecycle state is invalid")
+    })?;
+    let target = lock
+        .iter()
+        .find(|entry| entry.id() == &package_id)
+        .ok_or_else(|| lifecycle_error("package_not_found", "package is not installed"))?;
+
+    if state == PackageLifecycleState::Disabled {
+        for dependent in lock
+            .iter()
+            .filter(|entry| entry.id() != &package_id && package_state_is_active(entry.state()))
+        {
+            let Some(manifest) = installed_manifests.iter().find(|manifest| {
+                manifest.id() == dependent.id() && manifest.version() == dependent.version()
+            }) else {
+                return Err(lifecycle_error(
+                    "package_not_found",
+                    "package manifest is unavailable",
+                ));
+            };
+            if manifest.dependencies().iter().any(|dependency| {
+                dependency.id() == &package_id && dependency.version() == target.version()
+            }) {
+                return Err(lifecycle_error(
+                    "package_in_use",
+                    "another enabled package depends on this package",
+                ));
+            }
+        }
+    }
+
+    if state == PackageLifecycleState::Enabled {
+        let manifest = installed_manifests
+            .iter()
+            .find(|manifest| manifest.id() == target.id() && manifest.version() == target.version())
+            .ok_or_else(|| {
+                lifecycle_error("package_not_found", "package manifest is unavailable")
+            })?;
+        for dependency in manifest.dependencies() {
+            let Some(entry) = lock.iter().find(|entry| {
+                entry.id() == dependency.id() && entry.version() == dependency.version()
+            }) else {
+                return Err(lifecycle_error(
+                    "dependency_unavailable",
+                    "required package is not installed",
+                ));
+            };
+            if !package_state_is_active(entry.state()) {
+                return Err(lifecycle_error(
+                    "dependency_unavailable",
+                    "required package is not enabled",
+                ));
+            }
+        }
+    }
+
     let entry = lock
         .iter_mut()
         .find(|entry| entry.id() == &package_id)
@@ -12927,6 +13008,53 @@ mod tests {
         assert_lifecycle_error(
             "protected_package",
             mark_package_for_removal_entries(&mut core_lock, &[core], "fcitx5-core"),
+        );
+    }
+
+    #[test]
+    fn package_state_change_preserves_dependency_activation() {
+        let base = parse_manifest(&manifest_v1("fcitx5-rime", "1.0.0", &"a".repeat(64), 12))
+            .expect("base manifest should parse");
+        let dependent = parse_manifest(&manifest_v1_with_dependencies_for(
+            "rime-schema-luna",
+            "1.0.0",
+            &"b".repeat(64),
+            12,
+            "[{\"id\":\"fcitx5-rime\",\"version\":\"1.0.0\"}]",
+        ))
+        .expect("dependent manifest should parse");
+        let manifests = vec![base, dependent];
+        let mut lock = vec![
+            lock_entry("fcitx5-rime", PackageLifecycleState::Enabled),
+            lock_entry("rime-schema-luna", PackageLifecycleState::Enabled),
+        ];
+        let unchanged = lock.clone();
+        assert_lifecycle_error(
+            "package_in_use",
+            set_package_state_entries_checked(
+                &mut lock,
+                &manifests,
+                "fcitx5-rime",
+                PackageLifecycleState::Disabled,
+            ),
+        );
+        assert_eq!(lock, unchanged);
+        lock[1].state = PackageLifecycleState::Disabled;
+        set_package_state_entries_checked(
+            &mut lock,
+            &manifests,
+            "fcitx5-rime",
+            PackageLifecycleState::Disabled,
+        )
+        .expect("dependency may be disabled after dependent is disabled");
+        assert_lifecycle_error(
+            "dependency_unavailable",
+            set_package_state_entries_checked(
+                &mut lock,
+                &manifests,
+                "rime-schema-luna",
+                PackageLifecycleState::Enabled,
+            ),
         );
     }
 
