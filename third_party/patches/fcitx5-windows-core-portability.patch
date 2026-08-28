@@ -1,0 +1,100 @@
+diff --git a/src/lib/fcitx-utils/eventdispatcher.cpp b/src/lib/fcitx-utils/eventdispatcher.cpp
+index 4407e7cf..20302f10 100644
+--- a/src/lib/fcitx-utils/eventdispatcher.cpp
++++ b/src/lib/fcitx-utils/eventdispatcher.cpp
+@@ -82,4 +82,17 @@ EventLoop *EventDispatcher::eventLoop() const {
+     return d->loop_;
+ }
+ 
++void EventDispatcher::dispatchPending() {
++    FCITX_D();
++    for (int n = 0; n < 64; ++n) {
++        {
++            std::lock_guard<std::mutex> lock(d->mutex_);
++            if (d->eventList_.empty()) {
++                return;
++            }
++        }
++        d->dispatchEvent();
++    }
++}
++
+ } // namespace fcitx
+diff --git a/src/lib/fcitx-utils/eventdispatcher.h b/src/lib/fcitx-utils/eventdispatcher.h
+index ebec1602..53a4d282 100644
+--- a/src/lib/fcitx-utils/eventdispatcher.h
++++ b/src/lib/fcitx-utils/eventdispatcher.h
+@@ -91,6 +91,8 @@ public:
+      */
+     EventLoop *eventLoop() const;
+ 
++    void dispatchPending();
++
+ private:
+     const std::unique_ptr<EventDispatcherPrivate> d_ptr;
+     FCITX_DECLARE_PRIVATE(EventDispatcher);
+diff --git a/src/lib/fcitx-utils/standardpaths_p_win.cpp b/src/lib/fcitx-utils/standardpaths_p_win.cpp
+index c9d6942e..d9da2f1c 100644
+--- a/src/lib/fcitx-utils/standardpaths_p_win.cpp
++++ b/src/lib/fcitx-utils/standardpaths_p_win.cpp
+@@ -18,6 +18,7 @@
+ #include <initguid.h>
+ #include <knownfolders.h>
+ #include <ranges>
++#include "fcitx-utils/environ.h"
+ #include "fcitx-utils/fcitxutils_export.h"
+ #include "fcitx-utils/fs.h"
+ #include "fcitx-utils/standardpaths.h"
+@@ -38,7 +39,7 @@ namespace {
+ // standard path. We will have a 3 layer directory structure:
+ // AppData/Roaming/Fcitx5/{config,data}/[package]/
+ // AppData/Local/Fcitx5/{config,data}/[package]/
+-// appFilePath/../{config,data}/[package]/
++// appFilePath/../{config,share}/... (pkg data: share/fcitx5, addons: lib/fcitx5)
+ constexpr std::string_view windowsTopLevelAppName = "Fcitx5";
+ 
+ void normalizeSlash(std::wstring &path) {
+@@ -176,11 +177,11 @@ std::vector<std::filesystem::path> builtinPath(
+         {"basedir", basePath},
+         {"configdir", basePath / "config"},
+         {"pkgconfigdir", basePath / "config/fcitx5"},
+-        {"datadir", basePath / "data"},
+-        {"pkgdatadir", basePath / "data/fcitx5"},
++        {"datadir", basePath / "share"},
++        {"pkgdatadir", basePath / "share/fcitx5"},
+         {"libdir", basePath / "lib"},
+         {"bindir", basePath / "bin"},
+-        {"localedir", basePath / "data/locale"},
++        {"localedir", basePath / "share/locale"},
+         {"addondir", basePath / "lib/fcitx5"},
+         {"libdatadir", basePath / "lib"},
+         {"libexecdir", basePath / "libexec"},
+@@ -272,6 +273,15 @@ std::vector<std::filesystem::path> getPath(
+         }
+         if (!options.test(StandardPathsOption::SkipBuiltInPath)) {
+             if (packageName == "fcitx5") {
++                if (const auto extra = getEnvironment("FCITX_DATA_DIRS")) {
++                    for (const auto &dir :
++                         stringutils::split(*extra, std::string_view{";"})) {
++                        if (!dir.empty()) {
++                            paths.push_back(
++                                std::filesystem::path(dir).lexically_normal());
++                        }
++                    }
++                }
+                 std::ranges::copy(builtinPath(builtInPathMap, "pkgdatadir"),
+                                   std::back_inserter(paths));
+             } else {
+diff --git a/test/teststandardpaths_win.cpp b/test/teststandardpaths_win.cpp
+index b3eba5ce..c107a197 100644
+--- a/test/teststandardpaths_win.cpp
++++ b/test/teststandardpaths_win.cpp
+@@ -33,7 +33,7 @@ void test_basic() {
+     FCITX_ASSERT(standardPaths.directories(StandardPathsType::Config).back() ==
+                  FCITX5_BINARY_DIR "/config");
+     FCITX_ASSERT(standardPaths.directories(StandardPathsType::PkgData).back() ==
+-                 std::filesystem::path(FCITX5_BINARY_DIR) / "data/fcitx5");
++                 std::filesystem::path(FCITX5_BINARY_DIR) / "share/fcitx5");
+ }
+ 
+ void test_override() {

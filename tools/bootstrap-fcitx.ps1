@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch] $VerifyOnly)
+param([switch] $VerifyOnly, [switch] $VerifyPatchesOnly)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -15,7 +15,7 @@ $archiveHash = 'A2D047E8EE213C3C6A49A8DE427EB1069DF12207C0422FF1B3CBB5C905C34221
 $signingFingerprint = '0EBF782C5D53F7E5FB02A66746BD761F7A49B0EC'
 
 $sourcePins = @(
-  @{ Name = 'fcitx5'; Url = 'https://github.com/gaboolic/fcitx5.git'; Commit = '50a3069a2f1bb8647abef713d98ad10d0713b752' },
+  @{ Name = 'fcitx5'; Url = 'https://github.com/fcitx/fcitx5.git'; Commit = 'cdd0b9d900770d1ad1229d759213215d5dc23a90' },
   @{ Name = 'libime'; Url = 'https://github.com/fcitx/libime.git'; Commit = '92bf7144d31d42549d35e5db348dc79100cb2074' },
   @{ Name = 'fcitx5-chinese-addons'; Url = 'https://github.com/fcitx/fcitx5-chinese-addons.git'; Commit = 'bc84e3acb022f5b6b5bed254b14ba19d05023645' },
   @{ Name = 'fcitx5-rime'; Url = 'https://github.com/fcitx/fcitx5-rime.git'; Commit = '4e996319edea790495edc2c91893e9af4c4e6d6a' },
@@ -25,6 +25,16 @@ $sourcePins = @(
   @{ Name = 'librime-octagram'; Url = 'https://github.com/lotem/librime-octagram.git'; Commit = 'dfcc15115788c828d9dd7b4bff68067d3ce2ffb8' },
   @{ Name = 'librime-proto'; Url = 'https://github.com/lotem/librime-proto.git'; Commit = '657a923cd4c333e681dc943e6894e6f6d42d25b4' },
   @{ Name = 'librime-predict'; Url = 'https://github.com/rime/librime-predict.git'; Commit = '920bd41ebf6f9bf6855d14fbe80212e54e749791' }
+)
+
+$patchPins = @(
+  @{ Source = 'fcitx5'; File = 'fcitx5-windows-core-portability.patch' },
+  @{ Source = 'fcitx5'; File = 'fcitx5-windows-user-data-root.patch' },
+  @{ Source = 'libime'; File = 'libime-windows-model-dirs.patch' },
+  @{ Source = 'fcitx5-chinese-addons'; File = 'fcitx5-chinese-addons-msys2-clang-libcxx.patch' },
+  @{ Source = 'fcitx5-rime'; File = 'fcitx5-rime-windows-paths.patch' },
+  @{ Source = 'fcitx5-lua'; File = 'fcitx5-lua-windows-lua54.patch' },
+  @{ Source = 'librime'; File = 'librime-msys2-clang-windows.patch' }
 )
 
 $packagePins = @(
@@ -117,6 +127,28 @@ function Apply-PinnedPatch([string] $Repository, [string] $Patch) {
   throw "Pinned patch does not apply cleanly: $Patch"
 }
 
+function Assert-PatchCompatibility {
+  foreach ($pin in $patchPins) {
+    $repository = Join-Path $sources $pin.Source
+    $patch = Join-Path $repoRoot "third_party/patches/$($pin.File)"
+    if (-not (Test-Path -LiteralPath $patch -PathType Leaf)) {
+      throw "Missing pinned patch: $patch"
+    }
+    $gitPrefix = Get-RepositoryGitPrefix $repository
+    $forward = (& git @gitPrefix apply --check $patch 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host "Patch compatibility: APPLY-CLEAN $($pin.File)"
+      continue
+    }
+    $reverse = (& git @gitPrefix apply --reverse --check $patch 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host "Patch compatibility: ALREADY-APPLIED $($pin.File)"
+      continue
+    }
+    throw "Patch compatibility failed for $($pin.Source)/$($pin.File): $forward`n$reverse"
+  }
+}
+
 function Ensure-PluginJunction([string] $Link, [string] $Target) {
   if (Test-Path -LiteralPath $Link) {
     $item = Get-Item -LiteralPath $Link -Force
@@ -129,12 +161,7 @@ function Ensure-PluginJunction([string] $Link, [string] $Target) {
   New-Item -ItemType Junction -Path $Link -Target $Target | Out-Null
 }
 
-function Assert-Pins {
-  $archive = Join-Path $downloads $archiveName
-  if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
-      (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $archiveHash) {
-    throw 'Pinned MSYS2 archive is missing or has the wrong SHA-256.'
-  }
+function Assert-SourcePins {
   foreach ($pin in $sourcePins) {
     $path = Join-Path $sources $pin.Name
     if (-not (Test-Path -LiteralPath (Join-Path $path '.git'))) {
@@ -146,6 +173,16 @@ function Assert-Pins {
       throw "Unexpected $($pin.Name) commit: $actual"
     }
   }
+}
+
+function Assert-Pins {
+  $archive = Join-Path $downloads $archiveName
+  if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
+      (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $archiveHash) {
+    throw 'Pinned MSYS2 archive is missing or has the wrong SHA-256.'
+  }
+  Assert-SourcePins
+  Assert-PatchCompatibility
   $actualPackages = Invoke-Msys 'pacman -Q'
   foreach ($pin in $packagePins) {
     $parts = $pin.Split('=', 2)
@@ -158,6 +195,12 @@ function Assert-Pins {
 
 if ($VerifyOnly) {
   Assert-Pins
+  return
+}
+
+if ($VerifyPatchesOnly) {
+  Assert-SourcePins
+  Assert-PatchCompatibility
   return
 }
 
@@ -225,6 +268,8 @@ $rime = Join-Path $sources 'fcitx5-rime'
 $lua = Join-Path $sources 'fcitx5-lua'
 $fcitx = Join-Path $sources 'fcitx5'
 $librime = Join-Path $sources 'librime'
+Apply-PinnedPatch $fcitx `
+  (Join-Path $repoRoot 'third_party/patches/fcitx5-windows-core-portability.patch')
 Apply-PinnedPatch $fcitx `
   (Join-Path $repoRoot 'third_party/patches/fcitx5-windows-user-data-root.patch')
 Apply-PinnedPatch $libime `

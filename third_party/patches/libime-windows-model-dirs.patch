@@ -2,7 +2,7 @@ diff --git a/src/libime/core/languagemodel.cpp b/src/libime/core/languagemodel.c
 index feb3865..15ee2fb 100644
 --- a/src/libime/core/languagemodel.cpp
 +++ b/src/libime/core/languagemodel.cpp
-@@ -311,7 +311,18 @@ std::string DefaultLanguageModelResolver::languageModelFileNameForLanguage(
+@@ -311,7 +311,17 @@ std::string DefaultLanguageModelResolver::languageModelFileNameForLanguage(
      const char *modelDirs = getenv("LIBIME_MODEL_DIRS");
      std::vector<std::string> dirs;
      if (modelDirs && modelDirs[0]) {

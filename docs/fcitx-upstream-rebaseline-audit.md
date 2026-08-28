@@ -2,7 +2,49 @@
 
 Date: 2026-08-24 (audit against real repository HEAD `e993dfc6cbd0d1688ef67f153cb1164a0e144955`)
 
-Status: audit only. No shipping baseline was changed by this document.
+Status: rebaseline prepared; shipping build promotion remains blocked pending the
+native-engine/toolchain lane and real-host evidence.
+
+## 2026-08-28 rebaseline execution
+
+The requested official core object is reachable and was verified from
+`https://github.com/fcitx/fcitx5.git`:
+
+```text
+commit cdd0b9d900770d1ad1229d759213215d5dc23a90
+parent 7e0b09d514fda4c9bb20a89c8df353cd2ddbb3ec
+date 2026-08-25
+subject Revert "Bump C++ standard to 23 (#1623)"
+```
+
+`cdd0b9d` is not a descendant of the old fork parent
+`ebf24ddc8a2afe331df2b2f4cbe538f73a4a9b5f`; this is a real upstream rebaseline,
+not a fast-forward. The old fork commit remains available as rollback reference.
+
+The shipping pin is prepared to move to the official repository at `cdd0b9d`.
+The retained Windows behavior is now an explicit patch queue:
+
+| Patch | Classification on the pinned source | Reason |
+|---|---|---|
+| `fcitx5-windows-core-portability.patch` | APPLY-CLEAN | Carries `dispatchPending`, `share/` GNUInstallDirs layout, `FCITX_DATA_DIRS`, and the Windows path expectation. |
+| `fcitx5-windows-user-data-root.patch` | APPLY-CLEAN | Preserves the isolated `FCITX_USER_DATA_ROOT` override. |
+| `libime-windows-model-dirs.patch` | APPLY-CLEAN | Preserves semicolon-separated Windows model directories and drive letters. |
+| `fcitx5-chinese-addons-msys2-clang-libcxx.patch` | APPLY-CLEAN | Preserves Windows filesystem-string and endian portability. |
+| `fcitx5-rime-windows-paths.patch` | APPLY-CLEAN | Preserves Windows UTF-8 filesystem path conversion. |
+| `fcitx5-lua-windows-lua54.patch` | APPLY-CLEAN | Pins Lua discovery to the packaged Lua 5.4 provider and closes the Lua table. |
+| `librime-msys2-clang-windows.patch` | APPLY-CLEAN | Preserves MinGW/Clang resource and DLL install layout. |
+
+The bootstrap script applies the core portability patch before the user-data
+patch and fails closed when any patch is neither forward- nor reverse-applicable.
+`-VerifyPatchesOnly` provides a bounded audit path for an already prepared source
+tree; it does not claim a completed build.
+
+The target commit and all seven patch checks were run in the ignored
+`out/rebaseline-sources` audit checkout on 2026-08-28. The local worktree did not
+contain the MSYS2 bootstrap/toolchain binaries, so the full native-engine build,
+real Windows host matrix, signing, and release promotion remain **REBASELINE-BLOCKED**.
+
+## Historical pre-rebaseline audit (2026-08-24)
 
 ## Why this audit exists
 
@@ -13,7 +55,7 @@ with only a small audited patch queue. Before starting Engine E2/E3 (which touch
 Fcitx5 version it actually builds against, how far that baseline has drifted from
 current upstream, and which Windows-local changes still need to be carried.
 
-## Current shipping pin (verified locally)
+## Previous shipping pin (rollback reference)
 
 `tools/bootstrap-fcitx.ps1` pins:
 
@@ -51,7 +93,7 @@ Verified in the local checkout `out/sources/fcitx5`:
      the `fcitx5` package data search path.
 3. `teststandardpaths_win.cpp`: test expectation updated for the `share/fcitx5` layout.
 
-## Current upstream master (verified locally)
+## Historical upstream master (verified locally)
 
 Fetched from `https://github.com/fcitx/fcitx5.git`:
 
@@ -99,7 +141,7 @@ All three remain Windows-local needs and must be carried through the rebaseline.
   (`tools/stage-package.ps1`, `native-engine/CMakeLists.txt`, `src/control/control_main.cpp`),
   which only works because of the fork's `share/` mapping.
 
-## Patch queue applicability against official master (tested)
+## Historical patch queue applicability against official master (tested)
 
 `git apply --check` for every `third_party/patches/*.patch` against a clean
 `upstream/master` (442edbc9) worktree:
@@ -117,12 +159,12 @@ The `NEEDS-REWORK` results are expected: those upstream files moved during the l
 year. Each must be re-diffed against the new pinned upstream commit during the
 rebaseline, not blindly applied.
 
-## Rebaseline plan (proposed, not yet executed)
+## Rebaseline follow-up
 
-1. **Freeze current truth first** — the shipping build stays on the current pin
-   (`gaboolic/fcitx5 @ 50a3069`) until a compatibility lane proves the new baseline.
-2. **Create an upstream compatibility lane** — clone/build lane against official
-   `fcitx/fcitx5` master (or a pinned recent tag) in `out/`, not the shipping tree.
+1. **Keep the rollback reference** — `gaboolic/fcitx5 @ 50a3069` remains available
+   for rollback while the official baseline is not yet shipping-certified.
+2. **Build the upstream compatibility lane** — use the official `fcitx/fcitx5`
+   checkout in `out/`, not the shipping tree, with the pinned patch queue above.
 3. **Replay the patch queue** on the new lane in this order:
    - `fcitx5-windows-user-data-root.patch` first (already applies clean);
    - then re-diff each of the five `NEEDS-REWORK` patches against the new commit;

@@ -10,14 +10,14 @@ diff --git a/im/pinyin/pinyin.cpp b/im/pinyin/pinyin.cpp
      }
      {
          auto file =
-@@ -900,7 +900,7 @@ void PinyinEngine::loadBuiltInDict() {
+@@ -900,5 +900,5 @@ void PinyinEngine::loadBuiltInDict() {
              file = standardPath.locate(StandardPathsType::Data,
                                         LIBIME_INSTALL_PKGDATADIR "/extb.dict");
          }
 -        loadDict(file, persistentTask_);
 +        loadDict(file.string(), persistentTask_);
      }
-@@ -933,7 +933,7 @@ void PinyinEngine::loadExtraDict() {
+@@ -933,6 +933,6 @@ void PinyinEngine::loadExtraDict() {
              continue;
          }
          PINYIN_DEBUG() << "Loading extra dictionary: " << file.first;
@@ -28,7 +28,7 @@ diff --git a/im/pinyin/pinyin.cpp b/im/pinyin/pinyin.cpp
 diff --git a/tools/scel2org5.cpp b/tools/scel2org5.cpp
 --- a/tools/scel2org5.cpp
 +++ b/tools/scel2org5.cpp
-@@ -44,6 +44,10 @@
+@@ -44,6 +44,9 @@
  #include <libkern/OSByteOrder.h>
  #define le16toh(x) OSSwapLittleToHostInt16(x)
  #define le32toh(x) OSSwapLittleToHostInt32(x)
