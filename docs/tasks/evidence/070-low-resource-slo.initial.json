@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "architecture": "fixture-independent",
+  "calibration": "initial SLO; pending real calibration",
+  "privacy_safe": true,
+  "method": "deterministic Rust fixture; values are not host measurements",
+  "surfaces": ["Core", "TsfShim", "CandidateUi"],
+  "heavy_plugin_activation": ["rime", "mozc", "lua"],
+  "manual_pending": [
+    "real 2-core/4-GB host",
+    "low-storage host",
+    "offline and constrained-network host",
+    "accessibility",
+    "Windows 7",
+    "production signing and UAC"
+  ]
+}

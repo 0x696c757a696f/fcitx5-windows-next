@@ -177,6 +177,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fcitx5-measurement-core"
+version = "0.1.0"
+
+[[package]]
 name = "fcitx5-package-core"
 version = "0.1.0"
 dependencies = [

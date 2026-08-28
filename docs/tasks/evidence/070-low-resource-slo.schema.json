@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "architecture", "calibration", "privacy_safe", "measurements"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "architecture": { "enum": ["x64", "x86"] },
+    "calibration": { "const": "initial SLO; pending real calibration" },
+    "privacy_safe": { "const": true },
+    "measurements": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "required": ["surface", "workload", "latency_us", "memory_bytes", "operations"],
+        "properties": {
+          "surface": { "enum": ["Core", "TsfShim", "CandidateUi", "HeavyPluginActivation"] },
+          "workload": { "type": "string", "maxLength": 16, "pattern": "^[a-z0-9_]+$" },
+          "latency_us": { "type": "integer", "minimum": 1 },
+          "memory_bytes": { "type": "integer", "minimum": 1 },
+          "operations": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

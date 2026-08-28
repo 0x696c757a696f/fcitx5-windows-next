@@ -19,6 +19,7 @@ members = [
   "rust/tsf-poc",
   "rust/protocol-core",
   "rust/engine-core",
+  "rust/measurement-core",
 ]
 
 [profile.dev]
