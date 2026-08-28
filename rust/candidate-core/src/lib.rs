@@ -338,7 +338,7 @@ pub struct CandidateLabelSlotPlan {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Fcitx5CandidateUtf8 {
     pub ptr: *const u8,
     pub len: usize,
@@ -349,6 +349,13 @@ pub struct Fcitx5CandidateUtf8 {
 pub struct Fcitx5CandidateModelItem {
     pub id: u64,
     pub label: Fcitx5CandidateUtf8,
+    pub text: Fcitx5CandidateUtf8,
+    pub comment: Fcitx5CandidateUtf8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5CandidatePresentationText {
     pub text: Fcitx5CandidateUtf8,
     pub comment: Fcitx5CandidateUtf8,
 }
@@ -1157,6 +1164,179 @@ pub unsafe extern "C" fn fcitx5_candidate_model_current(
     1
 }
 
+#[no_mangle]
+pub extern "C" fn fcitx5_candidate_presentation_create() -> *mut c_void {
+    Box::into_raw(Box::<CandidatePresentationState>::default()) as *mut c_void
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `state` must be either null or a pointer returned by
+/// `fcitx5_candidate_presentation_create` that has not already been destroyed.
+pub unsafe extern "C" fn fcitx5_candidate_presentation_destroy(state: *mut c_void) {
+    if state.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(state.cast::<CandidatePresentationState>()) });
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `state` must be either null or a valid pointer returned by
+/// `fcitx5_candidate_presentation_create`.
+pub unsafe extern "C" fn fcitx5_candidate_presentation_reset(state: *mut c_void) {
+    if state.is_null() {
+        return;
+    }
+    unsafe { &mut *state.cast::<CandidatePresentationState>() }.reset();
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `state` and `input` must be valid pointers for the duration of this call.
+/// Neither pointer is retained.
+pub unsafe extern "C" fn fcitx5_candidate_presentation_apply(
+    state: *mut c_void,
+    input: *const CandidatePresentationUpdate,
+) -> u32 {
+    if state.is_null() || input.is_null() {
+        return 3;
+    }
+    unsafe { &mut *state.cast::<CandidatePresentationState>() }.apply(unsafe { *input })
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `state` must be a valid pointer returned by
+/// `fcitx5_candidate_presentation_create`, and `output` must point to writable
+/// storage for one output value.
+pub unsafe extern "C" fn fcitx5_candidate_presentation_current(
+    state: *mut c_void,
+    output: *mut CandidatePresentationOutput,
+) -> u8 {
+    if state.is_null() || output.is_null() {
+        return 0;
+    }
+    unsafe {
+        *output = (&*state.cast::<CandidatePresentationState>()).output();
+    }
+    1
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `state` must be a valid pointer returned by
+/// `fcitx5_candidate_presentation_create`.
+pub unsafe extern "C" fn fcitx5_candidate_presentation_set_placement(
+    state: *mut c_void,
+    placement: u32,
+) -> u8 {
+    let Some(placement) = placement_from_ffi(placement) else {
+        return 0;
+    };
+    if state.is_null() {
+        return 0;
+    }
+    unsafe { &mut *state.cast::<CandidatePresentationState>() }.set_placement(placement);
+    1
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `state` must be a valid pointer returned by
+/// `fcitx5_candidate_presentation_create`.
+pub unsafe extern "C" fn fcitx5_candidate_presentation_stable_window_width(
+    state: *mut c_void,
+    measured_width: f32,
+    max_allowed_width: f32,
+) -> f32 {
+    if state.is_null() {
+        return 0.0;
+    }
+    unsafe { &mut *state.cast::<CandidatePresentationState>() }
+        .stable_window_width(measured_width, max_allowed_width)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `state` must be a valid pointer returned by
+/// `fcitx5_candidate_presentation_create`. Candidate arrays and locale bytes
+/// must be valid for their declared lengths and are not retained.
+pub unsafe extern "C" fn fcitx5_candidate_presentation_resolve_orientation(
+    state: *mut c_void,
+    configured: u32,
+    candidates: *const Fcitx5CandidatePresentationText,
+    candidate_count: usize,
+    locale: Fcitx5CandidateUtf8,
+    work_area: Fcitx5CandidateLayoutRect,
+    caret_x: f32,
+    scale: f32,
+    page_size: u32,
+) -> u32 {
+    if state.is_null() || (candidate_count != 0 && candidates.is_null()) {
+        return 0;
+    }
+    let Some(configured) = (match configured {
+        0 => Some(PresentationOrientation::Automatic),
+        1 => Some(PresentationOrientation::Vertical),
+        2 => Some(PresentationOrientation::Horizontal),
+        _ => None,
+    }) else {
+        return 0;
+    };
+    let locale = unsafe { bytes_from_ffi(locale) }
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .unwrap_or_default();
+    let candidate_inputs = if candidate_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(candidates, candidate_count) }
+    };
+    let Some(candidates) = candidate_inputs
+        .iter()
+        .map(|candidate| {
+            let text = unsafe { bytes_from_ffi(candidate.text) }?;
+            let comment = unsafe { bytes_from_ffi(candidate.comment) }?;
+            Some(CandidateText {
+                text: std::str::from_utf8(text).ok()?.to_owned(),
+                comment: std::str::from_utf8(comment).ok()?.to_owned(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return 0;
+    };
+    let orientation = unsafe { &mut *state.cast::<CandidatePresentationState>() }
+        .layout
+        .resolve_orientation(
+            configured,
+            AutomaticOrientationInput {
+                candidates: &candidates,
+                locale,
+                work_area: Rect {
+                    left: work_area.left,
+                    top: work_area.top,
+                    right: work_area.right,
+                    bottom: work_area.bottom,
+                },
+                caret_x,
+                scale,
+                page_size,
+            },
+        );
+    match orientation {
+        Orientation::Vertical => 0,
+        Orientation::Horizontal => 1,
+    }
+}
+
 fn ffi_utf8(value: &[u8]) -> Fcitx5CandidateUtf8 {
     Fcitx5CandidateUtf8 {
         ptr: value.as_ptr(),
@@ -1890,6 +2070,183 @@ pub struct AutomaticOrientationInput<'a> {
     pub caret_x: f32,
     pub scale: f32,
     pub page_size: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CandidatePresentationUpdate {
+    pub engine_epoch: u64,
+    pub context_id: u64,
+    pub composition_id: u64,
+    pub revision: u64,
+    pub selected: usize,
+    pub has_selected: u8,
+    pub candidate_count: usize,
+    pub page: u32,
+    pub page_size: u32,
+    pub candidate_bulk: u8,
+    pub configured_scroll_mode: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CandidatePresentationOutput {
+    pub selected: usize,
+    pub has_selected: u8,
+    pub scroll_mode: u8,
+    pub scroll_expanded: u8,
+    pub scroll_columns: usize,
+    pub ordinary_start: usize,
+    pub ordinary_count: usize,
+    pub candidate_bulk: u8,
+    pub page_size: u32,
+    pub placement: u32,
+    pub stable_width: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct CandidatePresentationState {
+    identity: Option<CompositionIdentity>,
+    revision: u64,
+    selected: Option<usize>,
+    scroll_mode: bool,
+    scroll_expanded: bool,
+    scroll_columns: usize,
+    ordinary_start: usize,
+    ordinary_count: usize,
+    candidate_bulk: bool,
+    page_size: u32,
+    placement: Placement,
+    layout: CompositionLayoutState,
+}
+
+impl Default for CandidatePresentationState {
+    fn default() -> Self {
+        Self {
+            identity: None,
+            revision: 0,
+            selected: None,
+            scroll_mode: false,
+            scroll_expanded: false,
+            scroll_columns: 6,
+            ordinary_start: 0,
+            ordinary_count: 0,
+            candidate_bulk: false,
+            page_size: 0,
+            placement: Placement::Unlocked,
+            layout: CompositionLayoutState::default(),
+        }
+    }
+}
+
+impl CandidatePresentationState {
+    /// Applies the presentation metadata for one accepted semantic snapshot.
+    /// Returns 0 for applied, 1 for duplicate, 2 for stale, and 3 for invalid.
+    pub fn apply(&mut self, input: CandidatePresentationUpdate) -> u32 {
+        if input.engine_epoch == 0
+            || input.context_id == 0
+            || input.revision == 0
+            || input.candidate_count > MAX_CANDIDATES
+            || (input.has_selected != 0 && input.selected >= input.candidate_count)
+        {
+            return 3;
+        }
+        let identity = CompositionIdentity {
+            engine_epoch: input.engine_epoch,
+            context_id: input.context_id,
+            composition_id: input.composition_id,
+        };
+        if let Some(previous) = self.identity {
+            if input.engine_epoch < previous.engine_epoch
+                || (input.engine_epoch == previous.engine_epoch
+                    && input.context_id == previous.context_id
+                    && input.composition_id < previous.composition_id)
+            {
+                return 2;
+            }
+            if identity == previous {
+                if input.revision == self.revision {
+                    return 1;
+                }
+                if input.revision < self.revision {
+                    return 2;
+                }
+            }
+        }
+        if self.identity != Some(identity) {
+            self.identity = Some(identity);
+            self.layout.begin(identity);
+            self.revision = 0;
+            self.scroll_expanded = false;
+            self.placement = Placement::Unlocked;
+        }
+        self.revision = input.revision;
+        self.candidate_bulk = input.candidate_bulk != 0;
+        self.page_size = input.page_size;
+        self.selected = (input.has_selected != 0).then_some(input.selected);
+        self.scroll_columns = (input.page_size as usize).clamp(1, 9);
+        let scroll_eligible = input.configured_scroll_mode != 0
+            && input.candidate_bulk != 0
+            && input.page_size != 0
+            && input.candidate_count > input.page_size as usize;
+        let focus_beyond_first_page = self
+            .selected
+            .is_some_and(|selected| selected >= input.page_size as usize);
+        self.scroll_expanded =
+            scroll_eligible && (self.scroll_expanded || input.page > 0 || focus_beyond_first_page);
+        self.scroll_mode = scroll_eligible && self.scroll_expanded;
+        self.ordinary_count = if input.page_size == 0 {
+            input.candidate_count
+        } else {
+            (input.page_size as usize).min(input.candidate_count)
+        };
+        self.ordinary_start = if input.candidate_bulk != 0 && !self.scroll_mode {
+            (input.page as usize)
+                .saturating_mul(input.page_size as usize)
+                .min(input.candidate_count - self.ordinary_count)
+        } else {
+            0
+        };
+        if !self.scroll_mode && input.candidate_bulk == 0 {
+            if let Some(selected) = self.selected {
+                if selected < self.ordinary_count
+                    && self.ordinary_start + selected < input.candidate_count
+                {
+                    self.selected = Some(self.ordinary_start + selected);
+                }
+            }
+        }
+        0
+    }
+
+    pub fn output(&self) -> CandidatePresentationOutput {
+        CandidatePresentationOutput {
+            selected: self.selected.unwrap_or_default(),
+            has_selected: u8::from(self.selected.is_some()),
+            scroll_mode: u8::from(self.scroll_mode),
+            scroll_expanded: u8::from(self.scroll_expanded),
+            scroll_columns: self.scroll_columns,
+            ordinary_start: self.ordinary_start,
+            ordinary_count: self.ordinary_count,
+            candidate_bulk: u8::from(self.candidate_bulk),
+            page_size: self.page_size,
+            placement: placement_to_ffi(self.placement),
+            stable_width: self.layout.stable_width,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn set_placement(&mut self, placement: Placement) {
+        self.placement = placement;
+    }
+
+    pub fn stable_window_width(&mut self, measured_width: f32, max_allowed_width: f32) -> f32 {
+        self.layout
+            .stable_window_width(measured_width, max_allowed_width)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -4076,6 +4433,118 @@ mod tests {
             ),
             Orientation::Vertical
         );
+    }
+
+    #[test]
+    fn candidate_presentation_state_owns_scroll_and_composition_transitions() {
+        let mut state = CandidatePresentationState::default();
+        let first = CandidatePresentationUpdate {
+            engine_epoch: 1,
+            context_id: 2,
+            composition_id: 3,
+            revision: 1,
+            selected: 0,
+            has_selected: 1,
+            candidate_count: 30,
+            page: 0,
+            page_size: 5,
+            candidate_bulk: 1,
+            configured_scroll_mode: 1,
+        };
+
+        assert_eq!(state.apply(first), 0);
+        let output = state.output();
+        assert_eq!(output.selected, 0);
+        assert_eq!(output.has_selected, 1);
+        assert_eq!(output.scroll_mode, 0);
+        assert_eq!(output.scroll_columns, 5);
+        assert_eq!(output.ordinary_start, 0);
+        assert_eq!(output.ordinary_count, 5);
+
+        assert_eq!(state.apply(first), 1);
+        let mut second = first;
+        second.revision = 2;
+        second.page = 1;
+        second.selected = 5;
+        assert_eq!(state.apply(second), 0);
+        let output = state.output();
+        assert_eq!(output.scroll_mode, 1);
+        assert_eq!(output.scroll_expanded, 1);
+        assert_eq!(output.ordinary_start, 0);
+        assert_eq!(output.ordinary_count, 5);
+        assert_eq!(state.apply(first), 2);
+
+        state.set_placement(Placement::Above);
+        assert_eq!(state.output().placement, 2);
+        let mut next_composition = second;
+        next_composition.composition_id = 4;
+        next_composition.revision = 1;
+        next_composition.page = 0;
+        next_composition.selected = 0;
+        assert_eq!(state.apply(next_composition), 0);
+        let output = state.output();
+        assert_eq!(output.scroll_mode, 0);
+        assert_eq!(output.scroll_expanded, 0);
+        assert_eq!(output.placement, 0);
+        assert_eq!(output.stable_width, 0.0);
+    }
+
+    #[test]
+    fn candidate_presentation_state_tracks_bulk_page_window() {
+        let mut state = CandidatePresentationState::default();
+        assert_eq!(
+            state.apply(CandidatePresentationUpdate {
+                engine_epoch: 1,
+                context_id: 2,
+                composition_id: 3,
+                revision: 1,
+                selected: 2,
+                has_selected: 1,
+                candidate_count: 12,
+                page: 2,
+                page_size: 3,
+                candidate_bulk: 1,
+                configured_scroll_mode: 0,
+            }),
+            0
+        );
+        let output = state.output();
+        assert_eq!(output.selected, 2);
+        assert_eq!(output.ordinary_start, 6);
+        assert_eq!(output.ordinary_count, 3);
+        assert_eq!(output.scroll_mode, 0);
+    }
+
+    #[test]
+    fn candidate_presentation_orientation_fails_soft_on_invalid_utf8() {
+        let state = fcitx5_candidate_presentation_create();
+        let candidate = Fcitx5CandidatePresentationText {
+            text: Fcitx5CandidateUtf8 {
+                ptr: [0xff].as_ptr(),
+                len: 1,
+            },
+            comment: Fcitx5CandidateUtf8::default(),
+        };
+        let orientation = unsafe {
+            fcitx5_candidate_presentation_resolve_orientation(
+                state,
+                0,
+                &candidate,
+                1,
+                Fcitx5CandidateUtf8::default(),
+                Fcitx5CandidateLayoutRect {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 1920.0,
+                    bottom: 1080.0,
+                },
+                100.0,
+                1.0,
+                9,
+            )
+        };
+        assert_eq!(orientation, 0);
+        unsafe { fcitx5_candidate_presentation_destroy(state) };
     }
 
     #[test]

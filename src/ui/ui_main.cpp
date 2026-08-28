@@ -94,6 +94,44 @@ struct Fcitx5CandidateRenderItemOutput {
     std::uint8_t drawComment{};
 };
 
+struct Fcitx5CandidatePresentationUpdate {
+    std::uint64_t engineEpoch{};
+    std::uint64_t contextId{};
+    std::uint64_t compositionId{};
+    std::uint64_t revision{};
+    std::size_t selected{};
+    std::uint8_t hasSelected{};
+    std::size_t candidateCount{};
+    std::uint32_t page{};
+    std::uint32_t pageSize{};
+    std::uint8_t candidateBulk{};
+    std::uint8_t configuredScrollMode{};
+};
+
+struct Fcitx5CandidatePresentationOutput {
+    std::size_t selected{};
+    std::uint8_t hasSelected{};
+    std::uint8_t scrollMode{};
+    std::uint8_t scrollExpanded{};
+    std::size_t scrollColumns{};
+    std::size_t ordinaryStart{};
+    std::size_t ordinaryCount{};
+    std::uint8_t candidateBulk{};
+    std::uint32_t pageSize{};
+    std::uint32_t placement{};
+    float stableWidth{};
+};
+
+struct Fcitx5CandidateUtf8 {
+    const std::uint8_t* ptr{};
+    std::size_t len{};
+};
+
+struct Fcitx5CandidatePresentationText {
+    Fcitx5CandidateUtf8 text{};
+    Fcitx5CandidateUtf8 comment{};
+};
+
 struct Fcitx5CandidateSelectionIntent {
     std::uint32_t targetProcessId{};
     std::uint64_t engineEpoch{};
@@ -154,6 +192,22 @@ extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemI
                                                  std::uint8_t scrollMode,
                                                  Fcitx5CandidateRenderItemOutput* outItems,
                                                  float* outLabelColumnWidth);
+extern "C" void* fcitx5_candidate_presentation_create();
+extern "C" void fcitx5_candidate_presentation_destroy(void* state);
+extern "C" void fcitx5_candidate_presentation_reset(void* state);
+extern "C" std::uint32_t fcitx5_candidate_presentation_apply(
+    void* state, const Fcitx5CandidatePresentationUpdate* input);
+extern "C" std::uint8_t fcitx5_candidate_presentation_current(
+    void* state, Fcitx5CandidatePresentationOutput* output);
+extern "C" std::uint8_t fcitx5_candidate_presentation_set_placement(
+    void* state, std::uint32_t placement);
+extern "C" float fcitx5_candidate_presentation_stable_window_width(
+    void* state, float measuredWidth, float maxAllowedWidth);
+extern "C" std::uint32_t fcitx5_candidate_presentation_resolve_orientation(
+    void* state, std::uint32_t configured,
+    const Fcitx5CandidatePresentationText* candidates, std::size_t candidateCount,
+    Fcitx5CandidateUtf8 locale, Fcitx5CandidateLayoutRect workArea, float caretX, float scale,
+    std::uint32_t pageSize);
 extern "C" std::size_t fcitx5_candidate_format_label_utf16(
     std::uint32_t slot, std::uint32_t style, Fcitx5CandidateUtf16 sourceLabel,
     Fcitx5CandidateUtf16 customPrefix, Fcitx5CandidateUtf16 customSuffix, std::uint16_t* output,
@@ -923,7 +977,16 @@ D2D1_COLOR_F parseColor(const fcitx::windows::config::Config& config, std::strin
 
 class CandidateWindow final {
   public:
+    CandidateWindow()
+        : presentation_(fcitx::windows::ui::detail::fcitx5_candidate_presentation_create()) {}
+
+    ~CandidateWindow() {
+        fcitx::windows::ui::detail::fcitx5_candidate_presentation_destroy(presentation_);
+    }
+
     bool create(HINSTANCE instance, bool visible, bool safeMode, bool interactionTest = false) {
+        if (!presentation_)
+            return false;
         safeMode_ = safeMode;
         interactionTest_ = interactionTest;
         if (!interactionTest_) {
@@ -1013,7 +1076,6 @@ class CandidateWindow final {
             response.candidatePageSize = 6;
             response.candidateBulk = true;
             visualConfig_.scrollMode = true;
-            compositionId_ = response.metadata.compositionId;
         } else {
             response.candidates = {{1, "1", "输入法", "shūrùfǎ"},
                                    {2, "2", "输入", "shūrù"},
@@ -1192,13 +1254,13 @@ class CandidateWindow final {
             }
             response.candidateTotal = static_cast<std::uint32_t>(response.candidates.size());
             update(response);
-            if (scrollMode_ || itemRects_.size() != response.candidatePageSize ||
+            if (presentationScrollMode() || itemRects_.size() != response.candidatePageSize ||
                 visibleIndices_.size() != response.candidatePageSize) {
                 std::cerr << "bulk first page expanded before scroll navigation: orientation="
                           << (orientation == fcitx::windows::config::Orientation::horizontal
                                   ? "horizontal"
                                   : "vertical")
-                          << " scroll=" << scrollMode_ << " rects=" << itemRects_.size()
+                          << " scroll=" << presentationScrollMode() << " rects=" << itemRects_.size()
                           << " visible=" << visibleIndices_.size() << '\n';
                 return false;
             }
@@ -1213,13 +1275,13 @@ class CandidateWindow final {
                         : std::string{};
             }
             update(response);
-            if (!scrollMode_ || itemRects_.size() <= response.candidatePageSize ||
+            if (!presentationScrollMode() || itemRects_.size() <= response.candidatePageSize ||
                 visibleIndices_.size() <= response.candidatePageSize) {
                 std::cerr << "bulk scroll navigation did not expand viewport: orientation="
                           << (orientation == fcitx::windows::config::Orientation::horizontal
                                   ? "horizontal"
                                   : "vertical")
-                          << " scroll=" << scrollMode_ << " rects=" << itemRects_.size()
+                          << " scroll=" << presentationScrollMode() << " rects=" << itemRects_.size()
                           << " visible=" << visibleIndices_.size() << '\n';
                 return false;
             }
@@ -1439,14 +1501,16 @@ class CandidateWindow final {
                 candidate.reservedLabel.clear();
             }
         }
-        if (!scrollMode_ || !labelsVisible || scrollColumns_ == 0 || !selected_)
+        const auto selected = presentationSelected();
+        const auto scrollColumns = presentationScrollColumns();
+        if (!presentationScrollMode() || !labelsVisible || scrollColumns == 0 || !selected)
             return;
         for (std::size_t index = 0; index < candidates_.size(); ++index) {
             auto& candidate = candidates_[index];
             if (candidate.sourceLabel)
                 continue;
             const auto policy = candidate::detail::fcitx5_candidate_scroll_label_policy(
-                index, *selected_, scrollColumns_, candidates_.size());
+                index, *selected, scrollColumns, candidates_.size());
             if (policy.reserve == 0)
                 continue;
             candidate.reservedLabel = formatCandidateLabel(policy.slot,
@@ -1596,15 +1660,16 @@ class CandidateWindow final {
         const bool horizontalLayout =
             resolvedPresentationOrientation_ == fcitx::windows::ui::Orientation::horizontal;
         auto renderSegments =
-            fcitx::windows::ui::renderSegments(resolvedPresentationOrientation_, scrollMode_,
+            fcitx::windows::ui::renderSegments(resolvedPresentationOrientation_,
+                                               presentationScrollMode(),
                                                renderInputs);
         if (renderSegments.size() != renderInputs.size())
             renderSegments.assign(renderInputs.size(), {});
-        if (scrollMode_ && itemRects_.size() > scrollColumns_) {
+        if (presentationScrollMode() && itemRects_.size() > presentationScrollColumns()) {
             borderBrush->SetOpacity(0.55F);
             if (horizontalLayout) {
-                for (std::size_t row = scrollColumns_; row < itemRects_.size();
-                     row += scrollColumns_) {
+                for (std::size_t row = presentationScrollColumns(); row < itemRects_.size();
+                     row += presentationScrollColumns()) {
                     const float y = (itemRects_[row - 1U].bottom + itemRects_[row].top) / 2.0F;
                     renderTarget_->DrawLine(
                         D2D1::Point2F(12.0F, y),
@@ -1612,8 +1677,8 @@ class CandidateWindow final {
                         borderBrush.Get(), 1.0F);
                 }
             } else {
-                for (std::size_t column = scrollColumns_; column < itemRects_.size();
-                     column += scrollColumns_) {
+                for (std::size_t column = presentationScrollColumns(); column < itemRects_.size();
+                     column += presentationScrollColumns()) {
                     const float x =
                         (itemRects_[column - 1U].right + itemRects_[column].left) / 2.0F;
                     renderTarget_->DrawLine(
@@ -1632,7 +1697,8 @@ class CandidateWindow final {
             const D2D1_RECT_F bounds = itemRects_.size() == paintCount
                                            ? itemRects_[local]
                                            : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
-            const bool selected = selected_ && *selected_ == index;
+            const auto selectedIndex = presentationSelected();
+            const bool selected = selectedIndex && *selectedIndex == index;
             if (selected) {
                 const float radius =
                     static_cast<float>(visualConfig_.geometry.cornerRadius.value_or(8.0));
@@ -1760,7 +1826,8 @@ class CandidateWindow final {
                                            : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
             RECT item{static_cast<LONG>(bounds.left), static_cast<LONG>(bounds.top),
                       static_cast<LONG>(bounds.right), static_cast<LONG>(bounds.bottom)};
-            const bool selected = selected_ && *selected_ == index;
+            const auto selectedIndex = presentationSelected();
+            const bool selected = selectedIndex && *selectedIndex == index;
             if (selected)
                 FillRect(dc, &item, selectedBrush);
             SetTextColor(dc, selected ? selectedForeground : foreground);
@@ -1821,10 +1888,27 @@ class CandidateWindow final {
         const auto applied = model_.apply(std::move(snapshot));
         if (applied == candidate::ApplyResult::stale || applied == candidate::ApplyResult::invalid)
             return;
+        const auto& current = *model_.current();
+        const fcitx::windows::ui::detail::Fcitx5CandidatePresentationUpdate presentationInput{
+            current.engineEpoch,
+            current.contextId,
+            current.compositionId,
+            current.revision,
+            current.selected.value_or(0U),
+            static_cast<std::uint8_t>(current.selected.has_value()),
+            current.candidates.size(),
+            response.candidatePage,
+            response.candidatePageSize,
+            static_cast<std::uint8_t>(response.candidateBulk),
+            static_cast<std::uint8_t>(visualConfig_.scrollMode.value_or(false)),
+        };
+        const auto presentationApplied =
+            fcitx::windows::ui::detail::fcitx5_candidate_presentation_apply(
+            presentation_, &presentationInput);
+        if (presentationApplied == 2U || presentationApplied == 3U)
+            return;
         clickInFlight_ = false;
         KillTimer(window_, kClickGuardTimer);
-        lastCandidateBulk_ = response.candidateBulk;
-        lastCandidatePageSize_ = response.candidatePageSize;
         if (response.caret.valid)
             lastCaret_ = response.caret;
         const float requestedFontScale = static_cast<float>(lastCaret_.dpi) / 96.0F;
@@ -1843,8 +1927,7 @@ class CandidateWindow final {
         preeditPanel_.clear();
         preeditPanelRect_ = {};
         preeditDividerY_ = 0.0F;
-        const auto& current = *model_.current();
-        selected_ = current.selected;
+        const auto presentation = presentationState();
         if (visualConfig_.preeditMode.value_or(config::PreeditMode::inline_) ==
                 config::PreeditMode::panel &&
             !current.preedit.empty()) {
@@ -1852,43 +1935,11 @@ class CandidateWindow final {
             if (utf8ToWide(current.preedit, preedit))
                 preeditPanel_ = std::move(preedit);
         }
-        const bool compositionChanged = compositionId_ != current.compositionId;
-        if (compositionChanged) {
-            placement_ = ui::Placement::unlocked;
-            compositionId_ = current.compositionId;
-            scrollExpanded_ = false;
-            compositionAutoOrientation_.reset();
-            compositionStableWidth_ = 0.0F;
-        }
-        const bool scrollEligible = visualConfig_.scrollMode.value_or(false) &&
-                                    response.candidateBulk && response.candidatePageSize > 0U &&
-                                    current.candidates.size() > response.candidatePageSize;
-        const bool focusBeyondFirstPage =
-            selected_ && *selected_ >= static_cast<std::size_t>(response.candidatePageSize);
-        scrollExpanded_ =
-            scrollEligible &&
-            (scrollExpanded_ || response.candidatePage > 0U || focusBeyondFirstPage);
-        scrollMode_ = scrollEligible && scrollExpanded_;
-        scrollColumns_ = std::clamp<std::size_t>(response.candidatePageSize, 1U, 9U);
-        const std::size_t ordinaryCount =
-            response.candidatePageSize == 0U
-                ? current.candidates.size()
-                : std::min<std::size_t>(response.candidatePageSize, current.candidates.size());
-        const std::size_t ordinaryStart =
-            response.candidateBulk && !scrollMode_
-                ? std::min<std::size_t>(static_cast<std::size_t>(response.candidatePage) *
-                                            response.candidatePageSize,
-                                        current.candidates.size() - ordinaryCount)
-                : 0U;
-        // In the ordinary (non-bulk) lane the engine reports the selected
-        // candidate as a page-local index, while candidates_ is built from the
-        // full list and renderIndices_ addresses it with a global offset
-        // (ordinaryStart). Translate the selection to the global index so the
-        // paint loop can match it against visibleIndices_.
-        if (!scrollMode_ && !response.candidateBulk && selected_ &&
-            *selected_ < ordinaryCount && ordinaryStart + *selected_ < current.candidates.size()) {
-            selected_ = ordinaryStart + *selected_;
-        }
+        const auto selected = presentation.hasSelected
+                                  ? std::optional<std::size_t>{presentation.selected}
+                                  : std::nullopt;
+        const std::size_t ordinaryCount = presentation.ordinaryCount;
+        const std::size_t ordinaryStart = presentation.ordinaryStart;
         for (std::size_t candidateIndex = 0; candidateIndex < current.candidates.size();
              ++candidateIndex) {
             const auto& candidate = current.candidates[candidateIndex];
@@ -1912,7 +1963,7 @@ class CandidateWindow final {
                 visual.comment = L"  " + comment;
             candidates_.emplace_back(std::move(visual));
         }
-        if (scrollMode_) {
+        if (presentation.scrollMode != 0) {
             for (std::size_t index = 0; index < candidates_.size(); ++index)
                 renderIndices_.push_back(index);
         } else {
@@ -1953,17 +2004,35 @@ class CandidateWindow final {
         const auto configuredOrientation =
             visualConfig_.orientation.value_or(config::Orientation::automatic);
         bool horizontalPresentation = configuredOrientation == config::Orientation::horizontal;
-        if (configuredOrientation == config::Orientation::automatic) {
-            horizontalPresentation =
-                resolveAutomaticPresentation(monitorInfo.rcWork, scale,
-                                             response.candidatePageSize) ==
-                ui::Orientation::horizontal;
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidatePresentationText>
+            presentationCandidates;
+        presentationCandidates.reserve(current.candidates.size());
+        for (const auto& candidate : current.candidates) {
+            presentationCandidates.push_back({
+                {reinterpret_cast<const std::uint8_t*>(candidate.text.data()), candidate.text.size()},
+                {reinterpret_cast<const std::uint8_t*>(candidate.comment.data()),
+                 candidate.comment.size()},
+            });
         }
-        resolvedPresentationOrientation_ =
-            horizontalPresentation ? ui::Orientation::horizontal : ui::Orientation::vertical;
+        const auto configuredOrientationValue =
+            configuredOrientation == config::Orientation::vertical
+                ? 1U
+                : configuredOrientation == config::Orientation::horizontal ? 2U : 0U;
+        const auto rustOrientation =
+            fcitx::windows::ui::detail::fcitx5_candidate_presentation_resolve_orientation(
+            presentation_, configuredOrientationValue, presentationCandidates.data(),
+            presentationCandidates.size(),
+            {reinterpret_cast<const std::uint8_t*>(contentLocaleUtf8_.data()),
+             contentLocaleUtf8_.size()},
+            {static_cast<float>(monitorInfo.rcWork.left), static_cast<float>(monitorInfo.rcWork.top),
+             static_cast<float>(monitorInfo.rcWork.right), static_cast<float>(monitorInfo.rcWork.bottom)},
+            static_cast<float>(lastCaret_.left), scale, response.candidatePageSize);
+        horizontalPresentation = rustOrientation == 1U;
+        resolvedPresentationOrientation_ = horizontalPresentation ? ui::Orientation::horizontal
+                                                                   : ui::Orientation::vertical;
         applyScrollLabelReservations();
         float scrollLabelColumnWidth = 0.0F;
-        if (scrollMode_ && horizontalPresentation) {
+        if (presentationScrollMode() && horizontalPresentation) {
             for (const auto candidateIndex : renderIndices_) {
                 const auto& candidate = candidates_[candidateIndex];
                 if (candidate.reservedLabel.empty())
@@ -2002,7 +2071,7 @@ class CandidateWindow final {
                 height = (std::max)(height, metrics.height);
                 return true;
             };
-            if (scrollMode_ && horizontalPresentation && candidate.reservedLabel.empty())
+            if (presentationScrollMode() && horizontalPresentation && candidate.reservedLabel.empty())
                 width += scrollLabelColumnWidth + labelGap;
             if (measure(candidate.reservedLabel, labelFormat_.Get()) &&
                 measure(candidate.text, textFormat_.Get()) &&
@@ -2040,7 +2109,6 @@ class CandidateWindow final {
             if (horizontalNaturalWidth > hardLimit + 0.5F) {
                 horizontalPresentation = false;
                 resolvedPresentationOrientation_ = ui::Orientation::vertical;
-                compositionAutoOrientation_ = ui::Orientation::vertical;
             }
         }
         ui::LayoutInput input{
@@ -2057,15 +2125,15 @@ class CandidateWindow final {
             static_cast<float>(visualConfig_.geometry.paddingY.value_or(6.0) * scale),
             static_cast<float>(visualConfig_.geometry.rowGap.value_or(2.0) * scale),
             static_cast<float>(visualConfig_.geometry.columnGap.value_or(8.0) * scale),
-            placement_,
-            scrollMode_,
-            scrollColumns_,
+            presentationPlacement(),
+            presentationScrollMode(),
+            presentationScrollColumns(),
             6U,
-            selected_.value_or(0U)};
+            presentationSelected().value_or(0U)};
         input.scrollCellWidth =
             static_cast<float>(visualConfig_.scrollCellWidth.value_or(96.0) * scale);
         const auto layout = ui::layout(input);
-        placement_ = layout.placement;
+        setPresentationPlacement(layout.placement);
         const float preeditBlock =
             preeditPanelHeight > 0.0F ? preeditPanelHeight + input.rowGap : 0.0F;
         const float workWidth = (std::max)(0.0F, input.workArea.right - input.workArea.left);
@@ -2073,13 +2141,9 @@ class CandidateWindow final {
         const float measuredWindowWidth =
             std::min({std::max(layout.window.right - layout.window.left, preeditPanelWidth),
                       input.maxWidth, workWidth});
-        if (compositionStableWidth_ > std::min(input.maxWidth, workWidth))
-            compositionStableWidth_ = std::min(input.maxWidth, workWidth);
-        float windowWidth =
-            compositionStableWidth_ > 0.0F && measuredWindowWidth < compositionStableWidth_
-                ? compositionStableWidth_
-                : measuredWindowWidth;
-        compositionStableWidth_ = (std::max)(compositionStableWidth_, windowWidth);
+        const float windowWidth =
+            fcitx::windows::ui::detail::fcitx5_candidate_presentation_stable_window_width(
+            presentation_, measuredWindowWidth, std::min(input.maxWidth, workWidth));
         float windowHeight =
             std::min(layout.window.bottom - layout.window.top + preeditBlock, workHeight);
         float windowLeft =
@@ -2147,9 +2211,10 @@ class CandidateWindow final {
                                          ? static_cast<std::uint32_t>(*current.selected)
                                          : UINT32_MAX;
         response.candidatePage = current.page;
-        response.candidatePageSize = lastCandidatePageSize_;
+        const auto presentation = presentationState();
+        response.candidatePageSize = presentation.pageSize;
         response.candidateTotal = current.total;
-        response.candidateBulk = lastCandidateBulk_;
+        response.candidateBulk = presentation.candidateBulk != 0;
         response.candidateEnd = true;
         response.candidateVisibility =
             current.visibility == candidate::Visibility::prediction
@@ -2165,6 +2230,7 @@ class CandidateWindow final {
             response.candidates.push_back(
                 {item.id, item.label, item.text, item.comment});
         }
+        fcitx::windows::ui::detail::fcitx5_candidate_presentation_reset(presentation_);
         model_.reset();
         update(response);
     }
@@ -2180,6 +2246,7 @@ class CandidateWindow final {
 
     void dismissPresentation() noexcept {
         hidePopup();
+        fcitx::windows::ui::detail::fcitx5_candidate_presentation_reset(presentation_);
         model_.reset();
         candidates_.clear();
         itemRects_.clear();
@@ -2188,10 +2255,6 @@ class CandidateWindow final {
         preeditPanel_.clear();
         preeditPanelRect_ = {};
         preeditDividerY_ = 0.0F;
-        selected_.reset();
-        compositionId_ = 0;
-        compositionAutoOrientation_.reset();
-        compositionStableWidth_ = 0.0F;
         resolvedPresentationOrientation_ = ui::Orientation::vertical;
         targetForegroundWindow_ = nullptr;
         targetForegroundProcessId_ = 0;
@@ -2242,6 +2305,36 @@ class CandidateWindow final {
     }
 
   private:
+    [[nodiscard]] fcitx::windows::ui::detail::Fcitx5CandidatePresentationOutput
+    presentationState() const noexcept {
+        fcitx::windows::ui::detail::Fcitx5CandidatePresentationOutput output{};
+        (void)fcitx::windows::ui::detail::fcitx5_candidate_presentation_current(
+            presentation_, &output);
+        return output;
+    }
+
+    [[nodiscard]] std::optional<std::size_t> presentationSelected() const noexcept {
+        const auto state = presentationState();
+        return state.hasSelected ? std::optional<std::size_t>{state.selected} : std::nullopt;
+    }
+
+    [[nodiscard]] bool presentationScrollMode() const noexcept {
+        return presentationState().scrollMode != 0;
+    }
+
+    [[nodiscard]] std::size_t presentationScrollColumns() const noexcept {
+        return presentationState().scrollColumns;
+    }
+
+    [[nodiscard]] ui::Placement presentationPlacement() const noexcept {
+        return fcitx::windows::ui::placementFromRust(presentationState().placement);
+    }
+
+    void setPresentationPlacement(ui::Placement placement) noexcept {
+        (void)fcitx::windows::ui::detail::fcitx5_candidate_presentation_set_placement(
+            presentation_, toRust(placement));
+    }
+
     static float inputHorizontalNaturalWidth(std::span<const ui::Size> items, float paddingX,
                                              float columnGap, float preeditWidth) noexcept {
         float width = 0.0F;
@@ -2251,29 +2344,6 @@ class CandidateWindow final {
             width += item.width;
         }
         return (std::max)(width + paddingX * 2.0F, preeditWidth);
-    }
-
-    [[nodiscard]] ui::Orientation resolveAutomaticPresentation(const RECT& workArea, float scale,
-                                                               std::uint32_t pageSize) {
-        if (compositionAutoOrientation_)
-            return *compositionAutoOrientation_;
-        bool hasLongAnnotation = false;
-        bool compactCandidates = !candidates_.empty();
-        for (const auto& candidate : candidates_) {
-            hasLongAnnotation = hasLongAnnotation || candidate.comment.size() > 18U;
-            compactCandidates = compactCandidates && candidate.text.size() <= 6U &&
-                                candidate.comment.size() <= 18U;
-        }
-        const float nearRightThreshold = 360.0F * scale;
-        const bool edgeConstrained =
-            static_cast<float>(workArea.right - lastCaret_.left) < nearRightThreshold;
-        const bool compactCjk =
-            localePrefersCompactHorizontal(contentLocaleUtf8_) && compactCandidates &&
-            candidates_.size() <= std::max<std::size_t>(1U, pageSize == 0 ? 9U : pageSize);
-        compositionAutoOrientation_ =
-            compactCjk && !hasLongAnnotation && !edgeConstrained ? ui::Orientation::horizontal
-                                                                 : ui::Orientation::vertical;
-        return *compositionAutoOrientation_;
     }
 
     static LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam,
@@ -2466,23 +2536,13 @@ class CandidateWindow final {
     std::vector<D2D1_RECT_F> itemRects_;
     std::vector<std::size_t> visibleIndices_;
     std::vector<std::size_t> renderIndices_;
-    std::optional<std::size_t> selected_;
     std::optional<std::size_t> pressedCandidate_;
     fcitx::windows::config::Config visualConfig_;
     candidate::CandidateModel model_;
     fcitx::windows::protocol::CaretRect lastCaret_;
-    fcitx::windows::ui::Placement placement_{fcitx::windows::ui::Placement::unlocked};
     fcitx::windows::ui::Orientation resolvedPresentationOrientation_{
         fcitx::windows::ui::Orientation::vertical};
-    std::optional<fcitx::windows::ui::Orientation> compositionAutoOrientation_;
-    float compositionStableWidth_{};
-    std::uint64_t compositionId_{};
     bool safeMode_{};
-    bool scrollMode_{};
-    bool scrollExpanded_{};
-    std::size_t scrollColumns_{6U};
-    bool lastCandidateBulk_{};
-    std::uint32_t lastCandidatePageSize_{};
     bool hasScrollbar_{};
     float fontDpiScale_{1.0F};
     float selectionInflateX_{};
@@ -2497,6 +2557,7 @@ class CandidateWindow final {
     bool interactionTest_{};
     std::optional<fcitx::windows::ui::CandidateSelectionIntent> capturedTestIntent_;
     std::unique_ptr<fcitx::windows::ipc::PipeClient> candidateClient_;
+    void* presentation_{};
     std::wstring dwriteLocale_{defaultDwriteLocale()};
     std::string contentLocaleUtf8_;
 };
