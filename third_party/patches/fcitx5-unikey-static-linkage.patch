@@ -1,0 +1,20 @@
+diff --git a/unikey/CMakeLists.txt b/unikey/CMakeLists.txt
+--- a/unikey/CMakeLists.txt
++++ b/unikey/CMakeLists.txt
+@@ -16,3 +16,4 @@ add_library(unikey-lib STATIC ${UNIKEY_SRCS})
+ target_link_libraries(unikey-lib Fcitx5::Utils)
+ set_target_properties(unikey-lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
++target_compile_definitions(unikey-lib PRIVATE UNIKEYHOOK)
+ target_include_directories(unikey-lib PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -5,7 +5,8 @@ set( fcitx_unikey_sources
+     )
+ 
+ add_fcitx5_addon(unikey ${fcitx_unikey_sources})
+ target_link_libraries(unikey Fcitx5::Core Fcitx5::Config unikey-lib)
++target_compile_definitions(unikey PRIVATE UNIKEYHOOK)
+ target_include_directories(unikey PRIVATE ${PROJECT_BINARY_DIR})
+ if (ENABLE_QT)
+ target_compile_definitions(unikey PRIVATE "-DENABLE_QT")

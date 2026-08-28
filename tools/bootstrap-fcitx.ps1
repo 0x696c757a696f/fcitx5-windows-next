@@ -1,5 +1,12 @@
 [CmdletBinding()]
-param([switch] $VerifyOnly, [switch] $VerifyPatchesOnly)
+param(
+  [switch] $VerifyOnly,
+  [switch] $VerifyPatchesOnly,
+  [switch] $SkipToolchainSync,
+  [string] $SourcesRoot,
+  [string] $BuildRoot,
+  [string] $StageRoot
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -8,11 +15,25 @@ $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $outRoot = Join-Path $repoRoot 'out'
 $downloads = Join-Path $outRoot 'downloads'
 $toolchain = Join-Path $outRoot 'toolchains/msys64'
-$sources = Join-Path $outRoot 'sources'
-$stage = Join-Path $outRoot 'stage/fcitx5'
+$sources = if ($SourcesRoot) { [IO.Path]::GetFullPath($SourcesRoot) } else {
+  Join-Path $outRoot 'sources'
+}
+$buildRoot = if ($BuildRoot) { [IO.Path]::GetFullPath($BuildRoot) } else {
+  Join-Path $outRoot 'build'
+}
+$stage = if ($StageRoot) { [IO.Path]::GetFullPath($StageRoot) } else {
+  Join-Path $outRoot 'stage/fcitx5'
+}
 $archiveName = 'msys2-base-x86_64-20260611.tar.xz'
 $archiveHash = 'A2D047E8EE213C3C6A49A8DE427EB1069DF12207C0422FF1B3CBB5C905C34221'
 $signingFingerprint = '0EBF782C5D53F7E5FB02A66746BD761F7A49B0EC'
+
+foreach ($root in @($sources, $buildRoot, $stage)) {
+  $outPrefix = $outRoot.TrimEnd('\') + '\'
+  if (-not $root.StartsWith($outPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Bootstrap root must remain under $outRoot`: $root"
+  }
+}
 
 $sourcePins = @(
   @{ Name = 'fcitx5'; Url = 'https://github.com/fcitx/fcitx5.git'; Commit = 'cdd0b9d900770d1ad1229d759213215d5dc23a90' },
@@ -36,6 +57,8 @@ $patchPins = @(
   @{ Source = 'fcitx5-rime'; File = 'fcitx5-rime-windows-paths.patch' },
   @{ Source = 'fcitx5-lua'; File = 'fcitx5-lua-windows-lua54.patch' },
   @{ Source = 'librime'; File = 'librime-msys2-clang-windows.patch' }
+  @{ Source = 'fcitx5-unikey'; File = 'fcitx5-unikey-disable-test-frontend.patch' }
+  @{ Source = 'fcitx5-unikey'; File = 'fcitx5-unikey-static-linkage.patch' }
 )
 
 $packagePins = @(
@@ -153,8 +176,14 @@ function Assert-PatchCompatibility {
 function Ensure-PluginJunction([string] $Link, [string] $Target) {
   if (Test-Path -LiteralPath $Link) {
     $item = Get-Item -LiteralPath $Link -Force
+    $targetItem = Get-Item -LiteralPath $Target -Force
+    $expectedTarget = if ($targetItem.LinkType -eq 'Junction') {
+      $targetItem.Target
+    } else {
+      $Target
+    }
     if ($item.LinkType -eq 'Junction' -and
-        [IO.Path]::GetFullPath($item.Target) -eq [IO.Path]::GetFullPath($Target)) {
+        [IO.Path]::GetFullPath($item.Target) -eq [IO.Path]::GetFullPath($expectedTarget)) {
       return
     }
     throw "Unexpected file at pinned Rime plugin path: $Link"
@@ -219,13 +248,17 @@ if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $archiveHash
   throw 'MSYS2 archive SHA-256 mismatch.'
 }
 
-$gpg = (Get-Command gpg.exe -ErrorAction Stop).Source
+$gpg = Join-Path $toolchain 'usr/bin/gpg.exe'
+if (-not (Test-Path -LiteralPath $gpg -PathType Leaf)) {
+  $gpg = (Get-Command gpg.exe -ErrorAction Stop).Source
+}
 $gpgHome = Join-Path $outRoot 'gnupg'
 New-Item -ItemType Directory -Force -Path $gpgHome | Out-Null
-Invoke-Checked $gpg @('--homedir', $gpgHome, '--batch', '--keyserver',
+$gpgHomeMsys = Convert-ToMsysPath $gpgHome
+Invoke-Checked $gpg @('--homedir', $gpgHomeMsys, '--batch', '--keyserver',
   'hkps://keyserver.ubuntu.com', '--recv-keys', $signingFingerprint)
-$status = & $gpg --homedir $gpgHome --batch --status-fd 1 --verify $signature $archive 2>$null
-if ($LASTEXITCODE -ne 0 -or $status -notmatch "VALIDSIG $signingFingerprint") {
+$status = (& $gpg --homedir $gpgHomeMsys --batch --status-fd 1 --verify $signature $archive 2>$null | Out-String)
+if ($LASTEXITCODE -ne 0 -or $status -notmatch "VALIDSIG .* $signingFingerprint(?:\r?\n|$)") {
   throw 'MSYS2 signature or primary signing fingerprint verification failed.'
 }
 
@@ -249,8 +282,10 @@ foreach ($name in @('protocols', 'services', 'networks')) {
 }
 
 $packageNames = $packagePins | ForEach-Object { $_.Split('=', 2)[0] }
-Invoke-Msys "pacman -Syu --noconfirm"
-Invoke-Msys "pacman -S --needed --noconfirm $($packageNames -join ' ')"
+if (-not $SkipToolchainSync) {
+  Invoke-Msys "pacman -Syu --noconfirm"
+  Invoke-Msys "pacman -S --needed --noconfirm $($packageNames -join ' ')"
+}
 
 foreach ($pin in $sourcePins) {
   $path = Join-Path $sources $pin.Name
@@ -284,6 +319,10 @@ Apply-PinnedPatch $lua `
   (Join-Path $repoRoot 'third_party/patches/fcitx5-lua-windows-lua54.patch')
 Apply-PinnedPatch $librime `
   (Join-Path $repoRoot 'third_party/patches/librime-msys2-clang-windows.patch')
+Apply-PinnedPatch $unikey `
+  (Join-Path $repoRoot 'third_party/patches/fcitx5-unikey-disable-test-frontend.patch')
+Apply-PinnedPatch $unikey `
+  (Join-Path $repoRoot 'third_party/patches/fcitx5-unikey-static-linkage.patch')
 foreach ($plugin in @('librime-lua', 'librime-octagram', 'librime-proto', 'librime-predict')) {
   Ensure-PluginJunction (Join-Path $librime "plugins/$plugin") `
     (Join-Path $sources $plugin)
@@ -292,15 +331,26 @@ foreach ($plugin in @('librime-lua', 'librime-octagram', 'librime-proto', 'libri
 $msysRepo = Convert-ToMsysPath $repoRoot
 $msysSources = Convert-ToMsysPath $sources
 $msysStage = Convert-ToMsysPath $stage
+$msysBuild = Convert-ToMsysPath $buildRoot
 $common = "-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX='$msysStage'"
-Invoke-Msys "cmake -S '$msysSources/fcitx5' -B '$msysRepo/out/build/fcitx5-core' $common -DCMAKE_CXX_FLAGS=-fexperimental-library -DENABLE_DBUS=OFF -DENABLE_X11=OFF -DENABLE_WAYLAND=OFF -DENABLE_KEYBOARD=OFF -DENABLE_SERVER=OFF -DENABLE_TEST=OFF -DENABLE_TESTING_ADDONS=OFF -DBUILD_SPELL_DICT=OFF -DENABLE_DOC=OFF -DENABLE_LIBUUID=OFF -DENABLE_ENCHANT=OFF -DENABLE_EMOJI=OFF -DENABLE_XDGAUTOSTART=OFF; cmake --build '$msysRepo/out/build/fcitx5-core' --parallel; cmake --install '$msysRepo/out/build/fcitx5-core'"
-Invoke-Msys "cmake -S '$msysSources/libime' -B '$msysRepo/out/build/libime' $common -DCMAKE_PREFIX_PATH='$msysStage' -DENABLE_TEST=OFF -DENABLE_DOC=OFF; cmake --build '$msysRepo/out/build/libime' --parallel; cmake --install '$msysRepo/out/build/libime'"
-Invoke-Msys "cmake -S '$msysSources/fcitx5-chinese-addons' -B '$msysRepo/out/build/fcitx5-chinese-addons' $common -DCMAKE_PREFIX_PATH='$msysStage' -DENABLE_TEST=OFF -DENABLE_GUI=OFF -DENABLE_BROWSER=OFF -DENABLE_CLOUDPINYIN=OFF -DENABLE_OPENCC=OFF; cmake --build '$msysRepo/out/build/fcitx5-chinese-addons' --parallel; cmake --install '$msysRepo/out/build/fcitx5-chinese-addons'"
-Invoke-Msys "cmake -S '$msysSources/librime' -B '$msysRepo/out/build/librime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DCMAKE_DLL_NAME_WITH_SOVERSION=ON -DBUILD_TEST=OFF -DENABLE_LOGGING=OFF -DLUA_VERSION=lua5.4; cmake --build '$msysRepo/out/build/librime' --parallel; cmake --install '$msysRepo/out/build/librime'"
-Invoke-Msys "cmake -S '$msysSources/fcitx5-rime' -B '$msysRepo/out/build/fcitx5-rime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DRIME_DATA_DIR='$msysStage/share/rime-data'; cmake --build '$msysRepo/out/build/fcitx5-rime' --parallel; cmake --install '$msysRepo/out/build/fcitx5-rime'"
-Invoke-Msys "cmake -S '$msysSources/fcitx5-lua' -B '$msysRepo/out/build/fcitx5-lua' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DUSE_DLOPEN=OFF -DENABLE_TEST=OFF; cmake --build '$msysRepo/out/build/fcitx5-lua' --parallel; cmake --install '$msysRepo/out/build/fcitx5-lua'"
-Invoke-Msys "cmake -S '$msysSources/fcitx5-unikey' -B '$msysRepo/out/build/fcitx5-unikey' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DENABLE_TEST=OFF; cmake --build '$msysRepo/out/build/fcitx5-unikey' --parallel; cmake --install '$msysRepo/out/build/fcitx5-unikey'"
-Invoke-Msys "cmake -S '$msysRepo/native-engine' -B '$msysRepo/out/build/native-engine' $common -DCMAKE_PREFIX_PATH='$msysStage'; cmake --build '$msysRepo/out/build/native-engine' --parallel; cmake --install '$msysRepo/out/build/native-engine'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5' -B '$msysBuild/fcitx5-core' $common -DCMAKE_CXX_FLAGS=-fexperimental-library -DENABLE_DBUS=OFF -DENABLE_X11=OFF -DENABLE_WAYLAND=OFF -DENABLE_KEYBOARD=OFF -DENABLE_SERVER=OFF -DENABLE_TEST=OFF -DENABLE_TESTING_ADDONS=OFF -DBUILD_SPELL_DICT=OFF -DENABLE_DOC=OFF -DENABLE_LIBUUID=OFF -DENABLE_ENCHANT=OFF -DENABLE_EMOJI=OFF -DENABLE_XDGAUTOSTART=OFF; cmake --build '$msysBuild/fcitx5-core' --parallel; cmake --install '$msysBuild/fcitx5-core'"
+Invoke-Msys "PATH='$msysBuild/libime/bin:$msysStage/bin:/clang64/bin:/usr/bin:`$PATH' cmake -S '$msysSources/libime' -B '$msysBuild/libime' $common -DCMAKE_PREFIX_PATH='$msysStage' -DENABLE_TEST=OFF -DENABLE_DOC=OFF; PATH='$msysBuild/libime/bin:$msysStage/bin:/clang64/bin:/usr/bin:`$PATH' cmake --build '$msysBuild/libime' --parallel; cmake --install '$msysBuild/libime'"
+foreach ($tool in @('libime_pinyindict', 'libime_tabledict', 'libime_slm_build_binary',
+    'libime_prediction', 'libime_history', 'libime_migrate_fcitx4_table',
+    'libime_migrate_fcitx4_pinyin')) {
+  $withExtension = Join-Path $stage "bin/$tool.exe"
+  $withoutExtension = Join-Path $stage "bin/$tool"
+  if ((Test-Path -LiteralPath $withExtension -PathType Leaf) -and
+      -not (Test-Path -LiteralPath $withoutExtension)) {
+    Copy-Item -LiteralPath $withExtension -Destination $withoutExtension
+  }
+}
+Invoke-Msys "cmake -S '$msysSources/fcitx5-chinese-addons' -B '$msysBuild/fcitx5-chinese-addons' $common -DCMAKE_PREFIX_PATH='$msysStage' -DENABLE_TEST=OFF -DENABLE_GUI=OFF -DENABLE_BROWSER=OFF -DENABLE_CLOUDPINYIN=OFF -DENABLE_OPENCC=OFF; cmake --build '$msysBuild/fcitx5-chinese-addons' --parallel; cmake --install '$msysBuild/fcitx5-chinese-addons'"
+Invoke-Msys "cmake -S '$msysSources/librime' -B '$msysBuild/librime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DCMAKE_DLL_NAME_WITH_SOVERSION=ON -DBUILD_TEST=OFF -DENABLE_LOGGING=OFF -DLUA_VERSION=lua5.4; cmake --build '$msysBuild/librime' --parallel; cmake --install '$msysBuild/librime'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5-rime' -B '$msysBuild/fcitx5-rime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DRIME_DATA_DIR='$msysStage/share/rime-data'; cmake --build '$msysBuild/fcitx5-rime' --parallel; cmake --install '$msysBuild/fcitx5-rime'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5-lua' -B '$msysBuild/fcitx5-lua' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DUSE_DLOPEN=OFF -DENABLE_TEST=OFF; cmake --build '$msysBuild/fcitx5-lua' --parallel; cmake --install '$msysBuild/fcitx5-lua'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5-unikey' -B '$msysBuild/fcitx5-unikey' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DENABLE_TEST=OFF; cmake --build '$msysBuild/fcitx5-unikey' --parallel; cmake --install '$msysBuild/fcitx5-unikey'"
+Invoke-Msys "cmake -S '$msysRepo/native-engine' -B '$msysBuild/native-engine' $common -DCMAKE_PREFIX_PATH='$msysStage'; cmake --build '$msysBuild/native-engine' --parallel; cmake --install '$msysBuild/native-engine'"
 
 $runtimeDlls = @('libc++.dll', 'libzstd.dll', 'libdl.dll', 'libintl-8.dll',
   'libwinpthread-1.dll', 'libuv-1.dll', 'libiconv-2.dll',

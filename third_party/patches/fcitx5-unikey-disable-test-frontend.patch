@@ -1,0 +1,12 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -15,5 +15,7 @@ option(ENABLE_COVERAGE "Build the project with gcov support (Need ENABLE_TEST=On)" Off)
+ 
+ find_package(PkgConfig REQUIRED)
+ find_package(Fcitx5Core ${REQUIRED_FCITX_VERSION} REQUIRED)
+-find_package(Fcitx5Module REQUIRED COMPONENTS TestFrontend)
++if (ENABLE_TEST)
++    find_package(Fcitx5Module REQUIRED COMPONENTS TestFrontend)
++endif()
+ find_package(Gettext REQUIRED)
