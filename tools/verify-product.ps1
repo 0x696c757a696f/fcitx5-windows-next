@@ -8,7 +8,12 @@ param(
   [string] $Architecture = 'all',
 
   [ValidateSet('Debug', 'Release')]
-  [string] $Configuration = 'Release'
+  [string] $Configuration = 'Release',
+
+  [string] $Version = '0.1.0',
+
+  [ValidateSet('stable', 'beta', 'nightly')]
+  [string] $Channel = 'stable'
 )
 
 Set-StrictMode -Version Latest
@@ -25,7 +30,8 @@ switch ($Gate) {
       -Configuration $Configuration
   }
   'package' {
-    & (Join-Path $tools 'build.ps1') package -Architecture all -Configuration Release
+    & (Join-Path $tools 'build.ps1') package -Architecture all -Configuration Release `
+      -Version $Version -Channel $Channel
   }
   'desktop' {
     & (Join-Path $tools 'test-desktop.ps1') -Configuration Release

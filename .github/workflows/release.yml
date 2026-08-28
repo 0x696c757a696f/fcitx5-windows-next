@@ -87,7 +87,10 @@ jobs:
 
       - name: Build once, analyze, test, and stage
         shell: pwsh
-        run: ./tools/verify-product.ps1 package
+        env:
+          FCITX_PACKAGE_VERSION: ${{ inputs.version }}
+          FCITX_PACKAGE_CHANNEL: ${{ inputs.channel }}
+        run: ./tools/verify-product.ps1 package -Version $env:FCITX_PACKAGE_VERSION -Channel $env:FCITX_PACKAGE_CHANNEL
 
       - name: Show compiler cache stats
         if: always()

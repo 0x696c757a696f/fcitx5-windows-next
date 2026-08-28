@@ -8,7 +8,12 @@ param(
   [string] $Architecture = 'all',
 
   [ValidateSet('Debug', 'Release')]
-  [string] $Configuration = 'Debug'
+  [string] $Configuration = 'Debug',
+
+  [string] $Version = '0.1.0',
+
+  [ValidateSet('stable', 'beta', 'nightly')]
+  [string] $Channel = 'stable'
 )
 
 Set-StrictMode -Version Latest
@@ -371,7 +376,7 @@ try {
       & (Join-Path $PSScriptRoot 'check-locales.ps1')
       & (Join-Path $PSScriptRoot 'check-text-format.ps1')
       & (Join-Path $PSScriptRoot 'test-signing-credential-policy.ps1')
-      & (Join-Path $PSScriptRoot 'stage-package.ps1')
+      & (Join-Path $PSScriptRoot 'stage-package.ps1') -Version $Version -Channel $Channel
       & (Join-Path $PSScriptRoot 'test-portable.ps1')
       Write-Host 'Package gate passed using the tested Release artifacts.'
     }
