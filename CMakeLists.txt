@@ -944,6 +944,11 @@ if(BUILD_TESTING)
                    -NoProfile -File
                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-release-plugin-artifacts.ps1")
 
+  add_test(NAME signing-credential-policy
+           COMMAND "${FCITX_PWSH_EXECUTABLE}"
+                   -NoProfile -File
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-signing-credential-policy.ps1")
+
   add_library(
     fcitx5_mldsa65_test_sign STATIC
     "${FCITX_MLDSA_NATIVE_SOURCE_DIR}/mldsa/mldsa_native.c")

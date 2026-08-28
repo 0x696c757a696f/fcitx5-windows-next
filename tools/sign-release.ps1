@@ -9,6 +9,32 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $thumbprint = $CertificateThumbprint.Replace(' ', '').ToUpperInvariant()
 if ($thumbprint -notmatch '^[0-9A-F]{40,64}$') { throw 'Signing certificate thumbprint is invalid.' }
+$certificate = Get-Item "Cert:\CurrentUser\My\$thumbprint" -ErrorAction Stop
+if (-not $certificate.HasPrivateKey) {
+  throw 'Production signing certificate does not have an accessible private key.'
+}
+if ($certificate.Subject -eq $certificate.Issuer) {
+  throw 'Production signing rejects self-signed certificates.'
+}
+$now = Get-Date
+if ($now -lt $certificate.NotBefore -or $now -ge $certificate.NotAfter) {
+  throw 'Production signing certificate is outside its validity period.'
+}
+$codeSigningOid = '1.3.6.1.5.5.7.3.3'
+if ($certificate.EnhancedKeyUsageList.ObjectId.Value -notcontains $codeSigningOid) {
+  throw 'Production signing certificate is missing the Code Signing EKU.'
+}
+$chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
+$chain.ChainPolicy.RevocationMode =
+  [Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+$chain.ChainPolicy.RevocationFlag =
+  [Security.Cryptography.X509Certificates.X509RevocationFlag]::EntireChain
+$chain.ChainPolicy.VerificationFlags =
+  [Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+if (-not $chain.Build($certificate)) {
+  $statuses = @($chain.ChainStatus | ForEach-Object Status) -join ', '
+  throw "Production signing certificate chain validation failed: $statuses"
+}
 $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
 $signtool = Get-ChildItem -LiteralPath $kits -Filter signtool.exe -File -Recurse |
   Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |

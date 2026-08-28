@@ -350,6 +350,7 @@ try {
       & (Join-Path $PSScriptRoot 'check-dependencies.ps1')
       & (Join-Path $PSScriptRoot 'check-locales.ps1')
       & (Join-Path $PSScriptRoot 'check-text-format.ps1')
+      & (Join-Path $PSScriptRoot 'test-signing-credential-policy.ps1')
       Write-Host 'All build, test, and policy checks passed.'
     }
     'package' {
@@ -369,6 +370,7 @@ try {
       & (Join-Path $PSScriptRoot 'check-dependencies.ps1')
       & (Join-Path $PSScriptRoot 'check-locales.ps1')
       & (Join-Path $PSScriptRoot 'check-text-format.ps1')
+      & (Join-Path $PSScriptRoot 'test-signing-credential-policy.ps1')
       & (Join-Path $PSScriptRoot 'stage-package.ps1')
       & (Join-Path $PSScriptRoot 'test-portable.ps1')
       Write-Host 'Package gate passed using the tested Release artifacts.'
