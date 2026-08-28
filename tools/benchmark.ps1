@@ -8,10 +8,17 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$cmake = Join-Path $env:ProgramFiles 'CMake/bin/cmake.exe'
+$cmake = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\cmake-3.31.8\cmake-3.31.8-windows-x86_64\bin\cmake.exe'
 if (-not (Test-Path -LiteralPath $cmake -PathType Leaf)) {
   $cmake = (Get-Command cmake -ErrorAction Stop).Source
 }
+$cargo = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home\bin\cargo.exe'
+$cargoHome = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home'
+$sccache = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\sccache-0.17.0\sccache-v0.17.0-x86_64-pc-windows-msvc\sccache.exe'
+$cargoTarget = Join-Path $repoRoot 'out/cargo-target'
+$env:CARGO_HOME = $cargoHome
+$env:CARGO_TARGET_DIR = $cargoTarget
+$env:RUSTC_WRAPPER = $sccache
 $architectures = if ($Architecture -eq 'all') { @('x64', 'x86') } else { @($Architecture) }
 
 Push-Location $repoRoot
@@ -25,7 +32,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Release build failed for $targetArchitecture." }
 
     $binaryDirectory = Join-Path $buildDirectory 'Release'
-    & (Join-Path $binaryDirectory 'fcitx5_ipc_codec_bench.exe')
+    & $cargo run --locked --release --manifest-path (Join-Path $repoRoot 'Cargo.toml') `
+      -p fcitx5-protocol-core --bin fcitx5-protocol-bench --target (if ($targetArchitecture -eq 'x64') { 'x86_64-pc-windows-msvc' } else { 'i686-pc-windows-msvc' })
     if ($LASTEXITCODE -ne 0) { throw "Codec benchmark failed for $targetArchitecture." }
     & (Join-Path $binaryDirectory 'fcitx5_key_roundtrip_bench.exe') `
       (Join-Path $binaryDirectory 'fcitx5-mock-engine.exe')

@@ -883,9 +883,8 @@ std::uint64_t repositoryMaxReleaseSequence(const fcitx::package::RepositoryIndex
 
 bool repositorySequenceIsAcceptable(std::uint64_t sequence, std::uint64_t accepted,
                                     bool requireNew) {
-    return fcitx5_repository_sequence_is_acceptable(sequence, accepted,
-                                                    requireNew ? std::uint8_t{1} : std::uint8_t{0}) !=
-           0;
+    return fcitx::package::detail::fcitx5_repository_sequence_is_acceptable(
+               sequence, accepted, requireNew ? std::uint8_t{1} : std::uint8_t{0}) != 0;
 }
 
 std::wstring repositoryMetadataUrl(std::wstring_view baseUrl, std::string_view metadataName) {

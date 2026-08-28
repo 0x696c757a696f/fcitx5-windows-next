@@ -218,6 +218,7 @@ int wmain(int argc, wchar_t** argv) {
       (L"control-repo-rollback-" + std::to_wstring(GetCurrentProcessId()));
   std::error_code ignored;
   fs::remove_all(dataRoot, ignored);
+  fs::create_directories(dataRoot / "packages");
 
   try {
     MldsaSigningFixture signer;

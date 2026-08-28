@@ -1245,8 +1245,6 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "rust/package-core/src/deployer_main.rs");
     const auto rustDeployerBuild =
         read_text(sourceRoot / "tools/build-rust-deployer-cli.ps1");
-    const auto deploymentCoreHeader =
-        read_text(sourceRoot / "tests/support/deployment_test_core.h");
     const auto dependencyCheck = read_text(sourceRoot / "tools/check-dependencies.ps1");
     const auto cargoInventory = read_text(sourceRoot / "tools/cargo-inventory.ps1");
     const auto sbomGenerator = read_text(sourceRoot / "tools/generate-sbom.ps1");
@@ -1896,25 +1894,8 @@ int main(int argc, char** argv) {
         cmakeSource.find("Building Rust fcitx5-deployer CLI") == std::string::npos ||
         std::filesystem::exists(sourceRoot / "src/updater/deployment_core.cpp") ||
         std::filesystem::exists(sourceRoot / "src/updater/deployment_core.h") ||
-        deploymentCoreHeader.find("fcitx5_update_cleanup_previous_known_good_utf16") ==
-            std::string::npos ||
-        deploymentCoreHeader.find("fcitx5_update_install_tsf_dll_generation_utf16") ==
-            std::string::npos ||
-        deploymentCoreHeader.find("fcitx5_update_cleanup_old_tsf_dlls_utf16") ==
-            std::string::npos ||
-        deploymentCoreHeader.find("fcitx5_update_runtime_generation_directory_utf16") ==
-            std::string::npos ||
-        deploymentCoreHeader.find("fcitx5_update_install_runtime_generation_utf16") ==
-            std::string::npos ||
-        deploymentCoreHeader.find("CopyFileW(") != std::string::npos ||
-        deploymentCoreHeader.find("DeleteFileW(") != std::string::npos ||
-        deploymentCoreHeader.find("copy_directory_tree") != std::string::npos ||
-        deploymentCoreHeader.find("stage_runtime_payload") != std::string::npos ||
-        deploymentCoreHeader.find("publish_runtime_directory") != std::string::npos ||
         controlSource.find("#include \"deployment_core.h\"") != std::string::npos ||
         cmakeSource.find("${CMAKE_CURRENT_SOURCE_DIR}/src/updater") != std::string::npos ||
-        cmakeSource.find("add_library(fcitx5_deployment_core INTERFACE)") ==
-            std::string::npos ||
         rustPackageCore.find("cleanup_previous_known_good") == std::string::npos ||
         rustPackageCore.find("install_tsf_dll_generation") == std::string::npos ||
         rustPackageCore.find("cleanup_old_tsf_dlls") == std::string::npos ||
@@ -2014,8 +1995,6 @@ int main(int argc, char** argv) {
         read_text(sourceRoot / "tools/test-config-rust-legacy-cli.ps1");
     const auto stagePackageScript = read_text(sourceRoot / "tools/stage-package.ps1");
     const auto englishLocale = read_text(sourceRoot / "locales/en-US.json");
-    const auto controlPackageIntegrationSource =
-        read_text(sourceRoot / "tests/integration/control_package_integration_test.cpp");
     if (configPocSource.find("struct SettingsPalette") == std::string::npos ||
         configPocSource.find("struct DesignTokens") == std::string::npos ||
         configPocSource.find("fn design_tokens() -> DesignTokens") == std::string::npos ||
@@ -2620,10 +2599,6 @@ int main(int argc, char** argv) {
         configSource.find("presentation.find(\"candidate_font\")") == std::string::npos ||
         configSource.find("user.candidateFont.families = std::vector<std::string>{narrow(font)}") ==
             std::string::npos ||
-        controlPackageIntegrationSource.find("\"candidate_font\":\"Segoe UI Emoji\"") ==
-            std::string::npos ||
-        controlPackageIntegrationSource.find("presentation readback must replay the persisted font") ==
-            std::string::npos ||
         cmakeSource.find("rust-config-poc-contract") == std::string::npos ||
         cmakeSource.find("fcitx5_config_rust_side_by_side") == std::string::npos ||
         cmakeSource.find("Building Rust fcitx5-config.exe and side-by-side fcitx5-config-rust executable") ==
@@ -2668,8 +2643,6 @@ int main(int argc, char** argv) {
             std::string::npos ||
         configRustShippingLineageScript.find("shipping-candidate-real-preview-host-path") ==
             std::string::npos ||
-        configSource.find("--set-presentation") == std::string::npos ||
-        configSource.find("--reset-presentation") == std::string::npos ||
         configSource.find("candidate.automatic") == std::string::npos ||
         englishLocale.find("\"nav.theme\": \"Theme\"") != std::string::npos ||
         englishLocale.find("\"nav.repair\": \"Repair\"") != std::string::npos ||

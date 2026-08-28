@@ -40,6 +40,10 @@ if(NOT EXISTS "${FCITX_MINIZ_SOURCE_DIR}/miniz.c" OR
           "Pinned miniz sources are missing. Run tools/prepare-package-dependencies.ps1.")
 endif()
 
+set(FCITX_TOMLPLUSPLUS_INCLUDE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tomlplusplus/include"
+    CACHE PATH "Path to the pinned tomlplusplus headers")
+
 set(FCITX_MLDSA_NATIVE_SOURCE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/mldsa-native-2.0.0/mldsa-native-2.0.0"
     CACHE PATH "Path to the pinned mldsa-native 2.0.0 sources")
@@ -116,9 +120,18 @@ find_program(
 find_program(FCITX_SCCACHE_EXECUTABLE sccache)
 find_program(FCITX_PWSH_EXECUTABLE pwsh powershell REQUIRED)
 file(TO_CMAKE_PATH "${FCITX_PWSH_EXECUTABLE}" FCITX_PWSH_COMMAND)
-set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
-set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
-set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
+set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home" CACHE PATH
+    "Pinned Rustup home")
+set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home" CACHE PATH
+    "Pinned Cargo home")
+if(DEFINED ENV{FCITX_CARGO_TARGET_DIR} AND NOT "$ENV{FCITX_CARGO_TARGET_DIR}" STREQUAL "")
+  set(_fcitx_default_cargo_target_dir "$ENV{FCITX_CARGO_TARGET_DIR}")
+else()
+  set(_fcitx_default_cargo_target_dir "${CMAKE_CURRENT_SOURCE_DIR}/out/cargo-target")
+endif()
+set(FCITX_CARGO_TARGET_DIR "${_fcitx_default_cargo_target_dir}" CACHE PATH
+    "Worktree-local Cargo target directory")
+unset(_fcitx_default_cargo_target_dir)
 set(FCITX_RUST_BUILD_ENV)
 if("$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND
    NOT "$ENV{ACTIONS_RUNTIME_TOKEN}" STREQUAL "" AND
@@ -481,16 +494,6 @@ if(FCITX_COMPILER_IS_MSVC_CL)
   target_compile_options(fcitx5_package_core PRIVATE /external:W0 /analyze:external-)
 endif()
 
-add_library(fcitx5_deployment_core INTERFACE)
-add_library(fcitx5::deployment_core ALIAS fcitx5_deployment_core)
-target_compile_features(fcitx5_deployment_core INTERFACE cxx_std_20)
-target_include_directories(fcitx5_deployment_core INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
-target_link_libraries(
-  fcitx5_deployment_core
-  INTERFACE fcitx5_package_core_rust
-         ws2_32 userenv ntdll bcrypt crypt32 ole32)
-add_dependencies(fcitx5_deployment_core fcitx5_package_core_rustlib)
-
 add_library(fcitx5_config STATIC src/config/config_parser.cpp)
 add_library(fcitx5::config ALIAS fcitx5_config)
 target_compile_features(fcitx5_config PUBLIC cxx_std_20)
@@ -499,7 +502,7 @@ target_include_directories(
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
 target_include_directories(
   fcitx5_config SYSTEM
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tomlplusplus/include")
+  PRIVATE "${FCITX_TOMLPLUSPLUS_INCLUDE_DIR}")
 target_link_libraries(fcitx5_config PUBLIC fcitx5_control_core_rust)
 add_dependencies(fcitx5_config fcitx5_control_core_rustlib)
 target_compile_definitions(fcitx5_config PRIVATE TOML_EXCEPTIONS=1)
@@ -960,24 +963,6 @@ if(BUILD_TESTING)
     endif()
   endif()
 
-  add_executable(fcitx5_package_core_test tests/unit/package_core_test.cpp)
-  target_include_directories(
-    fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_MINIZ_SOURCE_DIR}")
-  target_include_directories(
-    fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
-  target_include_directories(
-    fcitx5_package_core_test SYSTEM PRIVATE "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
-  target_include_directories(
-    fcitx5_package_core_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
-  target_link_libraries(
-    fcitx5_package_core_test
-    PRIVATE fcitx5::package_core fcitx5_miniz fcitx5_mldsa65_test_sign bcrypt)
-  fcitx_apply_project_options(fcitx5_package_core_test)
-  fcitx_apply_binary_hardening(fcitx5_package_core_test)
-  add_test(NAME package-core-contract
-           COMMAND fcitx5_package_core_test
-                   "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/package_path_corpus.json")
-
   add_executable(fcitx5_pqc_fixture_signer tests/support/pqc_fixture_signer.cpp)
   set_target_properties(fcitx5_pqc_fixture_signer PROPERTIES
                         OUTPUT_NAME "fcitx5-pqc-fixture-signer")
@@ -1026,11 +1011,6 @@ if(BUILD_TESTING)
                    "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-register.exe")
   add_test(NAME package-version
            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-package.exe" --version)
-  add_executable(fcitx5_deployment_core_test tests/unit/deployment_core_test.cpp)
-  target_link_libraries(fcitx5_deployment_core_test PRIVATE fcitx5::deployment_core)
-  fcitx_apply_project_options(fcitx5_deployment_core_test)
-  fcitx_apply_binary_hardening(fcitx5_deployment_core_test)
-  add_test(NAME deployment-previous-known-good COMMAND fcitx5_deployment_core_test)
   add_test(
     NAME updater-version
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-updater.exe" --version)
@@ -1051,15 +1031,6 @@ if(BUILD_TESTING)
   add_test(NAME provider-boundary-smoke
            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-provider.exe" --self-test
                    --audit-self-pe)
-
-  add_executable(fcitx5_updater_cleanup_test tests/unit/updater_cleanup_test.cpp)
-  target_link_libraries(fcitx5_updater_cleanup_test PRIVATE fcitx5::deployment_core)
-  add_dependencies(fcitx5_updater_cleanup_test fcitx5_updater)
-  fcitx_apply_project_options(fcitx5_updater_cleanup_test)
-  fcitx_apply_binary_hardening(fcitx5_updater_cleanup_test)
-  add_test(NAME updater-cleanup-previous
-           COMMAND fcitx5_updater_cleanup_test
-                   "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-updater.exe")
 
   add_executable(fcitx5_control_repository_rollback_test
                  tests/unit/control_repository_rollback_test.cpp)
@@ -1211,18 +1182,6 @@ if(BUILD_TESTING)
   set_tests_properties(rust-config-poc-window-smoke PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-  add_executable(fcitx5_protocol_test tests/unit/protocol_test.cpp)
-  target_link_libraries(fcitx5_protocol_test PRIVATE fcitx5::protocol)
-  fcitx_apply_project_options(fcitx5_protocol_test)
-  fcitx_apply_binary_hardening(fcitx5_protocol_test)
-  add_test(NAME protocol-contract COMMAND fcitx5_protocol_test)
-  add_executable(fcitx5_protocol_differential_test tests/unit/protocol_differential_test.cpp)
-  target_link_libraries(fcitx5_protocol_differential_test
-                        PRIVATE fcitx5::protocol fcitx5_protocol_core_rust)
-  fcitx_apply_project_options(fcitx5_protocol_differential_test)
-  fcitx_apply_binary_hardening(fcitx5_protocol_differential_test)
-  add_test(NAME protocol-differential-contract COMMAND fcitx5_protocol_differential_test)
-
   add_executable(fcitx5_engine_core_contract_test tests/unit/engine_core_contract_test.cpp)
   target_include_directories(fcitx5_engine_core_contract_test
                              PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/engine")
@@ -1230,14 +1189,6 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_engine_core_contract_test)
   fcitx_apply_binary_hardening(fcitx5_engine_core_contract_test)
   add_test(NAME engine-core-contract COMMAND fcitx5_engine_core_contract_test)
-
-  add_executable(fcitx5_config_parser_test tests/unit/config_parser_test.cpp)
-  target_link_libraries(fcitx5_config_parser_test PRIVATE fcitx5::config)
-  fcitx_apply_project_options(fcitx5_config_parser_test)
-  fcitx_apply_binary_hardening(fcitx5_config_parser_test)
-  add_test(NAME config-toml-contract COMMAND fcitx5_config_parser_test)
-  set_tests_properties(config-toml-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-
 
   add_executable(fcitx5_source_contract_test tests/unit/source_contract_test.cpp)
   fcitx_apply_project_options(fcitx5_source_contract_test)
@@ -1247,9 +1198,6 @@ if(BUILD_TESTING)
   find_program(FCITX_CARGO_EXECUTABLE cargo)
   if(FCITX_CARGO_EXECUTABLE)
     find_program(FCITX_PWSH_EXECUTABLE pwsh powershell)
-    set(FCITX_RUSTUP_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/rustup-home")
-    set(FCITX_CARGO_HOME "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/cargo-home")
-    set(FCITX_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/rust/target")
     add_custom_target(
       fcitx5_rust_package_core_test
       COMMAND
@@ -1285,6 +1233,40 @@ if(BUILD_TESTING)
         "${FCITX_RUST_TARGET}")
     set_tests_properties(
       rust-package-core-differential PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-package-core-fuzz-smoke
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+        "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --lib --target
+        "${FCITX_RUST_TARGET}" fuzz_smoke_consumes_deterministic_random_package_bytes -- --exact)
+    set_tests_properties(
+      rust-package-core-fuzz-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-package-core-path-corpus-fuzz-smoke
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+        "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --lib --target
+        "${FCITX_RUST_TARGET}" package_path_corpus_matches_frozen_cpp_policy -- --exact)
+    set_tests_properties(
+      rust-package-core-path-corpus-fuzz-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-package-core-updater-cli-contract
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+        "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-package-core --test
+        updater_cli_contract --target "${FCITX_RUST_TARGET}")
+    set_tests_properties(
+      rust-package-core-updater-cli-contract PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(
       NAME rust-package-core-artifact-smoke
       COMMAND
@@ -1437,6 +1419,26 @@ if(BUILD_TESTING)
         rust-package-core-packaged-artifact-smoke PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
+    add_test(
+      NAME rust-protocol-core-contract
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-protocol-core --lib --target
+        "${FCITX_RUST_TARGET}")
+    set_tests_properties(
+      rust-protocol-core-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(FCITX_BUILD_FUZZERS)
+      add_test(
+        NAME rust-protocol-fuzz-smoke
+        COMMAND
+          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+          "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-protocol-core --lib --target
+          "${FCITX_RUST_TARGET}" fuzz_smoke_consumes_deterministic_random_bytes -- --exact)
+      set_tests_properties(
+        rust-protocol-fuzz-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
   else()
     message(STATUS "Cargo was not found; Rust R1 package-core tests are not registered.")
   endif()
@@ -1485,12 +1487,6 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_runtime_identity_test)
   fcitx_apply_binary_hardening(fcitx5_runtime_identity_test)
   add_test(NAME runtime-identity-contract COMMAND fcitx5_runtime_identity_test)
-
-  add_executable(fcitx5_launcher_state_test tests/unit/launcher_state_test.cpp)
-  target_link_libraries(fcitx5_launcher_state_test PRIVATE fcitx5::launcher_state)
-  fcitx_apply_project_options(fcitx5_launcher_state_test)
-  fcitx_apply_binary_hardening(fcitx5_launcher_state_test)
-  add_test(NAME launcher-state-model COMMAND fcitx5_launcher_state_test)
 
   add_executable(fcitx5_ipc_roundtrip_test tests/integration/ipc_roundtrip_test.cpp)
   target_link_libraries(fcitx5_ipc_roundtrip_test PRIVATE fcitx5::ipc_client)
@@ -1625,29 +1621,6 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_engine_integration_test)
 endif()
 
-if(FCITX_BUILD_FUZZERS)
-  add_executable(fcitx5_protocol_fuzz tests/fuzz/protocol_fuzz.cpp)
-  target_link_libraries(fcitx5_protocol_fuzz PRIVATE fcitx5::protocol)
-  fcitx_apply_project_options(fcitx5_protocol_fuzz)
-  fcitx_apply_binary_hardening(fcitx5_protocol_fuzz)
-  if(BUILD_TESTING)
-    add_test(NAME protocol-fuzz-smoke COMMAND fcitx5_protocol_fuzz)
-  endif()
-
-  add_executable(fcitx5_package_fuzz tests/fuzz/package_fuzz.cpp)
-  target_include_directories(
-    fcitx5_package_fuzz SYSTEM PRIVATE "${FCITX_MINIZ_SOURCE_DIR}")
-  target_link_libraries(fcitx5_package_fuzz PRIVATE fcitx5::package_core fcitx5_miniz)
-  fcitx_apply_project_options(fcitx5_package_fuzz)
-  fcitx_apply_binary_hardening(fcitx5_package_fuzz)
-  if(BUILD_TESTING)
-    add_test(NAME package-manifest-path-fuzz-smoke COMMAND fcitx5_package_fuzz)
-    add_test(NAME package-path-corpus-fuzz-smoke
-             COMMAND fcitx5_package_fuzz
-                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/package_path_corpus.json")
-  endif()
-endif()
-
 if(FCITX_BUILD_BENCHMARKS)
   add_executable(fcitx5_handle_leak_soak tests/perf/handle_leak_soak.cpp)
   target_include_directories(
@@ -1656,10 +1629,26 @@ if(FCITX_BUILD_BENCHMARKS)
   fcitx_apply_project_options(fcitx5_handle_leak_soak)
   fcitx_apply_binary_hardening(fcitx5_handle_leak_soak)
 
-  add_executable(fcitx5_ipc_codec_bench tests/perf/ipc_codec_bench.cpp)
-  target_link_libraries(fcitx5_ipc_codec_bench PRIVATE fcitx5::protocol)
-  fcitx_apply_project_options(fcitx5_ipc_codec_bench)
-  fcitx_apply_binary_hardening(fcitx5_ipc_codec_bench)
+  add_custom_target(
+    fcitx5_rust_ipc_codec_bench
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-protocol-core --bin
+      fcitx5-protocol-bench --target "${FCITX_RUST_TARGET}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Building Rust fcitx5-protocol-bench")
+  if(BUILD_TESTING)
+    add_test(
+      NAME rust-ipc-codec-bench
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-protocol-core --bin
+        fcitx5-protocol-bench --target "${FCITX_RUST_TARGET}")
+    set_tests_properties(rust-ipc-codec-bench PROPERTIES
+                         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  endif()
 
   add_executable(fcitx5_key_roundtrip_bench tests/perf/key_roundtrip_bench.cpp)
   target_link_libraries(fcitx5_key_roundtrip_bench PRIVATE fcitx5::ipc_client)

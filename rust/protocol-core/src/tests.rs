@@ -768,6 +768,51 @@ fn decode_and_reencode_is_byte_identical() {
 }
 
 #[test]
+fn frozen_wire_corpus_is_consumed_by_rust_authority() {
+    const GOLDEN_SOURCE: &str = include_str!("../../../tests/unit/protocol_wire_golden.inc");
+    const SAMPLE_SIZES: &[usize] = &[
+        139, 188, 72, 72, 76, 68, 64, 64, 105, 68, 68, 68, 68, 68, 68, 68, 68, 68, 125,
+    ];
+    let bytes: Vec<u8> = GOLDEN_SOURCE
+        .split_whitespace()
+        .filter_map(|token| token.strip_prefix("0x"))
+        .map(|token| token.trim_end_matches(','))
+        .filter(|token| token.len() == 2)
+        .map(|token| u8::from_str_radix(token, 16).expect("golden byte should be hexadecimal"))
+        .collect();
+    assert_eq!(bytes.len(), 1585);
+
+    let mut offset = 0;
+    for (index, size) in SAMPLE_SIZES.iter().copied().enumerate() {
+        let sample = &bytes[offset..offset + size];
+        let reencoded = decode_and_reencode(sample)
+            .unwrap_or_else(|| panic!("frozen protocol sample {index} did not decode"));
+        assert_eq!(reencoded, sample, "frozen protocol sample {index} changed");
+        offset += size;
+    }
+    assert_eq!(offset, bytes.len());
+}
+
+#[test]
+fn fuzz_smoke_consumes_deterministic_random_bytes() {
+    let mut state = 0x3457_4346_u64;
+    for _ in 0..20_000 {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        let size = (state.wrapping_mul(0x2545_f491_4f6c_dd1d) % 1024) as usize;
+        let mut bytes = vec![0_u8; size];
+        for byte in &mut bytes {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            *byte = state.wrapping_mul(0x2545_f491_4f6c_dd1d) as u8;
+        }
+        let _ = decode_and_reencode(&bytes);
+    }
+}
+
+#[test]
 fn utf8_check_matches_cpp_byte_structure_semantics() {
     // Overlong encodings are accepted by the C++ byte-structure check.
     assert_eq!(utf8_code_point_count(b"\x00"), Some(1));

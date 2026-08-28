@@ -10882,6 +10882,39 @@ mod tests {
     const CORPUS: &str = include_str!("../../../tests/fixtures/package_path_corpus.json");
 
     #[cfg(windows)]
+    fn ascii_buffer(buffer: &[u8]) -> String {
+        String::from_utf8(
+            buffer
+                .iter()
+                .copied()
+                .take_while(|byte| *byte != 0)
+                .collect(),
+        )
+        .expect("fixture state should be ASCII")
+    }
+
+    #[cfg(windows)]
+    fn write_runtime_payload_for_test(root: &Path, marker: &str) {
+        let files = [
+            ("bin/fcitx5-engine.exe", marker.to_owned()),
+            ("bin/fcitx5-launcher.exe", marker.to_owned()),
+            ("bin/fcitx5-ui.exe", marker.to_owned()),
+            ("bin/fcitx5-control.exe", marker.to_owned()),
+            ("lib/fcitx5/addon.dll", marker.to_owned()),
+            ("share/fcitx5/profile", marker.to_owned()),
+            ("themes/default/theme.conf", marker.to_owned()),
+            ("tsf/x64/fcitx5-tsf.dll", format!("{marker}-x64")),
+            ("tsf/x86/fcitx5-tsf.dll", format!("{marker}-x86")),
+        ];
+        for (relative, contents) in files {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().expect("runtime fixture parent"))
+                .expect("runtime fixture parent should create");
+            fs::write(path, contents).expect("runtime fixture file should write");
+        }
+    }
+
+    #[cfg(windows)]
     mod rsa_signing_fixture {
         #![allow(unsafe_code)]
 
@@ -11076,6 +11109,164 @@ mod tests {
                 "package path corpus mismatch for {path:?}"
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fuzz_smoke_consumes_deterministic_random_package_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-package-core-fuzz-smoke-{}",
+            std::process::id()
+        ));
+        let archive_path = root.join("random.fcpkg");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("fuzz fixture directory should create");
+
+        let mut state = 0x5041_434b_4147_45_u64;
+        for iteration in 0..20_000_u32 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            let size = (state.wrapping_mul(0x2545_f491_4f6c_dd1d) % 4096) as usize;
+            let mut bytes = vec![0_u8; size];
+            for byte in &mut bytes {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                *byte = state.wrapping_mul(0x2545_f491_4f6c_dd1d) as u8;
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            let _ = is_safe_relative_package_path(&text);
+            let _ = parse_manifest(&text);
+
+            // Keep archive probing deterministic without doing 20,000 filesystem writes.
+            if iteration % 256 == 0 {
+                fs::write(&archive_path, &bytes).expect("random archive fixture should write");
+                if let Ok(archive) = super::miniz_archive_adapter::ZipArchive::open(&archive_path) {
+                    let count = archive.len();
+                    if count <= MAX_FILE_COUNT + 2 {
+                        for index in 0..count {
+                            if archive.stat(index).is_ok() {
+                                let _ = archive.validate(index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn deployment_and_tsf_generation_match_frozen_cpp_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-package-core-deployment-contract-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("deployment fixture directory should create");
+
+        update::write_update_owner(&root, update::Fcitx5UpdateOwner::Builtin)
+            .expect("builtin owner should publish");
+        update::begin_activation(&root, "stable", "1.0.0", update::Fcitx5UpdateOwner::Builtin)
+            .expect("first activation should begin");
+        update::mark_current_healthy(&root, "stable").expect("first activation should be healthy");
+        update::begin_activation(&root, "stable", "1.1.0", update::Fcitx5UpdateOwner::Builtin)
+            .expect("second activation should begin");
+        let state = update::read_deployment_state(&root, "stable").expect("state should read");
+        assert_eq!(ascii_buffer(&state.current), "1.1.0");
+        assert_eq!(ascii_buffer(&state.previous), "1.0.0");
+        assert_eq!(state.healthy, 0);
+        assert_eq!(
+            update::rollback_target(&root, "stable").expect("rollback target"),
+            "1.0.0"
+        );
+        update::finish_rollback(&root, "stable").expect("rollback should finish");
+        let state = update::read_deployment_state(&root, "stable").expect("state should read");
+        assert_eq!(ascii_buffer(&state.current), "1.0.0");
+        assert!(ascii_buffer(&state.previous).is_empty());
+        assert_eq!(state.healthy, 1);
+        update::write_update_owner(&root, update::Fcitx5UpdateOwner::Winget)
+            .expect("external owner should publish");
+        assert!(update::begin_activation(
+            &root,
+            "stable",
+            "2.0.0",
+            update::Fcitx5UpdateOwner::Builtin,
+        )
+        .is_err());
+
+        let tsf_root = root.join("tsf");
+        let registered = tsf_root.join("x64/fcitx5-tsf.dll");
+        let incoming = root.join("staging/fcitx5-tsf.dll");
+        fs::create_dir_all(registered.parent().expect("registered parent"))
+            .expect("registered parent should create");
+        fs::create_dir_all(incoming.parent().expect("incoming parent"))
+            .expect("incoming parent should create");
+        fs::write(&registered, b"old-generation").expect("old TSF should write");
+        fs::write(&incoming, b"new-generation").expect("new TSF should write");
+        let result = update::install_tsf_dll_generation(&registered, &incoming, "00000042")
+            .expect("TSF generation should install");
+        assert_eq!(result.old_dll_renamed, 1);
+        assert_eq!(result.new_dll_installed, 1);
+        assert_eq!(
+            fs::read(&registered).expect("installed TSF should read"),
+            b"new-generation"
+        );
+        assert_eq!(
+            fs::read_to_string(registered.parent().unwrap().join("fcitx5-tsf.generation"))
+                .expect("generation marker should read"),
+            "00000042\n"
+        );
+        assert!(
+            update::install_tsf_dll_generation(&root.join("evil.dll"), &incoming, "00000042",)
+                .is_err()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn runtime_generation_install_rejects_incomplete_payloads() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-package-core-runtime-contract-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("runtime fixture directory should create");
+        let payload = root.join("payload-41");
+        write_runtime_payload_for_test(&payload, "payload-41");
+        let installed = update::install_runtime_generation(&root, &payload, "00000041", "build-41")
+            .expect("complete runtime should install");
+        assert_eq!(installed.runtime_installed, 1);
+        assert_eq!(installed.tsf_x64_installed, 1);
+        assert_eq!(installed.tsf_x86_installed, 1);
+        assert_eq!(installed.current_published, 1);
+        assert_eq!(
+            fs::read_to_string(root.join("runtime/00000041/bin/fcitx5-engine.exe"))
+                .expect("engine should be copied"),
+            "payload-41"
+        );
+        let state =
+            update::read_runtime_generation_state(&root).expect("runtime state should read");
+        assert_eq!(ascii_buffer(&state.current_generation), "00000041");
+        assert!(ascii_buffer(&state.previous_generation).is_empty());
+
+        let incomplete = root.join("payload-42");
+        write_runtime_payload_for_test(&incomplete, "payload-42");
+        fs::remove_file(incomplete.join("tsf/x86/fcitx5-tsf.dll"))
+            .expect("incomplete TSF should remove");
+        assert!(
+            update::install_runtime_generation(&root, &incomplete, "00000042", "build-42").is_err()
+        );
+        let state =
+            update::read_runtime_generation_state(&root).expect("runtime state should read");
+        assert_eq!(ascii_buffer(&state.current_generation), "00000041");
+        assert!(!root.join("runtime/00000042").exists());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
