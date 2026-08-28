@@ -2160,6 +2160,8 @@ impl CandidatePresentationState {
             if input.engine_epoch < previous.engine_epoch
                 || (input.engine_epoch == previous.engine_epoch
                     && input.context_id == previous.context_id
+                    && input.composition_id != 0
+                    && previous.composition_id != 0
                     && input.composition_id < previous.composition_id)
             {
                 return 2;
@@ -4473,6 +4475,20 @@ mod tests {
         assert_eq!(output.ordinary_start, 0);
         assert_eq!(output.ordinary_count, 5);
         assert_eq!(state.apply(first), 2);
+
+        let ended = CandidatePresentationUpdate {
+            composition_id: 0,
+            revision: 3,
+            selected: 0,
+            has_selected: 0,
+            candidate_count: 0,
+            page: 0,
+            page_size: 0,
+            candidate_bulk: 0,
+            configured_scroll_mode: 1,
+            ..second
+        };
+        assert_eq!(state.apply(ended), 0);
 
         state.set_placement(Placement::Above);
         assert_eq!(state.output().placement, 2);
