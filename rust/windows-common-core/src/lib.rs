@@ -454,7 +454,12 @@ fn pipe_security_descriptor(
 }
 
 #[repr(C)]
-struct SecurityAttributes {
+/// Windows security attributes borrowed from a live descriptor owner.
+///
+/// The fields are intentionally private: callers can pass this borrowed value
+/// to a native API during the borrow, but cannot safely extract or retain its
+/// descriptor pointer.
+pub struct SecurityAttributes {
     n_length: u32,
     security_descriptor: *mut c_void,
     inherit_handle: i32,
@@ -463,6 +468,75 @@ struct SecurityAttributes {
 struct PipeSecurityState {
     descriptor: *mut c_void,
     attributes: SecurityAttributes,
+}
+
+/// Owns the current user's pipe security descriptor and its native attributes.
+///
+/// This type intentionally does not implement `Send` or `Sync`: its raw
+/// LocalAlloc-backed descriptor is only exposed as an immutable borrow for a
+/// synchronous native call on the constructing thread.
+pub struct CurrentUserSecurityAttributes {
+    state: PipeSecurityState,
+}
+
+impl CurrentUserSecurityAttributes {
+    /// Resolves the authoritative current process identity and creates its
+    /// fail-closed pipe security attributes.
+    #[must_use]
+    pub fn new() -> Option<Self> {
+        let identity = current_identity(std::ptr::null_mut(), 0, std::ptr::null_mut(), 0);
+        if identity.status == 0 || identity.user_sid_len == 0 {
+            return None;
+        }
+
+        let mut user_sid = vec![0_u16; identity.user_sid_len];
+        let identity = current_identity(
+            user_sid.as_mut_ptr(),
+            user_sid.len(),
+            std::ptr::null_mut(),
+            0,
+        );
+        if identity.status == 0 || identity.user_sid_len != user_sid.len() {
+            return None;
+        }
+
+        let user_sid = String::from_utf16(&user_sid).ok()?;
+        Self::from_identity(
+            identity.service_account != 0,
+            identity.session_id,
+            identity.secure_desktop != 0,
+            &user_sid,
+        )
+    }
+
+    fn from_identity(
+        service_account: bool,
+        session_id: u32,
+        secure_desktop: bool,
+        user_sid: &str,
+    ) -> Option<Self> {
+        may_launch_user_engine(service_account, session_id, secure_desktop, user_sid)
+            .then(|| Self::from_pipe_identity(service_account, session_id, user_sid))?
+    }
+
+    fn from_pipe_identity(service_account: bool, session_id: u32, user_sid: &str) -> Option<Self> {
+        Some(Self {
+            state: pipe_security_state(service_account, session_id, user_sid)?,
+        })
+    }
+
+    fn into_descriptor(mut self) -> *mut c_void {
+        let descriptor = self.state.descriptor;
+        self.state.descriptor = std::ptr::null_mut();
+        self.state.attributes.security_descriptor = std::ptr::null_mut();
+        descriptor
+    }
+
+    /// Borrows the native attributes for a synchronous native call.
+    #[must_use]
+    pub fn attributes(&self) -> &SecurityAttributes {
+        &self.state.attributes
+    }
 }
 
 impl Drop for PipeSecurityState {
@@ -483,16 +557,16 @@ fn pipe_security_state(
     service_account: bool,
     session_id: u32,
     user_sid: &str,
-) -> Option<Box<PipeSecurityState>> {
+) -> Option<PipeSecurityState> {
     let descriptor = pipe_security_descriptor(service_account, session_id, user_sid)?;
-    Some(Box::new(PipeSecurityState {
+    Some(PipeSecurityState {
         descriptor,
         attributes: SecurityAttributes {
             n_length: std::mem::size_of::<SecurityAttributes>() as u32,
             security_descriptor: descriptor,
             inherit_handle: 0,
         },
-    }))
+    })
 }
 
 fn system_uses_dark_appearance() -> bool {
@@ -3187,8 +3261,14 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_descriptor_utf16(
     let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
         return std::ptr::null_mut();
     };
-    pipe_security_descriptor(service_account != 0, session_id, &user_sid)
-        .unwrap_or(std::ptr::null_mut())
+    let Some(security) = CurrentUserSecurityAttributes::from_pipe_identity(
+        service_account != 0,
+        session_id,
+        &user_sid,
+    ) else {
+        return std::ptr::null_mut();
+    };
+    security.into_descriptor()
 }
 
 #[unsafe(no_mangle)]
@@ -3207,28 +3287,42 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_create_utf16(
     let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
         return std::ptr::null_mut();
     };
-    let Some(state) = pipe_security_state(service_account != 0, session_id, &user_sid) else {
+    let Some(security) = CurrentUserSecurityAttributes::from_pipe_identity(
+        service_account != 0,
+        session_id,
+        &user_sid,
+    ) else {
         return std::ptr::null_mut();
     };
-    Box::into_raw(state).cast::<c_void>()
+    Box::into_raw(Box::new(security)).cast::<c_void>()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_pipe_security_attributes(
+/// # Safety
+///
+/// `state` must be a live opaque handle returned by
+/// `fcitx5_windows_common_pipe_security_create_utf16`. The returned pointer is
+/// borrowed from that handle and is valid only until it is destroyed.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_attributes(
     state: *mut c_void,
 ) -> *mut c_void {
     if state.is_null() {
         return std::ptr::null_mut();
     }
-    let state = state.cast::<PipeSecurityState>();
+    let state = state.cast::<CurrentUserSecurityAttributes>();
     // SAFETY: `state` is an opaque handle returned by
     // fcitx5_windows_common_pipe_security_create_utf16 and remains owned by
     // the caller until destroy.
-    unsafe { std::ptr::addr_of_mut!((*state).attributes).cast::<c_void>() }
+    unsafe { std::ptr::addr_of_mut!((*state).state.attributes).cast::<c_void>() }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_pipe_security_destroy(state: *mut c_void) {
+/// # Safety
+///
+/// `state` must be null or an opaque handle returned by
+/// `fcitx5_windows_common_pipe_security_create_utf16` that has not yet been
+/// destroyed.
+pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_destroy(state: *mut c_void) {
     if state.is_null() {
         return;
     }
@@ -3236,7 +3330,7 @@ pub extern "C" fn fcitx5_windows_common_pipe_security_destroy(state: *mut c_void
     // fcitx5_windows_common_pipe_security_create_utf16 that has not yet been
     // destroyed. Dropping the Box releases the LocalAlloc descriptor.
     unsafe {
-        drop(Box::from_raw(state.cast::<PipeSecurityState>()));
+        drop(Box::from_raw(state.cast::<CurrentUserSecurityAttributes>()));
     }
 }
 
@@ -4374,6 +4468,106 @@ mod tests {
         assert!(pipe_security_state(true, 7, &sid).is_none());
         assert!(pipe_security_state(false, 0, &sid).is_none());
         assert!(pipe_security_state(false, 7, "").is_none());
+    }
+
+    #[test]
+    fn current_user_security_attributes_use_current_runtime_identity() {
+        let security =
+            CurrentUserSecurityAttributes::new().expect("current user pipe security attributes");
+
+        let attributes = security.attributes();
+
+        assert_eq!(
+            attributes.n_length,
+            std::mem::size_of::<SecurityAttributes>() as u32
+        );
+        assert!(!attributes.security_descriptor.is_null());
+        assert_eq!(attributes.inherit_handle, 0);
+    }
+
+    #[test]
+    fn current_user_security_attributes_fail_closed_for_invalid_identity() {
+        const USER_SID: &str = "S-1-5-21-100";
+
+        assert!(CurrentUserSecurityAttributes::from_identity(true, 7, false, USER_SID).is_none());
+        assert!(CurrentUserSecurityAttributes::from_identity(false, 0, false, USER_SID).is_none());
+        assert!(CurrentUserSecurityAttributes::from_identity(false, 7, false, "").is_none());
+    }
+
+    #[test]
+    fn pipe_security_abi_preserves_owned_descriptor_contract() {
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        let (user_sid, _) = process_user_sid(current_process_id).expect("current process user sid");
+
+        // SAFETY: `user_sid` remains live for this length-delimited ABI call.
+        let state = unsafe {
+            fcitx5_windows_common_pipe_security_create_utf16(
+                0,
+                7,
+                user_sid.as_ptr(),
+                user_sid.len(),
+            )
+        };
+        assert!(!state.is_null());
+        // SAFETY: `state` is the still-live handle returned just above.
+        let attributes = unsafe {
+            fcitx5_windows_common_pipe_security_attributes(state).cast::<SecurityAttributes>()
+        };
+        assert!(!attributes.is_null());
+        // SAFETY: the returned attributes are borrowed from the live `state`.
+        let attributes = unsafe { &*attributes };
+        assert_eq!(
+            attributes.n_length,
+            std::mem::size_of::<SecurityAttributes>() as u32
+        );
+        assert!(!attributes.security_descriptor.is_null());
+        assert_eq!(attributes.inherit_handle, 0);
+        // SAFETY: `state` has not yet been destroyed and is released once here.
+        unsafe {
+            fcitx5_windows_common_pipe_security_destroy(state);
+        }
+
+        // SAFETY: `user_sid` remains live for this length-delimited ABI call.
+        let descriptor = unsafe {
+            fcitx5_windows_common_pipe_security_descriptor_utf16(
+                0,
+                7,
+                user_sid.as_ptr(),
+                user_sid.len(),
+            )
+        };
+        assert!(!descriptor.is_null());
+        // SAFETY: The descriptor ABI transfers the LocalAlloc allocation to
+        // the caller, which releases it exactly once here.
+        unsafe {
+            LocalFree(descriptor);
+        }
+
+        // SAFETY: the UTF-16 input remains live for the duration of each ABI call.
+        assert!(unsafe {
+            fcitx5_windows_common_pipe_security_create_utf16(
+                1,
+                7,
+                user_sid.as_ptr(),
+                user_sid.len(),
+            )
+        }
+        .is_null());
+        // SAFETY: the UTF-16 input remains live for the duration of each ABI call.
+        assert!(unsafe {
+            fcitx5_windows_common_pipe_security_create_utf16(
+                0,
+                0,
+                user_sid.as_ptr(),
+                user_sid.len(),
+            )
+        }
+        .is_null());
+        // SAFETY: a null UTF-16 pointer with zero length is permitted by this ABI.
+        assert!(unsafe {
+            fcitx5_windows_common_pipe_security_create_utf16(0, 7, std::ptr::null(), 0)
+        }
+        .is_null());
     }
 
     #[test]
