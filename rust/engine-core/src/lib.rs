@@ -18,6 +18,10 @@ use std::collections::HashMap;
 
 pub use fcitx5_protocol_core as protocol;
 
+mod presentation;
+
+pub use presentation::{PresentationPublicationAction, PresentationPublicationQueue};
+
 /// A validated request accepted by the Engine product plane.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
