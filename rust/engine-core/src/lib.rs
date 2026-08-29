@@ -16,6 +16,45 @@
 
 use std::collections::HashMap;
 
+pub use fcitx5_protocol_core as protocol;
+
+/// A validated request accepted by the Engine product plane.
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Request {
+    Hello(protocol::HelloRequest),
+    Key(protocol::KeyRequest),
+    Launcher(protocol::LauncherRequest),
+    CandidateSelect(protocol::CandidateSelectRequest),
+    State(protocol::StateRequest),
+    EngineStatus(protocol::EngineStatusRequest),
+}
+
+/// Decodes and validates one Engine request frame.
+#[must_use]
+pub fn decode_request(bytes: &[u8]) -> Option<Request> {
+    let frame = protocol::decode_frame(bytes)?;
+    match frame.message_type {
+        protocol::MessageType::HelloRequest => {
+            protocol::decode_hello_request(&frame).map(Request::Hello)
+        }
+        protocol::MessageType::KeyRequest => protocol::decode_key_request(&frame).map(Request::Key),
+        protocol::MessageType::LauncherRequest => {
+            protocol::decode_launcher_request(&frame).map(Request::Launcher)
+        }
+        protocol::MessageType::CandidateSelectRequest => {
+            protocol::decode_candidate_select_request(&frame).map(Request::CandidateSelect)
+        }
+        protocol::MessageType::StateRequest => {
+            protocol::decode_state_request(&frame).map(Request::State)
+        }
+        protocol::MessageType::EngineStatusRequest => {
+            protocol::decode_engine_status_request(&frame).map(Request::EngineStatus)
+        }
+        _ => None,
+    }
+}
+
 /// Per-context identity used by the Engine ledger.
 ///
 /// Layout matches `fcitx::windows::engine::ClientContextKey` (and the C ABI
