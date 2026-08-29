@@ -1228,6 +1228,53 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_current(
 }
 
 #[no_mangle]
+/// Writes the Rust-owned visible candidate order for the current presentation.
+///
+/// # Safety
+///
+/// `state` must be a valid presentation pointer, `output` must point to writable
+/// storage, and `indices` must point to `capacity` writable `usize` values when
+/// `capacity` is non-zero. No pointer is retained.
+pub unsafe extern "C" fn fcitx5_candidate_presentation_render_plan(
+    state: *mut c_void,
+    indices: *mut usize,
+    capacity: usize,
+    output: *mut Fcitx5CandidatePresentationRenderPlan,
+) -> u8 {
+    if state.is_null() || output.is_null() || (capacity != 0 && indices.is_null()) {
+        return 0;
+    }
+    let state = unsafe { &*state.cast::<CandidatePresentationState>() };
+    let (start, count) = if state.scroll_mode {
+        (0, state.candidate_count)
+    } else {
+        (state.ordinary_start, state.ordinary_count)
+    };
+    let Some(end) = start.checked_add(count) else {
+        return 0;
+    };
+    if end > state.candidate_count || count > capacity {
+        return 0;
+    }
+    let target = if count == 0 {
+        &mut []
+    } else {
+        unsafe { std::slice::from_raw_parts_mut(indices, count) }
+    };
+    for (slot, candidate_index) in target.iter_mut().zip(start..end) {
+        *slot = candidate_index;
+    }
+    unsafe {
+        *output = Fcitx5CandidatePresentationRenderPlan {
+            selected: state.selected.unwrap_or_default(),
+            has_selected: u8::from(state.selected.is_some()),
+            render_count: count,
+        };
+    }
+    1
+}
+
+#[no_mangle]
 /// # Safety
 ///
 /// `state` must be a valid pointer returned by
@@ -2104,6 +2151,14 @@ pub struct CandidatePresentationOutput {
     pub stable_width: f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5CandidatePresentationRenderPlan {
+    pub selected: usize,
+    pub has_selected: u8,
+    pub render_count: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct CandidatePresentationState {
     identity: Option<CompositionIdentity>,
@@ -2114,6 +2169,7 @@ pub struct CandidatePresentationState {
     scroll_columns: usize,
     ordinary_start: usize,
     ordinary_count: usize,
+    candidate_count: usize,
     candidate_bulk: bool,
     page_size: u32,
     placement: Placement,
@@ -2131,6 +2187,7 @@ impl Default for CandidatePresentationState {
             scroll_columns: 6,
             ordinary_start: 0,
             ordinary_count: 0,
+            candidate_count: 0,
             candidate_bulk: false,
             page_size: 0,
             placement: Placement::Unlocked,
@@ -2184,6 +2241,7 @@ impl CandidatePresentationState {
         }
         self.revision = input.revision;
         self.candidate_bulk = input.candidate_bulk != 0;
+        self.candidate_count = input.candidate_count;
         self.page_size = input.page_size;
         self.selected = (input.has_selected != 0).then_some(input.selected);
         self.scroll_columns = (input.page_size as usize).clamp(1, 9);
@@ -4529,6 +4587,74 @@ mod tests {
         assert_eq!(output.ordinary_start, 6);
         assert_eq!(output.ordinary_count, 3);
         assert_eq!(output.scroll_mode, 0);
+    }
+
+    #[test]
+    fn candidate_presentation_render_plan_owns_selected_and_page_indices() {
+        let state = fcitx5_candidate_presentation_create();
+        let update = CandidatePresentationUpdate {
+            engine_epoch: 1,
+            context_id: 2,
+            composition_id: 3,
+            revision: 1,
+            selected: 2,
+            has_selected: 1,
+            candidate_count: 12,
+            page: 2,
+            page_size: 3,
+            candidate_bulk: 1,
+            configured_scroll_mode: 0,
+        };
+        assert_eq!(
+            unsafe { fcitx5_candidate_presentation_apply(state, &update) },
+            0
+        );
+
+        let mut indices = [usize::MAX; 12];
+        let mut plan = Fcitx5CandidatePresentationRenderPlan::default();
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_presentation_render_plan(
+                    state,
+                    indices.as_mut_ptr(),
+                    indices.len(),
+                    &mut plan,
+                )
+            },
+            1
+        );
+        assert_eq!(plan.selected, 2);
+        assert_eq!(plan.has_selected, 1);
+        assert_eq!(plan.render_count, 3);
+        assert_eq!(&indices[..plan.render_count], &[6, 7, 8]);
+
+        let scroll_update = CandidatePresentationUpdate {
+            revision: 2,
+            selected: 5,
+            page: 1,
+            configured_scroll_mode: 1,
+            ..update
+        };
+        assert_eq!(
+            unsafe { fcitx5_candidate_presentation_apply(state, &scroll_update) },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_presentation_render_plan(
+                    state,
+                    indices.as_mut_ptr(),
+                    indices.len(),
+                    &mut plan,
+                )
+            },
+            1
+        );
+        assert_eq!(plan.selected, 5);
+        assert_eq!(plan.render_count, 12);
+        assert!(indices[..plan.render_count].iter().copied().eq(0..12));
+
+        unsafe { fcitx5_candidate_presentation_destroy(state) };
     }
 
     #[test]

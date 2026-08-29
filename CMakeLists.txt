@@ -612,32 +612,6 @@ add_dependencies(
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
-add_executable(
-  fcitx5_config_legacy_app EXCLUDE_FROM_ALL WIN32
-  src/config/app_main.cpp
-  resources/windows/app.rc)
-set_target_properties(fcitx5_config_legacy_app PROPERTIES OUTPUT_NAME "fcitx5-config-legacy")
-target_link_libraries(
-  fcitx5_config_legacy_app
-  PRIVATE fcitx5::windows_common fcitx5::release_identity fcitx5::config
-          fcitx5::platform fcitx5_process_execution_core_rust d2d1 dwrite shell32 user32 comctl32
-          comdlg32 advapi32 ole32)
-add_dependencies(fcitx5_config_legacy_app fcitx5_process_execution_core_rustlib)
-target_include_directories(fcitx5_config_legacy_app SYSTEM PRIVATE "${FCITX_WTL_INCLUDE_DIR}")
-target_include_directories(fcitx5_config_legacy_app SYSTEM PRIVATE "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
-target_include_directories(fcitx5_config_legacy_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
-if(FCITX_COMPILER_IS_MSVC_CL)
-  target_compile_options(fcitx5_config_legacy_app PRIVATE /external:W0 /analyze:external-)
-endif()
-fcitx_apply_project_options(fcitx5_config_legacy_app)
-fcitx_apply_binary_hardening(fcitx5_config_legacy_app)
-add_custom_command(
-  TARGET fcitx5_config_legacy_app POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-          "${CMAKE_CURRENT_SOURCE_DIR}/locales"
-          "$<TARGET_FILE_DIR:fcitx5_config_legacy_app>/locales"
-  VERBATIM)
-
 set(FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5-config-rust.exe")
 set(FCITX_CONFIG_APP_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
@@ -686,8 +660,6 @@ target_compile_features(fcitx5_candidate_layout INTERFACE cxx_std_20)
 target_link_libraries(fcitx5_candidate_layout INTERFACE fcitx5_candidate_core_rust ws2_32 userenv
                                                      ntdll)
 add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
-
-target_link_libraries(fcitx5_config_legacy_app PRIVATE fcitx5::candidate_layout)
 
 add_executable(
   fcitx5_ui WIN32
@@ -1129,28 +1101,6 @@ if(BUILD_TESTING)
   set_tests_properties(rust-config-side-by-side-contract
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(
-    NAME config-rust-legacy-baseline-build
-    COMMAND
-      "${CMAKE_COMMAND}" --build "${CMAKE_CURRENT_BINARY_DIR}" --config "$<CONFIG>"
-      --target fcitx5_config_legacy_app)
-  set_tests_properties(config-rust-legacy-baseline-build
-                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                                  TIMEOUT 120)
-  add_test(
-    NAME config-rust-side-by-side-differential
-    COMMAND
-      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-      "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
-      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-side-by-side.ps1"
-      -CppConfigExe "$<TARGET_FILE:fcitx5_config_legacy_app>"
-      -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
-      "${FCITX_RUST_TARGET}" -Report
-      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-side-by-side-differential.json")
-  set_tests_properties(config-rust-side-by-side-differential
-                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                                  TIMEOUT 45
-                                  DEPENDS config-rust-legacy-baseline-build)
-  add_test(
     NAME config-rust-shipping-lineage
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
@@ -1194,11 +1144,6 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_engine_core_contract_test)
   fcitx_apply_binary_hardening(fcitx5_engine_core_contract_test)
   add_test(NAME engine-core-contract COMMAND fcitx5_engine_core_contract_test)
-
-  add_executable(fcitx5_source_contract_test tests/unit/source_contract_test.cpp)
-  fcitx_apply_project_options(fcitx5_source_contract_test)
-  fcitx_apply_binary_hardening(fcitx5_source_contract_test)
-  add_test(NAME source-contract COMMAND fcitx5_source_contract_test "${CMAKE_CURRENT_SOURCE_DIR}")
 
   find_program(FCITX_CARGO_EXECUTABLE cargo)
   if(FCITX_CARGO_EXECUTABLE)

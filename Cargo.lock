@@ -162,6 +162,7 @@ version = "0.1.0"
 name = "fcitx5-control-core"
 version = "0.1.0"
 dependencies = [
+ "fcitx5-config-core",
  "toml_edit",
 ]
 

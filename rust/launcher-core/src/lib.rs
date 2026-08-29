@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -10,6 +11,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Storage::FileSystem::{
     MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
 };
+use windows::Win32::System::SystemInformation::GetTickCount64;
 
 const STARTUP_CRASH_WINDOW_MS: u64 = 10_000;
 const STABLE_RUNTIME_MS: u64 = 60_000;
@@ -26,9 +28,15 @@ const PROTOCOL_MAX_CONTROL_FRAME_SIZE: u32 = 1024 * 1024;
 const LANG_CHINESE: u16 = 0x04;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+#[must_use]
+pub fn launcher_tick_milliseconds() -> u64 {
+    // SAFETY: GetTickCount64 has no pointer arguments or preconditions.
+    unsafe { GetTickCount64() }
+}
+
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LauncherState {
+pub enum LauncherState {
     Normal = 0,
     UserStopped = 1,
     Updating = 2,
@@ -39,7 +47,7 @@ enum LauncherState {
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EngineState {
+pub enum EngineState {
     Stopped = 0,
     Starting = 1,
     Ready = 2,
@@ -47,7 +55,7 @@ enum EngineState {
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Command {
+pub enum Command {
     UserStop = 0,
     Resume = 1,
     BeginUpdate = 2,
@@ -58,7 +66,7 @@ enum Command {
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StartDisposition {
+pub enum StartDisposition {
     Start = 0,
     AlreadyActive = 1,
     Suppressed = 2,
@@ -87,6 +95,102 @@ pub struct Fcitx5LauncherStartDecision {
     pub safe_mode: u8,
     pub reserved: [u8; 7],
     pub retry_after_milliseconds: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LauncherOptions {
+    pub engine_path: Option<PathBuf>,
+    pub ui_path: Option<PathBuf>,
+    pub warmup: bool,
+    pub installed_defaults: bool,
+    pub engine_ready_event: Option<OsString>,
+    pub ready_event: Option<OsString>,
+    pub stop_event: Option<OsString>,
+    pub state_file: Option<PathBuf>,
+    pub generation: Option<OsString>,
+}
+
+impl Default for LauncherOptions {
+    fn default() -> Self {
+        Self {
+            engine_path: None,
+            ui_path: None,
+            warmup: true,
+            installed_defaults: false,
+            engine_ready_event: None,
+            ready_event: None,
+            stop_event: None,
+            state_file: None,
+            generation: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LauncherInvocation {
+    Version,
+    TraySelfTest,
+    Supervise(LauncherOptions),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LauncherError {
+    InvalidArguments,
+    MissingOptionValue(&'static str),
+    MissingEnginePath,
+    InvalidPath(&'static str),
+    MissingPath(PathBuf),
+    StateMissing(PathBuf),
+    StateInvalid(PathBuf),
+    StateStore(PathBuf),
+}
+
+impl fmt::Display for LauncherError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidArguments => formatter.write_str("invalid launcher arguments"),
+            Self::MissingOptionValue(option) => write!(formatter, "missing value for {option}"),
+            Self::MissingEnginePath => formatter.write_str("missing launcher engine path"),
+            Self::InvalidPath(option) => write!(formatter, "invalid path for {option}"),
+            Self::MissingPath(path) => write!(
+                formatter,
+                "launcher path does not exist: {}",
+                path.display()
+            ),
+            Self::StateMissing(path) => write!(
+                formatter,
+                "launcher state file is missing: {}",
+                path.display()
+            ),
+            Self::StateInvalid(path) => write!(
+                formatter,
+                "launcher state file is invalid: {}",
+                path.display()
+            ),
+            Self::StateStore(path) => {
+                write!(formatter, "launcher state store failed: {}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for LauncherError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LauncherStatus {
+    pub launcher_state: u32,
+    pub engine_state: u32,
+    pub start_disposition: u32,
+    pub retry_after_milliseconds: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LauncherStartup {
+    pub engine_path: PathBuf,
+    pub ui_path: Option<PathBuf>,
+    pub state_path: PathBuf,
+    pub status: LauncherStatus,
+    pub engine_command_line: Option<Vec<u16>>,
 }
 
 fn launcher_state(value: u32) -> Option<LauncherState> {
@@ -768,6 +872,225 @@ fn decision(
         reserved: [0; 7],
         retry_after_milliseconds,
     }
+}
+
+pub fn parse_launcher_arguments<I>(arguments: I) -> Result<LauncherInvocation, LauncherError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let arguments: Vec<OsString> = arguments.into_iter().collect();
+    if arguments.len() == 1 && arguments[0] == OsStr::new("--version") {
+        return Ok(LauncherInvocation::Version);
+    }
+    if arguments.len() == 1 && arguments[0] == OsStr::new("--tray-self-test") {
+        return Ok(LauncherInvocation::TraySelfTest);
+    }
+
+    let mut options = LauncherOptions {
+        installed_defaults: arguments.is_empty(),
+        ..LauncherOptions::default()
+    };
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = arguments[index].as_os_str();
+        if argument == OsStr::new("--engine") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(LauncherError::MissingOptionValue("--engine"));
+            };
+            options.engine_path = Some(PathBuf::from(value));
+            index += 2;
+        } else if argument == OsStr::new("--ui") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(LauncherError::MissingOptionValue("--ui"));
+            };
+            options.ui_path = Some(PathBuf::from(value));
+            index += 2;
+        } else if argument == OsStr::new("--no-warmup") {
+            options.warmup = false;
+            index += 1;
+        } else if argument == OsStr::new("--background") {
+            options.installed_defaults = true;
+            index += 1;
+        } else if argument == OsStr::new("--engine-ready-event") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(LauncherError::MissingOptionValue("--engine-ready-event"));
+            };
+            options.engine_ready_event = Some(value.clone());
+            index += 2;
+        } else if argument == OsStr::new("--ready-event") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(LauncherError::MissingOptionValue("--ready-event"));
+            };
+            options.ready_event = Some(value.clone());
+            index += 2;
+        } else if argument == OsStr::new("--stop-event") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(LauncherError::MissingOptionValue("--stop-event"));
+            };
+            options.stop_event = Some(value.clone());
+            index += 2;
+        } else if argument == OsStr::new("--state-file") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(LauncherError::MissingOptionValue("--state-file"));
+            };
+            options.state_file = Some(PathBuf::from(value));
+            index += 2;
+        } else if argument == OsStr::new("--generation") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(LauncherError::MissingOptionValue("--generation"));
+            };
+            options.generation = Some(value.clone());
+            index += 2;
+        } else {
+            return Err(LauncherError::InvalidArguments);
+        }
+    }
+    Ok(LauncherInvocation::Supervise(options))
+}
+
+pub fn load_launcher_snapshot(path: &Path) -> Result<Fcitx5LauncherSnapshot, LauncherError> {
+    match load_snapshot_from_path(path) {
+        Ok(snapshot) => Ok(snapshot),
+        Err(0) => Err(LauncherError::StateMissing(path.to_path_buf())),
+        Err(2) => Err(LauncherError::StateInvalid(path.to_path_buf())),
+        Err(_) => Err(LauncherError::StateStore(path.to_path_buf())),
+    }
+}
+
+pub fn save_launcher_snapshot(
+    path: &Path,
+    snapshot: Fcitx5LauncherSnapshot,
+) -> Result<(), LauncherError> {
+    if save_snapshot_to_path(path, snapshot) {
+        Ok(())
+    } else {
+        Err(LauncherError::StateStore(path.to_path_buf()))
+    }
+}
+
+pub fn resolve_launcher_process_paths(
+    options: &LauncherOptions,
+    executable_directory: &Path,
+) -> Result<(PathBuf, Option<PathBuf>), LauncherError> {
+    let generation = launcher_generation(options);
+    let (engine_path, ui_path) = match (&options.engine_path, options.installed_defaults) {
+        (Some(engine_path), _) => (engine_path.clone(), options.ui_path.clone()),
+        (None, true) => {
+            let (engine_path, ui_path) =
+                resolve_default_process_paths(executable_directory, &generation);
+            (engine_path, Some(ui_path))
+        }
+        (None, false) => return Err(LauncherError::MissingEnginePath),
+    };
+    validate_launcher_path("--engine", &engine_path)?;
+    if let Some(ui_path) = &ui_path {
+        validate_launcher_path("--ui", ui_path)?;
+    }
+    Ok((engine_path, ui_path))
+}
+
+fn launcher_generation(options: &LauncherOptions) -> OsString {
+    options
+        .generation
+        .clone()
+        .or_else(|| std::env::var_os("FCITX5_RELEASE_GENERATION"))
+        .unwrap_or_default()
+}
+
+fn validate_launcher_path(option: &'static str, path: &Path) -> Result<(), LauncherError> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if !absolute_windows_path_wide(&wide) {
+        return Err(LauncherError::InvalidPath(option));
+    }
+    if !path.exists() {
+        return Err(LauncherError::MissingPath(path.to_path_buf()));
+    }
+    Ok(())
+}
+
+pub fn prepare_supervisor_start(
+    options: &LauncherOptions,
+    executable_directory: &Path,
+    now_milliseconds: u64,
+) -> Result<LauncherStartup, LauncherError> {
+    let (engine_path, ui_path) = resolve_launcher_process_paths(options, executable_directory)?;
+    let state_path = options
+        .state_file
+        .clone()
+        .or_else(default_state_store_path)
+        .ok_or_else(|| LauncherError::StateStore(PathBuf::new()))?;
+    validate_launcher_path("--state-file", &state_path.parent().unwrap_or(&state_path))?;
+    let snapshot = match load_snapshot_from_path(&state_path) {
+        Ok(snapshot) => snapshot,
+        Err(0) => {
+            let snapshot = Fcitx5LauncherSnapshot {
+                state: LauncherState::Normal as u32,
+                consecutive_startup_crashes: 0,
+                next_start_allowed_milliseconds: 0,
+            };
+            save_launcher_snapshot(&state_path, snapshot)?;
+            snapshot
+        }
+        Err(2) => Fcitx5LauncherSnapshot {
+            state: LauncherState::UserStopped as u32,
+            consecutive_startup_crashes: 0,
+            next_start_allowed_milliseconds: 0,
+        },
+        Err(_) => return Err(LauncherError::StateStore(state_path)),
+    };
+    let snapshot = normalize_snapshot(snapshot, now_milliseconds)
+        .ok_or_else(|| LauncherError::StateInvalid(state_path.clone()))?;
+    let mut machine = Fcitx5LauncherMachine {
+        snapshot,
+        engine_state: EngineState::Stopped as u32,
+    };
+    let start_decision = options
+        .warmup
+        .then(|| request_start(&mut machine, now_milliseconds));
+    let generation = launcher_generation(options);
+    let engine_command_line = match (
+        start_decision,
+        options.engine_ready_event.as_deref(),
+        options.stop_event.as_deref(),
+    ) {
+        (Some(decision), Some(ready_event), Some(stop_event))
+            if decision.disposition == StartDisposition::Start as u32 =>
+        {
+            Some(launcher_engine_command(
+                engine_path.as_os_str(),
+                ready_event,
+                stop_event,
+                &generation,
+                decision.safe_mode != 0,
+            ))
+        }
+        _ => None,
+    };
+    let decision =
+        start_decision.unwrap_or_else(|| decision(StartDisposition::AlreadyActive, false, 0));
+    Ok(LauncherStartup {
+        engine_path,
+        ui_path,
+        state_path,
+        status: LauncherStatus {
+            launcher_state: machine.snapshot.state,
+            engine_state: machine.engine_state,
+            start_disposition: decision.disposition,
+            retry_after_milliseconds: decision.retry_after_milliseconds,
+        },
+        engine_command_line,
+    })
+}
+
+#[must_use]
+pub fn format_launcher_status(status: &LauncherStatus) -> String {
+    format!(
+        "launcher_state={} engine_state={} start_disposition={} retry_after_ms={}",
+        status.launcher_state,
+        status.engine_state,
+        status.start_disposition,
+        status.retry_after_milliseconds
+    )
 }
 
 #[no_mangle]

@@ -122,6 +122,12 @@ struct Fcitx5CandidatePresentationOutput {
     float stableWidth{};
 };
 
+struct Fcitx5CandidatePresentationRenderPlan {
+    std::size_t selected{};
+    std::uint8_t hasSelected{};
+    std::size_t renderCount{};
+};
+
 struct Fcitx5CandidateUtf8 {
     const std::uint8_t* ptr{};
     std::size_t len{};
@@ -199,6 +205,9 @@ extern "C" std::uint32_t fcitx5_candidate_presentation_apply(
     void* state, const Fcitx5CandidatePresentationUpdate* input);
 extern "C" std::uint8_t fcitx5_candidate_presentation_current(
     void* state, Fcitx5CandidatePresentationOutput* output);
+extern "C" std::uint8_t fcitx5_candidate_presentation_render_plan(
+    void* state, std::size_t* indices, std::size_t capacity,
+    Fcitx5CandidatePresentationRenderPlan* output);
 extern "C" std::uint8_t fcitx5_candidate_presentation_set_placement(
     void* state, std::uint32_t placement);
 extern "C" float fcitx5_candidate_presentation_stable_window_width(
@@ -767,11 +776,6 @@ std::wstring contentLocaleOrFallback(std::string_view locale) {
     if (written != result.size())
         return defaultDwriteLocale();
     return result;
-}
-
-bool localePrefersCompactHorizontal(std::string_view locale) noexcept {
-    return candidate::detail::fcitx5_candidate_locale_prefers_compact_horizontal_utf8(
-               candidate::detail::toRust(locale)) != 0;
 }
 
 std::uint32_t labelStyleToRust(fcitx::windows::config::LabelStyle style) noexcept {
@@ -1927,7 +1931,6 @@ class CandidateWindow final {
         preeditPanel_.clear();
         preeditPanelRect_ = {};
         preeditDividerY_ = 0.0F;
-        const auto presentation = presentationState();
         if (visualConfig_.preeditMode.value_or(config::PreeditMode::inline_) ==
                 config::PreeditMode::panel &&
             !current.preedit.empty()) {
@@ -1935,11 +1938,6 @@ class CandidateWindow final {
             if (utf8ToWide(current.preedit, preedit))
                 preeditPanel_ = std::move(preedit);
         }
-        const auto selected = presentation.hasSelected
-                                  ? std::optional<std::size_t>{presentation.selected}
-                                  : std::nullopt;
-        const std::size_t ordinaryCount = presentation.ordinaryCount;
-        const std::size_t ordinaryStart = presentation.ordinaryStart;
         for (std::size_t candidateIndex = 0; candidateIndex < current.candidates.size();
              ++candidateIndex) {
             const auto& candidate = current.candidates[candidateIndex];
@@ -1963,14 +1961,18 @@ class CandidateWindow final {
                 visual.comment = L"  " + comment;
             candidates_.emplace_back(std::move(visual));
         }
-        if (presentation.scrollMode != 0) {
-            for (std::size_t index = 0; index < candidates_.size(); ++index)
-                renderIndices_.push_back(index);
-        } else {
-            for (std::size_t index = ordinaryStart;
-                 index < std::min(candidates_.size(), ordinaryStart + ordinaryCount); ++index)
-                renderIndices_.push_back(index);
+        if (candidates_.size() != current.candidates.size()) {
+            dismissPresentation();
+            return;
         }
+        renderIndices_.resize(candidates_.size());
+        fcitx::windows::ui::detail::Fcitx5CandidatePresentationRenderPlan renderPlan{};
+        if (fcitx::windows::ui::detail::fcitx5_candidate_presentation_render_plan(
+                presentation_, renderIndices_.data(), renderIndices_.size(), &renderPlan) == 0) {
+            dismissPresentation();
+            return;
+        }
+        renderIndices_.resize(renderPlan.renderCount);
         if (current.visibility == candidate::Visibility::hidden || candidates_.empty() ||
             !lastCaret_.valid) {
             dismissPresentation();

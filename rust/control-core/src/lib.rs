@@ -1027,6 +1027,33 @@ fn status_json(status: &Fcitx5ControlStatus) -> Option<Vec<u8>> {
     Some(output)
 }
 
+#[must_use]
+pub fn control_unreachable_status_json(data_root: &str, config_valid: bool) -> Option<String> {
+    fn view(bytes: &[u8]) -> Fcitx5ControlUtf8 {
+        Fcitx5ControlUtf8 {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        }
+    }
+
+    let empty = view(&[]);
+    let status = Fcitx5ControlStatus {
+        launcher_reachable: 0,
+        launcher_state: 0,
+        engine_state: 0,
+        current_input_method_id: empty,
+        current_input_method_name: empty,
+        current_input_method_native_name: empty,
+        current_input_method_short_label: empty,
+        config_valid: u8::from(config_valid),
+        tsf_guard_disabled: 0,
+        tsf_guard_reason: empty,
+        data_root: view(data_root.as_bytes()),
+        update_owner: empty,
+    };
+    String::from_utf8(status_json(&status)?).ok()
+}
+
 fn push_diagnostics_check(
     output: &mut Vec<u8>,
     first: &mut bool,
