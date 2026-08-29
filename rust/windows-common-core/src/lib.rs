@@ -1,12 +1,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::env;
-use std::ffi::{c_void, OsString};
+use std::ffi::{c_void, OsStr, OsString};
 use std::fs;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 const VERSION_FALLBACK: &str = env!("CARGO_PKG_VERSION");
 const RELEASE_CHANNEL_FALLBACK: &str = "stable";
@@ -1883,6 +1884,121 @@ fn current_identity_with_executable_file(
         user_sid_len: process.user_sid_len,
         executable_path_len: process.executable_path_len,
         executable_final_path_len: process.executable_final_path_len,
+    }
+}
+
+/// A named-pipe client whose server was verified as the exact expected
+/// executable running under the current principal and session.
+///
+/// The pipe handle is owned privately and is closed when this value is
+/// dropped.
+#[must_use = "dropping the verified client closes its pipe handle"]
+pub struct VerifiedPipeClient {
+    pipe: *mut c_void,
+}
+
+impl VerifiedPipeClient {
+    /// Connects to `pipe_name` and accepts it only when its server is exactly
+    /// `expected_server` and passes the current peer-identity policy.
+    ///
+    /// Returns `None` if opening or verifying the pipe cannot complete within
+    /// `timeout`.
+    pub fn connect_exact(
+        pipe_name: &OsStr,
+        expected_server: &Path,
+        timeout: Duration,
+    ) -> Option<Self> {
+        let timeout_milliseconds =
+            u32::try_from(timeout.as_millis().min(u128::from(MAX_DWORD_MINUS_ONE))).ok()?;
+        if timeout_milliseconds == 0 {
+            return None;
+        }
+        let deadline = deadline_after_milliseconds(timeout_milliseconds);
+        let pipe_name = pipe_name.encode_wide().collect::<Vec<_>>();
+        let expected_server = expected_server
+            .as_os_str()
+            .encode_wide()
+            .collect::<Vec<_>>();
+        if pipe_name.is_empty() || expected_server.is_empty() {
+            return None;
+        }
+
+        let identity = current_identity_with_executable_file(
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+        );
+        if identity.status == 0 || identity.user_sid_len == 0 {
+            return None;
+        }
+        let mut user_sid = vec![0_u16; identity.user_sid_len];
+        let identity = current_identity_with_executable_file(
+            user_sid.as_mut_ptr(),
+            user_sid.len(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+        );
+        if identity.status == 0 || identity.user_sid_len != user_sid.len() {
+            return None;
+        }
+        let Ok(user_sid) = String::from_utf16(&user_sid) else {
+            return None;
+        };
+
+        let pipe = open_pipe_client(&pipe_name, deadline, true);
+        if pipe.is_null() || pipe == invalid_handle_value() {
+            return None;
+        }
+        if !verify_pipe_server_peer(
+            pipe,
+            identity.service_account != 0,
+            identity.session_id,
+            identity.secure_desktop != 0,
+            &user_sid,
+            0,
+            &expected_server,
+            false,
+        ) {
+            close_pipe_client(pipe);
+            return None;
+        }
+        Some(Self { pipe })
+    }
+
+    /// Writes the complete `frame` before `timeout` expires.
+    ///
+    /// Returns `false` if the pipe disconnects, makes no progress, or the
+    /// complete frame cannot be written before the deadline.
+    pub fn write_all(&mut self, frame: &[u8], timeout: Duration) -> bool {
+        if frame.is_empty() {
+            return true;
+        }
+        let Ok(timeout_milliseconds) =
+            u32::try_from(timeout.as_millis().min(u128::from(MAX_DWORD_MINUS_ONE)))
+        else {
+            return false;
+        };
+        if timeout_milliseconds == 0 {
+            return false;
+        }
+        pipe_transfer(
+            self.pipe,
+            true,
+            frame.as_ptr().cast_mut(),
+            frame.len(),
+            deadline_after_milliseconds(timeout_milliseconds),
+        )
+    }
+}
+
+impl Drop for VerifiedPipeClient {
+    fn drop(&mut self) {
+        close_pipe_client(self.pipe);
     }
 }
 
@@ -4061,6 +4177,313 @@ pub unsafe extern "C" fn fcitx5_windows_common_path_is_reparse_point_utf16(
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering as TestOrdering};
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::thread::{self, JoinHandle};
+    use std::time::{Duration, Instant};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateNamedPipeW(
+            name: *const u16,
+            open_mode: u32,
+            pipe_mode: u32,
+            max_instances: u32,
+            out_buffer_size: u32,
+            in_buffer_size: u32,
+            default_timeout: u32,
+            security_attributes: *mut c_void,
+        ) -> *mut c_void;
+        fn DisconnectNamedPipe(pipe: *mut c_void) -> i32;
+    }
+
+    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+    const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
+    const PIPE_READMODE_BYTE: u32 = 0x0000_0000;
+    const PIPE_WAIT: u32 = 0x0000_0000;
+    static NEXT_TEST_PIPE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    #[derive(Debug)]
+    enum PipeServerEvent {
+        Connected,
+        Received(Vec<u8>),
+        Disconnected,
+        Failed,
+    }
+
+    fn next_test_pipe_name() -> OsString {
+        let sequence = NEXT_TEST_PIPE_SEQUENCE.fetch_add(1, TestOrdering::Relaxed);
+        let process_id = std::process::id();
+        OsString::from(format!(
+            r"\\.\pipe\fcitx5-windows-common-core-verified-client-{process_id}-{sequence}"
+        ))
+    }
+
+    fn spawn_local_pipe_server<F>(body: F) -> (OsString, Receiver<PipeServerEvent>, JoinHandle<()>)
+    where
+        F: FnOnce(*mut c_void, &Sender<PipeServerEvent>) + Send + 'static,
+    {
+        let pipe_name = next_test_pipe_name();
+        let mut wide_name: Vec<u16> = pipe_name.encode_wide().collect();
+        wide_name.push(0);
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let (event_sender, event_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            // SAFETY: `wide_name` is an owned null-terminated pipe name. The
+            // server handle is closed on every path below.
+            let pipe = unsafe {
+                CreateNamedPipeW(
+                    wide_name.as_ptr(),
+                    PIPE_ACCESS_DUPLEX,
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                    1,
+                    64,
+                    64,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            if pipe.is_null() || pipe == invalid_handle_value() {
+                let _ = ready_sender.send(false);
+                return;
+            }
+            let _ = ready_sender.send(true);
+            // SAFETY: `pipe` is a synchronous server handle. A client connects
+            // after the ready barrier is released.
+            let connected = unsafe { ConnectNamedPipe(pipe, std::ptr::null_mut()) } != 0
+                || unsafe {
+                    // SAFETY: Reads the thread-local error from ConnectNamedPipe.
+                    GetLastError() == 535
+                };
+            if connected {
+                body(pipe, &event_sender);
+            } else {
+                let _ = event_sender.send(PipeServerEvent::Failed);
+            }
+            // SAFETY: `pipe` is the live server handle created above. Disconnect
+            // is best-effort before exactly one CloseHandle call.
+            unsafe {
+                DisconnectNamedPipe(pipe);
+                CloseHandle(pipe);
+            }
+        });
+        assert!(
+            ready_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("server fixture ready"),
+            "server fixture created its pipe"
+        );
+        (pipe_name, event_receiver, server)
+    }
+
+    fn next_pipe_server_event(events: &Receiver<PipeServerEvent>) -> PipeServerEvent {
+        events
+            .recv_timeout(Duration::from_secs(2))
+            .expect("server fixture event")
+    }
+
+    fn read_partial_frame(pipe: *mut c_void, len: usize) -> Option<Vec<u8>> {
+        let mut received = Vec::with_capacity(len);
+        while received.len() < len {
+            let mut chunk = [0_u8; 3];
+            let mut transferred = 0_u32;
+            let count = (len - received.len()).min(chunk.len());
+            // SAFETY: `pipe` is the live fixture server handle and `chunk`
+            // provides `count` writable bytes for this synchronous read.
+            let ok = unsafe {
+                ReadFile(
+                    pipe,
+                    chunk.as_mut_ptr().cast::<c_void>(),
+                    count as u32,
+                    &mut transferred,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 || transferred == 0 || transferred as usize > count {
+                return None;
+            }
+            received.extend_from_slice(&chunk[..transferred as usize]);
+        }
+        Some(received)
+    }
+
+    fn peer_disconnected(pipe: *mut c_void) -> bool {
+        let mut byte = 0_u8;
+        let mut transferred = 0_u32;
+        // SAFETY: `pipe` is the live fixture server handle and `byte` is
+        // writable storage for this synchronous read.
+        let ok = unsafe {
+            ReadFile(
+                pipe,
+                (&mut byte as *mut u8).cast::<c_void>(),
+                1,
+                &mut transferred,
+                std::ptr::null_mut(),
+            )
+        };
+        ok == 0 || transferred == 0
+    }
+
+    #[test]
+    fn verified_pipe_client_connects_to_exact_current_executable_and_writes_full_frame() {
+        let expected = env::current_exe().expect("current test executable");
+        let frame = (0_u8..=255).cycle().take(4096).collect::<Vec<_>>();
+        let expected_frame = frame.clone();
+        let (pipe_name, events, server) = spawn_local_pipe_server(move |pipe, events| {
+            let _ = events.send(PipeServerEvent::Connected);
+            let event = read_partial_frame(pipe, expected_frame.len())
+                .map(PipeServerEvent::Received)
+                .unwrap_or(PipeServerEvent::Failed);
+            let _ = events.send(event);
+        });
+
+        let mut client = VerifiedPipeClient::connect_exact(
+            pipe_name.as_os_str(),
+            &expected,
+            Duration::from_millis(500),
+        )
+        .expect("verified client");
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Connected
+        ));
+        assert!(client.write_all(&frame, Duration::from_secs(1)));
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Received(received) if received == frame
+        ));
+        drop(client);
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn verified_pipe_client_rejects_wrong_server_executable() {
+        let wrong_executable = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"))
+            .join("System32")
+            .join("cmd.exe");
+        assert!(wrong_executable.is_file(), "wrong executable fixture");
+        let (pipe_name, events, server) = spawn_local_pipe_server(|pipe, events| {
+            let _ = events.send(PipeServerEvent::Connected);
+            let event = if peer_disconnected(pipe) {
+                PipeServerEvent::Disconnected
+            } else {
+                PipeServerEvent::Failed
+            };
+            let _ = events.send(event);
+        });
+
+        assert!(VerifiedPipeClient::connect_exact(
+            pipe_name.as_os_str(),
+            &wrong_executable,
+            Duration::from_millis(500),
+        )
+        .is_none());
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Connected
+        ));
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Disconnected
+        ));
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn verified_pipe_client_write_fails_after_server_disconnects() {
+        let expected = env::current_exe().expect("current test executable");
+        let (release_sender, release_receiver) = mpsc::sync_channel(1);
+        let (pipe_name, events, server) = spawn_local_pipe_server(move |pipe, events| {
+            let _ = events.send(PipeServerEvent::Connected);
+            let _ = release_receiver.recv_timeout(Duration::from_secs(2));
+            // SAFETY: `pipe` is the live fixture server handle. Disconnecting
+            // it makes the peer's next write fail deterministically.
+            unsafe {
+                DisconnectNamedPipe(pipe);
+            }
+            let _ = events.send(PipeServerEvent::Disconnected);
+        });
+        let mut client = VerifiedPipeClient::connect_exact(
+            pipe_name.as_os_str(),
+            &expected,
+            Duration::from_millis(500),
+        )
+        .expect("verified client");
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Connected
+        ));
+        release_sender.send(()).expect("release server disconnect");
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Disconnected
+        ));
+        assert!(!client.write_all(&[1], Duration::from_millis(100)));
+        drop(client);
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn verified_pipe_client_busy_wait_is_bounded() {
+        let expected = env::current_exe().expect("current test executable");
+        let (release_sender, release_receiver) = mpsc::sync_channel(1);
+        let (pipe_name, events, server) = spawn_local_pipe_server(move |_pipe, events| {
+            let _ = events.send(PipeServerEvent::Connected);
+            let _ = release_receiver.recv_timeout(Duration::from_secs(2));
+        });
+        let client = VerifiedPipeClient::connect_exact(
+            pipe_name.as_os_str(),
+            &expected,
+            Duration::from_millis(500),
+        )
+        .expect("first verified client");
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Connected
+        ));
+
+        let started = Instant::now();
+        assert!(VerifiedPipeClient::connect_exact(
+            pipe_name.as_os_str(),
+            &expected,
+            Duration::from_millis(50),
+        )
+        .is_none());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(client);
+        release_sender.send(()).expect("release server");
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn verified_pipe_client_drop_disconnects_the_server_once() {
+        let expected = env::current_exe().expect("current test executable");
+        let (pipe_name, events, server) = spawn_local_pipe_server(|pipe, events| {
+            let _ = events.send(PipeServerEvent::Connected);
+            let event = if peer_disconnected(pipe) {
+                PipeServerEvent::Disconnected
+            } else {
+                PipeServerEvent::Failed
+            };
+            let _ = events.send(event);
+        });
+        let client = VerifiedPipeClient::connect_exact(
+            pipe_name.as_os_str(),
+            &expected,
+            Duration::from_millis(500),
+        )
+        .expect("verified client");
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Connected
+        ));
+        drop(client);
+        assert!(matches!(
+            next_pipe_server_event(&events),
+            PipeServerEvent::Disconnected
+        ));
+        server.join().expect("server thread");
+    }
 
     fn wide_units(value: &str) -> Vec<u16> {
         value.encode_utf16().collect()
