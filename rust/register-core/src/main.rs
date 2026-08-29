@@ -1,4 +1,4 @@
-#![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

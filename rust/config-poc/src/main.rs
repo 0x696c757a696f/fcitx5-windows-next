@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -3357,7 +3359,7 @@ impl LegacyHeadlessMode {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     let mut args = env::args_os().skip(1);
     let mut mode: Option<RunMode> = None;
     let mut report: Option<PathBuf> = None;

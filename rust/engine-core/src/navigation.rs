@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Candidate navigation decision (E3-2).
 //!
 //! This module is the Rust-authoritative Event→Action decision for the

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Canonical engine snapshot blob codec and per-context pending store (E5).
 //!
 //! The `pendingStates` cache (a full `RuntimeResult` published by

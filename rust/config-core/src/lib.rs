@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Typed Config state, transaction, and recovery contract.
 
 use std::collections::BTreeMap;

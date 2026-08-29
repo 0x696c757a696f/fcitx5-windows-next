@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 // Ported from WindInput wind-ui candidate window/theme behavior.
 // Source: https://github.com/huanfeng/WindInput, commit 2214bede43b4153f0fdc463928cf3c50184ec2ef.
 // License: MIT, Copyright (c) 2026 WindInput Contributors.

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Per-connection engine session state (E4-3).
 //!
 //! The engine server's per-connection session (handshake completion and the

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Deterministic, privacy-safe low-resource measurement fixtures.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

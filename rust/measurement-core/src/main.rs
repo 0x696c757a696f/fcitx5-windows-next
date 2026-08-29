@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use fcitx5_measurement_core::{run_fixture, Architecture};
 
 fn main() {

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use super::{
     classify_input_method_switch, CaretRect, ContextKey, ContextLedger, ImSwitchAction,
     LedgerError, KEY_SYM_ALT_L, KEY_SYM_CONTROL_L, KEY_SYM_NONE, KEY_SYM_SHIFT_L, KEY_SYM_SPACE,

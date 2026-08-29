@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::time::Instant;
 
 use fcitx5_protocol_core::{
