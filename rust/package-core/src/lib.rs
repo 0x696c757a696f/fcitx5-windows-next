@@ -11,6 +11,18 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
+mod catalog;
+
+#[cfg(windows)]
+pub use catalog::{read_package_catalog, read_package_detail};
+pub use catalog::{
+    BundledPackage, BundledPackageProbe, PackageCatalog, PackageCatalogDependency,
+    PackageCatalogEntry, PackageCatalogPackageType, PackageCatalogReadError,
+    PackageCatalogReadOptions, PackageCatalogRepository, PackageCatalogRepositoryError,
+    PackageCatalogRepositoryRead, PackageCatalogRepositorySource, PackageCatalogSources,
+    PackageConfigSurface,
+};
+
 const MANIFEST_FORMAT_VERSION_V1: u64 = 1;
 const MANIFEST_FORMAT_VERSION_V2: u64 = 2;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
@@ -3604,6 +3616,20 @@ pub fn find_repository_package<'a>(
     })
 }
 
+#[must_use]
+pub fn repository_sequence_is_acceptable(
+    sequence: u64,
+    accepted_sequence: u64,
+    require_new: bool,
+) -> bool {
+    sequence != 0
+        && if require_new {
+            sequence > accepted_sequence
+        } else {
+            sequence >= accepted_sequence
+        }
+}
+
 #[cfg(windows)]
 mod repository_ffi {
     #![allow(unsafe_code)]
@@ -4127,15 +4153,7 @@ mod repository_ffi {
         accepted_sequence: u64,
         require_new: u8,
     ) -> i32 {
-        if sequence == 0 {
-            return 0;
-        }
-        let acceptable = if require_new != 0 {
-            sequence > accepted_sequence
-        } else {
-            sequence >= accepted_sequence
-        };
-        if acceptable {
+        if super::repository_sequence_is_acceptable(sequence, accepted_sequence, require_new != 0) {
             1
         } else {
             0
