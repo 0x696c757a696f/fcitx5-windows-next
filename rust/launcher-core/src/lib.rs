@@ -193,6 +193,121 @@ pub struct LauncherStartup {
     pub engine_command_line: Option<Vec<u16>>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EngineLaunch {
+    pub engine_path: PathBuf,
+    pub ready_event: OsString,
+    pub stop_event: OsString,
+    pub generation: OsString,
+    pub safe_mode: bool,
+}
+
+impl EngineLaunch {
+    #[must_use]
+    pub fn new(
+        engine_path: PathBuf,
+        ready_event: OsString,
+        stop_event: OsString,
+        generation: OsString,
+        safe_mode: bool,
+    ) -> Self {
+        Self {
+            engine_path,
+            ready_event,
+            stop_event,
+            generation,
+            safe_mode,
+        }
+    }
+}
+
+pub type EngineLifecycleResult<T> = Result<T, String>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EngineReadyState {
+    Ready,
+    TimedOut,
+    Exited,
+}
+
+pub trait EngineLifecycleAdapter {
+    type Child;
+
+    fn start_engine(&mut self, launch: &EngineLaunch) -> EngineLifecycleResult<Self::Child>;
+
+    fn wait_for_ready(
+        &mut self,
+        child: &mut Self::Child,
+        ready_event: &OsStr,
+        timeout: std::time::Duration,
+    ) -> EngineLifecycleResult<EngineReadyState>;
+
+    fn signal_stop(&mut self, stop_event: &OsStr) -> EngineLifecycleResult<()>;
+
+    fn wait_for_exit(
+        &mut self,
+        child: &mut Self::Child,
+        timeout: std::time::Duration,
+    ) -> EngineLifecycleResult<bool>;
+
+    fn terminate(&mut self, child: &mut Self::Child) -> EngineLifecycleResult<()>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EngineSupervisionResult {
+    pub ready: EngineReadyState,
+    pub forced_termination: bool,
+}
+
+pub fn supervise_engine<A: EngineLifecycleAdapter>(
+    adapter: &mut A,
+    launch: &EngineLaunch,
+    ready_timeout: std::time::Duration,
+    exit_timeout: std::time::Duration,
+) -> EngineLifecycleResult<EngineSupervisionResult> {
+    let mut child = adapter.start_engine(launch)?;
+    let ready = match adapter.wait_for_ready(&mut child, &launch.ready_event, ready_timeout) {
+        Ok(ready) => ready,
+        Err(error) => {
+            let _ = adapter.terminate(&mut child);
+            return Err(error);
+        }
+    };
+    if ready != EngineReadyState::Ready {
+        let _ = adapter.terminate(&mut child);
+        let error = match ready {
+            EngineReadyState::TimedOut => "engine readiness timed out",
+            EngineReadyState::Exited => "engine exited before readiness",
+            EngineReadyState::Ready => "engine did not become ready",
+        };
+        return Err(error.to_owned());
+    }
+
+    if let Err(error) = adapter.signal_stop(&launch.stop_event) {
+        let _ = adapter.terminate(&mut child);
+        return Err(error);
+    }
+    let exited = match adapter.wait_for_exit(&mut child, exit_timeout) {
+        Ok(exited) => exited,
+        Err(error) => {
+            let _ = adapter.terminate(&mut child);
+            return Err(error);
+        }
+    };
+    if exited {
+        return Ok(EngineSupervisionResult {
+            ready,
+            forced_termination: false,
+        });
+    }
+
+    adapter.terminate(&mut child)?;
+    Ok(EngineSupervisionResult {
+        ready,
+        forced_termination: true,
+    })
+}
+
 fn launcher_state(value: u32) -> Option<LauncherState> {
     match value {
         0 => Some(LauncherState::Normal),
