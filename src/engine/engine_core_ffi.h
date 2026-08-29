@@ -21,6 +21,15 @@
 
 extern "C" {
 
+void* fcitx5_engine_core_presentation_publisher_create(const std::uint16_t* pipeName,
+                                                       std::size_t pipeNameLength,
+                                                       const std::uint16_t* uiExecutable,
+                                                       std::size_t uiExecutableLength);
+int fcitx5_engine_core_presentation_publisher_publish(void* publisher,
+                                                      const std::uint8_t* frame,
+                                                      std::size_t frameLength);
+void fcitx5_engine_core_presentation_publisher_destroy(void* publisher);
+
 struct FcitxEngineContextKeyC {
     std::uint32_t processId;
     std::uint64_t connectionId;

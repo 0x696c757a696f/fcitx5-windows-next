@@ -11,3 +11,4 @@ crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 fcitx5-protocol-core = { path = "../protocol-core" }
+fcitx5-windows-common-core = { path = "../windows-common-core" }

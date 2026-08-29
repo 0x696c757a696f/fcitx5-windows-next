@@ -77,6 +77,11 @@ impl PresentationPublicationQueue {
         PresentationPublicationAction::DisconnectAndRetryAfter(Duration::from_millis(25))
     }
 
+    #[must_use]
+    pub const fn delivery_failed_delay() -> Duration {
+        Duration::from_millis(25)
+    }
+
     /// Clears the pending response when a successful delivery matches it.
     ///
     /// Matching intentionally uses the C++ publisher's delivery identity,

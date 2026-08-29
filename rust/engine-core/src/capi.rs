@@ -7,15 +7,25 @@
 //! Every entry point is contained behind a panic boundary that fails closed
 //! (returns the stale error) instead of unwinding across the FFI edge.
 
-#![allow(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::c_void;
 use std::panic::{self, AssertUnwindSafe};
+
+#[cfg(windows)]
+use std::ffi::OsString;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStringExt;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 use crate::{
     classify_input_method_switch, navigation, CaretRect, ContextKey, ContextLedger, ImSwitchAction,
     LedgerError,
 };
+
+#[cfg(windows)]
+use crate::presentation_publisher::PresentationPublisher;
 
 /// Matches `ClientContextKey` and the C `FcitxEngineContextKeyC`.
 #[repr(C)]
@@ -75,6 +85,101 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_free(ledger: *mut c_void) {
             drop(Box::from_raw(ledger as *mut ContextLedger));
         }
     });
+}
+
+/// Creates the Rust-owned Engine presentation publisher.
+///
+/// `pipe_name` and `ui_executable` are borrowed UTF-16 buffers. The publisher
+/// copies both values before returning. A null result means validation,
+/// allocation, or thread creation failed.
+///
+/// # Safety
+/// `pipe_name` and `ui_executable` must each be null or a readable UTF-16
+/// buffer containing exactly the stated number of code units for the duration
+/// of this call. A successful result is a live opaque handle owned by the
+/// caller and must be passed exactly once to `destroy`; it must not be used
+/// concurrently with `destroy`.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_create(
+    pipe_name: *const u16,
+    pipe_name_len: usize,
+    ui_executable: *const u16,
+    ui_executable_len: usize,
+) -> *mut c_void {
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        if pipe_name.is_null()
+            || pipe_name_len == 0
+            || ui_executable.is_null()
+            || ui_executable_len == 0
+        {
+            return std::ptr::null_mut();
+        }
+        // SAFETY: each buffer is validated and borrowed only for this call.
+        let pipe =
+            unsafe { OsString::from_wide(std::slice::from_raw_parts(pipe_name, pipe_name_len)) };
+        // SAFETY: each buffer is validated and borrowed only for this call.
+        let executable = unsafe {
+            PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(
+                ui_executable,
+                ui_executable_len,
+            )))
+        };
+        PresentationPublisher::new(pipe, executable)
+            .map(|publisher| Box::into_raw(Box::new(publisher)) as *mut c_void)
+            .unwrap_or(std::ptr::null_mut())
+    }));
+    result.unwrap_or(std::ptr::null_mut())
+}
+
+/// Publishes one encoded KeyResponse frame. Returns 1 when accepted and 0
+/// when the frame is malformed, unsupported, or the handle is invalid.
+///
+/// # Safety
+/// `publisher` must be a live opaque handle returned by `create` and not yet
+/// destroyed. `frame` must be null or a readable encoded frame buffer of
+/// exactly `frame_len` bytes for the duration of this call. `publish` may be
+/// called from the C++ Engine's single publisher thread, but concurrent calls
+/// with `destroy` are forbidden; this ABI does not promise publish/destroy
+/// concurrency safety.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_publish(
+    publisher: *mut c_void,
+    frame: *const u8,
+    frame_len: usize,
+) -> i32 {
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        if publisher.is_null() || frame.is_null() || frame_len == 0 {
+            return 0;
+        }
+        // SAFETY: caller guarantees the live opaque handle and readable frame buffer.
+        let publisher = unsafe { &*(publisher as *mut PresentationPublisher) };
+        // SAFETY: caller guarantees `frame` points to `frame_len` readable bytes.
+        let frame = unsafe { std::slice::from_raw_parts(frame, frame_len) };
+        i32::from(publisher.publish_frame(frame))
+    }));
+    result.unwrap_or(0)
+}
+
+/// Destroys a publisher. Null is a no-op; destruction stops and joins its
+/// worker before releasing the opaque allocation.
+///
+/// # Safety
+/// `publisher` must be null or a live opaque handle returned by `create` that
+/// has not previously been passed to `destroy`. Destruction has exclusive
+/// ownership of the handle: no `publish` or second `destroy` call may run
+/// concurrently with it or after it begins.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_destroy(publisher: *mut c_void) {
+    if publisher.is_null() {
+        return;
+    }
+    let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller guarantees this is a live handle returned by create.
+        unsafe { drop(Box::from_raw(publisher as *mut PresentationPublisher)) };
+    }));
 }
 
 /// Drops all ledger state for a context key.

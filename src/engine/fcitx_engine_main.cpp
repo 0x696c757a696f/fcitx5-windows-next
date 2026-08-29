@@ -3,7 +3,6 @@
 #include "engine_core_ffi.h"
 #include "peer_verification.h"
 #include "pipe_security.h"
-#include "presentation_publisher.h"
 #include "protocol.h"
 #include "runtime_identity.h"
 
@@ -32,6 +31,28 @@ extern "C" std::uint8_t fcitx5_windows_common_pipe_connect_client(
 namespace {
 
 using namespace fcitx::windows;
+
+class PresentationPublisher final {
+public:
+    PresentationPublisher(std::wstring pipeName, std::wstring uiExecutable)
+        : handle_(fcitx5_engine_core_presentation_publisher_create(
+              reinterpret_cast<const std::uint16_t*>(pipeName.data()), pipeName.size(),
+              reinterpret_cast<const std::uint16_t*>(uiExecutable.data()),
+              uiExecutable.size())) {}
+    ~PresentationPublisher() {
+        fcitx5_engine_core_presentation_publisher_destroy(handle_);
+    }
+    PresentationPublisher(const PresentationPublisher&) = delete;
+    PresentationPublisher& operator=(const PresentationPublisher&) = delete;
+
+    bool publish(std::span<const std::uint8_t> frame) noexcept {
+        return fcitx5_engine_core_presentation_publisher_publish(
+                   handle_, frame.data(), frame.size()) != 0;
+    }
+
+private:
+    void* handle_{};
+};
 
 std::string jsonString(std::string_view value) {
     std::string output = "\"";
@@ -139,7 +160,7 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
                                         std::uint64_t connectionId,
                                         void* session,
                                         engine::FcitxDispatcher& dispatcher,
-                                        engine::PresentationPublisher& presentation,
+                                        PresentationPublisher& presentation,
                                         const platform::RuntimeIdentity& serverIdentity,
                                         const std::wstring& uiExecutable) {
     protocol::FrameView frame;
@@ -187,8 +208,9 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
                                                     request.metadata.requestId);
         auto response = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
                                           engineEpoch, runtimeResult);
-        presentation.publish(response);
-        return protocol::encode(response);
+        auto encodedResponse = protocol::encode(response);
+        presentation.publish(encodedResponse);
+        return encodedResponse;
     }
 
     if (frame.type == protocol::MessageType::candidateSelectRequest) {
@@ -202,7 +224,8 @@ std::vector<std::uint8_t> handleRequest(std::span<const std::uint8_t> requestByt
                                                     request.metadata.requestId);
         auto state = makeStateResponse(request.metadata, nextResponseId.fetch_add(1),
                                        engineEpoch, runtimeResult);
-        presentation.publish(state);
+        const auto encodedState = protocol::encode(state);
+        presentation.publish(encodedState);
         const bool notified = signalCandidateUpdate(serverIdentity, request.targetProcessId);
         const protocol::CandidateSelectResponse response{
             protocol::Metadata{nextResponseId.fetch_add(1), request.metadata.requestId,
@@ -270,7 +293,7 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     executable.resize(executableSize);
     const auto uiExecutable =
         (std::filesystem::path(executable).parent_path() / "fcitx5-ui.exe").wstring();
-    engine::PresentationPublisher presentation(
+    PresentationPublisher presentation(
         platform::makeLocalEndpointName(identity, L"presentation"), uiExecutable);
     // E4: the engine-process session epoch is Rust-generated (100ns-since-1601
     // FILETIME value); the C++ shell only holds the value.

@@ -2,7 +2,10 @@
 
 use std::time::Duration;
 
-use fcitx5_engine_core::{protocol, PresentationPublicationAction, PresentationPublicationQueue};
+use fcitx5_engine_core::{
+    decode_presentation_frame, protocol, PresentationPublicationAction,
+    PresentationPublicationQueue,
+};
 
 fn response(request_id: u64, engine_epoch: u64, revision: u64) -> protocol::KeyResponse {
     protocol::KeyResponse {
@@ -18,6 +21,22 @@ fn response(request_id: u64, engine_epoch: u64, revision: u64) -> protocol::KeyR
         commit_utf8: vec![request_id as u8],
         ..protocol::KeyResponse::default()
     }
+}
+
+#[test]
+fn malformed_presentation_frame_is_rejected() {
+    assert!(decode_presentation_frame(&[0; 4]).is_none());
+    let response = response(2, 7, 1);
+    let mut frame = protocol::encode_key_response(&response).expect("valid response");
+    frame[0] ^= 0xff;
+    assert!(decode_presentation_frame(&frame).is_none());
+}
+
+#[test]
+fn encoded_key_response_roundtrips_through_presentation_boundary() {
+    let response = response(2, 7, 1);
+    let frame = protocol::encode_key_response(&response).expect("valid response");
+    assert_eq!(decode_presentation_frame(&frame), Some(response));
 }
 
 #[test]

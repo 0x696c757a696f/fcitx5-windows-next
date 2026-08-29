@@ -59,12 +59,15 @@ configure_file(
 # with the `x86_64-pc-windows-gnu` target into
 # `out/toolchains/rust/target-gnu`. The Windows Rust toolchain provides cargo;
 # rust-std for the GNU target is installed under the toolchain rustlib.
-# `RUSTC_WRAPPER=` (empty) disables the sccache wrapper (not on PATH here).
+# Use the repository-pinned sccache by absolute path; an empty environment
+# value does not override Cargo's configured wrapper.
 # ---------------------------------------------------------------------------
 set(FCITX_RUST_CARGO
     "${REPOSITORY_ROOT}/out/toolchains/rust/cargo-home/bin/cargo.exe")
 set(FCITX_RUSTUP_HOME "${REPOSITORY_ROOT}/out/toolchains/rust/rustup-home")
 set(FCITX_RUST_CARGO_HOME "${REPOSITORY_ROOT}/out/toolchains/rust/cargo-home")
+set(FCITX_RUSTC_WRAPPER
+    "${REPOSITORY_ROOT}/out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe")
 set(FCITX_RUST_TARGET_DIR "${REPOSITORY_ROOT}/out/toolchains/rust/target-gnu")
 set(FCITX_RUST_TARGET "x86_64-pc-windows-gnu")
 set(FCITX_RUST_CARGO_ENV
@@ -74,7 +77,7 @@ set(FCITX_RUST_CARGO_ENV
     "CC_x86_64_pc_windows_gnu=${CMAKE_C_COMPILER}"
     "CXX_x86_64_pc_windows_gnu=${CMAKE_CXX_COMPILER}"
     "AR_x86_64_pc_windows_gnu=${CMAKE_AR}"
-    "RUSTC_WRAPPER=")
+    "RUSTC_WRAPPER=${FCITX_RUSTC_WRAPPER}")
 
 # Builds one Rust crate as a GNU staticlib and exposes it as
 # `<target>_rust` (imported static library) plus `<target>_rustlib` (build
@@ -124,7 +127,6 @@ add_executable(
   "${REPOSITORY_ROOT}/src/engine/key_event.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_runtime.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_dispatcher.cpp"
-  "${REPOSITORY_ROOT}/src/engine/presentation_publisher.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_engine_main.cpp")
 
 set_target_properties(

@@ -20,7 +20,17 @@ pub use fcitx5_protocol_core as protocol;
 
 mod presentation;
 
+#[cfg(windows)]
+mod presentation_publisher;
+
 pub use presentation::{PresentationPublicationAction, PresentationPublicationQueue};
+
+/// Decodes and validates one presentation KeyResponse frame.
+#[must_use]
+pub fn decode_presentation_frame(bytes: &[u8]) -> Option<protocol::KeyResponse> {
+    let frame = protocol::decode_frame(bytes)?;
+    protocol::decode_key_response(&frame)
+}
 
 /// A validated request accepted by the Engine product plane.
 #[derive(Debug, PartialEq, Eq)]
