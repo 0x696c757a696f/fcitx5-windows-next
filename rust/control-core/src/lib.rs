@@ -774,6 +774,101 @@ pub fn control_addons_list_json_for_path(
         .map_err(|_| "unable to format addons")
 }
 
+pub fn control_config_reset(data_root: &std::path::Path) -> Result<(), &'static str> {
+    let store = fcitx5_config_core::FileStore::new();
+    let path = data_root.join("config.toml");
+    let mut core = fcitx5_config_core::ConfigCore::compiled_defaults();
+    core.reset(fcitx5_config_core::ConfigField::All);
+    core.apply(&store, &path, fcitx5_config_core::CommitFault::None)
+        .map_err(|_| "unable to reset config")
+}
+
+fn theme_operation_error(status: i32) -> &'static str {
+    match status {
+        CONTROL_THEME_OPERATION_INVALID => "invalid_theme",
+        CONTROL_THEME_OPERATION_NOT_FOUND => "theme_not_found",
+        CONTROL_THEME_OPERATION_ALREADY_EXISTS => "theme_already_exists",
+        CONTROL_THEME_OPERATION_UNSAFE_IMPORT => "unsafe_theme",
+        CONTROL_THEME_OPERATION_READ_ONLY => "theme_read_only",
+        _ => "theme_operation_failed",
+    }
+}
+
+fn theme_install_root() -> Result<PathBuf, &'static str> {
+    control_install_root().map_err(|_| "unable to resolve installation root")
+}
+
+pub fn control_theme_export(data_root: &std::path::Path, id: &str) -> Result<String, &'static str> {
+    control_theme_export_for_paths(&theme_install_root()?, data_root, id)
+}
+
+pub fn control_theme_export_for_paths(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    id: &str,
+) -> Result<String, &'static str> {
+    let bytes = export_theme(install_root, data_root, id).map_err(theme_operation_error)?;
+    String::from_utf8(bytes).map_err(|_| "theme is not UTF-8")
+}
+
+pub fn control_theme_export_to(
+    data_root: &std::path::Path,
+    id: &str,
+    destination: &std::path::Path,
+) -> Result<String, &'static str> {
+    control_theme_export_to_for_paths(&theme_install_root()?, data_root, id, destination)
+}
+
+pub fn control_theme_export_to_for_paths(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    id: &str,
+    destination: &std::path::Path,
+) -> Result<String, &'static str> {
+    let bytes = export_theme_to_file(install_root, data_root, id, destination)
+        .map_err(theme_operation_error)?;
+    String::from_utf8(bytes).map_err(|_| "unable to format theme operation")
+}
+
+pub fn control_theme_import(
+    data_root: &std::path::Path,
+    source: &std::path::Path,
+) -> Result<String, &'static str> {
+    control_theme_import_for_paths(data_root, source)
+}
+
+pub fn control_theme_import_for_paths(
+    data_root: &std::path::Path,
+    source: &std::path::Path,
+) -> Result<String, &'static str> {
+    let bytes = import_theme(data_root, source).map_err(theme_operation_error)?;
+    String::from_utf8(bytes).map_err(|_| "unable to format theme operation")
+}
+
+pub fn control_theme_duplicate(
+    data_root: &std::path::Path,
+    source_id: &str,
+    new_id: &str,
+) -> Result<String, &'static str> {
+    control_theme_duplicate_for_paths(&theme_install_root()?, data_root, source_id, new_id)
+}
+
+pub fn control_theme_duplicate_for_paths(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    source_id: &str,
+    new_id: &str,
+) -> Result<String, &'static str> {
+    let bytes = duplicate_theme(install_root, data_root, source_id, new_id)
+        .map_err(theme_operation_error)?;
+    String::from_utf8(bytes).map_err(|_| "unable to format theme operation")
+}
+
+pub fn control_theme_delete(data_root: &std::path::Path, id: &str) -> Result<String, &'static str> {
+    let bytes = delete_theme(data_root, id).map_err(theme_operation_error)?;
+    String::from_utf8(bytes).map_err(|_| "unable to format theme operation")
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct Fcitx5ControlUtf16 {

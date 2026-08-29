@@ -6,9 +6,11 @@ use std::process::ExitCode;
 
 use fcitx5_config_core::{CommitFault, ConfigCore, FileStore};
 use fcitx5_control_core::{
-    control_addons_list_json, control_diagnostics_plan_for_path, control_package_detail_json,
-    control_packages_list_json, control_schema_json, control_startup_json, control_startup_query,
-    control_startup_set, control_theme_detail_json, control_themes_list_json,
+    control_addons_list_json, control_config_reset, control_diagnostics_plan_for_path,
+    control_package_detail_json, control_packages_list_json, control_schema_json,
+    control_startup_json, control_startup_query, control_startup_set, control_theme_delete,
+    control_theme_detail_json, control_theme_duplicate, control_theme_export,
+    control_theme_export_to, control_theme_import, control_themes_list_json,
     control_tsf_guard_json, control_tsf_guard_reset, control_unreachable_status_json,
     control_usage_text,
 };
@@ -29,6 +31,12 @@ enum Command {
     AddonsList,
     Validate(PathBuf),
     Apply(PathBuf),
+    ResetConfig,
+    ThemesExport(String),
+    ThemesExportTo(String, PathBuf),
+    ThemesImport(PathBuf),
+    ThemesDuplicate(String, String),
+    ThemesDelete(String),
 }
 
 fn parse() -> Result<(PathBuf, Command), ()> {
@@ -126,6 +134,70 @@ fn parse() -> Result<(PathBuf, Command), ()> {
                 ));
                 index += 2;
             }
+            Some("--reset-config") if command.is_none() => {
+                command = Some(Command::ResetConfig);
+                index += 1;
+            }
+            Some("--themes-export") if command.is_none() => {
+                command = Some(Command::ThemesExport(
+                    arguments
+                        .get(index + 1)
+                        .filter(|value| !value.to_string_lossy().starts_with('-'))
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .ok_or(())?,
+                ));
+                index += 2;
+            }
+            Some("--themes-export-to") if command.is_none() => {
+                command = Some(Command::ThemesExportTo(
+                    arguments
+                        .get(index + 1)
+                        .filter(|value| !value.to_string_lossy().starts_with('-'))
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .ok_or(())?,
+                    PathBuf::from(
+                        arguments
+                            .get(index + 2)
+                            .filter(|value| !value.to_string_lossy().starts_with('-'))
+                            .ok_or(())?,
+                    ),
+                ));
+                index += 3;
+            }
+            Some("--themes-import") if command.is_none() => {
+                command = Some(Command::ThemesImport(PathBuf::from(
+                    arguments
+                        .get(index + 1)
+                        .filter(|value| !value.to_string_lossy().starts_with('-'))
+                        .ok_or(())?,
+                )));
+                index += 2;
+            }
+            Some("--themes-duplicate") if command.is_none() => {
+                command = Some(Command::ThemesDuplicate(
+                    arguments
+                        .get(index + 1)
+                        .filter(|value| !value.to_string_lossy().starts_with('-'))
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .ok_or(())?,
+                    arguments
+                        .get(index + 2)
+                        .filter(|value| !value.to_string_lossy().starts_with('-'))
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .ok_or(())?,
+                ));
+                index += 3;
+            }
+            Some("--themes-delete") if command.is_none() => {
+                command = Some(Command::ThemesDelete(
+                    arguments
+                        .get(index + 1)
+                        .filter(|value| !value.to_string_lossy().starts_with('-'))
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .ok_or(())?,
+                ));
+                index += 2;
+            }
             _ => return Err(()),
         }
     }
@@ -190,6 +262,27 @@ fn run(data_root: PathBuf, command: Command) -> Result<(), String> {
             control_theme_detail_json(&data_root, &id).map_err(str::to_owned)?
         ),
         Command::AddonsList => println!("{}", control_addons_list_json().map_err(str::to_owned)?),
+        Command::ResetConfig => control_config_reset(&data_root).map_err(str::to_owned)?,
+        Command::ThemesExport(id) => print!(
+            "{}",
+            control_theme_export(&data_root, &id).map_err(str::to_owned)?
+        ),
+        Command::ThemesExportTo(id, path) => println!(
+            "{}",
+            control_theme_export_to(&data_root, &id, &path).map_err(str::to_owned)?
+        ),
+        Command::ThemesImport(path) => println!(
+            "{}",
+            control_theme_import(&data_root, &path).map_err(str::to_owned)?
+        ),
+        Command::ThemesDuplicate(source, id) => println!(
+            "{}",
+            control_theme_duplicate(&data_root, &source, &id).map_err(str::to_owned)?
+        ),
+        Command::ThemesDelete(id) => println!(
+            "{}",
+            control_theme_delete(&data_root, &id).map_err(str::to_owned)?
+        ),
         Command::Validate(source) => {
             let store = FileStore::new();
             let mut core = ConfigCore::compiled_defaults();
