@@ -16,3 +16,4 @@ path = "src/main.rs"
 [dependencies]
 toml_edit = { version = "0.22.27", default-features = false, features = ["display", "parse"] }
 fcitx5-config-core = { path = "../config-core" }
+fcitx5-package-core = { path = "../package-core" }

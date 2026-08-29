@@ -204,6 +204,576 @@ pub fn control_usage_text() -> &'static str {
     CONTROL_USAGE_TEXT
 }
 
+pub fn control_startup_json(enabled: bool) -> String {
+    String::from_utf8(startup_json(enabled)).expect("startup JSON is static UTF-8")
+}
+
+pub fn control_startup_query() -> Result<bool, &'static str> {
+    let executable_directory = std::env::current_exe()
+        .map_err(|_| "unable to resolve executable path")?
+        .parent()
+        .map(PathBuf::from)
+        .ok_or("unable to resolve executable directory")?;
+    query_startup(
+        executable_directory.into_os_string(),
+        OsString::from(release_registry_value()),
+    )
+    .map_err(|()| "unable to query startup")
+}
+
+pub fn control_startup_set(enabled: bool) -> Result<(), &'static str> {
+    let executable_directory = std::env::current_exe()
+        .map_err(|_| "unable to resolve executable path")?
+        .parent()
+        .map(PathBuf::from)
+        .ok_or("unable to resolve executable directory")?;
+    set_startup(
+        executable_directory.into_os_string(),
+        OsString::from(release_registry_value()),
+        enabled,
+    )
+    .map_err(|()| "unable to set startup")
+}
+
+fn release_registry_value_for_channel(channel: &str) -> &'static str {
+    match channel {
+        "beta" => "Fcitx5-Beta",
+        "nightly" => "Fcitx5-Nightly",
+        _ => "Fcitx5-Stable",
+    }
+}
+
+pub fn control_release_registry_value() -> &'static str {
+    release_registry_value_for_channel(
+        option_env!("FCITX_RELEASE_CHANNEL_NAME").unwrap_or("stable"),
+    )
+}
+
+fn release_registry_value() -> &'static str {
+    control_release_registry_value()
+}
+
+pub fn control_tsf_guard_json(data_root: &std::path::Path) -> Result<String, &'static str> {
+    let (disabled, reason) = tsf_guard_state(data_root)?;
+    let marker = data_root
+        .join("recovery")
+        .join("tsf-activation-disabled.v1");
+    let marker = marker.to_string_lossy().into_owned();
+    let status = Fcitx5ControlTsfGuard {
+        disabled: u8::from(disabled),
+        reason: Fcitx5ControlUtf8 {
+            ptr: reason.as_ptr(),
+            len: reason.len(),
+        },
+        marker_path: Fcitx5ControlUtf8 {
+            ptr: marker.as_bytes().as_ptr(),
+            len: marker.len(),
+        },
+    };
+    String::from_utf8(tsf_guard_json(&status).ok_or("unable to format TSF guard")?)
+        .map_err(|_| "unable to format TSF guard")
+}
+
+fn tsf_guard_state(data_root: &std::path::Path) -> Result<(bool, String), &'static str> {
+    let marker = data_root
+        .join("recovery")
+        .join("tsf-activation-disabled.v1");
+    if !marker.is_file() {
+        return Ok((false, String::new()));
+    }
+    let bytes = std::fs::read(marker).map_err(|_| "unable to read TSF activation guard")?;
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
+    let reason = text
+        .split_once("reason=")
+        .and_then(|(_, value)| value.lines().next())
+        .unwrap_or_default()
+        .to_owned();
+    Ok((true, reason))
+}
+
+pub fn control_tsf_guard_reset(data_root: &std::path::Path) -> Result<(), &'static str> {
+    let recovery = data_root.join("recovery");
+    let marker = recovery.join("tsf-activation-disabled.v1");
+    if let Err(error) = std::fs::remove_file(marker) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err("unable to clear TSF activation guard");
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(recovery) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            if name.starts_with("tsf-activation-attempt.") && name.ends_with(".v1") {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn control_diagnostics_plan_json(data_root: &str, config_valid: bool) -> Option<String> {
+    control_diagnostics_plan_for_path(std::path::Path::new(data_root), config_valid)
+}
+
+pub fn control_diagnostics_plan_for_path(
+    data_root: &std::path::Path,
+    config_valid: bool,
+) -> Option<String> {
+    let (tsf_guard_disabled, tsf_guard_reason) = tsf_guard_state(data_root).ok()?;
+    let data_root = data_root.to_string_lossy();
+    let empty = Fcitx5ControlUtf8::default();
+    let root = Fcitx5ControlUtf8 {
+        ptr: data_root.as_bytes().as_ptr(),
+        len: data_root.len(),
+    };
+    let status = Fcitx5ControlStatus {
+        launcher_reachable: 0,
+        launcher_state: 0,
+        engine_state: 0,
+        current_input_method_id: empty,
+        current_input_method_name: empty,
+        current_input_method_native_name: empty,
+        current_input_method_short_label: empty,
+        config_valid: u8::from(config_valid),
+        tsf_guard_disabled: u8::from(tsf_guard_disabled),
+        tsf_guard_reason: Fcitx5ControlUtf8 {
+            ptr: tsf_guard_reason.as_ptr(),
+            len: tsf_guard_reason.len(),
+        },
+        data_root: root,
+        update_owner: empty,
+    };
+    String::from_utf8(diagnostics_plan_json(&status)?).ok()
+}
+
+fn control_install_root() -> Result<PathBuf, &'static str> {
+    let executable = std::env::current_exe().map_err(|_| "unable to resolve installation root")?;
+    let directory = executable
+        .parent()
+        .ok_or("unable to resolve installation root")?;
+    Ok(if directory.file_name().is_some_and(|name| name == "bin") {
+        directory
+            .parent()
+            .ok_or("unable to resolve installation root")?
+            .to_owned()
+    } else {
+        directory.to_owned()
+    })
+}
+
+fn view(value: &str) -> Fcitx5ControlUtf8 {
+    Fcitx5ControlUtf8 {
+        ptr: value.as_ptr(),
+        len: value.len(),
+    }
+}
+
+fn package_catalog_options<'a>(
+    probes: &'a [fcitx5_package_core::BundledPackageProbe],
+) -> fcitx5_package_core::PackageCatalogReadOptions<'a> {
+    fcitx5_package_core::PackageCatalogReadOptions {
+        expected_channel: option_env!("FCITX_RELEASE_CHANNEL_NAME").unwrap_or("stable"),
+        architecture: native_package_architecture_str(),
+        release_version: option_env!("FCITX_WINDOWS_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+        bundled: probes,
+        repository: fcitx5_package_core::PackageCatalogRepositoryRead::Cached,
+    }
+}
+
+fn native_package_architecture_str() -> &'static str {
+    if cfg!(target_arch = "x86") {
+        "x86"
+    } else {
+        "x64"
+    }
+}
+
+fn package_probes() -> Vec<fcitx5_package_core::BundledPackageProbe> {
+    BUNDLED_PACKAGES
+        .iter()
+        .filter_map(|package| {
+            Some(fcitx5_package_core::BundledPackageProbe::new(
+                fcitx5_package_core::PackageId::parse(package.id).ok()?,
+                package.title.to_owned(),
+                fcitx5_package_core::SafeRelativePackagePath::parse(package.probe_relative_path)
+                    .ok()?,
+            ))
+        })
+        .collect()
+}
+
+fn package_summary_row(
+    package: &fcitx5_package_core::PackageCatalogEntry,
+) -> (String, String, String, String, String, String, String, bool) {
+    (
+        package.id().to_owned(),
+        package.title().to_owned(),
+        package.summary().to_owned(),
+        package.package_type().as_str().to_owned(),
+        package.available_version().unwrap_or_default().to_owned(),
+        package.installed_version().unwrap_or_default().to_owned(),
+        package.state().unwrap_or_default().to_owned(),
+        package.update_available(),
+    )
+}
+
+fn catalog_summary_json(
+    catalog: &fcitx5_package_core::PackageCatalog,
+) -> Result<String, &'static str> {
+    let rows = catalog
+        .packages()
+        .iter()
+        .map(package_summary_row)
+        .collect::<Vec<_>>();
+    let views = rows
+        .iter()
+        .map(|row| Fcitx5ControlPackageSummary {
+            id: view(&row.0),
+            title: view(&row.1),
+            summary: view(&row.2),
+            package_type: view(&row.3),
+            available_version: view(&row.4),
+            installed_version: view(&row.5),
+            state: view(&row.6),
+            update_available: u8::from(row.7),
+        })
+        .collect::<Vec<_>>();
+    let repository_error = catalog
+        .repository_error()
+        .map_or("", |error| error.as_str());
+    let list = Fcitx5ControlPackagesList {
+        repository_available: u8::from(catalog.repository_available()),
+        repository_error: view(repository_error),
+        packages: views.as_ptr(),
+        package_count: views.len(),
+    };
+    String::from_utf8(packages_list_json(&list).ok_or("unable to format packages")?)
+        .map_err(|_| "unable to format packages")
+}
+
+pub fn control_packages_list_json(data_root: &std::path::Path) -> Result<String, &'static str> {
+    let install_root = control_install_root()?;
+    control_packages_list_json_for_paths(&install_root, data_root)
+}
+
+pub fn control_packages_list_json_for_paths(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+) -> Result<String, &'static str> {
+    let probes = package_probes();
+    let catalog = fcitx5_package_core::read_package_catalog(
+        install_root,
+        data_root,
+        package_catalog_options(&probes),
+    )
+    .map_err(|error| error.code())?;
+    catalog_summary_json(&catalog)
+}
+
+fn catalog_detail_json(
+    catalog: &fcitx5_package_core::PackageCatalog,
+    package: &fcitx5_package_core::PackageCatalogEntry,
+) -> Result<String, &'static str> {
+    let dependency_views = package
+        .dependencies()
+        .iter()
+        .map(|dependency| Fcitx5ControlPackageDependency {
+            id: view(dependency.id()),
+            version: view(dependency.version()),
+        })
+        .collect::<Vec<_>>();
+    let dependencies = String::from_utf8(
+        package_dependencies_json(&dependency_views).ok_or("unable to format dependencies")?,
+    )
+    .map_err(|_| "unable to format dependencies")?;
+    let permission_views = package
+        .permissions()
+        .iter()
+        .map(|permission| view(permission))
+        .collect::<Vec<_>>();
+    let permissions = String::from_utf8(
+        string_array_json(&permission_views).ok_or("unable to format permissions")?,
+    )
+    .map_err(|_| "unable to format permissions")?;
+    let surface_views = package
+        .config_surfaces()
+        .iter()
+        .map(|surface| view(surface.kind()))
+        .collect::<Vec<_>>();
+    let config_surface = String::from_utf8(
+        config_surfaces_json(view(package.id()), &surface_views)
+            .ok_or("unable to format config surfaces")?,
+    )
+    .map_err(|_| "unable to format config surfaces")?;
+    let detail = Fcitx5ControlPackageDetail {
+        repository_available: u8::from(catalog.repository_available()),
+        repository_error: view(
+            catalog
+                .repository_error()
+                .map_or("", |error| error.as_str()),
+        ),
+        id: view(package.id()),
+        title: view(package.detail_title()),
+        summary: view(package.detail_summary()),
+        package_type: view(package.detail_package_type().as_str()),
+        available_version: view(package.available_version().unwrap_or_default()),
+        installed_version: view(package.installed_version().unwrap_or_default()),
+        state: view(package.state().unwrap_or_default()),
+        bundled: u8::from(package.bundled()),
+        update_available: u8::from(package.update_available()),
+        manifest_sha256: view(package.manifest_sha256().unwrap_or_default()),
+        source_commit: view(package.source_commit().unwrap_or_default()),
+        dependencies_json: view(&dependencies),
+        permissions_json: view(&permissions),
+        config_surface_json: view(&config_surface),
+    };
+    String::from_utf8(package_detail_json(&detail).ok_or("unable to format package")?)
+        .map_err(|_| "unable to format package")
+}
+
+type ThemeRecordOwned = (String, String, String, String, String, String, bool, bool);
+
+pub fn control_package_detail_json(
+    data_root: &std::path::Path,
+    requested_id: &str,
+) -> Result<String, &'static str> {
+    let install_root = control_install_root()?;
+    control_package_detail_json_for_paths(&install_root, data_root, requested_id)
+}
+
+pub fn control_package_detail_json_for_paths(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    requested_id: &str,
+) -> Result<String, &'static str> {
+    if fcitx5_package_core::PackageId::parse(requested_id).is_err() {
+        return Err("invalid_package");
+    }
+    let probes = package_probes();
+    let catalog = fcitx5_package_core::read_package_catalog(
+        install_root,
+        data_root,
+        package_catalog_options(&probes),
+    )
+    .map_err(|error| error.code())?;
+    let package = catalog.package(requested_id).ok_or("package_not_found")?;
+    catalog_detail_json(&catalog, package)
+}
+
+fn theme_records_for_paths(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+) -> Vec<ThemeRecordOwned> {
+    discover_themes(install_root, data_root)
+        .into_iter()
+        .filter_map(|entry| {
+            let text = read_file_bounded(entry.path, 512 * 1024).ok()?;
+            let summary = parse_theme_summary(&text)?;
+            (summary.id == entry.id || entry.id == "builtin:default").then_some((
+                entry.id,
+                entry.source.to_owned(),
+                summary.name,
+                summary.version,
+                summary.license,
+                summary.description,
+                summary.has_light_branch,
+                summary.has_dark_branch,
+            ))
+        })
+        .collect()
+}
+
+fn theme_records(data_root: &std::path::Path) -> Vec<ThemeRecordOwned> {
+    control_install_root()
+        .map(|install_root| theme_records_for_paths(&install_root, data_root))
+        .unwrap_or_default()
+}
+
+pub fn control_themes_list_json(data_root: &std::path::Path) -> Result<String, &'static str> {
+    let records = theme_records(data_root);
+    let views: Vec<_> = records
+        .iter()
+        .map(|record| Fcitx5ControlThemeRecord {
+            id: view(&record.0),
+            source: view(&record.1),
+            name: view(&record.2),
+            version: view(&record.3),
+            license: view(&record.4),
+            description: view(&record.5),
+        })
+        .collect();
+    let json = themes_json(&views).ok_or("unable to format themes")?;
+    String::from_utf8(json).map_err(|_| "unable to format themes")
+}
+
+pub fn control_themes_list_json_for_paths(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+) -> Result<String, &'static str> {
+    let records = theme_records_for_paths(install_root, data_root);
+    let views: Vec<_> = records
+        .iter()
+        .map(|record| Fcitx5ControlThemeRecord {
+            id: view(&record.0),
+            source: view(&record.1),
+            name: view(&record.2),
+            version: view(&record.3),
+            license: view(&record.4),
+            description: view(&record.5),
+        })
+        .collect();
+    String::from_utf8(themes_json(&views).ok_or("unable to format themes")?)
+        .map_err(|_| "unable to format themes")
+}
+
+pub fn control_theme_detail_json(
+    data_root: &std::path::Path,
+    requested_id: &str,
+) -> Result<String, &'static str> {
+    let record = theme_records(data_root)
+        .into_iter()
+        .find(|record| record.0 == requested_id)
+        .ok_or("theme is unknown")?;
+    let detail = Fcitx5ControlThemeDetail {
+        theme: Fcitx5ControlThemeRecord {
+            id: view(&record.0),
+            source: view(&record.1),
+            name: view(&record.2),
+            version: view(&record.3),
+            license: view(&record.4),
+            description: view(&record.5),
+        },
+        has_light_branch: u8::from(record.6),
+        has_dark_branch: u8::from(record.7),
+    };
+    String::from_utf8(theme_detail_json(&detail).ok_or("unable to format theme")?)
+        .map_err(|_| "unable to format theme")
+}
+
+pub fn control_theme_detail_json_for_paths(
+    install_root: &std::path::Path,
+    data_root: &std::path::Path,
+    requested_id: &str,
+) -> Result<String, &'static str> {
+    let record = theme_records_for_paths(install_root, data_root)
+        .into_iter()
+        .find(|record| record.0 == requested_id)
+        .ok_or("theme is unknown")?;
+    let detail = Fcitx5ControlThemeDetail {
+        theme: Fcitx5ControlThemeRecord {
+            id: view(&record.0),
+            source: view(&record.1),
+            name: view(&record.2),
+            version: view(&record.3),
+            license: view(&record.4),
+            description: view(&record.5),
+        },
+        has_light_branch: u8::from(record.6),
+        has_dark_branch: u8::from(record.7),
+    };
+    String::from_utf8(theme_detail_json(&detail).ok_or("unable to format theme")?)
+        .map_err(|_| "unable to format theme")
+}
+
+pub fn control_addons_list_json() -> Result<String, &'static str> {
+    let install_root = control_install_root()?;
+    control_addons_list_json_for_path(&install_root)
+}
+
+pub fn control_addons_list_json_for_path(
+    install_root: &std::path::Path,
+) -> Result<String, &'static str> {
+    let addon_root = install_root.join("share/fcitx5/addon");
+    let library_root = install_root.join("lib/fcitx5");
+    let mut records = Vec::new();
+    let entries = match std::fs::read_dir(addon_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let json = addons_json(&[]).ok_or("unable to format addons")?;
+            return String::from_utf8(json).map_err(|_| "unable to format addons");
+        }
+        Err(_) => return Err("unable to read addon directory"),
+    };
+    for entry in entries.flatten() {
+        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("conf") {
+            continue;
+        }
+        let Ok(text) = read_file_bounded(entry.path(), 64 * 1024) else {
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(&text) else {
+            continue;
+        };
+        let mut in_addon = false;
+        let mut values = [
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ];
+        let mut configurable = false;
+        let mut on_demand = false;
+        for line in text.lines().map(str::trim) {
+            if line.starts_with('[') && line.ends_with(']') {
+                in_addon = line == "[Addon]";
+                continue;
+            }
+            if !in_addon {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = value.trim().to_owned();
+            match key.trim() {
+                "Name" => values[0] = value,
+                "Category" => values[1] = value,
+                "Library" => values[2] = value,
+                "Type" => values[3] = value,
+                "Version" => values[4] = value,
+                "Configurable" => configurable = addon_metadata_bool(value.as_bytes()),
+                "OnDemand" => on_demand = addon_metadata_bool(value.as_bytes()),
+                _ => {}
+            }
+        }
+        let id = entry
+            .path()
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        if !theme_id_valid(&id) || values[0].is_empty() {
+            continue;
+        }
+        let library_present =
+            !values[2].is_empty() && library_root.join(format!("{}.dll", values[2])).is_file();
+        records.push((id, values, configurable, on_demand, library_present));
+    }
+    records.sort_by(|left, right| left.0.cmp(&right.0));
+    let views: Vec<_> = records
+        .iter()
+        .map(
+            |(id, values, configurable, on_demand, present)| Fcitx5ControlAddonDescriptor {
+                id: view(id),
+                name: view(&values[0]),
+                category: view(&values[1]),
+                library: view(&values[2]),
+                addon_type: view(&values[3]),
+                version: view(&values[4]),
+                configurable: u8::from(*configurable),
+                on_demand: u8::from(*on_demand),
+                library_present: u8::from(*present),
+            },
+        )
+        .collect();
+    String::from_utf8(addons_json(&views).ok_or("unable to format addons")?)
+        .map_err(|_| "unable to format addons")
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct Fcitx5ControlUtf16 {
@@ -5155,6 +5725,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::manual_c_str_literals)]
     fn package_dependencies_json_preserves_control_contract() {
         let dependencies = [
             Fcitx5ControlPackageDependency {
@@ -6504,11 +7075,11 @@ background = "${a}"
         assert!(text.contains(r#""data_root":"C:/Users/Test/Fcitx\\","#));
     }
 
-    fn status_fixture<'a>(
+    fn status_fixture(
         launcher_reachable: bool,
         config_valid: bool,
         tsf_guard_disabled: bool,
-        tsf_guard_reason: &'a [u8],
+        tsf_guard_reason: &[u8],
     ) -> Fcitx5ControlStatus {
         let id = b"rime";
         let name = b"Rime";
