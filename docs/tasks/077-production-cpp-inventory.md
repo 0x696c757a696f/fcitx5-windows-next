@@ -1,7 +1,7 @@
 # Task 077 production C++ inventory
 
 Baseline HEAD: `c6a804edcd093b98b8940730853f7301df58a21a`.
-Latest integrated cutover HEAD: `639a1c920307cab9bf9f707efff8237a52c46709`.
+Latest integrated cutover HEAD: `7d1aeaa`.
 
 This is the live cutover ledger. `KEEP-CANDIDATE` still requires symbol-level reduction and a final
 unconditional classification. There are no accepted conditional rows at 077 completion.
@@ -12,14 +12,14 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 | `protocol/protocol_ffi.h`, `resources/windows/resource.h` | KEEP-CANDIDATE ABI | Retain declarations/resource IDs only where required |
 | `src/config/app_main.cpp` | DELETED at `3cf297b` | Rust Settings is the sole shipping shell; legacy WTL target and differential test are deleted |
 | `src/config/config_model.h`, `src/config/config_parser.cpp` | DELETE-AFTER-CUTOVER | Delete remaining C++ Config parser/model authority after native consumers use Config Core |
-| `src/control/control_main.cpp` | MIGRATE | Replace shipping Control process with Rust and delete |
+| `src/control/control_main.cpp` | MIGRATE | Rust shipping CLI now owns query, startup/TSF guard, package/theme/addon projection, Config reset, and Theme lifecycle through `e4cd82e`/`bcbfc95`; finish Engine/Launcher and package mutation commands, then delete |
 | `src/package/package_core.cpp`, `package_core.h` | DELETE-AFTER-CUTOVER | Delete C++ package bridge after Rust consumers cut over |
 | `src/package/fcitx5_mldsa65_config.h` | KEEP-CANDIDATE native ABI | Retain only if the Rust package build's audited native verifier needs it |
 | `src/ui/ui_main.cpp` | MIGRATE/MIXED | Move all product state/protocol/config/orchestration to Rust; retain only necessary HWND/D2D/DWrite seam |
 | `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | MIGRATE | Rust fail-safe Engine supervision is integrated at `ce5eafa`; expose reusable safe security/Job Object owner APIs, finish the native process/IPC shell, then delete these files |
 | `src/launcher/tray_icon.cpp`, `tray_icon.h`, `launcher_rust_abi.h` | KEEP-CANDIDATE ABI | Retain only a required tray/flat ABI seam, otherwise delete |
 | `src/engine/mock_engine_main.cpp` | MIGRATE | Replace with Rust fixture and delete |
-| `src/engine/presentation_publisher.cpp`, `presentation_publisher.h` | MIGRATE | Latest-value, stop-precedence, exact-identity acknowledgement, and 25 ms retry policy are Rust-owned at `639a1c9`; finish the native pipe/peer seam, then delete these files |
+| `src/engine/presentation_publisher.cpp`, `presentation_publisher.h` | DELETED at `7d1aeaa` | Rust Engine owns validation, coalescing, exact peer transport, bounded I/O, retry/reconnect, stop, and destruction; only the opaque ABI RAII call site remains inside the approved Fcitx process adapter |
 | `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` | MIGRATE | Delete after Rust-owned process consumers use Rust IPC APIs |
 | `src/ipc/peer_verification.cpp`, `peer_verification.h` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary peer identity mechanics |
 | `src/platform/runtime_identity.*`, `pipe_security.*` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary Win32/C ABI mechanics |
@@ -41,8 +41,10 @@ After `1ec0921`, Engine request decoding accepts every current request type thro
 `protocol-core` and rejects malformed or response frames. After `ce5eafa`, Launcher Engine
 supervision owns deterministic launch/readiness/stop/reap/forced-termination error handling in Rust.
 After `639a1c9`, Engine presentation publication policy is Safe Rust; only native transport and peer
-mechanics remain before the C++ publisher can be deleted. These are side-by-side migration facts,
-not completion of the still-`MIGRATE` rows.
+mechanics remained. At `7d1aeaa`, verified pipe transport and lifetime moved to Rust, the two C++
+publisher files were deleted, x64/x86 each passed 141 Rust tests, and the GNU/native
+`fcitx5-engine.exe` target built successfully. These facts do not complete the other still-`MIGRATE`
+rows.
 
 Current facts: shipping TSF and Settings are Rust-owned; Candidate semantics are Rust-owned; Rust
 protocol, Engine, package, Control, launcher, Windows-common, process-execution, and Config owners
