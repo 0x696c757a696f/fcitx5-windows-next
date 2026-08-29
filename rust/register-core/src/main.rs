@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn version_command_succeeds() {
-        let args = vec![
+        let args = [
             OsString::from("fcitx5-register"),
             OsString::from("--version"),
         ];
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn rejects_non_absolute_dll_argument_before_artifact_checks() {
-        let args = vec![
+        let args = [
             OsString::from("fcitx5-register"),
             OsString::from("--validate-artifact"),
             OsString::from("--dll"),
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn unknown_operation_after_valid_dll_shape_returns_usage_error() {
-        let args = vec![
+        let args = [
             OsString::from("fcitx5-register"),
             OsString::from("--unknown"),
             OsString::from("--dll"),
