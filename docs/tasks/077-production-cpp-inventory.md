@@ -1,7 +1,7 @@
 # Task 077 production C++ inventory
 
 Baseline HEAD: `c6a804edcd093b98b8940730853f7301df58a21a`.
-Latest integrated cutover HEAD: `3cf297bc857c335c2ef2ce02e3310bfc133e2b18`.
+Latest integrated cutover HEAD: `639a1c920307cab9bf9f707efff8237a52c46709`.
 
 This is the live cutover ledger. `KEEP-CANDIDATE` still requires symbol-level reduction and a final
 unconditional classification. There are no accepted conditional rows at 077 completion.
@@ -16,10 +16,10 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 | `src/package/package_core.cpp`, `package_core.h` | DELETE-AFTER-CUTOVER | Delete C++ package bridge after Rust consumers cut over |
 | `src/package/fcitx5_mldsa65_config.h` | KEEP-CANDIDATE native ABI | Retain only if the Rust package build's audited native verifier needs it |
 | `src/ui/ui_main.cpp` | MIGRATE/MIXED | Move all product state/protocol/config/orchestration to Rust; retain only necessary HWND/D2D/DWrite seam |
-| `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | MIGRATE | Replace launcher product process/state/store with Rust and delete |
+| `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | MIGRATE | Rust fail-safe Engine supervision is integrated at `ce5eafa`; expose reusable safe security/Job Object owner APIs, finish the native process/IPC shell, then delete these files |
 | `src/launcher/tray_icon.cpp`, `tray_icon.h`, `launcher_rust_abi.h` | KEEP-CANDIDATE ABI | Retain only a required tray/flat ABI seam, otherwise delete |
 | `src/engine/mock_engine_main.cpp` | MIGRATE | Replace with Rust fixture and delete |
-| `src/engine/presentation_publisher.cpp`, `presentation_publisher.h` | MIGRATE | Move publication state/policy to Rust and delete or retain a mechanics-only seam |
+| `src/engine/presentation_publisher.cpp`, `presentation_publisher.h` | MIGRATE | Latest-value, stop-precedence, exact-identity acknowledgement, and 25 ms retry policy are Rust-owned at `639a1c9`; finish the native pipe/peer seam, then delete these files |
 | `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` | MIGRATE | Delete after Rust-owned process consumers use Rust IPC APIs |
 | `src/ipc/peer_verification.cpp`, `peer_verification.h` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary peer identity mechanics |
 | `src/platform/runtime_identity.*`, `pipe_security.*` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary Win32/C ABI mechanics |
@@ -36,6 +36,13 @@ After `3cf297b`: 40 production `.cpp/.h`; 29 test/support `.cpp/.h`.
 `tests/unit/source_contract_test.cpp` and its CMake target were deleted at the cutover boundary;
 Rust public-behavior tests remain authoritative and a Rust-authored unsafe/source policy gate replaces
 the temporary C++ string-matching supplement.
+
+After `1ec0921`, Engine request decoding accepts every current request type through Rust
+`protocol-core` and rejects malformed or response frames. After `ce5eafa`, Launcher Engine
+supervision owns deterministic launch/readiness/stop/reap/forced-termination error handling in Rust.
+After `639a1c9`, Engine presentation publication policy is Safe Rust; only native transport and peer
+mechanics remain before the C++ publisher can be deleted. These are side-by-side migration facts,
+not completion of the still-`MIGRATE` rows.
 
 Current facts: shipping TSF and Settings are Rust-owned; Candidate semantics are Rust-owned; Rust
 protocol, Engine, package, Control, launcher, Windows-common, process-execution, and Config owners
