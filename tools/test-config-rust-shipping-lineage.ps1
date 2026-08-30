@@ -3,7 +3,6 @@ param(
   [Parameter(Mandatory = $true)] [string] $CargoTarget,
   [Parameter(Mandatory = $true)] [string] $OutputDirectory,
   [string] $ShippingConfigExe = '',
-  [string] $SideBySideConfigExe = '',
   [Parameter(Mandatory = $true)] [string] $Report
 )
 
@@ -58,48 +57,42 @@ function Invoke-CheckedProcess {
   }
 }
 
-$rustSideBySide = if ([string]::IsNullOrWhiteSpace($SideBySideConfigExe)) {
-  $cargoArguments = @(
-    'build',
-    '--locked',
-    '--manifest-path',
-    (Join-Path $repoRoot 'Cargo.toml'),
-    '-p',
-    'fcitx5-config-poc',
-    '--bin',
-    'fcitx5-config-rust',
-    '--target',
-    $CargoTarget
-  )
-  [void] (Invoke-CheckedProcess -FilePath $cargo -Arguments $cargoArguments -Name 'build-rust-config-shipping-lineage')
+$cargoArguments = @(
+  'build',
+  '--locked',
+  '--manifest-path',
+  (Join-Path $repoRoot 'Cargo.toml'),
+  '-p',
+  'fcitx5-config-poc',
+  '--bin',
+  'fcitx5-config',
+  '--target',
+  $CargoTarget
+)
+[void] (Invoke-CheckedProcess -FilePath $cargo -Arguments $cargoArguments -Name 'build-rust-config-shipping-lineage')
 
-  $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
-    Join-Path $repoRoot 'out\toolchains\rust\target'
-  } else {
-    [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
-  }
-  Join-Path $targetRoot "$CargoTarget\debug\fcitx5-config-rust.exe"
+$targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+  Join-Path $repoRoot 'out\toolchains\rust\target'
 } else {
-  [IO.Path]::GetFullPath($SideBySideConfigExe)
+  [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
 }
-if (-not (Test-Path -LiteralPath $rustSideBySide -PathType Leaf)) {
-  throw "Rust Config side-by-side executable was not built: $rustSideBySide"
+$rustShipping = Join-Path $targetRoot "$CargoTarget\debug\fcitx5-config.exe"
+if (-not (Test-Path -LiteralPath $rustShipping -PathType Leaf)) {
+  throw "Rust Config shipping executable was not built: $rustShipping"
 }
 
 $shippingExe = if ([string]::IsNullOrWhiteSpace($ShippingConfigExe)) {
-  $lineageCopy = Join-Path $outputRoot 'fcitx5-config.exe'
-  Copy-Item -LiteralPath $rustSideBySide -Destination $lineageCopy -Force
-  $lineageCopy
+  $rustShipping
 } else {
   [IO.Path]::GetFullPath($ShippingConfigExe)
 }
 if (-not (Test-Path -LiteralPath $shippingExe -PathType Leaf)) {
   throw "Rust Config shipping-lineage executable is missing: $shippingExe"
 }
-$rustHash = (Get-FileHash -LiteralPath $rustSideBySide -Algorithm SHA256).Hash
+$rustHash = (Get-FileHash -LiteralPath $rustShipping -Algorithm SHA256).Hash
 $shippingHash = (Get-FileHash -LiteralPath $shippingExe -Algorithm SHA256).Hash
 if ($rustHash -ne $shippingHash) {
-  throw "Shipping fcitx5-config.exe is not byte-identical to the Rust fcitx5-config-rust.exe build output"
+  throw "Shipping fcitx5-config.exe is not byte-identical to the Rust shipping build output"
 }
 
 $rustReport = Join-Path $reportDirectory 'config-rust-shipping-lineage-self-check.json'
@@ -128,7 +121,7 @@ if ($rust.candidate_preview_renderer_contract -ne 'shipping-candidate-real-previ
 $reportObject = [ordered]@{
   component = 'fcitx5-config'
   kind = 'config-rust-shipping-lineage'
-  rust_source_executable = $rustSideBySide
+  rust_source_executable = $rustShipping
   rust_shipping_lineage_executable = $shippingExe
   rust_source_sha256 = $rustHash.ToLowerInvariant()
   rust_shipping_sha256 = $shippingHash.ToLowerInvariant()
