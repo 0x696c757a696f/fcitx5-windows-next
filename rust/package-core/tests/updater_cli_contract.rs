@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 use fcitx5_package_core::update::{self, Fcitx5UpdateOwner};
@@ -178,5 +178,5 @@ fn updater_cli_preserves_generation_and_previous_cleanup_contract() {
     );
     assert!(!previous.exists());
 
-    let _ = std::fs::remove_dir_all(PathBuf::from(root));
+    let _ = std::fs::remove_dir_all(root);
 }

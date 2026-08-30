@@ -12,6 +12,7 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 mod catalog;
+mod lifecycle_facade;
 
 #[cfg(windows)]
 pub use catalog::{read_package_catalog, read_package_detail};
@@ -21,6 +22,14 @@ pub use catalog::{
     PackageCatalogReadOptions, PackageCatalogRepository, PackageCatalogRepositoryError,
     PackageCatalogRepositoryRead, PackageCatalogRepositorySource, PackageCatalogSources,
     PackageConfigSurface,
+};
+pub use lifecycle_facade::{
+    activate_verified_staged_payload, read_trusted_keyring, resolve_repository_plan,
+    stage_verified_archive, validate_https_repository_url, CoreUpdateActivation,
+    DownloaderRepositoryTransport, PackageCoreFacade, PackageFacadeError, PackageInstallRequest,
+    PackageInstallResult, PackageRepairAction, PackageRepairReport, PackageRepairVerification,
+    PackageTransactionExecutor, RepositoryPlan, RepositoryRefreshRequest, RepositoryRefreshResult,
+    RepositoryTransport,
 };
 
 const MANIFEST_FORMAT_VERSION_V1: u64 = 1;
@@ -339,6 +348,7 @@ pub struct RepositoryVerificationPolicy<'a> {
     accepted_sequence: Option<u64>,
     accepted_targets_sha256: Option<&'a str>,
     require_new_sequence: bool,
+    accept_expired_refresh_reference: bool,
 }
 
 impl<'a> RepositoryVerificationPolicy<'a> {
@@ -356,6 +366,7 @@ impl<'a> RepositoryVerificationPolicy<'a> {
             accepted_sequence: None,
             accepted_targets_sha256: None,
             require_new_sequence: false,
+            accept_expired_refresh_reference: false,
         }
     }
 
@@ -372,6 +383,13 @@ impl<'a> RepositoryVerificationPolicy<'a> {
             accepted_sequence: Some(accepted_sequence),
             accepted_targets_sha256: Some(accepted_targets_sha256),
             require_new_sequence: false,
+            ..self
+        }
+    }
+
+    pub(crate) fn for_refresh_reference(self) -> Self {
+        Self {
+            accept_expired_refresh_reference: true,
             ..self
         }
     }
@@ -3400,7 +3418,7 @@ pub fn parse_repository_index_with_policy(
         || mirror_id != policy.expected_mirror_id
         || sequence == 0
         || generated_seconds > policy.now_seconds
-        || expires_seconds <= policy.now_seconds
+        || (!policy.accept_expired_refresh_reference && expires_seconds <= policy.now_seconds)
         || expires_seconds <= generated_seconds
         || expires_seconds - generated_seconds > 14 * 24 * 60 * 60
     {
@@ -8063,6 +8081,7 @@ pub fn repair_repository_sequence_state_for_repair(
 #[cfg(windows)]
 mod repair_ffi {
     #![allow(unsafe_code)]
+    #![allow(clippy::items_after_test_module)]
 
     use super::{
         activate_installed_version_for_rollback, activate_staged_payload_tree, parse_manifest,
@@ -11016,6 +11035,7 @@ mod tests {
     #[cfg(windows)]
     mod rsa_signing_fixture {
         #![allow(unsafe_code)]
+        #![allow(dead_code)]
 
         use std::ffi::{c_int, c_void};
 
@@ -11221,7 +11241,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("fuzz fixture directory should create");
 
-        let mut state = 0x5041_434b_4147_45_u64;
+        let mut state = 0x0050_4143_4b41_4745_u64;
         for iteration in 0..20_000_u32 {
             state ^= state >> 12;
             state ^= state << 25;
@@ -11939,6 +11959,22 @@ mod tests {
             parse_repository_index_with_policy(&valid, &policy.for_cached(13, &targets_sha256))
                 .expect("accepted cached metadata should parse");
         assert_eq!(cached.sequence(), 13);
+        let expired_reference = repository(
+            "fcitx5-windows-next",
+            "stable",
+            "official",
+            13,
+            "2023-11-14T22:14:59Z",
+            1,
+            &targets_sha256,
+        );
+        assert!(parse_repository_index_with_policy(&expired_reference, &policy).is_err());
+        let refresh_reference = parse_repository_index_with_policy(
+            &expired_reference,
+            &policy.for_refresh_reference(),
+        )
+        .expect("a signed expired cache must remain usable only as a refresh sequence reference");
+        assert_eq!(refresh_reference.sequence(), 13);
         let wrong_cached_targets = "b".repeat(64);
         assert_eq!(
             parse_repository_index_with_policy(
@@ -12448,7 +12484,7 @@ mod tests {
             SafeRelativePackagePath::parse("bin/addon.dll").expect("path should parse"),
             12,
         );
-        assert!(verify_payload_inventory(&manifest, &[declared.clone()]).is_ok());
+        assert!(verify_payload_inventory(&manifest, std::slice::from_ref(&declared)).is_ok());
 
         let missing: [PayloadEntry; 0] = [];
         assert_payload_error(&manifest, &missing);
@@ -12546,7 +12582,7 @@ mod tests {
             SafeRelativePackagePath::parse("bin/addon.dll").expect("path should parse"),
             b"hello".to_vec(),
         );
-        verify_payload_bytes(&manifest_v2_with_sha, &[observed.clone()])
+        verify_payload_bytes(&manifest_v2_with_sha, std::slice::from_ref(&observed))
             .expect("v2 payload bytes should hash to manifest BLAKE3 and SHA-256");
         let manifest_v2_without_sha = parse_manifest(&manifest_v2(
             "fcitx5-rime",
@@ -13149,16 +13185,6 @@ mod tests {
              \"files\":[{{\"path\":\"bin/addon.dll\",\"size\":{size},\"sha256\":\"{sha256}\"}}],\
              \"key_id\":\"release-2026\"}}"
         )
-    }
-
-    #[cfg(windows)]
-    fn rsa_trusted_key(id: &str, public_key: Vec<u8>) -> TrustedKey {
-        TrustedKey {
-            id: PackageId::parse(id).expect("RSA fixture key id should be valid"),
-            algorithm: TrustAlgorithm::Rsa2048Sha256,
-            public_key,
-            revoked: false,
-        }
     }
 
     fn manifest_v2(

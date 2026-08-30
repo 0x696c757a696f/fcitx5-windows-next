@@ -5,8 +5,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use fcitx5_package_core::{
-    activate_staged_payload_tree, is_safe_relative_package_path, parse_trusted_keys, sha256_digest,
-    stage_validated_archive_zip, TrustedKey,
+    activate_verified_staged_payload, read_trusted_keyring, sha256_digest, stage_verified_archive,
+    HexDigest32, PackageFacadeError, PackageId,
 };
 
 const MAXIMUM_ARTIFACT_BYTES: u64 = 128 * 1024 * 1024;
@@ -55,19 +55,19 @@ fn run(args: Vec<OsString>) -> Result<i32, DeployError> {
 }
 
 fn activate(source: &Path, expected_hash: &str, transaction_id: &str) -> Result<(), DeployError> {
-    if !win32::is_elevated()
-        || !is_hex_digest(expected_hash)
-        || !is_safe_relative_package_path(transaction_id)
-        || transaction_id.contains('/')
-        || transaction_id.contains('\\')
+    let expected_hash = HexDigest32::parse(expected_hash);
+    if !win32::is_elevated() || expected_hash.is_err() || PackageId::parse(transaction_id).is_err()
     {
         return Err(package_error(
             "privilege_boundary",
             "deployer request is invalid",
         ));
     }
+    let expected_hash = expected_hash
+        .map_err(|_| package_error("privilege_boundary", "deployer request is invalid"))?;
     let root = protected_install_root()?;
-    let keys = read_trusted_keys(root.join("security").join("trusted-keys.json"))?;
+    let keys = read_trusted_keyring(root.join("security").join("trusted-keys.json"))
+        .map_err(package_facade_error)?;
     let transactions = root.join(".transactions").join(transaction_id);
     if transactions.exists() {
         return Err(package_error(
@@ -83,16 +83,15 @@ fn activate(source: &Path, expected_hash: &str, transaction_id: &str) -> Result<
         win32::copy_exclusive_artifact(source, &protected_archive)?;
         let bytes = std::fs::read(&protected_archive)
             .map_err(|error| package_error("io_error", format!("artifact read failed: {error}")))?;
-        if sha256_digest(&bytes).as_str() != expected_hash.to_ascii_lowercase() {
+        if sha256_digest(&bytes) != expected_hash {
             return Err(package_error(
                 "hash_mismatch",
                 "artifact changed across elevation boundary",
             ));
         }
-        let staged = stage_validated_archive_zip(&protected_archive, &root, transaction_id, &keys)
-            .map_err(|error| package_error(error.code(), error.to_string()))?;
-        activate_staged_payload_tree(&staged, &root, &keys)
-            .map_err(|error| package_error(error.code(), error.to_string()))?;
+        let staged = stage_verified_archive(&protected_archive, &root, transaction_id, &keys)
+            .map_err(package_facade_error)?;
+        activate_verified_staged_payload(&staged, &root, &keys).map_err(package_facade_error)?;
         Ok(())
     })();
     let _ = std::fs::remove_dir_all(&transactions);
@@ -128,32 +127,11 @@ fn protected_install_root() -> Result<PathBuf, DeployError> {
     Ok(root)
 }
 
-fn read_trusted_keys(path: impl AsRef<Path>) -> Result<Vec<TrustedKey>, DeployError> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        package_error(
-            "invalid_keyring",
-            format!("trusted keyring read failed: {error}"),
-        )
-    })?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| package_error("invalid_keyring", "trusted keyring is not UTF-8"))?;
-    let keys =
-        parse_trusted_keys(text).map_err(|error| package_error(error.code(), error.to_string()))?;
-    if keys.is_empty() {
-        return Err(package_error("invalid_keyring", "trusted keyring is empty"));
-    }
-    Ok(keys)
-}
-
 fn unicode_arg(value: &OsString) -> Result<String, DeployError> {
     value
         .to_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| internal_error("argument is not valid Unicode"))
-}
-
-fn is_hex_digest(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[derive(Debug)]
@@ -167,6 +145,10 @@ fn package_error(code: &'static str, message: impl Into<String>) -> DeployError 
         code,
         message: message.into(),
     }
+}
+
+fn package_facade_error(error: PackageFacadeError) -> DeployError {
+    package_error(error.code(), error.to_string())
 }
 
 fn internal_error(message: impl Into<String>) -> DeployError {

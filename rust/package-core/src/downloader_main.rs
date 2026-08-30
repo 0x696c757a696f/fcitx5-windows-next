@@ -6,7 +6,9 @@ use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use fcitx5_package_core::{sha256_digest, HexDigest32};
+use fcitx5_package_core::{
+    sha256_digest, validate_https_repository_url, HexDigest32, PackageFacadeError,
+};
 
 type Bool = i32;
 type Dword = u32;
@@ -332,6 +334,10 @@ fn download(
             "destination or hash is invalid",
         ));
     }
+    let url_text = url.to_str().ok_or_else(|| {
+        DownloadError::new("invalid_download", "download URL is not valid Unicode")
+    })?;
+    validate_https_repository_url(url_text).map_err(facade_error)?;
     let Some((host, port, target)) = crack_https_url(url) else {
         return Err(DownloadError::new(
             "invalid_download",
@@ -472,6 +478,10 @@ fn download(
         let _ = fs::remove_file(&partial);
     }
     result
+}
+
+fn facade_error(error: PackageFacadeError) -> DownloadError {
+    DownloadError::new(error.code(), "download URL violates package HTTPS policy")
 }
 
 fn version() -> &'static str {

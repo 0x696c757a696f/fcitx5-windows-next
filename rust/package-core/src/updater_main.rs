@@ -3,13 +3,9 @@
 
 use std::error::Error;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use fcitx5_package_core::{
-    activate_installed_version_for_rollback, activate_staged_payload_tree, parse_manifest,
-    parse_trusted_keys, read_installed_lockfile, stage_validated_archive_zip, update, PackageType,
-    TrustedKey,
-};
+use fcitx5_package_core::{update, PackageCoreFacade};
 
 fn version() -> &'static str {
     option_env!("FCITX_WINDOWS_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
@@ -42,61 +38,31 @@ fn run(args: Vec<OsString>) -> Result<i32, Box<dyn Error>> {
         let transaction = token_arg(&args[4])?;
         let keyring = path_arg(&args[5]);
         let channel = token_arg(&args[6])?;
-        let owner = update::read_update_owner(&root)?;
-        if owner != update::Fcitx5UpdateOwner::Builtin {
-            return Err("Core update is owned by an external package manager".into());
-        }
-        let keys = read_trusted_keys(&keyring)?;
-        let package_root = root.join("packages");
-        let old_lock = read_installed_lockfile(&package_root)?;
-        let staged = stage_validated_archive_zip(&archive, &package_root, &transaction, &keys)?;
-        let manifest_bytes = read_bounded_bytes(staged.join("manifest.json"), 1024 * 1024)?;
-        let manifest_text = std::str::from_utf8(&manifest_bytes)?;
-        let manifest = parse_manifest(manifest_text)?;
-        if manifest.package_type() != &PackageType::Core {
-            return Err("updater accepts only a complete Core release package".into());
-        }
-        activate_staged_payload_tree(&staged, &package_root, &keys)?;
-        if let Err(error) = update::begin_activation(&root, &channel, manifest.version(), owner) {
-            if let Some(old) = old_lock.iter().find(|entry| entry.id() == manifest.id()) {
-                activate_installed_version_for_rollback(
-                    &package_root,
-                    old.id().as_str(),
-                    old.version(),
-                    &keys,
-                )?;
-            }
-            return Err(error.into());
-        }
-        println!("activation=pending_health\nversion={}", manifest.version());
+        let facade = PackageCoreFacade::new(root.clone(), root, "any");
+        let result = facade.activate_core_update(&archive, &transaction, &keyring, &channel)?;
+        println!("activation=pending_health\nversion={}", result.version());
         return Ok(0);
     }
     if args.len() == 4 && args[1] == "--health" {
-        update::mark_current_healthy(&path_arg(&args[2]), &token_arg(&args[3])?)?;
+        let root = path_arg(&args[2]);
+        let facade = PackageCoreFacade::new(root.clone(), root, "any");
+        facade.mark_core_update_healthy(&token_arg(&args[3])?)?;
         return Ok(0);
     }
     if args.len() == 6 && args[1] == "--rollback" {
         let root = path_arg(&args[2]);
         let channel = token_arg(&args[3])?;
         let package_id = token_arg(&args[4])?;
-        let keys = read_trusted_keys(path_arg(&args[5]))?;
-        let target = update::rollback_target(&root, &channel)?;
-        activate_installed_version_for_rollback(
-            root.join("packages"),
-            &package_id,
-            &target,
-            &keys,
-        )?;
-        update::finish_rollback(&root, &channel)?;
+        let keyring = path_arg(&args[5]);
+        let facade = PackageCoreFacade::new(root.clone(), root, "any");
+        let target = facade.rollback_core_update(&channel, &package_id, &keyring)?;
         println!("rollback={target}");
         return Ok(0);
     }
     if args.len() == 5 && args[1] == "--cleanup-previous" {
-        update::cleanup_previous_known_good(
-            &path_arg(&args[2]),
-            &token_arg(&args[3])?,
-            &token_arg(&args[4])?,
-        )?;
+        let root = path_arg(&args[2]);
+        let facade = PackageCoreFacade::new(root.clone(), root, "any");
+        facade.cleanup_previous_core_update(&token_arg(&args[3])?, &token_arg(&args[4])?)?;
         return Ok(0);
     }
     if args.len() == 5 && args[1] == "--install-tsf-dll" {
@@ -184,29 +150,6 @@ fn token_arg(value: &OsString) -> Result<String, Box<dyn Error>> {
         .to_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| "argument is not valid Unicode".into())
-}
-
-fn read_trusted_keys(path: impl AsRef<Path>) -> Result<Vec<TrustedKey>, Box<dyn Error>> {
-    let bytes = read_bounded_bytes(path, 1024 * 1024)?;
-    let text = std::str::from_utf8(&bytes)?;
-    let keys = parse_trusted_keys(text)?;
-    if keys.is_empty() {
-        return Err("trusted keyring is empty".into());
-    }
-    Ok(keys)
-}
-
-fn read_bounded_bytes(path: impl AsRef<Path>, maximum: u64) -> Result<Vec<u8>, Box<dyn Error>> {
-    let path = path.as_ref();
-    let metadata = std::fs::metadata(path).map_err(|_| "release metadata is unavailable")?;
-    if metadata.len() > maximum {
-        return Err("release metadata is unavailable".into());
-    }
-    let bytes = std::fs::read(path).map_err(|_| "release metadata read failed")?;
-    if bytes.len() as u64 != metadata.len() {
-        return Err("release metadata read failed".into());
-    }
-    Ok(bytes)
 }
 
 fn ascii_buffer(buffer: &[u8]) -> Result<String, Box<dyn Error>> {
