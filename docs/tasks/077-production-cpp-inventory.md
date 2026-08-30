@@ -1,7 +1,7 @@
 # Task 077 production C++ inventory
 
 Baseline HEAD: `c6a804edcd093b98b8940730853f7301df58a21a`.
-Latest integrated cutover HEAD: `7d1aeaa`.
+Latest integrated cutover HEAD: `240496e`.
 
 This is the live cutover ledger. `KEEP-CANDIDATE` still requires symbol-level reduction and a final
 unconditional classification. There are no accepted conditional rows at 077 completion.
@@ -16,8 +16,8 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 | `src/package/package_core.cpp`, `package_core.h` | DELETE-AFTER-CUTOVER | Delete C++ package bridge after Rust consumers cut over |
 | `src/package/fcitx5_mldsa65_config.h` | KEEP-CANDIDATE native ABI | Retain only if the Rust package build's audited native verifier needs it |
 | `src/ui/ui_main.cpp` | MIGRATE/MIXED | Move all product state/protocol/config/orchestration to Rust; retain only necessary HWND/D2D/DWrite seam |
-| `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | MIGRATE | Rust fail-safe Engine supervision is integrated at `ce5eafa`; expose reusable safe security/Job Object owner APIs, finish the native process/IPC shell, then delete these files |
-| `src/launcher/tray_icon.cpp`, `tray_icon.h`, `launcher_rust_abi.h` | KEEP-CANDIDATE ABI | Retain only a required tray/flat ABI seam, otherwise delete |
+| `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | DELETED at `240496e` | Rust is the sole Launcher supervisor, command, state-store, process, IPC-server, and shipping executable owner |
+| `src/launcher/tray_icon.cpp`, `tray_icon.h`, `launcher_rust_abi.h` | DELETED at `240496e` | No default tray is required; the temporary tray and flat C++ ABI seams were removed |
 | `src/engine/mock_engine_main.cpp` | MIGRATE | Replace with Rust fixture and delete |
 | `src/engine/presentation_publisher.cpp`, `presentation_publisher.h` | DELETED at `7d1aeaa` | Rust Engine owns validation, coalescing, exact peer transport, bounded I/O, retry/reconnect, stop, and destruction; only the opaque ABI RAII call site remains inside the approved Fcitx process adapter |
 | `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` | MIGRATE | Delete after Rust-owned process consumers use Rust IPC APIs |
@@ -43,8 +43,10 @@ supervision owns deterministic launch/readiness/stop/reap/forced-termination err
 After `639a1c9`, Engine presentation publication policy is Safe Rust; only native transport and peer
 mechanics remained. At `7d1aeaa`, verified pipe transport and lifetime moved to Rust, the two C++
 publisher files were deleted, x64/x86 each passed 141 Rust tests, and the GNU/native
-`fcitx5-engine.exe` target built successfully. These facts do not complete the other still-`MIGRATE`
-rows.
+`fcitx5-engine.exe` target built successfully. At `240496e`, the Rust Launcher became the shipping
+x64/x86 Debug and Release executable, kept an always-available next named-pipe listener, passed the
+final mixed lifecycle/crash-to-Safe-Mode E2E tests, and deleted all six remaining Launcher C++/header
+files. These facts do not complete the other still-`MIGRATE` rows.
 
 Current facts: shipping TSF and Settings are Rust-owned; Candidate semantics are Rust-owned; Rust
 protocol, Engine, package, Control, launcher, Windows-common, process-execution, and Config owners
