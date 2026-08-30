@@ -229,29 +229,35 @@ target_include_directories(fcitx5_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/p
 target_link_libraries(fcitx5_protocol PUBLIC fcitx5_protocol_core_rust)
 fcitx_apply_project_options(fcitx5_protocol)
 
-set(FCITX_RUST_LAUNCHER_CORE_STATICLIB
-    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_launcher_core.lib")
-add_custom_command(
-  OUTPUT "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}"
+set(FCITX_RUST_LAUNCHER_EXE
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-launcher.exe")
+set(FCITX_LAUNCHER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+set(FCITX_LAUNCHER_SHIPPING_EXE "${FCITX_LAUNCHER_OUTPUT_DIR}/fcitx5-launcher.exe")
+add_custom_target(
+  fcitx5_launcher ALL
+  BYPRODUCTS "${FCITX_LAUNCHER_SHIPPING_EXE}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "FCITX_WINDOWS_VERSION=${PROJECT_VERSION}"
     "FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}"
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-launcher-core --lib --target
-    "${FCITX_RUST_TARGET}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-launcher-core --bin
+    fcitx5-launcher --target "${FCITX_RUST_TARGET}" --profile
+    "$<IF:$<CONFIG:Debug>,dev,release>"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${FCITX_LAUNCHER_OUTPUT_DIR}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+          "${FCITX_RUST_LAUNCHER_EXE}" "${FCITX_LAUNCHER_SHIPPING_EXE}"
   DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/launcher-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/launcher-core/build.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/launcher-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/launcher-core/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/launcher.rc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/resource.h"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Building Rust fcitx5-launcher-core staticlib")
-add_custom_target(fcitx5_launcher_core_rustlib
-                  DEPENDS "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}")
-add_library(fcitx5_launcher_core_rust STATIC IMPORTED GLOBAL)
-set_target_properties(fcitx5_launcher_core_rust
-                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_LAUNCHER_CORE_STATICLIB}")
-add_dependencies(fcitx5_launcher_core_rust fcitx5_launcher_core_rustlib)
+  COMMENT "Building Rust fcitx5-launcher.exe")
 
 set(FCITX_RUST_PROCESS_EXECUTION_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_process_execution_core.lib")
@@ -523,16 +529,6 @@ target_link_libraries(fcitx5_platform PUBLIC fcitx5::release_identity fcitx5::wi
                                             advapi32 user32)
 fcitx_apply_project_options(fcitx5_platform)
 
-add_library(fcitx5_launcher_state INTERFACE)
-add_library(fcitx5::launcher_state ALIAS fcitx5_launcher_state)
-target_compile_features(fcitx5_launcher_state INTERFACE cxx_std_20)
-target_include_directories(
-  fcitx5_launcher_state INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/launcher")
-target_link_libraries(
-  fcitx5_launcher_state
-  INTERFACE fcitx5_launcher_core_rust shell32 ole32 ws2_32 userenv ntdll bcrypt advapi32)
-add_dependencies(fcitx5_launcher_state fcitx5_launcher_core_rustlib)
-
 add_library(
   fcitx5_ipc_client STATIC
   src/ipc/launcher_client.cpp
@@ -580,21 +576,6 @@ target_link_libraries(
   PRIVATE fcitx5::windows_common fcitx5::protocol fcitx5::ipc_client fcitx5::platform)
 fcitx_apply_project_options(fcitx5_mock_engine)
 fcitx_apply_binary_hardening(fcitx5_mock_engine)
-
-add_executable(
-  fcitx5_launcher WIN32
-  src/launcher/launcher_main.cpp
-  src/launcher/tray_icon.cpp
-  resources/windows/launcher.rc)
-set_target_properties(fcitx5_launcher PROPERTIES OUTPUT_NAME "fcitx5-launcher")
-target_link_libraries(
-  fcitx5_launcher
-  PRIVATE fcitx5::windows_common fcitx5::launcher_state fcitx5::protocol
-          fcitx5::ipc_client fcitx5::platform)
-target_include_directories(
-  fcitx5_launcher PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
-fcitx_apply_project_options(fcitx5_launcher)
-fcitx_apply_binary_hardening(fcitx5_launcher)
 
 add_executable(fcitx5_control src/control/control_main.cpp)
 set_target_properties(fcitx5_control PROPERTIES OUTPUT_NAME "fcitx5-control")
@@ -971,7 +952,7 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe"
             "$<TARGET_FILE:fcitx5_pqc_fixture_signer>")
   set_tests_properties(control-package-stopped-service-contract PROPERTIES TIMEOUT 30)
-  add_test(NAME launcher-version COMMAND fcitx5_launcher --version)
+  add_test(NAME launcher-version COMMAND "${FCITX_LAUNCHER_SHIPPING_EXE}" --version)
   add_test(NAME mock-engine-version COMMAND fcitx5_mock_engine --version)
   add_test(NAME control-version COMMAND fcitx5_control --version)
   add_test(NAME control-schema COMMAND fcitx5_control --schema)
@@ -1481,13 +1462,13 @@ if(BUILD_TESTING)
            COMMAND fcitx5_ipc_late_response_test $<TARGET_FILE:fcitx5_mock_engine>)
 
   add_executable(fcitx5_launcher_integration_test tests/integration/launcher_integration_test.cpp)
-  target_link_libraries(
-    fcitx5_launcher_integration_test PRIVATE fcitx5::ipc_client fcitx5::launcher_state)
+  target_link_libraries(fcitx5_launcher_integration_test PRIVATE fcitx5::ipc_client)
+  add_dependencies(fcitx5_launcher_integration_test fcitx5_launcher)
   fcitx_apply_project_options(fcitx5_launcher_integration_test)
   fcitx_apply_binary_hardening(fcitx5_launcher_integration_test)
   add_test(NAME launcher-engine-lifecycle
            COMMAND fcitx5_launcher_integration_test
-                   $<TARGET_FILE:fcitx5_launcher>
+                   "${FCITX_LAUNCHER_SHIPPING_EXE}"
                    $<TARGET_FILE:fcitx5_mock_engine>)
 
   add_executable(fcitx5_crash_engine_fixture tests/fixtures/crashing_engine_main.cpp)
@@ -1497,13 +1478,13 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_crash_engine_fixture)
   add_executable(fcitx5_launcher_crash_loop_test
                  tests/integration/launcher_crash_loop_test.cpp)
-  target_link_libraries(
-    fcitx5_launcher_crash_loop_test PRIVATE fcitx5::ipc_client fcitx5::launcher_state)
+  target_link_libraries(fcitx5_launcher_crash_loop_test PRIVATE fcitx5::ipc_client)
+  add_dependencies(fcitx5_launcher_crash_loop_test fcitx5_launcher)
   fcitx_apply_project_options(fcitx5_launcher_crash_loop_test)
   fcitx_apply_binary_hardening(fcitx5_launcher_crash_loop_test)
   add_test(NAME launcher-crash-loop-safe-mode
            COMMAND fcitx5_launcher_crash_loop_test
-                   $<TARGET_FILE:fcitx5_launcher>
+                   "${FCITX_LAUNCHER_SHIPPING_EXE}"
                    $<TARGET_FILE:fcitx5_crash_engine_fixture>)
 
   add_executable(fcitx5_tsf_module_test tests/unit/tsf_module_test.cpp)

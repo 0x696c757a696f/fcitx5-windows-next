@@ -3,8 +3,10 @@
 use std::env;
 use std::ffi::{c_void, OsStr, OsString};
 use std::fs;
+use std::io;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::MetadataExt;
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -19,6 +21,7 @@ const IPC_VERSION: u16 = 14;
 const IPC_HEADER_SIZE: usize = 64;
 const IPC_MAX_HOT_FRAME_SIZE: usize = 256 * 1024;
 const ERROR_INVALID_DATA: u32 = 13;
+const ERROR_ALREADY_EXISTS: u32 = 183;
 const ERROR_SUCCESS: i32 = 0;
 const ERROR_TIMEOUT: u32 = 1460;
 const KF_FLAG_CREATE: u32 = 0x0000_8000;
@@ -26,6 +29,13 @@ const RRF_RT_REG_DWORD: u32 = 0x0000_0010;
 const HKEY_CURRENT_USER: *mut c_void = 0x8000_0001usize as *mut c_void;
 const DEFAULT_CHARSET: u8 = 1;
 const LF_FACESIZE: usize = 32;
+const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
+const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
+const PIPE_READMODE_BYTE: u32 = 0x0000_0000;
+const PIPE_WAIT: u32 = 0x0000_0000;
+const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x0000_0008;
+const WAIT_OBJECT_0: u32 = 0;
 static NEXT_LAUNCHER_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_PIPE_CLIENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -538,6 +548,484 @@ impl CurrentUserSecurityAttributes {
     pub fn attributes(&self) -> &SecurityAttributes {
         &self.state.attributes
     }
+
+    fn native_attributes(&self) -> *mut c_void {
+        (&self.state.attributes as *const SecurityAttributes)
+            .cast_mut()
+            .cast::<c_void>()
+    }
+}
+
+/// The current interactive user's process identity for namespaced IPC and
+/// peer verification.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentUserRuntimeIdentity {
+    process_id: u32,
+    session_id: u32,
+    user_sid: String,
+    executable_path: PathBuf,
+    service_account: bool,
+    secure_desktop: bool,
+}
+
+impl CurrentUserRuntimeIdentity {
+    /// Resolves the identity only when this process may run the per-user
+    /// launcher and engine.
+    #[must_use]
+    pub fn current() -> Option<Self> {
+        let query = current_identity(std::ptr::null_mut(), 0, std::ptr::null_mut(), 0);
+        if query.status == 0 || query.user_sid_len == 0 || query.executable_path_len == 0 {
+            return None;
+        }
+        let mut user_sid = vec![0_u16; query.user_sid_len];
+        let mut executable_path = vec![0_u16; query.executable_path_len];
+        let identity = current_identity(
+            user_sid.as_mut_ptr(),
+            user_sid.len(),
+            executable_path.as_mut_ptr(),
+            executable_path.len(),
+        );
+        if identity.status == 0
+            || identity.user_sid_len != user_sid.len()
+            || identity.executable_path_len != executable_path.len()
+        {
+            return None;
+        }
+        let user_sid = String::from_utf16(&user_sid).ok()?;
+        let executable_path = PathBuf::from(OsString::from_wide(&executable_path));
+        may_launch_user_engine(
+            identity.service_account != 0,
+            identity.session_id,
+            identity.secure_desktop != 0,
+            &user_sid,
+        )
+        .then_some(Self {
+            process_id: identity.process_id,
+            session_id: identity.session_id,
+            user_sid,
+            executable_path,
+            service_account: identity.service_account != 0,
+            secure_desktop: identity.secure_desktop != 0,
+        })
+    }
+
+    /// Returns the process id associated with this identity.
+    #[must_use]
+    pub const fn process_id(&self) -> u32 {
+        self.process_id
+    }
+
+    /// Returns the interactive logon session id.
+    #[must_use]
+    pub const fn session_id(&self) -> u32 {
+        self.session_id
+    }
+
+    /// Returns the launcher executable path captured with the identity.
+    #[must_use]
+    pub fn executable_path(&self) -> &Path {
+        &self.executable_path
+    }
+
+    /// Creates security attributes for named objects restricted to this exact
+    /// interactive user and session.
+    #[must_use]
+    pub fn security_attributes(&self) -> Option<CurrentUserSecurityAttributes> {
+        CurrentUserSecurityAttributes::from_identity(
+            self.service_account,
+            self.session_id,
+            self.secure_desktop,
+            &self.user_sid,
+        )
+    }
+
+    /// Creates the generation-aware, current-user/session named-pipe path.
+    #[must_use]
+    pub fn local_endpoint_name(&self, generation: &str, channel: &str) -> Option<OsString> {
+        local_name(
+            true,
+            &self.user_sid,
+            self.session_id,
+            generation,
+            channel,
+            &local_test_namespace().unwrap_or_default(),
+        )
+        .map(OsString::from)
+    }
+
+    /// Creates the generation-aware, current-user/session local kernel-object
+    /// name.
+    #[must_use]
+    pub fn local_object_name(&self, generation: &str, channel: &str) -> Option<OsString> {
+        local_name(
+            false,
+            &self.user_sid,
+            self.session_id,
+            generation,
+            channel,
+            &local_test_namespace().unwrap_or_default(),
+        )
+        .map(OsString::from)
+    }
+
+    /// Accepts only a named-pipe client from the same interactive principal
+    /// and session.
+    #[must_use]
+    pub fn verifies_pipe_client(&self, pipe: BorrowedHandle<'_>) -> bool {
+        verified_pipe_client_peer(
+            pipe.as_raw_handle(),
+            self.service_account,
+            self.session_id,
+            self.secure_desktop,
+            &self.user_sid,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+        )
+        .status
+            != 0
+    }
+}
+
+/// Returns the shared monotonic deadline clock in milliseconds.
+#[must_use]
+pub fn monotonic_milliseconds() -> u64 {
+    tick_milliseconds()
+}
+
+/// Returns the shared absolute deadline `milliseconds` from now.
+#[must_use]
+pub fn deadline_after(milliseconds: u32) -> u64 {
+    deadline_after_milliseconds(milliseconds)
+}
+
+/// Reports whether an absolute deadline has not expired.
+#[must_use]
+pub fn deadline_has_time_remaining(deadline: u64) -> bool {
+    deadline_has_time(deadline)
+}
+
+/// Resolves the deployment generation for the current executable.
+#[must_use]
+pub fn current_runtime_generation_for_current_process() -> String {
+    current_runtime_generation()
+}
+
+fn wide_nul(value: &OsStr) -> Vec<u16> {
+    let mut wide = value.encode_wide().collect::<Vec<_>>();
+    wide.push(0);
+    wide
+}
+
+fn owned_kernel_handle(raw: *mut c_void) -> io::Result<OwnedHandle> {
+    if raw.is_null() || raw == invalid_handle_value() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: The successful Win32 creation call transfers sole ownership of
+    // this non-null, non-invalid handle to the returned owner.
+    Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
+}
+
+/// Owns a per-user/session named mutex used to elect one launcher instance.
+#[must_use = "keep this value alive while the launcher owns the singleton"]
+pub struct SingleInstance {
+    _handle: OwnedHandle,
+    primary: bool,
+}
+
+impl SingleInstance {
+    /// Acquires a named mutex using the supplied current-user security policy.
+    ///
+    /// A successful call always owns one mutex handle. `is_primary` distinguishes
+    /// the launcher elected to host the command pipe from an existing instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Win32 creation error when the named mutex cannot be opened
+    /// or created.
+    pub fn acquire(name: &OsStr, security: &CurrentUserSecurityAttributes) -> io::Result<Self> {
+        let name = wide_nul(name);
+        if name.len() == 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "empty mutex name",
+            ));
+        }
+        // SAFETY: `name` is NUL-terminated UTF-16 and the security attributes
+        // are borrowed for this synchronous call only.
+        let raw = unsafe { CreateMutexW(security.native_attributes(), 0, name.as_ptr()) };
+        let handle = owned_kernel_handle(raw)?;
+        // SAFETY: Reads the thread-local result of CreateMutexW immediately.
+        let primary = unsafe { GetLastError() } != ERROR_ALREADY_EXISTS;
+        Ok(Self {
+            _handle: handle,
+            primary,
+        })
+    }
+
+    /// Returns whether this process created the singleton mutex.
+    #[must_use]
+    pub const fn is_primary(&self) -> bool {
+        self.primary
+    }
+}
+
+/// Owns a manual-reset named event restricted to the current user/session.
+#[must_use = "keep this value alive while another process must observe the event"]
+pub struct NamedEvent {
+    handle: OwnedHandle,
+}
+
+impl NamedEvent {
+    /// Creates or opens a manual-reset event under the supplied security policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Win32 creation error when the event cannot be opened or
+    /// created.
+    pub fn create(name: &OsStr, security: &CurrentUserSecurityAttributes) -> io::Result<Self> {
+        let name = wide_nul(name);
+        if name.len() == 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "empty event name",
+            ));
+        }
+        // SAFETY: `name` is NUL-terminated UTF-16 and the security attributes
+        // are borrowed for this synchronous call only.
+        let raw = unsafe { CreateEventW(security.native_attributes(), 1, 0, name.as_ptr()) };
+        Ok(Self {
+            handle: owned_kernel_handle(raw)?,
+        })
+    }
+
+    /// Signals the event.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Win32 signaling error.
+    pub fn signal(&self) -> io::Result<()> {
+        // SAFETY: `handle` owns a live event handle for this synchronous call.
+        if unsafe { SetEvent(self.handle.as_raw_handle()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Resets the event to its non-signaled state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Win32 reset error.
+    pub fn reset(&self) -> io::Result<()> {
+        // SAFETY: `handle` owns a live event handle for this synchronous call.
+        if unsafe { ResetEvent(self.handle.as_raw_handle()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Returns whether the event is currently signaled without blocking.
+    #[must_use]
+    pub fn is_signaled(&self) -> bool {
+        // SAFETY: `handle` owns a live waitable handle for this zero-time wait.
+        (unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) }) == WAIT_OBJECT_0
+    }
+}
+
+/// Waits for a borrowed waitable handle until `timeout` expires.
+#[must_use]
+pub fn wait_for_handle(handle: BorrowedHandle<'_>, timeout: Duration) -> bool {
+    let Ok(milliseconds) = u32::try_from(timeout.as_millis().min(u128::from(MAX_DWORD_MINUS_ONE)))
+    else {
+        return false;
+    };
+    // SAFETY: `handle` remains borrowed and valid for this synchronous wait.
+    (unsafe { WaitForSingleObject(handle.as_raw_handle(), milliseconds) }) == WAIT_OBJECT_0
+}
+
+/// Checks whether a primary launcher pipe is available without connecting to it.
+#[must_use]
+pub fn named_pipe_is_available(name: &OsStr, timeout: Duration) -> bool {
+    let Ok(milliseconds) = u32::try_from(timeout.as_millis().min(u128::from(MAX_DWORD_MINUS_ONE)))
+    else {
+        return false;
+    };
+    let name = wide_nul(name);
+    if name.len() == 1 {
+        return false;
+    }
+    // SAFETY: `name` is a live NUL-terminated UTF-16 pipe path.
+    (unsafe { WaitNamedPipeW(name.as_ptr(), milliseconds) }) != 0
+}
+
+/// Owns one overlapped local named-pipe server instance.
+#[must_use = "dropping the server closes its pipe instance"]
+pub struct NamedPipeServer {
+    handle: OwnedHandle,
+}
+
+impl NamedPipeServer {
+    /// Creates a same-user/session, remote-client-rejecting duplex pipe.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Win32 error for invalid buffer bounds or pipe creation failure.
+    pub fn create(
+        name: &OsStr,
+        security: &CurrentUserSecurityAttributes,
+        buffer_bytes: usize,
+    ) -> io::Result<Self> {
+        let Ok(buffer_bytes) = u32::try_from(buffer_bytes) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "pipe buffer too large",
+            ));
+        };
+        if buffer_bytes == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "empty pipe buffer",
+            ));
+        }
+        let name = wide_nul(name);
+        if name.len() == 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "empty pipe name",
+            ));
+        }
+        // SAFETY: `name` is NUL-terminated UTF-16 and the security attributes
+        // are borrowed for this synchronous creation call only.
+        let raw = unsafe {
+            CreateNamedPipeW(
+                name.as_ptr(),
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                // Two sibling instances let a single-threaded server keep the
+                // next listener available while finishing the current reply.
+                2,
+                buffer_bytes,
+                buffer_bytes,
+                100,
+                security.native_attributes(),
+            )
+        };
+        Ok(Self {
+            handle: owned_kernel_handle(raw)?,
+        })
+    }
+
+    /// Waits for one client until `deadline` or the supplied stop event.
+    #[must_use]
+    pub fn connect_until(&self, deadline: u64, stop: &NamedEvent) -> bool {
+        pipe_connect_client(
+            self.handle.as_raw_handle(),
+            deadline,
+            stop.handle.as_raw_handle(),
+        )
+    }
+
+    /// Verifies the connected pipe client against this user/session identity.
+    #[must_use]
+    pub fn verifies_client(&self, identity: &CurrentUserRuntimeIdentity) -> bool {
+        identity.verifies_pipe_client(self.handle.as_handle())
+    }
+
+    /// Reads exactly `bytes.len()` bytes before `deadline`.
+    #[must_use]
+    pub fn read_exact(&self, bytes: &mut [u8], deadline: u64) -> bool {
+        read_named_pipe_exact(self.handle.as_handle(), bytes, deadline)
+    }
+
+    /// Writes all bytes before `deadline`.
+    #[must_use]
+    pub fn write_all(&self, bytes: &[u8], deadline: u64) -> bool {
+        write_named_pipe_all(self.handle.as_handle(), bytes, deadline)
+    }
+
+    /// Waits for the connected client to close after consuming a final response.
+    ///
+    /// This is bounded by `deadline`; it is intended only for process-shutdown
+    /// responses where dropping the server immediately could discard unread bytes.
+    #[must_use]
+    pub fn wait_for_client_disconnect(&self, deadline: u64) -> bool {
+        loop {
+            // SAFETY: the pipe handle is live and all optional output buffers are
+            // null because this call only probes whether the client remains connected.
+            if unsafe {
+                PeekNamedPipe(
+                    self.handle.as_raw_handle(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                return true;
+            }
+            if monotonic_milliseconds() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+impl Drop for NamedPipeServer {
+    fn drop(&mut self) {
+        // SAFETY: `handle` remains live until its OwnedHandle field drops. A
+        // best-effort disconnect releases a connected client before closure.
+        unsafe {
+            let _ = DisconnectNamedPipe(self.handle.as_raw_handle());
+        }
+    }
+}
+
+/// Waits for an overlapped named-pipe client connection until `deadline` or
+/// the optional stop handle is signaled.
+#[must_use]
+pub fn connect_named_pipe_client(
+    pipe: BorrowedHandle<'_>,
+    deadline: u64,
+    stop_handle: Option<BorrowedHandle<'_>>,
+) -> bool {
+    pipe_connect_client(
+        pipe.as_raw_handle(),
+        deadline,
+        stop_handle.map_or(std::ptr::null_mut(), |handle| handle.as_raw_handle()),
+    )
+}
+
+/// Reads exactly `bytes.len()` bytes from an overlapped named pipe before the
+/// absolute deadline expires.
+#[must_use]
+pub fn read_named_pipe_exact(pipe: BorrowedHandle<'_>, bytes: &mut [u8], deadline: u64) -> bool {
+    pipe_transfer(
+        pipe.as_raw_handle(),
+        false,
+        bytes.as_mut_ptr(),
+        bytes.len(),
+        deadline,
+    )
+}
+
+/// Writes all bytes to an overlapped named pipe before the absolute deadline
+/// expires.
+#[must_use]
+pub fn write_named_pipe_all(pipe: BorrowedHandle<'_>, bytes: &[u8], deadline: u64) -> bool {
+    pipe_transfer(
+        pipe.as_raw_handle(),
+        true,
+        bytes.as_ptr().cast_mut(),
+        bytes.len(),
+        deadline,
+    )
 }
 
 impl Drop for PipeSecurityState {
@@ -768,12 +1256,38 @@ unsafe extern "system" {
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
     fn GetCurrentProcessId() -> u32;
     fn GetTickCount64() -> u64;
+    fn CreateMutexW(
+        mutex_attributes: *mut c_void,
+        initial_owner: i32,
+        name: *const u16,
+    ) -> *mut c_void;
     fn CreateEventW(
         event_attributes: *mut c_void,
         manual_reset: i32,
         initial_state: i32,
         name: *const u16,
     ) -> *mut c_void;
+    fn SetEvent(event: *mut c_void) -> i32;
+    fn ResetEvent(event: *mut c_void) -> i32;
+    fn CreateNamedPipeW(
+        name: *const u16,
+        open_mode: u32,
+        pipe_mode: u32,
+        max_instances: u32,
+        out_buffer_size: u32,
+        in_buffer_size: u32,
+        default_timeout: u32,
+        security_attributes: *mut c_void,
+    ) -> *mut c_void;
+    fn DisconnectNamedPipe(pipe: *mut c_void) -> i32;
+    fn PeekNamedPipe(
+        pipe: *mut c_void,
+        buffer: *mut c_void,
+        buffer_size: u32,
+        bytes_read: *mut u32,
+        total_bytes_available: *mut u32,
+        bytes_left_this_message: *mut u32,
+    ) -> i32;
     fn WriteFile(
         file: *mut c_void,
         buffer: *const c_void,
@@ -1994,6 +2508,39 @@ impl VerifiedPipeClient {
             deadline_after_milliseconds(timeout_milliseconds),
         )
     }
+
+    /// Exchanges one complete request frame for one complete response frame
+    /// before `timeout` expires.
+    ///
+    /// Returns the response length only when it fits in `response` and the
+    /// underlying pipe transfer completes successfully.
+    #[must_use]
+    pub fn transact(
+        &mut self,
+        request: &[u8],
+        response: &mut [u8],
+        timeout: Duration,
+    ) -> Option<usize> {
+        let timeout_milliseconds =
+            u32::try_from(timeout.as_millis().min(u128::from(MAX_DWORD_MINUS_ONE))).ok()?;
+        if timeout_milliseconds == 0 || request.is_empty() || response.is_empty() {
+            return None;
+        }
+        let result = pipe_transact(
+            self.pipe,
+            request,
+            response.as_mut_ptr(),
+            response.len(),
+            deadline_after_milliseconds(timeout_milliseconds),
+        );
+        (result.status != 0 && result.response_len <= response.len()).then_some(result.response_len)
+    }
+}
+
+/// Returns a non-zero request id for a launcher-originated IPC request.
+#[must_use]
+pub fn next_launcher_request_id() -> u64 {
+    NEXT_LAUNCHER_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Drop for VerifiedPipeClient {
@@ -2172,10 +2719,6 @@ fn accept_launcher_response(
     expected_session_id: u32,
 ) -> bool {
     response_to == expected_request_id && session_id == expected_session_id
-}
-
-fn next_launcher_request_id() -> u64 {
-    NEXT_LAUNCHER_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 fn next_pipe_client_request_id() -> u64 {

@@ -1,7 +1,6 @@
 #include "launcher_client.h"
 #include "pipe_client.h"
 #include "runtime_identity.h"
-#include "state_machine.h"
 
 #include <Windows.h>
 
@@ -12,6 +11,9 @@
 #include <vector>
 
 namespace {
+
+constexpr std::uint32_t kLauncherUserStopped = 1;
+constexpr std::uint32_t kStartSuppressed = 2;
 
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
 
@@ -70,6 +72,7 @@ int wmain(int argc, wchar_t** argv) {
     CloseHandle(process.hThread);
     int stage = 0;
     int result = WaitForSingleObject(launcherReady, 2000) == WAIT_OBJECT_0 ? 0 : 1;
+    std::uint32_t failureStatus = 0;
     if (result != 0) stage = 1;
     fcitx::windows::protocol::LauncherResponse response;
     int controlFailure = 0;
@@ -95,6 +98,7 @@ int wmain(int argc, wchar_t** argv) {
         } else if (response.status != fcitx::windows::protocol::Status::ok) {
             result = 1;
             stage = 21;
+            failureStatus = static_cast<std::uint32_t>(response.status);
         } else if (WaitForSingleObject(engineReady, 2000) != WAIT_OBJECT_0) {
             result = 1;
             stage = 22;
@@ -125,11 +129,9 @@ int wmain(int argc, wchar_t** argv) {
     if (result == 0 &&
         (!sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::userStop) ||
          response.status != fcitx::windows::protocol::Status::ok ||
-         response.launcherState != static_cast<std::uint32_t>(
-                                       fcitx::windows::launcher::LauncherState::userStopped) ||
+         response.launcherState != kLauncherUserStopped ||
          !sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::startDemand) ||
-         response.startDisposition != static_cast<std::uint32_t>(
-                                          fcitx::windows::launcher::StartDisposition::suppressed))) {
+         response.startDisposition != kStartSuppressed)) {
         result = 1;
         stage = 4;
     }
@@ -170,6 +172,15 @@ int wmain(int argc, wchar_t** argv) {
     if (result != 0) {
         std::cerr << "launcher lifecycle integration failed at stage " << stage
                   << ", launcher exit " << exitCode << ", Win32 error " << controlError
+                  << ", control failure " << controlFailure
+                  << ", status " << failureStatus
+                  << ", launcher state " << response.launcherState
+                  << ", engine state " << response.engineState
+                  << ", start disposition " << response.startDisposition
+                  << ", input id '" << response.currentInputMethodId
+                  << "', name '" << response.currentInputMethodName
+                  << "', native '" << response.currentInputMethodNativeName
+                  << "', short '" << response.currentInputMethodShortLabel << "'"
                   << '\n';
     }
     return result;

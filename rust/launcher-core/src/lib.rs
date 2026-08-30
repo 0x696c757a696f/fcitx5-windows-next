@@ -1,37 +1,50 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::AsHandle;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use windows::core::PCWSTR;
-use windows::Win32::Storage::FileSystem::{
-    MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+use std::time::Duration;
+
+use fcitx5_process_execution_core::JobObject;
+use fcitx5_protocol_core::{
+    self as protocol, decode_engine_status_response, decode_frame, decode_header,
+    decode_hello_response, decode_launcher_request, encode_engine_status_request,
+    encode_hello_request, encode_launcher_response, EngineStatusRequest, EngineStatusResponse,
+    HelloRequest, LauncherCommand, LauncherResponse, Metadata, Status,
 };
-use windows::Win32::System::SystemInformation::GetTickCount64;
+use fcitx5_windows_common_core::{
+    current_runtime_generation_for_current_process, deadline_after,
+    default_fcitx5_data_root_for_current_process, monotonic_milliseconds, named_pipe_is_available,
+    next_launcher_request_id, wait_for_handle, CurrentUserRuntimeIdentity,
+    CurrentUserSecurityAttributes, NamedEvent, NamedPipeServer, SingleInstance, VerifiedPipeClient,
+};
 
 const STARTUP_CRASH_WINDOW_MS: u64 = 10_000;
 const STABLE_RUNTIME_MS: u64 = 60_000;
 const INITIAL_BACKOFF_MS: u64 = 250;
 const MAXIMUM_BACKOFF_MS: u64 = 30_000;
 const SAFE_MODE_CRASH_THRESHOLD: u32 = 3;
-const RELEASE_DATA_DIRECTORY_FALLBACK: &str = "Fcitx5";
 const STATE_FILE_NAME: &str = "launcher-state.v1";
-const PROTOCOL_MAGIC: u32 = 0x3457_4346;
-const PROTOCOL_VERSION: u16 = 14;
-const PROTOCOL_HEADER_SIZE: usize = 64;
-const PROTOCOL_MAX_HOT_FRAME_SIZE: u32 = 256 * 1024;
-const PROTOCOL_MAX_CONTROL_FRAME_SIZE: u32 = 1024 * 1024;
-const LANG_CHINESE: u16 = 0x04;
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const READY_TIMEOUT: Duration = Duration::from_millis(2_000);
+const STOP_TIMEOUT: Duration = Duration::from_millis(2_000);
+const KILL_TIMEOUT: Duration = Duration::from_millis(1_000);
+const PIPE_CONNECT_TIMEOUT_MS: u32 = 250;
+const PIPE_TRANSFER_TIMEOUT_MS: u32 = 100;
+const STATUS_TIMEOUT: Duration = Duration::from_millis(500);
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[must_use]
 pub fn launcher_tick_milliseconds() -> u64 {
-    // SAFETY: GetTickCount64 has no pointer arguments or preconditions.
-    unsafe { GetTickCount64() }
+    monotonic_milliseconds()
 }
 
 #[repr(u32)]
@@ -73,7 +86,6 @@ pub enum StartDisposition {
     Backoff = 3,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fcitx5LauncherSnapshot {
     pub state: u32,
@@ -81,19 +93,16 @@ pub struct Fcitx5LauncherSnapshot {
     pub next_start_allowed_milliseconds: u64,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fcitx5LauncherMachine {
     pub snapshot: Fcitx5LauncherSnapshot,
     pub engine_state: u32,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fcitx5LauncherStartDecision {
     pub disposition: u32,
-    pub safe_mode: u8,
-    pub reserved: [u8; 7],
+    pub safe_mode: bool,
     pub retry_after_milliseconds: u64,
 }
 
@@ -129,8 +138,7 @@ impl Default for LauncherOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LauncherInvocation {
     Version,
-    TraySelfTest,
-    Supervise(LauncherOptions),
+    Supervise(Box<LauncherOptions>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +151,7 @@ pub enum LauncherError {
     StateMissing(PathBuf),
     StateInvalid(PathBuf),
     StateStore(PathBuf),
+    Runtime(String),
 }
 
 impl fmt::Display for LauncherError {
@@ -170,6 +179,7 @@ impl fmt::Display for LauncherError {
             Self::StateStore(path) => {
                 write!(formatter, "launcher state store failed: {}", path.display())
             }
+            Self::Runtime(message) => formatter.write_str(message),
         }
     }
 }
@@ -189,6 +199,7 @@ pub struct LauncherStartup {
     pub engine_path: PathBuf,
     pub ui_path: Option<PathBuf>,
     pub state_path: PathBuf,
+    pub snapshot: Fcitx5LauncherSnapshot,
     pub status: LauncherStatus,
     pub engine_command_line: Option<Vec<u16>>,
 }
@@ -234,22 +245,18 @@ pub trait EngineLifecycleAdapter {
     type Child;
 
     fn start_engine(&mut self, launch: &EngineLaunch) -> EngineLifecycleResult<Self::Child>;
-
     fn wait_for_ready(
         &mut self,
         child: &mut Self::Child,
         ready_event: &OsStr,
-        timeout: std::time::Duration,
+        timeout: Duration,
     ) -> EngineLifecycleResult<EngineReadyState>;
-
     fn signal_stop(&mut self, stop_event: &OsStr) -> EngineLifecycleResult<()>;
-
     fn wait_for_exit(
         &mut self,
         child: &mut Self::Child,
-        timeout: std::time::Duration,
+        timeout: Duration,
     ) -> EngineLifecycleResult<bool>;
-
     fn terminate(&mut self, child: &mut Self::Child) -> EngineLifecycleResult<()>;
 }
 
@@ -262,8 +269,8 @@ pub struct EngineSupervisionResult {
 pub fn supervise_engine<A: EngineLifecycleAdapter>(
     adapter: &mut A,
     launch: &EngineLaunch,
-    ready_timeout: std::time::Duration,
-    exit_timeout: std::time::Duration,
+    ready_timeout: Duration,
+    exit_timeout: Duration,
 ) -> EngineLifecycleResult<EngineSupervisionResult> {
     let mut child = adapter.start_engine(launch)?;
     let ready = match adapter.wait_for_ready(&mut child, &launch.ready_event, ready_timeout) {
@@ -275,37 +282,34 @@ pub fn supervise_engine<A: EngineLifecycleAdapter>(
     };
     if ready != EngineReadyState::Ready {
         let _ = adapter.terminate(&mut child);
-        let error = match ready {
+        return Err(match ready {
             EngineReadyState::TimedOut => "engine readiness timed out",
             EngineReadyState::Exited => "engine exited before readiness",
             EngineReadyState::Ready => "engine did not become ready",
-        };
-        return Err(error.to_owned());
+        }
+        .to_owned());
     }
-
     if let Err(error) = adapter.signal_stop(&launch.stop_event) {
         let _ = adapter.terminate(&mut child);
         return Err(error);
     }
-    let exited = match adapter.wait_for_exit(&mut child, exit_timeout) {
-        Ok(exited) => exited,
-        Err(error) => {
-            let _ = adapter.terminate(&mut child);
-            return Err(error);
-        }
-    };
-    if exited {
-        return Ok(EngineSupervisionResult {
+    match adapter.wait_for_exit(&mut child, exit_timeout) {
+        Ok(true) => Ok(EngineSupervisionResult {
             ready,
             forced_termination: false,
-        });
+        }),
+        Ok(false) => {
+            adapter.terminate(&mut child)?;
+            Ok(EngineSupervisionResult {
+                ready,
+                forced_termination: true,
+            })
+        }
+        Err(error) => {
+            let _ = adapter.terminate(&mut child);
+            Err(error)
+        }
     }
-
-    adapter.terminate(&mut child)?;
-    Ok(EngineSupervisionResult {
-        ready,
-        forced_termination: true,
-    })
 }
 
 fn launcher_state(value: u32) -> Option<LauncherState> {
@@ -318,22 +322,6 @@ fn launcher_state(value: u32) -> Option<LauncherState> {
         5 => Some(LauncherState::SafeMode),
         _ => None,
     }
-}
-
-fn command(value: u32) -> Option<Command> {
-    match value {
-        0 => Some(Command::UserStop),
-        1 => Some(Command::Resume),
-        2 => Some(Command::BeginUpdate),
-        3 => Some(Command::EndUpdate),
-        4 => Some(Command::BeginUninstall),
-        5 => Some(Command::ResetSafeMode),
-        _ => None,
-    }
-}
-
-fn release_data_directory() -> &'static str {
-    option_env!("FCITX_RELEASE_DATA_DIRECTORY").unwrap_or(RELEASE_DATA_DIRECTORY_FALLBACK)
 }
 
 fn state_name(state: LauncherState) -> &'static str {
@@ -361,148 +349,80 @@ fn parse_state_name(value: &str) -> Option<LauncherState> {
 
 fn line_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let marker = format!("{key}=");
-    for mut line in text.split('\n') {
-        if let Some(stripped) = line.strip_suffix('\r') {
-            line = stripped;
-        }
-        if let Some(value) = line.strip_prefix(&marker) {
-            return Some(value);
-        }
-    }
-    None
-}
-
-fn parse_unsigned(value: &str) -> Option<u64> {
-    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let mut result = 0_u64;
-    for digit in value.bytes().map(|b| u64::from(b - b'0')) {
-        result = result.checked_mul(10)?.checked_add(digit)?;
-    }
-    Some(result)
-}
-
-fn parse_snapshot(text: &str) -> Option<Fcitx5LauncherSnapshot> {
-    if let Some(legacy) = text.strip_suffix('\n') {
-        if let Some(state) = parse_state_name(legacy) {
-            return Some(Fcitx5LauncherSnapshot {
-                state: state as u32,
-                consecutive_startup_crashes: 0,
-                next_start_allowed_milliseconds: 0,
-            });
-        }
-    }
-    let format = line_value(text, "format_version")?;
-    let state = parse_state_name(line_value(text, "state")?)?;
-    let crashes = parse_unsigned(line_value(text, "consecutive_startup_crashes")?)?;
-    let next_start = parse_unsigned(line_value(text, "next_start_allowed_ms")?)?;
-    if format != "2" || crashes > u64::from(u32::MAX) {
-        return None;
-    }
-    Some(Fcitx5LauncherSnapshot {
-        state: state as u32,
-        consecutive_startup_crashes: crashes as u32,
-        next_start_allowed_milliseconds: next_start,
+    text.lines().find_map(|line| {
+        line.strip_suffix('\r')
+            .unwrap_or(line)
+            .strip_prefix(&marker)
     })
 }
 
+fn parse_unsigned(value: &str) -> Option<u64> {
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())).then_some(())?;
+    value.bytes().try_fold(0_u64, |result, byte| {
+        result.checked_mul(10)?.checked_add(u64::from(byte - b'0'))
+    })
+}
+
+fn parse_snapshot(text: &str) -> Option<Fcitx5LauncherSnapshot> {
+    if let Some(state) = text.strip_suffix('\n').and_then(parse_state_name) {
+        return Some(Fcitx5LauncherSnapshot {
+            state: state as u32,
+            consecutive_startup_crashes: 0,
+            next_start_allowed_milliseconds: 0,
+        });
+    }
+    let crashes = parse_unsigned(line_value(text, "consecutive_startup_crashes")?)?;
+    (line_value(text, "format_version")? == "2" && crashes <= u64::from(u32::MAX)).then_some(
+        Fcitx5LauncherSnapshot {
+            state: parse_state_name(line_value(text, "state")?)? as u32,
+            consecutive_startup_crashes: crashes as u32,
+            next_start_allowed_milliseconds: parse_unsigned(line_value(
+                text,
+                "next_start_allowed_ms",
+            )?)?,
+        },
+    )
+}
+
 fn serialize_snapshot(snapshot: Fcitx5LauncherSnapshot) -> Option<String> {
-    let state = launcher_state(snapshot.state)?;
     Some(format!(
         "format_version=2\nstate={}\nconsecutive_startup_crashes={}\nnext_start_allowed_ms={}\n",
-        state_name(state),
+        state_name(launcher_state(snapshot.state)?),
         snapshot.consecutive_startup_crashes,
         snapshot.next_start_allowed_milliseconds
     ))
 }
 
-fn path_from_wide(path: *const u16, len: usize) -> Option<PathBuf> {
-    if path.is_null() {
-        return (len == 0).then(PathBuf::new);
-    }
-    // SAFETY: The C++ adapter passes a valid UTF-16 buffer with exactly `len`
-    // elements for the duration of this call.
-    let slice = unsafe { std::slice::from_raw_parts(path, len) };
-    Some(PathBuf::from(OsString::from_wide(slice)))
-}
-
-fn os_string_from_wide(text: *const u16, len: usize) -> Option<OsString> {
-    if text.is_null() {
-        return (len == 0).then(OsString::new);
-    }
-    // SAFETY: The C++ adapter passes a valid UTF-16 buffer with exactly `len`
-    // elements for the duration of this call.
-    let slice = unsafe { std::slice::from_raw_parts(text, len) };
-    Some(OsString::from_wide(slice))
-}
-
-fn wide_slice<'a>(text: *const u16, len: usize) -> Option<&'a [u16]> {
-    if text.is_null() {
-        return (len == 0).then_some(&[]);
-    }
-    // SAFETY: The C++ adapter passes a valid UTF-16 buffer with exactly `len`
-    // elements for the duration of this call.
-    Some(unsafe { std::slice::from_raw_parts(text, len) })
-}
-
-fn absolute_windows_path_wide(path: &[u16]) -> bool {
+fn is_absolute_windows_path(path: &Path) -> bool {
+    let path = path.as_os_str().encode_wide().collect::<Vec<_>>();
     path.len() >= 3
-        && ((path[0] >= b'A' as u16 && path[0] <= b'Z' as u16)
-            || (path[0] >= b'a' as u16 && path[0] <= b'z' as u16))
-        && path[1] == b':' as u16
-        && (path[2] == b'\\' as u16 || path[2] == b'/' as u16)
+        && ((u16::from(b'A')..=u16::from(b'Z')).contains(&path[0])
+            || (u16::from(b'a')..=u16::from(b'z')).contains(&path[0]))
+        && path[1] == u16::from(b':')
+        && matches!(path[2], value if value == u16::from(b'\\') || value == u16::from(b'/'))
 }
 
-fn resolve_default_process_paths(
-    executable_directory: &Path,
-    generation: &OsStr,
-) -> (PathBuf, PathBuf) {
-    let installed_root = if executable_directory.file_name() == Some(OsStr::new("bin")) {
-        executable_directory
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| executable_directory.to_path_buf())
+fn resolve_default_process_paths(directory: &Path, generation: &OsStr) -> (PathBuf, PathBuf) {
+    let root = if directory.file_name() == Some(OsStr::new("bin")) {
+        directory.parent().unwrap_or(directory)
     } else {
-        executable_directory.to_path_buf()
+        directory
     };
-    let generation_bin = installed_root.join("runtime").join(generation).join("bin");
-    let generation_engine = generation_bin.join("fcitx5-engine.exe");
-    let generation_ui = generation_bin.join("fcitx5-ui.exe");
-    if generation_engine.exists() && generation_ui.exists() {
-        (generation_engine, generation_ui)
+    let runtime = root.join("runtime").join(generation).join("bin");
+    let engine = runtime.join("fcitx5-engine.exe");
+    let ui = runtime.join("fcitx5-ui.exe");
+    if engine.exists() && ui.exists() {
+        (engine, ui)
     } else {
         (
-            executable_directory.join("fcitx5-engine.exe"),
-            executable_directory.join("fcitx5-ui.exe"),
+            directory.join("fcitx5-engine.exe"),
+            directory.join("fcitx5-ui.exe"),
         )
     }
 }
 
-fn wide_nul(path: &Path) -> Vec<u16> {
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    wide.push(0);
-    wide
-}
-
-fn replace_file(source: &Path, destination: &Path) -> bool {
-    let source = wide_nul(source);
-    let destination = wide_nul(destination);
-    // SAFETY: Both path buffers are NUL-terminated and live for the duration of
-    // the call. `MOVEFILE_REPLACE_EXISTING` preserves the old C++ ledger
-    // publication behavior.
-    unsafe {
-        MoveFileExW(
-            PCWSTR(source.as_ptr()),
-            PCWSTR(destination.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    }
-    .is_ok()
-}
-
-fn temporary_path(destination: &Path) -> PathBuf {
-    let mut value = destination.as_os_str().to_os_string();
+fn temporary_path(path: &Path) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
     value.push(format!(
         ".tmp.{}.{}",
         std::process::id(),
@@ -521,323 +441,67 @@ fn load_snapshot_from_path(path: &Path) -> Result<Fcitx5LauncherSnapshot, u32> {
         Err(_) => return Err(3),
     };
     let mut bytes = Vec::with_capacity(256);
-    let mut limited = file.take(256);
-    if limited.read_to_end(&mut bytes).is_err() {
+    if file.take(256).read_to_end(&mut bytes).is_err() {
         return Err(3);
     }
-    let Ok(text) = std::str::from_utf8(&bytes) else {
-        return Err(2);
-    };
-    parse_snapshot(text).ok_or(2)
+    std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(parse_snapshot)
+        .ok_or(2)
 }
 
 fn save_snapshot_to_path(path: &Path, snapshot: Fcitx5LauncherSnapshot) -> bool {
-    if path.as_os_str().is_empty() {
-        return false;
-    }
     let Some(text) = serialize_snapshot(snapshot) else {
         return false;
     };
     let temporary = temporary_path(path);
-    let result = (|| -> std::io::Result<()> {
+    let published = (|| -> std::io::Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)?;
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() || !replace_file(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return false;
+        fs::rename(&temporary, path)
+    })()
+    .is_ok();
+    if !published {
+        let _ = fs::remove_file(temporary);
     }
-    true
+    published
 }
 
 fn default_state_store_path() -> Option<PathBuf> {
-    let local_app_data = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
-    let directory = local_app_data.join(release_data_directory());
+    let directory = default_fcitx5_data_root_for_current_process()?;
     fs::create_dir_all(&directory).ok()?;
     Some(directory.join(STATE_FILE_NAME))
 }
 
-fn write_utf16_path(value: &Path, out: *mut u16, capacity: usize) -> usize {
-    let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
-    if !out.is_null() && capacity != 0 {
-        let count = wide.len().min(capacity);
-        // SAFETY: The caller supplied writable storage for `capacity` u16
-        // values. We copy at most that many initialized elements.
-        unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), out, count) };
-    }
-    wide.len()
-}
-
-fn write_utf16_path_checked(value: &Path, out: *mut u16, capacity: usize) -> Option<usize> {
-    let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
-    if !out.is_null() {
-        if capacity < wide.len() {
-            return None;
-        }
-        if !wide.is_empty() {
-            // SAFETY: The caller supplied writable storage for at least
-            // `wide.len()` u16 values.
-            unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), out, wide.len()) };
-        }
-    }
-    Some(wide.len())
-}
-
-fn write_utf16_string(value: &str, out: *mut u16, capacity: usize) -> usize {
-    let wide: Vec<u16> = value.encode_utf16().collect();
-    write_utf16_units(&wide, out, capacity)
-}
-
-fn write_utf16_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
-    if !out.is_null() && capacity != 0 {
-        let count = value.len().min(capacity);
-        if count != 0 {
-            // SAFETY: The caller supplied writable storage for `capacity` u16
-            // values. We copy at most that many initialized elements.
-            unsafe { std::ptr::copy_nonoverlapping(value.as_ptr(), out, count) };
-        }
-    }
-    value.len()
-}
-
-fn primary_lang_id(language: u16) -> u16 {
-    language & 0x03ff
-}
-
-fn user_default_ui_language_prefers_chinese() -> bool {
-    primary_lang_id(unsafe { GetUserDefaultUILanguage() }) == LANG_CHINESE
-}
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetUserDefaultUILanguage() -> u16;
-}
-
-fn utf16_string_from_raw(text: *const u16, len: usize) -> Option<String> {
-    let text = wide_slice(text, len)?;
-    String::from_utf16(text).ok()
-}
-
-fn utf8_candidate_from_raw(text: *const u8, len: usize) -> Option<String> {
-    if text.is_null() {
-        return None;
-    }
-    // SAFETY: The caller passes a valid byte buffer with exactly `len` elements
-    // for the duration of this call. We copy into an owned `String`.
-    let slice = unsafe { std::slice::from_raw_parts(text, len) };
-    std::str::from_utf8(slice)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn tray_status_text(
-    launcher_state_value: u32,
-    engine_state_value: u32,
-    chinese: bool,
-) -> &'static str {
-    let launcher_state = launcher_state(launcher_state_value).unwrap_or(LauncherState::UserStopped);
-    let engine_state = match engine_state_value {
-        0 => EngineState::Stopped,
-        1 => EngineState::Starting,
-        2 => EngineState::Ready,
-        _ => EngineState::Stopped,
-    };
-    if launcher_state == LauncherState::SafeMode {
-        return if chinese { "安全模式" } else { "Safe mode" };
-    }
-    if launcher_state == LauncherState::UserStopped {
-        return if chinese { "已暂停" } else { "Paused" };
-    }
-    if launcher_state == LauncherState::CrashBackoff {
-        return if chinese {
-            "故障恢复中"
-        } else {
-            "Recovering"
-        };
-    }
-    if launcher_state == LauncherState::Updating {
-        return if chinese { "正在更新" } else { "Updating" };
-    }
-    if launcher_state == LauncherState::Uninstalling {
-        return if chinese {
-            "正在卸载"
-        } else {
-            "Uninstalling"
-        };
-    }
-    if engine_state == EngineState::Ready {
-        return if chinese { "运行中" } else { "Running" };
-    }
-    if engine_state == EngineState::Starting {
-        return if chinese { "正在启动" } else { "Starting" };
-    }
-    if chinese {
-        "服务未运行"
-    } else {
-        "Service stopped"
-    }
-}
-
-fn input_method_display_from_raw(
-    native_name: *const u8,
-    native_name_len: usize,
-    name: *const u8,
-    name_len: usize,
-    id: *const u8,
-    id_len: usize,
-) -> String {
-    [
-        utf8_candidate_from_raw(native_name, native_name_len),
-        utf8_candidate_from_raw(name, name_len),
-        utf8_candidate_from_raw(id, id_len),
-    ]
-    .into_iter()
-    .flatten()
-    .next()
-    .unwrap_or_default()
-}
-
-fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
-    let slice = bytes.get(offset..offset + 2)?;
-    Some(u16::from_le_bytes([slice[0], slice[1]]))
-}
-
-fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
-    let slice = bytes.get(offset..offset + 4)?;
-    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
-}
-
-fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
-    let slice = bytes.get(offset..offset + 8)?;
-    Some(u64::from_le_bytes([
-        slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-    ]))
-}
-
-fn is_protocol_request(raw_type: u16) -> bool {
-    matches!(raw_type, 1 | 3 | 5 | 7 | 9 | 10)
-}
-
-fn is_protocol_response(raw_type: u16) -> bool {
-    matches!(raw_type, 2 | 4 | 6 | 8 | 11)
-}
-
-fn protocol_maximum_frame_size(raw_type: u16) -> Option<u32> {
-    match raw_type {
-        1..=11 => Some(if matches!(raw_type, 5 | 6) {
-            PROTOCOL_MAX_CONTROL_FRAME_SIZE
-        } else {
-            PROTOCOL_MAX_HOT_FRAME_SIZE
-        }),
-        _ => None,
-    }
-}
-
-fn launcher_frame_body_size(header: &[u8]) -> Option<u32> {
-    if header.len() != PROTOCOL_HEADER_SIZE {
-        return None;
-    }
-    let magic = read_u32_le(header, 0)?;
-    let version = read_u16_le(header, 4)?;
-    let raw_type = read_u16_le(header, 6)?;
-    let body_size = read_u32_le(header, 8)?;
-    let request_id = read_u64_le(header, 12)?;
-    let response_to = read_u64_le(header, 20)?;
-
-    if magic != PROTOCOL_MAGIC || version != PROTOCOL_VERSION || request_id == 0 {
-        return None;
-    }
-    if is_protocol_request(raw_type) {
-        if response_to != 0 {
-            return None;
-        }
-    } else if is_protocol_response(raw_type) {
-        if response_to == 0 {
-            return None;
-        }
-    } else {
-        return None;
-    }
-
-    let maximum_frame_size = protocol_maximum_frame_size(raw_type)?;
-    let maximum_body_size = maximum_frame_size.checked_sub(PROTOCOL_HEADER_SIZE as u32)?;
-    (body_size <= maximum_body_size).then_some(body_size)
-}
-
-fn append_literal(output: &mut Vec<u16>, text: &str) {
-    output.extend(text.encode_utf16());
-}
-
-fn append_os(output: &mut Vec<u16>, value: &OsStr) {
+fn append_quoted(output: &mut Vec<u16>, value: &OsStr) {
+    output.push(u16::from(b'"'));
     output.extend(value.encode_wide());
+    output.push(u16::from(b'"'));
 }
 
-fn append_quoted_os(output: &mut Vec<u16>, value: &OsStr) {
-    output.push(b'"' as u16);
-    append_os(output, value);
-    output.push(b'"' as u16);
-}
-
-fn launcher_engine_command(
-    engine_path: &OsStr,
-    ready_event: &OsStr,
-    stop_event: &OsStr,
+fn engine_command(
+    engine: &OsStr,
+    ready: &OsStr,
+    stop: &OsStr,
     generation: &OsStr,
     safe_mode: bool,
 ) -> Vec<u16> {
     let mut command = Vec::new();
-    append_quoted_os(&mut command, engine_path);
-    append_literal(&mut command, " --ready-event ");
-    append_quoted_os(&mut command, ready_event);
-    append_literal(&mut command, " --stop-event ");
-    append_quoted_os(&mut command, stop_event);
-    append_literal(&mut command, " --generation ");
-    append_quoted_os(&mut command, generation);
+    append_quoted(&mut command, engine);
+    command.extend(" --ready-event ".encode_utf16());
+    append_quoted(&mut command, ready);
+    command.extend(" --stop-event ".encode_utf16());
+    append_quoted(&mut command, stop);
+    command.extend(" --generation ".encode_utf16());
+    append_quoted(&mut command, generation);
     if safe_mode {
-        append_literal(&mut command, " --safe-mode");
+        command.extend(" --safe-mode".encode_utf16());
     }
     command
-}
-
-fn launcher_ui_command(
-    ui_path: &OsStr,
-    parent_pid: u32,
-    generation: &OsStr,
-    safe_mode: bool,
-) -> Vec<u16> {
-    let mut command = Vec::new();
-    append_quoted_os(&mut command, ui_path);
-    append_literal(&mut command, " --parent-pid ");
-    append_literal(&mut command, &parent_pid.to_string());
-    append_literal(&mut command, " --generation ");
-    append_quoted_os(&mut command, generation);
-    if safe_mode {
-        append_literal(&mut command, " --safe-mode");
-    }
-    command
-}
-
-fn launcher_config_command(config_path: &OsStr, arguments: &OsStr) -> Vec<u16> {
-    let mut command = Vec::new();
-    append_quoted_os(&mut command, config_path);
-    if !arguments.is_empty() {
-        append_literal(&mut command, " ");
-        append_os(&mut command, arguments);
-    }
-    command
-}
-
-fn start_suppressed(state: LauncherState) -> bool {
-    matches!(
-        state,
-        LauncherState::UserStopped | LauncherState::Updating | LauncherState::Uninstalling
-    )
 }
 
 fn reset_crash_accounting(snapshot: &mut Fcitx5LauncherSnapshot) {
@@ -849,12 +513,9 @@ fn normalize_snapshot(
     mut snapshot: Fcitx5LauncherSnapshot,
     now: u64,
 ) -> Option<Fcitx5LauncherSnapshot> {
-    let state = launcher_state(snapshot.state)?;
-    match state {
+    match launcher_state(snapshot.state)? {
         LauncherState::CrashBackoff => {
-            if snapshot.consecutive_startup_crashes == 0 {
-                snapshot.consecutive_startup_crashes = 1;
-            }
+            snapshot.consecutive_startup_crashes = snapshot.consecutive_startup_crashes.max(1);
             if snapshot.next_start_allowed_milliseconds == 0
                 || snapshot.next_start_allowed_milliseconds > now.saturating_add(MAXIMUM_BACKOFF_MS)
             {
@@ -862,9 +523,9 @@ fn normalize_snapshot(
             }
         }
         LauncherState::SafeMode => {
-            if snapshot.consecutive_startup_crashes < SAFE_MODE_CRASH_THRESHOLD {
-                snapshot.consecutive_startup_crashes = SAFE_MODE_CRASH_THRESHOLD;
-            }
+            snapshot.consecutive_startup_crashes = snapshot
+                .consecutive_startup_crashes
+                .max(SAFE_MODE_CRASH_THRESHOLD);
             snapshot.next_start_allowed_milliseconds = 0;
         }
         _ => reset_crash_accounting(&mut snapshot),
@@ -872,49 +533,24 @@ fn normalize_snapshot(
     Some(snapshot)
 }
 
-fn can_apply_state(state: LauncherState, command: Command) -> bool {
-    match command {
-        Command::UserStop | Command::BeginUpdate => {
-            state != LauncherState::Uninstalling && state != LauncherState::Updating
-        }
-        Command::Resume => state == LauncherState::UserStopped,
-        Command::EndUpdate => state == LauncherState::Updating,
-        Command::BeginUninstall => state != LauncherState::Uninstalling,
-        Command::ResetSafeMode => state == LauncherState::SafeMode,
+fn decision(
+    disposition: StartDisposition,
+    safe_mode: bool,
+    retry_after_milliseconds: u64,
+) -> Fcitx5LauncherStartDecision {
+    Fcitx5LauncherStartDecision {
+        disposition: disposition as u32,
+        safe_mode,
+        retry_after_milliseconds,
     }
-}
-
-fn state_after_command(command: Command) -> LauncherState {
-    match command {
-        Command::UserStop => LauncherState::UserStopped,
-        Command::BeginUpdate => LauncherState::Updating,
-        Command::BeginUninstall => LauncherState::Uninstalling,
-        Command::Resume | Command::EndUpdate | Command::ResetSafeMode => LauncherState::Normal,
-    }
-}
-
-fn apply_command(machine: &mut Fcitx5LauncherMachine, command: Command) -> bool {
-    let Some(state) = launcher_state(machine.snapshot.state) else {
-        return false;
-    };
-    if !can_apply_state(state, command) {
-        return false;
-    }
-    machine.snapshot.state = state_after_command(command) as u32;
-    match command {
-        Command::UserStop | Command::BeginUpdate | Command::BeginUninstall => {
-            machine.engine_state = EngineState::Stopped as u32;
-        }
-        Command::Resume | Command::EndUpdate | Command::ResetSafeMode => {
-            reset_crash_accounting(&mut machine.snapshot);
-        }
-    }
-    true
 }
 
 fn request_start(machine: &mut Fcitx5LauncherMachine, now: u64) -> Fcitx5LauncherStartDecision {
     let state = launcher_state(machine.snapshot.state).unwrap_or(LauncherState::UserStopped);
-    if start_suppressed(state) {
+    if matches!(
+        state,
+        LauncherState::UserStopped | LauncherState::Updating | LauncherState::Uninstalling
+    ) {
         return decision(StartDisposition::Suppressed, false, 0);
     }
     if machine.engine_state != EngineState::Stopped as u32 {
@@ -944,13 +580,52 @@ fn request_start(machine: &mut Fcitx5LauncherMachine, now: u64) -> Fcitx5Launche
     )
 }
 
-fn engine_exited(machine: &mut Fcitx5LauncherMachine, runtime_ms: u64, now: u64) {
+fn can_apply(state: LauncherState, command: Command) -> bool {
+    match command {
+        Command::UserStop | Command::BeginUpdate => {
+            state != LauncherState::Updating && state != LauncherState::Uninstalling
+        }
+        Command::Resume => state == LauncherState::UserStopped,
+        Command::EndUpdate => state == LauncherState::Updating,
+        Command::BeginUninstall => state != LauncherState::Uninstalling,
+        Command::ResetSafeMode => state == LauncherState::SafeMode,
+    }
+}
+
+fn apply_command(machine: &mut Fcitx5LauncherMachine, command: Command) -> bool {
+    let Some(state) = launcher_state(machine.snapshot.state) else {
+        return false;
+    };
+    if !can_apply(state, command) {
+        return false;
+    }
+    machine.snapshot.state = match command {
+        Command::UserStop => LauncherState::UserStopped,
+        Command::BeginUpdate => LauncherState::Updating,
+        Command::BeginUninstall => LauncherState::Uninstalling,
+        Command::Resume | Command::EndUpdate | Command::ResetSafeMode => LauncherState::Normal,
+    } as u32;
+    if matches!(
+        command,
+        Command::UserStop | Command::BeginUpdate | Command::BeginUninstall
+    ) {
+        machine.engine_state = EngineState::Stopped as u32;
+    } else {
+        reset_crash_accounting(&mut machine.snapshot);
+    }
+    true
+}
+
+fn engine_exited(machine: &mut Fcitx5LauncherMachine, runtime: u64, now: u64) {
     machine.engine_state = EngineState::Stopped as u32;
     let state = launcher_state(machine.snapshot.state).unwrap_or(LauncherState::UserStopped);
-    if start_suppressed(state) {
+    if matches!(
+        state,
+        LauncherState::UserStopped | LauncherState::Updating | LauncherState::Uninstalling
+    ) {
         return;
     }
-    if runtime_ms >= STABLE_RUNTIME_MS || runtime_ms >= STARTUP_CRASH_WINDOW_MS {
+    if runtime >= STARTUP_CRASH_WINDOW_MS || runtime >= STABLE_RUNTIME_MS {
         machine.snapshot.state = LauncherState::Normal as u32;
         reset_crash_accounting(&mut machine.snapshot);
         return;
@@ -964,43 +639,28 @@ fn engine_exited(machine: &mut Fcitx5LauncherMachine, runtime_ms: u64, now: u64)
         machine.snapshot.next_start_allowed_milliseconds = 0;
         return;
     }
-    let shift = machine
-        .snapshot
-        .consecutive_startup_crashes
-        .saturating_sub(1)
-        .min(16);
     let delay = INITIAL_BACKOFF_MS
-        .saturating_mul(1_u64 << shift)
+        .saturating_mul(
+            1_u64
+                << machine
+                    .snapshot
+                    .consecutive_startup_crashes
+                    .saturating_sub(1)
+                    .min(16),
+        )
         .min(MAXIMUM_BACKOFF_MS);
     machine.snapshot.state = LauncherState::CrashBackoff as u32;
     machine.snapshot.next_start_allowed_milliseconds = now.saturating_add(delay);
-}
-
-fn decision(
-    disposition: StartDisposition,
-    safe_mode: bool,
-    retry_after_milliseconds: u64,
-) -> Fcitx5LauncherStartDecision {
-    Fcitx5LauncherStartDecision {
-        disposition: disposition as u32,
-        safe_mode: u8::from(safe_mode),
-        reserved: [0; 7],
-        retry_after_milliseconds,
-    }
 }
 
 pub fn parse_launcher_arguments<I>(arguments: I) -> Result<LauncherInvocation, LauncherError>
 where
     I: IntoIterator<Item = OsString>,
 {
-    let arguments: Vec<OsString> = arguments.into_iter().collect();
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
     if arguments.len() == 1 && arguments[0] == OsStr::new("--version") {
         return Ok(LauncherInvocation::Version);
     }
-    if arguments.len() == 1 && arguments[0] == OsStr::new("--tray-self-test") {
-        return Ok(LauncherInvocation::TraySelfTest);
-    }
-
     let mut options = LauncherOptions {
         installed_defaults: arguments.is_empty(),
         ..LauncherOptions::default()
@@ -1008,17 +668,16 @@ where
     let mut index = 0;
     while index < arguments.len() {
         let argument = arguments[index].as_os_str();
+        let option = |name| -> Result<&OsString, LauncherError> {
+            arguments
+                .get(index + 1)
+                .ok_or(LauncherError::MissingOptionValue(name))
+        };
         if argument == OsStr::new("--engine") {
-            let Some(value) = arguments.get(index + 1) else {
-                return Err(LauncherError::MissingOptionValue("--engine"));
-            };
-            options.engine_path = Some(PathBuf::from(value));
+            options.engine_path = Some(PathBuf::from(option("--engine")?));
             index += 2;
         } else if argument == OsStr::new("--ui") {
-            let Some(value) = arguments.get(index + 1) else {
-                return Err(LauncherError::MissingOptionValue("--ui"));
-            };
-            options.ui_path = Some(PathBuf::from(value));
+            options.ui_path = Some(PathBuf::from(option("--ui")?));
             index += 2;
         } else if argument == OsStr::new("--no-warmup") {
             options.warmup = false;
@@ -1027,40 +686,25 @@ where
             options.installed_defaults = true;
             index += 1;
         } else if argument == OsStr::new("--engine-ready-event") {
-            let Some(value) = arguments.get(index + 1) else {
-                return Err(LauncherError::MissingOptionValue("--engine-ready-event"));
-            };
-            options.engine_ready_event = Some(value.clone());
+            options.engine_ready_event = Some(option("--engine-ready-event")?.clone());
             index += 2;
         } else if argument == OsStr::new("--ready-event") {
-            let Some(value) = arguments.get(index + 1) else {
-                return Err(LauncherError::MissingOptionValue("--ready-event"));
-            };
-            options.ready_event = Some(value.clone());
+            options.ready_event = Some(option("--ready-event")?.clone());
             index += 2;
         } else if argument == OsStr::new("--stop-event") {
-            let Some(value) = arguments.get(index + 1) else {
-                return Err(LauncherError::MissingOptionValue("--stop-event"));
-            };
-            options.stop_event = Some(value.clone());
+            options.stop_event = Some(option("--stop-event")?.clone());
             index += 2;
         } else if argument == OsStr::new("--state-file") {
-            let Some(value) = arguments.get(index + 1) else {
-                return Err(LauncherError::MissingOptionValue("--state-file"));
-            };
-            options.state_file = Some(PathBuf::from(value));
+            options.state_file = Some(PathBuf::from(option("--state-file")?));
             index += 2;
         } else if argument == OsStr::new("--generation") {
-            let Some(value) = arguments.get(index + 1) else {
-                return Err(LauncherError::MissingOptionValue("--generation"));
-            };
-            options.generation = Some(value.clone());
+            options.generation = Some(option("--generation")?.clone());
             index += 2;
         } else {
             return Err(LauncherError::InvalidArguments);
         }
     }
-    Ok(LauncherInvocation::Supervise(options))
+    Ok(LauncherInvocation::Supervise(Box::new(options)))
 }
 
 pub fn load_launcher_snapshot(path: &Path) -> Result<Fcitx5LauncherSnapshot, LauncherError> {
@@ -1068,7 +712,7 @@ pub fn load_launcher_snapshot(path: &Path) -> Result<Fcitx5LauncherSnapshot, Lau
         Ok(snapshot) => Ok(snapshot),
         Err(0) => Err(LauncherError::StateMissing(path.to_path_buf())),
         Err(2) => Err(LauncherError::StateInvalid(path.to_path_buf())),
-        Err(_) => Err(LauncherError::StateStore(path.to_path_buf())),
+        _ => Err(LauncherError::StateStore(path.to_path_buf())),
     }
 }
 
@@ -1076,65 +720,62 @@ pub fn save_launcher_snapshot(
     path: &Path,
     snapshot: Fcitx5LauncherSnapshot,
 ) -> Result<(), LauncherError> {
-    if save_snapshot_to_path(path, snapshot) {
-        Ok(())
-    } else {
-        Err(LauncherError::StateStore(path.to_path_buf()))
-    }
+    save_snapshot_to_path(path, snapshot)
+        .then_some(())
+        .ok_or_else(|| LauncherError::StateStore(path.to_path_buf()))
+}
+
+fn generation(options: &LauncherOptions) -> OsString {
+    options
+        .generation
+        .clone()
+        .unwrap_or_else(|| OsString::from(current_runtime_generation_for_current_process()))
 }
 
 pub fn resolve_launcher_process_paths(
     options: &LauncherOptions,
-    executable_directory: &Path,
+    directory: &Path,
 ) -> Result<(PathBuf, Option<PathBuf>), LauncherError> {
-    let generation = launcher_generation(options);
-    let (engine_path, ui_path) = match (&options.engine_path, options.installed_defaults) {
-        (Some(engine_path), _) => (engine_path.clone(), options.ui_path.clone()),
+    let (engine, ui) = match (&options.engine_path, options.installed_defaults) {
+        (Some(engine), _) => (engine.clone(), options.ui_path.clone()),
         (None, true) => {
-            let (engine_path, ui_path) =
-                resolve_default_process_paths(executable_directory, &generation);
-            (engine_path, Some(ui_path))
+            let (engine, ui) = resolve_default_process_paths(directory, &generation(options));
+            (engine, Some(ui))
         }
         (None, false) => return Err(LauncherError::MissingEnginePath),
     };
-    validate_launcher_path("--engine", &engine_path)?;
-    if let Some(ui_path) = &ui_path {
-        validate_launcher_path("--ui", ui_path)?;
+    for (option, path) in [("--engine", &engine)]
+        .into_iter()
+        .chain(ui.iter().map(|path| ("--ui", path)))
+    {
+        if !is_absolute_windows_path(path) {
+            return Err(LauncherError::InvalidPath(option));
+        }
+        if !path.exists() {
+            return Err(LauncherError::MissingPath(path.to_path_buf()));
+        }
     }
-    Ok((engine_path, ui_path))
-}
-
-fn launcher_generation(options: &LauncherOptions) -> OsString {
-    options
-        .generation
-        .clone()
-        .or_else(|| std::env::var_os("FCITX5_RELEASE_GENERATION"))
-        .unwrap_or_default()
-}
-
-fn validate_launcher_path(option: &'static str, path: &Path) -> Result<(), LauncherError> {
-    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    if !absolute_windows_path_wide(&wide) {
-        return Err(LauncherError::InvalidPath(option));
-    }
-    if !path.exists() {
-        return Err(LauncherError::MissingPath(path.to_path_buf()));
-    }
-    Ok(())
+    Ok((engine, ui))
 }
 
 pub fn prepare_supervisor_start(
     options: &LauncherOptions,
-    executable_directory: &Path,
-    now_milliseconds: u64,
+    directory: &Path,
+    now: u64,
 ) -> Result<LauncherStartup, LauncherError> {
-    let (engine_path, ui_path) = resolve_launcher_process_paths(options, executable_directory)?;
+    let (engine_path, ui_path) = resolve_launcher_process_paths(options, directory)?;
     let state_path = options
         .state_file
         .clone()
         .or_else(default_state_store_path)
         .ok_or_else(|| LauncherError::StateStore(PathBuf::new()))?;
-    validate_launcher_path("--state-file", &state_path.parent().unwrap_or(&state_path))?;
+    let parent = state_path.parent().unwrap_or(&state_path);
+    if !is_absolute_windows_path(parent) {
+        return Err(LauncherError::InvalidPath("--state-file"));
+    }
+    if !parent.exists() {
+        return Err(LauncherError::MissingPath(parent.to_path_buf()));
+    }
     let snapshot = match load_snapshot_from_path(&state_path) {
         Ok(snapshot) => snapshot,
         Err(0) => {
@@ -1151,47 +792,44 @@ pub fn prepare_supervisor_start(
             consecutive_startup_crashes: 0,
             next_start_allowed_milliseconds: 0,
         },
-        Err(_) => return Err(LauncherError::StateStore(state_path)),
+        _ => return Err(LauncherError::StateStore(state_path)),
     };
-    let snapshot = normalize_snapshot(snapshot, now_milliseconds)
+    let snapshot = normalize_snapshot(snapshot, now)
         .ok_or_else(|| LauncherError::StateInvalid(state_path.clone()))?;
     let mut machine = Fcitx5LauncherMachine {
         snapshot,
         engine_state: EngineState::Stopped as u32,
     };
-    let start_decision = options
-        .warmup
-        .then(|| request_start(&mut machine, now_milliseconds));
-    let generation = launcher_generation(options);
+    let start = options.warmup.then(|| request_start(&mut machine, now));
     let engine_command_line = match (
-        start_decision,
+        start,
         options.engine_ready_event.as_deref(),
         options.stop_event.as_deref(),
     ) {
-        (Some(decision), Some(ready_event), Some(stop_event))
-            if decision.disposition == StartDisposition::Start as u32 =>
+        (Some(start), Some(ready), Some(stop))
+            if start.disposition == StartDisposition::Start as u32 =>
         {
-            Some(launcher_engine_command(
+            Some(engine_command(
                 engine_path.as_os_str(),
-                ready_event,
-                stop_event,
-                &generation,
-                decision.safe_mode != 0,
+                ready,
+                stop,
+                &generation(options),
+                start.safe_mode,
             ))
         }
         _ => None,
     };
-    let decision =
-        start_decision.unwrap_or_else(|| decision(StartDisposition::AlreadyActive, false, 0));
+    let start = start.unwrap_or_else(|| decision(StartDisposition::AlreadyActive, false, 0));
     Ok(LauncherStartup {
         engine_path,
         ui_path,
         state_path,
+        snapshot,
         status: LauncherStatus {
             launcher_state: machine.snapshot.state,
             engine_state: machine.engine_state,
-            start_disposition: decision.disposition,
-            retry_after_milliseconds: decision.retry_after_milliseconds,
+            start_disposition: start.disposition,
+            retry_after_milliseconds: start.retry_after_milliseconds,
         },
         engine_command_line,
     })
@@ -1208,840 +846,566 @@ pub fn format_launcher_status(status: &LauncherStatus) -> String {
     )
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `out_machine` must be either null or point to writable storage for one
-/// `Fcitx5LauncherMachine`. The pointer is not retained after this call.
-pub unsafe extern "C" fn fcitx5_launcher_state_init(
-    now: u64,
-    snapshot: Fcitx5LauncherSnapshot,
-    out_machine: *mut Fcitx5LauncherMachine,
-) -> i32 {
-    let Some(snapshot) = normalize_snapshot(snapshot, now) else {
-        return 1;
-    };
-    if out_machine.is_null() {
-        return 1;
-    }
-    unsafe {
-        *out_machine = Fcitx5LauncherMachine {
-            snapshot,
-            engine_state: EngineState::Stopped as u32,
-        };
-    }
-    0
+struct EngineProcess {
+    child: Child,
+    stop: NamedEvent,
+    started: u64,
+}
+struct UiProcess {
+    child: Child,
+    safe_mode: bool,
 }
 
-#[no_mangle]
-pub extern "C" fn fcitx5_launcher_state_can_apply(state: u32, command: u32) -> u8 {
-    match (launcher_state(state), self::command(command)) {
-        (Some(state), Some(command)) => u8::from(can_apply_state(state, command)),
-        _ => 0,
-    }
+struct EngineStartContext<'a> {
+    identity: &'a CurrentUserRuntimeIdentity,
+    security: &'a CurrentUserSecurityAttributes,
+    generation: &'a str,
+    engine_path: &'a Path,
+    ready_name: &'a OsStr,
+    ready: &'a NamedEvent,
+    job: &'a JobObject,
+    sequence: &'a mut u64,
 }
 
-#[no_mangle]
-pub extern "C" fn fcitx5_launcher_state_after(state: u32, command: u32) -> u32 {
-    match (launcher_state(state), self::command(command)) {
-        (Some(_state), Some(command)) => state_after_command(command) as u32,
-        (Some(state), None) => state as u32,
-        _ => LauncherState::UserStopped as u32,
-    }
+fn background(path: &Path) -> ProcessCommand {
+    let mut command = ProcessCommand::new(path);
+    command
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `machine` must be either null or point to a valid writable
-/// `Fcitx5LauncherMachine` produced by this module. The pointer is not retained.
-pub unsafe extern "C" fn fcitx5_launcher_state_apply(
-    machine: *mut Fcitx5LauncherMachine,
-    command: u32,
-) -> u8 {
-    if machine.is_null() {
-        return 0;
-    }
-    let Some(command) = self::command(command) else {
-        return 0;
-    };
-    let machine = unsafe { &mut *machine };
-    u8::from(apply_command(machine, command))
+fn assign(job: &JobObject, child: &mut Child, label: &str) -> Result<(), LauncherError> {
+    job.assign_process(child.as_handle()).map_err(|error| {
+        let _ = child.kill();
+        let _ = child.wait();
+        LauncherError::Runtime(format!("{label} job assignment failed: {error}"))
+    })
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `machine` must point to a valid writable `Fcitx5LauncherMachine`, and
-/// `out_decision` must point to writable storage for one
-/// `Fcitx5LauncherStartDecision`. Neither pointer is retained.
-pub unsafe extern "C" fn fcitx5_launcher_state_request_start(
-    machine: *mut Fcitx5LauncherMachine,
-    now: u64,
-    out_decision: *mut Fcitx5LauncherStartDecision,
-) -> i32 {
-    if machine.is_null() || out_decision.is_null() {
-        return 1;
+fn spawn_engine(
+    launch: &EngineLaunch,
+    job: &JobObject,
+    stop: NamedEvent,
+) -> Result<EngineProcess, LauncherError> {
+    let mut command = background(&launch.engine_path);
+    command
+        .arg("--ready-event")
+        .arg(&launch.ready_event)
+        .arg("--stop-event")
+        .arg(&launch.stop_event)
+        .arg("--generation")
+        .arg(&launch.generation);
+    if launch.safe_mode {
+        command.arg("--safe-mode");
     }
-    let machine = unsafe { &mut *machine };
-    let decision = request_start(machine, now);
-    unsafe {
-        *out_decision = decision;
-    }
-    0
+    let mut child = command
+        .spawn()
+        .map_err(|error| LauncherError::Runtime(format!("engine launch failed: {error}")))?;
+    assign(job, &mut child, "engine")?;
+    Ok(EngineProcess {
+        child,
+        stop,
+        started: launcher_tick_milliseconds(),
+    })
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `machine` must be either null or point to a valid writable
-/// `Fcitx5LauncherMachine`. The pointer is not retained.
-pub unsafe extern "C" fn fcitx5_launcher_state_engine_ready(machine: *mut Fcitx5LauncherMachine) {
-    if machine.is_null() {
+fn spawn_ui(
+    path: &Path,
+    parent: u32,
+    generation: &str,
+    safe_mode: bool,
+    job: &JobObject,
+) -> Result<UiProcess, LauncherError> {
+    let mut command = background(path);
+    command
+        .arg("--parent-pid")
+        .arg(parent.to_string())
+        .arg("--generation")
+        .arg(generation);
+    if safe_mode {
+        command.arg("--safe-mode");
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| LauncherError::Runtime(format!("UI launch failed: {error}")))?;
+    assign(job, &mut child, "UI")?;
+    Ok(UiProcess { child, safe_mode })
+}
+
+fn stop_engine(engine: &mut Option<EngineProcess>) {
+    let Some(mut engine) = engine.take() else {
         return;
+    };
+    let _ = engine.stop.signal();
+    if !wait_for_handle(engine.child.as_handle(), STOP_TIMEOUT) {
+        let _ = engine.child.kill();
+        let _ = wait_for_handle(engine.child.as_handle(), KILL_TIMEOUT);
     }
-    let machine = unsafe { &mut *machine };
-    if machine.engine_state == EngineState::Starting as u32 {
-        machine.engine_state = EngineState::Ready as u32;
-    }
+    let _ = engine.child.wait();
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `machine` must be either null or point to a valid writable
-/// `Fcitx5LauncherMachine`. The pointer is not retained.
-pub unsafe extern "C" fn fcitx5_launcher_state_engine_exited(
-    machine: *mut Fcitx5LauncherMachine,
-    runtime_ms: u64,
-    now: u64,
-) {
-    if machine.is_null() {
+fn stop_ui(ui: &mut Option<UiProcess>) {
+    let Some(mut ui) = ui.take() else {
         return;
+    };
+    if !wait_for_handle(ui.child.as_handle(), Duration::ZERO) {
+        let _ = ui.child.kill();
+        let _ = wait_for_handle(ui.child.as_handle(), KILL_TIMEOUT);
     }
-    let machine = unsafe { &mut *machine };
-    engine_exited(machine, runtime_ms, now);
+    let _ = ui.child.wait();
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `machine` must be either null or point to a valid writable
-/// `Fcitx5LauncherMachine`. The pointer is not retained.
-pub unsafe extern "C" fn fcitx5_launcher_state_engine_stopped_intentionally(
-    machine: *mut Fcitx5LauncherMachine,
-) {
-    if machine.is_null() {
-        return;
+fn start_engine(
+    machine: &mut Fcitx5LauncherMachine,
+    context: EngineStartContext<'_>,
+) -> Result<(Fcitx5LauncherStartDecision, Option<EngineProcess>), LauncherError> {
+    let start = request_start(machine, launcher_tick_milliseconds());
+    if start.disposition != StartDisposition::Start as u32 {
+        return Ok((start, None));
     }
-    let machine = unsafe { &mut *machine };
-    machine.engine_state = EngineState::Stopped as u32;
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_launcher_state_is_persistent(state: u32) -> u8 {
-    u8::from(launcher_state(state).is_some())
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `path` must be either null with `len == 0`, or point to a valid UTF-16
-/// buffer with exactly `len` elements for the duration of this call.
-/// `out_snapshot` must point to writable storage when a loaded snapshot is
-/// requested. The pointer is not retained.
-pub unsafe extern "C" fn fcitx5_launcher_state_store_load_utf16(
-    path: *const u16,
-    len: usize,
-    out_snapshot: *mut Fcitx5LauncherSnapshot,
-) -> u32 {
-    if out_snapshot.is_null() {
-        return 3;
-    }
-    let Some(path) = path_from_wide(path, len) else {
-        return 3;
-    };
-    match load_snapshot_from_path(&path) {
-        Ok(snapshot) => {
-            unsafe {
-                *out_snapshot = snapshot;
-            }
-            1
-        }
-        Err(result) => result,
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `path` must be either null with `len == 0`, or point to a valid UTF-16
-/// buffer with exactly `len` elements for the duration of this call. The pointer
-/// is not retained.
-pub unsafe extern "C" fn fcitx5_launcher_state_store_save_utf16(
-    path: *const u16,
-    len: usize,
-    snapshot: Fcitx5LauncherSnapshot,
-) -> u8 {
-    let Some(path) = path_from_wide(path, len) else {
-        return 0;
-    };
-    u8::from(save_snapshot_to_path(&path, snapshot))
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `out` must be null or point to writable storage for `capacity` UTF-16 code
-/// units. The function returns the required code-unit count, excluding a NUL
-/// terminator, and does not retain the pointer.
-pub unsafe extern "C" fn fcitx5_launcher_default_state_store_path_utf16(
-    out: *mut u16,
-    capacity: usize,
-) -> usize {
-    let Some(path) = default_state_store_path() else {
-        return 0;
-    };
-    write_utf16_path(&path, out, capacity)
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `path` must be null with `len == 0`, or point to a valid UTF-16 buffer with
-/// exactly `len` elements for the duration of this call.
-pub unsafe extern "C" fn fcitx5_launcher_absolute_windows_path_utf16(
-    path: *const u16,
-    len: usize,
-) -> u8 {
-    let Some(path) = wide_slice(path, len) else {
-        return 0;
-    };
-    u8::from(absolute_windows_path_wide(path))
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// Input pointers must be null only when their corresponding length is zero, or
-/// point to valid UTF-16 buffers with exactly the provided lengths. Output
-/// pointers may be null for size queries; otherwise they must point to writable
-/// storage with the advertised capacities. Required lengths exclude NUL
-/// terminators. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_launcher_resolve_default_process_paths_utf16(
-    executable_directory: *const u16,
-    executable_directory_len: usize,
-    generation: *const u16,
-    generation_len: usize,
-    engine_output: *mut u16,
-    engine_capacity: usize,
-    ui_output: *mut u16,
-    ui_capacity: usize,
-    required_engine_len: *mut usize,
-    required_ui_len: *mut usize,
-) -> u8 {
-    let Some(executable_directory) = path_from_wide(executable_directory, executable_directory_len)
-    else {
-        return 0;
-    };
-    let Some(generation) = os_string_from_wide(generation, generation_len) else {
-        return 0;
-    };
-    let (engine, ui) = resolve_default_process_paths(&executable_directory, &generation);
-    let engine_len = write_utf16_path_checked(&engine, engine_output, engine_capacity);
-    let ui_len = write_utf16_path_checked(&ui, ui_output, ui_capacity);
-    if let Some(engine_len) = engine_len {
-        if !required_engine_len.is_null() {
-            unsafe {
-                *required_engine_len = engine_len;
-            }
-        }
-    }
-    if let Some(ui_len) = ui_len {
-        if !required_ui_len.is_null() {
-            unsafe {
-                *required_ui_len = ui_len;
-            }
-        }
-    }
-    u8::from(engine_len.is_some() && ui_len.is_some())
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_launcher_tray_status_text_utf16(
-    launcher_state: u32,
-    engine_state: u32,
-    chinese: u8,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    write_utf16_string(
-        tray_status_text(launcher_state, engine_state, chinese != 0),
-        output,
-        capacity,
-    )
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_launcher_user_default_ui_language_prefers_chinese() -> u8 {
-    user_default_ui_language_prefers_chinese() as u8
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// Non-null input pointers must point to valid byte buffers with exactly the
-/// provided lengths. `output` may be null for size queries or writable UTF-16
-/// storage for `capacity` code units. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_launcher_tray_input_method_display_utf16(
-    native_name: *const u8,
-    native_name_len: usize,
-    name: *const u8,
-    name_len: usize,
-    id: *const u8,
-    id_len: usize,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    let display =
-        input_method_display_from_raw(native_name, native_name_len, name, name_len, id, id_len);
-    write_utf16_string(&display, output, capacity)
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `product_name` must be null only when `product_name_len == 0`, or point to a
-/// valid UTF-16 buffer with exactly that length. Byte-string pointers follow the
-/// same lifetime rule as `fcitx5_launcher_tray_input_method_display_utf16`.
-/// `output` may be null for size queries or writable UTF-16 storage for
-/// `capacity` code units. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_launcher_tray_tooltip_utf16(
-    product_name: *const u16,
-    product_name_len: usize,
-    launcher_state: u32,
-    engine_state: u32,
-    chinese: u8,
-    native_name: *const u8,
-    native_name_len: usize,
-    name: *const u8,
-    name_len: usize,
-    id: *const u8,
-    id_len: usize,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    let Some(product_name) = utf16_string_from_raw(product_name, product_name_len) else {
-        return 0;
-    };
-    let status = tray_status_text(launcher_state, engine_state, chinese != 0);
-    let display =
-        input_method_display_from_raw(native_name, native_name_len, name, name_len, id, id_len);
-    let tooltip = if display.is_empty() {
-        format!("{product_name} — {status}")
-    } else {
-        format!("{product_name} — {status} — {display}")
-    };
-    write_utf16_string(&tooltip, output, capacity)
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// Input pointers must be null only when their corresponding length is zero, or
-/// point to valid UTF-16 buffers with exactly the provided lengths. `output` may
-/// be null for size queries or writable UTF-16 storage for `capacity` code
-/// units. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_launcher_engine_command_utf16(
-    engine_path: *const u16,
-    engine_path_len: usize,
-    ready_event: *const u16,
-    ready_event_len: usize,
-    stop_event: *const u16,
-    stop_event_len: usize,
-    generation: *const u16,
-    generation_len: usize,
-    safe_mode: u8,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    let Some(engine_path) = os_string_from_wide(engine_path, engine_path_len) else {
-        return 0;
-    };
-    let Some(ready_event) = os_string_from_wide(ready_event, ready_event_len) else {
-        return 0;
-    };
-    let Some(stop_event) = os_string_from_wide(stop_event, stop_event_len) else {
-        return 0;
-    };
-    let Some(generation) = os_string_from_wide(generation, generation_len) else {
-        return 0;
-    };
-    let command = launcher_engine_command(
-        &engine_path,
-        &ready_event,
-        &stop_event,
-        &generation,
-        safe_mode != 0,
+    context
+        .ready
+        .reset()
+        .map_err(|error| LauncherError::Runtime(format!("engine-ready reset failed: {error}")))?;
+    *context.sequence = context.sequence.saturating_add(1).max(1);
+    let stop_name = context
+        .identity
+        .local_object_name(
+            context.generation,
+            &format!("engine-stop-{}", context.sequence),
+        )
+        .ok_or_else(|| LauncherError::Runtime("invalid engine-stop name".to_owned()))?;
+    let stop = NamedEvent::create(&stop_name, context.security)
+        .map_err(|error| LauncherError::Runtime(format!("engine-stop event failed: {error}")))?;
+    let launch = EngineLaunch::new(
+        context.engine_path.to_path_buf(),
+        context.ready_name.to_os_string(),
+        stop_name,
+        OsString::from(context.generation),
+        start.safe_mode,
     );
-    write_utf16_units(&command, output, capacity)
+    Ok((start, Some(spawn_engine(&launch, context.job, stop)?)))
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// Input pointers must be null only when their corresponding length is zero, or
-/// point to valid UTF-16 buffers with exactly the provided lengths. `output` may
-/// be null for size queries or writable UTF-16 storage for `capacity` code
-/// units. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_launcher_ui_command_utf16(
-    ui_path: *const u16,
-    ui_path_len: usize,
-    parent_pid: u32,
-    generation: *const u16,
-    generation_len: usize,
-    safe_mode: u8,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    let Some(ui_path) = os_string_from_wide(ui_path, ui_path_len) else {
-        return 0;
-    };
-    let Some(generation) = os_string_from_wide(generation, generation_len) else {
-        return 0;
-    };
-    let command = launcher_ui_command(&ui_path, parent_pid, &generation, safe_mode != 0);
-    write_utf16_units(&command, output, capacity)
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// Input pointers must be null only when their corresponding length is zero, or
-/// point to valid UTF-16 buffers with exactly the provided lengths. `output` may
-/// be null for size queries or writable UTF-16 storage for `capacity` code
-/// units. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_launcher_config_command_utf16(
-    config_path: *const u16,
-    config_path_len: usize,
-    arguments: *const u16,
-    arguments_len: usize,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    let Some(config_path) = os_string_from_wide(config_path, config_path_len) else {
-        return 0;
-    };
-    let Some(arguments) = os_string_from_wide(arguments, arguments_len) else {
-        return 0;
-    };
-    let command = launcher_config_command(&config_path, &arguments);
-    write_utf16_units(&command, output, capacity)
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `header` must point to exactly `header_len` readable bytes and
-/// `body_size_out` must point to writable `u32` storage. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_launcher_frame_body_size(
-    header: *const u8,
-    header_len: usize,
-    body_size_out: *mut u32,
-) -> u8 {
-    if header.is_null() || body_size_out.is_null() {
-        return 0;
+fn read_frame(server: &NamedPipeServer) -> Option<Vec<u8>> {
+    let mut header = [0_u8; protocol::HEADER_SIZE];
+    if !server.read_exact(&mut header, deadline_after(PIPE_TRANSFER_TIMEOUT_MS)) {
+        return None;
     }
-    // SAFETY: The caller supplies exactly `header_len` readable bytes. We never
-    // retain this pointer and validate the protocol length before decoding.
-    let header = unsafe { std::slice::from_raw_parts(header, header_len) };
-    let Some(body_size) = launcher_frame_body_size(header) else {
-        return 0;
-    };
-    // SAFETY: The caller supplied writable storage for one u32.
-    unsafe {
-        *body_size_out = body_size;
+    let (_, size, _) = decode_header(&header)?;
+    let mut frame = header.to_vec();
+    frame.resize(protocol::HEADER_SIZE.checked_add(size as usize)?, 0);
+    if size != 0
+        && !server.read_exact(
+            &mut frame[protocol::HEADER_SIZE..],
+            deadline_after(PIPE_TRANSFER_TIMEOUT_MS),
+        )
+    {
+        return None;
     }
-    1
+    Some(frame)
+}
+
+fn engine_status(
+    identity: &CurrentUserRuntimeIdentity,
+    generation: &str,
+    engine: &Path,
+) -> EngineStatusResponse {
+    let Some(endpoint) = identity.local_endpoint_name(generation, "engine") else {
+        return engine_status_failure("endpoint");
+    };
+    let Some(mut client) = VerifiedPipeClient::connect_exact(&endpoint, engine, STATUS_TIMEOUT)
+    else {
+        return engine_status_failure("connect");
+    };
+    let mut response = vec![0_u8; protocol::MAX_CONTROL_FRAME_SIZE];
+    let hello_id = next_launcher_request_id();
+    let hello = HelloRequest {
+        metadata: Metadata {
+            request_id: hello_id,
+            session_id: identity.session_id(),
+            ..Metadata::default()
+        },
+        client_architecture_bits: usize::BITS,
+        client_process_id: identity.process_id(),
+    };
+    let Some(hello_bytes) = encode_hello_request(&hello) else {
+        return engine_status_failure("encode-hello");
+    };
+    let Some(length) = client.transact(&hello_bytes, &mut response, STATUS_TIMEOUT) else {
+        return engine_status_failure("hello-transport");
+    };
+    let Some(hello) =
+        decode_frame(&response[..length]).and_then(|frame| decode_hello_response(&frame))
+    else {
+        return engine_status_failure("hello-decode");
+    };
+    if hello.status != Status::Ok
+        || hello.metadata.response_to != hello_id
+        || hello.metadata.session_id != identity.session_id()
+        || hello.metadata.engine_epoch == 0
+    {
+        return engine_status_failure("hello-contract");
+    }
+    let id = next_launcher_request_id();
+    let request = EngineStatusRequest {
+        metadata: Metadata {
+            request_id: id,
+            engine_epoch: hello.metadata.engine_epoch,
+            session_id: identity.session_id(),
+            ..Metadata::default()
+        },
+    };
+    let Some(bytes) = encode_engine_status_request(&request) else {
+        return engine_status_failure("encode-status");
+    };
+    let Some(length) = client.transact(&bytes, &mut response, STATUS_TIMEOUT) else {
+        return engine_status_failure("status-transport");
+    };
+    let Some(status) =
+        decode_frame(&response[..length]).and_then(|frame| decode_engine_status_response(&frame))
+    else {
+        return engine_status_failure("status-decode");
+    };
+    if status.status == Status::Ok
+        && status.metadata.response_to == id
+        && status.metadata.session_id == identity.session_id()
+        && status.metadata.engine_epoch == hello.metadata.engine_epoch
+    {
+        status
+    } else {
+        engine_status_failure("status-contract")
+    }
+}
+
+fn engine_status_failure(_code: &'static str) -> EngineStatusResponse {
+    EngineStatusResponse::default()
+}
+
+fn state_command(command: LauncherCommand) -> Option<Command> {
+    match command {
+        LauncherCommand::UserStop => Some(Command::UserStop),
+        LauncherCommand::Resume => Some(Command::Resume),
+        LauncherCommand::BeginUpdate => Some(Command::BeginUpdate),
+        LauncherCommand::EndUpdate => Some(Command::EndUpdate),
+        LauncherCommand::BeginUninstall => Some(Command::BeginUninstall),
+        LauncherCommand::ResetSafeMode => Some(Command::ResetSafeMode),
+        LauncherCommand::StartDemand | LauncherCommand::Status | LauncherCommand::Shutdown => None,
+    }
+}
+
+fn response(
+    request: &protocol::LauncherRequest,
+    identity: &CurrentUserRuntimeIdentity,
+    machine: &Fcitx5LauncherMachine,
+    decision: Fcitx5LauncherStartDecision,
+    epoch: u64,
+    status: Status,
+    engine: EngineStatusResponse,
+) -> Option<Vec<u8>> {
+    encode_launcher_response(&LauncherResponse {
+        metadata: Metadata {
+            request_id: next_launcher_request_id(),
+            response_to: request.metadata.request_id,
+            engine_epoch: epoch,
+            session_id: identity.session_id(),
+            ..Metadata::default()
+        },
+        status,
+        launcher_state: machine.snapshot.state,
+        engine_state: machine.engine_state,
+        start_disposition: decision.disposition,
+        safe_mode: decision.safe_mode,
+        retry_after_milliseconds: decision.retry_after_milliseconds,
+        current_input_method_id: engine.current_input_method_id,
+        current_input_method_name: engine.current_input_method_name,
+        current_input_method_native_name: engine.current_input_method_native_name,
+        current_input_method_short_label: engine.current_input_method_short_label,
+    })
+}
+
+pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
+    let identity = CurrentUserRuntimeIdentity::current().ok_or_else(|| {
+        LauncherError::Runtime("launcher requires an interactive user session".to_owned())
+    })?;
+    let security = identity.security_attributes().ok_or_else(|| {
+        LauncherError::Runtime("launcher security policy is unavailable".to_owned())
+    })?;
+    let generation = generation(&options)
+        .into_string()
+        .map_err(|_| LauncherError::Runtime("launcher generation must be Unicode".to_owned()))?;
+    let endpoint = identity
+        .local_endpoint_name(&generation, "launcher")
+        .ok_or_else(|| LauncherError::Runtime("invalid launcher pipe name".to_owned()))?;
+    let mutex = identity
+        .local_object_name(&generation, "launcher")
+        .ok_or_else(|| LauncherError::Runtime("invalid launcher mutex name".to_owned()))?;
+    let singleton = SingleInstance::acquire(&mutex, &security)
+        .map_err(|error| LauncherError::Runtime(format!("launcher singleton failed: {error}")))?;
+    if !singleton.is_primary() {
+        return named_pipe_is_available(&endpoint, Duration::from_millis(100))
+            .then_some(())
+            .ok_or_else(|| {
+                LauncherError::Runtime("existing launcher pipe is unavailable".to_owned())
+            });
+    }
+    let directory = identity.executable_path().parent().ok_or_else(|| {
+        LauncherError::Runtime("launcher executable has no parent directory".to_owned())
+    })?;
+    let startup = prepare_supervisor_start(&options, directory, launcher_tick_milliseconds())?;
+    let job = JobObject::new_kill_on_close().map_err(|error| {
+        LauncherError::Runtime(format!("launcher job creation failed: {error}"))
+    })?;
+    let ready_name = options
+        .engine_ready_event
+        .clone()
+        .or_else(|| identity.local_object_name(&generation, "engine-ready"))
+        .ok_or_else(|| LauncherError::Runtime("invalid engine-ready name".to_owned()))?;
+    let ready = NamedEvent::create(&ready_name, &security)
+        .map_err(|error| LauncherError::Runtime(format!("engine-ready event failed: {error}")))?;
+    let stop_name = options
+        .stop_event
+        .clone()
+        .or_else(|| identity.local_object_name(&generation, "launcher-stop"))
+        .ok_or_else(|| LauncherError::Runtime("invalid launcher-stop name".to_owned()))?;
+    let stop = NamedEvent::create(&stop_name, &security)
+        .map_err(|error| LauncherError::Runtime(format!("launcher-stop event failed: {error}")))?;
+    let launcher_ready = options
+        .ready_event
+        .as_deref()
+        .map(|name| NamedEvent::create(name, &security))
+        .transpose()
+        .map_err(|error| LauncherError::Runtime(format!("launcher-ready event failed: {error}")))?;
+    let mut machine = Fcitx5LauncherMachine {
+        snapshot: startup.snapshot,
+        engine_state: EngineState::Stopped as u32,
+    };
+    let mut engine: Option<EngineProcess> = None;
+    let mut ui = startup
+        .ui_path
+        .as_deref()
+        .map(|path| spawn_ui(path, identity.process_id(), &generation, false, &job))
+        .transpose()?;
+    let mut restart = options.warmup;
+    let mut epoch = 0_u64;
+    let mut sequence = 0_u64;
+    let mut shutdown = false;
+    let mut listener =
+        NamedPipeServer::create(&endpoint, &security, protocol::MAX_CONTROL_FRAME_SIZE).map_err(
+            |error| LauncherError::Runtime(format!("launcher pipe creation failed: {error}")),
+        )?;
+    while !shutdown && !stop.is_signaled() {
+        let now = launcher_tick_milliseconds();
+        if let Some(current) = engine.as_mut() {
+            let exited = current
+                .child
+                .try_wait()
+                .map_err(|error| LauncherError::Runtime(format!("engine status failed: {error}")))?
+                .is_some();
+            let timed_out = machine.engine_state == EngineState::Starting as u32
+                && now.saturating_sub(current.started) >= READY_TIMEOUT.as_millis() as u64;
+            if exited || timed_out {
+                let runtime = now.saturating_sub(current.started);
+                stop_engine(&mut engine);
+                engine_exited(&mut machine, runtime, now);
+                save_launcher_snapshot(&startup.state_path, machine.snapshot)?;
+                restart = true;
+            }
+        }
+        if engine.is_some()
+            && machine.engine_state == EngineState::Starting as u32
+            && ready.is_signaled()
+        {
+            machine.engine_state = EngineState::Ready as u32;
+        }
+        let safe_mode = machine.snapshot.state == LauncherState::SafeMode as u32;
+        if ui.as_ref().is_some_and(|ui| ui.safe_mode != safe_mode) {
+            stop_ui(&mut ui);
+            ui = startup
+                .ui_path
+                .as_deref()
+                .map(|path| spawn_ui(path, identity.process_id(), &generation, safe_mode, &job))
+                .transpose()?;
+        }
+        if restart && engine.is_none() {
+            match start_engine(
+                &mut machine,
+                EngineStartContext {
+                    identity: &identity,
+                    security: &security,
+                    generation: &generation,
+                    engine_path: &startup.engine_path,
+                    ready_name: &ready_name,
+                    ready: &ready,
+                    job: &job,
+                    sequence: &mut sequence,
+                },
+            ) {
+                Ok((decision, started)) => {
+                    if decision.disposition == StartDisposition::Start as u32 {
+                        epoch = epoch.saturating_add(1).max(1);
+                        engine = started;
+                    }
+                    restart = decision.disposition != StartDisposition::Suppressed as u32;
+                }
+                Err(_) => {
+                    engine_exited(&mut machine, 0, now);
+                    save_launcher_snapshot(&startup.state_path, machine.snapshot)?;
+                    restart = true;
+                }
+            }
+        }
+        if let Some(event) = &launcher_ready {
+            event.signal().map_err(|error| {
+                LauncherError::Runtime(format!("launcher-ready signal failed: {error}"))
+            })?;
+        }
+        if !listener.connect_until(deadline_after(PIPE_CONNECT_TIMEOUT_MS), &stop) {
+            continue;
+        }
+        let server = std::mem::replace(
+            &mut listener,
+            NamedPipeServer::create(&endpoint, &security, protocol::MAX_CONTROL_FRAME_SIZE)
+                .map_err(|error| {
+                    LauncherError::Runtime(format!("launcher pipe creation failed: {error}"))
+                })?,
+        );
+        if !server.verifies_client(&identity) {
+            continue;
+        }
+        let Some(frame_bytes) = read_frame(&server) else {
+            continue;
+        };
+        let Some(frame) = decode_frame(&frame_bytes) else {
+            continue;
+        };
+        let Some(request) = decode_launcher_request(&frame) else {
+            continue;
+        };
+        if request.metadata.session_id != identity.session_id() {
+            continue;
+        }
+        // The readiness event can become signaled while this pipe instance is
+        // waiting for a request. Refresh the observed state before serving a
+        // status command so callers never see stale `Starting` state.
+        if engine.is_some()
+            && machine.engine_state == EngineState::Starting as u32
+            && ready.is_signaled()
+        {
+            machine.engine_state = EngineState::Ready as u32;
+        }
+        let mut status = Status::Ok;
+        let mut decision = decision(StartDisposition::AlreadyActive, false, 0);
+        if let Some(command) = state_command(request.command) {
+            if !apply_command(&mut machine, command)
+                || save_launcher_snapshot(&startup.state_path, machine.snapshot).is_err()
+            {
+                status = Status::Unsupported;
+            } else if matches!(
+                request.command,
+                LauncherCommand::UserStop
+                    | LauncherCommand::BeginUpdate
+                    | LauncherCommand::BeginUninstall
+            ) {
+                stop_engine(&mut engine);
+                machine.engine_state = EngineState::Stopped as u32;
+                restart = false;
+            }
+        } else if request.command == LauncherCommand::StartDemand {
+            restart = true;
+            match start_engine(
+                &mut machine,
+                EngineStartContext {
+                    identity: &identity,
+                    security: &security,
+                    generation: &generation,
+                    engine_path: &startup.engine_path,
+                    ready_name: &ready_name,
+                    ready: &ready,
+                    job: &job,
+                    sequence: &mut sequence,
+                },
+            ) {
+                Ok((start, started)) => {
+                    decision = start;
+                    if start.disposition == StartDisposition::Start as u32 {
+                        epoch = epoch.saturating_add(1).max(1);
+                        engine = started;
+                    }
+                    restart = start.disposition != StartDisposition::Suppressed as u32;
+                }
+                Err(_) => {
+                    engine_exited(&mut machine, 0, launcher_tick_milliseconds());
+                    let _ = save_launcher_snapshot(&startup.state_path, machine.snapshot);
+                    status = Status::Unsupported;
+                }
+            }
+        } else if request.command == LauncherCommand::Shutdown {
+            shutdown = true;
+        }
+        let input = if request.command == LauncherCommand::Status
+            && engine.is_some()
+            && machine.engine_state == EngineState::Ready as u32
+        {
+            engine_status(&identity, &generation, &startup.engine_path)
+        } else {
+            EngineStatusResponse::default()
+        };
+        if let Some(bytes) = response(
+            &request, &identity, &machine, decision, epoch, status, input,
+        ) {
+            if server.write_all(&bytes, deadline_after(PIPE_TRANSFER_TIMEOUT_MS)) {
+                let _ = server.wait_for_client_disconnect(deadline_after(PIPE_TRANSFER_TIMEOUT_MS));
+            }
+        }
+    }
+    stop_engine(&mut engine);
+    stop_ui(&mut ui);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn machine(
-        state: LauncherState,
-        crashes: u32,
-        next_start: u64,
-        engine: EngineState,
-    ) -> Fcitx5LauncherMachine {
-        Fcitx5LauncherMachine {
+    #[test]
+    fn startup_crashes_enter_safe_mode_without_respawn_loop() {
+        let mut machine = Fcitx5LauncherMachine {
             snapshot: Fcitx5LauncherSnapshot {
-                state: state as u32,
-                consecutive_startup_crashes: crashes,
-                next_start_allowed_milliseconds: next_start,
-            },
-            engine_state: engine as u32,
-        }
-    }
-
-    #[test]
-    fn crash_backoff_safe_mode_and_stable_reset_match_frozen_launcher_contract() {
-        let mut machine = machine(LauncherState::Normal, 0, 0, EngineState::Stopped);
-        assert_eq!(
-            request_start(&mut machine, 0).disposition,
-            StartDisposition::Start as u32
-        );
-        assert_eq!(
-            request_start(&mut machine, 0).disposition,
-            StartDisposition::AlreadyActive as u32
-        );
-        machine.engine_state = EngineState::Ready as u32;
-        engine_exited(&mut machine, 1, 0);
-        assert_eq!(machine.snapshot.state, LauncherState::CrashBackoff as u32);
-        assert_eq!(machine.snapshot.consecutive_startup_crashes, 1);
-        assert_eq!(
-            request_start(&mut machine, 0).retry_after_milliseconds,
-            INITIAL_BACKOFF_MS
-        );
-        assert_eq!(
-            request_start(&mut machine, 250).disposition,
-            StartDisposition::Start as u32
-        );
-        engine_exited(&mut machine, 2, 250);
-        assert_eq!(
-            request_start(&mut machine, 250).retry_after_milliseconds,
-            500
-        );
-        assert_eq!(
-            request_start(&mut machine, 750).disposition,
-            StartDisposition::Start as u32
-        );
-        engine_exited(&mut machine, 3, 750);
-        assert_eq!(machine.snapshot.state, LauncherState::SafeMode as u32);
-        assert_eq!(request_start(&mut machine, 750).safe_mode, 1);
-        engine_exited(&mut machine, STABLE_RUNTIME_MS, 750);
-        assert_eq!(machine.snapshot.state, LauncherState::Normal as u32);
-        assert_eq!(machine.snapshot.consecutive_startup_crashes, 0);
-    }
-
-    #[test]
-    fn persisted_snapshots_are_normalized_on_init() {
-        let crash = normalize_snapshot(
-            Fcitx5LauncherSnapshot {
-                state: LauncherState::CrashBackoff as u32,
+                state: LauncherState::Normal as u32,
                 consecutive_startup_crashes: 0,
                 next_start_allowed_milliseconds: 0,
             },
-            1000,
-        )
-        .expect("crash snapshot should normalize");
-        assert_eq!(crash.consecutive_startup_crashes, 1);
-        assert_eq!(crash.next_start_allowed_milliseconds, 1250);
+            engine_state: EngineState::Stopped as u32,
+        };
+        let mut now = 1_u64;
+        for _ in 0..SAFE_MODE_CRASH_THRESHOLD {
+            assert_eq!(
+                request_start(&mut machine, now).disposition,
+                StartDisposition::Start as u32
+            );
+            engine_exited(&mut machine, 0, now);
+            now = machine.snapshot.next_start_allowed_milliseconds;
+        }
+        assert_eq!(machine.snapshot.state, LauncherState::SafeMode as u32);
+    }
 
-        let safe = normalize_snapshot(
-            Fcitx5LauncherSnapshot {
-                state: LauncherState::SafeMode as u32,
-                consecutive_startup_crashes: 1,
-                next_start_allowed_milliseconds: 9999,
+    #[test]
+    fn update_marker_suppresses_demand_start() {
+        let mut machine = Fcitx5LauncherMachine {
+            snapshot: Fcitx5LauncherSnapshot {
+                state: LauncherState::Updating as u32,
+                consecutive_startup_crashes: 0,
+                next_start_allowed_milliseconds: 0,
             },
-            1000,
-        )
-        .expect("safe-mode snapshot should normalize");
-        assert_eq!(safe.consecutive_startup_crashes, SAFE_MODE_CRASH_THRESHOLD);
-        assert_eq!(safe.next_start_allowed_milliseconds, 0);
-    }
-
-    #[test]
-    fn state_store_parser_matches_frozen_cpp_ledger_contract() {
-        let legacy = parse_snapshot("user-stopped\n").expect("legacy v1 state should parse");
-        assert_eq!(legacy.state, LauncherState::UserStopped as u32);
-        assert_eq!(legacy.consecutive_startup_crashes, 0);
-        assert_eq!(legacy.next_start_allowed_milliseconds, 0);
-
-        let v2 = parse_snapshot(
-            "format_version=2\r\nstate=safe-mode\r\nconsecutive_startup_crashes=3\r\nnext_start_allowed_ms=0\r\n",
-        )
-        .expect("v2 CRLF ledger should parse");
-        assert_eq!(v2.state, LauncherState::SafeMode as u32);
-        assert_eq!(v2.consecutive_startup_crashes, 3);
-
-        assert!(
-            parse_snapshot("format_version=2\nstate=safe-mode\nconsecutive_startup_crashes=")
-                .is_none()
-        );
-        assert!(parse_snapshot(
-            "format_version=2\nstate=safe-mode\nconsecutive_startup_crashes=4294967296\nnext_start_allowed_ms=0\n",
-        )
-        .is_none());
-        assert!(parse_snapshot(
-            "format_version=2\nstate=unknown\nconsecutive_startup_crashes=0\nnext_start_allowed_ms=0\n",
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn state_store_save_load_and_publish_match_frozen_cpp_contract() {
-        let directory = std::env::temp_dir().join(format!(
-            "fcitx5-launcher-core-state-store-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).expect("test directory should be created");
-        let state_path = directory.join("launcher-state.v1");
-
-        assert_eq!(load_snapshot_from_path(&state_path), Err(0));
-
-        let snapshot = Fcitx5LauncherSnapshot {
-            state: LauncherState::CrashBackoff as u32,
-            consecutive_startup_crashes: 2,
-            next_start_allowed_milliseconds: 500,
-        };
-        assert!(save_snapshot_to_path(&state_path, snapshot));
-        assert_eq!(load_snapshot_from_path(&state_path), Ok(snapshot));
-
-        fs::write(
-            &state_path,
-            b"format_version=2\nstate=safe-mode\nconsecutive_startup_crashes=",
-        )
-        .expect("corrupt ledger should be written");
-        assert_eq!(load_snapshot_from_path(&state_path), Err(2));
-
-        let _ = fs::remove_dir_all(&directory);
-    }
-
-    #[test]
-    fn launcher_default_process_paths_match_cpp_generation_contract() {
-        let root = std::env::temp_dir().join(format!(
-            "fcitx5-launcher-core-default-paths-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        let bin = root.join("bin");
-        let generation_bin = root.join("runtime").join("g1").join("bin");
-        fs::create_dir_all(&bin).expect("bin directory should be created");
-        fs::create_dir_all(&generation_bin).expect("generation bin should be created");
-
-        let (engine, ui) = resolve_default_process_paths(&bin, OsStr::new("g1"));
-        assert_eq!(engine, bin.join("fcitx5-engine.exe"));
-        assert_eq!(ui, bin.join("fcitx5-ui.exe"));
-
-        fs::write(generation_bin.join("fcitx5-engine.exe"), b"engine")
-            .expect("generation engine should be created");
-        fs::write(generation_bin.join("fcitx5-ui.exe"), b"ui")
-            .expect("generation ui should be created");
-        let (engine, ui) = resolve_default_process_paths(&bin, OsStr::new("g1"));
-        assert_eq!(engine, generation_bin.join("fcitx5-engine.exe"));
-        assert_eq!(ui, generation_bin.join("fcitx5-ui.exe"));
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn absolute_windows_path_matches_cpp_contract() {
-        let wide = |value: &str| value.encode_utf16().collect::<Vec<_>>();
-        assert!(absolute_windows_path_wide(&wide(r"C:\Fcitx5\bin")));
-        assert!(absolute_windows_path_wide(&wide(r"d:/Fcitx5/bin")));
-        assert!(!absolute_windows_path_wide(&wide(r"\Fcitx5\bin")));
-        assert!(!absolute_windows_path_wide(&wide(r"Fcitx5\bin")));
-        assert!(!absolute_windows_path_wide(&wide(r"1:\Fcitx5\bin")));
-    }
-
-    #[test]
-    fn tray_text_and_tooltip_match_cpp_display_contract() {
-        assert_eq!(
-            tray_status_text(
-                LauncherState::SafeMode as u32,
-                EngineState::Ready as u32,
-                false
-            ),
-            "Safe mode"
-        );
-        assert_eq!(
-            tray_status_text(
-                LauncherState::Normal as u32,
-                EngineState::Ready as u32,
-                true
-            ),
-            "运行中"
-        );
-        assert_eq!(
-            tray_status_text(
-                LauncherState::Normal as u32,
-                EngineState::Stopped as u32,
-                false
-            ),
-            "Service stopped"
-        );
-
-        let native = "五笔".as_bytes();
-        let name = "Wubi".as_bytes();
-        let id = "rime-wubi".as_bytes();
-        assert_eq!(
-            input_method_display_from_raw(
-                native.as_ptr(),
-                native.len(),
-                name.as_ptr(),
-                name.len(),
-                id.as_ptr(),
-                id.len(),
-            ),
-            "五笔"
-        );
-        let invalid = [0xff_u8];
-        assert_eq!(
-            input_method_display_from_raw(
-                invalid.as_ptr(),
-                invalid.len(),
-                name.as_ptr(),
-                name.len(),
-                id.as_ptr(),
-                id.len(),
-            ),
-            "Wubi"
-        );
-
-        let product = "Fcitx5 for Windows Next".encode_utf16().collect::<Vec<_>>();
-        let required = unsafe {
-            fcitx5_launcher_tray_tooltip_utf16(
-                product.as_ptr(),
-                product.len(),
-                LauncherState::Normal as u32,
-                EngineState::Ready as u32,
-                0,
-                native.as_ptr(),
-                native.len(),
-                name.as_ptr(),
-                name.len(),
-                id.as_ptr(),
-                id.len(),
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        let mut output = vec![0_u16; required];
-        let written = unsafe {
-            fcitx5_launcher_tray_tooltip_utf16(
-                product.as_ptr(),
-                product.len(),
-                LauncherState::Normal as u32,
-                EngineState::Ready as u32,
-                0,
-                native.as_ptr(),
-                native.len(),
-                name.as_ptr(),
-                name.len(),
-                id.as_ptr(),
-                id.len(),
-                output.as_mut_ptr(),
-                output.len(),
-            )
-        };
-        assert_eq!(written, required);
-        assert_eq!(
-            String::from_utf16(&output).expect("tooltip should be valid UTF-16"),
-            "Fcitx5 for Windows Next — Running — 五笔"
-        );
-    }
-
-    #[test]
-    fn tray_ui_language_preference_matches_cpp_contract() {
-        assert_eq!(primary_lang_id(0x0804), LANG_CHINESE);
-        assert_eq!(primary_lang_id(0x0409), 0x09);
-        assert!(matches!(
-            fcitx5_launcher_user_default_ui_language_prefers_chinese(),
-            0 | 1
-        ));
-    }
-
-    #[test]
-    fn launcher_child_command_lines_match_cpp_contract() {
-        let to_string = |value: Vec<u16>| {
-            String::from_utf16(&value).expect("command line should be UTF-16 text")
+            engine_state: EngineState::Stopped as u32,
         };
         assert_eq!(
-            to_string(launcher_engine_command(
-                OsStr::new(r"C:\Fcitx5\bin\fcitx5-engine.exe"),
-                OsStr::new("ready"),
-                OsStr::new("stop"),
-                OsStr::new("g1"),
-                true,
-            )),
-            r#""C:\Fcitx5\bin\fcitx5-engine.exe" --ready-event "ready" --stop-event "stop" --generation "g1" --safe-mode"#
+            request_start(&mut machine, 0).disposition,
+            StartDisposition::Suppressed as u32
         );
-        assert_eq!(
-            to_string(launcher_ui_command(
-                OsStr::new(r"C:\Fcitx5\bin\fcitx5-ui.exe"),
-                42,
-                OsStr::new("g1"),
-                false,
-            )),
-            r#""C:\Fcitx5\bin\fcitx5-ui.exe" --parent-pid 42 --generation "g1""#
-        );
-        assert_eq!(
-            to_string(launcher_config_command(
-                OsStr::new(r"C:\Fcitx5\bin\fcitx5-config.exe"),
-                OsStr::new("--diagnostics"),
-            )),
-            r#""C:\Fcitx5\bin\fcitx5-config.exe" --diagnostics"#
-        );
-    }
-
-    fn protocol_header(
-        raw_type: u16,
-        body_size: u32,
-        request_id: u64,
-        response_to: u64,
-    ) -> Vec<u8> {
-        let mut header = Vec::new();
-        header.extend(PROTOCOL_MAGIC.to_le_bytes());
-        header.extend(PROTOCOL_VERSION.to_le_bytes());
-        header.extend(raw_type.to_le_bytes());
-        header.extend(body_size.to_le_bytes());
-        header.extend(request_id.to_le_bytes());
-        header.extend(response_to.to_le_bytes());
-        header.extend(0u64.to_le_bytes());
-        header.extend(0u32.to_le_bytes());
-        header.extend(0u64.to_le_bytes());
-        header.extend(0u64.to_le_bytes());
-        header.extend(0u64.to_le_bytes());
-        assert_eq!(header.len(), PROTOCOL_HEADER_SIZE);
-        header
-    }
-
-    #[test]
-    fn launcher_pipe_frame_header_matches_cpp_protocol_contract() {
-        assert_eq!(
-            launcher_frame_body_size(&protocol_header(5, 1024 * 1024 - 64, 7, 0)),
-            Some(1024 * 1024 - 64)
-        );
-        assert_eq!(
-            launcher_frame_body_size(&protocol_header(3, 256 * 1024 - 64, 7, 0)),
-            Some(256 * 1024 - 64)
-        );
-        assert_eq!(
-            launcher_frame_body_size(&protocol_header(3, 256 * 1024 - 63, 7, 0)),
-            None
-        );
-        assert_eq!(
-            launcher_frame_body_size(&protocol_header(5, 16, 0, 0)),
-            None
-        );
-        assert_eq!(
-            launcher_frame_body_size(&protocol_header(5, 16, 7, 1)),
-            None
-        );
-        assert_eq!(
-            launcher_frame_body_size(&protocol_header(6, 16, 7, 0)),
-            None
-        );
-        assert_eq!(
-            launcher_frame_body_size(&protocol_header(12, 0, 7, 0)),
-            None
-        );
-
-        let mut wrong_magic = protocol_header(5, 0, 7, 0);
-        wrong_magic[0] ^= 0xff;
-        assert_eq!(launcher_frame_body_size(&wrong_magic), None);
     }
 }

@@ -1,6 +1,5 @@
 #include "launcher_client.h"
 #include "runtime_identity.h"
-#include "state_machine.h"
 
 #include <Windows.h>
 
@@ -10,6 +9,9 @@
 #include <vector>
 
 namespace {
+
+constexpr std::uint32_t kLauncherSafeMode = 5;
+constexpr std::uint32_t kEngineReady = 2;
 
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
 
@@ -54,35 +56,42 @@ int wmain(int argc, wchar_t** argv) {
     if (!created) return 1;
     CloseHandle(process.hThread);
 
+    int stage = 0;
     int result = WaitForSingleObject(launcherReady, 2000) == WAIT_OBJECT_0 ? 0 : 1;
+    if (result != 0) stage = 1;
     protocol::LauncherResponse response;
     if (result == 0 && !ipc::sendLauncherCommand(
                            identity, GetTickCount64() + 1000,
                            ipc::PeerPolicy::exact(argv[1]),
                            protocol::LauncherCommand::startDemand, response)) {
         result = 1;
+        stage = 2;
     }
-    if (result == 0 && WaitForSingleObject(safeEvent, 5000) != WAIT_OBJECT_0) result = 1;
+    if (result == 0 && WaitForSingleObject(safeEvent, 5000) != WAIT_OBJECT_0) {
+        result = 1;
+        stage = 3;
+    }
     if (result == 0 &&
         (!ipc::sendLauncherCommand(identity, GetTickCount64() + 1000,
                                    ipc::PeerPolicy::exact(argv[1]),
                                    protocol::LauncherCommand::status, response) ||
-         response.launcherState != static_cast<std::uint32_t>(
-                                       launcher::LauncherState::safeMode) ||
-         response.engineState != static_cast<std::uint32_t>(launcher::EngineState::ready))) {
+         response.launcherState != kLauncherSafeMode || response.engineState != kEngineReady)) {
         result = 1;
+        stage = 4;
     }
     if (!ipc::sendLauncherCommand(identity, GetTickCount64() + 1000,
                                   ipc::PeerPolicy::exact(argv[1]),
                                   protocol::LauncherCommand::shutdown, response)) {
         SetEvent(stopEvent);
         result = 1;
+        stage = 5;
     }
     if (WaitForSingleObject(process.hProcess, 3000) != WAIT_OBJECT_0) {
         SetEvent(stopEvent);
         TerminateProcess(process.hProcess, 9);
         WaitForSingleObject(process.hProcess, 1000);
         result = 1;
+        stage = 6;
     }
     DWORD exitCode = 1;
     GetExitCodeProcess(process.hProcess, &exitCode);
@@ -91,7 +100,16 @@ int wmain(int argc, wchar_t** argv) {
     CloseHandle(stopEvent);
     CloseHandle(launcherReady);
     DeleteFileW(stateFile.c_str());
-    if (exitCode != 0) result = 1;
-    if (result != 0) std::cerr << "launcher crash-loop did not converge to Safe Mode\n";
+    if (exitCode != 0) {
+        result = 1;
+        stage = 7;
+    }
+    if (result != 0) {
+        std::cerr << "launcher crash-loop did not converge to Safe Mode at stage " << stage
+                  << ", exit " << exitCode << ", status "
+                  << static_cast<std::uint32_t>(response.status) << ", launcher state "
+                  << response.launcherState << ", engine state " << response.engineState
+                  << '\n';
+    }
     return result;
 }
