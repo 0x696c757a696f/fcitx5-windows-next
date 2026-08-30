@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory = $true)] [string] $CargoExecutable,
   [Parameter(Mandatory = $true)] [string] $CargoTarget,
+  [ValidateSet('dev', 'release')] [string] $CargoProfile = 'dev',
   [Parameter(Mandatory = $true)] [string] $OutputDirectory,
   [string] $ShippingConfigExe = '',
   [Parameter(Mandatory = $true)] [string] $Report
@@ -67,7 +68,9 @@ $cargoArguments = @(
   '--bin',
   'fcitx5-config',
   '--target',
-  $CargoTarget
+  $CargoTarget,
+  '--profile',
+  $CargoProfile
 )
 [void] (Invoke-CheckedProcess -FilePath $cargo -Arguments $cargoArguments -Name 'build-rust-config-shipping-lineage')
 
@@ -76,7 +79,8 @@ $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
 } else {
   [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
 }
-$rustShipping = Join-Path $targetRoot "$CargoTarget\debug\fcitx5-config.exe"
+$profileDirectory = if ($CargoProfile -eq 'dev') { 'debug' } else { 'release' }
+$rustShipping = Join-Path $targetRoot "$CargoTarget\$profileDirectory\fcitx5-config.exe"
 if (-not (Test-Path -LiteralPath $rustShipping -PathType Leaf)) {
   throw "Rust Config shipping executable was not built: $rustShipping"
 }

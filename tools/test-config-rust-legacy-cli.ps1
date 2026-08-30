@@ -25,7 +25,7 @@ $legacyArgs = @(
 $results = @()
 foreach ($legacyArg in $legacyArgs) {
   $output = & $CargoExecutable run --locked --manifest-path (Join-Path $repo 'Cargo.toml') `
-    -p fcitx5-config-poc --bin fcitx5-config-rust --target $CargoTarget -- $legacyArg
+    -p fcitx5-config-poc --bin fcitx5-config --target $CargoTarget -- $legacyArg
   $joined = $output -join "`n"
   if ($joined -notmatch '"legacy_config_cli_compat":true') {
     throw "Rust Config legacy CLI output for $legacyArg did not report compatibility."
@@ -43,11 +43,11 @@ foreach ($legacyArg in $legacyArgs) {
 }
 
 $reportObject = [pscustomobject]@{
-  component = 'fcitx5-config-rust'
+  component = 'fcitx5-config'
   kind = 'rust-config-legacy-headless-cli'
   legacy_config_cli_compat = $true
   legacy_arguments = $results
-  shipping_config_replaced = $false
+  shipping_config_replaced = $true
   result = 'PASS'
 }
 

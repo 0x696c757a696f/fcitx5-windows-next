@@ -595,28 +595,24 @@ add_dependencies(
 fcitx_apply_project_options(fcitx5_control)
 fcitx_apply_binary_hardening(fcitx5_control)
 
-set(FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE
-    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5-config-rust.exe")
+set(FCITX_RUST_CONFIG_SHIPPING_EXE
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-config.exe")
 set(FCITX_CONFIG_APP_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
 set(FCITX_CONFIG_SHIPPING_EXE "${FCITX_CONFIG_APP_OUTPUT_DIR}/fcitx5-config.exe")
-set(FCITX_CONFIG_SIDE_BY_SIDE_EXE "${FCITX_CONFIG_APP_OUTPUT_DIR}/fcitx5-config-rust.exe")
 add_custom_target(
-  fcitx5_config_rust_side_by_side
-  BYPRODUCTS "${FCITX_CONFIG_SIDE_BY_SIDE_EXE}" "${FCITX_CONFIG_SHIPPING_EXE}"
+  fcitx5_config_shipping
+  BYPRODUCTS "${FCITX_CONFIG_SHIPPING_EXE}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
-    fcitx5-config-rust --target "${FCITX_RUST_TARGET}"
+    fcitx5-config --target "${FCITX_RUST_TARGET}" --profile
+    "$<IF:$<CONFIG:Debug>,dev,release>"
   COMMAND
     "${CMAKE_COMMAND}" -E make_directory "${FCITX_CONFIG_APP_OUTPUT_DIR}"
   COMMAND
     "${CMAKE_COMMAND}" -E copy_if_different
-    "${FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE}"
-    "${FCITX_CONFIG_SIDE_BY_SIDE_EXE}"
-  COMMAND
-    "${CMAKE_COMMAND}" -E copy_if_different
-    "${FCITX_RUST_CONFIG_SIDE_BY_SIDE_EXE}"
+    "${FCITX_RUST_CONFIG_SHIPPING_EXE}"
     "${FCITX_CONFIG_SHIPPING_EXE}"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/locales"
@@ -626,6 +622,8 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/win32_window_smoke.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/bin/fcitx5_config.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml"
@@ -634,8 +632,8 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Building Rust fcitx5-config.exe and side-by-side fcitx5-config-rust executable")
-add_custom_target(fcitx5_config_app ALL DEPENDS fcitx5_config_rust_side_by_side)
+  COMMENT "Building Rust shipping fcitx5-config.exe")
+add_custom_target(fcitx5_config_app ALL DEPENDS fcitx5_config_shipping)
 
 add_library(fcitx5_candidate_layout INTERFACE)
 add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
@@ -1073,16 +1071,9 @@ if(BUILD_TESTING)
   set_tests_properties(rust-config-core-cli-contract PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(
-    NAME rust-config-side-by-side-contract
-    COMMAND
-      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-      "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
-      fcitx5-config-rust --target "${FCITX_RUST_TARGET}" -- --self-check
-      --report
-      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-side-by-side-report.json")
-  set_tests_properties(rust-config-side-by-side-contract
-                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    NAME rust-config-shipping-contract
+    COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --self-check --report
+            "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-report.json")
   add_test(
     NAME config-rust-shipping-lineage
     COMMAND
@@ -1090,9 +1081,9 @@ if(BUILD_TESTING)
       "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
       -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-shipping-lineage.ps1"
       -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
-      "${FCITX_RUST_TARGET}" -ShippingConfigExe "${FCITX_CONFIG_SHIPPING_EXE}" -OutputDirectory
-      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage" -SideBySideConfigExe
-      "${FCITX_CONFIG_SIDE_BY_SIDE_EXE}" -Report
+      "${FCITX_RUST_TARGET}" -CargoProfile "$<IF:$<CONFIG:Debug>,dev,release>"
+      -ShippingConfigExe "${FCITX_CONFIG_SHIPPING_EXE}" -OutputDirectory
+      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage" -Report
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage.json")
   set_tests_properties(config-rust-shipping-lineage
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
