@@ -3,7 +3,21 @@
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 
+mod candidate_abi;
 pub mod qingfeng;
+mod ui_plan;
+
+pub use candidate_abi::{
+    fcitx5_candidate_ui_apply, fcitx5_candidate_ui_build_plan, fcitx5_candidate_ui_create,
+    fcitx5_candidate_ui_destroy, fcitx5_candidate_ui_measurement_texts, Fcitx5CandidateUiColor,
+    Fcitx5CandidateUiInput, Fcitx5CandidateUiMeasurement, Fcitx5CandidateUiPlanOutput,
+    Fcitx5CandidateUiRenderItemOutput, Fcitx5CandidateUiTextOutput, Fcitx5CandidateUiUiaItemOutput,
+};
+pub use ui_plan::{
+    CandidateRenderItem, CandidateTheme, CandidateUiApplyResult, CandidateUiColor,
+    CandidateUiColors, CandidateUiConfig, CandidateUiInput, CandidateUiMeasurement,
+    CandidateUiPlan, CandidateUiState, CandidateUiText, CandidateUiaItem, CandidateUiaPlan,
+};
 
 const MAX_CANDIDATES: usize = 128;
 const MAX_CANDIDATE_TEXT_UTF8: usize = 4096;
@@ -716,8 +730,8 @@ fn split_windows_argument_string(input: &[u16]) -> Vec<Vec<u16>> {
                 index += 1;
             }
             if index < input.len() && input[index] == b'"' as u16 {
-                argument.extend(std::iter::repeat(b'\\' as u16).take(backslashes / 2));
-                if backslashes % 2 == 0 {
+                argument.extend(std::iter::repeat_n(b'\\' as u16, backslashes / 2));
+                if backslashes.is_multiple_of(2) {
                     quoted = !quoted;
                 } else {
                     argument.push(b'"' as u16);
@@ -725,7 +739,7 @@ fn split_windows_argument_string(input: &[u16]) -> Vec<Vec<u16>> {
                 index += 1;
                 continue;
             }
-            argument.extend(std::iter::repeat(b'\\' as u16).take(backslashes));
+            argument.extend(std::iter::repeat_n(b'\\' as u16, backslashes));
             if index >= input.len() {
                 break;
             }
@@ -872,7 +886,7 @@ pub fn format_candidate_label(
     custom_suffix: &str,
 ) -> String {
     let label = if source_label.is_empty() {
-        (slot == 0).then_some(1).unwrap_or(slot).to_string()
+        if slot == 0 { 1 } else { slot }.to_string()
     } else {
         source_label.to_owned()
     };
@@ -2766,7 +2780,7 @@ pub fn candidate_preview_paint_plan(
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
         return Err("candidate preview paint plan requires a positive finite surface".to_owned());
     }
-    let candidates = vec![
+    let candidates = [
         poc_candidate("1.", "你", ""),
         poc_candidate("2.", "好", ""),
         poc_candidate("3.", "😀", "emoji"),
@@ -3280,6 +3294,139 @@ fn locale_prefers_compact_horizontal(locale: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immutable_ui_plan_keeps_cjk_annotation_and_selected_uia_semantics() {
+        let mut state = CandidateUiState::default();
+        assert_eq!(
+            state.apply(CandidateUiInput {
+                snapshot: CandidateSemanticSnapshot {
+                    identity: CandidateSnapshotIdentity {
+                        engine_epoch: 1,
+                        context_id: 7,
+                        composition_id: 9,
+                        revision: 1,
+                    },
+                    preedit: "ni".to_owned(),
+                    auxiliary_up: String::new(),
+                    auxiliary_down: String::new(),
+                    candidates: vec![
+                        CandidateSemanticItem {
+                            id: 1,
+                            label: "1".to_owned(),
+                            text: "你".to_owned(),
+                            comment: "nǐ".to_owned(),
+                        },
+                        CandidateSemanticItem {
+                            id: 2,
+                            label: "2".to_owned(),
+                            text: "呢".to_owned(),
+                            comment: "ne".to_owned(),
+                        },
+                    ],
+                    selected: Some(0),
+                    page: 0,
+                    total: 2,
+                    visibility: 1,
+                    popup_allowed: true,
+                },
+                locale: "zh-CN".to_owned(),
+                caret: Point { x: 40.0, y: 60.0 },
+                caret_height: 24.0,
+                work_area: Rect {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 800.0,
+                    bottom: 600.0,
+                },
+                candidate_bulk: false,
+                config: CandidateUiConfig::default(),
+            }),
+            CandidateUiApplyResult::Applied
+        );
+
+        let plan = state.render_plan(&[
+            CandidateUiMeasurement::new(18.0, 20.0, 24.0, 26.0),
+            CandidateUiMeasurement::new(18.0, 20.0, 16.0, 26.0),
+        ]);
+
+        assert!(plan.popup_visible);
+        assert_eq!(plan.orientation, Orientation::Horizontal);
+        assert_eq!(plan.items.len(), 2);
+        assert!(plan.items[0].text_rect.right - plan.items[0].text_rect.left >= 22.0);
+        assert_eq!(plan.uia.items[0].name, "1. 你 nǐ");
+        assert!(plan.uia.items[0].selected);
+        assert!(!plan.uia.items[1].selected);
+    }
+
+    #[test]
+    fn immutable_ui_plan_keeps_selected_candidate_in_both_six_cell_scroll_axes() {
+        let candidates = (0..42)
+            .map(|index| CandidateSemanticItem {
+                id: (index + 1) as u64,
+                label: ((index % 6) + 1).to_string(),
+                text: format!("候选{}", index + 1),
+                comment: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let input = |orientation| CandidateUiInput {
+            snapshot: CandidateSemanticSnapshot {
+                identity: CandidateSnapshotIdentity {
+                    engine_epoch: 1,
+                    context_id: 8,
+                    composition_id: 10,
+                    revision: 1,
+                },
+                preedit: String::new(),
+                auxiliary_up: String::new(),
+                auxiliary_down: String::new(),
+                candidates: candidates.clone(),
+                selected: Some(30),
+                page: 5,
+                total: 42,
+                visibility: 1,
+                popup_allowed: true,
+            },
+            locale: "zh-CN".to_owned(),
+            caret: Point { x: 40.0, y: 60.0 },
+            caret_height: 24.0,
+            work_area: Rect {
+                left: 0.0,
+                top: 0.0,
+                right: 1600.0,
+                bottom: 1200.0,
+            },
+            candidate_bulk: true,
+            config: CandidateUiConfig {
+                orientation,
+                scroll_mode: true,
+                page_size: 6,
+                ..CandidateUiConfig::default()
+            },
+        };
+        let measurements = vec![CandidateUiMeasurement::new(18.0, 40.0, 0.0, 26.0); 42];
+
+        for orientation in [
+            PresentationOrientation::Vertical,
+            PresentationOrientation::Horizontal,
+        ] {
+            let mut state = CandidateUiState::default();
+            assert_eq!(
+                state.apply(input(orientation)),
+                CandidateUiApplyResult::Applied
+            );
+            let plan = state.render_plan(&measurements);
+            assert_eq!(plan.items.len(), 36);
+            assert!(plan
+                .items
+                .iter()
+                .any(|item| item.candidate_index == 30 && item.selected));
+            assert!(plan
+                .items
+                .iter()
+                .all(|item| item.text_rect.right > item.text_rect.left));
+        }
+    }
 
     fn snapshot(revision: u64) -> CandidateSnapshot {
         snapshot_with_identity(10, 20, 30, revision)
