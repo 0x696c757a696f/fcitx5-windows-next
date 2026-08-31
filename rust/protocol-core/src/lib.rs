@@ -1420,7 +1420,6 @@ pub fn decode_and_reencode(bytes: &[u8]) -> Option<Vec<u8>> {
 /// # Safety
 /// `bytes` must describe a readable buffer of `length` bytes when `length` is
 /// non-zero.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_accepts_frame(bytes: *const u8, length: usize) -> u8 {
     let result = panic::catch_unwind(|| {
@@ -1450,7 +1449,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_accepts_frame(bytes: *const u8, le
 /// # Safety
 /// `bytes`/`length` must describe a readable buffer; `out`/`out_capacity`
 /// must describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_reencode_frame(
     bytes: *const u8,

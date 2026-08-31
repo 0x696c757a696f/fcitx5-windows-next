@@ -1,7 +1,11 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! C ABI layer tests: the exported `fcitx5_protocol_core_*` functions must
 //! match the Rust typed API byte-for-byte and roundtrip through the flat C
 //! structures.
 
+// SAFETY: every ABI call below uses test-owned input and output buffers whose
+// declared lengths and lifetimes satisfy the corresponding C ABI contract.
 use super::*;
 use crate::{Status, KEY_FLAG_DEAD_KEY};
 

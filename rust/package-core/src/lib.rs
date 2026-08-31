@@ -1,4 +1,3 @@
-#![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::collections::BTreeSet;
@@ -57,7 +56,7 @@ const RSA_PUBLIC_MAGIC: u32 = 0x3141_5352;
 
 #[cfg(windows)]
 mod mldsa_verify_adapter {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use std::ffi::c_int;
 
@@ -92,7 +91,7 @@ mod mldsa_verify_adapter {
 
 #[cfg(windows)]
 mod rsa_verify_adapter {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use std::ffi::{c_int, c_void};
 
@@ -397,7 +396,7 @@ impl<'a> RepositoryVerificationPolicy<'a> {
 
 #[cfg(windows)]
 mod miniz_archive_adapter {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use super::{archive_error, ArchiveEntry, ArchiveError, MAX_ARCHIVE_BYTES};
     use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
@@ -572,7 +571,7 @@ mod miniz_archive_adapter {
 
 #[cfg(windows)]
 mod win32_fs_adapter {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use std::io;
     use std::os::windows::ffi::OsStrExt;
@@ -806,7 +805,6 @@ pub fn read_repository_sequence_state(
 }
 
 #[cfg(windows)]
-#[allow(unsafe_code)]
 pub fn write_repository_sequence_state(
     data_root: impl AsRef<Path>,
     channel: &str,
@@ -863,7 +861,7 @@ pub fn write_repository_sequence_state(
 
 #[cfg(windows)]
 mod repository_sequence_state_ffi {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use super::{read_repository_sequence_state, write_repository_sequence_state};
     use std::ffi::OsString;
@@ -1192,7 +1190,7 @@ impl ProviderProcessError {
 
 #[cfg(windows)]
 mod provider_process_adapter {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use super::ProviderProcessError;
     use std::ffi::c_void;
@@ -3650,7 +3648,7 @@ pub fn repository_sequence_is_acceptable(
 
 #[cfg(windows)]
 mod repository_ffi {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use super::{
         parse_signature_envelope, verify_repository_index_envelope_with_policy,
@@ -4633,7 +4631,7 @@ mod repository_ffi {
 
 #[cfg(windows)]
 pub mod update {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
     #![allow(clippy::missing_safety_doc)]
 
     use super::win32_fs_adapter;
@@ -7298,7 +7296,7 @@ pub fn finalize_installed_package_removal_in_roots(
 
 #[cfg(windows)]
 mod lifecycle_ffi {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use super::{
         finalize_installed_package_removal, mark_installed_package_for_removal,
@@ -8080,7 +8078,7 @@ pub fn repair_repository_sequence_state_for_repair(
 
 #[cfg(windows)]
 mod repair_ffi {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
     #![allow(clippy::items_after_test_module)]
 
     use super::{
@@ -11034,7 +11032,7 @@ mod tests {
 
     #[cfg(windows)]
     mod rsa_signing_fixture {
-        #![allow(unsafe_code)]
+        #![deny(unsafe_op_in_unsafe_fn)]
         #![allow(dead_code)]
 
         use std::ffi::{c_int, c_void};

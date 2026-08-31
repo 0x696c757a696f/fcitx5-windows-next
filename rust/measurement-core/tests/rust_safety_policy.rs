@@ -5,10 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const UNSAFE_EXCEPTIONS: &[&str] = &[
+    "rust/candidate-core/src/candidate_abi.rs",
     "rust/candidate-core/src/bin/candidate_poc.rs",
     "rust/candidate-core/src/lib.rs",
-    "rust/config-poc/src/bin/fcitx5_config_rust.rs",
+    "rust/config-poc/src/bin/fcitx5_config.rs",
     "rust/config-poc/src/main.rs",
+    "rust/config-poc/src/win32_window_smoke.rs",
     "rust/config-qa/src/main.rs",
     "rust/control-core/src/lib.rs",
     "rust/engine-core/src/capi.rs",
@@ -30,6 +32,7 @@ const UNSAFE_EXCEPTIONS: &[&str] = &[
     "rust/tsf-support-core/src/lib.rs",
     "rust/windows-common-core/src/lib.rs",
 ];
+const UNSAFE_ALLOW_ATTRIBUTE: &str = concat!("allow", "(unsafe_code)");
 
 fn rust_files(directory: &Path, output: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).expect("Rust source directory must be readable") {
@@ -60,8 +63,16 @@ fn every_rust_file_is_safe_by_default_or_an_explicit_boundary_exception() {
             .to_string_lossy()
             .replace('\\', "/");
         let source = fs::read_to_string(&file).expect("Rust source must be UTF-8");
+        assert!(
+            !source.contains(UNSAFE_ALLOW_ATTRIBUTE),
+            "Rust source must not allow unsafe code: {relative}"
+        );
         if exceptions.contains(relative.as_str()) {
-            seen_exceptions.insert(relative);
+            seen_exceptions.insert(relative.clone());
+            assert!(
+                source.contains("#![deny(unsafe_op_in_unsafe_fn)]"),
+                "unsafe boundary lacks #![deny(unsafe_op_in_unsafe_fn)]: {relative}"
+            );
         } else {
             assert!(
                 source.contains("#![forbid(unsafe_code)]"),

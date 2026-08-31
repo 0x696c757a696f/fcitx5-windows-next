@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! Narrow C ABI for the E1 cutover.
 //!
 //! The C++ `protocol/protocol.cpp` adapter marshals its DTOs into the flat
@@ -372,7 +374,6 @@ impl ArenaWriter {
 /// # Safety
 /// `bytes`/`length` must describe a readable buffer (null with length 0 is
 /// allowed); `out_type`, `out_body_size`, `out_metadata` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_header(
     bytes: *const u8,
@@ -416,7 +417,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_header(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_hello_request(
     message: *const FcitxHelloRequestC,
@@ -447,7 +447,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_hello_request(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_hello_response(
     message: *const FcitxHelloResponseC,
@@ -481,7 +480,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_hello_response(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_key_request(
     message: *const FcitxKeyRequestC,
@@ -523,7 +521,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_key_request(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_key_response(
     message: *const FcitxKeyResponseC,
@@ -592,7 +589,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_key_response(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_candidate_select_request(
     message: *const FcitxCandidateSelectRequestC,
@@ -623,7 +619,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_candidate_select_request(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_candidate_select_response(
     message: *const FcitxCandidateSelectResponseC,
@@ -656,7 +651,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_candidate_select_response(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_state_request(
     message: *const FcitxStateRequestC,
@@ -685,7 +679,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_state_request(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_engine_status_request(
     message: *const FcitxEngineStatusRequestC,
@@ -714,7 +707,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_engine_status_request(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_engine_status_response(
     message: *const FcitxEngineStatusResponseC,
@@ -751,7 +743,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_engine_status_response(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_launcher_request(
     message: *const FcitxLauncherRequestC,
@@ -784,7 +775,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_launcher_request(
 /// # Safety
 /// `message` must point at a valid structure; `out`/`out_capacity` must
 /// describe a writable buffer; `out_length` must be writable.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_encode_launcher_response(
     message: *const FcitxLauncherResponseC,
@@ -831,7 +821,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_launcher_response(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_hello_request(
     metadata: *const FcitxMetadataC,
@@ -879,7 +868,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_hello_request(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_hello_response(
     metadata: *const FcitxMetadataC,
@@ -927,7 +915,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_hello_response(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_key_request(
     metadata: *const FcitxMetadataC,
@@ -1001,7 +988,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_key_request(
 /// writable/valid pointers; `body`/`body_length` must describe a readable
 /// buffer; `strings`/`strings_capacity` and `candidates`/`candidates_capacity`
 /// must describe writable buffers.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_key_response(
     metadata: *const FcitxMetadataC,
@@ -1115,7 +1101,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_key_response(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_candidate_select_request(
     metadata: *const FcitxMetadataC,
@@ -1163,7 +1148,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_candidate_select_request(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_candidate_select_response(
     metadata: *const FcitxMetadataC,
@@ -1210,7 +1194,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_candidate_select_response(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_state_request(
     metadata: *const FcitxMetadataC,
@@ -1254,7 +1237,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_state_request(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_engine_status_request(
     metadata: *const FcitxMetadataC,
@@ -1298,7 +1280,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_engine_status_request(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_engine_status_response(
     metadata: *const FcitxMetadataC,
@@ -1366,7 +1347,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_engine_status_response(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_launcher_request(
     metadata: *const FcitxMetadataC,
@@ -1413,7 +1393,6 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_launcher_request(
 /// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
 /// `body`/`body_length` must describe a readable buffer; `strings`/
 /// `strings_capacity` must describe a writable buffer.
-#[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_protocol_core_decode_launcher_response(
     metadata: *const FcitxMetadataC,

@@ -1,5 +1,4 @@
 #![windows_subsystem = "windows"]
-#![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::OsString;
@@ -259,7 +258,7 @@ fn quote(path: &Path) -> String {
 
 #[cfg(windows)]
 mod win32 {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use std::ffi::{c_void, OsString};
     use std::os::windows::ffi::{OsStrExt, OsStringExt};

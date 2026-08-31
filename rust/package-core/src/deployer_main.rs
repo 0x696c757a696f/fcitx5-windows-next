@@ -1,4 +1,3 @@
-#![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::OsString;
@@ -157,7 +156,7 @@ fn internal_error(message: impl Into<String>) -> DeployError {
 
 #[cfg(windows)]
 mod win32 {
-    #![allow(unsafe_code)]
+    #![deny(unsafe_op_in_unsafe_fn)]
 
     use super::{internal_error, package_error, DeployError, MAXIMUM_ARTIFACT_BYTES};
     use std::ffi::c_void;

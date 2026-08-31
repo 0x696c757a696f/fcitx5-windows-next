@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! Tests mirroring `tests/unit/protocol_test.cpp` corpus against the Rust
 //! `fcitx5-protocol-core` codec. Every acceptance/rejection case from the C++
 //! contract test is reproduced here so the Rust implementation is a byte- and

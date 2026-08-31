@@ -1,3 +1,7 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
+// SAFETY: every ABI call below uses only test-owned handles and pointers that
+// remain valid and uniquely writable for the duration of that call.
 use super::{
     fcitx5_engine_core_ledger_begin_key, fcitx5_engine_core_ledger_end_result,
     fcitx5_engine_core_ledger_forget, fcitx5_engine_core_ledger_free,
