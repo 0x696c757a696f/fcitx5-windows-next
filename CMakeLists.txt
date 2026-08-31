@@ -598,21 +598,35 @@ add_custom_target(
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-mock-engine.exe fixture")
 
-add_executable(fcitx5_control src/control/control_main.cpp)
-set_target_properties(fcitx5_control PROPERTIES OUTPUT_NAME "fcitx5-control")
-target_link_libraries(
-  fcitx5_control
-  PRIVATE fcitx5::windows_common fcitx5::config fcitx5::protocol
-          fcitx5::ipc_client fcitx5::platform fcitx5::package_core
-          fcitx5::tsf_activation_guard
-          fcitx5_package_core_rust fcitx5_control_core_rust
-          fcitx5_process_execution_core_rust shell32 ole32 ws2_32 userenv ntdll bcrypt
-          advapi32)
-add_dependencies(
-  fcitx5_control fcitx5_package_core_rustlib fcitx5_control_core_rustlib
-  fcitx5_process_execution_core_rustlib)
-fcitx_apply_project_options(fcitx5_control)
-fcitx_apply_binary_hardening(fcitx5_control)
+set(FCITX_RUST_CONTROL_EXE
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-control.exe")
+set(FCITX_CONTROL_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+set(FCITX_CONTROL_EXE "${FCITX_CONTROL_OUTPUT_DIR}/fcitx5-control.exe")
+add_custom_target(
+  fcitx5_control ALL
+  BYPRODUCTS "${FCITX_CONTROL_EXE}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-control-core --bin
+    fcitx5-control --target "${FCITX_RUST_TARGET}" --profile
+    "$<IF:$<CONFIG:Debug>,dev,release>"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${FCITX_CONTROL_OUTPUT_DIR}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+          "${FCITX_RUST_CONTROL_EXE}" "${FCITX_CONTROL_EXE}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/process-execution-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/src/lib.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-control.exe")
 
 set(FCITX_RUST_CONFIG_SHIPPING_EXE
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-config.exe")
@@ -967,15 +981,15 @@ if(BUILD_TESTING)
   add_test(
     NAME control-package-stopped-service-contract
     COMMAND fcitx5_control_package_integration_test
-            "$<TARGET_FILE:fcitx5_control>"
+            "${FCITX_CONTROL_EXE}"
             "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe"
             "$<TARGET_FILE:fcitx5_pqc_fixture_signer>")
   set_tests_properties(control-package-stopped-service-contract PROPERTIES TIMEOUT 30)
   add_test(NAME launcher-version COMMAND "${FCITX_LAUNCHER_SHIPPING_EXE}" --version)
   add_test(NAME mock-engine-version COMMAND "${FCITX_MOCK_ENGINE_EXE}" --version)
-  add_test(NAME control-version COMMAND fcitx5_control --version)
-  add_test(NAME control-schema COMMAND fcitx5_control --schema)
-  add_test(NAME control-startup-query COMMAND fcitx5_control --get-startup)
+  add_test(NAME control-version COMMAND "${FCITX_CONTROL_EXE}" --version)
+  add_test(NAME control-schema COMMAND "${FCITX_CONTROL_EXE}" --schema)
+  add_test(NAME control-startup-query COMMAND "${FCITX_CONTROL_EXE}" --get-startup)
   add_test(
     NAME register-version
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-register.exe" --version)
@@ -1024,10 +1038,10 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_control_repository_rollback_test)
   fcitx_apply_binary_hardening(fcitx5_control_repository_rollback_test)
   add_test(NAME control-repository-rollback
-           COMMAND fcitx5_control_repository_rollback_test "$<TARGET_FILE:fcitx5_control>")
+           COMMAND fcitx5_control_repository_rollback_test "${FCITX_CONTROL_EXE}")
 
   add_test(NAME control-config-roundtrip
-           COMMAND fcitx5_control --data-root
+           COMMAND "${FCITX_CONTROL_EXE}" --data-root
                    "${CMAKE_CURRENT_BINARY_DIR}/control-test-data"
                    --apply-config "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml")
   add_test(NAME config-ui-headless-smoke COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --self-test)
@@ -1421,7 +1435,7 @@ if(BUILD_TESTING)
   add_test(
     NAME candidate-ui-live-presentation-contract
     COMMAND fcitx5_candidate_ui_config_integration_test
-            "$<TARGET_FILE:fcitx5_ui>" "$<TARGET_FILE:fcitx5_control>"
+            "$<TARGET_FILE:fcitx5_ui>" "${FCITX_CONTROL_EXE}"
             "$<TARGET_FILE_DIR:fcitx5_ui>/resources" "${FCITX_RUST_CANDIDATE_POC_EXE}")
   set_tests_properties(candidate-ui-live-presentation-contract PROPERTIES TIMEOUT 30)
 

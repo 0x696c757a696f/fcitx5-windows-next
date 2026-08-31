@@ -591,7 +591,13 @@ fn run(data_root: PathBuf, command: Command) -> Result<(), Failure> {
             );
         }
         Command::PackagesRepair => {
-            let report = package_facade(&data_root)?
+            let facade = package_facade(&data_root)?;
+            let repository_sequence_state = facade
+                .repair_repository_sequence(
+                    option_env!("FCITX_RELEASE_CHANNEL_NAME").unwrap_or("stable"),
+                )
+                .map_err(|error| Failure::package(format!("{}: {error}", error.code())))?;
+            let report = facade
                 .repair()
                 .map_err(|error| Failure::package(format!("{}: {error}", error.code())))?;
             if !matches!(report.verification(), PackageRepairVerification::Verified) {
@@ -600,7 +606,7 @@ fn run(data_root: PathBuf, command: Command) -> Result<(), Failure> {
                 ));
             }
             println!(
-                "{{\"format_version\":1,\"repair\":\"verified\",\"repository_sequence_state\":\"not_applicable\"}}"
+                "{{\"format_version\":1,\"repair\":\"verified\",\"repository_sequence_state\":\"{repository_sequence_state}\"}}"
             );
         }
     }

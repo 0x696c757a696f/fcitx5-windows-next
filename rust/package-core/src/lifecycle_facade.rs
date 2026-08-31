@@ -25,8 +25,6 @@ use crate::{
 const MAXIMUM_REPOSITORY_SIGNATURE_BYTES: u64 = 64 * 1024;
 const MAXIMUM_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 const MAXIMUM_TRANSACTION_STATE_BYTES: u64 = 1024;
-const REPOSITORY_CACHE_MAGIC: &[u8] = b"fcitx5-repository-cache-v1\n";
-type VerifiedRepositoryCache = (Vec<u8>, Vec<u8>);
 
 /// A typed failure returned by the public package lifecycle façade.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -365,7 +363,16 @@ impl PackageCoreFacade {
         let mut activation_started = false;
         let result = (|| {
             for entry in plan.entries() {
-                let archive = transport.fetch(entry.download_url(), MAXIMUM_ARCHIVE_BYTES)?;
+                let cached_archive = self.data_root.join("downloads").join(format!(
+                    "{}-{}.fcpkg",
+                    entry.id(),
+                    entry.version()
+                ));
+                let archive = if cached_archive.is_file() {
+                    read_bounded_file(&cached_archive, MAXIMUM_ARCHIVE_BYTES)?
+                } else {
+                    transport.fetch(entry.download_url(), MAXIMUM_ARCHIVE_BYTES)?
+                };
                 ensure_bound(&archive, MAXIMUM_ARCHIVE_BYTES, "package archive")?;
                 if sha256_digest(&archive) != *entry.sha256() {
                     return Err(PackageFacadeError::new(
@@ -568,6 +575,21 @@ impl PackageCoreFacade {
         })
     }
 
+    /// Repairs or resets the signed repository anti-rollback state.
+    pub fn repair_repository_sequence(
+        &self,
+        channel: &str,
+    ) -> Result<&'static str, PackageFacadeError> {
+        let trusted_keys = self.read_production_trusted_keys()?;
+        Ok(crate::repair_repository_sequence_state_for_repair(
+            &self.data_root,
+            self.repository_index_path(),
+            self.repository_signature_path(),
+            &trusted_keys,
+            channel,
+        ))
+    }
+
     /// Reads the trusted keys only from the installed product keyring.
     pub fn read_production_trusted_keys(&self) -> Result<Vec<TrustedKey>, PackageFacadeError> {
         read_trusted_keyring(self.install_root.join("security/trusted-keys.json"))
@@ -577,11 +599,12 @@ impl PackageCoreFacade {
         self.data_root.join("packages")
     }
 
-    fn repository_cache_path(&self, channel: &str) -> PathBuf {
-        self.data_root
-            .join("repository")
-            .join(channel)
-            .join("verified-cache-v1")
+    fn repository_index_path(&self) -> PathBuf {
+        self.data_root.join("repository").join("index.json")
+    }
+
+    fn repository_signature_path(&self) -> PathBuf {
+        self.data_root.join("repository").join("index.sig.json")
     }
 
     fn load_verified_repository_if_present(
@@ -593,11 +616,19 @@ impl PackageCoreFacade {
         trusted_keys: &[TrustedKey],
         accept_expired_refresh_reference: bool,
     ) -> Result<Option<RepositoryIndex>, PackageFacadeError> {
-        let Some((index, signature)) =
-            read_verified_repository_cache_if_present(&self.repository_cache_path(channel))?
-        else {
+        let index_path = self.repository_index_path();
+        let signature_path = self.repository_signature_path();
+        if !index_path.exists() && !signature_path.exists() {
             return Ok(None);
-        };
+        }
+        if !index_path.is_file() || !signature_path.is_file() {
+            return Err(PackageFacadeError::new(
+                "invalid_repository",
+                "repository cache is incomplete",
+            ));
+        }
+        let index = read_bounded_file(&index_path, MAX_MANIFEST_BYTES as u64)?;
+        let signature = read_bounded_file(&signature_path, MAXIMUM_REPOSITORY_SIGNATURE_BYTES)?;
         let signature_text = std::str::from_utf8(&signature).map_err(|_| {
             PackageFacadeError::new(
                 "invalid_signature",
@@ -654,8 +685,14 @@ impl PackageCoreFacade {
                 )
             },
         )?;
-        let write_cache =
-            write_verified_repository_cache(&self.repository_cache_path(channel), index, signature);
+        let write_cache = write_atomic_file(&self.repository_signature_path(), signature)
+            .and_then(|()| write_atomic_file(&self.repository_index_path(), index))
+            .map_err(|error| {
+                PackageFacadeError::new(
+                    "io_error",
+                    format!("verified repository cache publication failed: {error}"),
+                )
+            });
         if let Err(error) = write_cache {
             restore_repository_sequence(&self.data_root, channel, previous_sequence)?;
             return Err(error);
@@ -1304,98 +1341,6 @@ fn write_atomic_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = fs::remove_file(temporary);
     }
     write
-}
-
-fn write_verified_repository_cache(
-    path: &Path,
-    index: &[u8],
-    signature: &[u8],
-) -> Result<(), PackageFacadeError> {
-    let index_len = u64::try_from(index.len())
-        .map_err(|_| PackageFacadeError::new("resource_limit", "repository index is too large"))?;
-    let signature_len = u64::try_from(signature.len()).map_err(|_| {
-        PackageFacadeError::new("resource_limit", "repository signature is too large")
-    })?;
-    let mut bytes = Vec::with_capacity(
-        REPOSITORY_CACHE_MAGIC.len()
-            + std::mem::size_of::<u64>() * 2
-            + index.len()
-            + signature.len(),
-    );
-    bytes.extend_from_slice(REPOSITORY_CACHE_MAGIC);
-    bytes.extend_from_slice(&index_len.to_le_bytes());
-    bytes.extend_from_slice(&signature_len.to_le_bytes());
-    bytes.extend_from_slice(index);
-    bytes.extend_from_slice(signature);
-    write_atomic_file(path, &bytes).map_err(|error| {
-        PackageFacadeError::new(
-            "io_error",
-            format!("verified repository cache publication failed: {error}"),
-        )
-    })
-}
-
-pub(crate) fn read_verified_repository_cache_if_present(
-    path: &Path,
-) -> Result<Option<VerifiedRepositoryCache>, PackageFacadeError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let maximum = (MAX_MANIFEST_BYTES as u64)
-        .saturating_add(MAXIMUM_REPOSITORY_SIGNATURE_BYTES)
-        .saturating_add(u64::try_from(REPOSITORY_CACHE_MAGIC.len()).unwrap_or(u64::MAX))
-        .saturating_add(16);
-    let bytes = read_bounded_file(path, maximum)?;
-    let header = REPOSITORY_CACHE_MAGIC
-        .len()
-        .checked_add(16)
-        .ok_or_else(|| {
-            PackageFacadeError::new("invalid_repository", "repository cache header overflow")
-        })?;
-    if !bytes.starts_with(REPOSITORY_CACHE_MAGIC) || bytes.len() < header {
-        return Err(PackageFacadeError::new(
-            "invalid_repository",
-            "verified repository cache format is invalid",
-        ));
-    }
-    let index_start = REPOSITORY_CACHE_MAGIC.len();
-    let index_len = u64::from_le_bytes(bytes[index_start..index_start + 8].try_into().map_err(
-        |_| PackageFacadeError::new("invalid_repository", "repository cache is truncated"),
-    )?);
-    let signature_len =
-        u64::from_le_bytes(bytes[index_start + 8..header].try_into().map_err(|_| {
-            PackageFacadeError::new("invalid_repository", "repository cache is truncated")
-        })?);
-    if index_len > MAX_MANIFEST_BYTES as u64 || signature_len > MAXIMUM_REPOSITORY_SIGNATURE_BYTES {
-        return Err(PackageFacadeError::new(
-            "resource_limit",
-            "verified repository cache exceeds its resource budget",
-        ));
-    }
-    let index_end = header
-        .checked_add(usize::try_from(index_len).map_err(|_| {
-            PackageFacadeError::new("invalid_repository", "repository cache length is invalid")
-        })?)
-        .ok_or_else(|| {
-            PackageFacadeError::new("invalid_repository", "repository cache length overflow")
-        })?;
-    let signature_end = index_end
-        .checked_add(usize::try_from(signature_len).map_err(|_| {
-            PackageFacadeError::new("invalid_repository", "repository cache length is invalid")
-        })?)
-        .ok_or_else(|| {
-            PackageFacadeError::new("invalid_repository", "repository cache length overflow")
-        })?;
-    if signature_end != bytes.len() {
-        return Err(PackageFacadeError::new(
-            "invalid_repository",
-            "verified repository cache length is invalid",
-        ));
-    }
-    Ok(Some((
-        bytes[header..index_end].to_vec(),
-        bytes[index_end..].to_vec(),
-    )))
 }
 
 fn restore_repository_sequence(

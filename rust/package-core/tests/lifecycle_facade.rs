@@ -253,9 +253,7 @@ fn repository_plan_is_dependency_ordered_and_exact() {
 fn bad_signature_leaves_previous_verified_cache_untouched() {
     let fixture = FixtureRoot::new();
     let facade = fixture.facade();
-    let cache = fixture
-        .data_root()
-        .join("repository/stable/verified-cache-v1");
+    let cache = fixture.data_root().join("repository/index.json");
     std::fs::create_dir_all(cache.parent().expect("cache parent"))
         .expect("cache parent should create");
     std::fs::write(&cache, b"previous verified cache").expect("cache marker should write");
