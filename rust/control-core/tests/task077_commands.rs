@@ -113,6 +113,63 @@ fn command_arguments_are_rejected_without_mutating_commands() {
 }
 
 #[test]
+fn task077_control_commands_are_routed_and_strictly_parsed() {
+    let binary = std::env::var("CARGO_BIN_EXE_fcitx5-control").expect("control binary");
+    let data = root();
+    let data = data.to_string_lossy().into_owned();
+
+    for args in [
+        vec!["--get-input-methods"],
+        vec!["--set-input-method", "keyboard-us"],
+        vec!["--restart-engine"],
+        vec!["--shutdown"],
+        vec!["--packages-refresh", "https://packages.example.invalid/v1"],
+        vec!["--packages-install", "fcitx5-rime"],
+        vec!["--packages-update", "fcitx5-rime"],
+        vec!["--packages-state", "fcitx5-rime", "enabled"],
+        vec!["--packages-state", "fcitx5-rime", "disabled"],
+        vec!["--packages-remove", "fcitx5-rime"],
+        vec!["--packages-repair"],
+    ] {
+        let output = Command::new(&binary)
+            .args(["--data-root", &data])
+            .args(args)
+            .output()
+            .expect("control starts");
+        assert_ne!(output.status.code(), Some(2));
+        assert!(!String::from_utf8_lossy(&output.stderr).starts_with("Usage: fcitx5-control "));
+    }
+
+    for args in [
+        vec!["--get-input-methods", "extra"],
+        vec!["--set-input-method"],
+        vec!["--set-input-method", "--shutdown"],
+        vec!["--restart-engine", "extra"],
+        vec!["--shutdown", "extra"],
+        vec![
+            "--packages-refresh",
+            "https://packages.example.invalid/v1",
+            "extra",
+        ],
+        vec!["--packages-install", "bad/id"],
+        vec!["--packages-update", "bad/id"],
+        vec!["--packages-state", "fcitx5-rime", "pending_remove"],
+        vec!["--packages-remove", "bad/id"],
+        vec!["--packages-repair", "extra"],
+    ] {
+        let output = Command::new(&binary)
+            .args(["--data-root", &data])
+            .args(args)
+            .output()
+            .expect("control starts");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).starts_with("Usage: fcitx5-control "));
+    }
+
+    let _ = fs::remove_dir_all(data);
+}
+
+#[test]
 fn theme_mutations_are_validated_atomic_and_scoped() {
     let fixture = root();
     let install = fixture.join("install");

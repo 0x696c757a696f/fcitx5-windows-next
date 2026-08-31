@@ -204,6 +204,60 @@ pub fn control_usage_text() -> &'static str {
     CONTROL_USAGE_TEXT
 }
 
+/// Resolves the installation root for the current Control executable.
+///
+/// # Errors
+///
+/// Returns an error when the current executable path cannot be resolved.
+pub fn control_install_root() -> Result<PathBuf, &'static str> {
+    let executable = std::env::current_exe().map_err(|_| "unable to resolve installation root")?;
+    let directory = executable
+        .parent()
+        .ok_or("unable to resolve installation root")?;
+    Ok(if directory.file_name().is_some_and(|name| name == "bin") {
+        directory
+            .parent()
+            .ok_or("unable to resolve installation root")?
+            .to_owned()
+    } else {
+        directory.to_owned()
+    })
+}
+
+/// Returns whether `id` is a valid Control input-method identifier.
+#[must_use]
+pub fn control_input_method_id_valid(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, b'-' | b'_')
+        })
+}
+
+/// Returns the release repository base URL selected for this Control binary.
+#[must_use]
+pub fn control_repository_default_base_url() -> String {
+    String::from_utf16(&repository_default_base_url(b"").expect("static URL is valid UTF-16"))
+        .expect("static URL is valid UTF-16")
+}
+
+/// Appends one fixed repository metadata file name to a repository base URL.
+///
+/// # Errors
+///
+/// Returns an error when either argument cannot form a safe metadata URL.
+pub fn control_repository_metadata_url(
+    base_url: &str,
+    metadata_name: &str,
+) -> Result<String, &'static str> {
+    let base_url = base_url.encode_utf16().collect::<Vec<_>>();
+    let url = repository_metadata_url(&base_url, metadata_name.as_bytes())
+        .ok_or("repository metadata URL is invalid")?;
+    String::from_utf16(&url).map_err(|_| "repository metadata URL is invalid")
+}
+
 pub fn control_startup_json(enabled: bool) -> String {
     String::from_utf8(startup_json(enabled)).expect("startup JSON is static UTF-8")
 }
@@ -347,21 +401,6 @@ pub fn control_diagnostics_plan_for_path(
         update_owner: empty,
     };
     String::from_utf8(diagnostics_plan_json(&status)?).ok()
-}
-
-fn control_install_root() -> Result<PathBuf, &'static str> {
-    let executable = std::env::current_exe().map_err(|_| "unable to resolve installation root")?;
-    let directory = executable
-        .parent()
-        .ok_or("unable to resolve installation root")?;
-    Ok(if directory.file_name().is_some_and(|name| name == "bin") {
-        directory
-            .parent()
-            .ok_or("unable to resolve installation root")?
-            .to_owned()
-    } else {
-        directory.to_owned()
-    })
 }
 
 fn view(value: &str) -> Fcitx5ControlUtf8 {
