@@ -1,7 +1,7 @@
 # Task 077 production C++ inventory
 
 Baseline HEAD: `c6a804edcd093b98b8940730853f7301df58a21a`.
-Latest integrated cutover HEAD: `240496e`.
+Latest integrated cutover HEAD: `955137e`.
 
 This is the live cutover ledger. `KEEP-CANDIDATE` still requires symbol-level reduction and a final
 unconditional classification. There are no accepted conditional rows at 077 completion.
@@ -12,13 +12,13 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 | `protocol/protocol_ffi.h`, `resources/windows/resource.h` | KEEP-CANDIDATE ABI | Retain declarations/resource IDs only where required |
 | `src/config/app_main.cpp` | DELETED at `3cf297b` | Rust Settings is the sole shipping shell; legacy WTL target and differential test are deleted |
 | `src/config/config_model.h`, `src/config/config_parser.cpp` | DELETE-AFTER-CUTOVER | Delete remaining C++ Config parser/model authority after native consumers use Config Core |
-| `src/control/control_main.cpp` | MIGRATE | Rust shipping CLI now owns query, startup/TSF guard, package/theme/addon projection, Config reset, and Theme lifecycle through `e4cd82e`/`bcbfc95`; finish Engine/Launcher and package mutation commands, then delete |
+| `src/control/control_main.cpp` | DELETED at `955137e` | Rust is the sole shipping Control executable and owns Engine/Launcher commands plus signed repository/package lifecycle |
 | `src/package/package_core.cpp`, `package_core.h` | DELETE-AFTER-CUTOVER | Delete C++ package bridge after Rust consumers cut over |
 | `src/package/fcitx5_mldsa65_config.h` | KEEP-CANDIDATE native ABI | Retain only if the Rust package build's audited native verifier needs it |
 | `src/ui/ui_main.cpp` | MIGRATE/MIXED | Move all product state/protocol/config/orchestration to Rust; retain only necessary HWND/D2D/DWrite seam |
 | `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | DELETED at `240496e` | Rust is the sole Launcher supervisor, command, state-store, process, IPC-server, and shipping executable owner |
 | `src/launcher/tray_icon.cpp`, `tray_icon.h`, `launcher_rust_abi.h` | DELETED at `240496e` | No default tray is required; the temporary tray and flat C++ ABI seams were removed |
-| `src/engine/mock_engine_main.cpp` | MIGRATE | Replace with Rust fixture and delete |
+| `src/engine/mock_engine_main.cpp` | DELETED at `601a4d0` | Safe Rust fixture preserves the final mixed IPC/Launcher/TSF corpus and exact verified pipe-peer handshake |
 | `src/engine/presentation_publisher.cpp`, `presentation_publisher.h` | DELETED at `7d1aeaa` | Rust Engine owns validation, coalescing, exact peer transport, bounded I/O, retry/reconnect, stop, and destruction; only the opaque ABI RAII call site remains inside the approved Fcitx process adapter |
 | `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` | MIGRATE | Delete after Rust-owned process consumers use Rust IPC APIs |
 | `src/ipc/peer_verification.cpp`, `peer_verification.h` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary peer identity mechanics |
@@ -48,7 +48,15 @@ x64/x86 Debug and Release executable, kept an always-available next named-pipe l
 final mixed lifecycle/crash-to-Safe-Mode E2E tests, and deleted all six remaining Launcher C++/header
 files. These facts do not complete the other still-`MIGRATE` rows.
 
-Current facts: shipping TSF and Settings are Rust-owned; Candidate semantics are Rust-owned; Rust
-protocol, Engine, package, Control, launcher, Windows-common, process-execution, and Config owners
-already exist. The first Release package attempt at this baseline stopped in old `ui_main.cpp` under
-`/WX`, so no current-HEAD stage exists yet.
+After `601a4d0` and `955137e`, the C++ mock Engine fixture and 2,143-line C++ Control process are
+deleted. Rust Control and package lifecycle share one signed `repository/index.json` /
+`index.sig.json` cache, preserve verified offline archives, and pass the formerly known-failing
+stopped-service and repository rollback mixed tests on x64/x86. The repository-wide Rust source
+policy rejects every `allow(unsafe_code)`, requires `forbid(unsafe_code)` by default, and requires
+named low-level exceptions to deny unsafe operations inside unsafe functions.
+
+Current facts: shipping TSF, Settings, Launcher, Control, and the mock Engine fixture are Rust-owned;
+Candidate semantics are Rust-owned; Rust protocol, Engine, package, Windows-common,
+process-execution, and Config owners already exist. The remaining migration rows are Config
+parser/model consumers, Candidate adapter reduction, package/protocol bridges, and residual
+IPC/platform/Engine symbol classifications. No current-HEAD release stage exists yet.
