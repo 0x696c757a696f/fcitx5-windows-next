@@ -115,6 +115,7 @@ fcitx_add_rust_staticlib(fcitx5_engine_core fcitx5-engine-core engine-core)
 fcitx_add_rust_staticlib(fcitx5_windows_common_core fcitx5-windows-common-core
                          windows-common-core)
 fcitx_add_rust_staticlib(fcitx5_control_core fcitx5-control-core control-core)
+fcitx_add_rust_staticlib(fcitx5_config_core fcitx5-config-core config-core)
 fcitx_add_rust_staticlib(fcitx5_package_core fcitx5-package-core package-core)
 
 add_executable(
@@ -123,7 +124,6 @@ add_executable(
   "${REPOSITORY_ROOT}/src/platform/runtime_identity.cpp"
   "${REPOSITORY_ROOT}/src/platform/pipe_security.cpp"
   "${REPOSITORY_ROOT}/src/ipc/peer_verification.cpp"
-  "${REPOSITORY_ROOT}/src/config/config_parser.cpp"
   "${REPOSITORY_ROOT}/src/engine/key_event.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_runtime.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_dispatcher.cpp"
@@ -145,14 +145,12 @@ target_include_directories(
           "${REPOSITORY_ROOT}/src/ipc"
           "${REPOSITORY_ROOT}/src/config"
           "${REPOSITORY_ROOT}/src/engine")
-target_include_directories(
-  fcitx5_engine
-  SYSTEM PRIVATE "${REPOSITORY_ROOT}/third_party/tomlplusplus/include")
 target_link_libraries(
   fcitx5_engine
   PRIVATE Fcitx5::Core advapi32 user32
           fcitx5_protocol_core_rust fcitx5_engine_core_rust
-          fcitx5_windows_common_core_rust fcitx5_control_core_rust fcitx5_package_core_rust
+          fcitx5_windows_common_core_rust fcitx5_control_core_rust
+          fcitx5_config_core_rust fcitx5_package_core_rust
           ntdll ws2_32 userenv bcrypt)
 fcitx_stage_native_runtime(fcitx5_engine)
 

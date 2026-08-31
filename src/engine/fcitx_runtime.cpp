@@ -1,5 +1,5 @@
 #include "fcitx_runtime.h"
-#include "config_model.h"
+#include "config_snapshot_ffi.h"
 #include "engine_core_ffi.h"
 #include "key_event.h"
 #include "runtime_identity.h"
@@ -24,16 +24,16 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 extern "C" std::size_t fcitx5_package_active_addon_dirs_utf16(
     const wchar_t* install_root, std::size_t install_root_len, wchar_t* output,
@@ -47,7 +47,7 @@ struct EngineConfig {
     std::optional<std::string> defaultInputMethod;
     std::optional<std::string> hotkeyToggle;
     std::optional<std::string> hotkeyNext;
-    config::Orientation orientation{config::Orientation::vertical};
+    bool vertical{true};
     std::optional<int> candidatePageSize;
     bool scrollMode{};
 };
@@ -104,51 +104,48 @@ std::filesystem::path localDataDirectory() {
     return result / kReleaseIdentity.data_directory;
 }
 
-// config.toml is owned by the config module; parse it with the single
-// authoritative parser (config_parser.cpp) instead of a second, hand-rolled
-// TOML reader that could drift from the config tool's semantics.
+std::string copyConfigUtf8(Fcitx5ConfigUtf8 value) {
+    if (!value.ptr || value.len == 0)
+        return {};
+    return {reinterpret_cast<const char*>(value.ptr), value.len};
+}
+
+// Config Core owns parsing, validation, Current/LKG/default recovery, and the
+// resolved product schema. This direct Fcitx adapter only copies the few
+// values needed to configure upstream Fcitx objects.
 EngineConfig readEngineConfig() {
     EngineConfig config;
     const auto data = localDataDirectory();
-    std::string text;
     if (!data.empty()) {
-        std::ifstream file(data / L"config.toml");
-        if (file) {
-            std::ostringstream buffer;
-            buffer << file.rdbuf();
-            text = buffer.str();
+        const auto path = (data / L"config.toml").native();
+        static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+        const Fcitx5ConfigUtf16 input{
+            reinterpret_cast<const std::uint16_t*>(path.data()), path.size()};
+        std::unique_ptr<void, decltype(&fcitx5_config_snapshot_destroy)> snapshot(
+            fcitx5_config_snapshot_load_current_utf16(input),
+            &fcitx5_config_snapshot_destroy);
+        Fcitx5ConfigSnapshot view{};
+        if (snapshot && fcitx5_config_snapshot_view(snapshot.get(), &view) != 0) {
+            config.enabled.reserve(view.inputMethodCount);
+            for (std::size_t index = 0; index < view.inputMethodCount; ++index) {
+                auto id = copyConfigUtf8(
+                    fcitx5_config_snapshot_input_method_at(snapshot.get(), index));
+                if (!id.empty())
+                    config.enabled.push_back(std::move(id));
+            }
+            if (auto value = copyConfigUtf8(view.defaultInputMethod); !value.empty())
+                config.defaultInputMethod = std::move(value);
+            if (auto value = copyConfigUtf8(view.hotkeyToggleInputMethod); !value.empty())
+                config.hotkeyToggle = std::move(value);
+            if (auto value = copyConfigUtf8(view.hotkeyNextInputMethod); !value.empty())
+                config.hotkeyNext = std::move(value);
+            config.vertical = copyConfigUtf8(view.candidateOrientation) != "horizontal";
+            config.candidatePageSize = static_cast<int>(view.candidatePageSize);
+            config.scrollMode = view.candidateScrollMode != 0;
         }
     }
-    fcitx::windows::config::Config parsed;
-    fcitx::windows::config::ParseError error;
-    const bool parsedOk = !text.empty() &&
-                          fcitx::windows::config::parseConfig(text, parsed, error);
-    if (!parsedOk) {
-        // Fall back to the canonical defaults owned by the config module,
-        // which include [input_methods] and [hotkeys].
-        fcitx::windows::config::Config defaults;
-        fcitx::windows::config::ParseError defaultError;
-        if (fcitx::windows::config::parseConfig(
-                fcitx::windows::config::defaultConfigToml(), defaults, defaultError)) {
-            parsed = std::move(defaults);
-        }
-        // Missing or broken user config must not implicitly enable every
-        // bundled/input-method profile. Keep the engine's default activation
-        // policy aligned with TSF registration: pinyin only until the user or
-        // package config explicitly enables additional engines such as Rime.
-        parsed.enabledInputMethods = {"pinyin"};
-        parsed.defaultInputMethod = "pinyin";
-    }
-    config.enabled = parsed.enabledInputMethods;
-    config.defaultInputMethod = parsed.defaultInputMethod;
-    config.hotkeyToggle = parsed.hotkeyToggleInputMethod;
-    config.hotkeyNext = parsed.hotkeyNextInputMethod;
-    const auto parsedOrientation = parsed.orientation.value_or(config::Orientation::vertical);
-    config.orientation = parsedOrientation == config::Orientation::automatic
-                             ? config::Orientation::vertical
-                             : parsedOrientation;
-    config.candidatePageSize = parsed.candidatePageSize;
-    config.scrollMode = parsed.scrollMode.value_or(false);
+    // An unavailable ABI/path still fails soft to the same conservative
+    // activation policy as Config Core's compiled defaults.
     if (config.enabled.empty())
         config.enabled = {"pinyin"};
     if (!config.defaultInputMethod ||
@@ -879,7 +876,7 @@ class FcitxRuntime::Impl final {
                 } else if (config.scrollMode) {
                     std::uint32_t scrollOffset = 0;
                     if (fcitx5_engine_core_scroll_label_offset(
-                            config.orientation == config::Orientation::vertical ? 1 : 0,
+                            config.vertical ? 1 : 0,
                             static_cast<std::uint32_t>((std::max)(0, cursor)),
                             static_cast<std::uint32_t>(index),
                             static_cast<std::uint32_t>(dimension),
@@ -1095,7 +1092,7 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         keyEvent.view.hasNext = pageable && pageable->hasNext() ? 1U : 0U;
         keyEvent.config.scrollMode = impl_->config.scrollMode ? 1U : 0U;
         keyEvent.config.vertical =
-            impl_->config.orientation == config::Orientation::vertical ? 1U : 0U;
+            impl_->config.vertical ? 1U : 0U;
         keyEvent.config.candidatePageSize =
             impl_->config.candidatePageSize
                 ? static_cast<std::int32_t>(*impl_->config.candidatePageSize)
