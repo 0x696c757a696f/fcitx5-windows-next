@@ -672,7 +672,14 @@ impl CurrentUserRuntimeIdentity {
     /// and session.
     #[must_use]
     pub fn verifies_pipe_client(&self, pipe: BorrowedHandle<'_>) -> bool {
-        verified_pipe_client_peer(
+        self.verified_pipe_client_process_id(pipe).is_some()
+    }
+
+    /// Returns the verified named-pipe client's process ID when it belongs to
+    /// this exact interactive principal and session.
+    #[must_use]
+    pub fn verified_pipe_client_process_id(&self, pipe: BorrowedHandle<'_>) -> Option<u32> {
+        let peer = verified_pipe_client_peer(
             pipe.as_raw_handle(),
             self.service_account,
             self.session_id,
@@ -684,9 +691,8 @@ impl CurrentUserRuntimeIdentity {
             0,
             std::ptr::null_mut(),
             0,
-        )
-        .status
-            != 0
+        );
+        (peer.status != 0 && peer.process_id != 0).then_some(peer.process_id)
     }
 }
 
@@ -905,9 +911,9 @@ impl NamedPipeServer {
                 name.as_ptr(),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                // Two sibling instances let a single-threaded server keep the
-                // next listener available while finishing the current reply.
-                2,
+                // Let bounded server worker pools create every listener they
+                // need; Windows still enforces the per-process pipe limit.
+                255, // PIPE_UNLIMITED_INSTANCES
                 buffer_bytes,
                 buffer_bytes,
                 100,
@@ -933,6 +939,13 @@ impl NamedPipeServer {
     #[must_use]
     pub fn verifies_client(&self, identity: &CurrentUserRuntimeIdentity) -> bool {
         identity.verifies_pipe_client(self.handle.as_handle())
+    }
+
+    /// Returns the connected client's process ID after enforcing the same
+    /// user/session peer policy as [`Self::verifies_client`].
+    #[must_use]
+    pub fn verified_client_process_id(&self, identity: &CurrentUserRuntimeIdentity) -> Option<u32> {
+        identity.verified_pipe_client_process_id(self.handle.as_handle())
     }
 
     /// Reads exactly `bytes.len()` bytes before `deadline`.

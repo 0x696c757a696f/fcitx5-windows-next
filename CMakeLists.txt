@@ -571,13 +571,32 @@ set_target_properties(fcitx5_tsf_activation_guard PROPERTIES
 add_dependencies(fcitx5_tsf_activation_guard fcitx5_tsf_support_core_rustlib)
 target_link_libraries(fcitx5_tsf_activation_guard INTERFACE ws2_32 userenv ntdll bcrypt advapi32)
 
-add_executable(fcitx5_mock_engine src/engine/mock_engine_main.cpp)
-set_target_properties(fcitx5_mock_engine PROPERTIES OUTPUT_NAME "fcitx5-mock-engine")
-target_link_libraries(
-  fcitx5_mock_engine
-  PRIVATE fcitx5::windows_common fcitx5::protocol fcitx5::ipc_client fcitx5::platform)
-fcitx_apply_project_options(fcitx5_mock_engine)
-fcitx_apply_binary_hardening(fcitx5_mock_engine)
+set(FCITX_RUST_MOCK_ENGINE_EXE
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-mock-engine.exe")
+set(FCITX_MOCK_ENGINE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+set(FCITX_MOCK_ENGINE_EXE "${FCITX_MOCK_ENGINE_OUTPUT_DIR}/fcitx5-mock-engine.exe")
+add_custom_target(
+  fcitx5_mock_engine ALL
+  BYPRODUCTS "${FCITX_MOCK_ENGINE_EXE}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-mock-engine-core --bin
+    fcitx5-mock-engine --target "${FCITX_RUST_TARGET}" --profile
+    "$<IF:$<CONFIG:Debug>,dev,release>"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${FCITX_MOCK_ENGINE_OUTPUT_DIR}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+          "${FCITX_RUST_MOCK_ENGINE_EXE}" "${FCITX_MOCK_ENGINE_EXE}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/mock-engine-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/mock-engine-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/mock-engine-core/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/src/lib.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-mock-engine.exe fixture")
 
 add_executable(fcitx5_control src/control/control_main.cpp)
 set_target_properties(fcitx5_control PROPERTIES OUTPUT_NAME "fcitx5-control")
@@ -953,7 +972,7 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:fcitx5_pqc_fixture_signer>")
   set_tests_properties(control-package-stopped-service-contract PROPERTIES TIMEOUT 30)
   add_test(NAME launcher-version COMMAND "${FCITX_LAUNCHER_SHIPPING_EXE}" --version)
-  add_test(NAME mock-engine-version COMMAND fcitx5_mock_engine --version)
+  add_test(NAME mock-engine-version COMMAND "${FCITX_MOCK_ENGINE_EXE}" --version)
   add_test(NAME control-version COMMAND fcitx5_control --version)
   add_test(NAME control-schema COMMAND fcitx5_control --schema)
   add_test(NAME control-startup-query COMMAND fcitx5_control --get-startup)
@@ -1417,16 +1436,16 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_ipc_roundtrip_test)
   fcitx_apply_binary_hardening(fcitx5_ipc_roundtrip_test)
   add_test(NAME ipc-key-commit-roundtrip
-           COMMAND fcitx5_ipc_roundtrip_test $<TARGET_FILE:fcitx5_mock_engine>)
+           COMMAND fcitx5_ipc_roundtrip_test "${FCITX_MOCK_ENGINE_EXE}")
 
   add_executable(fcitx5_ipc_multi_client_test tests/integration/ipc_multi_client_test.cpp)
   target_link_libraries(fcitx5_ipc_multi_client_test PRIVATE fcitx5::ipc_client)
   fcitx_apply_project_options(fcitx5_ipc_multi_client_test)
   fcitx_apply_binary_hardening(fcitx5_ipc_multi_client_test)
   add_test(NAME ipc-multi-client
-           COMMAND fcitx5_ipc_multi_client_test $<TARGET_FILE:fcitx5_mock_engine>)
+           COMMAND fcitx5_ipc_multi_client_test "${FCITX_MOCK_ENGINE_EXE}")
   add_test(NAME ipc-multi-client-32
-           COMMAND fcitx5_ipc_multi_client_test $<TARGET_FILE:fcitx5_mock_engine> 32)
+           COMMAND fcitx5_ipc_multi_client_test "${FCITX_MOCK_ENGINE_EXE}" 32)
   set_tests_properties(ipc-multi-client-32 PROPERTIES TIMEOUT 30)
 
   add_executable(fcitx5_ipc_idle_client_test tests/integration/ipc_idle_client_test.cpp)
@@ -1434,7 +1453,7 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_ipc_idle_client_test)
   fcitx_apply_binary_hardening(fcitx5_ipc_idle_client_test)
   add_test(NAME ipc-idle-client
-           COMMAND fcitx5_ipc_idle_client_test $<TARGET_FILE:fcitx5_mock_engine>)
+           COMMAND fcitx5_ipc_idle_client_test "${FCITX_MOCK_ENGINE_EXE}")
   set_tests_properties(ipc-idle-client PROPERTIES TIMEOUT 30)
 
   add_executable(fcitx5_ipc_generation_routing_test
@@ -1443,7 +1462,7 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_ipc_generation_routing_test)
   fcitx_apply_binary_hardening(fcitx5_ipc_generation_routing_test)
   add_test(NAME ipc-generation-routing
-           COMMAND fcitx5_ipc_generation_routing_test $<TARGET_FILE:fcitx5_mock_engine>)
+           COMMAND fcitx5_ipc_generation_routing_test "${FCITX_MOCK_ENGINE_EXE}")
   set_tests_properties(ipc-generation-routing PROPERTIES TIMEOUT 30)
 
   add_executable(fcitx5_ipc_late_response_test
@@ -1452,7 +1471,7 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_ipc_late_response_test)
   fcitx_apply_binary_hardening(fcitx5_ipc_late_response_test)
   add_test(NAME ipc-late-response-reconnect
-           COMMAND fcitx5_ipc_late_response_test $<TARGET_FILE:fcitx5_mock_engine>)
+           COMMAND fcitx5_ipc_late_response_test "${FCITX_MOCK_ENGINE_EXE}")
 
   add_executable(fcitx5_launcher_integration_test tests/integration/launcher_integration_test.cpp)
   target_link_libraries(fcitx5_launcher_integration_test PRIVATE fcitx5::ipc_client)
@@ -1462,7 +1481,7 @@ if(BUILD_TESTING)
   add_test(NAME launcher-engine-lifecycle
            COMMAND fcitx5_launcher_integration_test
                    "${FCITX_LAUNCHER_SHIPPING_EXE}"
-                   $<TARGET_FILE:fcitx5_mock_engine>)
+                   "${FCITX_MOCK_ENGINE_EXE}")
 
   add_executable(fcitx5_crash_engine_fixture tests/fixtures/crashing_engine_main.cpp)
   set_target_properties(
@@ -1522,7 +1541,7 @@ if(BUILD_TESTING)
   add_test(NAME tsf-key-commit-e2e
            COMMAND fcitx5_tsf_key_commit_test
                   "${FCITX_SHIPPING_TSF_DLL}"
-                   $<TARGET_FILE:fcitx5_mock_engine>
+                   "${FCITX_MOCK_ENGINE_EXE}"
                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/tsf_behavior_corpus.json")
 
   # Interactive desktop E2E. It is built with the test suite but intentionally

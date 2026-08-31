@@ -1,0 +1,14 @@
+[package]
+name = "fcitx5-mock-engine-core"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[[bin]]
+name = "fcitx5-mock-engine"
+path = "src/main.rs"
+
+[dependencies]
+fcitx5-protocol-core = { path = "../protocol-core" }
+fcitx5-windows-common-core = { path = "../windows-common-core" }

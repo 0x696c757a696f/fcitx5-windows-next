@@ -164,6 +164,9 @@ version = "0.1.0"
 dependencies = [
  "fcitx5-config-core",
  "fcitx5-package-core",
+ "fcitx5-process-execution-core",
+ "fcitx5-protocol-core",
+ "fcitx5-windows-common-core",
  "toml_edit",
 ]
 
@@ -187,6 +190,14 @@ dependencies = [
 [[package]]
 name = "fcitx5-measurement-core"
 version = "0.1.0"
+
+[[package]]
+name = "fcitx5-mock-engine-core"
+version = "0.1.0"
+dependencies = [
+ "fcitx5-protocol-core",
+ "fcitx5-windows-common-core",
+]
 
 [[package]]
 name = "fcitx5-package-core"
