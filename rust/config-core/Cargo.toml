@@ -8,3 +8,6 @@ publish = false
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "1.1.4"
+
+[lib]
+crate-type = ["rlib", "staticlib"]

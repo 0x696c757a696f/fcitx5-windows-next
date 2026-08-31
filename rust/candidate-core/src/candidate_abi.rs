@@ -67,6 +67,10 @@ pub struct Fcitx5CandidateUiColor {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Fcitx5CandidateUiPlanOutput {
+    pub engine_epoch: u64,
+    pub context_id: u64,
+    pub composition_id: u64,
+    pub revision: u64,
     pub popup_visible: u8,
     pub orientation: u32,
     pub placement: u32,
@@ -114,11 +118,27 @@ pub struct Fcitx5CandidateUiUiaItemOutput {
     pub selected: u8,
 }
 
-#[derive(Default)]
 struct CandidateUiAbiState {
     core: CandidateUiState,
     measurement_texts: Vec<CandidateUiText>,
     plan: CandidateUiPlan,
+    identity: CandidateSnapshotIdentity,
+}
+
+impl Default for CandidateUiAbiState {
+    fn default() -> Self {
+        Self {
+            core: CandidateUiState::default(),
+            measurement_texts: Vec::new(),
+            plan: CandidateUiPlan::default(),
+            identity: CandidateSnapshotIdentity {
+                engine_epoch: 0,
+                context_id: 0,
+                composition_id: 0,
+                revision: 0,
+            },
+        }
+    }
 }
 
 /// Creates one Rust-owned Candidate UI state. The returned opaque handle has no HWND or COM state.
@@ -167,8 +187,10 @@ pub unsafe extern "C" fn fcitx5_candidate_ui_apply(
         let Some(input) = (unsafe { input_from_ffi(input) }) else {
             return 3;
         };
+        let identity = input.snapshot.identity;
         let result = state.core.apply(input);
         if result == CandidateUiApplyResult::Applied {
+            state.identity = identity;
             state.measurement_texts = state.core.measurement_texts();
             state.plan = CandidateUiPlan::default();
         }
@@ -263,7 +285,7 @@ pub unsafe extern "C" fn fcitx5_candidate_ui_build_plan(
         let state = unsafe { &mut *state.cast::<CandidateUiAbiState>() };
         state.plan = state.core.render_plan(&measurements);
         // SAFETY: output is writable by the function contract.
-        unsafe { *output = plan_output(&state.plan) };
+        unsafe { *output = plan_output(&state.plan, state.identity) };
         if item_capacity < state.plan.items.len() || uia_item_capacity < state.plan.uia.items.len()
         {
             return 0;
@@ -468,6 +490,82 @@ mod tests {
         assert_eq!(result, 0);
         unsafe { fcitx5_candidate_ui_destroy(state) };
     }
+
+    #[test]
+    fn plan_output_retains_the_applied_snapshot_identity() {
+        let snapshot = Fcitx5CandidateModelSnapshot {
+            engine_epoch: 7,
+            context_id: 8,
+            composition_id: 9,
+            revision: 10,
+            preedit: Fcitx5CandidateUtf8::default(),
+            auxiliary_up: Fcitx5CandidateUtf8::default(),
+            auxiliary_down: Fcitx5CandidateUtf8::default(),
+            candidates: std::ptr::null(),
+            candidate_count: 0,
+            selected: 0,
+            has_selected: 0,
+            page: 0,
+            total: 0,
+            visibility: 0,
+            popup_allowed: 1,
+        };
+        let input = Fcitx5CandidateUiInput {
+            snapshot,
+            locale: Fcitx5CandidateUtf8::default(),
+            caret: Fcitx5CandidateLayoutPoint::default(),
+            caret_height: 0.0,
+            work_area: Fcitx5CandidateLayoutRect {
+                right: 1.0,
+                bottom: 1.0,
+                ..Fcitx5CandidateLayoutRect::default()
+            },
+            candidate_bulk: 0,
+            orientation: 0,
+            scroll_mode: 0,
+            page_size: 1,
+            max_width: 1.0,
+            scroll_cell_width: 1.0,
+            padding_x: 0.0,
+            padding_y: 0.0,
+            row_gap: 0.0,
+            column_gap: 0.0,
+            item_padding_x: 0.0,
+            item_padding_y: 0.0,
+            label_gap: 0.0,
+            candidate_font_size: 1.0,
+            theme: 0,
+            opacity: 1.0,
+        };
+        let state = fcitx5_candidate_ui_create();
+        assert_eq!(unsafe { fcitx5_candidate_ui_apply(state, &input) }, 0);
+        let mut output = Fcitx5CandidateUiPlanOutput::default();
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_ui_build_plan(
+                    state,
+                    std::ptr::null(),
+                    0,
+                    &mut output,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            },
+            1
+        );
+        assert_eq!(
+            (
+                output.engine_epoch,
+                output.context_id,
+                output.composition_id,
+                output.revision
+            ),
+            (7, 8, 9, 10)
+        );
+        unsafe { fcitx5_candidate_ui_destroy(state) };
+    }
 }
 
 fn finite(value: f32) -> Option<f32> {
@@ -513,8 +611,15 @@ fn color_to_ffi(value: CandidateUiColor) -> Fcitx5CandidateUiColor {
     }
 }
 
-fn plan_output(plan: &CandidateUiPlan) -> Fcitx5CandidateUiPlanOutput {
+fn plan_output(
+    plan: &CandidateUiPlan,
+    identity: CandidateSnapshotIdentity,
+) -> Fcitx5CandidateUiPlanOutput {
     Fcitx5CandidateUiPlanOutput {
+        engine_epoch: identity.engine_epoch,
+        context_id: identity.context_id,
+        composition_id: identity.composition_id,
+        revision: identity.revision,
         popup_visible: u8::from(plan.popup_visible),
         orientation: match plan.orientation {
             Orientation::Vertical => 0,
