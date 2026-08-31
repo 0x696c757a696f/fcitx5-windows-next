@@ -26,6 +26,10 @@ pub struct ConfigSnapshot {
     appearance: AppearanceConfig,
     candidate: CandidateConfig,
     fonts: FontsConfig,
+    #[serde(default)]
+    input_methods: InputMethodsConfig,
+    #[serde(default)]
+    hotkeys: HotkeysConfig,
 }
 
 impl ConfigSnapshot {
@@ -45,6 +49,18 @@ impl ConfigSnapshot {
     #[must_use]
     pub fn fonts(&self) -> &FontsConfig {
         &self.fonts
+    }
+
+    /// Returns the Engine input-method activation policy.
+    #[must_use]
+    pub fn input_methods(&self) -> &InputMethodsConfig {
+        &self.input_methods
+    }
+
+    /// Returns the Engine hotkey policy.
+    #[must_use]
+    pub fn hotkeys(&self) -> &HotkeysConfig {
+        &self.hotkeys
     }
 }
 
@@ -208,6 +224,68 @@ pub struct AnnotationFont {
     scale: f32,
 }
 
+/// Resolved Engine input-method activation policy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputMethodsConfig {
+    enabled: Vec<String>,
+    default: String,
+}
+
+impl Default for InputMethodsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: vec!["pinyin".to_owned()],
+            default: "pinyin".to_owned(),
+        }
+    }
+}
+
+impl InputMethodsConfig {
+    /// Returns enabled input-method IDs in activation order.
+    #[must_use]
+    pub fn enabled(&self) -> &[String] {
+        &self.enabled
+    }
+
+    /// Returns the default input-method ID.
+    #[must_use]
+    pub fn default_id(&self) -> &str {
+        &self.default
+    }
+}
+
+/// Resolved Engine hotkey policy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HotkeysConfig {
+    toggle_input_method: String,
+    next_input_method: String,
+}
+
+impl Default for HotkeysConfig {
+    fn default() -> Self {
+        Self {
+            toggle_input_method: "Ctrl+Space".to_owned(),
+            next_input_method: "Ctrl+Shift".to_owned(),
+        }
+    }
+}
+
+impl HotkeysConfig {
+    /// Returns the input-method toggle hotkey.
+    #[must_use]
+    pub fn toggle_input_method(&self) -> &str {
+        &self.toggle_input_method
+    }
+
+    /// Returns the next-input-method hotkey.
+    #[must_use]
+    pub fn next_input_method(&self) -> &str {
+        &self.next_input_method
+    }
+}
+
 /// Sparse user overrides persisted in `config.toml`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConfigOverrides {
@@ -220,6 +298,10 @@ pub struct ConfigOverrides {
     candidate: CandidateOverrides,
     #[serde(default, skip_serializing_if = "FontsOverrides::is_empty")]
     fonts: FontsOverrides,
+    #[serde(default, skip_serializing_if = "InputMethodsOverrides::is_empty")]
+    input_methods: InputMethodsOverrides,
+    #[serde(default, skip_serializing_if = "HotkeysOverrides::is_empty")]
+    hotkeys: HotkeysOverrides,
     /// Fcitx-owned and forward-compatible TOML is retained verbatim by the
     /// Windows Config transaction without becoming a second semantic owner.
     #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
@@ -256,6 +338,46 @@ impl ConfigOverrides {
         self.fonts.annotation.families = None;
         self.fonts.annotation.scale = None;
         self.fonts.monospace.families = None;
+        self.input_methods.enabled = None;
+        self.input_methods.default = None;
+        self.hotkeys.toggle_input_method = None;
+        self.hotkeys.next_input_method = None;
+    }
+}
+
+/// Sparse Engine input-method activation overrides.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct InputMethodsOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default: Option<String>,
+    #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    passthrough: BTreeMap<String, toml::Value>,
+}
+
+impl InputMethodsOverrides {
+    fn is_empty(&self) -> bool {
+        self.enabled.is_none() && self.default.is_none() && self.passthrough.is_empty()
+    }
+}
+
+/// Sparse Engine hotkey overrides.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HotkeysOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toggle_input_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_input_method: Option<String>,
+    #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    passthrough: BTreeMap<String, toml::Value>,
+}
+
+impl HotkeysOverrides {
+    fn is_empty(&self) -> bool {
+        self.toggle_input_method.is_none()
+            && self.next_input_method.is_none()
+            && self.passthrough.is_empty()
     }
 }
 
@@ -598,7 +720,7 @@ pub enum ConfigCommand {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommandOutput {
     /// A resolved Draft snapshot.
-    Snapshot(ConfigSnapshot),
+    Snapshot(Box<ConfigSnapshot>),
     /// A validated command produced no data.
     Valid,
     /// The current Draft differences.
@@ -987,10 +1109,10 @@ impl ConfigCore {
         path: &Path,
     ) -> Result<CommandOutput, ConfigError> {
         match command {
-            ConfigCommand::Get => Ok(CommandOutput::Snapshot(self.preview())),
+            ConfigCommand::Get => Ok(CommandOutput::Snapshot(Box::new(self.preview()))),
             ConfigCommand::Set(edit) => {
                 self.set(edit);
-                Ok(CommandOutput::Snapshot(self.preview()))
+                Ok(CommandOutput::Snapshot(Box::new(self.preview())))
             }
             ConfigCommand::Validate => {
                 self.validate()?;
@@ -999,13 +1121,13 @@ impl ConfigCore {
             ConfigCommand::Diff => Ok(CommandOutput::Diff(self.diff())),
             ConfigCommand::Reset(field) => {
                 self.reset(field);
-                Ok(CommandOutput::Snapshot(self.preview()))
+                Ok(CommandOutput::Snapshot(Box::new(self.preview())))
             }
             ConfigCommand::Import(text) => {
                 let imported = parse_overrides(&text)?;
                 validate_snapshot(&self.resolve(&imported))?;
                 self.draft = imported;
-                Ok(CommandOutput::Snapshot(self.preview()))
+                Ok(CommandOutput::Snapshot(Box::new(self.preview())))
             }
             ConfigCommand::Export => Ok(CommandOutput::Export(serialize_overrides(&self.draft)?)),
             ConfigCommand::Doctor => Ok(CommandOutput::Doctor(Self::recover(store, path)?.source)),
@@ -1070,9 +1192,7 @@ impl ConfigCore {
         if let Err(error) = current_result {
             let restore = store.restore_last_known_good(previous_lkg_stage.as_deref(), &lkg_path);
             let _ = fs::remove_file(&current_stage);
-            if let Err(restore_error) = restore {
-                return Err(restore_error);
-            }
+            restore?;
             return Err(error);
         }
         if let Some(stage) = previous_lkg_stage {
@@ -1171,6 +1291,23 @@ impl ConfigCore {
         }
         if let Some(value) = &overrides.fonts.monospace.families {
             resolved.fonts.monospace.families.clone_from(value);
+        }
+        if let Some(values) = &overrides.input_methods.enabled {
+            resolved.input_methods.enabled.clear();
+            for value in values {
+                if !resolved.input_methods.enabled.contains(value) {
+                    resolved.input_methods.enabled.push(value.clone());
+                }
+            }
+        }
+        if let Some(value) = &overrides.input_methods.default {
+            resolved.input_methods.default.clone_from(value);
+        }
+        if let Some(value) = &overrides.hotkeys.toggle_input_method {
+            resolved.hotkeys.toggle_input_method.clone_from(value);
+        }
+        if let Some(value) = &overrides.hotkeys.next_input_method {
+            resolved.hotkeys.next_input_method.clone_from(value);
         }
         resolved
     }
@@ -1606,7 +1743,23 @@ fn validate_snapshot(snapshot: &ConfigSnapshot) -> Result<(), ConfigError> {
     validate_font_families(
         "fonts.monospace.families",
         &snapshot.fonts.monospace.families,
-    )
+    )?;
+    if snapshot.input_methods.enabled.is_empty() {
+        return invalid("input_methods.enabled must not be empty");
+    }
+    for id in &snapshot.input_methods.enabled {
+        if !valid_stable_id(id, false) {
+            return invalid("input_methods.enabled must contain stable non-empty IDs");
+        }
+    }
+    if !snapshot
+        .input_methods
+        .enabled
+        .contains(&snapshot.input_methods.default)
+    {
+        return invalid("input_methods.default must be in input_methods.enabled");
+    }
+    Ok(())
 }
 
 fn validate_one_of(field: &str, value: &str, values: &[&str]) -> Result<(), ConfigError> {
@@ -1618,19 +1771,22 @@ fn validate_one_of(field: &str, value: &str, values: &[&str]) -> Result<(), Conf
 }
 
 fn validate_id(field: &str, value: &str, allow_builtin: bool) -> Result<(), ConfigError> {
-    let valid = !value.is_empty()
+    if valid_stable_id(value, allow_builtin) {
+        Ok(())
+    } else {
+        invalid(&format!("{field} must be a stable theme ID"))
+    }
+}
+
+fn valid_stable_id(value: &str, allow_builtin: bool) -> bool {
+    !value.is_empty()
         && value.len() <= 64
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase()
                 || byte.is_ascii_digit()
                 || matches!(byte, b'.' | b'_' | b'-' | b':')
         })
-        && (allow_builtin || !value.starts_with("builtin:"));
-    if valid {
-        Ok(())
-    } else {
-        invalid(&format!("{field} must be a stable theme ID"))
-    }
+        && (allow_builtin || !value.starts_with("builtin:"))
 }
 
 fn validate_finite_range(

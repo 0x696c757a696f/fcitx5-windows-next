@@ -374,3 +374,41 @@ fn production_corpus_round_trips_product_fields_and_preserves_fcitx_and_future_d
     }
     ConfigCore::load(&store, &path).expect("the persisted corpus should reload");
 }
+
+#[test]
+fn engine_input_methods_and_hotkeys_are_typed_and_validated_by_config_core() {
+    let directory = TestDirectory::new("engine-settings");
+    let path = directory.config_path();
+    let store = FileStore::new();
+    fs::write(
+        &path,
+        "format_version = 1\n\
+         [input_methods]\n\
+         enabled = [\"pinyin\", \"rime\", \"pinyin\"]\n\
+         default = \"rime\"\n\
+         [hotkeys]\n\
+         toggle_input_method = \"Ctrl+Space\"\n\
+         next_input_method = \"Ctrl+Shift\"\n",
+    )
+    .expect("engine settings fixture");
+
+    let snapshot = ConfigCore::load(&store, &path)
+        .expect("valid engine settings")
+        .current();
+    assert_eq!(snapshot.input_methods().enabled(), ["pinyin", "rime"]);
+    assert_eq!(snapshot.input_methods().default_id(), "rime");
+    assert_eq!(snapshot.hotkeys().toggle_input_method(), "Ctrl+Space");
+    assert_eq!(snapshot.hotkeys().next_input_method(), "Ctrl+Shift");
+
+    for invalid in [
+        "format_version = 1\n[input_methods]\nenabled = []\n",
+        "format_version = 1\n[input_methods]\nenabled = [\"bad id\"]\n",
+        "format_version = 1\n[input_methods]\nenabled = [\"pinyin\"]\ndefault = \"rime\"\n",
+    ] {
+        fs::write(&path, invalid).expect("invalid fixture");
+        assert!(matches!(
+            ConfigCore::load(&store, &path),
+            Err(ConfigError::Validation { .. })
+        ));
+    }
+}
