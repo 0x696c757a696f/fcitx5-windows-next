@@ -1,4 +1,4 @@
-#include "config_model.h"
+#include "config_snapshot_ffi.h"
 #include "peer_verification.h"
 #include "pipe_client.h"
 #include "pipe_security.h"
@@ -507,7 +507,6 @@ struct ParsedCommandLine {
 namespace {
 
 using Microsoft::WRL::ComPtr;
-namespace config = fcitx::windows::config;
 namespace ui = fcitx::windows::ui;
 
 namespace candidate {
@@ -778,24 +777,72 @@ std::wstring contentLocaleOrFallback(std::string_view locale) {
     return result;
 }
 
-std::uint32_t labelStyleToRust(fcitx::windows::config::LabelStyle style) noexcept {
+// This is deliberately a renderer-local projection. Config Core owns parsing,
+// validation, recovery, theme resolution, and all defaults; the native window
+// receives only resolved D2D/DWrite values through its narrow ABI.
+enum class NativeOrientation : std::uint8_t { automatic, vertical, horizontal };
+enum class NativeLabelStyle : std::uint8_t { plain, dot, paren, bracket, circled };
+enum class NativePreeditMode : std::uint8_t { inline_, panel };
+
+struct NativeRenderColors {
+    D2D1_COLOR_F background{D2D1::ColorF(0.97F, 0.98F, 0.98F)};
+    D2D1_COLOR_F candidateText{D2D1::ColorF(0.13F, 0.13F, 0.14F)};
+    D2D1_COLOR_F selectedBackground{D2D1::ColorF(0.027F, 0.757F, 0.376F, 0.10F)};
+    D2D1_COLOR_F selectedCandidateText{D2D1::ColorF(0.027F, 0.757F, 0.376F)};
+    D2D1_COLOR_F labelText{candidateText};
+    D2D1_COLOR_F commentText{candidateText};
+    D2D1_COLOR_F preeditText{candidateText};
+    D2D1_COLOR_F selectedLabelText{selectedCandidateText};
+    D2D1_COLOR_F selectedCommentText{selectedCandidateText};
+    D2D1_COLOR_F border{D2D1::ColorF(0.82F, 0.82F, 0.82F)};
+};
+
+struct NativeRenderConfig {
+    NativeOrientation orientation{};
+    NativePreeditMode preeditMode{};
+    NativeLabelStyle labelStyle{NativeLabelStyle::dot};
+    std::vector<std::wstring> candidateLabels;
+    std::vector<std::wstring> candidateFontFamilies;
+    std::vector<std::wstring> annotationFontFamilies;
+    NativeRenderColors colors;
+    float maxWidthDip{};
+    float scrollCellWidthDip{};
+    float opacity{};
+    float paddingXDip{};
+    float paddingYDip{};
+    float itemPaddingXDip{};
+    float itemPaddingYDip{};
+    float rowGapDip{};
+    float columnGapDip{};
+    float borderWidthDip{};
+    float cornerRadiusDip{};
+    float labelFontScale{};
+    float labelGapDip{};
+    float candidateFontSizeDip{};
+    float annotationFontScale{};
+    std::uint16_t candidateFontWeight{};
+    bool scrollMode{};
+    bool labelVisible{};
+};
+
+std::uint32_t labelStyleToRust(NativeLabelStyle style) noexcept {
     switch (style) {
-    case fcitx::windows::config::LabelStyle::plain:
+    case NativeLabelStyle::plain:
         return 0;
-    case fcitx::windows::config::LabelStyle::dot:
+    case NativeLabelStyle::dot:
         return 1;
-    case fcitx::windows::config::LabelStyle::paren:
+    case NativeLabelStyle::paren:
         return 2;
-    case fcitx::windows::config::LabelStyle::bracket:
+    case NativeLabelStyle::bracket:
         return 3;
-    case fcitx::windows::config::LabelStyle::circled:
+    case NativeLabelStyle::circled:
         return 4;
     }
     return 1;
 }
 
 std::wstring formatCandidateLabel(std::uint32_t slot, std::wstring_view label,
-                                  fcitx::windows::config::LabelStyle style) {
+                                  NativeLabelStyle style) {
     const fcitx::windows::ui::detail::Fcitx5CandidateUtf16 empty{};
     const auto required = fcitx::windows::ui::detail::fcitx5_candidate_format_label_utf16(
         slot, labelStyleToRust(style), fcitx::windows::ui::toRust(label), empty, empty, nullptr, 0);
@@ -927,56 +974,179 @@ std::filesystem::path localDataDirectory() {
         identity.executablePath, fcitx::windows::kReleaseIdentity.data_directory);
 }
 
-fcitx::windows::config::Config loadVisualConfig(bool safeMode) {
-    using namespace fcitx::windows::config;
-    Config defaults;
-    ParseError error;
-    if (!parseConfig(defaultConfigToml(), defaults, error))
+std::string_view borrowedUtf8(Fcitx5ConfigUtf8 value) noexcept {
+    if (value.ptr == nullptr || value.len == 0)
         return {};
-    Config user;
-    const auto data = localDataDirectory();
-    if (!safeMode && !data.empty()) {
-        if (const auto text = readBoundedFile(data / L"config.toml", 256U * 1024U)) {
-            Config parsed;
-            if (parseConfig(*text, parsed, error))
-                user = std::move(parsed);
-        }
-    }
-    const AppearanceMode mode =
-        user.appearanceMode.value_or(defaults.appearanceMode.value_or(AppearanceMode::system));
-    const bool dark = mode == AppearanceMode::dark ||
-                      (mode == AppearanceMode::system && systemUsesDarkAppearance());
-    const std::string themeId =
-        safeMode ? "builtin:default" : user.theme.value_or("builtin:default");
-    const bool builtin = themeId == "builtin:default";
-    const std::filesystem::path themePath =
-        resolveThemePath(executableDirectory(), data, themeId, builtin);
-    if (!themePath.empty()) {
-        if (const auto text = readBoundedFile(themePath, 512U * 1024U)) {
-            Config themeConfig;
-            if (resolveThemeConfig(*text, themeId, builtin, dark, themeConfig, error)) {
-                return mergeConfig(defaults, mergeConfig(themeConfig, user));
-            }
-        }
-    }
-    return mergeConfig(defaults, user);
+    return {reinterpret_cast<const char*>(value.ptr), value.len};
 }
 
-D2D1_COLOR_F parseColor(const fcitx::windows::config::Config& config, std::string_view name,
-                        D2D1_COLOR_F fallback) {
-    const auto found = config.colors.find(std::string(name));
-    if (found == config.colors.end())
-        return fallback;
-    const auto& text = found->second;
-    const auto component = [&](std::size_t offset) {
-        return static_cast<float>(std::stoul(text.substr(offset, 2), nullptr, 16)) / 255.0F;
+NativeOrientation nativeOrientation(std::string_view value) noexcept {
+    if (value == "vertical")
+        return NativeOrientation::vertical;
+    if (value == "horizontal")
+        return NativeOrientation::horizontal;
+    return NativeOrientation::automatic;
+}
+
+NativePreeditMode nativePreeditMode(std::string_view value) noexcept {
+    return value == "panel" ? NativePreeditMode::panel : NativePreeditMode::inline_;
+}
+
+NativeLabelStyle nativeLabelStyle(std::string_view value) noexcept {
+    if (value == "plain")
+        return NativeLabelStyle::plain;
+    if (value == "paren")
+        return NativeLabelStyle::paren;
+    if (value == "bracket")
+        return NativeLabelStyle::bracket;
+    if (value == "circled")
+        return NativeLabelStyle::circled;
+    return NativeLabelStyle::dot;
+}
+
+std::optional<D2D1_COLOR_F> nativeColor(std::string_view value) noexcept {
+    if (value.size() != 7 && value.size() != 9)
+        return std::nullopt;
+    if (value.front() != '#')
+        return std::nullopt;
+    const auto nibble = [](char value) noexcept -> std::optional<std::uint8_t> {
+        if (value >= '0' && value <= '9')
+            return static_cast<std::uint8_t>(value - '0');
+        if (value >= 'a' && value <= 'f')
+            return static_cast<std::uint8_t>(value - 'a' + 10);
+        if (value >= 'A' && value <= 'F')
+            return static_cast<std::uint8_t>(value - 'A' + 10);
+        return std::nullopt;
     };
-    try {
-        return D2D1::ColorF(component(1), component(3), component(5),
-                            text.size() == 9 ? component(7) : 1.0F);
-    } catch (...) {
-        return fallback;
+    const auto byteAt = [&](std::size_t offset) noexcept -> std::optional<float> {
+        const auto high = nibble(value[offset]);
+        const auto low = nibble(value[offset + 1]);
+        if (!high || !low)
+            return std::nullopt;
+        return static_cast<float>((*high << 4U) | *low) / 255.0F;
+    };
+    const auto red = byteAt(1);
+    const auto green = byteAt(3);
+    const auto blue = byteAt(5);
+    const auto alpha = value.size() == 9 ? byteAt(7) : std::optional<float>{1.0F};
+    if (!red || !green || !blue || !alpha)
+        return std::nullopt;
+    return D2D1::ColorF(*red, *green, *blue, *alpha);
+}
+
+void assignNativeColor(NativeRenderColors& colors, std::string_view name,
+                       D2D1_COLOR_F value) noexcept {
+    if (name == "background")
+        colors.background = value;
+    else if (name == "candidate_text")
+        colors.candidateText = value;
+    else if (name == "selected_background")
+        colors.selectedBackground = value;
+    else if (name == "selected_candidate_text")
+        colors.selectedCandidateText = value;
+    else if (name == "label_text")
+        colors.labelText = value;
+    else if (name == "comment_text")
+        colors.commentText = value;
+    else if (name == "preedit_text")
+        colors.preeditText = value;
+    else if (name == "selected_label_text")
+        colors.selectedLabelText = value;
+    else if (name == "selected_comment_text")
+        colors.selectedCommentText = value;
+    else if (name == "border")
+        colors.border = value;
+}
+
+void copyFontFamilies(void* handle, std::uint32_t kind, std::size_t count,
+                      std::vector<std::wstring>& output) {
+    output.clear();
+    output.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        std::wstring family;
+        if (utf8ToWide(borrowedUtf8(
+                           fcitx5_config_snapshot_font_family_at(handle, kind, index)),
+                       family) &&
+            !family.empty() && family != L"system" && family != L"inherit") {
+            output.emplace_back(std::move(family));
+        }
     }
+}
+
+std::optional<NativeRenderConfig> loadVisualConfig(bool safeMode) {
+    const auto data = localDataDirectory();
+    const auto installation = executableDirectory();
+    if (data.empty() || installation.empty())
+        return std::nullopt;
+    // Config Core owns parsing, validation, recovery, theme layering, Safe Mode,
+    // and all defaults. This adapter only copies resolved native drawing values.
+    const auto currentPath = (data / L"config.toml").wstring();
+    const auto installationPath = installation.wstring();
+    const auto dataPath = data.wstring();
+    static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
+    const auto utf16 = [](const std::wstring& value) noexcept {
+        return Fcitx5ConfigUtf16{reinterpret_cast<const std::uint16_t*>(value.data()),
+                                value.size()};
+    };
+    void* const handle = fcitx5_config_snapshot_load_visual_utf16(
+        utf16(currentPath), utf16(installationPath), utf16(dataPath),
+        static_cast<std::uint8_t>(safeMode),
+        static_cast<std::uint8_t>(systemUsesDarkAppearance()));
+    if (handle == nullptr)
+        return std::nullopt;
+    struct HandleDestroyer {
+        void* value{};
+        ~HandleDestroyer() { fcitx5_config_snapshot_destroy(value); }
+    } destroyer{handle};
+    Fcitx5ConfigSnapshot snapshot{};
+    if (fcitx5_config_snapshot_view(handle, &snapshot) == 0)
+        return std::nullopt;
+
+    NativeRenderConfig config{};
+    config.orientation = nativeOrientation(borrowedUtf8(snapshot.candidateOrientation));
+    config.preeditMode = nativePreeditMode(borrowedUtf8(snapshot.candidatePreeditMode));
+    config.labelStyle = nativeLabelStyle(borrowedUtf8(snapshot.candidateLabelStyle));
+    config.maxWidthDip = snapshot.candidateMaxWidthDip;
+    config.scrollCellWidthDip = snapshot.candidateScrollCellWidthDip;
+    config.opacity = snapshot.candidateOpacity;
+    config.paddingXDip = snapshot.candidatePaddingXDip;
+    config.paddingYDip = snapshot.candidatePaddingYDip;
+    config.itemPaddingXDip = snapshot.candidateItemPaddingXDip;
+    config.itemPaddingYDip = snapshot.candidateItemPaddingYDip;
+    config.rowGapDip = snapshot.candidateRowGapDip;
+    config.columnGapDip = snapshot.candidateColumnGapDip;
+    config.borderWidthDip = snapshot.candidateBorderWidthDip;
+    config.cornerRadiusDip = snapshot.candidateCornerRadiusDip;
+    config.labelFontScale = snapshot.candidateLabelFontScale;
+    config.labelGapDip = snapshot.candidateLabelGapDip;
+    config.candidateFontSizeDip = snapshot.candidateFontSizeDip;
+    config.annotationFontScale = snapshot.annotationFontScale;
+    config.candidateFontWeight = snapshot.candidateFontWeight;
+    config.scrollMode = snapshot.candidateScrollMode != 0;
+    config.labelVisible = snapshot.candidateLabelVisible != 0;
+    config.candidateLabels.reserve(snapshot.candidateLabelCount);
+    for (std::size_t index = 0; index < snapshot.candidateLabelCount; ++index) {
+        std::wstring label;
+        if (utf8ToWide(
+                borrowedUtf8(fcitx5_config_snapshot_candidate_label_at(handle, index)),
+                label) &&
+            !label.empty()) {
+            config.candidateLabels.emplace_back(std::move(label));
+        }
+    }
+    copyFontFamilies(handle, kFcitx5ConfigFontCandidate, snapshot.candidateFontFamilyCount,
+                     config.candidateFontFamilies);
+    copyFontFamilies(handle, kFcitx5ConfigFontAnnotation, snapshot.annotationFontFamilyCount,
+                     config.annotationFontFamilies);
+    for (std::size_t index = 0; index < snapshot.candidateColorCount; ++index) {
+        Fcitx5ConfigUtf8 name{};
+        Fcitx5ConfigUtf8 value{};
+        if (fcitx5_config_snapshot_candidate_color_at(handle, index, &name, &value) == 0)
+            continue;
+        if (const auto color = nativeColor(borrowedUtf8(value)))
+            assignNativeColor(config.colors, borrowedUtf8(name), *color);
+    }
+    return config;
 }
 
 class CandidateWindow final {
@@ -1005,7 +1175,10 @@ class CandidateWindow final {
                 fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
                 fcitx::windows::ipc::PeerPolicy::exact(engine));
         }
-        visualConfig_ = loadVisualConfig(safeMode_);
+        const auto visualConfig = loadVisualConfig(safeMode_);
+        if (!visualConfig)
+            return false;
+        visualConfig_ = *visualConfig;
         WNDCLASSW windowClass{};
         windowClass.hInstance = instance;
         const std::wstring windowClassName =
@@ -1033,9 +1206,10 @@ class CandidateWindow final {
             (styles & WS_EX_APPWINDOW) != 0)
             return false;
         if (!interactionTest_) {
-            const auto opacity = visualConfig_.opacity.value_or(1.0);
+            const auto opacity = visualConfig_.opacity;
             SetLayeredWindowAttributes(
-                window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
+                window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2F, 1.0F) * 255.0F),
+                LWA_ALPHA);
         }
         if (visible)
             ShowWindow(window_, SW_SHOWNOACTIVATE);
@@ -1233,16 +1407,16 @@ class CandidateWindow final {
     }
 
     [[nodiscard]] bool runScrollExpansionSelfTest() {
-        const auto runCase = [&](fcitx::windows::config::Orientation orientation) {
+        const auto runCase = [&](NativeOrientation orientation) {
             dismissPresentation();
             visualConfig_.scrollMode = true;
             visualConfig_.orientation = orientation;
             fcitx::windows::protocol::KeyResponse response;
             response.metadata.engineEpoch = 1;
             response.metadata.contextId =
-                orientation == fcitx::windows::config::Orientation::horizontal ? 41 : 42;
+                orientation == NativeOrientation::horizontal ? 41 : 42;
             response.metadata.compositionId =
-                orientation == fcitx::windows::config::Orientation::horizontal ? 410 : 420;
+                orientation == NativeOrientation::horizontal ? 410 : 420;
             response.metadata.revision = 1;
             response.selectedCandidate = 0;
             response.candidatePage = 0;
@@ -1261,7 +1435,7 @@ class CandidateWindow final {
             if (presentationScrollMode() || itemRects_.size() != response.candidatePageSize ||
                 visibleIndices_.size() != response.candidatePageSize) {
                 std::cerr << "bulk first page expanded before scroll navigation: orientation="
-                          << (orientation == fcitx::windows::config::Orientation::horizontal
+                          << (orientation == NativeOrientation::horizontal
                                   ? "horizontal"
                                   : "vertical")
                           << " scroll=" << presentationScrollMode() << " rects=" << itemRects_.size()
@@ -1282,7 +1456,7 @@ class CandidateWindow final {
             if (!presentationScrollMode() || itemRects_.size() <= response.candidatePageSize ||
                 visibleIndices_.size() <= response.candidatePageSize) {
                 std::cerr << "bulk scroll navigation did not expand viewport: orientation="
-                          << (orientation == fcitx::windows::config::Orientation::horizontal
+                          << (orientation == NativeOrientation::horizontal
                                   ? "horizontal"
                                   : "vertical")
                           << " scroll=" << presentationScrollMode() << " rects=" << itemRects_.size()
@@ -1291,8 +1465,7 @@ class CandidateWindow final {
             }
             return true;
         };
-        return runCase(fcitx::windows::config::Orientation::horizontal) &&
-               runCase(fcitx::windows::config::Orientation::vertical);
+        return runCase(NativeOrientation::horizontal) && runCase(NativeOrientation::vertical);
     }
 
     [[nodiscard]] bool runLocaleSelfTest() {
@@ -1377,7 +1550,7 @@ class CandidateWindow final {
             return rect.right - rect.left;
         };
         visualConfig_.scrollMode = false;
-        visualConfig_.orientation = config::Orientation::automatic;
+        visualConfig_.orientation = NativeOrientation::automatic;
         update(makeResponse(800, 1, "zh-CN",
                             {{1, "1", "你", ""}, {2, "2", "好", ""},
                              {3, "3", "中文", ""}}));
@@ -1414,20 +1587,20 @@ class CandidateWindow final {
             std::cerr << "REG-CAND-AUTO-001: edge-of-screen auto layout did not choose vertical\n";
             return false;
         }
-        visualConfig_.orientation = config::Orientation::horizontal;
+        visualConfig_.orientation = NativeOrientation::horizontal;
         update(makeResponse(804, 1, "en-US", {{1, "1", "alpha", ""}, {2, "2", "beta", ""}}));
         if (resolvedPresentationOrientation_ != ui::Orientation::horizontal) {
             std::cerr << "REG-CAND-AUTO-001: explicit horizontal override lost precedence\n";
             return false;
         }
-        visualConfig_.orientation = config::Orientation::vertical;
+        visualConfig_.orientation = NativeOrientation::vertical;
         update(makeResponse(805, 1, "zh-CN", {{1, "1", "你", ""}, {2, "2", "好", ""}}));
         if (resolvedPresentationOrientation_ != ui::Orientation::vertical) {
             std::cerr << "REG-CAND-AUTO-001: explicit vertical override lost precedence\n";
             return false;
         }
 
-        visualConfig_.orientation = config::Orientation::vertical;
+        visualConfig_.orientation = NativeOrientation::vertical;
         auto longCandidates = std::vector<fcitx::windows::protocol::CandidateRecord>{
             {1, "1", "这是一个非常非常长的候选词条", ""},
             {2, "2", "另一个非常非常长的候选词条", ""}};
@@ -1458,14 +1631,16 @@ class CandidateWindow final {
     // would consume/reset the model and leave the outer update with an empty
     // current() snapshot.
     void refreshVisualConfig() {
-        visualConfig_ = loadVisualConfig(safeMode_);
+        if (const auto visualConfig = loadVisualConfig(safeMode_))
+            visualConfig_ = *visualConfig;
         textFormat_.Reset();
         labelFormat_.Reset();
         annotationFormat_.Reset();
         if (!interactionTest_) {
-            const auto opacity = visualConfig_.opacity.value_or(1.0);
+            const auto opacity = visualConfig_.opacity;
             SetLayeredWindowAttributes(
-                window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2, 1.0) * 255.0), LWA_ALPHA);
+                window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2F, 1.0F) * 255.0F),
+                LWA_ALPHA);
         }
         (void)createDeviceResources();
     }
@@ -1484,19 +1659,14 @@ class CandidateWindow final {
     }
 
     [[nodiscard]] std::wstring configuredSequenceLabel(std::uint32_t slot) const {
-        std::wstring label;
-        if (slot > 0 && visualConfig_.label.sequence &&
-            slot <= visualConfig_.label.sequence->size() &&
-            utf8ToWide((*visualConfig_.label.sequence)[slot - 1U], label) && !label.empty()) {
-            return label;
-        }
+        if (slot > 0 && slot <= visualConfig_.candidateLabels.size())
+            return visualConfig_.candidateLabels[slot - 1U];
         return std::to_wstring(slot == 0 ? 1U : slot);
     }
 
     void applyScrollLabelReservations() {
-        const auto style =
-            visualConfig_.label.style.value_or(fcitx::windows::config::LabelStyle::dot);
-        const bool labelsVisible = visualConfig_.label.visible.value_or(true);
+        const auto style = visualConfig_.labelStyle;
+        const bool labelsVisible = visualConfig_.labelVisible;
         for (auto& candidate : candidates_) {
             if (candidate.sourceLabel) {
                 candidate.reservedLabel = candidate.label;
@@ -1545,25 +1715,21 @@ class CandidateWindow final {
         const auto background = highContrast ? D2D1::ColorF(GetRValue(systemBackground) / 255.0F,
                                                             GetGValue(systemBackground) / 255.0F,
                                                             GetBValue(systemBackground) / 255.0F)
-                                             : parseColor(visualConfig_, "background",
-                                                          D2D1::ColorF(0.97F, 0.98F, 0.98F));
+                                             : visualConfig_.colors.background;
         const auto foreground = highContrast ? D2D1::ColorF(GetRValue(systemForeground) / 255.0F,
                                                             GetGValue(systemForeground) / 255.0F,
                                                             GetBValue(systemForeground) / 255.0F)
-                                             : parseColor(visualConfig_, "candidate_text",
-                                                          D2D1::ColorF(0.13F, 0.13F, 0.14F));
+                                             : visualConfig_.colors.candidateText;
         const auto selectedBackground =
             highContrast ? D2D1::ColorF(GetRValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F,
                                          GetGValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F,
                                          GetBValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F)
-                         : parseColor(visualConfig_, "selected_background",
-                                      D2D1::ColorF(0.027F, 0.757F, 0.376F, 0.10F));
+                         : visualConfig_.colors.selectedBackground;
         const auto selectedForeground =
             highContrast ? D2D1::ColorF(GetRValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F,
                                          GetGValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F,
                                          GetBValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F)
-                         : parseColor(visualConfig_, "selected_candidate_text",
-                                      D2D1::ColorF(0.027F, 0.757F, 0.376F));
+                         : visualConfig_.colors.selectedCandidateText;
         renderTarget_->Clear(background);
         ComPtr<ID2D1SolidColorBrush> textBrush;
         ComPtr<ID2D1SolidColorBrush> labelBrush;
@@ -1574,21 +1740,17 @@ class CandidateWindow final {
         ComPtr<ID2D1SolidColorBrush> selectedCommentBrush;
         ComPtr<ID2D1SolidColorBrush> borderBrush;
         ComPtr<ID2D1SolidColorBrush> preeditBrush;
-        const auto labelColor =
-            highContrast ? foreground : parseColor(visualConfig_, "label_text", foreground);
-        const auto commentColor =
-            highContrast ? foreground : parseColor(visualConfig_, "comment_text", foreground);
-        const auto preeditColor =
-            highContrast ? foreground : parseColor(visualConfig_, "preedit_text", foreground);
+        const auto labelColor = highContrast ? foreground : visualConfig_.colors.labelText;
+        const auto commentColor = highContrast ? foreground : visualConfig_.colors.commentText;
+        const auto preeditColor = highContrast ? foreground : visualConfig_.colors.preeditText;
         const auto selectedLabelColor =
             highContrast ? selectedForeground
-                         : parseColor(visualConfig_, "selected_label_text", selectedForeground);
+                         : visualConfig_.colors.selectedLabelText;
         const auto selectedCommentColor =
             highContrast ? selectedForeground
-                         : parseColor(visualConfig_, "selected_comment_text", selectedForeground);
+                         : visualConfig_.colors.selectedCommentText;
         const auto borderColor =
-            highContrast ? foreground
-                         : parseColor(visualConfig_, "border", D2D1::ColorF(0.82F, 0.82F, 0.82F));
+            highContrast ? foreground : visualConfig_.colors.border;
         if (FAILED(renderTarget_->CreateSolidColorBrush(foreground, &textBrush)) ||
             FAILED(renderTarget_->CreateSolidColorBrush(labelColor, &labelBrush)) ||
             FAILED(renderTarget_->CreateSolidColorBrush(commentColor, &commentBrush)) ||
@@ -1636,7 +1798,7 @@ class CandidateWindow final {
         std::vector<fcitx::windows::ui::RenderItemInput> renderInputs;
         renderInputs.reserve(paintCount);
         const float labelGap =
-            static_cast<float>(visualConfig_.label.gap.value_or(4.0) * fontDpiScale_);
+            visualConfig_.labelGapDip * fontDpiScale_;
         for (std::size_t local = 0; local < paintCount; ++local) {
             const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
             const D2D1_RECT_F bounds = itemRects_.size() == paintCount
@@ -1704,8 +1866,7 @@ class CandidateWindow final {
             const auto selectedIndex = presentationSelected();
             const bool selected = selectedIndex && *selectedIndex == index;
             if (selected) {
-                const float radius =
-                    static_cast<float>(visualConfig_.geometry.cornerRadius.value_or(8.0));
+                const float radius = visualConfig_.cornerRadiusDip;
                 const auto size = renderTarget_->GetSize();
                 const D2D1_RECT_F selection =
                     D2D1::RectF((std::max)(0.0F, bounds.left - selectionInflateX_),
@@ -1745,13 +1906,11 @@ class CandidateWindow final {
                                                 selectedTextBrush.Get());
         }
         const auto targetSize = renderTarget_->GetSize();
-        const float borderWidth =
-            static_cast<float>(visualConfig_.geometry.borderWidth.value_or(1.0));
+        const float borderWidth = visualConfig_.borderWidthDip;
         if (borderWidth > 0.0F && targetSize.width > borderWidth &&
             targetSize.height > borderWidth) {
             const float inset = borderWidth / 2.0F;
-            const float radius =
-                static_cast<float>(visualConfig_.geometry.cornerRadius.value_or(8.0));
+            const float radius = visualConfig_.cornerRadiusDip;
             renderTarget_->DrawRoundedRectangle(
                 D2D1::RoundedRect(
                     D2D1::RectF(inset, inset, targetSize.width - inset, targetSize.height - inset),
@@ -1785,20 +1944,16 @@ class CandidateWindow final {
             (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
         const COLORREF background =
             highContrast ? GetSysColor(COLOR_WINDOW)
-                         : toColorRef(parseColor(visualConfig_, "background",
-                                                 D2D1::ColorF(0.97F, 0.98F, 0.98F)));
+                         : toColorRef(visualConfig_.colors.background);
         const COLORREF foreground =
             highContrast ? GetSysColor(COLOR_WINDOWTEXT)
-                         : toColorRef(parseColor(visualConfig_, "candidate_text",
-                                                 D2D1::ColorF(0.13F, 0.13F, 0.14F)));
+                         : toColorRef(visualConfig_.colors.candidateText);
         const COLORREF selectedBackground =
             highContrast ? GetSysColor(COLOR_HIGHLIGHT)
-                         : toColorRef(parseColor(visualConfig_, "selected_background",
-                                                 D2D1::ColorF(0.027F, 0.757F, 0.376F, 0.10F)));
+                         : toColorRef(visualConfig_.colors.selectedBackground);
         const COLORREF selectedForeground =
             highContrast ? GetSysColor(COLOR_HIGHLIGHTTEXT)
-                         : toColorRef(parseColor(visualConfig_, "selected_candidate_text",
-                                                 D2D1::ColorF(0.027F, 0.757F, 0.376F)));
+                         : toColorRef(visualConfig_.colors.selectedCandidateText);
         HBRUSH backgroundBrush = CreateSolidBrush(background);
         HBRUSH selectedBrush = CreateSolidBrush(selectedBackground);
         if (!backgroundBrush || !selectedBrush) {
@@ -1904,7 +2059,7 @@ class CandidateWindow final {
             response.candidatePage,
             response.candidatePageSize,
             static_cast<std::uint8_t>(response.candidateBulk),
-            static_cast<std::uint8_t>(visualConfig_.scrollMode.value_or(false)),
+            static_cast<std::uint8_t>(visualConfig_.scrollMode),
         };
         const auto presentationApplied =
             fcitx::windows::ui::detail::fcitx5_candidate_presentation_apply(
@@ -1931,8 +2086,7 @@ class CandidateWindow final {
         preeditPanel_.clear();
         preeditPanelRect_ = {};
         preeditDividerY_ = 0.0F;
-        if (visualConfig_.preeditMode.value_or(config::PreeditMode::inline_) ==
-                config::PreeditMode::panel &&
+        if (visualConfig_.preeditMode == NativePreeditMode::panel &&
             !current.preedit.empty()) {
             std::wstring preedit;
             if (utf8ToWide(current.preedit, preedit))
@@ -1948,11 +2102,11 @@ class CandidateWindow final {
                 !utf8ToWide(candidate.comment, comment))
                 continue;
             CandidateVisual visual;
-            if (visualConfig_.label.visible.value_or(true) && !label.empty()) {
+            if (visualConfig_.labelVisible && !label.empty()) {
                 visual.label = formatCandidateLabel(
                     0,
                     label,
-                    visualConfig_.label.style.value_or(fcitx::windows::config::LabelStyle::dot));
+                    visualConfig_.labelStyle);
                 visual.reservedLabel = visual.label;
                 visual.sourceLabel = true;
             }
@@ -1995,17 +2149,13 @@ class CandidateWindow final {
         monitorInfo.cbSize = sizeof(monitorInfo);
         GetMonitorInfoW(monitor, &monitorInfo);
         const float scale = static_cast<float>(lastCaret_.dpi) / 96.0F;
-        const float itemPaddingX =
-            static_cast<float>(visualConfig_.geometry.itemPaddingX.value_or(6.0) * scale);
-        const float itemPaddingY =
-            static_cast<float>(visualConfig_.geometry.itemPaddingY.value_or(4.0) * scale);
-        const float labelGap =
-            static_cast<float>(visualConfig_.label.gap.value_or(4.0) * scale);
+        const float itemPaddingX = visualConfig_.itemPaddingXDip * scale;
+        const float itemPaddingY = visualConfig_.itemPaddingYDip * scale;
+        const float labelGap = visualConfig_.labelGapDip * scale;
         selectionInflateX_ = itemPaddingX * 0.65F;
         selectionInflateY_ = itemPaddingY * 0.55F;
-        const auto configuredOrientation =
-            visualConfig_.orientation.value_or(config::Orientation::automatic);
-        bool horizontalPresentation = configuredOrientation == config::Orientation::horizontal;
+        const auto configuredOrientation = visualConfig_.orientation;
+        bool horizontalPresentation = configuredOrientation == NativeOrientation::horizontal;
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidatePresentationText>
             presentationCandidates;
         presentationCandidates.reserve(current.candidates.size());
@@ -2017,9 +2167,9 @@ class CandidateWindow final {
             });
         }
         const auto configuredOrientationValue =
-            configuredOrientation == config::Orientation::vertical
+            configuredOrientation == NativeOrientation::vertical
                 ? 1U
-                : configuredOrientation == config::Orientation::horizontal ? 2U : 0U;
+                : configuredOrientation == NativeOrientation::horizontal ? 2U : 0U;
         const auto rustOrientation =
             fcitx::windows::ui::detail::fcitx5_candidate_presentation_resolve_orientation(
             presentation_, configuredOrientationValue, presentationCandidates.data(),
@@ -2098,16 +2248,14 @@ class CandidateWindow final {
                 preeditPanelWidth = metrics.widthIncludingTrailingWhitespace + itemPaddingX * 2.0F;
             }
         }
-        if (configuredOrientation == config::Orientation::automatic && horizontalPresentation) {
+        if (configuredOrientation == NativeOrientation::automatic && horizontalPresentation) {
             float horizontalNaturalWidth = inputHorizontalNaturalWidth(
-                items, static_cast<float>(visualConfig_.geometry.paddingX.value_or(8.0) * scale),
-                static_cast<float>(visualConfig_.geometry.columnGap.value_or(8.0) * scale),
+                items, visualConfig_.paddingXDip * scale, visualConfig_.columnGapDip * scale,
                 preeditPanelWidth);
             const float workWidth =
                 static_cast<float>((std::max)(0L, monitorInfo.rcWork.right - monitorInfo.rcWork.left));
             const float hardLimit =
-                std::min(static_cast<float>(visualConfig_.maxWidth.value_or(720.0) * scale),
-                         workWidth);
+                std::min(visualConfig_.maxWidthDip * scale, workWidth);
             if (horizontalNaturalWidth > hardLimit + 0.5F) {
                 horizontalPresentation = false;
                 resolvedPresentationOrientation_ = ui::Orientation::vertical;
@@ -2122,18 +2270,17 @@ class CandidateWindow final {
              static_cast<float>(monitorInfo.rcWork.top),
              static_cast<float>(monitorInfo.rcWork.right),
              static_cast<float>(monitorInfo.rcWork.bottom)},
-            static_cast<float>(visualConfig_.maxWidth.value_or(720.0) * scale),
-            static_cast<float>(visualConfig_.geometry.paddingX.value_or(8.0) * scale),
-            static_cast<float>(visualConfig_.geometry.paddingY.value_or(6.0) * scale),
-            static_cast<float>(visualConfig_.geometry.rowGap.value_or(2.0) * scale),
-            static_cast<float>(visualConfig_.geometry.columnGap.value_or(8.0) * scale),
+            visualConfig_.maxWidthDip * scale,
+            visualConfig_.paddingXDip * scale,
+            visualConfig_.paddingYDip * scale,
+            visualConfig_.rowGapDip * scale,
+            visualConfig_.columnGapDip * scale,
             presentationPlacement(),
             presentationScrollMode(),
             presentationScrollColumns(),
             6U,
             presentationSelected().value_or(0U)};
-        input.scrollCellWidth =
-            static_cast<float>(visualConfig_.scrollCellWidth.value_or(96.0) * scale);
+        input.scrollCellWidth = visualConfig_.scrollCellWidthDip * scale;
         const auto layout = ui::layout(input);
         setPresentationPlacement(layout.placement);
         const float preeditBlock =
@@ -2460,33 +2607,18 @@ class CandidateWindow final {
             FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                        reinterpret_cast<IUnknown**>(writeFactory_.GetAddressOf()))))
             return false;
-        std::wstring fontFamily = L"Microsoft YaHei";
-        if (visualConfig_.candidateFont.families) {
-            for (const auto& family : *visualConfig_.candidateFont.families) {
-                if (family != "system" && family != "inherit" && utf8ToWide(family, fontFamily))
-                    break;
-            }
-        }
-        const auto createFormat = [&](const fcitx::windows::config::Font& font, double scale,
+        const auto createFormat = [&](const std::vector<std::wstring>& families, float scale,
                                       ComPtr<IDWriteTextFormat>& format) {
             if (format)
                 return true;
-            std::wstring family = fontFamily;
-            if (font.families) {
-                for (const auto& candidate : *font.families) {
-                    if (candidate != "system" && candidate != "inherit" &&
-                        utf8ToWide(candidate, family))
-                        break;
-                }
-            }
+            std::wstring family = L"Microsoft YaHei";
+            if (!families.empty())
+                family = families.front();
             if (FAILED(writeFactory_->CreateTextFormat(
                     family.c_str(), nullptr,
-                    static_cast<DWRITE_FONT_WEIGHT>(
-                        font.weight.value_or(visualConfig_.candidateFont.weight.value_or(400))),
+                    static_cast<DWRITE_FONT_WEIGHT>(visualConfig_.candidateFontWeight),
                     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                    static_cast<float>(
-                        font.size.value_or(visualConfig_.candidateFont.size.value_or(16.0)) *
-                        scale * fontDpiScale_),
+                    visualConfig_.candidateFontSizeDip * scale * fontDpiScale_,
                     dwriteLocale_.c_str(), &format)))
                 return false;
             // Single line with ellipsis trimming: a label/comment longer than
@@ -2501,11 +2633,13 @@ class CandidateWindow final {
                 return false;
             return true;
         };
-        if (!createFormat(visualConfig_.candidateFont, 1.0, textFormat_) ||
-            !createFormat(visualConfig_.candidateFont, visualConfig_.label.fontScale.value_or(0.85),
+        const auto& annotationFamilies = visualConfig_.annotationFontFamilies.empty()
+                                             ? visualConfig_.candidateFontFamilies
+                                             : visualConfig_.annotationFontFamilies;
+        if (!createFormat(visualConfig_.candidateFontFamilies, 1.0F, textFormat_) ||
+            !createFormat(visualConfig_.candidateFontFamilies, visualConfig_.labelFontScale,
                           labelFormat_) ||
-            !createFormat(visualConfig_.annotationFont,
-                          visualConfig_.annotationFont.scale.value_or(0.85), annotationFormat_))
+            !createFormat(annotationFamilies, visualConfig_.annotationFontScale, annotationFormat_))
             return false;
         if (FAILED(labelFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)))
             return false;
@@ -2539,7 +2673,7 @@ class CandidateWindow final {
     std::vector<std::size_t> visibleIndices_;
     std::vector<std::size_t> renderIndices_;
     std::optional<std::size_t> pressedCandidate_;
-    fcitx::windows::config::Config visualConfig_;
+    NativeRenderConfig visualConfig_;
     candidate::CandidateModel model_;
     fcitx::windows::protocol::CaretRect lastCaret_;
     fcitx::windows::ui::Orientation resolvedPresentationOrientation_{

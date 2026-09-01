@@ -2,7 +2,7 @@
 
 //! Typed Config state, transaction, and recovery contract.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 
 const CONFIG_FORMAT_VERSION: u32 = 1;
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
+const MAX_THEME_BYTES: u64 = 512 * 1024;
+const BUILTIN_THEME_ID: &str = "builtin:default";
+const BUILTIN_THEME_METADATA_ID: &str = "builtin.default";
 const COMPILED_DEFAULTS: &str = include_str!("../../../resources/config.toml");
 static STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -959,6 +962,60 @@ pub struct Recovery {
     pub source: RecoverySource,
 }
 
+/// Inputs for one fully resolved Candidate visual snapshot.
+///
+/// The selected Config source is Current, then last-known-good, then compiled
+/// defaults unless `safe_mode` explicitly requests the compiled defaults.
+#[derive(Clone, Copy, Debug)]
+pub struct VisualSnapshotRequest<'a> {
+    current_path: &'a Path,
+    installation_root: &'a Path,
+    data_root: &'a Path,
+    safe_mode: bool,
+    system_dark: bool,
+}
+
+impl<'a> VisualSnapshotRequest<'a> {
+    /// Creates a request for a resolved Candidate visual snapshot.
+    #[must_use]
+    pub const fn new(
+        current_path: &'a Path,
+        installation_root: &'a Path,
+        data_root: &'a Path,
+        safe_mode: bool,
+        system_dark: bool,
+    ) -> Self {
+        Self {
+            current_path,
+            installation_root,
+            data_root,
+            safe_mode,
+            system_dark,
+        }
+    }
+}
+
+/// A recovered Candidate visual snapshot and the Config source selected for it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VisualSnapshot {
+    snapshot: ConfigSnapshot,
+    recovery_source: RecoverySource,
+}
+
+impl VisualSnapshot {
+    /// Returns the fully resolved visual configuration.
+    #[must_use]
+    pub fn snapshot(&self) -> &ConfigSnapshot {
+        &self.snapshot
+    }
+
+    /// Returns the Current/LKG/default source used for this snapshot.
+    #[must_use]
+    pub const fn recovery_source(&self) -> RecoverySource {
+        self.recovery_source
+    }
+}
+
 /// Errors returned by Config Core.
 #[derive(Debug)]
 pub enum ConfigError {
@@ -1410,90 +1467,136 @@ impl ConfigCore {
         })
     }
 
+    /// Loads one Candidate visual snapshot without exposing Config parsing to native adapters.
+    ///
+    /// The resolved precedence is compiled defaults, the selected valid theme,
+    /// and finally the recovered user overrides. Missing, malformed, unsafe, or
+    /// invalid themes are ignored so rendering keeps a usable safe snapshot.
+    #[must_use]
+    pub fn load_visual_snapshot(
+        store: &FileStore,
+        request: VisualSnapshotRequest<'_>,
+    ) -> VisualSnapshot {
+        let recovery = if request.safe_mode {
+            Recovery {
+                core: Self::compiled_defaults(),
+                source: RecoverySource::SafeDefaults,
+            }
+        } else {
+            Self::recover(store, request.current_path)
+                .expect("compiled Config defaults make recovery infallible")
+        };
+        let selected = recovery.core.resolve(&recovery.core.current);
+        let dark = match selected.appearance.mode.as_str() {
+            "dark" => true,
+            "light" => false,
+            _ => request.system_dark,
+        };
+        let mut snapshot = recovery.core.defaults.clone();
+        if let Some(theme) = load_theme_overrides(
+            request.installation_root,
+            request.data_root,
+            selected.appearance.theme(),
+            dark,
+        ) {
+            apply_overrides(&mut snapshot, &theme);
+        }
+        apply_overrides(&mut snapshot, &recovery.core.current);
+        debug_assert!(validate_snapshot(&snapshot).is_ok());
+        VisualSnapshot {
+            snapshot,
+            recovery_source: recovery.source,
+        }
+    }
+
     fn try_load(store: &FileStore, path: &Path) -> Option<Self> {
         Self::load(store, path).ok()
     }
 
     fn resolve(&self, overrides: &ConfigOverrides) -> ConfigSnapshot {
         let mut resolved = self.defaults.clone();
-        if let Some(value) = &overrides.ui.language {
-            resolved.ui.language.clone_from(value);
-        }
-        if let Some(value) = &overrides.appearance.mode {
-            resolved.appearance.mode.clone_from(value);
-        }
-        if let Some(value) = &overrides.appearance.theme {
-            resolved.appearance.theme.clone_from(value);
-        }
-        if let Some(value) = &overrides.candidate.orientation {
-            resolved.candidate.orientation.clone_from(value);
-        }
-        if let Some(value) = overrides.candidate.page_size {
-            resolved.candidate.page_size = value;
-        }
-        if let Some(value) = overrides.candidate.scroll_mode {
-            resolved.candidate.scroll_mode = value;
-        }
-        if let Some(value) = overrides.candidate.max_width_dip {
-            resolved.candidate.max_width_dip = value;
-        }
-        if let Some(value) = overrides.candidate.scroll_cell_width_dip {
-            resolved.candidate.scroll_cell_width_dip = value;
-        }
-        if let Some(value) = overrides.candidate.opacity {
-            resolved.candidate.opacity = value;
-        }
-        if let Some(value) = &overrides.candidate.preedit_mode {
-            resolved.candidate.preedit_mode.clone_from(value);
-        }
-        apply_geometry_overrides(
-            &mut resolved.candidate.geometry,
-            &overrides.candidate.geometry,
-        );
-        apply_label_overrides(&mut resolved.candidate.label, &overrides.candidate.label);
+        apply_overrides(&mut resolved, overrides);
         resolved
-            .candidate
-            .colors
-            .extend(overrides.candidate.colors.clone());
-        if let Some(value) = &overrides.fonts.ui.families {
-            resolved.fonts.ui.families.clone_from(value);
-        }
-        if let Some(value) = &overrides.fonts.candidate.families {
-            resolved.fonts.candidate.families.clone_from(value);
-        }
-        if let Some(value) = overrides.fonts.candidate.size_dip {
-            resolved.fonts.candidate.size_dip = value;
-        }
-        if let Some(value) = overrides.fonts.candidate.weight {
-            resolved.fonts.candidate.weight = value;
-        }
-        if let Some(value) = &overrides.fonts.annotation.families {
-            resolved.fonts.annotation.families.clone_from(value);
-        }
-        if let Some(value) = overrides.fonts.annotation.scale {
-            resolved.fonts.annotation.scale = value;
-        }
-        if let Some(value) = &overrides.fonts.monospace.families {
-            resolved.fonts.monospace.families.clone_from(value);
-        }
-        if let Some(values) = &overrides.input_methods.enabled {
-            resolved.input_methods.enabled.clear();
-            for value in values {
-                if !resolved.input_methods.enabled.contains(value) {
-                    resolved.input_methods.enabled.push(value.clone());
-                }
+    }
+}
+
+fn apply_overrides(resolved: &mut ConfigSnapshot, overrides: &ConfigOverrides) {
+    if let Some(value) = &overrides.ui.language {
+        resolved.ui.language.clone_from(value);
+    }
+    if let Some(value) = &overrides.appearance.mode {
+        resolved.appearance.mode.clone_from(value);
+    }
+    if let Some(value) = &overrides.appearance.theme {
+        resolved.appearance.theme.clone_from(value);
+    }
+    if let Some(value) = &overrides.candidate.orientation {
+        resolved.candidate.orientation.clone_from(value);
+    }
+    if let Some(value) = overrides.candidate.page_size {
+        resolved.candidate.page_size = value;
+    }
+    if let Some(value) = overrides.candidate.scroll_mode {
+        resolved.candidate.scroll_mode = value;
+    }
+    if let Some(value) = overrides.candidate.max_width_dip {
+        resolved.candidate.max_width_dip = value;
+    }
+    if let Some(value) = overrides.candidate.scroll_cell_width_dip {
+        resolved.candidate.scroll_cell_width_dip = value;
+    }
+    if let Some(value) = overrides.candidate.opacity {
+        resolved.candidate.opacity = value;
+    }
+    if let Some(value) = &overrides.candidate.preedit_mode {
+        resolved.candidate.preedit_mode.clone_from(value);
+    }
+    apply_geometry_overrides(
+        &mut resolved.candidate.geometry,
+        &overrides.candidate.geometry,
+    );
+    apply_label_overrides(&mut resolved.candidate.label, &overrides.candidate.label);
+    resolved
+        .candidate
+        .colors
+        .extend(overrides.candidate.colors.clone());
+    if let Some(value) = &overrides.fonts.ui.families {
+        resolved.fonts.ui.families.clone_from(value);
+    }
+    if let Some(value) = &overrides.fonts.candidate.families {
+        resolved.fonts.candidate.families.clone_from(value);
+    }
+    if let Some(value) = overrides.fonts.candidate.size_dip {
+        resolved.fonts.candidate.size_dip = value;
+    }
+    if let Some(value) = overrides.fonts.candidate.weight {
+        resolved.fonts.candidate.weight = value;
+    }
+    if let Some(value) = &overrides.fonts.annotation.families {
+        resolved.fonts.annotation.families.clone_from(value);
+    }
+    if let Some(value) = overrides.fonts.annotation.scale {
+        resolved.fonts.annotation.scale = value;
+    }
+    if let Some(value) = &overrides.fonts.monospace.families {
+        resolved.fonts.monospace.families.clone_from(value);
+    }
+    if let Some(values) = &overrides.input_methods.enabled {
+        resolved.input_methods.enabled.clear();
+        for value in values {
+            if !resolved.input_methods.enabled.contains(value) {
+                resolved.input_methods.enabled.push(value.clone());
             }
         }
-        if let Some(value) = &overrides.input_methods.default {
-            resolved.input_methods.default.clone_from(value);
-        }
-        if let Some(value) = &overrides.hotkeys.toggle_input_method {
-            resolved.hotkeys.toggle_input_method.clone_from(value);
-        }
-        if let Some(value) = &overrides.hotkeys.next_input_method {
-            resolved.hotkeys.next_input_method.clone_from(value);
-        }
-        resolved
+    }
+    if let Some(value) = &overrides.input_methods.default {
+        resolved.input_methods.default.clone_from(value);
+    }
+    if let Some(value) = &overrides.hotkeys.toggle_input_method {
+        resolved.hotkeys.toggle_input_method.clone_from(value);
+    }
+    if let Some(value) = &overrides.hotkeys.next_input_method {
+        resolved.hotkeys.next_input_method.clone_from(value);
     }
 }
 
@@ -1546,6 +1649,236 @@ fn apply_label_overrides(label: &mut CandidateLabel, overrides: &CandidateLabelO
     if let Some(value) = overrides.gap_dip {
         label.gap_dip = value;
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeDocument {
+    format_version: u32,
+    theme: ThemeMetadata,
+    #[serde(default)]
+    palette: BTreeMap<String, String>,
+    #[serde(default)]
+    common: ThemeCommon,
+    #[serde(default)]
+    light: ThemeBranch,
+    #[serde(default)]
+    dark: ThemeBranch,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeMetadata {
+    id: String,
+    name: String,
+    version: String,
+    license: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeCommon {
+    #[serde(default)]
+    candidate: CandidateOverrides,
+    #[serde(default)]
+    fonts: FontsOverrides,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeBranch {
+    #[serde(default)]
+    palette: BTreeMap<String, String>,
+    #[serde(default)]
+    candidate: ThemeColors,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeColors {
+    #[serde(default)]
+    colors: BTreeMap<String, String>,
+}
+
+fn load_theme_overrides(
+    installation_root: &Path,
+    data_root: &Path,
+    selected_id: &str,
+    dark: bool,
+) -> Option<ConfigOverrides> {
+    let builtin = selected_id == BUILTIN_THEME_ID;
+    let path = resolve_theme_path(installation_root, data_root, selected_id, builtin)?;
+    let text = read_theme_file(&path, !builtin)?;
+    let theme: ThemeDocument = toml::from_str(&text).ok()?;
+    if !theme_is_valid(&theme, selected_id, builtin) {
+        return None;
+    }
+    let branch = if dark { &theme.dark } else { &theme.light };
+    let palette = resolved_palette(&theme.palette, &branch.palette)?;
+    let mut candidate = theme.common.candidate;
+    candidate.colors.extend(branch.candidate.colors.clone());
+    for color in candidate.colors.values_mut() {
+        *color = resolve_theme_color(color, &palette)?;
+    }
+    let overrides = ConfigOverrides {
+        candidate,
+        fonts: theme.common.fonts,
+        ..ConfigOverrides::empty()
+    };
+    let mut themed = ConfigCore::compiled_defaults().defaults;
+    apply_overrides(&mut themed, &overrides);
+    validate_snapshot(&themed).ok()?;
+    Some(overrides)
+}
+
+fn resolve_theme_path(
+    installation_root: &Path,
+    data_root: &Path,
+    selected_id: &str,
+    builtin: bool,
+) -> Option<PathBuf> {
+    if builtin {
+        return (selected_id == BUILTIN_THEME_ID && !installation_root.as_os_str().is_empty())
+            .then(|| {
+                installation_root
+                    .join("resources")
+                    .join("themes")
+                    .join("default")
+                    .join("theme.toml")
+            });
+    }
+    valid_user_theme_id(selected_id)
+        .then_some(())
+        .filter(|()| !data_root.as_os_str().is_empty())
+        .map(|()| {
+            data_root
+                .join("themes")
+                .join(selected_id)
+                .join("theme.toml")
+        })
+}
+
+fn read_theme_file(path: &Path, user_theme: bool) -> Option<String> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_THEME_BYTES
+    {
+        return None;
+    }
+    if user_theme {
+        let directory = path.parent()?;
+        let directory_metadata = fs::symlink_metadata(directory).ok()?;
+        if !directory_metadata.is_dir() || directory_metadata.file_type().is_symlink() {
+            return None;
+        }
+    }
+    fs::read_to_string(path).ok()
+}
+
+fn theme_is_valid(theme: &ThemeDocument, selected_id: &str, builtin: bool) -> bool {
+    theme.format_version == CONFIG_FORMAT_VERSION
+        && !theme.theme.name.is_empty()
+        && !theme.theme.version.is_empty()
+        && !theme.theme.license.is_empty()
+        && theme.theme.description.len() <= 4096
+        && theme_common_is_exact(&theme.common)
+        && (if builtin {
+            selected_id == BUILTIN_THEME_ID && theme.theme.id == BUILTIN_THEME_METADATA_ID
+        } else {
+            valid_user_theme_id(selected_id) && theme.theme.id == selected_id
+        })
+}
+
+fn theme_common_is_exact(common: &ThemeCommon) -> bool {
+    let candidate = &common.candidate;
+    candidate.passthrough.is_empty()
+        && candidate.geometry.passthrough.is_empty()
+        && candidate.label.passthrough.is_empty()
+        && common.fonts.ui.passthrough.is_empty()
+        && common.fonts.candidate.passthrough.is_empty()
+        && common.fonts.annotation.passthrough.is_empty()
+        && common.fonts.monospace.passthrough.is_empty()
+        && common.fonts.passthrough.is_empty()
+}
+
+fn valid_user_theme_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn valid_palette_key(value: &str) -> bool {
+    valid_user_theme_id(value)
+}
+
+fn valid_theme_color(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    matches!(bytes.len(), 7 | 9)
+        && bytes.first() == Some(&b'#')
+        && bytes[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
+fn palette_reference(value: &str) -> Option<&str> {
+    let reference = value.trim().strip_prefix("${")?.strip_suffix('}')?;
+    valid_palette_key(reference).then_some(reference)
+}
+
+fn resolved_palette(
+    common: &BTreeMap<String, String>,
+    branch: &BTreeMap<String, String>,
+) -> Option<BTreeMap<String, String>> {
+    let mut values = common.clone();
+    values.extend(branch.clone());
+    if values
+        .iter()
+        .any(|(key, value)| !valid_palette_key(key) || value.len() > 96)
+    {
+        return None;
+    }
+    let mut resolved = BTreeMap::new();
+    for key in values.keys() {
+        resolve_palette_entry(key, &values, &mut resolved, &mut BTreeSet::new())?;
+    }
+    Some(resolved)
+}
+
+fn resolve_palette_entry(
+    key: &str,
+    values: &BTreeMap<String, String>,
+    resolved: &mut BTreeMap<String, String>,
+    visiting: &mut BTreeSet<String>,
+) -> Option<()> {
+    if resolved.contains_key(key) {
+        return Some(());
+    }
+    if !visiting.insert(key.to_owned()) {
+        return None;
+    }
+    let raw = values.get(key)?.trim();
+    let value = if let Some(reference) = palette_reference(raw) {
+        resolve_palette_entry(reference, values, resolved, visiting)?;
+        resolved.get(reference)?.clone()
+    } else if valid_theme_color(raw) {
+        raw.to_owned()
+    } else {
+        return None;
+    };
+    visiting.remove(key);
+    resolved.insert(key.to_owned(), value);
+    Some(())
+}
+
+fn resolve_theme_color(value: &str, palette: &BTreeMap<String, String>) -> Option<String> {
+    let value = value.trim();
+    let resolved = if let Some(reference) = palette_reference(value) {
+        palette.get(reference)?.clone()
+    } else {
+        value.to_owned()
+    };
+    valid_theme_color(&resolved).then_some(resolved)
 }
 
 impl ConfigEdit {

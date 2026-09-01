@@ -1,5 +1,5 @@
 [build]
-rustc-wrapper = "sccache"
+rustc-wrapper = "out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe"
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"

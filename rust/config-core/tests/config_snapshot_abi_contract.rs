@@ -4,9 +4,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use fcitx5_config_core::{
-    fcitx5_config_snapshot_candidate_color_at, fcitx5_config_snapshot_destroy,
-    fcitx5_config_snapshot_font_family_at, fcitx5_config_snapshot_input_method_at,
-    fcitx5_config_snapshot_load_current_utf16, fcitx5_config_snapshot_view, Fcitx5ConfigSnapshot,
+    fcitx5_config_snapshot_candidate_color_at, fcitx5_config_snapshot_candidate_label_at,
+    fcitx5_config_snapshot_destroy, fcitx5_config_snapshot_font_family_at,
+    fcitx5_config_snapshot_input_method_at, fcitx5_config_snapshot_load_current_utf16,
+    fcitx5_config_snapshot_load_visual_utf16, fcitx5_config_snapshot_view, Fcitx5ConfigSnapshot,
     Fcitx5ConfigUtf16, Fcitx5ConfigUtf8, FCITX5_CONFIG_FONT_CANDIDATE,
 };
 
@@ -26,6 +27,93 @@ impl TestDirectory {
 
     fn config_path(&self) -> PathBuf {
         self.0.join("config.toml")
+    }
+}
+
+#[test]
+fn native_adapters_can_load_resolved_visual_snapshot_and_access_label_sequence() {
+    let directory = TestDirectory::new();
+    let install_root = directory.0.join("install");
+    let data_root = directory.0.join("data");
+    let builtin_theme = install_root
+        .join("resources")
+        .join("themes")
+        .join("default");
+    fs::create_dir_all(&builtin_theme).expect("builtin theme directory should be created");
+    fs::write(
+        builtin_theme.join("theme.toml"),
+        r##"
+format_version = 1
+[theme]
+id = "builtin.default"
+name = "Builtin"
+version = "1"
+license = "MIT"
+[dark.candidate.colors]
+background = "#101820FF"
+"##,
+    )
+    .expect("builtin theme should be written");
+    fs::create_dir_all(&data_root).expect("data directory should be created");
+    let config_path = data_root.join("config.toml");
+    fs::write(
+        &config_path,
+        r##"
+format_version = 1
+[candidate.label]
+sequence = ["一", "二", "三"]
+"##,
+    )
+    .expect("Current should be written");
+
+    let config_utf16: Vec<u16> = config_path
+        .as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .collect();
+    let install_utf16: Vec<u16> = install_root
+        .as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .collect();
+    let data_utf16: Vec<u16> = data_root
+        .as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .collect();
+
+    // SAFETY: every input borrows one live UTF-16 buffer for the duration of the call.
+    let snapshot = unsafe {
+        fcitx5_config_snapshot_load_visual_utf16(
+            Fcitx5ConfigUtf16 {
+                ptr: config_utf16.as_ptr(),
+                len: config_utf16.len(),
+            },
+            Fcitx5ConfigUtf16 {
+                ptr: install_utf16.as_ptr(),
+                len: install_utf16.len(),
+            },
+            Fcitx5ConfigUtf16 {
+                ptr: data_utf16.as_ptr(),
+                len: data_utf16.len(),
+            },
+            0,
+            1,
+        )
+    };
+    assert!(!snapshot.is_null(), "visual ABI should return a snapshot");
+
+    // SAFETY: the handle remains live until it is destroyed below.
+    unsafe {
+        assert_eq!(
+            utf8(fcitx5_config_snapshot_candidate_label_at(snapshot, 1)),
+            "二"
+        );
+        assert_eq!(
+            utf8(fcitx5_config_snapshot_candidate_label_at(snapshot, 3)),
+            ""
+        );
+        fcitx5_config_snapshot_destroy(snapshot);
     }
 }
 

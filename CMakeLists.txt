@@ -709,9 +709,10 @@ add_executable(
 set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
   target_link_libraries(
   fcitx5_ui
-  PRIVATE fcitx5::candidate_layout fcitx5::config
+  PRIVATE fcitx5::candidate_layout fcitx5::config fcitx5_config_core_rust
           fcitx5::windows_common fcitx5::protocol fcitx5::ipc_client fcitx5::platform
           d2d1 dwrite shell32 ole32)
+add_dependencies(fcitx5_ui fcitx5_config_core_rustlib)
 fcitx_apply_project_options(fcitx5_ui)
 fcitx_apply_binary_hardening(fcitx5_ui)
 add_custom_command(
@@ -1217,6 +1218,20 @@ if(BUILD_TESTING)
         "${FCITX_RUST_TARGET}")
     set_tests_properties(
       rust-package-core-differential PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-control-package-lifecycle
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "FCITX5_TASK077_CONTROL=${FCITX_CONTROL_EXE}"
+        "FCITX5_TASK077_DOWNLOADER=${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe"
+        "FCITX5_TASK077_SIGNER=$<TARGET_FILE:fcitx5_pqc_fixture_signer>"
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-control-core --test
+        task077_control_package_e2e --target "${FCITX_RUST_TARGET}" -- --ignored --exact
+        task077_control_owns_signed_package_theme_and_repository_lifecycle)
+    set_tests_properties(
+      rust-control-package-lifecycle
+      PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" TIMEOUT 90)
     add_test(
       NAME rust-package-core-fuzz-smoke
       COMMAND

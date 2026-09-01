@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::panic;
 use std::path::PathBuf;
 
-use crate::{ConfigCore, ConfigSnapshot, FileStore, FontFamilies};
+use crate::{ConfigCore, ConfigSnapshot, FileStore, FontFamilies, VisualSnapshotRequest};
 
 /// Borrowed UTF-8 bytes owned by a live Config snapshot handle.
 #[repr(C)]
@@ -261,6 +261,59 @@ pub unsafe extern "C" fn fcitx5_config_snapshot_load_current_utf16(
     .unwrap_or(std::ptr::null_mut())
 }
 
+/// Loads one read-only, fully resolved Candidate visual snapshot.
+///
+/// Config Core selects Current/LKG/default recovery, applies the selected
+/// built-in or user theme for the requested light/dark mode, then applies user
+/// overrides. Invalid or unavailable themes fail soft to compiled defaults.
+///
+/// # Safety
+///
+/// Each UTF-16 value must be null only when its length is zero. Otherwise it
+/// must designate that many readable UTF-16 code units for this call. No input
+/// pointer is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_config_snapshot_load_visual_utf16(
+    current_path: Fcitx5ConfigUtf16,
+    installation_root: Fcitx5ConfigUtf16,
+    data_root: Fcitx5ConfigUtf16,
+    safe_mode: u8,
+    system_dark: u8,
+) -> *mut c_void {
+    panic::catch_unwind(|| {
+        let Some(current_path) = utf16_path(current_path) else {
+            return std::ptr::null_mut();
+        };
+        let Some(installation_root) = utf16_path(installation_root) else {
+            return std::ptr::null_mut();
+        };
+        let Some(data_root) = utf16_path(data_root) else {
+            return std::ptr::null_mut();
+        };
+        let visual = ConfigCore::load_visual_snapshot(
+            &FileStore::new(),
+            VisualSnapshotRequest::new(
+                &current_path,
+                &installation_root,
+                &data_root,
+                safe_mode != 0,
+                system_dark != 0,
+            ),
+        );
+        let recovery_source = match visual.recovery_source() {
+            crate::RecoverySource::Current => 0,
+            crate::RecoverySource::LastKnownGood => 1,
+            crate::RecoverySource::SafeDefaults => 2,
+        };
+        Box::into_raw(Box::new(SnapshotHandle {
+            snapshot: visual.snapshot().clone(),
+            recovery_source,
+        }))
+        .cast()
+    })
+    .unwrap_or(std::ptr::null_mut())
+}
+
 /// Destroys a snapshot handle returned by `fcitx5_config_snapshot_load_current_utf16`.
 ///
 /// # Safety
@@ -321,6 +374,30 @@ pub unsafe extern "C" fn fcitx5_config_snapshot_input_method_at(
         .snapshot
         .input_methods()
         .enabled()
+        .get(index)
+        .map_or_else(Fcitx5ConfigUtf8::default, |value| utf8(value))
+}
+
+/// Returns the candidate-label sequence entry at `index`, or an empty span when out of range.
+///
+/// # Safety
+///
+/// `handle` must be a live snapshot handle. The returned span is borrowed from
+/// that handle and becomes invalid when it is destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_config_snapshot_candidate_label_at(
+    handle: *mut c_void,
+    index: usize,
+) -> Fcitx5ConfigUtf8 {
+    // SAFETY: the FFI contract requires a live handle.
+    let Some(handle) = (unsafe { handle_ref(handle) }) else {
+        return Fcitx5ConfigUtf8::default();
+    };
+    handle
+        .snapshot
+        .candidate()
+        .label()
+        .sequence()
         .get(index)
         .map_or_else(Fcitx5ConfigUtf8::default, |value| utf8(value))
 }

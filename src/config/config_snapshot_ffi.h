@@ -60,11 +60,16 @@ struct Fcitx5ConfigSnapshot {
 };
 
 [[nodiscard]] void* fcitx5_config_snapshot_load_current_utf16(Fcitx5ConfigUtf16 path);
+[[nodiscard]] void* fcitx5_config_snapshot_load_visual_utf16(
+    Fcitx5ConfigUtf16 currentPath, Fcitx5ConfigUtf16 installationRoot,
+    Fcitx5ConfigUtf16 dataRoot, std::uint8_t safeMode, std::uint8_t systemDark);
 void fcitx5_config_snapshot_destroy(void* handle);
 [[nodiscard]] std::uint8_t fcitx5_config_snapshot_view(void* handle,
                                                        Fcitx5ConfigSnapshot* output);
 [[nodiscard]] Fcitx5ConfigUtf8 fcitx5_config_snapshot_input_method_at(void* handle,
                                                                      std::size_t index);
+[[nodiscard]] Fcitx5ConfigUtf8 fcitx5_config_snapshot_candidate_label_at(void* handle,
+                                                                        std::size_t index);
 [[nodiscard]] Fcitx5ConfigUtf8 fcitx5_config_snapshot_font_family_at(void* handle,
                                                                     std::uint32_t kind,
                                                                     std::size_t index);
