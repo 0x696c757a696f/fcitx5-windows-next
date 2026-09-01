@@ -1,7 +1,7 @@
 # Task 077 production C++ inventory
 
 Baseline HEAD: `c6a804edcd093b98b8940730853f7301df58a21a`.
-Latest integrated cutover HEAD: `2788831`.
+Latest integrated cutover HEAD: `9a63682`.
 
 This is the live cutover ledger. `KEEP-CANDIDATE` still requires symbol-level reduction and a final
 unconditional classification. There are no accepted conditional rows at 077 completion.
@@ -26,7 +26,7 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 | `src/engine/fcitx_dispatcher.*`, `fcitx_runtime.*`, `key_event.*`, `windows_keyboard.cpp` | KEEP-CANDIDATE Fcitx | Retain only direct Fcitx event/object/key/addon adapter symbols |
 | `src/engine/fcitx_engine_main.cpp` | KEEP-CANDIDATE mixed | Retain Fcitx lifecycle/native pipe host; migrate product protocol/routing/policy |
 | `src/engine/engine_core_ffi.h` | KEEP-CANDIDATE ABI | Narrow Rust Engine declarations only |
-| `src/pch/fcitx_windows_pch.h` | DELETE-CANDIDATE | Delete unless remaining approved C++ adapters still benefit |
+| `src/pch/fcitx_windows_pch.h` | DELETED at `23fb50e` | Obsolete project PCH option/header removed; remaining approved adapters compile directly |
 
 Baseline counts: 41 project-owned production `.cpp/.h`; 30 project-owned test/support `.cpp/.h`.
 Test classification starts from `docs/tasks/071-test-ownership-inventory.md` and must be rechecked
@@ -66,6 +66,21 @@ C++-authoritative tests were deleted, and the retained final Candidate mixed E2E
 through the public Rust Control/Config transaction. Rust Windows-common restores the required live
 Candidate notification behind one named low-level Win32 exception while the Rust Control binary
 remains `forbid(unsafe_code)`.
+
+At `23fb50e`, the obsolete project PCH and its CMake policy were deleted. The C++ version behavior
+test and C++ key-roundtrip benchmark were also deleted: Windows-common Rust tests retain version /
+channel / architecture authority, while a new Safe Rust measurement-core benchmark owns the final
+verified-pipe roundtrip measurement on x64/x86. The direct Fcitx key adapter now consumes the flat
+Rust protocol C ABI instead of the C++ protocol DTO. This narrows, but does not yet delete, the
+remaining C++ protocol/IPC bridge used by other consumers.
+
+At `9a63682`, the rejected legacy Rust Win32 Settings/QA host was deleted together with its
+environment-variable runtime selector and old control-ID automation. The sole interactive Config
+path is the existing WindUI shell containing Candidate layout/theme controls and the plugin manager.
+Config QA is now a small `forbid(unsafe_code)` WindUI screenshot/report/PNG contract, and the
+obsolete duplicate CTest plus two unsafe-policy exceptions were removed. The build entry point also
+invalidates an architecture cache whose effective C/C++ target flags no longer match its preset,
+preventing an x86 build from reusing x64 clang objects against x86 CRT libraries.
 
 Current facts: shipping TSF, Settings, Launcher, Control, and the mock Engine fixture are Rust-owned;
 Candidate semantics and resolved visual configuration are Rust-owned; Rust protocol, Engine,
