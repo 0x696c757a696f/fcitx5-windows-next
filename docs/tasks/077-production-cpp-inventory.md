@@ -1,7 +1,7 @@
 # Task 077 production C++ inventory
 
 Baseline HEAD: `c6a804edcd093b98b8940730853f7301df58a21a`.
-Latest integrated cutover HEAD: `596a31b`.
+Latest integrated cutover HEAD: `2788831`.
 
 This is the live cutover ledger. `KEEP-CANDIDATE` still requires symbol-level reduction and a final
 unconditional classification. There are no accepted conditional rows at 077 completion.
@@ -11,9 +11,9 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 | `protocol/protocol.cpp`, `protocol/protocol.h` | MIGRATE | Delete C++ DTO/bridge after consumers use Rust protocol ABI |
 | `protocol/protocol_ffi.h`, `resources/windows/resource.h` | KEEP-CANDIDATE ABI | Retain declarations/resource IDs only where required |
 | `src/config/app_main.cpp` | DELETED at `3cf297b` | Rust Settings is the sole shipping shell; legacy WTL target and differential test are deleted |
-| `src/config/config_model.h`, `src/config/config_parser.cpp` | DELETE-AFTER-CUTOVER | Delete remaining C++ Config parser/model authority after native consumers use Config Core |
+| `src/config/config_model.h`, `src/config/config_parser.cpp` | DELETED at `2788831` | Config Core owns typed parsing, validation, recovery, persistence, and resolved Candidate visuals |
 | `src/control/control_main.cpp` | DELETED at `955137e` | Rust is the sole shipping Control executable and owns Engine/Launcher commands plus signed repository/package lifecycle |
-| `src/package/package_core.cpp`, `package_core.h` | DELETE-AFTER-CUTOVER | Delete C++ package bridge after Rust consumers cut over |
+| `src/package/package_core.cpp`, `package_core.h` | DELETED at `2788831` | Rust package-core and the shipping Rust lifecycle binaries are the only package authority |
 | `src/package/fcitx5_mldsa65_config.h` | KEEP-CANDIDATE native ABI | Retain only if the Rust package build's audited native verifier needs it |
 | `src/ui/ui_main.cpp` | MIGRATE/MIXED; Rust visual snapshot landed at `596a31b` | Config/theme/default/Safe Mode/label semantics now come from Config Core; move remaining product state/protocol/orchestration to Rust and retain only necessary HWND/D2D/DWrite seam |
 | `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | DELETED at `240496e` | Rust is the sole Launcher supervisor, command, state-store, process, IPC-server, and shipping executable owner |
@@ -61,10 +61,14 @@ validated colors/fonts, and custom label sequences through one narrow snapshot A
 Control/package E2E owns signed repository, package install/update/repair/remove, and theme
 lifecycle behavior and is registered as `rust-control-package-lifecycle` on x64/x86. This does not
 delete the old C++ Config/package bridges while other consumers and retained mixed tests still use
-them.
+them. At `2788831`, the remaining consumers moved to Rust public contracts, both bridges and their
+C++-authoritative tests were deleted, and the retained final Candidate mixed E2E applies typed TOML
+through the public Rust Control/Config transaction. Rust Windows-common restores the required live
+Candidate notification behind one named low-level Win32 exception while the Rust Control binary
+remains `forbid(unsafe_code)`.
 
 Current facts: shipping TSF, Settings, Launcher, Control, and the mock Engine fixture are Rust-owned;
-Candidate semantics and resolved visual configuration are Rust-owned; Rust protocol, Engine, package, Windows-common,
-process-execution, and Config owners already exist. The remaining migration rows are Config
-parser/model consumers, Candidate adapter reduction, package/protocol bridges, and residual
-IPC/platform/Engine symbol classifications. No current-HEAD release stage exists yet.
+Candidate semantics and resolved visual configuration are Rust-owned; Rust protocol, Engine,
+package, Windows-common, process-execution, and Config owners already exist. The remaining migration
+rows are Candidate adapter reduction, the protocol/IPC bridges, and residual platform/Engine symbol
+classifications. No current-HEAD release stage exists yet.

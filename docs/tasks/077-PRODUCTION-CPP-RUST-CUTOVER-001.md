@@ -24,6 +24,10 @@ inventory has no `MIGRATE`, `DELETE`, `KEEP-TEMP`, conditional, or unclassified 
 - LLVM: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\llvm-22.1.8\clang+llvm-22.1.8-x86_64-pc-windows-msvc\bin`
 - sccache: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\sccache-0.17.0\sccache-v0.17.0-x86_64-pc-windows-msvc\sccache.exe`
 - Pinned Cargo: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home\bin\cargo.exe`
+- `RUSTUP_HOME`: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\rustup-home`
+- `CARGO_HOME`: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home`
+- `RUSTUP_TOOLCHAIN`: `1.98.0-x86_64-pc-windows-msvc`
+- `RUSTUP_IO_THREADS`: `1`
 - Python: `D:\Dev\pixi\envs\python\python.exe`
 - `CARGO_TARGET_DIR` must be inside the agent's own worktree.
 - The repository `.cargo/config.toml` points at the worktree-relative pinned sccache executable;
