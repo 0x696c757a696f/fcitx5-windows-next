@@ -1,7 +1,7 @@
 # Task 077 production C++ inventory
 
 Baseline HEAD: `c6a804edcd093b98b8940730853f7301df58a21a`.
-Latest integrated cutover HEAD: `955137e`.
+Latest integrated cutover HEAD: `596a31b`.
 
 This is the live cutover ledger. `KEEP-CANDIDATE` still requires symbol-level reduction and a final
 unconditional classification. There are no accepted conditional rows at 077 completion.
@@ -15,7 +15,7 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 | `src/control/control_main.cpp` | DELETED at `955137e` | Rust is the sole shipping Control executable and owns Engine/Launcher commands plus signed repository/package lifecycle |
 | `src/package/package_core.cpp`, `package_core.h` | DELETE-AFTER-CUTOVER | Delete C++ package bridge after Rust consumers cut over |
 | `src/package/fcitx5_mldsa65_config.h` | KEEP-CANDIDATE native ABI | Retain only if the Rust package build's audited native verifier needs it |
-| `src/ui/ui_main.cpp` | MIGRATE/MIXED | Move all product state/protocol/config/orchestration to Rust; retain only necessary HWND/D2D/DWrite seam |
+| `src/ui/ui_main.cpp` | MIGRATE/MIXED; Rust visual snapshot landed at `596a31b` | Config/theme/default/Safe Mode/label semantics now come from Config Core; move remaining product state/protocol/orchestration to Rust and retain only necessary HWND/D2D/DWrite seam |
 | `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | DELETED at `240496e` | Rust is the sole Launcher supervisor, command, state-store, process, IPC-server, and shipping executable owner |
 | `src/launcher/tray_icon.cpp`, `tray_icon.h`, `launcher_rust_abi.h` | DELETED at `240496e` | No default tray is required; the temporary tray and flat C++ ABI seams were removed |
 | `src/engine/mock_engine_main.cpp` | DELETED at `601a4d0` | Safe Rust fixture preserves the final mixed IPC/Launcher/TSF corpus and exact verified pipe-peer handshake |
@@ -55,8 +55,16 @@ stopped-service and repository rollback mixed tests on x64/x86. The repository-w
 policy rejects every `allow(unsafe_code)`, requires `forbid(unsafe_code)` by default, and requires
 named low-level exceptions to deny unsafe operations inside unsafe functions.
 
+At `596a31b`, Candidate stopped consuming the C++ Config model/parser for visual state. Config Core
+now resolves Current/LKG/default recovery, selected local theme light/dark layers, Safe Mode,
+validated colors/fonts, and custom label sequences through one narrow snapshot ABI. The Rust
+Control/package E2E owns signed repository, package install/update/repair/remove, and theme
+lifecycle behavior and is registered as `rust-control-package-lifecycle` on x64/x86. This does not
+delete the old C++ Config/package bridges while other consumers and retained mixed tests still use
+them.
+
 Current facts: shipping TSF, Settings, Launcher, Control, and the mock Engine fixture are Rust-owned;
-Candidate semantics are Rust-owned; Rust protocol, Engine, package, Windows-common,
+Candidate semantics and resolved visual configuration are Rust-owned; Rust protocol, Engine, package, Windows-common,
 process-execution, and Config owners already exist. The remaining migration rows are Config
 parser/model consumers, Candidate adapter reduction, package/protocol bridges, and residual
 IPC/platform/Engine symbol classifications. No current-HEAD release stage exists yet.

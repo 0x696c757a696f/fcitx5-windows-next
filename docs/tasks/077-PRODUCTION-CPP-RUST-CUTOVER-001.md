@@ -22,8 +22,14 @@ inventory has no `MIGRATE`, `DELETE`, `KEEP-TEMP`, conditional, or unclassified 
 - CMake/CTest: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\cmake-3.31.8\cmake-3.31.8-windows-x86_64\bin`
 - Ninja: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\ninja-1.13.2\ninja.exe`
 - LLVM: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\llvm-22.1.8\clang+llvm-22.1.8-x86_64-pc-windows-msvc\bin`
+- sccache: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\sccache-0.17.0\sccache-v0.17.0-x86_64-pc-windows-msvc\sccache.exe`
 - Pinned Cargo: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home\bin\cargo.exe`
+- Python: `D:\Dev\pixi\envs\python\python.exe`
 - `CARGO_TARGET_DIR` must be inside the agent's own worktree.
+- The repository `.cargo/config.toml` points at the worktree-relative pinned sccache executable;
+  agents still set `RUSTC_WRAPPER` to the absolute path above for auditable command lines.
+- Use PowerShell syntax only on this Windows task. Do not use Bash quoting, heredocs, or wildcard
+  search paths; expand wildcard directories before passing real paths to `rg`.
 
 Each subagent reads `AGENTS.md`, this task, the live inventory, and only the relevant spec/source
 slice; follows `rust-skills`, `tdd`, and `ponytail`; and does not commit or push. The root agent owns
