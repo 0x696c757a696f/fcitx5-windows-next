@@ -34,6 +34,25 @@ pub struct Report {
     pub measurements: Vec<Sample>,
 }
 
+/// Formats the bounded key roundtrip result consumed by the benchmark script.
+pub fn format_key_roundtrip_result(architecture_bits: usize, samples: &[f64]) -> Option<String> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let percentile = |numerator: usize| sorted[((sorted.len() - 1) * numerator) / 100];
+    Some(format!(
+        "{{\"benchmark\":\"key_roundtrip\",\"architecture_bits\":{},\"samples\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"max_us\":{}}}",
+        architecture_bits,
+        sorted.len(),
+        percentile(50),
+        percentile(95),
+        percentile(99),
+        sorted[sorted.len() - 1]
+    ))
+}
+
 struct FakeClock(u64);
 
 impl FakeClock {
@@ -85,6 +104,18 @@ pub fn run_fixture(architecture: Architecture) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_roundtrip_result_uses_compatible_json_fields() {
+        let result = format_key_roundtrip_result(64, &[1.0, 2.0, 3.0, 4.0]);
+
+        assert_eq!(
+            result,
+            Some(
+                "{\"benchmark\":\"key_roundtrip\",\"architecture_bits\":64,\"samples\":4,\"p50_us\":2,\"p95_us\":3,\"p99_us\":3,\"max_us\":4}".to_owned()
+            )
+        );
+    }
 
     #[test]
     fn architecture_changes_only_fixture_scale() {

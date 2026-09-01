@@ -2,6 +2,7 @@
 #include "config_snapshot_ffi.h"
 #include "engine_core_ffi.h"
 #include "key_event.h"
+#include "protocol_ffi.h"
 #include "runtime_identity.h"
 #include <fcitx5_windows/release_identity.h>
 
@@ -1040,7 +1041,30 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     // E3 event-shape consolidation: the unified Event→Action decision is
     // Rust-owned (`fcitx5_engine_core_handle_key_event`); the adapter only
     // flattens Fcitx facts and executes the returned decision.
-    KeyEvent event(&context, keyFromRequest(request),
+    const FcitxKeyRequestC keyRequest{
+        FcitxMetadataC{request.metadata.requestId, request.metadata.responseTo,
+                       request.metadata.engineEpoch, request.metadata.sessionId,
+                       request.metadata.contextId, request.metadata.compositionId,
+                       request.metadata.revision},
+        request.virtualKey,
+        request.keyFlags,
+        request.scanCode,
+        static_cast<std::uint8_t>(request.extendedKey),
+        static_cast<std::uint8_t>(request.popupAllowed),
+        request.keyboardLayout,
+        FcitxBytesC{reinterpret_cast<const std::uint8_t*>(request.logicalTextUtf8.data()),
+                    request.logicalTextUtf8.size()},
+        FcitxBytesC{reinterpret_cast<const std::uint8_t*>(request.inputMethodUtf8.data()),
+                    request.inputMethodUtf8.size()},
+        static_cast<std::uint8_t>(request.surroundingTextValid),
+        FcitxBytesC{reinterpret_cast<const std::uint8_t*>(request.surroundingTextUtf8.data()),
+                    request.surroundingTextUtf8.size()},
+        request.surroundingCursor,
+        request.surroundingAnchor,
+        FcitxCaretRectC{static_cast<std::uint8_t>(request.caret.valid), request.caret.left,
+                        request.caret.top, request.caret.right, request.caret.bottom,
+                        request.caret.dpi}};
+    KeyEvent event(&context, keyFromRequest(keyRequest),
                    (request.keyFlags & protocol::kKeyFlagRelease) != 0);
     const KeySym keySym = event.key().sym();
     const auto& group = impl_->instance->inputMethodManager().currentGroup();

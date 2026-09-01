@@ -45,6 +45,16 @@ struct FcitxBytesC {
     std::size_t len;
 };
 
+enum FcitxProtocolKeyFlagC : std::uint32_t {
+    FCITX5_PROTOCOL_KEY_FLAG_SHIFT = 1U << 0U,
+    FCITX5_PROTOCOL_KEY_FLAG_CONTROL = 1U << 1U,
+    FCITX5_PROTOCOL_KEY_FLAG_ALT = 1U << 2U,
+    FCITX5_PROTOCOL_KEY_FLAG_SUPER = 1U << 3U,
+    FCITX5_PROTOCOL_KEY_FLAG_RELEASE = 1U << 4U,
+    FCITX5_PROTOCOL_KEY_FLAG_ALTGR = 1U << 5U,
+    FCITX5_PROTOCOL_KEY_FLAG_DEAD_KEY = 1U << 6U,
+};
+
 struct FcitxHelloRequestC {
     FcitxMetadataC metadata;
     std::uint32_t clientArchitectureBits;

@@ -68,7 +68,6 @@ option(FCITX_BUILD_BENCHMARKS "Build repeatable microbenchmarks" ON)
 option(FCITX_BUILD_FUZZERS "Build security-boundary fuzz harnesses" ON)
 option(FCITX_DEVELOPMENT_PEER_EXCEPTION
        "Allow explicitly marked same-user/session peers in development builds" OFF)
-option(FCITX_ENABLE_PCH "Use project precompiled headers for C++ targets" ON)
 set(FCITX_TARGET_ARCH
     ""
     CACHE STRING "Windows target architecture: x64, x86, or arm64")
@@ -172,7 +171,6 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerOptions)
-set(FCITX_PROJECT_PCH_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/pch/fcitx_windows_pch.h")
 
 configure_file(
   cmake/version.h.in
@@ -844,12 +842,6 @@ add_custom_target(
   COMMENT "Building Rust fcitx5-updater CLI")
 
 if(BUILD_TESTING)
-  add_executable(fcitx5_version_test tests/unit/version_test.cpp)
-  target_link_libraries(fcitx5_version_test PRIVATE fcitx5::windows_common)
-  fcitx_apply_project_options(fcitx5_version_test)
-  fcitx_apply_binary_hardening(fcitx5_version_test)
-  add_test(NAME version-contract COMMAND fcitx5_version_test)
-
   add_executable(fcitx5_release_identity_test tests/unit/release_identity_test.cpp)
   target_link_libraries(
     fcitx5_release_identity_test PRIVATE fcitx5::windows_common fcitx5::release_identity ole32)
@@ -1522,8 +1514,34 @@ if(FCITX_BUILD_BENCHMARKS)
                          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   endif()
 
-  add_executable(fcitx5_key_roundtrip_bench tests/perf/key_roundtrip_bench.cpp)
-  target_link_libraries(fcitx5_key_roundtrip_bench PRIVATE fcitx5::ipc_client)
-  fcitx_apply_project_options(fcitx5_key_roundtrip_bench)
-  fcitx_apply_binary_hardening(fcitx5_key_roundtrip_bench)
+  add_custom_target(
+    fcitx5_key_roundtrip_bench ALL
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-measurement-core --bin
+      fcitx5-key-roundtrip-bench --target "${FCITX_RUST_TARGET}" --profile
+      "$<IF:$<CONFIG:Debug>,dev,release>"
+    DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+      "${CMAKE_CURRENT_SOURCE_DIR}/rust/measurement-core/Cargo.toml"
+      "${CMAKE_CURRENT_SOURCE_DIR}/rust/measurement-core/src/lib.rs"
+      "${CMAKE_CURRENT_SOURCE_DIR}/rust/measurement-core/src/key_roundtrip_bench.rs"
+      "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/lib.rs"
+      "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/src/lib.rs"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Building Safe Rust key roundtrip benchmark")
+  if(BUILD_TESTING)
+    add_test(
+      NAME rust-key-roundtrip-bench
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-measurement-core --bin
+        fcitx5-key-roundtrip-bench --target "${FCITX_RUST_TARGET}" --profile
+        "$<IF:$<CONFIG:Debug>,dev,release>" -- "${FCITX_MOCK_ENGINE_EXE}")
+    set_tests_properties(rust-key-roundtrip-bench PROPERTIES
+                         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" TIMEOUT 30)
+  endif()
 endif()

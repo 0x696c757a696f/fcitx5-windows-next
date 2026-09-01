@@ -35,17 +35,24 @@ std::uint32_t firstUtf8CodePoint(std::string_view text) noexcept {
     return 0;
 }
 
-KeyStates statesFromRequest(const protocol::KeyRequest& request) noexcept {
+std::string_view stringView(FcitxBytesC bytes) noexcept {
+    if (bytes.len == 0) {
+        return {};
+    }
+    return {reinterpret_cast<const char*>(bytes.data), bytes.len};
+}
+
+KeyStates statesFromRequest(const FcitxKeyRequestC& request) noexcept {
     KeyStates states;
-    const bool altGr = (request.keyFlags & protocol::kKeyFlagAltGr) != 0;
-    const bool printableAltGr = altGr && !request.logicalTextUtf8.empty();
-    if ((request.keyFlags & protocol::kKeyFlagShift) != 0)
+    const bool altGr = (request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_ALTGR) != 0;
+    const bool printableAltGr = altGr && !stringView(request.logicalText).empty();
+    if ((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0)
         states |= KeyState::Shift;
-    if (!printableAltGr && (request.keyFlags & protocol::kKeyFlagControl) != 0)
+    if (!printableAltGr && (request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_CONTROL) != 0)
         states |= KeyState::Ctrl;
-    if (!printableAltGr && (request.keyFlags & protocol::kKeyFlagAlt) != 0)
+    if (!printableAltGr && (request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_ALT) != 0)
         states |= KeyState::Alt;
-    if ((request.keyFlags & protocol::kKeyFlagSuper) != 0)
+    if ((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SUPER) != 0)
         states |= KeyState::Super;
     return states;
 }
@@ -57,9 +64,9 @@ KeySym logicalKeySym(std::string_view text) noexcept {
 
 } // namespace
 
-Key keyFromRequest(const protocol::KeyRequest& request) {
+Key keyFromRequest(const FcitxKeyRequestC& request) {
     const KeyStates states = statesFromRequest(request);
-    if (const KeySym sym = logicalKeySym(request.logicalTextUtf8);
+    if (const KeySym sym = logicalKeySym(stringView(request.logicalText));
         sym != FcitxKey_None && sym != FcitxKey_VoidSymbol) {
         return Key(sym, states, static_cast<int>(request.scanCode));
     }
@@ -97,42 +104,42 @@ Key keyFromRequest(const protocol::KeyRequest& request) {
     case VK_END:
         return Key(FcitxKey_End, states, static_cast<int>(request.scanCode));
     case VK_OEM_PLUS:
-        return Key((request.keyFlags & protocol::kKeyFlagShift) != 0 ? FcitxKey_plus
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_plus
                                                                      : FcitxKey_equal,
                    states, static_cast<int>(request.scanCode));
     case VK_OEM_MINUS:
-        return Key((request.keyFlags & protocol::kKeyFlagShift) != 0 ? FcitxKey_underscore
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_underscore
                                                                      : FcitxKey_minus,
                    states, static_cast<int>(request.scanCode));
     case VK_OEM_COMMA:
-        return Key((request.keyFlags & protocol::kKeyFlagShift) != 0 ? FcitxKey_less
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_less
                                                                      : FcitxKey_comma,
                    states, static_cast<int>(request.scanCode));
     case VK_OEM_PERIOD:
-        return Key((request.keyFlags & protocol::kKeyFlagShift) != 0 ? FcitxKey_greater
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_greater
                                                                      : FcitxKey_period,
                    states, static_cast<int>(request.scanCode));
     case VK_OEM_1:
-        return Key((request.keyFlags & protocol::kKeyFlagShift) != 0 ? FcitxKey_colon
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_colon
                                                                      : FcitxKey_semicolon,
                    states, static_cast<int>(request.scanCode));
     case VK_OEM_7:
-        return Key((request.keyFlags & protocol::kKeyFlagShift) != 0 ? FcitxKey_quotedbl
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_quotedbl
                                                                      : FcitxKey_apostrophe,
                    states, static_cast<int>(request.scanCode));
     case VK_OEM_4:
-        return Key((request.keyFlags & protocol::kKeyFlagShift) != 0 ? FcitxKey_braceleft
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_braceleft
                                                                      : FcitxKey_bracketleft,
                    states, static_cast<int>(request.scanCode));
     case VK_OEM_6:
-        return Key((request.keyFlags & protocol::kKeyFlagShift) != 0 ? FcitxKey_braceright
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_braceright
                                                                      : FcitxKey_bracketright,
                    states, static_cast<int>(request.scanCode));
     default:
         break;
     }
     if (vk >= 'A' && vk <= 'Z') {
-        const bool shifted = (request.keyFlags & protocol::kKeyFlagShift) != 0;
+        const bool shifted = (request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0;
         return Key(static_cast<KeySym>((shifted ? FcitxKey_A : FcitxKey_a) + (vk - 'A')),
                    states, static_cast<int>(request.scanCode));
     }

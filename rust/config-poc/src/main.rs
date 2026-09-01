@@ -13,8 +13,9 @@ use fcitx5_config_core::{
 use fcitx5_control_core::{control_schema_json, control_usage_text};
 use fcitx5_package_core::{
     finalize_package_removal_entries, find_repository_package, mark_package_for_removal_entries,
-    parse_lockfile, parse_manifest, parse_repository_index, parse_trusted_keys,
+    parse_lockfile, parse_manifest, parse_repository_index_with_policy, parse_trusted_keys,
     set_package_state_entries, validate_manifest_compatibility, PackageLifecycleState,
+    RepositoryVerificationPolicy,
 };
 use fcitx5_process_execution_core::run_process_bounded;
 use serde::Deserialize;
@@ -5424,8 +5425,15 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
         return Err("Config PoC manifest identity does not match package UI state".to_owned());
     }
 
-    let repository = parse_repository_index(CONFIG_POC_REPOSITORY_INDEX_JSON, "stable")
-        .map_err(|error| format!("repository parse failed: {error}"))?;
+    let repository_policy = RepositoryVerificationPolicy::new(
+        "fcitx5-windows-next",
+        "stable",
+        "official",
+        1_788_048_000,
+    );
+    let repository =
+        parse_repository_index_with_policy(CONFIG_POC_REPOSITORY_INDEX_JSON, &repository_policy)
+            .map_err(|error| format!("repository parse failed: {error}"))?;
     let entry = find_repository_package(&repository, "fcitx5-rime", "x64")
         .ok_or_else(|| "repository entry for fcitx5-rime x64 is missing".to_owned())?;
     if repository.key_id() != trusted_key.id().as_str()

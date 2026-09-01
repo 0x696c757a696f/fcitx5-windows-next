@@ -4,16 +4,6 @@ function(fcitx_apply_project_options target)
     ${target}
     PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0601)
 
-  set(FCITX_TARGET_USES_PCH ON)
-  if("${target}" MATCHES "(_test|_bench|_fuzz|fixture|mock)")
-    set(FCITX_TARGET_USES_PCH OFF)
-  endif()
-  if(FCITX_ENABLE_PCH AND FCITX_TARGET_USES_PCH AND
-     DEFINED FCITX_PROJECT_PCH_HEADER AND EXISTS "${FCITX_PROJECT_PCH_HEADER}")
-    target_precompile_headers(
-      ${target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${FCITX_PROJECT_PCH_HEADER}>")
-  endif()
-
   if(MSVC)
     target_compile_options(
       ${target}
