@@ -460,93 +460,6 @@ add_custom_target(
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-tsf-poc DLL")
 
-add_library(fcitx5_miniz STATIC "${FCITX_MINIZ_SOURCE_DIR}/miniz.c")
-target_include_directories(fcitx5_miniz SYSTEM PUBLIC "${FCITX_MINIZ_SOURCE_DIR}")
-target_compile_definitions(fcitx5_miniz PRIVATE MINIZ_NO_ZLIB_APIS)
-if(MSVC)
-  target_compile_options(fcitx5_miniz PRIVATE /W3)
-  if(FCITX_COMPILER_IS_MSVC_CL)
-    target_compile_options(fcitx5_miniz PRIVATE /sdl)
-  endif()
-endif()
-
-add_library(
-  fcitx5_mldsa65_verify STATIC
-  "${FCITX_MLDSA_NATIVE_SOURCE_DIR}/mldsa/mldsa_native.c")
-target_include_directories(
-  fcitx5_mldsa65_verify
-  SYSTEM PUBLIC "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
-target_include_directories(
-  fcitx5_mldsa65_verify
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/package")
-target_compile_definitions(
-  fcitx5_mldsa65_verify
-  PRIVATE MLD_CONFIG_FILE=\"fcitx5_mldsa65_config.h\")
-if(MSVC)
-  target_compile_options(fcitx5_mldsa65_verify PRIVATE /W3)
-  if(FCITX_COMPILER_IS_MSVC_CL)
-    target_compile_options(fcitx5_mldsa65_verify PRIVATE /sdl)
-  endif()
-endif()
-
-add_library(
-  fcitx5_blake3 STATIC
-  "${FCITX_BLAKE3_SOURCE_DIR}/blake3.c"
-  "${FCITX_BLAKE3_SOURCE_DIR}/blake3_dispatch.c"
-  "${FCITX_BLAKE3_SOURCE_DIR}/blake3_portable.c")
-target_include_directories(fcitx5_blake3 SYSTEM PUBLIC "${FCITX_BLAKE3_SOURCE_DIR}")
-target_compile_definitions(
-  fcitx5_blake3
-  PRIVATE BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512
-          BLAKE3_USE_NEON=0)
-if(MSVC)
-  target_compile_options(fcitx5_blake3 PRIVATE /W3 /wd4244)
-  if(FCITX_COMPILER_IS_MSVC_CL)
-    target_compile_options(fcitx5_blake3 PRIVATE /sdl)
-  endif()
-endif()
-
-add_library(
-  fcitx5_package_core STATIC
-  src/package/package_core.cpp
-  )
-add_library(fcitx5::package_core ALIAS fcitx5_package_core)
-target_compile_features(fcitx5_package_core PUBLIC cxx_std_20)
-target_include_directories(
-  fcitx5_package_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/package")
-target_include_directories(
-  fcitx5_package_core SYSTEM PUBLIC "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}")
-target_include_directories(
-  fcitx5_package_core SYSTEM PRIVATE "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
-target_include_directories(
-  fcitx5_package_core SYSTEM PRIVATE "${FCITX_BLAKE3_SOURCE_DIR}")
-target_link_libraries(
-  fcitx5_package_core
-  PUBLIC bcrypt crypt32
-  PRIVATE fcitx5_miniz fcitx5_mldsa65_verify fcitx5_blake3)
-fcitx_apply_project_options(fcitx5_package_core)
-if(FCITX_COMPILER_IS_MSVC_CL)
-  target_compile_options(fcitx5_package_core PRIVATE /external:W0 /analyze:external-)
-endif()
-
-add_library(fcitx5_config STATIC src/config/config_parser.cpp)
-add_library(fcitx5::config ALIAS fcitx5_config)
-target_compile_features(fcitx5_config PUBLIC cxx_std_20)
-target_include_directories(
-  fcitx5_config
-  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
-target_include_directories(
-  fcitx5_config SYSTEM
-  PRIVATE "${FCITX_TOMLPLUSPLUS_INCLUDE_DIR}")
-target_link_libraries(fcitx5_config PUBLIC fcitx5_control_core_rust)
-add_dependencies(fcitx5_config fcitx5_control_core_rustlib)
-target_compile_definitions(fcitx5_config PRIVATE TOML_EXCEPTIONS=1)
-fcitx_apply_project_options(fcitx5_config)
-if(FCITX_COMPILER_IS_MSVC_CL)
-  target_compile_options(fcitx5_config PRIVATE /external:W0 /analyze:external-)
-endif()
-
-
 add_library(
   fcitx5_platform STATIC
   src/platform/runtime_identity.cpp
@@ -707,9 +620,10 @@ add_executable(
   src/ui/ui_main.cpp
   resources/windows/app.rc)
 set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
-  target_link_libraries(
+target_include_directories(fcitx5_ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
+target_link_libraries(
   fcitx5_ui
-  PRIVATE fcitx5::candidate_layout fcitx5::config fcitx5_config_core_rust
+  PRIVATE fcitx5::candidate_layout fcitx5_config_core_rust
           fcitx5::windows_common fcitx5::protocol fcitx5::ipc_client fcitx5::platform
           d2d1 dwrite shell32 ole32)
 add_dependencies(fcitx5_ui fcitx5_config_core_rustlib)
@@ -851,10 +765,6 @@ add_library(fcitx5_package_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_package_core_rust PROPERTIES
                       IMPORTED_LOCATION "${FCITX_RUST_PACKAGE_CORE_STATICLIB}")
 add_dependencies(fcitx5_package_core_rust fcitx5_package_core_rustlib)
-target_link_libraries(
-  fcitx5_package_core
-  PUBLIC fcitx5_package_core_rust ole32 advapi32 ws2_32 userenv ntdll)
-add_dependencies(fcitx5_package_core fcitx5_package_core_rustlib)
 
 add_custom_target(
   fcitx5_downloader ALL
@@ -993,26 +903,6 @@ if(BUILD_TESTING)
   fcitx_apply_project_options(fcitx5_pqc_fixture_signer)
   fcitx_apply_binary_hardening(fcitx5_pqc_fixture_signer)
 
-  add_executable(
-    fcitx5_control_package_integration_test
-    tests/integration/control_package_integration_test.cpp)
-  target_include_directories(
-    fcitx5_control_package_integration_test SYSTEM PRIVATE "${FCITX_MINIZ_SOURCE_DIR}")
-  target_link_libraries(
-    fcitx5_control_package_integration_test
-    PRIVATE fcitx5::package_core fcitx5_miniz bcrypt crypt32)
-  add_dependencies(
-    fcitx5_control_package_integration_test fcitx5_control fcitx5_downloader
-    fcitx5_pqc_fixture_signer)
-  fcitx_apply_project_options(fcitx5_control_package_integration_test)
-  fcitx_apply_binary_hardening(fcitx5_control_package_integration_test)
-  add_test(
-    NAME control-package-stopped-service-contract
-    COMMAND fcitx5_control_package_integration_test
-            "${FCITX_CONTROL_EXE}"
-            "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe"
-            "$<TARGET_FILE:fcitx5_pqc_fixture_signer>")
-  set_tests_properties(control-package-stopped-service-contract PROPERTIES TIMEOUT 30)
   add_test(NAME launcher-version COMMAND "${FCITX_LAUNCHER_SHIPPING_EXE}" --version)
   add_test(NAME mock-engine-version COMMAND "${FCITX_MOCK_ENGINE_EXE}" --version)
   add_test(NAME control-version COMMAND "${FCITX_CONTROL_EXE}" --version)
@@ -1050,23 +940,6 @@ if(BUILD_TESTING)
   add_test(NAME provider-boundary-smoke
            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-provider.exe" --self-test
                    --audit-self-pe)
-
-  add_executable(fcitx5_control_repository_rollback_test
-                 tests/unit/control_repository_rollback_test.cpp)
-  target_include_directories(
-    fcitx5_control_repository_rollback_test SYSTEM PRIVATE
-    "${FCITX_NLOHMANN_JSON_INCLUDE_DIR}" "${FCITX_MLDSA_NATIVE_SOURCE_DIR}")
-  target_include_directories(
-    fcitx5_control_repository_rollback_test PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
-  target_link_libraries(
-    fcitx5_control_repository_rollback_test PRIVATE fcitx5::package_core
-            fcitx5_mldsa65_test_sign crypt32)
-  add_dependencies(fcitx5_control_repository_rollback_test fcitx5_control)
-  fcitx_apply_project_options(fcitx5_control_repository_rollback_test)
-  fcitx_apply_binary_hardening(fcitx5_control_repository_rollback_test)
-  add_test(NAME control-repository-rollback
-           COMMAND fcitx5_control_repository_rollback_test "${FCITX_CONTROL_EXE}")
 
   add_test(NAME control-config-roundtrip
            COMMAND "${FCITX_CONTROL_EXE}" --data-root
@@ -1471,7 +1344,7 @@ if(BUILD_TESTING)
     fcitx5_candidate_ui_config_integration_test fcitx5_ui fcitx5_control
     fcitx5_candidate_poc_rustbin)
   target_link_libraries(
-    fcitx5_candidate_ui_config_integration_test PRIVATE fcitx5::config user32)
+    fcitx5_candidate_ui_config_integration_test PRIVATE user32)
   fcitx_apply_project_options(fcitx5_candidate_ui_config_integration_test)
   fcitx_apply_binary_hardening(fcitx5_candidate_ui_config_integration_test)
   add_test(

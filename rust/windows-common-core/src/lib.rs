@@ -1341,6 +1341,8 @@ unsafe extern "system" {
 unsafe extern "system" {
     fn GetDC(window: *mut c_void) -> *mut c_void;
     fn ReleaseDC(window: *mut c_void, dc: *mut c_void) -> i32;
+    fn RegisterWindowMessageW(string: *const u16) -> u32;
+    fn PostMessageW(window: *mut c_void, message: u32, wparam: usize, lparam: isize) -> i32;
     fn OpenInputDesktop(flags: u32, inherit: i32, desired_access: u32) -> *mut c_void;
     fn GetUserObjectInformationW(
         object: *mut c_void,
@@ -1350,6 +1352,21 @@ unsafe extern "system" {
         length_needed: *mut u32,
     ) -> i32;
     fn CloseDesktop(desktop: *mut c_void) -> i32;
+}
+
+/// Notifies running Candidate windows that their resolved visual configuration changed.
+pub fn broadcast_visual_config_changed() {
+    let message_name: Vec<u16> = OsStr::new("Fcitx5WindowsNext.VisualConfigChanged.v1")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `message_name` is a live, NUL-terminated UTF-16 buffer for the call.
+    let message = unsafe { RegisterWindowMessageW(message_name.as_ptr()) };
+    if message != 0 {
+        // SAFETY: HWND_BROADCAST is the documented pseudo-handle 0xffff; this posts a
+        // registered message with no borrowed pointer payload.
+        let _ = unsafe { PostMessageW(0xffffusize as *mut c_void, message, 0, 0) };
+    }
 }
 
 #[link(name = "gdi32")]

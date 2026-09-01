@@ -1,5 +1,3 @@
-#include "config_model.h"
-
 #include <windows.h>
 
 #include <cstdint>
@@ -391,6 +389,57 @@ std::string read_text(const fs::path& path) {
   return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
+void apply_presentation_config(const fs::path& control, const fs::path& data_root,
+                               const fs::path& source, std::string_view text) {
+  std::ofstream output(source, std::ios::binary | std::ios::trunc);
+  expect(static_cast<bool>(output), "failed to create presentation config fixture");
+  output.write(text.data(), static_cast<std::streamsize>(text.size()));
+  output.close();
+  expect(static_cast<bool>(output), "failed to write presentation config fixture");
+  expect(run_process(control, {L"--data-root", data_root.wstring(), L"--apply-config",
+                               source.wstring()}) == 0,
+         "presentation config apply failed");
+}
+
+constexpr std::string_view kVerticalPresentation = R"(format_version = 1
+
+[appearance]
+mode = "light"
+theme = "builtin:default"
+
+[candidate]
+orientation = "vertical"
+page_size = 5
+scroll_mode = false
+
+[fonts.candidate]
+families = ["Segoe UI"]
+)";
+
+constexpr std::string_view kHorizontalPresentation = R"(format_version = 1
+
+[appearance]
+mode = "dark"
+theme = "builtin:default"
+
+[candidate]
+orientation = "horizontal"
+page_size = 6
+scroll_mode = true
+max_width_dip = 720.0
+scroll_cell_width_dip = 96.0
+opacity = 0.95
+preedit_mode = "panel"
+
+[candidate.geometry]
+column_gap_dip = 12.0
+shadow = true
+
+[fonts.candidate]
+families = ["Microsoft YaHei"]
+size_dip = 18.0
+)";
+
 int json_int_field(const std::string& text, std::string_view field) {
   const std::string needle = "\"" + std::string(field) + "\":";
   const auto marker = text.find(needle);
@@ -461,9 +510,9 @@ int wmain(int argc, wchar_t** argv) {
     fs::copy(resources_source, bin / L"resources",
              fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 
-    expect(run_process(control, {L"--set-presentation", L"light", L"builtin:default",
-                                 L"vertical", L"disabled", L"5", L"Segoe UI"}) == 0,
-           "initial vertical presentation save failed");
+    const auto data_root = root / L"data";
+    const auto presentation_source = root / L"presentation.toml";
+    apply_presentation_config(control, data_root, presentation_source, kVerticalPresentation);
     ChildProcess candidate(ui);
     const HWND window = wait_for_window(candidate);
     // The demo window is made visible before its synthetic CandidateModel is applied.
@@ -515,10 +564,8 @@ int wmain(int argc, wchar_t** argv) {
     expect(rust_demo_height <= vertical_height * 3 && rust_demo_height * 3 >= vertical_height,
            "Rust/C++ candidate demo height diverged beyond allowed PoC tolerance");
 
-    expect(run_process(control, {L"--set-presentation", L"dark", L"builtin:default",
-                                 L"horizontal", L"enabled", L"6", L"Microsoft YaHei", L"720",
-                                 L"96", L"18", L"12", L"enabled", L"0.95", L"panel"}) == 0,
-           "live horizontal presentation save failed");
+    apply_presentation_config(control, data_root, presentation_source,
+                              kHorizontalPresentation);
     static_cast<void>(wait_for_size_change(window, vertical));
     const RECT horizontal = wait_for_stable_size(window);
     const LONG horizontal_width = horizontal.right - horizontal.left;
@@ -530,10 +577,8 @@ int wmain(int argc, wchar_t** argv) {
 
     candidate.close_window(window);
 
-    expect(run_process(control, {L"--set-presentation", L"dark", L"builtin:default",
-                                 L"horizontal", L"enabled", L"6", L"Microsoft YaHei", L"720",
-                                 L"96", L"18", L"12", L"enabled", L"0.95", L"panel"}) == 0,
-           "scroll-demo horizontal presentation save failed");
+    apply_presentation_config(control, data_root, presentation_source,
+                              kHorizontalPresentation);
     ChildProcess scroll_candidate(ui, {L"--demo", L"--scroll-demo"});
     const HWND scroll_window = wait_for_window(scroll_candidate);
     Sleep(300U);
@@ -595,28 +640,18 @@ int wmain(int argc, wchar_t** argv) {
             "Rust/C++ candidate scroll-demo height diverged beyond allowed PoC tolerance");
 
     const auto saved = read_text(root / L"data/config.toml");
-    fcitx::windows::config::Config saved_config;
-    fcitx::windows::config::ParseError parse_error;
-    expect(fcitx::windows::config::parseConfig(saved, saved_config, parse_error),
-           "saved presentation config did not pass the product parser");
-    expect(saved_config.appearanceMode == fcitx::windows::config::AppearanceMode::dark,
-           "appearance mode was not persisted");
-    expect(saved_config.orientation == fcitx::windows::config::Orientation::horizontal,
-           "candidate orientation was not persisted");
-    expect(saved_config.scrollMode == true, "scroll mode was not persisted");
-    expect(saved_config.candidatePageSize && *saved_config.candidatePageSize == 6,
-           "candidate page size was not persisted");
-    expect(saved_config.opacity == 0.95, "candidate opacity was not persisted");
-    expect(saved_config.preeditMode == fcitx::windows::config::PreeditMode::panel,
-           "candidate preedit mode was not persisted");
-    expect(saved_config.candidateFont.families &&
-               !saved_config.candidateFont.families->empty() &&
-               saved_config.candidateFont.families->front() == "Microsoft YaHei",
-           "candidate font was not persisted");
+    expect_contains(saved, "mode = \"dark\"", "appearance mode was not persisted");
+    expect_contains(saved, "orientation = \"horizontal\"",
+                    "candidate orientation was not persisted");
+    expect_contains(saved, "scroll_mode = true", "scroll mode was not persisted");
+    expect_contains(saved, "page_size = 6", "candidate page size was not persisted");
+    expect_contains(saved, "opacity = 0.95", "candidate opacity was not persisted");
+    expect_contains(saved, "preedit_mode = \"panel\"",
+                    "candidate preedit mode was not persisted");
+    expect_contains(saved, "families = [\"Microsoft YaHei\"]",
+                    "candidate font was not persisted");
 
-    expect(run_process(control, {L"--set-presentation", L"light", L"builtin:default",
-                                 L"vertical", L"disabled", L"5", L"Segoe UI"}) == 0,
-           "reversible vertical presentation save failed");
+    apply_presentation_config(control, data_root, presentation_source, kVerticalPresentation);
     ChildProcess restored_candidate(ui);
     const HWND restored_window = wait_for_window(restored_candidate);
     const RECT restored = wait_for_matching_size(restored_window, vertical);

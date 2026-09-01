@@ -301,6 +301,43 @@ fn gui_and_cli_commands_have_identical_shared_core_semantics() {
 }
 
 #[test]
+fn presentation_edits_persist_through_the_public_config_core_api() {
+    let directory = TestDirectory::new("presentation-edits");
+    let path = directory.config_path();
+    let store = FileStore::new();
+    let mut core = ConfigCore::compiled_defaults();
+
+    for edit in [
+        ConfigEdit::AppearanceMode("dark".to_owned()),
+        ConfigEdit::CandidateOrientation("horizontal".to_owned()),
+        ConfigEdit::CandidateScrollMode(true),
+        ConfigEdit::CandidatePageSize(6),
+        ConfigEdit::CandidateOpacity(0.95),
+        ConfigEdit::CandidatePreeditMode("panel".to_owned()),
+        ConfigEdit::CandidateFontFamilies(vec!["Microsoft YaHei".to_owned()]),
+    ] {
+        core.execute(ConfigCommand::Set(edit), &store, &path)
+            .expect("presentation edit should use the public Config Core API");
+    }
+    core.apply(&store, &path, CommitFault::None)
+        .expect("presentation edits should commit through Config Core");
+
+    let persisted = ConfigCore::load(&store, &path)
+        .expect("persisted presentation edits should reload through Config Core")
+        .current();
+    assert_eq!(persisted.appearance().mode(), "dark");
+    assert_eq!(persisted.candidate().orientation(), "horizontal");
+    assert!(persisted.candidate().scroll_mode());
+    assert_eq!(persisted.candidate().page_size(), 6);
+    assert_eq!(persisted.candidate().opacity(), 0.95);
+    assert_eq!(persisted.candidate().preedit_mode(), "panel");
+    assert_eq!(
+        persisted.fonts().candidate().families(),
+        ["Microsoft YaHei"]
+    );
+}
+
+#[test]
 fn full_config_schema_round_trips_without_dropping_unedited_overrides() {
     let directory = TestDirectory::new("full-schema-round-trip");
     let path = directory.config_path();

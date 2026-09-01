@@ -26,8 +26,8 @@ use fcitx5_protocol_core::{
     LauncherRequest, Metadata, Status, MAX_CONTROL_FRAME_SIZE,
 };
 use fcitx5_windows_common_core::{
-    current_runtime_generation_for_current_process, next_launcher_request_id,
-    CurrentUserRuntimeIdentity, VerifiedPipeClient,
+    broadcast_visual_config_changed, current_runtime_generation_for_current_process,
+    next_launcher_request_id, CurrentUserRuntimeIdentity, VerifiedPipeClient,
 };
 
 enum Command {
@@ -526,7 +526,10 @@ fn run(data_root: PathBuf, command: Command) -> Result<(), Failure> {
         Command::ThemesList => println!("{}", control_themes_list_json(&data_root)?),
         Command::ThemesDetail(id) => println!("{}", control_theme_detail_json(&data_root, &id)?),
         Command::AddonsList => println!("{}", control_addons_list_json()?),
-        Command::ResetConfig => control_config_reset(&data_root)?,
+        Command::ResetConfig => {
+            control_config_reset(&data_root)?;
+            broadcast_visual_config_changed();
+        }
         Command::ThemesExport(id) => print!("{}", control_theme_export(&data_root, &id)?),
         Command::ThemesExportTo(id, path) => {
             println!("{}", control_theme_export_to(&data_root, &id, &path)?)
@@ -551,6 +554,7 @@ fn run(data_root: PathBuf, command: Command) -> Result<(), Failure> {
             core.import_from_path(&store, &source)
                 .and_then(|()| core.apply(&store, &config_path, CommitFault::None))
                 .map_err(|error| error.to_string())?;
+            broadcast_visual_config_changed();
         }
         Command::GetInputMethods => print!(
             "{}",
