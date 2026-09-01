@@ -153,7 +153,7 @@ function Get-BuildDirectory([string] $TargetArchitecture) {
   return Join-Path $repoRoot "out/build/$(Get-PresetName $TargetArchitecture)"
 }
 
-function Reset-BuildDirectoryIfGeneratorChanged([string] $TargetArchitecture) {
+function Reset-BuildDirectoryIfToolchainChanged([string] $TargetArchitecture) {
   $buildDirectory = [System.IO.Path]::GetFullPath((Get-BuildDirectory $TargetArchitecture))
   $allowedRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot 'out/build'))
   $allowedPrefix = $allowedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) +
@@ -165,11 +165,22 @@ function Reset-BuildDirectoryIfGeneratorChanged([string] $TargetArchitecture) {
   $cachePath = Join-Path $buildDirectory 'CMakeCache.txt'
   if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) { return }
 
-  $generator = [System.IO.File]::ReadLines($cachePath) |
+  $cacheLines = [System.IO.File]::ReadAllLines($cachePath)
+  $generator = $cacheLines |
     Where-Object { $_ -like 'CMAKE_GENERATOR:INTERNAL=*' } |
     Select-Object -First 1
-  if ($generator -and $generator -ne 'CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config') {
-    Write-Host "Removing stale non-Ninja build directory: $buildDirectory"
+  $targetTriple = switch ($TargetArchitecture) {
+    'x64' { 'x86_64-pc-windows-msvc' }
+    'x86' { 'i686-pc-windows-msvc' }
+    'arm64' { 'aarch64-pc-windows-msvc' }
+    default { throw "Unsupported architecture for compiler target: $TargetArchitecture" }
+  }
+  $targetFlag = "--target=$targetTriple"
+  $cFlags = $cacheLines | Where-Object { $_ -like 'CMAKE_C_FLAGS:STRING=*' } | Select-Object -First 1
+  $cxxFlags = $cacheLines | Where-Object { $_ -like 'CMAKE_CXX_FLAGS:STRING=*' } | Select-Object -First 1
+  if ($generator -ne 'CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config' -or
+      $cFlags -notlike "*$targetFlag*" -or $cxxFlags -notlike "*$targetFlag*") {
+    Write-Host "Removing stale build directory with incompatible generator or compiler target: $buildDirectory"
     Remove-Item -LiteralPath $buildDirectory -Recurse -Force
   }
 }
@@ -243,7 +254,7 @@ function Assert-FastWindowsToolchain {
 function Invoke-ConfigureAndBuild([string] $TargetArchitecture, [bool] $Analyze) {
   Import-MsvcEnvironment $TargetArchitecture
   Assert-FastWindowsToolchain
-  Reset-BuildDirectoryIfGeneratorChanged $TargetArchitecture
+  Reset-BuildDirectoryIfToolchainChanged $TargetArchitecture
   & (Join-Path $PSScriptRoot 'prepare-wtl.ps1')
   & (Join-Path $PSScriptRoot 'prepare-package-dependencies.ps1')
   $cmake = Get-CMakeCommand

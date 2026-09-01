@@ -1,5 +1,4 @@
 param(
-  [Parameter(Mandatory = $true)] [string] $CargoExecutable,
   [Parameter(Mandatory = $true)] [string] $CargoTarget,
   [ValidateSet('dev', 'release')] [string] $CargoProfile = 'dev',
   [Parameter(Mandatory = $true)] [string] $OutputDirectory,
@@ -13,13 +12,9 @@ $PSNativeCommandUseErrorActionPreference = $true
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$cargo = [IO.Path]::GetFullPath($CargoExecutable)
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $reportPath = [IO.Path]::GetFullPath($Report)
 $reportDirectory = Split-Path -Parent $reportPath
-if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) {
-  throw "Cargo executable is missing: $cargo"
-}
 if (-not (Test-Path -LiteralPath $reportDirectory -PathType Container)) {
   New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
 }
@@ -57,22 +52,6 @@ function Invoke-CheckedProcess {
     exit_code = $process.ExitCode
   }
 }
-
-$cargoArguments = @(
-  'build',
-  '--locked',
-  '--manifest-path',
-  (Join-Path $repoRoot 'Cargo.toml'),
-  '-p',
-  'fcitx5-config-poc',
-  '--bin',
-  'fcitx5-config',
-  '--target',
-  $CargoTarget,
-  '--profile',
-  $CargoProfile
-)
-[void] (Invoke-CheckedProcess -FilePath $cargo -Arguments $cargoArguments -Name 'build-rust-config-shipping-lineage')
 
 $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
   Join-Path $repoRoot 'out\toolchains\rust\target'

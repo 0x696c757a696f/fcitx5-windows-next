@@ -593,7 +593,6 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/main.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/win32_window_smoke.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/bin/fcitx5_config.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/src/lib.rs"
@@ -948,16 +947,6 @@ if(BUILD_TESTING)
   add_test(NAME config-ui-interaction-coverage
            COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-interaction-test)
   add_test(
-    NAME config-ui-preview-fidelity-qa
-    COMMAND
-      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-      "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-qa --target
-      "${FCITX_RUST_TARGET}" -- --config-exe "${FCITX_CONFIG_SHIPPING_EXE}"
-      --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
-      "${CMAKE_CURRENT_BINARY_DIR}/config-ui-preview-fidelity-qa")
-  set_tests_properties(config-ui-preview-fidelity-qa PROPERTIES TIMEOUT 60)
-  add_test(
     NAME rust-config-ui-preview-qa
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
@@ -1006,8 +995,8 @@ if(BUILD_TESTING)
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
       -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-shipping-lineage.ps1"
-      -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
-      "${FCITX_RUST_TARGET}" -CargoProfile "$<IF:$<CONFIG:Debug>,dev,release>"
+      -CargoTarget "${FCITX_RUST_TARGET}" -CargoProfile
+      "$<IF:$<CONFIG:Debug>,dev,release>"
       -ShippingConfigExe "${FCITX_CONFIG_SHIPPING_EXE}" -OutputDirectory
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage" -Report
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage.json")

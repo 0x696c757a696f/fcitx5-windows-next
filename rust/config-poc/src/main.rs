@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use fcitx5_candidate_core::{candidate_preview_paint_plan, run_candidate_poc_self_check};
+use fcitx5_candidate_core::run_candidate_poc_self_check;
 use fcitx5_config_core::{
     ConfigCommand, ConfigCore, ConfigEdit, ConfigField, ConfigSnapshot, FileStore, RecoverySource,
 };
@@ -41,7 +41,6 @@ const WINDOW_EFFECTS_ADAPTER_CONTRACT: &str = "rust-config-window-effects-capabi
 const SETTINGS_SURFACE_CONTRACT: &str = "bounded-rust-d2d-dwrite-settings-surface";
 const WIND_UI_RUST_REFERENCE_COMMIT: &str = "62241e25e762df154c1b1f855b4db57533e516fc";
 const WIND_UI_RUST_LICENSE: &str = "MIT OR Apache-2.0";
-const CONFIG_QA_PREVIEW_STATE_ENV: &str = "FCITX5_CONFIG_RUST_PREVIEW_STATE";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PageId {
@@ -200,7 +199,7 @@ struct WindUiRustAdoptionEvidence {
     settings_shell_constructed: bool,
     settings_input_visual_baseline: bool,
     default_interactive_window_uses_windui: bool,
-    win32_preview_host_qa_only: bool,
+    legacy_win32_preview_host_deleted: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2276,7 +2275,7 @@ fn validate_windui_rust_adoption() -> Result<WindUiRustAdoptionEvidence, String>
         settings_shell_constructed: true,
         settings_input_visual_baseline: true,
         default_interactive_window_uses_windui: true,
-        win32_preview_host_qa_only: true,
+        legacy_win32_preview_host_deleted: true,
     };
     if evidence.crate_name != "windui"
         || evidence.reference_commit != WIND_UI_RUST_REFERENCE_COMMIT
@@ -2293,7 +2292,7 @@ fn validate_windui_rust_adoption() -> Result<WindUiRustAdoptionEvidence, String>
         || !evidence.settings_shell_constructed
         || !evidence.settings_input_visual_baseline
         || !evidence.default_interactive_window_uses_windui
-        || !evidence.win32_preview_host_qa_only
+        || !evidence.legacy_win32_preview_host_deleted
     {
         return Err("wind-ui-rust adoption evidence is incomplete".to_owned());
     }
@@ -2366,7 +2365,6 @@ struct SettingsSurfaceComponent {
     kind: SettingsSurfaceComponentKind,
     name: &'static str,
     rect: Rect,
-    fill_color: u32,
     clears_before_draw: bool,
     preserves_native_hwnd_behavior: bool,
 }
@@ -2559,7 +2557,6 @@ fn settings_surface_paint_plan(
             kind: SettingsSurfaceComponentKind::AppBackground,
             name: "settings-app-background",
             rect: window_rect,
-            fill_color: tokens.palette.background,
             clears_before_draw: true,
             preserves_native_hwnd_behavior: true,
         },
@@ -2572,7 +2569,6 @@ fn settings_surface_paint_plan(
                 width: tokens.sidebar_width.min(window.width.max(0)),
                 height: window.height,
             },
-            fill_color: tokens.palette.sidebar,
             clears_before_draw: true,
             preserves_native_hwnd_behavior: true,
         },
@@ -2585,7 +2581,6 @@ fn settings_surface_paint_plan(
                 width: (window.width - tokens.sidebar_width).max(0),
                 height: tokens.header_height.min(window.height.max(0)),
             },
-            fill_color: tokens.palette.header,
             clears_before_draw: true,
             preserves_native_hwnd_behavior: true,
         },
@@ -2606,7 +2601,6 @@ fn settings_surface_paint_plan(
                     - tokens.content_bottom_margin)
                     .max(0),
             },
-            fill_color: tokens.palette.content,
             clears_before_draw: true,
             preserves_native_hwnd_behavior: true,
         },
@@ -2619,26 +2613,10 @@ fn settings_surface_paint_plan(
         let Some(kind) = settings_surface_kind_for_layout_element(&element) else {
             continue;
         };
-        let fill_color = match kind {
-            SettingsSurfaceComponentKind::NavigationItem
-                if element.name == navigation_element_name(page) =>
-            {
-                tokens.palette.nav_selected
-            }
-            SettingsSurfaceComponentKind::NavigationItem => tokens.palette.sidebar,
-            SettingsSurfaceComponentKind::BannerStatusRow => tokens.palette.header,
-            SettingsSurfaceComponentKind::PreviewSurface
-            | SettingsSurfaceComponentKind::SectionCard
-            | SettingsSurfaceComponentKind::SettingRowContainer => tokens.palette.content,
-            SettingsSurfaceComponentKind::AppBackground => tokens.palette.background,
-            SettingsSurfaceComponentKind::Sidebar => tokens.palette.sidebar,
-            SettingsSurfaceComponentKind::Header => tokens.palette.header,
-        };
         components.push(SettingsSurfaceComponent {
             kind,
             name: element.name,
             rect: element.rect,
-            fill_color,
             clears_before_draw: true,
             preserves_native_hwnd_behavior: true,
         });
@@ -2947,27 +2925,22 @@ impl AppearanceNumericField {
     fn spec(self) -> AppearanceNumericSpec {
         match self {
             Self::FontSizeDip => AppearanceNumericSpec {
-                key: "font_size_dip",
                 min: 8.0,
                 max: 72.0,
             },
             Self::Opacity => AppearanceNumericSpec {
-                key: "opacity",
                 min: 0.20,
                 max: 1.0,
             },
             Self::SpacingDip => AppearanceNumericSpec {
-                key: "spacing_dip",
                 min: 0.0,
                 max: 64.0,
             },
             Self::CornerRadiusDip => AppearanceNumericSpec {
-                key: "corner_radius_dip",
                 min: 0.0,
                 max: 48.0,
             },
             Self::CandidateWidthDip => AppearanceNumericSpec {
-                key: "candidate_width_dip",
                 min: 160.0,
                 max: 2048.0,
             },
@@ -2977,7 +2950,6 @@ impl AppearanceNumericField {
 
 #[derive(Clone, Copy, Debug)]
 struct AppearanceNumericSpec {
-    key: &'static str,
     min: f32,
     max: f32,
 }
@@ -3782,63 +3754,20 @@ fn run_window_smoke() -> Result<String, String> {
     let layout = validate_layout(&model)?;
     let _operations = validate_operations()?;
     let _boundaries = validate_typed_boundaries()?;
-    let window = create_config_window_smoke(
-        model.product_name,
-        layout.minimum_window_dip,
-        layout.candidate_preview_rect,
-    )?;
-    if !window.visible || !window.title_readable {
-        return Err("Rust Config PoC window was not visible/readable".to_owned());
-    }
-    if window.width < layout.minimum_window_dip.width
-        || window.height < layout.minimum_window_dip.height
-    {
-        return Err("Rust Config PoC window is smaller than the modeled minimum".to_owned());
-    }
-    if !window.candidate_preview_child_hwnd_created
-        || !window.candidate_preview_child_visible
-        || !window.candidate_preview_child_parented
-        || !window.candidate_preview_child_inside_window
-        || !window.candidate_preview_child_painted
-        || !window.candidate_preview_child_selected_pixel_visible
-    {
-        return Err(
-            "Rust Config PoC did not create and paint an embedded candidate preview child surface"
-                .to_owned(),
-        );
-    }
+    let windui = validate_windui_rust_adoption()?;
     Ok(format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-window-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"side_by_side_executable_name\":\"{}\",\n  \"rust_shipping_target_name\":\"{}\",\n  \"hwnd_created\":true,\n  \"visible\":{},\n  \"title_readable\":{},\n  \"window_left\":{},\n  \"window_top\":{},\n  \"window_right\":{},\n  \"window_bottom\":{},\n  \"window_width\":{},\n  \"window_height\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_child_hwnd_created\":{},\n  \"candidate_preview_child_visible\":{},\n  \"candidate_preview_child_parented\":{},\n  \"candidate_preview_child_inside_window\":{},\n  \"candidate_preview_child_painted\":{},\n  \"candidate_preview_child_selected_pixel_visible\":{},\n  \"candidate_preview_child_paint_count\":{},\n  \"candidate_preview_child_selected_pixel\":{},\n  \"candidate_preview_child_left\":{},\n  \"candidate_preview_child_top\":{},\n  \"candidate_preview_child_right\":{},\n  \"candidate_preview_child_bottom\":{},\n  \"candidate_preview_child_width\":{},\n  \"candidate_preview_child_height\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-windui-settings-shell-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"side_by_side_executable_name\":\"{}\",\n  \"rust_shipping_target_name\":\"{}\",\n  \"real_window\":false,\n  \"windui_settings_shell_constructed\":{},\n  \"default_interactive_window_uses_windui\":{},\n  \"legacy_preview_env_switch\":false,\n  \"legacy_win32_preview_host_deleted\":{},\n  \"legacy_navigation_control_ids_deleted\":true,\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         shipping_config_replaced(),
         CONFIG_RETIRED_SIDE_BY_SIDE_COMPONENT,
         CONFIG_SHIPPING_BINARY_NAME,
-        window.visible,
-        window.title_readable,
-        window.left,
-        window.top,
-        window.right,
-        window.bottom,
-        window.width,
-        window.height,
+        windui.settings_shell_constructed,
+        windui.default_interactive_window_uses_windui,
+        windui.legacy_win32_preview_host_deleted,
+        layout.candidate_preview_embedded_in_config_content,
         layout.minimum_window_dip.width,
         layout.minimum_window_dip.height,
-        layout.candidate_preview_embedded_in_config_content,
-        window.candidate_preview_child_hwnd_created,
-        window.candidate_preview_child_visible,
-        window.candidate_preview_child_parented,
-        window.candidate_preview_child_inside_window,
-        window.candidate_preview_child_painted,
-        window.candidate_preview_child_selected_pixel_visible,
-        window.candidate_preview_child_paint_count,
-        window.candidate_preview_child_selected_pixel,
-        window.candidate_preview_child_left,
-        window.candidate_preview_child_top,
-        window.candidate_preview_child_right,
-        window.candidate_preview_child_bottom,
-        window.candidate_preview_child_width,
-        window.candidate_preview_child_height,
         layout.candidate_preview_rect.x,
         layout.candidate_preview_rect.y,
         layout.candidate_preview_rect.width,
@@ -3848,55 +3777,8 @@ fn run_window_smoke() -> Result<String, String> {
     ))
 }
 
-#[derive(Clone, Copy, Debug)]
-struct WindowSmokeEvidence {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-    width: i32,
-    height: i32,
-    visible: bool,
-    title_readable: bool,
-    candidate_preview_child_hwnd_created: bool,
-    candidate_preview_child_visible: bool,
-    candidate_preview_child_parented: bool,
-    candidate_preview_child_inside_window: bool,
-    candidate_preview_child_painted: bool,
-    candidate_preview_child_selected_pixel_visible: bool,
-    candidate_preview_child_paint_count: usize,
-    candidate_preview_child_selected_pixel: u32,
-    candidate_preview_child_left: i32,
-    candidate_preview_child_top: i32,
-    candidate_preview_child_right: i32,
-    candidate_preview_child_bottom: i32,
-    candidate_preview_child_width: i32,
-    candidate_preview_child_height: i32,
-}
-
-#[cfg(windows)]
-fn create_config_window_smoke(
-    title: &str,
-    minimum_window_dip: Size,
-    candidate_preview_rect: Rect,
-) -> Result<WindowSmokeEvidence, String> {
-    win32_window_smoke::create(title, minimum_window_dip, candidate_preview_rect)
-}
-
-#[cfg(not(windows))]
-fn create_config_window_smoke(
-    _title: &str,
-    _minimum_window_dip: Size,
-    _candidate_preview_rect: Rect,
-) -> Result<WindowSmokeEvidence, String> {
-    Err("Rust Config PoC window smoke requires Windows".to_owned())
-}
-
 #[cfg(windows)]
 fn run_default_interactive_window() -> Result<String, String> {
-    if env::var_os(CONFIG_QA_PREVIEW_STATE_ENV).is_some() {
-        return run_interactive_window();
-    }
     run_windui_settings_window(false)
 }
 
@@ -3931,7 +3813,7 @@ fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, Stri
     ))
     .run();
     Ok(format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-windui-settings-shell\",\n  \"real_window\":true,\n  \"no_arg_launch\":{},\n  \"windui_app_default_interactive\":true,\n  \"settings_input_visual_baseline\":true,\n  \"legacy_win32_preview_host_qa_only\":true,\n  \"stage\":\"Rust wind-ui Settings Shell\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-windui-settings-shell\",\n  \"real_window\":true,\n  \"no_arg_launch\":{},\n  \"windui_app_default_interactive\":true,\n  \"settings_input_visual_baseline\":true,\n  \"legacy_win32_preview_host_deleted\":true,\n  \"stage\":\"Rust wind-ui Settings Shell\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         !screenshot_from_args,
     ))
@@ -3940,28 +3822,6 @@ fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, Stri
 #[cfg(not(windows))]
 fn run_windui_settings_window(_screenshot_from_args: bool) -> Result<String, String> {
     Err("Rust wind-ui Settings Shell requires Windows".to_owned())
-}
-
-#[cfg(windows)]
-fn run_interactive_window() -> Result<String, String> {
-    let model = frozen_settings_model();
-    validate_model(&model)?;
-    let layout = validate_layout(&model)?;
-    win32_window_smoke::run_interactive(
-        model.product_name,
-        layout.minimum_window_dip,
-        layout.candidate_preview_rect,
-    )?;
-    Ok(format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-win32-qa-preview-host\",\n  \"real_window\":true,\n  \"no_arg_launch\":false,\n  \"qa_preview_state_env\":\"{}\",\n  \"qa_navigation_ids\":[130,131,132,133,134,135],\n  \"qa_child_control_ids\":[110,112,113,127,140,206],\n  \"candidate_preview_child_id\":112,\n  \"wm_command_navigation\":true,\n  \"get_dlg_item_visible_controls\":true,\n  \"stage\":\"Rust Settings UI Preview QA Host\",\n  \"rust_config_cutover_complete\":false,\n  \"result\":\"PASS\"\n}}",
-        current_component_name(),
-        CONFIG_QA_PREVIEW_STATE_ENV
-    ))
-}
-
-#[cfg(not(windows))]
-fn run_interactive_window() -> Result<String, String> {
-    Err("Rust Settings UI Preview requires Windows".to_owned())
 }
 
 fn frozen_settings_model() -> ConfigPocModel {
@@ -5666,7 +5526,7 @@ fn render_report(input: RenderReportInput<'_>) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_product_owned_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"windui_crate_name\":\"{}\",\n  \"windui_reference_commit\":\"{}\",\n  \"windui_license\":\"{}\",\n  \"windui_vendored_path_dependency\":{},\n  \"windui_role_palette_consumed\":{},\n  \"windui_theme_row_height_consumed\":{},\n  \"windui_element_builder_tree_constructed\":{},\n  \"windui_setting_row_constructed\":{},\n  \"windui_segmented_control_constructed\":{},\n  \"windui_nav_list_pattern_used\":{},\n  \"windui_preview_first_appearance_layout\":{},\n  \"windui_engineering_dip_labels_removed_from_first_screen\":{},\n  \"windui_settings_shell_constructed\":{},\n  \"windui_settings_input_visual_baseline\":{},\n  \"windui_default_interactive_window_uses_windui\":{},\n  \"windui_win32_preview_host_qa_only\":{},\n  \"stage4_config_qa_gate_frozen\":{},\n  \"stage4_automated_keyboard_tab_order\":{},\n  \"stage4_automated_focus_visibility\":{},\n  \"stage4_automated_page_navigation\":{},\n  \"stage4_automated_no_overlap\":{},\n  \"stage4_automated_high_dpi_geometry\":{},\n  \"stage4_automated_high_contrast_fallback_markers\":{},\n  \"stage4_automated_embedded_candidate_preview_bounds\":{},\n  \"stage4_manual_narrator_nvda_pending\":{},\n  \"stage4_manual_real_win7_host_pending\":{},\n  \"stage4_manual_real_win10_host_pending\":{},\n  \"stage4_manual_real_win11_host_pending\":{},\n  \"stage4_rust_config_cutover_complete_claimed\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_product_owned_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"windui_crate_name\":\"{}\",\n  \"windui_reference_commit\":\"{}\",\n  \"windui_license\":\"{}\",\n  \"windui_vendored_path_dependency\":{},\n  \"windui_role_palette_consumed\":{},\n  \"windui_theme_row_height_consumed\":{},\n  \"windui_element_builder_tree_constructed\":{},\n  \"windui_setting_row_constructed\":{},\n  \"windui_segmented_control_constructed\":{},\n  \"windui_nav_list_pattern_used\":{},\n  \"windui_preview_first_appearance_layout\":{},\n  \"windui_engineering_dip_labels_removed_from_first_screen\":{},\n  \"windui_settings_shell_constructed\":{},\n  \"windui_settings_input_visual_baseline\":{},\n  \"windui_default_interactive_window_uses_windui\":{},\n  \"legacy_win32_preview_host_deleted\":{},\n  \"stage4_config_qa_gate_frozen\":{},\n  \"stage4_automated_keyboard_tab_order\":{},\n  \"stage4_automated_focus_visibility\":{},\n  \"stage4_automated_page_navigation\":{},\n  \"stage4_automated_no_overlap\":{},\n  \"stage4_automated_high_dpi_geometry\":{},\n  \"stage4_automated_high_contrast_fallback_markers\":{},\n  \"stage4_automated_embedded_candidate_preview_bounds\":{},\n  \"stage4_manual_narrator_nvda_pending\":{},\n  \"stage4_manual_real_win7_host_pending\":{},\n  \"stage4_manual_real_win10_host_pending\":{},\n  \"stage4_manual_real_win11_host_pending\":{},\n  \"stage4_rust_config_cutover_complete_claimed\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         shipping_config_replaced(),
@@ -5725,7 +5585,7 @@ fn render_report(input: RenderReportInput<'_>) -> String {
         windui_adoption.settings_shell_constructed,
         windui_adoption.settings_input_visual_baseline,
         windui_adoption.default_interactive_window_uses_windui,
-        windui_adoption.win32_preview_host_qa_only,
+        windui_adoption.legacy_win32_preview_host_deleted,
         stage4_qa.gate_frozen,
         stage4_qa.automated_keyboard_tab_order,
         stage4_qa.automated_focus_visibility,
@@ -5878,10 +5738,6 @@ fn json_escape(value: &str) -> String {
     escaped
 }
 
-#[cfg(windows)]
-#[path = "win32_window_smoke.rs"]
-mod win32_window_smoke;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6029,7 +5885,29 @@ mod tests {
         assert!(evidence.settings_shell_constructed);
         assert!(evidence.settings_input_visual_baseline);
         assert!(evidence.default_interactive_window_uses_windui);
-        assert!(evidence.win32_preview_host_qa_only);
+        assert!(evidence.legacy_win32_preview_host_deleted);
+    }
+
+    #[test]
+    fn legacy_config_window_is_deleted_and_window_smoke_uses_windui() {
+        let source = include_str!("../src/main.rs");
+        assert!(!source.contains(concat!("FCITX5_CONFIG_RUST_", "PREVIEW_STATE")));
+        assert!(!source.contains(concat!("CONFIG_QA_PREVIEW_", "STATE_ENV")));
+        assert!(!source.contains(concat!("run_interactive_", "window")));
+        assert!(!source.contains(concat!("win32_window_", "smoke")));
+        assert!(!source.contains(concat!("qa_navigation_", "ids")));
+        assert!(!source.contains(concat!("K_NAV_", "GENERAL")));
+        assert!(!std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/",
+            "win32_window_",
+            "smoke.rs"
+        ))
+        .exists());
+
+        let evidence = validate_windui_rust_adoption().expect("WindUI shell should build");
+        assert!(evidence.settings_shell_constructed);
+        assert!(evidence.default_interactive_window_uses_windui);
     }
 
     #[test]
@@ -6281,7 +6159,7 @@ mod tests {
         assert!(report.contains("\"windui_settings_shell_constructed\":true"));
         assert!(report.contains("\"windui_settings_input_visual_baseline\":true"));
         assert!(report.contains("\"windui_default_interactive_window_uses_windui\":true"));
-        assert!(report.contains("\"windui_win32_preview_host_qa_only\":true"));
+        assert!(report.contains("\"legacy_win32_preview_host_deleted\":true"));
         assert!(report.contains("\"stage4_config_qa_gate_frozen\":true"));
         assert!(report.contains("\"stage4_automated_keyboard_tab_order\":true"));
         assert!(report.contains("\"stage4_automated_focus_visibility\":true"));

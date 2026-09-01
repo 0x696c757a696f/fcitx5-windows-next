@@ -13,8 +13,6 @@ const UNSAFE_EXCEPTIONS: &[&str] = &[
     "rust/config-core/tests/config_snapshot_abi_contract.rs",
     "rust/config-poc/src/bin/fcitx5_config.rs",
     "rust/config-poc/src/main.rs",
-    "rust/config-poc/src/win32_window_smoke.rs",
-    "rust/config-qa/src/main.rs",
     "rust/control-core/src/lib.rs",
     "rust/engine-core/src/capi.rs",
     "rust/engine-core/src/capi_tests.rs",
