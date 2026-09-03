@@ -14,7 +14,7 @@ class EventDispatcher;
 namespace fcitx::windows::engine {
 
 class FcitxDispatcher final {
-public:
+  public:
     FcitxDispatcher();
     ~FcitxDispatcher();
 
@@ -27,20 +27,15 @@ public:
     // (the client times out while the task is stalled, then the stalled task
     // is dropped at its deadline check). Subsequent tasks run normally.
     // Honored when FCITX5_TEST_DISPATCH_DELAY_MS is set at startup.
-    void setTestDispatchDelay(std::uint32_t milliseconds) {
-        testDispatchDelayMs_ = milliseconds;
-    }
-    [[nodiscard]] bool processKey(const ClientContextKey& context,
-                                  const protocol::KeyRequest& request,
-                                  RuntimeResult& result,
-                                  std::chrono::milliseconds timeout);
-    [[nodiscard]] bool selectCandidate(
-        std::uint32_t targetProcessId,
-        const protocol::CandidateSelectRequest& request,
-        RuntimeResult& result, std::chrono::milliseconds timeout);
-    [[nodiscard]] bool takePendingState(
-        const ClientContextKey& context, const protocol::StateRequest& request,
-        RuntimeResult& result, std::chrono::milliseconds timeout);
+    void setTestDispatchDelay(std::uint32_t milliseconds) { testDispatchDelayMs_ = milliseconds; }
+    [[nodiscard]] bool processKey(const ClientContextKey& context, const FcitxKeyRequestC& request,
+                                  RuntimeResult& result, std::chrono::milliseconds timeout);
+    [[nodiscard]] bool selectCandidate(std::uint32_t targetProcessId,
+                                       const FcitxCandidateSelectRequestC& request,
+                                       RuntimeResult& result, std::chrono::milliseconds timeout);
+    [[nodiscard]] bool takePendingState(const ClientContextKey& context,
+                                        const FcitxStateRequestC& request, RuntimeResult& result,
+                                        std::chrono::milliseconds timeout);
     [[nodiscard]] bool queryInputMethodStatus(InputMethodStatus& result,
                                               std::chrono::milliseconds timeout);
     void forgetConnection(std::uint64_t connectionId);
@@ -53,7 +48,7 @@ public:
         return droppedCount_.load(std::memory_order_acquire);
     }
 
-private:
+  private:
     std::thread thread_;
     std::unique_ptr<FcitxRuntime> runtime_;
     std::unique_ptr<::fcitx::EventDispatcher> dispatcher_;

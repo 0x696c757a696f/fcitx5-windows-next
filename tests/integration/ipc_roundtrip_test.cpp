@@ -126,7 +126,7 @@ int wmain(int argc, wchar_t** argv) {
         fcitx::windows::ipc::PipeClient client(
             pipeName, fcitx::windows::ipc::PeerPolicy::exact(argv[1]));
         fcitx::windows::ipc::KeyResult result;
-        fcitx::windows::protocol::EngineStatusResponse status;
+        fcitx::windows::ipc::EngineStatusResult status;
         if (!available || !client.processKey(7, 'A', 0, result) || !result.handled ||
             result.commit != L"a") {
             std::cerr << "IPC key-to-commit roundtrip failed\n";

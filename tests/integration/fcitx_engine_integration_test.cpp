@@ -23,6 +23,15 @@
 
 namespace {
 
+// Flat protocol-core key flag and budget constants (Rust owns the wire
+// contract; these mirror the values the engine enforces).
+constexpr std::uint32_t kKeyFlagShift = 1U << 0U;
+constexpr std::uint32_t kKeyFlagControl = 1U << 1U;
+constexpr std::uint32_t kKeyFlagRelease = 1U << 4U;
+constexpr std::size_t kMaxPreeditUtf8 = 16U * 1024U;
+constexpr std::size_t kMaxCommitUtf8 = 16U * 1024U;
+constexpr std::size_t kMaxCandidates = 128;
+
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
 
 struct Process {
@@ -451,8 +460,8 @@ int wmain(int argc, wchar_t** argv) {
     if (chttrans) {
         constexpr std::uint64_t conversionContext = 0x4348545452414E53ULL;
         constexpr std::uint32_t conversionFlags =
-            fcitx::windows::protocol::kKeyFlagControl |
-            fcitx::windows::protocol::kKeyFlagShift;
+            kKeyFlagControl |
+            kKeyFlagShift;
         if (!client.processKey(conversionContext, 'F', conversionFlags, result) ||
             !result.handled) {
             std::wcerr << L"chttrans toggle hotkey was not handled: handled="
@@ -490,9 +499,9 @@ int wmain(int argc, wchar_t** argv) {
     // of the toggle chord must not switch again.
     {
         constexpr std::uint64_t hotkeyContext = 0x484F544B455953ULL;
-        constexpr std::uint32_t ctrl = fcitx::windows::protocol::kKeyFlagControl;
+        constexpr std::uint32_t ctrl = kKeyFlagControl;
         constexpr std::uint32_t ctrlRelease =
-            ctrl | fcitx::windows::protocol::kKeyFlagRelease;
+            ctrl | kKeyFlagRelease;
         // Toggle to keyboard passthrough: the chord is handled, a following
         // letter is not claimed by Fcitx.
         if (!client.processKey(hotkeyContext, VK_SPACE, ctrl, result) ||
@@ -523,8 +532,8 @@ int wmain(int argc, wchar_t** argv) {
         // time OnKeyDown(VK_SHIFT) runs, GetKeyState(VK_SHIFT) is already
         // down), so the request must include both modifiers.
         constexpr std::uint32_t ctrlShift =
-            fcitx::windows::protocol::kKeyFlagControl |
-            fcitx::windows::protocol::kKeyFlagShift;
+            kKeyFlagControl |
+            kKeyFlagShift;
         const bool ctrlShiftOk = client.processKey(hotkeyContext, VK_SHIFT, ctrlShift, result);
         if (!ctrlShiftOk || !result.handled) {
             std::wcerr << L"Ctrl+Shift next hotkey was not handled: ipc="
@@ -691,7 +700,7 @@ int wmain(int argc, wchar_t** argv) {
             // ordinary printable typing can reach. Control hotkeys have dedicated
             // functional tests and can trigger intentionally expensive on-demand addons.
             const std::uint32_t flags =
-                (random() & 1U) == 0 ? 0U : fcitx::windows::protocol::kKeyFlagShift;
+                (random() & 1U) == 0 ? 0U : kKeyFlagShift;
             if (!client.processKey(context, key, flags, result)) {
                 ++recoveredTransportFailures;
                 activeContexts.clear();
@@ -705,9 +714,9 @@ int wmain(int argc, wchar_t** argv) {
                 activeContexts[recoveryContext] = true;
                 continue;
             }
-            if (result.preedit.size() > fcitx::windows::protocol::kMaxPreeditUtf8 ||
-                result.commit.size() > fcitx::windows::protocol::kMaxCommitUtf8 ||
-                result.candidates.size() > fcitx::windows::protocol::kMaxCandidates ||
+            if (result.preedit.size() > kMaxPreeditUtf8 ||
+                result.commit.size() > kMaxCommitUtf8 ||
+                result.candidates.size() > kMaxCandidates ||
                 result.candidateVisibility > 2U ||
                 (result.selectedCandidate != UINT32_MAX &&
                  result.selectedCandidate >= result.candidates.size())) {

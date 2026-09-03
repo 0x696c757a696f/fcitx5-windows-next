@@ -16,7 +16,8 @@ FcitxDispatcher::FcitxDispatcher() = default;
 FcitxDispatcher::~FcitxDispatcher() { stop(); }
 
 bool FcitxDispatcher::start(bool safeMode) {
-    if (thread_.joinable()) return false;
+    if (thread_.joinable())
+        return false;
     auto ready = std::make_shared<std::promise<bool>>();
     auto future = ready->get_future();
     thread_ = std::thread([this, ready, safeMode] {
@@ -53,11 +54,10 @@ bool FcitxDispatcher::start(bool safeMode) {
     return true;
 }
 
-bool FcitxDispatcher::processKey(const ClientContextKey& context,
-                                 const protocol::KeyRequest& request,
-                                 RuntimeResult& result,
-                                 std::chrono::milliseconds timeout) {
-    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
+bool FcitxDispatcher::processKey(const ClientContextKey& context, const FcitxKeyRequestC& request,
+                                 RuntimeResult& result, std::chrono::milliseconds timeout) {
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_)
+        return false;
     auto completed = std::make_shared<std::promise<RuntimeResult>>();
     auto future = completed->get_future();
     // Absolute deadline: the queued work re-checks it right before touching
@@ -102,11 +102,11 @@ bool FcitxDispatcher::processKey(const ClientContextKey& context,
     }
 }
 
-bool FcitxDispatcher::selectCandidate(
-    std::uint32_t targetProcessId,
-    const protocol::CandidateSelectRequest& request,
-    RuntimeResult& result, std::chrono::milliseconds timeout) {
-    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
+bool FcitxDispatcher::selectCandidate(std::uint32_t targetProcessId,
+                                      const FcitxCandidateSelectRequestC& request,
+                                      RuntimeResult& result, std::chrono::milliseconds timeout) {
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_)
+        return false;
     auto completed = std::make_shared<std::promise<RuntimeResult>>();
     auto future = completed->get_future();
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -129,7 +129,8 @@ bool FcitxDispatcher::selectCandidate(
             completed->set_exception(std::current_exception());
         }
     });
-    if (future.wait_for(timeout) != std::future_status::ready) return false;
+    if (future.wait_for(timeout) != std::future_status::ready)
+        return false;
     try {
         result = future.get();
         return true;
@@ -138,10 +139,11 @@ bool FcitxDispatcher::selectCandidate(
     }
 }
 
-bool FcitxDispatcher::takePendingState(
-    const ClientContextKey& context, const protocol::StateRequest& request,
-    RuntimeResult& result, std::chrono::milliseconds timeout) {
-    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
+bool FcitxDispatcher::takePendingState(const ClientContextKey& context,
+                                       const FcitxStateRequestC& request, RuntimeResult& result,
+                                       std::chrono::milliseconds timeout) {
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_)
+        return false;
     auto completed = std::make_shared<std::promise<RuntimeResult>>();
     auto future = completed->get_future();
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -164,7 +166,8 @@ bool FcitxDispatcher::takePendingState(
             completed->set_exception(std::current_exception());
         }
     });
-    if (future.wait_for(timeout) != std::future_status::ready) return false;
+    if (future.wait_for(timeout) != std::future_status::ready)
+        return false;
     try {
         result = future.get();
         return true;
@@ -176,7 +179,8 @@ bool FcitxDispatcher::takePendingState(
 bool FcitxDispatcher::queryInputMethodStatus(InputMethodStatus& result,
                                              std::chrono::milliseconds timeout) {
     result = {};
-    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_) return false;
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_)
+        return false;
     auto completed = std::make_shared<std::promise<InputMethodStatus>>();
     auto future = completed->get_future();
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -195,7 +199,8 @@ bool FcitxDispatcher::queryInputMethodStatus(InputMethodStatus& result,
             completed->set_exception(std::current_exception());
         }
     });
-    if (future.wait_for(timeout) != std::future_status::ready) return false;
+    if (future.wait_for(timeout) != std::future_status::ready)
+        return false;
     try {
         result = future.get();
         return true;
@@ -208,8 +213,7 @@ bool FcitxDispatcher::queryInputMethodStatus(InputMethodStatus& result,
 void FcitxDispatcher::forgetConnection(std::uint64_t connectionId) {
     if (!accepting_.load(std::memory_order_acquire) || !dispatcher_ || connectionId == 0)
         return;
-    dispatcher_->schedule(
-        [this, connectionId] { runtime_->forgetConnection(connectionId); });
+    dispatcher_->schedule([this, connectionId] { runtime_->forgetConnection(connectionId); });
 }
 
 void FcitxDispatcher::stop() {
@@ -217,7 +221,8 @@ void FcitxDispatcher::stop() {
     if (dispatcher_ && runtime_) {
         dispatcher_->schedule([this] { runtime_->eventLoop().exit(); });
     }
-    if (thread_.joinable()) thread_.join();
+    if (thread_.joinable())
+        thread_.join();
 }
 
 } // namespace fcitx::windows::engine

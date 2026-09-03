@@ -1,6 +1,6 @@
 #pragma once
 
-#include "protocol.h"
+#include "protocol_ffi.h"
 
 #include <cstdint>
 #include <memory>
@@ -12,6 +12,15 @@ class EventLoop;
 }
 
 namespace fcitx::windows::engine {
+
+// This is the Fcitx candidate data flattened for the Rust protocol ABI. Its
+// strings are owned only while the direct Fcitx adapter assembles a response.
+struct CandidateView {
+    std::uint64_t id{};
+    std::string labelUtf8;
+    std::string textUtf8;
+    std::string commentUtf8;
+};
 
 struct ClientContextKey {
     std::uint32_t processId{};
@@ -28,7 +37,7 @@ struct RuntimeResult {
     std::uint32_t preeditCaretUtf8{};
     std::uint64_t compositionId{};
     std::uint64_t revision{};
-    std::vector<protocol::CandidateRecord> candidates;
+    std::vector<CandidateView> candidates;
     std::uint32_t selectedCandidate{UINT32_MAX};
     std::uint32_t candidatePage{};
     std::uint32_t candidateTotal{};
@@ -44,7 +53,7 @@ struct RuntimeResult {
     std::uint32_t forwardKeyStates{};
     std::int32_t forwardKeyCode{};
     bool forwardKeyRelease{};
-    protocol::CaretRect caret;
+    FcitxCaretRectC caret{0, 0, 0, 0, 0, 96};
     bool popupAllowed{true};
     std::string contentLocaleUtf8;
 };
@@ -74,12 +83,11 @@ class FcitxRuntime final {
     [[nodiscard]] bool initialize(bool safeMode = false);
     [[nodiscard]] ::fcitx::EventLoop& eventLoop();
     [[nodiscard]] RuntimeResult processKey(const ClientContextKey& key,
-                                           const protocol::KeyRequest& request);
-    [[nodiscard]] RuntimeResult selectCandidate(
-        std::uint32_t targetProcessId,
-        const protocol::CandidateSelectRequest& request);
-    [[nodiscard]] RuntimeResult takePendingState(
-        const ClientContextKey& key, const protocol::StateRequest& request);
+                                           const FcitxKeyRequestC& request);
+    [[nodiscard]] RuntimeResult selectCandidate(std::uint32_t targetProcessId,
+                                                const FcitxCandidateSelectRequestC& request);
+    [[nodiscard]] RuntimeResult takePendingState(const ClientContextKey& key,
+                                                 const FcitxStateRequestC& request);
     [[nodiscard]] std::vector<InputMethodInfo> inputMethods() const;
     [[nodiscard]] InputMethodStatus currentInputMethod() const;
     [[nodiscard]] bool setDefaultInputMethod(std::string_view id);

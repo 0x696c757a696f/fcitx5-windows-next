@@ -2,7 +2,7 @@
 #include "peer_verification.h"
 #include "pipe_client.h"
 #include "pipe_security.h"
-#include "protocol.h"
+#include "protocol_ffi.h"
 #include "runtime_identity.h"
 
 #include <fcitx5_windows/release_identity.h>
@@ -508,6 +508,58 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 namespace ui = fcitx::windows::ui;
+
+// ---------------------------------------------------------------------------
+// File-local presentation carrier. Rust protocol-core owns the wire codec and
+// the authoritative KeyResponse DTO; this translation unit only projects the
+// decoded snapshot into the HWND/D2D candidate renderer, so it carries a
+// minimal owned mirror instead of depending on the deleted protocol.h DTO.
+// ---------------------------------------------------------------------------
+
+// Presentation pipe only carries keyResponse frames (wire type 4).
+constexpr std::uint16_t kKeyResponseMessageType = 4;
+
+struct Metadata {
+    std::uint64_t engineEpoch{};
+    std::uint64_t contextId{};
+    std::uint64_t compositionId{};
+    std::uint64_t revision{};
+};
+
+struct CaretRect {
+    bool valid{};
+    std::int32_t left{};
+    std::int32_t top{};
+    std::int32_t right{};
+    std::int32_t bottom{};
+    std::uint32_t dpi{};
+};
+
+struct CandidateRecord {
+    std::uint64_t id{};
+    std::string labelUtf8;
+    std::string textUtf8;
+    std::string commentUtf8;
+};
+
+struct KeyResponse {
+    Metadata metadata;
+    std::uint32_t status{};
+    bool handled{};
+    std::string preeditUtf8;
+    std::uint32_t preeditCaretUtf8{};
+    std::string contentLocaleUtf8;
+    std::vector<CandidateRecord> candidates;
+    std::uint32_t selectedCandidate{UINT32_MAX};
+    std::uint32_t candidatePage{};
+    std::uint32_t candidatePageSize{};
+    std::uint32_t candidateTotal{};
+    std::uint8_t candidateVisibility{};
+    bool candidateBulk{};
+    bool candidateEnd{};
+    CaretRect caret;
+    bool popupAllowed{true};
+};
 
 namespace candidate {
 
@@ -1230,7 +1282,7 @@ class CandidateWindow final {
     void simulateDeviceLossForTest() noexcept { renderTarget_.Reset(); }
 
     void showSyntheticPreview(bool scrollDemo) {
-        fcitx::windows::protocol::KeyResponse response;
+        KeyResponse response;
         response.metadata.engineEpoch = 1;
         response.metadata.contextId = 1;
         response.metadata.compositionId = 1;
@@ -1330,7 +1382,7 @@ class CandidateWindow final {
         const auto makeResponse = [](std::uint64_t epoch, std::uint64_t context,
                                      std::uint64_t composition, std::uint64_t revision,
                                      bool popupAllowed, std::uint32_t selected) {
-            fcitx::windows::protocol::KeyResponse response;
+            KeyResponse response;
             response.metadata.engineEpoch = epoch;
             response.metadata.contextId = context;
             response.metadata.compositionId = composition;
@@ -1411,7 +1463,7 @@ class CandidateWindow final {
             dismissPresentation();
             visualConfig_.scrollMode = true;
             visualConfig_.orientation = orientation;
-            fcitx::windows::protocol::KeyResponse response;
+            KeyResponse response;
             response.metadata.engineEpoch = 1;
             response.metadata.contextId =
                 orientation == NativeOrientation::horizontal ? 41 : 42;
@@ -1469,12 +1521,12 @@ class CandidateWindow final {
     }
 
     [[nodiscard]] bool runLocaleSelfTest() {
-        fcitx::windows::protocol::KeyResponse response;
+        KeyResponse response;
         response.metadata.engineEpoch = 1;
         response.metadata.contextId = 51;
         response.metadata.compositionId = 510;
         response.metadata.revision = 1;
-        response.status = fcitx::windows::protocol::Status::ok;
+        response.status = 0;
         response.handled = true;
         response.preeditUtf8 = "かな";
         response.preeditCaretUtf8 = static_cast<std::uint32_t>(response.preeditUtf8.size());
@@ -1521,15 +1573,15 @@ class CandidateWindow final {
     [[nodiscard]] bool runCandidateUxSelfTest() {
         const auto makeResponse = [](std::uint64_t composition, std::uint64_t revision,
                                      std::string locale,
-                                     std::vector<fcitx::windows::protocol::CandidateRecord>
+                                     std::vector<CandidateRecord>
                                          candidates,
                                      LONG caretLeft = 100) {
-            fcitx::windows::protocol::KeyResponse response;
+            KeyResponse response;
             response.metadata.engineEpoch = 1;
             response.metadata.contextId = 80;
             response.metadata.compositionId = composition;
             response.metadata.revision = revision;
-            response.status = fcitx::windows::protocol::Status::ok;
+            response.status = 0;
             response.handled = true;
             response.preeditUtf8 = "ni";
             response.contentLocaleUtf8 = std::move(locale);
@@ -1601,10 +1653,10 @@ class CandidateWindow final {
         }
 
         visualConfig_.orientation = NativeOrientation::vertical;
-        auto longCandidates = std::vector<fcitx::windows::protocol::CandidateRecord>{
+        auto longCandidates = std::vector<CandidateRecord>{
             {1, "1", "这是一个非常非常长的候选词条", ""},
             {2, "2", "另一个非常非常长的候选词条", ""}};
-        auto shortCandidates = std::vector<fcitx::windows::protocol::CandidateRecord>{
+        auto shortCandidates = std::vector<CandidateRecord>{
             {1, "1", "短", ""}, {2, "2", "小", ""}};
         update(makeResponse(806, 1, "zh-CN", longCandidates));
         const LONG longWidth = width();
@@ -2020,7 +2072,7 @@ class CandidateWindow final {
         ReleaseDC(window_, dc);
     }
 
-    void update(const fcitx::windows::protocol::KeyResponse& response) {
+    void update(const KeyResponse& response) {
         using namespace fcitx::windows;
         applyContentLocale(response.contentLocaleUtf8);
         candidate::Snapshot snapshot;
@@ -2350,7 +2402,7 @@ class CandidateWindow final {
             return;
         }
         const auto current = *model_.current();
-        fcitx::windows::protocol::KeyResponse response;
+        KeyResponse response;
         response.metadata.engineEpoch = current.engineEpoch;
         response.metadata.contextId = current.contextId;
         response.metadata.compositionId = current.compositionId;
@@ -2517,8 +2569,8 @@ class CandidateWindow final {
             return 0;
         }
         if (self && message == kSnapshotMessage) {
-            std::unique_ptr<fcitx::windows::protocol::KeyResponse> response(
-                reinterpret_cast<fcitx::windows::protocol::KeyResponse*>(lparam));
+            std::unique_ptr<KeyResponse> response(
+                reinterpret_cast<KeyResponse*>(lparam));
             self->update(*response);
             return 0;
         }
@@ -2675,7 +2727,7 @@ class CandidateWindow final {
     std::optional<std::size_t> pressedCandidate_;
     NativeRenderConfig visualConfig_;
     candidate::CandidateModel model_;
-    fcitx::windows::protocol::CaretRect lastCaret_;
+    CaretRect lastCaret_;
     fcitx::windows::ui::Orientation resolvedPresentationOrientation_{
         fcitx::windows::ui::Orientation::vertical};
     bool safeMode_{};
@@ -2711,8 +2763,90 @@ bool readExact(HANDLE pipe, void* destination, std::size_t size) {
     return true;
 }
 
+std::string_view ffiBytes(FcitxBytesC value) noexcept {
+    if (value.len == 0 || value.data == nullptr) return {};
+    return {reinterpret_cast<const char*>(value.data), value.len};
+}
+
+bool decodePresentationFrame(const std::vector<std::uint8_t>& frame, KeyResponse& out) noexcept {
+    constexpr std::size_t kHeaderSize = 64;
+    constexpr std::uint16_t kKeyResponseType = 4;
+    constexpr std::size_t kMaxFrameSize = 256U * 1024U;
+    if (frame.size() < kHeaderSize || frame.size() > kMaxFrameSize) return false;
+    std::uint16_t type = 0;
+    std::uint32_t bodySize = 0;
+    FcitxMetadataC header{};
+    if (fcitx5_protocol_core_decode_header(frame.data(), kHeaderSize, &type, &bodySize,
+                                           &header) == 0 ||
+        type != kKeyResponseType || bodySize != frame.size() - kHeaderSize) {
+        return false;
+    }
+    FcitxKeyResponseC decoded{};
+    std::vector<std::uint8_t> strings;
+    std::vector<FcitxCandidateRecordC> candidates;
+    std::size_t stringsNeeded = 0;
+    std::size_t candidatesNeeded = 0;
+    const std::uint8_t* body = frame.data() + kHeaderSize;
+    auto fill = [&]() noexcept {
+        out.metadata.engineEpoch = header.engineEpoch;
+        out.metadata.contextId = header.contextId;
+        out.metadata.compositionId = header.compositionId;
+        out.metadata.revision = header.revision;
+        out.status = decoded.status;
+        out.handled = decoded.handled != 0;
+        out.preeditUtf8.assign(ffiBytes(decoded.preedit));
+        out.preeditCaretUtf8 = decoded.preeditCaretUtf8;
+        out.contentLocaleUtf8.assign(ffiBytes(decoded.contentLocale));
+        out.selectedCandidate = decoded.selectedCandidate;
+        out.candidatePage = decoded.candidatePage;
+        out.candidatePageSize = decoded.candidatePageSize;
+        out.candidateTotal = decoded.candidateTotal;
+        out.candidateVisibility = decoded.candidateVisibility;
+        out.candidateBulk = decoded.candidateBulk != 0;
+        out.candidateEnd = decoded.candidateEnd != 0;
+        out.caret = CaretRect{decoded.caret.valid != 0, decoded.caret.left, decoded.caret.top,
+                              decoded.caret.right, decoded.caret.bottom, decoded.caret.dpi};
+        out.popupAllowed = decoded.popupAllowed != 0;
+        out.candidates.clear();
+        out.candidates.reserve(decoded.candidateCount);
+        for (std::size_t index = 0; index < decoded.candidateCount; ++index) {
+            const auto& source = decoded.candidates[index];
+            out.candidates.push_back(CandidateRecord{
+                source.id, std::string(ffiBytes(source.label)),
+                std::string(ffiBytes(source.text)), std::string(ffiBytes(source.comment))});
+        }
+    };
+    if (fcitx5_protocol_core_decode_key_response(
+            &header, body, bodySize, &decoded, nullptr, 0, &stringsNeeded, nullptr, 0,
+            &candidatesNeeded) != 0) {
+        fill();
+        return true;
+    }
+    if ((stringsNeeded == 0 && candidatesNeeded == 0) || stringsNeeded > kMaxFrameSize ||
+        candidatesNeeded > kMaxFrameSize) {
+        return false;
+    }
+    try {
+        strings.assign(stringsNeeded, 0);
+        candidates.assign(candidatesNeeded, FcitxCandidateRecordC{});
+    } catch (...) {
+        return false;
+    }
+    if (fcitx5_protocol_core_decode_key_response(
+            &header, body, bodySize, &decoded,
+            strings.empty() ? nullptr : strings.data(), strings.size(), &stringsNeeded,
+            candidates.empty() ? nullptr : candidates.data(), candidates.size(),
+            &candidatesNeeded) == 0) {
+        return false;
+    }
+    fill();
+    return true;
+}
+
 void servePresentation(HWND window, bool testOnce) {
     using namespace fcitx::windows;
+    constexpr std::size_t kHeaderSize = 64;
+    constexpr DWORD kMaxHotFrameSize = 256U * 1024U;
     platform::RuntimeIdentity identity;
     platform::PipeSecurity security;
     if (!platform::queryCurrentIdentity(identity) ||
@@ -2728,8 +2862,7 @@ void servePresentation(HWND window, bool testOnce) {
         HANDLE pipe = CreateNamedPipeW(
             pipeName.c_str(), PIPE_ACCESS_INBOUND,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
-            static_cast<DWORD>(protocol::kMaxHotFrameSize),
-            static_cast<DWORD>(protocol::kMaxHotFrameSize), 25, security.attributes());
+            kMaxHotFrameSize, kMaxHotFrameSize, 25, security.attributes());
         if (pipe == INVALID_HANDLE_VALUE)
             return;
         const bool connected =
@@ -2738,22 +2871,23 @@ void servePresentation(HWND window, bool testOnce) {
         if (connected && ipc::verifyPipeClient(pipe, identity, &peer) &&
             platform::pathsReferToSameFile(peer.executablePath, engine)) {
             for (;;) {
-                std::array<std::uint8_t, protocol::kHeaderSize> header{};
+                std::array<std::uint8_t, kHeaderSize> header{};
                 if (!readExact(pipe, header.data(), header.size()))
                     break;
-                protocol::MessageType type{};
+                std::uint16_t type = 0;
                 std::uint32_t bodySize = 0;
-                protocol::Metadata metadata;
-                if (!protocol::decodeHeader(header, type, bodySize, metadata) ||
-                    type != protocol::MessageType::keyResponse)
+                FcitxMetadataC metadata{};
+                if (fcitx5_protocol_core_decode_header(header.data(), header.size(), &type,
+                                                       &bodySize, &metadata) == 0 ||
+                    type != kKeyResponseMessageType ||
+                    bodySize > static_cast<std::uint32_t>(kMaxHotFrameSize - kHeaderSize))
                     break;
                 std::vector<std::uint8_t> frame(header.begin(), header.end());
-                frame.resize(protocol::kHeaderSize + bodySize);
-                if (bodySize && !readExact(pipe, frame.data() + protocol::kHeaderSize, bodySize))
+                frame.resize(kHeaderSize + bodySize);
+                if (bodySize && !readExact(pipe, frame.data() + kHeaderSize, bodySize))
                     break;
-                protocol::FrameView view;
-                auto response = std::make_unique<protocol::KeyResponse>();
-                if (!protocol::decodeFrame(frame, view) || !protocol::decode(view, *response))
+                auto response = std::make_unique<KeyResponse>();
+                if (!decodePresentationFrame(frame, *response))
                     break;
                 if (!PostMessageW(window, kSnapshotMessage, 0,
                                   reinterpret_cast<LPARAM>(response.get())))

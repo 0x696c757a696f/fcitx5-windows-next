@@ -36,12 +36,15 @@
 #include <utility>
 #include <vector>
 
-extern "C" std::size_t fcitx5_package_active_addon_dirs_utf16(
-    const wchar_t* install_root, std::size_t install_root_len, wchar_t* output,
-    std::size_t capacity);
+extern "C" std::size_t fcitx5_package_active_addon_dirs_utf16(const wchar_t* install_root,
+                                                              std::size_t install_root_len,
+                                                              wchar_t* output,
+                                                              std::size_t capacity);
 
 namespace fcitx::windows::engine {
 namespace {
+
+constexpr int kMaximumCandidateViews = 128;
 
 struct EngineConfig {
     std::vector<std::string> enabled;
@@ -69,9 +72,8 @@ Function resolveProcAddress(HMODULE module, const char* name) noexcept {
 std::filesystem::path pathFromUtf8(std::string_view value) {
     if (value.empty())
         return {};
-    const int size =
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                            static_cast<int>(value.size()), nullptr, 0);
+    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                                         static_cast<int>(value.size()), nullptr, 0);
     if (size <= 0)
         return {};
     std::wstring wide(static_cast<std::size_t>(size), L'\0');
@@ -120,17 +122,16 @@ EngineConfig readEngineConfig() {
     if (!data.empty()) {
         const auto path = (data / L"config.toml").native();
         static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
-        const Fcitx5ConfigUtf16 input{
-            reinterpret_cast<const std::uint16_t*>(path.data()), path.size()};
+        const Fcitx5ConfigUtf16 input{reinterpret_cast<const std::uint16_t*>(path.data()),
+                                      path.size()};
         std::unique_ptr<void, decltype(&fcitx5_config_snapshot_destroy)> snapshot(
-            fcitx5_config_snapshot_load_current_utf16(input),
-            &fcitx5_config_snapshot_destroy);
+            fcitx5_config_snapshot_load_current_utf16(input), &fcitx5_config_snapshot_destroy);
         Fcitx5ConfigSnapshot view{};
         if (snapshot && fcitx5_config_snapshot_view(snapshot.get(), &view) != 0) {
             config.enabled.reserve(view.inputMethodCount);
             for (std::size_t index = 0; index < view.inputMethodCount; ++index) {
-                auto id = copyConfigUtf8(
-                    fcitx5_config_snapshot_input_method_at(snapshot.get(), index));
+                auto id =
+                    copyConfigUtf8(fcitx5_config_snapshot_input_method_at(snapshot.get(), index));
                 if (!id.empty())
                     config.enabled.push_back(std::move(id));
             }
@@ -149,9 +150,8 @@ EngineConfig readEngineConfig() {
     // activation policy as Config Core's compiled defaults.
     if (config.enabled.empty())
         config.enabled = {"pinyin"};
-    if (!config.defaultInputMethod ||
-        std::find(config.enabled.begin(), config.enabled.end(),
-                  *config.defaultInputMethod) == config.enabled.end())
+    if (!config.defaultInputMethod || std::find(config.enabled.begin(), config.enabled.end(),
+                                                *config.defaultInputMethod) == config.enabled.end())
         config.defaultInputMethod = config.enabled.front();
     if (!config.hotkeyToggle)
         config.hotkeyToggle = "Ctrl+Space";
@@ -162,13 +162,8 @@ EngineConfig readEngineConfig() {
 
 std::string startupAddonList(const EngineConfig& config) {
     std::set<std::string> addons{
-        "windowskeyboard",
-        "pinyin",
-        "punctuation",
-        "pinyinhelper",
-        "chttrans",
-        "luaaddonloader",
-        "imeapi",
+        "windowskeyboard", "pinyin",         "punctuation", "pinyinhelper",
+        "chttrans",        "luaaddonloader", "imeapi",
     };
     for (const auto& id : config.enabled) {
         if (id == "pinyin") {
@@ -215,8 +210,8 @@ std::string activePackageAddonDirectories(const std::filesystem::path& dataRoot)
         return {};
     std::wstring directories(required, L'\0');
     if (fcitx5_package_active_addon_dirs_utf16(packageRoot.c_str(), packageRoot.native().size(),
-                                               directories.data(), directories.size()) !=
-        directories.size()) {
+                                               directories.data(),
+                                               directories.size()) != directories.size()) {
         return {};
     }
     return utf8Path(std::filesystem::path(directories));
@@ -231,8 +226,7 @@ bool setupEnvironment() {
     modulePath.resize(size);
     const auto root = std::filesystem::path(modulePath).parent_path().parent_path();
     if (!getEnvironment("FCITX_USER_DATA_ROOT")) {
-        const auto portableRoot =
-            fcitx::windows::platform::portableDataRootForModule(modulePath);
+        const auto portableRoot = fcitx::windows::platform::portableDataRootForModule(modulePath);
         if (!portableRoot.empty()) {
             const auto portableData = utf8Path(portableRoot);
             if (portableData.empty())
@@ -243,13 +237,11 @@ bool setupEnvironment() {
     using SetDefaultDirectories = BOOL(WINAPI*)(DWORD);
     using AddDirectory = DLL_DIRECTORY_COOKIE(WINAPI*)(PCWSTR);
     const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-    const auto setDefaultDirectories = kernel
-                                           ? resolveProcAddress<SetDefaultDirectories>(
-                                                 kernel, "SetDefaultDllDirectories")
-                                           : nullptr;
-    const auto addDirectory =
-        kernel ? resolveProcAddress<AddDirectory>(kernel, "AddDllDirectory")
+    const auto setDefaultDirectories =
+        kernel ? resolveProcAddress<SetDefaultDirectories>(kernel, "SetDefaultDllDirectories")
                : nullptr;
+    const auto addDirectory =
+        kernel ? resolveProcAddress<AddDirectory>(kernel, "AddDllDirectory") : nullptr;
     if (!setDefaultDirectories || !addDirectory ||
         !setDefaultDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 |
                                LOAD_LIBRARY_SEARCH_USER_DIRS) ||
@@ -304,14 +296,14 @@ FcitxEngineContextKeyC toLedgerKey(const ClientContextKey& key) {
     return FcitxEngineContextKeyC{key.processId, key.connectionId, key.contextId};
 }
 
-FcitxEngineCaretC toLedgerCaret(const protocol::CaretRect& caret) {
-    return FcitxEngineCaretC{caret.valid, caret.left, caret.top, caret.right, caret.bottom,
-                             caret.dpi};
+FcitxEngineCaretC toLedgerCaret(const FcitxCaretRectC& caret) {
+    return FcitxEngineCaretC{caret.valid, caret.left,   caret.top,
+                             caret.right, caret.bottom, caret.dpi};
 }
 
-protocol::CaretRect fromLedgerCaret(const FcitxEngineCaretC& caret) {
-    return protocol::CaretRect{caret.valid != 0, caret.left, caret.top, caret.right,
-                               caret.bottom, caret.dpi};
+FcitxCaretRectC fromLedgerCaret(const FcitxEngineCaretC& caret) {
+    return FcitxCaretRectC{caret.valid, caret.left,   caret.top,
+                           caret.right, caret.bottom, caret.dpi};
 }
 
 class EngineInputContext final : public InputContext {
@@ -330,8 +322,7 @@ class EngineInputContext final : public InputContext {
 
     explicit EngineInputContext(InputContextManager& manager) : InputContext(manager, "tsf") {
         setEnablePreedit(true);
-        setCapabilityFlags(CapabilityFlags{CapabilityFlag::Preedit,
-                                           CapabilityFlag::SurroundingText,
+        setCapabilityFlags(CapabilityFlags{CapabilityFlag::Preedit, CapabilityFlag::SurroundingText,
                                            CapabilityFlag::ClientSideInputPanel});
         created();
     }
@@ -347,14 +338,17 @@ class EngineInputContext final : public InputContext {
     std::optional<ForwardKeyOperation> takeForwardKey() {
         return std::exchange(forwardKey_, std::nullopt);
     }
-    bool applySurroundingText(const protocol::KeyRequest& request,
+    bool applySurroundingText(const FcitxKeyRequestC& request,
                               const FcitxEngineKeyDecisionC& decision) {
         // E3: the surrounding-text decision is Rust-owned; this adapter only
         // executes the returned action against Fcitx.
         if (decision.surroundingAction == FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_SET) {
-            surroundingText().setText(request.surroundingTextUtf8,
-                                      request.surroundingCursor,
-                                      request.surroundingAnchor);
+            const std::string text =
+                request.surroundingText.data
+                    ? std::string(reinterpret_cast<const char*>(request.surroundingText.data),
+                                  request.surroundingText.len)
+                    : std::string{};
+            surroundingText().setText(text, request.surroundingCursor, request.surroundingAnchor);
             surroundingTextValid_ = true;
         } else {
             surroundingText().invalidate();
@@ -363,23 +357,19 @@ class EngineInputContext final : public InputContext {
         return decision.surroundingUpdate != 0;
     }
 
-    [[nodiscard]] bool hasSurroundingText() const noexcept {
-        return surroundingTextValid_;
-    }
+    [[nodiscard]] bool hasSurroundingText() const noexcept { return surroundingTextValid_; }
 
   private:
     void commitStringImpl(const std::string& text) override { commit_ += text; }
     void forwardKeyImpl(const ForwardKeyEvent& key) override {
         const auto rawKey = key.rawKey();
-        forwardKey_ = ForwardKeyOperation{
-            static_cast<std::uint32_t>(rawKey.sym()),
-            static_cast<std::uint32_t>(rawKey.states().toInteger()),
-            rawKey.code(),
-            key.isRelease()};
+        forwardKey_ = ForwardKeyOperation{static_cast<std::uint32_t>(rawKey.sym()),
+                                          static_cast<std::uint32_t>(rawKey.states().toInteger()),
+                                          rawKey.code(), key.isRelease()};
     }
     void deleteSurroundingTextImpl(int offset, unsigned int size) override {
-        deleteSurroundingText_ = DeleteSurroundingOperation{
-            static_cast<std::int32_t>(offset), static_cast<std::uint32_t>(size)};
+        deleteSurroundingText_ = DeleteSurroundingOperation{static_cast<std::int32_t>(offset),
+                                                            static_cast<std::uint32_t>(size)};
     }
     void updatePreeditImpl() override {}
 
@@ -402,8 +392,7 @@ std::pair<std::string, std::uint32_t> readPreedit(EngineInputContext& context) {
 }
 
 bool warmupHasNoUserState(EngineInputContext& context) {
-    if (!context.takeCommit().empty() ||
-        context.takeDeleteSurroundingText() ||
+    if (!context.takeCommit().empty() || context.takeDeleteSurroundingText() ||
         context.takeForwardKey()) {
         return false;
     }
@@ -435,13 +424,11 @@ std::string contentLocaleToString(int locale) {
 std::string shortLabelFromRust(std::string_view text) {
     std::uint8_t buffer[16]{};
     const auto written = fcitx5_engine_core_status_short_label(
-        reinterpret_cast<const std::uint8_t*>(text.data()), text.size(), buffer,
-        sizeof(buffer));
+        reinterpret_cast<const std::uint8_t*>(text.data()), text.size(), buffer, sizeof(buffer));
     if (written > sizeof(buffer))
         return {};
     return std::string(reinterpret_cast<const char*>(buffer), written);
 }
-
 
 // E5-3: canonical snapshot blob serialization. The blob format is
 // Rust-authoritative (`rust/engine-core/src/snapshot.rs`); these helpers only
@@ -611,12 +598,12 @@ bool deserializeSnapshot(const std::uint8_t* data, std::size_t size, RuntimeResu
     if (!reader.bytes(result.commitUtf8) || !reader.bytes(result.preeditUtf8) ||
         !reader.bytes(result.contentLocaleUtf8) || !reader.u32(value32))
         return false;
-    if (value32 > protocol::kMaxCandidates)
+    if (value32 > static_cast<std::uint32_t>(kMaximumCandidateViews))
         return false;
     result.candidates.clear();
     result.candidates.reserve(value32);
     for (std::uint32_t index = 0; index < value32; ++index) {
-        protocol::CandidateRecord record;
+        CandidateView record;
         if (!reader.u64(record.id) || !reader.bytes(record.labelUtf8) ||
             !reader.bytes(record.textUtf8) || !reader.bytes(record.commentUtf8))
             return false;
@@ -652,10 +639,10 @@ class FcitxRuntime::Impl final {
                                [&](const auto& item) { return item.name() == name; });
         };
         const std::string previousDefault = group.defaultInputMethod();
-        items.erase(std::remove_if(items.begin(), items.end(), [&](const auto& item) {
-                        return manager.entry(item.name()) == nullptr;
-                    }),
-                    items.end());
+        items.erase(
+            std::remove_if(items.begin(), items.end(),
+                           [&](const auto& item) { return manager.entry(item.name()) == nullptr; }),
+            items.end());
         config = readEngineConfig();
         for (const std::string& id : config.enabled) {
             if (manager.entry(id) && !contains(id)) {
@@ -727,9 +714,9 @@ class FcitxRuntime::Impl final {
             return;
         auto iter = std::find(config.enabled.begin(), config.enabled.end(), current);
         const std::string next =
-            iter == config.enabled.end() ? config.enabled.front()
-                                         : config.enabled[(iter - config.enabled.begin() + 1) %
-                                                          config.enabled.size()];
+            iter == config.enabled.end()
+                ? config.enabled.front()
+                : config.enabled[(iter - config.enabled.begin() + 1) % config.enabled.size()];
         if (manager.entry(next)) {
             instance->setCurrentInputMethod(&context, next, true);
             const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
@@ -785,8 +772,8 @@ class FcitxRuntime::Impl final {
             instance->eventDispatcher().dispatchPending();
     }
 
-    RuntimeResult collectResult(const ClientContextKey& key,
-                                EngineInputContext& context, bool handled) {
+    RuntimeResult collectResult(const ClientContextKey& key, EngineInputContext& context,
+                                bool handled) {
         dispatchPendingEvents();
         RuntimeResult output;
         output.handled = handled;
@@ -794,11 +781,9 @@ class FcitxRuntime::Impl final {
         int popupAllowed = 0;
         if (fcitx5_engine_core_popup_allowed(ledger.get(), &ledgerKey, &popupAllowed))
             output.popupAllowed = popupAllowed != 0;
-        output.contentLocaleUtf8 = contentLocaleToString(
-            fcitx5_engine_core_content_locale_for_input_method(
-                instance
-                    ? instance->inputMethod(&context).c_str()
-                    : ""));
+        output.contentLocaleUtf8 =
+            contentLocaleToString(fcitx5_engine_core_content_locale_for_input_method(
+                instance ? instance->inputMethod(&context).c_str() : ""));
         output.commitUtf8 = context.takeCommit();
         auto [preedit, caretOffset] = readPreedit(context);
         output.preeditUtf8 = std::move(preedit);
@@ -820,13 +805,10 @@ class FcitxRuntime::Impl final {
         std::uint64_t composition = 0;
         std::uint64_t revision = 0;
         (void)fcitx5_engine_core_ledger_end_result(
-            ledger.get(), &ledgerKey,
-            (!output.preeditUtf8.empty() || hasCandidates) ? 1 : 0,
+            ledger.get(), &ledgerKey, (!output.preeditUtf8.empty() || hasCandidates) ? 1 : 0,
             &composition, &revision);
         if (hasCandidates) {
-            const int fcitxPageSize =
-                std::clamp(candidateList->size(), 0,
-                           static_cast<int>(protocol::kMaxCandidates));
+            const int fcitxPageSize = std::clamp(candidateList->size(), 0, kMaximumCandidateViews);
             const auto* bulk = candidateList->toBulk();
             const int reportedTotal = bulk ? bulk->totalSize() : fcitxPageSize;
             // Some addons (e.g. Rime) expose a BulkCandidateList without a
@@ -836,16 +818,13 @@ class FcitxRuntime::Impl final {
             // selection would be missing and the candidate window renders
             // without any highlight.
             const bool realBulk = bulk != nullptr && reportedTotal >= 0;
-            const int pageSize =
-                realBulk
-                    ? std::clamp(config.candidatePageSize.value_or(fcitxPageSize), 1,
-                                 static_cast<int>(protocol::kMaxCandidates))
-                    : fcitxPageSize;
+            const int pageSize = realBulk
+                                     ? std::clamp(config.candidatePageSize.value_or(fcitxPageSize),
+                                                  1, kMaximumCandidateViews)
+                                     : fcitxPageSize;
             output.candidatePageSize = static_cast<std::uint32_t>(pageSize);
             const int size =
-                realBulk ? std::clamp(reportedTotal, 0,
-                                      static_cast<int>(protocol::kMaxCandidates))
-                         : fcitxPageSize;
+                realBulk ? std::clamp(reportedTotal, 0, kMaximumCandidateViews) : fcitxPageSize;
             output.candidateBulk = realBulk;
             output.candidateEnd = !realBulk || (reportedTotal >= 0 && size >= reportedTotal);
             int cursor = candidateList->cursorIndex();
@@ -855,8 +834,7 @@ class FcitxRuntime::Impl final {
                     cursor = global;
             }
             std::uint32_t overrideValue = 0;
-            if (fcitx5_engine_core_selected_override(ledger.get(), &ledgerKey,
-                                                     &overrideValue)) {
+            if (fcitx5_engine_core_selected_override(ledger.get(), &ledgerKey, &overrideValue)) {
                 cursor = static_cast<int>(overrideValue);
             }
             if (cursor >= 0 && cursor < size)
@@ -880,16 +858,16 @@ class FcitxRuntime::Impl final {
                             config.vertical ? 1 : 0,
                             static_cast<std::uint32_t>((std::max)(0, cursor)),
                             static_cast<std::uint32_t>(index),
-                            static_cast<std::uint32_t>(dimension),
-                            static_cast<std::uint32_t>(size), &scrollOffset)) {
+                            static_cast<std::uint32_t>(dimension), static_cast<std::uint32_t>(size),
+                            &scrollOffset)) {
                         label = std::to_string(scrollOffset + 1U);
                     }
                 } else if (index >= page * dimension && index < (page + 1) * dimension) {
                     label = std::to_string(index - page * dimension + 1);
                 }
-                output.candidates.push_back(protocol::CandidateRecord{
-                    (composition << 8U) | static_cast<std::uint64_t>(index + 1),
-                    std::move(label), word.text().toString(), word.comment().toString()});
+                output.candidates.push_back(CandidateView{
+                    (composition << 8U) | static_cast<std::uint64_t>(index + 1), std::move(label),
+                    word.text().toString(), word.comment().toString()});
             }
             output.candidateTotal = static_cast<std::uint32_t>(size);
             if (realBulk)
@@ -973,8 +951,7 @@ bool FcitxRuntime::initialize(bool safeMode) {
         argv.reserve(arguments.size());
         for (auto& argument : arguments)
             argv.push_back(argument.data());
-        impl_->instance =
-            std::make_unique<Instance>(static_cast<int>(argv.size()), argv.data());
+        impl_->instance = std::make_unique<Instance>(static_cast<int>(argv.size()), argv.data());
         impl_->instance->addonManager().registerDefaultLoader(nullptr);
         impl_->instance->initialize();
         impl_->ensureInputMethods();
@@ -1021,7 +998,7 @@ bool FcitxRuntime::initialize(bool safeMode) {
 ::fcitx::EventLoop& FcitxRuntime::eventLoop() { return impl_->instance->eventLoop(); }
 
 RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
-                                       const protocol::KeyRequest& request) {
+                                       const FcitxKeyRequestC& request) {
     const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
     if (fcitx5_engine_core_ledger_begin_key(
             impl_->ledger.get(), &ledgerKey, request.metadata.revision,
@@ -1041,53 +1018,31 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     // E3 event-shape consolidation: the unified Event→Action decision is
     // Rust-owned (`fcitx5_engine_core_handle_key_event`); the adapter only
     // flattens Fcitx facts and executes the returned decision.
-    const FcitxKeyRequestC keyRequest{
-        FcitxMetadataC{request.metadata.requestId, request.metadata.responseTo,
-                       request.metadata.engineEpoch, request.metadata.sessionId,
-                       request.metadata.contextId, request.metadata.compositionId,
-                       request.metadata.revision},
-        request.virtualKey,
-        request.keyFlags,
-        request.scanCode,
-        static_cast<std::uint8_t>(request.extendedKey),
-        static_cast<std::uint8_t>(request.popupAllowed),
-        request.keyboardLayout,
-        FcitxBytesC{reinterpret_cast<const std::uint8_t*>(request.logicalTextUtf8.data()),
-                    request.logicalTextUtf8.size()},
-        FcitxBytesC{reinterpret_cast<const std::uint8_t*>(request.inputMethodUtf8.data()),
-                    request.inputMethodUtf8.size()},
-        static_cast<std::uint8_t>(request.surroundingTextValid),
-        FcitxBytesC{reinterpret_cast<const std::uint8_t*>(request.surroundingTextUtf8.data()),
-                    request.surroundingTextUtf8.size()},
-        request.surroundingCursor,
-        request.surroundingAnchor,
-        FcitxCaretRectC{static_cast<std::uint8_t>(request.caret.valid), request.caret.left,
-                        request.caret.top, request.caret.right, request.caret.bottom,
-                        request.caret.dpi}};
-    KeyEvent event(&context, keyFromRequest(keyRequest),
-                   (request.keyFlags & protocol::kKeyFlagRelease) != 0);
+    KeyEvent event(&context, keyFromRequest(request),
+                   (request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_RELEASE) != 0);
     const KeySym keySym = event.key().sym();
     const auto& group = impl_->instance->inputMethodManager().currentGroup();
-    const std::string& requestIm = request.inputMethodUtf8;
+    const std::string requestIm =
+        request.inputMethod.data
+            ? std::string(reinterpret_cast<const char*>(request.inputMethod.data),
+                          request.inputMethod.len)
+            : std::string{};
     const std::string& defaultIm = group.defaultInputMethod();
     const bool hasRequestIm = !requestIm.empty();
     const bool requestImValid =
         hasRequestIm && impl_->instance->inputMethodManager().entry(requestIm) != nullptr;
-    const bool defaultImValid =
-        impl_->instance->inputMethodManager().entry(defaultIm) != nullptr;
+    const bool defaultImValid = impl_->instance->inputMethodManager().entry(defaultIm) != nullptr;
     const std::string& currentIm = impl_->instance->inputMethod(&context);
     int inputMethodOverridden = 0;
-    const bool hasImOverride =
-        fcitx5_engine_core_input_method_overridden(impl_->ledger.get(), &ledgerKey,
-                                                   &inputMethodOverridden) != 0;
+    const bool hasImOverride = fcitx5_engine_core_input_method_overridden(
+                                   impl_->ledger.get(), &ledgerKey, &inputMethodOverridden) != 0;
     FcitxEngineKeyEventC keyEvent{};
     keyEvent.keySym = static_cast<std::uint32_t>(keySym);
     keyEvent.keyFlags = request.keyFlags;
     keyEvent.isRelease = event.isRelease() ? 1U : 0U;
     keyEvent.hotkeyToggle =
         impl_->config.hotkeyToggle ? impl_->config.hotkeyToggle->c_str() : nullptr;
-    keyEvent.hotkeyNext =
-        impl_->config.hotkeyNext ? impl_->config.hotkeyNext->c_str() : nullptr;
+    keyEvent.hotkeyNext = impl_->config.hotkeyNext ? impl_->config.hotkeyNext->c_str() : nullptr;
     keyEvent.surroundingTextValid = request.surroundingTextValid ? 1U : 0U;
     keyEvent.currentSurroundingValid = context.hasSurroundingText() ? 1U : 0U;
     keyEvent.hasRequestIm = hasRequestIm ? 1U : 0U;
@@ -1097,14 +1052,12 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     keyEvent.currentEqRequest = hasRequestIm && currentIm == requestIm ? 1U : 0U;
     keyEvent.currentEqDefault = currentIm == defaultIm ? 1U : 0U;
     keyEvent.imOverridden = hasImOverride && inputMethodOverridden != 0 ? 1U : 0U;
-    if (const auto list = context.inputPanel().candidateList();
-        list && !list->empty()) {
+    if (const auto list = context.inputPanel().candidateList(); list && !list->empty()) {
         const auto* bulk = list->toBulk();
         const auto* bulkCursor = list->toBulkCursor();
         auto* pageable = list->toPageable();
         keyEvent.hasCandidates = 1U;
-        keyEvent.view.count =
-            bulk && bulk->totalSize() >= 0 ? bulk->totalSize() : list->size();
+        keyEvent.view.count = bulk && bulk->totalSize() >= 0 ? bulk->totalSize() : list->size();
         keyEvent.view.listSize = static_cast<std::int32_t>(list->size());
         keyEvent.view.cursor = static_cast<std::int32_t>(list->cursorIndex());
         keyEvent.view.bulkCursor =
@@ -1115,15 +1068,13 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
         keyEvent.view.hasPrev = pageable && pageable->hasPrev() ? 1U : 0U;
         keyEvent.view.hasNext = pageable && pageable->hasNext() ? 1U : 0U;
         keyEvent.config.scrollMode = impl_->config.scrollMode ? 1U : 0U;
-        keyEvent.config.vertical =
-            impl_->config.vertical ? 1U : 0U;
+        keyEvent.config.vertical = impl_->config.vertical ? 1U : 0U;
         keyEvent.config.candidatePageSize =
             impl_->config.candidatePageSize
                 ? static_cast<std::int32_t>(*impl_->config.candidatePageSize)
                 : -1;
         std::uint32_t overrideValue = 0;
-        if (fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey,
-                                                 &overrideValue)) {
+        if (fcitx5_engine_core_selected_override(impl_->ledger.get(), &ledgerKey, &overrideValue)) {
             keyEvent.hasOverride = 1U;
             keyEvent.overrideValue = overrideValue;
         }
@@ -1143,8 +1094,7 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     // Execute the input-method selection.
     if (decision.imSelection != FCITX_ENGINE_CORE_IM_SELECTION_NONE) {
         const std::string& target =
-            decision.imSelection == FCITX_ENGINE_CORE_IM_SELECTION_REQUEST ? requestIm
-                                                                           : defaultIm;
+            decision.imSelection == FCITX_ENGINE_CORE_IM_SELECTION_REQUEST ? requestIm : defaultIm;
         (void)impl_->instance->inputMethodEngine(target);
         impl_->instance->setCurrentInputMethod(&context, target, true);
         impl_->dispatchPendingEvents();
@@ -1167,37 +1117,32 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
             const auto* bulk = list->toBulk();
             auto* pageable = list->toPageable();
             const auto selectCandidate = [&](std::uint32_t index) {
-                const auto& candidate =
-                    bulk && bulk->totalSize() >= 0
-                        ? bulk->candidateFromAll(static_cast<int>(index))
-                        : list->candidate(static_cast<int>(index));
+                const auto& candidate = bulk && bulk->totalSize() >= 0
+                                            ? bulk->candidateFromAll(static_cast<int>(index))
+                                            : list->candidate(static_cast<int>(index));
                 candidate.select(&context);
             };
             switch (decision.candidateAction) {
             case FCITX_ENGINE_CORE_CANDIDATE_ACTION_SELECT_AND_CLEAR:
                 selectCandidate(decision.candidateValue);
-                (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(),
-                                                                 &ledgerKey);
+                (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(), &ledgerKey);
                 break;
             case FCITX_ENGINE_CORE_CANDIDATE_ACTION_SET_OVERRIDE:
-                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(),
-                                                               &ledgerKey,
+                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(), &ledgerKey,
                                                                decision.candidateValue);
                 break;
             case FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_NEXT_AND_SET_OVERRIDE:
                 if (pageable) {
                     pageable->next();
                 }
-                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(),
-                                                               &ledgerKey,
+                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(), &ledgerKey,
                                                                decision.candidateValue);
                 break;
             case FCITX_ENGINE_CORE_CANDIDATE_ACTION_PAGE_PREV_AND_SET_OVERRIDE:
                 if (pageable) {
                     pageable->prev();
                 }
-                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(),
-                                                               &ledgerKey,
+                (void)fcitx5_engine_core_set_selected_override(impl_->ledger.get(), &ledgerKey,
                                                                decision.candidateValue);
                 break;
             default:
@@ -1217,11 +1162,10 @@ RuntimeResult FcitxRuntime::processKey(const ClientContextKey& key,
     return impl_->collectResult(key, context, event.accepted());
 }
 
-RuntimeResult FcitxRuntime::selectCandidate(
-    std::uint32_t targetProcessId,
-    const protocol::CandidateSelectRequest& request) {
-    const auto found = std::find_if(
-        impl_->contexts.begin(), impl_->contexts.end(), [&](const auto& item) {
+RuntimeResult FcitxRuntime::selectCandidate(std::uint32_t targetProcessId,
+                                            const FcitxCandidateSelectRequestC& request) {
+    const auto found =
+        std::find_if(impl_->contexts.begin(), impl_->contexts.end(), [&](const auto& item) {
             return item.first.processId == targetProcessId &&
                    item.first.contextId == request.metadata.contextId;
         });
@@ -1231,8 +1175,7 @@ RuntimeResult FcitxRuntime::selectCandidate(
     const FcitxEngineContextKeyC ledgerKey = toLedgerKey(found->first);
     if (fcitx5_engine_core_ledger_select_candidate(
             impl_->ledger.get(), &ledgerKey, request.metadata.revision,
-            request.metadata.compositionId, request.candidateId) !=
-        FCITX_ENGINE_CORE_OK) {
+            request.metadata.compositionId, request.candidateId) != FCITX_ENGINE_CORE_OK) {
         throw std::invalid_argument("stale candidate selection state");
     }
     auto& context = *found->second;
@@ -1243,8 +1186,7 @@ RuntimeResult FcitxRuntime::selectCandidate(
     const std::size_t index = static_cast<std::size_t>(encodedIndex - 1U);
     const auto* bulk = candidateList->toBulk();
     const int count = bulk && bulk->totalSize() >= 0 ? bulk->totalSize() : candidateList->size();
-    if (index >= static_cast<std::size_t>(std::clamp(
-                     count, 0, static_cast<int>(protocol::kMaxCandidates)))) {
+    if (index >= static_cast<std::size_t>(std::clamp(count, 0, kMaximumCandidateViews))) {
         throw std::invalid_argument("candidate selection index is invalid");
     }
     const auto& candidate = bulk ? bulk->candidateFromAll(static_cast<int>(index))
@@ -1254,13 +1196,13 @@ RuntimeResult FcitxRuntime::selectCandidate(
     RuntimeResult output = impl_->collectResult(found->first, context, true);
     // E5-3: the pending snapshot store is Rust-owned.
     const auto blob = serializeSnapshot(output);
-    (void)fcitx5_engine_core_snapshot_store_put(impl_->ledger.get(), &ledgerKey,
-                                                output.revision, blob.data(), blob.size());
+    (void)fcitx5_engine_core_snapshot_store_put(impl_->ledger.get(), &ledgerKey, output.revision,
+                                                blob.data(), blob.size());
     return output;
 }
 
-RuntimeResult FcitxRuntime::takePendingState(
-    const ClientContextKey& key, const protocol::StateRequest& request) {
+RuntimeResult FcitxRuntime::takePendingState(const ClientContextKey& key,
+                                             const FcitxStateRequestC& request) {
     const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
     const std::size_t required =
         fcitx5_engine_core_snapshot_store_required_size(impl_->ledger.get(), &ledgerKey);
@@ -1268,9 +1210,9 @@ RuntimeResult FcitxRuntime::takePendingState(
         throw std::invalid_argument("pending state is unavailable");
     std::vector<std::uint8_t> blob(required);
     std::size_t blobLength = 0;
-    if (fcitx5_engine_core_snapshot_store_take(
-            impl_->ledger.get(), &ledgerKey, request.metadata.revision, blob.data(),
-            blob.size(), &blobLength) == 0) {
+    if (fcitx5_engine_core_snapshot_store_take(impl_->ledger.get(), &ledgerKey,
+                                               request.metadata.revision, blob.data(), blob.size(),
+                                               &blobLength) == 0) {
         throw std::invalid_argument("pending state is unavailable");
     }
     RuntimeResult output;
@@ -1341,9 +1283,8 @@ bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {
                                      [&](const auto& item) { return item.name() == id; });
     if (!present)
         items.emplace_back(std::string(id));
-    const auto keyboard = std::find_if(items.begin(), items.end(), [](const auto& item) {
-        return item.name() == "keyboard-us";
-    });
+    const auto keyboard = std::find_if(
+        items.begin(), items.end(), [](const auto& item) { return item.name() == "keyboard-us"; });
     if (!manager.entry("keyboard-us"))
         return false;
     if (keyboard == items.end())

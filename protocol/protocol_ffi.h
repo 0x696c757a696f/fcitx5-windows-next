@@ -1,9 +1,9 @@
-// C ABI surface of the Rust `fcitx5-protocol-core` crate (E1 cutover).
+// C ABI surface of the Rust `fcitx5-protocol-core` crate.
 //
 // This header declares the flat structures and functions exported by
-// `rust/protocol-core/src/capi.rs`. `protocol/protocol.cpp` uses these as its
-// authoritative codec: validation and byte layout live in Rust, this side only
-// marshals between the `protocol.h` DTOs and the flat structures below.
+// `rust/protocol-core/src/capi.rs`. Rust owns the codec: all validation and
+// byte layout live in Rust; every C++ consumer (engine, IPC clients, and the
+// candidate UI presentation host) calls these functions directly.
 //
 // ABI conventions (see capi.rs for the authoritative documentation):
 //

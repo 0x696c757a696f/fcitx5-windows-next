@@ -14,12 +14,17 @@ namespace {
 
 constexpr std::uint32_t kLauncherUserStopped = 1;
 constexpr std::uint32_t kStartSuppressed = 2;
+constexpr std::uint32_t kCommandStartDemand = 1;
+constexpr std::uint32_t kCommandUserStop = 2;
+constexpr std::uint32_t kCommandResume = 3;
+constexpr std::uint32_t kCommandStatus = 8;
+constexpr std::uint32_t kCommandShutdown = 9;
 
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
 
 bool send(const fcitx::windows::platform::RuntimeIdentity& identity,
-          const wchar_t* launcherPath, fcitx::windows::protocol::LauncherCommand command,
-          fcitx::windows::protocol::LauncherResponse& response) {
+          const wchar_t* launcherPath, std::uint32_t command,
+          fcitx::windows::ipc::LauncherResponse& response) {
     return fcitx::windows::ipc::sendLauncherCommand(
         identity, GetTickCount64() + 1000,
         fcitx::windows::ipc::PeerPolicy::exact(launcherPath), command, response);
@@ -74,10 +79,10 @@ int wmain(int argc, wchar_t** argv) {
     int result = WaitForSingleObject(launcherReady, 2000) == WAIT_OBJECT_0 ? 0 : 1;
     std::uint32_t failureStatus = 0;
     if (result != 0) stage = 1;
-    fcitx::windows::protocol::LauncherResponse response;
+    fcitx::windows::ipc::LauncherResponse response;
     int controlFailure = 0;
     DWORD controlError = ERROR_SUCCESS;
-    const auto sendAndAwaitNext = [&](fcitx::windows::protocol::LauncherCommand command) {
+    const auto sendAndAwaitNext = [&](std::uint32_t command) {
         controlFailure = 0;
         ResetEvent(launcherReady);
         if (!send(identity, argv[1], command, response)) {
@@ -92,10 +97,10 @@ int wmain(int argc, wchar_t** argv) {
         return true;
     };
     if (result == 0) {
-        if (!sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::startDemand)) {
+        if (!sendAndAwaitNext(kCommandStartDemand)) {
             result = 1;
             stage = 20 + controlFailure;
-        } else if (response.status != fcitx::windows::protocol::Status::ok) {
+        } else if (response.status != 0) {
             result = 1;
             stage = 21;
             failureStatus = static_cast<std::uint32_t>(response.status);
@@ -117,8 +122,8 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     if (result == 0 &&
-        (!sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::status) ||
-         response.status != fcitx::windows::protocol::Status::ok ||
+        (!sendAndAwaitNext(kCommandStatus) ||
+         response.status != 0 ||
          response.currentInputMethodId != "mock-pinyin" ||
          response.currentInputMethodName != "Mock Pinyin" ||
          response.currentInputMethodNativeName != "\xe5\xb0\x8f\xe4\xbc\x81\xe9\xb9\x85" ||
@@ -127,24 +132,24 @@ int wmain(int argc, wchar_t** argv) {
         stage = 35;
     }
     if (result == 0 &&
-        (!sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::userStop) ||
-         response.status != fcitx::windows::protocol::Status::ok ||
+        (!sendAndAwaitNext(kCommandUserStop) ||
+         response.status != 0 ||
          response.launcherState != kLauncherUserStopped ||
-         !sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::startDemand) ||
+         !sendAndAwaitNext(kCommandStartDemand) ||
          response.startDisposition != kStartSuppressed)) {
         result = 1;
         stage = 4;
     }
     if (result == 0 &&
-        (!sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::resume) ||
-         response.status != fcitx::windows::protocol::Status::ok ||
-         !sendAndAwaitNext(fcitx::windows::protocol::LauncherCommand::startDemand) ||
-         response.status != fcitx::windows::protocol::Status::ok ||
+        (!sendAndAwaitNext(kCommandResume) ||
+         response.status != 0 ||
+         !sendAndAwaitNext(kCommandStartDemand) ||
+         response.status != 0 ||
          WaitForSingleObject(engineReady, 2000) != WAIT_OBJECT_0)) {
         result = 1;
         stage = 5;
     }
-    if (!send(identity, argv[1], fcitx::windows::protocol::LauncherCommand::shutdown, response)) {
+    if (!send(identity, argv[1], kCommandShutdown, response)) {
         SetEvent(stopEvent);
         result = 1;
         stage = 6;

@@ -1,5 +1,5 @@
 #include "pipe_client.h"
-#include "protocol.h"
+#include "protocol_ffi.h"
 #include "runtime_identity.h"
 
 #include <Windows.h>
@@ -12,6 +12,11 @@
 #include <vector>
 
 namespace {
+
+// Flat protocol-core frame bounds (Rust owns the wire contract).
+constexpr std::size_t kHeaderSize = 64;
+constexpr std::uint16_t kHelloRequestType = 1;
+constexpr std::uint16_t kKeyRequestType = 3;
 
 bool transfer(HANDLE pipe, bool write, void* data, std::size_t size, DWORD timeout) {
     auto* cursor = static_cast<std::uint8_t*>(data);
@@ -67,14 +72,17 @@ bool connect(HANDLE pipe) {
     return success;
 }
 
+// Reads one complete FCW4 frame (header + body) into `bytes`.
 bool readFrame(HANDLE pipe, std::vector<std::uint8_t>& bytes) {
-    using namespace fcitx::windows::protocol;
     std::array<std::uint8_t, kHeaderSize> header{};
     if (!transfer(pipe, false, header.data(), header.size(), 2000)) return false;
-    MessageType type{};
-    Metadata metadata;
+    std::uint16_t type = 0;
     std::uint32_t bodySize = 0;
-    if (!decodeHeader(header, type, bodySize, metadata)) return false;
+    FcitxMetadataC metadata{};
+    if (fcitx5_protocol_core_decode_header(header.data(), header.size(), &type, &bodySize,
+                                           &metadata) == 0) {
+        return false;
+    }
     bytes.assign(header.begin(), header.end());
     bytes.resize(kHeaderSize + bodySize);
     return bodySize == 0 ||
@@ -91,6 +99,49 @@ HANDLE createPipe(const std::wstring& name) {
                             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
                                 PIPE_REJECT_REMOTE_CLIENTS,
                             1, 4096, 4096, 25, nullptr);
+}
+
+// Encodes one frame through the Rust codec into a byte vector.
+template <typename Message, typename Encoder>
+std::vector<std::uint8_t> encodeMessage(const Message& message, Encoder encoder) {
+    std::array<std::uint8_t, 512> stack{};
+    std::size_t written = 0;
+    if (encoder(&message, stack.data(), stack.size(), &written)) {
+        return std::vector<std::uint8_t>(stack.begin(), stack.begin() + written);
+    }
+    if (written == 0) {
+        return {}; // rejected by validation
+    }
+    std::vector<std::uint8_t> out(written);
+    std::size_t finalWritten = 0;
+    if (!encoder(&message, out.data(), out.size(), &finalWritten)) {
+        return {};
+    }
+    out.resize(finalWritten);
+    return out;
+}
+
+// Decodes a request body through the Rust codec (used only to confirm the
+// frame is well-formed; request metadata comes from the header decode).
+template <typename Message, typename Decoder>
+bool decodeRequest(const std::vector<std::uint8_t>& frame, const FcitxMetadataC& metadata,
+                   Message& message, Decoder decoder) {
+    if (frame.size() < kHeaderSize) {
+        return false;
+    }
+    std::array<std::uint8_t, 4096> strings{};
+    std::size_t stringsNeeded = 0;
+    if (decoder(&metadata, frame.data() + kHeaderSize, frame.size() - kHeaderSize, &message,
+                strings.data(), strings.size(), &stringsNeeded)) {
+        return true;
+    }
+    if (stringsNeeded == 0) {
+        return false; // rejected by validation
+    }
+    std::vector<std::uint8_t> heap(stringsNeeded);
+    std::size_t finalNeeded = 0;
+    return decoder(&metadata, frame.data() + kHeaderSize, frame.size() - kHeaderSize, &message,
+                   heap.data(), heap.size(), &finalNeeded) != 0;
 }
 
 } // namespace
@@ -159,31 +210,75 @@ int wmain(int argc, wchar_t** argv) {
                 return;
             }
             std::vector<std::uint8_t> bytes;
-            protocol::FrameView frame;
-            protocol::HelloRequest hello;
-            if (!readFrame(pipe, bytes) || !protocol::decodeFrame(bytes, frame) ||
-                !protocol::decode(frame, hello)) {
+            std::uint16_t type = 0;
+            std::uint32_t bodySize = 0;
+            FcitxMetadataC helloMetadata{};
+            if (!readFrame(pipe, bytes) ||
+                fcitx5_protocol_core_decode_header(bytes.data(), kHeaderSize, &type, &bodySize,
+                                                   &helloMetadata) == 0 ||
+                type != kHelloRequestType || bodySize != bytes.size() - kHeaderSize) {
+                CloseHandle(pipe);
+                serverError.store(12);
+                return;
+            }
+            FcitxHelloRequestC hello{};
+            if (!decodeRequest(bytes, helloMetadata, hello,
+                               fcitx5_protocol_core_decode_hello_request)) {
                 CloseHandle(pipe);
                 serverError.store(12);
                 return;
             }
             const std::uint64_t epoch = connectionIndex + 100;
-            const protocol::HelloResponse helloResponse{
-                protocol::Metadata{nextResponseId++, hello.metadata.requestId, epoch,
-                                   identity.sessionId, 0, 0, 0},
-                protocol::Status::ok, static_cast<std::uint32_t>(sizeof(void*) * 8)};
-            protocol::KeyRequest key;
-            if (!writeFrame(pipe, protocol::encode(helloResponse)) || !readFrame(pipe, bytes) ||
-                !protocol::decodeFrame(bytes, frame) || !protocol::decode(frame, key)) {
+            const FcitxHelloResponseC helloResponse{
+                FcitxMetadataC{nextResponseId++, helloMetadata.requestId, epoch,
+                               identity.sessionId, 0, 0, 0},
+                0, // Status::ok
+                static_cast<std::uint32_t>(sizeof(void*) * 8)};
+            auto helloBytes = encodeMessage(helloResponse,
+                                            fcitx5_protocol_core_encode_hello_response);
+            if (helloBytes.empty() || !writeFrame(pipe, helloBytes)) {
                 CloseHandle(pipe);
-                serverError.store(13);
+                serverError.store(131);
                 return;
             }
-            const protocol::KeyResponse keyResponse{
-                protocol::Metadata{nextResponseId++, key.metadata.requestId, epoch,
-                                   identity.sessionId, key.metadata.contextId,
-                                   key.metadata.compositionId, key.metadata.revision + 1},
-                protocol::Status::ok, true, connectionIndex == 0 ? "late" : "a"};
+            FcitxMetadataC keyMetadata{};
+            if (!readFrame(pipe, bytes) ||
+                fcitx5_protocol_core_decode_header(bytes.data(), kHeaderSize, &type, &bodySize,
+                                                   &keyMetadata) == 0 ||
+                type != kKeyRequestType || bodySize != bytes.size() - kHeaderSize) {
+                CloseHandle(pipe);
+                serverError.store(132);
+                return;
+            }
+            FcitxKeyRequestC key{};
+            if (!decodeRequest(bytes, keyMetadata, key,
+                               fcitx5_protocol_core_decode_key_request)) {
+                CloseHandle(pipe);
+                serverError.store(133);
+                return;
+            }
+            const char* commit = connectionIndex == 0 ? "late" : "a";
+            FcitxKeyResponseC keyResponse{};
+            keyResponse.metadata = FcitxMetadataC{
+                nextResponseId++, keyMetadata.requestId, epoch, identity.sessionId,
+                keyMetadata.contextId, keyMetadata.compositionId, keyMetadata.revision + 1};
+            keyResponse.status = 0; // Status::ok
+            keyResponse.handled = 1;
+            keyResponse.commit = FcitxBytesC{
+                reinterpret_cast<const std::uint8_t*>(commit), connectionIndex == 0 ? 4U : 1U};
+            // The key response is a plain handshake-shaped acknowledgement (no
+            // preedit/candidates); the client only checks handled/commit.
+            keyResponse.selectedCandidate = UINT32_MAX;
+            keyResponse.popupAllowed = 1;
+            // An invalid caret still must carry the canonical default DPI for
+            // the Rust payload validator.
+            keyResponse.caret = FcitxCaretRectC{0, 0, 0, 0, 0, 96};
+            auto keyBytes = encodeMessage(keyResponse, fcitx5_protocol_core_encode_key_response);
+            if (keyBytes.empty()) {
+                CloseHandle(pipe);
+                serverError.store(134);
+                return;
+            }
             if (connectionIndex == 0) {
                 SetEvent(keyReceived);
                 if (WaitForSingleObject(releaseLate, kContextStartSlackMilliseconds) !=
@@ -192,10 +287,10 @@ int wmain(int argc, wchar_t** argv) {
                     serverError.store(14);
                     return;
                 }
-                (void)writeFrame(pipe, protocol::encode(keyResponse));
+                (void)writeFrame(pipe, keyBytes);
             } else if (connectionIndex == 1) {
                 SetEvent(abruptKeyReceived);
-            } else if (!writeFrame(pipe, protocol::encode(keyResponse))) {
+            } else if (!writeFrame(pipe, keyBytes)) {
                 CloseHandle(pipe);
                 serverError.store(15);
                 return;

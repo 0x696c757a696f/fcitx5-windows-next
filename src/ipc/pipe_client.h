@@ -1,7 +1,7 @@
 #pragma once
 
 #include "peer_verification.h"
-#include "protocol.h"
+#include "protocol_ffi.h"
 #include "runtime_identity.h"
 
 #include <Windows.h>
@@ -22,6 +22,30 @@ inline constexpr DWORD kInputDeadlineMilliseconds = 250;
 // key, but the first real context is not dropped solely because initialization
 // crossed the hot-path deadline.
 inline constexpr DWORD kContextStartDeadlineMilliseconds = 7500;
+
+struct CaretRect {
+    bool valid{};
+    std::int32_t left{};
+    std::int32_t top{};
+    std::int32_t right{};
+    std::int32_t bottom{};
+    std::uint32_t dpi{96};
+};
+
+struct EngineStatusResult {
+    std::uint64_t requestId{};
+    std::uint64_t responseTo{};
+    std::uint64_t engineEpoch{};
+    std::uint32_t sessionId{};
+    std::uint64_t contextId{};
+    std::uint64_t compositionId{};
+    std::uint64_t revision{};
+    std::uint32_t status{};
+    std::string currentInputMethodId;
+    std::string currentInputMethodName;
+    std::string currentInputMethodNativeName;
+    std::string currentInputMethodShortLabel;
+};
 
 struct KeyResult {
     struct Candidate {
@@ -50,7 +74,7 @@ struct KeyResult {
     std::uint32_t forwardKeyStates{};
     std::int32_t forwardKeyCode{};
     bool forwardKeyRelease{};
-    protocol::CaretRect caret;
+    CaretRect caret;
 };
 
 class PipeClient final {
@@ -66,7 +90,7 @@ public:
 
     [[nodiscard]] bool processKey(std::uint64_t contextId, std::uint32_t virtualKey,
                                   std::uint32_t keyFlags, KeyResult& result,
-                                  const protocol::CaretRect& caret = {},
+                                  const CaretRect& caret = {},
                                   bool popupAllowed = true,
                                   std::uint32_t scanCode = 0,
                                   bool extendedKey = false,
@@ -84,7 +108,7 @@ public:
                                        std::uint64_t revision,
                                        std::uint64_t candidateId) noexcept;
     [[nodiscard]] bool pollState(std::uint64_t contextId, KeyResult& result) noexcept;
-    [[nodiscard]] bool queryEngineStatus(protocol::EngineStatusResponse& result,
+    [[nodiscard]] bool queryEngineStatus(EngineStatusResult& result,
                                          DWORD timeoutMilliseconds =
                                              kInputDeadlineMilliseconds) noexcept;
     void disconnect() noexcept;
@@ -100,7 +124,7 @@ private:
     [[nodiscard]] bool transact(const std::vector<std::uint8_t>& request,
                                 std::vector<std::uint8_t>& response,
                                 std::uint64_t deadline) noexcept;
-    [[nodiscard]] bool acceptKeyResponse(const protocol::KeyResponse& response,
+    [[nodiscard]] bool acceptKeyResponse(const struct FcitxKeyResponseC& response,
                                          std::uint64_t requestId,
                                          std::uint64_t contextId,
                                          ContextState& contextState,

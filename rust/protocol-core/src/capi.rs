@@ -2,9 +2,10 @@
 
 //! Narrow C ABI for the E1 cutover.
 //!
-//! The C++ `protocol/protocol.cpp` adapter marshals its DTOs into the flat
-//! `Fcitx*C` structures below and calls these functions; all validation and
-//! byte layout authority lives in Rust. `protocol.h` stays unchanged.
+//! Consumers (the engine adapter, IPC clients, and the Candidate UI) marshal
+//! their data into the flat `Fcitx*C` structures below and call these
+//! functions; all validation and byte layout authority lives in Rust. The C++
+//! `protocol.h`/`protocol.cpp` DTO bridge has been deleted.
 //!
 //! ABI conventions:
 //!

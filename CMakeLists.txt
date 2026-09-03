@@ -217,16 +217,6 @@ target_include_directories(
   INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>")
 target_link_libraries(fcitx5_windows_common INTERFACE ws2_32 userenv ntdll bcrypt advapi32 shell32 ole32 gdi32)
 
-add_library(fcitx5_protocol STATIC protocol/protocol.cpp)
-add_library(fcitx5::protocol ALIAS fcitx5_protocol)
-target_compile_features(fcitx5_protocol PUBLIC cxx_std_20)
-target_include_directories(fcitx5_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
-# E1 cutover: the codec is authoritative in Rust `fcitx5-protocol-core`; this
-# static library only marshals over the C ABI, so every consumer links the Rust
-# codec transitively.
-target_link_libraries(fcitx5_protocol PUBLIC fcitx5_protocol_core_rust)
-fcitx_apply_project_options(fcitx5_protocol)
-
 set(FCITX_RUST_LAUNCHER_EXE
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-launcher.exe")
 set(FCITX_LAUNCHER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
@@ -477,7 +467,12 @@ add_library(
 add_library(fcitx5::ipc_client ALIAS fcitx5_ipc_client)
 target_compile_features(fcitx5_ipc_client PUBLIC cxx_std_20)
 target_include_directories(fcitx5_ipc_client PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ipc")
-target_link_libraries(fcitx5_ipc_client PUBLIC fcitx5::protocol fcitx5::platform)
+# The Rust `fcitx5-protocol-core` C ABI is the wire codec. Consumers that only
+# include pipe_client.h still need the flat `protocol_ffi.h` header and the
+# imported codec library, so both are exposed PUBLIC here after the C++ DTO
+# bridge was deleted.
+target_include_directories(fcitx5_ipc_client PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
+target_link_libraries(fcitx5_ipc_client PUBLIC fcitx5_protocol_core_rust fcitx5::platform)
 if(FCITX_DEVELOPMENT_PEER_EXCEPTION)
   target_compile_definitions(fcitx5_ipc_client PRIVATE FCITX_DEVELOPMENT_PEER_EXCEPTION=1)
 endif()
@@ -621,9 +616,10 @@ target_include_directories(fcitx5_ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/co
 target_link_libraries(
   fcitx5_ui
   PRIVATE fcitx5::candidate_layout fcitx5_config_core_rust
-          fcitx5::windows_common fcitx5::protocol fcitx5::ipc_client fcitx5::platform
+          fcitx5::windows_common fcitx5_protocol_core_rust fcitx5::ipc_client fcitx5::platform
           d2d1 dwrite shell32 ole32)
 add_dependencies(fcitx5_ui fcitx5_config_core_rustlib)
+target_include_directories(fcitx5_ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
 fcitx_apply_project_options(fcitx5_ui)
 fcitx_apply_binary_hardening(fcitx5_ui)
 add_custom_command(

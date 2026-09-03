@@ -1,11 +1,12 @@
 //! Shared FCW4 wire protocol codec.
 //!
 //! This crate is the Rust-authoritative implementation of the FCW4 frame
-//! protocol previously defined by `protocol/protocol.h` + `protocol/protocol.cpp`.
-//! Wire compatibility (bytes, limits, and decode rejection) is preserved exactly:
-//! the UTF-8 validation below deliberately mirrors the C++ byte-structure check
-//! (which accepts overlong encodings), not the stricter Rust standard-library
-//! `from_utf8` semantics.
+//! protocol (previously also described by the deleted `protocol/protocol.h`
+//! and `protocol/protocol.cpp` DTO bridge). Wire compatibility (bytes, limits,
+//! and decode rejection) is preserved exactly: the UTF-8 validation below
+//! deliberately mirrors the former C++ byte-structure check (which accepts
+//! overlong encodings), not the stricter Rust standard-library `from_utf8`
+//! semantics.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

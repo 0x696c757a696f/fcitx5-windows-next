@@ -12,6 +12,9 @@ namespace {
 
 constexpr std::uint32_t kLauncherSafeMode = 5;
 constexpr std::uint32_t kEngineReady = 2;
+constexpr std::uint32_t kCommandStartDemand = 1;
+constexpr std::uint32_t kCommandStatus = 8;
+constexpr std::uint32_t kCommandShutdown = 9;
 
 std::wstring quote(std::wstring_view value) { return L"\"" + std::wstring(value) + L"\""; }
 
@@ -59,11 +62,11 @@ int wmain(int argc, wchar_t** argv) {
     int stage = 0;
     int result = WaitForSingleObject(launcherReady, 2000) == WAIT_OBJECT_0 ? 0 : 1;
     if (result != 0) stage = 1;
-    protocol::LauncherResponse response;
+    ipc::LauncherResponse response;
     if (result == 0 && !ipc::sendLauncherCommand(
                            identity, GetTickCount64() + 1000,
                            ipc::PeerPolicy::exact(argv[1]),
-                           protocol::LauncherCommand::startDemand, response)) {
+                           kCommandStartDemand, response)) {
         result = 1;
         stage = 2;
     }
@@ -74,14 +77,14 @@ int wmain(int argc, wchar_t** argv) {
     if (result == 0 &&
         (!ipc::sendLauncherCommand(identity, GetTickCount64() + 1000,
                                    ipc::PeerPolicy::exact(argv[1]),
-                                   protocol::LauncherCommand::status, response) ||
+                                   kCommandStatus, response) ||
          response.launcherState != kLauncherSafeMode || response.engineState != kEngineReady)) {
         result = 1;
         stage = 4;
     }
     if (!ipc::sendLauncherCommand(identity, GetTickCount64() + 1000,
                                   ipc::PeerPolicy::exact(argv[1]),
-                                  protocol::LauncherCommand::shutdown, response)) {
+                                  kCommandShutdown, response)) {
         SetEvent(stopEvent);
         result = 1;
         stage = 5;

@@ -120,7 +120,6 @@ fcitx_add_rust_staticlib(fcitx5_package_core fcitx5-package-core package-core)
 
 add_executable(
   fcitx5_engine
-  "${REPOSITORY_ROOT}/protocol/protocol.cpp"
   "${REPOSITORY_ROOT}/src/platform/runtime_identity.cpp"
   "${REPOSITORY_ROOT}/src/platform/pipe_security.cpp"
   "${REPOSITORY_ROOT}/src/ipc/peer_verification.cpp"
