@@ -379,7 +379,9 @@ try {
         & (Join-Path $PSScriptRoot 'check-runtime-security.ps1') `
           -Architecture $targetArchitecture -Configuration $Configuration
       }
-      & (Join-Path $PSScriptRoot 'test-fcitx.ps1') -Configuration Release
+      & (Join-Path $PSScriptRoot 'test-fcitx.ps1') -Configuration Release `
+        -SourcesRoot (Join-Path $repoRoot 'out/official-rebaseline-sources') `
+        -StageRoot (Join-Path $repoRoot 'out/official-rebaseline-stage')
       if ($LASTEXITCODE -ne 0) { throw "Real Fcitx acceptance failed with exit code $LASTEXITCODE." }
       & (Join-Path $PSScriptRoot 'check-secrets.ps1')
       & (Join-Path $PSScriptRoot 'check-licenses.ps1')

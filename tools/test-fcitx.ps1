@@ -1,10 +1,16 @@
 [CmdletBinding()]
-param([ValidateSet('Debug', 'Release')] [string] $Configuration = 'Debug')
+param(
+  [ValidateSet('Debug', 'Release')] [string] $Configuration = 'Debug',
+  [string] $SourcesRoot,
+  [string] $StageRoot
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$stage = Join-Path $repoRoot 'out/stage/fcitx5'
+$stage = if ($StageRoot) { [IO.Path]::GetFullPath($StageRoot) } else {
+  Join-Path $repoRoot 'out/stage/fcitx5'
+}
 $engine = Join-Path $stage 'bin/fcitx5-engine.exe'
 $bash = Join-Path $repoRoot 'out/toolchains/msys64/usr/bin/bash.exe'
 
@@ -61,7 +67,10 @@ foreach ($path in @($bash, $cmake, (Join-Path $stage 'lib/cmake/Fcitx5Core/Fcitx
   }
 }
 
-& (Join-Path $PSScriptRoot 'bootstrap-fcitx.ps1') -VerifyOnly
+$bootstrapArguments = @{ VerifyOnly = $true }
+if ($SourcesRoot) { $bootstrapArguments['SourcesRoot'] = $SourcesRoot }
+if ($StageRoot) { $bootstrapArguments['StageRoot'] = $StageRoot }
+& (Join-Path $PSScriptRoot 'bootstrap-fcitx.ps1') @bootstrapArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $repoMsys = '/' + $repoRoot.Substring(0, 1).ToLowerInvariant() +
