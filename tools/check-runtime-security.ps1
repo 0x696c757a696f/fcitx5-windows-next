@@ -140,7 +140,14 @@ $networkProhibited = @(
   '\bwindows::Win32::Networking\b'
 )
 $networkAllowedSources = @(
-  'rust/package-core/src/downloader_main.rs'
+  'rust/package-core/src/downloader_main.rs',
+  # process-execution-core uses std::net::{TcpListener,TcpStream} only inside
+  # its `#[cfg(test)] mod tests` (127.0.0.1 loopback readiness/release barriers
+  # for the deterministic kill-on-close Job Object fixtures at ef0bfd8). No
+  # product code in this crate performs networking, and the hook/injection
+  # patterns above still apply to the whole file. Do not extend this entry to
+  # any other file without a matching test-only justification.
+  'rust/process-execution-core/src/lib.rs'
 )
 $scannedSourceCount = 0
 foreach ($root in $sourceRoots) {
