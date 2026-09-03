@@ -1,0 +1,71 @@
+name: Sync upstream
+
+on:
+  schedule:
+    # Weekly, Monday 03:00 UTC.
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  windui:
+    name: Sync wind-ui-rust
+    runs-on: windows-2022
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Sync wind-ui-rust to upstream HEAD
+        shell: pwsh
+        run: |
+          & ./tools/sync-windui.ps1 -Latest
+
+      - name: Detect windui change and open PR
+        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: upstream/wind-ui-rust
+          commit-message: 'chore(vendor): sync wind-ui-rust to upstream HEAD'
+          title: 'chore(vendor): sync wind-ui-rust to upstream HEAD'
+          body: |
+            Automated upstream sync of the vendored `huanfeng/wind-ui-rust`
+            path dependency. Re-applies the two repo-local Windows portability
+            patches (fail-closed) and updates the pin in `dependencies.json`
+            and the config-poc reference-commit constant.
+
+            Do not merge without the Core CI passing on this branch.
+
+  fcitx:
+    name: Sync fcitx5 core and addon pins
+    runs-on: windows-2022
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Bump drifted fcitx5/addon pins to upstream HEAD
+        shell: pwsh
+        run: |
+          & ./tools/sync-fcitx-pins.ps1 -Latest
+
+      - name: Open PR for pin bumps
+        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: upstream/fcitx5-pins
+          commit-message: 'chore(pins): bump fcitx5 core/addon upstream pins'
+          title: 'chore(pins): bump fcitx5 core/addon upstream pins'
+          body: |
+            Automated pin bump for the fcitx5 core and addon sources recorded
+            in `tools/bootstrap-fcitx.ps1` `$sourcePins`. This only updates the
+            pinned commits; it does NOT verify the patch queue still applies.
+
+            Patch compatibility must be confirmed by running
+            `tools/bootstrap-fcitx.ps1 -VerifyPatchesOnly` against the new
+            checkouts (or by the release/package gate) before merging.
