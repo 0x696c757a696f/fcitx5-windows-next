@@ -12,7 +12,7 @@ provenance, and explicit separation of versioned program packages from user data
 
 ## Constraints and acceptance
 
-- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. Preserve the
+- Read `rust-skills`; use worktree-local `CARGO_TARGET_DIR`. Preserve the
   current ML-DSA-65 v2 verifier and upstream standard Fcitx addon/build-farm semantics.
 - Reject missing/malformed `runtime_build` or a value inconsistent with the signed manifest
   provenance. `runtime_build` is diagnostic/provenance, not ABI equality; compatibility rejection

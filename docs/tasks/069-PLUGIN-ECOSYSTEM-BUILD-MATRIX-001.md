@@ -13,7 +13,7 @@ sign-input -> install/load smoke.
 
 ## Constraints and acceptance
 
-- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. Add one addon
+- Read `rust-skills`; use worktree-local `CARGO_TARGET_DIR`. Add one addon
   per vertical slice, use upstream standard Fcitx addon semantics, and do not create a second plugin API.
 - Keep Engine native-addon architecture claims exact: only build/test architectures actually supported
   by the Engine are declared. Do not claim ARM64 or x86 Engine native-addon support.

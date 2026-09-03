@@ -196,7 +196,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
   mixed-binary integration/E2E C++ tests. Temporary differential/golden tests require an explicit
   deletion condition; CMake/CTest routing and x64/x86 continuity remain required.
 - Every future Rust task must use a worktree-local `CARGO_TARGET_DIR`; before implementation its
-  execution agent must fully read `ponytail`, `rust-skills`, and `tdd`. New product logic is Rust;
+  execution agent must fully read `rust-skills`. New product logic is Rust;
   C++ is limited to the direct Fcitx adapter, upstream native addon, or a thin Windows ABI/renderer
   adapter. Do not create a second Config truth, generic GUI framework, or permanent protocol dual stack.
 - A task may be skipped only when current HEAD already satisfies it **and** the required regression/evidence is present; record `ALREADY-GREEN` with evidence in `status.md`.

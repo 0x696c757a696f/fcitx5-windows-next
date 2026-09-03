@@ -12,7 +12,7 @@ with revision-aware stale suppression and sensitive-context privacy enforcement.
 
 ## Constraints and acceptance
 
-- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. Keep new domain
+- Read `rust-skills`; use worktree-local `CARGO_TARGET_DIR`. Keep new domain
   logic Rust-owned; native renderer/UIA adapters only consume the Rust semantic DTO.
 - Notifications carry snapshot identity, coalesce compatible changes, cancel/drop stale revisions, and
   do not derive a separate candidate order or selection state.

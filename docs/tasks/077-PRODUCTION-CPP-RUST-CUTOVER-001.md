@@ -36,7 +36,7 @@ inventory has no `MIGRATE`, `DELETE`, `KEEP-TEMP`, conditional, or unclassified 
   search paths; expand wildcard directories before passing real paths to `rg`.
 
 Each subagent reads `AGENTS.md`, this task, the live inventory, and only the relevant spec/source
-slice; follows `rust-skills`, `tdd`, and `ponytail`; and does not commit or push. The root agent owns
+slice; follows `rust-skills`; and does not commit or push. The root agent owns
 integration, conflict resolution, validation, commits, and pushes.
 
 ## Permanent C++ boundary

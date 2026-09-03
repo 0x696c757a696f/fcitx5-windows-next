@@ -38,7 +38,7 @@ rewrite every test in one opaque change.
 ## Constraints
 
 - Read `AGENTS.md`, this task, and only the referenced specification ranges before implementation.
-- Fully read and follow `ponytail`, `rust-skills`, and `tdd`; use a worktree-local `CARGO_TARGET_DIR`.
+- Fully read and follow `rust-skills`; use a worktree-local `CARGO_TARGET_DIR`.
 - Use PowerShell 7 at `D:\Program Files\PowerShell\7\pwsh.exe`.
 - Use `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains`, with fast tools under
   `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast`; use the pinned repository Cargo

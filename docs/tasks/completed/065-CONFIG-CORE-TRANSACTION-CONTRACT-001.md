@@ -20,7 +20,7 @@ GUI/CLI/test contract.
 
 ## Constraints
 
-- Before implementation, fully read `ponytail`, `rust-skills`, and `tdd`; use a worktree-local
+- Before implementation, fully read `rust-skills`; use a worktree-local
   `CARGO_TARGET_DIR`.
 - New product logic is Rust. C++ may only remain a thin Windows ABI/renderer adapter; do not revive
   the legacy Config shell or add a generic GUI framework, a second Config truth, or a permanent

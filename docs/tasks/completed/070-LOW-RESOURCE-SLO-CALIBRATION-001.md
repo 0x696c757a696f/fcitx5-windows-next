@@ -12,7 +12,7 @@ activation so initial low-resource SLOs can be calibrated without treating estim
 
 ## Constraints and acceptance
 
-- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. New measurement
+- Read `rust-skills`; use worktree-local `CARGO_TARGET_DIR`. New measurement
   and product logic is Rust-first; no benchmark framework or telemetry service unless current code
   cannot provide a bounded script/harness.
 - Separate offline Core measurements from Rime/Mozc/Lua activation. Capture latency/memory inputs

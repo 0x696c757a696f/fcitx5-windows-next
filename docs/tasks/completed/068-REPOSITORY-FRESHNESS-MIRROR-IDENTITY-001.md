@@ -12,7 +12,7 @@ bind mirrors to the same verified repository identity.
 
 ## Constraints and acceptance
 
-- Read `ponytail`, `rust-skills`, and `tdd`; use worktree-local `CARGO_TARGET_DIR`. Extend the current
+- Read `rust-skills`; use worktree-local `CARGO_TARGET_DIR`. Extend the current
   protocol in one versioned path; do not build permanent v2/v3 runtime dual stacks.
 - Verify monotonic sequence, expiry/freshness, channel identity, mirror identity, and coherent target
   metadata before package selection. Reject rollback, freeze, and mix-and-match fixtures.
