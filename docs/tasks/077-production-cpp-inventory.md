@@ -1,31 +1,32 @@
 # Task 077 production C++ inventory
 
 Baseline HEAD: `c6a804edcd093b98b8940730853f7301df58a21a`.
-Latest integrated cutover HEAD: `9a63682`.
+Latest integrated cutover HEAD: `1781b2d` (protocol DTO bridge deleted at `ac6d200`; AGENTS/
+queue docs at `b282dfd`; x86 protocol cutover verification at `1781b2d`).
 
-This is the live cutover ledger. `KEEP-CANDIDATE` still requires symbol-level reduction and a final
-unconditional classification. There are no accepted conditional rows at 077 completion.
+This ledger is now closed: every row below has an unconditional `KEEP` (with reason) or
+`DELETED at <commit>` state. No `KEEP-CANDIDATE`, `MIGRATE`, or conditional row remains.
 
 | Current file(s) | Initial class | Required final state |
 |---|---|---|
-| `protocol/protocol.cpp`, `protocol/protocol.h` | DELETED (phase-4, uncommitted HEAD after `87e1f43`) | C++ DTO/bridge deleted; all consumers now use the Rust `protocol_ffi.h` flat ABI |
-| `protocol/protocol_ffi.h`, `resources/windows/resource.h` | KEEP-CANDIDATE ABI | Retain declarations/resource IDs only where required |
+| `protocol/protocol.cpp`, `protocol/protocol.h` | DELETED at `ac6d200` | C++ DTO/bridge deleted; all consumers now use the Rust `protocol_ffi.h` flat ABI |
+| `protocol/protocol_ffi.h`, `resources/windows/resource.h`, `src/config/config_snapshot_ffi.h` | KEEP (ABI declarations) | Flat C ABI declarations and resource IDs only; no C++ product logic. `config_snapshot_ffi.h` is consumed only by the Fcitx adapter and Candidate renderer to borrow the Rust Config snapshot |
 | `src/config/app_main.cpp` | DELETED at `3cf297b` | Rust Settings is the sole shipping shell; legacy WTL target and differential test are deleted |
 | `src/config/config_model.h`, `src/config/config_parser.cpp` | DELETED at `2788831` | Config Core owns typed parsing, validation, recovery, persistence, and resolved Candidate visuals |
 | `src/control/control_main.cpp` | DELETED at `955137e` | Rust is the sole shipping Control executable and owns Engine/Launcher commands plus signed repository/package lifecycle |
 | `src/package/package_core.cpp`, `package_core.h` | DELETED at `2788831` | Rust package-core and the shipping Rust lifecycle binaries are the only package authority |
-| `src/package/fcitx5_mldsa65_config.h` | KEEP-CANDIDATE native ABI | Retain only if the Rust package build's audited native verifier needs it |
-| `src/ui/ui_main.cpp` | MIGRATE/MIXED; Rust visual snapshot landed at `596a31b` | Config/theme/default/Safe Mode/label semantics now come from Config Core; move remaining product state/protocol/orchestration to Rust and retain only necessary HWND/D2D/DWrite seam |
+| `src/package/fcitx5_mldsa65_config.h` | KEEP (native ABI config) | Verify-only ML-DSA-65 configuration consumed by `rust/package-core/build.rs` to compile the audited native verifier; ships no private-key/sign API |
+| `src/ui/ui_main.cpp` | KEEP (HWND/D2D/DWrite renderer adapter) | Config/theme/default/Safe Mode/label semantics come from Config Core via `config_snapshot_ffi.h`; protocol decode is the Rust `protocol_ffi.h` codec; model/layout/presentation/hit-test/selection are the Rust candidate-core ABI; C++ retains only the native window/renderer and the self-test/demo harness required by the final mixed-binary `candidate-ui-*` CTest group |
 | `src/launcher/launcher_main.cpp`, `state_machine.h`, `state_store.h` | DELETED at `240496e` | Rust is the sole Launcher supervisor, command, state-store, process, IPC-server, and shipping executable owner |
 | `src/launcher/tray_icon.cpp`, `tray_icon.h`, `launcher_rust_abi.h` | DELETED at `240496e` | No default tray is required; the temporary tray and flat C++ ABI seams were removed |
 | `src/engine/mock_engine_main.cpp` | DELETED at `601a4d0` | Safe Rust fixture preserves the final mixed IPC/Launcher/TSF corpus and exact verified pipe-peer handshake |
 | `src/engine/presentation_publisher.cpp`, `presentation_publisher.h` | DELETED at `7d1aeaa` | Rust Engine owns validation, coalescing, exact peer transport, bounded I/O, retry/reconnect, stop, and destruction; only the opaque ABI RAII call site remains inside the approved Fcitx process adapter |
-| `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` | KEEP-CANDIDATE ABI (protocol DTO dependency removed) | These now marshal only transport bytes through the Rust protocol-core C ABI; reclassify as thin native IPC adapters or delete once no Rust-owned process consumer needs them |
-| `src/ipc/peer_verification.cpp`, `peer_verification.h` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary peer identity mechanics |
-| `src/platform/runtime_identity.*`, `pipe_security.*` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary Win32/C ABI mechanics |
-| `src/engine/fcitx_dispatcher.*`, `fcitx_runtime.*`, `key_event.*`, `windows_keyboard.cpp` | KEEP-CANDIDATE Fcitx | Retain only direct Fcitx event/object/key/addon adapter symbols |
-| `src/engine/fcitx_engine_main.cpp` | KEEP-CANDIDATE mixed | Retain Fcitx lifecycle/native pipe host; migrate product protocol/routing/policy |
-| `src/engine/engine_core_ffi.h` | KEEP-CANDIDATE ABI | Narrow Rust Engine declarations only |
+| `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` | KEEP (thin native IPC transport) | Marshal only pipe transport + peer verification against the Rust protocol-core / windows-common C ABI; frame validation and response scalars are Rust-owned |
+| `src/ipc/peer_verification.cpp`, `peer_verification.h` | KEEP (native peer-identity ABI) | All peer policy is delegated to Rust `fcitx5_windows_common_verify_pipe_*`; C++ retains only the narrow pipe-peer identity marshalling seam |
+| `src/platform/runtime_identity.*`, `pipe_security.*` | KEEP (native Win32/C ABI seam) | Identity/generation/executable-match and pipe-security policy live in Rust `fcitx5_windows_common_*`; C++ retains only the Win32/C marshalling seam |
+| `src/engine/fcitx_dispatcher.*`, `fcitx_runtime.*`, `key_event.*`, `windows_keyboard.cpp` | KEEP (direct Fcitx adapter) | Only direct `fcitx::Instance`/`InputContext`/`EventDispatcher`/key/addon object access, the Rust engine-core ledger/snapshot FFI, and the Rust protocol key DTO; product ledger/state/snapshot policy is Rust-owned. The snapshot-store blob marshalling helpers (`serializeSnapshot`/`deserializeSnapshot`) mirror the Rust `snapshot.rs` canonical format, which Rust `snapshot_store_put` decodes/validates fail-closed on every store |
+| `src/engine/fcitx_engine_main.cpp` | KEEP (native process host) | Windows pipe host that starts the Fcitx adapter, routes decoded Rust-protocol requests, and owns no product protocol/routing policy beyond the native host/pipe loop |
+| `src/engine/engine_core_ffi.h` | KEEP (ABI declarations) | Flat declarations of the Rust engine-core C ABI only; no implementation |
 | `src/pch/fcitx_windows_pch.h` | DELETED at `23fb50e` | Obsolete project PCH option/header removed; remaining approved adapters compile directly |
 
 Baseline counts: 41 project-owned production `.cpp/.h`; 30 project-owned test/support `.cpp/.h`.
@@ -46,7 +47,8 @@ publisher files were deleted, x64/x86 each passed 141 Rust tests, and the GNU/na
 `fcitx5-engine.exe` target built successfully. At `240496e`, the Rust Launcher became the shipping
 x64/x86 Debug and Release executable, kept an always-available next named-pipe listener, passed the
 final mixed lifecycle/crash-to-Safe-Mode E2E tests, and deleted all six remaining Launcher C++/header
-files. These facts do not complete the other still-`MIGRATE` rows.
+files. These were the final Launcher rows; the still-`MIGRATE` rows at that point (Candidate,
+Config/package/Control, protocol/IPC) were closed by the later commits recorded above.
 
 After `601a4d0` and `955137e`, the C++ mock Engine fixture and 2,143-line C++ Control process are
 deleted. Rust Control and package lifecycle share one signed `repository/index.json` /
@@ -59,20 +61,19 @@ At `596a31b`, Candidate stopped consuming the C++ Config model/parser for visual
 now resolves Current/LKG/default recovery, selected local theme light/dark layers, Safe Mode,
 validated colors/fonts, and custom label sequences through one narrow snapshot ABI. The Rust
 Control/package E2E owns signed repository, package install/update/repair/remove, and theme
-lifecycle behavior and is registered as `rust-control-package-lifecycle` on x64/x86. This does not
-delete the old C++ Config/package bridges while other consumers and retained mixed tests still use
-them. At `2788831`, the remaining consumers moved to Rust public contracts, both bridges and their
-C++-authoritative tests were deleted, and the retained final Candidate mixed E2E applies typed TOML
-through the public Rust Control/Config transaction. Rust Windows-common restores the required live
-Candidate notification behind one named low-level Win32 exception while the Rust Control binary
-remains `forbid(unsafe_code)`.
+lifecycle behavior and is registered as `rust-control-package-lifecycle` on x64/x86. At `2788831`,
+the remaining consumers moved to Rust public contracts, both bridges and their C++-authoritative
+tests were deleted, and the retained final Candidate mixed E2E applies typed TOML through the
+public Rust Control/Config transaction. Rust Windows-common restores the required live Candidate
+notification behind one named low-level Win32 exception while the Rust Control binary remains
+`forbid(unsafe_code)`.
 
 At `23fb50e`, the obsolete project PCH and its CMake policy were deleted. The C++ version behavior
 test and C++ key-roundtrip benchmark were also deleted: Windows-common Rust tests retain version /
 channel / architecture authority, while a new Safe Rust measurement-core benchmark owns the final
 verified-pipe roundtrip measurement on x64/x86. The direct Fcitx key adapter now consumes the flat
-Rust protocol C ABI instead of the C++ protocol DTO. This narrows, but does not yet delete, the
-remaining C++ protocol/IPC bridge used by other consumers.
+Rust protocol C ABI instead of the C++ protocol DTO. The remaining C++ protocol/IPC bridge was
+fully deleted at `ac6d200` (see the closed row above); consumers now call `protocol_ffi.h` directly.
 
 At `9a63682`, the rejected legacy Rust Win32 Settings/QA host was deleted together with its
 environment-variable runtime selector and old control-ID automation. The sole interactive Config
@@ -82,8 +83,11 @@ obsolete duplicate CTest plus two unsafe-policy exceptions were removed. The bui
 invalidates an architecture cache whose effective C/C++ target flags no longer match its preset,
 preventing an x86 build from reusing x64 clang objects against x86 CRT libraries.
 
-Current facts: shipping TSF, Settings, Launcher, Control, and the mock Engine fixture are Rust-owned;
-Candidate semantics and resolved visual configuration are Rust-owned; Rust protocol, Engine,
-package, Windows-common, process-execution, and Config owners already exist. The remaining migration
-rows are Candidate adapter reduction, the protocol/IPC bridges, and residual platform/Engine symbol
-classifications. No current-HEAD release stage exists yet.
+Current facts: shipping TSF, Settings, Launcher, Control, the Candidate UI renderer host, and the
+mock Engine fixture are integrated into their shipping C++/Rust boundaries; Candidate semantics,
+resolved visual configuration, protocol codec/validation, Engine ledger/product state/snapshot,
+package, Windows-common, process-execution, and Config are Rust-owned. All remaining project-owned
+production C++ is classified above as an approved `KEEP` (direct Fcitx adapter, necessary native
+Win32/C ABI seam, ABI declaration header, or required renderer/process host) or `DELETED`. There are
+no open `MIGRATE`/`KEEP-CANDIDATE` rows. No current-HEAD release stage exists yet; real-host
+Accessibility/signing/UAC/Win7 evidence remains external and unclaimed.
