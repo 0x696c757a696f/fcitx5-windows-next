@@ -31,6 +31,7 @@ const UNSAFE_EXCEPTIONS: &[&str] = &[
     "rust/release-pqc-signer/src/main.rs",
     "rust/tsf-poc/src/lib.rs",
     "rust/tsf-support-core/src/lib.rs",
+    "rust/windows-common-core/src/candidate_select_client.rs",
     "rust/windows-common-core/src/lib.rs",
 ];
 const UNSAFE_ALLOW_ATTRIBUTE: &str = concat!("allow", "(unsafe_code)");

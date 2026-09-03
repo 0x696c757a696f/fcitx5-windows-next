@@ -1,5 +1,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// Rust-owned opaque candidate-select client used by the C++ Candidate
+// renderer host (078 Stage 1).
+mod candidate_select_client;
+pub use candidate_select_client::{
+    fcitx5_windows_common_candidate_select_client_create_utf16,
+    fcitx5_windows_common_candidate_select_client_destroy,
+    fcitx5_windows_common_candidate_select_client_select,
+};
+
 use std::env;
 use std::ffi::{c_void, OsStr, OsString};
 use std::fs;

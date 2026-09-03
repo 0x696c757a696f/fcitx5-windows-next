@@ -1415,6 +1415,7 @@ mod window_smoke {
             family: Some("Microsoft YaHei UI"),
             size,
             weight: 400,
+            italic: false,
             line_height: None,
         };
         let clip = wind_rect_from_win_rect(rect);

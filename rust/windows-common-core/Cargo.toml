@@ -8,3 +8,6 @@ publish = false
 [lib]
 path = "src/lib.rs"
 crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+fcitx5-protocol-core = { path = "../protocol-core" }

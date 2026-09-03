@@ -1,6 +1,6 @@
+#include "candidate_select_client.h"
 #include "config_snapshot_ffi.h"
 #include "peer_verification.h"
-#include "pipe_client.h"
 #include "pipe_security.h"
 #include "protocol_ffi.h"
 #include "runtime_identity.h"
@@ -1002,14 +1002,18 @@ std::filesystem::path executableDirectory() {
 int runCandidateSelectionTest(const fcitx::windows::ui::ParsedCommandLine& parsed) {
     fcitx::windows::platform::RuntimeIdentity identity;
     if (!fcitx::windows::platform::queryCurrentIdentity(identity)) return 66;
-    fcitx::windows::ipc::PipeClient client(
-        fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
-        fcitx::windows::ipc::PeerPolicy::exact(parsed.candidatePeer));
-    return client.selectCandidate(parsed.flags.targetProcessId, parsed.flags.engineEpoch,
-                                  parsed.flags.contextId, parsed.flags.compositionId,
-                                  parsed.flags.revision, parsed.flags.candidateId)
-               ? 0
-               : 67;
+    const auto pipeName = fcitx::windows::platform::makeLocalEndpointName(identity, L"engine");
+    void* client = fcitx5_windows_common_candidate_select_client_create_utf16(
+        reinterpret_cast<const std::uint16_t*>(pipeName.data()), pipeName.size(),
+        reinterpret_cast<const std::uint16_t*>(parsed.candidatePeer.data()),
+        parsed.candidatePeer.size());
+    if (!client) return 67;
+    const bool selected = fcitx5_windows_common_candidate_select_client_select(
+                              client, parsed.flags.targetProcessId, parsed.flags.engineEpoch,
+                              parsed.flags.contextId, parsed.flags.compositionId,
+                              parsed.flags.revision, parsed.flags.candidateId) != 0;
+    fcitx5_windows_common_candidate_select_client_destroy(client);
+    return selected ? 0 : 67;
 }
 
 std::filesystem::path localDataDirectory() {
@@ -1207,12 +1211,20 @@ class CandidateWindow final {
         : presentation_(fcitx::windows::ui::detail::fcitx5_candidate_presentation_create()) {}
 
     ~CandidateWindow() {
+        if (candidateClient_) {
+            fcitx5_windows_common_candidate_select_client_destroy(candidateClient_);
+            candidateClient_ = nullptr;
+        }
         fcitx::windows::ui::detail::fcitx5_candidate_presentation_destroy(presentation_);
     }
 
     bool create(HINSTANCE instance, bool visible, bool safeMode, bool interactionTest = false) {
         if (!presentation_)
             return false;
+        if (candidateClient_) {
+            fcitx5_windows_common_candidate_select_client_destroy(candidateClient_);
+            candidateClient_ = nullptr;
+        }
         safeMode_ = safeMode;
         interactionTest_ = interactionTest;
         if (!interactionTest_) {
@@ -1223,9 +1235,10 @@ class CandidateWindow final {
                 (std::filesystem::path(identity.executablePath).parent_path() /
                  L"fcitx5-engine.exe")
                     .wstring();
-            candidateClient_ = std::make_unique<fcitx::windows::ipc::PipeClient>(
-                fcitx::windows::platform::makeLocalEndpointName(identity, L"engine"),
-                fcitx::windows::ipc::PeerPolicy::exact(engine));
+            const auto pipeName = fcitx::windows::platform::makeLocalEndpointName(identity, L"engine");
+            candidateClient_ = fcitx5_windows_common_candidate_select_client_create_utf16(
+                reinterpret_cast<const std::uint16_t*>(pipeName.data()), pipeName.size(),
+                reinterpret_cast<const std::uint16_t*>(engine.data()), engine.size());
         }
         const auto visualConfig = loadVisualConfig(safeMode_);
         if (!visualConfig)
@@ -2495,9 +2508,9 @@ class CandidateWindow final {
             return true;
         }
         if (!candidateClient_ ||
-            !candidateClient_->selectCandidate(
-                intent.targetProcessId, intent.engineEpoch, intent.contextId,
-                intent.compositionId, intent.revision, intent.candidateId)) {
+            fcitx5_windows_common_candidate_select_client_select(
+                candidateClient_, intent.targetProcessId, intent.engineEpoch, intent.contextId,
+                intent.compositionId, intent.revision, intent.candidateId) == 0) {
             clickInFlight_ = false;
             KillTimer(window_, kClickGuardTimer);
             return false;
@@ -2744,7 +2757,7 @@ class CandidateWindow final {
     bool clickInFlight_{};
     bool interactionTest_{};
     std::optional<fcitx::windows::ui::CandidateSelectionIntent> capturedTestIntent_;
-    std::unique_ptr<fcitx::windows::ipc::PipeClient> candidateClient_;
+    void* candidateClient_{};
     void* presentation_{};
     std::wstring dwriteLocale_{defaultDwriteLocale()};
     std::string contentLocaleUtf8_;
