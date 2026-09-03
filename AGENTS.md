@@ -28,6 +28,11 @@ Security/compatibility terms in the specification describe defensive constraints
 
 Preserve context for reasoning and code, not bulk input.
 
+- Use the installed `pi-caveman` extension (`/caveman`) to cut output tokens. When enabled (or as a
+  standing style), write terse like a smart caveman: drop articles/filler/pleasantries/hedging,
+  fragments OK, keep technical terms and code blocks exact, use `[thing] [action] [reason]. [next]`.
+  Auto-clarity: expand for security warnings, irreversible-action confirmations, or confused users.
+
 - Search before reading. Use `rg`/symbol search to locate relevant definitions, references, specification sections, and evidence.
 - Never read `docs/tasks/status.md`, the full specification, completed-task archives, or other large documents wholesale. Read only relevant ranges.
 - For large source files, locate the relevant symbol or call site first and read only the necessary surrounding ranges.
