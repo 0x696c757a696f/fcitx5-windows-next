@@ -4,6 +4,7 @@
 //! `Element`，`.child(...)` 接受任意 `Element`，构建时递归插入 arena。
 
 pub mod caret;
+pub mod color_picker;
 pub mod containers;
 pub mod dyn_list;
 pub mod image;
@@ -41,6 +42,10 @@ use crate::text::TextEngine;
 use crate::theme::{Intent, IntentColors};
 
 pub use caret::{CaretOpts, CaretState, CaretStyle};
+// 只导出外部真正用得上的：`ColorPickerOpts` 是构造器参数、`Hsva` 是对外颜色模型、
+// `default_presets` 供在默认色之上增删、`ColorTrigger` 有公开的 `hex_text()` 供 downcast。
+// 面板内那四个 widget 的构造器要 crate 私有的 `PickerState`，外部拿到类型名也无事可做。
+pub use color_picker::{default_presets, ColorPickerOpts, ColorTrigger, Hsva};
 pub use image::{ImageContent, ImageView};
 pub use inputs::{CheckBox, CheckBoxSize, RadioButton, Slider, Switch, SwitchSize, TextInput};
 pub use link::Link;
@@ -49,12 +54,11 @@ pub use nav::{AccordionHeader, CollapsibleHeader, ExpandState, NavRow};
 pub use pager::page_count;
 pub use progress::ProgressBar;
 pub use reorder::{CommitMode, DragHandle, ReorderList};
-pub use rich::{Para, RichColor, RichDoc, RichText, SpanStyle};
+pub use rich::{Para, RichColor, RichDoc, RichText, SelectionScope, SpanStyle};
 pub use row_source::{RowRequest, RowSource, ROW_CACHE_SEGMENTS, ROW_CHUNK};
 pub use segmented::SegmentedControl;
 pub use select::{CheckMenu, CheckMenuItem, Dropdown, DropdownItem};
 pub use sortable_table::{SortKey, SortStyle};
-pub use stepper::Stepper;
 pub use text_content::TextContent;
 pub use virtual_list::TABLE_ROW_H;
 pub use window_buttons::{WindowButton, WindowButtonKind};
@@ -691,6 +695,8 @@ pub struct Element {
     padding: Insets,
     margin: Insets,
     align: Option<Align>,
+    /// 纵轴对齐覆盖（仅 stack），见 [`Element::align_xy`]。
+    align_v: Option<Align>,
     weight: Option<f32>,
     layout: Layout,
     style: Style,
@@ -718,6 +724,8 @@ pub struct Element {
     /// 注册为响应式节点：build 后自动调用 `Tree::register_reactive`，
     /// 框架在每次 layout 前向其 widget 调用 `on_update`。
     reactive: bool,
+    /// 锚定浮层的展开信号（见 [`Node::overlay`]）。由 [`Element::popup`] 设置。
+    overlay: Option<Signal<bool>>,
 }
 
 impl Element {
@@ -731,6 +739,7 @@ impl Element {
             padding: Insets::default(),
             margin: Insets::default(),
             align: None,
+            align_v: None,
             weight: None,
             layout,
             style: Style::default(),
@@ -752,6 +761,7 @@ impl Element {
             en_cond: None,
             tooltip: None,
             reactive: false,
+            overlay: None,
         }
     }
 
@@ -917,6 +927,11 @@ impl Element {
     }
 
     /// 点击/激活回调（按钮等交互控件）。
+    ///
+    /// 用在 [`Element::text_input`] 上时语义是**旁路通知**而非激活：输入框照常聚焦、
+    /// 定位光标、起拖选，回调只是让宿主知道「这个框被点了」——例如重新展开一个被
+    /// Escape 收起的补全/结果浮层。**仅左键**：右键（弹上下文菜单）、中键、
+    /// 拖多行滚动条都不触发。
     pub fn on_click(mut self, f: impl FnMut(&mut EventCtx) + 'static) -> Self {
         self.click = Some(Box::new(f));
         self
@@ -1137,6 +1152,27 @@ impl Element {
     #[track_caller]
     pub fn on_span_click(self, f: impl FnMut(&mut EventCtx, &str) + 'static) -> Self {
         self.config_rich(move |r| r.set_on_span_click(Box::new(f)))
+    }
+
+    /// 把这个富文本挂进一个[选择域](rich::SelectionScope)：域里所有控件共用一份选区，
+    /// 拖拽可以从一个控件一路延伸到另一个，Ctrl+C、Ctrl+A 与右键复制取的也是整个域的
+    /// 选区。
+    ///
+    /// 用在「一屏内容被拆成多个富文本」的地方——词典条目就是如此：词头一个控件、音标
+    /// 一个、每段释义一个（词头要与星标按钮并排，而富文本里放不进按钮）。不挂域的富文本
+    /// 各管各的选区，行为一字不变。
+    ///
+    /// ```no_run
+    /// use windui::prelude::*;
+    ///
+    /// let scope = SelectionScope::new();
+    /// let page = Element::col()
+    ///     .child(Element::rich(RichDoc::new().para("词头")).selection_scope(scope.clone()))
+    ///     .child(Element::rich(RichDoc::new().para("释义")).selection_scope(scope.clone()));
+    /// ```
+    #[track_caller]
+    pub fn selection_scope(self, scope: rich::SelectionScope) -> Self {
+        self.config_rich(move |r| r.set_selection_scope(scope))
     }
 
     /// 富文本内建右键「复制全部」菜单开关（默认开）。应用要挂自定义
@@ -1740,8 +1776,23 @@ impl Element {
     }
 
     /// 数字步进（绑定 `Signal<f64>`，带范围与步长；小数位由步长推断）。
+    ///
+    /// 中部是一个完整的文本输入框：可拖选、双击选词、Ctrl+A/C/X/V、右键菜单、输入法，
+    /// 与 [`Element::text_input`] 同源。方向键上/下步进，Enter 提交并全选，
+    /// Escape 撤销本轮编辑，失焦自动提交（越界值钳回范围）。
+    ///
+    /// 点 ± 只调值，**不会**把焦点拽给数值框（那会平白闪起光标，像是进了编辑态）；
+    /// 想编辑就直接点中间那格。相应地，方向键步进只在数值框已聚焦时可用。
+    ///
+    /// 返回的是一个**行容器**（`[−] 输入框 [+]`）。`.width(..)` / `.disabled(..)`
+    /// 一如既往作用在整体上；默认宽 120。
+    ///
+    /// ⚠ 宽度别低于 **90**：两侧按钮各占 30 是定值，剩下的才归中部输入框。给到 60 以下
+    /// 中部会算成 0 宽——数字看不见也点不中。这条只能靠调用方守：`min_width` 在
+    /// `Tree::measure` 里是"子节点测完之后再抬高容器自身"，抬出来的空间不会回流给子节点
+    /// 重新分配，拿它当护栏只会得到一个更宽但中间照样是空的框。
     pub fn stepper(value: Signal<f64>, min: f64, max: f64, step: f64) -> Self {
-        Self::base(Layout::None).widget(stepper::Stepper::new(value, min, max, step))
+        stepper::build(value, min, max, step)
     }
 
     /// 单选列表（绑定 `Signal<usize>` 选中索引 + 行标签）。可滚动；
@@ -2157,6 +2208,48 @@ impl Element {
         Self::tabs_frame(items, selected, content, containers::TabStyle::Pill)
     }
 
+    /// 逐项定制的标签页：`pages` 为 (标签项, 页面) 列表，`style` 选下划线或胶囊。
+    ///
+    /// 与 [`tabs`](Self::tabs) 系列的区别只在于**标签项由调用方构造**，因而能用上
+    /// [`TabItem`](containers::TabItem) 上那些三个便捷构造器不暴露的能力——目前是
+    /// [`enabled`](containers::TabItem::enabled)（逐项禁用）与
+    /// [`icon_content`](containers::TabItem::icon_content)（前置图标），两者可叠加。
+    /// 不需要这些就用 `tabs` / `tabs_icons` / `tabs_pill`，它们更短。
+    ///
+    /// ```no_run
+    /// # use windui::prelude::*;
+    /// # use windui::ui::containers::{TabItem, TabStyle};
+    /// # let (sel, has_examples) = (signal(0usize), signal(false));
+    /// # let (a, b) = (Element::col(), Element::col());
+    /// Element::tabs_items(
+    ///     sel,
+    ///     vec![
+    ///         (TabItem::new("释义".into()), a),
+    ///         // 本次查询没有例句：留在原位置灰，而不是把这一项摘掉
+    ///         (TabItem::new("例句".into()).enabled(has_examples), b),
+    ///     ],
+    ///     TabStyle::Underline,
+    /// );
+    /// ```
+    ///
+    /// 禁用项灰显、悬停不亮、点击与键盘都跳过它；方向键**跳过**而不是停在上面。
+    /// 选中项本身被禁用时不会自动改选——那是数据的问题，替调用方猜该跳到哪一项，
+    /// 猜错比不动更难查。
+    pub fn tabs_items(
+        selected: Signal<usize>,
+        pages: Vec<(containers::TabItem, Element)>,
+        style: containers::TabStyle,
+    ) -> Self {
+        let mut items = Vec::new();
+        let mut content = Element::stack().fill().weight(1.0);
+        for (i, (item, page)) in pages.into_iter().enumerate() {
+            items.push(item);
+            let sel2 = selected;
+            content = content.child(page.fill().visible_when(move || sel2.get() == i));
+        }
+        Self::tabs_frame(items, selected, content, style)
+    }
+
     /// `tabs` / `tabs_icons` / `tabs_pill` 的共同骨架：整条标签条是**一个**
     /// [`containers::TabBar`] 自绘节点（滑动选中滑块要跨标签的布局信息，拆成多节点就
     /// 拿不到），下方是内容区。条高与（下划线风格的）贯穿基线均由 TabBar 自己按主题决定，
@@ -2176,20 +2269,70 @@ impl Element {
     /// 模态对话框：全窗半透明遮罩 + 居中内容，遮罩吞掉指针事件实现模态。
     /// `show` 绑定显示标志。
     ///
+    /// **面板可拖动**：按住面板顶部约 52px 的区域（通常正是标题行）即可把对话框拖开，
+    /// 去看它盖住的内容。落在这条带里的按钮/输入框照常响应点击。拖动写的是
+    /// `Node::offset`（视觉位移、布局不变），故只对**当次**生效——关掉再弹出回到居中。
+    /// 拖动**不要求**面板整体留在窗口内，只保证拖动带还留得住、抓得回来，
+    /// 细节见 `containers::DIALOG_DRAG_BAND_H`。
+    ///
     /// 无边框窗口下遮罩对**窗口拖动区判定**透明（`ModalScrim::scrim_passthrough`）：
     /// 对话框弹出后自绘标题栏仍可拖窗，窗口按钮则照旧被模态屏蔽。因此 `content`
     /// 面板须自带背景（`bg_role(Role::Surface)` 等），否则面板空白区会穿透遮罩、
     /// 让其下的标题栏被误判成拖动区。
+    ///
+    /// 要在面板右上角加一个不抢视觉的小 ×，用 [`dialog_closable`](Self::dialog_closable)。
     pub fn dialog(show: Signal<bool>, content: Element) -> Self {
+        Self::dialog_frame(show, content, None)
+    }
+
+    /// 同 [`dialog`](Self::dialog)，额外在面板**右上角**叠一个小关闭按钮。
+    ///
+    /// 按钮只有一个淡色的 ×、无背景无边框，压在面板已有内容之上而不占布局位——这是
+    /// 刻意的：它是"随手关掉"的兜底入口，不该跟底栏的「取消」抢注意力，更不该把已经
+    /// 排好的标题行挤变形。也正因为它压在上面，**面板顶部右侧已有控件的对话框不要用它**，
+    /// 会盖住；那种情况用 [`dialog`](Self::dialog) 即可，ESC 与底栏按钮都还在。
+    ///
+    /// `on_close` 通常是 `move |_| show.set(false)`，与底栏「取消」做同一件事。
+    pub fn dialog_closable(
+        show: Signal<bool>,
+        content: Element,
+        on_close: impl FnMut(&mut EventCtx) + 'static,
+    ) -> Self {
+        Self::dialog_frame(show, content, Some(Box::new(on_close)))
+    }
+
+    /// `dialog` / `dialog_closable` 的共同骨架。
+    fn dialog_frame(show: Signal<bool>, content: Element, on_close: Option<ClickFn>) -> Self {
+        // 有关闭按钮时把面板与 × 并进一层 stack：遮罩必须**恒只有一个子**，拖动就是
+        // 挪它（见 `ModalScrim::panel`）。两者分作遮罩的两个子会拖散架。
+        let panel = match on_close {
+            None => content,
+            Some(click) => {
+                let th = crate::theme::current();
+                let close = Element::icon_button("\u{2715}")
+                    .size(24, 24)
+                    .font_size(11.0)
+                    .fg_role(crate::style::Role::TextMuted)
+                    // 右上角：stack 里一个 align 管两轴、End 只能是右下，故分轴给值。
+                    .align_xy(Align::End, Align::Start)
+                    .margin(th.metrics.spacing)
+                    .on_click(click);
+                Element::stack().child(content).child(close)
+            }
+        };
         // 遮罩自己带着显示信号，`build` 时登记进所属 `Tree`，使 ESC / WM_CLOSE 能优先
         // 关闭此对话框。登记推迟到 build 而非在此直接做，是为了让归属跟着树走——
         // 否则同线程多窗口下，先构建的那棵树会把后构建的对话框一并收走。
+        //
+        // `reactive()` 是拖动位移的复位钩子：每次 layout 前调 `ModalScrim::on_update`，
+        // 在那里识别"重新弹出"并把位移清零。
         Element::stack()
             .fill()
             .widget(containers::ModalScrim::new(show))
             .bg(Color::rgba(0, 0, 0, 120))
             .visible_when(move || show.get())
-            .child(content.align(Align::Center))
+            .reactive()
+            .child(panel.align(Align::Center))
     }
 
     /// 带标题栏 + 关闭按钮 + 底栏的对话框面板（在 `dialog` 遮罩之上居中）。
@@ -2232,6 +2375,201 @@ impl Element {
             .child(body)
             .child(footer);
         Element::dialog(show, panel)
+    }
+
+    /// **锚定浮层**：把 `content` 挂成本元素的浮层子节点，展开时贴在本元素正下方
+    /// 浮在整个窗口内容之上。`open` 为展开信号。
+    ///
+    /// 与 [`dialog`](Self::dialog) 的分工：对话框是**模态**的，铺满全窗、压暗背景、
+    /// 要求先处理完再继续；浮层是**非模态**的，只借用一小块地方，点别处即收起。
+    /// 下拉面板、取色盘、日期选择这类「选完就走」的临时界面属于后者。
+    ///
+    /// 核心为它做三件普通子节点做不到的事（见 [`Node::overlay`]）：脱离父容器布局流、
+    /// 在整棵树之后绘制且不受祖先裁剪、命中先于整棵树。此外还负责**轻量关闭**——
+    /// 在浮层与本元素之外按下、或按 ESC，都会把 `open` 置 false。
+    ///
+    /// 展开/收起由调用方自己驱动（通常是本元素的 `on_click` 里 `open.set(!open.get())`）；
+    /// 点在**本元素自身**上时核心不插手，正是为了不跟这个 toggle 打架。
+    ///
+    /// # 两条容易踩的约定
+    ///
+    /// - **`content` 的可见性由 `open` 独占**：本方法会覆盖 `content` 上已有的
+    ///   `visible_signal` / `visible`。浮层的「展开」与「可见」是同一件事，留两个开关
+    ///   只会制造出「登记为浮层却看不见」和「看得见却关不掉」两种半开状态。
+    /// - **`content` 要给出确定宽度**（`.width(px)`）。浮层脱离了父容器的布局流，
+    ///   量它时可用宽是**整个窗口**；写 `.width_match()` 会得到一块窗口那么宽的面板，
+    ///   而不是「跟锚点一样宽」。要跟随锚点宽度，请自行把锚点的宽度传进来。
+    ///
+    /// # 示例
+    /// ```
+    /// use windui::prelude::*;
+    /// let open = signal(false);
+    /// let panel = Element::col()
+    ///     .padding(12)
+    ///     .bg_role(Role::Surface)
+    ///     .child(Element::label("浮层内容"));
+    /// let el = Element::button("展开")
+    ///     .on_click(move |_| open.set(!open.get()))
+    ///     .popup(open, panel);
+    /// ```
+    pub fn popup(self, open: Signal<bool>, content: Element) -> Self {
+        // 可见性直接绑 `open`：浮层的「展开」与「可见」是同一件事，分成两个开关只会
+        // 制造出「登记为浮层却看不见」和「看得见却关不掉」两种半开状态。
+        let content = Element {
+            overlay: Some(open),
+            ..content
+        }
+        .visible_signal(open);
+        self.child(content)
+    }
+
+    /// **颜色选择器**：一枚当前色的色块，点开是浮在内容之上的取色面板。
+    ///
+    /// 面板含 SV 方块（饱和度 × 明度）、色相条、透明度条、HEX 输入框与一排预设色，
+    /// 全部双向绑定到 `value`。点面板外或按 ESC 收起（走 [`Element::popup`] 的锚定
+    /// 浮层，见 [`Node::overlay`](crate::core::Node::overlay)）。
+    ///
+    /// 要裁剪面板组成（去掉透明度、换预设色、只留一枚方块当触发器）用
+    /// [`color_picker_opts`](Self::color_picker_opts)。
+    ///
+    /// # 示例
+    /// ```
+    /// use windui::prelude::*;
+    /// let brand = signal(Color::hex(0x4C8BF5));
+    /// let form = Element::col().child(Element::field("主题色", Element::color_picker(brand)));
+    /// ```
+    pub fn color_picker(value: Signal<Color>) -> Self {
+        Self::color_picker_opts(value, color_picker::ColorPickerOpts::default())
+    }
+
+    /// 同 [`color_picker`](Self::color_picker)，可配置面板组成。
+    ///
+    /// # 示例
+    /// ```
+    /// use windui::prelude::*;
+    /// let pen = signal(Color::hex(0xE03131));
+    /// // 工具栏里的画笔颜色：只要一枚方色块，不要透明度也不要 HEX 框。
+    /// let btn = Element::color_picker_opts(
+    ///     pen,
+    ///     ColorPickerOpts::default()
+    ///         .alpha(false)
+    ///         .hex(false)
+    ///         .trigger_text(false),
+    /// );
+    /// ```
+    pub fn color_picker_opts(value: Signal<Color>, opts: color_picker::ColorPickerOpts) -> Self {
+        use color_picker::{
+            AlphaBar, ColorPickerOpts, ColorTrigger, Hsva, HueBar, PickerState, PresetSwatch,
+            SvArea, BAR_HEIGHT, SV_HEIGHT, SWATCH_SIZE,
+        };
+        let ColorPickerOpts {
+            alpha,
+            hex,
+            presets,
+            panel_width,
+            trigger_text,
+            open,
+        } = opts;
+
+        let th = crate::theme::current();
+        let open = open.unwrap_or_else(|| crate::signal::signal(false));
+        let init = value.get();
+        let st = PickerState {
+            value,
+            hsva: crate::signal::signal(Hsva::from_color(init)),
+            echo: crate::signal::signal(init),
+            with_alpha: alpha,
+        };
+        // HEX 文本与它的回声成对存在：少了回声就分不清"用户在打字"和"我自己刚写的"，
+        // 两边会互相覆盖（见 `ColorTrigger::on_update`）。
+        let (hex_text, hex_echo) = if hex {
+            let s = init.to_hex_string();
+            (
+                Some(crate::signal::signal(s.clone())),
+                Some(crate::signal::signal(s)),
+            )
+        } else {
+            (None, None)
+        };
+
+        // 收 Element 而不是 Box<dyn Widget>：后者要给 Element 开一个绕过
+        // `widget()` 那条 debug_assert 的公开入口，为省两行重复代码不值当。
+        let bar = |el: Element| el.width_match().height(BAR_HEIGHT);
+        let mut panel = Element::col()
+            .width(panel_width)
+            .padding(12)
+            .spacing(10)
+            .bg_role(crate::style::Role::Surface)
+            .border_role(crate::style::Role::Border, 1)
+            .corner(th.metrics.corner_lg)
+            // 面板必须自带背景与投影：它浮在任意内容之上，透明的话下面的文字会透出来。
+            .shadow(crate::style::Shadow::new(
+                0.0,
+                6.0,
+                18.0,
+                Color::rgba(0, 0, 0, 0x2E),
+            ))
+            .child(
+                Element::leaf()
+                    .widget(SvArea::new(st))
+                    .width_match()
+                    .height(SV_HEIGHT),
+            )
+            .child(bar(Element::leaf().widget(HueBar::new(st))));
+        if alpha {
+            panel = panel.child(bar(Element::leaf().widget(AlphaBar::new(st))));
+        }
+        if let Some(t) = hex_text {
+            panel = panel.child(
+                Element::row()
+                    .width_match()
+                    .cross(Align::Center)
+                    .spacing(8)
+                    .child(
+                        Element::label("HEX")
+                            .font_size(12.0)
+                            .fg_role(crate::style::Role::TextMuted),
+                    )
+                    // 提示串跟着 alpha 走：开着透明度时 `Color::to_hex_string`
+                    // 产出的是 9 字符的 #RRGGBBAA，提示写短一截会误导。
+                    .child(
+                        Element::text_input(t, if alpha { "#RRGGBBAA" } else { "#RRGGBB" })
+                            .weight(1.0),
+                    ),
+            );
+        }
+        if !presets.is_empty() {
+            // 每行放得下几个由面板宽算，不写死：改 panel_width 时这排跟着走，
+            // 不会突然溢出面板或在右边留一条空白。
+            let inner = panel_width - 24;
+            let per_row = ((inner + 6) / (SWATCH_SIZE + 6)).max(1) as usize;
+            let mut grid = Element::col().width_match().spacing(6);
+            for chunk in presets.chunks(per_row) {
+                let mut row = Element::row().spacing(6);
+                for &c in chunk {
+                    row = row.child(
+                        Element::leaf()
+                            .widget(PresetSwatch::new(st, c))
+                            .size(SWATCH_SIZE, SWATCH_SIZE),
+                    );
+                }
+                grid = grid.child(row);
+            }
+            panel = panel.child(grid);
+        }
+
+        Element::leaf()
+            .widget(ColorTrigger::new(
+                st,
+                open,
+                hex_text,
+                hex_echo,
+                trigger_text,
+            ))
+            // 三份状态（颜色 / HSVA / HEX 文本）的对齐挂在触发器的 on_update 上：
+            // 触发器常驻，而面板只在展开时才存在——同步逻辑不能跟着面板一起消失。
+            .reactive()
+            .popup(open, panel)
     }
 
     /// 弹性空白：主轴方向占据剩余空间，把其后的兄弟元素推到另一端（如底栏「左按钮 … 右按钮」）。
@@ -3554,6 +3892,17 @@ impl Element {
         self.padding = Insets::all(p);
         self
     }
+    /// 四边各自指定的内边距。
+    ///
+    /// [`padding`](Self::padding) 与 [`padding_xy`](Self::padding_xy) 覆盖了绝大多数
+    /// 情形，但有一类真实需求它们表达不了：**只在滚动条那一侧留出空间**。滚动条画在
+    /// 滚动容器的全矩形边缘，而内容排在 padding 内——想让正文不被滚动条压住，就得单独
+    /// 给右侧加一档，左侧照旧。用对称 padding 凑的话，左边会跟着白白缩进同样多。
+    pub fn padding_edges(mut self, p: Insets) -> Self {
+        self.padding = p;
+        self
+    }
+
     pub fn padding_xy(mut self, h: i32, v: i32) -> Self {
         self.padding = Insets::symmetric(h, v);
         self
@@ -3570,6 +3919,20 @@ impl Element {
     // ---- 对齐/布局参数 ----
     pub fn align(mut self, a: Align) -> Self {
         self.align = Some(a);
+        self
+    }
+    /// **两轴分别对齐**（仅 stack / `Layout::Frame` 内有效）：`h` 管横轴、`v` 管纵轴。
+    ///
+    /// [`align`](Self::align) 在 stack 里一个值同时管两轴，`Align::End` 因此只能是
+    /// 右**下**角。要把元素摆到右上（对话框角上的小关闭按钮）就得分开给值。
+    ///
+    /// ```
+    /// use windui::prelude::*;
+    /// let close = Element::icon_button("\u{2715}").align_xy(Align::End, Align::Start);
+    /// ```
+    pub fn align_xy(mut self, h: Align, v: Align) -> Self {
+        self.align = Some(h);
+        self.align_v = Some(v);
         self
     }
     /// 线性容器主轴子间距。
@@ -3720,6 +4083,17 @@ impl Element {
         self.style.font_family = Some(name.into());
         self
     }
+    /// 斜体。
+    ///
+    /// 与 `font_weight` 正交——字体里字重与倾斜是两个轴，故「粗斜体」是合法组合，
+    /// 不必也不该合成一个「字形变体」枚举。
+    ///
+    /// 同 `font_family`：字体没有斜体字面时 DirectWrite 会**合成**一个（几何倾斜），
+    /// 不报错。效果不如真斜体，但不会缺字。
+    pub fn italic(mut self) -> Self {
+        self.style.font_italic = true;
+        self
+    }
     /// 行高倍数（相对字号）。不设则用字体自带行距。
     ///
     /// 主要影响**多行文字**的行间距；单行文字只影响其占位高度。取倍数而非绝对像素，
@@ -3779,6 +4153,7 @@ impl Element {
             padding: self.padding,
             margin: self.margin,
             align: self.align,
+            align_v: self.align_v,
             layout: self.layout,
             widget,
             style: self.style,
@@ -3802,6 +4177,7 @@ impl Element {
             prev_visible: Cell::new(true),
             offset: Point::new(0, 0),
             raised: false,
+            overlay: self.overlay,
         };
         let id = tree.insert(node);
         if is_reactive {
@@ -5245,6 +5621,217 @@ mod tests {
         assert!(
             tree.drag_hit_at(Point::new(20, 20)),
             "面板左侧露出的标题栏区域仍可拖窗"
+        );
+    }
+
+    // ---- 对话框面板拖动 ----
+
+    /// 200×200 窗口里居中的 120×120 对话框面板（拖动带 y 40..92）。
+    /// `body` 是面板内容；面板自带背景，故命中在它这里落定、再冒泡到遮罩。
+    fn dialog_tree(show: Signal<bool>, body: Element) -> Tree {
+        layout(Element::dialog(
+            show,
+            Element::col()
+                .width(120)
+                .height(120)
+                .bg(Color::rgba(40, 40, 40, 255))
+                .child(body),
+        ))
+    }
+
+    /// 对话框面板节点：遮罩（根）的唯一子。
+    fn dialog_panel_id(tree: &Tree) -> crate::core::NodeId {
+        tree.get(tree.root.unwrap()).unwrap().children[0]
+    }
+
+    fn press(tree: &mut Tree, at: Point, hover: &mut Option<NodeId>, cap: &mut Option<NodeId>) {
+        tree.dispatch_pointer(
+            crate::event::PointerEvent::single(
+                PointerKind::Down,
+                at,
+                crate::event::MouseButton::Left,
+            ),
+            hover,
+            cap,
+        );
+    }
+
+    fn drag_to(tree: &mut Tree, at: Point, hover: &mut Option<NodeId>, cap: &mut Option<NodeId>) {
+        tree.dispatch_pointer(
+            crate::event::PointerEvent::single(
+                PointerKind::Move,
+                at,
+                crate::event::MouseButton::Left,
+            ),
+            hover,
+            cap,
+        );
+    }
+
+    #[test]
+    fn dialog_drag_band_moves_panel() {
+        let show = signal(true);
+        let mut tree = dialog_tree(show, Element::leaf().width(120).height(120));
+        let panel = dialog_panel_id(&tree);
+        let (mut hover, mut cap) = (None, None);
+
+        // 面板顶部带内按下（面板 y 40..160，带 40..92）。
+        press(&mut tree, Point::new(60, 50), &mut hover, &mut cap);
+        assert!(cap.is_some(), "在拖动带内按下应捕获指针");
+
+        drag_to(&mut tree, Point::new(80, 70), &mut hover, &mut cap);
+        assert_eq!(
+            tree.get(panel).unwrap().offset,
+            Point::new(20, 20),
+            "面板应精确跟随指针位移"
+        );
+
+        // 位移写在 offset 上，relayout 不该冲掉它（居中布局照旧）。
+        relayout(&mut tree);
+        assert_eq!(
+            tree.get(panel).unwrap().offset,
+            Point::new(20, 20),
+            "relayout 不应清掉拖动位移"
+        );
+    }
+
+    #[test]
+    fn dialog_body_press_does_not_drag() {
+        let show = signal(true);
+        let mut tree = dialog_tree(show, Element::leaf().width(120).height(120));
+        let panel = dialog_panel_id(&tree);
+        let (mut hover, mut cap) = (None, None);
+
+        // 面板正文区（y=150，远在拖动带 40..92 之外）。
+        press(&mut tree, Point::new(60, 150), &mut hover, &mut cap);
+        assert!(cap.is_none(), "拖动带之外按下不应起拖");
+        drag_to(&mut tree, Point::new(120, 190), &mut hover, &mut cap);
+        assert_eq!(
+            tree.get(panel).unwrap().offset,
+            Point::new(0, 0),
+            "拖动带之外的拖拽不应挪动面板"
+        );
+    }
+
+    #[test]
+    fn dialog_drag_band_yields_to_button() {
+        // 拖动带里的按钮照常响应点击：按下被按钮消费，冒泡不到遮罩。
+        // 这是白拿的——拖动挂在最外层遮罩上，靠的正是"谁先消费谁优先"。
+        let show = signal(true);
+        let mut tree = dialog_tree(
+            show,
+            Element::row()
+                .width(120)
+                .height(40)
+                .child(Element::button("确定").width(40).height(40)),
+        );
+        let panel = dialog_panel_id(&tree);
+        let (mut hover, mut cap) = (None, None);
+
+        // 按钮占面板左上 x 40..80、y 40..80，在拖动带内。
+        press(&mut tree, Point::new(60, 60), &mut hover, &mut cap);
+        drag_to(&mut tree, Point::new(100, 100), &mut hover, &mut cap);
+        assert_eq!(
+            tree.get(panel).unwrap().offset,
+            Point::new(0, 0),
+            "按在拖动带里的按钮上不应拖动面板"
+        );
+
+        // 同一条带里按钮右侧的空白处则可拖。
+        let (mut hover, mut cap) = (None, None);
+        press(&mut tree, Point::new(100, 60), &mut hover, &mut cap);
+        drag_to(&mut tree, Point::new(110, 70), &mut hover, &mut cap);
+        assert_eq!(
+            tree.get(panel).unwrap().offset,
+            Point::new(10, 10),
+            "带内非交互区仍应可拖"
+        );
+    }
+
+    #[test]
+    fn dialog_drag_keeps_band_reachable() {
+        // 不要求面板整体留在窗口内（大对话框正要能拖开），只保证拖动带还抓得回来。
+        let show = signal(true);
+        let mut tree = dialog_tree(show, Element::leaf().width(120).height(120));
+        let panel = dialog_panel_id(&tree);
+        let (mut hover, mut cap) = (None, None);
+
+        press(&mut tree, Point::new(60, 50), &mut hover, &mut cap);
+        drag_to(&mut tree, Point::new(900, 900), &mut hover, &mut cap);
+
+        let r = tree.abs_bounds(panel);
+        // 窗口 200×200，keep_w=96：面板左缘最远到 200-96=104。
+        assert_eq!(r.x, 104, "右拖应停在仍露出 96px 的位置");
+        // keep_h=32：面板顶最远到 200-32=168。
+        assert_eq!(r.y, 168, "下拖应停在拖动带仍露出 32px 的位置");
+
+        // 反向拖同样有界：向上不越过窗口顶，向左至少留 96px。
+        drag_to(&mut tree, Point::new(-900, -900), &mut hover, &mut cap);
+        let r = tree.abs_bounds(panel);
+        assert_eq!(r.x, 96 - 120, "左拖应停在仍露出 96px 的位置");
+        assert_eq!(r.y, 0, "上拖不应越过窗口顶");
+    }
+
+    #[test]
+    fn dialog_reopen_resets_drag_offset() {
+        // 拖动只对当次生效：这些节点是常驻树的，位移不会因隐藏自己清掉，
+        // 必须靠 ModalScrim 在 on_update 里识别"重新弹出"来复位。
+        let show = signal(true);
+        let mut tree = dialog_tree(show, Element::leaf().width(120).height(120));
+        let panel = dialog_panel_id(&tree);
+        let (mut hover, mut cap) = (None, None);
+
+        press(&mut tree, Point::new(60, 50), &mut hover, &mut cap);
+        drag_to(&mut tree, Point::new(80, 70), &mut hover, &mut cap);
+        tree.dispatch_pointer(
+            crate::event::PointerEvent::single(
+                PointerKind::Up,
+                Point::new(80, 70),
+                crate::event::MouseButton::Left,
+            ),
+            &mut hover,
+            &mut cap,
+        );
+        assert_ne!(tree.get(panel).unwrap().offset, Point::new(0, 0));
+
+        show.set(false);
+        relayout(&mut tree);
+        show.set(true);
+        relayout(&mut tree);
+        assert_eq!(
+            tree.get(panel).unwrap().offset,
+            Point::new(0, 0),
+            "重新弹出应回到居中"
+        );
+    }
+
+    #[test]
+    fn align_xy_places_child_at_top_right() {
+        // stack 里一个 align 管两轴（End = 右下），要"右上"必须分轴给值。
+        // 根节点由 layout_root 撑到窗口尺寸 200×200，故 20px 的子右缘落在 180。
+        let tree = layout(
+            Element::stack()
+                .fill()
+                .child(Element::leaf().width(20).height(20).align(Align::End))
+                .child(
+                    Element::leaf()
+                        .width(20)
+                        .height(20)
+                        .align_xy(Align::End, Align::Start),
+                ),
+        );
+        let kids = tree.get(tree.root.unwrap()).unwrap().children.clone();
+        let bottom_right = tree.get(kids[0]).unwrap().bounds;
+        let top_right = tree.get(kids[1]).unwrap().bounds;
+        assert_eq!(
+            (bottom_right.x, bottom_right.y),
+            (180, 180),
+            "align(End)=右下"
+        );
+        assert_eq!(
+            (top_right.x, top_right.y),
+            (180, 0),
+            "align_xy(End,Start)=右上"
         );
     }
 

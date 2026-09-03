@@ -246,23 +246,156 @@ impl Widget for ScrollWidget {
     }
 }
 
-/// 模态遮罩 widget：吞掉所有指针事件，阻止穿透到下层（命中链先于其下内容）。
+/// 对话框可拖动的顶部带高（逻辑 px）：面板顶端起这么高的区域按下即开始拖动。
+///
+/// 取 52 是按设置页对话框的标题行实测（18px 标题 + 上下内边距）。落在带里的按钮、
+/// 输入框照常响应点击——拖动挂在**遮罩**上，只有冒泡到最外层的按下才轮得到它，被子
+/// 控件消费掉的根本到不了（见 `Tree::dispatch_pointer` 的祖先链冒泡）。这与
+/// `Node::window_drag` 的"落在子交互控件上不拖窗"是同一套裁决，无需另写。
+const DIALOG_DRAG_BAND_H: i32 = 52;
+
+/// 拖动后至少要留在窗口内的**拖动带**尺寸（逻辑 px）。
+///
+/// 对话框**不要求**整体留在窗口内：大对话框正是要能拖开去看它盖住的内容，硬钳在窗口
+/// 内等于把拖动这件事作废。只堵一种情况——拖动带整条出界，那时既抓不回来也拖不动，
+/// 只能 ESC 关掉重开。
+const DIALOG_DRAG_KEEP_W: i32 = 96;
+const DIALOG_DRAG_KEEP_H: i32 = 32;
+
+/// 模态遮罩 widget：吞掉所有指针事件，阻止穿透到下层（命中链先于其下内容），
+/// 并承载对话框面板的拖动（见 [`DIALOG_DRAG_BAND_H`]）。
 pub struct ModalScrim {
     /// 本遮罩的显示信号。持有它是为了让 `build` 能把遮罩登记进 `Tree::modals`，
-    /// 供 ESC / 窗口关闭优先关掉最顶层对话框。
+    /// 供 ESC / 窗口关闭优先关掉最顶层对话框；拖动侧还靠它识别"这次是重新弹出"。
     show: Signal<bool>,
+    /// 上一帧的显示态。`false → true` 的翻转即"重新弹出"，届时位移归零——
+    /// 拖动只对当次生效。
+    ///
+    /// 必须自己记：对话框节点是**常驻树**的（显隐由 `vis_cond` 控制，节点不销毁），
+    /// 位移写在 `Node::offset` 上不会因隐藏而清掉。`Widget::reset_interaction` 虽然
+    /// 也在显隐翻转时被调用，但签名里没有 `EventCtx`、够不着树，改不了别人的 offset。
+    was_shown: bool,
+    /// 拖动中的状态：`(按下时的指针绝对位置, 按下时面板的 offset)`。
+    ///
+    /// 记按下时的基准而非逐帧累加增量：累加会把每帧的钳制结果当成下一帧的起点，指针
+    /// 越界回来后面板跟不上，表现为"贴边后手感黏住"。
+    drag: Option<(Point, Point)>,
 }
 
 impl ModalScrim {
     pub fn new(show: Signal<bool>) -> Self {
-        Self { show }
+        Self {
+            show,
+            was_shown: false,
+            drag: None,
+        }
+    }
+
+    /// 被拖动的面板节点：遮罩恒只有一个子（由 `Element::dialog` 保证），即对话框面板
+    /// （带关闭按钮时是包着面板与 × 的那层，两者一起走）。
+    fn panel(ctx: &mut EventCtx) -> Option<crate::core::NodeId> {
+        let id = ctx.id();
+        ctx.tree_mut().get(id)?.children.first().copied()
+    }
+
+    /// 读面板当前的绘制偏移。
+    fn panel_offset(ctx: &mut EventCtx, panel: crate::core::NodeId) -> Point {
+        ctx.tree_mut()
+            .get(panel)
+            .map(|n| n.offset)
+            .unwrap_or(Point::new(0, 0))
+    }
+
+    /// 按下：落在面板顶部拖动带内才起拖。
+    fn begin_drag(&mut self, ctx: &mut EventCtx, pos: Point) {
+        let Some(panel) = Self::panel(ctx) else {
+            return;
+        };
+        let r = ctx.tree_mut().abs_bounds(panel);
+        let band_h = DIALOG_DRAG_BAND_H.min(r.h);
+        let in_band = pos.x >= r.x && pos.x < r.x + r.w && pos.y >= r.y && pos.y < r.y + band_h;
+        if !in_band {
+            return;
+        }
+        self.drag = Some((pos, Self::panel_offset(ctx, panel)));
+        ctx.capture();
+    }
+
+    /// 拖动中：写 `Node::offset`（视觉位移，布局不变），故居中排布原样保留、
+    /// 任何一次 relayout 都不会把位置冲掉。
+    fn update_drag(&mut self, ctx: &mut EventCtx, pos: Point) {
+        let Some((start, base)) = self.drag else {
+            return;
+        };
+        let Some(panel) = Self::panel(ctx) else {
+            return;
+        };
+        let want = Point::new(base.x + pos.x - start.x, base.y + pos.y - start.y);
+        let off = Self::clamp_offset(ctx, panel, want);
+        if ctx.set_node_offset(panel, off) {
+            // 面板整体挪位，旧位置也要擦干净——脏区不止自身矩形，只能整窗重绘。
+            ctx.mark_dirty_all();
+        }
+    }
+
+    /// 抬起：结束拖动。位移留在节点上，直到下次重新弹出才归零（见 `was_shown`）。
+    fn end_drag(&mut self, ctx: &mut EventCtx) {
+        if self.drag.take().is_some() {
+            ctx.release_capture();
+        }
+    }
+
+    /// 把想要的位移收进"拖动带至少还留一角在窗口内"的范围。
+    fn clamp_offset(ctx: &mut EventCtx, panel: crate::core::NodeId, want: Point) -> Point {
+        // 遮罩铺满整窗，自身矩形即窗口客户区。
+        let win = ctx.bounds();
+        let cur = ctx.tree_mut().abs_bounds(panel);
+        let cur_off = Self::panel_offset(ctx, panel);
+        // abs_bounds 已含 offset，先减回去得到**布局位**——钳制的基准是它，
+        // 拿含 offset 的位置去算会把上一次的位移重复计入。
+        let base_x = cur.x - cur_off.x;
+        let base_y = cur.y - cur_off.y;
+        let keep_w = DIALOG_DRAG_KEEP_W.min(cur.w);
+        let keep_h = DIALOG_DRAG_KEEP_H.min(cur.h);
+        // 横向：面板左右任一端都要与窗口至少交出 keep_w。
+        let min_x = win.x + keep_w - cur.w - base_x;
+        let max_x = win.x + win.w - keep_w - base_x;
+        // 纵向：向上不越过窗口顶（越过拖动带就没了），向下至少留 keep_h。
+        let min_y = win.y - base_y;
+        let max_y = win.y + win.h - keep_h - base_y;
+        // 窗口比对话框还小时上下界可能倒挂，clamp 会 panic，故先摆正。
+        Point::new(
+            want.x.clamp(min_x.min(max_x), min_x.max(max_x)),
+            want.y.clamp(min_y.min(max_y), min_y.max(max_y)),
+        )
     }
 }
 
 impl Widget for ModalScrim {
-    fn on_event(&mut self, _ctx: &mut EventCtx, ev: &Event) -> bool {
+    fn on_event(&mut self, ctx: &mut EventCtx, ev: &Event) -> bool {
         // 仅吞指针事件；键盘仍可冒泡（如 Escape 关闭由宿主处理）。
-        matches!(ev, Event::Pointer(_))
+        let Event::Pointer(p) = ev else {
+            return false;
+        };
+        match p.kind {
+            PointerKind::Down => self.begin_drag(ctx, p.pos),
+            PointerKind::Move => self.update_drag(ctx, p.pos),
+            PointerKind::Up => self.end_drag(ctx),
+            _ => {}
+        }
+        true
+    }
+
+    fn on_update(&mut self, ctx: &mut EventCtx) {
+        let shown = self.show.get();
+        if shown && !self.was_shown {
+            // 每次重新弹出都回到居中：拖动只对当次生效。
+            if let Some(panel) = Self::panel(ctx) {
+                ctx.set_node_offset(panel, Point::new(0, 0));
+            }
+            self.drag = None;
+        }
+        self.was_shown = shown;
     }
 
     fn is_modal(&self) -> bool {
@@ -642,15 +775,42 @@ impl Widget for IconButton {
     }
 }
 
-/// 标签条中的一项：标题 + 可选前置图标。
+/// 标签条中的一项：标题 + 可选前置图标 + 是否可选。
 pub struct TabItem {
     pub label: String,
     pub icon: Option<ImageContent>,
+    /// 可选与否，`None` = 恒可选。`false` 时文字走 `text_disabled`、悬停不亮、
+    /// 点击与键盘都跳过它。
+    ///
+    /// **禁用不是隐藏**：一个「本次没内容」的标签留在原位、置灰，位置就是稳定的，
+    /// 用户「总是点第三个」这条肌肉记忆才成立；把它摘掉则每次结果一变，后面所有
+    /// 标签就整体左移一格，看着像换了一条标签条。
+    ///
+    /// **收信号而非布尔**（与 [`TrayMenuItem::enabled`](crate::platform::TrayMenuItem::enabled)
+    /// 一致）：禁用与否往往随数据变，而标签条本身不变。收布尔就意味着「哪一项能点」
+    /// 一改就得重建整条——重建会丢掉悬停态、并让选中滑块从头落定而不是滑过去。
+    pub enabled: Option<Signal<bool>>,
 }
 
 impl TabItem {
     pub fn new(label: String) -> Self {
-        Self { label, icon: None }
+        Self {
+            label,
+            icon: None,
+            enabled: None,
+        }
+    }
+
+    /// 绑定可用态：`flag` 为 false 时该项灰显且不可选（每帧现读）。
+    /// 永久禁用可传 `signal(false)`。
+    pub fn enabled(mut self, flag: Signal<bool>) -> Self {
+        self.enabled = Some(flag);
+        self
+    }
+
+    /// 此刻是否可选。未绑信号即恒可选。
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.is_none_or(|f| f.get())
     }
     /// 前置图标（图片内容）。
     pub fn icon_content(mut self, icon: ImageContent) -> Self {
@@ -802,16 +962,25 @@ impl TabBar {
     }
 
     /// 按**相对条左缘**的 x 命中某标签（绝对坐标须先减去 `bounds.x`）。
+    /// 落在哪一项上。**禁用项返回 `None`**——悬停高亮与点击选中都走这一个入口，
+    /// 在这里挡住，两条路径就不会各判一次然后漏掉其中一条。
     fn index_at(&self, rel_x: i32) -> Option<usize> {
-        self.layout
+        let i = self
+            .layout
             .borrow()
             .iter()
-            .position(|(ix, iw)| (*ix..*ix + *iw).contains(&rel_x))
+            .position(|(ix, iw)| (*ix..*ix + *iw).contains(&rel_x))?;
+        self.items.get(i).filter(|it| it.is_enabled()).map(|_| i)
     }
 
     /// 切到第 `i` 项。切页改变 `visible_when` 绑定的内容面板显隐（非局部 + 布局
     /// 变化）→ 重排整窗。
     fn select(&mut self, i: usize, ctx: &mut EventCtx) {
+        // 禁用项不可选。`index_at` 已经挡过鼠标那条路，这里管的是键盘那条——两条
+        // 路径最终都收在这一句上，日后再添第三条入口也不会绕开它。
+        if !self.items.get(i).is_some_and(|it| it.is_enabled()) {
+            return;
+        }
         if i < self.items.len() && self.group.get() != i {
             self.group.set(i);
             ctx.mark_layout_dirty();
@@ -819,13 +988,22 @@ impl TabBar {
     }
 
     /// 键盘导航的目标项：Left/Right 循环、Home/End 跳首尾、Enter/Space 保持当前。
-    fn key_target(key: Key, cur: usize, n: usize) -> Option<usize> {
+    ///
+    /// **禁用项要跳过而不是停在上面**：Left/Right 一路找下一个可选项（最多绕一圈），
+    /// Home/End 从两端往里找第一个可选的。否则按一下方向键「没反应」，用户分不清是
+    /// 键坏了还是标签坏了。全都禁用时返回 `None`，什么也不做。
+    fn key_target(&self, key: Key, cur: usize, n: usize) -> Option<usize> {
+        let step = |dir: isize| {
+            (1..=n as isize)
+                .map(|k| ((cur as isize + dir * k).rem_euclid(n as isize)) as usize)
+                .find(|&i| self.items[i].is_enabled())
+        };
         match key {
-            Key::Left => Some((cur + n - 1) % n),
-            Key::Right => Some((cur + 1) % n),
-            Key::Home => Some(0),
-            Key::End => Some(n - 1),
-            Key::Enter | Key::Space => Some(cur),
+            Key::Left => step(-1),
+            Key::Right => step(1),
+            Key::Home => (0..n).find(|&i| self.items[i].is_enabled()),
+            Key::End => (0..n).rev().find(|&i| self.items[i].is_enabled()),
+            Key::Enter | Key::Space => Some(cur).filter(|&i| self.items[i].is_enabled()),
             _ => None,
         }
     }
@@ -926,6 +1104,10 @@ impl Widget for TabBar {
 
             // 文字色：禁用 > 选中 > 悬停 > 普通，三态补间；首帧落定。
             // 选中色随风格：下划线用 accent 本色，胶囊用 on_accent（压在实底胶囊上要反色）。
+            //
+            // 整条禁用与**单项**禁用在这里合流：两者对这一项的效果完全一样，故只取
+            // 一个布尔往下走，不必在每处判断里写两遍。
+            let enabled = enabled && self.items[i].is_enabled();
             let sel_color = if pill { pal.on_accent } else { tab.accent(pal) };
             let target_color = if !enabled {
                 pal.text_disabled
@@ -1038,7 +1220,7 @@ impl Widget for TabBar {
             },
             Event::Key(k) if k.pressed && !self.items.is_empty() => {
                 let n = self.items.len();
-                match Self::key_target(k.key, self.selected(), n) {
+                match self.key_target(k.key, self.selected(), n) {
                     Some(i) => {
                         self.select(i, ctx);
                         true
@@ -1210,29 +1392,92 @@ mod tests {
         assert!(total <= natural - 60, "收缩后应放得进可用宽，实得 {total}");
     }
 
+    /// 造一条标签条，`off` 里的下标为禁用项。
+    fn bar_with_disabled(labels: &[&str], off: &[usize], g: Signal<usize>) -> TabBar {
+        TabBar::new(
+            labels
+                .iter()
+                .enumerate()
+                .map(|(i, s)| TabItem::new((*s).into()).enabled(signal(!off.contains(&i))))
+                .collect(),
+            g,
+        )
+    }
+
     #[test]
     fn tab_arrow_keys_cycle_selection() {
+        let b = bar(&["A", "B", "C"], signal(0));
         let n = 3;
-        assert_eq!(TabBar::key_target(Key::Right, 0, n), Some(1));
+        assert_eq!(b.key_target(Key::Right, 0, n), Some(1));
+        assert_eq!(b.key_target(Key::Right, 2, n), Some(0), "末项右移回首项");
+        assert_eq!(b.key_target(Key::Left, 0, n), Some(2), "首项左移到末项");
+        assert_eq!(b.key_target(Key::Left, 2, n), Some(1));
+        assert_eq!(b.key_target(Key::Home, 2, n), Some(0));
+        assert_eq!(b.key_target(Key::End, 0, n), Some(2));
+        assert_eq!(b.key_target(Key::Enter, 1, n), Some(1));
+        assert_eq!(b.key_target(Key::Up, 1, n), None, "上下键不归标签条处理");
+    }
+
+    /// 方向键**跳过**禁用项，而不是停在上面。
+    ///
+    /// 停在上面时按键看着「没反应」，用户分不清是键坏了还是标签坏了。
+    #[test]
+    fn tab_arrow_keys_skip_disabled() {
+        let b = bar_with_disabled(&["A", "B", "C", "D"], &[1, 2], signal(0));
+        let n = 4;
         assert_eq!(
-            TabBar::key_target(Key::Right, 2, n),
-            Some(0),
-            "末项右移回首项"
+            b.key_target(Key::Right, 0, n),
+            Some(3),
+            "跨过中间两个禁用项"
         );
-        assert_eq!(
-            TabBar::key_target(Key::Left, 0, n),
-            Some(2),
-            "首项左移到末项"
-        );
-        assert_eq!(TabBar::key_target(Key::Left, 2, n), Some(1));
-        assert_eq!(TabBar::key_target(Key::Home, 2, n), Some(0));
-        assert_eq!(TabBar::key_target(Key::End, 0, n), Some(2));
-        assert_eq!(TabBar::key_target(Key::Enter, 1, n), Some(1));
-        assert_eq!(
-            TabBar::key_target(Key::Up, 1, n),
-            None,
-            "上下键不归标签条处理"
-        );
+        assert_eq!(b.key_target(Key::Left, 3, n), Some(0));
+        assert_eq!(b.key_target(Key::Home, 3, n), Some(0));
+        assert_eq!(b.key_target(Key::End, 0, n), Some(3), "末项禁用则再往里找");
+    }
+
+    /// 首尾也禁用时，Home/End 要落到里面第一个可选项上。
+    #[test]
+    fn tab_home_end_land_on_enabled() {
+        let b = bar_with_disabled(&["A", "B", "C", "D"], &[0, 3], signal(1));
+        assert_eq!(b.key_target(Key::Home, 1, 4), Some(1));
+        assert_eq!(b.key_target(Key::End, 1, 4), Some(2));
+    }
+
+    /// 全部禁用：什么也不做，而不是死循环或恐慌。
+    #[test]
+    fn tab_all_disabled_goes_nowhere() {
+        let b = bar_with_disabled(&["A", "B"], &[0, 1], signal(0));
+        assert_eq!(b.key_target(Key::Right, 0, 2), None);
+        assert_eq!(b.key_target(Key::Home, 0, 2), None);
+        assert_eq!(b.key_target(Key::Enter, 0, 2), None);
+    }
+
+    /// 禁用项不参与命中测试——悬停与点击共用 `index_at`，在那里挡住即两条路都挡住。
+    #[test]
+    fn tab_disabled_item_is_not_hit() {
+        let b = bar_with_disabled(&["A", "B"], &[1], signal(0));
+        // 直接摆一份布局，免得依赖真实文字测量。
+        b.layout.replace(vec![(0, 50), (50, 50)]);
+        assert_eq!(b.index_at(10), Some(0));
+        assert_eq!(b.index_at(60), None, "落在禁用项上不该命中");
+        assert_eq!(b.index_at(999), None, "落在条外仍是 None");
+    }
+
+    /// `TabItem` 默认可选——不写 `.enabled(..)` 的既有调用方行为不变。
+    #[test]
+    fn tab_item_enabled_by_default() {
+        assert!(TabItem::new("A".into()).is_enabled());
+        assert!(!TabItem::new("A".into()).enabled(signal(false)).is_enabled());
+    }
+
+    /// 绑了信号之后，改信号即改可用态——不必重建标签条。这正是收信号而非布尔的理由。
+    #[test]
+    fn tab_enabled_follows_signal() {
+        let flag = signal(true);
+        let it = TabItem::new("A".into()).enabled(flag);
+        assert!(it.is_enabled());
+        flag.set(false);
+        assert!(!it.is_enabled());
     }
 
     #[test]

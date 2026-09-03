@@ -29,12 +29,14 @@ pub mod ui;
 pub mod prelude {
     pub use crate::app::{App, HotkeyHandle, ThemeHandle, Window};
     pub use crate::event::{
-        window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, Key, MenuItem, Mods, ToastKind,
-        WindowState,
+        window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, Key, MenuItem, Mods, Preedit,
+        ToastKind, WindowState,
     };
     pub use crate::geometry::{Color, Insets, Point, Rect, Size};
     pub use crate::icon::{brand_icon, brand_icon_at, IconSource, WindowIcon};
-    pub use crate::platform::{PickDialog, Renderer, Tray, TrayCtx, TrayMenuItem};
+    pub use crate::platform::{
+        PickDialog, Renderer, Tray, TrayCtx, TrayHandle, TrayMenuItem, TrayOp,
+    };
     pub use crate::render::image::{Fit, Image, ImageError, VisualState};
     pub use crate::render::{Gradient, PixmapTarget, RenderTarget};
     pub use crate::signal::{signal, Signal};
@@ -42,10 +44,14 @@ pub mod prelude {
     pub use crate::style::{Brush, Edges, Role, Shadow, Style};
     pub use crate::sync::Sender;
     pub use crate::theme::{Intent, Len, TableTheme, Theme};
+    // `TabItem` / `TabStyle` 是 `Element::tabs_items` 的参数类型，`ColorPickerOpts` 是
+    // `Element::color_picker_opts` 的：构造器在 prelude 里，参数类型却要写一行深路径
+    // import，那条路就没人走。`Hsva` 则是取色器对外的颜色模型，业务侧做色相运算时用得上。
+    pub use crate::ui::containers::{TabItem, TabStyle};
     pub use crate::ui::{
-        CaretStyle, CheckMenuItem, CommitMode, DropdownItem, Element, ImageContent, ImageView,
-        Link, Para, RichColor, RichDoc, RowRequest, RowSource, SortKey, SortOrder, SortStyle,
-        SpanStyle, TextContent, Truncate, WindowButton, WindowButtonKind, ROW_CACHE_SEGMENTS,
-        ROW_CHUNK, TABLE_ROW_H,
+        default_presets, CaretStyle, CheckMenuItem, ColorPickerOpts, CommitMode, DropdownItem,
+        Element, Hsva, ImageContent, ImageView, Link, Para, RichColor, RichDoc, RowRequest,
+        RowSource, SelectionScope, SortKey, SortOrder, SortStyle, SpanStyle, TextContent, Truncate,
+        WindowButton, WindowButtonKind, ROW_CACHE_SEGMENTS, ROW_CHUNK, TABLE_ROW_H,
     };
 }

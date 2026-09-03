@@ -209,7 +209,28 @@ pub trait Widget {
     }
     /// 输入法组合态变化（拼音等未上屏文字开始/结束合成）时由框架通知焦点节点。
     /// 文本控件借此在组合期间暂不绘制自绘光标（系统组合浮层自带光标）。默认无操作。
+    ///
+    /// **仅 win32 这条路会调**——那边系统 IME 自己画合成串。需自绘的平台走
+    /// [`Self::set_preedit`]。
     fn set_composing(&mut self, _composing: bool) {}
+
+    /// 输入法合成串变化时由框架通知焦点节点。文本控件借此把未提交的合成串
+    /// 内联显示出来（见 `TextInput`）。默认无操作。
+    ///
+    /// 空 `text` 表示合成结束，控件应清掉合成串并恢复正常光标。
+    fn set_preedit(&mut self, _pe: &crate::event::Preedit) {}
+
+    /// 本控件当前选区（**字符**索引）。无选区的文本控件返回光标处空范围，
+    /// 非文本控件返回 `None`。供输入法查询上下文。
+    fn selection_range(&self) -> Option<(usize, usize)> {
+        None
+    }
+
+    /// 本控件的已提交正文（不含未上屏合成串），供输入法读取上下文。
+    /// 非文本控件返回 `None`；密码框应返回 `None`（不把密码交给输入法）。
+    fn ime_text(&self) -> Option<String> {
+        None
+    }
     /// layout 前由框架向**已注册的响应式节点**调用（见 `Tree::register_reactive`）。
     /// 响应式控件在此检测绑定信号的版本变化，若有变化则通过 `ctx.tree_mut()` 重建子节点。
     /// 默认无操作；普通控件无需实现。
@@ -346,7 +367,17 @@ pub struct Node {
     pub padding: Insets,
     pub margin: Insets,
     /// 自身对齐覆盖：None=继承容器交叉轴对齐；Some(a)=显式覆盖。
+    ///
+    /// 在 `Layout::Frame`（stack）里它同时管两个轴——`Align::End` 就是右下角。要把
+    /// 子元素放到"右上"这类**两轴取值不同**的位置，再补 [`Node::align_v`]。
     pub align: Option<Align>,
+    /// **纵轴对齐覆盖**（仅 `Layout::Frame`）：`None` 时纵轴跟随 [`Node::align`]，
+    /// `Some(a)` 时纵轴单独取 `a`、`align` 只管横轴。
+    ///
+    /// 只为 Frame 而设：线性容器的主轴由排布本身决定、交叉轴才用 `align`，本就不存在
+    /// "两轴各要一个值"的问题。stack 则是唯一能把子元素摆到任意角的布局，而角落是
+    /// 两轴的组合——对话框右上角的小关闭按钮正是如此。
+    pub align_v: Option<Align>,
     pub layout: Layout,
     pub widget: Box<dyn Widget>,
     pub style: Style,
@@ -414,6 +445,22 @@ pub struct Node {
     /// **同级绘制顺序提升**：为 true 的子节点在其余兄弟之后绘制、命中时优先测试。
     /// 拖拽浮起的行用，否则会被排在它后面的兄弟行盖住。
     pub raised: bool,
+    /// **锚定浮层（portal）**：`Some(open)` 时本节点脱离父容器的布局流，改由 [`Tree`]
+    /// 在根级排布——锚在父节点正下方（下方放不下则上翻）、**绘制在整棵树之后**、
+    /// **命中先于整棵树**，且不受任何祖先 `clip_children` 裁剪。
+    ///
+    /// 与 [`Node::raised`] 的区别是作用域：`raised` 只在**同级兄弟**间提升绘制顺序，
+    /// 逃不出祖先的裁剪与绘制序；下拉面板必须浮在整个窗口内容之上，只能走本字段。
+    ///
+    /// 信号即「是否展开」：核心据它决定可见性，并在**浮层与锚点之外按下**或 ESC 时
+    /// 置 false（轻量关闭）。锚点自身的点击**不**触发关闭——那由触发器控件自己 toggle，
+    /// 否则会「先被核心关掉、再被控件打开」，点了等于没点。
+    ///
+    /// **只能经 [`Element::popup`](crate::ui::Element::popup) 设置。** 本字段只是一半
+    /// 真相：另一半是 `Tree::overlays` 那份登记表，而它**只在 [`Tree::insert`] 时按本
+    /// 字段登记**。事后直接给已建好的节点赋值，会得到一个既被排除出父容器布局流、
+    /// 又从不被排布/绘制/命中的幽灵节点——彻底消失，且没有任何提示。
+    pub overlay: Option<Signal<bool>>,
     /// 声明式初始焦点（`None`=不参与）。宿主在布局稳定后**一次性**兑现，见
     /// [`Autofocus`] 与 `UiHost::refresh_focus`。
     pub autofocus: Option<Autofocus>,
@@ -440,6 +487,13 @@ pub struct Tree {
     /// 丢弃整个 `EventOutcome`，其中的 toast 无处上交宿主；单独在此累积，由宿主在
     /// layout 后 `take_pending_toasts` 取走上屏（否则 `toast_sink` 等经信号触发的提示全被吞）。
     pending_toasts: Vec<ToastRequest>,
+    /// on_update 相位里控件请求的**焦点转移**暂存区。与 `pending_toasts` 同因同治：
+    /// 该相位丢弃整个 `EventOutcome`，`EventCtx::request_focus` 设的那一位也随之消失。
+    ///
+    /// 需要它的场景：一块列表整体占一个焦点位（roving tabindex），而点击是列表**行**
+    /// 自己消费的——行没法替父容器要焦点，只能由父容器在 on_update 里替自己要。没有
+    /// 这条通道，鼠标点完一行之后方向键就落不到列表上，键盘与鼠标接不起来。
+    pending_focus: Option<NodeId>,
     /// arrange 递归中当前节点父级的绝对左上角。
     ///
     /// `arrange` 全程使用相对父的坐标，但滚动条要判断"本容器是否贴着窗口右缘"必须知道
@@ -466,6 +520,12 @@ pub struct Tree {
     /// 挂在树上而非线程全局：同线程跑多个窗口时，全局栈会让在 A 窗口按下的 ESC 关掉
     /// B 窗口的对话框。归属到树，每个宿主只看得见自己那棵树上的遮罩。
     modals: Vec<Signal<bool>>,
+    /// 本树上所有锚定浮层节点（见 [`Node::overlay`]），按插入先序登记。
+    ///
+    /// 需要这份登记而不是每次遍历全树找 `overlay` 节点：绘制、命中、轻量关闭三条
+    /// 路径每帧/每次鼠标移动都要用它，全 arena 扫描会把浮层的成本摊到所有界面上，
+    /// 而绝大多数界面一个浮层也没有。**顺序即层叠序**：后登记者在上层。
+    overlays: Vec<NodeId>,
 }
 
 impl Default for Tree {
@@ -484,15 +544,22 @@ impl Tree {
             clipboard: None,
             reactive_nodes: Vec::new(),
             pending_toasts: Vec::new(),
+            pending_focus: None,
             arrange_origin: Point::new(0, 0),
             layout_size: Size::ZERO,
             modals: Vec::new(),
+            overlays: Vec::new(),
         }
     }
 
     /// 取走 on_update 相位累积的 toast 请求（宿主在 layout 后调用上屏），并清空暂存。
     pub fn take_pending_toasts(&mut self) -> Vec<ToastRequest> {
         std::mem::take(&mut self.pending_toasts)
+    }
+
+    /// 取走 on_update 相位攒下的焦点转移请求（见 `pending_focus`）。
+    pub fn take_pending_focus(&mut self) -> Option<NodeId> {
+        self.pending_focus.take()
     }
 
     /// 登记一个对话框遮罩的显示信号（`Element::build` 在插入遮罩节点时调用）。
@@ -523,6 +590,15 @@ impl Tree {
     // ---- arena ----
 
     pub fn insert(&mut self, node: Node) -> NodeId {
+        let is_overlay = node.overlay.is_some();
+        let id = self.insert_slot(node);
+        if is_overlay {
+            self.overlays.push(id);
+        }
+        id
+    }
+
+    fn insert_slot(&mut self, node: Node) -> NodeId {
         if let Some(idx) = self.free.pop() {
             let slot = &mut self.slots[idx as usize];
             slot.node = Some(node);
@@ -577,6 +653,9 @@ impl Tree {
                 self.free.push(id.index);
             }
         }
+        // 浮层登记随节点一起回收：槽位会被后来的节点复用，留着的话新节点会凭空
+        // 继承「我是浮层」的身份（代际校验只挡得住 `get`，挡不住这份 id 列表本身）。
+        self.overlays.retain(|o| *o != id);
     }
 
     /// 将节点注册为响应式：每次 `layout_root` 前收到 `Widget::on_update` 回调。
@@ -606,11 +685,17 @@ impl Tree {
         // 唯 toast 需上交宿主——on_update 相位不经 DispatchResult，若一并丢弃则 toast_sink
         // 等在此发的提示永不上屏，故先取出暂存（见 pending_toasts / take_pending_toasts）。
         let requested_toast = ctx.out.toast.take();
+        let requested_focus = ctx.out.focus.take();
         if let Some(n) = self.get_mut(id) {
             n.widget = widget;
         }
         if let Some(req) = requested_toast {
             self.pending_toasts.push(req);
+        }
+        // 后来者覆盖前者：同一轮里多个控件都要焦点时，只可能满足一个，取最后那个与
+        // 事件路径的语义一致（`EventOutcome::focus` 本身也是单值）。
+        if let Some(id) = requested_focus {
+            self.pending_focus = Some(id);
         }
     }
 
@@ -650,13 +735,22 @@ impl Tree {
         }
     }
 
+    /// 参与父容器布局的子节点：可见 ∧ 非锚定浮层。
+    ///
+    /// 浮层被排除在此，是它「脱离布局流」的**唯一**实现点——不占父容器的主轴长度、
+    /// 不撑大父容器的测量结果，父容器完全不知道它的存在。它的测量与排布另由
+    /// [`Tree::layout_overlays`] 在根级完成。
     fn visible_children(&self, id: NodeId) -> Vec<NodeId> {
         match self.get(id) {
             Some(n) => n
                 .children
                 .iter()
                 .copied()
-                .filter(|c| self.get(*c).map(|n| n.effective_visible()).unwrap_or(false))
+                .filter(|c| {
+                    self.get(*c)
+                        .map(|n| n.effective_visible() && n.overlay.is_none())
+                        .unwrap_or(false)
+                })
                 .collect(),
             None => Vec::new(),
         }
@@ -687,6 +781,167 @@ impl Tree {
             );
             self.arrange(root, Rect::from_size(size));
         }
+        // 浮层必须排在整棵树 arrange **之后**：它的锚点取自父节点的绝对矩形，
+        // 而那要等父级排完才成立。
+        self.layout_overlays(size, text);
+    }
+
+    /// 锚定浮层与其锚点之间的间隙（逻辑 px）。
+    const OVERLAY_GAP: i32 = 4;
+
+    /// 锚定浮层的根级排布（见 [`Node::overlay`]）。
+    ///
+    /// 定位口径与 `EventCtx::show_dropdown_menu` 一致：左缘对齐锚点、贴在锚点下方，
+    /// 下方装不下就翻到上方；两边都装不下时贴住窗口底/右缘钳制，宁可盖住锚点也不
+    /// 让面板一半在窗口外——那等于控件不可用。
+    ///
+    /// 落到 `bounds` 里的是**相对父节点**的坐标，与其余节点同一口径。这样浮层会
+    /// 自动跟着锚点走（滚动、拖拽让位都不必重排浮层），`abs_bounds` 也无需特判。
+    fn layout_overlays(&mut self, win: Size, text: &mut dyn TextEngine) {
+        if self.overlays.is_empty() {
+            return;
+        }
+        // 取出再放回：measure/arrange 要 `&mut self`，借着这份列表就动不了树。
+        let mut list = std::mem::take(&mut self.overlays);
+        list.retain(|&id| self.get(id).is_some());
+        self.overlays = list.clone();
+        for id in list {
+            // 被模态层挡在外面的浮层直接收起，而不是隐着等对话框关掉再冒出来——
+            // 那会让一个用户早已忘记的面板在关闭对话框后凭空重现。写入有 `get()`
+            // 守卫，是一次性的，不会每帧弄脏。
+            if !self.overlay_in_modal_scope(id) {
+                if let Some(sig) = self.get(id).and_then(|n| n.overlay) {
+                    if sig.get() {
+                        sig.set(false);
+                    }
+                }
+                continue;
+            }
+            if !self.overlay_showing(id) {
+                continue;
+            }
+            let Some(parent) = self.get(id).and_then(|n| n.parent) else {
+                continue;
+            };
+            // 锚点被滚出视口后也收起：浮层刻意不受祖先裁剪，锚点滚没了它还浮着，
+            // 位置又被下面的 clamp 钳在窗口边缘，就成了一块与任何东西都无关的浮块。
+            // 滚轮不触发轻量关闭（那只挂在 Down 上），故必须在这里兜住。
+            if self.anchor_scrolled_out(parent, win) {
+                if let Some(sig) = self.get(id).and_then(|n| n.overlay) {
+                    if sig.get() {
+                        sig.set(false);
+                    }
+                }
+                continue;
+            }
+            // 尺寸维度要走 `child_spec` 翻译成 MeasureSpec，跟普通父容器给子节点定规格
+            // 是同一套：`measure` 本身**不看**节点自己的 `width`/`height`，那一直是父级
+            // 的职责。直接丢一对 at_most 进去，固定尺寸的面板会被当成 Wrap 量成 0×0。
+            let (w_dim, h_dim) = match self.get(id) {
+                Some(n) => (n.width, n.height),
+                None => continue,
+            };
+            let size = self.measure(
+                id,
+                child_spec(w_dim, win.w, false),
+                child_spec(h_dim, win.h, false),
+                text,
+            );
+            let anchor = self.abs_bounds(parent);
+            let below = anchor.bottom() + Self::OVERLAY_GAP;
+            let y = if below + size.h <= win.h {
+                below
+            } else {
+                let above = anchor.y - Self::OVERLAY_GAP - size.h;
+                if above >= 0 {
+                    above
+                } else {
+                    (win.h - size.h).max(0)
+                }
+            };
+            let x = anchor.x.clamp(0, (win.w - size.w).max(0));
+            let saved = self.arrange_origin;
+            self.arrange_origin = Point::new(anchor.x, anchor.y);
+            self.arrange(id, Rect::new(x - anchor.x, y - anchor.y, size.w, size.h));
+            self.arrange_origin = saved;
+        }
+    }
+
+    /// 锚点是否已被滚出（或本来就落在）所有祖先裁剪容器的视口之外。
+    ///
+    /// 只看**裁剪**容器：非裁剪的祖先不会把子节点藏起来，拿它们的矩形做判据会误伤
+    /// （自适应高的容器矩形可能比内容还小）。窗口本身也算一层——锚点整个滚出窗口时
+    /// 同样该收起。
+    fn anchor_scrolled_out(&self, anchor: NodeId, win: Size) -> bool {
+        let a = self.abs_bounds(anchor);
+        if a.intersect(&Rect::from_size(win)).is_empty() {
+            return true;
+        }
+        // skip(1)：祖先链含自身，要找的是它的祖先。
+        for c in self.ancestor_chain(anchor).into_iter().skip(1) {
+            let Some(n) = self.get(c) else { continue };
+            if !n.clip_children {
+                continue;
+            }
+            if a.intersect(&self.abs_bounds(c).inset(n.padding)).is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 浮层当前是否该上屏：自身可见 ∧ **整条祖先链**可见。
+    ///
+    /// 祖先链要自己走，是因为浮层的绘制与命中都从根级直接进入、不经过父节点那趟
+    /// 递归——而正是那趟递归在替普通节点做「父不可见则整棵子树不画」。少了这一步，
+    /// 切到另一个 Tab 页之后，上一页里展开着的下拉面板会继续浮在新页面上。
+    fn overlay_showing(&self, id: NodeId) -> bool {
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            match self.get(c) {
+                Some(n) if n.effective_visible() => cur = n.parent,
+                _ => return false,
+            }
+        }
+        self.overlay_in_modal_scope(id)
+    }
+
+    /// 浮层是否落在当前模态作用域内（无对话框打开时恒真）。
+    ///
+    /// 没有这道闸，浮层会**浮在对话框之上并抢走点击**：它无条件地画在整棵树之后、
+    /// 命中先于整棵树，而遮罩只是树里的一个普通节点。焦点那一侧早就按模态作用域裁过了
+    /// （见 [`Tree::focusable_order`]），命中与绘制不跟上，三者对「模态期间谁可交互」
+    /// 的判断就不一致。
+    ///
+    /// 指针路径大多能自愈——点开对话框那一下会先被 `dismiss_overlays_outside` 收掉浮层；
+    /// 但键盘快捷键、`on_submit`、定时器、跨线程消息弹出的对话框都走不到那一步。
+    ///
+    /// **先问 `modals` 再扫树**：`topmost_modal` 是一次全树前序遍历，而本方法在每次
+    /// 鼠标移动的命中测试里都会被调用。绝大多数时候一个对话框都没开，那时只需扫一遍
+    /// 长度通常为 0 的信号表。
+    fn overlay_in_modal_scope(&self, id: NodeId) -> bool {
+        if !self.modals.iter().any(|s| s.is_alive() && s.get()) {
+            return true;
+        }
+        let Some(scope) = self.topmost_modal() else {
+            return true;
+        };
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if c == scope {
+                return true;
+            }
+            cur = self.get(c).and_then(|n| n.parent);
+        }
+        false
+    }
+
+    /// 浮层的绘制/命中原点 = 其锚点（父节点）的绝对左上角。与 `paint_node` 里
+    /// `child_origin` 的口径相同，故浮层内部的坐标推导与普通子树完全一致。
+    fn overlay_origin(&self, id: NodeId) -> Option<Point> {
+        let parent = self.get(id).and_then(|n| n.parent)?;
+        let a = self.abs_bounds(parent);
+        Some(Point::new(a.x, a.y))
     }
 
     // ---- Measure ----
@@ -1072,15 +1327,23 @@ impl Tree {
             let cs = self.measured_of(c);
             let cm = self.margin_of(c);
             let align = self.get(c).and_then(|n| n.align).unwrap_or(Align::Start);
+            // 纵轴可单独覆盖（见 `Node::align_v`）：未设时跟随 `align`，两轴同值即旧行为。
+            let align_v = self.get(c).and_then(|n| n.align_v).unwrap_or(align);
             let avail_w = (inner.w - cm.horizontal()).max(0);
             let avail_h = (inner.h - cm.vertical()).max(0);
-            let (cw, ch) = if align == Align::Stretch {
-                (avail_w, avail_h)
+            // Stretch 按轴各判各的：横轴 Stretch + 纵轴 Start 是合法组合（顶部通栏）。
+            let cw = if align == Align::Stretch {
+                avail_w
             } else {
-                (cs.w, cs.h)
+                cs.w
+            };
+            let ch = if align_v == Align::Stretch {
+                avail_h
+            } else {
+                cs.h
             };
             let x = inner.x + cm.left + align_offset(align, avail_w, cw);
-            let y = inner.y + cm.top + align_offset(align, avail_h, ch);
+            let y = inner.y + cm.top + align_offset(align_v, avail_h, ch);
             self.arrange(c, Rect::new(x, y, cw, ch));
         }
     }
@@ -1091,6 +1354,19 @@ impl Tree {
     pub fn paint(&self, canvas: &mut dyn Canvas) {
         if let Some(root) = self.root {
             self.paint_node(canvas, root, Point::new(0, 0), true);
+        }
+        // 锚定浮层最后画，且从根级重新进入——不带任何祖先的裁剪栈，故能盖住滚动
+        // 容器的边界与其后的一切兄弟。登记序即层叠序，后登记者压在上面。
+        for &id in &self.overlays {
+            if !self.overlay_showing(id) {
+                continue;
+            }
+            let (Some(origin), Some(parent)) =
+                (self.overlay_origin(id), self.get(id).and_then(|n| n.parent))
+            else {
+                continue;
+            };
+            self.paint_node(canvas, id, origin, self.node_enabled(parent));
         }
     }
 
@@ -1257,13 +1533,25 @@ impl Tree {
     /// 与 [`Tree::hit_node`] 的倒序遍历互为镜像——那边先测 `raised`，两者对"谁在上层"
     /// 的判断必须一致，否则会出现"画在上面却点不到"。
     fn paint_children(&self, canvas: &mut dyn Canvas, n: &Node, origin: Point, enabled: bool) {
+        // 锚定浮层不在此列：它由 `Tree::paint` 在整棵树之后单独绘制。留在这里画的话
+        // 它照样会被后续兄弟盖住，「浮层」二字就落空了。
+        let ordinary = |c: NodeId| {
+            self.get(c)
+                .map(|cn| cn.overlay.is_none() && !cn.raised)
+                .unwrap_or(false)
+        };
+        let raised = |c: NodeId| {
+            self.get(c)
+                .map(|cn| cn.overlay.is_none() && cn.raised)
+                .unwrap_or(false)
+        };
         for &c in &n.children {
-            if !self.get(c).map(|cn| cn.raised).unwrap_or(false) {
+            if ordinary(c) {
                 self.paint_node(canvas, c, origin, enabled);
             }
         }
         for &c in &n.children {
-            if self.get(c).map(|cn| cn.raised).unwrap_or(false) {
+            if raised(c) {
                 self.paint_node(canvas, c, origin, enabled);
             }
         }
@@ -1776,18 +2064,30 @@ impl Tree {
     /// 当前**未**截断（`Some(false)`），视为原文已完整可见，不再弹出与其重复的
     /// 提示——避免"短文案也弹一模一样的浮层"。不具备该概念的控件（`None`）按
     /// 原语义正常返回，不受影响。
+    /// **沿命中节点向祖先回溯**（与 [`Self::cursor_at`] 同一心智）：取最近一个能给出
+    /// 提示的节点。没有这层回溯，凡是内部由多个节点拼成的**复合控件**——
+    /// `Element::stepper` 的 `[−][输入框][+]` 是最典型的一个——命中永远落在子节点上，
+    /// 挂在控件本身上的 `.tooltip(..)` 就再也读不到，链上去不报错也不生效。
     pub fn node_tooltip(&self, id: NodeId) -> Option<String> {
-        let n = self.get(id)?;
-        // 控件动态提示优先：自绘图表按指针所在的数据点给文案，静态文本给不了
-        // （见 [`Widget::tooltip`]）。返回 None 才回退到节点上设的静态文本。
-        if let Some(dynamic) = n.widget.tooltip() {
-            return Some(dynamic);
+        for nid in self.ancestor_chain(id) {
+            let Some(n) = self.get(nid) else { continue };
+            // 控件动态提示优先：自绘图表按指针所在的数据点给文案，静态文本给不了
+            // （见 [`Widget::tooltip`]）。返回 None 才回退到节点上设的静态文本。
+            if let Some(dynamic) = n.widget.tooltip() {
+                return Some(dynamic);
+            }
+            let Some(text) = n.tooltip.clone() else {
+                continue;
+            };
+            // 截断判定按**持有这条提示的那个节点**算，不是按命中的子节点算。
+            // 找到提示就到此为止：被自身判定压掉时不再往上找，否则一个没被截断的
+            // Label 会转而弹出祖先容器的提示，看着像"弹错了别人的说明"。
+            if n.widget.text_truncated() == Some(false) {
+                return None;
+            }
+            return Some(text);
         }
-        let text = n.tooltip.clone()?;
-        if n.widget.text_truncated() == Some(false) {
-            return None;
-        }
-        Some(text)
+        None
     }
 
     /// `pos`（逻辑坐标）是否落在交互控件上（可聚焦节点，如自定义标题栏的窗口按钮）。
@@ -1994,6 +2294,26 @@ impl Tree {
         true
     }
 
+    /// 把输入法合成串下发给节点（见 `Widget::set_preedit`）。
+    /// 返回 true 表示节点存在且已通知（调用方据此判断是否需要重绘）。
+    pub fn set_preedit(&mut self, id: NodeId, pe: &crate::event::Preedit) -> bool {
+        let Some(n) = self.get_mut(id) else {
+            return false;
+        };
+        n.widget.set_preedit(pe);
+        true
+    }
+
+    /// 读节点当前选区（见 `Widget::selection_range`）。
+    pub fn selection_of(&self, id: NodeId) -> Option<(usize, usize)> {
+        self.get(id)?.widget.selection_range()
+    }
+
+    /// 读节点的已提交正文（见 `Widget::ime_text`）。
+    pub fn ime_text_of(&self, id: NodeId) -> Option<String> {
+        self.get(id)?.widget.ime_text()
+    }
+
     /// 找 `p`（逻辑坐标）下最近的滚动容器节点（命中点向上找首个 `Layout::Scroll`）。
     pub fn scroll_node_at(&self, p: Point) -> Option<NodeId> {
         let mut cur = self.hit_test(p);
@@ -2077,14 +2397,86 @@ impl Tree {
 
     /// 命中测试：返回包含该点的最深可见节点。
     pub fn hit_test(&self, p: Point) -> Option<NodeId> {
+        if let Some(hit) = self.hit_overlays(p, false) {
+            return Some(hit);
+        }
         let root = self.root?;
         self.hit_node(root, p, Point::new(0, 0), false)
+    }
+
+    /// 先于整棵树测试锚定浮层（见 [`Node::overlay`]）：**倒序**遍历登记表，与
+    /// `Tree::paint` 的正序绘制互为镜像——最后画的那层最先命中，否则会出现
+    /// 「画在上面却点不到」。
+    fn hit_overlays(&self, p: Point, for_drag: bool) -> Option<NodeId> {
+        for &id in self.overlays.iter().rev() {
+            if !self.overlay_showing(id) {
+                continue;
+            }
+            // 用 continue 而不是 `?`：`overlay_origin` 在浮层没有父节点时返回 None，
+            // 拿 `?` 一并把整个 hit_overlays 报成 None，会连累后面登记的所有浮层一个都测不到。
+            let Some(origin) = self.overlay_origin(id) else {
+                continue;
+            };
+            if let Some(hit) = self.hit_node(id, p, origin, for_drag) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+
+    /// 轻量关闭：在浮层**与其锚点**之外按下时收起浮层。返回是否关掉了至少一个。
+    ///
+    /// 锚点也要排除，否则「点触发器收起面板」会退化成无操作——核心先把它关掉，
+    /// 触发器的 toggle 紧接着又把它打开。锚点上的开合一律交给触发器控件自己决定。
+    pub(crate) fn dismiss_overlays_outside(&mut self, p: Point) -> bool {
+        let mut closed = false;
+        for id in self.overlays.clone() {
+            if !self.overlay_showing(id) {
+                continue;
+            }
+            // 浮层的 bounds 存的是相对父节点的坐标，`abs_bounds` 沿父链累加出来的
+            // 正好就是它的绝对矩形——不必再算一遍（算两遍迟早口径分叉）。
+            let inside_panel = self.abs_bounds(id).contains(p);
+            let inside_anchor = self
+                .get(id)
+                .and_then(|n| n.parent)
+                .is_some_and(|pa| self.abs_bounds(pa).contains(p));
+            if inside_panel || inside_anchor {
+                continue;
+            }
+            if let Some(sig) = self.get(id).and_then(|n| n.overlay) {
+                if sig.get() {
+                    sig.set(false);
+                    closed = true;
+                }
+            }
+        }
+        closed
+    }
+
+    /// 收起最顶层（最后登记）的可见浮层。返回是否确实收起了一个。ESC 用。
+    pub(crate) fn close_topmost_overlay(&mut self) -> bool {
+        for id in self.overlays.clone().into_iter().rev() {
+            if !self.overlay_showing(id) {
+                continue;
+            }
+            if let Some(sig) = self.get(id).and_then(|n| n.overlay) {
+                if sig.get() {
+                    sig.set(false);
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// 拖动区专用命中：同 [`Tree::hit_test`]，但模态遮罩（`Widget::scrim_passthrough`）
     /// 不落定、继续穿透到下层兄弟。供 [`Tree::drag_hit_at`] 判断标题栏——对话框弹出后
     /// 遮罩覆盖全窗，普通命中会停在遮罩上，标题栏因此失去 HTCAPTION、拖不动窗口。
     fn hit_test_for_drag(&self, p: Point) -> Option<NodeId> {
+        if let Some(hit) = self.hit_overlays(p, true) {
+            return Some(hit);
+        }
         let root = self.root?;
         self.hit_node(root, p, Point::new(0, 0), true)
     }
@@ -2121,16 +2513,30 @@ impl Tree {
         if in_content {
             // 倒序遍历子节点：后绘制者在上层，优先命中。`raised` 子节点整体后绘制
             // （见 `Tree::paint_children`），故先倒序测它们，再倒序测其余。
+            //
+            // 锚定浮层不在此列：它已在 `hit_overlays` 里先于整棵树测过。留在这里再测
+            // 一次是有害的——浮层的绝对矩形常常落在锚点之外，父节点的 `abs.contains(p)`
+            // 会先把它挡掉，反而让「浮层内点击」漏判成命中锚点。
             let child_origin = Point::new(abs.x, abs.y);
+            let ordinary = |c: NodeId| {
+                self.get(c)
+                    .map(|cn| cn.overlay.is_none() && !cn.raised)
+                    .unwrap_or(false)
+            };
+            let raised = |c: NodeId| {
+                self.get(c)
+                    .map(|cn| cn.overlay.is_none() && cn.raised)
+                    .unwrap_or(false)
+            };
             for &c in n.children.iter().rev() {
-                if self.get(c).map(|cn| cn.raised).unwrap_or(false) {
+                if raised(c) {
                     if let Some(hit) = self.hit_node(c, p, child_origin, for_drag) {
                         return Some(hit);
                     }
                 }
             }
             for &c in n.children.iter().rev() {
-                if !self.get(c).map(|cn| cn.raised).unwrap_or(false) {
+                if ordinary(c) {
                     if let Some(hit) = self.hit_node(c, p, child_origin, for_drag) {
                         return Some(hit);
                     }
@@ -2383,6 +2789,18 @@ impl Tree {
         capture: &mut Option<NodeId>,
     ) -> DispatchResult {
         let mut res = DispatchResult::default();
+
+        // 轻量关闭：浮层外按下即收起。**在主事件之前**做，这样同一次按下里「关掉旧
+        // 浮层」与「命中新控件」都能发生（点 A 的面板外的 B 按钮，面板收起且 B 被按到）。
+        // 关闭改变显隐 → 无法局部化，直接升整窗。
+        if matches!(ev.kind, PointerKind::Down)
+            && capture.is_none()
+            && !self.overlays.is_empty()
+            && self.dismiss_overlays_outside(ev.pos)
+        {
+            res.repaint = true;
+            res.damage = res.damage.merge(DamageReq::Full);
+        }
 
         // hover 进出（仅 Move 且无捕获时）：沿祖先链派发，使可点击容器也能收到 Enter/Leave。
         if matches!(ev.kind, PointerKind::Move) && capture.is_none() {
@@ -2699,6 +3117,594 @@ mod tests {
         );
         let kids = tree.get(tree.root.unwrap()).unwrap().children.clone();
         (tree, kids)
+    }
+
+    // ---- 锚定浮层（Node::overlay）----
+
+    /// 浮层树：一列三行，第二行挂一个 60×80 的浮层。返回 (tree, 行 id, 浮层 id)。
+    fn popup_tree(open: crate::signal::Signal<bool>) -> (Tree, Vec<NodeId>, NodeId) {
+        let panel = Element::col().width(60).height(80).bg(Color::WHITE);
+        // 锚点是**自适应高的线性容器**：浮层若没被排除在 `visible_children` 之外，
+        // 它 80px 的高度会撑高锚点、把第三行顶下去。锚点若用 leaf（Layout::None
+        // 压根不排布子节点）或写死高度，这条断言就恒成立、什么也验不到。
+        let tree = layout(
+            Element::col()
+                .width(200)
+                .height(300)
+                .child(Element::leaf().width(200).height(40).bg(Color::WHITE))
+                .child(
+                    Element::col()
+                        .width(200)
+                        .child(Element::leaf().width(200).height(40).bg(Color::WHITE))
+                        .popup(open, panel),
+                )
+                .child(Element::leaf().width(200).height(40).bg(Color::WHITE)),
+            200,
+            300,
+        );
+        let kids = tree.get(tree.root.unwrap()).unwrap().children.clone();
+        // 浮层是 `popup()` 最后挂上去的那个子节点（前面还有锚点自己的内容）。
+        let popup = *tree.get(kids[1]).unwrap().children.last().unwrap();
+        (tree, kids, popup)
+    }
+
+    #[test]
+    fn overlay_is_excluded_from_parent_layout_flow() {
+        // 浮层脱离布局流的判据不是"看不见"，而是**父容器和后续兄弟的几何完全不受
+        // 影响**——它一旦被算进主轴长度，第三行就会被顶下去。展开与收起两态都要验，
+        // 只测收起态会漏掉"展开后才把兄弟挤走"这类回归。
+        let open = signal(false);
+        let (tree, kids, _) = popup_tree(open);
+        assert_eq!(tree.abs_bounds(kids[2]).y, 80, "收起态第三行应紧跟第二行");
+
+        open.set(true);
+        let (tree, kids, popup) = popup_tree(open);
+        assert_eq!(tree.abs_bounds(kids[2]).y, 80, "展开后第三行不得被顶下去");
+        assert_eq!(
+            tree.abs_bounds(kids[1]).h,
+            40,
+            "锚点自身的高度不含浮层——它自适应高，浮层一旦参与布局这里就是 80+"
+        );
+        assert!(tree.abs_bounds(popup).h > 0, "浮层本身应被排布出尺寸");
+    }
+
+    #[test]
+    fn overlay_anchors_below_and_hit_tests_above_later_siblings() {
+        // 浮层挂在第二行（y=40..80）上，展开后应落在第三行（y=80..120）之上。
+        // 若走普通子节点路径，第三行是**后画**的兄弟，会盖住它并抢走点击。
+        let open = signal(true);
+        let (tree, kids, popup) = popup_tree(open);
+        let r = tree.abs_bounds(popup);
+        assert_eq!((r.x, r.y), (0, 84), "应贴在锚点下方 OVERLAY_GAP 处");
+
+        let p = Point::new(30, 100); // 同时落在第三行与浮层里
+        assert!(
+            tree.abs_bounds(kids[2]).contains(p),
+            "本例前提：该点确实也落在第三行上"
+        );
+        assert_eq!(tree.hit_test(p), Some(popup), "浮层必须先于其后的兄弟命中");
+        assert_eq!(tree.hit_test(Point::new(30, 20)), Some(kids[0]));
+    }
+
+    #[test]
+    fn overlay_flips_above_anchor_when_it_would_overflow_bottom() {
+        // 锚点贴着窗口底部时下方放不下，必须上翻——否则面板一半在窗口外，等于不可用。
+        let open = signal(true);
+        let panel = Element::col().width(60).height(80).bg(Color::WHITE);
+        let tree = layout(
+            Element::col()
+                .width(200)
+                .height(200)
+                .child(Element::leaf().width(200).height(160))
+                .child(
+                    Element::leaf()
+                        .width(200)
+                        .height(40)
+                        .bg(Color::WHITE)
+                        .popup(open, panel),
+                ),
+            200,
+            200,
+        );
+        let anchor = tree.get(tree.root.unwrap()).unwrap().children[1];
+        let popup = tree.get(anchor).unwrap().children[0];
+        let a = tree.abs_bounds(anchor);
+        let r = tree.abs_bounds(popup);
+        assert_eq!(a.y, 160);
+        assert_eq!(r.y, 160 - 4 - 80, "下方放不下应翻到锚点上方");
+        assert!(r.y >= 0);
+    }
+
+    #[test]
+    fn pointer_down_outside_dismisses_overlay_but_anchor_click_does_not() {
+        // 轻量关闭的两半必须一起成立：点别处收起，点锚点**不**收起（那一下归触发器
+        // 自己 toggle）。少了后半条，"点触发器关面板"会变成关了又立刻开、看着没反应。
+        let open = signal(true);
+        let (mut tree, kids, _) = popup_tree(open);
+        let (mut hover, mut capture) = (None, None);
+
+        let down = |pos: Point| PointerEvent::single(PointerKind::Down, pos, MouseButton::Left);
+
+        let res = tree.dispatch_pointer(down(Point::new(30, 50)), &mut hover, &mut capture);
+        assert!(open.get(), "点在锚点上不应由核心收起");
+        assert_eq!(res.damage, DamageReq::None, "没关掉浮层就不该平白升整窗");
+
+        assert_eq!(tree.abs_bounds(kids[1]).y, 40);
+        let res = tree.dispatch_pointer(down(Point::new(30, 10)), &mut hover, &mut capture);
+        assert!(!open.get(), "点在浮层与锚点之外应收起");
+        // 关闭改变显隐，局部脏区盖不住浮层腾出的那片区域——降成节点级脏区的话
+        // 测试照样全绿，画面上却留着面板残影。故这里连脏区一起断言。
+        assert_eq!(res.damage, DamageReq::Full, "收起浮层必须升整窗重绘");
+        assert!(res.repaint);
+    }
+
+    #[test]
+    fn pointer_down_inside_overlay_keeps_it_open() {
+        // 面板内部的交互（拖色相条）绝不能顺手把面板关掉。
+        let open = signal(true);
+        let (mut tree, _, popup) = popup_tree(open);
+        let (mut hover, mut capture) = (None, None);
+        let r = tree.abs_bounds(popup);
+        tree.dispatch_pointer(
+            PointerEvent::single(
+                PointerKind::Down,
+                Point::new(r.x + r.w / 2, r.y + r.h / 2),
+                MouseButton::Left,
+            ),
+            &mut hover,
+            &mut capture,
+        );
+        assert!(open.get(), "面板内按下应保持展开");
+    }
+
+    /// 只记录填充色顺序的画布。绘制序是"谁盖住谁"的唯一真相，而它在几何断言里
+    /// 完全看不见——两个节点的矩形重叠时，命中测试可能是对的、画面却是反的。
+    struct OrderCanvas(Vec<Color>);
+
+    impl crate::render::Canvas for OrderCanvas {
+        fn dpi_scale(&self) -> f32 {
+            1.0
+        }
+        fn fill_rect(&mut self, _x: f32, _y: f32, _w: f32, _h: f32, p: &Paint) {
+            self.0.push(p.color);
+        }
+        fn fill_round_rect(&mut self, _x: f32, _y: f32, _w: f32, _h: f32, _r: f32, p: &Paint) {
+            self.0.push(p.color);
+        }
+        fn stroke_round_rect(
+            &mut self,
+            _x: f32,
+            _y: f32,
+            _w: f32,
+            _h: f32,
+            _r: f32,
+            _lw: f32,
+            _p: &Paint,
+        ) {
+        }
+        fn draw_line(&mut self, _a: f32, _b: f32, _c: f32, _d: f32, _w: f32, _p: &Paint) {}
+        fn fill_circle(&mut self, _cx: f32, _cy: f32, _r: f32, _p: &Paint) {}
+        fn draw_shadow(&mut self, _x: f32, _y: f32, _w: f32, _h: f32, _r: f32, _b: f32, _c: Color) {
+        }
+        fn draw_image(
+            &mut self,
+            _i: &crate::render::image::Image,
+            _d: Rect,
+            _f: crate::render::image::Fit,
+            _r: f32,
+            _o: f32,
+        ) {
+        }
+        fn draw_text(
+            &mut self,
+            _t: &str,
+            _r: Rect,
+            _c: Color,
+            _a: crate::spec::Align,
+            _ts: &crate::text::TextStyle,
+        ) {
+        }
+        fn measure_text(&mut self, _t: &str, _ts: &crate::text::TextStyle) -> Size {
+            Size::ZERO
+        }
+        fn push_layer(&mut self, _o: f32) {}
+        fn pop_layer(&mut self) {}
+        fn save(&mut self) {}
+        fn restore(&mut self) {}
+        fn clip_rect(&mut self, _r: Rect) {}
+    }
+
+    #[test]
+    fn overlay_painted_once_and_last() {
+        // 浮层必须**恰好画一次**且排在所有普通节点之后。画两次（普通遍历里没跳过它）
+        // 在静态画面上看不出破绽——同样的内容盖在同样的位置；但它会被排在后面的兄弟
+        // 盖住，"浮层"就名存实亡。故这里同时断言次数与次序。
+        let open = signal(true);
+        let panel_bg = Color::hex(0x123456);
+        let sibling_bg = Color::hex(0xABCDEF);
+        let tree = layout(
+            Element::col()
+                .width(200)
+                .height(300)
+                .child(
+                    Element::col()
+                        .width(200)
+                        .child(Element::leaf().width(200).height(40))
+                        .popup(open, Element::col().width(60).height(80).bg(panel_bg)),
+                )
+                .child(Element::leaf().width(200).height(200).bg(sibling_bg)),
+            200,
+            300,
+        );
+
+        let mut canvas = OrderCanvas(Vec::new());
+        tree.paint(&mut canvas);
+        let seq = canvas.0;
+        let panel_at: Vec<usize> = seq
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c == panel_bg)
+            .map(|(i, _)| i)
+            .collect();
+        let sib_at = seq.iter().position(|c| *c == sibling_bg);
+        assert_eq!(panel_at.len(), 1, "浮层应恰好绘制一次，实得 {panel_at:?}");
+        assert!(sib_at.is_some(), "本例前提：后续兄弟确实画了自己的底色");
+        assert!(
+            panel_at[0] > sib_at.unwrap(),
+            "浮层必须画在后续兄弟之后：浮层 @{} vs 兄弟 @{}",
+            panel_at[0],
+            sib_at.unwrap()
+        );
+    }
+
+    #[test]
+    fn overlay_is_hidden_when_an_ancestor_is_hidden() {
+        // 浮层从根级直接绘制/命中，不走父节点那趟递归，也就没人替它做"父不可见则
+        // 整棵子树不画"。切走 Tab 页后仍浮在新页面上的 bug 正出在这里。
+        let open = signal(true);
+        let page = signal(true);
+        let panel = Element::col().width(60).height(80).bg(Color::WHITE);
+        let tree = layout(
+            Element::col().width(200).height(300).child(
+                Element::col().visible_signal(page).child(
+                    Element::leaf()
+                        .width(200)
+                        .height(40)
+                        .bg(Color::WHITE)
+                        .popup(open, panel),
+                ),
+            ),
+            200,
+            300,
+        );
+        let hit_at = Point::new(30, 60);
+        assert!(tree.hit_test(hit_at).is_some(), "页面可见时浮层应命中");
+
+        page.set(false);
+        assert_eq!(tree.hit_test(hit_at), None, "祖先隐藏后浮层不得再命中");
+    }
+
+    /// 浮层必须能**逃出滚动容器的裁剪**。
+    ///
+    /// 这是浮层最容易悄悄失效的地方，也是 `Node::raised` 根本做不到的事：滚动容器
+    /// `clip_children` 会把子树剪到视口内，而取色器在设置页里正是长在滚动区里的——
+    /// 面板一旦被剪，下半截就凭空消失，且**看不见**的那半截也点不着。
+    #[test]
+    fn overlay_escapes_an_ancestor_scroll_clip() {
+        let open = signal(true);
+        let panel_bg = Color::hex(0x123456);
+        // 视口只有 100 高，锚点贴着视口底部：面板必然伸出视口之外。
+        let tree = layout(
+            Element::col().width(200).height(300).child(
+                Element::scroll().width(200).height(100).child(
+                    Element::col()
+                        .width(200)
+                        .child(Element::leaf().width(200).height(60))
+                        .child(
+                            Element::col()
+                                .width(200)
+                                .child(Element::leaf().width(200).height(30))
+                                .popup(open, Element::col().width(60).height(80).bg(panel_bg)),
+                        ),
+                ),
+            ),
+            200,
+            300,
+        );
+
+        // 根节点恒被拉伸到整窗，故滚动容器必须自己占一层，否则视口就是整个窗口、
+        // 面板根本伸不出去，这条测试会在前提不成立上空转。
+        let scroll = tree.get(tree.root.unwrap()).unwrap().children[0];
+        let viewport = tree.abs_bounds(scroll);
+        let col = tree.get(scroll).unwrap().children[0];
+        let anchor = tree.get(col).unwrap().children[1];
+        let popup = *tree.get(anchor).unwrap().children.last().unwrap();
+        let pr = tree.abs_bounds(popup);
+        assert!(
+            pr.bottom() > viewport.bottom(),
+            "本例前提：面板确实伸出了滚动视口（视口底 {}，面板底 {}）",
+            viewport.bottom(),
+            pr.bottom()
+        );
+
+        // ① 命中：视口之外的那半截仍要点得到。
+        let outside = Point::new(pr.x + pr.w / 2, viewport.bottom() + 10);
+        assert!(pr.contains(outside));
+        assert_eq!(
+            tree.hit_test(outside),
+            Some(popup),
+            "伸出视口的那半截浮层仍应命中"
+        );
+
+        // ② 绘制：不能被裁掉。裁剪不改变提交次数，只改变落到画布上的像素，故这里
+        //    比对的是「有没有画」而非「画在哪」——OrderCanvas 忽略裁剪，若实现把浮层
+        //    留在滚动子树里绘制，它就会在真实画布上被剪掉而这里仍记一次。为此改看
+        //    绘制时的裁剪栈：浮层绘制期间不得处在滚动容器的裁剪之下。
+        let mut canvas = ClipWatchCanvas {
+            clips: Vec::new(),
+            depth: 0,
+            fills: Vec::new(),
+        };
+        tree.paint(&mut canvas);
+        let hit = canvas
+            .fills
+            .iter()
+            .find(|(c, _)| *c == panel_bg)
+            .expect("浮层应当被绘制");
+        assert_eq!(
+            hit.1, 0,
+            "浮层绘制时不得处在任何祖先裁剪之下（当前深度 {})",
+            hit.1
+        );
+    }
+
+    /// 记录每次填充时的裁剪栈深度。裁剪是"看不见的状态"，只有把它连同颜色一起记下来
+    /// 才验得到"画了但被剪掉"这种失败——单看提交次数与几何都是对的。
+    struct ClipWatchCanvas {
+        clips: Vec<()>,
+        depth: usize,
+        fills: Vec<(Color, usize)>,
+    }
+
+    impl crate::render::Canvas for ClipWatchCanvas {
+        fn dpi_scale(&self) -> f32 {
+            1.0
+        }
+        fn fill_rect(&mut self, _x: f32, _y: f32, _w: f32, _h: f32, p: &Paint) {
+            self.fills.push((p.color, self.depth));
+        }
+        fn fill_round_rect(&mut self, _x: f32, _y: f32, _w: f32, _h: f32, _r: f32, p: &Paint) {
+            self.fills.push((p.color, self.depth));
+        }
+        fn stroke_round_rect(
+            &mut self,
+            _x: f32,
+            _y: f32,
+            _w: f32,
+            _h: f32,
+            _r: f32,
+            _lw: f32,
+            _p: &Paint,
+        ) {
+        }
+        fn draw_line(&mut self, _a: f32, _b: f32, _c: f32, _d: f32, _w: f32, _p: &Paint) {}
+        fn fill_circle(&mut self, _cx: f32, _cy: f32, _r: f32, _p: &Paint) {}
+        fn draw_shadow(&mut self, _x: f32, _y: f32, _w: f32, _h: f32, _r: f32, _b: f32, _c: Color) {
+        }
+        fn draw_image(
+            &mut self,
+            _i: &crate::render::image::Image,
+            _d: Rect,
+            _f: crate::render::image::Fit,
+            _r: f32,
+            _o: f32,
+        ) {
+        }
+        fn draw_text(
+            &mut self,
+            _t: &str,
+            _r: Rect,
+            _c: Color,
+            _a: crate::spec::Align,
+            _ts: &crate::text::TextStyle,
+        ) {
+        }
+        fn measure_text(&mut self, _t: &str, _ts: &crate::text::TextStyle) -> Size {
+            Size::ZERO
+        }
+        fn push_layer(&mut self, _o: f32) {}
+        fn pop_layer(&mut self) {}
+        fn save(&mut self) {
+            self.clips.push(());
+        }
+        fn restore(&mut self) {
+            self.clips.pop();
+            self.depth = self.clips.len();
+        }
+        fn clip_rect(&mut self, _r: Rect) {
+            self.depth = self.clips.len();
+        }
+    }
+
+    /// 对话框弹出后，长在它**外面**的浮层不得再抢命中，并且会被收起。
+    ///
+    /// 浮层无条件画在整棵树之后、命中先于整棵树，而遮罩只是树里的普通节点——不设闸
+    /// 的话一个开着的取色面板会浮在对话框之上照常接点击，模态语义当场破掉。焦点那侧
+    /// 早就按模态作用域裁过了（`focusable_order`），命中与绘制必须跟上。
+    #[test]
+    fn an_overlay_outside_the_dialog_is_shut_out_by_it() {
+        let open = signal(true);
+        let show_dialog = signal(false);
+        let panel_bg = Color::hex(0x123456);
+        let tree_of = |open, show_dialog| {
+            layout(
+                Element::stack()
+                    .width(300)
+                    .height(400)
+                    .child(
+                        Element::col().width(300).child(
+                            Element::col()
+                                .width(200)
+                                .child(Element::leaf().width(200).height(30))
+                                .popup(open, Element::col().width(80).height(90).bg(panel_bg)),
+                        ),
+                    )
+                    .child(Element::dialog(
+                        show_dialog,
+                        Element::col().width(120).height(80).bg(Color::WHITE),
+                    )),
+                300,
+                400,
+            )
+        };
+
+        // 没有对话框时，浮层照常命中。
+        let tree = tree_of(open, show_dialog);
+        let col = tree.get(tree.root.unwrap()).unwrap().children[0];
+        let anchor = tree.get(col).unwrap().children[0];
+        let popup = *tree.get(anchor).unwrap().children.last().unwrap();
+        let pr = tree.abs_bounds(popup);
+        let inside = Point::new(pr.x + pr.w / 2, pr.y + pr.h / 2);
+        assert_eq!(
+            tree.hit_test(inside),
+            Some(popup),
+            "本例前提：无对话框时能命中浮层"
+        );
+
+        // 弹出对话框（不经指针，故走不到 `dismiss_overlays_outside` 那条自愈路径）。
+        show_dialog.set(true);
+
+        // ① **同一帧内**（还没来得及重新布局）就必须失效。对话框常由快捷键、
+        //    on_submit、定时器弹出，那些路径与下一次 layout 之间隔着完整的一轮
+        //    命中与绘制；只靠布局阶段收起浮层，这段窗口里它照样盖在对话框上。
+        assert_ne!(
+            tree.hit_test(inside),
+            Some(popup),
+            "对话框一弹出，域外浮层当帧就不得再抢走命中"
+        );
+        let mut canvas = OrderCanvas(Vec::new());
+        tree.paint(&mut canvas);
+        assert!(
+            !canvas.0.contains(&panel_bg),
+            "域外浮层当帧就不得画在对话框之上"
+        );
+        assert!(open.get(), "此刻还没重新布局，展开信号应当原样未动");
+
+        // ② 下一次布局把它真正收起来——而不是隐着等对话框关掉再凭空冒出来。
+        let tree = tree_of(open, show_dialog);
+        assert!(!open.get(), "重新布局后域外浮层应被收起");
+        assert_ne!(tree.hit_test(inside), Some(popup));
+    }
+
+    /// 反向：长在对话框**里面**的浮层必须照常工作。
+    ///
+    /// 设置类对话框里放取色器是常见写法，闸门若按「有对话框就一律关掉浮层」来写，
+    /// 这条会立刻断掉，而只测上一条是发现不了的。
+    #[test]
+    fn an_overlay_inside_the_dialog_still_works() {
+        let open = signal(true);
+        let show_dialog = signal(true);
+        let panel_bg = Color::hex(0x654321);
+        let tree = layout(
+            Element::stack()
+                .width(300)
+                .height(400)
+                .child(Element::dialog(
+                    show_dialog,
+                    Element::col().width(200).bg(Color::WHITE).child(
+                        Element::col()
+                            .width(180)
+                            .child(Element::leaf().width(180).height(30))
+                            .popup(open, Element::col().width(80).height(90).bg(panel_bg)),
+                    ),
+                )),
+            300,
+            400,
+        );
+        // 从遮罩往下找到那个浮层节点。
+        fn find_overlay(tree: &Tree, id: NodeId) -> Option<NodeId> {
+            let n = tree.get(id)?;
+            if n.overlay.is_some() {
+                return Some(id);
+            }
+            n.children.iter().find_map(|&c| find_overlay(tree, c))
+        }
+        let popup = find_overlay(&tree, tree.root.unwrap()).expect("应找得到浮层节点");
+        assert!(open.get(), "对话框内的浮层不该被闸门收起");
+        let pr = tree.abs_bounds(popup);
+        assert!(!pr.is_empty(), "对话框内的浮层应被正常排布");
+        assert_eq!(
+            tree.hit_test(Point::new(pr.x + pr.w / 2, pr.y + pr.h / 2)),
+            Some(popup),
+            "对话框内的浮层应照常命中"
+        );
+    }
+
+    /// `close_topmost_overlay` 在纯浮层树上的返回值与幂等性。
+    ///
+    /// **它不覆盖「ESC 排在对话框之前」**——那条排序在 `UiHost::resolve_close_inner`
+    /// 里，由 `escape_closes_the_overlay_before_the_dialog_that_hosts_it` 守（在
+    /// `src/app` 的测试里）。这个名字此前写成 `..._before_dialogs`，而用例里连一个
+    /// 对话框都没有。
+    /// 锚点被滚出视口后浮层要收起。
+    ///
+    /// 浮层刻意不受祖先裁剪（那正是 `overlay_escapes_an_ancestor_scroll_clip` 要的），
+    /// 代价就是锚点滚没了它还浮着，且位置被钳在窗口边缘、与任何东西都不再相关。
+    /// 滚轮不走轻量关闭（那只挂在 Down 上），必须由布局阶段兜住。
+    #[test]
+    fn scrolling_the_anchor_out_of_view_closes_the_overlay() {
+        let open = signal(true);
+        let mut tree = layout(
+            Element::col().width(200).height(300).child(
+                Element::scroll().width(200).height(100).child(
+                    Element::col()
+                        .width(200)
+                        .child(Element::leaf().width(200).height(60))
+                        .child(
+                            Element::col()
+                                .width(200)
+                                .child(Element::leaf().width(200).height(30))
+                                .popup(open, Element::col().width(60).height(80).bg(Color::WHITE)),
+                        )
+                        .child(Element::leaf().width(200).height(400)),
+                ),
+            ),
+            200,
+            300,
+        );
+        let scroll = tree.get(tree.root.unwrap()).unwrap().children[0];
+        assert!(open.get(), "本例前提：初始时锚点在视口内、浮层开着");
+
+        // 滚到锚点（y≈60..90）完全离开 100 高的视口之外。
+        assert!(tree.set_scroll_y(scroll, 200), "本例前提：这块内容确实可滚");
+        let mut te = crate::text::NullTextEngine;
+        tree.layout_root(Size::new(200, 300), &mut te);
+        assert!(!open.get(), "锚点滚出视口后浮层应被收起");
+    }
+
+    #[test]
+    fn close_topmost_overlay_is_idempotent() {
+        let open = signal(true);
+        let (mut tree, _, _) = popup_tree(open);
+        assert!(tree.close_topmost_overlay());
+        assert!(!open.get());
+        assert!(!tree.close_topmost_overlay(), "已收起后不应再报关掉了一个");
+    }
+
+    #[test]
+    fn removed_overlay_deregisters_so_a_recycled_slot_is_not_treated_as_one() {
+        // arena 槽位会被复用。浮层登记若不随节点回收，后来占用同一槽位的普通节点会
+        // 凭空继承"我是浮层"的身份——代际校验挡得住 `get`，挡不住这份 id 列表本身。
+        let open = signal(true);
+        let (mut tree, kids, popup) = popup_tree(open);
+        assert_eq!(tree.overlays.len(), 1);
+        tree.remove(popup);
+        assert!(tree.overlays.is_empty(), "移除后登记应一并清掉");
+
+        let fresh = Element::leaf().width(10).height(10).build(&mut tree);
+        tree.add_child(kids[1], fresh);
+        assert_eq!(fresh.index, popup.index, "本例前提：新节点复用了浮层的槽位");
+        assert!(tree.overlays.is_empty(), "复用槽位的新节点不得被当成浮层");
     }
 
     #[test]
@@ -3030,6 +4036,57 @@ mod tests {
         tree.dispatch_pointer(ptr(PointerKind::Down, p), &mut hover, &mut cap);
         tree.dispatch_pointer(ptr(PointerKind::Up, p), &mut hover, &mut cap);
         assert_eq!(sel.get(), 0, "点击首个标签应把选中索引切到 0");
+    }
+
+    /// `Element::tabs_items` 是 `TabItem::enabled` 唯一的公开可达路径——三个便捷
+    /// 构造器都在内部自己造项，收 `Vec<TabItem>` 的 `tabs_frame` 是私有的。
+    /// 本例走完整分发链路验证这条路真的把禁用态带到了标签条上。
+    ///
+    /// **两棵树对照**是必须的：只断言「禁用项点不动」的话，一条彻底断掉的路径
+    /// （比如 `tabs_items` 压根没把 items 传下去）也会照样通过。
+    #[test]
+    fn tabs_items_carries_per_item_enabled_through_dispatch() {
+        use crate::ui::containers::{TabItem, TabStyle};
+
+        fn click_first_tab(first_enabled: bool) -> Signal<usize> {
+            let sel = signal(1);
+            let root = Element::tabs_items(
+                sel,
+                vec![
+                    (
+                        TabItem::new("甲".into()).enabled(signal(first_enabled)),
+                        Element::label("page A"),
+                    ),
+                    (TabItem::new("乙".into()), Element::label("page B")),
+                ],
+                TabStyle::Underline,
+            );
+            let mut tree = Tree::new();
+            let id = root.build(&mut tree);
+            tree.root = Some(id);
+            let mut te = crate::text::NullTextEngine;
+            tree.layout_root(Size::new(400, 300), &mut te);
+
+            let bar = tree.get(id).unwrap().children[0];
+            let b = tree.abs_bounds(bar);
+            let p = Point::new(b.x + 2, b.y + b.h / 2);
+            let (mut hover, mut cap) = (None, None);
+            tree.dispatch_pointer(ptr(PointerKind::Move, p), &mut hover, &mut cap);
+            tree.dispatch_pointer(ptr(PointerKind::Down, p), &mut hover, &mut cap);
+            tree.dispatch_pointer(ptr(PointerKind::Up, p), &mut hover, &mut cap);
+            sel
+        }
+
+        assert_eq!(
+            click_first_tab(true).get(),
+            0,
+            "首项可选时，点它应切到 0——否则说明 tabs_items 这条路本身就是断的"
+        );
+        assert_eq!(
+            click_first_tab(false).get(),
+            1,
+            "首项禁用时点击应无效，选中索引留在原处"
+        );
     }
 
     /// 构建 [下层按钮 + 上层全覆盖容器]，返回 (tree, 按钮 id, 按钮中心点)。
@@ -4365,15 +5422,21 @@ mod tests {
         let plus = Point::new(b.right() - 5, cy);
         let minus = Point::new(b.x + 5, cy);
         let (mut h, mut cap) = (None, None);
+        // 必须成对收发：按下会捕获指针，不补 Up 的话后续事件全被锁在同一个按钮上
+        // ——± 现在是两个独立节点，不像旧的自绘版那样每次按下都按 x 重算左右区。
+        let mut click = |p: Point, tree: &mut Tree| {
+            tree.dispatch_pointer(ptr(PointerKind::Down, p), &mut h, &mut cap);
+            tree.dispatch_pointer(ptr(PointerKind::Up, p), &mut h, &mut cap);
+        };
         // + → 3（达上限）
-        tree.dispatch_pointer(ptr(PointerKind::Down, plus), &mut h, &mut cap);
+        click(plus, &mut tree);
         assert_eq!(v.get(), 3.0);
         // 再 + 钳制在 3
-        tree.dispatch_pointer(ptr(PointerKind::Down, plus), &mut h, &mut cap);
+        click(plus, &mut tree);
         assert_eq!(v.get(), 3.0, "上限钳制");
         // − 三次到 0 并钳制
         for _ in 0..4 {
-            tree.dispatch_pointer(ptr(PointerKind::Down, minus), &mut h, &mut cap);
+            click(minus, &mut tree);
         }
         assert_eq!(v.get(), 0.0, "下限钳制");
     }
@@ -4397,6 +5460,440 @@ mod tests {
         let (mut h, mut cap) = (None, None);
         tree.dispatch_pointer(ptr(PointerKind::Down, plus), &mut h, &mut cap);
         assert_eq!(v.get(), 6.0, "归一后 step=1，5→6");
+    }
+
+    // ── Stepper 中部是真正的 TextInput ────────────────────────────────────────
+    //
+    // 旧实现自绘那份文本只会逐字符增删 + 左右移光标：选不中、复制不了、粘不进去。
+    // 下面这组盯的就是「换成文本控件之后，那些能力确实到位了」，以及数值语义
+    //（范围钳制、格式化）没有因此走丢。
+
+    /// 建一棵只含 stepper 的树，返回 `(树, 中部数值框节点, value 信号)`。
+    fn stepper_tree(init: f64, min: f64, max: f64, step: f64) -> (Tree, NodeId, Signal<f64>) {
+        let v = signal(init);
+        let root = Element::col()
+            .width(120)
+            .height(40)
+            .child(Element::stepper(v, min, max, step).width(120));
+        let mut tree = Tree::new();
+        let id = root.build(&mut tree);
+        tree.root = Some(id);
+        tree.layout_root(Size::new(120, 40), &mut crate::text::NullTextEngine);
+        let row = tree.get(id).unwrap().children[0];
+        // 行的三个子节点：[− 按钮, 数值框, + 按钮]。
+        let field = tree.get(row).unwrap().children[1];
+        (tree, field, v)
+    }
+
+    /// 重排一次——`value` ↔ `text` 的同步挂在 `on_update` 上，只在布局前跑。
+    fn stepper_sync(tree: &mut Tree) {
+        tree.layout_root(Size::new(120, 40), &mut crate::text::NullTextEngine);
+    }
+
+    fn skey(key: Key, ctrl: bool) -> KeyEvent {
+        KeyEvent {
+            key,
+            pressed: true,
+            shift: false,
+            ctrl,
+        }
+    }
+
+    /// 全选 + 复制，返回剪贴板内容——即"用户此刻在框里看到的那串字"。
+    fn stepper_copy(tree: &mut Tree, field: NodeId, clip: &Rc<RefCell<String>>) -> String {
+        tree.dispatch_key(skey(Key::Other(0x41), true), Some(field)); // Ctrl+A
+        tree.dispatch_key(skey(Key::Other(0x43), true), Some(field)); // Ctrl+C
+        clip.borrow().clone()
+    }
+
+    #[test]
+    fn stepper_value_is_selectable_and_copyable() {
+        let clip = Rc::new(RefCell::new(String::new()));
+        let (mut tree, field, _v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        tree.clipboard = Some(Box::new(SharedClip(clip.clone())));
+        assert_eq!(
+            stepper_copy(&mut tree, field, &clip),
+            "5",
+            "全选+复制应把当前数值取出来（旧的自绘文本根本选不中）"
+        );
+    }
+
+    #[test]
+    fn stepper_typing_rewrites_value() {
+        let (mut tree, field, v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        tree.dispatch_key(skey(Key::Other(0x41), true), Some(field)); // 全选
+        tree.dispatch_key(skey(Key::Char('7'), false), Some(field)); // 整体替换
+        stepper_sync(&mut tree);
+        assert_eq!(v.get(), 7.0, "键入的数字应回写到绑定信号");
+    }
+
+    /// 非数字**打不进也粘不进**——键入与粘贴共用同一把尺子。
+    #[test]
+    fn stepper_rejects_non_numeric_input() {
+        let clip = Rc::new(RefCell::new(String::from("abc")));
+        let (mut tree, field, v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        tree.clipboard = Some(Box::new(SharedClip(clip.clone())));
+
+        tree.dispatch_key(skey(Key::Char('a'), false), Some(field));
+        stepper_sync(&mut tree);
+        assert_eq!(v.get(), 5.0, "字母键入不得改值");
+
+        tree.dispatch_key(skey(Key::Other(0x41), true), Some(field)); // 全选
+        tree.dispatch_key(skey(Key::Other(0x56), true), Some(field)); // 粘贴 "abc"
+        stepper_sync(&mut tree);
+        assert_eq!(v.get(), 5.0, "非数字粘贴不得改值");
+        assert_eq!(
+            stepper_copy(&mut tree, field, &clip),
+            "5",
+            "被拒的输入不得留在框里（整串丢弃，不做'挑能进的字符'）"
+        );
+    }
+
+    #[test]
+    fn stepper_arrow_keys_step_and_clamp() {
+        let (mut tree, field, v) = stepper_tree(8.0, 1.0, 9.0, 1.0);
+        tree.dispatch_key(skey(Key::Up, false), Some(field));
+        assert_eq!(v.get(), 9.0);
+        tree.dispatch_key(skey(Key::Up, false), Some(field));
+        assert_eq!(v.get(), 9.0, "到上限后不再增");
+        tree.dispatch_key(skey(Key::Down, false), Some(field));
+        assert_eq!(v.get(), 8.0);
+    }
+
+    /// 越界的键入在**失焦提交**时钳回范围，并把文本规整成标准写法。
+    ///
+    /// 提交时机只有 paint 能感知（`focused` 参数），故这条必须真画一帧。
+    #[test]
+    fn stepper_commits_and_clamps_on_blur() {
+        let clip = Rc::new(RefCell::new(String::new()));
+        let (mut tree, field, v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        tree.clipboard = Some(Box::new(SharedClip(clip.clone())));
+        let mut pm = tiny_skia::Pixmap::new(120, 40).unwrap();
+        let mut paint_once = |tree: &Tree| {
+            let mut eng = crate::text::NullTextEngine;
+            let mut canvas = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+            tree.paint(&mut canvas);
+        };
+
+        tree.set_focused(Some(field), None);
+        paint_once(&tree);
+
+        tree.dispatch_key(skey(Key::Other(0x41), true), Some(field)); // 全选
+        for c in ['9', '9'] {
+            tree.dispatch_key(skey(Key::Char(c), false), Some(field));
+        }
+        stepper_sync(&mut tree);
+        assert_eq!(v.get(), 9.0, "编辑途中就把值钳在范围内");
+
+        tree.set_focused(None, Some(field));
+        paint_once(&tree);
+        assert_eq!(
+            stepper_copy(&mut tree, field, &clip),
+            "9",
+            "失焦提交后框里应是钳制后的标准写法，而不是打进去的 99"
+        );
+    }
+
+    /// 外部写 `value`（别处的按钮、恢复默认…）要反映到框里。
+    #[test]
+    fn stepper_external_value_write_updates_text() {
+        let clip = Rc::new(RefCell::new(String::new()));
+        let (mut tree, field, v) = stepper_tree(5.0, 0.0, 3.0, 0.25);
+        tree.clipboard = Some(Box::new(SharedClip(clip.clone())));
+        assert_eq!(
+            stepper_copy(&mut tree, field, &clip),
+            "3.00",
+            "越界初值应先钳进范围，并按步长推断的小数位显示"
+        );
+        v.set(1.5);
+        stepper_sync(&mut tree);
+        assert_eq!(stepper_copy(&mut tree, field, &clip), "1.50");
+    }
+
+    /// 点击落点要按**居中后**的文字算。
+    ///
+    /// 数值是居中绘制的，而命中测试走的是另一条路径——绘制那边加了居中偏移、命中这边
+    /// 忘了减，两边就整体错开半个空白宽度：点第一个数字会把光标放到第二个后面，
+    /// 拖选出来的也是错位的一段。而且屏幕上一切正常，只有真去点才暴露。
+    #[test]
+    fn stepper_click_maps_to_the_centered_text() {
+        let clip = Rc::new(RefCell::new(String::new()));
+        let (mut tree, field, _v) = stepper_tree(123.0, 0.0, 999.0, 1.0);
+        tree.clipboard = Some(Box::new(SharedClip(clip.clone())));
+        // 居中偏移是 paint 算出来的，命中依赖它，故先真画一帧。
+        {
+            let mut pm = tiny_skia::Pixmap::new(120, 40).unwrap();
+            let mut eng = crate::text::NullTextEngine;
+            let mut canvas = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+            tree.paint(&mut canvas);
+        }
+        // 落点在文字左侧的空白里 → 光标应停在串首。
+        let b = tree.abs_bounds(field);
+        let p = Point::new(b.x + 20, b.y + b.h / 2);
+        let (mut h, mut cap) = (None, None);
+        tree.dispatch_pointer(ptr(PointerKind::Down, p), &mut h, &mut cap);
+        tree.dispatch_pointer(ptr(PointerKind::Up, p), &mut h, &mut cap);
+        tree.dispatch_key(
+            KeyEvent {
+                key: Key::End,
+                pressed: true,
+                shift: true,
+                ctrl: false,
+            },
+            Some(field),
+        );
+        tree.dispatch_key(skey(Key::Other(0x43), true), Some(field)); // Ctrl+C
+        assert_eq!(
+            &*clip.borrow(),
+            "123",
+            "点在数值左边再 Shift+End，应选中整串；只选到一部分说明命中没吃居中偏移"
+        );
+    }
+
+    /// ± 按钮写完，框里的数字**当场**就得是新的——不能等下一次 `on_update`。
+    ///
+    /// 长按的重复步进跑在 `paint` 里，那条路不置 `needs_relayout`，下一帧的
+    /// `layout_root` 整个会被跳过、`on_update` 自然也不跑。若按钮只写 `value` 而把
+    /// 文本留给 `on_update` 排，长按期间数字会一直定在原地，松手那次点击才跳到终值。
+    /// 故这里刻意**不调 `stepper_sync`**：中间隔一次重排，这条测试就测不出东西了。
+    #[test]
+    fn stepper_button_updates_text_without_waiting_for_relayout() {
+        let clip = Rc::new(RefCell::new(String::new()));
+        let (mut tree, field, v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        tree.clipboard = Some(Box::new(SharedClip(clip.clone())));
+        let row = tree.get(tree.root.unwrap()).unwrap().children[0];
+        let rb = tree.abs_bounds(row);
+        let plus = Point::new(rb.right() - 5, rb.y + rb.h / 2);
+        let (mut h, mut cap) = (None, None);
+        tree.dispatch_pointer(ptr(PointerKind::Down, plus), &mut h, &mut cap);
+        tree.dispatch_pointer(ptr(PointerKind::Up, plus), &mut h, &mut cap);
+        assert_eq!(v.get(), 6.0);
+        assert_eq!(
+            stepper_copy(&mut tree, field, &clip),
+            "6",
+            "按钮写完文本应当场更新，不依赖后续重排"
+        );
+    }
+
+    /// Escape 撤销的是**本轮键入**，不是"聚焦以来发生的一切"。
+    ///
+    /// 键入会实时回写 `value`（绑定信号随打字更新），所以 Escape 必须能把值退回去；
+    /// 而 ± 按钮和方向键的步进是当场落地的动作，退回时不该被一起吃掉——
+    /// 聚焦 → 点两次 + → 打错一个字 → Escape，用户要的是撤销那个字。
+    #[test]
+    fn stepper_escape_undoes_typing_but_keeps_steps() {
+        let clip = Rc::new(RefCell::new(String::new()));
+        let (mut tree, field, v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        tree.clipboard = Some(Box::new(SharedClip(clip.clone())));
+        {
+            let mut pm = tiny_skia::Pixmap::new(120, 40).unwrap();
+            let mut eng = crate::text::NullTextEngine;
+            let mut canvas = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+            tree.set_focused(Some(field), None);
+            tree.paint(&mut canvas); // 聚焦这一帧记下基线 5
+        }
+        // 点两次 +（左右按钮分列行首行尾，成对收发指针）。
+        let row = tree.get(tree.root.unwrap()).unwrap().children[0];
+        let rb = tree.abs_bounds(row);
+        let plus = Point::new(rb.right() - 5, rb.y + rb.h / 2);
+        let (mut h, mut cap) = (None, None);
+        for _ in 0..2 {
+            tree.dispatch_pointer(ptr(PointerKind::Down, plus), &mut h, &mut cap);
+            tree.dispatch_pointer(ptr(PointerKind::Up, plus), &mut h, &mut cap);
+        }
+        assert_eq!(v.get(), 7.0, "两次 + 应到 7");
+
+        // 再打错一个字：全选后键入 2。
+        tree.dispatch_key(skey(Key::Other(0x41), true), Some(field));
+        tree.dispatch_key(skey(Key::Char('2'), false), Some(field));
+        stepper_sync(&mut tree);
+        assert_eq!(v.get(), 2.0, "键入实时回写");
+
+        tree.dispatch_key(skey(Key::Escape, false), Some(field));
+        assert_eq!(v.get(), 7.0, "Escape 只撤销键入，不该退回两次 + 之前的 5");
+        assert_eq!(stepper_copy(&mut tree, field, &clip), "7");
+    }
+
+    /// Enter 是一次提交，Escape 不该越过它退到更早的地方。
+    ///
+    /// 与上一条同源：`edit_origin` 的前移时机不能只有「获焦」和「步进」，
+    /// 「Enter 定了一次」同样是当场落地。
+    #[test]
+    fn stepper_escape_stops_at_the_last_enter() {
+        let (mut tree, field, v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        {
+            let mut pm = tiny_skia::Pixmap::new(120, 40).unwrap();
+            let mut eng = crate::text::NullTextEngine;
+            let mut canvas = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+            tree.set_focused(Some(field), None);
+            tree.paint(&mut canvas); // 基线 = 5
+        }
+        tree.dispatch_key(skey(Key::Other(0x41), true), Some(field));
+        tree.dispatch_key(skey(Key::Char('3'), false), Some(field));
+        stepper_sync(&mut tree);
+        tree.dispatch_key(skey(Key::Enter, false), Some(field)); // 提交 3
+
+        tree.dispatch_key(skey(Key::Other(0x41), true), Some(field));
+        tree.dispatch_key(skey(Key::Char('7'), false), Some(field));
+        stepper_sync(&mut tree);
+        tree.dispatch_key(skey(Key::Escape, false), Some(field));
+        assert_eq!(v.get(), 3.0, "应退回上次 Enter 提交的 3，而不是聚焦时的 5");
+    }
+
+    /// 没有未提交改动时，Enter 要放行冒泡——否则对话框的默认按钮会被数字框吃掉。
+    #[test]
+    fn stepper_enter_bubbles_when_nothing_to_commit() {
+        let (mut tree, field, _v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        let clean = tree.dispatch_key(skey(Key::Enter, false), Some(field));
+        assert!(
+            !clean.consumed,
+            "什么都没改就按回车，Enter 应冒泡出去（对话框「确定」还得能按）"
+        );
+        tree.dispatch_key(skey(Key::Other(0x41), true), Some(field));
+        tree.dispatch_key(skey(Key::Char('8'), false), Some(field));
+        let dirty = tree.dispatch_key(skey(Key::Enter, false), Some(field));
+        assert!(dirty.consumed, "有未提交改动时 Enter 是提交，应被消费");
+    }
+
+    /// **禁用期间**外部写 `value`，框里也得跟着变。
+    ///
+    /// 这条盯的是一个只在复合化之后才可能出现的回归：同步全挂在 `on_update` 上，而
+    /// `Tree::call_on_update` 开头就把禁用节点整个跳过了——于是置灰的数字框会一直
+    /// 停在禁用那一刻的旧数字，重新启用才跳到新值。旧的自绘实现每帧现读 `value`，
+    /// 没有这个问题。兜底做在 `NumberField::paint` 里，故这条必须真画一帧。
+    #[test]
+    fn stepper_disabled_still_follows_external_value() {
+        let v = signal(5.0f64);
+        let root = Element::col()
+            .width(120)
+            .height(40)
+            .child(Element::stepper(v, 1.0, 9.0, 1.0).width(120).disabled(true));
+        let mut tree = Tree::new();
+        let id = root.build(&mut tree);
+        tree.root = Some(id);
+        tree.layout_root(Size::new(120, 40), &mut crate::text::NullTextEngine);
+        let row = tree.get(id).unwrap().children[0];
+        let field = tree.get(row).unwrap().children[1];
+
+        let mut pm = tiny_skia::Pixmap::new(120, 40).unwrap();
+        let mut paint_once = |tree: &Tree| {
+            let mut eng = crate::text::NullTextEngine;
+            let mut canvas = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+            tree.paint(&mut canvas);
+        };
+        paint_once(&tree);
+        assert_eq!(tree.ime_text_of(field).as_deref(), Some("5"));
+
+        v.set(8.0);
+        tree.layout_root(Size::new(120, 40), &mut crate::text::NullTextEngine);
+        paint_once(&tree);
+        assert_eq!(
+            tree.ime_text_of(field).as_deref(),
+            Some("8"),
+            "置灰期间外部改值，框里仍须显示新值"
+        );
+    }
+
+    /// 只重绘、不重排的帧里，`value` 变化也得跟上。
+    ///
+    /// 典型场景是同一个 `Signal<f64>` 同时绑 `slider` 和 `stepper`：拖滑块全程是指针
+    /// `Move`，而 `Move` 刻意不置 `needs_relayout`（hover 高频），于是 `layout_root`
+    /// 不跑、`on_update` 也不跑。同步只挂在 `on_update` 上的话，数字会一路纹丝不动，
+    /// 直到松手才一次性跳到位。故这条**只 paint、不 layout**。
+    #[test]
+    fn stepper_follows_value_on_repaint_only_frames() {
+        let (tree, field, v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        let mut pm = tiny_skia::Pixmap::new(120, 40).unwrap();
+        let mut paint_once = |tree: &Tree| {
+            let mut eng = crate::text::NullTextEngine;
+            let mut canvas = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+            tree.paint(&mut canvas);
+        };
+        paint_once(&tree);
+        assert_eq!(tree.ime_text_of(field).as_deref(), Some("5"));
+
+        v.set(2.0);
+        paint_once(&tree); // 刻意不 layout_root：重排一跑，这条就测不出东西了
+        assert_eq!(
+            tree.ime_text_of(field).as_deref(),
+            Some("2"),
+            "没有重排的帧里也要跟上 value"
+        );
+    }
+
+    /// 挂在 stepper 上的 `.tooltip(..)` 要能从内部任一处悬停触发。
+    ///
+    /// 复合控件的命中永远落在子节点（± 按钮、数值框）上，而 `node_tooltip` 原先只看
+    /// 命中节点自身——于是 `.tooltip(..)` 链上去不报错也不生效。现已与 `cursor_at`
+    /// 对齐：沿祖先链回溯。
+    #[test]
+    fn stepper_tooltip_reaches_inner_nodes() {
+        let v = signal(5.0f64);
+        let root = Element::col().width(120).height(40).child(
+            Element::stepper(v, 1.0, 9.0, 1.0)
+                .width(120)
+                .tooltip("每次 ±1"),
+        );
+        let mut tree = Tree::new();
+        let id = root.build(&mut tree);
+        tree.root = Some(id);
+        tree.layout_root(Size::new(120, 40), &mut crate::text::NullTextEngine);
+        let row = tree.get(id).unwrap().children[0];
+        let rb = tree.abs_bounds(row);
+        // 悬停在 − 按钮上（命中的是子节点，不是挂提示的那个行容器）。
+        let hit = tree
+            .hit_test(Point::new(rb.x + 5, rb.y + rb.h / 2))
+            .expect("应命中 − 按钮");
+        assert_ne!(hit, row, "前置：命中的确实是子节点");
+        assert_eq!(tree.node_tooltip(hit).as_deref(), Some("每次 ±1"));
+    }
+
+    /// 点 ± **不要**把焦点拽给数值框——调值和编辑是两件事。
+    ///
+    /// 光标是个很强的视觉信号：只想微调一下数字，框里却开始闪光标，既像是进了编辑态
+    /// 又容易被后续误触改坏。想编辑就直接点中间那格。
+    ///
+    /// 判据取 `dispatch_pointer` 的 `res.focus`：宿主每次按下都重新裁决焦点，没有节点
+    /// 认领就清空（`apply_dispatch_effects` 的 blur 分支），所以「不请求」就等于「不聚焦」。
+    #[test]
+    fn stepper_buttons_do_not_steal_focus() {
+        let (mut tree, field, v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        let row = tree.get(tree.root.unwrap()).unwrap().children[0];
+        let rb = tree.abs_bounds(row);
+        let (mut h, mut cap) = (None, None);
+        for p in [
+            Point::new(rb.right() - 5, rb.y + rb.h / 2), // +
+            Point::new(rb.x + 5, rb.y + rb.h / 2),       // −
+        ] {
+            let down = tree.dispatch_pointer(ptr(PointerKind::Down, p), &mut h, &mut cap);
+            let up = tree.dispatch_pointer(ptr(PointerKind::Up, p), &mut h, &mut cap);
+            assert!(
+                down.focus.is_none() && up.focus.is_none(),
+                "点 ± 不得请求焦点"
+            );
+        }
+        assert_eq!(v.get(), 5.0, "前置：一加一减回到原值，说明两次都真的点中了");
+
+        // 对照：直接点中部那格才聚焦。
+        let fb = tree.abs_bounds(field);
+        let p = Point::new(fb.x + fb.w / 2, fb.y + fb.h / 2);
+        let down = tree.dispatch_pointer(ptr(PointerKind::Down, p), &mut h, &mut cap);
+        assert_eq!(
+            down.focus,
+            Some(field),
+            "手动点数值框才该聚焦，否则连编辑都进不去了"
+        );
+    }
+
+    /// 整个 stepper 对 Tab 只占一个焦点位，且那一位是中部数值框。
+    #[test]
+    fn stepper_takes_a_single_tab_stop() {
+        let (tree, field, _v) = stepper_tree(5.0, 1.0, 9.0, 1.0);
+        assert_eq!(
+            tree.focusable_order(),
+            vec![field],
+            "± 按钮不该各占一个焦点位，否则跨过一个数字框要按三次 Tab"
+        );
     }
 
     #[test]

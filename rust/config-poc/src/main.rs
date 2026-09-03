@@ -39,7 +39,7 @@ const CANDIDATE_PREVIEW_MODEL_CONTRACT: &str = "candidate-model-layout-render-se
 const CANDIDATE_PREVIEW_SAMPLE_SOURCE: &str = "fixed-preview-sample-input-only";
 const WINDOW_EFFECTS_ADAPTER_CONTRACT: &str = "rust-config-window-effects-capability-adapter";
 const SETTINGS_SURFACE_CONTRACT: &str = "bounded-rust-d2d-dwrite-settings-surface";
-const WIND_UI_RUST_REFERENCE_COMMIT: &str = "62241e25e762df154c1b1f855b4db57533e516fc";
+const WIND_UI_RUST_REFERENCE_COMMIT: &str = "3b643b281ebbd82e8f22a77143dea3e3363f242e";
 const WIND_UI_RUST_LICENSE: &str = "MIT OR Apache-2.0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5870,7 +5870,7 @@ mod tests {
         assert_eq!(evidence.crate_name, "windui");
         assert_eq!(
             evidence.reference_commit,
-            "62241e25e762df154c1b1f855b4db57533e516fc"
+            "3b643b281ebbd82e8f22a77143dea3e3363f242e"
         );
         assert_eq!(evidence.license, "MIT OR Apache-2.0");
         assert!(evidence.vendored_path_dependency);
@@ -6145,7 +6145,7 @@ mod tests {
         assert!(report.contains("\"settings_surface_no_surface_overlap\":true"));
         assert!(report.contains("\"windui_crate_name\":\"windui\""));
         assert!(report
-            .contains("\"windui_reference_commit\":\"62241e25e762df154c1b1f855b4db57533e516fc\""));
+            .contains("\"windui_reference_commit\":\"3b643b281ebbd82e8f22a77143dea3e3363f242e\""));
         assert!(report.contains("\"windui_license\":\"MIT OR Apache-2.0\""));
         assert!(report.contains("\"windui_vendored_path_dependency\":true"));
         assert!(report.contains("\"windui_role_palette_consumed\":true"));

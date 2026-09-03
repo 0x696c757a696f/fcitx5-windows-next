@@ -20,6 +20,8 @@ pub use win32::clipboard::WinClipboard as Clipboard;
 pub use win32::open_url;
 #[cfg(windows)]
 pub(crate) use win32::run;
+#[cfg(windows)]
+pub(crate) use win32::system_prefers_dark;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -29,13 +31,15 @@ pub use macos::clipboard::MacClipboard as Clipboard;
 pub use macos::open_url;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::run;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::system_prefers_dark;
 
 #[cfg(not(any(windows, target_os = "macos")))]
 compile_error!("windui 目前仅支持 Windows 与 macOS 平台");
 
 /// 托盘的平台无关声明层（`Tray` / `TrayMenuItem` / `TrayCtx` / `TrayAction`）。
 pub mod tray;
-pub use tray::{Tray, TrayAction, TrayCtx, TrayMenuItem};
+pub use tray::{Tray, TrayAction, TrayCtx, TrayHandle, TrayMenuItem, TrayOp};
 
 use std::cell::Cell;
 use std::path::Path;
@@ -719,8 +723,38 @@ pub trait AppHandler {
 
     /// 输入法组合态开始/结束（拼音等未上屏文字合成中）时由平台层调用，转发给
     /// 当前焦点控件（见 `Widget::set_composing`）。返回 true 表示需要重绘。
+    ///
+    /// **仅 win32 走这条**：那边合成串由系统 IME 自己画（`ImmSetCompositionWindow`），
+    /// 上层只需知道「合成中」以便藏起自绘光标、消除双光标。需要自绘合成串的平台
+    /// （macOS、将来的 Linux）走 [`Self::set_ime_preedit`]。
     fn set_ime_composing(&mut self, _composing: bool) -> bool {
         false
+    }
+
+    /// 输入法合成串变化时由平台层调用，转发给当前焦点控件（见 `Widget::set_preedit`）。
+    /// 返回 true 表示需要重绘。
+    ///
+    /// 与 [`Self::set_ime_composing`] 互斥：**走系统内联绘制的平台（win32）永不调用本方法**，
+    /// 否则系统画一份、控件自绘一份，屏幕上会出现双份合成串。
+    fn set_ime_preedit(&mut self, _pe: &crate::event::Preedit) -> bool {
+        false
+    }
+
+    /// 焦点文本控件的当前选区（**字符**索引，`(start, end)` 且 `start <= end`）。
+    /// 无选区时返回光标处的空范围；无文本焦点返回 `None`。
+    ///
+    /// 供输入法查询上下文（macOS `selectedRange`）。返回错误的值不会崩，只会让
+    /// 部分输入法的候选联想与重转换失准，故值必须真实反映控件状态。
+    fn ime_selection(&self) -> Option<(usize, usize)> {
+        None
+    }
+
+    /// 焦点文本控件的**已提交**正文（不含未上屏的合成串）。无文本焦点返回空串。
+    ///
+    /// 供输入法读取上下文（macOS `attributedSubstringForProposedRange:`，用于重转换与
+    /// 联想），以及把字符索引换算成 UTF-16 码元。密码框返回空串——不把密码交给输入法。
+    fn ime_text(&self) -> String {
+        String::new()
     }
 
     /// 本帧是否有控件请求持续动画。平台层据此在阻塞空闲与按帧驱动之间切换。
@@ -820,6 +854,14 @@ pub trait AppHandler {
     /// 省，否则首次事件分发读到的还是配置推导出的初始值。未推送的平台上宿主沿用
     /// 由建窗配置推导的初始快照——那是保守但正确的能力位，不是谎报。
     fn on_window_state(&mut self, _st: crate::event::WindowState) {}
+
+    /// 系统外观偏好变了（亮 ↔ 暗）。返回是否需要重绘。
+    ///
+    /// 平台只在**主题这一项**变化时调它。Windows 上所有系统设置的变更共用一条
+    /// `WM_SETTINGCHANGE`，不筛的话用户改字体、区域、鼠标速度都会把界面重建一遍。
+    fn on_system_theme_changed(&mut self, _dark: bool) -> bool {
+        false
+    }
 
     /// 取出并清除待执行的原生文件对话框请求。平台在事件分发**完全返回**（OS 侧鼠标
     /// 捕获已同步）之后才调用，避免在事件回调栈内重入阻塞式模态对话框。
