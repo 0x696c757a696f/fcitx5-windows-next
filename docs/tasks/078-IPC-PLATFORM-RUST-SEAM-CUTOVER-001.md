@@ -242,34 +242,35 @@ and drives a Rust client, deleting the C++ client dependency:
   `rust/ipc-client-core` crate) that spawn `fcitx5-mock-engine.exe` and assert the same commit/
   handled/late/multi-client/idle/revision semantics with a Rust client. Reuse the frozen
   `protocol-core` wire corpus where it already covers the frame semantics.
-- `launcher_integration_test` and `launcher_crash_loop_test`: MIGRATE to Rust transport E2E that
-  spawn the shipping `fcitx5-launcher.exe` + mock/crash engine and assert the same
-  launcherState/engineState/startDisposition/Safe-Mode lifecycle via a Rust launcher client
-  (add the missing Rust launcher-command client if none exists; `launcher-core` already owns the
-  supervisor side). These are real-process lifecycle E2E and remain `KEEP` as *final mixed-binary*
-  only if rewritten so the client is Rust; the C++ `LauncherResponse` mirror is deleted either way.
+- `launcher_integration_test` and `launcher_crash_loop_test`: KEEP (final mixed-binary
+  integration/E2E). They spawn the real shipping `fcitx5-launcher.exe` + mock/crash engine and
+  assert the real process lifecycle (launcherState/engineState/startDisposition/Safe-Mode); the
+  C++ client is the legitimate cross-language probe, not a product authority. Per AGENTS.md
+  long-term C++ test allowlist item 3 these stay C++.
 - `fcitx_engine_integration_test` (real `fcitx5-engine.exe` x64/x86 acceptance in
-  `tools/test-fcitx.ps1`): MIGRATE the key-drive to a Rust client harness that spawns
-  `fcitx5-engine.exe` and `fcitx5-ui.exe`, drives the same baseline/typing-fuzz/chttrans/safe-mode/
-  rime-lua key sequences and candidate selection through the Rust client + Rust decode, and asserts
-  the same `KeyResult` semantics from the decoded Rust `KeyResponse`. `tools/test-fcitx.ps1` then
-  invokes the Rust test binary. This is the largest migration slice and must preserve the exact
-  release-gate corpus; do not drop a scenario.
-- Classification: none of these C++ files qualify as long-term `KEEP` under the permanent C++ test
-  allowlist (they do not directly operate `fcitx::Instance`/`InputContext`/`Addon`/`CandidateList`;
-  they are pure pipe/protocol clients, and the same coverage is achievable with a Rust client).
-  All are `MIGRATE`. The only retained C++ seam is the new opaque `candidate_select_client`
-  declarations (necessary Win32/C-ABI seam for the C++ renderer host) plus the already-`KEEP`
-  peer/identity/pipe-security seams.
+  `tools/test-fcitx.ps1`): KEEP (final mixed-binary integration/E2E). It drives the real
+  Fcitx C++ binary + `fcitx5-ui.exe` and is the release-gate real-Fcitx acceptance corpus; the
+  C++ client over the real pipe is the cross-language probe. Do NOT rewrite it to a Rust harness
+  (that would replace a mixed-binary E2E with a Rust-only one and shrink release coverage).
+- Classification: the five `ipc_*` wire tests are `MIGRATE` (pure protocol, mock-engine fixture,
+  Rust `protocol-core` owns the wire). `fcitx_engine_integration_test` and the two `launcher_*`
+  tests are `KEEP` (final mixed-binary integration/E2E, allowlist item 3). Consequently
+  `pipe_client.*`/`launcher_client.*` remain as the necessary C++ client for the KEEP E2E tests
+  (no product policy, only transport); they are NOT deleted. 078 completion is: ui_main.cpp
+  production consumer migrated to the Rust opaque client (done, Stage 1+2), the five `ipc_*` wire
+  tests migrated to Rust (Stage 3), and the KEEP E2E tests + their C++ client reclassified.
 
-#### Stage 4 — delete the C++ transport adapters and CMake target
+#### Stage 4 — delete the five migrated C++ wire tests and their CTest entries
 
-- Delete `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` and
-the now-unused integration `.cpp` test files after each Rust replacement is green on x64 and x86.
-- Remove `fcitx5::ipc_client` target/sources and the removed CTest entries from `CMakeLists.txt`
-  once the Rust CTest routes are registered. Keep `fcitx5::ipc_client` only if a `KEEP` adapter
-  still needs it; the plan expects none remains.
-- Update `docs/tasks/077-production-cpp-inventory.md` rows for the four deleted files.
+- Delete `tests/integration/ipc_roundtrip_test.cpp`, `ipc_multi_client_test.cpp`,
+  `ipc_idle_client_test.cpp`, `ipc_generation_routing_test.cpp`, `ipc_late_response_test.cpp` after
+their Rust replacements are green on x64 and x86, and remove their CTest registrations in
+  `CMakeLists.txt` once the Rust CTest routes are registered.
+- `src/ipc/pipe_client.*`/`launcher_client.*` stay as the KEEP mixed-binary E2E client (used by
+  `fcitx_engine_integration_test` and `launcher_*_test`). They hold no product policy; update
+  `docs/tasks/077-production-cpp-inventory.md` rows to `KEEP (final mixed-binary E2E client)`.
+- The five deleted test `.cpp` files were the only consumers that no longer qualify; `fcitx5::ipc_client`
+  remains linked by the KEEP E2E tests.
 
 #### Stage 5 — x64/x86 verification
 
