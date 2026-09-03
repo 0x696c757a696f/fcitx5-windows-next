@@ -42,20 +42,10 @@ Preserve context for reasoning and code, not bulk input.
 
 The root agent is the orchestrator. Route work automatically instead of asking the user to switch models.
 
-Optimize for successful work per unit of context and compute. Spend strong-model reasoning on uncertainty and delegate well-specified execution downward.
-
-Preferred routing:
-
-- Luna medium: delegate deterministic, well-specified implementation, tests, fixtures, mechanical edits, straightforward refactors, and regressions whose root cause and acceptance criteria are already known.
-- Terra high: delegate bounded debugging or implementation that requires judgment but has limited architectural uncertainty.
-- Terra xhigh: delegate bounded investigations that need materially deeper reasoning while cost efficiency still matters.
-- Sol medium: keep orchestration, decomposition, integration, ambiguous root-cause analysis, architecture review, and decisions where a wrong assumption could cause substantial rework.
-- Sol xhigh: use for TSF/COM/ABI/FFI, concurrency/lifetime/unsafe boundaries, security-sensitive design, protocol redesign, difficult cross-component regressions, or when a focused lower-cost investigation fails to establish a trustworthy root cause.
-- GPT-5.5 high/xhigh: optional independent second opinion only, not part of the normal escalation ladder.
-
-Do not use Sol high as an automatic intermediate step. Do not use Sol max by default.
-
-After Sol or Terra removes uncertainty, delegate the now-bounded implementation and regression work to Luna whenever practical.
+Subagents are implemented with `deepseek-v4-flash`. The root agent keeps orchestration,
+decomposition, integration, ambiguous root-cause analysis, architecture review, and decisions where
+a wrong assumption could cause substantial rework; well-specified execution is delegated to
+`deepseek-v4-flash` subagents.
 
 Delegation rules:
 
@@ -67,7 +57,7 @@ Delegation rules:
 - Do not spawn a subagent when describing and supervising the work would cost more context than doing it directly.
 - After two materially equivalent failures, stop repeating the same approach and reconsider the root-cause model.
 
-Execution environment for implementation agents:
+Execution environment for implementation agents (give every subagent these absolute paths):
 
 - Use PowerShell 7 at `D:\Program Files\PowerShell\7\pwsh.exe`.
 - Use the repository toolchain root `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains`.
@@ -76,6 +66,25 @@ Execution environment for implementation agents:
   `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home\bin\cargo.exe`
   (or the exact pinned toolchain path selected by the task), and keep `CARGO_TARGET_DIR`
   inside the agent worktree.
+- Set `RUSTUP_HOME=D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\rustup-home`,
+  `CARGO_HOME=D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home`, and
+  `RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-msvc`.
+- The repository `.cargo/config.toml` already points `rustc-wrapper` at the pinned sccache; also pass
+  the absolute sccache path explicitly:
+  `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\sccache-0.17.0\sccache-v0.17.0-x86_64-pc-windows-msvc\sccache.exe`.
+- CMake/CTest:
+  `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\cmake-3.31.8\cmake-3.31.8-windows-x86_64\bin`.
+- Ninja: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\ninja-1.13.2\ninja.exe`.
+- LLVM bin:
+  `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\llvm-22.1.8\clang+llvm-22.1.8-x86_64-pc-windows-msvc\bin`.
+- Python: `D:\Dev\pixi\envs\python\python.exe`.
+- Use PowerShell syntax only on this Windows task; never use Bash quoting/heredocs. Wrap statement
+  blocks (`foreach`, `if`) in `$()`/`@()` before piping, expand wildcard directories with
+  `Get-ChildItem -Filter` before passing real paths to `rg`, and prefer single quotes around complex
+  regexes. Multi-line Python uses a PowerShell here-string piped to `python -`, never a Bash heredoc.
+- Default every pure Safe Rust crate/entry to `#![forbid(unsafe_code)]`; only FFI, Win32/COM,
+  allocator, or low-level ABI files may be named exceptions, and they must still use
+  `#![deny(unsafe_op_in_unsafe_fn)]`, narrow `unsafe` blocks, and `SAFETY` comments.
 
 ## Implementation rule
 

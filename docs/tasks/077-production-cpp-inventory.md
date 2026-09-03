@@ -8,7 +8,7 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 
 | Current file(s) | Initial class | Required final state |
 |---|---|---|
-| `protocol/protocol.cpp`, `protocol/protocol.h` | MIGRATE | Delete C++ DTO/bridge after consumers use Rust protocol ABI |
+| `protocol/protocol.cpp`, `protocol/protocol.h` | DELETED (phase-4, uncommitted HEAD after `87e1f43`) | C++ DTO/bridge deleted; all consumers now use the Rust `protocol_ffi.h` flat ABI |
 | `protocol/protocol_ffi.h`, `resources/windows/resource.h` | KEEP-CANDIDATE ABI | Retain declarations/resource IDs only where required |
 | `src/config/app_main.cpp` | DELETED at `3cf297b` | Rust Settings is the sole shipping shell; legacy WTL target and differential test are deleted |
 | `src/config/config_model.h`, `src/config/config_parser.cpp` | DELETED at `2788831` | Config Core owns typed parsing, validation, recovery, persistence, and resolved Candidate visuals |
@@ -20,7 +20,7 @@ unconditional classification. There are no accepted conditional rows at 077 comp
 | `src/launcher/tray_icon.cpp`, `tray_icon.h`, `launcher_rust_abi.h` | DELETED at `240496e` | No default tray is required; the temporary tray and flat C++ ABI seams were removed |
 | `src/engine/mock_engine_main.cpp` | DELETED at `601a4d0` | Safe Rust fixture preserves the final mixed IPC/Launcher/TSF corpus and exact verified pipe-peer handshake |
 | `src/engine/presentation_publisher.cpp`, `presentation_publisher.h` | DELETED at `7d1aeaa` | Rust Engine owns validation, coalescing, exact peer transport, bounded I/O, retry/reconnect, stop, and destruction; only the opaque ABI RAII call site remains inside the approved Fcitx process adapter |
-| `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` | MIGRATE | Delete after Rust-owned process consumers use Rust IPC APIs |
+| `src/ipc/pipe_client.cpp`, `pipe_client.h`, `launcher_client.cpp`, `launcher_client.h` | KEEP-CANDIDATE ABI (protocol DTO dependency removed) | These now marshal only transport bytes through the Rust protocol-core C ABI; reclassify as thin native IPC adapters or delete once no Rust-owned process consumer needs them |
 | `src/ipc/peer_verification.cpp`, `peer_verification.h` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary peer identity mechanics |
 | `src/platform/runtime_identity.*`, `pipe_security.*` | KEEP-CANDIDATE native ABI | Remove duplicate policy; retain only necessary Win32/C ABI mechanics |
 | `src/engine/fcitx_dispatcher.*`, `fcitx_runtime.*`, `key_event.*`, `windows_keyboard.cpp` | KEEP-CANDIDATE Fcitx | Retain only direct Fcitx event/object/key/addon adapter symbols |
