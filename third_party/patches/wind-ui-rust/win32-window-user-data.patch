@@ -1,0 +1,47 @@
+diff --git a/src/platform/win32/mod.rs b/src/platform/win32/mod.rs
+index 24b5877..4e47329 100644
+--- a/src/platform/win32/mod.rs
++++ b/src/platform/win32/mod.rs
+@@ -294,6 +294,24 @@ unsafe fn destroy_app_host() {
+ ///
+ /// 都不碰 `handler`——托盘与热键的回调只需各自的 `TrayState`/`HotkeyState`，产出的是
+ /// [`WindowOp`] 意图，由 `main` 窗口执行；唤醒则只是让各窗口出一帧。
++#[cfg(target_pointer_width = "64")]
++fn set_window_user_data(hwnd: HWND, value: isize) {
++    // SAFETY: Caller provides a live HWND during WM_NCCREATE; the value is the application state
++    // pointer passed through CreateWindowExW and is stored without dereferencing.
++    unsafe {
++        SetWindowLongPtrW(hwnd, GWLP_USERDATA, value);
++    }
++}
++
++#[cfg(target_pointer_width = "32")]
++fn set_window_user_data(hwnd: HWND, value: isize) {
++    // SAFETY: Caller provides a live HWND during WM_NCCREATE; on 32-bit Windows the windows crate
++    // maps SetWindowLongPtrW to SetWindowLongW, whose pointer-sized slot is i32.
++    unsafe {
++        SetWindowLongPtrW(hwnd, GWLP_USERDATA, value as i32);
++    }
++}
++
+ unsafe extern "system" fn app_host_proc(
+     hwnd: HWND,
+     msg: u32,
+@@ -304,7 +322,7 @@ unsafe extern "system" fn app_host_proc(
+         WM_NCCREATE => {
+             let cs = lparam.0 as *const CREATESTRUCTW;
+             if !cs.is_null() {
+-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*cs).lpCreateParams as isize);
++                set_window_user_data(hwnd, (*cs).lpCreateParams as isize);
+             }
+             DefWindowProcW(hwnd, msg, wparam, lparam)
+         }
+@@ -1347,7 +1365,7 @@ unsafe extern "system" fn wnd_proc(
+             let cs = lparam.0 as *const CREATESTRUCTW;
+             if !cs.is_null() {
+                 let state_ptr = (*cs).lpCreateParams as isize;
+-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
++                set_window_user_data(hwnd, state_ptr);
+             }
+             DefWindowProcW(hwnd, msg, wparam, lparam)
+         }

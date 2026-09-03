@@ -75,3 +75,50 @@ manual bulk file copy. Two upstream families are in scope:
 - Do not add a second build system or a third-party tool that requires network
   access at configure time beyond what already exists.
 - Do not claim real-host/signing/UAC/accessibility evidence; this is tooling only.
+
+## Implemented design (record of execution)
+
+**Decision: scripted vendoring + named patch files, NOT subtree/submodule.**
+`wind-ui-rust` is a Rust path dependency (`windui = { path =
+"../../third_party/wind-ui-rust" }`) and carries two repo-local Windows
+portability patches. A git submodule would make those patches impossible to
+record (a submodule working tree cannot carry repo-local committed edits), and a
+git subtree history rewrite is higher risk for no additional benefit over a
+deterministic sync script. The scripted approach still delivers one-command
+sync with clean, attributable diffs.
+
+Created by 079:
+
+- `third_party/patches/wind-ui-rust/win32-window-user-data.patch` - the
+  `set_window_user_data` cfg(64/32) wrapper for `src/platform/win32/mod.rs`.
+- `third_party/patches/wind-ui-rust/win32-tray-unaligned.patch` - the
+  `copy_wide_unaligned` + `std::ptr` fix for `src/platform/win32/tray.rs`.
+- `tools/sync-windui.ps1` - the one-command sync.
+
+Sync command (pin or latest):
+
+```powershell
+# to a specific upstream commit:
+& tools/sync-windui.ps1 -Commit <40-hex-sha>
+# to upstream HEAD:
+& tools/sync-windui.ps1 -Latest
+```
+
+The script: clones upstream to a temp dir, verifies every patch with
+`git apply --check` on the clean upstream content **before** touching the
+vendored tree (fail-closed, no half-updated tree), copies only the in-scope
+entries (`src/`, `examples/`, `Cargo.toml`, `README.md`, `README.en.md`,
+`LICENSE-APACHE`, `LICENSE-MIT`; `build.rs`/`assets`/`CHANGELOG.md` only serve
+upstream example-exe icon embedding and are excluded), normalizes every copied
+text file to LF (repo `.gitattributes` is `* text=auto eol=lf`), applies the two
+patches with `git apply --directory=third_party/wind-ui-rust`, updates
+`third_party/dependencies.json` (short-hash version convention, full-hash
+source), updates the `WIND_UI_RUST_REFERENCE_COMMIT` constant + test assertions
+in `rust/config-poc/src/main.rs`, and runs the config consumer tests.
+
+Fcitx5 core/addons stay pinned build-time checkouts under `$sourcePins` in
+`tools/bootstrap-fcitx.ps1` with the patch queue in `third_party/patches/`; they
+are intentionally NOT re-vendored. 079 changed no Fcitx native pin or patch.
+
+Idempotency: running `sync-windui.ps1 -Commit` at the current pin produces no
+net diff to the tracked working tree.

@@ -1,0 +1,83 @@
+diff --git a/src/platform/win32/tray.rs b/src/platform/win32/tray.rs
+index d8b4e1b..97d6014 100644
+--- a/src/platform/win32/tray.rs
++++ b/src/platform/win32/tray.rs
+@@ -9,6 +9,7 @@
+ 
+ use std::ffi::c_void;
+ use std::mem::size_of;
++use std::ptr;
+ 
+ pub(crate) use crate::platform::tray::{invoke, ItemKind, Tray, TrayAction};
+ 
+@@ -94,7 +95,7 @@ pub(crate) fn install(hwnd: HWND, tray: Tray) -> Option<TrayState> {
+     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+     nid.uCallbackMessage = WM_TRAYICON;
+     nid.hIcon = hicon;
+-    copy_wide(&mut nid.szTip, &tray.tooltip);
++    copy_wide_unaligned(ptr::addr_of_mut!(nid.szTip), &tray.tooltip);
+     let ok = unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool();
+     if !ok {
+         if owns_icon {
+@@ -205,8 +206,8 @@ pub(crate) fn notify(hwnd: HWND, uid: u32, title: &str, body: &str) {
+     unsafe {
+         let mut nid = base_nid(hwnd, uid);
+         nid.uFlags = NIF_INFO;
+-        copy_wide(&mut nid.szInfoTitle, title);
+-        copy_wide(&mut nid.szInfo, body);
++        copy_wide_unaligned(ptr::addr_of_mut!(nid.szInfoTitle), title);
++        copy_wide_unaligned(ptr::addr_of_mut!(nid.szInfo), body);
+         nid.dwInfoFlags = NIIF_INFO;
+         let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+     }
+@@ -221,7 +222,7 @@ pub(crate) fn set_tooltip(hwnd: HWND, uid: u32, tip: &str) {
+     unsafe {
+         let mut nid = base_nid(hwnd, uid);
+         nid.uFlags = NIF_TIP;
+-        copy_wide(&mut nid.szTip, tip);
++        copy_wide_unaligned(ptr::addr_of_mut!(nid.szTip), tip);
+         let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+     }
+ }
+@@ -265,24 +266,29 @@ fn base_nid(hwnd: HWND, uid: u32) -> NOTIFYICONDATAW {
+ }
+ 
+ /// 把 &str 写入定长 UTF-16 缓冲（截断 + NUL 收尾）。
+-fn copy_wide(dst: &mut [u16], s: &str) {
+-    let n = dst.len();
+-    if n == 0 {
++/// 将 &str 写入 Win32 packed 结构体内的定长 UTF-16 缓冲区（截断 + NUL 结尾）。
++fn copy_wide_unaligned<const N: usize>(dst: *mut [u16; N], s: &str) {
++    if N == 0 || dst.is_null() {
+         return;
+     }
+-    let mut it = s.encode_utf16();
+-    for slot in dst.iter_mut().take(n - 1) {
+-        match it.next() {
+-            Some(c) => *slot = c,
+-            None => {
+-                *slot = 0;
+-                return;
+-            }
++    let base = dst.cast::<u16>();
++    let mut written = 0usize;
++    for code_unit in s.encode_utf16().take(N - 1) {
++        // SAFETY: `base` points at a fixed-size UTF-16 array inside NOTIFYICONDATAW. Shell
++        // structures may be packed, so every element write uses unaligned stores within bounds.
++        unsafe {
++            ptr::write_unaligned(base.add(written), code_unit);
+         }
++        written += 1;
++    }
++    // SAFETY: `written <= N - 1`, so the trailing NUL is within the destination array. The write
++    // remains unaligned-safe for packed Win32 shell structures.
++    unsafe {
++        ptr::write_unaligned(base.add(written), 0);
+     }
+-    dst[n - 1] = 0;
+ }
+ 
++
+ /// &str → 以 NUL 结尾的 UTF-16。
+ fn wide_nul(s: &str) -> Vec<u16> {
+     s.encode_utf16().chain(std::iter::once(0)).collect()
