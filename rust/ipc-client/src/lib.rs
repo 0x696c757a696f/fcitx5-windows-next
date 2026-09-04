@@ -33,13 +33,26 @@ fn next_request_id() -> u64 {
     NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// A candidate record projected from a decoded `KeyResponse`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CandidateOutcome {
+    pub id: u64,
+    pub label_utf8: Vec<u8>,
+    pub text_utf8: Vec<u8>,
+    pub comment_utf8: Vec<u8>,
+}
+
 /// Result of a key request that the wire tests assert on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyOutcome {
     pub handled: bool,
+    pub engine_epoch: u64,
+    pub composition_id: u64,
+    pub revision: u64,
     pub commit: Vec<u8>,
     pub preedit: Vec<u8>,
     pub preedit_caret_utf8: u32,
+    pub candidates: Vec<CandidateOutcome>,
     pub selected_candidate: u32,
     pub candidate_page: u32,
     pub candidate_total: u32,
@@ -233,16 +246,66 @@ impl EngineClient {
             .insert(context_id, response.metadata.composition_id);
         self.revisions
             .insert(context_id, response.metadata.revision);
-        Some(KeyOutcome {
-            handled: response.handled,
-            commit: response.commit_utf8,
-            preedit: response.preedit_utf8,
-            preedit_caret_utf8: response.preedit_caret_utf8,
-            selected_candidate: response.selected_candidate,
-            candidate_page: response.candidate_page,
-            candidate_total: response.candidate_total,
-            candidate_visibility: response.candidate_visibility,
-        })
+        Some(outcome_from_key_response(response))
+    }
+
+    /// One state request (mirrors the C++ `pollState`): asks the engine for
+    /// the current composition state of an existing context without sending a
+    /// key. Returns `None` when the context was never started through
+    /// [`Self::process_key`], on any validation failure, or on disconnect.
+    pub fn poll_state(&mut self, context_id: u64) -> Option<KeyOutcome> {
+        let timeout = Duration::from_millis(u64::from(INPUT_DEADLINE_MS));
+        if !self.revisions.contains_key(&context_id)
+            || !self.connect(timeout)
+            || !self.handshake(timeout)
+        {
+            return None;
+        }
+        let composition_id = *self.compositions.get(&context_id).unwrap_or(&0);
+        let revision = *self.revisions.get(&context_id).unwrap_or(&0);
+        let request_id = next_request_id();
+        let request = protocol::StateRequest {
+            metadata: protocol::Metadata {
+                request_id,
+                engine_epoch: self.engine_epoch,
+                session_id: self.session_id,
+                context_id,
+                composition_id,
+                revision,
+                ..protocol::Metadata::default()
+            },
+        };
+        let Some(request_bytes) = protocol::encode_state_request(&request) else {
+            self.disconnect();
+            return None;
+        };
+        let Some(response_bytes) = self.transact(request_bytes, timeout) else {
+            self.disconnect();
+            return None;
+        };
+        let Some(frame) = protocol::decode_frame(&response_bytes) else {
+            self.disconnect();
+            return None;
+        };
+        let Some(response) = protocol::decode_key_response(&frame) else {
+            self.disconnect();
+            return None;
+        };
+        if response.status != protocol::Status::Ok
+            || response.metadata.response_to != request_id
+            || response.metadata.engine_epoch != self.engine_epoch
+            || response.metadata.session_id != self.session_id
+            || response.metadata.context_id != context_id
+            || response.metadata.revision <= revision
+        {
+            self.disconnect();
+            return None;
+        }
+        self.compositions
+            .insert(context_id, response.metadata.composition_id);
+        self.revisions
+            .insert(context_id, response.metadata.revision);
+        Some(outcome_from_key_response(response))
     }
 
     /// One engine-status request (mirrors `queryEngineStatus`).
@@ -294,6 +357,32 @@ impl EngineClient {
     /// Closes the pipe so the engine observes the client disconnect.
     pub fn close(&mut self) {
         self.disconnect();
+    }
+}
+
+fn outcome_from_key_response(response: protocol::KeyResponse) -> KeyOutcome {
+    KeyOutcome {
+        handled: response.handled,
+        engine_epoch: response.metadata.engine_epoch,
+        composition_id: response.metadata.composition_id,
+        revision: response.metadata.revision,
+        commit: response.commit_utf8,
+        preedit: response.preedit_utf8,
+        preedit_caret_utf8: response.preedit_caret_utf8,
+        candidates: response
+            .candidates
+            .into_iter()
+            .map(|candidate| CandidateOutcome {
+                id: candidate.id,
+                label_utf8: candidate.label_utf8,
+                text_utf8: candidate.text_utf8,
+                comment_utf8: candidate.comment_utf8,
+            })
+            .collect(),
+        selected_candidate: response.selected_candidate,
+        candidate_page: response.candidate_page,
+        candidate_total: response.candidate_total,
+        candidate_visibility: response.candidate_visibility,
     }
 }
 

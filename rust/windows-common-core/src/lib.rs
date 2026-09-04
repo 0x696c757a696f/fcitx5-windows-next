@@ -1277,6 +1277,18 @@ unsafe extern "system" {
     fn GetNamedPipeServerProcessId(pipe: *mut c_void, server_process_id: *mut u32) -> i32;
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
     fn GetCurrentProcessId() -> u32;
+    fn GetProcessTimes(
+        process: *mut c_void,
+        creation_time: *mut u64,
+        exit_time: *mut u64,
+        kernel_time: *mut u64,
+        user_time: *mut u64,
+    ) -> i32;
+    fn K32GetProcessMemoryInfo(
+        process: *mut c_void,
+        counters: *mut ProcessMemoryCounters,
+        size: u32,
+    ) -> i32;
     fn GetTickCount64() -> u64;
     fn CreateMutexW(
         mutex_attributes: *mut c_void,
@@ -2163,6 +2175,92 @@ fn process_session_id(process_id: u32) -> Fcitx5WindowsCommonProcessSession {
         status: 1,
         session_id,
     }
+}
+
+// PROCESS_MEMORY_COUNTERS (non-EX suffices: `PrivateUsage` is its final
+// field and the engine-E2E harness samples only private bytes). SIZE_T is
+// `usize` on both supported targets.
+#[repr(C)]
+struct ProcessMemoryCounters {
+    cb: u32,
+    page_fault_count: u32,
+    peak_working_set_size: usize,
+    working_set_size: usize,
+    quota_peak_paged_pool_usage: usize,
+    quota_paged_pool_usage: usize,
+    quota_peak_non_paged_pool_usage: usize,
+    quota_non_paged_pool_usage: usize,
+    pagefile_usage: usize,
+    peak_pagefile_usage: usize,
+    private_usage: usize,
+}
+
+fn open_query_limited_process(process_id: u32) -> *mut c_void {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    if process_id == 0 {
+        return invalid_handle_value();
+    }
+    // SAFETY: Opening by process id with query-only rights; the caller closes
+    // any successful handle before returning.
+    unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) }
+}
+
+/// Returns `(kernel, user)` accumulated CPU time in 100 ns units for the
+/// process, or `None` when the process cannot be queried.
+#[must_use]
+pub fn process_cpu_time_100ns(process_id: u32) -> Option<(u64, u64)> {
+    let handle = open_query_limited_process(process_id);
+    if handle.is_null() || handle == invalid_handle_value() {
+        return None;
+    }
+    let mut creation = 0_u64;
+    let mut exit = 0_u64;
+    let mut kernel = 0_u64;
+    let mut user = 0_u64;
+    // SAFETY: All four out pointers are valid for the call duration.
+    let ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+    // SAFETY: `handle` was returned by open_query_limited_process above.
+    unsafe {
+        CloseHandle(handle);
+    }
+    (ok != 0).then_some((kernel, user))
+}
+
+/// Returns the process private working-set bytes, or `None` when the process
+/// cannot be queried.
+#[must_use]
+pub fn process_private_usage_bytes(process_id: u32) -> Option<u64> {
+    let handle = open_query_limited_process(process_id);
+    if handle.is_null() || handle == invalid_handle_value() {
+        return None;
+    }
+    let mut counters = ProcessMemoryCounters {
+        cb: 0,
+        page_fault_count: 0,
+        peak_working_set_size: 0,
+        working_set_size: 0,
+        quota_peak_paged_pool_usage: 0,
+        quota_paged_pool_usage: 0,
+        quota_peak_non_paged_pool_usage: 0,
+        quota_non_paged_pool_usage: 0,
+        pagefile_usage: 0,
+        peak_pagefile_usage: 0,
+        private_usage: 0,
+    };
+    counters.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
+    // SAFETY: `handle` is valid and `counters` is writable for its size.
+    let ok = unsafe {
+        K32GetProcessMemoryInfo(
+            handle,
+            &mut counters,
+            std::mem::size_of::<ProcessMemoryCounters>() as u32,
+        )
+    };
+    // SAFETY: `handle` was returned by open_query_limited_process above.
+    unsafe {
+        CloseHandle(handle);
+    }
+    (ok != 0).then_some(counters.private_usage as u64)
 }
 
 fn process_user_sid(process_id: u32) -> Option<(Vec<u16>, bool)> {

@@ -459,15 +459,12 @@ target_link_libraries(fcitx5_platform PUBLIC fcitx5::release_identity fcitx5::wi
                                             advapi32 user32)
 fcitx_apply_project_options(fcitx5_platform)
 
-add_library(
-  fcitx5_ipc_client STATIC
-  src/ipc/pipe_client.cpp
-  src/ipc/peer_verification.cpp)
+add_library(fcitx5_ipc_client STATIC src/ipc/peer_verification.cpp)
 add_library(fcitx5::ipc_client ALIAS fcitx5_ipc_client)
 target_compile_features(fcitx5_ipc_client PUBLIC cxx_std_20)
 target_include_directories(fcitx5_ipc_client PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/ipc")
 # The Rust `fcitx5-protocol-core` C ABI is the wire codec. Consumers that only
-# include pipe_client.h still need the flat `protocol_ffi.h` header and the
+# include peer_verification.h still need the flat `protocol_ffi.h` header and the
 # imported codec library, so both are exposed PUBLIC here after the C++ DTO
 # bridge was deleted.
 target_include_directories(fcitx5_ipc_client PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
@@ -529,6 +526,36 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/src/lib.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-mock-engine.exe fixture")
+
+# Rust real-Fcitx engine E2E harness (replaces the deleted C++
+# fcitx5_engine_integration_test). Built on demand by tools/test-fcitx.ps1,
+# which passes the staged real fcitx5-engine.exe path.
+set(FCITX_RUST_ENGINE_E2E_EXE
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/engine_e2e.exe")
+set(FCITX_ENGINE_E2E_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+set(FCITX_ENGINE_E2E_EXE "${FCITX_ENGINE_E2E_OUTPUT_DIR}/engine_e2e.exe")
+add_custom_target(
+  fcitx5_engine_e2e
+  BYPRODUCTS "${FCITX_ENGINE_E2E_EXE}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-ipc-client --bin
+    engine_e2e --target "${FCITX_RUST_TARGET}" --profile
+    "$<IF:$<CONFIG:Debug>,dev,release>"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${FCITX_ENGINE_E2E_OUTPUT_DIR}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+          "${FCITX_RUST_ENGINE_E2E_EXE}" "${FCITX_ENGINE_E2E_EXE}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/ipc-client/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/ipc-client/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/ipc-client/src/bin/engine_e2e.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/src/lib.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-engine-e2e harness")
 
 set(FCITX_RUST_CONTROL_EXE
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-control.exe")
@@ -1411,12 +1438,6 @@ if(BUILD_TESTING)
                         PRIVATE fcitx5::release_identity ole32 user32)
   fcitx_apply_project_options(fcitx5_tsf_notepad_e2e_test)
   fcitx_apply_binary_hardening(fcitx5_tsf_notepad_e2e_test)
-
-  add_executable(fcitx5_engine_integration_test
-                 tests/integration/fcitx_engine_integration_test.cpp)
-  target_link_libraries(fcitx5_engine_integration_test PRIVATE fcitx5::ipc_client)
-  fcitx_apply_project_options(fcitx5_engine_integration_test)
-  fcitx_apply_binary_hardening(fcitx5_engine_integration_test)
 endif()
 
 if(FCITX_BUILD_BENCHMARKS)

@@ -109,23 +109,23 @@ try {
     & $cmake --preset "windows-$architecture-dev"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
-    & $cmake --build $build --config $Configuration --target fcitx5_engine_integration_test fcitx5_ui
+    & $cmake --build $build --config $Configuration --target fcitx5_engine_e2e fcitx5_ui
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Copy-Item -LiteralPath (Join-Path $build "$Configuration/fcitx5-ui.exe") `
       -Destination (Join-Path $stage 'bin/fcitx5-ui.exe') -Force
     Write-Host "Running real Fcitx acceptance: $architecture baseline"
-    & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") $engine
+    & (Join-Path $build "$Configuration/engine_e2e.exe") $engine
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "Running real Fcitx acceptance: $architecture typing-fuzz"
-    & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
+    & (Join-Path $build "$Configuration/engine_e2e.exe") `
       $engine --typing-fuzz
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "Running real Fcitx acceptance: $architecture chttrans"
-    & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
+    & (Join-Path $build "$Configuration/engine_e2e.exe") `
       $engine --chttrans
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "Running real Fcitx acceptance: $architecture safe-mode"
-    & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
+    & (Join-Path $build "$Configuration/engine_e2e.exe") `
       $engine --safe-mode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if (-not (Test-Path -LiteralPath $luaMarker -PathType Leaf) -or
@@ -160,7 +160,7 @@ default = "rime"
   foreach ($architecture in @('x64', 'x86')) {
     $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
     Write-Host "Running real Fcitx acceptance: $architecture rime-lua"
-    & (Join-Path $build "$Configuration/fcitx5_engine_integration_test.exe") `
+    & (Join-Path $build "$Configuration/engine_e2e.exe") `
       $engine --rime-lua
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   }
