@@ -1,53 +1,106 @@
-# 080 layout naming + full-glyph contract (frozen)
+# 080 layout: three-axis candidate layout model (frozen 2026-09-04)
 
-**Decision date:** 2026-09-04
-**Sources:** fcitx5-macos#164 (scroll mode 卷轴模式), rimeinn/rabbit (stacked/flow/vertical_text).
+**Sources:** rimeinn/rabbit (flow/stacked/vertical_text visuals), fcitx5-macos#164 (scroll),
+user design spec (orientation/overflow/writing-mode separation).
 
-## 1. Candidate layout type (unified setting)
+## 1. Three orthogonal concepts (do not collapse)
 
-Replace the current `orientation` (`automatic`/`horizontal`/`vertical`) + `scroll_mode` (bool)
-pair (and the 6-way `CandidateLayoutMode`) with ONE `layout_type` setting. Naming mirrors the two
-references while keeping the existing capability:
+```rust
+enum CandidateOrientation { Horizontal, Vertical }   // candidate items' overall arrangement
+enum OverflowBehavior    { Paging, Scrolling, Wrapping } // what happens past the visible space
+enum WritingMode         { Horizontal, VerticalRl, VerticalLr } // the candidate TEXT's own direction
+```
 
-| `layout_type` key | 中文 label | 实现语义 | 旧值映射 |
-|---|---|---|---|
-| `automatic` | 自动 | caret + 显示器工作区自动选纵排/横排 | `orientation=automatic, scroll=false` |
-| `stacked` | 纵排 | 候选逐行纵向列表（每行一个候选，文字横排） | `orientation=vertical, scroll=false` |
-| `flow` | 横排 | 候选横向排列，超宽时多行分页 | `orientation=horizontal, scroll=false` |
-| `scroll` | 卷轴 | 固定网格（6×N 或 N×6），带滚动条 | `scroll_mode=true`（方向由 grid 形状决定） |
-| `vertical_text` | 竖排文字 | 文字自上而下竖排，列从左→右或右→左（可配置） | 新增，对应 rabbit `vertical_text` + `vertical_text_left_to_right` |
+**CandidateOrientation != WritingMode.** A "vertical candidate list" (1你好/2你们/3你的 top-to-
+bottom) is still Horizontal writing with orientation=Vertical. VerticalRl/Lr is traditional CJK
+vertical typesetting (glyphs top-to-bottom). Never merge the two.
 
-`scroll` 模式的网格形状（6×N 列优先 vs N×6 行优先）由 `page_size` + 现有 scroll 方向语义决定，
-不新增单独的方向设置。
+## 2. Effective combination matrix + UI visibility
 
-## 2. Full-glyph visibility contract (全字形可见性)
+| orientation | overflow | writing | UI shows? | semantics |
+|---|---|---|---|---|
+| Horizontal | Paging | Horizontal | 普通页 ✓ (default) | classic single-row candidate bar, page up/down at page capacity |
+| Vertical | Paging | Horizontal | 普通页 ✓ | traditional vertical list (row per candidate) |
+| Horizontal | Scrolling | Horizontal | 普通页 ✓ | single row, viewport scrolls (not wraps); highlighted always scroll-into-view |
+| Vertical | Scrolling | Horizontal | 普通页 ✓ (our natural extension; fcitx5-macos limits scroll to H+H, do not claim theirs) | fixed max height, viewport scrolls vertically |
+| Horizontal | Wrapping | Horizontal | 普通页 ✓ | rabbit flow: real measured width breaks to next row; no wrap at max rows → page |
+| Vertical | Wrapping | Horizontal | ✗ not shown | no meaningful semantics |
+| any | any | VerticalRl/VerticalLr | 高级页 (文字方向) | rabbit vertical_text: text top-to-bottom, columns left→right (Lr) or right→left (Rl); independent of orientation/overflow |
 
-候选字必须完整显示，禁止裁切/重叠/截断：
+UI rule: `Vertical + Wrapping` is not displayed. Writing-mode is an advanced setting, never shown
+as an orientation option.
 
-- CJK 字形：完整 advance + DirectWrite 边距（预算完整字形宽度，含 comment 相邻）。
-- emoji：彩色 emoji / 彩色字形回退完整渲染，不裁切。
-- 注释（comment）：与候选文本并列时完整可见，不重叠、不截断。
-- 所有 `layout_type`（automatic/stacked/flow/scroll）× HiDPI（100/125/150/200%）× light/dark 组合下成立。
-- 渲染尺寸计算用完整字形预算（`cjk_text_rect_keeps_full_glyph_budget_beside_comment` 语义），
-  不依赖 `non-overlap` 假阳性。
+## 3. Config model + legacy compatibility
 
-## 3. HiDPI contract
+New canonical fields (single source inside the model):
 
-- 候选窗口在 100/125/150/200% DPI 下正确缩放（字体、间距、圆角、滚动条、边框、选中区域）。
-- 移除 C++ `createDeviceResources` 的 `SetDpi(96,96)` 硬编码；Rust 渲染器用实际 DPI scale
-  （caret/monitor dpi）驱动几何 + 字体。
-- golden 截图覆盖四档 DPI。
+```rust
+struct CandidateLayoutOptions {
+    orientation: CandidateOrientation, // default Horizontal
+    overflow: OverflowBehavior,        // default Paging
+    writing_mode: WritingMode,         // default Horizontal
+    // page_size etc. stay existing fields
+}
+```
 
-## 4. Config setting surface
+Legacy mapping (never delete old keys abruptly; decode once at the model boundary):
+- `layout_type=stacked` → orientation=Vertical, overflow=Paging, writing=Horizontal
+- `layout_type=flow` → orientation=Horizontal, overflow=Wrapping
+- `layout_type=scroll` → overflow=Scrolling (orientation from the grid shape / page_size)
+- `layout_type=vertical_text` → writing=VerticalRl (or VerticalLr per a direction flag) with a
+  column arrangement
+- `layout_type=automatic` → presentation-decided orientation (Horizontal/Vertical from work area)
+- legacy `orientation=vertical|horizontal` + `scroll_mode=true|false` → same expansion
+- saving prefers the new canonical fields; the renderer/layout engine reads ONLY the unified model
+  (no `if horizontal / if scroll / if flow` scatter).
 
-- Config 设置项显示为：`自动 / 纵排 / 横排 / 卷轴 / 竖排文字`（radio/segmented），key 用 `layout_type`。
-- 中文 label 与实现语义严格一致：“纵排”= 纵向列表（非竖排文字），“横排”= 横向流式，
-  “卷轴”= 固定网格 + 滚动条，“竖排文字”= 文字自上而下（列从左→右或右→左可配）。
-- 旧配置迁移：`orientation=vertical`→`stacked`，`horizontal`→`flow`，`scroll_mode=true`→`scroll`。
+## 4. Settings UI
 
-## 5. Acceptance
+Ordinary page (config-poc):
+```
+候选窗口
+布局:  [横向预览卡片] [纵向预览卡片]   ← orientation, clickable live/static preview cards
+候选溢出: [分页 ▾]                    ← overflow, options filtered by orientation
+候选数量: [5]
+高级设置 >
+```
+Advanced page: 文字方向 (横排 / 竖排从右到左 / 竖排从左到右), 候选间距, 窗口边距, 最大宽度/高度,
+圆角, 阴影, 透明度, 候选编号样式 — reuse existing settings where present; do not duplicate.
 
-- `rust/config-core` 设置项 `layout_type` + 中文 label 冻结；旧值迁移测试绿。
-- `rust/candidate-core` 四种布局（stacked/flow/scroll/vertical_text）+ 四档 DPI 的 golden 截图，候选字
-  （CJK/emoji/comment）完整可见。
-- 渲染迁移（080）后等价视觉差分通过。
+Preview must update instantly with orientation/overflow (real candidate-core geometry, not only a
+schematic), staying inline with the plan for a later real renderer preview.
+
+## 5. Renderer invariant (one paint path)
+
+Renderer receives only geometry: x/y/w/h, visibility, viewport offset, per-item writing token.
+Different layouts only change the layout engine's output rects; label/text/comment/highlight paint
+is one shared path. No per-combination renderer copies.
+
+## 6. Interaction invariants
+
+- Keyboard selection index is data-stable: candidate index N stays N across wrap/scroll/orientation.
+- Paging changes the candidate page; Scrolling changes only the visible viewport.
+- Highlighted candidate is always scroll-into-view in Scrolling.
+- Wheel: a single wheel semantics (scroll viewport in Scrolling; page prev/next in Paging) — check
+  existing wheel handling before adding any.
+
+## 7. Window stability + HiDPI + font
+
+- Re-check placement vs caret + monitor work area whenever orientation/overflow/writing changes the
+  size; no flow-expansion off-screen, no viewport jitter, no resize-on-highlight-change.
+- Real font measurement (DWrite), per-monitor DPI; no `chars × fixed-width` estimates.
+- Layout must scale under 100/125/150/200%; highlight geometry must equal text geometry.
+
+## 8. Priority scope this round (do not gold-plate)
+
+1. Horizontal+Paging, 2. Vertical+Paging, 3. Horizontal+Scrolling, 4. Vertical+Scrolling,
+5. Horizontal+Wrapping, 6. WritingMode vs CandidateOrientation decoupling,
+7. settings UI + preview, 8. config persistence + legacy, 9. DPI/window-bounds correctness.
+No new theme/animation/config framework; no big renderer rewrite unless blocked (state the block).
+
+## 9. Acceptance
+
+Config decode → unified model tests; layout() geometry per combination; settings UI + preview;
+legacy config still loads; DPI screenshots; user visual review of previews/screenshots; and the
+15 acceptance items from the user spec (paging/scroll-into-view/wrap/measure/monitor-bounds/mixed
+glyphs/DPI/live-switch/writing-vs-orientation/legacy/edge-cases/click index/highlight geometry).
