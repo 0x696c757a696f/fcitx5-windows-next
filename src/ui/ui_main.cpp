@@ -49,34 +49,6 @@ struct Fcitx5CandidateLayoutRect {
     float bottom{};
 };
 
-struct Fcitx5CandidateLayoutInput {
-    std::uint32_t orientation{};
-    Fcitx5CandidateLayoutPoint caret{};
-    float caretHeight{};
-    Fcitx5CandidateLayoutRect workArea{};
-    float maxWidth{};
-    float paddingX{};
-    float paddingY{};
-    float rowGap{};
-    float columnGap{};
-    std::uint32_t placement{};
-    std::uint8_t scrollMode{};
-    std::size_t scrollColumns{};
-    std::size_t scrollVisibleRows{};
-    std::size_t selected{};
-    float scrollCellWidth{};
-};
-
-struct Fcitx5CandidateLayoutOutput {
-    Fcitx5CandidateLayoutRect window{};
-    Fcitx5CandidateLayoutRect scrollbarTrack{};
-    Fcitx5CandidateLayoutRect scrollbarThumb{};
-    std::uint8_t hasScrollbar{};
-    std::size_t firstVisible{};
-    std::uint32_t placement{};
-    std::size_t itemCount{};
-};
-
 struct Fcitx5CandidateRenderItemInput {
     Fcitx5CandidateLayoutRect bounds{};
     float labelWidth{};
@@ -92,6 +64,47 @@ struct Fcitx5CandidateRenderItemOutput {
     Fcitx5CandidateLayoutRect text{};
     Fcitx5CandidateLayoutRect comment{};
     std::uint8_t drawComment{};
+};
+
+struct Fcitx5CandidateAxisLayoutItemOutput {
+    float x{};
+    float y{};
+    float w{};
+    float h{};
+    std::uint8_t visible{};
+};
+
+struct Fcitx5CandidateAxisLayoutOutput {
+    float windowX{};
+    float windowY{};
+    float windowW{};
+    float windowH{};
+    std::uint32_t placement{};
+    float viewportDx{};
+    float viewportDy{};
+    float contentWidth{};
+    float contentHeight{};
+    std::size_t firstVisible{};
+    std::size_t itemCount{};
+};
+
+struct Fcitx5CandidateAxisLayoutInput {
+    std::uint32_t pageSize{};
+    float maxWidth{};
+    float maxHeight{};
+    float dpiScale{};
+    std::size_t highlightedIndex{};
+    std::uint8_t orientation{};
+    std::uint8_t overflow{};
+    std::uint8_t writing{};
+    Fcitx5CandidateLayoutPoint caret{};
+    float caretHeight{};
+    Fcitx5CandidateLayoutRect workArea{};
+    float paddingX{};
+    float paddingY{};
+    float rowGap{};
+    float columnGap{};
+    std::uint32_t placement{};
 };
 
 struct Fcitx5CandidatePresentationUpdate {
@@ -185,19 +198,17 @@ struct Fcitx5WindowsCommonUtf8ToWide {
     std::size_t utf16Len;
 };
 
-extern "C" int fcitx5_candidate_layout_run(const Fcitx5CandidateLayoutInput* input,
-                                            const Fcitx5CandidateLayoutSize* items,
-                                            std::size_t itemCount,
-                                            Fcitx5CandidateLayoutRect* outItems,
-                                            std::size_t* outItemIndices,
-                                            std::size_t outCapacity,
-                                            Fcitx5CandidateLayoutOutput* output);
 extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemInput* items,
                                                  std::size_t itemCount,
                                                  std::uint8_t horizontal,
                                                  std::uint8_t scrollMode,
                                                  Fcitx5CandidateRenderItemOutput* outItems,
                                                  float* outLabelColumnWidth);
+extern "C" int fcitx5_candidate_axis_layout(
+    const Fcitx5CandidateAxisLayoutInput* input,
+    const Fcitx5CandidateLayoutSize* items, std::size_t itemCount,
+    Fcitx5CandidateAxisLayoutItemOutput* outItems, std::size_t outCapacity,
+    Fcitx5CandidateAxisLayoutOutput* output);
 extern "C" void* fcitx5_candidate_presentation_create();
 extern "C" void fcitx5_candidate_presentation_destroy(void* state);
 extern "C" void fcitx5_candidate_presentation_reset(void* state);
@@ -264,36 +275,6 @@ struct Rect {
 enum class Orientation { vertical, horizontal };
 enum class Placement { unlocked, below, above };
 
-struct LayoutInput {
-    Orientation orientation{Orientation::vertical};
-    std::vector<Size> items;
-    Point caret;
-    float caretHeight{};
-    Rect workArea;
-    float maxWidth{720};
-    float paddingX{8};
-    float paddingY{6};
-    float rowGap{2};
-    float columnGap{8};
-    Placement placement{Placement::unlocked};
-    bool scrollMode{};
-    std::size_t scrollColumns{6};
-    std::size_t scrollVisibleRows{6};
-    std::size_t selected{};
-    float scrollCellWidth{96};
-};
-
-struct LayoutResult {
-    Rect window;
-    std::vector<Rect> items;
-    std::vector<std::size_t> itemIndices;
-    Rect scrollbarTrack{};
-    Rect scrollbarThumb{};
-    bool hasScrollbar{};
-    std::size_t firstVisible{};
-    Placement placement{Placement::below};
-};
-
 struct RenderItemInput {
     Rect bounds{};
     float labelWidth{};
@@ -324,10 +305,6 @@ struct CandidateSelectionIntent {
                compositionId != 0 && revision != 0 && candidateId != 0;
     }
 };
-
-[[nodiscard]] inline std::uint32_t toRust(Orientation value) noexcept {
-    return value == Orientation::horizontal ? 1U : 0U;
-}
 
 [[nodiscard]] inline detail::Fcitx5CandidateUtf16 toRust(std::wstring_view value) noexcept {
     static_assert(sizeof(wchar_t) == sizeof(std::uint16_t));
@@ -360,54 +337,6 @@ struct CandidateSelectionIntent {
 [[nodiscard]] inline Rect rectFromRust(
     const detail::Fcitx5CandidateLayoutRect& value) noexcept {
     return {value.left, value.top, value.right, value.bottom};
-}
-
-[[nodiscard]] inline LayoutResult layout(const LayoutInput& input) {
-    std::vector<detail::Fcitx5CandidateLayoutSize> rustItems;
-    rustItems.reserve(input.items.size());
-    for (const auto& item : input.items)
-        rustItems.push_back({item.width, item.height});
-
-    std::vector<detail::Fcitx5CandidateLayoutRect> outItems(input.items.size());
-    std::vector<std::size_t> outItemIndices(input.items.size());
-    const detail::Fcitx5CandidateLayoutInput rustInput{
-        toRust(input.orientation),
-        {input.caret.x, input.caret.y},
-        input.caretHeight,
-        {input.workArea.left, input.workArea.top, input.workArea.right, input.workArea.bottom},
-        input.maxWidth,
-        input.paddingX,
-        input.paddingY,
-        input.rowGap,
-        input.columnGap,
-        toRust(input.placement),
-        static_cast<std::uint8_t>(input.scrollMode ? 1U : 0U),
-        input.scrollColumns,
-        input.scrollVisibleRows,
-        input.selected,
-        input.scrollCellWidth,
-    };
-    detail::Fcitx5CandidateLayoutOutput rustOutput{};
-    if (detail::fcitx5_candidate_layout_run(&rustInput, rustItems.data(), rustItems.size(),
-                                            outItems.data(), outItemIndices.data(), outItems.size(),
-                                            &rustOutput) != 0) {
-        return {};
-    }
-
-    LayoutResult result;
-    result.window = rectFromRust(rustOutput.window);
-    result.scrollbarTrack = rectFromRust(rustOutput.scrollbarTrack);
-    result.scrollbarThumb = rectFromRust(rustOutput.scrollbarThumb);
-    result.hasScrollbar = rustOutput.hasScrollbar != 0;
-    result.firstVisible = rustOutput.firstVisible;
-    result.placement = placementFromRust(rustOutput.placement);
-    result.items.reserve(rustOutput.itemCount);
-    result.itemIndices.reserve(rustOutput.itemCount);
-    for (std::size_t index = 0; index < rustOutput.itemCount; ++index) {
-        result.items.push_back(rectFromRust(outItems[index]));
-        result.itemIndices.push_back(outItemIndices[index]);
-    }
-    return result;
 }
 
 [[nodiscard]] inline std::vector<RenderItemSegments> renderSegments(
@@ -2373,47 +2302,70 @@ class CandidateWindow final {
                 resolvedPresentationOrientation_ = ui::Orientation::vertical;
             }
         }
-        ui::LayoutInput input{
-            horizontalPresentation ? ui::Orientation::horizontal : ui::Orientation::vertical,
-            std::move(items),
+        const fcitx::windows::ui::detail::Fcitx5CandidateAxisLayoutInput axisInput{
+            response.candidatePageSize,
+            visualConfig_.maxWidthDip * scale,
+            0.0F,
+            scale,
+            presentationSelected().value_or(0U),
+            static_cast<std::uint8_t>(horizontalPresentation ? 0U : 1U),
+            static_cast<std::uint8_t>(
+                visualConfig_.writingMode != NativeWritingMode::horizontal
+                    ? 0U
+                    : visualConfig_.overflow == NativeOverflow::wrapping
+                          ? 2U
+                          : visualConfig_.overflow == NativeOverflow::scrolling ? 1U : 0U),
+            static_cast<std::uint8_t>(
+                visualConfig_.writingMode == NativeWritingMode::verticalRl
+                    ? 1U
+                    : visualConfig_.writingMode == NativeWritingMode::verticalLr ? 2U : 0U),
             {static_cast<float>(lastCaret_.left), static_cast<float>(lastCaret_.top)},
             static_cast<float>((std::max)(1, lastCaret_.bottom - lastCaret_.top)),
             {static_cast<float>(monitorInfo.rcWork.left),
              static_cast<float>(monitorInfo.rcWork.top),
              static_cast<float>(monitorInfo.rcWork.right),
              static_cast<float>(monitorInfo.rcWork.bottom)},
-            visualConfig_.maxWidthDip * scale,
             visualConfig_.paddingXDip * scale,
             visualConfig_.paddingYDip * scale,
             visualConfig_.rowGapDip * scale,
             visualConfig_.columnGapDip * scale,
-            presentationPlacement(),
-            presentationScrollMode(),
-            presentationScrollColumns(),
-            6U,
-            presentationSelected().value_or(0U)};
-        input.scrollCellWidth = visualConfig_.scrollCellWidthDip * scale;
-        const auto layout = ui::layout(input);
-        setPresentationPlacement(layout.placement);
+            toRust(presentationPlacement()),
+        };
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> axisItemSizes;
+        axisItemSizes.reserve(items.size());
+        for (const auto& item : items)
+            axisItemSizes.push_back({item.width, item.height});
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateAxisLayoutItemOutput> axisItemRects(
+            axisItemSizes.size());
+        fcitx::windows::ui::detail::Fcitx5CandidateAxisLayoutOutput axisOutput{};
+        if (fcitx::windows::ui::detail::fcitx5_candidate_axis_layout(
+                &axisInput, axisItemSizes.data(), axisItemSizes.size(), axisItemRects.data(),
+                axisItemRects.size(), &axisOutput) != 0) {
+            dismissPresentation();
+            return;
+        }
+        const auto layoutPlacement =
+            fcitx::windows::ui::placementFromRust(axisOutput.placement);
+        setPresentationPlacement(layoutPlacement);
         const float preeditBlock =
-            preeditPanelHeight > 0.0F ? preeditPanelHeight + input.rowGap : 0.0F;
-        const float workWidth = (std::max)(0.0F, input.workArea.right - input.workArea.left);
-        const float workHeight = (std::max)(0.0F, input.workArea.bottom - input.workArea.top);
-        const float measuredWindowWidth =
-            std::min({std::max(layout.window.right - layout.window.left, preeditPanelWidth),
-                      input.maxWidth, workWidth});
+            preeditPanelHeight > 0.0F ? preeditPanelHeight + visualConfig_.rowGapDip * scale : 0.0F;
+        const float workWidth =
+            (std::max)(0.0F, axisInput.workArea.right - axisInput.workArea.left);
+        const float workHeight =
+            (std::max)(0.0F, axisInput.workArea.bottom - axisInput.workArea.top);
+        const float measuredWindowWidth = std::min(
+            {std::max(axisOutput.windowW, preeditPanelWidth), axisInput.maxWidth, workWidth});
         const float windowWidth =
             fcitx::windows::ui::detail::fcitx5_candidate_presentation_stable_window_width(
-            presentation_, measuredWindowWidth, std::min(input.maxWidth, workWidth));
-        float windowHeight =
-            std::min(layout.window.bottom - layout.window.top + preeditBlock, workHeight);
-        float windowLeft =
-            std::clamp(layout.window.left, input.workArea.left, input.workArea.right - windowWidth);
-        float windowTop = layout.window.top;
-        if (preeditBlock > 0.0F && layout.placement == ui::Placement::above)
+                presentation_, measuredWindowWidth, std::min(axisInput.maxWidth, workWidth));
+        float windowHeight = std::min(axisOutput.windowH + preeditBlock, workHeight);
+        float windowLeft = std::clamp(axisOutput.windowX, axisInput.workArea.left,
+                                      axisInput.workArea.right - windowWidth);
+        float windowTop = axisOutput.windowY;
+        if (preeditBlock > 0.0F && layoutPlacement == ui::Placement::above)
             windowTop -= preeditBlock;
         windowTop =
-            std::clamp(windowTop, input.workArea.top, input.workArea.bottom - windowHeight);
+            std::clamp(windowTop, axisInput.workArea.top, axisInput.workArea.bottom - windowHeight);
         const LONG left = static_cast<LONG>(windowLeft);
         const LONG top = static_cast<LONG>(windowTop);
         const LONG width = static_cast<LONG>(windowWidth);
@@ -2422,32 +2374,27 @@ class CandidateWindow final {
             preeditPanelRect_ =
                 D2D1::RectF(itemPaddingX, itemPaddingY, windowWidth - itemPaddingX,
                             (std::max)(itemPaddingY, preeditPanelHeight - itemPaddingY));
-            preeditDividerY_ = preeditPanelHeight + input.rowGap / 2.0F;
+            preeditDividerY_ = preeditPanelHeight + axisInput.rowGap / 2.0F;
         }
-        for (std::size_t local = 0; local < layout.items.size(); ++local) {
-            const auto& item = layout.items[local];
+        for (std::size_t local = 0; local < axisOutput.itemCount; ++local) {
+            const auto& item = axisItemRects[local];
             const float candidateOffset =
-                layout.placement == ui::Placement::below ? preeditBlock : 0.0F;
+                layoutPlacement == ui::Placement::below ? preeditBlock : 0.0F;
             itemRects_.push_back(D2D1::RectF(
-                item.left - windowLeft + itemPaddingX,
-                item.top + candidateOffset - windowTop + itemPaddingY,
-                item.right - windowLeft - itemPaddingX,
-                item.bottom + candidateOffset - windowTop - itemPaddingY));
-            visibleIndices_.push_back(renderIndices_[layout.itemIndices[local]]);
+                item.x - windowLeft + itemPaddingX,
+                item.y + candidateOffset - windowTop + itemPaddingY,
+                item.x + item.w - windowLeft - itemPaddingX,
+                item.y + item.h + candidateOffset - windowTop - itemPaddingY));
+            visibleIndices_.push_back(renderIndices_[local]);
         }
-        hasScrollbar_ = layout.hasScrollbar;
+        hasScrollbar_ = axisOutput.viewportDx != 0.0F || axisOutput.viewportDy != 0.0F;
         const float candidateOffset =
-            layout.placement == ui::Placement::below ? preeditBlock : 0.0F;
+            layoutPlacement == ui::Placement::below ? preeditBlock : 0.0F;
         scrollbarTrack_ =
-            D2D1::RectF(layout.scrollbarTrack.left - windowLeft,
-                        layout.scrollbarTrack.top + candidateOffset - windowTop,
-                        layout.scrollbarTrack.right - windowLeft,
-                        layout.scrollbarTrack.bottom + candidateOffset - windowTop);
-        scrollbarThumb_ =
-            D2D1::RectF(layout.scrollbarThumb.left - windowLeft,
-                        layout.scrollbarThumb.top + candidateOffset - windowTop,
-                        layout.scrollbarThumb.right - windowLeft,
-                        layout.scrollbarThumb.bottom + candidateOffset - windowTop);
+            D2D1::RectF(axisOutput.windowW - 6.0F, itemPaddingY + candidateOffset,
+                        axisOutput.windowW - 2.0F,
+                        axisOutput.windowH - itemPaddingY + candidateOffset);
+        scrollbarThumb_ = scrollbarTrack_;
         SetWindowPos(window_, HWND_TOPMOST, left, top, width, height,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
         if (renderTarget_)
