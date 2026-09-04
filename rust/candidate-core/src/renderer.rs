@@ -192,7 +192,14 @@ impl RenderWindowOutput {
 pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOutput {
     let axis = input.axis_result;
     let window_w = (axis.window.right - axis.window.left).ceil().max(0.0);
-    let window_h = (axis.window.bottom - axis.window.top).ceil().max(0.0);
+    let mut window_h = (axis.window.bottom - axis.window.top).ceil().max(0.0);
+    // Include preedit row in the bitmap height when present.
+    let preedit_extra = if input.preedit.is_some_and(|t| !t.is_empty()) {
+        input.geometry.preedit_height.max(8.0)
+    } else {
+        0.0
+    };
+    window_h += preedit_extra;
     if window_w < 1.0 || window_h < 1.0 {
         return RenderWindowOutput {
             pixels: Vec::new(),
@@ -235,14 +242,20 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
     );
 
     // 2. Preedit row (text + divider; high-contrast fills the row background).
-    if let Some(preedit) = input.preedit.filter(|text| !text.is_empty()) {
+    let preedit_offset = if let Some(preedit) = input.preedit.filter(|text| !text.is_empty()) {
+        let row_height = input.geometry.preedit_height.max(8.0).min(window_h);
         draw_preedit(&mut canvas, input, window_w, window_h, preedit);
-    }
+        row_height
+    } else {
+        0.0
+    };
 
     // 3. Selection rect under the selected row's text.
+    // When preedit is present, offset all candidate rows below the preedit panel.
+    let y_offset = preedit_offset;
     if let Some(selected) = input.selected {
         if let Some(item) = axis.items.get(selected).filter(|item| item.visible) {
-            draw_selection(&mut canvas, input, window_w, window_h, item);
+            draw_selection(&mut canvas, input, window_w, window_h, item, y_offset);
         }
     }
 
@@ -264,6 +277,7 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
                 item,
                 candidate,
                 selected,
+                y_offset,
             );
         } else {
             draw_candidate_vertical(
@@ -274,6 +288,7 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
                 item,
                 candidate,
                 selected,
+                y_offset,
             );
         }
     }
@@ -355,12 +370,13 @@ fn draw_selection(
     window_w: f32,
     window_h: f32,
     item: &AxisLayoutItem,
+    y_offset: f32,
 ) {
     let origin = &input.axis_result.window;
     let inflate_x = input.theme.selection_inflate_x.max(0.0);
     let inflate_y = input.theme.selection_inflate_y.max(0.0);
     let x = (item.rect.left - origin.left - inflate_x).max(0.0);
-    let y = (item.rect.top - origin.top - inflate_y).max(0.0);
+    let y = (item.rect.top - origin.top - inflate_y + y_offset).max(0.0);
     let right = (item.rect.right - origin.left + inflate_x).min(window_w);
     let bottom = (item.rect.bottom - origin.top + inflate_y).min(window_h);
     let w = (right - x).max(0.0);
@@ -385,6 +401,7 @@ fn draw_candidate_horizontal(
     item: &AxisLayoutItem,
     candidate: &CandidateRenderData,
     selected: bool,
+    y_offset: f32,
 ) {
     let origin = &input.axis_result.window;
     let left = (item.rect.left - origin.left).clamp(0.0, window_w);
@@ -505,12 +522,13 @@ fn draw_candidate_vertical(
     item: &AxisLayoutItem,
     candidate: &CandidateRenderData,
     selected: bool,
+    y_offset: f32,
 ) {
     let origin = &input.axis_result.window;
     let left = (item.rect.left - origin.left).clamp(0.0, window_w);
-    let top = (item.rect.top - origin.top).clamp(0.0, window_h);
+    let top = (item.rect.top - origin.top + y_offset).clamp(0.0, window_h);
     let right = (item.rect.right - origin.left).clamp(left, window_w);
-    let bottom = (item.rect.bottom - origin.top).clamp(top, window_h);
+    let bottom = (item.rect.bottom - origin.top + y_offset).clamp(top, window_h);
     let geometry = input.geometry;
     let pad_x = geometry.item_padding_x.max(0.0);
     let color = if selected {
