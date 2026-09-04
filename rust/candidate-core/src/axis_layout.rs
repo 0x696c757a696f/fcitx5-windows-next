@@ -1,8 +1,9 @@
 //! Three-axis candidate geometry (design docs/tasks/080-layout-naming-design.md):
 //! orientation x overflow x writing-mode produce one deterministic rect set per
 //! visible page/viewport. The renderer receives only per-item rects plus a
-//! visibility flag, an optional viewport offset, and a per-item writing token,
-//! so painting has a single path that never re-branches on the layout mode.
+//! visibility flag, an optional viewport offset, and an optional per-item writing
+//! token, so painting has a single path that never re-branches on the layout mode.
+#![forbid(unsafe_code)]
 //!
 //! The three enums mirror the frozen config-core model on purpose: this crate
 //! is the geometry engine and must not depend on the config/serde crate. The

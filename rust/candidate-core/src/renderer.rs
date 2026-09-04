@@ -1,5 +1,6 @@
 //! Runtime candidate-window renderer (081A: first Rust slice of the
 //! D2D→tiny-skia cutover, task CANDIDATE-RENDERER-D2D-TINY-SKIA-CUTOVER-001).
+#![forbid(unsafe_code)]
 //!
 //! One paint path over frozen `axis_layout` geometry. The caller already ran
 //! the three-axis layout and hands over window rect + per-item rects + scroll
