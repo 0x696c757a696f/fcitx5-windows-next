@@ -2320,6 +2320,7 @@ fn rect_to_ffi(rect: Rect) -> Fcitx5CandidateLayoutRect {
 /// `Fcitx5CandidateRenderOutput` when non-null. `out_pixel_capacity` is
 /// queried two-phase like the other ABI entry points: pass 0 to learn the
 /// required size, then render into the buffer. Pointers are not retained.
+#[no_mangle]
 #[cfg(windows)]
 pub unsafe extern "C" fn fcitx5_candidate_render_window(
     in_candidates: *const Fcitx5CandidateRenderCandidateInput,

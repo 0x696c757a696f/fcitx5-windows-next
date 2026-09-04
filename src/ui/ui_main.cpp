@@ -1830,19 +1830,11 @@ class CandidateWindow final {
         paintTestSurfaceOverlay();
     }
 
-    bool paintOnce() {
-        RECT client{};
-        if (!GetClientRect(window_, &client) || IsRectEmpty(&client))
-            return true;
+    bool paintOnceToDC(HDC dc, const RECT& client) {
         if (candidates_.empty()) {
-            // First paint before update() — just clear.
-            HDC dc = GetDC(window_);
-            if (dc) {
-                HBRUSH bg = CreateSolidBrush(RGB(248, 250, 250));
-                FillRect(dc, &client, bg);
-                DeleteObject(bg);
-                ReleaseDC(window_, dc);
-            }
+            HBRUSH bg = CreateSolidBrush(RGB(248, 250, 250));
+            FillRect(dc, &client, bg);
+            DeleteObject(bg);
             return true;
         }
         // Build Rust render input from C++ member state.
@@ -1852,15 +1844,12 @@ class CandidateWindow final {
         const bool highContrast =
             SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
             (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
-        const auto to_u8 = [](const D2D1_COLOR_F& c, bool hc, COLORREF sys, int channel) -> std::uint8_t {
-            if (hc) {
-                const BYTE v = static_cast<BYTE>(sys >> (channel * 8));
-                return v;
-            }
-            return static_cast<std::uint8_t>(std::clamp((&c.r)[channel], 0.0F, 1.0F) * 255.0F);
+        const auto to_u8 = [](const D2D1_COLOR_F& c, bool hc, COLORREF sys, int ch) -> std::uint8_t {
+            if (hc) return static_cast<std::uint8_t>(sys >> (ch * 8));
+            return static_cast<std::uint8_t>(std::clamp((&c.r)[ch], 0.0F, 1.0F) * 255.0F);
         };
-        const auto rgb = [&](const D2D1_COLOR_F& c, bool hc, int sysColor) {
-            const COLORREF sys = hc ? GetSysColor(sysColor) : 0;
+        const auto rgb = [&](const D2D1_COLOR_F& c, bool hc, int sc) {
+            const COLORREF sys = hc ? GetSysColor(sc) : 0;
             return std::tuple{to_u8(c, hc, sys, 2), to_u8(c, hc, sys, 1), to_u8(c, hc, sys, 0)};
         };
         const auto& col = visualConfig_.colors;
@@ -1870,14 +1859,12 @@ class CandidateWindow final {
         auto [selTxtR, selTxtG, selTxtB] = rgb(col.selectedCandidateText, highContrast, COLOR_HIGHLIGHTTEXT);
         auto [cmtR, cmtG, cmtB] = rgb(col.commentText, highContrast, COLOR_WINDOWTEXT);
         auto [bdrR, bdrG, bdrB] = rgb(col.border, highContrast, COLOR_WINDOWTEXT);
-        auto [scrR, scrG, scrB] = std::tuple{bdrR, bdrG, bdrB};
-        auto [pedBgR, pedBgG, pedBgB] = std::tuple{bgR, bgG, bgB};
         auto [pedTxtR, pedTxtG, pedTxtB] = rgb(col.preeditText, highContrast, COLOR_WINDOWTEXT);
         const fcitx::windows::ui::detail::Fcitx5CandidateRenderThemeInput theme{
             bgR, bgG, bgB, txtR, txtG, txtB,
             selBgR, selBgG, selBgB, selTxtR, selTxtG, selTxtB,
-            cmtR, cmtG, cmtB, bdrR, bdrG, bdrB, scrR, scrG, scrB,
-            pedBgR, pedBgG, pedBgB, pedTxtR, pedTxtG, pedTxtB,
+            cmtR, cmtG, cmtB, bdrR, bdrG, bdrB, bdrR, bdrG, bdrB,
+            bgR, bgG, bgB, pedTxtR, pedTxtG, pedTxtB,
             selectionInflateX_, selectionInflateY_, visualConfig_.cornerRadiusDip};
         const fcitx::windows::ui::detail::Fcitx5CandidateRenderGeometryInput geo{
             visualConfig_.candidateFontSizeDip * scale,
@@ -1887,73 +1874,54 @@ class CandidateWindow final {
             visualConfig_.itemPaddingXDip * scale,
             visualConfig_.itemPaddingYDip * scale,
             preeditPanelRect_.bottom - preeditPanelRect_.top,
-            visualConfig_.maxWidthDip * scale,
-            0.0F,
-            visualConfig_.paddingXDip * scale,
-            visualConfig_.paddingYDip * scale,
-            visualConfig_.rowGapDip * scale,
-            visualConfig_.columnGapDip * scale,
+            visualConfig_.maxWidthDip * scale, 0.0F,
+            visualConfig_.paddingXDip * scale, visualConfig_.paddingYDip * scale,
+            visualConfig_.rowGapDip * scale, visualConfig_.columnGapDip * scale,
             candidatePageSize_,
             static_cast<std::uint8_t>(visualConfig_.orientation == NativeOrientation::horizontal ? 0U : 1U),
-            static_cast<std::uint8_t>(
-                visualConfig_.writingMode != NativeWritingMode::horizontal
-                    ? 0U
-                    : visualConfig_.overflow == NativeOverflow::wrapping ? 2U
-                    : visualConfig_.overflow == NativeOverflow::scrolling ? 1U : 0U),
-            static_cast<std::uint8_t>(
-                visualConfig_.writingMode == NativeWritingMode::verticalRl ? 1U
+            static_cast<std::uint8_t>(visualConfig_.writingMode != NativeWritingMode::horizontal ? 0U
+                : visualConfig_.overflow == NativeOverflow::wrapping ? 2U
+                : visualConfig_.overflow == NativeOverflow::scrolling ? 1U : 0U),
+            static_cast<std::uint8_t>(visualConfig_.writingMode == NativeWritingMode::verticalRl ? 1U
                 : visualConfig_.writingMode == NativeWritingMode::verticalLr ? 2U : 0U)};
-        const std::vector<CandidateVisual>& lines = candidates_;
-        const std::size_t count = visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
+        const std::size_t count = visibleIndices_.empty() ? candidates_.size() : visibleIndices_.size();
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateRenderCandidateInput> candidatesIn;
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> sizesIn;
         candidatesIn.reserve(count);
         sizesIn.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             const std::size_t idx = visibleIndices_.empty() ? i : visibleIndices_[i];
-            const auto& c = (idx < lines.size()) ? lines[idx] : lines[0];
+            const auto& c = (idx < candidates_.size()) ? candidates_[idx] : candidates_[0];
             auto [lblP, lblL] = to_utf8(c.label);
             auto [txtP, txtL] = to_utf8(c.text);
             auto [cmtP, cmtL] = to_utf8(c.comment);
             candidatesIn.push_back({lblP, lblL, txtP, txtL, cmtP, cmtL});
-            const D2D1_RECT_F bounds = (i < itemRects_.size()) ? itemRects_[i]
-                : D2D1::RectF(0, 0, 80, 32);
+            const D2D1_RECT_F bounds = (i < itemRects_.size()) ? itemRects_[i] : D2D1::RectF(0, 0, 80, 32);
             sizesIn.push_back({bounds.right - bounds.left, bounds.bottom - bounds.top});
         }
         const std::uint64_t selectedIdx = presentationSelected().value_or(UINT64_MAX);
-        std::string preeditUtf8;
-        {
-            auto [p, l] = to_utf8(preeditPanel_);
-            preeditUtf8.assign(reinterpret_cast<const char*>(p), l);
-        }
-        // Two-phase: query size, then render.
+        auto [pedP, pedL] = to_utf8(preeditPanel_);
+        std::string preeditUtf8(reinterpret_cast<const char*>(pedP), pedL);
         fcitx::windows::ui::detail::Fcitx5CandidateRenderOutput out{};
-        const int rc1 = fcitx::windows::ui::detail::fcitx5_candidate_render_window(
-            candidatesIn.data(), sizesIn.data(), count,
-            &theme, &geo,
-            reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
-            scale, highContrast ? 1 : 0, selectedIdx,
-            nullptr, 0, &out);
-        if (rc1 != 2 || out.windowW < 1.0F || out.windowH < 1.0F)
+        if (fcitx::windows::ui::detail::fcitx5_candidate_render_window(
+                candidatesIn.data(), sizesIn.data(), count, &theme, &geo,
+                reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
+                scale, highContrast ? 1 : 0, selectedIdx, nullptr, 0, &out) != 2
+            || out.windowW < 1.0F || out.windowH < 1.0F)
             return true;
         std::vector<std::uint8_t> pixels(static_cast<std::size_t>(out.pixelByteLen));
-        const int rc2 = fcitx::windows::ui::detail::fcitx5_candidate_render_window(
-            candidatesIn.data(), sizesIn.data(), count,
-            &theme, &geo,
-            reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
-            scale, highContrast ? 1 : 0, selectedIdx,
-            pixels.data(), pixels.size(), &out);
-        if (rc2 != 0)
+        if (fcitx::windows::ui::detail::fcitx5_candidate_render_window(
+                candidatesIn.data(), sizesIn.data(), count, &theme, &geo,
+                reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
+                scale, highContrast ? 1 : 0, selectedIdx,
+                pixels.data(), pixels.size(), &out) != 0)
             return true;
-        // GDI blit.
-        HDC dc = GetDC(window_);
-        if (!dc) return true;
         const auto pixW = static_cast<LONG>(out.windowW);
         const auto pixH = static_cast<LONG>(out.windowH);
         BITMAPINFO bmi{};
         bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
         bmi.bmiHeader.biWidth = pixW;
-        bmi.bmiHeader.biHeight = -pixH; // top-down
+        bmi.bmiHeader.biHeight = -pixH;
         bmi.bmiHeader.biPlanes = 1;
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
@@ -1964,99 +1932,32 @@ class CandidateWindow final {
             HDC memdc = CreateCompatibleDC(dc);
             HGDIOBJ old = SelectObject(memdc, hbmp);
             StretchBlt(dc, 0, 0, client.right, client.bottom,
-                       memdc, 0, 0, static_cast<int>(pixW), static_cast<int>(pixH),
-                       SRCCOPY);
+                       memdc, 0, 0, static_cast<int>(pixW), static_cast<int>(pixH), SRCCOPY);
             SelectObject(memdc, old);
             DeleteDC(memdc);
             DeleteObject(hbmp);
         }
-        ReleaseDC(window_, dc);
         return true;
     }
 
-    void paintToDeviceContext(HDC dc) {
-        if (!dc)
-            return;
+    bool paintOnce() {
         RECT client{};
-        if (!GetClientRect(window_, &client))
-            return;
-        const auto toColorRef = [](const D2D1_COLOR_F& color) {
-            const auto channel = [](float value) {
-                return static_cast<BYTE>(std::clamp(value, 0.0F, 1.0F) * 255.0F);
-            };
-            return RGB(channel(color.r), channel(color.g), channel(color.b));
-        };
-        HIGHCONTRASTW contrast{};
-        contrast.cbSize = sizeof(contrast);
-        const bool highContrast =
-            SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
-            (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
-        const COLORREF background =
-            highContrast ? GetSysColor(COLOR_WINDOW)
-                         : toColorRef(visualConfig_.colors.background);
-        const COLORREF foreground =
-            highContrast ? GetSysColor(COLOR_WINDOWTEXT)
-                         : toColorRef(visualConfig_.colors.candidateText);
-        const COLORREF selectedBackground =
-            highContrast ? GetSysColor(COLOR_HIGHLIGHT)
-                         : toColorRef(visualConfig_.colors.selectedBackground);
-        const COLORREF selectedForeground =
-            highContrast ? GetSysColor(COLOR_HIGHLIGHTTEXT)
-                         : toColorRef(visualConfig_.colors.selectedCandidateText);
-        HBRUSH backgroundBrush = CreateSolidBrush(background);
-        HBRUSH selectedBrush = CreateSolidBrush(selectedBackground);
-        if (!backgroundBrush || !selectedBrush) {
-            if (backgroundBrush)
-                DeleteObject(backgroundBrush);
-            if (selectedBrush)
-                DeleteObject(selectedBrush);
-            return;
-        }
-        FillRect(dc, &client, backgroundBrush);
-        SetBkMode(dc, TRANSPARENT);
-        HFONT font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
-        const std::vector<CandidateVisual> fallback{
-            {L"1. ", L"1. ", L"你", L"nǐ", true},
-            {L"2. ", L"2. ", L"呢", L"", true}};
-        const auto& lines = candidates_.empty() ? fallback : candidates_;
-        const std::size_t paintCount =
-            visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
-        float fallbackTop = 8.0F;
-        for (std::size_t local = 0; local < paintCount; ++local) {
-            const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
-            if (index >= lines.size())
-                continue;
-            const D2D1_RECT_F bounds = itemRects_.size() == paintCount
-                                           ? itemRects_[local]
-                                           : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
-            RECT item{static_cast<LONG>(bounds.left), static_cast<LONG>(bounds.top),
-                      static_cast<LONG>(bounds.right), static_cast<LONG>(bounds.bottom)};
-            const auto selectedIndex = presentationSelected();
-            const bool selected = selectedIndex && *selectedIndex == index;
-            if (selected)
-                FillRect(dc, &item, selectedBrush);
-            SetTextColor(dc, selected ? selectedForeground : foreground);
-            RECT textRect{item.left + 8, item.top, item.right - 8, item.bottom};
-            const auto& candidate = lines[index];
-            const std::wstring line = candidate.label.empty()
-                                          ? candidate.text
-                                          : candidate.label + L" " + candidate.text +
-                                                (candidate.comment.empty()
-                                                     ? std::wstring{}
-                                                     : L"  " + candidate.comment);
-            DrawTextW(dc, line.c_str(), static_cast<int>(line.size()), &textRect,
-                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-            fallbackTop += 32.0F;
-        }
-        if (oldFont)
-            SelectObject(dc, oldFont);
-        if (font)
-            DeleteObject(font);
-        DeleteObject(selectedBrush);
-        DeleteObject(backgroundBrush);
+        if (!GetClientRect(window_, &client) || IsRectEmpty(&client))
+            return true;
+        HDC dc = GetDC(window_);
+        if (!dc) return true;
+        const bool ok = paintOnceToDC(dc, client);
+        ReleaseDC(window_, dc);
+        return ok;
+    }
+
+
+
+    void paintToDeviceContext(HDC dc) {
+        if (!dc) return;
+        RECT client{};
+        if (!GetClientRect(window_, &client)) return;
+        (void)paintOnceToDC(dc, client);
     }
 
     void paintTestSurfaceOverlay() {
