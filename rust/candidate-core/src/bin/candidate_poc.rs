@@ -1511,8 +1511,14 @@ mod window_smoke {
             line_height: None,
         };
         let clip = wind_rect_from_win_rect(rect);
+        // The caller-supplied layout box is widened to 8192 logical px and its
+        // origin is chosen so that DirectWrite alignment lands the *visible*
+        // text inside `clip` (the engine computes the text origin from the full
+        // layout width, so a start-anchored 8192-wide box would place Center/
+        // End text far off-canvas).
         let layout = match align {
             WindAlign::End => WindRect::new(clip.right() - 8192, clip.y, 8192, clip.h),
+            WindAlign::Center => WindRect::new(clip.x + clip.w / 2 - 4096, clip.y, 8192, clip.h),
             _ => WindRect::new(clip.x, clip.y, 8192, clip.h),
         };
         canvas.save();
@@ -3023,6 +3029,16 @@ mod window_smoke {
             .max(1.0)
             .ceil() as u32
             + 1;
+        // One fixed label slot for every item of the batch (stacked label-slot
+        // rule): reserve the width of the widest label, right-align each label
+        // into that slot, and start every candidate text after the same fixed
+        // gap. A hidden/empty label keeps the slot so text origins stay aligned
+        // across rows and pages.
+        let label_w = cells
+            .iter()
+            .map(|cell| estimated_text_width(cell.label, LAYOUT_FONT * 0.85))
+            .fold(0.0_f32, f32::max)
+            + 2.0;
         let mut pixmap =
             Pixmap::new(width, height).ok_or_else(|| format!("{name} pixmap alloc failed"))?;
         let mut text_engine = DWriteEngine::new();
@@ -3044,7 +3060,6 @@ mod window_smoke {
                     &WindPaint::fill(colorref_to_wind_color(selected_bg)),
                 );
             }
-            let label_w = estimated_text_width(cell.label, LAYOUT_FONT * 0.85) + 2.0;
             let comment_w = estimated_text_width(cell.comment, LAYOUT_FONT * 0.80) + 2.0;
             let (label_rect, text_rect, comment_rect) = split_f32_cell(rect, label_w, comment_w);
             draw_cell_text(
@@ -3070,9 +3085,13 @@ mod window_smoke {
         cells: &[DemoCell],
         dark: bool,
     ) -> Result<String, String> {
-        // Interim: vertical_text_columns places each candidate as one column; the
-        // demo renders each glyph top-to-bottom per column (true per-glyph
-        // stacking) with the label at the column top. Comments are omitted here.
+        // vertical_text demo: `vertical_text_columns` places each candidate as
+        // one column (left→right). Interim rendering note: the windui DWrite
+        // engine has no vertical text flow, so each glyph is typeset
+        // horizontally inside its column cell, one glyph per row, top→bottom;
+        // for CJK this reads as a vertical column of upright glyphs. Glyphs are
+        // horizontally centered in the column cell by WindAlign::Center (the
+        // poc helper centers against the clip rect). Comments are omitted here.
         let colors = demo_layout_colors(dark);
         let glyph_step = (LAYOUT_FONT * 1.6).ceil();
         let column_gap = 10.0;
@@ -3132,6 +3151,175 @@ mod window_smoke {
                     LAYOUT_FONT,
                 );
             }
+        }
+        drop(canvas);
+        let pixels = pixmap_to_bgra(&pixmap);
+        let path = out_dir.join(name);
+        write_bmp(&path, width as i32, height as i32, &pixels)?;
+        Ok(format!("{}: {}x{}", path.display(), width, height))
+    }
+
+    /// 卷轴 (scroll) demo: mirrors the vertical scroll geometry in lib.rs
+    /// (fixed-size grid cells, page_size candidates per page). Pages are
+    /// columns of `PAGE_SIZE` rows placed left→right; an 18-item corpus yields
+    /// three pages, the window shows the first two page columns and the lib
+    /// scrollbar track/thumb (thumb height = track · visible/total pages)
+    /// signals the third. Cell width budgets the widest measured item (label
+    /// slot + candidate text + comment + padding) so cell text is never clipped.
+    fn render_scroll_impl(out_dir: &Path, name: &str, dark: bool) -> Result<String, String> {
+        const CORPUS: [(&str, &str); 18] = [
+            ("输入法", "shū rù fǎ"),
+            ("拼音", "pīn yīn"),
+            ("汉字", "hàn zì"),
+            ("你好😀", "nǐ hǎo"),
+            ("学习", ""),
+            ("工作", ""),
+            ("生活", ""),
+            ("世界", ""),
+            ("时间", ""),
+            ("今天", ""),
+            ("明天", ""),
+            ("问题", ""),
+            ("方法", ""),
+            ("手机", ""),
+            ("电脑", ""),
+            ("音乐", ""),
+            ("朋友", ""),
+            ("加油", ""),
+        ];
+        const PAGE_SIZE: usize = 6;
+        const MAX_VISIBLE_PAGES: usize = 2;
+        let colors = demo_layout_colors(dark);
+        let row_h = (LAYOUT_FONT * 1.4 + LAYOUT_ITEM_PAD_Y * 2.0).ceil();
+        let total_pages = CORPUS.len().div_ceil(PAGE_SIZE);
+        let visible_pages = total_pages.min(MAX_VISIBLE_PAGES);
+        // Fixed label slot (widest label "18"), shared by every cell so all
+        // candidate text starts after the same reserved slot + gap.
+        let label_slot = estimated_text_width("18", LAYOUT_FONT * 0.85) + 2.0;
+        let cell_w = CORPUS
+            .iter()
+            .map(|(text, comment)| {
+                let comment_w = if comment.is_empty() {
+                    0.0
+                } else {
+                    estimated_text_width(comment, LAYOUT_FONT * 0.80) + 4.0
+                };
+                LAYOUT_ITEM_PAD_X * 2.0
+                    + label_slot
+                    + LAYOUT_COL_GAP
+                    + estimated_text_width(text, LAYOUT_FONT)
+                    + comment_w
+                    + 3.0
+            })
+            .fold(0.0_f32, f32::max);
+        let content_w = visible_pages as f32 * cell_w
+            + (visible_pages.saturating_sub(1)) as f32 * LAYOUT_COL_GAP;
+        let content_h = PAGE_SIZE as f32 * row_h + (PAGE_SIZE as f32 - 1.0) * LAYOUT_ROW_GAP;
+        let width = (LAYOUT_PAD * 2.0 + content_w).ceil() as u32 + 1;
+        let height = (LAYOUT_PAD * 2.0 + content_h).ceil() as u32 + 1;
+        let mut pixmap =
+            Pixmap::new(width, height).ok_or_else(|| format!("{name} pixmap alloc failed"))?;
+        let mut text_engine = DWriteEngine::new();
+        text_engine.set_scale(1.0);
+        let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut text_engine, 1.0);
+        fill_background(&mut canvas, width as f32, height as f32, colors.0);
+        // Grid separators (scroll cells): thin lines between rows and between
+        // page columns, drawn in the muted label color.
+        let separator = colorref_to_wind_color(colors.2);
+        for row in 1..PAGE_SIZE {
+            let y = LAYOUT_PAD + row as f32 * (row_h + LAYOUT_ROW_GAP) - LAYOUT_ROW_GAP / 2.0;
+            canvas.fill_rect(LAYOUT_PAD, y, content_w, 1.0, &WindPaint::fill(separator));
+        }
+        for column in 1..visible_pages {
+            let x = LAYOUT_PAD + column as f32 * (cell_w + LAYOUT_COL_GAP) - LAYOUT_COL_GAP / 2.0;
+            canvas.fill_rect(x, LAYOUT_PAD, 1.0, content_h, &WindPaint::fill(separator));
+        }
+        let (_, _, _, selected_bg, _, _) = colors;
+        for (column, row) in
+            (0..visible_pages).flat_map(|column| (0..PAGE_SIZE).map(move |row| (column, row)))
+        {
+            let index = column * PAGE_SIZE + row;
+            if index >= CORPUS.len() {
+                continue;
+            }
+            let cell = CoreRect {
+                left: LAYOUT_PAD + column as f32 * (cell_w + LAYOUT_COL_GAP),
+                top: LAYOUT_PAD + row as f32 * (row_h + LAYOUT_ROW_GAP),
+                right: LAYOUT_PAD + column as f32 * (cell_w + LAYOUT_COL_GAP) + cell_w,
+                bottom: LAYOUT_PAD + row as f32 * (row_h + LAYOUT_ROW_GAP) + row_h,
+            };
+            let (text, comment) = CORPUS[index];
+            if index == 0 {
+                let wind = wind_rect_from_win_rect(&to_i32_rect(&cell));
+                canvas.fill_round_rect(
+                    wind.x as f32,
+                    wind.y as f32,
+                    wind.w as f32,
+                    wind.h as f32,
+                    8.0,
+                    &WindPaint::fill(colorref_to_wind_color(selected_bg)),
+                );
+            }
+            let comment_w = if comment.is_empty() {
+                2.0
+            } else {
+                estimated_text_width(comment, LAYOUT_FONT * 0.80) + 2.0
+            };
+            let label = format!("{}", index + 1);
+            let (label_rect, text_rect, comment_rect) = split_f32_cell(cell, label_slot, comment_w);
+            draw_text_in(
+                &mut canvas,
+                &label,
+                &label_rect,
+                colors.2,
+                WindAlign::End,
+                LAYOUT_FONT * 0.85,
+            );
+            let text_color = if index == 0 { colors.4 } else { colors.5 };
+            draw_text_in(
+                &mut canvas,
+                text,
+                &text_rect,
+                text_color,
+                WindAlign::Start,
+                LAYOUT_FONT,
+            );
+            if !comment.is_empty() {
+                draw_text_in(
+                    &mut canvas,
+                    comment,
+                    &comment_rect,
+                    colors.2,
+                    WindAlign::Start,
+                    LAYOUT_FONT * 0.80,
+                );
+            }
+        }
+        if total_pages > visible_pages {
+            // Scrollbar track/thumb at the window right, mirroring lib.rs:
+            // track spans the content height, thumb = track · visible/total.
+            let track_right = (width as f32 - LAYOUT_PAD - 2.0).max(1.0);
+            let track_left = (track_right - 6.0).max(0.0);
+            let track_top = LAYOUT_PAD;
+            let track_bottom = height as f32 - LAYOUT_PAD;
+            let track_h = (track_bottom - track_top).max(1.0);
+            let thumb_h = (track_h * visible_pages as f32 / total_pages as f32).max(18.0);
+            canvas.fill_round_rect(
+                track_left,
+                track_top,
+                6.0,
+                track_h,
+                3.0,
+                &WindPaint::fill(colorref_to_wind_color(colors.1)),
+            );
+            canvas.fill_round_rect(
+                track_left,
+                track_top,
+                6.0,
+                thumb_h,
+                3.0,
+                &WindPaint::fill(separator),
+            );
         }
         drop(canvas);
         let pixels = pixmap_to_bgra(&pixmap);
@@ -3226,29 +3414,12 @@ mod window_smoke {
                     dark,
                 )?);
             }
-            // scroll: 卷轴 grid, fixed cells on a row (6 per page limit).
-            {
-                let cell_w = 120.0;
-                let row_h = (LAYOUT_FONT * 1.4 + LAYOUT_ITEM_PAD_Y * 2.0 + 4.0).ceil();
-                let mut rects = Vec::with_capacity(cells.len());
-                for index in 0..cells.len() {
-                    rects.push(CoreRect {
-                        left: LAYOUT_PAD + index as f32 * (cell_w + LAYOUT_COL_GAP),
-                        top: LAYOUT_PAD,
-                        right: LAYOUT_PAD
-                            + (index as f32 + 1.0) * cell_w
-                            + index as f32 * LAYOUT_COL_GAP,
-                        bottom: LAYOUT_PAD + row_h,
-                    });
-                }
-                report.push(render_rects_impl(
-                    out_dir,
-                    &format!("layout-scroll{suffix}.bmp"),
-                    &cells,
-                    rects,
-                    dark,
-                )?);
-            }
+            // scroll: 卷轴 grid demo (page columns of fixed cells + scrollbar).
+            report.push(render_scroll_impl(
+                out_dir,
+                &format!("layout-scroll{suffix}.bmp"),
+                dark,
+            )?);
             // vertical_text.
             report.push(render_vertical_text_impl(
                 out_dir,
