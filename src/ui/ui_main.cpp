@@ -29,6 +29,19 @@
 #include <thread>
 #include <vector>
 
+namespace {
+std::pair<const std::uint8_t*, std::size_t> to_utf8(const std::wstring& ws) {
+    thread_local std::string buf;
+    buf.clear();
+    for (wchar_t wc : ws) {
+        if (wc < 0x80) { buf.push_back(static_cast<char>(wc)); }
+        else if (wc < 0x800) { buf.push_back(static_cast<char>(0xC0|(wc>>6))); buf.push_back(static_cast<char>(0x80|(wc&0x3F))); }
+        else { buf.push_back(static_cast<char>(0xE0|(wc>>12))); buf.push_back(static_cast<char>(0x80|((wc>>6)&0x3F))); buf.push_back(static_cast<char>(0x80|(wc&0x3F))); }
+    }
+    return {reinterpret_cast<const std::uint8_t*>(buf.data()), buf.size()};
+}
+} // namespace
+
 namespace fcitx::windows::ui {
 
 namespace detail {
@@ -200,6 +213,82 @@ struct Fcitx5WindowsCommonUtf8ToWide {
     std::size_t utf16Len;
 };
 
+struct Fcitx5WindowsCommonWideToUtf8 {
+    std::uint8_t status;
+    std::size_t utf8Len;
+};
+
+struct Fcitx5CandidateRenderCandidateInput {
+    const std::uint8_t* label{};
+    std::size_t labelLen{};
+    const std::uint8_t* text{};
+    std::size_t textLen{};
+    const std::uint8_t* comment{};
+    std::size_t commentLen{};
+};
+
+struct Fcitx5CandidateRenderThemeInput {
+    std::uint8_t backgroundR{};
+    std::uint8_t backgroundG{};
+    std::uint8_t backgroundB{};
+    std::uint8_t textR{};
+    std::uint8_t textG{};
+    std::uint8_t textB{};
+    std::uint8_t selectedBackgroundR{};
+    std::uint8_t selectedBackgroundG{};
+    std::uint8_t selectedBackgroundB{};
+    std::uint8_t selectedTextR{};
+    std::uint8_t selectedTextG{};
+    std::uint8_t selectedTextB{};
+    std::uint8_t commentR{};
+    std::uint8_t commentG{};
+    std::uint8_t commentB{};
+    std::uint8_t borderR{};
+    std::uint8_t borderG{};
+    std::uint8_t borderB{};
+    std::uint8_t scrollbarR{};
+    std::uint8_t scrollbarG{};
+    std::uint8_t scrollbarB{};
+    std::uint8_t preeditBackgroundR{};
+    std::uint8_t preeditBackgroundG{};
+    std::uint8_t preeditBackgroundB{};
+    std::uint8_t preeditTextR{};
+    std::uint8_t preeditTextG{};
+    std::uint8_t preeditTextB{};
+    float selectionInflateX{};
+    float selectionInflateY{};
+    float cornerRadius{};
+};
+
+struct Fcitx5CandidateRenderGeometryInput {
+    float fontSize{};
+    float labelFontSize{};
+    float commentFontSize{};
+    float labelGap{};
+    float itemPaddingX{};
+    float itemPaddingY{};
+    float preeditHeight{};
+    float maxWidth{};
+    float maxHeight{};
+    float paddingX{};
+    float paddingY{};
+    float rowGap{};
+    float columnGap{};
+    std::uint32_t pageSize{};
+    std::uint8_t orientation{};
+    std::uint8_t overflow{};
+    std::uint8_t writing{};
+};
+
+struct Fcitx5CandidateRenderOutput {
+    float windowX{};
+    float windowY{};
+    float windowW{};
+    float windowH{};
+    std::uint32_t pixelStride{};
+    std::uint64_t pixelByteLen{};
+};
+
 extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemInput* items,
                                                  std::size_t itemCount,
                                                  std::uint8_t horizontal,
@@ -255,6 +344,25 @@ extern "C" Fcitx5WindowsCommonUtf8ToWide fcitx5_windows_common_utf8_to_wide_utf1
     std::size_t input_len,
     std::uint16_t* output,
     std::size_t capacity);
+extern "C" Fcitx5WindowsCommonWideToUtf8 fcitx5_windows_common_wide_utf16_to_utf8(
+    const std::uint16_t* input,
+    std::size_t input_len,
+    std::uint8_t* output,
+    std::size_t capacity);
+extern "C" int fcitx5_candidate_render_window(
+    const Fcitx5CandidateRenderCandidateInput* inCandidates,
+    const Fcitx5CandidateLayoutSize* inSizes,
+    std::size_t candidateCount,
+    const Fcitx5CandidateRenderThemeInput* inTheme,
+    const Fcitx5CandidateRenderGeometryInput* inGeometry,
+    const std::uint8_t* preeditUtf8,
+    std::size_t preeditLen,
+    float dpiScale,
+    std::uint8_t highContrast,
+    std::uint64_t selected,
+    std::uint8_t* outPixels,
+    std::size_t outPixelCapacity,
+    Fcitx5CandidateRenderOutput* out);
 extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
 extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
 
@@ -863,14 +971,6 @@ Function resolveProcAddress(HMODULE module, const char* name) noexcept {
 #pragma clang diagnostic pop
 #endif
     return function;
-}
-
-[[nodiscard]] fcitx::windows::ui::Rect toUiRect(const D2D1_RECT_F& value) noexcept {
-    return {value.left, value.top, value.right, value.bottom};
-}
-
-[[nodiscard]] D2D1_RECT_F fromUiRect(const fcitx::windows::ui::Rect& value) noexcept {
-    return D2D1::RectF(value.left, value.top, value.right, value.bottom);
 }
 
 void enableDpiAwareness() {
@@ -1731,227 +1831,147 @@ class CandidateWindow final {
     }
 
     bool paintOnce() {
-        if (!createDeviceResources())
-            return false;
-        renderTarget_->BeginDraw();
+        RECT client{};
+        if (!GetClientRect(window_, &client) || IsRectEmpty(&client))
+            return true;
+        if (candidates_.empty()) {
+            // First paint before update() — just clear.
+            HDC dc = GetDC(window_);
+            if (dc) {
+                HBRUSH bg = CreateSolidBrush(RGB(248, 250, 250));
+                FillRect(dc, &client, bg);
+                DeleteObject(bg);
+                ReleaseDC(window_, dc);
+            }
+            return true;
+        }
+        // Build Rust render input from C++ member state.
+        const float scale = fontDpiScale_;
         HIGHCONTRASTW contrast{};
         contrast.cbSize = sizeof(contrast);
         const bool highContrast =
             SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
             (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
-        const COLORREF systemBackground = GetSysColor(COLOR_WINDOW);
-        const COLORREF systemForeground = GetSysColor(COLOR_WINDOWTEXT);
-        const auto background = highContrast ? D2D1::ColorF(GetRValue(systemBackground) / 255.0F,
-                                                            GetGValue(systemBackground) / 255.0F,
-                                                            GetBValue(systemBackground) / 255.0F)
-                                             : visualConfig_.colors.background;
-        const auto foreground = highContrast ? D2D1::ColorF(GetRValue(systemForeground) / 255.0F,
-                                                            GetGValue(systemForeground) / 255.0F,
-                                                            GetBValue(systemForeground) / 255.0F)
-                                             : visualConfig_.colors.candidateText;
-        const auto selectedBackground =
-            highContrast ? D2D1::ColorF(GetRValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F,
-                                         GetGValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F,
-                                         GetBValue(GetSysColor(COLOR_HIGHLIGHT)) / 255.0F)
-                         : visualConfig_.colors.selectedBackground;
-        const auto selectedForeground =
-            highContrast ? D2D1::ColorF(GetRValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F,
-                                         GetGValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F,
-                                         GetBValue(GetSysColor(COLOR_HIGHLIGHTTEXT)) / 255.0F)
-                         : visualConfig_.colors.selectedCandidateText;
-        renderTarget_->Clear(background);
-        ComPtr<ID2D1SolidColorBrush> textBrush;
-        ComPtr<ID2D1SolidColorBrush> labelBrush;
-        ComPtr<ID2D1SolidColorBrush> commentBrush;
-        ComPtr<ID2D1SolidColorBrush> selectionBrush;
-        ComPtr<ID2D1SolidColorBrush> selectedTextBrush;
-        ComPtr<ID2D1SolidColorBrush> selectedLabelBrush;
-        ComPtr<ID2D1SolidColorBrush> selectedCommentBrush;
-        ComPtr<ID2D1SolidColorBrush> borderBrush;
-        ComPtr<ID2D1SolidColorBrush> preeditBrush;
-        const auto labelColor = highContrast ? foreground : visualConfig_.colors.labelText;
-        const auto commentColor = highContrast ? foreground : visualConfig_.colors.commentText;
-        const auto preeditColor = highContrast ? foreground : visualConfig_.colors.preeditText;
-        const auto selectedLabelColor =
-            highContrast ? selectedForeground
-                         : visualConfig_.colors.selectedLabelText;
-        const auto selectedCommentColor =
-            highContrast ? selectedForeground
-                         : visualConfig_.colors.selectedCommentText;
-        const auto borderColor =
-            highContrast ? foreground : visualConfig_.colors.border;
-        if (FAILED(renderTarget_->CreateSolidColorBrush(foreground, &textBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(labelColor, &labelBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(commentColor, &commentBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(selectedBackground, &selectionBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(selectedForeground, &selectedTextBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(selectedLabelColor, &selectedLabelBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(selectedCommentColor,
-                                                        &selectedCommentBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(borderColor, &borderBrush)) ||
-            FAILED(renderTarget_->CreateSolidColorBrush(preeditColor, &preeditBrush)))
-            return false;
-        constexpr D2D1_DRAW_TEXT_OPTIONS kDrawTextOptions =
-            static_cast<D2D1_DRAW_TEXT_OPTIONS>(
-                static_cast<UINT32>(D2D1_DRAW_TEXT_OPTIONS_CLIP) | 0x4U);
-        if (!preeditPanel_.empty()) {
-            renderTarget_->DrawTextW(preeditPanel_.data(), static_cast<UINT32>(preeditPanel_.size()),
-                                     textFormat_.Get(), preeditPanelRect_, preeditBrush.Get(),
-                                     kDrawTextOptions);
-            borderBrush->SetOpacity(0.45F);
-            renderTarget_->DrawLine(D2D1::Point2F(preeditPanelRect_.left, preeditDividerY_),
-                                    D2D1::Point2F(preeditPanelRect_.right, preeditDividerY_),
-                                    borderBrush.Get(), 1.0F);
-            borderBrush->SetOpacity(1.0F);
-        }
-        const std::vector<CandidateVisual> fallback{
-            {L"1. ", L"1. ", L"你", L"nǐ", true},
-            {L"2. ", L"2. ", L"呢", L"", true}};
-        const auto& lines = candidates_.empty() ? fallback : candidates_;
-        float fallbackTop = 8.0F;
-        const std::size_t paintCount =
-            visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
-        const auto naturalTextWidth = [&](const std::wstring& value, IDWriteTextFormat* format,
-                                          float height) {
-            ComPtr<IDWriteTextLayout> layout;
-            DWRITE_TEXT_METRICS metrics{};
-            if (value.empty() || !format ||
-                FAILED(writeFactory_->CreateTextLayout(
-                    value.data(), static_cast<UINT32>(value.size()), format, 4096.0F,
-                    (std::max)(1.0F, height), &layout)) ||
-                FAILED(layout->GetMetrics(&metrics))) {
-                return 0.0F;
+        const auto to_u8 = [](const D2D1_COLOR_F& c, bool hc, COLORREF sys, int channel) -> std::uint8_t {
+            if (hc) {
+                const BYTE v = static_cast<BYTE>(sys >> (channel * 8));
+                return v;
             }
-            return metrics.widthIncludingTrailingWhitespace;
+            return static_cast<std::uint8_t>(std::clamp((&c.r)[channel], 0.0F, 1.0F) * 255.0F);
         };
-        std::vector<fcitx::windows::ui::RenderItemInput> renderInputs;
-        renderInputs.reserve(paintCount);
-        const float labelGap =
-            visualConfig_.labelGapDip * fontDpiScale_;
-        for (std::size_t local = 0; local < paintCount; ++local) {
-            const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
-            const D2D1_RECT_F bounds = itemRects_.size() == paintCount
-                                           ? itemRects_[local]
-                                           : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
-            if (index >= lines.size()) {
-                renderInputs.push_back(
-                    {toUiRect(bounds), 0.0F, labelGap, 0.0F, 0.0F, false, false});
-                fallbackTop += 32.0F;
-                continue;
-            }
-            const auto& candidate = lines[index];
-            const float height = bounds.bottom - bounds.top;
-            renderInputs.push_back(
-                {toUiRect(bounds),
-                 naturalTextWidth(candidate.reservedLabel, labelFormat_.Get(), height),
-                 labelGap,
-                 naturalTextWidth(candidate.text, textFormat_.Get(), height),
-                 naturalTextWidth(candidate.comment, annotationFormat_.Get(), height),
-                 !candidate.label.empty(),
-                 !candidate.reservedLabel.empty()});
-            fallbackTop += 32.0F;
+        const auto rgb = [&](const D2D1_COLOR_F& c, bool hc, int sysColor) {
+            const COLORREF sys = hc ? GetSysColor(sysColor) : 0;
+            return std::tuple{to_u8(c, hc, sys, 2), to_u8(c, hc, sys, 1), to_u8(c, hc, sys, 0)};
+        };
+        const auto& col = visualConfig_.colors;
+        auto [bgR, bgG, bgB] = rgb(col.background, highContrast, COLOR_WINDOW);
+        auto [txtR, txtG, txtB] = rgb(col.candidateText, highContrast, COLOR_WINDOWTEXT);
+        auto [selBgR, selBgG, selBgB] = rgb(col.selectedBackground, highContrast, COLOR_HIGHLIGHT);
+        auto [selTxtR, selTxtG, selTxtB] = rgb(col.selectedCandidateText, highContrast, COLOR_HIGHLIGHTTEXT);
+        auto [cmtR, cmtG, cmtB] = rgb(col.commentText, highContrast, COLOR_WINDOWTEXT);
+        auto [bdrR, bdrG, bdrB] = rgb(col.border, highContrast, COLOR_WINDOWTEXT);
+        auto [scrR, scrG, scrB] = std::tuple{bdrR, bdrG, bdrB};
+        auto [pedBgR, pedBgG, pedBgB] = std::tuple{bgR, bgG, bgB};
+        auto [pedTxtR, pedTxtG, pedTxtB] = rgb(col.preeditText, highContrast, COLOR_WINDOWTEXT);
+        const fcitx::windows::ui::detail::Fcitx5CandidateRenderThemeInput theme{
+            bgR, bgG, bgB, txtR, txtG, txtB,
+            selBgR, selBgG, selBgB, selTxtR, selTxtG, selTxtB,
+            cmtR, cmtG, cmtB, bdrR, bdrG, bdrB, scrR, scrG, scrB,
+            pedBgR, pedBgG, pedBgB, pedTxtR, pedTxtG, pedTxtB,
+            selectionInflateX_, selectionInflateY_, visualConfig_.cornerRadiusDip};
+        const fcitx::windows::ui::detail::Fcitx5CandidateRenderGeometryInput geo{
+            visualConfig_.candidateFontSizeDip * scale,
+            visualConfig_.candidateFontSizeDip * visualConfig_.labelFontScale * scale,
+            visualConfig_.candidateFontSizeDip * visualConfig_.annotationFontScale * scale,
+            visualConfig_.labelGapDip * scale,
+            visualConfig_.itemPaddingXDip * scale,
+            visualConfig_.itemPaddingYDip * scale,
+            preeditPanelRect_.bottom - preeditPanelRect_.top,
+            visualConfig_.maxWidthDip * scale,
+            0.0F,
+            visualConfig_.paddingXDip * scale,
+            visualConfig_.paddingYDip * scale,
+            visualConfig_.rowGapDip * scale,
+            visualConfig_.columnGapDip * scale,
+            candidatePageSize_,
+            static_cast<std::uint8_t>(visualConfig_.orientation == NativeOrientation::horizontal ? 0U : 1U),
+            static_cast<std::uint8_t>(
+                visualConfig_.writingMode != NativeWritingMode::horizontal
+                    ? 0U
+                    : visualConfig_.overflow == NativeOverflow::wrapping ? 2U
+                    : visualConfig_.overflow == NativeOverflow::scrolling ? 1U : 0U),
+            static_cast<std::uint8_t>(
+                visualConfig_.writingMode == NativeWritingMode::verticalRl ? 1U
+                : visualConfig_.writingMode == NativeWritingMode::verticalLr ? 2U : 0U)};
+        const std::vector<CandidateVisual>& lines = candidates_;
+        const std::size_t count = visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateRenderCandidateInput> candidatesIn;
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> sizesIn;
+        candidatesIn.reserve(count);
+        sizesIn.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::size_t idx = visibleIndices_.empty() ? i : visibleIndices_[i];
+            const auto& c = (idx < lines.size()) ? lines[idx] : lines[0];
+            auto [lblP, lblL] = to_utf8(c.label);
+            auto [txtP, txtL] = to_utf8(c.text);
+            auto [cmtP, cmtL] = to_utf8(c.comment);
+            candidatesIn.push_back({lblP, lblL, txtP, txtL, cmtP, cmtL});
+            const D2D1_RECT_F bounds = (i < itemRects_.size()) ? itemRects_[i]
+                : D2D1::RectF(0, 0, 80, 32);
+            sizesIn.push_back({bounds.right - bounds.left, bounds.bottom - bounds.top});
         }
-        fallbackTop = 8.0F;
-        const bool horizontalLayout =
-            resolvedPresentationOrientation_ == fcitx::windows::ui::Orientation::horizontal;
-        auto renderSegments =
-            fcitx::windows::ui::renderSegments(resolvedPresentationOrientation_,
-                                               presentationScrollMode(),
-                                               renderInputs);
-        if (renderSegments.size() != renderInputs.size())
-            renderSegments.assign(renderInputs.size(), {});
-        if (presentationScrollMode() && itemRects_.size() > presentationScrollColumns()) {
-            borderBrush->SetOpacity(0.55F);
-            if (horizontalLayout) {
-                for (std::size_t row = presentationScrollColumns(); row < itemRects_.size();
-                     row += presentationScrollColumns()) {
-                    const float y = (itemRects_[row - 1U].bottom + itemRects_[row].top) / 2.0F;
-                    renderTarget_->DrawLine(
-                        D2D1::Point2F(12.0F, y),
-                        D2D1::Point2F(renderTarget_->GetSize().width - 12.0F, y),
-                        borderBrush.Get(), 1.0F);
-                }
-            } else {
-                for (std::size_t column = presentationScrollColumns(); column < itemRects_.size();
-                     column += presentationScrollColumns()) {
-                    const float x =
-                        (itemRects_[column - 1U].right + itemRects_[column].left) / 2.0F;
-                    renderTarget_->DrawLine(
-                        D2D1::Point2F(x, 12.0F),
-                        D2D1::Point2F(x, renderTarget_->GetSize().height - 12.0F),
-                        borderBrush.Get(), 1.0F);
-                }
-            }
-            borderBrush->SetOpacity(1.0F);
+        const std::uint64_t selectedIdx = presentationSelected().value_or(UINT64_MAX);
+        std::string preeditUtf8;
+        {
+            auto [p, l] = to_utf8(preeditPanel_);
+            preeditUtf8.assign(reinterpret_cast<const char*>(p), l);
         }
-        for (std::size_t local = 0; local < paintCount; ++local) {
-            const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
-            if (index >= lines.size())
-                continue;
-            const auto& candidate = lines[index];
-            const D2D1_RECT_F bounds = itemRects_.size() == paintCount
-                                           ? itemRects_[local]
-                                           : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
-            const auto selectedIndex = presentationSelected();
-            const bool selected = selectedIndex && *selectedIndex == index;
-            if (selected) {
-                const float radius = visualConfig_.cornerRadiusDip;
-                const auto size = renderTarget_->GetSize();
-                const D2D1_RECT_F selection =
-                    D2D1::RectF((std::max)(0.0F, bounds.left - selectionInflateX_),
-                                (std::max)(0.0F, bounds.top - selectionInflateY_),
-                                (std::min)(size.width, bounds.right + selectionInflateX_),
-                                (std::min)(size.height, bounds.bottom + selectionInflateY_));
-                renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(selection, radius, radius),
-                                                    selectionBrush.Get());
-            }
-            const auto drawTextInRect = [&](const D2D1_RECT_F& segment,
-                                            const std::wstring& value,
-                                            IDWriteTextFormat* format, ID2D1Brush* brush) {
-                if (value.empty())
-                    return;
-                // Clip instead of wrapping: a long label/comment that exceeds
-                // the remaining row width must not wrap onto the candidate
-                // row below and visually overlap it.
-                renderTarget_->DrawTextW(value.data(), static_cast<UINT32>(value.size()), format,
-                                         segment, brush, kDrawTextOptions);
-            };
-            const auto& segments = renderSegments[local];
-            if (!candidate.label.empty())
-                drawTextInRect(fromUiRect(segments.label), candidate.label, labelFormat_.Get(),
-                               selected ? selectedLabelBrush.Get() : labelBrush.Get());
-            drawTextInRect(fromUiRect(segments.text), candidate.text, textFormat_.Get(),
-                           selected ? selectedTextBrush.Get() : textBrush.Get());
-            if (segments.drawComment)
-                drawTextInRect(fromUiRect(segments.comment), candidate.comment,
-                               annotationFormat_.Get(),
-                               selected ? selectedCommentBrush.Get() : commentBrush.Get());
-            fallbackTop += 32.0F;
+        // Two-phase: query size, then render.
+        fcitx::windows::ui::detail::Fcitx5CandidateRenderOutput out{};
+        const int rc1 = fcitx::windows::ui::detail::fcitx5_candidate_render_window(
+            candidatesIn.data(), sizesIn.data(), count,
+            &theme, &geo,
+            reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
+            scale, highContrast ? 1 : 0, selectedIdx,
+            nullptr, 0, &out);
+        if (rc1 != 2 || out.windowW < 1.0F || out.windowH < 1.0F)
+            return true;
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(out.pixelByteLen));
+        const int rc2 = fcitx::windows::ui::detail::fcitx5_candidate_render_window(
+            candidatesIn.data(), sizesIn.data(), count,
+            &theme, &geo,
+            reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
+            scale, highContrast ? 1 : 0, selectedIdx,
+            pixels.data(), pixels.size(), &out);
+        if (rc2 != 0)
+            return true;
+        // GDI blit.
+        HDC dc = GetDC(window_);
+        if (!dc) return true;
+        const auto pixW = static_cast<LONG>(out.windowW);
+        const auto pixH = static_cast<LONG>(out.windowH);
+        BITMAPINFO bmi{};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = pixW;
+        bmi.bmiHeader.biHeight = -pixH; // top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        HBITMAP hbmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (hbmp && bits) {
+            std::memcpy(bits, pixels.data(), pixels.size());
+            HDC memdc = CreateCompatibleDC(dc);
+            HGDIOBJ old = SelectObject(memdc, hbmp);
+            StretchBlt(dc, 0, 0, client.right, client.bottom,
+                       memdc, 0, 0, static_cast<int>(pixW), static_cast<int>(pixH),
+                       SRCCOPY);
+            SelectObject(memdc, old);
+            DeleteDC(memdc);
+            DeleteObject(hbmp);
         }
-        if (hasScrollbar_) {
-            renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(scrollbarTrack_, 2.0F, 2.0F),
-                                                borderBrush.Get());
-            renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(scrollbarThumb_, 2.0F, 2.0F),
-                                                selectedTextBrush.Get());
-        }
-        const auto targetSize = renderTarget_->GetSize();
-        const float borderWidth = visualConfig_.borderWidthDip;
-        if (borderWidth > 0.0F && targetSize.width > borderWidth &&
-            targetSize.height > borderWidth) {
-            const float inset = borderWidth / 2.0F;
-            const float radius = visualConfig_.cornerRadiusDip;
-            renderTarget_->DrawRoundedRectangle(
-                D2D1::RoundedRect(
-                    D2D1::RectF(inset, inset, targetSize.width - inset, targetSize.height - inset),
-                    radius, radius),
-                borderBrush.Get(), borderWidth);
-        }
-        const HRESULT result = renderTarget_->EndDraw();
-        if (result == D2DERR_RECREATE_TARGET) {
-            renderTarget_.Reset();
-            return createDeviceResources();
-        }
-        return SUCCEEDED(result);
+        ReleaseDC(window_, dc);
+        return true;
     }
 
     void paintToDeviceContext(HDC dc) {
@@ -2424,6 +2444,7 @@ class CandidateWindow final {
         response.candidatePage = current.page;
         const auto presentation = presentationState();
         response.candidatePageSize = presentation.pageSize;
+        candidatePageSize_ = response.candidatePageSize;
         response.candidateTotal = current.total;
         response.candidateBulk = presentation.candidateBulk != 0;
         response.candidateEnd = true;
@@ -2760,6 +2781,7 @@ class CandidateWindow final {
     bool hasScrollbar_{};
     float scrollOverridePx_{-1.0f};
     float fontDpiScale_{1.0F};
+    std::uint32_t candidatePageSize_{5};
     float selectionInflateX_{};
     float selectionInflateY_{};
     float preeditDividerY_{};
