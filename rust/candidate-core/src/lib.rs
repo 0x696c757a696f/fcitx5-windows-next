@@ -2705,6 +2705,118 @@ pub fn layout(input: &LayoutInput) -> LayoutResult {
     result
 }
 
+/// Multi-row horizontal layout for `flow` (rabbit `flow`/`flow_paging`):
+/// items are placed left-to-right and wrap onto further rows once a row would
+/// exceed `row_content_width`. Pure geometry on zero-origin content space; the
+/// caller adds padding and the caret/placement offset. Returns the per-item
+/// rects (row-major) and the tight content width/height. Item sizes already
+/// carry any DPI scale, so the geometry scales with the caller-provided sizes.
+#[must_use]
+pub fn flow_paged_bounds(
+    item_sizes: &[Size],
+    row_content_width: f32,
+    column_gap: f32,
+    row_gap: f32,
+) -> (Vec<Rect>, f32, f32) {
+    if item_sizes.is_empty() {
+        return (Vec::new(), 0.0, 0.0);
+    }
+    let mut rects = Vec::with_capacity(item_sizes.len());
+    let mut x = 0.0_f32;
+    let mut y = 0.0_f32;
+    let mut row_height = 0.0_f32;
+    let mut row_right = 0.0_f32;
+    let mut content_width = 0.0_f32;
+    for item in item_sizes {
+        let item_width = item.width.max(1.0);
+        let gap = if x > 0.0 { column_gap } else { 0.0 };
+        if row_content_width > 0.0 && x + gap + item_width > row_content_width && x > 0.0 {
+            content_width = content_width.max(row_right);
+            y += row_height + row_gap;
+            x = 0.0;
+            row_height = 0.0;
+            row_right = 0.0;
+        }
+        if x > 0.0 {
+            x += column_gap;
+        }
+        rects.push(Rect {
+            left: x,
+            top: y,
+            right: x + item_width,
+            bottom: y + item.height,
+        });
+        row_height = row_height.max(item.height);
+        row_right = row_right.max(x + item_width);
+        x += item_width;
+    }
+    let height = y + row_height;
+    (
+        rects,
+        content_width.max(row_right).max(0.0),
+        height.max(0.0),
+    )
+}
+
+/// `vertical_text` column geometry (rabbit `vertical_text`): every candidate
+/// occupies one column that typesets its text top-to-bottom. Column width is
+/// the full-glyph advance budget (CJK advance + DWrite margin) carried in the
+/// item width; column height is the per-column glyph budget in the item
+/// height. Columns are placed left-to-right (default) or right-to-left when
+/// `left_to_right` is false. Actual vertical glyph typesetting is a renderer
+/// concern (deferred to the renderer slice); this function owns the
+/// deterministic column geometry. Returns the per-column rects and the tight
+/// content width/height on zero-origin space.
+#[must_use]
+pub fn vertical_text_columns(
+    item_sizes: &[Size],
+    column_gap: f32,
+    left_to_right: bool,
+) -> (Vec<Rect>, f32, f32) {
+    if item_sizes.is_empty() {
+        return (Vec::new(), 0.0, 0.0);
+    }
+    let column_gaps = column_gap * item_sizes.len().saturating_sub(1) as f32;
+    let width: f32 = item_sizes
+        .iter()
+        .map(|size| size.width.max(1.0))
+        .sum::<f32>()
+        + column_gaps;
+    let height = item_sizes
+        .iter()
+        .fold(0.0_f32, |peak, size| peak.max(size.height));
+    let mut rects = Vec::with_capacity(item_sizes.len());
+    if left_to_right {
+        let mut x = 0.0_f32;
+        for size in item_sizes {
+            let item_width = size.width.max(1.0);
+            rects.push(Rect {
+                left: x,
+                top: 0.0,
+                right: x + item_width,
+                bottom: size.height,
+            });
+            x += item_width + column_gap;
+        }
+    } else {
+        let mut x = width;
+        for size in item_sizes {
+            let item_width = size.width.max(1.0);
+            x -= item_width;
+            rects.push(Rect {
+                left: x,
+                top: 0.0,
+                right: x + item_width,
+                bottom: size.height,
+            });
+            if x > 0.0 {
+                x -= column_gap;
+            }
+        }
+    }
+    (rects, width, height)
+}
+
 #[derive(Clone, Debug)]
 pub struct PocCandidate {
     pub label: String,
@@ -4331,6 +4443,96 @@ mod tests {
         input.caret = Point { x: 10.0, y: 10.0 };
         let horizontal = layout(&input);
         assert!(horizontal.items[1].left > horizontal.items[0].right);
+    }
+
+    #[test]
+    fn flow_paged_bounds_wraps_into_rows_without_overlap() {
+        let sizes = vec![
+            Size {
+                width: 100.0,
+                height: 24.0
+            };
+            5
+        ];
+        let (rects, width, height) = flow_paged_bounds(&sizes, 250.0, 10.0, 2.0);
+        // Row capacity: 100+10+100=210<=250, +10+100=320>250 => 2 per row => 2,2,1 rows.
+        assert_eq!(rects.len(), 5);
+        assert_eq!(width, 210.0);
+        assert_eq!(height, 24.0 * 3.0 + 2.0 * 2.0);
+        assert_eq!(rects[0].top, rects[1].top);
+        assert!(rects[1].left > rects[0].right);
+        assert!(rects[2].top >= rects[1].bottom + 2.0);
+        assert!(rects[3].top == rects[2].top);
+    }
+
+    #[test]
+    fn flow_paged_bounds_scales_with_dpi_item_sizes() {
+        // 200% DPI doubles every item; the wrap geometry stays non-overlapping
+        // and keeps full-item bounds.
+        let sizes = vec![
+            Size {
+                width: 200.0,
+                height: 48.0
+            };
+            6
+        ];
+        let (rects, width, height) = flow_paged_bounds(&sizes, 500.0, 20.0, 4.0);
+        assert_eq!(rects.len(), 6);
+        assert!(width <= 500.0);
+        assert!(height > 48.0);
+        for window in rects.windows(2) {
+            if (window[1].top - window[0].top).abs() < f32::EPSILON {
+                assert!(window[1].left >= window[0].right);
+            } else {
+                assert!(window[1].top >= window[0].bottom);
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_text_columns_left_to_right_keep_full_glyph_budget() {
+        // 150% DPI: full CJK advance 36.0 * 1.5 = 54.0 column budget.
+        let sizes = vec![
+            Size {
+                width: 54.0,
+                height: 96.0
+            };
+            3
+        ];
+        let (rects, width, height) = vertical_text_columns(&sizes, 12.0, true);
+        assert_eq!(rects.len(), 3);
+        assert_eq!(width, 54.0 * 3.0 + 12.0 * 2.0);
+        assert_eq!(height, 96.0);
+        assert!(rects[1].left >= rects[0].right);
+        assert!(rects[2].left >= rects[1].right);
+        assert_eq!(rects[0].top, 0.0);
+        // Each column keeps its full-glyph advance budget (no truncation).
+        for rect in &rects {
+            assert_eq!(rect.right - rect.left, 54.0);
+        }
+    }
+
+    #[test]
+    fn vertical_text_columns_right_to_left_reverse_order() {
+        let sizes = vec![
+            Size {
+                width: 40.0,
+                height: 80.0,
+            },
+            Size {
+                width: 40.0,
+                height: 80.0,
+            },
+        ];
+        let (rects, width, _) = vertical_text_columns(&sizes, 10.0, false);
+        assert_eq!(rects.len(), 2);
+        assert_eq!(width, 90.0);
+        assert!(
+            rects[0].left > rects[1].left,
+            "right-to-left puts first candidate on the right"
+        );
+        assert_eq!(rects[1].left, 0.0);
+        assert!(rects[0].left >= rects[1].right);
     }
 
     #[test]

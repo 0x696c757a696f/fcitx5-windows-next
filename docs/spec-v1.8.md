@@ -787,7 +787,7 @@ Design Tokens、icon metrics、component state colors 与 typography 必须只�
 
 ```text
 候选布局
-根据当前输入内容选择候选排列方式                 [ 自动 | 横排 | 竖排 ]
+根据当前输入内容选择候选排列方式                 [ 自动 | 纵排 | 横排 | 卷轴 | 竖排文字 ]
 
 候选字号
 控制候选主文字大小                              ─────●──── 16
@@ -831,7 +831,7 @@ Appearance 是最能体现产品完成度的页面，第一屏 SHOULD 包含：
 [ System ] [ Light ] [ Dark ] [ 已安装主题 … ]
 
 候选布局
-[ 自动 ] [ 横排 ] [ 竖排 ]
+[ 自动 ] [ 纵排 ] [ 横排 ] [ 卷轴 ] [ 竖排文字 ]
 
 文字大小
 ────────●──────── 16
@@ -862,13 +862,21 @@ Candidate UI 的目标不是“第一眼惊艳”，而是**长时间输入时�
 - 不添加无意义的心形、更多菜单、动画徽章等 chrome；
 - 鼠标 hover 不改变 keyboard-selected candidate；点击才改变选择/提交。
 
-新增布局模式：
+新增布局模式（`layout_type`，统一一个设置项）：
 
 ```text
-orientation = auto | horizontal | vertical
+layout_type = automatic | stacked | flow | scroll | vertical_text
 ```
 
-`auto` 为默认。解析策略由 presentation 层依据 active Fcitx input method、candidate/comment 内容、writing mode 与可用 work area 决定；用户显式 horizontal/vertical override 始终优先。Auto 不得随机抖动，同一 composition 内布局切换必须有稳定规则。
+- `automatic`（自动，默认）：由 presentation 层依据 active Fcitx input method、candidate/comment
+  内容、writing mode 与可用 work area 决定最终纵/横方向；用户显式 stacked/flow 等 override 始终
+  优先。Auto 不得随机抖动，同一 composition 内布局切换必须有稳定规则。
+- `stacked`（纵排）：候选逐行纵向列表（每行一个候选，文字横排）。
+- `flow`（横排）：候选横向排列；内容超宽时多行分页（对应 rabbit `flow`/`flow_paging`）。
+- `scroll`（卷轴）：固定网格（6×N 或 N×6，按 page_size/方向），带滚动条；direction 在 presentation 层决定。
+- `vertical_text`（竖排文字）：候选文字自上而下竖排，每候选一列；列从左→右或右→左（配置开关）。
+  英文 key/命名与 rimeinn/rabbit `stacked`/`flow`/`vertical_text` 及 fcitx5-macos 卷轴模式对齐；
+  “纵排”指逐行列表，与“竖排文字”严格区分。
 
 **候选窗口尺寸稳定性：**
 
@@ -1114,15 +1122,19 @@ system/default fallback
 
 ### 5.7.1 第一版正式支持的候选布局
 
-- `vertical`：纵向逐候选排列；默认。
-- `horizontal`：横向连续排列；空间不足时按当前页面整体布局，不偷偷改变候选顺序。
-- 一个 composition 周期内 SHOULD 保持 orientation 和候选窗口锚点稳定。
+布局统一由 `layout_type` 设置（见 5.5.11）：
+
+- `stacked`（纵排）：纵向逐候选列表（原 `vertical`）。默认。
+- `flow`（横排）：横向排列；空间不足时按当前行超宽多行分页，不偷偷改变候选顺序（原 `horizontal`）。
+- `scroll`（卷轴）：固定网格（6×N / N×6）+ 滚动条。
+- `vertical_text`（竖排文字）：每候选一列，文字自上而下竖排；列左→右或右→左（后续 slice 完成 glyph 竖排渲染）。
+- 一个 composition 周期内 SHOULD 保持布局和候选窗口锚点稳定。
 - 当前不实现瀑布流、任意网格、主题脚本计算布局；出现明确需求后再扩。
 
 用户可配置或由主题提供默认值的几何项：
 
 ```text
-orientation
+layout_type
 max_width_dip
 padding_x_dip / padding_y_dip
 item_padding_x_dip / item_padding_y_dip
@@ -2670,7 +2682,7 @@ mode = "system"                 # system | light | dark
 theme = "builtin:default"
 
 [candidate]
-orientation = "vertical"        # vertical | horizontal
+layout_type = "stacked"        # automatic | stacked | flow | scroll | vertical_text
 max_width_dip = 720.0
 opacity = 1.0
 
@@ -2764,7 +2776,7 @@ license = "MIT"
 description = "A clean Fcitx5 candidate theme"
 
 [common.candidate]
-orientation = "vertical"
+layout_type = "stacked"
 max_width_dip = 720.0
 opacity = 1.0
 
@@ -2827,7 +2839,7 @@ selected_candidate_text = "#202124FF"
 | 字段 | v1 范围 / 枚举 |
 |---|---|
 | `appearance.mode` | `system | light | dark` |
-| `candidate.orientation` | `vertical | horizontal` |
+| `candidate.layout_type` | `automatic | stacked | flow | scroll | vertical_text` |
 | `candidate.label.display` | `always | selected_scope | hidden` |
 | `candidate.label.scope` | `item | row | column` |
 | `candidate.label.align` | `right | left | center` |
@@ -3503,7 +3515,7 @@ Microsoft DXUT/IME 行为以 Microsoft Learn / Windows classic DirectX sample �
 | REG-UPDATE-TSF-002 | 更新过程中 N+1 health check 失败或 N+1 engine 崩溃 | current/previous identity 可安全回退；N 宿主仍可输入；不可再生用户数据不回滚；不产生 mixed-generation runtime | v1.8 generation draining |
 | REG-CONFIG-A11Y-001 | keyboard-only + Narrator/NVDA 操作自绘 Navigation/Toggle/Segmented/Slider/ThemeCard | focus 顺序稳定、focus ring 可见；Name/Role/State 与 Invoke/Toggle/Selection/RangeValue 等适用 UIA pattern 正确；High Contrast 不丢关键状态 | v1.8 D2D Settings a11y |
 | REG-CONFIG-VISUAL-001 | Config 在 100/125/150/200% DPI + Light/Dark/High Contrast | 页面/SettingRow/Toggle/Segmented/Slider/卡片使用统一 tokens，不退化成裸 Win32 属性表；无裁切/错位 | v1.8 UI/UX |
-| REG-CONFIG-LIVE-001 | 修改主题/字号/Auto/横竖布局 | production Candidate Preview 同步 Live 更新；不要求反复 Apply→Preview；Reset 恢复继承 | v1.8 UI/UX |
+| REG-CONFIG-LIVE-001 | 修改主题/字号/Auto/纵排/横排/卷轴/竖排文字布局 | production Candidate Preview 同步 Live 更新；不要求反复 Apply→Preview；Reset 恢复继承 | v1.8 UI/UX |
 | REG-CAND-STABLE-001 | 同一 composition 候选宽度长→短→长变化 | width hysteresis/稳定策略避免无意义频繁缩放；composition 结束后正确 reset | v1.8 UI/UX |
 | REG-CAND-AUTO-001 | 中文短候选、长 annotation、非中文 engine、屏幕边缘 | Auto layout 按稳定规则选择横/竖；同一 composition 不随机抖动；显式 override 始终优先 | v1.8 UI/UX |
 | REG-BRAND-001 | Shell/任务栏/开始菜单/TSF picker 在常用 DPI 与 Light/Dark/HC | Product icon 与 TSF icon 同一视觉家族；TSF icon 语言中立；Windows 用户可见 profile 名固定为 `Fcitx5`；内部 engine 切换不换 TSF identity | v1.8 branding |
