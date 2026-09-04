@@ -116,6 +116,87 @@ impl AppearanceConfig {
     }
 }
 
+/// Candidate items' overall arrangement axis (orthogonal to text writing mode).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CandidateOrientation {
+    /// Candidates flow left-to-right in rows.
+    #[default]
+    Horizontal,
+    /// Candidates stack top-to-bottom, one row per candidate.
+    Vertical,
+}
+
+/// What happens when candidates exceed the visible space.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OverflowBehavior {
+    /// Candidate page advances past the visible space at page capacity.
+    #[default]
+    Paging,
+    /// A fixed grid viewport scrolls past the visible space.
+    Scrolling,
+    /// Real measured width breaks to the next row.
+    Wrapping,
+}
+
+/// The candidate text's own direction, independent of item arrangement.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WritingMode {
+    /// Horizontal glyph runs left-to-right.
+    #[default]
+    Horizontal,
+    /// Traditional CJK vertical typesetting, columns right-to-left.
+    VerticalRl,
+    /// Traditional CJK vertical typesetting, columns left-to-right.
+    VerticalLr,
+}
+
+/// The unified three-axis candidate layout model. The layout engine and
+/// config boundary read only this model; legacy single-dimension strings
+/// decode into it once at the config boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CandidateLayoutOptions {
+    /// Candidate items' overall arrangement.
+    pub orientation: CandidateOrientation,
+    /// Behavior past the visible space.
+    pub overflow: OverflowBehavior,
+    /// Candidate text direction.
+    pub writing_mode: WritingMode,
+}
+
+/// Decodes the legacy single-dimension `layout_type` vocabulary into the
+/// unified three-axis model. `automatic` keeps the default arrangement axis
+/// because its direction is presentation-decided.
+fn decode_candidate_layout_options(layout_type: &str) -> CandidateLayoutOptions {
+    match layout_type {
+        "stacked" => CandidateLayoutOptions {
+            orientation: CandidateOrientation::Vertical,
+            overflow: OverflowBehavior::Paging,
+            writing_mode: WritingMode::Horizontal,
+        },
+        "flow" => CandidateLayoutOptions {
+            orientation: CandidateOrientation::Horizontal,
+            overflow: OverflowBehavior::Wrapping,
+            writing_mode: WritingMode::Horizontal,
+        },
+        "scroll" => CandidateLayoutOptions {
+            orientation: CandidateOrientation::Horizontal,
+            overflow: OverflowBehavior::Scrolling,
+            writing_mode: WritingMode::Horizontal,
+        },
+        "vertical_text" => CandidateLayoutOptions {
+            orientation: CandidateOrientation::Vertical,
+            overflow: OverflowBehavior::Paging,
+            writing_mode: WritingMode::VerticalRl,
+        },
+        // `automatic` and any unrecognized fallback keep the default axis.
+        _ => CandidateLayoutOptions {
+            orientation: CandidateOrientation::Horizontal,
+            overflow: OverflowBehavior::Paging,
+            writing_mode: WritingMode::Horizontal,
+        },
+    }
+}
+
 /// Resolved candidate settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +220,13 @@ impl CandidateConfig {
     #[must_use]
     pub fn layout_type(&self) -> &str {
         &self.layout_type
+    }
+
+    /// Decodes `layout_type` into the unified three-axis candidate layout
+    /// model consumed by the layout engine and config boundary.
+    #[must_use]
+    pub fn layout_options(&self) -> CandidateLayoutOptions {
+        decode_candidate_layout_options(&self.layout_type)
     }
 
     /// Returns the configured candidate page size.
@@ -2428,4 +2516,75 @@ fn invalid(message: &str) -> Result<(), ConfigError> {
     Err(ConfigError::Validation {
         message: message.to_owned(),
     })
+}
+
+#[cfg(test)]
+mod candidate_layout_decode_tests {
+    use super::*;
+
+    fn options(layout_type: &str) -> CandidateLayoutOptions {
+        decode_candidate_layout_options(layout_type)
+    }
+
+    #[test]
+    fn decodes_stacked_to_vertical_paging_horizontal() {
+        let decoded = options("stacked");
+        assert_eq!(decoded.orientation, CandidateOrientation::Vertical);
+        assert_eq!(decoded.overflow, OverflowBehavior::Paging);
+        assert_eq!(decoded.writing_mode, WritingMode::Horizontal);
+    }
+
+    #[test]
+    fn decodes_flow_to_horizontal_wrapping_horizontal() {
+        let decoded = options("flow");
+        assert_eq!(decoded.orientation, CandidateOrientation::Horizontal);
+        assert_eq!(decoded.overflow, OverflowBehavior::Wrapping);
+        assert_eq!(decoded.writing_mode, WritingMode::Horizontal);
+    }
+
+    #[test]
+    fn decodes_scroll_to_horizontal_scrolling_horizontal() {
+        let decoded = options("scroll");
+        assert_eq!(decoded.orientation, CandidateOrientation::Horizontal);
+        assert_eq!(decoded.overflow, OverflowBehavior::Scrolling);
+        assert_eq!(decoded.writing_mode, WritingMode::Horizontal);
+    }
+
+    #[test]
+    fn decodes_vertical_text_to_vertical_paging_vertical_rl() {
+        let decoded = options("vertical_text");
+        assert_eq!(decoded.orientation, CandidateOrientation::Vertical);
+        assert_eq!(decoded.overflow, OverflowBehavior::Paging);
+        assert_eq!(decoded.writing_mode, WritingMode::VerticalRl);
+    }
+
+    #[test]
+    fn decodes_automatic_to_defaults() {
+        let decoded = options("automatic");
+        assert_eq!(
+            decoded,
+            CandidateLayoutOptions {
+                orientation: CandidateOrientation::Horizontal,
+                overflow: OverflowBehavior::Paging,
+                writing_mode: WritingMode::Horizontal,
+            }
+        );
+    }
+
+    #[test]
+    fn struct_default_matches_automatic_decode() {
+        assert_eq!(CandidateLayoutOptions::default(), options("automatic"));
+    }
+
+    #[test]
+    fn unknown_layout_type_falls_back_to_automatic() {
+        assert_eq!(
+            options("sideways"),
+            CandidateLayoutOptions {
+                orientation: CandidateOrientation::Horizontal,
+                overflow: OverflowBehavior::Paging,
+                writing_mode: WritingMode::Horizontal,
+            }
+        );
+    }
 }
