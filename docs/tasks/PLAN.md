@@ -145,7 +145,7 @@ state is `ALREADY-GREEN` or whose old scope is now superseded by the
 | 080 | CANDIDATE-RENDERER-RUST-CUTOVER-001 | COMPLETED / THREE-AXIS-LANDDED-PAINTONCE-WHEEL / MANUAL-PENDING-RUNTIME | three-axis layout model (orientation x overflow x writing) frozen + config decode + axis_layout geometry (55 tests) + settings UI + C++ snapshot ABI + paintOnce integration + WM_MOUSEWHEEL (Scrolling viewport / Paging VK_PRIOR/NEXT) + DPI unified + window-bound clamped by axis_layout place_window; runtime verification of15 acceptance items on real host remains manual-pending | completed/080-CANDIDATE-RENDERER-RUST-CUTOVER-001.md |
 | 081A | RENDERER-TINY-SKIA-FN-001 | IN-FLIGHT | 080; Rust render_candidate_window fn + C ABI + unit tests (preedit/label/text/comment/selection/scrollbar/border from axis_layout rects + candidate data + theme) | 081-RENDERER-D2D-TINY-SKIA-CUTOVER-001.md |
 | 081B | RENDERER-CPP-BLIT-001 | COMPLETED / PAINTONCE-RUST-RENDER-GDI-BLIT-GREEN | paintOnce calls Rust render fn + blits BGRA pixels via GDI/D2D; D2D still owns the HWND | |
-| 081C | RENDERER-HWND-RUST-001 | OPEN / 081B | HWND creation + message loop + mouse/keyboard dispatch to Rust; delete C++ CandidateWindow | |
+| 081C | RENDERER-HWND-RUST-001 | OPEN / 081B / DEFERRED-TO-FOCUSED-SLICE | HWND creation + message loop + mouse/keyboard dispatch to Rust; delete C++ CandidateWindow | |
 | 081D | RENDERER-DELETE-CPP-001 | OPEN / 081C | delete ui_main.cpp + update tests + verify visual parity + x64/x86 | |
 | REL-01 | RELEASE-01 | RELEASE-GATED / EXTERNAL-EVIDENCE-PENDING | 050 + required external evidence + intended Rust cutovers; code-only queue may continue while this remains parked | release/REL-01-RELEASE-GATE.md |
 
