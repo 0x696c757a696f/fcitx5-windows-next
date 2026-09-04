@@ -6,7 +6,15 @@ use std::ffi::c_void;
 pub mod axis_layout;
 mod candidate_abi;
 pub mod qingfeng;
+#[cfg(windows)]
+pub mod renderer;
 mod ui_plan;
+
+#[cfg(windows)]
+pub use renderer::{
+    render_candidate_window, CandidateRenderData, RenderColor, RenderGeometry, RenderTheme,
+    RenderWindowInput, RenderWindowOutput,
+};
 
 pub use candidate_abi::{
     fcitx5_candidate_ui_apply, fcitx5_candidate_ui_build_plan, fcitx5_candidate_ui_create,
@@ -2295,6 +2303,327 @@ fn rect_to_ffi(rect: Rect) -> Fcitx5CandidateLayoutRect {
         right: rect.right,
         bottom: rect.bottom,
     }
+}
+
+/// Background of the C render-window ABI: lays out the given candidates (each
+/// with a measured logical size, exactly like the axis-layout ABI input), runs
+/// the frozen three-axis geometry, then renders the complete window bitmap
+/// with the caller-supplied colors/geometry. Returns the work-area-local
+/// window rect plus the BGRA bitmap.
+///
+/// # Safety
+///
+/// `in_candidates`, `in_sizes` must be valid for `candidate_count` elements
+/// each when `candidate_count` is non-zero; `in_theme`/`in_geometry` must be
+/// valid. `out_pixels` must point to writable storage of at least
+/// `out_pixel_capacity` bytes, `out` to valid storage for one
+/// `Fcitx5CandidateRenderOutput` when non-null. `out_pixel_capacity` is
+/// queried two-phase like the other ABI entry points: pass 0 to learn the
+/// required size, then render into the buffer. Pointers are not retained.
+#[cfg(windows)]
+pub unsafe extern "C" fn fcitx5_candidate_render_window(
+    in_candidates: *const Fcitx5CandidateRenderCandidateInput,
+    in_sizes: *const Fcitx5CandidateLayoutSize,
+    candidate_count: usize,
+    in_theme: *const Fcitx5CandidateRenderThemeInput,
+    in_geometry: *const Fcitx5CandidateRenderGeometryInput,
+    preedit_utf8: *const u8,
+    preedit_len: usize,
+    dpi_scale: f32,
+    high_contrast: u8,
+    selected: u64,
+    out_pixels: *mut u8,
+    out_pixel_capacity: usize,
+    out: *mut Fcitx5CandidateRenderOutput,
+) -> i32 {
+    if in_theme.is_null() || in_geometry.is_null() {
+        return 1;
+    }
+    if !dpi_scale.is_finite() || !(0.5..=4.0).contains(&dpi_scale) {
+        return 1;
+    }
+    let candidates = if candidate_count == 0 {
+        &[]
+    } else {
+        if in_candidates.is_null() || in_sizes.is_null() {
+            return 1;
+        }
+        unsafe { std::slice::from_raw_parts(in_candidates, candidate_count) }
+    };
+    let sizes = if candidate_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(in_sizes, candidate_count) }
+    };
+    let theme = unsafe { *in_theme };
+    let geometry = unsafe { *in_geometry };
+    let orientation = match geometry.orientation {
+        0 => Orientation::Horizontal,
+        1 => Orientation::Vertical,
+        _ => return 1,
+    };
+    let Some(overflow) = axis_overflow_from_ffi(geometry.overflow) else {
+        return 1;
+    };
+    let Some(writing_mode) = axis_writing_from_ffi(geometry.writing) else {
+        return 1;
+    };
+    let preedit = if preedit_len > 0 {
+        if preedit_utf8.is_null() {
+            return 1;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(preedit_utf8, preedit_len) };
+        Some(String::from_utf8_lossy(bytes).into_owned())
+    } else {
+        None
+    };
+    let data = candidates
+        .iter()
+        .map(|c| CandidateRenderData {
+            label: String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(c.label, c.label_len)
+            })
+            .into_owned(),
+            text: String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(c.text, c.text_len)
+            })
+            .into_owned(),
+            comment: String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(c.comment, c.comment_len)
+            })
+            .into_owned(),
+        })
+        .collect::<Vec<_>>();
+    let axis_input = crate::axis_layout::AxisLayoutInput {
+        options: crate::axis_layout::CandidateLayoutOptions {
+            orientation,
+            overflow,
+            writing_mode,
+        },
+        items: sizes
+            .iter()
+            .map(|s| Size {
+                width: s.width,
+                height: s.height,
+            })
+            .collect(),
+        caret: Point { x: 0.0, y: 0.0 },
+        caret_height: 0.0,
+        work_area: Rect {
+            left: 0.0,
+            top: 0.0,
+            right: geometry.max_width.max(geometry.max_height).max(1.0) * 4.0,
+            bottom: geometry.max_width.max(geometry.max_height).max(1.0) * 4.0,
+        },
+        max_width: geometry.max_width,
+        max_height: geometry.max_height,
+        padding_x: geometry.padding_x,
+        padding_y: geometry.padding_y,
+        row_gap: geometry.row_gap,
+        column_gap: geometry.column_gap,
+        page_size: geometry.page_size as usize,
+        selected: selected as usize,
+        scroll_override: None,
+        placement: Placement::Unlocked,
+    };
+    let axis_result = crate::axis_layout::layout(&axis_input);
+    let out_window = Fcitx5CandidateRenderOutput {
+        window_x: axis_result.window.left,
+        window_y: axis_result.window.top,
+        window_w: (axis_result.window.right - axis_result.window.left).max(0.0),
+        window_h: (axis_result.window.bottom - axis_result.window.top).max(0.0),
+        pixel_stride: 0,
+        pixel_byte_len: 0,
+    };
+    let render = renderer::render_candidate_window(&renderer::RenderWindowInput {
+        axis_result: &axis_result,
+        candidates: &data,
+        theme: &renderer::RenderTheme {
+            background: RenderColor::rgba(
+                theme.background_r,
+                theme.background_g,
+                theme.background_b,
+                255,
+            ),
+            text: RenderColor::rgba(theme.text_r, theme.text_g, theme.text_b, 255),
+            selected_background: RenderColor::rgba(
+                theme.selected_background_r,
+                theme.selected_background_g,
+                theme.selected_background_b,
+                255,
+            ),
+            selected_text: RenderColor::rgba(
+                theme.selected_text_r,
+                theme.selected_text_g,
+                theme.selected_text_b,
+                255,
+            ),
+            comment_color: RenderColor::rgba(
+                theme.comment_r,
+                theme.comment_g,
+                theme.comment_b,
+                255,
+            ),
+            border: RenderColor::rgba(theme.border_r, theme.border_g, theme.border_b, 255),
+            scrollbar: RenderColor::rgba(
+                theme.scrollbar_r,
+                theme.scrollbar_g,
+                theme.scrollbar_b,
+                255,
+            ),
+            preedit_background: RenderColor::rgba(
+                theme.preedit_background_r,
+                theme.preedit_background_g,
+                theme.preedit_background_b,
+                255,
+            ),
+            preedit_text: RenderColor::rgba(
+                theme.preedit_text_r,
+                theme.preedit_text_g,
+                theme.preedit_text_b,
+                255,
+            ),
+            selection_inflate_x: theme.selection_inflate_x,
+            selection_inflate_y: theme.selection_inflate_y,
+            corner_radius: theme.corner_radius,
+        },
+        geometry: &renderer::RenderGeometry {
+            font_size: geometry.font_size,
+            label_font_size: geometry.label_font_size,
+            comment_font_size: geometry.comment_font_size,
+            label_gap: geometry.label_gap,
+            item_padding_x: geometry.item_padding_x,
+            item_padding_y: geometry.item_padding_y,
+            preedit_height: geometry.preedit_height,
+        },
+        preedit: preedit.as_deref(),
+        dpi_scale,
+        high_contrast: high_contrast != 0,
+        selected: if (selected as usize) < data.len() {
+            Some(selected as usize)
+        } else {
+            None
+        },
+    });
+    let required = render.pixels.len();
+    if out_pixel_capacity < required {
+        if !out.is_null() {
+            unsafe {
+                *out = Fcitx5CandidateRenderOutput {
+                    pixel_stride: render.stride,
+                    pixel_byte_len: required as u64,
+                    ..out_window
+                };
+            }
+        }
+        return 2;
+    }
+    if required > 0 && out_pixels.is_null() {
+        return 1;
+    }
+    if required > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(render.pixels.as_ptr(), out_pixels, required) };
+    }
+    if !out.is_null() {
+        unsafe {
+            *out = Fcitx5CandidateRenderOutput {
+                pixel_stride: render.stride,
+                pixel_byte_len: required as u64,
+                ..out_window
+            };
+        }
+    }
+    0
+}
+
+/// One candidate string triple fed to `fcitx5_candidate_render_window`.
+/// All three slices are counted byte buffers; a length of 0 means empty
+/// (label/comment optional). Not retained by the callee.
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Fcitx5CandidateRenderCandidateInput {
+    pub label: *const u8,
+    pub label_len: usize,
+    pub text: *const u8,
+    pub text_len: usize,
+    pub comment: *const u8,
+    pub comment_len: usize,
+}
+
+/// Colors (RGB, alpha forced to 255 by the callee) + selection inflate +
+/// corner radius for `fcitx5_candidate_render_window`.
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Fcitx5CandidateRenderThemeInput {
+    pub background_r: u8,
+    pub background_g: u8,
+    pub background_b: u8,
+    pub text_r: u8,
+    pub text_g: u8,
+    pub text_b: u8,
+    pub selected_background_r: u8,
+    pub selected_background_g: u8,
+    pub selected_background_b: u8,
+    pub selected_text_r: u8,
+    pub selected_text_g: u8,
+    pub selected_text_b: u8,
+    pub comment_r: u8,
+    pub comment_g: u8,
+    pub comment_b: u8,
+    pub border_r: u8,
+    pub border_g: u8,
+    pub border_b: u8,
+    pub scrollbar_r: u8,
+    pub scrollbar_g: u8,
+    pub scrollbar_b: u8,
+    pub preedit_background_r: u8,
+    pub preedit_background_g: u8,
+    pub preedit_background_b: u8,
+    pub preedit_text_r: u8,
+    pub preedit_text_g: u8,
+    pub preedit_text_b: u8,
+    pub selection_inflate_x: f32,
+    pub selection_inflate_y: f32,
+    pub corner_radius: f32,
+}
+
+/// Font/padding/preedit geometry fed to `fcitx5_candidate_render_window`.
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Fcitx5CandidateRenderGeometryInput {
+    pub font_size: f32,
+    pub label_font_size: f32,
+    pub comment_font_size: f32,
+    pub label_gap: f32,
+    pub item_padding_x: f32,
+    pub item_padding_y: f32,
+    pub preedit_height: f32,
+    pub max_width: f32,
+    pub max_height: f32,
+    pub padding_x: f32,
+    pub padding_y: f32,
+    pub row_gap: f32,
+    pub column_gap: f32,
+    pub page_size: u32,
+    pub orientation: u8,
+    pub overflow: u8,
+    pub writing: u8,
+}
+
+/// Geometry + pixel buffer descriptor returned by `fcitx5_candidate_render_window`.
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5CandidateRenderOutput {
+    pub window_x: f32,
+    pub window_y: f32,
+    pub window_w: f32,
+    pub window_h: f32,
+    pub pixel_stride: u32,
+    pub pixel_byte_len: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5380,5 +5709,145 @@ mod axis_layout_ffi_tests {
             1,
             "out_capacity below item_count is rejected"
         );
+    }
+
+    fn utf8_slice(value: &str) -> (*const u8, usize) {
+        (value.as_ptr(), value.len())
+    }
+
+    fn render_theme_input() -> Fcitx5CandidateRenderThemeInput {
+        Fcitx5CandidateRenderThemeInput {
+            background_r: 255,
+            background_g: 255,
+            background_b: 255,
+            text_r: 32,
+            text_g: 33,
+            text_b: 36,
+            selected_background_r: 240,
+            selected_background_g: 250,
+            selected_background_b: 231,
+            selected_text_r: 96,
+            selected_text_g: 193,
+            selected_text_b: 7,
+            comment_r: 120,
+            comment_g: 120,
+            comment_b: 120,
+            border_r: 215,
+            border_g: 215,
+            border_b: 215,
+            scrollbar_r: 128,
+            scrollbar_g: 128,
+            scrollbar_b: 128,
+            preedit_background_r: 255,
+            preedit_background_g: 255,
+            preedit_background_b: 255,
+            preedit_text_r: 32,
+            preedit_text_g: 33,
+            preedit_text_b: 36,
+            selection_inflate_x: 2.0,
+            selection_inflate_y: 2.0,
+            corner_radius: 8.0,
+        }
+    }
+
+    fn render_geometry_input() -> Fcitx5CandidateRenderGeometryInput {
+        Fcitx5CandidateRenderGeometryInput {
+            font_size: 18.0,
+            label_font_size: 16.0,
+            comment_font_size: 14.0,
+            label_gap: 4.0,
+            item_padding_x: 8.0,
+            item_padding_y: 6.0,
+            preedit_height: 30.0,
+            max_width: 400.0,
+            max_height: 0.0,
+            padding_x: 8.0,
+            padding_y: 6.0,
+            row_gap: 2.0,
+            column_gap: 8.0,
+            page_size: 0,
+            orientation: 1,
+            overflow: 0,
+            writing: 0,
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn render_window_ffi_returns_bgra_buffer_and_window_rect() {
+        let cand_text = |text: &str, label: &str, comment: &str| {
+            let (text_p, text_len) = utf8_slice(text);
+            let (label_p, label_len) = utf8_slice(label);
+            let (comment_p, comment_len) = utf8_slice(comment);
+            Fcitx5CandidateRenderCandidateInput {
+                label: label_p,
+                label_len,
+                text: text_p,
+                text_len,
+                comment: comment_p,
+                comment_len,
+            }
+        };
+        let candidates = [
+            cand_text("你", "1", "nǐ"),
+            cand_text("好", "2", "hǎo"),
+            cand_text("汉", "3", ""),
+        ];
+        let sizes = [Fcitx5CandidateLayoutSize {
+            width: 80.0,
+            height: 24.0,
+        }; 3];
+        let theme = render_theme_input();
+        let geometry = render_geometry_input();
+        let mut out = Fcitx5CandidateRenderOutput::default();
+        let preedit = "ni";
+        let (preedit_p, preedit_len) = utf8_slice(preedit);
+        let code = unsafe {
+            fcitx5_candidate_render_window(
+                candidates.as_ptr(),
+                sizes.as_ptr(),
+                candidates.len(),
+                &theme,
+                &geometry,
+                preedit_p,
+                preedit_len,
+                1.0,
+                0,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut out,
+            )
+        };
+        assert_eq!(code, 2, "size query returns the required pixel size");
+        let required = out.pixel_byte_len as usize;
+        assert!(out.window_w > 0.0 && out.window_h > 0.0);
+        assert!(required > 0);
+        assert!(out.pixel_stride > 0);
+        let mut pixels = vec![0u8; required];
+        let code = unsafe {
+            fcitx5_candidate_render_window(
+                candidates.as_ptr(),
+                sizes.as_ptr(),
+                candidates.len(),
+                &theme,
+                &geometry,
+                preedit_p,
+                preedit_len,
+                1.0,
+                0,
+                1,
+                pixels.as_mut_ptr(),
+                pixels.len(),
+                &mut out,
+            )
+        };
+        assert_eq!(code, 0, "render into the sized buffer succeeds");
+        assert_eq!(pixels.len(), out.pixel_byte_len as usize);
+        assert_eq!(
+            out.pixel_stride as usize,
+            (out.window_w.ceil() as usize) * 4
+        );
+        assert!(pixels.iter().any(|&b| b != 0), "buffer is not all zeros");
     }
 }
