@@ -227,7 +227,7 @@ mod window_smoke {
         CandidateLabelAlign, CandidateLabelDisplay, CandidateLabelScope, CandidateLabelSlotConfig,
         CandidateLabelSlotSource, CandidateLabelStyle, CandidateLabelWidthStrategy,
         Fcitx5CandidateLayoutRect, Fcitx5CandidateRenderItemInput, LayoutInput, Orientation,
-        PocCandidate, PocScenario, Point, Rect as CoreRect, Size,
+        Placement, PocCandidate, PocScenario, Point, Rect as CoreRect, Size,
     };
     use std::ffi::c_void;
     use std::fs;
@@ -2452,28 +2452,122 @@ mod window_smoke {
                 },
             ]
         };
-        // Rust-owned geometry: the qingfeng visual plan is the pure Rust
-        // candidate-window layout/theme authority (window + item rects are
-        // window-relative, dpi 1.0).
-        let orientation = if scroll {
-            QingfengOrientation::Grid
-        } else {
-            QingfengOrientation::Vertical
-        };
-        let plan = qingfeng_candidate_visual_plan(
-            orientation,
-            theme_mode,
-            &inputs,
-            if scroll { 36.0 } else { 0.0 },
-            1.0,
-        );
-        let theme = plan.theme;
-        let width = plan.window.width().round().max(1.0) as u32;
-        let height = plan.window.height().round().max(1.0) as u32;
-        let mut pixmap = Pixmap::new(width, height)
-            .ok_or_else(|| format!("golden pixmap alloc failed {width}x{height}"))?;
+        // 080 Stage 3: geometry aligns with the frozen C++ goldens (96x62
+        // vertical 3 / 219x118 scroll 60). The C++ renderer measures every
+        // label/text/comment with DirectWrite and lays out with the Rust
+        // presentation geometry from resources/config.toml (18 DIP candidate
+        // font, YaHei, paddings 10/6, item padding 8/4, row gap 1, column gap
+        // 12, label scale 0.85, annotation scale 0.80, corner radius 12).
+        // The qingfeng theme keeps the WeChat-green selection colors; its
+        // large 22px/42px typography is NOT used here.
+        const FONT_SIZE: f32 = 18.0;
+        const LABEL_FONT: f32 = 18.0 * 0.85;
+        const COMMENT_FONT: f32 = 18.0 * 0.80;
+        const PADDING_X: f32 = 10.0;
+        const PADDING_Y: f32 = 6.0;
+        const ITEM_PADDING_X: f32 = 8.0;
+        const ITEM_PADDING_Y: f32 = 4.0;
+        const ROW_GAP: f32 = 1.0;
+        const COLUMN_GAP: f32 = 12.0;
+        const LABEL_GAP: f32 = 4.0;
+        const CORNER_RADIUS: f32 = 12.0;
         let mut text_engine = DWriteEngine::new();
         text_engine.set_scale(1.0);
+        // item sizes measured with the real DirectWrite engine, exactly like
+        // the C++ update() (IDWriteTextLayout::GetMetrics).
+        let mut measured = Vec::with_capacity(inputs.len());
+        for input in &inputs {
+            let style = WindTextStyle {
+                family: Some("Microsoft YaHei UI"),
+                size: FONT_SIZE,
+                weight: 400,
+                italic: false,
+                line_height: None,
+            };
+            let label_style = WindTextStyle {
+                size: LABEL_FONT,
+                ..style
+            };
+            let comment_style = WindTextStyle {
+                size: COMMENT_FONT,
+                ..style
+            };
+            let (lw, lh) = if input.label.is_empty() {
+                (0.0, 0.0)
+            } else {
+                let m = text_engine.measure(&input.label, &label_style, None);
+                (m.w as f32, m.h as f32)
+            };
+            let tm = text_engine.measure(&input.text, &style, None);
+            let tw = tm.w as f32;
+            let th = tm.h as f32;
+            let comment_text = if input.comment.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", input.comment)
+            };
+            let (cw, ch) = if comment_text.is_empty() {
+                (0.0, 0.0)
+            } else {
+                let m = text_engine.measure(&comment_text, &comment_style, None);
+                (m.w as f32, m.h as f32)
+            };
+            let width = lw
+                + tw
+                + cw
+                + if input.label.is_empty() {
+                    0.0
+                } else {
+                    LABEL_GAP
+                }
+                + ITEM_PADDING_X * 2.0;
+            let height = lh.max(th).max(ch) + ITEM_PADDING_Y * 2.0;
+            measured.push((width, height, input.label.clone(), comment_text, lw, tw));
+        }
+        let theme = if dark {
+            QingfengCandidateTheme::dark()
+        } else {
+            QingfengCandidateTheme::light()
+        };
+        let scroll_selected = if scroll { 18usize } else { 0usize };
+        let input = LayoutInput {
+            orientation: Orientation::Vertical,
+            items: measured
+                .iter()
+                .map(|m| Size {
+                    width: m.0,
+                    height: m.1,
+                })
+                .collect(),
+            caret: Point { x: 100.0, y: 100.0 },
+            caret_height: 24.0,
+            work_area: CoreRect {
+                left: 0.0,
+                top: 0.0,
+                right: 1920.0,
+                bottom: 1040.0,
+            },
+            max_width: 860.0,
+            padding_x: PADDING_X,
+            padding_y: PADDING_Y,
+            row_gap: ROW_GAP,
+            column_gap: COLUMN_GAP,
+            placement: Placement::Unlocked,
+            scroll_mode: scroll,
+            scroll_columns: 6,
+            scroll_visible_rows: 6,
+            selected: scroll_selected,
+            scroll_cell_width: 96.0,
+        };
+        let result = layout(&input);
+        let width = ((result.window.right - result.window.left).round()).max(1.0) as u32;
+        let height = ((result.window.bottom - result.window.top).round()).max(1.0) as u32;
+        let window_origin_x = result.window.left;
+        let window_origin_y = result.window.top;
+        let window_items = result.items.clone();
+        let visible_indices = result.item_indices.clone();
+        let mut pixmap = Pixmap::new(width, height)
+            .ok_or_else(|| format!("golden pixmap alloc failed {width}x{height}"))?;
         let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut text_engine, 1.0);
         let background = colorref_to_wind_color(theme.background.colorref());
         let border = colorref_to_wind_color(theme.border.colorref());
@@ -2486,117 +2580,104 @@ mod window_smoke {
         );
         let window_w = width as f32;
         let window_h = height as f32;
-        // Selected inflated rounded rect (mirrors C++ FillRoundedRectangle with
-        // the Rust item_radius; inflate is bounded by the window padding so it
-        // stays inside the window like the C++ clamp).
-        let selection_inflate = 2.0_f32;
-        for item in plan.items.iter().filter(|item| item.selected) {
-            let rect = qingfeng_rect_to_window(item.item_rect);
-            let x = ((rect.left as f32) - selection_inflate).max(0.0);
-            let y = ((rect.top as f32) - selection_inflate).max(0.0);
-            let right = ((rect.right as f32) + selection_inflate).min(window_w);
-            let bottom = ((rect.bottom as f32) + selection_inflate).min(window_h);
+        // Selected inflated rounded rect (WeChat-green selection; mirrors the
+        // C++ FillRoundedRectangle over the measured item bounds).
+        let selection_inflate_x = ITEM_PADDING_X * 0.65;
+        let selection_inflate_y = ITEM_PADDING_Y * 0.55;
+        for (local_index, global_index) in visible_indices.iter().enumerate() {
+            let item_rect = &window_items[local_index];
+            if *global_index != scroll_selected {
+                continue;
+            }
+            let x = (item_rect.left - window_origin_x - selection_inflate_x).max(0.0);
+            let y = (item_rect.top - window_origin_y - selection_inflate_y).max(0.0);
+            let right = (item_rect.right - window_origin_x + selection_inflate_x).min(window_w);
+            let bottom = (item_rect.bottom - window_origin_y + selection_inflate_y).min(window_h);
             canvas.fill_round_rect(
                 x,
                 y,
                 (right - x).max(0.0),
                 (bottom - y).max(0.0),
-                theme.item_radius,
+                8.0,
                 &WindPaint::fill(colorref_to_wind_color(theme.selected_background.colorref())),
             );
         }
-        if scroll {
-            // Grid cell separators: vertical divider between item columns
-            // (mirrors the C++ scroll-mode column separator lines). The Rust
-            // qingfeng grid uses three columns; the divider sits on the
-            // boundary between each column block.
-            let columns = 3usize;
-            let item_count = plan.items.len();
-            for column in 1..columns {
-                let index = column - 1;
-                if index >= item_count {
-                    continue;
-                }
-                let left_item = &plan.items[index];
-                let right_item = plan
-                    .items
-                    .get(index + columns)
-                    .unwrap_or(&plan.items[item_count - 1]);
-                let x = (left_item.item_rect.right + right_item.item_rect.left) / 2.0;
-                canvas.draw_line(x, 0.0, x, window_h, 1.0, &WindPaint::fill(border));
+        let label_size = LABEL_FONT;
+        let text_size = FONT_SIZE;
+        let comment_size = COMMENT_FONT;
+        for (local_index, global_index) in visible_indices.iter().enumerate() {
+            let input_index = *global_index;
+            if input_index >= inputs.len() {
+                continue;
             }
-            // Scrollbar track + thumb on the right edge. The Rust qingfeng
-            // plan has no scrollbar geometry (the C++ one comes from the Rust
-            // presentation layout), so this is a best-effort vocabulary
-            // render: track fills the right gutter, thumb position maps the
-            // selected cell within the 60-item page. Stage 3 must source the
-            // scrollbar rects from the presentation layout instead.
-            let track_left = (window_w - 6.0).max(0.0);
-            let thumb_area = (window_h - 12.0).max(1.0);
-            canvas.fill_round_rect(
-                track_left,
-                3.0,
-                3.0,
-                (window_h - 6.0).max(1.0),
-                1.5,
-                &WindPaint::fill(border),
-            );
-            let thumb_height = (thumb_area * 0.12).clamp(8.0, 40.0);
-            let thumb_top = 3.0
-                + (thumb_area - thumb_height)
-                    * (selected as f32 / (candidate_count - 1).max(1) as f32);
-            canvas.fill_round_rect(
-                track_left,
-                thumb_top,
-                3.0,
-                thumb_height,
-                1.5,
-                &WindPaint::fill(colorref_to_wind_color(theme.selected_text.colorref())),
-            );
-        }
-        let label_size = theme.typography.label_font_size;
-        let text_size = theme.typography.candidate_font_size;
-        let comment_size = theme.typography.comment_font_size;
-        for item in &plan.items {
-            let selected_text_color = if item.selected {
+            let input = &inputs[input_index];
+            let item_rect = &window_items[local_index];
+            let row_top = item_rect.top - window_origin_y;
+            let row_bottom = item_rect.bottom - window_origin_y;
+            let base_left = item_rect.left - window_origin_x;
+            let (lw, tw, ltext, ctext) = measured
+                .get(input_index)
+                .map(|m| (m.4, m.5, m.2.clone(), m.3.clone()))
+                .unwrap_or((0.0, 0.0, String::new(), String::new()));
+            let is_selected = input_index == scroll_selected;
+            let selected_text_color = if is_selected {
                 theme.selected_text.colorref()
             } else {
                 theme.text.colorref()
             };
-            let label_color = if item.selected {
+            let label_color = if is_selected {
                 theme.selected_text.colorref()
             } else {
                 theme.label.colorref()
             };
-            if !item.label_text.is_empty() {
+            let mut cursor = base_left + ITEM_PADDING_X;
+            if !input.label.is_empty() && !ltext.is_empty() {
+                let lrect = Rect {
+                    left: cursor.round() as i32,
+                    top: row_top.round() as i32,
+                    right: (cursor + lw).round() as i32,
+                    bottom: row_bottom.round() as i32,
+                };
                 draw_windui_text(
                     &mut canvas,
-                    &wide(&item.label_text),
-                    &qingfeng_rect_to_window(item.label_rect),
+                    &wide(&ltext),
+                    &lrect,
                     label_color,
                     WindAlign::End,
                     label_size,
                 );
+                cursor += lw + LABEL_GAP;
             }
+            let text_rect = Rect {
+                left: cursor.round() as i32,
+                top: row_top.round() as i32,
+                right: (cursor + tw).round() as i32,
+                bottom: row_bottom.round() as i32,
+            };
             draw_windui_text(
                 &mut canvas,
-                &wide(&item.text),
-                &qingfeng_rect_to_window(item.text_rect),
+                &wide(&input.text),
+                &text_rect,
                 selected_text_color,
                 WindAlign::Start,
                 text_size,
             );
-            if let Some(comment_rect) = item.comment_rect {
-                if !item.comment.is_empty() {
-                    draw_windui_text(
-                        &mut canvas,
-                        &wide(&item.comment),
-                        &qingfeng_rect_to_window(comment_rect),
-                        theme.label.colorref(),
-                        WindAlign::Start,
-                        comment_size,
-                    );
-                }
+            cursor += tw;
+            if !ctext.is_empty() {
+                let comment_rect = Rect {
+                    left: cursor.round() as i32,
+                    top: row_top.round() as i32,
+                    right: (cursor + 400.0).round() as i32,
+                    bottom: row_bottom.round() as i32,
+                };
+                draw_windui_text(
+                    &mut canvas,
+                    &wide(&ctext),
+                    &comment_rect,
+                    theme.label.colorref(),
+                    WindAlign::Start,
+                    comment_size,
+                );
             }
         }
         let border_width = 1.0_f32;
@@ -2607,7 +2688,7 @@ mod window_smoke {
                 inset,
                 window_w - border_width,
                 window_h - border_width,
-                theme.window_radius,
+                CORNER_RADIUS,
                 border_width,
                 &WindPaint::fill(border),
             );
