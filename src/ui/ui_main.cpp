@@ -363,7 +363,13 @@ extern "C" int fcitx5_candidate_render_window(
     std::uint8_t* outPixels,
     std::size_t outPixelCapacity,
     Fcitx5CandidateRenderOutput* out);
+// extern "C" declarations for Rust window management (081C2).
 extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
+extern "C" HWND fcitx5_candidate_window_create(HINSTANCE instance, bool visible,
+                                                  bool safeMode, bool interactionTest);
+extern "C" int fcitx5_candidate_window_run(HWND window);
+extern "C" void fcitx5_candidate_window_destroy(HWND window);
+
 extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
 
 } // namespace detail
@@ -2853,6 +2859,28 @@ void servePresentation(HWND window, bool testOnce) {
         CloseHandle(pipe);
     }
 }
+
+// Window management FFI for Rust (081C2).
+extern "C" HWND fcitx5_candidate_window_create(HINSTANCE instance, bool visible,
+                                                  bool safeMode, bool interactionTest) {
+    auto* window = new CandidateWindow();
+    if (!window->create(instance, visible, safeMode, interactionTest)) {
+        delete window;
+        return nullptr;
+    }
+    return window->handle();
+}
+
+extern "C" int fcitx5_candidate_window_run(HWND) {
+    MSG msg{};
+    while (GetMessageW(&msg, nullptr, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    return static_cast<int>(msg.wParam);
+}
+
+extern "C" void fcitx5_candidate_window_destroy(HWND) {}
 
 } // namespace
 
