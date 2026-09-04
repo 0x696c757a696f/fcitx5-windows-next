@@ -19,12 +19,24 @@ evidence**, then deletes `ui_main.cpp`. 080 is not complete while `ui_main.cpp` 
 candidate drawing/window path, or while any new permanent C++/Rust dual renderer authority is
 introduced.
 
-## Frozen corpus / differential gate
+## Acceptance standard (revised 2026-09-04)
 
-The Rust renderer must reproduce the C++ D2D/DWrite output. Frozen golden screenshots from the
-shipping C++ renderer (vertical/horizontal/grid candidate layouts, selected/scroll states, light/
-dark, 100/150/200% DPI, high-contrast) are the differential corpus. The cutover is gated on
-byte-comparable or tolerance-equivalent screenshots, not on "it compiles".
+The Rust renderer cannot pixel-clone the C++ D2D output: Direct2D ClearType vs tiny-skia
+rasterize glyphs differently, and the frozen C++ goldens were captured under a display-DPI
+artifact (96x62 window renders ~10.4px text). Per user decision the cutover is gated on Rust
+functional correctness plus user visual confirmation, not byte/pixel parity with the C++ goldens:
+
+- **Full-glyph visibility**: CJK/emoji/comment render completely (no clip/overlap/truncation)
+  across every layout × HiDPI (100/125/150/200%) × light/dark — the user's core requirement
+  (see `docs/tasks/080-layout-naming-design.md` §2).
+- **Geometry**: window/item geometry driven by the same DWrite metrics + Rust presentation
+  `layout()` the C++ renderer consumed (18 DIP candidate, label 0.85, comment 0.80); C++ golden
+  dimensions remain a reference (geometric sanity), not a pixel gate.
+- **Visual confirmation**: the user reviews Rust screenshots (vertical/scroll light+dark at
+  minimum; later stacked/flow/vertical_text + HiDPI).
+
+The C++ goldens are kept as a behavioral reference corpus; they are NOT a pixel-parity gate
+(D2D vs tiny-skia glyph rasterization cannot byte-match — recorded in `080-stage3-diff.md`).
 
 ## TDD cutover sequence
 
@@ -34,8 +46,10 @@ byte-comparable or tolerance-equivalent screenshots, not on "it compiles".
 2. **Stage 2 — Rust renderer parity.** Extend `fcitx5-candidate-core`'s existing `tiny-skia` +
    `windui` DWrite path to draw the full candidate window (preedit divider, candidate rows,
    labels/comments, selection rounded rect, scrollbar, borders) and emit BMPs for the same inputs.
-3. **Stage 3 — differential.** Compare Rust BMPs vs C++ goldens per state; iterate until within the
-   frozen tolerance (or byte-identical where feasible). Record the diff evidence.
+3. **Stage 3 — renderer geometry + full-glyph parity.** Rust BMPs reproduce the C++ window
+   geometry via the same DWrite metrics + presentation layout; full-glyph visibility (CJK/emoji/
+   comment) asserted on Rust screenshots; C++ goldens kept as geometric reference (recorded in
+   `080-stage3-diff.md`), not a pixel gate.
 4. **Stage 4 — Rust window/adapter host.** Move the HWND window, message loop, mouse hit-testing,
    and selection intent to a Rust binary (the new `fcitx5-ui`), reusing the Rust renderer from
    Stage 2 and the existing Rust opaque `candidate_select_client` for selection IPC. Keep the
@@ -55,8 +69,9 @@ D2D/DWrite renderer is deleted, not kept as a runtime selector.
 
 ## Verification contract
 
-- Frozen golden corpus committed under `docs/tasks/` or a documented artifact path; Stage 3
-  differential evidence recorded per state.
+- Full-glyph visibility screenshots per layout state (CJK/emoji/comment complete, no clip/
+  overlap) across HiDPI 100/125/150/200% where the target supports it; recorded under a documented
+  artifact path with the visual-confirmation state noted per state.
 - `cargo test --locked -p fcitx5-candidate-core --target ...` green (x64/x86 where the target
   supports it); `cargo fmt --all -- --check` (for Rust-owned crates, excluding the vendored
   `wind-ui-rust` pre-existing tray.rs whitespace); `git diff --check`.
