@@ -8,6 +8,7 @@
 #include <fcitx5_windows/release_identity.h>
 
 #include <Windows.h>
+#include <Windowsx.h>
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
@@ -105,6 +106,7 @@ struct Fcitx5CandidateAxisLayoutInput {
     float rowGap{};
     float columnGap{};
     std::uint32_t placement{};
+    float scrollOverridePx{-1.0f};
 };
 
 struct Fcitx5CandidatePresentationUpdate {
@@ -2330,6 +2332,7 @@ class CandidateWindow final {
             visualConfig_.rowGapDip * scale,
             visualConfig_.columnGapDip * scale,
             toRust(presentationPlacement()),
+            scrollOverridePx_,
         };
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> axisItemSizes;
         axisItemSizes.reserve(items.size());
@@ -2649,6 +2652,22 @@ class CandidateWindow final {
             self->pressedCandidate_.reset();
             return 0;
         }
+        if (self && message == WM_MOUSEWHEEL) {
+            constexpr float kScrollLineHeight = 28.0F;
+            const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
+            if (self->visualConfig_.overflow == NativeOverflow::scrolling) {
+                const float current =
+                    self->scrollOverridePx_ < 0.0F ? 0.0F : self->scrollOverridePx_;
+                self->scrollOverridePx_ = std::clamp(
+                    current + (static_cast<float>(delta) / 120.0F) * kScrollLineHeight,
+                    0.0F, 8000.0F);
+                InvalidateRect(window, nullptr, FALSE);
+            } else {
+                PostMessageW(window, WM_KEYDOWN,
+                             delta > 0 ? VK_PRIOR : VK_NEXT, 0);
+            }
+            return 0;
+        }
         if (message == WM_NCHITTEST)
             return HTCLIENT;
         if (message == WM_DESTROY) {
@@ -2739,6 +2758,7 @@ class CandidateWindow final {
         fcitx::windows::ui::Orientation::vertical};
     bool safeMode_{};
     bool hasScrollbar_{};
+    float scrollOverridePx_{-1.0f};
     float fontDpiScale_{1.0F};
     float selectionInflateX_{};
     float selectionInflateY_{};

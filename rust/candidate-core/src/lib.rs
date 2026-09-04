@@ -2113,6 +2113,9 @@ pub struct Fcitx5CandidateAxisLayoutInput {
     pub row_gap: f32,
     pub column_gap: f32,
     pub placement: u32,
+    /// Manual scroll override in DIP pixels. -1.0 = auto (scroll-into-view);
+    /// >= 0 = use this offset clamped to [0, scroll_max].
+    pub scroll_override_px: f32,
 }
 
 fn axis_overflow_from_ffi(value: u8) -> Option<axis_layout::OverflowBehavior> {
@@ -2210,6 +2213,11 @@ pub unsafe extern "C" fn fcitx5_candidate_axis_layout(
         column_gap: input.column_gap,
         page_size: input.page_size as usize,
         selected: input.highlighted_index,
+        scroll_override: if input.scroll_override_px >= 0.0 {
+            Some(input.scroll_override_px)
+        } else {
+            None
+        },
         placement,
     });
     if result.items.len() > out_capacity {
@@ -5299,6 +5307,7 @@ mod axis_layout_ffi_tests {
             row_gap: 2.0,
             column_gap: 8.0,
             placement: 0,
+            scroll_override_px: -1.0,
         }
     }
 

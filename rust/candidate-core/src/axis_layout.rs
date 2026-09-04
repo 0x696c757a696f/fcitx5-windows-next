@@ -107,6 +107,10 @@ pub struct AxisLayoutInput {
     pub page_size: usize,
     /// Highlighted candidate; Scrolling keeps it scroll-into-view.
     pub selected: usize,
+    /// Manual scroll override for Scrolling overflow (DIP px).
+    /// `None` = auto scroll-into-view; `Some(px)` = use this offset
+    /// clamped to [0, scroll_max]. Used by WM_MOUSEWHEEL.
+    pub scroll_override: Option<f32>,
     pub placement: Placement,
 }
 
@@ -126,6 +130,7 @@ impl Default for AxisLayoutInput {
             column_gap: 8.0,
             page_size: 0,
             selected: 0,
+            scroll_override: None,
             placement: Placement::Unlocked,
         }
     }
@@ -418,6 +423,10 @@ fn scroll_horizontal(input: &AxisLayoutInput, options: CandidateLayoutOptions) -
     } else {
         0.0
     };
+    let dx = input
+        .scroll_override
+        .map(|o| o.clamp(0.0, scroll_max))
+        .unwrap_or(dx);
     let mut items = Vec::with_capacity(input.items.len());
     let mut first_visible = usize::MAX;
     for (index, (offset, item)) in offsets.into_iter().zip(input.items.iter()).enumerate() {
@@ -497,6 +506,10 @@ fn scroll_vertical(input: &AxisLayoutInput, options: CandidateLayoutOptions) -> 
     } else {
         0.0
     };
+    let dy = input
+        .scroll_override
+        .map(|o| o.clamp(0.0, scroll_max))
+        .unwrap_or(dy);
     let mut items = Vec::with_capacity(input.items.len());
     let mut first_visible = usize::MAX;
     for (index, (offset, item)) in offsets.into_iter().zip(input.items.iter()).enumerate() {
@@ -631,6 +644,10 @@ fn vertical_columns(input: &AxisLayoutInput, options: CandidateLayoutOptions) ->
     } else {
         0.0
     };
+    let dx = input
+        .scroll_override
+        .map(|o| o.clamp(0.0, scroll_max))
+        .unwrap_or(dx);
     for rect in &mut rects {
         rect.left += window.left + padding_x - dx;
         rect.right += window.left + padding_x - dx;
