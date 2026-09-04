@@ -645,13 +645,13 @@ fn windui_candidate_preview_row(
 }
 
 fn windui_candidate_preview_panel(
-    layout: WindUiSignal<CandidateLayoutMode>,
+    options: WindUiSignal<CandidateLayoutUiOptions>,
     page_size: WindUiSignal<u8>,
     theme_mode: WindUiSignal<usize>,
     draft_summary: WindUiSignal<String>,
 ) -> WindUiElement {
     let preview_description =
-        page_size.map(move |page_size| layout.get().preview_description(*page_size));
+        page_size.map(move |page_size| options.get().preview_description(*page_size));
     let mode = WindUiElement::row()
         .cross(WindUiAlign::Center)
         .spacing(6)
@@ -692,6 +692,41 @@ fn windui_candidate_preview_panel(
                 .fg_role(WindUiRole::TextMuted),
         );
 
+    let slot_visible = |page_size: WindUiSignal<u8>, slot: u8| {
+        page_size.map(move |count| candidate_preview_slot_visible(*count, slot))
+    };
+    let writing = WindUiElement::col()
+        .width_match()
+        .spacing(2)
+        .padding_xy(8, 6)
+        .bg_role(WindUiRole::SurfaceAlt)
+        .corner(8.0)
+        .child(windui_candidate_preview_row(
+            "一",
+            "是",
+            "",
+            true,
+            false,
+            slot_visible(page_size, 1),
+        ))
+        .child(windui_candidate_preview_row(
+            "二",
+            "识",
+            "",
+            false,
+            false,
+            slot_visible(page_size, 2),
+        ))
+        .child(windui_candidate_preview_row(
+            "三",
+            "实",
+            "",
+            false,
+            false,
+            slot_visible(page_size, 3),
+        ))
+        .visible_when(move || options.get().writing_mode != CandidateWritingMode::Horizontal);
+
     let vertical = WindUiElement::col()
         .width_match()
         .spacing(2)
@@ -701,7 +736,7 @@ fn windui_candidate_preview_panel(
             "",
             true,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 1)),
+            slot_visible(page_size, 1),
         ))
         .child(windui_candidate_preview_row(
             "2.",
@@ -709,7 +744,7 @@ fn windui_candidate_preview_panel(
             "",
             false,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 2)),
+            slot_visible(page_size, 2),
         ))
         .child(windui_candidate_preview_row(
             "3.",
@@ -717,7 +752,7 @@ fn windui_candidate_preview_panel(
             "",
             false,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 3)),
+            slot_visible(page_size, 3),
         ))
         .child(windui_candidate_preview_row(
             "4.",
@@ -725,7 +760,7 @@ fn windui_candidate_preview_panel(
             "~b",
             false,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 4)),
+            slot_visible(page_size, 4),
         ))
         .child(windui_candidate_preview_row(
             "5.",
@@ -733,7 +768,7 @@ fn windui_candidate_preview_panel(
             "~d",
             false,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 5)),
+            slot_visible(page_size, 5),
         ))
         .child(windui_candidate_preview_row(
             "6.",
@@ -741,7 +776,7 @@ fn windui_candidate_preview_panel(
             "",
             false,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 6)),
+            slot_visible(page_size, 6),
         ))
         .child(windui_candidate_preview_row(
             "7.",
@@ -749,7 +784,7 @@ fn windui_candidate_preview_panel(
             "",
             false,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 7)),
+            slot_visible(page_size, 7),
         ))
         .child(windui_candidate_preview_row(
             "8.",
@@ -757,7 +792,7 @@ fn windui_candidate_preview_panel(
             "",
             false,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 8)),
+            slot_visible(page_size, 8),
         ))
         .child(windui_candidate_preview_row(
             "9.",
@@ -765,16 +800,11 @@ fn windui_candidate_preview_panel(
             "",
             false,
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 9)),
+            slot_visible(page_size, 9),
         ))
         .visible_when(move || {
-            matches!(
-                layout.get(),
-                CandidateLayoutMode::Automatic
-                    | CandidateLayoutMode::Stacked
-                    | CandidateLayoutMode::Scroll
-                    | CandidateLayoutMode::VerticalText
-            )
+            options.get().writing_mode == CandidateWritingMode::Horizontal
+                && options.get().orientation == CandidateLayoutOrientation::Vertical
         });
 
     let horizontal = WindUiElement::row()
@@ -783,54 +813,58 @@ fn windui_candidate_preview_panel(
         .child(windui_candidate_preview_chip(
             "1. 是",
             true,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 1)),
+            slot_visible(page_size, 1),
         ))
         .child(windui_candidate_preview_chip(
             "2. 识",
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 2)),
+            slot_visible(page_size, 2),
         ))
         .child(windui_candidate_preview_chip(
             "3. 实",
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 3)),
+            slot_visible(page_size, 3),
         ))
         .child(windui_candidate_preview_chip(
             "4. 水 ~b",
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 4)),
+            slot_visible(page_size, 4),
         ))
         .child(windui_candidate_preview_chip(
             "5. 收 ~d",
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 5)),
+            slot_visible(page_size, 5),
         ))
         .child(windui_candidate_preview_chip(
             "6. 十",
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 6)),
+            slot_visible(page_size, 6),
         ))
         .child(windui_candidate_preview_chip(
             "7. 诗",
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 7)),
+            slot_visible(page_size, 7),
         ))
         .child(windui_candidate_preview_chip(
             "8. 式",
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 8)),
+            slot_visible(page_size, 8),
         ))
         .child(windui_candidate_preview_chip(
             "9. 试",
             false,
-            page_size.map(|count| candidate_preview_slot_visible(*count, 9)),
+            slot_visible(page_size, 9),
         ))
-        .visible_when(move || matches!(layout.get(), CandidateLayoutMode::Flow));
+        .visible_when(move || {
+            options.get().writing_mode == CandidateWritingMode::Horizontal
+                && options.get().orientation == CandidateLayoutOrientation::Horizontal
+        });
 
     WindUiElement::col()
         .width_match()
         .spacing(10)
         .child(mode)
+        .child(writing)
         .child(vertical)
         .child(horizontal)
         .child(
@@ -1173,6 +1207,8 @@ fn run_control(arguments: &[OsString]) -> Result<String, String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// UI-side mirror of the legacy single `layout_type` string Config Core still
+/// persists. Decoded once from the snapshot and re-encoded on every change.
 enum CandidateLayoutMode {
     Automatic,
     Stacked,
@@ -1182,16 +1218,7 @@ enum CandidateLayoutMode {
 }
 
 impl CandidateLayoutMode {
-    fn control_value(self) -> &'static str {
-        match self {
-            Self::Automatic => "automatic",
-            Self::Stacked => "stacked",
-            Self::Flow => "flow",
-            Self::Scroll => "scroll",
-            Self::VerticalText => "vertical_text",
-        }
-    }
-
+    #[cfg_attr(not(test), allow(dead_code))]
     fn label(self) -> &'static str {
         match self {
             Self::Automatic => "自动",
@@ -1202,6 +1229,7 @@ impl CandidateLayoutMode {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn preview_description(self, page_size: u8) -> String {
         match self {
             Self::Automatic => "自动布局".to_owned(),
@@ -1209,6 +1237,164 @@ impl CandidateLayoutMode {
             Self::Flow => "横排布局（多行分页）".to_owned(),
             Self::Scroll => format!("卷轴布局（每页最多 {page_size} 个候选）"),
             Self::VerticalText => "竖排文字布局".to_owned(),
+        }
+    }
+}
+
+/// UI-side mirror of `fcitx5_config_core::CandidateOrientation`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum CandidateLayoutOrientation {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+/// UI-side mirror of `fcitx5_config_core::OverflowBehavior`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum CandidateLayoutOverflow {
+    #[default]
+    Paging,
+    Scrolling,
+    Wrapping,
+}
+
+/// UI-side mirror of `fcitx5_config_core::WritingMode`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum CandidateWritingMode {
+    #[default]
+    Horizontal,
+    VerticalRl,
+    VerticalLr,
+}
+
+/// The two-axis UI state decoded from the legacy `layout_type` string exactly
+/// as `fcitx5_config_core::decode_candidate_layout_options` decodes it, plus
+/// the explicit writing-mode axis that legacy maps onto `vertical_text`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CandidateLayoutUiOptions {
+    orientation: CandidateLayoutOrientation,
+    overflow: CandidateLayoutOverflow,
+    writing_mode: CandidateWritingMode,
+}
+
+impl CandidateLayoutUiOptions {
+    /// Overflows the selected orientation may display. `Vertical + Wrapping`
+    /// has no semantics in the frozen matrix and is never offered.
+    fn overflow_choices(self) -> &'static [CandidateLayoutOverflow] {
+        match self.orientation {
+            CandidateLayoutOrientation::Horizontal => &[
+                CandidateLayoutOverflow::Paging,
+                CandidateLayoutOverflow::Scrolling,
+                CandidateLayoutOverflow::Wrapping,
+            ],
+            CandidateLayoutOrientation::Vertical => &[
+                CandidateLayoutOverflow::Paging,
+                CandidateLayoutOverflow::Scrolling,
+            ],
+        }
+    }
+
+    /// Encodes back to the single legacy `layout_type` string Config Core
+    /// accepts, mirroring the decode table: V+Paging→stacked, H+Wrapping→flow,
+    /// (H|V)+Scrolling→scroll, VerticalRl/Lr→vertical_text, H+Paging→automatic.
+    fn layout_type(self) -> &'static str {
+        match self.writing_mode {
+            CandidateWritingMode::Horizontal => match (self.orientation, self.overflow) {
+                (CandidateLayoutOrientation::Horizontal, CandidateLayoutOverflow::Paging) => {
+                    "automatic"
+                }
+                (CandidateLayoutOrientation::Vertical, CandidateLayoutOverflow::Paging) => {
+                    "stacked"
+                }
+                (_, CandidateLayoutOverflow::Scrolling) => "scroll",
+                (CandidateLayoutOrientation::Horizontal, CandidateLayoutOverflow::Wrapping) => {
+                    "flow"
+                }
+                // Vertical + Wrapping is not selectable; Vertical + Scrolling
+                // above covers every other reachable pair.
+                (CandidateLayoutOrientation::Vertical, CandidateLayoutOverflow::Wrapping) => {
+                    "stacked"
+                }
+            },
+            CandidateWritingMode::VerticalRl | CandidateWritingMode::VerticalLr => "vertical_text",
+        }
+    }
+
+    /// When a non-Horizontal writing mode is picked, orientation/overflow do
+    /// not persist: legacy `vertical_text` only carries Vertical+Paging+the
+    /// vertical writing token. Switching back to Horizontal keeps the current
+    /// orientation/overflow pair and only clears the vertical writing.
+    fn with_writing(self, writing_mode: CandidateWritingMode) -> Self {
+        match writing_mode {
+            CandidateWritingMode::Horizontal => Self {
+                writing_mode,
+                ..self
+            },
+            _ => Self {
+                orientation: CandidateLayoutOrientation::Vertical,
+                overflow: CandidateLayoutOverflow::Paging,
+                writing_mode,
+            },
+        }
+    }
+}
+
+impl CandidateLayoutMode {
+    /// Decodes the legacy mode into the two-axis model exactly as Config Core
+    /// does (`layout_type` → orientation/overflow, writing→`vertical_text`).
+    fn options(self) -> CandidateLayoutUiOptions {
+        match self {
+            Self::Automatic => CandidateLayoutUiOptions {
+                orientation: CandidateLayoutOrientation::Horizontal,
+                overflow: CandidateLayoutOverflow::Paging,
+                writing_mode: CandidateWritingMode::Horizontal,
+            },
+            Self::Stacked => CandidateLayoutUiOptions {
+                orientation: CandidateLayoutOrientation::Vertical,
+                overflow: CandidateLayoutOverflow::Paging,
+                writing_mode: CandidateWritingMode::Horizontal,
+            },
+            Self::Flow => CandidateLayoutUiOptions {
+                orientation: CandidateLayoutOrientation::Horizontal,
+                overflow: CandidateLayoutOverflow::Wrapping,
+                writing_mode: CandidateWritingMode::Horizontal,
+            },
+            Self::Scroll => CandidateLayoutUiOptions {
+                orientation: CandidateLayoutOrientation::Horizontal,
+                overflow: CandidateLayoutOverflow::Scrolling,
+                writing_mode: CandidateWritingMode::Horizontal,
+            },
+            Self::VerticalText => CandidateLayoutUiOptions {
+                orientation: CandidateLayoutOrientation::Vertical,
+                overflow: CandidateLayoutOverflow::Paging,
+                writing_mode: CandidateWritingMode::VerticalRl,
+            },
+        }
+    }
+}
+
+impl CandidateLayoutUiOptions {
+    fn preview_description(self, page_size: u8) -> String {
+        match self.writing_mode {
+            CandidateWritingMode::Horizontal => match (self.orientation, self.overflow) {
+                (CandidateLayoutOrientation::Horizontal, CandidateLayoutOverflow::Paging) => {
+                    format!("横排布局（分页，每页最多 {page_size} 个候选）")
+                }
+                (CandidateLayoutOrientation::Vertical, CandidateLayoutOverflow::Paging) => {
+                    format!("纵排布局（分页，每页最多 {page_size} 个候选）")
+                }
+                (_, CandidateLayoutOverflow::Scrolling) => {
+                    "卷轴布局（视口滚动，选中项始终可见）".to_owned()
+                }
+                (CandidateLayoutOrientation::Horizontal, CandidateLayoutOverflow::Wrapping) => {
+                    "横排自动换行（按实际宽度折行，行满后分页）".to_owned()
+                }
+                (CandidateLayoutOrientation::Vertical, CandidateLayoutOverflow::Wrapping) => {
+                    format!("纵排布局（分页，每页最多 {page_size} 个候选）")
+                }
+            },
+            CandidateWritingMode::VerticalRl => "竖排文字（从右到左）".to_owned(),
+            CandidateWritingMode::VerticalLr => "竖排文字（从左到右）".to_owned(),
         }
     }
 }
@@ -1933,42 +2119,213 @@ fn reset_candidate_draft(adapter: WindUiSignal<WindUiConfigAdapter>, status: Win
     status.set("候选布局 Draft 已恢复默认继承值".to_owned());
 }
 
-fn config_core_candidate_layout_button(
-    choice: CandidateLayoutMode,
-    selected: WindUiSignal<CandidateLayoutMode>,
+/// Decodes the current snapshot into the two-axis UI state exactly as Config
+/// Core decodes the legacy string (see `candidate_layout_mode` + `.options()`).
+fn candidate_layout_ui_options(snapshot: &ConfigSnapshot) -> CandidateLayoutUiOptions {
+    candidate_layout_mode(snapshot)
+        .unwrap_or(CandidateLayoutMode::Automatic)
+        .options()
+}
+
+/// Re-encodes the edited two-axis state to the single legacy `layout_type`
+/// string and writes it to the Draft as one `CandidateLayoutType` edit.
+fn commit_candidate_layout_ui(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+    control: &'static str,
+    edit: impl Fn(CandidateLayoutUiOptions) -> CandidateLayoutUiOptions + 'static,
+) -> Result<(), String> {
+    let mut result = Ok(());
+    adapter.update(|adapter| {
+        let current = candidate_layout_ui_options(&adapter.preview());
+        let next = edit(current);
+        result = adapter.set(ConfigEdit::CandidateLayoutType(
+            next.layout_type().to_owned(),
+        ));
+    });
+    result?;
+    status.set(format!("{control}已更新 Draft；点击应用后保存"));
+    Ok(())
+}
+
+/// Two clickable orientation cards (横向 / 纵向) with a clear selected state.
+fn candidate_layout_orientation_card(
+    orientation: CandidateLayoutOrientation,
+    options: WindUiSignal<CandidateLayoutUiOptions>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
 ) -> WindUiElement {
-    let active = WindUiElement::button(choice.label())
-        .small()
-        .tooltip("选择候选窗口布局")
+    let label = match orientation {
+        CandidateLayoutOrientation::Horizontal => "横向",
+        CandidateLayoutOrientation::Vertical => "纵向",
+    };
+    let description = match orientation {
+        CandidateLayoutOrientation::Horizontal => "单行或多行横向排列",
+        CandidateLayoutOrientation::Vertical => "候选自上而下逐行排列",
+    };
+    let active = WindUiElement::col()
+        .padding(10)
+        .corner(9.0)
+        .bg_role(WindUiRole::Accent)
+        .spacing(2)
+        .width(122)
+        .child(
+            WindUiElement::label(label)
+                .font_size(13.5)
+                .font_weight(600)
+                .fg_role(WindUiRole::OnAccent),
+        )
+        .child(
+            WindUiElement::label(description)
+                .font_size(11.0)
+                .fg_role(WindUiRole::OnAccent)
+                .width_match(),
+        )
+        .visible_when(move || options.get().orientation == orientation);
+    let inactive = WindUiElement::col()
+        .clickable()
         .on_click(move |ctx| {
-            if let Err(error) = update_candidate_draft(
-                adapter,
-                status,
-                "候选布局",
-                ConfigEdit::CandidateLayoutType(choice.control_value().to_owned()),
-            ) {
+            if let Err(error) =
+                commit_candidate_layout_ui(adapter, status, "布局", move |current| {
+                    CandidateLayoutUiOptions {
+                        orientation,
+                        overflow: if orientation == CandidateLayoutOrientation::Vertical
+                            && current.overflow == CandidateLayoutOverflow::Wrapping
+                        {
+                            CandidateLayoutOverflow::Paging
+                        } else {
+                            current.overflow
+                        },
+                        writing_mode: CandidateWritingMode::Horizontal,
+                    }
+                })
+            {
                 ctx.toast_err(error);
             }
         })
-        .visible_when(move || selected.get() == choice);
-    let inactive = WindUiElement::button(choice.label())
+        .padding(10)
+        .corner(9.0)
+        .border_role(WindUiRole::Border, 1)
+        .bg_role(WindUiRole::SurfaceAlt)
+        .spacing(2)
+        .width(122)
+        .child(
+            WindUiElement::label(label)
+                .font_size(13.5)
+                .font_weight(600)
+                .fg_role(WindUiRole::Text),
+        )
+        .child(
+            WindUiElement::label(description)
+                .font_size(11.0)
+                .fg_role(WindUiRole::TextMuted)
+                .width_match(),
+        )
+        .visible_when(move || {
+            options.get().writing_mode == CandidateWritingMode::Horizontal
+                && options.get().orientation != orientation
+        });
+    WindUiElement::stack().child(active).child(inactive)
+}
+
+/// One overflow option. Options not allowed for the current orientation, and
+/// any overflow change while a vertical writing mode is active (which legacy
+/// `vertical_text` fixes to Vertical+Paging), are never offered.
+fn candidate_layout_overflow_button(
+    overflow: CandidateLayoutOverflow,
+    options: WindUiSignal<CandidateLayoutUiOptions>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) -> WindUiElement {
+    let label = match overflow {
+        CandidateLayoutOverflow::Paging => "分页",
+        CandidateLayoutOverflow::Scrolling => "卷轴",
+        CandidateLayoutOverflow::Wrapping => "自动换行",
+    };
+    let available = options.map(move |current| current.overflow_choices().contains(&overflow));
+    let active = WindUiElement::button(label)
+        .small()
+        .tooltip("候选超出可见区域时的行为")
+        .on_click(move |ctx| {
+            if let Err(error) =
+                commit_candidate_layout_ui(adapter, status, "候选溢出", move |current| {
+                    CandidateLayoutUiOptions {
+                        overflow,
+                        writing_mode: CandidateWritingMode::Horizontal,
+                        ..current
+                    }
+                })
+            {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || available.get() && options.get().overflow == overflow);
+    let inactive = WindUiElement::button(label)
         .small()
         .outline_soft()
         .neutral()
-        .tooltip("选择候选窗口布局")
+        .tooltip("候选超出可见区域时的行为")
         .on_click(move |ctx| {
-            if let Err(error) = update_candidate_draft(
-                adapter,
-                status,
-                "候选布局",
-                ConfigEdit::CandidateLayoutType(choice.control_value().to_owned()),
-            ) {
+            if let Err(error) =
+                commit_candidate_layout_ui(adapter, status, "候选溢出", move |current| {
+                    CandidateLayoutUiOptions {
+                        overflow,
+                        writing_mode: CandidateWritingMode::Horizontal,
+                        ..current
+                    }
+                })
+            {
                 ctx.toast_err(error);
             }
         })
-        .visible_when(move || selected.get() != choice);
+        .visible_when(move || {
+            available.get()
+                && options.get().writing_mode == CandidateWritingMode::Horizontal
+                && options.get().overflow != overflow
+        });
+    WindUiElement::stack().child(active).child(inactive)
+}
+
+/// One advanced writing-mode option (高级 · 文字方向), set apart from layout.
+fn candidate_layout_writing_button(
+    writing: CandidateWritingMode,
+    options: WindUiSignal<CandidateLayoutUiOptions>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) -> WindUiElement {
+    let label = match writing {
+        CandidateWritingMode::Horizontal => "横排",
+        CandidateWritingMode::VerticalRl => "竖排从右到左",
+        CandidateWritingMode::VerticalLr => "竖排从左到右",
+    };
+    let active = WindUiElement::button(label)
+        .small()
+        .tooltip("候选文字自身的排布方向（独立于布局方向）")
+        .on_click(move |ctx| {
+            if let Err(error) =
+                commit_candidate_layout_ui(adapter, status, "文字方向", move |current| {
+                    current.with_writing(writing)
+                })
+            {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || options.get().writing_mode == writing);
+    let inactive = WindUiElement::button(label)
+        .small()
+        .outline_soft()
+        .neutral()
+        .tooltip("候选文字自身的排布方向（独立于布局方向）")
+        .on_click(move |ctx| {
+            if let Err(error) =
+                commit_candidate_layout_ui(adapter, status, "文字方向", move |current| {
+                    current.with_writing(writing)
+                })
+            {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || options.get().writing_mode != writing);
     WindUiElement::stack().child(active).child(inactive)
 }
 
@@ -2016,11 +2373,7 @@ fn windui_config_core_candidate_layout_controls(
     status: WindUiSignal<String>,
     theme_mode: WindUiSignal<usize>,
 ) -> WindUiElement {
-    let layout = adapter.map(|adapter| {
-        adapter
-            .layout_mode()
-            .unwrap_or(CandidateLayoutMode::Automatic)
-    });
+    let options = adapter.map(|adapter| candidate_layout_ui_options(&adapter.preview()));
     let page_size = adapter.map(|adapter| adapter.preview().candidate().page_size());
     let draft_summary = adapter.map(|adapter| {
         let draft = PreviewRenderContext::from_draft(adapter.preview(), 150);
@@ -2031,16 +2384,41 @@ fn windui_config_core_candidate_layout_controls(
             draft.draft.candidate().preedit_mode(),
         )
     });
-    let mut layouts = WindUiElement::row().width_match().spacing(6);
-    for choice in [
-        CandidateLayoutMode::Automatic,
-        CandidateLayoutMode::Stacked,
-        CandidateLayoutMode::Flow,
-        CandidateLayoutMode::Scroll,
-        CandidateLayoutMode::VerticalText,
+
+    let orientations = WindUiElement::row()
+        .spacing(10)
+        .child(candidate_layout_orientation_card(
+            CandidateLayoutOrientation::Horizontal,
+            options,
+            adapter,
+            status,
+        ));
+    let orientations = orientations.child(candidate_layout_orientation_card(
+        CandidateLayoutOrientation::Vertical,
+        options,
+        adapter,
+        status,
+    ));
+
+    let mut overflows = WindUiElement::row().spacing(4);
+    for overflow in [
+        CandidateLayoutOverflow::Paging,
+        CandidateLayoutOverflow::Scrolling,
+        CandidateLayoutOverflow::Wrapping,
     ] {
-        layouts = layouts.child(config_core_candidate_layout_button(
-            choice, layout, adapter, status,
+        overflows = overflows.child(candidate_layout_overflow_button(
+            overflow, options, adapter, status,
+        ));
+    }
+
+    let mut writings = WindUiElement::row().spacing(4);
+    for writing in [
+        CandidateWritingMode::Horizontal,
+        CandidateWritingMode::VerticalRl,
+        CandidateWritingMode::VerticalLr,
+    ] {
+        writings = writings.child(candidate_layout_writing_button(
+            writing, options, adapter, status,
         ));
     }
 
@@ -2056,17 +2434,27 @@ fn windui_config_core_candidate_layout_controls(
         .spacing(14)
         .child(windui_settings_section_title("候选窗口"))
         .child(WindUiElement::setting_row_desc(
-            "候选布局",
-            "选择候选窗口的布局（纵排/横排/卷轴/竖排文字）",
-            layouts,
+            "布局",
+            "候选窗口的排布方向（横向 / 纵向）",
+            orientations,
+        ))
+        .child(WindUiElement::setting_row_desc(
+            "候选溢出",
+            "候选超出可见区域时的行为；纵向不提供自动换行",
+            overflows,
         ))
         .child(WindUiElement::setting_row_desc(
             "候选个数",
             "每页最多显示的候选数（1-9）",
             page_sizes,
         ))
+        .child(WindUiElement::setting_row_desc(
+            "高级 · 文字方向",
+            "候选文字自身方向，独立于布局方向",
+            writings,
+        ))
         .child(windui_candidate_preview_panel(
-            layout,
+            options,
             page_size,
             theme_mode,
             draft_summary,
@@ -3016,10 +3404,6 @@ impl WindUiConfigAdapter {
 
     fn preview(&self) -> ConfigSnapshot {
         self.core.preview()
-    }
-
-    fn layout_mode(&self) -> Result<CandidateLayoutMode, String> {
-        candidate_layout_mode(&self.preview())
     }
 
     fn set(&mut self, edit: ConfigEdit) -> Result<(), String> {
@@ -5672,6 +6056,238 @@ mod tests {
                 format!("卷轴布局（每页最多 {page_size} 个候选）")
             );
         }
+    }
+
+    fn ui_options(
+        orientation: CandidateLayoutOrientation,
+        overflow: CandidateLayoutOverflow,
+        writing_mode: CandidateWritingMode,
+    ) -> CandidateLayoutUiOptions {
+        CandidateLayoutUiOptions {
+            orientation,
+            overflow,
+            writing_mode,
+        }
+    }
+
+    #[test]
+    fn two_axis_decode_matches_config_core_legacy_table() {
+        assert_eq!(
+            CandidateLayoutMode::Automatic.options(),
+            ui_options(
+                CandidateLayoutOrientation::Horizontal,
+                CandidateLayoutOverflow::Paging,
+                CandidateWritingMode::Horizontal
+            )
+        );
+        assert_eq!(
+            CandidateLayoutMode::Stacked.options(),
+            ui_options(
+                CandidateLayoutOrientation::Vertical,
+                CandidateLayoutOverflow::Paging,
+                CandidateWritingMode::Horizontal
+            )
+        );
+        assert_eq!(
+            CandidateLayoutMode::Flow.options(),
+            ui_options(
+                CandidateLayoutOrientation::Horizontal,
+                CandidateLayoutOverflow::Wrapping,
+                CandidateWritingMode::Horizontal
+            )
+        );
+        assert_eq!(
+            CandidateLayoutMode::Scroll.options(),
+            ui_options(
+                CandidateLayoutOrientation::Horizontal,
+                CandidateLayoutOverflow::Scrolling,
+                CandidateWritingMode::Horizontal
+            )
+        );
+        assert_eq!(
+            CandidateLayoutMode::VerticalText.options(),
+            ui_options(
+                CandidateLayoutOrientation::Vertical,
+                CandidateLayoutOverflow::Paging,
+                CandidateWritingMode::VerticalRl
+            )
+        );
+    }
+
+    #[test]
+    fn two_axis_encode_round_trips_to_legacy_layout_type() {
+        assert_eq!(
+            ui_options(
+                CandidateLayoutOrientation::Horizontal,
+                CandidateLayoutOverflow::Paging,
+                CandidateWritingMode::Horizontal
+            )
+            .layout_type(),
+            "automatic"
+        );
+        assert_eq!(
+            ui_options(
+                CandidateLayoutOrientation::Vertical,
+                CandidateLayoutOverflow::Paging,
+                CandidateWritingMode::Horizontal
+            )
+            .layout_type(),
+            "stacked"
+        );
+        assert_eq!(
+            ui_options(
+                CandidateLayoutOrientation::Horizontal,
+                CandidateLayoutOverflow::Wrapping,
+                CandidateWritingMode::Horizontal
+            )
+            .layout_type(),
+            "flow"
+        );
+        assert_eq!(
+            ui_options(
+                CandidateLayoutOrientation::Vertical,
+                CandidateLayoutOverflow::Scrolling,
+                CandidateWritingMode::Horizontal
+            )
+            .layout_type(),
+            "scroll"
+        );
+        for writing in [
+            CandidateWritingMode::VerticalRl,
+            CandidateWritingMode::VerticalLr,
+        ] {
+            assert_eq!(
+                ui_options(
+                    CandidateLayoutOrientation::Horizontal,
+                    CandidateLayoutOverflow::Scrolling,
+                    writing
+                )
+                .layout_type(),
+                "vertical_text"
+            );
+        }
+    }
+
+    #[test]
+    fn vertical_orientation_hides_wrapping_from_overflow_choices() {
+        let horizontal = CandidateLayoutUiOptions {
+            orientation: CandidateLayoutOrientation::Horizontal,
+            ..CandidateLayoutUiOptions::default()
+        };
+        assert_eq!(
+            horizontal.overflow_choices(),
+            &[
+                CandidateLayoutOverflow::Paging,
+                CandidateLayoutOverflow::Scrolling,
+                CandidateLayoutOverflow::Wrapping
+            ]
+        );
+        let vertical = CandidateLayoutUiOptions {
+            orientation: CandidateLayoutOrientation::Vertical,
+            ..CandidateLayoutUiOptions::default()
+        };
+        assert_eq!(
+            vertical.overflow_choices(),
+            &[
+                CandidateLayoutOverflow::Paging,
+                CandidateLayoutOverflow::Scrolling
+            ]
+        );
+    }
+
+    #[test]
+    fn non_horizontal_writing_forces_legacy_vertical_text_semantics() {
+        let vertical_rl = CandidateLayoutUiOptions {
+            orientation: CandidateLayoutOrientation::Vertical,
+            overflow: CandidateLayoutOverflow::Wrapping,
+            writing_mode: CandidateWritingMode::VerticalLr,
+        };
+        assert_eq!(vertical_rl.layout_type(), "vertical_text");
+
+        // Switching writing back to Horizontal keeps the regular two-axis pair.
+        let restored = vertical_rl.with_writing(CandidateWritingMode::Horizontal);
+        assert_eq!(
+            restored,
+            ui_options(
+                CandidateLayoutOrientation::Vertical,
+                CandidateLayoutOverflow::Wrapping,
+                CandidateWritingMode::Horizontal
+            )
+        );
+        // Picking a vertical writing mode fixes orientation/overflow the way
+        // legacy `vertical_text` stores it, and both directions stay vertical.
+        for writing in [
+            CandidateWritingMode::VerticalRl,
+            CandidateWritingMode::VerticalLr,
+        ] {
+            let forced = CandidateLayoutUiOptions {
+                orientation: CandidateLayoutOrientation::Horizontal,
+                overflow: CandidateLayoutOverflow::Scrolling,
+                writing_mode: CandidateWritingMode::Horizontal,
+            }
+            .with_writing(writing);
+            assert_eq!(forced.orientation, CandidateLayoutOrientation::Vertical);
+            assert_eq!(forced.overflow, CandidateLayoutOverflow::Paging);
+            assert_eq!(forced.writing_mode, writing);
+        }
+    }
+
+    #[test]
+    fn snapshot_layout_type_decodes_and_ui_commits_through_config_core() {
+        let store = FileStore::new();
+        let path = Path::new("two-axis-snapshot.toml");
+        for (legacy, expected) in [
+            ("automatic", CandidateLayoutMode::Automatic),
+            ("stacked", CandidateLayoutMode::Stacked),
+            ("flow", CandidateLayoutMode::Flow),
+            ("scroll", CandidateLayoutMode::Scroll),
+            ("vertical_text", CandidateLayoutMode::VerticalText),
+        ] {
+            let mut core = ConfigCore::compiled_defaults();
+            core.execute(
+                ConfigCommand::Set(ConfigEdit::CandidateLayoutType(legacy.to_owned())),
+                &store,
+                path,
+            )
+            .expect("legacy layout_type should set");
+            assert_eq!(core.preview().candidate().layout_type(), legacy);
+            assert_eq!(
+                candidate_layout_ui_options(&core.preview()).layout_type(),
+                legacy,
+                "{legacy} must round-trip through the two-axis decode"
+            );
+            assert_eq!(
+                candidate_layout_ui_options(&core.preview()),
+                expected.options(),
+                "{legacy} must decode to the frozen two-axis pair"
+            );
+        }
+    }
+
+    #[test]
+    fn vertical_preview_description_is_never_wrapping() {
+        let vertical_paging = ui_options(
+            CandidateLayoutOrientation::Vertical,
+            CandidateLayoutOverflow::Paging,
+            CandidateWritingMode::Horizontal,
+        );
+        assert!(vertical_paging.preview_description(5).contains("纵排"));
+        assert!(vertical_paging.preview_description(5).contains("分页"));
+        assert!(vertical_paging
+            .preview_description(5)
+            .contains(&5.to_string()));
+        let writing = ui_options(
+            CandidateLayoutOrientation::Vertical,
+            CandidateLayoutOverflow::Paging,
+            CandidateWritingMode::VerticalLr,
+        );
+        assert!(writing.preview_description(5).contains("从左到右"));
+        let horizontal_wrap = ui_options(
+            CandidateLayoutOrientation::Horizontal,
+            CandidateLayoutOverflow::Wrapping,
+            CandidateWritingMode::Horizontal,
+        );
+        assert!(horizontal_wrap.preview_description(5).contains("自动换行"));
     }
 
     #[test]
