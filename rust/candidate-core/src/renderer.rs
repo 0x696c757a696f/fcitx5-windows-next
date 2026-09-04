@@ -201,8 +201,17 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
             stride: 0,
         };
     }
-    let width = window_w as u32;
-    let height = window_h as u32;
+    let scale = input.dpi_scale.clamp(0.25, 8.0);
+    let width = (window_w * scale).ceil() as u32;
+    let height = (window_h * scale).ceil() as u32;
+    if width == 0 || height == 0 {
+        return RenderWindowOutput {
+            pixels: Vec::new(),
+            width,
+            height,
+            stride: 0,
+        };
+    }
     let stride = width * 4;
     let Some(mut pixmap) = Pixmap::new(width, height) else {
         return RenderWindowOutput {
@@ -212,7 +221,6 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
             stride,
         };
     };
-    let scale = input.dpi_scale.clamp(0.25, 8.0);
     let mut engine = DWriteEngine::new();
     engine.set_scale(scale);
     let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut engine, scale);
