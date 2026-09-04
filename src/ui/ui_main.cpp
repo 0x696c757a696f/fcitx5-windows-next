@@ -833,6 +833,8 @@ std::wstring contentLocaleOrFallback(std::string_view locale) {
 // validation, recovery, theme resolution, and all defaults; the native window
 // receives only resolved D2D/DWrite values through its narrow ABI.
 enum class NativeOrientation : std::uint8_t { automatic, vertical, horizontal };
+enum class NativeOverflow : std::uint8_t { paging, scrolling, wrapping };
+enum class NativeWritingMode : std::uint8_t { horizontal, verticalRl, verticalLr };
 enum class NativeLabelStyle : std::uint8_t { plain, dot, paren, bracket, circled };
 enum class NativePreeditMode : std::uint8_t { inline_, panel };
 
@@ -851,6 +853,8 @@ struct NativeRenderColors {
 
 struct NativeRenderConfig {
     NativeOrientation orientation{};
+    NativeOverflow overflow{NativeOverflow::paging};
+    NativeWritingMode writingMode{NativeWritingMode::horizontal};
     NativePreeditMode preeditMode{};
     NativeLabelStyle labelStyle{NativeLabelStyle::dot};
     std::vector<std::wstring> candidateLabels;
@@ -1036,12 +1040,37 @@ std::string_view borrowedUtf8(Fcitx5ConfigUtf8 value) noexcept {
     return {reinterpret_cast<const char*>(value.ptr), value.len};
 }
 
-NativeOrientation nativeOrientation(std::string_view value) noexcept {
-    if (value == "vertical")
-        return NativeOrientation::vertical;
-    if (value == "horizontal")
-        return NativeOrientation::horizontal;
-    return NativeOrientation::automatic;
+// Decodes the frozen legacy `layout_type` vocabulary into the unified
+// three-axis candidate layout model. Mirror of config-core
+// `decode_candidate_layout_options` (docs/tasks/080-layout-naming-design.md
+// §3): automatic→H+Paging, stacked→V+Paging, flow→H+Wrapping, scroll→
+// H+Scrolling, vertical_text→V+Paging+VerticalRl; anything else falls back
+// to the automatic default. This is the single decode seam the snapshot
+// layout type feeds; consumers read the three axes, never the raw string.
+void decodeNativeLayoutType(std::string_view value, NativeOrientation& orientation,
+                            NativeOverflow& overflow,
+                            NativeWritingMode& writingMode) noexcept {
+    if (value == "stacked") {
+        orientation = NativeOrientation::vertical;
+        overflow = NativeOverflow::paging;
+        writingMode = NativeWritingMode::horizontal;
+    } else if (value == "flow") {
+        orientation = NativeOrientation::horizontal;
+        overflow = NativeOverflow::wrapping;
+        writingMode = NativeWritingMode::horizontal;
+    } else if (value == "scroll") {
+        orientation = NativeOrientation::horizontal;
+        overflow = NativeOverflow::scrolling;
+        writingMode = NativeWritingMode::horizontal;
+    } else if (value == "vertical_text") {
+        orientation = NativeOrientation::vertical;
+        overflow = NativeOverflow::paging;
+        writingMode = NativeWritingMode::verticalRl;
+    } else {  // "automatic" and any unrecognized value keep the default axis.
+        orientation = NativeOrientation::automatic;
+        overflow = NativeOverflow::paging;
+        writingMode = NativeWritingMode::horizontal;
+    }
 }
 
 NativePreeditMode nativePreeditMode(std::string_view value) noexcept {
@@ -1159,7 +1188,11 @@ std::optional<NativeRenderConfig> loadVisualConfig(bool safeMode) {
         return std::nullopt;
 
     NativeRenderConfig config{};
-    config.orientation = nativeOrientation(borrowedUtf8(snapshot.candidateOrientation));
+    config.orientation = NativeOrientation::automatic;
+    config.overflow = NativeOverflow::paging;
+    config.writingMode = NativeWritingMode::horizontal;
+    decodeNativeLayoutType(borrowedUtf8(snapshot.candidateLayoutType), config.orientation,
+                           config.overflow, config.writingMode);
     config.preeditMode = nativePreeditMode(borrowedUtf8(snapshot.candidatePreeditMode));
     config.labelStyle = nativeLabelStyle(borrowedUtf8(snapshot.candidateLabelStyle));
     config.maxWidthDip = snapshot.candidateMaxWidthDip;
@@ -1178,7 +1211,7 @@ std::optional<NativeRenderConfig> loadVisualConfig(bool safeMode) {
     config.candidateFontSizeDip = snapshot.candidateFontSizeDip;
     config.annotationFontScale = snapshot.annotationFontScale;
     config.candidateFontWeight = snapshot.candidateFontWeight;
-    config.scrollMode = snapshot.candidateScrollMode != 0;
+    config.scrollMode = config.overflow == NativeOverflow::scrolling;
     config.labelVisible = snapshot.candidateLabelVisible != 0;
     config.candidateLabels.reserve(snapshot.candidateLabelCount);
     for (std::size_t index = 0; index < snapshot.candidateLabelCount; ++index) {
@@ -2221,6 +2254,13 @@ class CandidateWindow final {
         selectionInflateY_ = itemPaddingY * 0.55F;
         const auto configuredOrientation = visualConfig_.orientation;
         bool horizontalPresentation = configuredOrientation == NativeOrientation::horizontal;
+        if (visualConfig_.writingMode != NativeWritingMode::horizontal)
+            horizontalPresentation = false;
+        if (visualConfig_.overflow == NativeOverflow::wrapping) {
+            // flow → the legacy renderer surface collapses to a single row; the
+            // Rust three-axis geometry (080 slice 2) owns real wrap rects.
+            horizontalPresentation = true;
+        }
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidatePresentationText>
             presentationCandidates;
         presentationCandidates.reserve(current.candidates.size());
@@ -2231,10 +2271,17 @@ class CandidateWindow final {
                  candidate.comment.size()},
             });
         }
+        // The resolved presentation axis: vertical writing (VerticalRl/Lr) is a
+        // column arrangement and always renders vertical; wrapping renders a
+        // single horizontal row on the legacy surface; stacked is vertical;
+        // everything else (automatic paging, scrolling) stays presentation-
+        // decided and resolves inside the Rust presentation state.
         const auto configuredOrientationValue =
-            configuredOrientation == NativeOrientation::vertical
+            visualConfig_.writingMode != NativeWritingMode::horizontal
                 ? 1U
-                : configuredOrientation == NativeOrientation::horizontal ? 2U : 0U;
+                : configuredOrientation == NativeOrientation::vertical
+                      ? 1U
+                      : configuredOrientation == NativeOrientation::horizontal ? 2U : 0U;
         const auto rustOrientation =
             fcitx::windows::ui::detail::fcitx5_candidate_presentation_resolve_orientation(
             presentation_, configuredOrientationValue, presentationCandidates.data(),
