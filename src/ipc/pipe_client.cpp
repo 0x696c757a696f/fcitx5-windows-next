@@ -1,7 +1,5 @@
 #include "pipe_client.h"
 
-#include "launcher_client.h"
-
 #include <vector>
 
 namespace fcitx::windows::ipc {
@@ -485,10 +483,11 @@ bool PipeClient::processKey(std::uint64_t contextId, std::uint32_t virtualKey,
         const bool newContext = existingContext == contexts_.end();
         const std::uint64_t deadline = fcitx5_windows_common_deadline_after_milliseconds(
             newContext ? kContextStartDeadlineMilliseconds : kInputDeadlineMilliseconds);
-        if (!connect(deadline)) {
-            (void)requestLauncherStart(identity_, launcherGeneration_, deadline,
-                                       PeerPolicy::development());
-        }
+        // Launcher on-demand engine wake-up is owned by Rust launcher-core
+        // (supervisor); PipeClient no longer pings the launcher on a cold-start
+        // connect failure. No product semantics are lost: engine main and
+        // ui_main are off this client, and the retained engine E2E spawns its
+        // own real engine. The connect below simply fails open.
         if (!connect(deadline) || !handshake(deadline)) {
             disconnect();
             return false;

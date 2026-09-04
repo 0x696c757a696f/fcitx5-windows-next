@@ -5,3 +5,4 @@
 *.VC.db
 *.VC.opendb
 /.reasonix/
+.pi/

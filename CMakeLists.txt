@@ -461,7 +461,6 @@ fcitx_apply_project_options(fcitx5_platform)
 
 add_library(
   fcitx5_ipc_client STATIC
-  src/ipc/launcher_client.cpp
   src/ipc/pipe_client.cpp
   src/ipc/peer_verification.cpp)
 add_library(fcitx5::ipc_client ALIAS fcitx5_ipc_client)
@@ -1337,74 +1336,24 @@ if(BUILD_TESTING)
   fcitx_apply_binary_hardening(fcitx5_runtime_identity_test)
   add_test(NAME runtime-identity-contract COMMAND fcitx5_runtime_identity_test)
 
-  add_executable(fcitx5_ipc_roundtrip_test tests/integration/ipc_roundtrip_test.cpp)
-  target_link_libraries(fcitx5_ipc_roundtrip_test PRIVATE fcitx5::ipc_client)
-  fcitx_apply_project_options(fcitx5_ipc_roundtrip_test)
-  fcitx_apply_binary_hardening(fcitx5_ipc_roundtrip_test)
-  add_test(NAME ipc-key-commit-roundtrip
-           COMMAND fcitx5_ipc_roundtrip_test "${FCITX_MOCK_ENGINE_EXE}")
-
-  add_executable(fcitx5_ipc_multi_client_test tests/integration/ipc_multi_client_test.cpp)
-  target_link_libraries(fcitx5_ipc_multi_client_test PRIVATE fcitx5::ipc_client)
-  fcitx_apply_project_options(fcitx5_ipc_multi_client_test)
-  fcitx_apply_binary_hardening(fcitx5_ipc_multi_client_test)
-  add_test(NAME ipc-multi-client
-           COMMAND fcitx5_ipc_multi_client_test "${FCITX_MOCK_ENGINE_EXE}")
-  add_test(NAME ipc-multi-client-32
-           COMMAND fcitx5_ipc_multi_client_test "${FCITX_MOCK_ENGINE_EXE}" 32)
-  set_tests_properties(ipc-multi-client-32 PROPERTIES TIMEOUT 30)
-
-  add_executable(fcitx5_ipc_idle_client_test tests/integration/ipc_idle_client_test.cpp)
-  target_link_libraries(fcitx5_ipc_idle_client_test PRIVATE fcitx5::ipc_client)
-  fcitx_apply_project_options(fcitx5_ipc_idle_client_test)
-  fcitx_apply_binary_hardening(fcitx5_ipc_idle_client_test)
-  add_test(NAME ipc-idle-client
-           COMMAND fcitx5_ipc_idle_client_test "${FCITX_MOCK_ENGINE_EXE}")
-  set_tests_properties(ipc-idle-client PROPERTIES TIMEOUT 30)
-
-  add_executable(fcitx5_ipc_generation_routing_test
-                 tests/integration/ipc_generation_routing_test.cpp)
-  target_link_libraries(fcitx5_ipc_generation_routing_test PRIVATE fcitx5::ipc_client)
-  fcitx_apply_project_options(fcitx5_ipc_generation_routing_test)
-  fcitx_apply_binary_hardening(fcitx5_ipc_generation_routing_test)
-  add_test(NAME ipc-generation-routing
-           COMMAND fcitx5_ipc_generation_routing_test "${FCITX_MOCK_ENGINE_EXE}")
-  set_tests_properties(ipc-generation-routing PROPERTIES TIMEOUT 30)
-
-  add_executable(fcitx5_ipc_late_response_test
-                 tests/integration/ipc_late_response_test.cpp)
-  target_link_libraries(fcitx5_ipc_late_response_test PRIVATE fcitx5::ipc_client)
-  fcitx_apply_project_options(fcitx5_ipc_late_response_test)
-  fcitx_apply_binary_hardening(fcitx5_ipc_late_response_test)
-  add_test(NAME ipc-late-response-reconnect
-           COMMAND fcitx5_ipc_late_response_test "${FCITX_MOCK_ENGINE_EXE}")
-
-  add_executable(fcitx5_launcher_integration_test tests/integration/launcher_integration_test.cpp)
-  target_link_libraries(fcitx5_launcher_integration_test PRIVATE fcitx5::ipc_client)
-  add_dependencies(fcitx5_launcher_integration_test fcitx5_launcher)
-  fcitx_apply_project_options(fcitx5_launcher_integration_test)
-  fcitx_apply_binary_hardening(fcitx5_launcher_integration_test)
-  add_test(NAME launcher-engine-lifecycle
-           COMMAND fcitx5_launcher_integration_test
-                   "${FCITX_LAUNCHER_SHIPPING_EXE}"
-                   "${FCITX_MOCK_ENGINE_EXE}")
+  add_test(
+    NAME rust-ipc-client-wire
+    COMMAND
+      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+      "FCITX_MOCK_ENGINE_EXE=${FCITX_MOCK_ENGINE_EXE}"
+      "FCITX_LAUNCHER_EXE=${FCITX_LAUNCHER_SHIPPING_EXE}"
+      "FCITX_CRASH_ENGINE_EXE=$<TARGET_FILE:fcitx5_crash_engine_fixture>"
+      "${FCITX_CARGO_EXECUTABLE}" test --locked
+      --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-ipc-client
+      --target "${FCITX_RUST_TARGET}" -- --test-threads=1)
+  set_tests_properties(rust-ipc-client-wire PROPERTIES
+                       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" TIMEOUT 240)
 
   add_executable(fcitx5_crash_engine_fixture tests/fixtures/crashing_engine_main.cpp)
   set_target_properties(
     fcitx5_crash_engine_fixture PROPERTIES OUTPUT_NAME "fcitx5-crash-engine-fixture")
   fcitx_apply_project_options(fcitx5_crash_engine_fixture)
   fcitx_apply_binary_hardening(fcitx5_crash_engine_fixture)
-  add_executable(fcitx5_launcher_crash_loop_test
-                 tests/integration/launcher_crash_loop_test.cpp)
-  target_link_libraries(fcitx5_launcher_crash_loop_test PRIVATE fcitx5::ipc_client)
-  add_dependencies(fcitx5_launcher_crash_loop_test fcitx5_launcher)
-  fcitx_apply_project_options(fcitx5_launcher_crash_loop_test)
-  fcitx_apply_binary_hardening(fcitx5_launcher_crash_loop_test)
-  add_test(NAME launcher-crash-loop-safe-mode
-           COMMAND fcitx5_launcher_crash_loop_test
-                   "${FCITX_LAUNCHER_SHIPPING_EXE}"
-                   $<TARGET_FILE:fcitx5_crash_engine_fixture>)
-
   add_executable(fcitx5_tsf_module_test tests/unit/tsf_module_test.cpp)
   add_dependencies(fcitx5_tsf_module_test fcitx5_tsf)
   target_include_directories(fcitx5_tsf_module_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")

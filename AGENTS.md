@@ -35,7 +35,9 @@ Preserve context for reasoning and code, not bulk input.
 
 - Search before reading. Use `rg`/symbol search to locate relevant definitions, references, specification sections, and evidence.
 - Never read `docs/tasks/status.md`, the full specification, completed-task archives, or other large documents wholesale. Read only relevant ranges.
-- For large source files, locate the relevant symbol or call site first and read only the necessary surrounding ranges.
+- For large source files, never read the entire file by default. First locate the relevant
+  symbols/usages and inspect the file structure (symbol/index/call-graph queries), then read only
+  the smallest necessary line ranges. Prefer `rg`/symbol/call-graph/index queries over full-file reads.
 - Do not inspect `third_party/`, historical audits, or unrelated reference implementations unless the current task or affected code path requires them.
 - Do not reread unchanged files when the relevant content is already known.
 - Keep command output bounded. Prefer quiet/targeted commands; on failure inspect the relevant error and nearby context instead of dumping full build or test logs.
