@@ -8,6 +8,8 @@ fn main() {
     let mut args = env::args_os().skip(1);
     let mut self_check = false;
     let mut window_smoke = false;
+    let mut render_golden: Option<String> = None;
+    let mut golden_out: Option<PathBuf> = None;
     let mut demo_snapshot = false;
     let mut scroll_demo_snapshot = false;
     let mut typography_snapshot = false;
@@ -22,6 +24,20 @@ fn main() {
             self_check = true;
         } else if arg == "--window-smoke" {
             window_smoke = true;
+        } else if arg == "--render-golden" {
+            let Some(kind) = args.next() else {
+                eprintln!(
+                    "--render-golden requires vertical, vertical-dark, scroll, or scroll-dark"
+                );
+                std::process::exit(2);
+            };
+            render_golden = Some(kind.to_string_lossy().into_owned());
+        } else if arg == "--out" {
+            let Some(path) = args.next() else {
+                eprintln!("--out requires a path");
+                std::process::exit(2);
+            };
+            golden_out = Some(PathBuf::from(path));
         } else if arg == "--demo-snapshot" {
             demo_snapshot = true;
         } else if arg == "--scroll-demo-snapshot" {
@@ -69,11 +85,35 @@ fn main() {
         }
     }
 
-    if self_check == window_smoke {
+    if self_check == window_smoke && render_golden.is_none() {
         eprintln!(
-            "usage: fcitx5-candidate-poc (--self-check | --window-smoke) [--demo-snapshot | --scroll-demo-snapshot | --typography-snapshot | --label-slot-snapshot vertical|horizontal|grid | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
+            "usage: fcitx5-candidate-poc (--self-check | --window-smoke | --render-golden KIND --out PATH) [--demo-snapshot | --scroll-demo-snapshot | --typography-snapshot | --label-slot-snapshot vertical|horizontal|grid | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
         );
         std::process::exit(2);
+    }
+    if let Some(kind) = &render_golden {
+        let Some(out) = &golden_out else {
+            eprintln!("--render-golden requires --out PATH");
+            std::process::exit(2);
+        };
+        if self_check || window_smoke {
+            eprintln!("--render-golden is exclusive with other modes");
+            std::process::exit(2);
+        }
+        let result = render_golden_impl(kind, out);
+        match result {
+            Ok(output) => {
+                if let Some(path) = report {
+                    write_report(&path, &output);
+                }
+                println!("{output}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
     }
     let mode_count = usize::from(demo_snapshot)
         + usize::from(scroll_demo_snapshot)
@@ -126,6 +166,18 @@ fn write_report(path: &Path, output: &str) {
         eprintln!("failed to write report: {error}");
         std::process::exit(1);
     }
+}
+
+#[cfg(windows)]
+fn render_golden_impl(kind: &str, out: &Path) -> Result<String, String> {
+    window_smoke::render_golden(kind, out)
+}
+
+#[cfg(not(windows))]
+fn render_golden_impl(kind: &str, _out: &Path) -> Result<String, String> {
+    Err(format!(
+        "render-golden is only available on Windows (kind {kind})"
+    ))
 }
 
 #[cfg(windows)]
@@ -2315,6 +2367,272 @@ mod window_smoke {
             && left.right > right.left
             && left.top < right.bottom
             && left.bottom > right.top
+    }
+
+    pub(super) fn render_golden(kind: &str, out: &Path) -> Result<String, String> {
+        let (dark, scroll) = match kind {
+            "vertical" => (false, false),
+            "vertical-dark" => (true, false),
+            "scroll" => (false, true),
+            "scroll-dark" => (true, true),
+            _ => {
+                return Err(
+                    "--render-golden must be vertical, vertical-dark, scroll, or scroll-dark"
+                        .to_owned(),
+                )
+            }
+        };
+        let theme_mode = if dark {
+            QingfengThemeMode::Dark
+        } else {
+            QingfengThemeMode::Light
+        };
+        // Mirrors the C++ golden corpus inputs (080-golden/manifest.json):
+        // --demo = 3 candidates selected 0; --scroll-demo = 60 candidates
+        // (42 wo/single-char words + 候选N), selected 18.
+        let selected = if scroll { 18usize } else { 0usize };
+        let candidate_count = if scroll { 60usize } else { 3usize };
+        let inputs: Vec<QingfengCandidateVisualInput> = if scroll {
+            const WORDS: [&str; 42] = [
+                "我", "哦", "窝", "沃", "握", "卧", "涡", "蜗", "渥", "幄", "斡", "龌", "喔", "莴",
+                "倭", "硪", "挝", "肟", "偓", "涴", "踒", "猧", "婐", "捰", "瓁", "馧", "焥", "腛",
+                "濣", "瞃", "擭", "雘", "臒", "檴", "嚄", "濩", "获", "惑", "豁", "霍", "藿", "镬",
+            ];
+            // Display a visible page (first 30 of the 60-item corpus) so the
+            // scroll window height stays page-like; the full 60-item corpus is
+            // reflected in the scrollbar thumb position estimate below.
+            (0..30)
+                .map(|index| {
+                    let text = if index < WORDS.len() {
+                        WORDS[index].to_owned()
+                    } else {
+                        format!("候选{}", index + 1)
+                    };
+                    let labelled = (18..24).contains(&index);
+                    let label = if labelled {
+                        format!("{}", index - 18 + 1)
+                    } else {
+                        String::new()
+                    };
+                    QingfengCandidateVisualInput {
+                        label,
+                        text,
+                        comment: String::new(),
+                        selected: index == selected,
+                        show_label: labelled,
+                        reserve_label: true,
+                    }
+                })
+                .collect()
+        } else {
+            vec![
+                QingfengCandidateVisualInput {
+                    label: "1".to_owned(),
+                    text: "输入法".to_owned(),
+                    comment: "shūrùfǎ".to_owned(),
+                    selected: false,
+                    show_label: true,
+                    reserve_label: true,
+                },
+                QingfengCandidateVisualInput {
+                    label: "2".to_owned(),
+                    text: "输入".to_owned(),
+                    comment: "shūrù".to_owned(),
+                    selected: true,
+                    show_label: true,
+                    reserve_label: true,
+                },
+                QingfengCandidateVisualInput {
+                    label: "3".to_owned(),
+                    text: "中文".to_owned(),
+                    comment: "zhōngwén".to_owned(),
+                    selected: false,
+                    show_label: true,
+                    reserve_label: true,
+                },
+            ]
+        };
+        // Rust-owned geometry: the qingfeng visual plan is the pure Rust
+        // candidate-window layout/theme authority (window + item rects are
+        // window-relative, dpi 1.0).
+        let orientation = if scroll {
+            QingfengOrientation::Grid
+        } else {
+            QingfengOrientation::Vertical
+        };
+        let plan = qingfeng_candidate_visual_plan(
+            orientation,
+            theme_mode,
+            &inputs,
+            if scroll { 36.0 } else { 0.0 },
+            1.0,
+        );
+        let theme = plan.theme;
+        let width = plan.window.width().round().max(1.0) as u32;
+        let height = plan.window.height().round().max(1.0) as u32;
+        let mut pixmap = Pixmap::new(width, height)
+            .ok_or_else(|| format!("golden pixmap alloc failed {width}x{height}"))?;
+        let mut text_engine = DWriteEngine::new();
+        text_engine.set_scale(1.0);
+        let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut text_engine, 1.0);
+        let background = colorref_to_wind_color(theme.background.colorref());
+        let border = colorref_to_wind_color(theme.border.colorref());
+        canvas.fill_rect(
+            0.0,
+            0.0,
+            width as f32,
+            height as f32,
+            &WindPaint::fill(background),
+        );
+        let window_w = width as f32;
+        let window_h = height as f32;
+        // Selected inflated rounded rect (mirrors C++ FillRoundedRectangle with
+        // the Rust item_radius; inflate is bounded by the window padding so it
+        // stays inside the window like the C++ clamp).
+        let selection_inflate = 2.0_f32;
+        for item in plan.items.iter().filter(|item| item.selected) {
+            let rect = qingfeng_rect_to_window(item.item_rect);
+            let x = ((rect.left as f32) - selection_inflate).max(0.0);
+            let y = ((rect.top as f32) - selection_inflate).max(0.0);
+            let right = ((rect.right as f32) + selection_inflate).min(window_w);
+            let bottom = ((rect.bottom as f32) + selection_inflate).min(window_h);
+            canvas.fill_round_rect(
+                x,
+                y,
+                (right - x).max(0.0),
+                (bottom - y).max(0.0),
+                theme.item_radius,
+                &WindPaint::fill(colorref_to_wind_color(theme.selected_background.colorref())),
+            );
+        }
+        if scroll {
+            // Grid cell separators: vertical divider between item columns
+            // (mirrors the C++ scroll-mode column separator lines). The Rust
+            // qingfeng grid uses three columns; the divider sits on the
+            // boundary between each column block.
+            let columns = 3usize;
+            let item_count = plan.items.len();
+            for column in 1..columns {
+                let index = column - 1;
+                if index >= item_count {
+                    continue;
+                }
+                let left_item = &plan.items[index];
+                let right_item = plan
+                    .items
+                    .get(index + columns)
+                    .unwrap_or(&plan.items[item_count - 1]);
+                let x = (left_item.item_rect.right + right_item.item_rect.left) / 2.0;
+                canvas.draw_line(x, 0.0, x, window_h, 1.0, &WindPaint::fill(border));
+            }
+            // Scrollbar track + thumb on the right edge. The Rust qingfeng
+            // plan has no scrollbar geometry (the C++ one comes from the Rust
+            // presentation layout), so this is a best-effort vocabulary
+            // render: track fills the right gutter, thumb position maps the
+            // selected cell within the 60-item page. Stage 3 must source the
+            // scrollbar rects from the presentation layout instead.
+            let track_left = (window_w - 6.0).max(0.0);
+            let thumb_area = (window_h - 12.0).max(1.0);
+            canvas.fill_round_rect(
+                track_left,
+                3.0,
+                3.0,
+                (window_h - 6.0).max(1.0),
+                1.5,
+                &WindPaint::fill(border),
+            );
+            let thumb_height = (thumb_area * 0.12).clamp(8.0, 40.0);
+            let thumb_top = 3.0
+                + (thumb_area - thumb_height)
+                    * (selected as f32 / (candidate_count - 1).max(1) as f32);
+            canvas.fill_round_rect(
+                track_left,
+                thumb_top,
+                3.0,
+                thumb_height,
+                1.5,
+                &WindPaint::fill(colorref_to_wind_color(theme.selected_text.colorref())),
+            );
+        }
+        let label_size = theme.typography.label_font_size;
+        let text_size = theme.typography.candidate_font_size;
+        let comment_size = theme.typography.comment_font_size;
+        for item in &plan.items {
+            let selected_text_color = if item.selected {
+                theme.selected_text.colorref()
+            } else {
+                theme.text.colorref()
+            };
+            let label_color = if item.selected {
+                theme.selected_text.colorref()
+            } else {
+                theme.label.colorref()
+            };
+            if !item.label_text.is_empty() {
+                draw_windui_text(
+                    &mut canvas,
+                    &wide(&item.label_text),
+                    &qingfeng_rect_to_window(item.label_rect),
+                    label_color,
+                    WindAlign::End,
+                    label_size,
+                );
+            }
+            draw_windui_text(
+                &mut canvas,
+                &wide(&item.text),
+                &qingfeng_rect_to_window(item.text_rect),
+                selected_text_color,
+                WindAlign::Start,
+                text_size,
+            );
+            if let Some(comment_rect) = item.comment_rect {
+                if !item.comment.is_empty() {
+                    draw_windui_text(
+                        &mut canvas,
+                        &wide(&item.comment),
+                        &qingfeng_rect_to_window(comment_rect),
+                        theme.label.colorref(),
+                        WindAlign::Start,
+                        comment_size,
+                    );
+                }
+            }
+        }
+        let border_width = 1.0_f32;
+        if window_w > border_width && window_h > border_width {
+            let inset = border_width / 2.0;
+            canvas.stroke_round_rect(
+                inset,
+                inset,
+                window_w - border_width,
+                window_h - border_width,
+                theme.window_radius,
+                border_width,
+                &WindPaint::fill(border),
+            );
+        }
+        drop(canvas);
+        // Compact output filename: vertical/vertical-dark -> rust-golden[.bmp]/rust-golden-dark.bmp,
+        // scroll/scroll-dark -> rust-golden-scroll.bmp/rust-golden-scroll-dark.bmp.
+        let file_name = if scroll {
+            if dark {
+                "rust-golden-scroll-dark.bmp"
+            } else {
+                "rust-golden-scroll.bmp"
+            }
+        } else if dark {
+            "rust-golden-dark.bmp"
+        } else {
+            "rust-golden.bmp"
+        };
+        let out = out.join(file_name);
+        write_bmp(&out, width as i32, height as i32, &pixmap_to_bgra(&pixmap))?;
+        Ok(format!(
+            "render-golden kind={kind} rendered {width}x{height} -> {}\nscroll={scroll} dark={dark} selected={selected} candidates={inputs_len} separator/source={WINDINPUT_QINGFENG_CANDIDATE_SOURCE}",
+            out.display(),
+            inputs_len = inputs.len(),
+        ))
     }
 
     fn host_snapshot_scenario(host: &str) -> Result<PocScenario, String> {
