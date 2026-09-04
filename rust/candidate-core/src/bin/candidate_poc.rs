@@ -15,6 +15,7 @@ fn main() {
     let mut typography_snapshot = false;
     let mut label_slot_snapshot: Option<String> = None;
     let mut host_snapshot: Option<String> = None;
+    let mut layout_snapshot: Option<PathBuf> = None;
     let mut dpi_scale = 1.0_f32;
     let mut report: Option<PathBuf> = None;
     let mut screenshot: Option<PathBuf> = None;
@@ -56,6 +57,12 @@ fn main() {
                 std::process::exit(2);
             };
             host_snapshot = Some(host.to_string_lossy().into_owned());
+        } else if arg == "--layout-snapshot" {
+            let Some(path) = args.next() else {
+                eprintln!("--layout-snapshot requires an output directory");
+                std::process::exit(2);
+            };
+            layout_snapshot = Some(PathBuf::from(path));
         } else if arg == "--dpi-scale" {
             let Some(value) = args.next() else {
                 eprintln!("--dpi-scale requires a value");
@@ -85,7 +92,7 @@ fn main() {
         }
     }
 
-    if self_check == window_smoke && render_golden.is_none() {
+    if self_check == window_smoke && render_golden.is_none() && layout_snapshot.is_none() {
         eprintln!(
             "usage: fcitx5-candidate-poc (--self-check | --window-smoke | --render-golden KIND --out PATH) [--demo-snapshot | --scroll-demo-snapshot | --typography-snapshot | --label-slot-snapshot vertical|horizontal|grid | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
         );
@@ -119,10 +126,32 @@ fn main() {
         + usize::from(scroll_demo_snapshot)
         + usize::from(typography_snapshot)
         + usize::from(label_slot_snapshot.is_some())
-        + usize::from(host_snapshot.is_some());
+        + usize::from(host_snapshot.is_some())
+        + usize::from(layout_snapshot.is_some());
     if mode_count > 1 {
         eprintln!("snapshot modes are mutually exclusive");
         std::process::exit(2);
+    }
+
+    if let Some(dir) = &layout_snapshot {
+        if self_check || window_smoke {
+            eprintln!("--layout-snapshot is exclusive with other modes");
+            std::process::exit(2);
+        }
+        let result = layout_snapshot_impl(dir);
+        match result {
+            Ok(output) => {
+                if let Some(path) = report {
+                    write_report(&path, &output);
+                }
+                println!("{output}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
     }
 
     let result = if self_check {
@@ -181,6 +210,16 @@ fn render_golden_impl(kind: &str, _out: &Path) -> Result<String, String> {
 }
 
 #[cfg(windows)]
+fn layout_snapshot_impl(out_dir: &Path) -> Result<String, String> {
+    window_smoke::layout_snapshot_impl(out_dir)
+}
+
+#[cfg(not(windows))]
+fn layout_snapshot_impl(_out_dir: &Path) -> Result<String, String> {
+    Err("layout snapshot is only available on Windows (DWrite renderer)".to_owned())
+}
+
+#[cfg(windows)]
 fn run_window_smoke(
     screenshot: Option<&Path>,
     demo_snapshot: bool,
@@ -218,16 +257,17 @@ fn run_window_smoke(
 mod window_smoke {
     use fcitx5_candidate_core::{
         candidate_label_slot_plan, candidate_poc_scenarios, candidate_render_segments,
-        format_candidate_label, layout,
+        flow_paged_bounds, format_candidate_label, layout,
         qingfeng::{
             qingfeng_candidate_visual_plan, QingfengCandidateTheme, QingfengCandidateVisualInput,
             QingfengOrientation, QingfengRect, QingfengThemeMode,
             WINDINPUT_QINGFENG_CANDIDATE_SOURCE,
         },
-        CandidateLabelAlign, CandidateLabelDisplay, CandidateLabelScope, CandidateLabelSlotConfig,
-        CandidateLabelSlotSource, CandidateLabelStyle, CandidateLabelWidthStrategy,
-        Fcitx5CandidateLayoutRect, Fcitx5CandidateRenderItemInput, LayoutInput, Orientation,
-        Placement, PocCandidate, PocScenario, Point, Rect as CoreRect, Size,
+        vertical_text_columns, CandidateLabelAlign, CandidateLabelDisplay, CandidateLabelScope,
+        CandidateLabelSlotConfig, CandidateLabelSlotSource, CandidateLabelStyle,
+        CandidateLabelWidthStrategy, Fcitx5CandidateLayoutRect, Fcitx5CandidateRenderItemInput,
+        LayoutInput, Orientation, Placement, PocCandidate, PocScenario, Point, Rect as CoreRect,
+        Size,
     };
     use std::ffi::c_void;
     use std::fs;
@@ -2775,5 +2815,448 @@ mod window_smoke {
                 wide(&format!("{label}{text}"))
             })
             .collect()
+    }
+
+    // ---- 080 layout screenshots: stacked / flow / scroll / vertical_text ----
+
+    const LAYOUT_PAD: f32 = 10.0;
+    const LAYOUT_ITEM_PAD_X: f32 = 8.0;
+    const LAYOUT_ITEM_PAD_Y: f32 = 4.0;
+    const LAYOUT_COL_GAP: f32 = 12.0;
+    const LAYOUT_ROW_GAP: f32 = 4.0;
+    const LAYOUT_FONT: f32 = 18.0;
+
+    struct DemoCell {
+        label: &'static str,
+        text: &'static str,
+        comment: &'static str,
+    }
+
+    fn demo_cells() -> Vec<DemoCell> {
+        vec![
+            DemoCell {
+                label: "1",
+                text: "输入法",
+                comment: "shū rù fǎ",
+            },
+            DemoCell {
+                label: "2",
+                text: "拼音",
+                comment: "pīn yīn",
+            },
+            DemoCell {
+                label: "3",
+                text: "汉字",
+                comment: "hàn zì",
+            },
+            DemoCell {
+                label: "4",
+                text: "你好😀",
+                comment: "nǐ hǎo",
+            },
+        ]
+    }
+
+    /// Demo geometry only (NOT production metric): CJK/emoji ~1.0 em, ASCII ~0.6 em.
+    fn estimated_text_width(text: &str, font: f32) -> f32 {
+        let mut units = 0.0_f32;
+        for character in text.chars() {
+            let full = (character as u32) > 0x2e7f || character == ' ';
+            units += if full { 1.0 } else { 0.62 };
+        }
+        (units * font).max(1.0)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn demo_layout_colors(dark: bool) -> (Dword, Dword, Dword, Dword, Dword, Dword) {
+        // (background, border, label, selected_bg, selected_text, normal_text)
+        if dark {
+            (
+                0x00_18_18_18,
+                0x00_3E_3E_3E,
+                0x00_9C_9C_9C,
+                0x00_1F_6F_4A,
+                0x00_2E_E4_7E,
+                0x00_E8_E8_E8,
+            )
+        } else {
+            (
+                0x00_FF_FF_FF,
+                0x00_EB_E5_E2,
+                0x00_AE_A0_9A,
+                0x00_F0_FA_E7,
+                0x00_60_C1_07,
+                0x00_4A_4A_4A,
+            )
+        }
+    }
+
+    fn fill_background(canvas: &mut SkiaCanvas<'_>, width: f32, height: f32, color: Dword) {
+        canvas.fill_rect(
+            0.0,
+            0.0,
+            width,
+            height,
+            &WindPaint::fill(colorref_to_wind_color(color)),
+        );
+        canvas.stroke_round_rect(
+            0.5,
+            0.5,
+            width - 1.0,
+            height - 1.0,
+            12.0,
+            1.0,
+            &WindPaint::fill(colorref_to_wind_color(0x00_EB_E5_E2)),
+        );
+    }
+
+    fn draw_cell_text(
+        canvas: &mut SkiaCanvas<'_>,
+        cell: &DemoCell,
+        label_rect: CoreRect,
+        text_rect: CoreRect,
+        comment_rect: CoreRect,
+        selected: bool,
+        colors: (Dword, Dword, Dword, Dword, Dword, Dword),
+    ) {
+        let font = LAYOUT_FONT;
+        let (_, _, label_color, _, selected_text, normal_text) = colors;
+        let text_color = if selected { selected_text } else { normal_text };
+        draw_text_in(
+            canvas,
+            cell.label,
+            &label_rect,
+            label_color,
+            WindAlign::End,
+            font * 0.85,
+        );
+        draw_text_in(
+            canvas,
+            cell.text,
+            &text_rect,
+            text_color,
+            WindAlign::Start,
+            font,
+        );
+        draw_text_in(
+            canvas,
+            cell.comment,
+            &comment_rect,
+            label_color,
+            WindAlign::Start,
+            font * 0.80,
+        );
+    }
+
+    fn to_i32_rect(rect: &CoreRect) -> Rect {
+        Rect {
+            left: rect.left.round() as i32,
+            top: rect.top.round() as i32,
+            right: rect.right.round() as i32,
+            bottom: rect.bottom.round() as i32,
+        }
+    }
+
+    fn to_win_text_rect(rect: &CoreRect) -> Rect {
+        to_i32_rect(rect)
+    }
+
+    fn split_f32_cell(
+        rect: CoreRect,
+        label_w: f32,
+        comment_w: f32,
+    ) -> (CoreRect, CoreRect, CoreRect) {
+        let left = rect.left + LAYOUT_ITEM_PAD_X;
+        let right = (rect.right - LAYOUT_ITEM_PAD_X).max(left + 1.0);
+        let label_rect = CoreRect {
+            left,
+            top: rect.top + LAYOUT_ITEM_PAD_Y,
+            right: (left + label_w).min(right),
+            bottom: rect.bottom - LAYOUT_ITEM_PAD_Y,
+        };
+        let text_left = label_rect.right + LAYOUT_COL_GAP;
+        let text_rect = CoreRect {
+            left: text_left,
+            top: label_rect.top,
+            right: (right - comment_w - 4.0).max(text_left + 1.0),
+            bottom: label_rect.bottom,
+        };
+        let comment_rect = CoreRect {
+            left: text_rect.right + 4.0,
+            top: label_rect.top,
+            right: right.max(text_rect.right + 5.0),
+            bottom: label_rect.bottom,
+        };
+        (label_rect, text_rect, comment_rect)
+    }
+
+    fn draw_text_in(
+        canvas: &mut SkiaCanvas<'_>,
+        text: &str,
+        rect: &CoreRect,
+        color: Dword,
+        align: WindAlign,
+        size: f32,
+    ) {
+        let win_rect = to_win_text_rect(rect);
+        draw_windui_text(canvas, wide(text).as_slice(), &win_rect, color, align, size);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_rects_impl(
+        out_dir: &Path,
+        name: &str,
+        cells: &[DemoCell],
+        rects: Vec<CoreRect>,
+        dark: bool,
+    ) -> Result<String, String> {
+        let colors = demo_layout_colors(dark);
+        let width = rects
+            .iter()
+            .fold(0.0_f32, |w, r| w.max(r.right))
+            .max(1.0)
+            .ceil() as u32
+            + 1;
+        let height = rects
+            .iter()
+            .fold(0.0_f32, |h, r| h.max(r.bottom))
+            .max(1.0)
+            .ceil() as u32
+            + 1;
+        let mut pixmap =
+            Pixmap::new(width, height).ok_or_else(|| format!("{name} pixmap alloc failed"))?;
+        let mut text_engine = DWriteEngine::new();
+        text_engine.set_scale(1.0);
+        let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut text_engine, 1.0);
+        fill_background(&mut canvas, width as f32, height as f32, colors.0);
+        for (index, cell) in cells.iter().enumerate() {
+            let rect = rects[index];
+            let selected = index == 0;
+            let (_, _, _, selected_bg, _, _) = colors;
+            if selected {
+                let wind = wind_rect_from_win_rect(&to_i32_rect(&rect));
+                canvas.fill_round_rect(
+                    wind.x as f32,
+                    wind.y as f32,
+                    wind.w as f32,
+                    wind.h as f32,
+                    12.0,
+                    &WindPaint::fill(colorref_to_wind_color(selected_bg)),
+                );
+            }
+            let label_w = estimated_text_width(cell.label, LAYOUT_FONT * 0.85) + 2.0;
+            let comment_w = estimated_text_width(cell.comment, LAYOUT_FONT * 0.80) + 2.0;
+            let (label_rect, text_rect, comment_rect) = split_f32_cell(rect, label_w, comment_w);
+            draw_cell_text(
+                &mut canvas,
+                cell,
+                label_rect,
+                text_rect,
+                comment_rect,
+                selected,
+                colors,
+            );
+        }
+        drop(canvas);
+        let pixels = pixmap_to_bgra(&pixmap);
+        let path = out_dir.join(name);
+        write_bmp(&path, width as i32, height as i32, &pixels)?;
+        Ok(format!("{}: {}x{}", path.display(), width, height))
+    }
+
+    fn render_vertical_text_impl(
+        out_dir: &Path,
+        name: &str,
+        cells: &[DemoCell],
+        dark: bool,
+    ) -> Result<String, String> {
+        // Interim: vertical_text_columns places each candidate as one column; the
+        // demo renders each glyph top-to-bottom per column (true per-glyph
+        // stacking) with the label at the column top. Comments are omitted here.
+        let colors = demo_layout_colors(dark);
+        let glyph_step = (LAYOUT_FONT * 1.6).ceil();
+        let column_gap = 10.0;
+        let label_h = 20.0;
+        let mut item_sizes = Vec::new();
+        for cell in cells {
+            let glyph_count = cell.text.chars().count().max(1) as f32;
+            item_sizes.push(Size {
+                width: (estimated_text_width(cell.label, LAYOUT_FONT * 0.85) + 6.0)
+                    .max(LAYOUT_FONT + 4.0),
+                height: label_h + glyph_count * glyph_step,
+            });
+        }
+        let (columns, total_width, total_height) =
+            vertical_text_columns(&item_sizes, column_gap, true);
+        let width = (total_width + LAYOUT_PAD * 2.0).ceil() as u32 + 1;
+        let height = (total_height + LAYOUT_PAD * 2.0).ceil() as u32 + 1;
+        let mut pixmap =
+            Pixmap::new(width, height).ok_or_else(|| format!("{name} pixmap alloc failed"))?;
+        let mut text_engine = DWriteEngine::new();
+        text_engine.set_scale(1.0);
+        let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut text_engine, 1.0);
+        fill_background(&mut canvas, width as f32, height as f32, colors.0);
+        for (index, column) in columns.iter().enumerate() {
+            let cell = &cells[index];
+            let origin_left = LAYOUT_PAD + column.left;
+            let origin_top = LAYOUT_PAD + column.top;
+            let label_rect = CoreRect {
+                left: origin_left,
+                top: origin_top,
+                right: origin_left + (column.right - column.left),
+                bottom: origin_top + label_h,
+            };
+            draw_text_in(
+                &mut canvas,
+                cell.label,
+                &label_rect,
+                colors.2,
+                WindAlign::Start,
+                LAYOUT_FONT * 0.85,
+            );
+            let text_top = origin_top + label_h;
+            for (glyph_index, glyph) in cell.text.chars().enumerate() {
+                let glyph_rect = CoreRect {
+                    left: origin_left,
+                    top: text_top + glyph_index as f32 * glyph_step,
+                    right: origin_left + (column.right - column.left),
+                    bottom: text_top + (glyph_index as f32 + 1.0) * glyph_step,
+                };
+                let glyph_string: String = glyph.to_string();
+                draw_text_in(
+                    &mut canvas,
+                    &glyph_string,
+                    &glyph_rect,
+                    if index == 0 { colors.4 } else { colors.5 },
+                    WindAlign::Center,
+                    LAYOUT_FONT,
+                );
+            }
+        }
+        drop(canvas);
+        let pixels = pixmap_to_bgra(&pixmap);
+        let path = out_dir.join(name);
+        write_bmp(&path, width as i32, height as i32, &pixels)?;
+        Ok(format!("{}: {}x{}", path.display(), width, height))
+    }
+
+    pub fn layout_snapshot_impl(out_dir: &Path) -> Result<String, String> {
+        fs::create_dir_all(out_dir)
+            .map_err(|error| format!("layout snapshot dir create failed: {error}"))?;
+        let cells = demo_cells();
+        let mut report = Vec::new();
+        for dark in [false, true] {
+            let suffix = if dark { "-dark" } else { "" };
+            // stacked: reuse vertical geometry (one row per candidate).
+            {
+                let text_w = cells
+                    .iter()
+                    .map(|c| estimated_text_width(c.text, LAYOUT_FONT))
+                    .fold(0.0_f32, |a, b| a.max(b))
+                    + 4.0;
+                let comment_w = cells
+                    .iter()
+                    .map(|c| estimated_text_width(c.comment, LAYOUT_FONT * 0.8))
+                    .fold(0.0_f32, |a, b| a.max(b))
+                    + 4.0;
+                let label_w = 22.0;
+                let row_h = (LAYOUT_FONT * 1.4 + LAYOUT_ITEM_PAD_Y * 2.0).ceil();
+                let content_w =
+                    label_w + LAYOUT_COL_GAP + text_w + 4.0 + comment_w + LAYOUT_ITEM_PAD_X * 2.0;
+                let total_w = (content_w + LAYOUT_PAD * 2.0).ceil();
+                let mut rects = Vec::with_capacity(cells.len());
+                for index in 0..cells.len() {
+                    rects.push(CoreRect {
+                        left: LAYOUT_PAD,
+                        top: LAYOUT_PAD + index as f32 * row_h,
+                        right: total_w - LAYOUT_PAD,
+                        bottom: LAYOUT_PAD + (index as f32 + 1.0) * row_h,
+                    });
+                }
+                report.push(render_rects_impl(
+                    out_dir,
+                    &format!("layout-stacked{suffix}.bmp"),
+                    &cells,
+                    rects,
+                    dark,
+                )?);
+            }
+            // flow: multi-row horizontal wrap via flow_paged_bounds.
+            {
+                let row_h = (LAYOUT_FONT * 1.4 + LAYOUT_ITEM_PAD_Y * 2.0).ceil();
+                let label_w = 22.0;
+                let comment_w = cells
+                    .iter()
+                    .map(|c| estimated_text_width(c.comment, LAYOUT_FONT * 0.8))
+                    .fold(0.0_f32, |a, b| a.max(b))
+                    + 4.0;
+                let item_sizes: Vec<Size> = cells
+                    .iter()
+                    .map(|c| {
+                        let text_w = estimated_text_width(c.text, LAYOUT_FONT) + 4.0;
+                        let cell_w = label_w
+                            + LAYOUT_COL_GAP
+                            + text_w
+                            + 4.0
+                            + comment_w
+                            + LAYOUT_ITEM_PAD_X * 2.0;
+                        Size {
+                            width: cell_w,
+                            height: row_h,
+                        }
+                    })
+                    .collect();
+                let (rects, _, _) =
+                    flow_paged_bounds(&item_sizes, 420.0, LAYOUT_COL_GAP, LAYOUT_ROW_GAP);
+                let offset = LAYOUT_PAD;
+                let shifted: Vec<CoreRect> = rects
+                    .iter()
+                    .map(|r| CoreRect {
+                        left: r.left + offset,
+                        top: r.top + offset,
+                        right: r.right + offset,
+                        bottom: r.bottom + offset,
+                    })
+                    .collect();
+                report.push(render_rects_impl(
+                    out_dir,
+                    &format!("layout-flow{suffix}.bmp"),
+                    &cells,
+                    shifted,
+                    dark,
+                )?);
+            }
+            // scroll: 卷轴 grid, fixed cells on a row (6 per page limit).
+            {
+                let cell_w = 120.0;
+                let row_h = (LAYOUT_FONT * 1.4 + LAYOUT_ITEM_PAD_Y * 2.0 + 4.0).ceil();
+                let mut rects = Vec::with_capacity(cells.len());
+                for index in 0..cells.len() {
+                    rects.push(CoreRect {
+                        left: LAYOUT_PAD + index as f32 * (cell_w + LAYOUT_COL_GAP),
+                        top: LAYOUT_PAD,
+                        right: LAYOUT_PAD
+                            + (index as f32 + 1.0) * cell_w
+                            + index as f32 * LAYOUT_COL_GAP,
+                        bottom: LAYOUT_PAD + row_h,
+                    });
+                }
+                report.push(render_rects_impl(
+                    out_dir,
+                    &format!("layout-scroll{suffix}.bmp"),
+                    &cells,
+                    rects,
+                    dark,
+                )?);
+            }
+            // vertical_text.
+            report.push(render_vertical_text_impl(
+                out_dir,
+                &format!("layout-vertical_text{suffix}.bmp"),
+                &cells,
+                dark,
+            )?);
+        }
+        Ok(report.join("\n"))
     }
 }

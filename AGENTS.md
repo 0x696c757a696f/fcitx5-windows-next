@@ -57,6 +57,10 @@ a wrong assumption could cause substantial rework; well-specified execution is d
 Delegation rules:
 
 - Route models automatically; do not ask the user to choose or switch models for ordinary task execution.
+- Spawn subagents with `context: "fresh"` by default: a fork that inherits the whole parent-session
+  history (hundreds of millions of tokens) makes `deepseek-v4-flash` children confused (they repeat
+  parent actions, spawn grandchildren, or stop early). Fresh context keeps the child focused on the
+  task description + the explicit context block you pass.
 - Delegate only bounded work with explicit files/symbols, constraints, acceptance criteria, and tests.
 - Give subagents the minimum relevant context; do not make them rediscover the repository.
 - Parallelize only genuinely independent workstreams.
