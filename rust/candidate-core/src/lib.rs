@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 
+pub mod axis_layout;
 mod candidate_abi;
 pub mod qingfeng;
 mod ui_plan;
