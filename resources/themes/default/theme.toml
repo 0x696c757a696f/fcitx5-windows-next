@@ -9,7 +9,7 @@ license = "MIT"
 description = "WeChat-like green candidate theme"
 
 [common.candidate]
-orientation = "vertical" # vertical | horizontal
+layout_type = "scroll" # vertical | horizontal
 max_width_dip = 860.0
 opacity = 1.0
 

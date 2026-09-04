@@ -120,9 +120,9 @@ impl AppearanceConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateConfig {
-    orientation: String,
+    #[serde(default = "default_candidate_layout_type")]
+    layout_type: String,
     page_size: u8,
-    scroll_mode: bool,
     max_width_dip: f32,
     scroll_cell_width_dip: f32,
     opacity: f32,
@@ -134,22 +134,37 @@ pub struct CandidateConfig {
 }
 
 impl CandidateConfig {
-    /// Returns the configured candidate orientation.
+    /// Returns the configured candidate layout type
+    /// (`automatic`/`stacked`/`flow`/`scroll`/`vertical_text`).
     #[must_use]
-    pub fn orientation(&self) -> &str {
-        &self.orientation
+    pub fn layout_type(&self) -> &str {
+        &self.layout_type
     }
 
-    /// Returns the resolved candidate page size.
+    /// Returns the configured candidate page size.
     #[must_use]
     pub fn page_size(&self) -> u8 {
         self.page_size
     }
 
-    /// Returns whether the resolved candidate layout uses scroll presentation.
+    /// Returns whether the resolved candidate layout uses scroll
+    /// presentation (legacy projection of `layout_type`).
     #[must_use]
     pub fn scroll_mode(&self) -> bool {
-        self.scroll_mode
+        self.layout_type == "scroll"
+    }
+
+    /// Returns the legacy orientation projection of `layout_type`
+    /// (`automatic`/`horizontal`/`vertical`) used by ABI consumers until the
+    /// renderer cutover lands. `scroll` and `vertical_text` project to
+    /// `automatic` (their direction is resolved at presentation time).
+    #[must_use]
+    pub fn orientation(&self) -> &str {
+        match self.layout_type.as_str() {
+            "stacked" => "vertical",
+            "flow" => "horizontal",
+            _ => "automatic",
+        }
     }
 
     /// Returns the configured maximum candidate width in DIP.
@@ -508,6 +523,7 @@ impl ConfigOverrides {
         self.ui.language = None;
         self.appearance.mode = None;
         self.appearance.theme = None;
+        self.candidate.layout_type = None;
         self.candidate.orientation = None;
         self.candidate.page_size = None;
         self.candidate.scroll_mode = None;
@@ -604,10 +620,16 @@ impl AppearanceOverrides {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CandidateOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
+    layout_type: Option<String>,
+    /// Legacy `orientation` key, accepted on read and migrated to
+    /// `layout_type`; never serialized after normalization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     orientation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     page_size: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Legacy `scroll_mode` key, accepted on read and migrated to
+    /// `layout_type`; never serialized after normalization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     scroll_mode: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_width_dip: Option<f32>,
@@ -629,7 +651,8 @@ pub struct CandidateOverrides {
 
 impl CandidateOverrides {
     fn is_empty(&self) -> bool {
-        self.orientation.is_none()
+        self.layout_type.is_none()
+            && self.orientation.is_none()
             && self.page_size.is_none()
             && self.scroll_mode.is_none()
             && self.max_width_dip.is_none()
@@ -640,6 +663,29 @@ impl CandidateOverrides {
             && self.label.is_empty()
             && self.colors.is_empty()
             && self.passthrough.is_empty()
+    }
+
+    /// Migrates the legacy `orientation` + `scroll_mode` pair into
+    /// `layout_type` when the new key is absent, then clears the legacy keys
+    /// so persisted drafts serialize the new schema.
+    fn normalize_layout_type(&mut self) {
+        if self.layout_type.is_none() {
+            let scroll = self.scroll_mode.unwrap_or(false);
+            let direction = self.orientation.as_deref().unwrap_or("automatic");
+            if self.orientation.is_some() || self.scroll_mode.is_some() {
+                self.layout_type = Some(if scroll {
+                    "scroll".to_owned()
+                } else {
+                    match direction {
+                        "horizontal" => "flow".to_owned(),
+                        "vertical" => "stacked".to_owned(),
+                        _ => "automatic".to_owned(),
+                    }
+                });
+            }
+        }
+        self.orientation = None;
+        self.scroll_mode = None;
     }
 }
 
@@ -819,12 +865,11 @@ pub enum ConfigEdit {
     AppearanceMode(String),
     /// Sets the selected theme ID.
     Theme(String),
-    /// Sets the candidate orientation.
-    CandidateOrientation(String),
+    /// Sets the candidate layout type
+    /// (`automatic`/`stacked`/`flow`/`scroll`/`vertical_text`).
+    CandidateLayoutType(String),
     /// Sets the candidate page size.
     CandidatePageSize(u8),
-    /// Sets candidate scroll mode.
-    CandidateScrollMode(bool),
     /// Sets the candidate maximum width in DIP.
     CandidateMaxWidthDip(f32),
     /// Sets the scroll candidate cell width in DIP.
@@ -850,12 +895,10 @@ pub enum ConfigField {
     AppearanceMode,
     /// Resets the theme.
     Theme,
-    /// Resets the candidate orientation.
-    CandidateOrientation,
+    /// Resets the candidate layout type.
+    CandidateLayoutType,
     /// Resets the candidate page size.
     CandidatePageSize,
-    /// Resets the candidate scroll mode.
-    CandidateScrollMode,
     /// Resets the candidate maximum width.
     CandidateMaxWidthDip,
     /// Resets the scroll candidate cell width.
@@ -1164,18 +1207,13 @@ impl ConfigCore {
         );
         compare_field(
             &mut differences,
-            ConfigField::CandidateOrientation,
-            current.candidate.orientation != draft.candidate.orientation,
+            ConfigField::CandidateLayoutType,
+            current.candidate.layout_type != draft.candidate.layout_type,
         );
         compare_field(
             &mut differences,
             ConfigField::CandidatePageSize,
             current.candidate.page_size != draft.candidate.page_size,
-        );
-        compare_field(
-            &mut differences,
-            ConfigField::CandidateScrollMode,
-            current.candidate.scroll_mode != draft.candidate.scroll_mode,
         );
         compare_field(
             &mut differences,
@@ -1252,9 +1290,12 @@ impl ConfigCore {
             ConfigField::UiLanguage => self.draft.ui.language = None,
             ConfigField::AppearanceMode => self.draft.appearance.mode = None,
             ConfigField::Theme => self.draft.appearance.theme = None,
-            ConfigField::CandidateOrientation => self.draft.candidate.orientation = None,
+            ConfigField::CandidateLayoutType => {
+                self.draft.candidate.layout_type = None;
+                self.draft.candidate.orientation = None;
+                self.draft.candidate.scroll_mode = None;
+            }
             ConfigField::CandidatePageSize => self.draft.candidate.page_size = None,
-            ConfigField::CandidateScrollMode => self.draft.candidate.scroll_mode = None,
             ConfigField::CandidateMaxWidthDip => self.draft.candidate.max_width_dip = None,
             ConfigField::CandidateScrollCellWidthDip => {
                 self.draft.candidate.scroll_cell_width_dip = None;
@@ -1289,13 +1330,12 @@ impl ConfigCore {
             ConfigEdit::UiLanguage(value) => self.draft.ui.language = Some(value),
             ConfigEdit::AppearanceMode(value) => self.draft.appearance.mode = Some(value),
             ConfigEdit::Theme(value) => self.draft.appearance.theme = Some(value),
-            ConfigEdit::CandidateOrientation(value) => {
-                self.draft.candidate.orientation = Some(value)
+            ConfigEdit::CandidateLayoutType(value) => {
+                self.draft.candidate.orientation = None;
+                self.draft.candidate.scroll_mode = None;
+                self.draft.candidate.layout_type = Some(value)
             }
             ConfigEdit::CandidatePageSize(value) => self.draft.candidate.page_size = Some(value),
-            ConfigEdit::CandidateScrollMode(value) => {
-                self.draft.candidate.scroll_mode = Some(value)
-            }
             ConfigEdit::CandidateMaxWidthDip(value) => {
                 self.draft.candidate.max_width_dip = Some(value)
             }
@@ -1530,14 +1570,18 @@ fn apply_overrides(resolved: &mut ConfigSnapshot, overrides: &ConfigOverrides) {
     if let Some(value) = &overrides.appearance.theme {
         resolved.appearance.theme.clone_from(value);
     }
-    if let Some(value) = &overrides.candidate.orientation {
-        resolved.candidate.orientation.clone_from(value);
+    if overrides.candidate.layout_type.is_some()
+        || overrides.candidate.orientation.is_some()
+        || overrides.candidate.scroll_mode.is_some()
+    {
+        let mut candidate = overrides.candidate.clone();
+        candidate.normalize_layout_type();
+        if let Some(value) = candidate.layout_type {
+            resolved.candidate.layout_type = value;
+        }
     }
     if let Some(value) = overrides.candidate.page_size {
         resolved.candidate.page_size = value;
-    }
-    if let Some(value) = overrides.candidate.scroll_mode {
-        resolved.candidate.scroll_mode = value;
     }
     if let Some(value) = overrides.candidate.max_width_dip {
         resolved.candidate.max_width_dip = value;
@@ -1892,7 +1936,7 @@ impl ConfigEdit {
             "ui.language" => Ok(Self::UiLanguage(value.to_owned())),
             "appearance.mode" => Ok(Self::AppearanceMode(value.to_owned())),
             "appearance.theme" => Ok(Self::Theme(value.to_owned())),
-            "candidate.orientation" => Ok(Self::CandidateOrientation(value.to_owned())),
+            "candidate.layout_type" => Ok(Self::CandidateLayoutType(value.to_owned())),
             "candidate.page_size" => {
                 value
                     .parse::<u8>()
@@ -1901,12 +1945,25 @@ impl ConfigEdit {
                         message: "candidate.page_size must be an unsigned integer".to_owned(),
                     })
             }
-            "candidate.scroll_mode" => value
-                .parse::<bool>()
-                .map(Self::CandidateScrollMode)
-                .map_err(|_| ConfigError::Parse {
-                    message: "candidate.scroll_mode must be true or false".to_owned(),
-                }),
+            // Legacy single-key CLI compatibility: directional values migrate
+            // to the layout type; the scroll flag alone cannot recover the old
+            // direction, so true maps to `scroll` and false is rejected with a
+            // pointer to the layout-type key.
+            "candidate.orientation" => Ok(Self::CandidateLayoutType(match value {
+                "horizontal" | "flow" => "flow".to_owned(),
+                "vertical" | "stacked" => "stacked".to_owned(),
+                "scroll" | "vertical_text" => value.to_owned(),
+                _ => "automatic".to_owned(),
+            })),
+            "candidate.scroll_mode" => {
+                if value.parse::<bool>().unwrap_or(false) {
+                    Ok(Self::CandidateLayoutType("scroll".to_owned()))
+                } else {
+                    Err(ConfigError::Parse {
+                        message: "candidate.scroll_mode=false has no layout-type equivalent; set candidate.layout_type explicitly (automatic/stacked/flow/scroll/vertical_text)".to_owned(),
+                    })
+                }
+            }
             "candidate.max_width_dip" => value
                 .parse::<f32>()
                 .map(Self::CandidateMaxWidthDip)
@@ -1954,9 +2011,9 @@ impl ConfigField {
             "ui.language" => Ok(Self::UiLanguage),
             "appearance.mode" => Ok(Self::AppearanceMode),
             "appearance.theme" => Ok(Self::Theme),
-            "candidate.orientation" => Ok(Self::CandidateOrientation),
+            "candidate.layout_type" => Ok(Self::CandidateLayoutType),
+            "candidate.orientation" | "candidate.scroll_mode" => Ok(Self::CandidateLayoutType),
             "candidate.page_size" => Ok(Self::CandidatePageSize),
-            "candidate.scroll_mode" => Ok(Self::CandidateScrollMode),
             "candidate.max_width_dip" => Ok(Self::CandidateMaxWidthDip),
             "candidate.scroll_cell_width_dip" => Ok(Self::CandidateScrollCellWidthDip),
             "candidate.opacity" => Ok(Self::CandidateOpacity),
@@ -2105,10 +2162,16 @@ fn stage_path(path: &Path) -> PathBuf {
 }
 
 fn parse_overrides(text: &str) -> Result<ConfigOverrides, ConfigError> {
-    let parsed = toml::from_str(text).map_err(|error| ConfigError::Parse {
+    let mut parsed: ConfigOverrides = toml::from_str(text).map_err(|error| ConfigError::Parse {
         message: error.to_string(),
     })?;
+    parsed.candidate.normalize_layout_type();
     Ok(parsed)
+}
+
+/// Serde fallback for a missing `[candidate] layout_type` key.
+fn default_candidate_layout_type() -> String {
+    "automatic".to_owned()
 }
 
 fn serialize_overrides(overrides: &ConfigOverrides) -> Result<String, ConfigError> {
@@ -2139,9 +2202,9 @@ fn validate_snapshot(snapshot: &ConfigSnapshot) -> Result<(), ConfigError> {
     )?;
     validate_id("appearance.theme", &snapshot.appearance.theme, true)?;
     validate_one_of(
-        "candidate.orientation",
-        &snapshot.candidate.orientation,
-        &["automatic", "horizontal", "vertical"],
+        "candidate.layout_type",
+        &snapshot.candidate.layout_type,
+        &["automatic", "stacked", "flow", "scroll", "vertical_text"],
     )?;
     if !(1..=9).contains(&snapshot.candidate.page_size) {
         return invalid("candidate.page_size must be between 1 and 9");

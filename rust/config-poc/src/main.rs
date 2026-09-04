@@ -771,9 +771,9 @@ fn windui_candidate_preview_panel(
             matches!(
                 layout.get(),
                 CandidateLayoutMode::Automatic
-                    | CandidateLayoutMode::Vertical
-                    | CandidateLayoutMode::ScrollAutomatic
-                    | CandidateLayoutMode::ScrollVertical
+                    | CandidateLayoutMode::Stacked
+                    | CandidateLayoutMode::Scroll
+                    | CandidateLayoutMode::VerticalText
             )
         });
 
@@ -825,12 +825,7 @@ fn windui_candidate_preview_panel(
             false,
             page_size.map(|count| candidate_preview_slot_visible(*count, 9)),
         ))
-        .visible_when(move || {
-            matches!(
-                layout.get(),
-                CandidateLayoutMode::Horizontal | CandidateLayoutMode::ScrollHorizontal
-            )
-        });
+        .visible_when(move || matches!(layout.get(), CandidateLayoutMode::Flow));
 
     WindUiElement::col()
         .width_match()
@@ -1178,79 +1173,42 @@ fn run_control(arguments: &[OsString]) -> Result<String, String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CandidateOrientation {
+enum CandidateLayoutMode {
     Automatic,
-    Horizontal,
-    Vertical,
+    Stacked,
+    Flow,
+    Scroll,
+    VerticalText,
 }
 
-impl CandidateOrientation {
+impl CandidateLayoutMode {
     fn control_value(self) -> &'static str {
         match self {
             Self::Automatic => "automatic",
-            Self::Horizontal => "horizontal",
-            Self::Vertical => "vertical",
+            Self::Stacked => "stacked",
+            Self::Flow => "flow",
+            Self::Scroll => "scroll",
+            Self::VerticalText => "vertical_text",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::Automatic => "自动",
-            Self::Horizontal => "横排",
-            Self::Vertical => "竖排",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CandidateLayoutMode {
-    Automatic,
-    Horizontal,
-    Vertical,
-    ScrollAutomatic,
-    ScrollHorizontal,
-    ScrollVertical,
-}
-
-impl CandidateLayoutMode {
-    fn orientation(self) -> CandidateOrientation {
-        match self {
-            Self::Automatic | Self::ScrollAutomatic => CandidateOrientation::Automatic,
-            Self::Horizontal | Self::ScrollHorizontal => CandidateOrientation::Horizontal,
-            Self::Vertical | Self::ScrollVertical => CandidateOrientation::Vertical,
-        }
-    }
-
-    fn scroll_mode(self) -> bool {
-        matches!(
-            self,
-            Self::ScrollAutomatic | Self::ScrollHorizontal | Self::ScrollVertical
-        )
-    }
-
-    fn display_label(self, page_size: u8) -> String {
-        match self {
-            Self::Automatic => "自动".to_owned(),
-            Self::Horizontal => "横排".to_owned(),
-            Self::Vertical => "竖排".to_owned(),
-            Self::ScrollAutomatic => "Scroll（自动卷轴）".to_owned(),
-            Self::ScrollHorizontal => format!("6 x {page_size}（横排卷轴）"),
-            Self::ScrollVertical => format!("{page_size} x 6（竖排卷轴）"),
+            Self::Stacked => "纵排",
+            Self::Flow => "横排",
+            Self::Scroll => "卷轴",
+            Self::VerticalText => "竖排文字",
         }
     }
 
     fn preview_description(self, page_size: u8) -> String {
         match self {
             Self::Automatic => "自动布局".to_owned(),
-            Self::Horizontal => "横排布局".to_owned(),
-            Self::Vertical => "竖排布局".to_owned(),
-            Self::ScrollAutomatic => format!("Scroll（自动，每页最多 {page_size} 个候选）"),
-            Self::ScrollHorizontal => {
-                format!("6 x {page_size}（横排卷轴，每页最多 {page_size} 个候选）")
-            }
-            Self::ScrollVertical => {
-                format!("{page_size} x 6（竖排卷轴，每页最多 {page_size} 个候选）")
-            }
+            Self::Stacked => "纵排布局（候选逐行）".to_owned(),
+            Self::Flow => "横排布局（多行分页）".to_owned(),
+            Self::Scroll => format!("卷轴布局（每页最多 {page_size} 个候选）"),
+            Self::VerticalText => "竖排文字布局".to_owned(),
         }
     }
 }
@@ -1951,21 +1909,6 @@ fn update_candidate_draft(
     Ok(())
 }
 
-fn update_candidate_layout_draft(
-    adapter: WindUiSignal<WindUiConfigAdapter>,
-    status: WindUiSignal<String>,
-    mode: CandidateLayoutMode,
-) -> Result<(), String> {
-    let mut result = Ok(());
-    adapter.update(|adapter| result = adapter.set_layout_mode(mode));
-    result?;
-    status.set(format!(
-        "{}已更新 Draft；点击应用后保存",
-        mode.display_label(adapter.with(|adapter| adapter.preview().candidate().page_size()))
-    ));
-    Ok(())
-}
-
 fn apply_candidate_draft(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
@@ -1990,111 +1933,43 @@ fn reset_candidate_draft(adapter: WindUiSignal<WindUiConfigAdapter>, status: Win
     status.set("候选布局 Draft 已恢复默认继承值".to_owned());
 }
 
-fn config_core_candidate_orientation_button(
-    choice: CandidateOrientation,
+fn config_core_candidate_layout_button(
+    choice: CandidateLayoutMode,
     selected: WindUiSignal<CandidateLayoutMode>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
 ) -> WindUiElement {
     let active = WindUiElement::button(choice.label())
         .small()
-        .tooltip("选择候选窗口排列方式")
+        .tooltip("选择候选窗口布局")
         .on_click(move |ctx| {
             if let Err(error) = update_candidate_draft(
                 adapter,
                 status,
                 "候选布局",
-                ConfigEdit::CandidateOrientation(choice.control_value().to_owned()),
+                ConfigEdit::CandidateLayoutType(choice.control_value().to_owned()),
             ) {
-                ctx.toast_err(error);
-            }
-        })
-        .visible_when(move || selected.get().orientation() == choice);
-    let inactive = WindUiElement::button(choice.label())
-        .small()
-        .outline_soft()
-        .neutral()
-        .tooltip("选择候选窗口排列方式")
-        .on_click(move |ctx| {
-            if let Err(error) = update_candidate_draft(
-                adapter,
-                status,
-                "候选布局",
-                ConfigEdit::CandidateOrientation(choice.control_value().to_owned()),
-            ) {
-                ctx.toast_err(error);
-            }
-        })
-        .visible_when(move || selected.get().orientation() != choice);
-    WindUiElement::stack().child(active).child(inactive)
-}
-
-fn config_core_candidate_scroll_layout_button(
-    choice: CandidateLayoutMode,
-    selected: WindUiSignal<CandidateLayoutMode>,
-    page_size: WindUiSignal<u8>,
-    adapter: WindUiSignal<WindUiConfigAdapter>,
-    status: WindUiSignal<String>,
-) -> WindUiElement {
-    let active_label = page_size.map(move |value| choice.display_label(*value));
-    let active = WindUiElement::button(active_label)
-        .small()
-        .tooltip("选择卷轴候选布局")
-        .on_click(move |ctx| {
-            if let Err(error) = update_candidate_layout_draft(adapter, status, choice) {
                 ctx.toast_err(error);
             }
         })
         .visible_when(move || selected.get() == choice);
-    let inactive_label = page_size.map(move |value| choice.display_label(*value));
-    let inactive = WindUiElement::button(inactive_label)
+    let inactive = WindUiElement::button(choice.label())
         .small()
         .outline_soft()
         .neutral()
-        .tooltip("选择卷轴候选布局")
+        .tooltip("选择候选窗口布局")
         .on_click(move |ctx| {
-            if let Err(error) = update_candidate_layout_draft(adapter, status, choice) {
+            if let Err(error) = update_candidate_draft(
+                adapter,
+                status,
+                "候选布局",
+                ConfigEdit::CandidateLayoutType(choice.control_value().to_owned()),
+            ) {
                 ctx.toast_err(error);
             }
         })
         .visible_when(move || selected.get() != choice);
     WindUiElement::stack().child(active).child(inactive)
-}
-
-fn config_core_candidate_scroll_controls(
-    selected: WindUiSignal<CandidateLayoutMode>,
-    page_size: WindUiSignal<u8>,
-    adapter: WindUiSignal<WindUiConfigAdapter>,
-    status: WindUiSignal<String>,
-) -> WindUiElement {
-    let enabled = selected.map(|mode| mode.scroll_mode());
-    let mut layouts = WindUiElement::row().spacing(6);
-    for choice in [
-        CandidateLayoutMode::ScrollAutomatic,
-        CandidateLayoutMode::ScrollVertical,
-        CandidateLayoutMode::ScrollHorizontal,
-    ] {
-        layouts = layouts.child(config_core_candidate_scroll_layout_button(
-            choice, selected, page_size, adapter, status,
-        ));
-    }
-    let checkbox = WindUiElement::checkbox("启用", enabled)
-        .tooltip("启用卷轴模式")
-        .on_toggle(move |ctx| {
-            let scroll_mode = adapter.with(|adapter| adapter.preview().candidate().scroll_mode());
-            if let Err(error) = update_candidate_draft(
-                adapter,
-                status,
-                "卷轴模式",
-                ConfigEdit::CandidateScrollMode(!scroll_mode),
-            ) {
-                ctx.toast_err(error);
-            }
-        });
-    WindUiElement::col()
-        .spacing(6)
-        .child(checkbox)
-        .child(layouts.visible_when(move || selected.get().scroll_mode()))
 }
 
 fn config_core_candidate_page_size_button(
@@ -2156,13 +2031,15 @@ fn windui_config_core_candidate_layout_controls(
             draft.draft.candidate().preedit_mode(),
         )
     });
-    let mut orientations = WindUiElement::row().width_match().spacing(6);
+    let mut layouts = WindUiElement::row().width_match().spacing(6);
     for choice in [
-        CandidateOrientation::Automatic,
-        CandidateOrientation::Horizontal,
-        CandidateOrientation::Vertical,
+        CandidateLayoutMode::Automatic,
+        CandidateLayoutMode::Stacked,
+        CandidateLayoutMode::Flow,
+        CandidateLayoutMode::Scroll,
+        CandidateLayoutMode::VerticalText,
     ] {
-        orientations = orientations.child(config_core_candidate_orientation_button(
+        layouts = layouts.child(config_core_candidate_layout_button(
             choice, layout, adapter, status,
         ));
     }
@@ -2180,13 +2057,8 @@ fn windui_config_core_candidate_layout_controls(
         .child(windui_settings_section_title("候选窗口"))
         .child(WindUiElement::setting_row_desc(
             "候选布局",
-            "选择候选窗口的排列方向",
-            orientations,
-        ))
-        .child(WindUiElement::setting_row_desc(
-            "卷轴模式",
-            "按当前排列方向显示候选内容",
-            config_core_candidate_scroll_controls(layout, page_size, adapter, status),
+            "选择候选窗口的布局（纵排/横排/卷轴/竖排文字）",
+            layouts,
         ))
         .child(WindUiElement::setting_row_desc(
             "候选个数",
@@ -3157,13 +3029,6 @@ impl WindUiConfigAdapter {
             .map_err(|error| error.to_string())
     }
 
-    fn set_layout_mode(&mut self, mode: CandidateLayoutMode) -> Result<(), String> {
-        self.set(ConfigEdit::CandidateOrientation(
-            mode.orientation().control_value().to_owned(),
-        ))?;
-        self.set(ConfigEdit::CandidateScrollMode(mode.scroll_mode()))
-    }
-
     fn cancel(&mut self) {
         self.core.cancel();
     }
@@ -3174,8 +3039,7 @@ impl WindUiConfigAdapter {
 
     fn reset_candidate_layout(&mut self) {
         for field in [
-            ConfigField::CandidateOrientation,
-            ConfigField::CandidateScrollMode,
+            ConfigField::CandidateLayoutType,
             ConfigField::CandidatePageSize,
         ] {
             self.reset(field);
@@ -3194,18 +3058,14 @@ impl WindUiConfigAdapter {
 }
 
 fn candidate_layout_mode(snapshot: &ConfigSnapshot) -> Result<CandidateLayoutMode, String> {
-    match (
-        snapshot.candidate().orientation(),
-        snapshot.candidate().scroll_mode(),
-    ) {
-        ("automatic", false) => Ok(CandidateLayoutMode::Automatic),
-        ("horizontal", false) => Ok(CandidateLayoutMode::Horizontal),
-        ("vertical", false) => Ok(CandidateLayoutMode::Vertical),
-        ("automatic", true) => Ok(CandidateLayoutMode::ScrollAutomatic),
-        ("horizontal", true) => Ok(CandidateLayoutMode::ScrollHorizontal),
-        ("vertical", true) => Ok(CandidateLayoutMode::ScrollVertical),
-        (orientation, _) => Err(format!(
-            "Config Core returned an invalid candidate orientation {orientation}"
+    match snapshot.candidate().layout_type() {
+        "automatic" => Ok(CandidateLayoutMode::Automatic),
+        "stacked" => Ok(CandidateLayoutMode::Stacked),
+        "flow" => Ok(CandidateLayoutMode::Flow),
+        "scroll" => Ok(CandidateLayoutMode::Scroll),
+        "vertical_text" => Ok(CandidateLayoutMode::VerticalText),
+        other => Err(format!(
+            "Config Core returned an invalid candidate layout_type {other}"
         )),
     }
 }
@@ -5780,30 +5640,15 @@ mod tests {
     }
 
     #[test]
-    fn candidate_layout_uses_normal_scroll_mode_names_and_preserves_direction() {
-        assert_eq!(
-            CandidateLayoutMode::ScrollAutomatic.display_label(5),
-            "Scroll（自动卷轴）"
-        );
-        assert_eq!(
-            CandidateLayoutMode::ScrollHorizontal.display_label(5),
-            "6 x 5（横排卷轴）"
-        );
-        assert_eq!(
-            CandidateLayoutMode::ScrollVertical.display_label(5),
-            "5 x 6（竖排卷轴）"
-        );
-        assert!(CandidateLayoutMode::ScrollVertical
+    fn candidate_layout_uses_frozen_names_and_migrated_semantics() {
+        assert_eq!(CandidateLayoutMode::Automatic.label(), "自动");
+        assert_eq!(CandidateLayoutMode::Stacked.label(), "纵排");
+        assert_eq!(CandidateLayoutMode::Flow.label(), "横排");
+        assert_eq!(CandidateLayoutMode::Scroll.label(), "卷轴");
+        assert_eq!(CandidateLayoutMode::VerticalText.label(), "竖排文字");
+        assert!(CandidateLayoutMode::Scroll
             .preview_description(5)
-            .contains("5 x 6"));
-        assert!(CandidateLayoutMode::ScrollHorizontal
-            .preview_description(7)
-            .contains("6 x 7"));
-        assert_eq!(
-            CandidateLayoutMode::ScrollVertical.orientation(),
-            CandidateOrientation::Vertical
-        );
-        assert!(CandidateLayoutMode::ScrollHorizontal.scroll_mode());
+            .contains("5"));
     }
 
     #[test]
@@ -5813,22 +5658,18 @@ mod tests {
                 .filter(|slot| candidate_preview_slot_visible(page_size, *slot))
                 .count();
             assert_eq!(visible_slots, usize::from(page_size));
-            assert!(CandidateLayoutMode::ScrollVertical
+            assert!(CandidateLayoutMode::Scroll
                 .preview_description(page_size)
                 .contains(&page_size.to_string()));
         }
     }
 
     #[test]
-    fn scroll_layout_labels_follow_authoritative_page_size() {
+    fn layout_labels_follow_authoritative_page_size() {
         for page_size in [3, 5, 9] {
             assert_eq!(
-                CandidateLayoutMode::ScrollVertical.display_label(page_size),
-                format!("{page_size} x 6（竖排卷轴）")
-            );
-            assert_eq!(
-                CandidateLayoutMode::ScrollHorizontal.display_label(page_size),
-                format!("6 x {page_size}（横排卷轴）")
+                CandidateLayoutMode::Scroll.preview_description(page_size),
+                format!("卷轴布局（每页最多 {page_size} 个候选）")
             );
         }
     }

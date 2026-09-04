@@ -24,6 +24,8 @@ struct Fcitx5ConfigSnapshot {
     Fcitx5ConfigUtf8 uiLanguage;
     Fcitx5ConfigUtf8 appearanceMode;
     Fcitx5ConfigUtf8 appearanceTheme;
+    // Legacy projection derived from `candidateLayoutType` until the renderer
+    // cutover lands; kept at these offsets so pre-cutover consumers compile.
     Fcitx5ConfigUtf8 candidateOrientation;
     std::uint8_t candidatePageSize;
     std::uint8_t candidateScrollMode;
@@ -57,6 +59,9 @@ struct Fcitx5ConfigSnapshot {
     Fcitx5ConfigUtf8 defaultInputMethod;
     Fcitx5ConfigUtf8 hotkeyToggleInputMethod;
     Fcitx5ConfigUtf8 hotkeyNextInputMethod;
+    // Unified candidate layout type
+    // (`automatic`/`stacked`/`flow`/`scroll`/`vertical_text`).
+    Fcitx5ConfigUtf8 candidateLayoutType;
 };
 
 [[nodiscard]] void* fcitx5_config_snapshot_load_current_utf16(Fcitx5ConfigUtf16 path);

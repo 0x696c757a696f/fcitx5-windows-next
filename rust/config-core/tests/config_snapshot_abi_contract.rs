@@ -163,6 +163,10 @@ fn native_adapters_can_load_one_resolved_current_snapshot() {
     );
     assert_eq!(utf8(view.appearance_mode), "system");
     assert_eq!(utf8(view.appearance_theme), "builtin:default");
+    // Legacy fixture (`orientation="automatic" + scroll_mode=true`) migrates
+    // to the unified layout type `scroll`; the legacy orientation/scroll
+    // projections stay available for the pre-cutover C++ consumers.
+    assert_eq!(utf8(view.candidate_layout_type), "scroll");
     assert_eq!(utf8(view.candidate_orientation), "automatic");
     assert_eq!(view.candidate_page_size, 5);
     assert_eq!(view.candidate_scroll_mode, 1);

@@ -309,8 +309,7 @@ fn presentation_edits_persist_through_the_public_config_core_api() {
 
     for edit in [
         ConfigEdit::AppearanceMode("dark".to_owned()),
-        ConfigEdit::CandidateOrientation("horizontal".to_owned()),
-        ConfigEdit::CandidateScrollMode(true),
+        ConfigEdit::CandidateLayoutType("scroll".to_owned()),
         ConfigEdit::CandidatePageSize(6),
         ConfigEdit::CandidateOpacity(0.95),
         ConfigEdit::CandidatePreeditMode("panel".to_owned()),
@@ -326,7 +325,7 @@ fn presentation_edits_persist_through_the_public_config_core_api() {
         .expect("persisted presentation edits should reload through Config Core")
         .current();
     assert_eq!(persisted.appearance().mode(), "dark");
-    assert_eq!(persisted.candidate().orientation(), "horizontal");
+    assert_eq!(persisted.candidate().layout_type(), "scroll");
     assert!(persisted.candidate().scroll_mode());
     assert_eq!(persisted.candidate().page_size(), 6);
     assert_eq!(persisted.candidate().opacity(), 0.95);
@@ -448,4 +447,46 @@ fn engine_input_methods_and_hotkeys_are_typed_and_validated_by_config_core() {
             Err(ConfigError::Validation { .. })
         ));
     }
+}
+
+#[test]
+fn legacy_orientation_scroll_pair_migrates_to_layout_type() {
+    let directory = TestDirectory::new("layout-migration");
+    let path = directory.config_path();
+    let store = FileStore::new();
+    for (orientation, scroll, expected) in [
+        ("vertical", "false", "stacked"),
+        ("horizontal", "false", "flow"),
+        ("vertical", "true", "scroll"),
+        ("automatic", "false", "automatic"),
+    ] {
+        fs::write(
+            &path,
+            format!("format_version = 1\n[candidate]\norientation = \"{orientation}\"\nscroll_mode = {scroll}\npage_size = 5\n"),
+        )
+        .expect("legacy fixture");
+        let snapshot = ConfigCore::load(&store, &path)
+            .expect("legacy current file should migrate")
+            .current();
+        assert_eq!(
+            snapshot.candidate().layout_type(),
+            expected,
+            "orientation={orientation} scroll_mode={scroll} should migrate to {expected}"
+        );
+        assert_eq!(
+            snapshot.candidate().scroll_mode(),
+            expected == "scroll",
+            "scroll_mode projection must match migrated layout"
+        );
+    }
+    // Unknown layout_type is rejected on load.
+    fs::write(
+        &path,
+        "format_version = 1\n[candidate]\nlayout_type = \"sideways\"\n",
+    )
+    .expect("invalid fixture");
+    assert!(matches!(
+        ConfigCore::load(&store, &path),
+        Err(ConfigError::Validation { .. })
+    ));
 }

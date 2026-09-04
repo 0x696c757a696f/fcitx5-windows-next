@@ -108,6 +108,9 @@ pub struct Fcitx5ConfigSnapshot {
     pub hotkey_toggle_input_method: Fcitx5ConfigUtf8,
     /// Next-input-method hotkey.
     pub hotkey_next_input_method: Fcitx5ConfigUtf8,
+    /// Candidate layout type
+    /// (`automatic`/`stacked`/`flow`/`scroll`/`vertical_text`).
+    pub candidate_layout_type: Fcitx5ConfigUtf8,
 }
 
 /// UI font-family selector for `fcitx5_config_snapshot_font_family_at`.
@@ -176,6 +179,7 @@ fn snapshot_view(handle: &SnapshotHandle) -> Fcitx5ConfigSnapshot {
         default_input_method: utf8(snapshot.input_methods().default_id()),
         hotkey_toggle_input_method: utf8(snapshot.hotkeys().toggle_input_method()),
         hotkey_next_input_method: utf8(snapshot.hotkeys().next_input_method()),
+        candidate_layout_type: utf8(candidate.layout_type()),
     }
 }
 
