@@ -28,7 +28,7 @@ jobs:
           & ./tools/sync-windui.ps1 -Latest
 
       - name: Detect windui change and open PR
-        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: upstream/wind-ui-rust
@@ -55,7 +55,7 @@ jobs:
           & ./tools/sync-fcitx-pins.ps1 -Latest
 
       - name: Open PR for pin bumps
-        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: upstream/fcitx5-pins
