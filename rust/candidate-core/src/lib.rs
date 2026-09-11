@@ -1056,6 +1056,248 @@ pub fn format_candidate_label(
     }
 }
 
+/// Rust-owned visual construction for one candidate (081D model slice).
+///
+/// Mirrors the frozen C++ `update()` loop body: the label is formatted when
+/// labels are visible and non-empty, the reserved label starts as the label,
+/// and a non-empty comment gains the fixed two-space prefix.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Fcitx5CandidateVisualBuildInput {
+    pub label: Fcitx5CandidateUtf8,
+    pub text: Fcitx5CandidateUtf8,
+    pub comment: Fcitx5CandidateUtf8,
+    pub label_style: u32,
+    pub labels_visible: u8,
+}
+
+/// Resolved visual fields; string storage is owned by the Rust arena.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Fcitx5CandidateVisualBuildOutput {
+    pub label: Fcitx5CandidateUtf8,
+    pub reserved_label: Fcitx5CandidateUtf8,
+    pub text: Fcitx5CandidateUtf8,
+    pub comment: Fcitx5CandidateUtf8,
+    /// 1 when the candidate carries its own formatted label.
+    pub source_label: u8,
+}
+
+impl Fcitx5CandidateVisualBuildOutput {
+    #[must_use]
+    pub fn null_output() -> Self {
+        Self {
+            label: Fcitx5CandidateUtf8::default(),
+            reserved_label: Fcitx5CandidateUtf8::default(),
+            text: Fcitx5CandidateUtf8::default(),
+            comment: Fcitx5CandidateUtf8::default(),
+            source_label: 0,
+        }
+    }
+}
+
+/// Arena that owns built visual strings for the current composition.
+#[derive(Default)]
+pub struct CandidateVisualArena {
+    strings: Vec<Vec<u8>>,
+    outputs: Vec<Fcitx5CandidateVisualBuildOutput>,
+}
+
+impl CandidateVisualArena {
+    fn build(&mut self, inputs: &[Fcitx5CandidateVisualBuildInput]) -> usize {
+        self.strings.clear();
+        self.outputs.clear();
+        let mut owned = |text: &[u8]| -> Fcitx5CandidateUtf8 {
+            self.strings.push(text.to_vec());
+            let stored = self.strings.last().expect("pushed above");
+            Fcitx5CandidateUtf8 {
+                ptr: stored.as_ptr(),
+                len: stored.len(),
+            }
+        };
+        for input in inputs {
+            let label_bytes = utf8_slice(input.label);
+            let text_bytes = utf8_slice(input.text);
+            let comment_bytes = utf8_slice(input.comment);
+            let label_text = String::from_utf8_lossy(label_bytes).into_owned();
+            let comment_text = String::from_utf8_lossy(comment_bytes).into_owned();
+            let Some(style) = label_style_from_ffi(input.label_style) else {
+                return self.outputs.len();
+            };
+            let formatted = if input.labels_visible != 0 && !label_text.is_empty() {
+                format_candidate_label(0, &label_text, style, "", "")
+            } else {
+                String::new()
+            };
+            let source_label = u8::from(!formatted.is_empty());
+            let reserved = if source_label != 0 {
+                formatted.clone()
+            } else {
+                String::new()
+            };
+            let comment = if comment_text.is_empty() {
+                String::new()
+            } else {
+                format!("  {comment_text}")
+            };
+            let output = Fcitx5CandidateVisualBuildOutput {
+                label: owned(formatted.as_bytes()),
+                reserved_label: owned(reserved.as_bytes()),
+                text: owned(text_bytes),
+                comment: owned(comment.as_bytes()),
+                source_label,
+            };
+            self.outputs.push(output);
+        }
+        self.outputs.len()
+    }
+}
+
+fn utf8_slice(value: Fcitx5CandidateUtf8) -> &'static [u8] {
+    if value.len == 0 {
+        return &[];
+    }
+    // SAFETY: the C ABI contract requires valid `len` readable bytes.
+    unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
+}
+
+#[no_mangle]
+pub extern "C" fn fcitx5_candidate_visual_arena_create() -> *mut c_void {
+    Box::into_raw(Box::<CandidateVisualArena>::default()).cast()
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `arena` must be null or a pointer returned by
+/// `fcitx5_candidate_visual_arena_create` that has not already been destroyed.
+pub unsafe extern "C" fn fcitx5_candidate_visual_arena_destroy(arena: *mut c_void) {
+    if !arena.is_null() {
+        // SAFETY: caller guarantees this is the unique allocation from create.
+        unsafe { drop(Box::from_raw(arena.cast::<CandidateVisualArena>())) };
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `arena` must be a valid arena pointer; `inputs` must be valid for
+/// `input_count` elements when non-zero; `out_outputs` must point to writable
+/// storage for `input_count` outputs when non-zero. Returned string pointers
+/// remain valid until the next build call or arena destruction.
+pub unsafe extern "C" fn fcitx5_candidate_visual_build(
+    arena: *mut c_void,
+    inputs: *const Fcitx5CandidateVisualBuildInput,
+    input_count: usize,
+    out_outputs: *mut Fcitx5CandidateVisualBuildOutput,
+) -> usize {
+    if arena.is_null() || (input_count > 0 && (inputs.is_null() || out_outputs.is_null())) {
+        return 0;
+    }
+    // SAFETY: caller guarantees the arena allocation is valid for this call.
+    let arena = unsafe { &mut *arena.cast::<CandidateVisualArena>() };
+    // SAFETY: the C ABI contract requires this slice to be valid.
+    let inputs = if input_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(inputs, input_count) }
+    };
+    let built = arena.build(inputs);
+    if built > 0 {
+        // SAFETY: out_outputs is non-null for non-zero counts (checked above)
+        // and covers input_count elements.
+        unsafe { std::ptr::copy_nonoverlapping(arena.outputs.as_ptr(), out_outputs, built) };
+    }
+    built
+}
+
+#[cfg(test)]
+mod candidate_visual_arena_tests {
+    use super::*;
+
+    fn input(
+        label: &str,
+        text: &str,
+        comment: &str,
+        visible: u8,
+    ) -> Fcitx5CandidateVisualBuildInput {
+        Fcitx5CandidateVisualBuildInput {
+            label: Fcitx5CandidateUtf8 {
+                ptr: label.as_ptr(),
+                len: label.len(),
+            },
+            text: Fcitx5CandidateUtf8 {
+                ptr: text.as_ptr(),
+                len: text.len(),
+            },
+            comment: Fcitx5CandidateUtf8 {
+                ptr: comment.as_ptr(),
+                len: comment.len(),
+            },
+            label_style: 1,
+            labels_visible: visible,
+        }
+    }
+
+    fn read(value: &Fcitx5CandidateUtf8) -> String {
+        // SAFETY: arena-owned pointers from a live build are valid.
+        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
+            .into_owned()
+    }
+
+    #[test]
+    fn build_formats_labels_and_prefixes_comments() {
+        let mut arena = CandidateVisualArena::default();
+        let inputs = [
+            input("1", "你", "nǐ", 1),
+            input("", "好", "", 1),
+            input("2", "汉", "hàn", 0),
+        ];
+        let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 3];
+        let built = unsafe {
+            fcitx5_candidate_visual_build(
+                &arena as *const _ as *mut c_void,
+                inputs.as_ptr(),
+                3,
+                outputs.as_mut_ptr(),
+            )
+        };
+        assert_eq!(built, 3);
+        assert_eq!(read(&outputs[0].label), "1.");
+        assert_eq!(read(&outputs[0].reserved_label), "1.");
+        assert_eq!(outputs[0].source_label, 1);
+        assert_eq!(read(&outputs[0].comment), "  nǐ");
+        assert_eq!(read(&outputs[1].label), "");
+        assert_eq!(outputs[1].source_label, 0);
+        assert_eq!(read(&outputs[2].label), "", "hidden labels stay empty");
+        assert_eq!(outputs[2].source_label, 0);
+        assert_eq!(read(&outputs[2].comment), "  hàn");
+    }
+
+    #[test]
+    fn build_rejects_invalid_style_and_null_arena() {
+        let mut arena = CandidateVisualArena::default();
+        let mut bad = input("1", "你", "", 1);
+        bad.label_style = 99;
+        let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 1];
+        let built = unsafe {
+            fcitx5_candidate_visual_build(
+                &arena as *const _ as *mut c_void,
+                &bad,
+                1,
+                outputs.as_mut_ptr(),
+            )
+        };
+        assert_eq!(built, 0, "invalid style stops the build at the offender");
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_visual_build(core::ptr::null_mut(), &bad, 1, outputs.as_mut_ptr())
+            },
+            0
+        );
+    }
+}
+
 pub fn candidate_label_slot_plan(
     config: CandidateLabelSlotConfig,
     sources: &[CandidateLabelSlotSource],

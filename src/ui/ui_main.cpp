@@ -321,6 +321,22 @@ struct Fcitx5CandidateResolvedColors {
     std::uint8_t preeditText[3]{};
 };
 
+struct Fcitx5CandidateVisualBuildInput {
+    Fcitx5CandidateUtf8 label;
+    Fcitx5CandidateUtf8 text;
+    Fcitx5CandidateUtf8 comment;
+    std::uint32_t labelStyle{};
+    std::uint8_t labelsVisible{};
+};
+
+struct Fcitx5CandidateVisualBuildOutput {
+    Fcitx5CandidateUtf8 label;
+    Fcitx5CandidateUtf8 reservedLabel;
+    Fcitx5CandidateUtf8 text;
+    Fcitx5CandidateUtf8 comment;
+    std::uint8_t sourceLabel{};
+};
+
 using CandidateWindowMessageCallback = LRESULT(CALLBACK *)(void*, HWND, UINT, WPARAM, LPARAM);
 struct Fcitx5CandidateWindowCreateInput {
     HINSTANCE instance{};
@@ -454,6 +470,11 @@ extern "C" std::uint8_t fcitx5_candidate_resolve_paint_colors(
     Fcitx5CandidateConfigColor commentText, Fcitx5CandidateConfigColor border,
     Fcitx5CandidateConfigColor preeditText, std::uint8_t highContrast,
     Fcitx5CandidateResolvedColors* output);
+extern "C" void* fcitx5_candidate_visual_arena_create();
+extern "C" void fcitx5_candidate_visual_arena_destroy(void* arena);
+extern "C" std::size_t fcitx5_candidate_visual_build(
+    void* arena, const Fcitx5CandidateVisualBuildInput* inputs,
+    std::size_t inputCount, Fcitx5CandidateVisualBuildOutput* outOutputs);
 extern "C" std::uint8_t fcitx5_candidate_window_create(
     const Fcitx5CandidateWindowCreateInput* input, HWND* outWindow);
 extern "C" void fcitx5_candidate_window_destroy(HWND window);
@@ -1388,6 +1409,7 @@ class CandidateWindow final {
           clickGuard_(fcitx::windows::ui::detail::fcitx5_candidate_click_guard_create()),
           focusWatch_(fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_create()),
           measureEngine_(fcitx::windows::ui::detail::fcitx5_candidate_measure_create()),
+          visualArena_(fcitx::windows::ui::detail::fcitx5_candidate_visual_arena_create()),
           presentation_(fcitx::windows::ui::detail::fcitx5_candidate_presentation_create()) {}
 
     ~CandidateWindow() {
@@ -1409,12 +1431,14 @@ class CandidateWindow final {
         focusWatch_ = nullptr;
         fcitx::windows::ui::detail::fcitx5_candidate_measure_destroy(measureEngine_);
         measureEngine_ = nullptr;
+        fcitx::windows::ui::detail::fcitx5_candidate_visual_arena_destroy(visualArena_);
+        visualArena_ = nullptr;
         fcitx::windows::ui::detail::fcitx5_candidate_presentation_destroy(presentation_);
     }
 
     bool create(HINSTANCE instance, bool visible, bool safeMode, bool interactionTest = false) {
         if (!presentation_ || !pointerState_ || !scrollState_ || !clickGuard_ || !focusWatch_ ||
-            !measureEngine_)
+            !measureEngine_ || !visualArena_)
             return false;
         if (candidateClient_) {
             fcitx5_windows_common_candidate_select_client_destroy(candidateClient_);
@@ -2148,27 +2172,52 @@ class CandidateWindow final {
             if (utf8ToWide(current.preedit, preedit))
                 preeditPanel_ = std::move(preedit);
         }
-        for (std::size_t candidateIndex = 0; candidateIndex < current.candidates.size();
-             ++candidateIndex) {
-            const auto& candidate = current.candidates[candidateIndex];
+        // Rust owns the visual-build semantics (081D model slice): label
+        // formatting, reserved-label policy, and the comment prefix are one
+        // arena call over UTF-8 inputs. C++ only widens the results.
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateVisualBuildInput> visualInputs;
+        visualInputs.reserve(current.candidates.size());
+        for (const auto& candidate : current.candidates) {
+            visualInputs.push_back({
+                {reinterpret_cast<const std::uint8_t*>(candidate.label.data()),
+                 candidate.label.size()},
+                {reinterpret_cast<const std::uint8_t*>(candidate.text.data()),
+                 candidate.text.size()},
+                {reinterpret_cast<const std::uint8_t*>(candidate.comment.data()),
+                 candidate.comment.size()},
+                labelStyleToRust(visualConfig_.labelStyle),
+                static_cast<std::uint8_t>(visualConfig_.labelVisible)});
+        }
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateVisualBuildOutput> visualOutputs(
+            visualInputs.size());
+        const auto built = fcitx::windows::ui::detail::fcitx5_candidate_visual_build(
+            visualArena_, visualInputs.data(), visualInputs.size(), visualOutputs.data());
+        if (built != current.candidates.size()) {
+            dismissPresentation();
+            return;
+        }
+        for (std::size_t candidateIndex = 0; candidateIndex < built; ++candidateIndex) {
+            const auto& output = visualOutputs[candidateIndex];
+            CandidateVisual visual;
+            const auto widen = [](fcitx::windows::ui::detail::Fcitx5CandidateUtf8 value,
+                                  std::wstring& out) {
+                return utf8ToWide(std::string_view(reinterpret_cast<const char*>(value.ptr),
+                                                    value.len),
+                                   out);
+            };
             std::wstring label;
             std::wstring text;
             std::wstring comment;
-            if (!utf8ToWide(candidate.label, label) || !utf8ToWide(candidate.text, text) ||
-                !utf8ToWide(candidate.comment, comment))
+            if (!widen(output.label, label) || !widen(output.text, text) ||
+                !widen(output.comment, comment))
                 continue;
-            CandidateVisual visual;
-            if (visualConfig_.labelVisible && !label.empty()) {
-                visual.label = formatCandidateLabel(
-                    0,
-                    label,
-                    visualConfig_.labelStyle);
+            if (output.sourceLabel != 0) {
+                visual.label = std::move(label);
                 visual.reservedLabel = visual.label;
                 visual.sourceLabel = true;
             }
             visual.text = std::move(text);
-            if (!comment.empty())
-                visual.comment = L"  " + comment;
+            visual.comment = std::move(comment);
             candidates_.emplace_back(std::move(visual));
         }
         if (candidates_.size() != current.candidates.size()) {
@@ -2710,6 +2759,7 @@ class CandidateWindow final {
     void* clickGuard_{};
     void* focusWatch_{};
     void* measureEngine_{};
+    void* visualArena_{};
     NativeRenderConfig visualConfig_;
     candidate::CandidateModel model_;
     CaretRect lastCaret_;
