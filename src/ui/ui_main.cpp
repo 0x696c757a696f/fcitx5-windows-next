@@ -421,6 +421,9 @@ extern "C" int fcitx5_candidate_window_run_message_loop();
 extern "C" std::uint8_t fcitx5_candidate_window_blit_bgra(
     HWND window, const std::uint8_t* pixels, std::size_t pixelByteLen,
     std::size_t pixelStride, std::int32_t* outClientWidth);
+extern "C" std::uint8_t fcitx5_candidate_window_blit_bgra_to_dc(
+    HDC dc, const std::uint8_t* pixels, std::size_t pixelByteLen,
+    std::size_t pixelStride, std::int32_t clientWidth, std::int32_t clientHeight);
 extern "C" void* fcitx5_candidate_measure_create();
 extern "C" void fcitx5_candidate_measure_destroy(void* engine);
 extern "C" std::uint8_t fcitx5_candidate_measure_text_utf8(
@@ -1908,6 +1911,24 @@ class CandidateWindow final {
             }
             return true;
         }
+        HDC dc = GetDC(window_);
+        if (!dc)
+            return true;
+        const bool ok = paintOnceToDC(dc, client);
+        ReleaseDC(window_, dc);
+        return ok;
+    }
+
+    bool paintOnceToDC(HDC dc, const RECT& client) {
+        if (!dc)
+            return true;
+        if (candidates_.empty()) {
+            // First paint before update() — just clear.
+            HBRUSH bg = CreateSolidBrush(RGB(248, 250, 250));
+            FillRect(dc, &client, bg);
+            DeleteObject(bg);
+            return true;
+        }
         // Build Rust render input from C++ member state.
         const float scale = fontDpiScale_;
         HIGHCONTRASTW contrast{};
@@ -2009,11 +2030,11 @@ class CandidateWindow final {
         if (rc2 != 0)
             return true;
         // Rust owns the DIB blit path (081C paint slice): identical stride
-        // validation and StretchBlt inside the window host.
-        std::int32_t clientWidth = 0;
-        fcitx::windows::ui::detail::fcitx5_candidate_window_blit_bgra(
-            window_, pixels.data(), pixels.size(), static_cast<std::size_t>(out.pixelStride),
-            &clientWidth);
+        // validation and StretchBlt inside the window host. The dc-target
+        // blit serves both the paintOnce window DC and foreign WM_PRINT DCs.
+        fcitx::windows::ui::detail::fcitx5_candidate_window_blit_bgra_to_dc(
+            dc, pixels.data(), pixels.size(), static_cast<std::size_t>(out.pixelStride),
+            client.right, client.bottom);
         return true;
     }
 
@@ -2023,83 +2044,7 @@ class CandidateWindow final {
         RECT client{};
         if (!GetClientRect(window_, &client))
             return;
-        const auto toColorRef = [](const D2D1_COLOR_F& color) {
-            const auto channel = [](float value) {
-                return static_cast<BYTE>(std::clamp(value, 0.0F, 1.0F) * 255.0F);
-            };
-            return RGB(channel(color.r), channel(color.g), channel(color.b));
-        };
-        HIGHCONTRASTW contrast{};
-        contrast.cbSize = sizeof(contrast);
-        const bool highContrast =
-            SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
-            (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
-        const COLORREF background =
-            highContrast ? GetSysColor(COLOR_WINDOW)
-                         : toColorRef(visualConfig_.colors.background);
-        const COLORREF foreground =
-            highContrast ? GetSysColor(COLOR_WINDOWTEXT)
-                         : toColorRef(visualConfig_.colors.candidateText);
-        const COLORREF selectedBackground =
-            highContrast ? GetSysColor(COLOR_HIGHLIGHT)
-                         : toColorRef(visualConfig_.colors.selectedBackground);
-        const COLORREF selectedForeground =
-            highContrast ? GetSysColor(COLOR_HIGHLIGHTTEXT)
-                         : toColorRef(visualConfig_.colors.selectedCandidateText);
-        HBRUSH backgroundBrush = CreateSolidBrush(background);
-        HBRUSH selectedBrush = CreateSolidBrush(selectedBackground);
-        if (!backgroundBrush || !selectedBrush) {
-            if (backgroundBrush)
-                DeleteObject(backgroundBrush);
-            if (selectedBrush)
-                DeleteObject(selectedBrush);
-            return;
-        }
-        FillRect(dc, &client, backgroundBrush);
-        SetBkMode(dc, TRANSPARENT);
-        HFONT font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
-        const std::vector<CandidateVisual> fallback{
-            {L"1. ", L"1. ", L"你", L"nǐ", true},
-            {L"2. ", L"2. ", L"呢", L"", true}};
-        const auto& lines = candidates_.empty() ? fallback : candidates_;
-        const std::size_t paintCount =
-            visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
-        float fallbackTop = 8.0F;
-        for (std::size_t local = 0; local < paintCount; ++local) {
-            const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
-            if (index >= lines.size())
-                continue;
-            const D2D1_RECT_F bounds = itemRects_.size() == paintCount
-                                           ? itemRects_[local]
-                                           : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
-            RECT item{static_cast<LONG>(bounds.left), static_cast<LONG>(bounds.top),
-                      static_cast<LONG>(bounds.right), static_cast<LONG>(bounds.bottom)};
-            const auto selectedIndex = presentationSelected();
-            const bool selected = selectedIndex && *selectedIndex == index;
-            if (selected)
-                FillRect(dc, &item, selectedBrush);
-            SetTextColor(dc, selected ? selectedForeground : foreground);
-            RECT textRect{item.left + 8, item.top, item.right - 8, item.bottom};
-            const auto& candidate = lines[index];
-            const std::wstring line = candidate.label.empty()
-                                          ? candidate.text
-                                          : candidate.label + L" " + candidate.text +
-                                                (candidate.comment.empty()
-                                                     ? std::wstring{}
-                                                     : L"  " + candidate.comment);
-            DrawTextW(dc, line.c_str(), static_cast<int>(line.size()), &textRect,
-                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-            fallbackTop += 32.0F;
-        }
-        if (oldFont)
-            SelectObject(dc, oldFont);
-        if (font)
-            DeleteObject(font);
-        DeleteObject(selectedBrush);
-        DeleteObject(backgroundBrush);
+        (void)paintOnceToDC(dc, client);
     }
 
     void paintTestSurfaceOverlay() {

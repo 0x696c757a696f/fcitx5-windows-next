@@ -566,6 +566,109 @@ pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra(
     u8::from(blitted)
 }
 
+/// Blits a top-down BGRA buffer onto a caller-supplied DC (WM_PRINT path).
+///
+/// Same DIB semantics as [`fcitx5_candidate_window_blit_bgra`] but the
+/// destination DC is provided by the caller (e.g. the WM_PRINT wparam).
+///
+/// # Safety
+///
+/// `dc` must be a valid HDC, `pixels` must reference `pixel_byte_len`
+/// readable bytes, and `client_width`/`client_height` must be the target
+/// client-rect extent.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra_to_dc(
+    dc: Hdc,
+    pixels: *const u8,
+    pixel_byte_len: usize,
+    pixel_stride: usize,
+    client_width: i32,
+    client_height: i32,
+) -> u8 {
+    if dc.is_null() || pixels.is_null() {
+        return 0;
+    }
+    if pixel_stride == 0
+        || pixel_byte_len == 0
+        || pixel_stride % 4 != 0
+        || pixel_byte_len % pixel_stride != 0
+    {
+        return 0;
+    }
+    let pix_w = (pixel_stride / 4) as i32;
+    let pix_h = (pixel_byte_len / pixel_stride) as i32;
+    if pix_w <= 0 || pix_h <= 0 {
+        return 0;
+    }
+    let bmi = BitmapInfo {
+        bmi_header: BitmapInfoHeader {
+            bi_size: core::mem::size_of::<BitmapInfoHeader>() as u32,
+            bi_width: pix_w,
+            bi_height: -pix_h,
+            bi_planes: 1,
+            bi_bit_count: 32,
+            bi_compression: BI_RGB,
+            ..BitmapInfoHeader::default()
+        },
+        bmi_colors: [0; 1],
+    };
+    let mut bits: *mut c_void = core::ptr::null_mut();
+    // SAFETY: `dc` is valid and `bits` receives the DIB allocation pointer.
+    let bitmap = unsafe {
+        CreateDIBSection(
+            dc,
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    if bitmap.is_null() || bits.is_null() {
+        if !bitmap.is_null() {
+            // SAFETY: `bitmap` is owned by this call.
+            unsafe { DeleteObject(bitmap) };
+        }
+        return 0;
+    }
+    // SAFETY: `bits` covers pixel_byte_len bytes and pixels has that length.
+    unsafe {
+        core::ptr::copy_nonoverlapping(pixels.cast::<u8>(), bits.cast::<u8>(), pixel_byte_len);
+    }
+    // SAFETY: `dc` is a valid HDC.
+    let mem_dc = unsafe { CreateCompatibleDC(dc) };
+    if mem_dc.is_null() {
+        // SAFETY: `bitmap` is owned by this call.
+        unsafe { DeleteObject(bitmap) };
+        return 0;
+    }
+    // SAFETY: both DC and bitmap are valid.
+    let old = unsafe { SelectObject(mem_dc, bitmap) };
+    // SAFETY: both DCs are valid with matching pixel formats.
+    let drawn = unsafe {
+        StretchBlt(
+            dc,
+            0,
+            0,
+            client_width,
+            client_height,
+            mem_dc,
+            0,
+            0,
+            pix_w,
+            pix_h,
+            SRCCOPY,
+        )
+    };
+    // SAFETY: restore the original bitmap selection.
+    unsafe { SelectObject(mem_dc, old) };
+    // SAFETY: `mem_dc` came from CreateCompatibleDC above.
+    unsafe { DeleteDC(mem_dc) };
+    // SAFETY: `bitmap` is owned by this call.
+    unsafe { DeleteObject(bitmap) };
+    u8::from(drawn != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::quit_exit_code;
