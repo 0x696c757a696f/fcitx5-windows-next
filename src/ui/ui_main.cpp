@@ -1128,14 +1128,6 @@ std::uint32_t labelStyleToRust(NativeLabelStyle style) noexcept {
     return 1;
 }
 
-struct CandidateVisual {
-    std::wstring label;
-    std::wstring reservedLabel;
-    std::wstring text;
-    std::wstring comment;
-    bool sourceLabel{};
-};
-
 template <typename Function>
 Function resolveProcAddress(HMODULE module, const char* name) noexcept {
 #if defined(__clang__)
@@ -1984,7 +1976,7 @@ class CandidateWindow final {
         RECT client{};
         if (!GetClientRect(window_, &client) || IsRectEmpty(&client))
             return true;
-        if (candidates_.empty()) {
+        if (visualOutputs_.empty()) {
             // First paint before update() — just clear.
             HDC dc = GetDC(window_);
             if (dc) {
@@ -2006,7 +1998,7 @@ class CandidateWindow final {
     bool paintOnceToDC(HDC dc, const RECT& client) {
         if (!dc)
             return true;
-        if (candidates_.empty()) {
+        if (visualOutputs_.empty()) {
             // First paint before update() — just clear.
             HBRUSH bg = CreateSolidBrush(RGB(248, 250, 250));
             FillRect(dc, &client, bg);
@@ -2067,43 +2059,21 @@ class CandidateWindow final {
             static_cast<std::uint8_t>(
                 visualConfig_.writingMode == NativeWritingMode::verticalRl ? 1U
                 : visualConfig_.writingMode == NativeWritingMode::verticalLr ? 2U : 0U)};
-        const std::vector<CandidateVisual>& lines = candidates_;
-        const std::size_t count = visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
+        const std::size_t count =
+            visibleIndices_.empty() ? visualOutputs_.size() : visibleIndices_.size();
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateRenderCandidateInput> candidatesIn;
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> sizesIn;
-        // to_utf8 returns a pointer into one shared thread_local buffer, so
-        // every encoded string needs its own storage that outlives the render
-        // call. Aliasing them corrupted every candidate's label/text/comment.
-        std::vector<std::string> encoded;
-        encoded.reserve(count * 3);
+        // The arena owns the UTF-8 render strings (valid until the next
+        // build), so paint maps visible indices straight onto the outputs —
+        // no wide→UTF-8 re-encoding happens on the paint path.
         candidatesIn.reserve(count);
         sizesIn.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             const std::size_t idx = visibleIndices_.empty() ? i : visibleIndices_[i];
-            const auto& c = (idx < lines.size()) ? lines[idx] : lines[0];
-            const auto encode = [&encoded](const std::wstring& value) {
-                encoded.emplace_back();
-                auto& stored = encoded.back();
-                for (wchar_t wc : value) {
-                    if (wc < 0x80) {
-                        stored.push_back(static_cast<char>(wc));
-                    } else if (wc < 0x800) {
-                        stored.push_back(static_cast<char>(0xC0 | (wc >> 6)));
-                        stored.push_back(static_cast<char>(0x80 | (wc & 0x3F)));
-                    } else {
-                        stored.push_back(static_cast<char>(0xE0 | (wc >> 12)));
-                        stored.push_back(static_cast<char>(0x80 | ((wc >> 6) & 0x3F)));
-                        stored.push_back(static_cast<char>(0x80 | (wc & 0x3F)));
-                    }
-                }
-                return fcitx::windows::ui::detail::Fcitx5CandidateUtf8{
-                    reinterpret_cast<const std::uint8_t*>(stored.data()), stored.size()};
-            };
-            const auto label = encode(c.label);
-            const auto text = encode(c.text);
-            const auto comment = encode(c.comment);
-            candidatesIn.push_back({label.ptr, label.len, text.ptr, text.len, comment.ptr,
-                                    comment.len});
+            const auto& output =
+                visualOutputs_[idx < visualOutputs_.size() ? idx : 0];
+            candidatesIn.push_back({output.label.ptr, output.label.len, output.text.ptr,
+                                    output.text.len, output.comment.ptr, output.comment.len});
             const D2D1_RECT_F bounds = (i < itemRects_.size()) ? itemRects_[i]
                 : D2D1::RectF(0, 0, 80, 32);
             sizesIn.push_back({bounds.right - bounds.left, bounds.bottom - bounds.top});
@@ -2201,7 +2171,6 @@ class CandidateWindow final {
             if (!createDeviceResources())
                 return;
         }
-        candidates_.clear();
         itemRects_.clear();
         visibleIndices_.clear();
         renderIndices_.clear();
@@ -2216,8 +2185,8 @@ class CandidateWindow final {
         }
         // Rust owns the visual-build semantics (081D model slice): label
         // formatting, scroll-label reservations, reserved-label policy, and
-        // the comment prefix are one arena call over UTF-8 inputs. C++ only
-        // widens the results.
+        // the comment prefix are one arena call over UTF-8 inputs. The arena
+        // outputs are the render-input model; C++ keeps no wide copy.
         const auto reservationSelected = presentationSelected();
         const auto reservationColumns = presentationScrollColumns();
         const bool reservationScroll = presentationScrollMode();
@@ -2278,35 +2247,8 @@ class CandidateWindow final {
             dismissPresentation();
             return;
         }
-        for (std::size_t candidateIndex = 0; candidateIndex < built; ++candidateIndex) {
-            const auto& output = visualOutputs[candidateIndex];
-            CandidateVisual visual;
-            const auto widen = [](fcitx::windows::ui::detail::Fcitx5CandidateUtf8 value,
-                                  std::wstring& out) {
-                return utf8ToWide(std::string_view(reinterpret_cast<const char*>(value.ptr),
-                                                    value.len),
-                                   out);
-            };
-            std::wstring label;
-            std::wstring text;
-            std::wstring comment;
-            if (!widen(output.label, label) || !widen(output.text, text) ||
-                !widen(output.comment, comment))
-                continue;
-            if (output.sourceLabel != 0) {
-                visual.label = std::move(label);
-                visual.reservedLabel = visual.label;
-                visual.sourceLabel = true;
-            }
-            visual.text = std::move(text);
-            visual.comment = std::move(comment);
-            candidates_.emplace_back(std::move(visual));
-        }
-        if (candidates_.size() != current.candidates.size()) {
-            dismissPresentation();
-            return;
-        }
-        renderIndices_.resize(candidates_.size());
+        visualOutputs_ = std::move(visualOutputs);
+        renderIndices_.resize(visualOutputs_.size());
         fcitx::windows::ui::detail::Fcitx5CandidatePresentationRenderPlan renderPlan{};
         if (fcitx::windows::ui::detail::fcitx5_candidate_presentation_render_plan(
                 presentation_, renderIndices_.data(), renderIndices_.size(), &renderPlan) == 0) {
@@ -2318,7 +2260,7 @@ class CandidateWindow final {
         if (fcitx::windows::ui::detail::fcitx5_candidate_presentation_decide(
                 presentation_,
                 static_cast<std::uint8_t>(current.visibility),
-                candidates_.size(),
+                visualOutputs_.size(),
                 lastCaret_.valid ? 1U : 0U,
                 current.popupAllowed ? 1U : 0U,
                 focusTargetProcessId(),
@@ -2409,7 +2351,7 @@ class CandidateWindow final {
             preeditUtf8.assign(reinterpret_cast<const char*>(p), l);
         }
         const auto measured = fcitx::windows::ui::detail::fcitx5_candidate_measure_visual_items(
-            measureEngine_, visualOutputs.data(), visualOutputs.size(),
+            measureEngine_, visualOutputs_.data(), visualOutputs_.size(),
             renderIndices_.empty() ? nullptr : renderIndices_.data(), renderIndices_.size(),
             horizontalPresentation ? 1U : 0U, presentationScrollMode() ? 1U : 0U,
             labelGap, itemPaddingX, itemPaddingY,
@@ -2598,7 +2540,7 @@ class CandidateWindow final {
         hidePopup();
         fcitx::windows::ui::detail::fcitx5_candidate_presentation_reset(presentation_);
         model_.reset();
-        candidates_.clear();
+        visualOutputs_.clear();
         itemRects_.clear();
         visibleIndices_.clear();
         renderIndices_.clear();
@@ -2627,7 +2569,7 @@ class CandidateWindow final {
         if (localIndex >= visibleIndices_.size() || !foregroundTargetIsValid())
             return false;
         const std::size_t targetIndex = visibleIndices_[localIndex];
-        if (targetIndex >= candidates_.size())
+        if (targetIndex >= visualOutputs_.size())
             return false;
         const auto& current = model_.current();
         if (!current || targetIndex >= current->candidates.size())
@@ -2806,7 +2748,7 @@ class CandidateWindow final {
     bool createDeviceResources() { return true; }
 
     HWND window_{};
-    std::vector<CandidateVisual> candidates_;
+    std::vector<fcitx::windows::ui::detail::Fcitx5CandidateVisualBuildOutput> visualOutputs_;
     std::wstring preeditPanel_;
     std::vector<D2D1_RECT_F> itemRects_;
     std::vector<std::size_t> visibleIndices_;
