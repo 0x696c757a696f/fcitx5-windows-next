@@ -418,6 +418,9 @@ extern "C" std::uint8_t fcitx5_candidate_window_create(
     const Fcitx5CandidateWindowCreateInput* input, HWND* outWindow);
 extern "C" void fcitx5_candidate_window_destroy(HWND window);
 extern "C" int fcitx5_candidate_window_run_message_loop();
+extern "C" std::uint8_t fcitx5_candidate_window_blit_bgra(
+    HWND window, const std::uint8_t* pixels, std::size_t pixelByteLen,
+    std::size_t pixelStride, std::int32_t* outClientWidth);
 extern "C" void* fcitx5_candidate_measure_create();
 extern "C" void fcitx5_candidate_measure_destroy(void* engine);
 extern "C" std::uint8_t fcitx5_candidate_measure_text_utf8(
@@ -2005,37 +2008,12 @@ class CandidateWindow final {
             pixels.data(), pixels.size(), &out);
         if (rc2 != 0)
             return true;
-        // Rust returns a physical-DPI BGRA bitmap. Allocate the DIB from its
-        // stride and byte count, not the logical window dimensions, or a
-        // high-DPI memcpy writes beyond the destination allocation.
-        if (out.pixelStride == 0 || out.pixelByteLen == 0 ||
-            out.pixelStride % 4 != 0 || out.pixelByteLen % out.pixelStride != 0)
-            return true;
-        HDC dc = GetDC(window_);
-        if (!dc) return true;
-        const auto pixW = static_cast<LONG>(out.pixelStride / 4);
-        const auto pixH = static_cast<LONG>(out.pixelByteLen / out.pixelStride);
-        BITMAPINFO bmi{};
-        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = pixW;
-        bmi.bmiHeader.biHeight = -pixH; // top-down
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-        void* bits = nullptr;
-        HBITMAP hbmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-        if (hbmp && bits) {
-            std::memcpy(bits, pixels.data(), pixels.size());
-            HDC memdc = CreateCompatibleDC(dc);
-            HGDIOBJ old = SelectObject(memdc, hbmp);
-            StretchBlt(dc, 0, 0, client.right, client.bottom,
-                       memdc, 0, 0, static_cast<int>(pixW), static_cast<int>(pixH),
-                       SRCCOPY);
-            SelectObject(memdc, old);
-            DeleteDC(memdc);
-            DeleteObject(hbmp);
-        }
-        ReleaseDC(window_, dc);
+        // Rust owns the DIB blit path (081C paint slice): identical stride
+        // validation and StretchBlt inside the window host.
+        std::int32_t clientWidth = 0;
+        fcitx::windows::ui::detail::fcitx5_candidate_window_blit_bgra(
+            window_, pixels.data(), pixels.size(), static_cast<std::size_t>(out.pixelStride),
+            &clientWidth);
         return true;
     }
 

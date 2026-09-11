@@ -27,9 +27,36 @@ const WS_EX_TOPMOST: u32 = 0x0000_0008;
 const WS_POPUP: u32 = 0x8000_0000;
 
 type Hwnd = *mut c_void;
+type Hdc = *mut c_void;
 type WndProc = unsafe extern "system" fn(Hwnd, u32, usize, isize) -> isize;
 pub type CandidateWindowCallback =
     unsafe extern "system" fn(*mut c_void, Hwnd, u32, usize, isize) -> isize;
+
+const BI_RGB: u32 = 0;
+const DIB_RGB_COLORS: u32 = 0;
+const SRCCOPY: u32 = 0x00CC_0020;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct BitmapInfoHeader {
+    bi_size: u32,
+    bi_width: i32,
+    bi_height: i32,
+    bi_planes: u16,
+    bi_bit_count: u16,
+    bi_compression: u32,
+    bi_size_image: u32,
+    bi_x_pels_per_meter: i32,
+    bi_y_pels_per_meter: i32,
+    bi_clr_used: u32,
+    bi_clr_important: u32,
+}
+
+#[repr(C)]
+struct BitmapInfo {
+    bmi_header: BitmapInfoHeader,
+    bmi_colors: [u32; 1],
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -64,6 +91,7 @@ struct WndClassW {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct Rect {
     left: i32,
     top: i32,
@@ -125,6 +153,9 @@ unsafe extern "system" {
     fn DestroyWindow(window: Hwnd) -> i32;
     fn DispatchMessageW(message: *const Msg) -> isize;
     fn GetMessageW(message: *mut Msg, window: Hwnd, min: u32, max: u32) -> i32;
+    fn GetDC(window: Hwnd) -> Hdc;
+    fn ReleaseDC(window: Hwnd, dc: Hdc) -> i32;
+    fn GetClientRect(window: Hwnd, rect: *mut Rect) -> i32;
     #[cfg(target_pointer_width = "64")]
     fn GetWindowLongPtrW(window: Hwnd, index: i32) -> isize;
     #[cfg(target_pointer_width = "32")]
@@ -147,6 +178,36 @@ unsafe extern "system" {
     fn ShowWindow(window: Hwnd, command: i32) -> i32;
     fn PostQuitMessage(exit_code: i32);
     fn TranslateMessage(message: *const Msg) -> i32;
+}
+
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    fn CreateDIBSection(
+        dc: Hdc,
+        bmi: *const BitmapInfo,
+        usage: u32,
+        bits: *mut *mut c_void,
+        section: *mut c_void,
+        offset: u32,
+    ) -> *mut c_void;
+    fn CreateCompatibleDC(dc: Hdc) -> Hdc;
+    #[allow(dead_code)]
+    fn DeleteDC(dc: Hdc) -> i32;
+    fn DeleteObject(object: *mut c_void) -> i32;
+    fn SelectObject(dc: Hdc, object: *mut c_void) -> *mut c_void;
+    fn StretchBlt(
+        dest: Hdc,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        src: Hdc,
+        x1: i32,
+        y1: i32,
+        w1: i32,
+        h1: i32,
+        rop: u32,
+    ) -> i32;
 }
 
 fn quit_exit_code(wparam: usize) -> i32 {
@@ -386,6 +447,123 @@ pub extern "C" fn fcitx5_candidate_window_run_message_loop() -> i32 {
             _ => return WM_QUIT_ERROR,
         }
     }
+}
+
+/// Blits a top-down BGRA buffer onto a window DC (081C paint slice).
+///
+/// The C++ `paintOnce` DIB path moves here verbatim: allocate a top-down DIB
+/// from the buffer's stride/byte count, memcpy, and `StretchBlt` to the client
+/// rect. Any invalid descriptor is a silent no-op, exactly like the C++
+/// early-return.
+///
+/// # Safety
+///
+/// `window` must be a valid HWND, `pixels` must reference `pixel_byte_len`
+/// readable bytes, and `out_client` must point to writable storage for the
+/// client-rect query result when `query_client` is non-zero.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra(
+    window: Hwnd,
+    pixels: *const u8,
+    pixel_byte_len: usize,
+    pixel_stride: usize,
+    out_client: *mut i32,
+) -> u8 {
+    if window.is_null() || pixels.is_null() || out_client.is_null() {
+        return 0;
+    }
+    if pixel_stride == 0
+        || pixel_byte_len == 0
+        || pixel_stride % 4 != 0
+        || pixel_byte_len % pixel_stride != 0
+    {
+        return 0;
+    }
+    // SAFETY: `window` is a valid HWND per the caller contract.
+    let mut client = Rect::default();
+    if unsafe { GetClientRect(window, &mut client) } == 0 {
+        return 0;
+    }
+    let pix_w = (pixel_stride / 4) as i32;
+    let pix_h = (pixel_byte_len / pixel_stride) as i32;
+    if pix_w <= 0 || pix_h <= 0 {
+        return 0;
+    }
+    // SAFETY: `window` is a valid HWND per the caller contract.
+    let dc = unsafe { GetDC(window) };
+    if dc.is_null() {
+        return 0;
+    }
+    let bmi = BitmapInfo {
+        bmi_header: BitmapInfoHeader {
+            bi_size: core::mem::size_of::<BitmapInfoHeader>() as u32,
+            bi_width: pix_w,
+            bi_height: -pix_h,
+            bi_planes: 1,
+            bi_bit_count: 32,
+            bi_compression: BI_RGB,
+            ..BitmapInfoHeader::default()
+        },
+        bmi_colors: [0; 1],
+    };
+    let mut bits: *mut c_void = core::ptr::null_mut();
+    // SAFETY: `dc` is valid and `bits` receives the DIB allocation pointer.
+    let bitmap = unsafe {
+        CreateDIBSection(
+            dc,
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    let blitted = if !bitmap.is_null() && !bits.is_null() {
+        // SAFETY: `bits` covers pixel_byte_len bytes and pixels has that length.
+        unsafe {
+            core::ptr::copy_nonoverlapping(pixels.cast::<u8>(), bits.cast::<u8>(), pixel_byte_len);
+        }
+        // SAFETY: `dc` is a valid HDC.
+        let mem_dc = unsafe { CreateCompatibleDC(dc) };
+        if mem_dc.is_null() {
+            false
+        } else {
+            // SAFETY: both DC and bitmap are valid.
+            let old = unsafe { SelectObject(mem_dc, bitmap) };
+            // SAFETY: both DCs are valid with matching pixel formats.
+            let drawn = unsafe {
+                StretchBlt(
+                    dc,
+                    0,
+                    0,
+                    client.right,
+                    client.bottom,
+                    mem_dc,
+                    0,
+                    0,
+                    pix_w,
+                    pix_h,
+                    SRCCOPY,
+                )
+            };
+            // SAFETY: restore the original bitmap selection.
+            unsafe { SelectObject(mem_dc, old) };
+            drawn != 0
+        }
+    } else {
+        false
+    };
+    if !bitmap.is_null() {
+        // SAFETY: `bitmap` is owned by this call and not selected anywhere else.
+        unsafe { DeleteObject(bitmap) };
+    }
+    // SAFETY: `dc` came from GetDC above.
+    unsafe { ReleaseDC(window, dc) };
+    // SAFETY: non-null checked above; caller provides writable output storage.
+    unsafe {
+        *out_client = client.right;
+    }
+    u8::from(blitted)
 }
 
 #[cfg(test)]
