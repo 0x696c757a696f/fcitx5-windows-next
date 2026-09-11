@@ -878,6 +878,9 @@ fcitx5_candidate_scroll_reservation_for(
     std::size_t candidateIndex, std::uint8_t sourceLabel, std::size_t selectedIndex,
     std::uint8_t scrollMode, std::uint8_t labelsVisible, std::size_t scrollColumns,
     std::size_t totalCandidates);
+extern "C" std::uint8_t fcitx5_candidate_horizontal_natural_downgrade(
+    const float* itemWidths, std::size_t itemCount, float paddingX, float columnGap,
+    float preeditWidth, float hardLimit);
 
 [[nodiscard]] Fcitx5CandidateUtf8 toRust(std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
@@ -2367,14 +2370,16 @@ class CandidateWindow final {
         const float preeditPanelHeight = preeditPanel.height;
         const float preeditPanelWidth = preeditPanel.width;
         if (configuredOrientation == NativeOrientation::automatic && horizontalPresentation) {
-            float horizontalNaturalWidth = inputHorizontalNaturalWidth(
-                items, visualConfig_.paddingXDip * scale, visualConfig_.columnGapDip * scale,
-                preeditPanelWidth);
+            std::vector<float> itemWidths(items.size());
+            for (std::size_t index = 0; index < items.size(); ++index)
+                itemWidths[index] = items[index].width;
             const float workWidth =
                 static_cast<float>((std::max)(0L, monitorInfo.rcWork.right - monitorInfo.rcWork.left));
-            const float hardLimit =
-                std::min(visualConfig_.maxWidthDip * scale, workWidth);
-            if (horizontalNaturalWidth > hardLimit + 0.5F) {
+            const float hardLimit = std::min(visualConfig_.maxWidthDip * scale, workWidth);
+            if (candidate::detail::fcitx5_candidate_horizontal_natural_downgrade(
+                    itemWidths.empty() ? nullptr : itemWidths.data(), itemWidths.size(),
+                    visualConfig_.paddingXDip * scale, visualConfig_.columnGapDip * scale,
+                    preeditPanelWidth, hardLimit) != 0) {
                 horizontalPresentation = false;
                 resolvedPresentationOrientation_ = ui::Orientation::vertical;
             }
@@ -2626,18 +2631,6 @@ class CandidateWindow final {
     void setPresentationPlacement(ui::Placement placement) noexcept {
         (void)fcitx::windows::ui::detail::fcitx5_candidate_presentation_set_placement(
             presentation_, toRust(placement));
-    }
-
-    static float inputHorizontalNaturalWidth(
-        std::span<const fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> items,
-        float paddingX, float columnGap, float preeditWidth) noexcept {
-        float width = 0.0F;
-        for (const auto& item : items) {
-            if (width > 0.0F)
-                width += columnGap;
-            width += item.width;
-        }
-        return (std::max)(width + paddingX * 2.0F, preeditWidth);
     }
 
     static LRESULT CALLBACK windowMessageCallback(void* owner, HWND window, UINT message,

@@ -1264,6 +1264,71 @@ pub unsafe extern "C" fn fcitx5_candidate_visual_build(
 }
 
 #[cfg(test)]
+mod candidate_horizontal_downgrade_tests {
+    use super::fcitx5_candidate_horizontal_natural_downgrade;
+
+    #[test]
+    fn downgrade_follows_the_frozen_natural_width_contract() {
+        let widths = [100.0_f32, 80.0, 60.0];
+        // sum + gaps + padding = 240 + 20 + 24 = 284; below limit → keep.
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_horizontal_natural_downgrade(
+                    widths.as_ptr(),
+                    3,
+                    12.0,
+                    10.0,
+                    0.0,
+                    300.0,
+                )
+            },
+            0
+        );
+        // Preedit width wins over the natural sum.
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_horizontal_natural_downgrade(
+                    widths.as_ptr(),
+                    3,
+                    12.0,
+                    10.0,
+                    320.0,
+                    300.0,
+                )
+            },
+            1
+        );
+        // The +0.5 tolerance holds a borderline width.
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_horizontal_natural_downgrade(
+                    widths.as_ptr(),
+                    3,
+                    12.0,
+                    10.0,
+                    0.0,
+                    283.5,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                fcitx5_candidate_horizontal_natural_downgrade(
+                    widths.as_ptr(),
+                    3,
+                    12.0,
+                    10.0,
+                    0.0,
+                    283.4,
+                )
+            },
+            1
+        );
+    }
+}
+
+#[cfg(test)]
 mod candidate_window_assembly_tests {
     use super::*;
 
@@ -1543,6 +1608,39 @@ mod candidate_visual_arena_tests {
         assert_eq!(read(&outputs[2].label), "");
         assert_eq!(read(&outputs[2].reserved_label), "5.");
     }
+}
+
+/// Horizontal natural-width downgrade decision (081D slice 6).
+#[no_mangle]
+/// # Safety
+///
+/// `item_widths` must be valid for `item_count` elements when non-zero.
+pub unsafe extern "C" fn fcitx5_candidate_horizontal_natural_downgrade(
+    item_widths: *const f32,
+    item_count: usize,
+    padding_x: f32,
+    column_gap: f32,
+    preedit_width: f32,
+    hard_limit: f32,
+) -> u8 {
+    if item_count > 0 && item_widths.is_null() {
+        return 0;
+    }
+    // SAFETY: the C ABI contract requires this slice to be valid.
+    let widths = if item_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(item_widths, item_count) }
+    };
+    let mut natural = 0.0_f32;
+    for width in widths {
+        if natural > 0.0 {
+            natural += column_gap;
+        }
+        natural += width;
+    }
+    let natural = (natural + padding_x * 2.0).max(preedit_width);
+    u8::from(natural > hard_limit + 0.5)
 }
 
 pub fn candidate_label_slot_plan(
