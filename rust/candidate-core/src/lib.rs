@@ -1060,7 +1060,9 @@ pub fn format_candidate_label(
 ///
 /// Mirrors the frozen C++ `update()` loop body: the label is formatted when
 /// labels are visible and non-empty, the reserved label starts as the label,
-/// and a non-empty comment gains the fixed two-space prefix.
+/// and a non-empty comment gains the fixed two-space prefix. Scroll-label
+/// reservations (081D slice 3) apply only to generated labels: action 1
+/// reserves the configured slot label, action 2 also shows it.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Fcitx5CandidateVisualBuildInput {
@@ -1069,6 +1071,16 @@ pub struct Fcitx5CandidateVisualBuildInput {
     pub comment: Fcitx5CandidateUtf8,
     pub label_style: u32,
     pub labels_visible: u8,
+    pub reservation_action: u8,
+    pub reservation_slot: u32,
+}
+
+/// Build-wide configuration: the configured label sequence (1-based slots).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Fcitx5CandidateVisualBuildConfig {
+    pub configured_labels: *const Fcitx5CandidateUtf8,
+    pub configured_label_count: usize,
 }
 
 /// Resolved visual fields; string storage is owned by the Rust arena.
@@ -1104,7 +1116,11 @@ pub struct CandidateVisualArena {
 }
 
 impl CandidateVisualArena {
-    fn build(&mut self, inputs: &[Fcitx5CandidateVisualBuildInput]) -> usize {
+    fn build(
+        &mut self,
+        inputs: &[Fcitx5CandidateVisualBuildInput],
+        config: &Fcitx5CandidateVisualBuildConfig,
+    ) -> usize {
         self.strings.clear();
         self.outputs.clear();
         let mut owned = |text: &[u8]| -> Fcitx5CandidateUtf8 {
@@ -1113,6 +1129,15 @@ impl CandidateVisualArena {
             Fcitx5CandidateUtf8 {
                 ptr: stored.as_ptr(),
                 len: stored.len(),
+            }
+        };
+        // SAFETY: the C ABI contract requires configured_labels to cover
+        // configured_label_count elements when non-zero.
+        let configured_labels: &[Fcitx5CandidateUtf8] = if config.configured_label_count == 0 {
+            &[]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(config.configured_labels, config.configured_label_count)
             }
         };
         for input in inputs {
@@ -1130,8 +1155,27 @@ impl CandidateVisualArena {
                 String::new()
             };
             let source_label = u8::from(!formatted.is_empty());
-            let reserved = if source_label != 0 {
+            // Generated scroll-label reservations (081D slice 3): mirror the
+            // frozen applyScrollLabelReservations semantics.
+            let (reserved, show) = if source_label != 0 {
+                (formatted.clone(), false)
+            } else if matches!(input.reservation_action, 1 | 2) {
+                let slot_index = input.reservation_slot.max(1) as usize - 1;
+                let slot_source = configured_labels
+                    .get(slot_index)
+                    .map(|value| String::from_utf8_lossy(utf8_slice(*value)).into_owned())
+                    .unwrap_or_default();
+                (
+                    format_candidate_label(input.reservation_slot, &slot_source, style, "", ""),
+                    input.reservation_action == 2,
+                )
+            } else {
+                (String::new(), false)
+            };
+            let label = if source_label != 0 {
                 formatted.clone()
+            } else if show {
+                reserved.clone()
             } else {
                 String::new()
             };
@@ -1141,7 +1185,7 @@ impl CandidateVisualArena {
                 format!("  {comment_text}")
             };
             let output = Fcitx5CandidateVisualBuildOutput {
-                label: owned(formatted.as_bytes()),
+                label: owned(label.as_bytes()),
                 reserved_label: owned(reserved.as_bytes()),
                 text: owned(text_bytes),
                 comment: owned(comment.as_bytes()),
@@ -1182,16 +1226,22 @@ pub unsafe extern "C" fn fcitx5_candidate_visual_arena_destroy(arena: *mut c_voi
 /// # Safety
 ///
 /// `arena` must be a valid arena pointer; `inputs` must be valid for
-/// `input_count` elements when non-zero; `out_outputs` must point to writable
-/// storage for `input_count` outputs when non-zero. Returned string pointers
-/// remain valid until the next build call or arena destruction.
+/// `input_count` elements when non-zero; `config.configured_labels` must be
+/// valid for `config.configured_label_count` elements when non-zero;
+/// `out_outputs` must point to writable storage for `input_count` outputs when
+/// non-zero. Returned string pointers remain valid until the next build call
+/// or arena destruction.
 pub unsafe extern "C" fn fcitx5_candidate_visual_build(
     arena: *mut c_void,
     inputs: *const Fcitx5CandidateVisualBuildInput,
     input_count: usize,
+    config: *const Fcitx5CandidateVisualBuildConfig,
     out_outputs: *mut Fcitx5CandidateVisualBuildOutput,
 ) -> usize {
-    if arena.is_null() || (input_count > 0 && (inputs.is_null() || out_outputs.is_null())) {
+    if arena.is_null()
+        || config.is_null()
+        || (input_count > 0 && (inputs.is_null() || out_outputs.is_null()))
+    {
         return 0;
     }
     // SAFETY: caller guarantees the arena allocation is valid for this call.
@@ -1202,7 +1252,9 @@ pub unsafe extern "C" fn fcitx5_candidate_visual_build(
     } else {
         unsafe { std::slice::from_raw_parts(inputs, input_count) }
     };
-    let built = arena.build(inputs);
+    // SAFETY: non-null checked above; callers provide an initialized config.
+    let config = unsafe { *config };
+    let built = arena.build(inputs, &config);
     if built > 0 {
         // SAFETY: out_outputs is non-null for non-zero counts (checked above)
         // and covers input_count elements.
@@ -1363,6 +1415,15 @@ mod candidate_visual_arena_tests {
             },
             label_style: 1,
             labels_visible: visible,
+            reservation_action: 0,
+            reservation_slot: 0,
+        }
+    }
+
+    fn empty_config() -> Fcitx5CandidateVisualBuildConfig {
+        Fcitx5CandidateVisualBuildConfig {
+            configured_labels: core::ptr::null(),
+            configured_label_count: 0,
         }
     }
 
@@ -1381,11 +1442,13 @@ mod candidate_visual_arena_tests {
             input("2", "汉", "hàn", 0),
         ];
         let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 3];
+        let config = empty_config();
         let built = unsafe {
             fcitx5_candidate_visual_build(
                 &arena as *const _ as *mut c_void,
                 inputs.as_ptr(),
                 3,
+                &config,
                 outputs.as_mut_ptr(),
             )
         };
@@ -1407,21 +1470,78 @@ mod candidate_visual_arena_tests {
         let mut bad = input("1", "你", "", 1);
         bad.label_style = 99;
         let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 1];
+        let config = empty_config();
         let built = unsafe {
             fcitx5_candidate_visual_build(
                 &arena as *const _ as *mut c_void,
                 &bad,
                 1,
+                &config,
                 outputs.as_mut_ptr(),
             )
         };
         assert_eq!(built, 0, "invalid style stops the build at the offender");
         assert_eq!(
             unsafe {
-                fcitx5_candidate_visual_build(core::ptr::null_mut(), &bad, 1, outputs.as_mut_ptr())
+                fcitx5_candidate_visual_build(
+                    core::ptr::null_mut(),
+                    &bad,
+                    1,
+                    &config,
+                    outputs.as_mut_ptr(),
+                )
             },
             0
         );
+    }
+
+    #[test]
+    fn build_applies_scroll_label_reservations_to_generated_labels() {
+        let mut arena = CandidateVisualArena::default();
+        let configured = ["甲", "乙"];
+        let configured_refs = [
+            Fcitx5CandidateUtf8 {
+                ptr: configured[0].as_ptr(),
+                len: configured[0].len(),
+            },
+            Fcitx5CandidateUtf8 {
+                ptr: configured[1].as_ptr(),
+                len: configured[1].len(),
+            },
+        ];
+        let config = Fcitx5CandidateVisualBuildConfig {
+            configured_labels: configured_refs.as_ptr(),
+            configured_label_count: configured_refs.len(),
+        };
+        let mut inputs = [
+            input("1", "你", "", 1),
+            input("", "好", "", 1),
+            input("", "汉", "", 1),
+        ];
+        inputs[1].reservation_action = 2;
+        inputs[1].reservation_slot = 1; // configured 甲
+        inputs[2].reservation_action = 1;
+        inputs[2].reservation_slot = 5; // out of range → slot number 5
+        let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 3];
+        let built = unsafe {
+            fcitx5_candidate_visual_build(
+                &arena as *const _ as *mut c_void,
+                inputs.as_ptr(),
+                3,
+                &config,
+                outputs.as_mut_ptr(),
+            )
+        };
+        assert_eq!(built, 3);
+        // Source labels keep their own formatted label.
+        assert_eq!(read(&outputs[0].label), "1.");
+        assert_eq!(read(&outputs[0].reserved_label), "1.");
+        // Reserved + shown uses the configured slot label.
+        assert_eq!(read(&outputs[1].label), "甲.");
+        assert_eq!(read(&outputs[1].reserved_label), "甲.");
+        // Reserve-only leaves the shown label empty.
+        assert_eq!(read(&outputs[2].label), "");
+        assert_eq!(read(&outputs[2].reserved_label), "5.");
     }
 }
 

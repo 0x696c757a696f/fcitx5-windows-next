@@ -327,6 +327,13 @@ struct Fcitx5CandidateVisualBuildInput {
     Fcitx5CandidateUtf8 comment;
     std::uint32_t labelStyle{};
     std::uint8_t labelsVisible{};
+    std::uint8_t reservationAction{};
+    std::uint32_t reservationSlot{};
+};
+
+struct Fcitx5CandidateVisualBuildConfig {
+    const Fcitx5CandidateUtf8* configuredLabels{};
+    std::size_t configuredLabelCount{};
 };
 
 struct Fcitx5CandidateVisualBuildOutput {
@@ -517,7 +524,8 @@ extern "C" void* fcitx5_candidate_visual_arena_create();
 extern "C" void fcitx5_candidate_visual_arena_destroy(void* arena);
 extern "C" std::size_t fcitx5_candidate_visual_build(
     void* arena, const Fcitx5CandidateVisualBuildInput* inputs,
-    std::size_t inputCount, Fcitx5CandidateVisualBuildOutput* outOutputs);
+    std::size_t inputCount, const Fcitx5CandidateVisualBuildConfig* config,
+    Fcitx5CandidateVisualBuildOutput* outOutputs);
 extern "C" std::uint8_t fcitx5_candidate_window_assembly(
     const Fcitx5CandidateWindowAssemblyInput* input,
     Fcitx5CandidateWindowAssemblyOutput* output,
@@ -1113,22 +1121,6 @@ std::uint32_t labelStyleToRust(NativeLabelStyle style) noexcept {
         return 4;
     }
     return 1;
-}
-
-std::wstring formatCandidateLabel(std::uint32_t slot, std::wstring_view label,
-                                  NativeLabelStyle style) {
-    const fcitx::windows::ui::detail::Fcitx5CandidateUtf16 empty{};
-    const auto required = fcitx::windows::ui::detail::fcitx5_candidate_format_label_utf16(
-        slot, labelStyleToRust(style), fcitx::windows::ui::toRust(label), empty, empty, nullptr, 0);
-    if (required == 0)
-        return label.empty() ? std::to_wstring(slot == 0 ? 1U : slot) : std::wstring(label);
-    std::wstring result(required, L'\0');
-    const auto written = fcitx::windows::ui::detail::fcitx5_candidate_format_label_utf16(
-        slot, labelStyleToRust(style), fcitx::windows::ui::toRust(label), empty, empty,
-        reinterpret_cast<std::uint16_t*>(result.data()), result.size());
-    if (written != result.size())
-        return label.empty() ? std::to_wstring(slot == 0 ? 1U : slot) : std::wstring(label);
-    return result;
 }
 
 struct CandidateVisual {
@@ -1975,33 +1967,7 @@ class CandidateWindow final {
         return std::to_wstring(slot == 0 ? 1U : slot);
     }
 
-    void applyScrollLabelReservations() {
-        const auto style = visualConfig_.labelStyle;
-        const bool labelsVisible = visualConfig_.labelVisible;
-        const auto selected = presentationSelected();
-        const auto scrollColumns = presentationScrollColumns();
-        const bool scrollMode = presentationScrollMode();
-        for (std::size_t index = 0; index < candidates_.size(); ++index) {
-            auto& candidate = candidates_[index];
-            if (candidate.sourceLabel) {
-                candidate.reservedLabel = candidate.label;
-                continue;
-            }
-            candidate.label.clear();
-            candidate.reservedLabel.clear();
-            const auto reservation =
-                candidate::detail::fcitx5_candidate_scroll_reservation_for(
-                    index, 0U, selected.value_or(0U), scrollMode ? 1U : 0U,
-                    labelsVisible ? 1U : 0U, scrollColumns, candidates_.size());
-            if (reservation.action == 0)
-                continue;
-            candidate.reservedLabel = formatCandidateLabel(reservation.slot,
-                                                          configuredSequenceLabel(reservation.slot),
-                                                          style);
-            if (reservation.action == 2)
-                candidate.label = candidate.reservedLabel;
-        }
-    }
+    void applyScrollLabelReservations() = delete;
 
     void reloadVisualConfig() {
         refreshVisualConfig();
@@ -2244,11 +2210,23 @@ class CandidateWindow final {
                 preeditPanel_ = std::move(preedit);
         }
         // Rust owns the visual-build semantics (081D model slice): label
-        // formatting, reserved-label policy, and the comment prefix are one
-        // arena call over UTF-8 inputs. C++ only widens the results.
+        // formatting, scroll-label reservations, reserved-label policy, and
+        // the comment prefix are one arena call over UTF-8 inputs. C++ only
+        // widens the results.
+        const auto reservationSelected = presentationSelected();
+        const auto reservationColumns = presentationScrollColumns();
+        const bool reservationScroll = presentationScrollMode();
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateVisualBuildInput> visualInputs;
         visualInputs.reserve(current.candidates.size());
-        for (const auto& candidate : current.candidates) {
+        for (std::size_t candidateIndex = 0; candidateIndex < current.candidates.size();
+             ++candidateIndex) {
+            const auto& candidate = current.candidates[candidateIndex];
+            const auto reservation =
+                candidate::detail::fcitx5_candidate_scroll_reservation_for(
+                    candidateIndex, candidate.label.empty() ? 0U : 1U,
+                    reservationSelected.value_or(0U), reservationScroll ? 1U : 0U,
+                    visualConfig_.labelVisible ? 1U : 0U, reservationColumns,
+                    current.candidates.size());
             visualInputs.push_back({
                 {reinterpret_cast<const std::uint8_t*>(candidate.label.data()),
                  candidate.label.size()},
@@ -2257,12 +2235,40 @@ class CandidateWindow final {
                 {reinterpret_cast<const std::uint8_t*>(candidate.comment.data()),
                  candidate.comment.size()},
                 labelStyleToRust(visualConfig_.labelStyle),
-                static_cast<std::uint8_t>(visualConfig_.labelVisible)});
+                static_cast<std::uint8_t>(visualConfig_.labelVisible),
+                reservation.action,
+                reservation.slot});
         }
+        // Configured label sequence must stay valid for the build call.
+        std::vector<std::string> configuredEncoded;
+        configuredEncoded.reserve(visualConfig_.candidateLabels.size());
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateUtf8> configuredRefs;
+        configuredRefs.reserve(visualConfig_.candidateLabels.size());
+        for (const auto& label : visualConfig_.candidateLabels) {
+            configuredEncoded.emplace_back();
+            auto& stored = configuredEncoded.back();
+            for (wchar_t wc : label) {
+                if (wc < 0x80) {
+                    stored.push_back(static_cast<char>(wc));
+                } else if (wc < 0x800) {
+                    stored.push_back(static_cast<char>(0xC0 | (wc >> 6)));
+                    stored.push_back(static_cast<char>(0x80 | (wc & 0x3F)));
+                } else {
+                    stored.push_back(static_cast<char>(0xE0 | (wc >> 12)));
+                    stored.push_back(static_cast<char>(0x80 | ((wc >> 6) & 0x3F)));
+                    stored.push_back(static_cast<char>(0x80 | (wc & 0x3F)));
+                }
+            }
+            configuredRefs.push_back({reinterpret_cast<const std::uint8_t*>(stored.data()),
+                                      stored.size()});
+        }
+        const fcitx::windows::ui::detail::Fcitx5CandidateVisualBuildConfig buildConfig{
+            configuredRefs.empty() ? nullptr : configuredRefs.data(), configuredRefs.size()};
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateVisualBuildOutput> visualOutputs(
             visualInputs.size());
         const auto built = fcitx::windows::ui::detail::fcitx5_candidate_visual_build(
-            visualArena_, visualInputs.data(), visualInputs.size(), visualOutputs.data());
+            visualArena_, visualInputs.data(), visualInputs.size(), &buildConfig,
+            visualOutputs.data());
         if (built != current.candidates.size()) {
             dismissPresentation();
             return;
@@ -2385,7 +2391,6 @@ class CandidateWindow final {
         horizontalPresentation = rustOrientation == 1U;
         resolvedPresentationOrientation_ = horizontalPresentation ? ui::Orientation::horizontal
                                                                    : ui::Orientation::vertical;
-        applyScrollLabelReservations();
         float scrollLabelColumnWidth = 0.0F;
         if (presentationScrollMode() && horizontalPresentation) {
             for (const auto candidateIndex : renderIndices_) {
