@@ -2100,15 +2100,39 @@ class CandidateWindow final {
         const std::size_t count = visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateRenderCandidateInput> candidatesIn;
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> sizesIn;
+        // to_utf8 returns a pointer into one shared thread_local buffer, so
+        // every encoded string needs its own storage that outlives the render
+        // call. Aliasing them corrupted every candidate's label/text/comment.
+        std::vector<std::string> encoded;
+        encoded.reserve(count * 3);
         candidatesIn.reserve(count);
         sizesIn.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             const std::size_t idx = visibleIndices_.empty() ? i : visibleIndices_[i];
             const auto& c = (idx < lines.size()) ? lines[idx] : lines[0];
-            auto [lblP, lblL] = to_utf8(c.label);
-            auto [txtP, txtL] = to_utf8(c.text);
-            auto [cmtP, cmtL] = to_utf8(c.comment);
-            candidatesIn.push_back({lblP, lblL, txtP, txtL, cmtP, cmtL});
+            const auto encode = [&encoded](const std::wstring& value) {
+                encoded.emplace_back();
+                auto& stored = encoded.back();
+                for (wchar_t wc : value) {
+                    if (wc < 0x80) {
+                        stored.push_back(static_cast<char>(wc));
+                    } else if (wc < 0x800) {
+                        stored.push_back(static_cast<char>(0xC0 | (wc >> 6)));
+                        stored.push_back(static_cast<char>(0x80 | (wc & 0x3F)));
+                    } else {
+                        stored.push_back(static_cast<char>(0xE0 | (wc >> 12)));
+                        stored.push_back(static_cast<char>(0x80 | ((wc >> 6) & 0x3F)));
+                        stored.push_back(static_cast<char>(0x80 | (wc & 0x3F)));
+                    }
+                }
+                return fcitx::windows::ui::detail::Fcitx5CandidateUtf8{
+                    reinterpret_cast<const std::uint8_t*>(stored.data()), stored.size()};
+            };
+            const auto label = encode(c.label);
+            const auto text = encode(c.text);
+            const auto comment = encode(c.comment);
+            candidatesIn.push_back({label.ptr, label.len, text.ptr, text.len, comment.ptr,
+                                    comment.len});
             const D2D1_RECT_F bounds = (i < itemRects_.size()) ? itemRects_[i]
                 : D2D1::RectF(0, 0, 80, 32);
             sizesIn.push_back({bounds.right - bounds.left, bounds.bottom - bounds.top});
