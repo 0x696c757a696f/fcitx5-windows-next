@@ -542,9 +542,14 @@ extern "C" std::uint8_t fcitx5_candidate_window_blit_bgra_to_dc(
     std::size_t pixelStride, std::int32_t clientWidth, std::int32_t clientHeight);
 extern "C" void* fcitx5_candidate_measure_create();
 extern "C" void fcitx5_candidate_measure_destroy(void* engine);
-extern "C" std::uint8_t fcitx5_candidate_measure_text_utf8(
-    void* engine, const std::uint8_t* text, std::size_t textLen, float fontSize,
-    float dpiScale, Fcitx5CandidateMeasureSize* output);
+extern "C" std::size_t fcitx5_candidate_measure_visual_items(
+    void* engine, const Fcitx5CandidateVisualBuildOutput* outputs,
+    std::size_t outputCount, const std::size_t* indices, std::size_t indexCount,
+    std::uint8_t horizontal, std::uint8_t scrollMode, float labelGap,
+    float itemPaddingX, float itemPaddingY, float fontSize, float labelFontSize,
+    float commentFontSize, const std::uint8_t* preedit, std::size_t preeditLen,
+    float dpiScale, Fcitx5CandidateLayoutSize* outItems,
+    Fcitx5CandidateLayoutSize* outPreeditPanel, float* outScrollLabelColumnWidth);
 extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
 extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
 
@@ -2391,67 +2396,34 @@ class CandidateWindow final {
         horizontalPresentation = rustOrientation == 1U;
         resolvedPresentationOrientation_ = horizontalPresentation ? ui::Orientation::horizontal
                                                                    : ui::Orientation::vertical;
+        // Rust owns the frozen measure loop (081D model slice 4): scroll-label
+        // column width, per-item reserved/text/comment runs, and the preedit
+        // panel all measure inside one Rust call over the live arena outputs.
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> items(
+            renderIndices_.size());
+        fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize preeditPanel{};
         float scrollLabelColumnWidth = 0.0F;
-        if (presentationScrollMode() && horizontalPresentation) {
-            for (const auto candidateIndex : renderIndices_) {
-                const auto& candidate = candidates_[candidateIndex];
-                if (candidate.reservedLabel.empty())
-                    continue;
-                auto [labelWide, labelLen] = to_utf8(candidate.reservedLabel);
-                fcitx::windows::ui::detail::Fcitx5CandidateMeasureSize labelSize{};
-                if (fcitx::windows::ui::detail::fcitx5_candidate_measure_text_utf8(
-                        measureEngine_, labelWide, labelLen,
-                        visualConfig_.candidateFontSizeDip * visualConfig_.labelFontScale * scale,
-                        scale, &labelSize) != 0) {
-                    scrollLabelColumnWidth =
-                        (std::max)(scrollLabelColumnWidth, labelSize.width);
-                }
-            }
+        std::string preeditUtf8;
+        {
+            auto [p, l] = to_utf8(preeditPanel_);
+            preeditUtf8.assign(reinterpret_cast<const char*>(p), l);
         }
-        std::vector<ui::Size> items;
-        items.reserve(renderIndices_.size());
-        for (const auto candidateIndex : renderIndices_) {
-            const auto& candidate = candidates_[candidateIndex];
-            float width = 0.0F;
-            float height = 0.0F;
-            const auto measure = [&](const std::wstring& value, float fontSize) {
-                if (value.empty())
-                    return true;
-                auto [bytes, len] = to_utf8(value);
-                fcitx::windows::ui::detail::Fcitx5CandidateMeasureSize size{};
-                if (fcitx::windows::ui::detail::fcitx5_candidate_measure_text_utf8(
-                        measureEngine_, bytes, len, fontSize, scale, &size) == 0)
-                    return false;
-                width += size.width;
-                height = (std::max)(height, size.height);
-                return true;
-            };
-            if (presentationScrollMode() && horizontalPresentation && candidate.reservedLabel.empty())
-                width += scrollLabelColumnWidth + labelGap;
-            if (measure(candidate.reservedLabel,
-                        visualConfig_.candidateFontSizeDip * visualConfig_.labelFontScale * scale) &&
-                measure(candidate.text, visualConfig_.candidateFontSizeDip * scale) &&
-                measure(candidate.comment,
-                        visualConfig_.candidateFontSizeDip * visualConfig_.annotationFontScale * scale)) {
-                if (!candidate.reservedLabel.empty())
-                    width += labelGap;
-                items.push_back({width + itemPaddingX * 2, height + itemPaddingY * 2});
-            } else {
-                items.push_back({336 * scale, 32 * scale});
-            }
+        const auto measured = fcitx::windows::ui::detail::fcitx5_candidate_measure_visual_items(
+            measureEngine_, visualOutputs.data(), visualOutputs.size(),
+            renderIndices_.empty() ? nullptr : renderIndices_.data(), renderIndices_.size(),
+            horizontalPresentation ? 1U : 0U, presentationScrollMode() ? 1U : 0U,
+            labelGap, itemPaddingX, itemPaddingY,
+            visualConfig_.candidateFontSizeDip * scale,
+            visualConfig_.candidateFontSizeDip * visualConfig_.labelFontScale * scale,
+            visualConfig_.candidateFontSizeDip * visualConfig_.annotationFontScale * scale,
+            reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(), scale,
+            items.empty() ? nullptr : items.data(), &preeditPanel, &scrollLabelColumnWidth);
+        if (measured != renderIndices_.size()) {
+            dismissPresentation();
+            return;
         }
-        float preeditPanelHeight = 0.0F;
-        float preeditPanelWidth = 0.0F;
-        if (!preeditPanel_.empty()) {
-            auto [bytes, len] = to_utf8(preeditPanel_);
-            fcitx::windows::ui::detail::Fcitx5CandidateMeasureSize size{};
-            if (fcitx::windows::ui::detail::fcitx5_candidate_measure_text_utf8(
-                    measureEngine_, bytes, len, visualConfig_.candidateFontSizeDip * scale,
-                    scale, &size) != 0) {
-                preeditPanelHeight = size.height + itemPaddingY * 2.0F;
-                preeditPanelWidth = size.width + itemPaddingX * 2.0F;
-            }
-        }
+        const float preeditPanelHeight = preeditPanel.height;
+        const float preeditPanelWidth = preeditPanel.width;
         if (configuredOrientation == NativeOrientation::automatic && horizontalPresentation) {
             float horizontalNaturalWidth = inputHorizontalNaturalWidth(
                 items, visualConfig_.paddingXDip * scale, visualConfig_.columnGapDip * scale,
@@ -2714,8 +2686,9 @@ class CandidateWindow final {
             presentation_, toRust(placement));
     }
 
-    static float inputHorizontalNaturalWidth(std::span<const ui::Size> items, float paddingX,
-                                             float columnGap, float preeditWidth) noexcept {
+    static float inputHorizontalNaturalWidth(
+        std::span<const fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> items,
+        float paddingX, float columnGap, float preeditWidth) noexcept {
         float width = 0.0F;
         for (const auto& item : items) {
             if (width > 0.0F)

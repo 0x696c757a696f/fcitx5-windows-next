@@ -6,6 +6,131 @@
 use core::ffi::c_void;
 
 use crate::renderer::{Fcitx5CandidateMeasureSize, MeasureEngine};
+use crate::{Fcitx5CandidateLayoutSize, Fcitx5CandidateVisualBuildOutput};
+
+/// Measures rendered-item sizes exactly like the shipping C++ `update()`
+/// measure loop: optional scroll-label column width, per-item
+/// reserved-label/text/comment runs with a fallback cell, and the preedit
+/// panel including its padding. `outputs` must be the live arena build whose
+/// strings are still valid.
+///
+/// # Safety
+///
+/// `engine` must be a valid measure-engine pointer; `outputs` must be valid
+/// for `output_count` elements; `indices` must be valid for `index_count`
+/// elements and each index must be `< output_count`; `out_items` must cover
+/// `index_count` writable sizes; `out_preedit_panel` and
+/// `out_scroll_label_column_width` must point to writable storage.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
+    engine: *mut c_void,
+    outputs: *const Fcitx5CandidateVisualBuildOutput,
+    output_count: usize,
+    indices: *const usize,
+    index_count: usize,
+    horizontal: u8,
+    scroll_mode: u8,
+    label_gap: f32,
+    item_padding_x: f32,
+    item_padding_y: f32,
+    font_size: f32,
+    label_font_size: f32,
+    comment_font_size: f32,
+    preedit: *const u8,
+    preedit_len: usize,
+    dpi_scale: f32,
+    out_items: *mut Fcitx5CandidateLayoutSize,
+    out_preedit_panel: *mut Fcitx5CandidateLayoutSize,
+    out_scroll_label_column_width: *mut f32,
+) -> usize {
+    if engine.is_null()
+        || out_items.is_null()
+        || out_preedit_panel.is_null()
+        || out_scroll_label_column_width.is_null()
+        || (output_count > 0 && outputs.is_null())
+        || (index_count > 0 && indices.is_null())
+    {
+        return 0;
+    }
+    // SAFETY: caller guarantees the engine allocation is valid for this call.
+    let engine = unsafe { &mut *engine.cast::<MeasureEngine>() };
+    // SAFETY: the C ABI contract requires these slices to be valid.
+    let outputs = if output_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(outputs, output_count) }
+    };
+    let indices = if index_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(indices, index_count) }
+    };
+    if indices.iter().any(|index| *index >= output_count) {
+        return 0;
+    }
+    let field = |value: &crate::Fcitx5CandidateUtf8| -> String {
+        // SAFETY: arena-owned strings for a live build are valid UTF-8.
+        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
+            .into_owned()
+    };
+    let mut scroll_label_column_width = 0.0_f32;
+    if scroll_mode != 0 && horizontal != 0 {
+        for index in indices {
+            let reserved = field(&outputs[*index].reserved_label);
+            if reserved.is_empty() {
+                continue;
+            }
+            let (width, _) = engine.measure(&reserved, label_font_size, dpi_scale);
+            scroll_label_column_width = scroll_label_column_width.max(width);
+        }
+    }
+    // SAFETY: non-null checked above; caller provides writable output storage.
+    unsafe { *out_scroll_label_column_width = scroll_label_column_width };
+    for (slot, index) in indices.iter().enumerate() {
+        let output = &outputs[*index];
+        let mut width = 0.0_f32;
+        let mut height = 0.0_f32;
+        if scroll_mode != 0 && horizontal != 0 && output.reserved_label.len == 0 {
+            width += scroll_label_column_width + label_gap;
+        }
+        for (value, size) in [
+            (field(&output.reserved_label), label_font_size),
+            (field(&output.text), font_size),
+            (field(&output.comment), comment_font_size),
+        ] {
+            if value.is_empty() {
+                continue;
+            }
+            let (run_width, run_height) = engine.measure(&value, size, dpi_scale);
+            width += run_width;
+            height = height.max(run_height);
+        }
+        if output.reserved_label.len != 0 {
+            width += label_gap;
+        }
+        // SAFETY: caller provides writable output storage for index_count.
+        unsafe {
+            *out_items.add(slot) = Fcitx5CandidateLayoutSize {
+                width: width + item_padding_x * 2.0,
+                height: height + item_padding_y * 2.0,
+            };
+        }
+    }
+    let mut panel = Fcitx5CandidateLayoutSize::default();
+    if preedit_len > 0 && !preedit.is_null() {
+        // SAFETY: the C ABI contract requires preedit_len readable bytes.
+        let bytes = unsafe { std::slice::from_raw_parts(preedit, preedit_len) };
+        let value = String::from_utf8_lossy(bytes).into_owned();
+        let (run_width, run_height) = engine.measure(&value, font_size, dpi_scale);
+        panel = Fcitx5CandidateLayoutSize {
+            width: run_width + item_padding_x * 2.0,
+            height: run_height + item_padding_y * 2.0,
+        };
+    }
+    // SAFETY: non-null checked above; caller provides writable output storage.
+    unsafe { *out_preedit_panel = panel };
+    index_count
+}
 
 /// Creates the shipping measurement engine.
 #[no_mangle]
@@ -97,5 +222,105 @@ mod tests {
         assert_eq!(null_out, 0);
         // SAFETY: engine is the unique allocation from create.
         unsafe { fcitx5_candidate_measure_destroy(engine) };
+    }
+
+    /// Re-encodes one arena output field the way the C++ host did before this
+    /// ABI existed: invalid UTF-8 in the raw model text collapses lossily.
+    fn field(value: &crate::Fcitx5CandidateUtf8) -> String {
+        // SAFETY: the test constructs these slices from live strings.
+        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
+            .into_owned()
+    }
+
+    #[test]
+    fn measure_visual_items_follows_the_frozen_update_measure_loop() {
+        let engine = fcitx5_candidate_measure_create();
+        let mut arena = crate::CandidateVisualArena::default();
+        let inputs = [
+            crate::Fcitx5CandidateVisualBuildInput {
+                label: str_field("1"),
+                text: str_field("你"),
+                comment: str_field("nǐ"),
+                label_style: 1,
+                labels_visible: 1,
+                reservation_action: 0,
+                reservation_slot: 0,
+            },
+            crate::Fcitx5CandidateVisualBuildInput {
+                label: str_field(""),
+                text: str_field("好"),
+                comment: str_field(""),
+                label_style: 1,
+                labels_visible: 1,
+                reservation_action: 0,
+                reservation_slot: 0,
+            },
+        ];
+        let config = crate::Fcitx5CandidateVisualBuildConfig {
+            configured_labels: core::ptr::null(),
+            configured_label_count: 0,
+        };
+        let mut outputs = [crate::Fcitx5CandidateVisualBuildOutput::null_output(); 2];
+        let built = unsafe {
+            crate::fcitx5_candidate_visual_build(
+                &mut arena as *mut _ as *mut c_void,
+                inputs.as_ptr(),
+                2,
+                &config,
+                outputs.as_mut_ptr(),
+            )
+        };
+        assert_eq!(built, 2);
+        let indices = [0usize, 1];
+        let mut items = [crate::Fcitx5CandidateLayoutSize::default(); 2];
+        let mut preedit = crate::Fcitx5CandidateLayoutSize::default();
+        let mut scroll_col = 0.0_f32;
+        let measured = unsafe {
+            fcitx5_candidate_measure_visual_items(
+                engine,
+                outputs.as_ptr(),
+                2,
+                indices.as_ptr(),
+                2,
+                1,
+                0,
+                4.0,
+                10.0,
+                8.0,
+                14.0,
+                12.0,
+                11.0,
+                core::ptr::null(),
+                0,
+                1.0,
+                items.as_mut_ptr(),
+                out_preedit(&mut preedit),
+                &mut scroll_col,
+            )
+        };
+        assert_eq!(measured, 2);
+        for item in &items {
+            assert!(
+                item.width > 20.0 && item.height > 8.0,
+                "padded cell {item:?}"
+            );
+        }
+        assert_eq!(scroll_col, 0.0, "non-scroll mode has no label column");
+        assert_eq!(preedit.width, 0.0, "no preedit input → zero panel");
+        // SAFETY: engine is the unique allocation from create.
+        unsafe { fcitx5_candidate_measure_destroy(engine) };
+    }
+
+    fn out_preedit(
+        slot: &mut crate::Fcitx5CandidateLayoutSize,
+    ) -> *mut crate::Fcitx5CandidateLayoutSize {
+        slot as *mut _
+    }
+
+    fn str_field(value: &str) -> crate::Fcitx5CandidateUtf8 {
+        crate::Fcitx5CandidateUtf8 {
+            ptr: value.as_ptr(),
+            len: value.len(),
+        }
     }
 }
