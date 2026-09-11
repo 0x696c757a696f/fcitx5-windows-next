@@ -585,6 +585,32 @@ pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra_to_dc(
     client_width: i32,
     client_height: i32,
 ) -> u8 {
+    // SAFETY: callers uphold the documented pointer/DC contracts.
+    unsafe {
+        blit_bgra_to_dc(
+            dc,
+            pixels,
+            pixel_byte_len,
+            pixel_stride,
+            client_width,
+            client_height,
+        )
+    }
+}
+
+/// Shared implementation for the exported blit entry points.
+///
+/// # Safety
+///
+/// Same contracts as [`fcitx5_candidate_window_blit_bgra_to_dc`].
+pub(crate) unsafe fn blit_bgra_to_dc(
+    dc: Hdc,
+    pixels: *const u8,
+    pixel_byte_len: usize,
+    pixel_stride: usize,
+    client_width: i32,
+    client_height: i32,
+) -> u8 {
     if dc.is_null() || pixels.is_null() {
         return 0;
     }

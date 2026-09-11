@@ -419,6 +419,18 @@ extern "C" int fcitx5_candidate_render_window(
     std::uint8_t* outPixels,
     std::size_t outPixelCapacity,
     Fcitx5CandidateRenderOutput* out);
+extern "C" int fcitx5_candidate_render_window_blit_to_dc(
+    const Fcitx5CandidateRenderCandidateInput* inCandidates,
+    const Fcitx5CandidateLayoutSize* inSizes,
+    std::size_t candidateCount,
+    const Fcitx5CandidateRenderThemeInput* inTheme,
+    const Fcitx5CandidateRenderGeometryInput* inGeometry,
+    const std::uint8_t* preeditUtf8,
+    std::size_t preeditLen,
+    float dpiScale,
+    std::uint8_t highContrast,
+    std::uint64_t selected,
+    HDC dc, std::int32_t clientWidth, std::int32_t clientHeight);
 extern "C" std::uint8_t fcitx5_candidate_window_create(
     const Fcitx5CandidateWindowCreateInput* input, HWND* outWindow);
 extern "C" void fcitx5_candidate_window_destroy(HWND window);
@@ -2017,31 +2029,15 @@ class CandidateWindow final {
             auto [p, l] = to_utf8(preeditPanel_);
             preeditUtf8.assign(reinterpret_cast<const char*>(p), l);
         }
-        // Two-phase: query size, then render.
-        fcitx::windows::ui::detail::Fcitx5CandidateRenderOutput out{};
-        const int rc1 = fcitx::windows::ui::detail::fcitx5_candidate_render_window(
+        // Rust owns the two-phase render + blit as one call (081C paint
+        // assembly slice): size query, buffer render, and DIB StretchBlt are
+        // all inside the Rust host. 2 = nothing to paint (empty window).
+        fcitx::windows::ui::detail::fcitx5_candidate_render_window_blit_to_dc(
             candidatesIn.data(), sizesIn.data(), count,
             &theme, &geo,
             reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
             scale, highContrast ? 1 : 0, selectedIdx,
-            nullptr, 0, &out);
-        if (rc1 != 2 || out.windowW < 1.0F || out.windowH < 1.0F)
-            return true;
-        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(out.pixelByteLen));
-        const int rc2 = fcitx::windows::ui::detail::fcitx5_candidate_render_window(
-            candidatesIn.data(), sizesIn.data(), count,
-            &theme, &geo,
-            reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
-            scale, highContrast ? 1 : 0, selectedIdx,
-            pixels.data(), pixels.size(), &out);
-        if (rc2 != 0)
-            return true;
-        // Rust owns the DIB blit path (081C paint slice): identical stride
-        // validation and StretchBlt inside the window host. The dc-target
-        // blit serves both the paintOnce window DC and foreign WM_PRINT DCs.
-        fcitx::windows::ui::detail::fcitx5_candidate_window_blit_bgra_to_dc(
-            dc, pixels.data(), pixels.size(), static_cast<std::size_t>(out.pixelStride),
-            client.right, client.bottom);
+            dc, client.right, client.bottom);
         return true;
     }
 

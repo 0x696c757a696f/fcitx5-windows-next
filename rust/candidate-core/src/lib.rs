@@ -3217,6 +3217,91 @@ pub struct Fcitx5CandidateRenderOutput {
     pub pixel_byte_len: u64,
 }
 
+/// Combined two-phase render + DC blit (081C paint-assembly slice).
+///
+/// Runs `fcitx5_candidate_render_window`'s size query and buffer render, then
+/// blits the result through `window_host::blit_bgra_to_dc`. Returns 0 on a
+/// painted frame, 2 when the renderer produced no bitmap (empty window), and
+/// 1 on invalid input or blit failure.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_candidate_render_window_blit_to_dc(
+    in_candidates: *const Fcitx5CandidateRenderCandidateInput,
+    in_sizes: *const Fcitx5CandidateLayoutSize,
+    candidate_count: usize,
+    in_theme: *const Fcitx5CandidateRenderThemeInput,
+    in_geometry: *const Fcitx5CandidateRenderGeometryInput,
+    preedit_utf8: *const u8,
+    preedit_len: usize,
+    dpi_scale: f32,
+    high_contrast: u8,
+    selected: u64,
+    dc: *mut c_void,
+    client_width: i32,
+    client_height: i32,
+) -> i32 {
+    let mut out = Fcitx5CandidateRenderOutput::default();
+    // SAFETY: callers uphold the same pointer contracts as the two-phase ABI.
+    let rc1 = unsafe {
+        fcitx5_candidate_render_window(
+            in_candidates,
+            in_sizes,
+            candidate_count,
+            in_theme,
+            in_geometry,
+            preedit_utf8,
+            preedit_len,
+            dpi_scale,
+            high_contrast,
+            selected,
+            core::ptr::null_mut(),
+            0,
+            &mut out,
+        )
+    };
+    if rc1 != 2 || out.window_w < 1.0 || out.window_h < 1.0 {
+        return 2;
+    }
+    let byte_len = out.pixel_byte_len as usize;
+    if byte_len == 0 {
+        return 2;
+    }
+    let mut pixels = vec![0_u8; byte_len];
+    // SAFETY: same pointer contracts; buffer matches the queried size.
+    let rc2 = unsafe {
+        fcitx5_candidate_render_window(
+            in_candidates,
+            in_sizes,
+            candidate_count,
+            in_theme,
+            in_geometry,
+            preedit_utf8,
+            preedit_len,
+            dpi_scale,
+            high_contrast,
+            selected,
+            pixels.as_mut_ptr(),
+            pixels.len(),
+            &mut out,
+        )
+    };
+    if rc2 != 0 {
+        return 1;
+    }
+    // SAFETY: `dc` validity is the caller's contract for the blit ABI.
+    let blitted = unsafe {
+        crate::window_host::blit_bgra_to_dc(
+            dc,
+            pixels.as_ptr(),
+            pixels.len(),
+            out.pixel_stride as usize,
+            client_width,
+            client_height,
+        )
+    };
+    i32::from(blitted != 0)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CandidateText {
     pub text: String,
