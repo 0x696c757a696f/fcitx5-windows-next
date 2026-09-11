@@ -7,6 +7,8 @@ pub mod axis_layout;
 mod candidate_abi;
 #[cfg(windows)]
 mod measure_ffi;
+#[cfg(windows)]
+pub mod presentation_server;
 pub mod qingfeng;
 #[cfg(windows)]
 pub mod renderer;

@@ -703,6 +703,82 @@ impl CurrentUserRuntimeIdentity {
         );
         (peer.status != 0 && peer.process_id != 0).then_some(peer.process_id)
     }
+
+    /// Fully verifies a connected named-pipe client: user/session policy plus
+    /// the client executable path and its on-disk file identity (082 slice 1).
+    ///
+    /// Mirrors the C++ `verifyPipeClient` two-phase query: the first call
+    /// sizes the SID and path buffers, the second fills and validates them.
+    #[must_use]
+    pub fn verified_pipe_client(&self, pipe: BorrowedHandle<'_>) -> Option<VerifiedPipePeer> {
+        let query = verified_pipe_client_peer(
+            pipe.as_raw_handle(),
+            self.service_account,
+            self.session_id,
+            self.secure_desktop,
+            &self.user_sid,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+        );
+        if query.status == 0 || query.user_sid_len == 0 || query.executable_path_len == 0 {
+            return None;
+        }
+        let mut user_sid = vec![0_u16; query.user_sid_len];
+        let mut executable_path = vec![0_u16; query.executable_path_len];
+        let mut final_path = vec![0_u16; query.executable_final_path_len];
+        let filled = verified_pipe_client_peer(
+            pipe.as_raw_handle(),
+            self.service_account,
+            self.session_id,
+            self.secure_desktop,
+            &self.user_sid,
+            user_sid.as_mut_ptr(),
+            user_sid.len(),
+            executable_path.as_mut_ptr(),
+            executable_path.len(),
+            final_path.as_mut_ptr(),
+            final_path.len(),
+        );
+        if filled.status == 0
+            || filled.user_sid_len != user_sid.len()
+            || filled.executable_path_len != executable_path.len()
+        {
+            return None;
+        }
+        let user_sid = String::from_utf16(&user_sid).ok()?;
+        let executable_path = String::from_utf16_lossy(&executable_path);
+        let executable_final_path = String::from_utf16_lossy(&final_path);
+        // The C++ copyExecutableFileIdentity contract: a verified file needs
+        // a non-empty final path that fits the queried buffer.
+        let executable_file = if filled.executable_file_status != 0
+            && filled.executable_final_path_len != 0
+            && filled.executable_final_path_len <= final_path.len()
+        {
+            Some(VerifiedExecutableFileIdentity {
+                volume_serial_number: filled.executable_file_volume_serial_number,
+                file_index_high: filled.executable_file_index_high,
+                file_index_low: filled.executable_file_index_low,
+                number_of_links: filled.executable_file_number_of_links,
+                contains_reparse_point: filled.executable_file_contains_reparse_point != 0,
+                final_path: executable_final_path.clone(),
+            })
+        } else {
+            None
+        };
+        Some(VerifiedPipePeer {
+            process_id: filled.process_id,
+            session_id: filled.session_id,
+            service_account: filled.service_account != 0,
+            user_sid,
+            executable_path,
+            executable_final_path,
+            executable_file,
+        })
+    }
 }
 
 /// Returns the shared monotonic deadline clock in milliseconds.
@@ -955,6 +1031,17 @@ impl NamedPipeServer {
     #[must_use]
     pub fn verified_client_process_id(&self, identity: &CurrentUserRuntimeIdentity) -> Option<u32> {
         identity.verified_pipe_client_process_id(self.handle.as_handle())
+    }
+
+    /// Fully verifies the connected client (peer policy + executable path and
+    /// file identity) for same-executable gating such as the presentation
+    /// pipe server (082 slice 1).
+    #[must_use]
+    pub fn verified_client(
+        &self,
+        identity: &CurrentUserRuntimeIdentity,
+    ) -> Option<VerifiedPipePeer> {
+        identity.verified_pipe_client(self.handle.as_handle())
     }
 
     /// Reads exactly `bytes.len()` bytes before `deadline`.
@@ -3043,7 +3130,34 @@ fn basic_file_identities_match(
         && left_file_index_low == right_file_index_low
 }
 
-fn paths_refer_to_same_file(left: &[u16], right: &[u16]) -> bool {
+/// Fully verified named-pipe client identity (082 slice 1): peer policy plus
+/// the client executable path and its on-disk file identity when verifiable.
+#[derive(Clone, Debug)]
+pub struct VerifiedPipePeer {
+    pub process_id: u32,
+    pub session_id: u32,
+    pub service_account: bool,
+    pub user_sid: String,
+    pub executable_path: String,
+    pub executable_final_path: String,
+    pub executable_file: Option<VerifiedExecutableFileIdentity>,
+}
+
+/// On-disk identity of the verified client's executable file.
+#[derive(Clone, Debug)]
+pub struct VerifiedExecutableFileIdentity {
+    pub volume_serial_number: u32,
+    pub file_index_high: u32,
+    pub file_index_low: u32,
+    pub number_of_links: u32,
+    pub contains_reparse_point: bool,
+    pub final_path: String,
+}
+
+/// Compares two paths by on-disk file identity, mirroring the C++
+/// `pathsReferToSameFile` contract.
+#[must_use]
+pub fn paths_refer_to_same_file(left: &[u16], right: &[u16]) -> bool {
     let left = basic_file_identity(left);
     if left.status == 0 {
         return false;

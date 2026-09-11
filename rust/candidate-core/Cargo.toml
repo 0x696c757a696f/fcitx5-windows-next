@@ -8,6 +8,8 @@ publish = false
 [dependencies]
 tiny-skia = "0.12"
 windui = { path = "../../third_party/wind-ui-rust", default-features = false }
+fcitx5-protocol-core = { path = "../protocol-core" }
+fcitx5-windows-common-core = { path = "../windows-common-core" }
 
 [lib]
 path = "src/lib.rs"
