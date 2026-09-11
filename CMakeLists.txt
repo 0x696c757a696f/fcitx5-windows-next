@@ -357,9 +357,12 @@ add_custom_command(
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/axis_layout.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/candidate_abi.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/ui_plan.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/qingfeng.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/renderer.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/ui_plan.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/window_host.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-candidate-core staticlib")
 add_custom_target(fcitx5_candidate_core_rustlib

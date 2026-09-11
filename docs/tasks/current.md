@@ -1,46 +1,39 @@
-# Current Task — RELEASE-01 Stable release pipeline / Build Once evidence
+# Task 081 - Candidate renderer D2D→tiny-skia cutover + HWND migration
 
-**Mode:** RELEASE
-**Task ID:** `RELEASE-01`
-**Prerequisite:** All stabilization tasks + required external evidence + intended Rust cutovers
-**Evidence class:** `EXTERNAL_EVIDENCE` — never claim unrun real-host evidence passed.
+**Task ID:** `CANDIDATE-RENDERER-D2D-TINY-SKIA-CUTOVER-001`
+**Mode:** CHANGE / RENDERER-CUTOVER
+**Prerequisite:** 080 (three-axis model wired through snapshot ABI + axis_layout + paintOnce + wheel).
 
 ## Goal
 
-Execute the final release gate only after stabilization, required external host evidence, and selected Rust cutovers are complete.
+Replace the C++ D2D/DWrite candidate renderer in `src/ui/ui_main.cpp` with a Rust
+tiny-skia/windui renderer. The Rust renderer must produce equivalent visual output (geometry +
+colors + layout) for all three-axis layout combinations. The HWND window + message loop must
+also move to Rust. Delete `ui_main.cpp` when done.
 
-## Specification references
+## Frozen acceptance
 
-- Phase 8
-- Build Once principle
-- Signing/SBOM/provenance sections
+- Geometry: same axis_layout rects (orientation x overflow x writing).
+- Colors: WeChat-green selection, light/dark theme, high-contrast.
+- Fonts: Microsoft YaHei UI, CJK-first, label/comment scaling.
+- DPI: 100/125/150/200% correct scaling.
+- Window: WS_EX_TOOLWINDOW|NOACTIVATE|TOPMOST, layered opacity, hit-test.
+- Wheel: Scrolling=viewport, Paging=VK_PRIOR/NEXT.
+- Highlight: selection rounded rect + font color swap.
 
-## Required behavior / implementation contract
+## Slices
 
-- Build each declared Modern/Legacy lineage once from one source commit and locked toolchain.
-- Test/promote the same artifacts; do not recompile in signing/publish jobs.
-- Generate final hash/manifest/attestation for actual signed release bytes.
-- Unify C++/MSYS2/Cargo dependencies in SBOM/notices/provenance.
-- Validate channel identity, key rotation/revocation, rollback and package-manager ownership.
-- Retain the useful Phase 8 requirements from removed historical docs: `package` compiles one
-  x64-with-x86-TSF lineage and records its source commit; `release` promotes exactly that stage,
-  injects protected public keyring material, Authenticode-signs/timestamps PE files when
-  credentials exist, signs packages/installers, and never recompiles in the signing/publish job.
-- Release artifacts must include final hashes, signed manifest, SPDX SBOM from actual staged files
-  and dependency inventory, SLSA-shaped provenance, WinGet metadata, Chocolatey metadata, and final
-  smoke that rechecks hash/signature/SBOM consistency.
+A. Extract paintOnce D2D logic into a testable render function (C++ side refactor).
+B. Rust tiny-skia renderer: replace D2D with tiny-skia + windui DWrite for the same rects.
+C. HWND + message loop to Rust (create window, message pump, mouse/keyboard dispatch).
+D. Delete ui_main.cpp + update tests + verify.
 
-## Required validation
+## C++ files affected
 
-- Full declared host/release matrix.
-- Authenticode/timestamp where credentials are available.
-- Install/update/rollback/uninstall from final packaged bytes.
-- SBOM/provenance/hash/signature consistency.
+- `src/ui/ui_main.cpp` (3007 lines) — deleted at end
 
-## Done when
+## Rust files affected
 
-- No unresolved required MANUAL-PENDING compatibility evidence.
-- Final published artifacts trace to source commit and locked toolchains.
-- No signing-stage recompilation.
-
-After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.
+- `rust/candidate-core/src/bin/candidate_poc.rs` (extend to shipping renderer)
+- `rust/candidate-core/src/lib.rs` (FFI for renderer)
+- New: `rust/candidate-core/src/renderer.rs` or similar

@@ -289,6 +289,22 @@ struct Fcitx5CandidateRenderOutput {
     std::uint64_t pixelByteLen{};
 };
 
+struct Fcitx5CandidatePresentationDecision {
+    std::uint8_t action{};
+    std::uint32_t focusPid{};
+};
+
+using CandidateWindowMessageCallback = LRESULT(CALLBACK *)(void*, HWND, UINT, WPARAM, LPARAM);
+struct Fcitx5CandidateWindowCreateInput {
+    HINSTANCE instance{};
+    void* owner{};
+    CandidateWindowMessageCallback callback{};
+    const std::uint16_t* className{};
+    std::size_t classNameLen{};
+    std::uint8_t visible{};
+    std::uint8_t interactionTest{};
+};
+
 extern "C" int fcitx5_candidate_render_segments(const Fcitx5CandidateRenderItemInput* items,
                                                  std::size_t itemCount,
                                                  std::uint8_t horizontal,
@@ -302,6 +318,32 @@ extern "C" int fcitx5_candidate_axis_layout(
     Fcitx5CandidateAxisLayoutOutput* output);
 extern "C" void* fcitx5_candidate_presentation_create();
 extern "C" void fcitx5_candidate_presentation_destroy(void* state);
+extern "C" void* fcitx5_candidate_pointer_state_create();
+extern "C" void fcitx5_candidate_pointer_state_destroy(void* state);
+extern "C" void* fcitx5_candidate_scroll_state_create();
+extern "C" void fcitx5_candidate_scroll_state_destroy(void* state);
+extern "C" float fcitx5_candidate_scroll_state_wheel(void* state, std::int32_t delta);
+extern "C" float fcitx5_candidate_scroll_state_override(void* state);
+extern "C" void fcitx5_candidate_scroll_state_reset(void* state);
+extern "C" void* fcitx5_candidate_click_guard_create();
+extern "C" void fcitx5_candidate_click_guard_destroy(void* state);
+extern "C" std::uint8_t fcitx5_candidate_click_guard_begin(void* state);
+extern "C" void fcitx5_candidate_click_guard_clear(void* state);
+extern "C" std::uint8_t fcitx5_candidate_click_guard_expire(void* state);
+extern "C" void* fcitx5_candidate_focus_watch_create();
+extern "C" void fcitx5_candidate_focus_watch_destroy(void* state);
+extern "C" void fcitx5_candidate_focus_watch_set_target(void* state, std::uint32_t pid);
+extern "C" std::uint32_t fcitx5_candidate_focus_watch_target(void* state);
+extern "C" std::uint8_t fcitx5_candidate_focus_watch_is_valid(
+    void* state, std::uint32_t foregroundPid, std::uint8_t interactionTest);
+extern "C" std::uint8_t fcitx5_candidate_focus_watch_should_dismiss(
+    void* state, std::uint32_t broadcastPid, std::uint8_t sameContext);
+extern "C" void fcitx5_candidate_focus_watch_reset(void* state);
+extern "C" void fcitx5_candidate_pointer_state_press(
+    void* state, std::uint8_t hasIndex, std::size_t index);
+extern "C" std::uint8_t fcitx5_candidate_pointer_state_release(
+    void* state, std::uint8_t hasIndex, std::size_t index, std::size_t* outIndex);
+extern "C" void fcitx5_candidate_pointer_state_clear(void* state);
 extern "C" void fcitx5_candidate_presentation_reset(void* state);
 extern "C" std::uint32_t fcitx5_candidate_presentation_apply(
     void* state, const Fcitx5CandidatePresentationUpdate* input);
@@ -312,6 +354,10 @@ extern "C" std::uint8_t fcitx5_candidate_presentation_render_plan(
     Fcitx5CandidatePresentationRenderPlan* output);
 extern "C" std::uint8_t fcitx5_candidate_presentation_set_placement(
     void* state, std::uint32_t placement);
+extern "C" std::uint8_t fcitx5_candidate_presentation_decide(
+    const void* state, std::uint8_t visibility, std::size_t candidateCount,
+    std::uint8_t caretValid, std::uint8_t popupAllowed, std::uint32_t focusPid,
+    Fcitx5CandidatePresentationDecision* output);
 extern "C" float fcitx5_candidate_presentation_stable_window_width(
     void* state, float measuredWidth, float maxAllowedWidth);
 extern "C" std::uint32_t fcitx5_candidate_presentation_resolve_orientation(
@@ -363,13 +409,11 @@ extern "C" int fcitx5_candidate_render_window(
     std::uint8_t* outPixels,
     std::size_t outPixelCapacity,
     Fcitx5CandidateRenderOutput* out);
-// extern "C" declarations for Rust window management (081C2).
-extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
-extern "C" HWND fcitx5_candidate_window_create(HINSTANCE instance, bool visible,
-                                                  bool safeMode, bool interactionTest);
-extern "C" int fcitx5_candidate_window_run(HWND window);
+extern "C" std::uint8_t fcitx5_candidate_window_create(
+    const Fcitx5CandidateWindowCreateInput* input, HWND* outWindow);
 extern "C" void fcitx5_candidate_window_destroy(HWND window);
-
+extern "C" int fcitx5_candidate_window_run_message_loop();
+extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
 extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
 
 } // namespace detail
@@ -1278,18 +1322,34 @@ std::optional<NativeRenderConfig> loadVisualConfig(bool safeMode) {
 class CandidateWindow final {
   public:
     CandidateWindow()
-        : presentation_(fcitx::windows::ui::detail::fcitx5_candidate_presentation_create()) {}
+        : pointerState_(fcitx::windows::ui::detail::fcitx5_candidate_pointer_state_create()),
+          scrollState_(fcitx::windows::ui::detail::fcitx5_candidate_scroll_state_create()),
+          clickGuard_(fcitx::windows::ui::detail::fcitx5_candidate_click_guard_create()),
+          focusWatch_(fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_create()),
+          presentation_(fcitx::windows::ui::detail::fcitx5_candidate_presentation_create()) {}
 
     ~CandidateWindow() {
+        if (window_) {
+            fcitx::windows::ui::detail::fcitx5_candidate_window_destroy(window_);
+            window_ = nullptr;
+        }
         if (candidateClient_) {
             fcitx5_windows_common_candidate_select_client_destroy(candidateClient_);
             candidateClient_ = nullptr;
         }
+        fcitx::windows::ui::detail::fcitx5_candidate_pointer_state_destroy(pointerState_);
+        pointerState_ = nullptr;
+        fcitx::windows::ui::detail::fcitx5_candidate_scroll_state_destroy(scrollState_);
+        scrollState_ = nullptr;
+        fcitx::windows::ui::detail::fcitx5_candidate_click_guard_destroy(clickGuard_);
+        clickGuard_ = nullptr;
+        fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_destroy(focusWatch_);
+        focusWatch_ = nullptr;
         fcitx::windows::ui::detail::fcitx5_candidate_presentation_destroy(presentation_);
     }
 
     bool create(HINSTANCE instance, bool visible, bool safeMode, bool interactionTest = false) {
-        if (!presentation_)
+        if (!presentation_ || !pointerState_ || !scrollState_ || !clickGuard_ || !focusWatch_)
             return false;
         if (candidateClient_) {
             fcitx5_windows_common_candidate_select_client_destroy(candidateClient_);
@@ -1314,23 +1374,18 @@ class CandidateWindow final {
         if (!visualConfig)
             return false;
         visualConfig_ = *visualConfig;
-        WNDCLASSW windowClass{};
-        windowClass.hInstance = instance;
         const std::wstring windowClassName =
             std::wstring(fcitx::windows::kReleaseIdentity.local_object_prefix) + L".Candidate";
-        windowClass.lpszClassName = windowClassName.c_str();
-        windowClass.lpfnWndProc = windowProcedure;
-        windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        windowClass.style = CS_DROPSHADOW;
-        RegisterClassW(&windowClass);
-        DWORD extendedStyle = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST;
-        if (!interactionTest_)
-            extendedStyle |= WS_EX_LAYERED;
-        window_ =
-            CreateWindowExW(extendedStyle, windowClass.lpszClassName, L"", WS_POPUP, 100, 100,
-                            360, 120, nullptr,
-                            nullptr, instance, this);
-        if (!window_)
+        const fcitx::windows::ui::detail::Fcitx5CandidateWindowCreateInput createInput{
+            instance,
+            this,
+            windowMessageCallback,
+            reinterpret_cast<const std::uint16_t*>(windowClassName.data()),
+            windowClassName.size(),
+            static_cast<std::uint8_t>(visible),
+            static_cast<std::uint8_t>(interactionTest_)};
+        if (fcitx::windows::ui::detail::fcitx5_candidate_window_create(
+                &createInput, &window_) == 0)
             return false;
         if (SetTimer(window_, kFocusWatchTimer, 100, nullptr) == 0)
             return false;
@@ -1346,18 +1401,11 @@ class CandidateWindow final {
                 window_, 0, static_cast<BYTE>(std::clamp(opacity, 0.2F, 1.0F) * 255.0F),
                 LWA_ALPHA);
         }
-        if (visible)
-            ShowWindow(window_, SW_SHOWNOACTIVATE);
         return createDeviceResources();
     }
 
     int run() {
-        MSG message{};
-        while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-        return static_cast<int>(message.wParam);
+        return fcitx::windows::ui::detail::fcitx5_candidate_window_run_message_loop();
     }
 
     [[nodiscard]] HWND handle() const noexcept { return window_; }
@@ -1433,7 +1481,7 @@ class CandidateWindow final {
         if (!capturedTestIntent_ || !capturedTestIntent_->valid() ||
             capturedTestIntent_->candidateId != 2U) {
             capturedTestIntent_.reset();
-            clickInFlight_ = false;
+            fcitx::windows::ui::detail::fcitx5_candidate_click_guard_clear(clickGuard_);
             KillTimer(window_, kClickGuardTimer);
             if (!dispatchCandidate(1U) || !capturedTestIntent_ ||
                 !capturedTestIntent_->valid() || capturedTestIntent_->candidateId != 2U) {
@@ -1446,13 +1494,13 @@ class CandidateWindow final {
             std::cerr << "interaction self-test lost candidate model\n";
             return false;
         }
-        SendMessageW(window_, candidateDismissMessage(), targetForegroundProcessId_,
+        SendMessageW(window_, candidateDismissMessage(), focusTargetProcessId(),
                      static_cast<LPARAM>(current->contextId + 1U));
         if (!IsWindowVisible(window_)) {
             std::cerr << "interaction self-test dismissed the wrong context\n";
             return false;
         }
-        SendMessageW(window_, candidateDismissMessage(), targetForegroundProcessId_,
+        SendMessageW(window_, candidateDismissMessage(), focusTargetProcessId(),
                      static_cast<LPARAM>(current->contextId));
         if (IsWindowVisible(window_)) {
             std::cerr << "interaction self-test did not dismiss the matching context\n";
@@ -1836,11 +1884,19 @@ class CandidateWindow final {
         paintTestSurfaceOverlay();
     }
 
-    bool paintOnceToDC(HDC dc, const RECT& client) {
+    bool paintOnce() {
+        RECT client{};
+        if (!GetClientRect(window_, &client) || IsRectEmpty(&client))
+            return true;
         if (candidates_.empty()) {
-            HBRUSH bg = CreateSolidBrush(RGB(248, 250, 250));
-            FillRect(dc, &client, bg);
-            DeleteObject(bg);
+            // First paint before update() — just clear.
+            HDC dc = GetDC(window_);
+            if (dc) {
+                HBRUSH bg = CreateSolidBrush(RGB(248, 250, 250));
+                FillRect(dc, &client, bg);
+                DeleteObject(bg);
+                ReleaseDC(window_, dc);
+            }
             return true;
         }
         // Build Rust render input from C++ member state.
@@ -1850,12 +1906,15 @@ class CandidateWindow final {
         const bool highContrast =
             SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
             (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
-        const auto to_u8 = [](const D2D1_COLOR_F& c, bool hc, COLORREF sys, int ch) -> std::uint8_t {
-            if (hc) return static_cast<std::uint8_t>(sys >> (ch * 8));
-            return static_cast<std::uint8_t>(std::clamp((&c.r)[ch], 0.0F, 1.0F) * 255.0F);
+        const auto to_u8 = [](const D2D1_COLOR_F& c, bool hc, COLORREF sys, int channel) -> std::uint8_t {
+            if (hc) {
+                const BYTE v = static_cast<BYTE>(sys >> (channel * 8));
+                return v;
+            }
+            return static_cast<std::uint8_t>(std::clamp((&c.r)[channel], 0.0F, 1.0F) * 255.0F);
         };
-        const auto rgb = [&](const D2D1_COLOR_F& c, bool hc, int sc) {
-            const COLORREF sys = hc ? GetSysColor(sc) : 0;
+        const auto rgb = [&](const D2D1_COLOR_F& c, bool hc, int sysColor) {
+            const COLORREF sys = hc ? GetSysColor(sysColor) : 0;
             return std::tuple{to_u8(c, hc, sys, 2), to_u8(c, hc, sys, 1), to_u8(c, hc, sys, 0)};
         };
         const auto& col = visualConfig_.colors;
@@ -1865,12 +1924,14 @@ class CandidateWindow final {
         auto [selTxtR, selTxtG, selTxtB] = rgb(col.selectedCandidateText, highContrast, COLOR_HIGHLIGHTTEXT);
         auto [cmtR, cmtG, cmtB] = rgb(col.commentText, highContrast, COLOR_WINDOWTEXT);
         auto [bdrR, bdrG, bdrB] = rgb(col.border, highContrast, COLOR_WINDOWTEXT);
+        auto [scrR, scrG, scrB] = std::tuple{bdrR, bdrG, bdrB};
+        auto [pedBgR, pedBgG, pedBgB] = std::tuple{bgR, bgG, bgB};
         auto [pedTxtR, pedTxtG, pedTxtB] = rgb(col.preeditText, highContrast, COLOR_WINDOWTEXT);
         const fcitx::windows::ui::detail::Fcitx5CandidateRenderThemeInput theme{
             bgR, bgG, bgB, txtR, txtG, txtB,
             selBgR, selBgG, selBgB, selTxtR, selTxtG, selTxtB,
-            cmtR, cmtG, cmtB, bdrR, bdrG, bdrB, bdrR, bdrG, bdrB,
-            bgR, bgG, bgB, pedTxtR, pedTxtG, pedTxtB,
+            cmtR, cmtG, cmtB, bdrR, bdrG, bdrB, scrR, scrG, scrB,
+            pedBgR, pedBgG, pedBgB, pedTxtR, pedTxtG, pedTxtB,
             selectionInflateX_, selectionInflateY_, visualConfig_.cornerRadiusDip};
         const fcitx::windows::ui::detail::Fcitx5CandidateRenderGeometryInput geo{
             visualConfig_.candidateFontSizeDip * scale,
@@ -1880,54 +1941,78 @@ class CandidateWindow final {
             visualConfig_.itemPaddingXDip * scale,
             visualConfig_.itemPaddingYDip * scale,
             preeditPanelRect_.bottom - preeditPanelRect_.top,
-            visualConfig_.maxWidthDip * scale, 0.0F,
-            visualConfig_.paddingXDip * scale, visualConfig_.paddingYDip * scale,
-            visualConfig_.rowGapDip * scale, visualConfig_.columnGapDip * scale,
+            visualConfig_.maxWidthDip * scale,
+            0.0F,
+            visualConfig_.paddingXDip * scale,
+            visualConfig_.paddingYDip * scale,
+            visualConfig_.rowGapDip * scale,
+            visualConfig_.columnGapDip * scale,
             candidatePageSize_,
             static_cast<std::uint8_t>(visualConfig_.orientation == NativeOrientation::horizontal ? 0U : 1U),
-            static_cast<std::uint8_t>(visualConfig_.writingMode != NativeWritingMode::horizontal ? 0U
-                : visualConfig_.overflow == NativeOverflow::wrapping ? 2U
-                : visualConfig_.overflow == NativeOverflow::scrolling ? 1U : 0U),
-            static_cast<std::uint8_t>(visualConfig_.writingMode == NativeWritingMode::verticalRl ? 1U
+            static_cast<std::uint8_t>(
+                visualConfig_.writingMode != NativeWritingMode::horizontal
+                    ? 0U
+                    : visualConfig_.overflow == NativeOverflow::wrapping ? 2U
+                    : visualConfig_.overflow == NativeOverflow::scrolling ? 1U : 0U),
+            static_cast<std::uint8_t>(
+                visualConfig_.writingMode == NativeWritingMode::verticalRl ? 1U
                 : visualConfig_.writingMode == NativeWritingMode::verticalLr ? 2U : 0U)};
-        const std::size_t count = visibleIndices_.empty() ? candidates_.size() : visibleIndices_.size();
+        const std::vector<CandidateVisual>& lines = candidates_;
+        const std::size_t count = visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateRenderCandidateInput> candidatesIn;
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> sizesIn;
         candidatesIn.reserve(count);
         sizesIn.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             const std::size_t idx = visibleIndices_.empty() ? i : visibleIndices_[i];
-            const auto& c = (idx < candidates_.size()) ? candidates_[idx] : candidates_[0];
+            const auto& c = (idx < lines.size()) ? lines[idx] : lines[0];
             auto [lblP, lblL] = to_utf8(c.label);
             auto [txtP, txtL] = to_utf8(c.text);
             auto [cmtP, cmtL] = to_utf8(c.comment);
             candidatesIn.push_back({lblP, lblL, txtP, txtL, cmtP, cmtL});
-            const D2D1_RECT_F bounds = (i < itemRects_.size()) ? itemRects_[i] : D2D1::RectF(0, 0, 80, 32);
+            const D2D1_RECT_F bounds = (i < itemRects_.size()) ? itemRects_[i]
+                : D2D1::RectF(0, 0, 80, 32);
             sizesIn.push_back({bounds.right - bounds.left, bounds.bottom - bounds.top});
         }
         const std::uint64_t selectedIdx = presentationSelected().value_or(UINT64_MAX);
-        auto [pedP, pedL] = to_utf8(preeditPanel_);
-        std::string preeditUtf8(reinterpret_cast<const char*>(pedP), pedL);
+        std::string preeditUtf8;
+        {
+            auto [p, l] = to_utf8(preeditPanel_);
+            preeditUtf8.assign(reinterpret_cast<const char*>(p), l);
+        }
+        // Two-phase: query size, then render.
         fcitx::windows::ui::detail::Fcitx5CandidateRenderOutput out{};
-        if (fcitx::windows::ui::detail::fcitx5_candidate_render_window(
-                candidatesIn.data(), sizesIn.data(), count, &theme, &geo,
-                reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
-                scale, highContrast ? 1 : 0, selectedIdx, nullptr, 0, &out) != 2
-            || out.windowW < 1.0F || out.windowH < 1.0F)
+        const int rc1 = fcitx::windows::ui::detail::fcitx5_candidate_render_window(
+            candidatesIn.data(), sizesIn.data(), count,
+            &theme, &geo,
+            reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
+            scale, highContrast ? 1 : 0, selectedIdx,
+            nullptr, 0, &out);
+        if (rc1 != 2 || out.windowW < 1.0F || out.windowH < 1.0F)
             return true;
         std::vector<std::uint8_t> pixels(static_cast<std::size_t>(out.pixelByteLen));
-        if (fcitx::windows::ui::detail::fcitx5_candidate_render_window(
-                candidatesIn.data(), sizesIn.data(), count, &theme, &geo,
-                reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
-                scale, highContrast ? 1 : 0, selectedIdx,
-                pixels.data(), pixels.size(), &out) != 0)
+        const int rc2 = fcitx::windows::ui::detail::fcitx5_candidate_render_window(
+            candidatesIn.data(), sizesIn.data(), count,
+            &theme, &geo,
+            reinterpret_cast<const std::uint8_t*>(preeditUtf8.data()), preeditUtf8.size(),
+            scale, highContrast ? 1 : 0, selectedIdx,
+            pixels.data(), pixels.size(), &out);
+        if (rc2 != 0)
             return true;
-        const auto pixW = static_cast<LONG>(out.windowW);
-        const auto pixH = static_cast<LONG>(out.windowH);
+        // Rust returns a physical-DPI BGRA bitmap. Allocate the DIB from its
+        // stride and byte count, not the logical window dimensions, or a
+        // high-DPI memcpy writes beyond the destination allocation.
+        if (out.pixelStride == 0 || out.pixelByteLen == 0 ||
+            out.pixelStride % 4 != 0 || out.pixelByteLen % out.pixelStride != 0)
+            return true;
+        HDC dc = GetDC(window_);
+        if (!dc) return true;
+        const auto pixW = static_cast<LONG>(out.pixelStride / 4);
+        const auto pixH = static_cast<LONG>(out.pixelByteLen / out.pixelStride);
         BITMAPINFO bmi{};
         bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
         bmi.bmiHeader.biWidth = pixW;
-        bmi.bmiHeader.biHeight = -pixH;
+        bmi.bmiHeader.biHeight = -pixH; // top-down
         bmi.bmiHeader.biPlanes = 1;
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
@@ -1938,32 +2023,99 @@ class CandidateWindow final {
             HDC memdc = CreateCompatibleDC(dc);
             HGDIOBJ old = SelectObject(memdc, hbmp);
             StretchBlt(dc, 0, 0, client.right, client.bottom,
-                       memdc, 0, 0, static_cast<int>(pixW), static_cast<int>(pixH), SRCCOPY);
+                       memdc, 0, 0, static_cast<int>(pixW), static_cast<int>(pixH),
+                       SRCCOPY);
             SelectObject(memdc, old);
             DeleteDC(memdc);
             DeleteObject(hbmp);
         }
+        ReleaseDC(window_, dc);
         return true;
     }
 
-    bool paintOnce() {
-        RECT client{};
-        if (!GetClientRect(window_, &client) || IsRectEmpty(&client))
-            return true;
-        HDC dc = GetDC(window_);
-        if (!dc) return true;
-        const bool ok = paintOnceToDC(dc, client);
-        ReleaseDC(window_, dc);
-        return ok;
-    }
-
-
-
     void paintToDeviceContext(HDC dc) {
-        if (!dc) return;
+        if (!dc)
+            return;
         RECT client{};
-        if (!GetClientRect(window_, &client)) return;
-        (void)paintOnceToDC(dc, client);
+        if (!GetClientRect(window_, &client))
+            return;
+        const auto toColorRef = [](const D2D1_COLOR_F& color) {
+            const auto channel = [](float value) {
+                return static_cast<BYTE>(std::clamp(value, 0.0F, 1.0F) * 255.0F);
+            };
+            return RGB(channel(color.r), channel(color.g), channel(color.b));
+        };
+        HIGHCONTRASTW contrast{};
+        contrast.cbSize = sizeof(contrast);
+        const bool highContrast =
+            SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
+            (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+        const COLORREF background =
+            highContrast ? GetSysColor(COLOR_WINDOW)
+                         : toColorRef(visualConfig_.colors.background);
+        const COLORREF foreground =
+            highContrast ? GetSysColor(COLOR_WINDOWTEXT)
+                         : toColorRef(visualConfig_.colors.candidateText);
+        const COLORREF selectedBackground =
+            highContrast ? GetSysColor(COLOR_HIGHLIGHT)
+                         : toColorRef(visualConfig_.colors.selectedBackground);
+        const COLORREF selectedForeground =
+            highContrast ? GetSysColor(COLOR_HIGHLIGHTTEXT)
+                         : toColorRef(visualConfig_.colors.selectedCandidateText);
+        HBRUSH backgroundBrush = CreateSolidBrush(background);
+        HBRUSH selectedBrush = CreateSolidBrush(selectedBackground);
+        if (!backgroundBrush || !selectedBrush) {
+            if (backgroundBrush)
+                DeleteObject(backgroundBrush);
+            if (selectedBrush)
+                DeleteObject(selectedBrush);
+            return;
+        }
+        FillRect(dc, &client, backgroundBrush);
+        SetBkMode(dc, TRANSPARENT);
+        HFONT font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+        const std::vector<CandidateVisual> fallback{
+            {L"1. ", L"1. ", L"你", L"nǐ", true},
+            {L"2. ", L"2. ", L"呢", L"", true}};
+        const auto& lines = candidates_.empty() ? fallback : candidates_;
+        const std::size_t paintCount =
+            visibleIndices_.empty() ? lines.size() : visibleIndices_.size();
+        float fallbackTop = 8.0F;
+        for (std::size_t local = 0; local < paintCount; ++local) {
+            const std::size_t index = visibleIndices_.empty() ? local : visibleIndices_[local];
+            if (index >= lines.size())
+                continue;
+            const D2D1_RECT_F bounds = itemRects_.size() == paintCount
+                                           ? itemRects_[local]
+                                           : D2D1::RectF(12, fallbackTop, 348, fallbackTop + 32);
+            RECT item{static_cast<LONG>(bounds.left), static_cast<LONG>(bounds.top),
+                      static_cast<LONG>(bounds.right), static_cast<LONG>(bounds.bottom)};
+            const auto selectedIndex = presentationSelected();
+            const bool selected = selectedIndex && *selectedIndex == index;
+            if (selected)
+                FillRect(dc, &item, selectedBrush);
+            SetTextColor(dc, selected ? selectedForeground : foreground);
+            RECT textRect{item.left + 8, item.top, item.right - 8, item.bottom};
+            const auto& candidate = lines[index];
+            const std::wstring line = candidate.label.empty()
+                                          ? candidate.text
+                                          : candidate.label + L" " + candidate.text +
+                                                (candidate.comment.empty()
+                                                     ? std::wstring{}
+                                                     : L"  " + candidate.comment);
+            DrawTextW(dc, line.c_str(), static_cast<int>(line.size()), &textRect,
+                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            fallbackTop += 32.0F;
+        }
+        if (oldFont)
+            SelectObject(dc, oldFont);
+        if (font)
+            DeleteObject(font);
+        DeleteObject(selectedBrush);
+        DeleteObject(backgroundBrush);
     }
 
     void paintTestSurfaceOverlay() {
@@ -2022,7 +2174,7 @@ class CandidateWindow final {
             presentation_, &presentationInput);
         if (presentationApplied == 2U || presentationApplied == 3U)
             return;
-        clickInFlight_ = false;
+        fcitx::windows::ui::detail::fcitx5_candidate_click_guard_clear(clickGuard_);
         KillTimer(window_, kClickGuardTimer);
         if (response.caret.valid)
             lastCaret_ = response.caret;
@@ -2083,22 +2235,35 @@ class CandidateWindow final {
             return;
         }
         renderIndices_.resize(renderPlan.renderCount);
-        if (current.visibility == candidate::Visibility::hidden || candidates_.empty() ||
-            !lastCaret_.valid) {
+        fcitx::windows::ui::detail::Fcitx5CandidatePresentationDecision decision{};
+        if (fcitx::windows::ui::detail::fcitx5_candidate_presentation_decide(
+                presentation_,
+                static_cast<std::uint8_t>(current.visibility),
+                candidates_.size(),
+                lastCaret_.valid ? 1U : 0U,
+                current.popupAllowed ? 1U : 0U,
+                focusTargetProcessId(),
+                &decision) == 0) {
             dismissPresentation();
             return;
         }
-        if (!current.popupAllowed) {
+        if (decision.action == 1) {
+            dismissPresentation();
+            return;
+        }
+        if (decision.action == 2) {
             hidePopup();
             return;
         }
         targetForegroundWindow_ = GetForegroundWindow();
-        targetForegroundProcessId_ = 0;
+        DWORD foregroundProcessId = 0;
         if (targetForegroundWindow_)
-            GetWindowThreadProcessId(targetForegroundWindow_, &targetForegroundProcessId_);
+            GetWindowThreadProcessId(targetForegroundWindow_, &foregroundProcessId);
         if (interactionTest_)
-            targetForegroundProcessId_ =
+            foregroundProcessId =
                 fcitx::windows::ui::detail::fcitx5_windows_common_current_process_id();
+        fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_set_target(
+            focusWatch_, foregroundProcessId);
         POINT caretPoint{lastCaret_.left, lastCaret_.top};
         HMONITOR monitor = MonitorFromPoint(caretPoint, MONITOR_DEFAULTTONEAREST);
         MONITORINFO monitorInfo{};
@@ -2259,7 +2424,7 @@ class CandidateWindow final {
             visualConfig_.rowGapDip * scale,
             visualConfig_.columnGapDip * scale,
             toRust(presentationPlacement()),
-            scrollOverridePx_,
+            fcitx::windows::ui::detail::fcitx5_candidate_scroll_state_override(scrollState_),
         };
         std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutSize> axisItemSizes;
         axisItemSizes.reserve(items.size());
@@ -2378,8 +2543,8 @@ class CandidateWindow final {
         ShowWindow(window_, SW_HIDE);
         if (GetCapture() == window_)
             ReleaseCapture();
-        pressedCandidate_.reset();
-        clickInFlight_ = false;
+        fcitx::windows::ui::detail::fcitx5_candidate_pointer_state_clear(pointerState_);
+        fcitx::windows::ui::detail::fcitx5_candidate_click_guard_clear(clickGuard_);
         KillTimer(window_, kClickGuardTimer);
     }
 
@@ -2396,24 +2561,24 @@ class CandidateWindow final {
         preeditDividerY_ = 0.0F;
         resolvedPresentationOrientation_ = ui::Orientation::vertical;
         targetForegroundWindow_ = nullptr;
-        targetForegroundProcessId_ = 0;
+        fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_reset(focusWatch_);
+    }
+
+    [[nodiscard]] std::uint32_t focusTargetProcessId() const noexcept {
+        return fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_target(focusWatch_);
     }
 
     [[nodiscard]] bool foregroundTargetIsValid() const noexcept {
-        if (interactionTest_)
-            return true;
-        if (!targetForegroundProcessId_)
-            return false;
-        const HWND foreground = GetForegroundWindow();
         DWORD processId = 0;
+        const HWND foreground = GetForegroundWindow();
         if (foreground)
             GetWindowThreadProcessId(foreground, &processId);
-        return processId == targetForegroundProcessId_;
+        return fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_is_valid(
+                   focusWatch_, processId, static_cast<std::uint8_t>(interactionTest_)) != 0;
     }
 
     [[nodiscard]] bool dispatchCandidate(std::size_t localIndex) {
-        if (clickInFlight_ || localIndex >= visibleIndices_.size() ||
-            !foregroundTargetIsValid())
+        if (localIndex >= visibleIndices_.size() || !foregroundTargetIsValid())
             return false;
         const std::size_t targetIndex = visibleIndices_[localIndex];
         if (targetIndex >= candidates_.size())
@@ -2422,11 +2587,12 @@ class CandidateWindow final {
         if (!current || targetIndex >= current->candidates.size())
             return false;
         const auto intent = fcitx::windows::ui::makeCandidateSelectionIntent(
-            targetForegroundProcessId_, current->engineEpoch, current->contextId,
+            focusTargetProcessId(), current->engineEpoch, current->contextId,
             current->compositionId, current->revision, current->candidates[targetIndex].id);
         if (!intent.valid())
             return false;
-        clickInFlight_ = true;
+        if (fcitx::windows::ui::detail::fcitx5_candidate_click_guard_begin(clickGuard_) == 0)
+            return false;
         SetTimer(window_, kClickGuardTimer, 750, nullptr);
         if (interactionTest_) {
             capturedTestIntent_ = intent;
@@ -2436,7 +2602,7 @@ class CandidateWindow final {
             fcitx5_windows_common_candidate_select_client_select(
                 candidateClient_, intent.targetProcessId, intent.engineEpoch, intent.contextId,
                 intent.compositionId, intent.revision, intent.candidateId) == 0) {
-            clickInFlight_ = false;
+            fcitx::windows::ui::detail::fcitx5_candidate_click_guard_clear(clickGuard_);
             KillTimer(window_, kClickGuardTimer);
             return false;
         }
@@ -2485,122 +2651,107 @@ class CandidateWindow final {
         return (std::max)(width + paddingX * 2.0F, preeditWidth);
     }
 
-    static LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam,
-                                            LPARAM lparam) {
-        CandidateWindow* self = nullptr;
-        if (message == WM_NCCREATE) {
-            self = static_cast<CandidateWindow*>(
-                reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
-            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        } else {
-            self = reinterpret_cast<CandidateWindow*>(GetWindowLongPtrW(window, GWLP_USERDATA));
-        }
-        if (self && (message == WM_PRINT || message == WM_PRINTCLIENT)) {
+    static LRESULT CALLBACK windowMessageCallback(void* owner, HWND window, UINT message,
+                                                    WPARAM wparam, LPARAM lparam) {
+        auto* self = static_cast<CandidateWindow*>(owner);
+        if (!self)
+            return DefWindowProcW(window, message, wparam, lparam);
+        if (message == WM_PRINT || message == WM_PRINTCLIENT) {
             self->paintToDeviceContext(reinterpret_cast<HDC>(wparam));
             return 0;
         }
-        if (self && message == WM_PAINT) {
+        if (message == WM_PAINT) {
             PAINTSTRUCT paint{};
             BeginPaint(window, &paint);
             self->paintOnce();
             EndPaint(window, &paint);
             return 0;
         }
-        if (self && message == kSnapshotMessage) {
+        if (message == kSnapshotMessage) {
             std::unique_ptr<KeyResponse> response(
                 reinterpret_cast<KeyResponse*>(lparam));
             self->update(*response);
             return 0;
         }
-        if (self && message == visualConfigChangedMessage()) {
+        if (message == visualConfigChangedMessage()) {
             self->reloadVisualConfig();
             return 0;
         }
-        if (self && message == candidateDismissMessage()) {
+        if (message == candidateDismissMessage()) {
             const auto sourceContext = static_cast<std::uint64_t>(lparam);
             const auto& current = self->model_.current();
             const bool sameContext = sourceContext == 0 ||
                                      (current && sourceContext == current->contextId);
             if ((wparam == 0 ||
-                 static_cast<DWORD>(wparam) == self->targetForegroundProcessId_) &&
+                 static_cast<DWORD>(wparam) == self->focusTargetProcessId()) &&
                 sameContext)
                 self->dismissPresentation();
             return 0;
         }
-        if (self && message == WM_TIMER) {
+        if (message == WM_TIMER) {
             if (wparam == kFocusWatchTimer && IsWindowVisible(window) &&
                 !self->foregroundTargetIsValid()) {
                 self->dismissPresentation();
             } else if (wparam == kClickGuardTimer) {
-                self->clickInFlight_ = false;
-                KillTimer(window, kClickGuardTimer);
+                if (fcitx::windows::ui::detail::fcitx5_candidate_click_guard_expire(
+                        self->clickGuard_) != 0) {
+                    KillTimer(window, kClickGuardTimer);
+                }
             }
             return 0;
         }
-        if (self && message == WM_DPICHANGED) {
-            const auto* suggested = reinterpret_cast<const RECT*>(lparam);
-            SetWindowPos(window, nullptr, suggested->left, suggested->top,
-                         suggested->right - suggested->left, suggested->bottom - suggested->top,
-                         SWP_NOACTIVATE | SWP_NOZORDER);
-            if (self->renderTarget_) {
-                self->renderTarget_->SetDpi(96.0F, 96.0F);
-            }
-            return 0;
-        }
-        if (self && (message == WM_SETTINGCHANGE || message == WM_THEMECHANGED ||
-                     message == WM_SYSCOLORCHANGE)) {
+        if (message == WM_SETTINGCHANGE || message == WM_THEMECHANGED ||
+            message == WM_SYSCOLORCHANGE) {
             self->reloadVisualConfig();
             return 0;
         }
-        if (self && message == WM_MOUSEACTIVATE)
-            return MA_NOACTIVATE;
-        if (self && message == WM_LBUTTONDOWN) {
+        if (message == WM_LBUTTONDOWN) {
             const float x = static_cast<float>(static_cast<short>(LOWORD(lparam)));
             const float y = static_cast<float>(static_cast<short>(HIWORD(lparam)));
-            self->pressedCandidate_ =
+            const auto pressed =
                 fcitx::windows::ui::hitTestCandidate(self->itemRects_, x, y);
-            if (self->pressedCandidate_)
+            fcitx::windows::ui::detail::fcitx5_candidate_pointer_state_press(
+                self->pointerState_, static_cast<std::uint8_t>(pressed.has_value()),
+                pressed.value_or(0));
+            if (pressed)
                 SetCapture(window);
             return 0;
         }
-        if (self && message == WM_LBUTTONUP) {
+        if (message == WM_LBUTTONUP) {
             const float x = static_cast<float>(static_cast<short>(LOWORD(lparam)));
             const float y = static_cast<float>(static_cast<short>(HIWORD(lparam)));
             const auto released =
                 fcitx::windows::ui::hitTestCandidate(self->itemRects_, x, y);
-            const auto pressed = self->pressedCandidate_;
-            self->pressedCandidate_.reset();
+            std::size_t selected = 0;
+            const bool dispatch =
+                fcitx::windows::ui::detail::fcitx5_candidate_pointer_state_release(
+                    self->pointerState_, static_cast<std::uint8_t>(released.has_value()),
+                    released.value_or(0), &selected) != 0;
             if (GetCapture() == window)
                 ReleaseCapture();
-            if (pressed && released == pressed)
-                (void)self->dispatchCandidate(*pressed);
+            if (dispatch)
+                (void)self->dispatchCandidate(selected);
             return 0;
         }
-        if (self && (message == WM_CANCELMODE || message == WM_CAPTURECHANGED)) {
-            self->pressedCandidate_.reset();
+        if (message == WM_CANCELMODE || message == WM_CAPTURECHANGED) {
+            fcitx::windows::ui::detail::fcitx5_candidate_pointer_state_clear(
+                self->pointerState_);
             return 0;
         }
-        if (self && message == WM_MOUSEWHEEL) {
-            constexpr float kScrollLineHeight = 28.0F;
-            const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
+        if (message == WM_MOUSEWHEEL) {
             if (self->visualConfig_.overflow == NativeOverflow::scrolling) {
-                const float current =
-                    self->scrollOverridePx_ < 0.0F ? 0.0F : self->scrollOverridePx_;
-                self->scrollOverridePx_ = std::clamp(
-                    current + (static_cast<float>(delta) / 120.0F) * kScrollLineHeight,
-                    0.0F, 8000.0F);
+                fcitx::windows::ui::detail::fcitx5_candidate_scroll_state_wheel(
+                    self->scrollState_, GET_WHEEL_DELTA_WPARAM(wparam));
                 InvalidateRect(window, nullptr, FALSE);
             } else {
                 PostMessageW(window, WM_KEYDOWN,
-                             delta > 0 ? VK_PRIOR : VK_NEXT, 0);
+                             GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? VK_PRIOR : VK_NEXT, 0);
             }
             return 0;
         }
-        if (message == WM_NCHITTEST)
-            return HTCLIENT;
-        if (message == WM_DESTROY) {
-            PostQuitMessage(0);
-            return 0;
+        if (message == WM_NCDESTROY) {
+            self->window_ = nullptr;
+            return DefWindowProcW(window, message, wparam, lparam);
         }
         return DefWindowProcW(window, message, wparam, lparam);
     }
@@ -2678,7 +2829,10 @@ class CandidateWindow final {
     std::vector<D2D1_RECT_F> itemRects_;
     std::vector<std::size_t> visibleIndices_;
     std::vector<std::size_t> renderIndices_;
-    std::optional<std::size_t> pressedCandidate_;
+    void* pointerState_{};
+    void* scrollState_{};
+    void* clickGuard_{};
+    void* focusWatch_{};
     NativeRenderConfig visualConfig_;
     candidate::CandidateModel model_;
     CaretRect lastCaret_;
@@ -2686,7 +2840,6 @@ class CandidateWindow final {
         fcitx::windows::ui::Orientation::vertical};
     bool safeMode_{};
     bool hasScrollbar_{};
-    float scrollOverridePx_{-1.0f};
     float fontDpiScale_{1.0F};
     std::uint32_t candidatePageSize_{5};
     float selectionInflateX_{};
@@ -2696,8 +2849,6 @@ class CandidateWindow final {
     D2D1_RECT_F scrollbarTrack_{};
     D2D1_RECT_F scrollbarThumb_{};
     HWND targetForegroundWindow_{};
-    DWORD targetForegroundProcessId_{};
-    bool clickInFlight_{};
     bool interactionTest_{};
     std::optional<fcitx::windows::ui::CandidateSelectionIntent> capturedTestIntent_;
     void* candidateClient_{};
@@ -2859,28 +3010,6 @@ void servePresentation(HWND window, bool testOnce) {
         CloseHandle(pipe);
     }
 }
-
-// Window management FFI for Rust (081C2).
-extern "C" HWND fcitx5_candidate_window_create(HINSTANCE instance, bool visible,
-                                                  bool safeMode, bool interactionTest) {
-    auto* window = new CandidateWindow();
-    if (!window->create(instance, visible, safeMode, interactionTest)) {
-        delete window;
-        return nullptr;
-    }
-    return window->handle();
-}
-
-extern "C" int fcitx5_candidate_window_run(HWND) {
-    MSG msg{};
-    while (GetMessageW(&msg, nullptr, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-    return static_cast<int>(msg.wParam);
-}
-
-extern "C" void fcitx5_candidate_window_destroy(HWND) {}
 
 } // namespace
 
