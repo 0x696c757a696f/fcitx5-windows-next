@@ -337,6 +337,49 @@ struct Fcitx5CandidateVisualBuildOutput {
     std::uint8_t sourceLabel{};
 };
 
+struct Fcitx5CandidateAssemblyItem {
+    float x{};
+    float y{};
+    float w{};
+    float h{};
+};
+
+struct Fcitx5CandidateWindowAssemblyInput {
+    const void* presentation{};
+    float windowX{};
+    float windowY{};
+    float windowW{};
+    float windowH{};
+    std::uint32_t placement{};
+    float preeditPanelHeight{};
+    float preeditPanelWidth{};
+    float rowGap{};
+    float maxWidth{};
+    float workLeft{};
+    float workTop{};
+    float workRight{};
+    float workBottom{};
+    float itemPaddingX{};
+    float itemPaddingY{};
+    float viewportDx{};
+    float viewportDy{};
+    const Fcitx5CandidateAssemblyItem* items{};
+    std::size_t itemCount{};
+};
+
+struct Fcitx5CandidateWindowAssemblyOutput {
+    float windowLeft{};
+    float windowTop{};
+    float windowWidth{};
+    float windowHeight{};
+    Fcitx5CandidateLayoutRect preeditPanel{};
+    float preeditDividerY{};
+    std::uint8_t hasScrollbar{};
+    Fcitx5CandidateLayoutRect scrollbarTrack{};
+    Fcitx5CandidateLayoutRect scrollbarThumb{};
+    std::size_t itemCount{};
+};
+
 using CandidateWindowMessageCallback = LRESULT(CALLBACK *)(void*, HWND, UINT, WPARAM, LPARAM);
 struct Fcitx5CandidateWindowCreateInput {
     HINSTANCE instance{};
@@ -475,6 +518,10 @@ extern "C" void fcitx5_candidate_visual_arena_destroy(void* arena);
 extern "C" std::size_t fcitx5_candidate_visual_build(
     void* arena, const Fcitx5CandidateVisualBuildInput* inputs,
     std::size_t inputCount, Fcitx5CandidateVisualBuildOutput* outOutputs);
+extern "C" std::uint8_t fcitx5_candidate_window_assembly(
+    const Fcitx5CandidateWindowAssemblyInput* input,
+    Fcitx5CandidateWindowAssemblyOutput* output,
+    Fcitx5CandidateLayoutRect* outItems);
 extern "C" std::uint8_t fcitx5_candidate_window_create(
     const Fcitx5CandidateWindowCreateInput* input, HWND* outWindow);
 extern "C" void fcitx5_candidate_window_destroy(HWND window);
@@ -2432,58 +2479,66 @@ class CandidateWindow final {
             dismissPresentation();
             return;
         }
-        const auto layoutPlacement =
-            fcitx::windows::ui::placementFromRust(axisOutput.placement);
+        // Rust owns the frozen window-assembly chain (081D model slice 2):
+        // preedit block, stable-width clamp, work-area clamps, window-local
+        // item rects, and scrollbar rects.
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateAssemblyItem> assemblyItems(
+            axisItemRects.size());
+        for (std::size_t index = 0; index < axisItemRects.size(); ++index) {
+            const auto& item = axisItemRects[index];
+            assemblyItems[index] = {item.x, item.y, item.w, item.h};
+        }
+        const fcitx::windows::ui::detail::Fcitx5CandidateWindowAssemblyInput assemblyInput{
+            presentation_,
+            axisOutput.windowX,
+            axisOutput.windowY,
+            axisOutput.windowW,
+            axisOutput.windowH,
+            axisOutput.placement,
+            preeditPanelHeight,
+            preeditPanelWidth,
+            visualConfig_.rowGapDip * scale,
+            axisInput.maxWidth,
+            axisInput.workArea.left,
+            axisInput.workArea.top,
+            axisInput.workArea.right,
+            axisInput.workArea.bottom,
+            itemPaddingX,
+            itemPaddingY,
+            axisOutput.viewportDx,
+            axisOutput.viewportDy,
+            assemblyItems.data(),
+            assemblyItems.size()};
+        fcitx::windows::ui::detail::Fcitx5CandidateWindowAssemblyOutput assembly{};
+        std::vector<fcitx::windows::ui::detail::Fcitx5CandidateLayoutRect> assemblyRects(
+            assemblyItems.size());
+        if (fcitx::windows::ui::detail::fcitx5_candidate_window_assembly(
+                &assemblyInput, &assembly,
+                assemblyRects.empty() ? nullptr : assemblyRects.data()) == 0) {
+            dismissPresentation();
+            return;
+        }
+        const auto layoutPlacement = fcitx::windows::ui::placementFromRust(assemblyInput.placement);
         setPresentationPlacement(layoutPlacement);
-        const float preeditBlock =
-            preeditPanelHeight > 0.0F ? preeditPanelHeight + visualConfig_.rowGapDip * scale : 0.0F;
-        const float workWidth =
-            (std::max)(0.0F, axisInput.workArea.right - axisInput.workArea.left);
-        const float workHeight =
-            (std::max)(0.0F, axisInput.workArea.bottom - axisInput.workArea.top);
-        const float measuredWindowWidth = std::min(
-            {std::max(axisOutput.windowW, preeditPanelWidth), axisInput.maxWidth, workWidth});
-        const float windowWidth =
-            fcitx::windows::ui::detail::fcitx5_candidate_presentation_stable_window_width(
-                presentation_, measuredWindowWidth, std::min(axisInput.maxWidth, workWidth));
-        float windowHeight = std::min(axisOutput.windowH + preeditBlock, workHeight);
-        float windowLeft = std::clamp(axisOutput.windowX, axisInput.workArea.left,
-                                      axisInput.workArea.right - windowWidth);
-        float windowTop = axisOutput.windowY;
-        if (preeditBlock > 0.0F && layoutPlacement == ui::Placement::above)
-            windowTop -= preeditBlock;
-        windowTop =
-            std::clamp(windowTop, axisInput.workArea.top, axisInput.workArea.bottom - windowHeight);
-        const LONG left = static_cast<LONG>(windowLeft);
-        const LONG top = static_cast<LONG>(windowTop);
-        const LONG width = static_cast<LONG>(windowWidth);
-        const LONG height = static_cast<LONG>(windowHeight);
-        if (preeditBlock > 0.0F) {
-            preeditPanelRect_ =
-                D2D1::RectF(itemPaddingX, itemPaddingY, windowWidth - itemPaddingX,
-                            (std::max)(itemPaddingY, preeditPanelHeight - itemPaddingY));
-            preeditDividerY_ = preeditPanelHeight + axisInput.rowGap / 2.0F;
+        preeditDividerY_ = assembly.preeditDividerY;
+        preeditPanelRect_ = D2D1::RectF(assembly.preeditPanel.left, assembly.preeditPanel.top,
+                                        assembly.preeditPanel.right, assembly.preeditPanel.bottom);
+        if (assembly.preeditDividerY == 0.0F)
+            preeditPanelRect_ = {};
+        for (std::size_t index = 0; index < assembly.itemCount; ++index) {
+            const auto& rect = assemblyRects[index];
+            itemRects_.push_back(
+                D2D1::RectF(rect.left, rect.top, rect.right, rect.bottom));
+            visibleIndices_.push_back(renderIndices_[index]);
         }
-        for (std::size_t local = 0; local < axisOutput.itemCount; ++local) {
-            const auto& item = axisItemRects[local];
-            const float candidateOffset =
-                layoutPlacement == ui::Placement::below ? preeditBlock : 0.0F;
-            itemRects_.push_back(D2D1::RectF(
-                item.x - windowLeft + itemPaddingX,
-                item.y + candidateOffset - windowTop + itemPaddingY,
-                item.x + item.w - windowLeft - itemPaddingX,
-                item.y + item.h + candidateOffset - windowTop - itemPaddingY));
-            visibleIndices_.push_back(renderIndices_[local]);
-        }
-        hasScrollbar_ = axisOutput.viewportDx != 0.0F || axisOutput.viewportDy != 0.0F;
-        const float candidateOffset =
-            layoutPlacement == ui::Placement::below ? preeditBlock : 0.0F;
-        scrollbarTrack_ =
-            D2D1::RectF(axisOutput.windowW - 6.0F, itemPaddingY + candidateOffset,
-                        axisOutput.windowW - 2.0F,
-                        axisOutput.windowH - itemPaddingY + candidateOffset);
-        scrollbarThumb_ = scrollbarTrack_;
-        SetWindowPos(window_, HWND_TOPMOST, left, top, width, height,
+        hasScrollbar_ = assembly.hasScrollbar != 0;
+        scrollbarTrack_ = D2D1::RectF(assembly.scrollbarTrack.left, assembly.scrollbarTrack.top,
+                                      assembly.scrollbarTrack.right, assembly.scrollbarTrack.bottom);
+        scrollbarThumb_ = D2D1::RectF(assembly.scrollbarThumb.left, assembly.scrollbarThumb.top,
+                                      assembly.scrollbarThumb.right, assembly.scrollbarThumb.bottom);
+        SetWindowPos(window_, HWND_TOPMOST,
+                     static_cast<LONG>(assembly.windowLeft), static_cast<LONG>(assembly.windowTop),
+                     static_cast<LONG>(assembly.windowWidth), static_cast<LONG>(assembly.windowHeight),
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
         InvalidateRect(window_, nullptr, FALSE);
     }
