@@ -694,6 +694,43 @@ fn text_style(size: f32) -> WindTextStyle<'static> {
     }
 }
 
+/// Owns the windui DirectWrite engine for host-side text measurement.
+pub struct MeasureEngine {
+    engine: DWriteEngine,
+}
+
+impl MeasureEngine {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            engine: DWriteEngine::new(),
+        }
+    }
+
+    /// Logical-DIP width/height of a single-line UTF-8 run.
+    #[must_use]
+    pub fn measure(&mut self, text: &str, font_size: f32, dpi_scale: f32) -> (f32, f32) {
+        self.engine.set_scale(dpi_scale);
+        let style = text_style(font_size);
+        let size = TextEngine::measure(&mut self.engine, text, &style, None);
+        (size.w as f32, size.h as f32)
+    }
+}
+
+impl Default for MeasureEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Measured logical-DIP size of one text run.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5CandidateMeasureSize {
+    pub width: f32,
+    pub height: f32,
+}
+
 /// Logical float rect → windui i32 rect (floor/ceil so the clip fully covers).
 fn windui_text_rect(rect: Rect) -> WindRect {
     let x = rect.left.floor() as i32;
@@ -900,5 +937,23 @@ mod tests {
         assert!(output.pixels.is_empty());
         assert_eq!(output.width, 0);
         assert_eq!(output.stride, 0);
+    }
+
+    #[test]
+    fn measure_engine_reports_nonzero_cjk_metrics() {
+        let mut engine = MeasureEngine::new();
+        let (width, height) = engine.measure("\u{4f60}\u{597d}\u{5417}", 14.0, 1.0);
+        assert!(
+            width > 0.0 && height > 0.0,
+            "CJK run must measure {width}x{height}"
+        );
+        let scaled = {
+            let (w, h) = engine.measure("\u{4f60}\u{597d}\u{5417}", 14.0, 2.0);
+            (w, h)
+        };
+        assert!(
+            scaled.0 >= width && scaled.1 >= height,
+            "higher DPI scale must not shrink CJK metrics"
+        );
     }
 }

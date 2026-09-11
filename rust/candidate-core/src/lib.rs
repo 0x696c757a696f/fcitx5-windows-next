@@ -5,6 +5,8 @@ use std::ffi::c_void;
 
 pub mod axis_layout;
 mod candidate_abi;
+#[cfg(windows)]
+mod measure_ffi;
 pub mod qingfeng;
 #[cfg(windows)]
 pub mod renderer;

@@ -294,6 +294,11 @@ struct Fcitx5CandidatePresentationDecision {
     std::uint32_t focusPid{};
 };
 
+struct Fcitx5CandidateMeasureSize {
+    float width{};
+    float height{};
+};
+
 using CandidateWindowMessageCallback = LRESULT(CALLBACK *)(void*, HWND, UINT, WPARAM, LPARAM);
 struct Fcitx5CandidateWindowCreateInput {
     HINSTANCE instance{};
@@ -413,6 +418,11 @@ extern "C" std::uint8_t fcitx5_candidate_window_create(
     const Fcitx5CandidateWindowCreateInput* input, HWND* outWindow);
 extern "C" void fcitx5_candidate_window_destroy(HWND window);
 extern "C" int fcitx5_candidate_window_run_message_loop();
+extern "C" void* fcitx5_candidate_measure_create();
+extern "C" void fcitx5_candidate_measure_destroy(void* engine);
+extern "C" std::uint8_t fcitx5_candidate_measure_text_utf8(
+    void* engine, const std::uint8_t* text, std::size_t textLen, float fontSize,
+    float dpiScale, Fcitx5CandidateMeasureSize* output);
 extern "C" std::uint32_t fcitx5_windows_common_current_process_id();
 extern "C" std::uint8_t fcitx5_windows_common_system_uses_dark_appearance();
 
@@ -1326,6 +1336,7 @@ class CandidateWindow final {
           scrollState_(fcitx::windows::ui::detail::fcitx5_candidate_scroll_state_create()),
           clickGuard_(fcitx::windows::ui::detail::fcitx5_candidate_click_guard_create()),
           focusWatch_(fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_create()),
+          measureEngine_(fcitx::windows::ui::detail::fcitx5_candidate_measure_create()),
           presentation_(fcitx::windows::ui::detail::fcitx5_candidate_presentation_create()) {}
 
     ~CandidateWindow() {
@@ -1345,11 +1356,14 @@ class CandidateWindow final {
         clickGuard_ = nullptr;
         fcitx::windows::ui::detail::fcitx5_candidate_focus_watch_destroy(focusWatch_);
         focusWatch_ = nullptr;
+        fcitx::windows::ui::detail::fcitx5_candidate_measure_destroy(measureEngine_);
+        measureEngine_ = nullptr;
         fcitx::windows::ui::detail::fcitx5_candidate_presentation_destroy(presentation_);
     }
 
     bool create(HINSTANCE instance, bool visible, bool safeMode, bool interactionTest = false) {
-        if (!presentation_ || !pointerState_ || !scrollState_ || !clickGuard_ || !focusWatch_)
+        if (!presentation_ || !pointerState_ || !scrollState_ || !clickGuard_ || !focusWatch_ ||
+            !measureEngine_)
             return false;
         if (candidateClient_) {
             fcitx5_windows_common_candidate_select_client_destroy(candidateClient_);
@@ -1409,8 +1423,6 @@ class CandidateWindow final {
     }
 
     [[nodiscard]] HWND handle() const noexcept { return window_; }
-
-    void simulateDeviceLossForTest() noexcept { renderTarget_.Reset(); }
 
     void showSyntheticPreview(bool scrollDemo) {
         KeyResponse response;
@@ -1816,9 +1828,6 @@ class CandidateWindow final {
     void refreshVisualConfig() {
         if (const auto visualConfig = loadVisualConfig(safeMode_))
             visualConfig_ = *visualConfig;
-        textFormat_.Reset();
-        labelFormat_.Reset();
-        annotationFormat_.Reset();
         if (!interactionTest_) {
             const auto opacity = visualConfig_.opacity;
             SetLayeredWindowAttributes(
@@ -1835,9 +1844,6 @@ class CandidateWindow final {
             CSTR_EQUAL)
             return;
         dwriteLocale_ = next;
-        textFormat_.Reset();
-        labelFormat_.Reset();
-        annotationFormat_.Reset();
         (void)createDeviceResources();
     }
 
@@ -2181,9 +2187,6 @@ class CandidateWindow final {
         const float requestedFontScale = static_cast<float>(lastCaret_.dpi) / 96.0F;
         if (requestedFontScale != fontDpiScale_) {
             fontDpiScale_ = requestedFontScale;
-            textFormat_.Reset();
-            labelFormat_.Reset();
-            annotationFormat_.Reset();
             if (!createDeviceResources())
                 return;
         }
@@ -2324,16 +2327,14 @@ class CandidateWindow final {
                 const auto& candidate = candidates_[candidateIndex];
                 if (candidate.reservedLabel.empty())
                     continue;
-                ComPtr<IDWriteTextLayout> labelLayout;
-                DWRITE_TEXT_METRICS metrics{};
-                if (writeFactory_ && labelFormat_ &&
-                    SUCCEEDED(writeFactory_->CreateTextLayout(
-                        candidate.reservedLabel.data(),
-                        static_cast<UINT32>(candidate.reservedLabel.size()),
-                        labelFormat_.Get(), 4096.0F, 512.0F, &labelLayout)) &&
-                    SUCCEEDED(labelLayout->GetMetrics(&metrics))) {
-                    scrollLabelColumnWidth = (std::max)(
-                        scrollLabelColumnWidth, metrics.widthIncludingTrailingWhitespace);
+                auto [labelWide, labelLen] = to_utf8(candidate.reservedLabel);
+                fcitx::windows::ui::detail::Fcitx5CandidateMeasureSize labelSize{};
+                if (fcitx::windows::ui::detail::fcitx5_candidate_measure_text_utf8(
+                        measureEngine_, labelWide, labelLen,
+                        visualConfig_.candidateFontSizeDip * visualConfig_.labelFontScale * scale,
+                        scale, &labelSize) != 0) {
+                    scrollLabelColumnWidth =
+                        (std::max)(scrollLabelColumnWidth, labelSize.width);
                 }
             }
         }
@@ -2343,26 +2344,25 @@ class CandidateWindow final {
             const auto& candidate = candidates_[candidateIndex];
             float width = 0.0F;
             float height = 0.0F;
-            const auto measure = [&](const std::wstring& value, IDWriteTextFormat* format) {
+            const auto measure = [&](const std::wstring& value, float fontSize) {
                 if (value.empty())
                     return true;
-                ComPtr<IDWriteTextLayout> textLayout;
-                DWRITE_TEXT_METRICS metrics{};
-                if (!writeFactory_ || !format ||
-                    FAILED(writeFactory_->CreateTextLayout(value.data(),
-                                                           static_cast<UINT32>(value.size()),
-                                                           format, 4096.0F, 512.0F, &textLayout)) ||
-                    FAILED(textLayout->GetMetrics(&metrics)))
+                auto [bytes, len] = to_utf8(value);
+                fcitx::windows::ui::detail::Fcitx5CandidateMeasureSize size{};
+                if (fcitx::windows::ui::detail::fcitx5_candidate_measure_text_utf8(
+                        measureEngine_, bytes, len, fontSize, scale, &size) == 0)
                     return false;
-                width += metrics.widthIncludingTrailingWhitespace;
-                height = (std::max)(height, metrics.height);
+                width += size.width;
+                height = (std::max)(height, size.height);
                 return true;
             };
             if (presentationScrollMode() && horizontalPresentation && candidate.reservedLabel.empty())
                 width += scrollLabelColumnWidth + labelGap;
-            if (measure(candidate.reservedLabel, labelFormat_.Get()) &&
-                measure(candidate.text, textFormat_.Get()) &&
-                measure(candidate.comment, annotationFormat_.Get())) {
+            if (measure(candidate.reservedLabel,
+                        visualConfig_.candidateFontSizeDip * visualConfig_.labelFontScale * scale) &&
+                measure(candidate.text, visualConfig_.candidateFontSizeDip * scale) &&
+                measure(candidate.comment,
+                        visualConfig_.candidateFontSizeDip * visualConfig_.annotationFontScale * scale)) {
                 if (!candidate.reservedLabel.empty())
                     width += labelGap;
                 items.push_back({width + itemPaddingX * 2, height + itemPaddingY * 2});
@@ -2372,15 +2372,14 @@ class CandidateWindow final {
         }
         float preeditPanelHeight = 0.0F;
         float preeditPanelWidth = 0.0F;
-        if (!preeditPanel_.empty() && writeFactory_ && textFormat_) {
-            ComPtr<IDWriteTextLayout> preeditLayout;
-            DWRITE_TEXT_METRICS metrics{};
-            if (SUCCEEDED(writeFactory_->CreateTextLayout(
-                    preeditPanel_.data(), static_cast<UINT32>(preeditPanel_.size()),
-                    textFormat_.Get(), 4096.0F, 512.0F, &preeditLayout)) &&
-                SUCCEEDED(preeditLayout->GetMetrics(&metrics))) {
-                preeditPanelHeight = metrics.height + itemPaddingY * 2.0F;
-                preeditPanelWidth = metrics.widthIncludingTrailingWhitespace + itemPaddingX * 2.0F;
+        if (!preeditPanel_.empty()) {
+            auto [bytes, len] = to_utf8(preeditPanel_);
+            fcitx::windows::ui::detail::Fcitx5CandidateMeasureSize size{};
+            if (fcitx::windows::ui::detail::fcitx5_candidate_measure_text_utf8(
+                    measureEngine_, bytes, len, visualConfig_.candidateFontSizeDip * scale,
+                    scale, &size) != 0) {
+                preeditPanelHeight = size.height + itemPaddingY * 2.0F;
+                preeditPanelWidth = size.width + itemPaddingX * 2.0F;
             }
         }
         if (configuredOrientation == NativeOrientation::automatic && horizontalPresentation) {
@@ -2492,9 +2491,6 @@ class CandidateWindow final {
         scrollbarThumb_ = scrollbarTrack_;
         SetWindowPos(window_, HWND_TOPMOST, left, top, width, height,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        if (renderTarget_)
-            renderTarget_->Resize(
-                D2D1::SizeU(static_cast<UINT32>(width), static_cast<UINT32>(height)));
         InvalidateRect(window_, nullptr, FALSE);
     }
 
@@ -2756,74 +2752,9 @@ class CandidateWindow final {
         return DefWindowProcW(window, message, wparam, lparam);
     }
 
-    bool createDeviceResources() {
-        if (!d2dFactory_ && FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,
-                                                     d2dFactory_.GetAddressOf())))
-            return false;
-        if (!writeFactory_ &&
-            FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                                       reinterpret_cast<IUnknown**>(writeFactory_.GetAddressOf()))))
-            return false;
-        const auto createFormat = [&](const std::vector<std::wstring>& families, float scale,
-                                      ComPtr<IDWriteTextFormat>& format) {
-            if (format)
-                return true;
-            std::wstring family = L"Microsoft YaHei";
-            if (!families.empty())
-                family = families.front();
-            if (FAILED(writeFactory_->CreateTextFormat(
-                    family.c_str(), nullptr,
-                    static_cast<DWRITE_FONT_WEIGHT>(visualConfig_.candidateFontWeight),
-                    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                    visualConfig_.candidateFontSizeDip * scale * fontDpiScale_,
-                    dwriteLocale_.c_str(), &format)))
-                return false;
-            // Single line with ellipsis trimming: a label/comment longer than
-            // the remaining row width must not wrap onto the candidate row
-            // below (which visually overlaps the next candidate).
-            if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)))
-                return false;
-            DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-            ComPtr<IDWriteInlineObject> ellipsis;
-            if (FAILED(writeFactory_->CreateEllipsisTrimmingSign(format.Get(), &ellipsis)) ||
-                FAILED(format->SetTrimming(&trimming, ellipsis.Get())))
-                return false;
-            return true;
-        };
-        const auto& annotationFamilies = visualConfig_.annotationFontFamilies.empty()
-                                             ? visualConfig_.candidateFontFamilies
-                                             : visualConfig_.annotationFontFamilies;
-        if (!createFormat(visualConfig_.candidateFontFamilies, 1.0F, textFormat_) ||
-            !createFormat(visualConfig_.candidateFontFamilies, visualConfig_.labelFontScale,
-                          labelFormat_) ||
-            !createFormat(annotationFamilies, visualConfig_.annotationFontScale, annotationFormat_))
-            return false;
-        if (FAILED(labelFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)))
-            return false;
-        DWRITE_TRIMMING labelTrimming{DWRITE_TRIMMING_GRANULARITY_NONE, 0, 0};
-        if (FAILED(labelFormat_->SetTrimming(&labelTrimming, nullptr)))
-            return false;
-        if (!renderTarget_) {
-            RECT client{};
-            GetClientRect(window_, &client);
-            const auto size =
-                D2D1::SizeU(static_cast<UINT32>(client.right), static_cast<UINT32>(client.bottom));
-            if (FAILED(d2dFactory_->CreateHwndRenderTarget(
-                    D2D1::RenderTargetProperties(), D2D1::HwndRenderTargetProperties(window_, size),
-                    &renderTarget_)))
-                return false;
-            renderTarget_->SetDpi(96.0F, 96.0F);
-        }
-        return true;
-    }
+    bool createDeviceResources() { return true; }
 
     HWND window_{};
-    ComPtr<ID2D1Factory> d2dFactory_;
-    ComPtr<IDWriteFactory> writeFactory_;
-    ComPtr<IDWriteTextFormat> textFormat_;
-    ComPtr<IDWriteTextFormat> labelFormat_;
-    ComPtr<IDWriteTextFormat> annotationFormat_;
-    ComPtr<ID2D1HwndRenderTarget> renderTarget_;
     std::vector<CandidateVisual> candidates_;
     std::wstring preeditPanel_;
     std::vector<D2D1_RECT_F> itemRects_;
@@ -2833,6 +2764,7 @@ class CandidateWindow final {
     void* scrollState_{};
     void* clickGuard_{};
     void* focusWatch_{};
+    void* measureEngine_{};
     NativeRenderConfig visualConfig_;
     candidate::CandidateModel model_;
     CaretRect lastCaret_;
@@ -3036,7 +2968,6 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
     const bool localeSelfTest = parsed.flags.localeSelfTest != 0;
     const bool candidateUxSelfTest = parsed.flags.candidateUxSelfTest != 0;
     const bool reloadTest = parsed.flags.reloadTest != 0;
-    const bool simulateDeviceLoss = parsed.flags.simulateDeviceLoss != 0;
     const bool scrollDemo = parsed.flags.scrollDemo != 0;
     const bool demo = parsed.flags.demo != 0;
     const bool testOnce = parsed.flags.testOnce != 0;
@@ -3058,11 +2989,6 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR comm
         return window.runLocaleSelfTest() ? 0 : 2;
     if (candidateUxSelfTest)
         return window.runCandidateUxSelfTest() ? 0 : 2;
-    if (simulateDeviceLoss) {
-        window.simulateDeviceLossForTest();
-        if (!window.paintOnce())
-            return 1;
-    }
     if (reloadTest) {
         window.showSyntheticPreview(false);
         SendMessageW(window.handle(), visualConfigChangedMessage(), 0, 0);
