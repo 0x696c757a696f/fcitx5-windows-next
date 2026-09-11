@@ -304,6 +304,23 @@ struct Fcitx5CandidateScrollReservation {
     std::uint32_t slot{};
 };
 
+struct Fcitx5CandidateConfigColor {
+    float r{};
+    float g{};
+    float b{};
+    float a{};
+};
+
+struct Fcitx5CandidateResolvedColors {
+    std::uint8_t background[3]{};
+    std::uint8_t text[3]{};
+    std::uint8_t selectedBackground[3]{};
+    std::uint8_t selectedText[3]{};
+    std::uint8_t comment[3]{};
+    std::uint8_t border[3]{};
+    std::uint8_t preeditText[3]{};
+};
+
 using CandidateWindowMessageCallback = LRESULT(CALLBACK *)(void*, HWND, UINT, WPARAM, LPARAM);
 struct Fcitx5CandidateWindowCreateInput {
     HINSTANCE instance{};
@@ -431,6 +448,12 @@ extern "C" int fcitx5_candidate_render_window_blit_to_dc(
     std::uint8_t highContrast,
     std::uint64_t selected,
     HDC dc, std::int32_t clientWidth, std::int32_t clientHeight);
+extern "C" std::uint8_t fcitx5_candidate_resolve_paint_colors(
+    Fcitx5CandidateConfigColor background, Fcitx5CandidateConfigColor candidateText,
+    Fcitx5CandidateConfigColor selectedBackground, Fcitx5CandidateConfigColor selectedText,
+    Fcitx5CandidateConfigColor commentText, Fcitx5CandidateConfigColor border,
+    Fcitx5CandidateConfigColor preeditText, std::uint8_t highContrast,
+    Fcitx5CandidateResolvedColors* output);
 extern "C" std::uint8_t fcitx5_candidate_window_create(
     const Fcitx5CandidateWindowCreateInput* input, HWND* outWindow);
 extern "C" void fcitx5_candidate_window_destroy(HWND window);
@@ -1955,32 +1978,28 @@ class CandidateWindow final {
         const bool highContrast =
             SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
             (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
-        const auto to_u8 = [](const D2D1_COLOR_F& c, bool hc, COLORREF sys, int channel) -> std::uint8_t {
-            if (hc) {
-                const BYTE v = static_cast<BYTE>(sys >> (channel * 8));
-                return v;
-            }
-            return static_cast<std::uint8_t>(std::clamp((&c.r)[channel], 0.0F, 1.0F) * 255.0F);
-        };
-        const auto rgb = [&](const D2D1_COLOR_F& c, bool hc, int sysColor) {
-            const COLORREF sys = hc ? GetSysColor(sysColor) : 0;
-            return std::tuple{to_u8(c, hc, sys, 2), to_u8(c, hc, sys, 1), to_u8(c, hc, sys, 0)};
+        const auto toConfig = [](const D2D1_COLOR_F& c) {
+            return fcitx::windows::ui::detail::Fcitx5CandidateConfigColor{c.r, c.g, c.b, c.a};
         };
         const auto& col = visualConfig_.colors;
-        auto [bgR, bgG, bgB] = rgb(col.background, highContrast, COLOR_WINDOW);
-        auto [txtR, txtG, txtB] = rgb(col.candidateText, highContrast, COLOR_WINDOWTEXT);
-        auto [selBgR, selBgG, selBgB] = rgb(col.selectedBackground, highContrast, COLOR_HIGHLIGHT);
-        auto [selTxtR, selTxtG, selTxtB] = rgb(col.selectedCandidateText, highContrast, COLOR_HIGHLIGHTTEXT);
-        auto [cmtR, cmtG, cmtB] = rgb(col.commentText, highContrast, COLOR_WINDOWTEXT);
-        auto [bdrR, bdrG, bdrB] = rgb(col.border, highContrast, COLOR_WINDOWTEXT);
-        auto [scrR, scrG, scrB] = std::tuple{bdrR, bdrG, bdrB};
-        auto [pedBgR, pedBgG, pedBgB] = std::tuple{bgR, bgG, bgB};
-        auto [pedTxtR, pedTxtG, pedTxtB] = rgb(col.preeditText, highContrast, COLOR_WINDOWTEXT);
+        fcitx::windows::ui::detail::Fcitx5CandidateResolvedColors resolved{};
+        if (fcitx::windows::ui::detail::fcitx5_candidate_resolve_paint_colors(
+                toConfig(col.background), toConfig(col.candidateText),
+                toConfig(col.selectedBackground), toConfig(col.selectedCandidateText),
+                toConfig(col.commentText), toConfig(col.border), toConfig(col.preeditText),
+                highContrast ? 1U : 0U, &resolved) == 0)
+            return true;
+        const auto& c = resolved;
         const fcitx::windows::ui::detail::Fcitx5CandidateRenderThemeInput theme{
-            bgR, bgG, bgB, txtR, txtG, txtB,
-            selBgR, selBgG, selBgB, selTxtR, selTxtG, selTxtB,
-            cmtR, cmtG, cmtB, bdrR, bdrG, bdrB, scrR, scrG, scrB,
-            pedBgR, pedBgG, pedBgB, pedTxtR, pedTxtG, pedTxtB,
+            c.background[0], c.background[1], c.background[2],
+            c.text[0], c.text[1], c.text[2],
+            c.selectedBackground[0], c.selectedBackground[1], c.selectedBackground[2],
+            c.selectedText[0], c.selectedText[1], c.selectedText[2],
+            c.comment[0], c.comment[1], c.comment[2],
+            c.border[0], c.border[1], c.border[2],
+            c.border[0], c.border[1], c.border[2],
+            c.background[0], c.background[1], c.background[2],
+            c.preeditText[0], c.preeditText[1], c.preeditText[2],
             selectionInflateX_, selectionInflateY_, visualConfig_.cornerRadiusDip};
         const fcitx::windows::ui::detail::Fcitx5CandidateRenderGeometryInput geo{
             visualConfig_.candidateFontSizeDip * scale,

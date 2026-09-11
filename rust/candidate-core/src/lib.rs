@@ -900,6 +900,92 @@ pub struct Fcitx5CandidateScrollReservation {
     pub slot: u32,
 }
 
+/// Host-supplied config colors in 0..1 float RGBA (081C theme slice).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5CandidateConfigColor {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+/// Resolved 8-bit render theme colors for one paint.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5CandidateResolvedColors {
+    pub background: [u8; 3],
+    pub text: [u8; 3],
+    pub selected_background: [u8; 3],
+    pub selected_text: [u8; 3],
+    pub comment: [u8; 3],
+    pub border: [u8; 3],
+    pub preedit_text: [u8; 3],
+}
+
+const COLOR_WINDOW_COLORREF_BGR: [u8; 3] = [255, 255, 255];
+const COLOR_WINDOWTEXT_COLORREF_BGR: [u8; 3] = [0, 0, 0];
+const COLOR_HIGHLIGHT_COLORREF_BGR: [u8; 3] = [215, 120, 0];
+const COLOR_HIGHLIGHTTEXT_COLORREF_BGR: [u8; 3] = [255, 255, 255];
+
+fn clamp_color_byte(value: f32, high_contrast: bool, system: [u8; 3], channel: usize) -> u8 {
+    if high_contrast {
+        return system[channel];
+    }
+    ((value.clamp(0.0, 1.0)) * 255.0).round() as u8
+}
+
+/// Resolves one config color into the C++ channel order (R, G, B).
+///
+/// `system` must already be ordered to match the extraction indices used by
+/// the C++ `to_u8` lambda: channel 2 = R, channel 1 = G, channel 0 = B, i.e.
+/// the COLORREF little-endian byte layout (B, G, R).
+fn resolve_rgb(
+    color: Fcitx5CandidateConfigColor,
+    high_contrast: bool,
+    colorref_bgr: [u8; 3],
+) -> [u8; 3] {
+    // COLORREF layout: 0x00BBGGRR → byte[0]=B, byte[1]=G, byte[2]=R.
+    // to_u8 channel 2 selects R, 1 selects G, 0 selects B.
+    [
+        clamp_color_byte(color.r, high_contrast, colorref_bgr, 2),
+        clamp_color_byte(color.g, high_contrast, colorref_bgr, 1),
+        clamp_color_byte(color.b, high_contrast, colorref_bgr, 0),
+    ]
+}
+
+/// Resolves the eight paint colors from config colors and the high-contrast
+/// policy, mirroring the frozen shipping `paintOnceToDC` color mapping.
+#[no_mangle]
+pub extern "C" fn fcitx5_candidate_resolve_paint_colors(
+    background: Fcitx5CandidateConfigColor,
+    candidate_text: Fcitx5CandidateConfigColor,
+    selected_background: Fcitx5CandidateConfigColor,
+    selected_text: Fcitx5CandidateConfigColor,
+    comment_text: Fcitx5CandidateConfigColor,
+    border: Fcitx5CandidateConfigColor,
+    preedit_text: Fcitx5CandidateConfigColor,
+    high_contrast: u8,
+    out: *mut Fcitx5CandidateResolvedColors,
+) -> u8 {
+    if out.is_null() {
+        return 0;
+    }
+    let hc = high_contrast != 0;
+    let resolved = Fcitx5CandidateResolvedColors {
+        background: resolve_rgb(background, hc, COLOR_WINDOW_COLORREF_BGR),
+        text: resolve_rgb(candidate_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
+        selected_background: resolve_rgb(selected_background, hc, COLOR_HIGHLIGHT_COLORREF_BGR),
+        selected_text: resolve_rgb(selected_text, hc, COLOR_HIGHLIGHTTEXT_COLORREF_BGR),
+        comment: resolve_rgb(comment_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
+        border: resolve_rgb(border, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
+        preedit_text: resolve_rgb(preedit_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
+    };
+    // SAFETY: non-null checked above; caller provides writable output storage.
+    unsafe { *out = resolved };
+    1
+}
+
 /// Computes the scroll-label reservation for one candidate.
 ///
 /// `source_label` is 0/1 whether the candidate carries its own label; only
@@ -1914,6 +2000,64 @@ pub unsafe extern "C" fn fcitx5_candidate_scroll_state_reset(state: *mut c_void)
     if !state.is_null() {
         // SAFETY: caller guarantees the state allocation is valid for this call.
         unsafe { (&mut *state.cast::<CandidateScrollState>()).reset() };
+    }
+}
+
+#[cfg(test)]
+mod candidate_paint_color_tests {
+    use super::*;
+
+    fn color(r: f32, g: f32, b: f32) -> Fcitx5CandidateConfigColor {
+        Fcitx5CandidateConfigColor { r, g, b, a: 1.0 }
+    }
+
+    #[test]
+    fn paint_colors_clamp_and_scale_config_colors() {
+        let mut resolved = Fcitx5CandidateResolvedColors::default();
+        let ok = unsafe {
+            fcitx5_candidate_resolve_paint_colors(
+                color(0.97, 0.98, 0.98),
+                color(0.13, 0.13, 0.14),
+                color(0.027, 0.757, 0.376),
+                color(0.027, 0.757, 0.376),
+                color(0.13, 0.13, 0.14),
+                color(0.82, 0.82, 0.82),
+                color(0.13, 0.13, 0.14),
+                0,
+                &mut resolved,
+            )
+        };
+        assert_eq!(ok, 1);
+        assert_eq!(resolved.background, [247, 250, 250]);
+        assert_eq!(resolved.selected_background, [7, 193, 96]);
+        assert_eq!(resolved.border, [209, 209, 209]);
+    }
+
+    #[test]
+    fn high_contrast_maps_colors_to_system_palette() {
+        let mut resolved = Fcitx5CandidateResolvedColors::default();
+        let ok = unsafe {
+            fcitx5_candidate_resolve_paint_colors(
+                color(0.0, 0.0, 0.0),
+                color(0.0, 0.0, 0.0),
+                color(0.0, 0.0, 0.0),
+                color(0.0, 0.0, 0.0),
+                color(0.0, 0.0, 0.0),
+                color(0.0, 0.0, 0.0),
+                color(0.0, 0.0, 0.0),
+                1,
+                &mut resolved,
+            )
+        };
+        assert_eq!(ok, 1);
+        assert_eq!(resolved.background, COLOR_WINDOW_COLORREF_BGR);
+        assert_eq!(resolved.text, COLOR_WINDOWTEXT_COLORREF_BGR);
+        assert_eq!(
+            resolved.selected_background,
+            [0, 120, 215],
+            "COLORREF [B,G,R] extracts to RGB"
+        );
+        assert_eq!(resolved.selected_text, COLOR_HIGHLIGHTTEXT_COLORREF_BGR);
     }
 }
 
