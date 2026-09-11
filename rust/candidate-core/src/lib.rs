@@ -891,6 +891,51 @@ fn scroll_label_policy(
     }
 }
 
+/// Resolved per-candidate scroll-label reservation (081C glue slice).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fcitx5CandidateScrollReservation {
+    /// 0 skip, 1 reserve the slot, 2 reserve + show the label.
+    pub action: u8,
+    pub slot: u32,
+}
+
+/// Computes the scroll-label reservation for one candidate.
+///
+/// `source_label` is 0/1 whether the candidate carries its own label; only
+/// generated candidates receive a synthesized scroll slot. Mirrors the
+/// shipping C++ `applyScrollLabelReservations` loop body.
+#[no_mangle]
+pub extern "C" fn fcitx5_candidate_scroll_reservation_for(
+    candidate_index: usize,
+    source_label: u8,
+    selected_index: usize,
+    scroll_mode: u8,
+    labels_visible: u8,
+    scroll_columns: usize,
+    total_candidates: usize,
+) -> Fcitx5CandidateScrollReservation {
+    if source_label != 0 {
+        return Fcitx5CandidateScrollReservation::default();
+    }
+    if scroll_mode == 0 || labels_visible == 0 || scroll_columns == 0 {
+        return Fcitx5CandidateScrollReservation::default();
+    }
+    let policy = scroll_label_policy(
+        candidate_index,
+        selected_index,
+        scroll_columns,
+        total_candidates,
+    );
+    if policy.reserve == 0 {
+        return Fcitx5CandidateScrollReservation::default();
+    }
+    Fcitx5CandidateScrollReservation {
+        action: if policy.show != 0 { 2 } else { 1 },
+        slot: policy.slot,
+    }
+}
+
 pub fn format_candidate_label(
     slot: u32,
     source_label: &str,
@@ -1869,6 +1914,31 @@ pub unsafe extern "C" fn fcitx5_candidate_scroll_state_reset(state: *mut c_void)
     if !state.is_null() {
         // SAFETY: caller guarantees the state allocation is valid for this call.
         unsafe { (&mut *state.cast::<CandidateScrollState>()).reset() };
+    }
+}
+
+#[cfg(test)]
+mod candidate_scroll_reservation_tests {
+    use super::fcitx5_candidate_scroll_reservation_for;
+
+    #[test]
+    fn reservations_follow_the_frozen_scroll_label_policy() {
+        // Source labels keep their own label; no synthesized slot.
+        let source = unsafe { fcitx5_candidate_scroll_reservation_for(3, 1, 0, 1, 1, 6, 60) };
+        assert_eq!(source.action, 0);
+        // Non-scroll or hidden labels never reserve.
+        let off = unsafe { fcitx5_candidate_scroll_reservation_for(3, 0, 0, 0, 1, 6, 60) };
+        assert_eq!(off.action, 0);
+        let hidden = unsafe { fcitx5_candidate_scroll_reservation_for(3, 0, 0, 1, 0, 6, 60) };
+        assert_eq!(hidden.action, 0);
+        // Current page reserves and shows (slot = index % page + 1).
+        let show = unsafe { fcitx5_candidate_scroll_reservation_for(3, 0, 3, 1, 1, 6, 60) };
+        assert_eq!(show.action, 2);
+        assert_eq!(show.slot, 4);
+        // Other pages reserve but hide.
+        let reserve = unsafe { fcitx5_candidate_scroll_reservation_for(9, 0, 3, 1, 1, 6, 60) };
+        assert_eq!(reserve.action, 1);
+        assert_eq!(reserve.slot, 4);
     }
 }
 

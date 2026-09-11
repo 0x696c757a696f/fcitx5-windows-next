@@ -299,6 +299,11 @@ struct Fcitx5CandidateMeasureSize {
     float height{};
 };
 
+struct Fcitx5CandidateScrollReservation {
+    std::uint8_t action{};
+    std::uint32_t slot{};
+};
+
 using CandidateWindowMessageCallback = LRESULT(CALLBACK *)(void*, HWND, UINT, WPARAM, LPARAM);
 struct Fcitx5CandidateWindowCreateInput {
     HINSTANCE instance{};
@@ -751,6 +756,11 @@ extern "C" Fcitx5CandidateScrollLabel fcitx5_candidate_scroll_label_policy(
     std::size_t candidateIndex,
     std::size_t selectedIndex,
     std::size_t pageSize,
+    std::size_t totalCandidates);
+extern "C" fcitx::windows::ui::detail::Fcitx5CandidateScrollReservation
+fcitx5_candidate_scroll_reservation_for(
+    std::size_t candidateIndex, std::uint8_t sourceLabel, std::size_t selectedIndex,
+    std::uint8_t scrollMode, std::uint8_t labelsVisible, std::size_t scrollColumns,
     std::size_t totalCandidates);
 
 [[nodiscard]] Fcitx5CandidateUtf8 toRust(std::string_view value) noexcept {
@@ -1862,30 +1872,27 @@ class CandidateWindow final {
     void applyScrollLabelReservations() {
         const auto style = visualConfig_.labelStyle;
         const bool labelsVisible = visualConfig_.labelVisible;
-        for (auto& candidate : candidates_) {
-            if (candidate.sourceLabel) {
-                candidate.reservedLabel = candidate.label;
-            } else {
-                candidate.label.clear();
-                candidate.reservedLabel.clear();
-            }
-        }
         const auto selected = presentationSelected();
         const auto scrollColumns = presentationScrollColumns();
-        if (!presentationScrollMode() || !labelsVisible || scrollColumns == 0 || !selected)
-            return;
+        const bool scrollMode = presentationScrollMode();
         for (std::size_t index = 0; index < candidates_.size(); ++index) {
             auto& candidate = candidates_[index];
-            if (candidate.sourceLabel)
+            if (candidate.sourceLabel) {
+                candidate.reservedLabel = candidate.label;
                 continue;
-            const auto policy = candidate::detail::fcitx5_candidate_scroll_label_policy(
-                index, *selected, scrollColumns, candidates_.size());
-            if (policy.reserve == 0)
+            }
+            candidate.label.clear();
+            candidate.reservedLabel.clear();
+            const auto reservation =
+                candidate::detail::fcitx5_candidate_scroll_reservation_for(
+                    index, 0U, selected.value_or(0U), scrollMode ? 1U : 0U,
+                    labelsVisible ? 1U : 0U, scrollColumns, candidates_.size());
+            if (reservation.action == 0)
                 continue;
-            candidate.reservedLabel = formatCandidateLabel(policy.slot,
-                                                          configuredSequenceLabel(policy.slot),
+            candidate.reservedLabel = formatCandidateLabel(reservation.slot,
+                                                          configuredSequenceLabel(reservation.slot),
                                                           style);
-            if (policy.show != 0)
+            if (reservation.action == 2)
                 candidate.label = candidate.reservedLabel;
         }
     }
