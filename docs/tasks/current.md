@@ -28,6 +28,16 @@ B. Rust tiny-skia renderer: replace D2D with tiny-skia + windui DWrite for the s
 C. HWND + message loop to Rust (create window, message pump, mouse/keyboard dispatch).
 D. Delete ui_main.cpp + update tests + verify.
 
+### Slice D completion record
+
+`src/ui/ui_main.cpp` is deleted (renamed `src/ui/ui_host.cpp`): every product
+semantic it used to own is Rust-owned through the `fcitx5-candidate-core` C ABI
+(slices A–C plus 081D slices 1–6). The surviving file is the document-allowed
+native seam — Win32 host glue, narrow FFI adapters, the presentation pipe
+server, and the mixed-binary self-test harness — and its header comment now
+states that scope. Visual parity verification on a real host remains
+MANUAL-PENDING under REL-01.
+
 ## C++ files affected
 
 - `src/ui/ui_main.cpp` (3007 lines) — deleted at end

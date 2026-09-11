@@ -1,3 +1,15 @@
+// C++ renderer-host shell for the shipping candidate window (081D).
+//
+// Every candidate product semantic — rendering (tiny-skia/DWrite), three-axis
+// layout, window/WndProc/message-pump lifecycle, pointer/scroll/click-guard/
+// focus-watch state, presentation decisions, text measurement, visual build,
+// and the natural-width downgrade — is Rust-owned through the
+// `fcitx5-candidate-core` C ABI (see rust/candidate-core). What remains in
+// this file is the document-allowed native seam: Win32 host glue, narrow FFI
+// adapters (model, presentation, protocol decode, config snapshot,
+// candidate-select client), the presentation pipe server, and the
+// mixed-binary self-test harness.
+
 #include "candidate_select_client.h"
 #include "config_snapshot_ffi.h"
 #include "peer_verification.h"

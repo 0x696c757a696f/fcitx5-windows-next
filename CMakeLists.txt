@@ -639,7 +639,7 @@ add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
 
 add_executable(
   fcitx5_ui WIN32
-  src/ui/ui_main.cpp
+  src/ui/ui_host.cpp
   resources/windows/app.rc)
 set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
 target_include_directories(fcitx5_ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
