@@ -8,6 +8,96 @@ use core::ffi::c_void;
 use crate::renderer::{Fcitx5CandidateMeasureSize, MeasureEngine};
 use crate::{Fcitx5CandidateLayoutSize, Fcitx5CandidateVisualBuildOutput};
 
+/// Parameters for one measure-loop run (frozen from the C++ `update()`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MeasureLoopParams {
+    pub horizontal: bool,
+    pub scroll_mode: bool,
+    pub label_gap: f32,
+    pub item_padding_x: f32,
+    pub item_padding_y: f32,
+    pub font_size: f32,
+    pub label_font_size: f32,
+    pub comment_font_size: f32,
+    pub dpi_scale: f32,
+}
+
+/// The frozen measure loop over live arena outputs: optional scroll-label
+/// column width, per-item reserved/text/comment runs, and the padded preedit
+/// panel. Returns `(items, preedit_panel, scroll_label_column_width)` or
+/// `None` when any render index is out of range.
+pub(crate) fn measure_visual_items(
+    engine: &mut MeasureEngine,
+    outputs: &[Fcitx5CandidateVisualBuildOutput],
+    indices: &[usize],
+    preedit: Option<&str>,
+    params: &MeasureLoopParams,
+) -> Option<(
+    Vec<Fcitx5CandidateLayoutSize>,
+    Fcitx5CandidateLayoutSize,
+    f32,
+)> {
+    if indices.iter().any(|index| *index >= outputs.len()) {
+        return None;
+    }
+    let field = |value: &crate::Fcitx5CandidateUtf8| -> String {
+        // SAFETY: arena-owned strings for a live build are valid UTF-8.
+        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
+            .into_owned()
+    };
+    let mut scroll_label_column_width = 0.0_f32;
+    if params.scroll_mode && params.horizontal {
+        for index in indices {
+            let reserved = field(&outputs[*index].reserved_label);
+            if reserved.is_empty() {
+                continue;
+            }
+            let (width, _) = engine.measure(&reserved, params.label_font_size, params.dpi_scale);
+            scroll_label_column_width = scroll_label_column_width.max(width);
+        }
+    }
+    let mut items = Vec::with_capacity(indices.len());
+    for index in indices {
+        let output = &outputs[*index];
+        let mut width = 0.0_f32;
+        let mut height = 0.0_f32;
+        if params.scroll_mode && params.horizontal && output.reserved_label.len == 0 {
+            width += scroll_label_column_width + params.label_gap;
+        }
+        for (value, size) in [
+            (field(&output.reserved_label), params.label_font_size),
+            (field(&output.text), params.font_size),
+            (field(&output.comment), params.comment_font_size),
+        ] {
+            if value.is_empty() {
+                continue;
+            }
+            let (run_width, run_height) = engine.measure(&value, size, params.dpi_scale);
+            width += run_width;
+            height = height.max(run_height);
+        }
+        if output.reserved_label.len != 0 {
+            width += params.label_gap;
+        }
+        items.push(Fcitx5CandidateLayoutSize {
+            width: width + params.item_padding_x * 2.0,
+            height: height + params.item_padding_y * 2.0,
+        });
+    }
+    let mut panel = Fcitx5CandidateLayoutSize::default();
+    if let Some(preedit) = preedit {
+        if !preedit.is_empty() {
+            let (run_width, run_height) =
+                engine.measure(preedit, params.font_size, params.dpi_scale);
+            panel = Fcitx5CandidateLayoutSize {
+                width: run_width + params.item_padding_x * 2.0,
+                height: run_height + params.item_padding_y * 2.0,
+            };
+        }
+    }
+    Some((items, panel, scroll_label_column_width))
+}
+
 /// Measures rendered-item sizes exactly like the shipping C++ `update()`
 /// measure loop: optional scroll-label column width, per-item
 /// reserved-label/text/comment runs with a fallback cell, and the preedit
@@ -65,70 +155,41 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
     } else {
         unsafe { std::slice::from_raw_parts(indices, index_count) }
     };
-    if indices.iter().any(|index| *index >= output_count) {
+    let preedit_text = if preedit_len > 0 && !preedit.is_null() {
+        // SAFETY: the C ABI contract requires preedit_len readable bytes.
+        Some(String::from_utf8_lossy(unsafe {
+            std::slice::from_raw_parts(preedit, preedit_len)
+        }))
+    } else {
+        None
+    };
+    let params = MeasureLoopParams {
+        horizontal: horizontal != 0,
+        scroll_mode: scroll_mode != 0,
+        label_gap,
+        item_padding_x,
+        item_padding_y,
+        font_size,
+        label_font_size,
+        comment_font_size,
+        dpi_scale,
+    };
+    let Some((items, panel, scroll_label_column_width)) =
+        measure_visual_items(engine, outputs, indices, preedit_text.as_deref(), &params)
+    else {
+        return 0;
+    };
+    if items.len() != index_count {
         return 0;
     }
-    let field = |value: &crate::Fcitx5CandidateUtf8| -> String {
-        // SAFETY: arena-owned strings for a live build are valid UTF-8.
-        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
-            .into_owned()
-    };
-    let mut scroll_label_column_width = 0.0_f32;
-    if scroll_mode != 0 && horizontal != 0 {
-        for index in indices {
-            let reserved = field(&outputs[*index].reserved_label);
-            if reserved.is_empty() {
-                continue;
-            }
-            let (width, _) = engine.measure(&reserved, label_font_size, dpi_scale);
-            scroll_label_column_width = scroll_label_column_width.max(width);
-        }
-    }
     // SAFETY: non-null checked above; caller provides writable output storage.
-    unsafe { *out_scroll_label_column_width = scroll_label_column_width };
-    for (slot, index) in indices.iter().enumerate() {
-        let output = &outputs[*index];
-        let mut width = 0.0_f32;
-        let mut height = 0.0_f32;
-        if scroll_mode != 0 && horizontal != 0 && output.reserved_label.len == 0 {
-            width += scroll_label_column_width + label_gap;
+    unsafe {
+        if !items.is_empty() {
+            std::ptr::copy_nonoverlapping(items.as_ptr(), out_items, items.len());
         }
-        for (value, size) in [
-            (field(&output.reserved_label), label_font_size),
-            (field(&output.text), font_size),
-            (field(&output.comment), comment_font_size),
-        ] {
-            if value.is_empty() {
-                continue;
-            }
-            let (run_width, run_height) = engine.measure(&value, size, dpi_scale);
-            width += run_width;
-            height = height.max(run_height);
-        }
-        if output.reserved_label.len != 0 {
-            width += label_gap;
-        }
-        // SAFETY: caller provides writable output storage for index_count.
-        unsafe {
-            *out_items.add(slot) = Fcitx5CandidateLayoutSize {
-                width: width + item_padding_x * 2.0,
-                height: height + item_padding_y * 2.0,
-            };
-        }
+        *out_preedit_panel = panel;
+        *out_scroll_label_column_width = scroll_label_column_width;
     }
-    let mut panel = Fcitx5CandidateLayoutSize::default();
-    if preedit_len > 0 && !preedit.is_null() {
-        // SAFETY: the C ABI contract requires preedit_len readable bytes.
-        let bytes = unsafe { std::slice::from_raw_parts(preedit, preedit_len) };
-        let value = String::from_utf8_lossy(bytes).into_owned();
-        let (run_width, run_height) = engine.measure(&value, font_size, dpi_scale);
-        panel = Fcitx5CandidateLayoutSize {
-            width: run_width + item_padding_x * 2.0,
-            height: run_height + item_padding_y * 2.0,
-        };
-    }
-    // SAFETY: non-null checked above; caller provides writable output storage.
-    unsafe { *out_preedit_panel = panel };
     index_count
 }
 

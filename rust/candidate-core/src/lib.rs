@@ -6,6 +6,8 @@ use std::ffi::c_void;
 pub mod axis_layout;
 mod candidate_abi;
 #[cfg(windows)]
+pub mod frame_update;
+#[cfg(windows)]
 mod measure_ffi;
 #[cfg(windows)]
 pub mod presentation_server;
@@ -1118,7 +1120,13 @@ pub struct CandidateVisualArena {
 }
 
 impl CandidateVisualArena {
-    fn build(
+    /// Built outputs from the last [`Self::build`] call; string pointers stay
+    /// arena-owned and valid until the next build.
+    pub(crate) fn built_outputs(&self) -> &[Fcitx5CandidateVisualBuildOutput] {
+        &self.outputs
+    }
+
+    pub(crate) fn build(
         &mut self,
         inputs: &[Fcitx5CandidateVisualBuildInput],
         config: &Fcitx5CandidateVisualBuildConfig,
@@ -2712,7 +2720,7 @@ impl CandidateScrollState {
         next
     }
 
-    fn override_px(&self) -> f32 {
+    pub(crate) fn override_px(&self) -> f32 {
         self.override_px.unwrap_or(-1.0)
     }
 
@@ -3013,6 +3021,12 @@ impl CandidateClickGuardState {
 struct CandidateFocusWatchState {
     /// Foreground process id captured when the popup was presented; 0 = none.
     target_process_id: u32,
+}
+
+impl CandidateFocusWatchState {
+    pub(crate) fn set_target(&mut self, pid: u32) {
+        self.target_process_id = pid;
+    }
 }
 
 impl CandidateFocusWatchState {
@@ -3789,7 +3803,7 @@ fn orientation_from_ffi(value: u32) -> Option<Orientation> {
     }
 }
 
-fn placement_from_ffi(value: u32) -> Option<Placement> {
+pub(crate) fn placement_from_ffi(value: u32) -> Option<Placement> {
     match value {
         0 => Some(Placement::Unlocked),
         1 => Some(Placement::Below),
@@ -3798,7 +3812,7 @@ fn placement_from_ffi(value: u32) -> Option<Placement> {
     }
 }
 
-fn placement_to_ffi(value: Placement) -> u32 {
+pub(crate) fn placement_to_ffi(value: Placement) -> u32 {
     match value {
         Placement::Unlocked => 0,
         Placement::Below => 1,
@@ -4488,6 +4502,24 @@ impl CandidatePresentationState {
 
     pub fn set_placement(&mut self, placement: Placement) {
         self.placement = placement;
+    }
+
+    /// Writes the presentation render order (candidate indices) into `indices`
+    /// and returns its length, mirroring the C++ render-plan contract.
+    pub(crate) fn render_plan(&self, indices: &mut [usize]) -> Option<usize> {
+        let (start, count) = if self.scroll_mode {
+            (0, self.candidate_count)
+        } else {
+            (self.ordinary_start, self.ordinary_count)
+        };
+        let end = start.checked_add(count)?;
+        if end > self.candidate_count || count > indices.len() {
+            return None;
+        }
+        for (slot, candidate_index) in indices[..count].iter_mut().zip(start..end) {
+            *slot = candidate_index;
+        }
+        Some(count)
     }
 
     pub fn stable_window_width(&mut self, measured_width: f32, max_allowed_width: f32) -> f32 {
