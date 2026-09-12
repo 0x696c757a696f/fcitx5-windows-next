@@ -1026,6 +1026,16 @@ impl NamedPipeServer {
         identity.verifies_pipe_client(self.handle.as_handle())
     }
 
+    /// Attempts one immediate connect: accepts an already-connected client or
+    /// fails fast when none is waiting (polling servers).
+    pub fn connect_poll(&self) -> bool {
+        pipe_connect_client(
+            self.handle.as_raw_handle(),
+            tick_milliseconds(),
+            std::ptr::null_mut(),
+        )
+    }
+
     /// Returns the connected client's process ID after enforcing the same
     /// user/session peer policy as [`Self::verifies_client`].
     #[must_use]

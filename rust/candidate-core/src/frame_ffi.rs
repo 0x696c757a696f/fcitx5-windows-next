@@ -43,6 +43,8 @@ pub struct Fcitx5CandidateFrameResponse {
     pub revision: u64,
     pub preedit: *const u8,
     pub preedit_len: usize,
+    pub content_locale: *const u8,
+    pub content_locale_len: usize,
     pub status: u32,
     pub selected_candidate: u32,
     pub candidate_page: u32,

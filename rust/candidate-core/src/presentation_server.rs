@@ -1,29 +1,30 @@
-//! Rust presentation pipe server (082 slice 1).
+//! Rust presentation pipe server (082 slices 1 & 4).
 //!
 //! Replaces the C++ `servePresentation`/`decodePresentationFrame` pair: one
 //! inbound named pipe per cycle, same-principal peer verification with the
-//! engine-executable gate, 64-byte headers, 256 KiB frame ceiling, and
-//! protocol-core `KeyResponse` decoding. Delivery is a callback so the
-//! window-host integration (slice 4) decides how frames reach the UI thread.
+//! engine-executable identity gate, frozen wire constants (64-byte header,
+//! 256 KiB ceiling), and protocol-core `KeyResponse` decoding. The blocking
+//! serve entry delivers each decoded response to the host callback as a flat
+//! self-contained snapshot valid for the duration of the call.
 
-use std::ffi::OsStr;
+use std::ffi::{c_void, OsStr};
+use std::os::windows::ffi::OsStrExt;
+use std::time::Duration;
 
 use fcitx5_protocol_core::{FrameView, KeyResponse, MessageType};
 use fcitx5_windows_common_core::{
-    deadline_after, paths_refer_to_same_file, CurrentUserRuntimeIdentity, NamedEvent,
+    deadline_after, paths_refer_to_same_file, wait_for_handle, CurrentUserRuntimeIdentity,
     NamedPipeServer,
 };
+
+use crate::frame_ffi::{Fcitx5CandidateFrameRecord, Fcitx5CandidateFrameResponse};
 
 /// Frozen wire constants from the shipping C++ `servePresentation`.
 pub const PRESENTATION_HEADER_SIZE: usize = 64;
 pub const PRESENTATION_MAX_FRAME_SIZE: usize = 256 * 1024;
 const PRESENTATION_PIPE_CHANNEL: &str = "presentation";
-/// Polling window for the connect loop. The C++ host blocks indefinitely in
-/// `ConnectNamedPipe`; the stop event keeps this loop responsive instead.
-const CONNECT_POLL_MILLIS: u32 = 1000;
 /// Blocking read horizon. A frame can only arrive from a live composition;
-/// an idle horizon this long is treated as a disconnect, matching the C++
-/// `ReadFile` failure path.
+/// a long-idle connection is recycled like a C++ `ReadFile` disconnect.
 const READ_DEADLINE_TICKS: u64 = u64::MAX;
 
 /// Decodes one complete presentation frame into a [`KeyResponse`].
@@ -63,7 +64,7 @@ pub fn read_presentation_frame(server: &NamedPipeServer, deadline: u64) -> Optio
     if !server.read_exact(&mut header, deadline) {
         return None;
     }
-    let (message_type, body_size, _metadata) = fcitx5_protocol_core::decode_header(&header)?;
+    let (message_type, body_size, metadata) = fcitx5_protocol_core::decode_header(&header)?;
     if message_type != MessageType::KeyResponse {
         return None;
     }
@@ -90,81 +91,202 @@ pub fn presentation_pipe_name(
 
 fn engine_peer_matches(peer_executable_path: &str, engine_executable: &OsStr) -> bool {
     let peer_units: Vec<u16> = peer_executable_path.encode_utf16().collect();
-    let engine_units = engine_wide_units(engine_executable);
+    let engine_units: Vec<u16> = engine_executable.encode_wide().collect();
     paths_refer_to_same_file(&peer_units, &engine_units)
 }
 
-/// Serves presentation frames until `stop` is signaled or a delivery callback
-/// aborts the loop.
-///
-/// Per connection: verifies the peer against this identity, gates on the
-/// engine executable path, then decodes frames until the peer disconnects or
-/// the callback stops the loop. `test_once` mirrors the C++ contract — one
-/// delivered response ends the server (`Some(())`).
-///
-/// Returns `Some(())` when `test_once` delivered its response, `None` when
-/// stopped or aborted.
-pub fn serve_presentation(
-    identity: &CurrentUserRuntimeIdentity,
-    generation: &str,
-    engine_executable: &OsStr,
-    stop: &NamedEvent,
-    test_once: bool,
-    on_response: &mut dyn FnMut(KeyResponse) -> bool,
-) -> Option<()> {
-    let name = presentation_pipe_name(identity, generation)?;
-    let security = identity.security_attributes()?;
-    loop {
-        if stop.is_signaled() {
-            return None;
-        }
-        let listener =
-            NamedPipeServer::create(&name, &security, PRESENTATION_MAX_FRAME_SIZE).ok()?;
+fn wide_until_nul(pointer: *const u16) -> Vec<u16> {
+    let mut units = Vec::new();
+    // SAFETY: the C ABI contract guarantees NUL termination.
+    let mut cursor = pointer;
+    unsafe {
         loop {
-            if stop.is_signaled() {
-                return None;
-            }
-            if listener.connect_until(deadline_after(CONNECT_POLL_MILLIS), stop) {
+            let unit = *cursor;
+            if unit == 0 {
                 break;
             }
+            units.push(unit);
+            cursor = cursor.add(1);
         }
-        let Some(peer) = listener.verified_client(identity) else {
-            continue;
+    }
+    units
+}
+
+/// Self-contained flat response snapshot handed to the host callback. String
+/// storage lives in `strings` and stays valid while the snapshot is alive.
+struct FlatFrameResponse {
+    response: Fcitx5CandidateFrameResponse,
+    candidates: Vec<Fcitx5CandidateFrameRecord>,
+    strings: Vec<Vec<u8>>,
+}
+
+impl FlatFrameResponse {
+    fn build(response: &KeyResponse) -> Self {
+        let mut strings: Vec<Vec<u8>> = Vec::new();
+        let mut owned = |bytes: &[u8]| -> *const u8 {
+            strings.push(bytes.to_vec());
+            let stored = strings.last().expect("pushed above");
+            stored.as_ptr()
         };
-        if !engine_peer_matches(&peer.executable_path, engine_executable) {
-            continue;
+        let mut candidates = Vec::with_capacity(response.candidates.len());
+        for candidate in &response.candidates {
+            candidates.push(Fcitx5CandidateFrameRecord {
+                id: candidate.id,
+                label: owned(&candidate.label_utf8),
+                label_len: candidate.label_utf8.len(),
+                text: owned(&candidate.text_utf8),
+                text_len: candidate.text_utf8.len(),
+                comment: owned(&candidate.comment_utf8),
+                comment_len: candidate.comment_utf8.len(),
+            });
         }
-        loop {
-            // Blocking horizon: u64::MAX never expires via remaining_milliseconds'
-            // window (it clamps to the ~49.7-day DWORD window, after which the
-            // read fails and the connection is recycled like a C++ disconnect).
-            let Some(response) = read_presentation_frame(&listener, READ_DEADLINE_TICKS) else {
-                break;
-            };
-            let delivered = on_response(response);
-            if test_once {
-                return Some(());
-            }
-            if !delivered {
-                return None;
-            }
+        let preedit = owned(&response.preedit_utf8);
+        let preedit_len = response.preedit_utf8.len();
+        let content_locale = owned(&response.content_locale_utf8);
+        let content_locale_len = response.content_locale_utf8.len();
+        let flat = Fcitx5CandidateFrameResponse {
+            engine_epoch: response.metadata.engine_epoch,
+            context_id: response.metadata.context_id,
+            composition_id: response.metadata.composition_id,
+            revision: response.metadata.revision,
+            preedit,
+            preedit_len,
+            content_locale,
+            content_locale_len,
+            status: 0,
+            selected_candidate: response.selected_candidate,
+            candidate_page: response.candidate_page,
+            candidate_page_size: response.candidate_page_size,
+            candidate_total: response.candidate_total,
+            candidate_visibility: response.candidate_visibility,
+            candidate_bulk: u8::from(response.candidate_bulk),
+            candidate_end: u8::from(response.candidate_end),
+            popup_allowed: u8::from(response.popup_allowed),
+            caret_valid: u8::from(response.caret.valid),
+            caret_left: response.caret.left,
+            caret_top: response.caret.top,
+            caret_right: response.caret.right,
+            caret_bottom: response.caret.bottom,
+            caret_dpi: response.caret.dpi,
+            candidates: candidates.as_ptr(),
+            candidate_count: candidates.len(),
+        };
+        Self {
+            response: flat,
+            candidates,
+            strings,
         }
-        // Dropping `listener` disconnects and closes this instance; the loop
-        // recreates it, matching the C++ DisconnectNamedPipe/CloseHandle pair.
+    }
+
+    fn as_response(&self) -> &Fcitx5CandidateFrameResponse {
+        &self.response
     }
 }
 
-fn engine_wide_units(value: &OsStr) -> Vec<u16> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        value.encode_wide().collect()
+/// Blocking-mode serve entry for the C++ host (082 slice 4).
+///
+/// Owns pipe creation, same-principal peer verification, the engine-executable
+/// identity gate, frame reads, and KeyResponse decoding; delivers each decoded
+/// response through `on_frame` as a flat self-contained snapshot whose buffers
+/// are valid only during the call. Returns when `stop` is signaled, the
+/// callback reports failure, or `test_once` delivered one response.
+///
+/// # Safety
+///
+/// `generation`/`engine_executable` must be NUL-terminated UTF-16; `stop` must
+/// be a live event handle; `on_frame` must invoke no re-entrant server calls
+/// and must finish before the next frame is delivered.
+#[no_mangle]
+pub unsafe extern "C" fn fcitx5_candidate_presentation_serve(
+    generation: *const u16,
+    engine_executable: *const u16,
+    stop: *mut c_void,
+    test_once: u8,
+    on_frame: unsafe extern "system" fn(*mut c_void, *const Fcitx5CandidateFrameResponse),
+    user: *mut c_void,
+) -> u8 {
+    let generation = if generation.is_null() {
+        String::new()
+    } else {
+        // SAFETY: NUL-terminated UTF-16 per the contract above.
+        let units = wide_until_nul(generation);
+        String::from_utf16_lossy(&units)
+    };
+    if engine_executable.is_null() {
+        return 0;
     }
-    #[cfg(not(windows))]
-    {
-        value.to_string_lossy().encode_utf16().collect()
+    // SAFETY: NUL-terminated UTF-16 per the contract above.
+    let engine_units = wide_until_nul(engine_executable);
+    let engine_path = {
+        use std::os::windows::ffi::OsStringExt;
+        std::path::PathBuf::from(std::ffi::OsString::from_wide(&engine_units))
+    };
+    let Some(identity) = CurrentUserRuntimeIdentity::current() else {
+        return 0;
+    };
+    let Some(name) = presentation_pipe_name(&identity, &generation) else {
+        return 0;
+    };
+    let Some(security) = identity.security_attributes() else {
+        return 0;
+    };
+    let stop_handle = core::ptr::NonNull::new(stop);
+    let stop_signaled = || {
+        stop_handle.is_some_and(|handle| {
+            // SAFETY: borrowed for a zero-time probe of a live event handle.
+            unsafe {
+                wait_for_handle(
+                    core::mem::transmute::<
+                        core::ptr::NonNull<c_void>,
+                        std::os::windows::io::BorrowedHandle<'_>,
+                    >(handle),
+                    Duration::ZERO,
+                )
+            }
+        })
+    };
+    let peer_units: Vec<u16> = engine_path
+        .as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .collect();
+    loop {
+        if stop_signaled() {
+            return 1;
+        }
+        let Ok(listener) = NamedPipeServer::create(&name, &security, PRESENTATION_MAX_FRAME_SIZE)
+        else {
+            return 0;
+        };
+        loop {
+            if stop_signaled() {
+                return 1;
+            }
+            if listener.connect_poll() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let Some(peer) = listener.verified_client(&identity) else {
+            continue;
+        };
+        if !engine_peer_matches(&peer.executable_path, &engine_path.as_os_str()) {
+            continue;
+        }
+        loop {
+            let Some(response) = read_presentation_frame(&listener, READ_DEADLINE_TICKS) else {
+                break;
+            };
+            let snapshot = FlatFrameResponse::build(&response);
+            // SAFETY: `user` ownership belongs to the host callback contract.
+            unsafe { on_frame(user, snapshot.as_response()) };
+            if test_once != 0 {
+                return 1;
+            }
+        }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,7 +306,6 @@ mod tests {
             status: Status::Ok,
             handled: true,
             preedit_utf8: b"ni".to_vec(),
-            preedit_caret_utf8: 2,
             candidates: vec![CandidateRecord {
                 id: 1,
                 label_utf8: b"1".to_vec(),
@@ -209,12 +330,9 @@ mod tests {
 
     #[test]
     fn decode_rejects_wrong_type_truncated_and_oversized_frames() {
-        // Truncated header.
         assert!(decode_presentation_frame(&[0_u8; PRESENTATION_HEADER_SIZE - 1]).is_none());
-        // Header-only frame decodes the header but the body size mismatches.
         let frame = fcitx5_protocol_core::encode_key_response(&response()).expect("encoded frame");
         assert!(decode_presentation_frame(&frame[..PRESENTATION_HEADER_SIZE]).is_none());
-        // Oversized frames are rejected before any decode work.
         let oversized = vec![0_u8; PRESENTATION_MAX_FRAME_SIZE + 1];
         assert!(decode_presentation_frame(&oversized).is_none());
     }
@@ -222,8 +340,7 @@ mod tests {
     #[test]
     fn decode_rejects_body_size_mismatch() {
         let frame = fcitx5_protocol_core::encode_key_response(&response()).expect("encoded frame");
-        let mut tampered = frame.clone();
-        // Rewrite the declared body size in the header to one byte too small.
+        let mut tampered = frame;
         // Header layout (frozen): [0..2) type, [2..6) body size.
         let declared = u32::from_le_bytes([tampered[2], tampered[3], tampered[4], tampered[5]]);
         let reduced = declared - 1;
