@@ -142,6 +142,7 @@ pub struct Fcitx5CandidateFrameUpdateOutput {
     pub visible_count: usize,
     pub selection_inflate_x: f32,
     pub selection_inflate_y: f32,
+    pub horizontal: u8,
 }
 
 fn config_from_ffi(config: &Fcitx5CandidateFrameUpdateConfig) -> Option<FrameConfig> {
@@ -369,8 +370,10 @@ pub unsafe extern "C" fn fcitx5_candidate_frame_update(
     last_caret_state.valid = u8::from(last_caret.valid);
     match outcome {
         FrameUpdateOutcome::Ignored => {
+            // Action 3 = ignored: the model was not mutated, so the host must
+            // not refresh its mirror.
             // SAFETY: caller provides writable output storage.
-            unsafe { (*output).action = 0 };
+            unsafe { (*output).action = 3 };
             1
         }
         FrameUpdateOutcome::Dismiss => {
@@ -427,6 +430,7 @@ pub unsafe extern "C" fn fcitx5_candidate_frame_update(
                 (*output).visible_count = visible_count;
                 (*output).selection_inflate_x = outputs.selection_inflate_x;
                 (*output).selection_inflate_y = outputs.selection_inflate_y;
+                (*output).horizontal = u8::from(outputs.horizontal);
             }
             let preedit_len = outputs.preedit_utf8.len();
             let copy_len = preedit_len.min(out_preedit_capacity);

@@ -136,6 +136,9 @@ pub struct FrameUpdateOutputs {
     pub preedit_utf8: Vec<u8>,
     pub selection_inflate_x: f32,
     pub selection_inflate_y: f32,
+    /// Final presentation orientation after the automatic downgrade check
+    /// (true = horizontal).
+    pub horizontal: bool,
 }
 
 fn frame_overflow(config: &FrameConfig) -> OverflowBehavior {
@@ -512,6 +515,7 @@ pub fn frame_update(
         preedit_utf8,
         selection_inflate_x: config.item_padding_x_dip * scale * 0.65,
         selection_inflate_y: config.item_padding_y_dip * scale * 0.55,
+        horizontal,
     })
 }
 
