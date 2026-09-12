@@ -5,7 +5,7 @@ use std::ffi::c_void;
 
 pub mod axis_layout;
 mod candidate_abi;
-#[cfg(windows)]
+pub mod frame_ffi;
 pub mod frame_update;
 #[cfg(windows)]
 mod measure_ffi;
@@ -36,7 +36,7 @@ pub use ui_plan::{
     CandidateUiPlan, CandidateUiState, CandidateUiText, CandidateUiaItem, CandidateUiaPlan,
 };
 
-const MAX_CANDIDATES: usize = 128;
+pub(crate) const MAX_CANDIDATES: usize = 128;
 const MAX_CANDIDATE_TEXT_UTF8: usize = 4096;
 const MAX_TRACKED_CONTEXTS: usize = 64;
 const MAX_CONTENT_LOCALE_UTF8: usize = 35;
