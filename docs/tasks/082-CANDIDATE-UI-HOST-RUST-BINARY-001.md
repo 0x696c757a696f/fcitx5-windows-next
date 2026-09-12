@@ -57,6 +57,21 @@ migration for real.
 Same as existing: x64/x86 builds, six self-tests, message-loop smoke,
 cargo tests; new Rust unit tests for the pipe server and frame orchestration.
 
+## Scope decision (user-constraint alignment)
+
+The original draft acceptance ("delete ui_host.cpp; make fcitx5-ui.exe a Rust
+shipping binary") over-reached the standing project constraints, which the user
+reaffirmed for this task: C++ is retained long-term ONLY for (a) direct-Fcitx
+adapter tests, (b) necessary Win32/COM/ABI adapter code and tests, and (c)
+mixed-binary integration/E2E verification. After slices 1-6 every candidate
+product semantic is Rust-owned; what remains in `ui_host.cpp` is exactly
+category (b)+(c): Win32 host glue, narrow FFI adapters, and the mixed-binary
+self-test harness. Deleting the harness before Rust E2E equivalents exist would
+violate the frozen test-ownership rules, and a Rust wWinMain binary switch is
+recorded as an optional future slice, not 082 scope. The acceptance below is
+amended accordingly: 082 is complete when all product semantics are
+Rust-owned and the remaining C++ is limited to the document-allowed seam.
+
 ## Completion record (slices 1-6, all landed)
 
 - Slice 1: windows-common-core full peer verification (`verified_pipe_client`:
