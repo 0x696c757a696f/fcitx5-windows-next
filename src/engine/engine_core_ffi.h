@@ -333,20 +333,66 @@ struct FcitxEngineSnapshotC {
 
 int fcitx5_engine_core_validate_snapshot(const FcitxEngineSnapshotC* snapshot);
 
-// E5-3: pending snapshot store. `put` stores a canonical snapshot blob with
-// its revision; `take` removes it only when the request revision is strictly
-// older than the stored revision and writes the canonical blob back (0 when
-// absent/stale/buffer-too-small, with the required size in `*outLength`);
-// `required_size` returns the stored blob size (0 when absent) so the caller
-// can size the take buffer without consuming the entry.
-int fcitx5_engine_core_snapshot_store_put(void* ledger, const FcitxEngineContextKeyC* key,
-                                          std::uint64_t revision, const std::uint8_t* blob,
-                                          std::size_t blobLength);
-int fcitx5_engine_core_snapshot_store_take(void* ledger, const FcitxEngineContextKeyC* key,
-                                           std::uint64_t requestRevision, std::uint8_t* out,
-                                           std::size_t outCapacity, std::size_t* outLength);
-std::size_t fcitx5_engine_core_snapshot_store_required_size(
-    void* ledger, const FcitxEngineContextKeyC* key);
+// E5-3 (083): pending snapshot store using a flat self-contained snapshot
+// projection. The Rust ledger owns the authoritative snapshot form; no
+// serialization format crosses this FFI edge (the previous C++ blob codec
+// was deleted). `put_flat` stores the projection with its revision;
+// `take_flat` removes it only when the request revision is strictly older
+// than the stored revision and returns a pointer to a Rust-owned flat
+// projection whose string/candidate pointers stay valid until the next
+// take_flat call or ledger destruction (null when absent/stale).
+struct Fcitx5EngineSnapshotRecordC {
+    std::uint64_t id;
+    const std::uint8_t* label;
+    std::size_t labelLen;
+    const std::uint8_t* text;
+    std::size_t textLen;
+    const std::uint8_t* comment;
+    std::size_t commentLen;
+};
+
+struct Fcitx5EngineSnapshotFlatC {
+    std::uint8_t handled;
+    std::uint32_t preeditCaretUtf8;
+    std::uint64_t compositionId;
+    std::uint64_t revision;
+    std::uint32_t selectedCandidate;
+    std::uint32_t candidatePage;
+    std::uint32_t candidateTotal;
+    std::uint8_t candidateVisibility;
+    std::uint32_t candidatePageSize;
+    std::uint8_t candidateBulk;
+    std::uint8_t candidateEnd;
+    std::uint8_t deleteSurroundingText;
+    std::int32_t deleteSurroundingOffset;
+    std::uint32_t deleteSurroundingSize;
+    std::uint8_t forwardKey;
+    std::uint32_t forwardKeySym;
+    std::uint32_t forwardKeyStates;
+    std::int32_t forwardKeyCode;
+    std::uint8_t forwardKeyRelease;
+    std::uint8_t caretValid;
+    std::int32_t caretLeft;
+    std::int32_t caretTop;
+    std::int32_t caretRight;
+    std::int32_t caretBottom;
+    std::uint32_t caretDpi;
+    std::uint8_t popupAllowed;
+    const std::uint8_t* commit;
+    std::size_t commitLen;
+    const std::uint8_t* preedit;
+    std::size_t preeditLen;
+    const std::uint8_t* contentLocale;
+    std::size_t contentLocaleLen;
+    const Fcitx5EngineSnapshotRecordC* candidates;
+    std::size_t candidateCount;
+};
+
+int fcitx5_engine_core_snapshot_store_put_flat(
+    void* ledger, const FcitxEngineContextKeyC* key, std::uint64_t revision,
+    const Fcitx5EngineSnapshotFlatC* snapshot);
+const Fcitx5EngineSnapshotFlatC* fcitx5_engine_core_snapshot_store_take_flat(
+    void* ledger, const FcitxEngineContextKeyC* key, std::uint64_t requestRevision);
 
 // E6: scroll-mode candidate label offset (mirrors the C++
 // `columnSelectionRow`/`rowSelectionColumn` choice). Returns 1 and writes

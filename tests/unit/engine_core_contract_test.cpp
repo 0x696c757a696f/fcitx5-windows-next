@@ -466,19 +466,32 @@ int runCorpus() {
             "null snapshot must fail closed");
     }
 
-    // E5-3: pending snapshot store error paths.
+    // E5-3 (083): pending snapshot store error paths via the flat ABI.
     {
         failures += !expect(
-            fcitx5_engine_core_snapshot_store_put(ledger, &a, 1, nullptr, 0) ==
+            fcitx5_engine_core_snapshot_store_put_flat(ledger, &a, 1, nullptr) ==
                 FCITX_ENGINE_CORE_STALE,
-            "malformed snapshot blob must be rejected");
+            "null flat snapshot must be rejected");
+        Fcitx5EngineSnapshotRecordC record{};
+        record.id = 1;
+        record.label = nullptr;
+        record.labelLen = 1;
+        record.text = nullptr;
+        record.textLen = 0;
+        record.comment = nullptr;
+        record.commentLen = 0;
+        Fcitx5EngineSnapshotFlatC flat{};
+        flat.handled = 1;
+        flat.candidateVisibility = 1;
+        flat.candidatePageSize = 1;
+        flat.candidates = &record;
+        flat.candidateCount = 1;
         failures += !expect(
-            fcitx5_engine_core_snapshot_store_required_size(ledger, &a) == 0,
-            "absent pending snapshot reports size 0");
-        std::size_t blobLength = 0;
+            fcitx5_engine_core_snapshot_store_put_flat(ledger, &a, 1, &flat) ==
+                FCITX_ENGINE_CORE_STALE,
+            "null candidate string with non-zero length must fail closed");
         failures += !expect(
-            fcitx5_engine_core_snapshot_store_take(ledger, &a, 0, nullptr, 0, &blobLength) ==
-                0,
+            fcitx5_engine_core_snapshot_store_take_flat(ledger, &a, 0) == nullptr,
             "absent pending snapshot must not be taken");
     }
 

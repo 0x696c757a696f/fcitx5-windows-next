@@ -1431,11 +1431,11 @@ fn snapshot_validation_accepts_boundary_values() {
 }
 
 // ---------------------------------------------------------------------------
-// E5-3: canonical snapshot blob codec + pending store
+// E5-3: canonical snapshot flat ABI projection + pending store
 // ---------------------------------------------------------------------------
 
 mod snapshot_tests {
-    use super::super::snapshot::{decode_snapshot, encode_snapshot, Candidate, EngineSnapshot};
+    use super::super::snapshot::{Candidate, EngineSnapshot, FlatSnapshotArena};
     use super::super::ContextLedger;
 
     fn sample() -> EngineSnapshot {
@@ -1479,39 +1479,41 @@ mod snapshot_tests {
     }
 
     #[test]
-    fn snapshot_blob_roundtrip() {
+    fn snapshot_flat_projection_roundtrip_fields() {
         let snapshot = sample();
-        let blob = encode_snapshot(&snapshot);
-        let decoded = decode_snapshot(&blob).expect("valid blob");
-        assert_eq!(decoded, snapshot);
+        let (arena, flat) = FlatSnapshotArena::build(&snapshot);
+        // The projection exposes the same scalar fields.
+        assert_eq!(flat.handled, 1);
+        assert_eq!(flat.composition_id, snapshot.composition_id);
+        assert_eq!(flat.revision, snapshot.revision);
+        assert_eq!(flat.candidate_page_size, snapshot.candidate_page_size);
+        assert_eq!(flat.candidate_bulk, 0);
+        assert_eq!(flat.candidate_end, 1);
+        assert_eq!(flat.caret_dpi, snapshot.caret_dpi);
+        assert_eq!(flat.candidate_count, snapshot.candidates.len());
+        // The arena stores exactly the referenced payloads, in order:
+        // commit, preedit, content locale, then per-candidate triples.
+        let buffers: Vec<&[u8]> = arena.stored_buffers().collect();
+        assert_eq!(buffers[0], snapshot.commit_utf8.as_slice());
+        assert_eq!(buffers[1], snapshot.preedit_utf8.as_slice());
+        assert_eq!(buffers[2], snapshot.content_locale_utf8.as_slice());
+        assert_eq!(buffers[3], snapshot.candidates[0].label.as_slice());
+        assert_eq!(buffers[4], snapshot.candidates[0].text.as_slice());
+        assert_eq!(flat.commit_len, buffers[0].len());
+        assert_eq!(flat.candidate_count, 1);
+        drop(arena);
     }
 
     #[test]
-    fn snapshot_blob_rejects_malformed_input() {
-        assert!(decode_snapshot(&[]).is_none());
-        assert!(decode_snapshot(&[0xff; 4]).is_none());
-        // Truncated candidate count with candidates.
-        let blob = encode_snapshot(&sample());
-        assert!(decode_snapshot(&blob[..blob.len() - 1]).is_none());
-        // Trailing garbage.
-        let mut bad = blob.clone();
-        bad.push(0);
-        assert!(decode_snapshot(&bad).is_none());
-    }
-
-    #[test]
-    fn snapshot_blob_rejects_oversized_candidate_count() {
+    fn snapshot_flat_projection_empty_strings_and_candidates() {
         let mut snapshot = sample();
-        snapshot.candidates = (0..129)
-            .map(|i| Candidate {
-                id: i,
-                label: Vec::new(),
-                text: Vec::new(),
-                comment: Vec::new(),
-            })
-            .collect();
-        let blob = encode_snapshot(&snapshot);
-        assert!(decode_snapshot(&blob).is_none());
+        snapshot.commit_utf8.clear();
+        snapshot.candidates.clear();
+        let (arena, flat) = FlatSnapshotArena::build(&snapshot);
+        assert_eq!(flat.commit_len, 0);
+        assert_eq!(flat.candidate_count, 0);
+        assert_eq!(arena.stored_buffers().count(), 3);
+        drop(arena);
     }
 
     #[test]

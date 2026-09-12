@@ -6,6 +6,7 @@ use super::{
     fcitx5_engine_core_ledger_begin_key, fcitx5_engine_core_ledger_end_result,
     fcitx5_engine_core_ledger_forget, fcitx5_engine_core_ledger_free,
     fcitx5_engine_core_ledger_new, fcitx5_engine_core_ledger_select_candidate,
+    fcitx5_engine_core_snapshot_store_put_flat, fcitx5_engine_core_snapshot_store_take_flat,
     FcitxEngineContextKeyC, FCITX_ENGINE_CORE_INVALID_CANDIDATE, FCITX_ENGINE_CORE_OK,
     FCITX_ENGINE_CORE_STALE,
 };
@@ -1041,4 +1042,87 @@ fn session_c_abi_complete_request_advances_last_id() {
         0
     );
     free_session(session);
+}
+
+#[test]
+fn snapshot_store_flat_c_abi_roundtrip() {
+    // Builds a flat projection through the Rust arena, stores it through the
+    // C ABI, takes it back, and verifies the returned projection matches.
+    let ledger = fcitx5_engine_core_ledger_new();
+    assert!(!ledger.is_null());
+    let key = FcitxEngineContextKeyC {
+        process_id: 11,
+        connection_id: 22,
+        context_id: 33,
+    };
+    let snapshot = crate::snapshot::EngineSnapshot {
+        handled: true,
+        preedit_caret_utf8: 3,
+        composition_id: 9,
+        revision: 5,
+        selected_candidate: 1,
+        candidate_page: 0,
+        candidate_total: 2,
+        candidate_visibility: 1,
+        candidate_page_size: 2,
+        candidate_bulk: false,
+        candidate_end: true,
+        delete_surrounding_text: false,
+        delete_surrounding_offset: 0,
+        delete_surrounding_size: 0,
+        forward_key: false,
+        forward_key_sym: 0,
+        forward_key_states: 0,
+        forward_key_code: 0,
+        forward_key_release: false,
+        caret_valid: true,
+        caret_left: 10,
+        caret_top: 20,
+        caret_right: 12,
+        caret_bottom: 42,
+        caret_dpi: 96,
+        popup_allowed: true,
+        commit_utf8: b"ni".to_vec(),
+        preedit_utf8: vec![0xe4, 0xbd, 0xa0],
+        content_locale_utf8: b"zh-CN".to_vec(),
+        candidates: vec![
+            crate::snapshot::Candidate {
+                id: 1,
+                label: b"1".to_vec(),
+                text: vec![0xe4, 0xbd, 0xa0],
+                comment: Vec::new(),
+            },
+            crate::snapshot::Candidate {
+                id: 2,
+                label: b"2".to_vec(),
+                text: vec![0xe5, 0xa5, 0xbd],
+                comment: b"hao".to_vec(),
+            },
+        ],
+    };
+    let (arena, flat) = crate::snapshot::FlatSnapshotArena::build(&snapshot);
+    let put =
+        unsafe { fcitx5_engine_core_snapshot_store_put_flat(ledger, &key, flat.revision, &flat) };
+    assert_eq!(put, 0);
+    // Keep the arena alive past the call: the put contract only needs it for
+    // the call duration, but the take must still return owned data.
+    let taken = unsafe {
+        fcitx5_engine_core_snapshot_store_take_flat(ledger, &key, flat.revision.wrapping_sub(1))
+    };
+    assert!(!taken.is_null());
+    // SAFETY: take_flat returns one initialized flat snapshot.
+    let taken = unsafe { &*taken };
+    assert_eq!(taken.handled, flat.handled);
+    assert_eq!(taken.composition_id, flat.composition_id);
+    assert_eq!(taken.revision, flat.revision);
+    assert_eq!(taken.candidate_count, flat.candidate_count);
+    // SAFETY: taken candidates reference ledger arena storage.
+    let records = unsafe { std::slice::from_raw_parts(taken.candidates, taken.candidate_count) };
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].id, 2);
+    let commit = unsafe { std::slice::from_raw_parts(taken.commit, taken.commit_len) };
+    assert_eq!(commit, b"ni");
+    let _ = arena;
+    // SAFETY: ledger created by fcitx5_engine_core_ledger_new above.
+    unsafe { fcitx5_engine_core_ledger_free(ledger) };
 }

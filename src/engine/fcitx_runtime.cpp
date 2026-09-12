@@ -433,185 +433,6 @@ std::string shortLabelFromRust(std::string_view text) {
 // E5-3: canonical snapshot blob serialization. The blob format is
 // Rust-authoritative (`rust/engine-core/src/snapshot.rs`); these helpers only
 // marshal `RuntimeResult` in/out of that byte format for the pending store.
-void writeU32(std::vector<std::uint8_t>& out, std::uint32_t value) {
-    out.push_back(static_cast<std::uint8_t>(value));
-    out.push_back(static_cast<std::uint8_t>(value >> 8U));
-    out.push_back(static_cast<std::uint8_t>(value >> 16U));
-    out.push_back(static_cast<std::uint8_t>(value >> 24U));
-}
-
-void writeI32(std::vector<std::uint8_t>& out, std::int32_t value) {
-    writeU32(out, static_cast<std::uint32_t>(value));
-}
-
-void writeU64(std::vector<std::uint8_t>& out, std::uint64_t value) {
-    for (int index = 0; index < 8; ++index) {
-        out.push_back(static_cast<std::uint8_t>(value >> (8 * index)));
-    }
-}
-
-void writeBytes(std::vector<std::uint8_t>& out, std::string_view text) {
-    writeU32(out, static_cast<std::uint32_t>(text.size()));
-    out.insert(out.end(), text.begin(), text.end());
-}
-
-std::vector<std::uint8_t> serializeSnapshot(const RuntimeResult& result) {
-    std::vector<std::uint8_t> out;
-    out.push_back(result.handled ? 1U : 0U);
-    writeU32(out, result.preeditCaretUtf8);
-    writeU64(out, result.compositionId);
-    writeU64(out, result.revision);
-    writeU32(out, result.selectedCandidate);
-    writeU32(out, result.candidatePage);
-    writeU32(out, result.candidateTotal);
-    out.push_back(result.candidateVisibility);
-    writeU32(out, result.candidatePageSize);
-    out.push_back(result.candidateBulk ? 1U : 0U);
-    out.push_back(result.candidateEnd ? 1U : 0U);
-    out.push_back(result.deleteSurroundingText ? 1U : 0U);
-    writeI32(out, result.deleteSurroundingOffset);
-    writeU32(out, result.deleteSurroundingSize);
-    out.push_back(result.forwardKey ? 1U : 0U);
-    writeU32(out, result.forwardKeySym);
-    writeU32(out, result.forwardKeyStates);
-    writeI32(out, result.forwardKeyCode);
-    out.push_back(result.forwardKeyRelease ? 1U : 0U);
-    out.push_back(result.caret.valid ? 1U : 0U);
-    writeI32(out, result.caret.left);
-    writeI32(out, result.caret.top);
-    writeI32(out, result.caret.right);
-    writeI32(out, result.caret.bottom);
-    writeU32(out, result.caret.dpi);
-    out.push_back(result.popupAllowed ? 1U : 0U);
-    writeBytes(out, result.commitUtf8);
-    writeBytes(out, result.preeditUtf8);
-    writeBytes(out, result.contentLocaleUtf8);
-    writeU32(out, static_cast<std::uint32_t>(result.candidates.size()));
-    for (const auto& candidate : result.candidates) {
-        writeU64(out, candidate.id);
-        writeBytes(out, candidate.labelUtf8);
-        writeBytes(out, candidate.textUtf8);
-        writeBytes(out, candidate.commentUtf8);
-    }
-    return out;
-}
-
-struct BlobReader {
-    const std::uint8_t* data;
-    std::size_t size;
-    std::size_t offset{};
-
-    bool take(std::size_t count, const std::uint8_t*& pointer) {
-        if (count > size - offset)
-            return false;
-        pointer = data + offset;
-        offset += count;
-        return true;
-    }
-    bool u8(std::uint8_t& value) {
-        const std::uint8_t* pointer = nullptr;
-        if (!take(1, pointer))
-            return false;
-        value = *pointer;
-        return true;
-    }
-    bool u32(std::uint32_t& value) {
-        const std::uint8_t* pointer = nullptr;
-        if (!take(4, pointer))
-            return false;
-        value = static_cast<std::uint32_t>(pointer[0]) |
-                (static_cast<std::uint32_t>(pointer[1]) << 8U) |
-                (static_cast<std::uint32_t>(pointer[2]) << 16U) |
-                (static_cast<std::uint32_t>(pointer[3]) << 24U);
-        return true;
-    }
-    bool i32(std::int32_t& value) {
-        std::uint32_t raw = 0;
-        if (!u32(raw))
-            return false;
-        value = static_cast<std::int32_t>(raw);
-        return true;
-    }
-    bool u64(std::uint64_t& value) {
-        const std::uint8_t* pointer = nullptr;
-        if (!take(8, pointer))
-            return false;
-        value = 0;
-        for (int index = 0; index < 8; ++index)
-            value |= static_cast<std::uint64_t>(pointer[index]) << (8 * index);
-        return true;
-    }
-    bool bytes(std::string& text) {
-        std::uint32_t length = 0;
-        if (!u32(length))
-            return false;
-        const std::uint8_t* pointer = nullptr;
-        if (!take(length, pointer))
-            return false;
-        text.assign(reinterpret_cast<const char*>(pointer), length);
-        return true;
-    }
-};
-
-bool deserializeSnapshot(const std::uint8_t* data, std::size_t size, RuntimeResult& result) {
-    BlobReader reader{data, size};
-    std::uint8_t value8 = 0;
-    std::uint32_t value32 = 0;
-    if (!reader.u8(value8))
-        return false;
-    result.handled = value8 != 0;
-    if (!reader.u32(result.preeditCaretUtf8) || !reader.u64(result.compositionId) ||
-        !reader.u64(result.revision) || !reader.u32(result.selectedCandidate) ||
-        !reader.u32(result.candidatePage) || !reader.u32(result.candidateTotal) ||
-        !reader.u8(result.candidateVisibility) || !reader.u32(result.candidatePageSize))
-        return false;
-    if (!reader.u8(value8))
-        return false;
-    result.candidateBulk = value8 != 0;
-    if (!reader.u8(value8))
-        return false;
-    result.candidateEnd = value8 != 0;
-    if (!reader.u8(value8))
-        return false;
-    result.deleteSurroundingText = value8 != 0;
-    if (!reader.i32(result.deleteSurroundingOffset) || !reader.u32(result.deleteSurroundingSize))
-        return false;
-    if (!reader.u8(value8))
-        return false;
-    result.forwardKey = value8 != 0;
-    if (!reader.u32(result.forwardKeySym) || !reader.u32(result.forwardKeyStates) ||
-        !reader.i32(result.forwardKeyCode))
-        return false;
-    if (!reader.u8(value8))
-        return false;
-    result.forwardKeyRelease = value8 != 0;
-    if (!reader.u8(value8))
-        return false;
-    result.caret.valid = value8 != 0;
-    if (!reader.i32(result.caret.left) || !reader.i32(result.caret.top) ||
-        !reader.i32(result.caret.right) || !reader.i32(result.caret.bottom) ||
-        !reader.u32(result.caret.dpi))
-        return false;
-    if (!reader.u8(value8))
-        return false;
-    result.popupAllowed = value8 != 0;
-    if (!reader.bytes(result.commitUtf8) || !reader.bytes(result.preeditUtf8) ||
-        !reader.bytes(result.contentLocaleUtf8) || !reader.u32(value32))
-        return false;
-    if (value32 > static_cast<std::uint32_t>(kMaximumCandidateViews))
-        return false;
-    result.candidates.clear();
-    result.candidates.reserve(value32);
-    for (std::uint32_t index = 0; index < value32; ++index) {
-        CandidateView record;
-        if (!reader.u64(record.id) || !reader.bytes(record.labelUtf8) ||
-            !reader.bytes(record.textUtf8) || !reader.bytes(record.commentUtf8))
-            return false;
-        result.candidates.push_back(std::move(record));
-    }
-    return reader.offset == reader.size;
-}
-
 } // namespace
 
 class FcitxRuntime::Impl final {
@@ -925,6 +746,83 @@ class FcitxRuntime::Impl final {
     }
 };
 
+// 083: flat ABI projection of RuntimeResult. The Rust ledger owns the
+// authoritative snapshot form; no serialization format crosses the FFI edge
+// (the previous hand-rolled C++ blob codec was deleted).
+namespace {
+
+Fcitx5EngineSnapshotRecordC toRecordC(const CandidateView& candidate) noexcept {
+    const auto label =
+        reinterpret_cast<const std::uint8_t*>(candidate.labelUtf8.data());
+    const auto text =
+        reinterpret_cast<const std::uint8_t*>(candidate.textUtf8.data());
+    const auto comment =
+        reinterpret_cast<const std::uint8_t*>(candidate.commentUtf8.data());
+    return Fcitx5EngineSnapshotRecordC{
+        candidate.id,
+        label,
+        candidate.labelUtf8.size(),
+        text,
+        candidate.textUtf8.size(),
+        comment,
+        candidate.commentUtf8.size(),
+    };
+}
+
+Fcitx5EngineSnapshotFlatC toFlatC(std::vector<Fcitx5EngineSnapshotRecordC>& records,
+                                  const RuntimeResult& result) noexcept {
+    records.clear();
+    records.reserve(result.candidates.size());
+    for (const auto& candidate : result.candidates) {
+        records.push_back(toRecordC(candidate));
+    }
+    const auto view = [](const std::string& text) {
+        return std::pair<const std::uint8_t*, std::size_t>{
+            reinterpret_cast<const std::uint8_t*>(text.data()), text.size()};
+    };
+    const auto commit = view(result.commitUtf8);
+    const auto preedit = view(result.preeditUtf8);
+    const auto contentLocale = view(result.contentLocaleUtf8);
+    return Fcitx5EngineSnapshotFlatC{
+        result.handled ? std::uint8_t{1U} : std::uint8_t{0U},
+        result.preeditCaretUtf8,
+        result.compositionId,
+        result.revision,
+        result.selectedCandidate,
+        result.candidatePage,
+        result.candidateTotal,
+        result.candidateVisibility,
+        result.candidatePageSize,
+        result.candidateBulk ? std::uint8_t{1U} : std::uint8_t{0U},
+        result.candidateEnd ? std::uint8_t{1U} : std::uint8_t{0U},
+        result.deleteSurroundingText ? std::uint8_t{1U} : std::uint8_t{0U},
+        result.deleteSurroundingOffset,
+        result.deleteSurroundingSize,
+        result.forwardKey ? std::uint8_t{1U} : std::uint8_t{0U},
+        result.forwardKeySym,
+        result.forwardKeyStates,
+        result.forwardKeyCode,
+        result.forwardKeyRelease ? std::uint8_t{1U} : std::uint8_t{0U},
+        result.caret.valid ? std::uint8_t{1U} : std::uint8_t{0U},
+        result.caret.left,
+        result.caret.top,
+        result.caret.right,
+        result.caret.bottom,
+        result.caret.dpi,
+        result.popupAllowed ? std::uint8_t{1U} : std::uint8_t{0U},
+        commit.first,
+        commit.second,
+        preedit.first,
+        preedit.second,
+        contentLocale.first,
+        contentLocale.second,
+        records.data(),
+        records.size(),
+    };
+}
+
+} // namespace
+
 FcitxRuntime::FcitxRuntime() : impl_(std::make_unique<Impl>()) {}
 FcitxRuntime::~FcitxRuntime() = default;
 
@@ -1194,30 +1092,63 @@ RuntimeResult FcitxRuntime::selectCandidate(std::uint32_t targetProcessId,
     candidate.select(&context);
     (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(), &ledgerKey);
     RuntimeResult output = impl_->collectResult(found->first, context, true);
-    // E5-3: the pending snapshot store is Rust-owned.
-    const auto blob = serializeSnapshot(output);
-    (void)fcitx5_engine_core_snapshot_store_put(impl_->ledger.get(), &ledgerKey, output.revision,
-                                                blob.data(), blob.size());
+    // E5-3 (083): the pending snapshot store is Rust-owned; the flat
+    // projection is marshaled without any serialization format crossing the
+    // FFI edge. The record vector lives in this scope so the flat projection's
+    // candidate pointers stay valid for the duration of the put call.
+    std::vector<Fcitx5EngineSnapshotRecordC> flatRecords;
+    const Fcitx5EngineSnapshotFlatC flat = toFlatC(flatRecords, output);
+    (void)fcitx5_engine_core_snapshot_store_put_flat(impl_->ledger.get(), &ledgerKey,
+                                                     output.revision, &flat);
     return output;
 }
 
 RuntimeResult FcitxRuntime::takePendingState(const ClientContextKey& key,
                                              const FcitxStateRequestC& request) {
     const FcitxEngineContextKeyC ledgerKey = toLedgerKey(key);
-    const std::size_t required =
-        fcitx5_engine_core_snapshot_store_required_size(impl_->ledger.get(), &ledgerKey);
-    if (required == 0)
+    const auto* flat = fcitx5_engine_core_snapshot_store_take_flat(
+        impl_->ledger.get(), &ledgerKey, request.metadata.revision);
+    if (flat == nullptr)
         throw std::invalid_argument("pending state is unavailable");
-    std::vector<std::uint8_t> blob(required);
-    std::size_t blobLength = 0;
-    if (fcitx5_engine_core_snapshot_store_take(impl_->ledger.get(), &ledgerKey,
-                                               request.metadata.revision, blob.data(), blob.size(),
-                                               &blobLength) == 0) {
-        throw std::invalid_argument("pending state is unavailable");
-    }
     RuntimeResult output;
-    if (!deserializeSnapshot(blob.data(), blobLength, output))
-        throw std::invalid_argument("pending state is unavailable");
+    output.handled = flat->handled != 0;
+    output.commitUtf8.assign(reinterpret_cast<const char*>(flat->commit), flat->commitLen);
+    output.preeditUtf8.assign(reinterpret_cast<const char*>(flat->preedit), flat->preeditLen);
+    output.preeditCaretUtf8 = flat->preeditCaretUtf8;
+    output.compositionId = flat->compositionId;
+    output.revision = flat->revision;
+    output.selectedCandidate = flat->selectedCandidate;
+    output.candidatePage = flat->candidatePage;
+    output.candidateTotal = flat->candidateTotal;
+    output.candidateVisibility = flat->candidateVisibility;
+    output.candidatePageSize = flat->candidatePageSize;
+    output.candidateBulk = flat->candidateBulk != 0;
+    output.candidateEnd = flat->candidateEnd != 0;
+    output.deleteSurroundingText = flat->deleteSurroundingText != 0;
+    output.deleteSurroundingOffset = flat->deleteSurroundingOffset;
+    output.deleteSurroundingSize = flat->deleteSurroundingSize;
+    output.forwardKey = flat->forwardKey != 0;
+    output.forwardKeySym = flat->forwardKeySym;
+    output.forwardKeyStates = flat->forwardKeyStates;
+    output.forwardKeyCode = flat->forwardKeyCode;
+    output.forwardKeyRelease = flat->forwardKeyRelease != 0;
+    output.caret = FcitxCaretRectC{flat->caretValid != 0, flat->caretLeft, flat->caretTop,
+                                   flat->caretRight, flat->caretBottom, flat->caretDpi};
+    output.popupAllowed = flat->popupAllowed != 0;
+    output.contentLocaleUtf8.assign(reinterpret_cast<const char*>(flat->contentLocale),
+                                    flat->contentLocaleLen);
+    output.candidates.reserve(flat->candidateCount);
+    for (std::size_t index = 0; index < flat->candidateCount; ++index) {
+        const auto& record = flat->candidates[index];
+        const auto view = [](const std::uint8_t* data, std::size_t length) {
+            if (length == 0)
+                return std::string{};
+            return std::string(reinterpret_cast<const char*>(data), length);
+        };
+        output.candidates.push_back(CandidateView{record.id, view(record.label, record.labelLen),
+                                                  view(record.text, record.textLen),
+                                                  view(record.comment, record.commentLen)});
+    }
     return output;
 }
 

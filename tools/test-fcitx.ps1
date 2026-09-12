@@ -109,7 +109,7 @@ try {
     & $cmake --preset "windows-$architecture-dev"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
-    & $cmake --build $build --config $Configuration --target fcitx5_engine_e2e fcitx5_ui
+    & $cmake --build $build --config $Configuration --target fcitx5_engine_e2e fcitx5_ui_rustbin
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Copy-Item -LiteralPath (Join-Path $build "$Configuration/fcitx5-ui.exe") `
       -Destination (Join-Path $stage 'bin/fcitx5-ui.exe') -Force

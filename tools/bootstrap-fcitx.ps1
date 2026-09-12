@@ -349,7 +349,7 @@ Invoke-Msys "cmake -S '$msysSources/fcitx5-chinese-addons' -B '$msysBuild/fcitx5
 Invoke-Msys "cmake -S '$msysSources/librime' -B '$msysBuild/librime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DCMAKE_DLL_NAME_WITH_SOVERSION=ON -DBUILD_TEST=OFF -DENABLE_LOGGING=OFF -DLUA_VERSION=lua5.4; cmake --build '$msysBuild/librime' --parallel; cmake --install '$msysBuild/librime'"
 Invoke-Msys "cmake -S '$msysSources/fcitx5-rime' -B '$msysBuild/fcitx5-rime' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DRIME_DATA_DIR='$msysStage/share/rime-data'; cmake --build '$msysBuild/fcitx5-rime' --parallel; cmake --install '$msysBuild/fcitx5-rime'"
 Invoke-Msys "cmake -S '$msysSources/fcitx5-lua' -B '$msysBuild/fcitx5-lua' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DUSE_DLOPEN=OFF -DENABLE_TEST=OFF; cmake --build '$msysBuild/fcitx5-lua' --parallel; cmake --install '$msysBuild/fcitx5-lua'"
-Invoke-Msys "cmake -S '$msysSources/fcitx5-unikey' -B '$msysBuild/fcitx5-unikey' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DENABLE_TEST=OFF; cmake --build '$msysBuild/fcitx5-unikey' --parallel; cmake --install '$msysBuild/fcitx5-unikey'"
+Invoke-Msys "cmake -S '$msysSources/fcitx5-unikey' -B '$msysBuild/fcitx5-unikey' $common -DCMAKE_PREFIX_PATH='$msysStage;/clang64' -DENABLE_TEST=OFF -DENABLE_QT=OFF; cmake --build '$msysBuild/fcitx5-unikey' --parallel; cmake --install '$msysBuild/fcitx5-unikey'"
 Invoke-Msys "cmake -S '$msysRepo/native-engine' -B '$msysBuild/native-engine' $common -DCMAKE_PREFIX_PATH='$msysStage'; cmake --build '$msysBuild/native-engine' --parallel; cmake --install '$msysBuild/native-engine'"
 
 $runtimeDlls = @('libc++.dll', 'libzstd.dll', 'libdl.dll', 'libintl-8.dll',

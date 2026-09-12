@@ -135,6 +135,9 @@ pub struct ContextLedger {
     selected_override: HashMap<ContextKey, Option<u32>>,
     input_method_overridden: HashMap<ContextKey, bool>,
     snapshot_store: snapshot::SnapshotStore,
+    /// Arena backing the most recent `snapshot_take_flat` response; the
+    /// returned pointers stay valid until the next flat take or drop.
+    flat_take: Option<Box<snapshot::FlatTake>>,
 }
 
 impl Default for ContextLedger {
@@ -156,6 +159,7 @@ impl ContextLedger {
             selected_override: HashMap::new(),
             input_method_overridden: HashMap::new(),
             snapshot_store: snapshot::SnapshotStore::new(),
+            flat_take: None,
         }
     }
 
@@ -262,6 +266,22 @@ impl ContextLedger {
         request_revision: u64,
     ) -> Option<snapshot::EngineSnapshot> {
         self.snapshot_store.take(key, request_revision)
+    }
+
+    /// Takes the pending snapshot and returns a pointer to a flat
+    /// self-contained projection whose strings reference ledger-owned arena
+    /// storage. The pointers stay valid until the next flat take or ledger
+    /// drop (the same contract as the candidate frame response DTO).
+    pub fn snapshot_take_flat(
+        &mut self,
+        key: ContextKey,
+        request_revision: u64,
+    ) -> Option<*const snapshot::Fcitx5EngineSnapshotFlatC> {
+        let snapshot = self.snapshot_store.take(key, request_revision)?;
+        let (arena, flat) = snapshot::FlatSnapshotArena::build(&snapshot);
+        self.flat_take = Some(Box::new(snapshot::FlatTake { arena, flat }));
+        let boxed = self.flat_take.as_ref().expect("just stored");
+        Some(&boxed.flat as *const snapshot::Fcitx5EngineSnapshotFlatC)
     }
 
     /// Stores the last-known caret rectangle for `key` (mirrors

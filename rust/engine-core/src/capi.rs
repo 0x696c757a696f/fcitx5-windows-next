@@ -1415,38 +1415,37 @@ pub unsafe extern "C" fn fcitx5_engine_core_validate_snapshot(
 // E5-3: pending snapshot store C ABI
 // ---------------------------------------------------------------------------
 
-/// Stores a pending snapshot for a context. The blob must be a valid
-/// canonical snapshot encoding (parsed and validated by Rust); the store
-/// keeps the decoded snapshot with its revision. Returns
+/// Stores a pending snapshot for a context from a flat self-contained ABI
+/// projection ([`crate::snapshot::Fcitx5EngineSnapshotFlatC`]). The Rust
+/// ledger converts it to the authoritative [`EngineSnapshot`] form; no
+/// serialization format crosses the FFI edge (083). Returns
 /// FCITX_ENGINE_CORE_OK (0) on success, FCITX_ENGINE_CORE_STALE (1) on null
-/// input or a malformed blob (fail closed).
+/// input or an inconsistent projection (fail closed).
 ///
 /// # Safety
-/// `ledger` must be a valid live handle; `key` must be valid or null;
-/// `blob`/`blob_len` must describe a readable buffer (null with length 0 is
-/// allowed).
+/// `ledger` must be a valid live handle; `key` and `snapshot` must be valid
+/// or null; string/candidate pointers inside `snapshot` must reference
+/// readable memory for their documented lengths for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_put(
+pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_put_flat(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
     revision: u64,
-    blob: *const u8,
-    blob_len: usize,
+    snapshot: *const crate::snapshot::Fcitx5EngineSnapshotFlatC,
 ) -> i32 {
     let Some(key) = from_c(key) else {
         return FCITX_ENGINE_CORE_STALE;
     };
-    if ledger.is_null() || (blob.is_null() && blob_len != 0) {
+    if ledger.is_null() || snapshot.is_null() {
         return FCITX_ENGINE_CORE_STALE;
     }
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
-        let bytes = if blob_len == 0 {
-            &[][..]
-        } else {
-            // SAFETY: caller provides a valid buffer of `blob_len` bytes.
-            unsafe { std::slice::from_raw_parts(blob, blob_len) }
+        // SAFETY: caller guarantees `snapshot` points to one initialized
+        // flat snapshot for the duration of the call.
+        let flat = unsafe { &*snapshot };
+        let Some(snapshot) = snapshot_from_flat(flat) else {
+            return None;
         };
-        let snapshot = crate::snapshot::decode_snapshot(bytes)?;
         // SAFETY: caller guarantees the handle came from `ledger_new`.
         let ledger = unsafe { &mut *(ledger as *mut ContextLedger) };
         ledger.snapshot_put(key, revision, snapshot);
@@ -1459,96 +1458,111 @@ pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_put(
 }
 
 /// Takes the pending snapshot for a context when the request revision is
-/// strictly older than the stored revision, removing the entry. Writes the
-/// canonical snapshot encoding into `out` and `*out_len` (when the buffer is
-/// large enough; otherwise the required size is reported in `*out_len` and 0
-/// is returned). Returns 1 on success, 0 when absent/stale/buffer-too-small
-/// or on null input.
-///
-/// # Safety
-/// `ledger` must be a valid live handle; `key`/`out_len` must be valid or
-/// null; `out` must be writable for `out_capacity` bytes or null with
-/// capacity 0.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_take(
-    ledger: *mut c_void,
-    key: *const FcitxEngineContextKeyC,
-    request_revision: u64,
-    out: *mut u8,
-    out_capacity: usize,
-    out_len: *mut usize,
-) -> i32 {
-    let Some(key) = from_c(key) else {
-        return 0;
-    };
-    if ledger.is_null() || out_len.is_null() {
-        return 0;
-    }
-    let result = panic::catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: caller guarantees the handle came from `ledger_new`.
-        let ledger = unsafe { &mut *(ledger as *mut ContextLedger) };
-        ledger
-            .snapshot_take(key, request_revision)
-            .map(|snapshot| crate::snapshot::encode_snapshot(&snapshot))
-    }));
-    match result {
-        Ok(Some(blob)) => {
-            // SAFETY: output pointer checked above.
-            unsafe {
-                *out_len = blob.len();
-            }
-            if blob.len() > out_capacity {
-                return 0;
-            }
-            if !blob.is_empty() && !out.is_null() {
-                // SAFETY: caller provides a writable buffer of
-                // `out_capacity` bytes and `blob.len() <= out_capacity`.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(blob.as_ptr(), out, blob.len());
-                }
-            }
-            1
-        }
-        _ => 0,
-    }
-}
-
-/// Returns the stored pending snapshot blob size for a context (0 when
-/// absent), so the caller can size the take buffer without consuming the
-/// entry.
+/// strictly older than the stored revision, removing the entry. Returns a
+/// pointer to a flat self-contained projection whose strings reference
+/// ledger-owned arena storage valid until the next flat take or ledger
+/// destroy; null when absent/stale (083: replaces the blob two-phase take).
 ///
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_required_size(
+pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_take_flat(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
-) -> usize {
+    request_revision: u64,
+) -> *const crate::snapshot::Fcitx5EngineSnapshotFlatC {
     let Some(key) = from_c(key) else {
-        return 0;
+        return std::ptr::null();
     };
     if ledger.is_null() {
-        return 0;
+        return std::ptr::null();
     }
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: caller guarantees the handle came from `ledger_new`.
-        let ledger = unsafe { &*(ledger as *const ContextLedger) };
-        ledger
-            .snapshot_store
-            .entry_size(key)
-            .map(|snapshot| crate::snapshot::encode_snapshot(snapshot).len())
-            .unwrap_or(0)
+        let ledger = unsafe { &mut *(ledger as *mut ContextLedger) };
+        ledger.snapshot_take_flat(key, request_revision)
     }));
-    result.unwrap_or(0)
+    result.unwrap_or(None).unwrap_or(std::ptr::null())
 }
 
-/// Decides the scroll-mode candidate label offset (mirrors the C++
-/// `columnSelectionRow`/`rowSelectionColumn` choice). Returns 1 and writes
-/// `out_offset` when the index is in the same row/column as the cursor;
-/// 0 otherwise or on null output.
-///
-/// # Safety
-/// `out_offset` must be writable or null.
+/// Reads one caller-provided string view; None on null pointer with
+/// non-zero length (fail closed).
+fn flat_view(bytes: *const u8, len: usize) -> Option<&'static [u8]> {
+    if len == 0 {
+        return Some(&[]);
+    }
+    if bytes.is_null() {
+        return None;
+    }
+    // SAFETY: the caller's flat snapshot contract guarantees a readable
+    // buffer of exactly `len` bytes for the duration of the put call; the
+    // returned slice is only used to build an owned snapshot.
+    Some(unsafe { std::slice::from_raw_parts(bytes, len) })
+}
+
+/// Converts a caller-provided flat snapshot into the authoritative owned
+/// [`crate::snapshot::EngineSnapshot`]. Returns None on null string or
+/// candidate pointers with non-zero lengths (fail closed).
+fn snapshot_from_flat(
+    flat: &crate::snapshot::Fcitx5EngineSnapshotFlatC,
+) -> Option<crate::snapshot::EngineSnapshot> {
+    let commit_utf8 = flat_view(flat.commit, flat.commit_len)?.to_vec();
+    let preedit_utf8 = flat_view(flat.preedit, flat.preedit_len)?.to_vec();
+    let content_locale_utf8 = flat_view(flat.content_locale, flat.content_locale_len)?.to_vec();
+    // An empty candidate list may carry a null pointer; slice::from_raw_parts
+    // is UB for a null pointer even with length 0, so branch on the count.
+    let records: &[crate::snapshot::Fcitx5EngineSnapshotRecordC] = if flat.candidate_count == 0 {
+        &[]
+    } else if flat.candidates.is_null() {
+        return None;
+    } else {
+        // SAFETY: the flat contract guarantees `candidate_count`
+        // initialized records when the pointer is non-null.
+        unsafe { std::slice::from_raw_parts(flat.candidates, flat.candidate_count) }
+    };
+    let mut candidates = Vec::with_capacity(records.len());
+    for record in records {
+        candidates.push(crate::snapshot::Candidate {
+            id: record.id,
+            label: flat_view(record.label, record.label_len)?.to_vec(),
+            text: flat_view(record.text, record.text_len)?.to_vec(),
+            comment: flat_view(record.comment, record.comment_len)?.to_vec(),
+        });
+    }
+    Some(crate::snapshot::EngineSnapshot {
+        handled: flat.handled != 0,
+        preedit_caret_utf8: flat.preedit_caret_utf8,
+        composition_id: flat.composition_id,
+        revision: flat.revision,
+        selected_candidate: flat.selected_candidate,
+        candidate_page: flat.candidate_page,
+        candidate_total: flat.candidate_total,
+        candidate_visibility: flat.candidate_visibility,
+        candidate_page_size: flat.candidate_page_size,
+        candidate_bulk: flat.candidate_bulk != 0,
+        candidate_end: flat.candidate_end != 0,
+        delete_surrounding_text: flat.delete_surrounding_text != 0,
+        delete_surrounding_offset: flat.delete_surrounding_offset,
+        delete_surrounding_size: flat.delete_surrounding_size,
+        forward_key: flat.forward_key != 0,
+        forward_key_sym: flat.forward_key_sym,
+        forward_key_states: flat.forward_key_states,
+        forward_key_code: flat.forward_key_code,
+        forward_key_release: flat.forward_key_release != 0,
+        caret_valid: flat.caret_valid != 0,
+        caret_left: flat.caret_left,
+        caret_top: flat.caret_top,
+        caret_right: flat.caret_right,
+        caret_bottom: flat.caret_bottom,
+        caret_dpi: flat.caret_dpi,
+        popup_allowed: flat.popup_allowed != 0,
+        commit_utf8,
+        preedit_utf8,
+        content_locale_utf8,
+        candidates,
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcitx5_engine_core_scroll_label_offset(
     vertical: i32,
