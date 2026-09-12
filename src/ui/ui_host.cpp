@@ -755,7 +755,6 @@ namespace ui = fcitx::windows::ui;
 // ---------------------------------------------------------------------------
 
 // Presentation pipe only carries keyResponse frames (wire type 4).
-constexpr std::uint16_t kKeyResponseMessageType = 4;
 
 struct Metadata {
     std::uint64_t engineEpoch{};
@@ -1010,6 +1009,12 @@ extern "C" std::uint8_t fcitx5_candidate_frame_update(
     fcitx::windows::ui::detail::Fcitx5CandidateLayoutRect* outItemRects,
     std::size_t* outVisibleIndices, std::uint8_t* outPreeditUtf8,
     std::size_t outPreeditCapacity, std::size_t* outPreeditLen);
+
+extern "C" void fcitx5_candidate_presentation_serve(
+    const std::uint16_t* generation, const std::uint16_t* engineExecutable,
+    void* stop, std::uint8_t testOnce,
+    void (*onFrame)(void* user, const Fcitx5CandidateFrameResponse* response),
+    void* user);
 
 [[nodiscard]] Fcitx5CandidateUtf8 toRust(std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
@@ -2724,158 +2729,75 @@ class CandidateWindow final {
     std::string contentLocaleUtf8_;
 };
 
-bool readExact(HANDLE pipe, void* destination, std::size_t size) {
-    auto* bytes = static_cast<std::uint8_t*>(destination);
-    std::size_t offset = 0;
-    while (offset < size) {
-        DWORD read = 0;
-        if (!ReadFile(pipe, bytes + offset, static_cast<DWORD>(size - offset), &read, nullptr) ||
-            read == 0)
-            return false;
-        offset += read;
-    }
-    return true;
-}
-
-std::string_view ffiBytes(FcitxBytesC value) noexcept {
-    if (value.len == 0 || value.data == nullptr) return {};
-    return {reinterpret_cast<const char*>(value.data), value.len};
-}
-
-bool decodePresentationFrame(const std::vector<std::uint8_t>& frame, KeyResponse& out) noexcept {
-    constexpr std::size_t kHeaderSize = 64;
-    constexpr std::uint16_t kKeyResponseType = 4;
-    constexpr std::size_t kMaxFrameSize = 256U * 1024U;
-    if (frame.size() < kHeaderSize || frame.size() > kMaxFrameSize) return false;
-    std::uint16_t type = 0;
-    std::uint32_t bodySize = 0;
-    FcitxMetadataC header{};
-    if (fcitx5_protocol_core_decode_header(frame.data(), kHeaderSize, &type, &bodySize,
-                                           &header) == 0 ||
-        type != kKeyResponseType || bodySize != frame.size() - kHeaderSize) {
-        return false;
-    }
-    FcitxKeyResponseC decoded{};
-    std::vector<std::uint8_t> strings;
-    std::vector<FcitxCandidateRecordC> candidates;
-    std::size_t stringsNeeded = 0;
-    std::size_t candidatesNeeded = 0;
-    const std::uint8_t* body = frame.data() + kHeaderSize;
-    auto fill = [&]() noexcept {
-        out.metadata.engineEpoch = header.engineEpoch;
-        out.metadata.contextId = header.contextId;
-        out.metadata.compositionId = header.compositionId;
-        out.metadata.revision = header.revision;
-        out.status = decoded.status;
-        out.handled = decoded.handled != 0;
-        out.preeditUtf8.assign(ffiBytes(decoded.preedit));
-        out.preeditCaretUtf8 = decoded.preeditCaretUtf8;
-        out.contentLocaleUtf8.assign(ffiBytes(decoded.contentLocale));
-        out.selectedCandidate = decoded.selectedCandidate;
-        out.candidatePage = decoded.candidatePage;
-        out.candidatePageSize = decoded.candidatePageSize;
-        out.candidateTotal = decoded.candidateTotal;
-        out.candidateVisibility = decoded.candidateVisibility;
-        out.candidateBulk = decoded.candidateBulk != 0;
-        out.candidateEnd = decoded.candidateEnd != 0;
-        out.caret = CaretRect{decoded.caret.valid != 0, decoded.caret.left, decoded.caret.top,
-                              decoded.caret.right, decoded.caret.bottom, decoded.caret.dpi};
-        out.popupAllowed = decoded.popupAllowed != 0;
-        out.candidates.clear();
-        out.candidates.reserve(decoded.candidateCount);
-        for (std::size_t index = 0; index < decoded.candidateCount; ++index) {
-            const auto& source = decoded.candidates[index];
-            out.candidates.push_back(CandidateRecord{
-                source.id, std::string(ffiBytes(source.label)),
-                std::string(ffiBytes(source.text)), std::string(ffiBytes(source.comment))});
-        }
-    };
-    if (fcitx5_protocol_core_decode_key_response(
-            &header, body, bodySize, &decoded, nullptr, 0, &stringsNeeded, nullptr, 0,
-            &candidatesNeeded) != 0) {
-        fill();
-        return true;
-    }
-    if ((stringsNeeded == 0 && candidatesNeeded == 0) || stringsNeeded > kMaxFrameSize ||
-        candidatesNeeded > kMaxFrameSize) {
-        return false;
-    }
-    try {
-        strings.assign(stringsNeeded, 0);
-        candidates.assign(candidatesNeeded, FcitxCandidateRecordC{});
-    } catch (...) {
-        return false;
-    }
-    if (fcitx5_protocol_core_decode_key_response(
-            &header, body, bodySize, &decoded,
-            strings.empty() ? nullptr : strings.data(), strings.size(), &stringsNeeded,
-            candidates.empty() ? nullptr : candidates.data(), candidates.size(),
-            &candidatesNeeded) == 0) {
-        return false;
-    }
-    fill();
-    return true;
-}
-
 void servePresentation(HWND window, bool testOnce) {
     using namespace fcitx::windows;
-    constexpr std::size_t kHeaderSize = 64;
-    constexpr DWORD kMaxHotFrameSize = 256U * 1024U;
+    // 082 slice 6: pipe creation, peer verification, engine-executable gating,
+    // frame reads, and KeyResponse decoding all live in the Rust
+    // presentation server. This thread only marshals decoded responses to the
+    // UI thread via kSnapshotMessage.
     platform::RuntimeIdentity identity;
-    platform::PipeSecurity security;
-    if (!platform::queryCurrentIdentity(identity) ||
-        !platform::PipeSecurity::create(identity, security))
-        return;
-    if (identity.executablePath.empty())
+    if (!platform::queryCurrentIdentity(identity) || identity.executablePath.empty())
         return;
     const auto engine =
         (std::filesystem::path(identity.executablePath).parent_path() / "fcitx5-engine.exe")
             .wstring();
-    const auto pipeName = platform::makeLocalEndpointName(identity, L"presentation");
-    for (;;) {
-        HANDLE pipe = CreateNamedPipeW(
-            pipeName.c_str(), PIPE_ACCESS_INBOUND,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
-            kMaxHotFrameSize, kMaxHotFrameSize, 25, security.attributes());
-        if (pipe == INVALID_HANDLE_VALUE)
-            return;
-        const bool connected =
-            ConnectNamedPipe(pipe, nullptr) != FALSE || GetLastError() == ERROR_PIPE_CONNECTED;
-        platform::ProcessIdentity peer;
-        if (connected && ipc::verifyPipeClient(pipe, identity, &peer) &&
-            platform::pathsReferToSameFile(peer.executablePath, engine)) {
-            for (;;) {
-                std::array<std::uint8_t, kHeaderSize> header{};
-                if (!readExact(pipe, header.data(), header.size()))
-                    break;
-                std::uint16_t type = 0;
-                std::uint32_t bodySize = 0;
-                FcitxMetadataC metadata{};
-                if (fcitx5_protocol_core_decode_header(header.data(), header.size(), &type,
-                                                       &bodySize, &metadata) == 0 ||
-                    type != kKeyResponseMessageType ||
-                    bodySize > static_cast<std::uint32_t>(kMaxHotFrameSize - kHeaderSize))
-                    break;
-                std::vector<std::uint8_t> frame(header.begin(), header.end());
-                frame.resize(kHeaderSize + bodySize);
-                if (bodySize && !readExact(pipe, frame.data() + kHeaderSize, bodySize))
-                    break;
-                auto response = std::make_unique<KeyResponse>();
-                if (!decodePresentationFrame(frame, *response))
-                    break;
-                if (!PostMessageW(window, kSnapshotMessage, 0,
-                                  reinterpret_cast<LPARAM>(response.get())))
-                    return;
-                (void)response.release();
-                if (testOnce) {
-                    PostMessageW(window, WM_CLOSE, 0, 0);
-                    return;
-                }
-            }
+    const auto generation = fcitx::windows::platform::currentRuntimeGeneration();
+
+    struct ServeContext {
+        HWND window;
+        bool testOnce;
+    } context{window, testOnce};
+
+    const auto onFrame = [](void* user,
+                            const candidate::detail::Fcitx5CandidateFrameResponse* response) {
+        auto* context = static_cast<ServeContext*>(user);
+        auto out = std::make_unique<KeyResponse>();
+        out->metadata.engineEpoch = response->engineEpoch;
+        out->metadata.contextId = response->contextId;
+        out->metadata.compositionId = response->compositionId;
+        out->metadata.revision = response->revision;
+        out->status = response->status;
+        out->handled = true;
+        if (response->preeditLen > 0 && response->preedit != nullptr)
+            out->preeditUtf8.assign(reinterpret_cast<const char*>(response->preedit),
+                                    response->preeditLen);
+        if (response->contentLocaleLen > 0 && response->contentLocale != nullptr)
+            out->contentLocaleUtf8.assign(reinterpret_cast<const char*>(response->contentLocale),
+                                          response->contentLocaleLen);
+        out->selectedCandidate = response->selectedCandidate;
+        out->candidatePage = response->candidatePage;
+        out->candidatePageSize = response->candidatePageSize;
+        out->candidateTotal = response->candidateTotal;
+        out->candidateVisibility = response->candidateVisibility;
+        out->candidateBulk = response->candidateBulk != 0;
+        out->candidateEnd = response->candidateEnd != 0;
+        out->caret = CaretRect{response->caretValid != 0, response->caretLeft,
+                               response->caretTop, response->caretRight,
+                               response->caretBottom, response->caretDpi};
+        out->popupAllowed = response->popupAllowed != 0;
+        out->candidates.reserve(response->candidateCount);
+        for (std::size_t index = 0; index < response->candidateCount; ++index) {
+            const auto& source = response->candidates[index];
+            const auto view = [](const std::uint8_t* data, std::size_t len) {
+                if (len == 0 || data == nullptr) return std::string{};
+                return std::string(reinterpret_cast<const char*>(data), len);
+            };
+            out->candidates.push_back(CandidateRecord{
+                source.id, view(source.label, source.labelLen),
+                view(source.text, source.textLen), view(source.comment, source.commentLen)});
         }
-        DisconnectNamedPipe(pipe);
-        CloseHandle(pipe);
-    }
+        if (!PostMessageW(context->window, kSnapshotMessage, 0,
+                          reinterpret_cast<LPARAM>(out.get())))
+            return;
+        (void)out.release();
+        if (context->testOnce)
+            PostMessageW(context->window, WM_CLOSE, 0, 0);
+    };
+
+    candidate::detail::fcitx5_candidate_presentation_serve(
+        reinterpret_cast<const std::uint16_t*>(generation.c_str()),
+        reinterpret_cast<const std::uint16_t*>(engine.c_str()), nullptr,
+        testOnce ? std::uint8_t{1U} : std::uint8_t{0U}, onFrame, &context);
 }
 
 } // namespace
