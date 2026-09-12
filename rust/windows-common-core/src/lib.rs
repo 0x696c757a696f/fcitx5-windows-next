@@ -3,6 +3,7 @@
 // Rust-owned opaque candidate-select client used by the C++ Candidate
 // renderer host (078 Stage 1).
 mod candidate_select_client;
+pub use candidate_select_client::safe::CandidateSelectClient;
 pub use candidate_select_client::{
     fcitx5_windows_common_candidate_select_client_create_utf16,
     fcitx5_windows_common_candidate_select_client_destroy,
@@ -420,6 +421,34 @@ where
 
 fn default_data_root_for_module(module_path: &Path, data_directory: &Path) -> Option<PathBuf> {
     default_data_root_for_module_with_local(module_path, data_directory, local_app_data_root)
+}
+
+/// Channel data directory from the release-identity contract
+/// (`Fcitx5`, `Fcitx5-Beta`, `Fcitx5-Nightly`).
+#[must_use]
+pub fn release_data_directory() -> &'static str {
+    match release_channel() {
+        "beta" => "Fcitx5-Beta",
+        "nightly" => "Fcitx5-Nightly",
+        _ => "Fcitx5",
+    }
+}
+
+/// Local data root for the current process module: the portable data root
+/// when present, otherwise the per-user known-folder root for the release
+/// channel. Mirrors the C++ `localDataDirectory` host helper.
+#[must_use]
+pub fn local_data_directory() -> Option<PathBuf> {
+    let module_path = CurrentUserRuntimeIdentity::current()?.executable_path;
+    portable_data_root_for_module(&module_path)
+        .or_else(|| default_data_root_for_module(&module_path, Path::new(release_data_directory())))
+}
+
+/// Local kernel-object class prefix from the release-identity contract
+/// (`Fcitx5WindowsNext.Stable`, `.Beta`, `.Nightly`).
+#[must_use]
+pub fn release_local_object_prefix() -> &'static str {
+    local_object_prefix()
 }
 
 /// Returns the Fcitx5 user-data root for the current executable.
@@ -1177,7 +1206,8 @@ fn pipe_security_state(
     })
 }
 
-fn system_uses_dark_appearance() -> bool {
+#[must_use]
+pub fn system_uses_dark_appearance() -> bool {
     let mut sub_key: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
         .encode_utf16()
         .collect();

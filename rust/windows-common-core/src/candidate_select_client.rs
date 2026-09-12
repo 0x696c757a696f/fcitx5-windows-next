@@ -16,7 +16,7 @@
 
 use std::ffi::c_void;
 
-mod safe {
+pub mod safe {
     #![forbid(unsafe_code)]
 
     use crate::{

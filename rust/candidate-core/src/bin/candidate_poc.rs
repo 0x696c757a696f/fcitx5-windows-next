@@ -782,7 +782,9 @@ mod window_smoke {
                     column_gap: 8.0 * dpi_scale,
                     scroll_mode: true,
                     scroll_columns: 6,
-                    scroll_visible_rows: 6,
+                    // 082: align the scroll-demo differential with the frozen 080 design —
+                    // horizontal Scrolling is a single-row viewport, not a grid.
+                    scroll_visible_rows: 1,
                     selected: 18,
                     scroll_cell_width: 96.0 * dpi_scale,
                     ..LayoutInput::default()

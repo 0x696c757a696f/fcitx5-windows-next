@@ -631,6 +631,11 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust shipping fcitx5-config.exe")
+# Serialize the cargo invocations sharing the CMake target directory: the
+# candidate UI rustbin build (which pulls config-core through candidate-core)
+# must not relink shared artifacts after fcitx5-config.exe was copied for the
+# shipping-lineage byte-identical check.
+add_dependencies(fcitx5_config_shipping fcitx5_ui_rustbin)
 add_custom_target(fcitx5_config_app ALL DEPENDS fcitx5_config_shipping)
 
 add_library(fcitx5_candidate_layout INTERFACE)
@@ -640,27 +645,34 @@ target_link_libraries(fcitx5_candidate_layout INTERFACE fcitx5_candidate_core_ru
                                                      ntdll)
 add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
 
-add_executable(
-  fcitx5_ui WIN32
-  src/ui/ui_host.cpp
-  resources/windows/app.rc)
-set_target_properties(fcitx5_ui PROPERTIES OUTPUT_NAME "fcitx5-ui")
-target_include_directories(fcitx5_ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/config")
-target_link_libraries(
-  fcitx5_ui
-  PRIVATE fcitx5::candidate_layout fcitx5_config_core_rust
-          fcitx5::windows_common fcitx5_protocol_core_rust fcitx5::ipc_client fcitx5::platform
-          d2d1 dwrite shell32 ole32)
-add_dependencies(fcitx5_ui fcitx5_config_core_rustlib)
-target_include_directories(fcitx5_ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
-fcitx_apply_project_options(fcitx5_ui)
-fcitx_apply_binary_hardening(fcitx5_ui)
-add_custom_command(
-  TARGET fcitx5_ui POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-          "${CMAKE_CURRENT_SOURCE_DIR}/resources"
-          "$<TARGET_FILE_DIR:fcitx5_ui>/resources"
-  VERBATIM)
+# 082: fcitx5-ui.exe is the Rust candidate-UI host binary. The C++ shell
+# (src/ui/ui_host.cpp) was deleted; the exe is built by cargo from
+# rust/candidate-core/src/bin/fcitx5_ui.rs.
+set(FCITX_RUST_UI_EXE
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-ui.exe")
+set(FCITX_UI_EXE "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-ui.exe")
+set(FCITX_UI_RESOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/resources")
+add_custom_target(
+  fcitx5_ui_rustbin
+  ALL
+  BYPRODUCTS "${FCITX_UI_EXE}"
+  COMMAND "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+          "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
+          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
+          fcitx5-ui --target "${FCITX_RUST_TARGET}" --profile
+          "$<IF:$<CONFIG:Debug>,dev,release>"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+          "${FCITX_RUST_UI_EXE}" "${FCITX_UI_EXE}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources" "${FCITX_UI_RESOURCE_DIR}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/bin/fcitx5_ui.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Building Rust fcitx5-ui.exe candidate-UI host binary")
 
 add_custom_target(
   fcitx5_tsf
@@ -983,7 +995,7 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-qa --target
       "${FCITX_RUST_TARGET}" -- --config-exe
       "${FCITX_CONFIG_SHIPPING_EXE}"
-      --candidate-ui-exe "$<TARGET_FILE:fcitx5_ui>" --out
+      --candidate-ui-exe "${FCITX_UI_EXE}" --out
       "${CMAKE_CURRENT_BINARY_DIR}/rust-config-ui-preview-qa")
   set_tests_properties(rust-config-ui-preview-qa PROPERTIES TIMEOUT 60)
   add_test(
@@ -1327,31 +1339,31 @@ if(BUILD_TESTING)
 
 
   add_test(NAME candidate-ui-device-smoke
-           COMMAND fcitx5_ui --self-test --simulate-device-loss)
-  add_test(NAME candidate-ui-safe-mode-smoke COMMAND fcitx5_ui --self-test --safe-mode)
+           COMMAND "${FCITX_UI_EXE}" --self-test --simulate-device-loss)
+  add_test(NAME candidate-ui-safe-mode-smoke COMMAND "${FCITX_UI_EXE}" --self-test --safe-mode)
   add_test(NAME candidate-ui-interaction-contract
-           COMMAND fcitx5_ui --interaction-self-test)
+           COMMAND "${FCITX_UI_EXE}" --interaction-self-test)
   set_tests_properties(candidate-ui-interaction-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-uiless-presentation-contract
-           COMMAND fcitx5_ui --uiless-presentation-self-test)
+           COMMAND "${FCITX_UI_EXE}" --uiless-presentation-self-test)
   set_tests_properties(candidate-ui-uiless-presentation-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-scroll-expansion-contract
-           COMMAND fcitx5_ui --scroll-expansion-self-test)
+           COMMAND "${FCITX_UI_EXE}" --scroll-expansion-self-test)
   set_tests_properties(candidate-ui-scroll-expansion-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-locale-contract
-           COMMAND fcitx5_ui --locale-self-test --safe-mode)
+           COMMAND "${FCITX_UI_EXE}" --locale-self-test --safe-mode)
   set_tests_properties(candidate-ui-locale-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-ux-contract
-           COMMAND fcitx5_ui --candidate-ux-self-test --safe-mode)
+           COMMAND "${FCITX_UI_EXE}" --candidate-ux-self-test --safe-mode)
   set_tests_properties(candidate-ui-ux-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-live-config-reflow
-           COMMAND fcitx5_ui --self-test --reload-test)
+           COMMAND "${FCITX_UI_EXE}" --self-test --reload-test)
 
   add_executable(
     fcitx5_candidate_ui_config_integration_test
     tests/integration/candidate_ui_config_integration_test.cpp)
   add_dependencies(
-    fcitx5_candidate_ui_config_integration_test fcitx5_ui fcitx5_control
+    fcitx5_candidate_ui_config_integration_test fcitx5_ui_rustbin fcitx5_control
     fcitx5_candidate_poc_rustbin)
   target_link_libraries(
     fcitx5_candidate_ui_config_integration_test PRIVATE user32)
@@ -1360,8 +1372,8 @@ if(BUILD_TESTING)
   add_test(
     NAME candidate-ui-live-presentation-contract
     COMMAND fcitx5_candidate_ui_config_integration_test
-            "$<TARGET_FILE:fcitx5_ui>" "${FCITX_CONTROL_EXE}"
-            "$<TARGET_FILE_DIR:fcitx5_ui>/resources" "${FCITX_RUST_CANDIDATE_POC_EXE}")
+            "${FCITX_UI_EXE}" "${FCITX_CONTROL_EXE}"
+            "${FCITX_UI_RESOURCE_DIR}" "${FCITX_RUST_CANDIDATE_POC_EXE}")
   set_tests_properties(candidate-ui-live-presentation-contract PROPERTIES TIMEOUT 30)
 
   add_executable(fcitx5_runtime_identity_test tests/unit/runtime_identity_test.cpp)

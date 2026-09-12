@@ -401,7 +401,7 @@ fn draw_candidate_horizontal(
     item: &AxisLayoutItem,
     candidate: &CandidateRenderData,
     selected: bool,
-    y_offset: f32,
+    _y_offset: f32,
 ) {
     let origin = &input.axis_result.window;
     let left = (item.rect.left - origin.left).clamp(0.0, window_w);

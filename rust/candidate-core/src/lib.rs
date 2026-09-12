@@ -844,7 +844,8 @@ fn write_wide_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
     value.len()
 }
 
-fn default_dwrite_locale() -> Vec<u16> {
+#[must_use]
+pub fn default_dwrite_locale() -> Vec<u16> {
     let mut locale = [0_u16; LOCALE_NAME_MAX_LENGTH];
     let length = unsafe { GetUserDefaultLocaleName(locale.as_mut_ptr(), locale.len() as i32) };
     if length > 1 && length as usize <= locale.len() {
@@ -853,7 +854,8 @@ fn default_dwrite_locale() -> Vec<u16> {
     DEFAULT_DWRITE_LOCALE.to_vec()
 }
 
-fn content_locale_valid(locale: &[u8]) -> bool {
+#[must_use]
+pub fn content_locale_valid(locale: &[u8]) -> bool {
     if locale.is_empty() || locale.len() > MAX_CONTENT_LOCALE_UTF8 {
         return false;
     }
@@ -868,7 +870,8 @@ fn content_locale_valid(locale: &[u8]) -> bool {
     has_letter
 }
 
-fn content_locale_or_default(locale: &[u8]) -> Vec<u16> {
+#[must_use]
+pub fn content_locale_or_default(locale: &[u8]) -> Vec<u16> {
     if !content_locale_valid(locale) {
         return default_dwrite_locale();
     }
@@ -960,6 +963,31 @@ fn resolve_rgb(
 
 /// Resolves the eight paint colors from config colors and the high-contrast
 /// policy, mirroring the frozen shipping `paintOnceToDC` color mapping.
+/// Resolved eight paint colors (Rust-native form of
+/// [`fcitx5_candidate_resolve_paint_colors`]).
+#[must_use]
+pub fn resolve_paint_colors(
+    background: Fcitx5CandidateConfigColor,
+    candidate_text: Fcitx5CandidateConfigColor,
+    selected_background: Fcitx5CandidateConfigColor,
+    selected_text: Fcitx5CandidateConfigColor,
+    comment_text: Fcitx5CandidateConfigColor,
+    border: Fcitx5CandidateConfigColor,
+    preedit_text: Fcitx5CandidateConfigColor,
+    high_contrast: bool,
+) -> Fcitx5CandidateResolvedColors {
+    let hc = high_contrast;
+    Fcitx5CandidateResolvedColors {
+        background: resolve_rgb(background, hc, COLOR_WINDOW_COLORREF_BGR),
+        text: resolve_rgb(candidate_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
+        selected_background: resolve_rgb(selected_background, hc, COLOR_HIGHLIGHT_COLORREF_BGR),
+        selected_text: resolve_rgb(selected_text, hc, COLOR_HIGHLIGHTTEXT_COLORREF_BGR),
+        comment: resolve_rgb(comment_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
+        border: resolve_rgb(border, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
+        preedit_text: resolve_rgb(preedit_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fcitx5_candidate_resolve_paint_colors(
     background: Fcitx5CandidateConfigColor,
@@ -975,16 +1003,16 @@ pub extern "C" fn fcitx5_candidate_resolve_paint_colors(
     if out.is_null() {
         return 0;
     }
-    let hc = high_contrast != 0;
-    let resolved = Fcitx5CandidateResolvedColors {
-        background: resolve_rgb(background, hc, COLOR_WINDOW_COLORREF_BGR),
-        text: resolve_rgb(candidate_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
-        selected_background: resolve_rgb(selected_background, hc, COLOR_HIGHLIGHT_COLORREF_BGR),
-        selected_text: resolve_rgb(selected_text, hc, COLOR_HIGHLIGHTTEXT_COLORREF_BGR),
-        comment: resolve_rgb(comment_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
-        border: resolve_rgb(border, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
-        preedit_text: resolve_rgb(preedit_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
-    };
+    let resolved = resolve_paint_colors(
+        background,
+        candidate_text,
+        selected_background,
+        selected_text,
+        comment_text,
+        border,
+        preedit_text,
+        high_contrast != 0,
+    );
     // SAFETY: non-null checked above; caller provides writable output storage.
     unsafe { *out = resolved };
     1
@@ -1120,9 +1148,14 @@ pub struct CandidateVisualArena {
 }
 
 impl CandidateVisualArena {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Built outputs from the last [`Self::build`] call; string pointers stay
     /// arena-owned and valid until the next build.
-    pub(crate) fn built_outputs(&self) -> &[Fcitx5CandidateVisualBuildOutput] {
+    pub fn built_outputs(&self) -> &[Fcitx5CandidateVisualBuildOutput] {
         &self.outputs
     }
 
@@ -1510,7 +1543,7 @@ mod candidate_visual_arena_tests {
 
     #[test]
     fn build_formats_labels_and_prefixes_comments() {
-        let mut arena = CandidateVisualArena::default();
+        let arena = CandidateVisualArena::default();
         let inputs = [
             input("1", "你", "nǐ", 1),
             input("", "好", "", 1),
@@ -1541,7 +1574,7 @@ mod candidate_visual_arena_tests {
 
     #[test]
     fn build_rejects_invalid_style_and_null_arena() {
-        let mut arena = CandidateVisualArena::default();
+        let arena = CandidateVisualArena::default();
         let mut bad = input("1", "你", "", 1);
         bad.label_style = 99;
         let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 1];
@@ -1572,7 +1605,7 @@ mod candidate_visual_arena_tests {
 
     #[test]
     fn build_applies_scroll_label_reservations_to_generated_labels() {
-        let mut arena = CandidateVisualArena::default();
+        let arena = CandidateVisualArena::default();
         let configured = ["甲", "乙"];
         let configured_refs = [
             Fcitx5CandidateUtf8 {
@@ -1720,7 +1753,7 @@ pub fn candidate_label_slot_plan(
     }
 }
 
-fn parse_candidate_command_line(
+pub fn parse_candidate_command_line(
     arguments: &[u16],
 ) -> (Fcitx5CandidateCommandLine, Vec<u16>, Vec<u16>) {
     let tokens = split_windows_argument_string(arguments);
@@ -2464,7 +2497,7 @@ impl CandidateModel {
         freshness.revision = snapshot.revision;
     }
 
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.current = None;
         self.ffi_items.clear();
         self.engine_epoch = 0;
@@ -2702,7 +2735,7 @@ pub unsafe extern "C" fn fcitx5_candidate_layout_run(
 }
 
 #[derive(Default)]
-struct CandidateScrollState {
+pub struct CandidateScrollState {
     /// Manual scroll offset in DIP px; `None` mirrors the C++ sentinel of a
     /// never-scrolled viewport (auto scroll-into-view).
     override_px: Option<f32>,
@@ -2712,7 +2745,7 @@ impl CandidateScrollState {
     const LINE_HEIGHT: f32 = 28.0;
     const MAX_OFFSET: f32 = 8000.0;
 
-    fn wheel(&mut self, delta: i32) -> f32 {
+    pub fn wheel(&mut self, delta: i32) -> f32 {
         let current = self.override_px.unwrap_or(0.0);
         let next =
             (current + (delta as f32 / 120.0) * Self::LINE_HEIGHT).clamp(0.0, Self::MAX_OFFSET);
@@ -2720,11 +2753,12 @@ impl CandidateScrollState {
         next
     }
 
-    pub(crate) fn override_px(&self) -> f32 {
+    #[must_use]
+    pub fn override_px(&self) -> f32 {
         self.override_px.unwrap_or(-1.0)
     }
 
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.override_px = None;
     }
 }
@@ -2798,19 +2832,17 @@ mod candidate_paint_color_tests {
     #[test]
     fn paint_colors_clamp_and_scale_config_colors() {
         let mut resolved = Fcitx5CandidateResolvedColors::default();
-        let ok = unsafe {
-            fcitx5_candidate_resolve_paint_colors(
-                color(0.97, 0.98, 0.98),
-                color(0.13, 0.13, 0.14),
-                color(0.027, 0.757, 0.376),
-                color(0.027, 0.757, 0.376),
-                color(0.13, 0.13, 0.14),
-                color(0.82, 0.82, 0.82),
-                color(0.13, 0.13, 0.14),
-                0,
-                &mut resolved,
-            )
-        };
+        let ok = fcitx5_candidate_resolve_paint_colors(
+            color(0.97, 0.98, 0.98),
+            color(0.13, 0.13, 0.14),
+            color(0.027, 0.757, 0.376),
+            color(0.027, 0.757, 0.376),
+            color(0.13, 0.13, 0.14),
+            color(0.82, 0.82, 0.82),
+            color(0.13, 0.13, 0.14),
+            0,
+            &mut resolved,
+        );
         assert_eq!(ok, 1);
         assert_eq!(resolved.background, [247, 250, 250]);
         assert_eq!(resolved.selected_background, [7, 193, 96]);
@@ -2820,19 +2852,17 @@ mod candidate_paint_color_tests {
     #[test]
     fn high_contrast_maps_colors_to_system_palette() {
         let mut resolved = Fcitx5CandidateResolvedColors::default();
-        let ok = unsafe {
-            fcitx5_candidate_resolve_paint_colors(
-                color(0.0, 0.0, 0.0),
-                color(0.0, 0.0, 0.0),
-                color(0.0, 0.0, 0.0),
-                color(0.0, 0.0, 0.0),
-                color(0.0, 0.0, 0.0),
-                color(0.0, 0.0, 0.0),
-                color(0.0, 0.0, 0.0),
-                1,
-                &mut resolved,
-            )
-        };
+        let ok = fcitx5_candidate_resolve_paint_colors(
+            color(0.0, 0.0, 0.0),
+            color(0.0, 0.0, 0.0),
+            color(0.0, 0.0, 0.0),
+            color(0.0, 0.0, 0.0),
+            color(0.0, 0.0, 0.0),
+            color(0.0, 0.0, 0.0),
+            color(0.0, 0.0, 0.0),
+            1,
+            &mut resolved,
+        );
         assert_eq!(ok, 1);
         assert_eq!(resolved.background, COLOR_WINDOW_COLORREF_BGR);
         assert_eq!(resolved.text, COLOR_WINDOWTEXT_COLORREF_BGR);
@@ -2852,19 +2882,19 @@ mod candidate_scroll_reservation_tests {
     #[test]
     fn reservations_follow_the_frozen_scroll_label_policy() {
         // Source labels keep their own label; no synthesized slot.
-        let source = unsafe { fcitx5_candidate_scroll_reservation_for(3, 1, 0, 1, 1, 6, 60) };
+        let source = fcitx5_candidate_scroll_reservation_for(3, 1, 0, 1, 1, 6, 60);
         assert_eq!(source.action, 0);
         // Non-scroll or hidden labels never reserve.
-        let off = unsafe { fcitx5_candidate_scroll_reservation_for(3, 0, 0, 0, 1, 6, 60) };
+        let off = fcitx5_candidate_scroll_reservation_for(3, 0, 0, 0, 1, 6, 60);
         assert_eq!(off.action, 0);
-        let hidden = unsafe { fcitx5_candidate_scroll_reservation_for(3, 0, 0, 1, 0, 6, 60) };
+        let hidden = fcitx5_candidate_scroll_reservation_for(3, 0, 0, 1, 0, 6, 60);
         assert_eq!(hidden.action, 0);
         // Current page reserves and shows (slot = index % page + 1).
-        let show = unsafe { fcitx5_candidate_scroll_reservation_for(3, 0, 3, 1, 1, 6, 60) };
+        let show = fcitx5_candidate_scroll_reservation_for(3, 0, 3, 1, 1, 6, 60);
         assert_eq!(show.action, 2);
         assert_eq!(show.slot, 4);
         // Other pages reserve but hide.
-        let reserve = unsafe { fcitx5_candidate_scroll_reservation_for(9, 0, 3, 1, 1, 6, 60) };
+        let reserve = fcitx5_candidate_scroll_reservation_for(9, 0, 3, 1, 1, 6, 60);
         assert_eq!(reserve.action, 1);
         assert_eq!(reserve.slot, 4);
     }
@@ -2997,34 +3027,43 @@ mod candidate_scroll_state_tests {
 }
 
 #[derive(Default)]
-struct CandidateClickGuardState {
+pub struct CandidateClickGuardState {
     in_flight: bool,
 }
 
 impl CandidateClickGuardState {
     /// Begins a guarded click; returns `false` when one is already in flight.
-    fn begin(&mut self) -> bool {
+    pub fn begin(&mut self) -> bool {
         !std::mem::replace(&mut self.in_flight, true)
     }
 
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.in_flight = false;
     }
 
     /// Expires the guard timer; returns whether a click was in flight.
-    fn expire(&mut self) -> bool {
+    pub fn expire(&mut self) -> bool {
         std::mem::take(&mut self.in_flight)
     }
 }
 
 #[derive(Default)]
-struct CandidateFocusWatchState {
+pub struct CandidateFocusWatchState {
     /// Foreground process id captured when the popup was presented; 0 = none.
     target_process_id: u32,
 }
 
 impl CandidateFocusWatchState {
-    pub(crate) fn set_target(&mut self, pid: u32) {
+    #[must_use]
+    pub fn target(&self) -> u32 {
+        self.target_process_id
+    }
+
+    pub fn reset(&mut self) {
+        self.target_process_id = 0;
+    }
+
+    pub fn set_target(&mut self, pid: u32) {
         self.target_process_id = pid;
     }
 }
@@ -3033,7 +3072,8 @@ impl CandidateFocusWatchState {
     /// Whether `foreground_pid` still matches the presented target.mirrors the
     /// C++ contract: interaction tests always report valid, and a zero target
     /// is never valid.
-    fn is_valid(&self, foreground_pid: u32, interaction_test: bool) -> bool {
+    #[must_use]
+    pub fn is_valid(&self, foreground_pid: u32, interaction_test: bool) -> bool {
         if interaction_test {
             return true;
         }
@@ -3041,7 +3081,8 @@ impl CandidateFocusWatchState {
     }
 
     /// Whether a dismissal broadcast should dismiss this popup.
-    fn should_dismiss(&self, broadcast_pid: u32, same_context: bool) -> bool {
+    #[must_use]
+    pub fn should_dismiss(&self, broadcast_pid: u32, same_context: bool) -> bool {
         (broadcast_pid == 0 || broadcast_pid == self.target_process_id) && same_context
     }
 }
@@ -3192,16 +3233,16 @@ pub unsafe extern "C" fn fcitx5_candidate_click_guard_expire(state: *mut c_void)
 }
 
 #[derive(Default)]
-struct CandidatePointerState {
+pub struct CandidatePointerState {
     pressed: Option<usize>,
 }
 
 impl CandidatePointerState {
-    fn press(&mut self, index: Option<usize>) {
+    pub fn press(&mut self, index: Option<usize>) {
         self.pressed = index;
     }
 
-    fn release(&mut self, index: Option<usize>) -> Option<usize> {
+    pub fn release(&mut self, index: Option<usize>) -> Option<usize> {
         let pressed = self.pressed.take();
         if pressed == index {
             pressed
@@ -3210,7 +3251,7 @@ impl CandidatePointerState {
         }
     }
 
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.pressed = None;
     }
 }
@@ -3786,7 +3827,7 @@ pub unsafe extern "C" fn fcitx5_candidate_axis_layout(
     0
 }
 
-fn selection_intent_valid(intent: Fcitx5CandidateSelectionIntent) -> bool {
+pub fn selection_intent_valid(intent: Fcitx5CandidateSelectionIntent) -> bool {
     intent.target_process_id != 0
         && intent.engine_epoch != 0
         && intent.context_id != 0

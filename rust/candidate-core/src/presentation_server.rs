@@ -13,8 +13,7 @@ use std::time::Duration;
 
 use fcitx5_protocol_core::{FrameView, KeyResponse, MessageType};
 use fcitx5_windows_common_core::{
-    deadline_after, paths_refer_to_same_file, wait_for_handle, CurrentUserRuntimeIdentity,
-    NamedPipeServer,
+    paths_refer_to_same_file, wait_for_handle, CurrentUserRuntimeIdentity, NamedPipeServer,
 };
 
 use crate::frame_ffi::{Fcitx5CandidateFrameRecord, Fcitx5CandidateFrameResponse};
@@ -64,7 +63,7 @@ pub fn read_presentation_frame(server: &NamedPipeServer, deadline: u64) -> Optio
     if !server.read_exact(&mut header, deadline) {
         return None;
     }
-    let (message_type, body_size, metadata) = fcitx5_protocol_core::decode_header(&header)?;
+    let (message_type, body_size, _metadata) = fcitx5_protocol_core::decode_header(&header)?;
     if message_type != MessageType::KeyResponse {
         return None;
     }
@@ -116,7 +115,9 @@ fn wide_until_nul(pointer: *const u16) -> Vec<u16> {
 /// storage lives in `strings` and stays valid while the snapshot is alive.
 struct FlatFrameResponse {
     response: Fcitx5CandidateFrameResponse,
+    #[allow(dead_code)] // read by the raw frame bytes handed to the host ABI
     candidates: Vec<Fcitx5CandidateFrameRecord>,
+    #[allow(dead_code)] // arena keeping the referenced byte storage alive
     strings: Vec<Vec<u8>>,
 }
 
@@ -245,7 +246,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_serve(
             }
         })
     };
-    let peer_units: Vec<u16> = engine_path
+    let _peer_units: Vec<u16> = engine_path
         .as_os_str()
         .to_string_lossy()
         .encode_utf16()
