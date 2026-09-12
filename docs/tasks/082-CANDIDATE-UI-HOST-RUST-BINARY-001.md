@@ -56,3 +56,35 @@ migration for real.
 
 Same as existing: x64/x86 builds, six self-tests, message-loop smoke,
 cargo tests; new Rust unit tests for the pipe server and frame orchestration.
+
+## Completion record (slices 1-6, all landed)
+
+- Slice 1: windows-common-core full peer verification (`verified_pipe_client`:
+  SID/executable path/final path/on-disk file identity via the frozen two-phase
+  contract), `NamedPipeServer::verified_client`, public
+  `paths_refer_to_same_file`.
+- Slice 2: `frame_update` orchestration — one Rust function runs the frozen
+  update() sequence (semantic snapshot apply, presentation apply, click-guard
+  clear, visual build with scroll-label reservations, render plan,
+  dismiss/hide decision chain, focus-watch capture, presentation orientation
+  resolve, measure loop, automatic-orientation downgrade, three-axis layout,
+  window assembly) with Proceed/Dismiss/HidePopup/Ignored outcomes.
+- Slice 3: `frame_ffi` — flat C ABI (state pointers + flat response/config +
+  environment → action + paint outputs); Ignored is action 3 so the host never
+  refreshes its mirror on a rejected frame.
+- Slice 4: `presentation_server::fcitx5_candidate_presentation_serve` —
+  blocking serve entry owning pipe creation, same-principal peer verification,
+  the engine-executable identity gate, frame reads, and KeyResponse decoding;
+  delivers flat self-contained snapshots to the host callback; stop-event
+  responsive; test-once semantics preserved.
+- Slice 5: C++ `update()` delegates to the orchestrator; the host only
+  executes Win32 actions (model mirror refresh, dismiss/hide, item/visible
+  storage, preedit panel, window positioning, invalidate).
+- Slice 6: C++ `servePresentation` delegates to the Rust serve entry;
+  `decodePresentationFrame`, `readExact`, `ffiBytes`, and
+  `kKeyResponseMessageType` deleted from C++.
+
+Evidence: candidate-core 88/88, windows-common-core 62/62, x64/x86
+`fcitx5_ui` builds, six self-tests (interaction/scroll/candidate-ux/
+uiless/device/self) plus the parent-close message-loop smoke all exit 0
+in both lanes; rustfmt clean; git diff --check clean.
