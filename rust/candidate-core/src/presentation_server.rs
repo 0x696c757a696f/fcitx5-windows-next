@@ -7,6 +7,8 @@
 //! serve entry delivers each decoded response to the host callback as a flat
 //! self-contained snapshot valid for the duration of the call.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::ffi::{c_void, OsStr};
 use std::os::windows::ffi::OsStrExt;
 use std::time::Duration;
@@ -98,6 +100,7 @@ fn wide_until_nul(pointer: *const u16) -> Vec<u16> {
     let mut units = Vec::new();
     // SAFETY: the C ABI contract guarantees NUL termination.
     let mut cursor = pointer;
+    // SAFETY: `cursor` starts at a valid NUL-terminated UTF-16 sequence and advances only to its terminator.
     unsafe {
         loop {
             let unit = *cursor;

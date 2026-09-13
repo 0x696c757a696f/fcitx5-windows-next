@@ -364,6 +364,8 @@ mod tests {
         assert!(safe::CandidateSelectClient::new(vec![0x0065], vec![]).is_none());
         assert!(safe::CandidateSelectClient::new(vec![], vec![]).is_none());
         // The exported shim maps a null/empty name+path to a null handle.
+        // SAFETY: the exported ABI permits null UTF-16 pointers when both
+        // lengths are zero; this test supplies no borrowed data.
         let handle = unsafe {
             fcitx5_windows_common_candidate_select_client_create_utf16(
                 std::ptr::null::<u16>(),
@@ -377,6 +379,8 @@ mod tests {
 
     #[test]
     fn destroy_null_is_a_noop() {
+        // SAFETY: the exported destroy ABI explicitly accepts a null handle
+        // and performs no dereference in that case.
         unsafe {
             fcitx5_windows_common_candidate_select_client_destroy(std::ptr::null_mut());
         }
@@ -384,6 +388,8 @@ mod tests {
 
     #[test]
     fn select_null_handle_returns_zero() {
+        // SAFETY: the exported select ABI checks for a null handle before any
+        // cast or dereference; this test supplies no client-owned allocation.
         let result = unsafe {
             fcitx5_windows_common_candidate_select_client_select(
                 std::ptr::null_mut(),

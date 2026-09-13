@@ -6,6 +6,8 @@
 //! outputs. This deletes the C++ call-stitching without moving the Win32
 //! glue yet.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use core::ffi::c_void;
 
 use fcitx5_protocol_core::{CandidateRecord, CaretRect, KeyResponse, Metadata, Status};
@@ -293,17 +295,24 @@ pub unsafe extern "C" fn fcitx5_candidate_frame_update(
     }
     // SAFETY: each pointer is the unique allocation from its create export.
     let model = unsafe { &mut *(input.model as *mut CandidateModel) };
+    // SAFETY: this non-null handle is a unique live presentation allocation from its create export.
     let presentation = unsafe { &mut *(input.presentation as *mut CandidatePresentationState) };
+    // SAFETY: this non-null handle is a unique live scroll allocation from its create export.
     let scroll = unsafe { &mut *(input.scroll as *mut CandidateScrollState) };
+    // SAFETY: this non-null handle is a unique live click-guard allocation from its create export.
     let click_guard = unsafe { &mut *(input.click_guard as *mut CandidateClickGuardState) };
+    // SAFETY: this non-null handle is a unique live focus-watch allocation from its create export.
     let focus_watch = unsafe { &mut *(input.focus_watch as *mut CandidateFocusWatchState) };
+    // SAFETY: this non-null handle is a unique live visual-arena allocation from its create export.
     let arena = unsafe { &mut *(input.arena as *mut CandidateVisualArena) };
+    // SAFETY: this non-null handle is a unique live measure-engine allocation from its create export.
     let measure = unsafe { &mut *(input.measure_engine as *mut MeasureEngine) };
     let configured_labels = if input.configured_label_count == 0 {
         &[]
     } else if input.configured_labels.is_null() {
         return 0;
     } else {
+        // SAFETY: the non-null configured-label span has exactly the supplied readable length.
         unsafe { std::slice::from_raw_parts(input.configured_labels, input.configured_label_count) }
     };
     let content_locale = if input.content_locale_len == 0 || input.content_locale.is_null() {

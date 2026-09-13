@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 // Rust-owned opaque candidate-select client used by the C++ Candidate
 // renderer host (078 Stage 1).
 mod candidate_select_client;
@@ -1724,9 +1725,10 @@ fn pipe_connect_client(pipe: *mut c_void, deadline: u64, stop_handle: *mut c_voi
             connected = true;
         } else if error == ERROR_IO_PENDING {
             let Some(wait) = remaining_milliseconds(deadline) else {
-                // SAFETY: Cancels and drains the outstanding connect before
-                // closing the event handle.
                 let mut transferred = 0_u32;
+                // SAFETY: `operation` is the outstanding connect on this live
+                // pipe; Windows permits cancelling and then draining it before
+                // the event handle is closed.
                 unsafe {
                     CancelIoEx(pipe, &mut operation);
                     GetOverlappedResult(pipe, &mut operation, &mut transferred, 1);
@@ -1749,9 +1751,10 @@ fn pipe_connect_client(pipe: *mut c_void, deadline: u64, stop_handle: *mut c_voi
                 connected =
                     unsafe { GetOverlappedResult(pipe, &mut operation, &mut transferred, 0) != 0 };
             } else {
-                // SAFETY: Cancels and drains this specific outstanding operation
-                // before closing the event handle.
                 let mut transferred = 0_u32;
+                // SAFETY: `operation` is the outstanding connect on this live
+                // pipe; Windows permits cancelling and then draining it before
+                // the event handle is closed.
                 unsafe {
                     CancelIoEx(pipe, &mut operation);
                     GetOverlappedResult(pipe, &mut operation, &mut transferred, 1);
@@ -4943,7 +4946,11 @@ pub unsafe extern "C" fn fcitx5_windows_common_paths_refer_to_same_file_utf16(
     if left_path.is_null() || right_path.is_null() {
         return 0;
     }
+    // SAFETY: The ABI requires `left_path` to be readable for exactly
+    // `left_path_len` UTF-16 code units; the slice is not retained.
     let left = unsafe { std::slice::from_raw_parts(left_path, left_path_len) };
+    // SAFETY: The ABI requires `right_path` to be readable for exactly
+    // `right_path_len` UTF-16 code units; the slice is not retained.
     let right = unsafe { std::slice::from_raw_parts(right_path, right_path_len) };
     paths_refer_to_same_file(left, right) as u8
 }
@@ -4986,7 +4993,11 @@ pub unsafe extern "C" fn fcitx5_windows_common_executable_paths_match_utf16(
     if left_path.is_null() || right_path.is_null() {
         return 0;
     }
+    // SAFETY: The ABI requires `left_path` to be readable for exactly
+    // `left_path_len` UTF-16 code units; the slice is not retained.
     let left = unsafe { std::slice::from_raw_parts(left_path, left_path_len) };
+    // SAFETY: The ABI requires `right_path` to be readable for exactly
+    // `right_path_len` UTF-16 code units; the slice is not retained.
     let right = unsafe { std::slice::from_raw_parts(right_path, right_path_len) };
     executable_paths_match(left, right) as u8
 }
@@ -5372,14 +5383,19 @@ mod tests {
 
     #[test]
     fn local_test_namespace_matches_cpp_contract() {
+        // SAFETY: This single-threaded test changes process environment only
+        // before invoking code that reads this variable.
         unsafe {
             env::set_var("FCITX5_TEST_NAMESPACE", "contract-42");
         }
         assert_eq!(local_test_namespace().as_deref(), Some("contract-42"));
+        // SAFETY: This single-threaded test changes process environment only
+        // before invoking code that reads this variable.
         unsafe {
             env::set_var("FCITX5_TEST_NAMESPACE", "../bad");
         }
         assert_eq!(local_test_namespace(), None);
+        // SAFETY: This test has finished reading the variable before removing it.
         unsafe {
             env::remove_var("FCITX5_TEST_NAMESPACE");
         }
@@ -5394,6 +5410,8 @@ mod tests {
 
     #[test]
     fn process_image_path_query_matches_cpp_contract() {
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         let current_process_id = unsafe { GetCurrentProcessId() };
         let path = process_image_path(current_process_id).expect("current process image path");
         assert!(path.to_ascii_lowercase().ends_with(".exe"));
@@ -5402,6 +5420,8 @@ mod tests {
 
     #[test]
     fn process_session_id_query_matches_cpp_contract() {
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         let current_process_id = unsafe { GetCurrentProcessId() };
         let session = process_session_id(current_process_id);
         assert_eq!(session.status, 1);
@@ -5410,6 +5430,8 @@ mod tests {
 
     #[test]
     fn process_user_sid_query_matches_cpp_contract() {
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         let current_process_id = unsafe { GetCurrentProcessId() };
         let (sid, _service_account) =
             process_user_sid(current_process_id).expect("current process user sid");
@@ -5420,6 +5442,8 @@ mod tests {
 
     #[test]
     fn process_identity_query_matches_cpp_contract() {
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         let current_process_id = unsafe { GetCurrentProcessId() };
         let query = process_identity(
             current_process_id,
@@ -5458,6 +5482,8 @@ mod tests {
     fn current_identity_query_matches_cpp_contract() {
         let query = current_identity(std::ptr::null_mut(), 0, std::ptr::null_mut(), 0);
         assert_eq!(query.status, 1);
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         assert_eq!(query.process_id, unsafe { GetCurrentProcessId() });
         assert!(query.user_sid_len > 0);
         assert!(query.executable_path_len > 0);
@@ -5476,6 +5502,8 @@ mod tests {
 
     #[test]
     fn process_identity_with_executable_file_matches_cpp_contract() {
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         let current_process_id = unsafe { GetCurrentProcessId() };
         let query = process_identity_with_executable_file(
             current_process_id,
@@ -5543,6 +5571,8 @@ mod tests {
             0,
         );
         assert_eq!(query.status, 1);
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         assert_eq!(query.process_id, unsafe { GetCurrentProcessId() });
         assert_eq!(query.executable_file_status, 1);
         assert!(query.user_sid_len > 0);
@@ -5710,6 +5740,8 @@ mod tests {
 
     #[test]
     fn pipe_security_state_matches_cpp_attributes_contract() {
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         let current_process_id = unsafe { GetCurrentProcessId() };
         let (sid, _service_account) =
             process_user_sid(current_process_id).expect("current process user sid");
@@ -5753,6 +5785,8 @@ mod tests {
 
     #[test]
     fn pipe_security_abi_preserves_owned_descriptor_contract() {
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         let current_process_id = unsafe { GetCurrentProcessId() };
         let (user_sid, _) = process_user_sid(current_process_id).expect("current process user sid");
 
@@ -5884,6 +5918,8 @@ mod tests {
             true,
             std::ptr::null_mut(),
             1,
+            // SAFETY: GetTickCount64 has no pointer, ownership, or lifetime
+            // preconditions and only reads the monotonic system tick count.
             unsafe { GetTickCount64() } + 100
         ));
         let mut byte = 0_u8;
@@ -5892,6 +5928,8 @@ mod tests {
             false,
             &mut byte,
             1,
+            // SAFETY: GetTickCount64 has no pointer, ownership, or lifetime
+            // preconditions and only reads the monotonic system tick count.
             unsafe { GetTickCount64() } + 100
         ));
     }
@@ -5920,6 +5958,8 @@ mod tests {
         // SAFETY: The invalid pipe/null-buffer inputs are deliberately passed
         // to verify the C ABI's fail-closed validation path.
         assert_eq!(
+            // SAFETY: This ABI explicitly accepts null/invalid inputs to return
+            // failure without dereferencing them; the test exercises that path.
             unsafe {
                 fcitx5_windows_common_pipe_transfer_with_stop(
                     std::ptr::null_mut(),
@@ -5951,6 +5991,8 @@ mod tests {
         // SAFETY: The invalid pipe is deliberately passed to verify the C ABI's
         // fail-closed validation path.
         assert_eq!(
+            // SAFETY: This ABI explicitly accepts an invalid pipe to return
+            // failure; the test exercises that validation path.
             unsafe {
                 fcitx5_windows_common_pipe_connect_client(
                     std::ptr::null_mut(),
@@ -5972,6 +6014,8 @@ mod tests {
                 &request,
                 response.as_mut_ptr(),
                 response.len(),
+                // SAFETY: GetTickCount64 has no pointer, ownership, or lifetime
+                // preconditions and only reads the monotonic system tick count.
                 unsafe { GetTickCount64() } + 100
             )
             .status,
@@ -6015,7 +6059,11 @@ mod tests {
         assert_ne!(fcitx5_windows_common_tick_milliseconds(), 0);
         assert!(deadline_has_time(deadline_after_milliseconds(100)));
         assert!(!deadline_has_time(0));
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         assert_ne!(unsafe { GetCurrentProcessId() }, 0);
+        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
+        // preconditions and only reads the current process identity.
         assert_eq!(fcitx5_windows_common_current_process_id(), unsafe {
             GetCurrentProcessId()
         });
@@ -6077,11 +6125,23 @@ mod tests {
     #[test]
     fn open_pipe_client_rejects_empty_name_like_cpp_contract() {
         assert_eq!(
-            open_pipe_client(&[], unsafe { GetTickCount64() } + 100, true),
+            open_pipe_client(
+                &[],
+                // SAFETY: GetTickCount64 has no pointer, ownership, or lifetime
+                // preconditions and only reads the monotonic system tick count.
+                unsafe { GetTickCount64() } + 100,
+                true,
+            ),
             invalid_handle_value()
         );
         assert_eq!(
-            open_pipe_client(&[b'x' as u16], unsafe { GetTickCount64() }, true),
+            open_pipe_client(
+                &[b'x' as u16],
+                // SAFETY: GetTickCount64 has no pointer, ownership, or lifetime
+                // preconditions and only reads the monotonic system tick count.
+                unsafe { GetTickCount64() },
+                true,
+            ),
             invalid_handle_value()
         );
     }
@@ -6282,8 +6342,10 @@ mod tests {
     #[test]
     fn set_last_error_matches_cpp_contract() {
         fcitx5_windows_common_set_last_error(1234);
+        // SAFETY: GetLastError only reads the current thread's Win32 error slot.
         assert_eq!(unsafe { GetLastError() }, 1234);
         fcitx5_windows_common_set_last_error(0);
+        // SAFETY: GetLastError only reads the current thread's Win32 error slot.
         assert_eq!(unsafe { GetLastError() }, 0);
     }
 

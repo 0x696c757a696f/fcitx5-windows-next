@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
@@ -86,8 +87,9 @@ fn path_from_wide(path: *const u16, len: usize) -> Option<PathBuf> {
     if path.is_null() {
         return (len == 0).then(PathBuf::new);
     }
-    // SAFETY: The C++ adapter passes a valid UTF-16 buffer with exactly `len`
-    // elements for the duration of this call.
+    // SAFETY: the C ABI requires a non-null `path` to originate from a live UTF-16
+    // allocation containing exactly `len` initialized elements, with no mutation or
+    // deallocation for this borrow's duration.
     let slice = unsafe { std::slice::from_raw_parts(path, len) };
     Some(PathBuf::from(OsString::from_wide(slice)))
 }
@@ -96,8 +98,9 @@ fn utf8_from_raw(text: *const u8, len: usize) -> String {
     if text.is_null() || len == 0 {
         return String::new();
     }
-    // SAFETY: The C++ adapter passes a valid byte buffer with exactly `len`
-    // elements for the duration of this call.
+    // SAFETY: the C ABI requires a non-null `text` to originate from a live byte
+    // allocation containing exactly `len` initialized elements, with no mutation or
+    // deallocation for this borrow's duration.
     let slice = unsafe { std::slice::from_raw_parts(text, len) };
     String::from_utf8_lossy(slice).into_owned()
 }
@@ -106,8 +109,9 @@ fn write_utf16_to_buffer(value: &Path, out: *mut u16, capacity: usize) -> usize 
     let wide: Vec<u16> = value.as_os_str().encode_wide().collect();
     if !out.is_null() && capacity != 0 {
         let count = wide.len().min(capacity);
-        // SAFETY: The caller supplied writable storage for `capacity` u16
-        // values. We copy at most that many initialized elements.
+        // SAFETY: the C ABI requires `out` to denote an exclusive writable range of
+        // `capacity` u16 values; `wide` supplies `count` initialized values and the
+        // separate Rust allocation cannot overlap that destination.
         unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), out, count) };
     }
     wide.len()
@@ -117,8 +121,9 @@ fn write_utf8_to_buffer(value: &str, out: *mut u8, capacity: usize) -> usize {
     let bytes = value.as_bytes();
     if !out.is_null() && capacity != 0 {
         let count = bytes.len().min(capacity);
-        // SAFETY: The caller supplied writable storage for `capacity` bytes. We
-        // copy at most that many initialized elements.
+        // SAFETY: the C ABI requires `out` to denote an exclusive writable range of
+        // `capacity` bytes; `bytes` supplies `count` initialized values and cannot
+        // overlap the caller-owned destination.
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, count) };
     }
     bytes.len()
@@ -161,8 +166,9 @@ fn wide_nul(path: &Path) -> Vec<u16> {
 fn replace_file(source: &Path, destination: &Path) -> bool {
     let source = wide_nul(source);
     let destination = wide_nul(destination);
-    // SAFETY: Both path buffers are NUL-terminated and live for the duration of
-    // the call. MOVEFILE_REPLACE_EXISTING preserves the old C++ guard behavior.
+    // SAFETY: both PCWSTR values point to owned, NUL-terminated UTF-16 buffers that
+    // remain live for the call; MoveFileExW reads them only, and these flags meet its
+    // Windows API contract for replacing and flushing the destination.
     unsafe {
         MoveFileExW(
             PCWSTR(source.as_ptr()),
@@ -285,7 +291,8 @@ pub extern "C" fn fcitx5_tsf_activation_guard_status(
 ) -> u8 {
     let Some(root) = path_from_wide(data_root, data_root_len) else {
         if !reason_len.is_null() {
-            // SAFETY: reason_len is an optional writable out pointer.
+            // SAFETY: when non-null, the C ABI requires `reason_len` to point to one
+            // live, uniquely writable usize for this call; writing zero does not alias Rust data.
             unsafe { reason_len.write(0) };
         }
         return 0;
@@ -299,7 +306,8 @@ pub extern "C" fn fcitx5_tsf_activation_guard_status(
     };
     let written_len = write_utf8_to_buffer(&reason, reason_out, reason_capacity);
     if !reason_len.is_null() {
-        // SAFETY: reason_len is an optional writable out pointer.
+        // SAFETY: when non-null, the C ABI requires `reason_len` to point to one
+        // live, uniquely writable usize for this call; writing the length does not alias Rust data.
         unsafe { reason_len.write(written_len) };
     }
     u8::from(disabled)

@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -123,6 +124,8 @@ impl RegistryKey {
 
 impl Drop for RegistryKey {
     fn drop(&mut self) {
+        // SAFETY: RegistryKey owns this non-null HKEY returned by a successful
+        // registry-open/create call and closes it exactly once at drop.
         unsafe {
             let _ = RegCloseKey(self.0);
         }
@@ -139,6 +142,8 @@ impl Sid {
 
 impl Drop for Sid {
     fn drop(&mut self) {
+        // SAFETY: Sid owns the non-null allocation returned by
+        // AllocateAndInitializeSid and releases it exactly once with FreeSid.
         unsafe {
             let _ = FreeSid(self.0);
         }
@@ -155,6 +160,8 @@ impl Library {
 
 impl Drop for Library {
     fn drop(&mut self) {
+        // SAFETY: Library owns the non-null module handle returned by
+        // LoadLibraryExW and releases that reference exactly once.
         unsafe {
             let _ = FreeLibrary(self.0);
         }
@@ -165,6 +172,8 @@ fn path_from_utf16(value: Fcitx5RegisterUtf16) -> Option<PathBuf> {
     if value.ptr.is_null() {
         return None;
     }
+    // SAFETY: The length-delimited ABI requires `ptr` to be readable for `len`
+    // UTF-16 code units; this function copies them and retains no borrow.
     let slice = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
     Some(PathBuf::from(OsString::from_wide(slice)))
 }
@@ -279,6 +288,8 @@ fn registered_path_at(root: Hkey) -> Option<PathBuf> {
     ));
     let key_path = wide_z(&key_path);
     let mut raw_key: Hkey = std::ptr::null_mut();
+    // SAFETY: `root` is a predefined registry root, `key_path` is NUL-terminated,
+    // and `raw_key` is writable storage for the returned handle.
     let open = unsafe { RegOpenKeyExW(root, key_path.as_ptr(), 0, KEY_QUERY_VALUE, &mut raw_key) };
     if open == ERROR_FILE_NOT_FOUND {
         return None;
@@ -289,6 +300,8 @@ fn registered_path_at(root: Hkey) -> Option<PathBuf> {
     let key = RegistryKey(raw_key);
     let mut value_type: Dword = 0;
     let mut bytes: Dword = 0;
+    // SAFETY: `key` owns a live HKEY; the type and byte-count out-pointers are
+    // valid, and null value/data pointers request only the value metadata.
     let query_size = unsafe {
         RegQueryValueExW(
             key.get(),
@@ -303,6 +316,8 @@ fn registered_path_at(root: Hkey) -> Option<PathBuf> {
         return None;
     }
     let mut value = vec![0_u16; (bytes as usize).div_ceil(2)];
+    // SAFETY: `key` remains live, `value` owns at least the byte count returned
+    // above, and the type/count pointers are valid mutable out-parameters.
     let query_value = unsafe {
         RegQueryValueExW(
             key.get(),
@@ -360,6 +375,8 @@ pub fn is_elevated() -> bool {
         value: [0, 0, 0, 0, 0, 5],
     };
     let mut raw_sid: *mut std::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: `authority` and `raw_sid` are live for the call; the fixed RID
+    // arguments form the BUILTIN\\Administrators SID requested by the API.
     let allocated = unsafe {
         AllocateAndInitializeSid(
             &authority,
@@ -380,6 +397,8 @@ pub fn is_elevated() -> bool {
     }
     let sid = Sid(raw_sid);
     let mut is_member: Bool = 0;
+    // SAFETY: `sid` owns a valid SID allocation and `is_member` is writable;
+    // a null token handle asks Windows to use the effective thread token.
     let checked = unsafe { CheckTokenMembership(std::ptr::null_mut(), sid.get(), &mut is_member) };
     checked != 0 && is_member != 0
 }
@@ -391,9 +410,13 @@ pub fn invoke_registration_export(dll: &Path, export_kind: u32) -> Hresult {
         _ => return hresult_from_win32(ERROR_INVALID_PARAMETER),
     };
     let dll = wide_z(dll.as_os_str());
+    // SAFETY: A null path restores the process default DLL search directory as
+    // specified by SetDllDirectoryW and does not dereference application memory.
     unsafe {
         let _ = SetDllDirectoryW(std::ptr::null());
     }
+    // SAFETY: `dll` is NUL-terminated and remains live for the call; the null
+    // file handle is required for this load mode.
     let module = unsafe {
         LoadLibraryExW(
             dll.as_ptr(),
@@ -402,14 +425,21 @@ pub fn invoke_registration_export(dll: &Path, export_kind: u32) -> Hresult {
         )
     };
     if module.is_null() {
+        // SAFETY: Reads the thread-local error established by LoadLibraryExW above.
         return hresult_from_win32(unsafe { GetLastError() });
     }
     let library = Library(module);
+    // SAFETY: `library` owns a live module and `export_name` points to one of
+    // the two static NUL-terminated export names selected above.
     let function = unsafe { GetProcAddress(library.get(), export_name) };
     if function.is_null() {
         return hresult_from_win32(ERROR_PROC_NOT_FOUND);
     }
+    // SAFETY: DllRegisterServer and DllUnregisterServer have the documented
+    // zero-argument system ABI returning HRESULT, matching this function type.
     let function: unsafe extern "system" fn() -> Hresult = unsafe { std::mem::transmute(function) };
+    // SAFETY: The function pointer was resolved from the live module with its
+    // documented registration-export signature and the module outlives this call.
     unsafe { function() }
 }
 

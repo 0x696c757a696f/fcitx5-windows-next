@@ -13,7 +13,8 @@
 //! `ClientContextKey { processId, connectionId, contextId }`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
-
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 use std::collections::HashMap;
 
 pub use fcitx5_protocol_core as protocol;

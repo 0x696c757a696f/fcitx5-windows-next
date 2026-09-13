@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 //! Typed Config state, transaction, recovery, and native snapshot ABI contract.
 
 mod config_core;

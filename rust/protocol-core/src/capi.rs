@@ -843,6 +843,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_hello_request(
         }
         let frame = FrameView {
             message_type: MessageType::HelloRequest,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -890,6 +892,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_hello_response(
         }
         let frame = FrameView {
             message_type: MessageType::HelloResponse,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -937,6 +941,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_key_request(
         }
         let frame = FrameView {
             message_type: MessageType::KeyRequest,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -1015,6 +1021,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_key_response(
         }
         let frame = FrameView {
             message_type: MessageType::KeyResponse,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -1074,6 +1082,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_key_response(
         // SAFETY: `candidates` is writable for `candidates_capacity` records
         // and `msg.candidates.len() <= candidates_capacity`.
         if !msg.candidates.is_empty() {
+            // SAFETY: `candidates` is non-null when records are requested, and the
+            // FFI ABI provides exclusive, aligned initialized record storage.
             let out_candidates =
                 unsafe { std::slice::from_raw_parts_mut(candidates, msg.candidates.len()) };
             for (target, candidate) in out_candidates.iter_mut().zip(&msg.candidates) {
@@ -1123,6 +1133,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_candidate_select_request(
         }
         let frame = FrameView {
             message_type: MessageType::CandidateSelectRequest,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -1170,6 +1182,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_candidate_select_response(
         }
         let frame = FrameView {
             message_type: MessageType::CandidateSelectResponse,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -1216,6 +1230,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_state_request(
         }
         let frame = FrameView {
             message_type: MessageType::StateRequest,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -1259,6 +1275,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_engine_status_request(
         }
         let frame = FrameView {
             message_type: MessageType::EngineStatusRequest,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -1302,6 +1320,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_engine_status_response(
         }
         let frame = FrameView {
             message_type: MessageType::EngineStatusResponse,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -1369,6 +1389,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_launcher_request(
         }
         let frame = FrameView {
             message_type: MessageType::LauncherRequest,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]
@@ -1415,6 +1437,8 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_launcher_response(
         }
         let frame = FrameView {
             message_type: MessageType::LauncherResponse,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
             metadata: metadata_from_c(unsafe { &*metadata }),
             body: if body_length == 0 {
                 &[][..]

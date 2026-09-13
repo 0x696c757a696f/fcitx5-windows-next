@@ -328,6 +328,7 @@ mod win32 {
     }
 
     #[link(name = "user32")]
+    // SAFETY: declarations use the Windows system ABI and exact Win32 layouts; every call below supplies documented valid buffers or handles.
     unsafe extern "system" {
         fn GetModuleFileNameW(module: Handle, filename: *mut u16, size: u32) -> u32;
         fn CreateProcessW(
@@ -351,12 +352,14 @@ mod win32 {
     }
 
     #[link(name = "shell32")]
+    // SAFETY: ShellExecuteExW uses the Windows system ABI and receives a live, correctly sized ShellExecuteInfoW allocated below.
     unsafe extern "system" {
         fn ShellExecuteExW(execute_info: *mut ShellExecuteInfoW) -> i32;
     }
 
     pub fn module_path() -> Option<PathBuf> {
         let mut buffer = vec![0u16; 32768];
+        // SAFETY: buffer is writable for its stated u16 length and remains live for the call; null module selects this executable.
         let length = unsafe {
             GetModuleFileNameW(
                 std::ptr::null_mut(),
@@ -399,6 +402,7 @@ mod win32 {
             process_id: 0,
             thread_id: 0,
         };
+        // SAFETY: application and mutable command strings are NUL-terminated and live through the call; startup/process records have exact Win32 layout.
         let created = unsafe {
             CreateProcessW(
                 wide_path(executable).as_ptr(),
@@ -416,19 +420,24 @@ mod win32 {
         if created == 0 {
             return None;
         }
+        // SAFETY: CreateProcessW returned a nonzero result, so process.thread is an owned valid handle closed exactly once here.
         unsafe {
             let _ = CloseHandle(process.thread);
         }
+        // SAFETY: process.process is the owned valid process handle returned by successful CreateProcessW and remains open through the wait.
         let wait = unsafe { WaitForSingleObject(process.process, timeout_ms) };
         let mut exit_code = 0;
         let success = wait == WAIT_OBJECT_0
+            // SAFETY: process.process remains an owned valid handle; exit_code is aligned writable storage for the duration of the call.
             && unsafe { GetExitCodeProcess(process.process, &mut exit_code) } != 0;
         if wait == WAIT_TIMEOUT {
+            // SAFETY: process.process remains the owned valid handle; terminating and waiting do not transfer or alias its ownership.
             unsafe {
                 let _ = TerminateProcess(process.process, ERROR_TIMEOUT);
                 let _ = WaitForSingleObject(process.process, 5000);
             }
         }
+        // SAFETY: process.process is still the one owned handle returned by CreateProcessW and is closed exactly once after all use.
         unsafe {
             let _ = CloseHandle(process.process);
         }
@@ -463,6 +472,7 @@ mod win32 {
             process_id: 0,
             thread_id: 0,
         };
+        // SAFETY: application and mutable command strings are NUL-terminated and live through the call; startup/process records have exact Win32 layout.
         let created = unsafe {
             CreateProcessW(
                 wide_path(executable).as_ptr(),
@@ -480,6 +490,7 @@ mod win32 {
         if created == 0 {
             return false;
         }
+        // SAFETY: successful CreateProcessW returned distinct owned process and thread handles, each closed exactly once here.
         unsafe {
             let _ = CloseHandle(process.thread);
             let _ = CloseHandle(process.process);
@@ -512,20 +523,25 @@ mod win32 {
             icon_or_monitor: std::ptr::null_mut(),
             process: std::ptr::null_mut(),
         };
+        // SAFETY: info has the exact Win32 layout and size; its NUL-terminated string fields and mutable storage remain live for the call.
         if unsafe { ShellExecuteExW(&mut info) } == 0 || info.process.is_null() {
             return None;
         }
+        // SAFETY: a successful ShellExecuteExW with SEE_MASK_NOCLOSEPROCESS supplies the owned valid process handle used here.
         let wait = unsafe { WaitForSingleObject(info.process, timeout_ms) };
         let mut exit_code = 13;
         if wait == WAIT_OBJECT_0 {
+            // SAFETY: info.process remains the owned valid process handle and exit_code is aligned writable storage for this call.
             let _ = unsafe { GetExitCodeProcess(info.process, &mut exit_code) };
         } else if wait == WAIT_TIMEOUT {
+            // SAFETY: info.process remains the owned valid handle; termination and waiting leave ownership with this function.
             unsafe {
                 let _ = TerminateProcess(info.process, ERROR_TIMEOUT);
                 let _ = WaitForSingleObject(info.process, 5000);
             }
             exit_code = ERROR_TIMEOUT;
         }
+        // SAFETY: info.process is the owned handle returned by ShellExecuteExW and is closed exactly once after all use.
         unsafe {
             let _ = CloseHandle(info.process);
         }
@@ -535,6 +551,7 @@ mod win32 {
     pub fn message_box_w(text: &str, caption: &str, icon: u32) {
         let text = wide_nul(text);
         let caption = wide_nul(caption);
+        // SAFETY: text and caption are NUL-terminated UTF-16 buffers that remain live for the synchronous call; null hwnd is allowed.
         unsafe {
             let _ = MessageBoxW(
                 std::ptr::null_mut(),
@@ -548,6 +565,7 @@ mod win32 {
     pub fn message_box_a(text: &str, caption: &str, icon: u32) {
         let text = nul_bytes(text);
         let caption = nul_bytes(caption);
+        // SAFETY: text and caption are NUL-terminated byte buffers that remain live for the synchronous call; null hwnd is allowed.
         unsafe {
             let _ = MessageBoxA(
                 std::ptr::null_mut(),

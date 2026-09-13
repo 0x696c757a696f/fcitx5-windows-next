@@ -836,6 +836,7 @@ fn write_wide_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
     if !out.is_null() && capacity != 0 {
         let count = value.len().min(capacity);
         if count != 0 {
+            // SAFETY: `out` is non-null and the caller provides `capacity` writable u16 units.
             unsafe {
                 std::ptr::copy_nonoverlapping(value.as_ptr(), out, count);
             }
@@ -847,6 +848,7 @@ fn write_wide_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
 #[must_use]
 pub fn default_dwrite_locale() -> Vec<u16> {
     let mut locale = [0_u16; LOCALE_NAME_MAX_LENGTH];
+    // SAFETY: `locale` is writable storage for exactly the documented buffer length.
     let length = unsafe { GetUserDefaultLocaleName(locale.as_mut_ptr(), locale.len() as i32) };
     if length > 1 && length as usize <= locale.len() {
         return locale[..length as usize - 1].to_vec();
@@ -1179,6 +1181,7 @@ impl CandidateVisualArena {
         let configured_labels: &[Fcitx5CandidateUtf8] = if config.configured_label_count == 0 {
             &[]
         } else {
+            // SAFETY: the C ABI contract requires configured_labels to cover this non-zero count.
             unsafe {
                 std::slice::from_raw_parts(config.configured_labels, config.configured_label_count)
             }
@@ -1293,14 +1296,14 @@ pub unsafe extern "C" fn fcitx5_candidate_visual_build(
     let inputs = if input_count == 0 {
         &[]
     } else {
+        // SAFETY: non-null was checked above and the ABI provides `input_count` readable records.
         unsafe { std::slice::from_raw_parts(inputs, input_count) }
     };
     // SAFETY: non-null checked above; callers provide an initialized config.
     let config = unsafe { *config };
     let built = arena.build(inputs, &config);
     if built > 0 {
-        // SAFETY: out_outputs is non-null for non-zero counts (checked above)
-        // and covers input_count elements.
+        // SAFETY: out_outputs is non-null for non-zero counts and covers all `built` outputs.
         unsafe { std::ptr::copy_nonoverlapping(arena.outputs.as_ptr(), out_outputs, built) };
     }
     built
@@ -1315,6 +1318,7 @@ mod candidate_horizontal_downgrade_tests {
         let widths = [100.0_f32, 80.0, 60.0];
         // sum + gaps + padding = 240 + 20 + 24 = 284; below limit → keep.
         assert_eq!(
+            // SAFETY: the test passes a live `widths` slice for the exact count.
             unsafe {
                 fcitx5_candidate_horizontal_natural_downgrade(
                     widths.as_ptr(),
@@ -1329,6 +1333,7 @@ mod candidate_horizontal_downgrade_tests {
         );
         // Preedit width wins over the natural sum.
         assert_eq!(
+            // SAFETY: the test passes a live `widths` slice for the exact count.
             unsafe {
                 fcitx5_candidate_horizontal_natural_downgrade(
                     widths.as_ptr(),
@@ -1343,6 +1348,7 @@ mod candidate_horizontal_downgrade_tests {
         );
         // The +0.5 tolerance holds a borderline width.
         assert_eq!(
+            // SAFETY: the test passes a live `widths` slice for the exact count.
             unsafe {
                 fcitx5_candidate_horizontal_natural_downgrade(
                     widths.as_ptr(),
@@ -1356,6 +1362,7 @@ mod candidate_horizontal_downgrade_tests {
             0
         );
         assert_eq!(
+            // SAFETY: the test passes a live `widths` slice for the exact count.
             unsafe {
                 fcitx5_candidate_horizontal_natural_downgrade(
                     widths.as_ptr(),
@@ -1414,6 +1421,8 @@ mod candidate_window_assembly_tests {
         input.item_count = 1;
         let mut output = Fcitx5CandidateWindowAssemblyOutput::default();
         let mut out_items = [Fcitx5CandidateLayoutRect::default(); 1];
+        // SAFETY: this test supplies live input/output/item storage with the declared item count.
+        // SAFETY: test supplies valid state and writable decision pointers for this call.
         let ok = unsafe {
             fcitx5_candidate_window_assembly(&input, &mut output, out_items.as_mut_ptr())
         };
@@ -1438,6 +1447,7 @@ mod candidate_window_assembly_tests {
         input.window_y = 400.0;
         input.window_h = 35.8;
         let mut output = Fcitx5CandidateWindowAssemblyOutput::default();
+        // SAFETY: this test supplies live input/output storage and a null zero-length item buffer.
         let ok =
             unsafe { fcitx5_candidate_window_assembly(&input, &mut output, core::ptr::null_mut()) };
         assert_eq!(ok, 1);
@@ -1457,6 +1467,7 @@ mod candidate_window_assembly_tests {
         let mut input = base_input();
         input.viewport_dx = 12.0;
         let mut output = Fcitx5CandidateWindowAssemblyOutput::default();
+        // SAFETY: this test supplies live input/output storage and a null zero-length item buffer.
         let ok =
             unsafe { fcitx5_candidate_window_assembly(&input, &mut output, core::ptr::null_mut()) };
         assert_eq!(ok, 1);
@@ -1476,6 +1487,7 @@ mod candidate_window_assembly_tests {
         let input = base_input();
         let mut output = Fcitx5CandidateWindowAssemblyOutput::default();
         assert_eq!(
+            // SAFETY: the null input is intentional and output is live writable test storage.
             unsafe {
                 fcitx5_candidate_window_assembly(
                     core::ptr::null(),
@@ -1486,6 +1498,7 @@ mod candidate_window_assembly_tests {
             0
         );
         assert_eq!(
+            // SAFETY: the null output is intentional and input is live test storage.
             unsafe {
                 fcitx5_candidate_window_assembly(
                     &input,
@@ -1551,6 +1564,7 @@ mod candidate_visual_arena_tests {
         ];
         let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 3];
         let config = empty_config();
+        // SAFETY: this test supplies live arena/input/config/output storage for the declared count.
         let built = unsafe {
             fcitx5_candidate_visual_build(
                 &arena as *const _ as *mut c_void,
@@ -1579,6 +1593,7 @@ mod candidate_visual_arena_tests {
         bad.label_style = 99;
         let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 1];
         let config = empty_config();
+        // SAFETY: this test supplies live arena/input/config/output storage for the declared count.
         let built = unsafe {
             fcitx5_candidate_visual_build(
                 &arena as *const _ as *mut c_void,
@@ -1590,6 +1605,7 @@ mod candidate_visual_arena_tests {
         };
         assert_eq!(built, 0, "invalid style stops the build at the offender");
         assert_eq!(
+            // SAFETY: null arena is intentional while all other test buffers remain live.
             unsafe {
                 fcitx5_candidate_visual_build(
                     core::ptr::null_mut(),
@@ -1631,6 +1647,7 @@ mod candidate_visual_arena_tests {
         inputs[2].reservation_action = 1;
         inputs[2].reservation_slot = 5; // out of range → slot number 5
         let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 3];
+        // SAFETY: this test supplies live arena/input/config/output storage for the declared count.
         let built = unsafe {
             fcitx5_candidate_visual_build(
                 &arena as *const _ as *mut c_void,
@@ -1673,6 +1690,7 @@ pub unsafe extern "C" fn fcitx5_candidate_horizontal_natural_downgrade(
     let widths = if item_count == 0 {
         &[]
     } else {
+        // SAFETY: non-null was checked above and the ABI supplies `item_count` readable widths.
         unsafe { std::slice::from_raw_parts(item_widths, item_count) }
     };
     let mut natural = 0.0_f32;
@@ -1858,6 +1876,7 @@ pub unsafe extern "C" fn fcitx5_candidate_model_destroy(model: *mut c_void) {
     if model.is_null() {
         return;
     }
+    // SAFETY: the API contract makes this a unique allocation from the matching create export.
     drop(unsafe { Box::from_raw(model.cast::<CandidateModel>()) });
 }
 
@@ -1870,6 +1889,7 @@ pub unsafe extern "C" fn fcitx5_candidate_model_reset(model: *mut c_void) {
     if model.is_null() {
         return;
     }
+    // SAFETY: the API contract supplies a live uniquely borrowed CandidateModel allocation.
     let model = unsafe { &mut *model.cast::<CandidateModel>() };
     model.reset();
 }
@@ -1882,6 +1902,7 @@ pub unsafe extern "C" fn fcitx5_candidate_model_reset(model: *mut c_void) {
 pub unsafe extern "C" fn fcitx5_candidate_model_validate(
     snapshot: *const Fcitx5CandidateModelSnapshot,
 ) -> u8 {
+    // SAFETY: the API contract keeps the snapshot and all nested spans valid for this call.
     let Some(snapshot) = (unsafe { snapshot_from_ffi(snapshot) }) else {
         return 0;
     };
@@ -1901,9 +1922,11 @@ pub unsafe extern "C" fn fcitx5_candidate_model_apply(
     if model.is_null() {
         return 3;
     }
+    // SAFETY: the API contract keeps the snapshot and all nested spans valid for this call.
     let Some(snapshot) = (unsafe { snapshot_from_ffi(snapshot) }) else {
         return 3;
     };
+    // SAFETY: the API contract supplies a live uniquely borrowed CandidateModel allocation.
     let model = unsafe { &mut *model.cast::<CandidateModel>() };
     model.apply(snapshot)
 }
@@ -1921,6 +1944,7 @@ pub unsafe extern "C" fn fcitx5_candidate_model_current(
     if model.is_null() || output.is_null() {
         return 0;
     }
+    // SAFETY: the API contract supplies a live CandidateModel allocation for this read.
     let model = unsafe { &mut *model.cast::<CandidateModel>() };
     let Some(snapshot) = model.current.as_ref() else {
         return 0;
@@ -1930,6 +1954,7 @@ pub unsafe extern "C" fn fcitx5_candidate_model_current(
         Visibility::Composition => 1,
         Visibility::Prediction => 2,
     };
+    // SAFETY: the API contract supplies writable output storage for one snapshot.
     unsafe {
         *output = Fcitx5CandidateModelSnapshot {
             engine_epoch: snapshot.engine_epoch,
@@ -1966,6 +1991,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_destroy(state: *mut c_voi
     if state.is_null() {
         return;
     }
+    // SAFETY: the API contract makes this a unique allocation from the matching create export.
     drop(unsafe { Box::from_raw(state.cast::<CandidatePresentationState>()) });
 }
 
@@ -1978,6 +2004,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_reset(state: *mut c_void)
     if state.is_null() {
         return;
     }
+    // SAFETY: the API contract supplies a live uniquely borrowed presentation allocation.
     unsafe { &mut *state.cast::<CandidatePresentationState>() }.reset();
 }
 
@@ -1993,6 +2020,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_apply(
     if state.is_null() || input.is_null() {
         return 3;
     }
+    // SAFETY: the API contract supplies live state/input storage for this call without retained pointers.
     unsafe { &mut *state.cast::<CandidatePresentationState>() }.apply(unsafe { *input })
 }
 
@@ -2009,6 +2037,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_current(
     if state.is_null() || output.is_null() {
         return 0;
     }
+    // SAFETY: the API contract supplies live state plus writable output storage.
     unsafe {
         *output = (&*state.cast::<CandidatePresentationState>()).output();
     }
@@ -2032,6 +2061,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_render_plan(
     if state.is_null() || output.is_null() || (capacity != 0 && indices.is_null()) {
         return 0;
     }
+    // SAFETY: the API contract supplies a live presentation allocation for this read.
     let state = unsafe { &*state.cast::<CandidatePresentationState>() };
     let (start, count) = if state.scroll_mode {
         (0, state.candidate_count)
@@ -2047,11 +2077,13 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_render_plan(
     let target = if count == 0 {
         &mut []
     } else {
+        // SAFETY: non-null was checked above and `count <= capacity` was verified.
         unsafe { std::slice::from_raw_parts_mut(indices, count) }
     };
     for (slot, candidate_index) in target.iter_mut().zip(start..end) {
         *slot = candidate_index;
     }
+    // SAFETY: the API contract supplies writable output storage for one render plan.
     unsafe {
         *output = Fcitx5CandidatePresentationRenderPlan {
             selected: state.selected.unwrap_or_default(),
@@ -2077,6 +2109,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_set_placement(
     if state.is_null() {
         return 0;
     }
+    // SAFETY: the API contract supplies a live uniquely borrowed presentation allocation.
     unsafe { &mut *state.cast::<CandidatePresentationState>() }.set_placement(placement);
     1
 }
@@ -2094,6 +2127,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_stable_window_width(
     if state.is_null() {
         return 0.0;
     }
+    // SAFETY: the API contract supplies a live uniquely borrowed presentation allocation.
     unsafe { &mut *state.cast::<CandidatePresentationState>() }
         .stable_window_width(measured_width, max_allowed_width)
 }
@@ -2231,6 +2265,7 @@ pub fn window_assembly(
     let items = if input.item_count == 0 {
         &[]
     } else {
+        // SAFETY: `input.items` covers `input.item_count` readable layout items by the C ABI contract.
         unsafe { std::slice::from_raw_parts(input.items, input.item_count) }
     };
     for (index, item) in items.iter().enumerate().take(count) {
@@ -2275,6 +2310,7 @@ pub unsafe extern "C" fn fcitx5_candidate_window_assembly(
     let items = if input.item_count == 0 || out_items.is_null() {
         &mut []
     } else {
+        // SAFETY: the validated `out_items` pointer covers `input.item_count` writable rects.
         unsafe { std::slice::from_raw_parts_mut(out_items, input.item_count) }
     };
     if !window_assembly(&input, &mut out, items) {
@@ -2313,18 +2349,22 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_resolve_orientation(
     }) else {
         return 0;
     };
+    // SAFETY: the ABI keeps the locale byte span readable for this conversion and it is not retained.
     let locale = unsafe { bytes_from_ffi(locale) }
         .and_then(|bytes| std::str::from_utf8(bytes).ok())
         .unwrap_or_default();
     let candidate_inputs = if candidate_count == 0 {
         &[]
     } else {
+        // SAFETY: the validated candidates pointer covers `candidate_count` readable records.
         unsafe { std::slice::from_raw_parts(candidates, candidate_count) }
     };
     let Some(candidates) = candidate_inputs
         .iter()
         .map(|candidate| {
+            // SAFETY: the ABI keeps each candidate text span readable during this owned conversion.
             let text = unsafe { bytes_from_ffi(candidate.text) }?;
+            // SAFETY: the ABI keeps each candidate comment span readable during this owned conversion.
             let comment = unsafe { bytes_from_ffi(candidate.comment) }?;
             Some(CandidateText {
                 text: std::str::from_utf8(text).ok()?.to_owned(),
@@ -2335,6 +2375,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_resolve_orientation(
     else {
         return 0;
     };
+    // SAFETY: the non-null state pointer is a uniquely borrowed presentation allocation for this call.
     let orientation = unsafe { &mut *state.cast::<CandidatePresentationState>() }
         .layout
         .resolve_orientation(
@@ -2565,12 +2606,15 @@ fn valid_text(value: &[u8]) -> bool {
         && std::str::from_utf8(value).is_ok()
 }
 
+// SAFETY: the caller keeps `snapshot`, its candidate array, and every nested FFI string span
+// valid and immutable for this conversion; the returned model owns copied bytes only.
 unsafe fn snapshot_from_ffi(
     snapshot: *const Fcitx5CandidateModelSnapshot,
 ) -> Option<CandidateSnapshot> {
     if snapshot.is_null() {
         return None;
     }
+    // SAFETY: the non-null `snapshot` pointer is valid and aligned for one readable snapshot.
     let snapshot = unsafe { *snapshot };
     if snapshot.candidate_count > 0 && snapshot.candidates.is_null() {
         return None;
@@ -2578,6 +2622,7 @@ unsafe fn snapshot_from_ffi(
     let candidates = if snapshot.candidate_count == 0 {
         &[]
     } else {
+        // SAFETY: the caller supplies `candidate_count` contiguous readable candidate records.
         unsafe { std::slice::from_raw_parts(snapshot.candidates, snapshot.candidate_count) }
     };
     let visibility = match snapshot.visibility {
@@ -2590,8 +2635,11 @@ unsafe fn snapshot_from_ffi(
     for item in candidates {
         owned_candidates.push(CandidateItem {
             id: item.id,
+            // SAFETY: the outer snapshot contract keeps this label span readable during the copy.
             label: unsafe { bytes_from_ffi(item.label) }?.to_vec(),
+            // SAFETY: the outer snapshot contract keeps this text span readable during the copy.
             text: unsafe { bytes_from_ffi(item.text) }?.to_vec(),
+            // SAFETY: the outer snapshot contract keeps this comment span readable during the copy.
             comment: unsafe { bytes_from_ffi(item.comment) }?.to_vec(),
         });
     }
@@ -2600,8 +2648,11 @@ unsafe fn snapshot_from_ffi(
         context_id: snapshot.context_id,
         composition_id: snapshot.composition_id,
         revision: snapshot.revision,
+        // SAFETY: the outer snapshot contract keeps this preedit span readable during the copy.
         preedit: unsafe { bytes_from_ffi(snapshot.preedit) }?.to_vec(),
+        // SAFETY: the outer snapshot contract keeps this upper auxiliary span readable during the copy.
         auxiliary_up: unsafe { bytes_from_ffi(snapshot.auxiliary_up) }?.to_vec(),
+        // SAFETY: the outer snapshot contract keeps this lower auxiliary span readable during the copy.
         auxiliary_down: unsafe { bytes_from_ffi(snapshot.auxiliary_down) }?.to_vec(),
         candidates: owned_candidates,
         selected: (snapshot.has_selected != 0).then_some(snapshot.selected),
@@ -2612,6 +2663,8 @@ unsafe fn snapshot_from_ffi(
     })
 }
 
+// SAFETY: when non-empty, the caller supplies a non-null, aligned UTF-8 byte span valid for the
+// returned borrow; callers immediately copy it and do not retain the forged `'static` reference.
 unsafe fn bytes_from_ffi(value: Fcitx5CandidateUtf8) -> Option<&'static [u8]> {
     if value.len == 0 {
         return Some(&[]);
@@ -2619,9 +2672,12 @@ unsafe fn bytes_from_ffi(value: Fcitx5CandidateUtf8) -> Option<&'static [u8]> {
     if value.ptr.is_null() {
         return None;
     }
+    // SAFETY: the non-null pointer covers `len` readable bytes for the caller-guaranteed lifetime.
     Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
 }
 
+// SAFETY: when non-empty, the caller supplies a non-null, aligned UTF-16 span valid for the
+// returned borrow; callers immediately copy it and do not retain the forged `'static` reference.
 unsafe fn utf16_from_ffi(value: Fcitx5CandidateUtf16) -> Option<&'static [u16]> {
     if value.len == 0 {
         return Some(&[]);
@@ -2629,6 +2685,7 @@ unsafe fn utf16_from_ffi(value: Fcitx5CandidateUtf16) -> Option<&'static [u16]> 
     if value.ptr.is_null() {
         return None;
     }
+    // SAFETY: the non-null pointer covers `len` readable u16 elements for the caller-guaranteed lifetime.
     Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
 }
 
@@ -2664,10 +2721,12 @@ pub unsafe extern "C" fn fcitx5_candidate_layout_run(
     if item_count > 0 && (items.is_null() || out_items.is_null() || out_item_indices.is_null()) {
         return 1;
     }
+    // SAFETY: the validated input pointer is aligned and readable for one layout input.
     let input = unsafe { *input };
     let item_slice = if item_count == 0 {
         &[]
     } else {
+        // SAFETY: the validated items pointer covers `item_count` readable sizes.
         unsafe { std::slice::from_raw_parts(items, item_count) }
     };
     let Some(orientation) = orientation_from_ffi(input.orientation) else {
@@ -2712,7 +2771,9 @@ pub unsafe extern "C" fn fcitx5_candidate_layout_run(
         return 1;
     }
     if !result.items.is_empty() {
+        // SAFETY: the validated output pointer covers exactly `result.items.len()` writable rects.
         let out_items = unsafe { std::slice::from_raw_parts_mut(out_items, result.items.len()) };
+        // SAFETY: the validated index pointer covers exactly `result.item_indices.len()` writable indices.
         let out_indices =
             unsafe { std::slice::from_raw_parts_mut(out_item_indices, result.item_indices.len()) };
         for (target, source) in out_items.iter_mut().zip(result.items.iter()) {
@@ -2720,6 +2781,7 @@ pub unsafe extern "C" fn fcitx5_candidate_layout_run(
         }
         out_indices.copy_from_slice(&result.item_indices);
     }
+    // SAFETY: the validated output pointer is writable for one layout result and no aliases are used.
     unsafe {
         *output = Fcitx5CandidateLayoutOutput {
             window: rect_to_ffi(result.window),
@@ -2934,6 +2996,7 @@ mod candidate_presentation_decision_tests {
     fn decision_abi_rejects_null_state_or_output() {
         let state = CandidatePresentationState::default();
         let mut decision = CandidatePresentationDecision::default();
+        // SAFETY: this test passes a live presentation state and writable decision output.
         let ok = unsafe {
             super::fcitx5_candidate_presentation_decide(
                 (&state as *const CandidatePresentationState).cast(),
@@ -3366,10 +3429,12 @@ pub unsafe extern "C" fn fcitx5_candidate_hit_test(
     let rects = if rect_count == 0 {
         &[]
     } else {
+        // SAFETY: the validated rect pointer covers `rect_count` readable rectangles.
         unsafe { std::slice::from_raw_parts(rects, rect_count) }
     };
     for (index, rect) in rects.iter().enumerate() {
         if x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom {
+            // SAFETY: the non-null output pointer is writable for one index.
             unsafe {
                 *out_index = index;
             }
@@ -3424,6 +3489,7 @@ pub unsafe extern "C" fn fcitx5_candidate_parse_command_line_utf16(
     let arguments = if arguments.is_null() {
         &[]
     } else {
+        // SAFETY: the ABI contract keeps `arguments_len` UTF-16 units readable for this call.
         unsafe { std::slice::from_raw_parts(arguments, arguments_len) }
     };
     let (mut parsed, generation, candidate_peer) = parse_candidate_command_line(arguments);
@@ -3453,6 +3519,7 @@ pub unsafe extern "C" fn fcitx5_candidate_default_dwrite_locale_utf16(
 pub unsafe extern "C" fn fcitx5_candidate_content_locale_valid_utf8(
     locale: Fcitx5CandidateUtf8,
 ) -> u8 {
+    // SAFETY: the ABI keeps the locale byte span readable for this call and it is not retained.
     let Some(locale) = (unsafe { bytes_from_ffi(locale) }) else {
         return 0;
     };
@@ -3471,6 +3538,7 @@ pub unsafe extern "C" fn fcitx5_candidate_content_locale_or_default_utf16(
     locale_out: *mut u16,
     locale_capacity: usize,
 ) -> usize {
+    // SAFETY: the ABI keeps the locale byte span readable for this call and it is not retained.
     let locale = (unsafe { bytes_from_ffi(locale) }).unwrap_or_default();
     write_wide_units(
         &content_locale_or_default(locale),
@@ -3487,6 +3555,7 @@ pub unsafe extern "C" fn fcitx5_candidate_content_locale_or_default_utf16(
 pub unsafe extern "C" fn fcitx5_candidate_locale_prefers_compact_horizontal_utf8(
     locale: Fcitx5CandidateUtf8,
 ) -> u8 {
+    // SAFETY: the ABI keeps the locale byte span readable for this call and it is not retained.
     let Some(locale) = (unsafe { bytes_from_ffi(locale) }) else {
         return 0;
     };
@@ -3525,12 +3594,15 @@ pub unsafe extern "C" fn fcitx5_candidate_format_label_utf16(
     let Some(style) = label_style_from_ffi(style) else {
         return 0;
     };
+    // SAFETY: the ABI keeps the source label UTF-16 span readable for this owned conversion.
     let Some(source_label) = (unsafe { utf16_from_ffi(source_label) }) else {
         return 0;
     };
+    // SAFETY: the ABI keeps the prefix UTF-16 span readable for this owned conversion.
     let Some(custom_prefix) = (unsafe { utf16_from_ffi(custom_prefix) }) else {
         return 0;
     };
+    // SAFETY: the ABI keeps the suffix UTF-16 span readable for this owned conversion.
     let Some(custom_suffix) = (unsafe { utf16_from_ffi(custom_suffix) }) else {
         return 0;
     };
@@ -3626,14 +3698,17 @@ pub unsafe extern "C" fn fcitx5_candidate_render_segments(
     let items = if item_count == 0 {
         &[]
     } else {
+        // SAFETY: the validated items pointer covers `item_count` readable render-item inputs.
         unsafe { std::slice::from_raw_parts(items, item_count) }
     };
     let out_items = if item_count == 0 {
         &mut []
     } else {
+        // SAFETY: the validated output pointer covers `item_count` writable segment outputs.
         unsafe { std::slice::from_raw_parts_mut(out_items, item_count) }
     };
     let (segments, label_column_width) = candidate_render_segments(items);
+    // SAFETY: the validated label-width pointer is writable for one f32 result.
     unsafe {
         *out_label_column_width = label_column_width;
     }
@@ -3731,6 +3806,7 @@ pub unsafe extern "C" fn fcitx5_candidate_axis_layout(
     if item_count > 0 && (items.is_null() || out_items.is_null()) {
         return 1;
     }
+    // SAFETY: the validated input pointer is aligned and readable for one axis-layout input.
     let input = unsafe { *input };
     if !input.dpi_scale.is_finite() || !(0.5..=4.0).contains(&input.dpi_scale) {
         return 1;
@@ -3752,6 +3828,7 @@ pub unsafe extern "C" fn fcitx5_candidate_axis_layout(
     let item_slice = if item_count == 0 {
         &[]
     } else {
+        // SAFETY: the validated items pointer covers `item_count` readable sizes.
         unsafe { std::slice::from_raw_parts(items, item_count) }
     };
     let result = axis_layout::layout(&axis_layout::AxisLayoutInput {
@@ -3797,6 +3874,7 @@ pub unsafe extern "C" fn fcitx5_candidate_axis_layout(
         return 1;
     }
     if !result.items.is_empty() {
+        // SAFETY: the validated output buffer covers `result.items.len()` writable entries.
         let out_items = unsafe { std::slice::from_raw_parts_mut(out_items, result.items.len()) };
         for (target, source) in out_items.iter_mut().zip(result.items.iter()) {
             *target = Fcitx5CandidateAxisLayoutItemOutput {
@@ -3809,6 +3887,7 @@ pub unsafe extern "C" fn fcitx5_candidate_axis_layout(
         }
     }
     let (viewport_dx, viewport_dy) = result.viewport_offset.unwrap_or((0.0, 0.0));
+    // SAFETY: the validated output pointer is writable for one axis-layout result.
     unsafe {
         *output = Fcitx5CandidateAxisLayoutOutput {
             window_x: result.window.left,
@@ -3914,14 +3993,18 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
         if in_candidates.is_null() || in_sizes.is_null() {
             return 1;
         }
+        // SAFETY: validated candidate input covers `candidate_count` readable records for this call.
         unsafe { std::slice::from_raw_parts(in_candidates, candidate_count) }
     };
     let sizes = if candidate_count == 0 {
         &[]
     } else {
+        // SAFETY: validated size input covers `candidate_count` readable records for this call.
         unsafe { std::slice::from_raw_parts(in_sizes, candidate_count) }
     };
+    // SAFETY: the non-null theme pointer is aligned and readable for one input value.
     let theme = unsafe { *in_theme };
+    // SAFETY: the non-null geometry pointer is aligned and readable for one input value.
     let geometry = unsafe { *in_geometry };
     let orientation = match geometry.orientation {
         0 => Orientation::Horizontal,
@@ -3938,6 +4021,7 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
         if preedit_utf8.is_null() {
             return 1;
         }
+        // SAFETY: the validated preedit pointer covers `preedit_len` readable bytes for this copy.
         let bytes = unsafe { std::slice::from_raw_parts(preedit_utf8, preedit_len) };
         Some(String::from_utf8_lossy(bytes).into_owned())
     } else {
@@ -3946,14 +4030,17 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
     let data = candidates
         .iter()
         .map(|c| CandidateRenderData {
+            // SAFETY: each candidate label span is valid for its declared length during rendering.
             label: String::from_utf8_lossy(unsafe {
                 std::slice::from_raw_parts(c.label, c.label_len)
             })
             .into_owned(),
+            // SAFETY: each candidate text span is valid for its declared length during rendering.
             text: String::from_utf8_lossy(unsafe {
                 std::slice::from_raw_parts(c.text, c.text_len)
             })
             .into_owned(),
+            // SAFETY: each candidate comment span is valid for its declared length during rendering.
             comment: String::from_utf8_lossy(unsafe {
                 std::slice::from_raw_parts(c.comment, c.comment_len)
             })
@@ -4074,6 +4161,7 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
     let required = render.pixels.len();
     if out_pixel_capacity < required {
         if !out.is_null() {
+            // SAFETY: the non-null output pointer is writable for one render result.
             unsafe {
                 *out = Fcitx5CandidateRenderOutput {
                     pixel_stride: render.stride,
@@ -4088,9 +4176,11 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
         return 1;
     }
     if required > 0 {
+        // SAFETY: the validated output pixel buffer has `required` writable bytes and does not alias render storage.
         unsafe { std::ptr::copy_nonoverlapping(render.pixels.as_ptr(), out_pixels, required) };
     }
     if !out.is_null() {
+        // SAFETY: the non-null output pointer is writable for one render result.
         unsafe {
             *out = Fcitx5CandidateRenderOutput {
                 pixel_stride: render.stride,
@@ -4198,6 +4288,11 @@ pub struct Fcitx5CandidateRenderOutput {
 /// blits the result through `window_host::blit_bgra_to_dc`. Returns 0 on a
 /// painted frame, 2 when the renderer produced no bitmap (empty window), and
 /// 1 on invalid input or blit failure.
+///
+/// # Safety
+///
+/// The candidate, size, theme, geometry, and preedit pointers must satisfy the
+/// two-phase render ABI; `dc` must be a live device context for the call.
 #[cfg(windows)]
 #[no_mangle]
 pub unsafe extern "C" fn fcitx5_candidate_render_window_blit_to_dc(
@@ -4347,6 +4442,7 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_decide(
     if state.is_null() || output.is_null() {
         return 0;
     }
+    // SAFETY: the non-null state pointer is valid and shared for this read-only decision.
     let state = unsafe { &*state.cast::<CandidatePresentationState>() };
     let action = state.decide(
         visibility,
@@ -5876,6 +5972,7 @@ mod tests {
             popup_allowed: 0,
         };
         assert_eq!(
+            // SAFETY: model and output are valid, uniquely borrowed test storage.
             unsafe {
                 fcitx5_candidate_model_current(
                     (&mut model as *mut CandidateModel).cast(),
@@ -5887,8 +5984,10 @@ mod tests {
         assert_eq!(output.revision, 1);
         assert_eq!(output.selected, 0);
         assert_eq!(output.candidate_count, 2);
+        // SAFETY: successful current call returned a non-null candidate pointer valid for model lifetime.
         let first = unsafe { &*output.candidates };
         assert_eq!(
+            // SAFETY: candidate text pointer and length come from the valid model snapshot above.
             unsafe { std::slice::from_raw_parts(first.text.ptr, first.text.len) },
             "你".as_bytes()
         );
@@ -6108,10 +6207,12 @@ mod tests {
 
     #[test]
     fn default_dwrite_locale_abi_uses_two_phase_utf16_output() {
+        // SAFETY: null output with zero capacity is the documented size-query form.
         let required =
             unsafe { fcitx5_candidate_default_dwrite_locale_utf16(std::ptr::null_mut(), 0) };
         assert!(required > 0);
         let mut output = vec![0_u16; required];
+        // SAFETY: output owns writable storage for exactly its supplied u16 capacity.
         let written = unsafe {
             fcitx5_candidate_default_dwrite_locale_utf16(output.as_mut_ptr(), output.len())
         };
@@ -6130,6 +6231,7 @@ mod tests {
         assert!(!content_locale_valid(&[b'a'; MAX_CONTENT_LOCALE_UTF8 + 1]));
         assert_eq!(content_locale_or_default(b"zh-CN"), wide("zh-CN"));
         assert_eq!(
+            // SAFETY: UTF-8 view points to the static byte literal for its exact length.
             unsafe {
                 fcitx5_candidate_content_locale_valid_utf8(Fcitx5CandidateUtf8 {
                     ptr: b"ko-KR".as_ptr(),
@@ -6139,6 +6241,7 @@ mod tests {
             1
         );
         assert_eq!(
+            // SAFETY: UTF-8 view points to the static byte literal for its exact length.
             unsafe {
                 fcitx5_candidate_locale_prefers_compact_horizontal_utf8(Fcitx5CandidateUtf8 {
                     ptr: b"JA-jp".as_ptr(),
@@ -6155,11 +6258,13 @@ mod tests {
             ptr: b"en-US".as_ptr(),
             len: b"en-US".len(),
         };
+        // SAFETY: locale view references the static byte literal and null output is a size query.
         let required = unsafe {
             fcitx5_candidate_content_locale_or_default_utf16(locale, std::ptr::null_mut(), 0)
         };
         assert_eq!(required, wide("en-US").len());
         let mut output = vec![0_u16; required];
+        // SAFETY: locale view is valid and output owns writable storage for its supplied capacity.
         let written = unsafe {
             fcitx5_candidate_content_locale_or_default_utf16(
                 locale,
@@ -6174,6 +6279,7 @@ mod tests {
             ptr: b"zh_CN".as_ptr(),
             len: b"zh_CN".len(),
         };
+        // SAFETY: invalid locale bytes remain valid readable storage for the supplied length.
         let fallback_required = unsafe {
             fcitx5_candidate_content_locale_or_default_utf16(invalid, std::ptr::null_mut(), 0)
         };
@@ -6355,6 +6461,7 @@ mod tests {
         ];
         let mut index = usize::MAX;
         assert_eq!(
+            // SAFETY: rectangles is a live contiguous slice and index is writable test storage.
             unsafe {
                 fcitx5_candidate_hit_test(
                     rectangles.as_ptr(),
@@ -6368,6 +6475,7 @@ mod tests {
         );
         assert_eq!(index, 1);
         assert_eq!(
+            // SAFETY: rectangles is a live contiguous slice and index is writable test storage.
             unsafe {
                 fcitx5_candidate_hit_test(
                     rectangles.as_ptr(),
@@ -6380,6 +6488,7 @@ mod tests {
             0
         );
         assert_eq!(
+            // SAFETY: rectangles is a live contiguous slice and index is writable test storage.
             unsafe {
                 fcitx5_candidate_hit_test(
                     rectangles.as_ptr(),
@@ -6449,6 +6558,7 @@ mod tests {
         let mut output = [Fcitx5CandidateRenderItemOutput::default(); 2];
         let mut label_column = 0.0_f32;
         assert_eq!(
+            // SAFETY: input and output arrays are live contiguous test storage for their supplied lengths.
             unsafe {
                 fcitx5_candidate_render_segments(
                     input.as_ptr(),
@@ -6482,6 +6592,7 @@ mod tests {
         }];
         let mut no_label_output = [Fcitx5CandidateRenderItemOutput::default(); 1];
         assert_eq!(
+            // SAFETY: input and output arrays are live contiguous test storage for their supplied lengths.
             unsafe {
                 fcitx5_candidate_render_segments(
                     no_label.as_ptr(),
@@ -6508,6 +6619,7 @@ mod tests {
         }];
         let mut hidden_output = [Fcitx5CandidateRenderItemOutput::default(); 1];
         assert_eq!(
+            // SAFETY: input and output arrays are live contiguous test storage for their supplied lengths.
             unsafe {
                 fcitx5_candidate_render_segments(
                     hidden_label.as_ptr(),
@@ -7201,6 +7313,7 @@ mod tests {
             configured_scroll_mode: 0,
         };
         assert_eq!(
+            // SAFETY: state was created by the paired constructor and update is a valid live reference.
             unsafe { fcitx5_candidate_presentation_apply(state, &update) },
             0
         );
@@ -7208,6 +7321,7 @@ mod tests {
         let mut indices = [usize::MAX; 12];
         let mut plan = Fcitx5CandidatePresentationRenderPlan::default();
         assert_eq!(
+            // SAFETY: state is live; indices and plan provide writable storage for their supplied bounds.
             unsafe {
                 fcitx5_candidate_presentation_render_plan(
                     state,
@@ -7231,10 +7345,12 @@ mod tests {
             ..update
         };
         assert_eq!(
+            // SAFETY: state is live and scroll_update is a valid live reference.
             unsafe { fcitx5_candidate_presentation_apply(state, &scroll_update) },
             0
         );
         assert_eq!(
+            // SAFETY: state is live; indices and plan provide writable storage for their supplied bounds.
             unsafe {
                 fcitx5_candidate_presentation_render_plan(
                     state,
@@ -7249,6 +7365,7 @@ mod tests {
         assert_eq!(plan.render_count, 12);
         assert!(indices[..plan.render_count].iter().copied().eq(0..12));
 
+        // SAFETY: state is the unique live allocation returned by the paired constructor.
         unsafe { fcitx5_candidate_presentation_destroy(state) };
     }
 
@@ -7262,6 +7379,7 @@ mod tests {
             },
             comment: Fcitx5CandidateUtf8::default(),
         };
+        // SAFETY: state is live and candidate points to valid test storage for the supplied count.
         let orientation = unsafe {
             fcitx5_candidate_presentation_resolve_orientation(
                 state,
@@ -7281,6 +7399,7 @@ mod tests {
             )
         };
         assert_eq!(orientation, 0);
+        // SAFETY: state is the unique live allocation returned by the paired constructor.
         unsafe { fcitx5_candidate_presentation_destroy(state) };
     }
 
@@ -7377,6 +7496,7 @@ mod axis_layout_ffi_tests {
         let mut out_items = vec![Fcitx5CandidateAxisLayoutItemOutput::default(); items.len()];
         let mut output = Fcitx5CandidateAxisLayoutOutput::default();
         assert_eq!(
+            // SAFETY: input, items, output items, and output are live storage for their supplied bounds.
             unsafe {
                 fcitx5_candidate_axis_layout(
                     &input,
@@ -7411,6 +7531,7 @@ mod axis_layout_ffi_tests {
         let mut out_items = vec![Fcitx5CandidateAxisLayoutItemOutput::default(); items.len()];
         let mut output = Fcitx5CandidateAxisLayoutOutput::default();
         assert_eq!(
+            // SAFETY: input, items, output items, and output are live storage for their supplied bounds.
             unsafe {
                 fcitx5_candidate_axis_layout(
                     &input,
@@ -7426,6 +7547,7 @@ mod axis_layout_ffi_tests {
         );
         let input = axis_input(0, 0, 0, 0);
         assert_eq!(
+            // SAFETY: input, items, output items, and output are live storage for their supplied bounds.
             unsafe {
                 fcitx5_candidate_axis_layout(
                     &input,
@@ -7532,6 +7654,7 @@ mod axis_layout_ffi_tests {
         let mut out = Fcitx5CandidateRenderOutput::default();
         let preedit = "ni";
         let (preedit_p, preedit_len) = utf8_slice(preedit);
+        // SAFETY: all inputs are live for the call and out is uniquely writable test storage.
         let code = unsafe {
             fcitx5_candidate_render_window(
                 candidates.as_ptr(),
@@ -7555,6 +7678,7 @@ mod axis_layout_ffi_tests {
         assert!(required > 0);
         assert!(out.pixel_stride > 0);
         let mut pixels = vec![0u8; required];
+        // SAFETY: all inputs are live for the call and pixels/out provide writable storage for supplied bounds.
         let code = unsafe {
             fcitx5_candidate_render_window(
                 candidates.as_ptr(),

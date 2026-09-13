@@ -103,17 +103,22 @@ fn key_response_c() -> FcitxKeyResponseC {
 }
 
 /// Calls an encode FFI once with a large buffer and returns the bytes.
+// SAFETY: callers pass an exported encoder whose C arguments are valid for
+// each invocation; `encode_once` does not retain the function or input data.
 unsafe fn encode_once<C>(
     f: unsafe extern "C" fn(*const C, *mut u8, usize, *mut usize) -> u8,
     c: &C,
 ) -> Option<Vec<u8>> {
     let mut needed = 0usize;
-    // First call with no buffer: reports the required size (0 on rejection).
+    // SAFETY: `c` and `needed` are live aligned references; the encoder ABI
+    // permits a null output pointer when its capacity is zero.
     if unsafe { f(c, std::ptr::null_mut(), 0, &mut needed) } == 0 && needed == 0 {
         return None;
     }
     let mut out = vec![0u8; needed];
     let mut written = 0usize;
+    // SAFETY: `out` is uniquely writable for its exact length, while `c` and
+    // `written` are live aligned references for this non-retained ABI call.
     if unsafe { f(c, out.as_mut_ptr(), out.len(), &mut written) } == 0 {
         return None;
     }
@@ -137,6 +142,7 @@ fn encode_matches_rust_typed_api() {
         client_architecture_bits: 64,
         client_process_id: 100,
     };
+    // SAFETY: `hello_c` is an initialized ABI fixture borrowed for this call.
     let via_ffi = unsafe { encode_once(fcitx5_protocol_core_encode_hello_request, &hello_c) }
         .expect("hello request accepted");
     let via_rust = crate::encode_hello_request(&HelloRequest {
@@ -169,6 +175,7 @@ fn encode_matches_rust_typed_api() {
         status: Status::Ok as u32,
         server_architecture_bits: 64,
     };
+    // SAFETY: `hello_r_c` is an initialized ABI fixture borrowed for this call.
     let via_ffi = unsafe { encode_once(fcitx5_protocol_core_encode_hello_response, &hello_r_c) }
         .expect("hello response accepted");
     let via_rust = crate::encode_hello_response(&HelloResponse {
@@ -188,6 +195,7 @@ fn encode_matches_rust_typed_api() {
     assert_eq!(via_ffi, via_rust);
 
     // key request
+    // SAFETY: the returned C fixture is initialized and borrowed only for this call.
     let via_ffi = unsafe { encode_once(fcitx5_protocol_core_encode_key_request, &key_request_c()) }
         .expect("key request accepted");
     let via_rust = crate::encode_key_request(&KeyRequest {
@@ -225,6 +233,7 @@ fn encode_matches_rust_typed_api() {
     assert_eq!(via_ffi, via_rust);
 
     // key response (with candidates)
+    // SAFETY: the returned C fixture is initialized and borrowed only for this call.
     let via_ffi =
         unsafe { encode_once(fcitx5_protocol_core_encode_key_response, &key_response_c()) }
             .expect("key response accepted");
@@ -284,6 +293,7 @@ fn encode_matches_rust_typed_api() {
         target_process_id: 1234,
         candidate_id: 0x0b02,
     };
+    // SAFETY: `select_c` is an initialized ABI fixture borrowed only for this call.
     let via_ffi = unsafe {
         encode_once(
             fcitx5_protocol_core_encode_candidate_select_request,
@@ -311,6 +321,7 @@ fn encode_matches_rust_typed_api() {
         metadata: md_response(4, 3),
         status: Status::Ok as u32,
     };
+    // SAFETY: `select_r_c` is an initialized ABI fixture borrowed only for this call.
     let via_ffi = unsafe {
         encode_once(
             fcitx5_protocol_core_encode_candidate_select_response,
@@ -335,6 +346,7 @@ fn encode_matches_rust_typed_api() {
 
     // state / engine status request
     let state_c = FcitxStateRequestC { metadata: md(5) };
+    // SAFETY: `state_c` is an initialized ABI fixture borrowed only for this call.
     let via_ffi = unsafe { encode_once(fcitx5_protocol_core_encode_state_request, &state_c) }
         .expect("state request accepted");
     let via_rust = crate::encode_state_request(&StateRequest {
@@ -362,6 +374,7 @@ fn encode_matches_rust_typed_api() {
             revision: 0,
         },
     };
+    // SAFETY: `engine_c` is an initialized ABI fixture borrowed only for this call.
     let via_ffi =
         unsafe { encode_once(fcitx5_protocol_core_encode_engine_status_request, &engine_c) }
             .expect("engine status request accepted");
@@ -396,6 +409,7 @@ fn encode_matches_rust_typed_api() {
         current_input_method_native_name: bytes("\u{62fc}\u{97f3}"),
         current_input_method_short_label: bytes("\u{62fc}"),
     };
+    // SAFETY: `engine_r_c` is an initialized ABI fixture borrowed only for this call.
     let via_ffi = unsafe {
         encode_once(
             fcitx5_protocol_core_encode_engine_status_response,
@@ -436,6 +450,7 @@ fn encode_matches_rust_typed_api() {
             },
             command: raw,
         };
+        // SAFETY: `launcher_c` is an initialized ABI fixture borrowed only for this call.
         let via_ffi =
             unsafe { encode_once(fcitx5_protocol_core_encode_launcher_request, &launcher_c) }
                 .expect("launcher request accepted");
@@ -477,6 +492,7 @@ fn encode_matches_rust_typed_api() {
         current_input_method_native_name: bytes("\u{4e2d}\u{6d32}\u{97f5}"),
         current_input_method_short_label: bytes("\u{4e2d}"),
     };
+    // SAFETY: `launcher_r_c` is an initialized ABI fixture borrowed only for this call.
     let via_ffi =
         unsafe { encode_once(fcitx5_protocol_core_encode_launcher_response, &launcher_r_c) }
             .expect("launcher response accepted");
@@ -507,14 +523,19 @@ fn encode_matches_rust_typed_api() {
 
 #[test]
 fn decode_key_request_roundtrips_through_c_structures() {
+    // SAFETY: the returned C fixture is initialized and borrowed only for this call.
     let bytes = unsafe { encode_once(fcitx5_protocol_core_encode_key_request, &key_request_c()) }
         .expect("key request accepted");
 
     let metadata = key_request_c().metadata;
     let body = &bytes[crate::HEADER_SIZE..];
+    // SAFETY: this repr(C) output contains scalar fields and nullable byte views,
+    // so its all-zero bit pattern is valid before the decoder initializes it.
     let mut out = unsafe { std::mem::zeroed::<FcitxKeyRequestC>() };
     let mut strings = [0u8; 4096];
     let mut strings_needed = 0usize;
+    // SAFETY: all input slices/references are live and sized as passed; `out`,
+    // `strings`, and `strings_needed` are uniquely writable for this call.
     let ok = unsafe {
         fcitx5_protocol_core_decode_key_request(
             &metadata,
@@ -546,16 +567,23 @@ fn decode_key_request_roundtrips_through_c_structures() {
 
 #[test]
 fn decode_key_response_roundtrips_candidates() {
+    // SAFETY: the returned C fixture is initialized and borrowed only for this call.
     let bytes = unsafe { encode_once(fcitx5_protocol_core_encode_key_response, &key_response_c()) }
         .expect("key response accepted");
 
     let metadata = key_response_c().metadata;
     let body = &bytes[crate::HEADER_SIZE..];
+    // SAFETY: this repr(C) output contains scalar fields and nullable byte views,
+    // so its all-zero bit pattern is valid before the decoder initializes it.
     let mut out = unsafe { std::mem::zeroed::<FcitxKeyResponseC>() };
     let mut strings = [0u8; 4096];
+    // SAFETY: this repr(C) candidate record has scalar fields and nullable byte
+    // views, so an all-zero record is valid before the decoder initializes it.
     let mut candidates = [unsafe { std::mem::zeroed::<FcitxCandidateRecordC>() }; 4];
     let mut strings_needed = 0usize;
     let mut candidates_needed = 0usize;
+    // SAFETY: all input slices/references are live and sized as passed; output
+    // record and byte buffers are uniquely writable for this call.
     let ok = unsafe {
         fcitx5_protocol_core_decode_key_response(
             &metadata,
@@ -592,13 +620,18 @@ fn decode_key_response_roundtrips_candidates() {
 
 #[test]
 fn decode_reports_space_needed_when_buffers_are_small() {
+    // SAFETY: the returned C fixture is initialized and borrowed only for this call.
     let bytes = unsafe { encode_once(fcitx5_protocol_core_encode_key_request, &key_request_c()) }
         .expect("key request accepted");
     let metadata = key_request_c().metadata;
     let body = &bytes[crate::HEADER_SIZE..];
 
+    // SAFETY: this repr(C) output contains scalar fields and nullable byte views,
+    // so its all-zero bit pattern is valid before the decoder initializes it.
     let mut out = unsafe { std::mem::zeroed::<FcitxKeyRequestC>() };
     let mut strings_needed = 0usize;
+    // SAFETY: input references are live and correctly sized; `out` and
+    // `strings_needed` are uniquely writable, and null bytes mean zero capacity.
     let ok = unsafe {
         fcitx5_protocol_core_decode_key_request(
             &metadata,
@@ -620,6 +653,8 @@ fn decode_reports_space_needed_when_buffers_are_small() {
         ..md(42)
     };
     let mut strings_needed = 99usize;
+    // SAFETY: input references are live and correctly sized; the null byte
+    // pointer is paired with zero capacity, and `strings_needed` is writable.
     let ok = unsafe {
         fcitx5_protocol_core_decode_key_request(
             &bad_metadata,
@@ -639,6 +674,8 @@ fn decode_reports_space_needed_when_buffers_are_small() {
 fn encode_reports_space_needed_when_buffer_is_small() {
     let c = key_request_c();
     let mut needed = 0usize;
+    // SAFETY: `c` and `needed` are live aligned references; the encoder ABI
+    // permits a null output pointer when its capacity is zero.
     let ok = unsafe {
         fcitx5_protocol_core_encode_key_request(&c, std::ptr::null_mut(), 0, &mut needed)
     };
@@ -654,6 +691,8 @@ fn rejected_inputs_return_zero() {
         ..key_request_c()
     };
     let mut needed = 0usize;
+    // SAFETY: `bad` and `needed` are live aligned references; the encoder ABI
+    // permits a null output pointer when its capacity is zero.
     let ok = unsafe {
         fcitx5_protocol_core_encode_key_request(&bad, std::ptr::null_mut(), 0, &mut needed)
     };
@@ -674,6 +713,8 @@ fn rejected_inputs_return_zero() {
         command: 99,
     };
     let mut needed = 0usize;
+    // SAFETY: `bad` and `needed` are live aligned references; the encoder ABI
+    // permits a null output pointer when its capacity is zero.
     let ok = unsafe {
         fcitx5_protocol_core_encode_launcher_request(&bad, std::ptr::null_mut(), 0, &mut needed)
     };
@@ -683,11 +724,16 @@ fn rejected_inputs_return_zero() {
 
 #[test]
 fn decode_header_abi_reports_type_and_metadata() {
+    // SAFETY: the returned C fixture is initialized and borrowed only for this call.
     let bytes = unsafe { encode_once(fcitx5_protocol_core_encode_key_request, &key_request_c()) }
         .expect("key request accepted");
     let mut out_type = 0u16;
     let mut out_body_size = 0u32;
+    // SAFETY: metadata is a repr(C) scalar record whose all-zero bit pattern is
+    // valid before `decode_header` initializes every output field.
     let mut out_metadata = unsafe { std::mem::zeroed::<FcitxMetadataC>() };
+    // SAFETY: `bytes` is readable for exactly HEADER_SIZE bytes; all output
+    // references are live, aligned, and uniquely writable for this call.
     let ok = unsafe {
         fcitx5_protocol_core_decode_header(
             bytes.as_ptr(),
@@ -703,6 +749,8 @@ fn decode_header_abi_reports_type_and_metadata() {
     assert_eq!(out_metadata.request_id, 42);
 
     // Wrong-length header rejected.
+    // SAFETY: `bytes` remains readable, while the deliberately short length
+    // prevents access past its prefix; output references remain writable.
     let ok = unsafe {
         fcitx5_protocol_core_decode_header(
             bytes.as_ptr(),

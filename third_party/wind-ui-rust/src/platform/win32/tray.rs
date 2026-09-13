@@ -288,7 +288,6 @@ fn copy_wide_unaligned<const N: usize>(dst: *mut [u16; N], s: &str) {
     }
 }
 
-
 /// &str → 以 NUL 结尾的 UTF-16。
 fn wide_nul(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()

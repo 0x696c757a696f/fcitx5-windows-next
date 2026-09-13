@@ -5,6 +5,8 @@
 //! reports the host action. All underlying semantics already live in this
 //! crate; this module only sequences them.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use fcitx5_protocol_core::KeyResponse;
 
 use crate::axis_layout::{AxisLayoutInput, CandidateLayoutOptions, OverflowBehavior, WritingMode};
@@ -383,6 +385,10 @@ pub fn frame_update(
         let item_widths: Vec<f32> = items.iter().map(|item| item.width).collect();
         let work_width = (work_area.right - work_area.left).max(0.0);
         let hard_limit = config.max_width_dip * scale.min(work_width);
+        // SAFETY: `fcitx5_candidate_horizontal_natural_downgrade` reads only
+        // `item_widths.as_ptr()` for `item_widths.len()` elements (both valid
+        // above) and the scalar arguments; it writes nothing and cannot retain
+        // the pointer beyond the call.
         if unsafe {
             fcitx5_candidate_horizontal_natural_downgrade(
                 item_widths.as_ptr(),

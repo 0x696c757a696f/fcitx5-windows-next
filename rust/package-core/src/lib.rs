@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
@@ -75,6 +76,8 @@ mod mldsa_verify_adapter {
         if signature.is_empty() || message.is_empty() || public_key.is_empty() {
             return false;
         }
+        // SAFETY: all slice pointers are non-null for the supplied lengths; the
+        // verifier reads them only for this synchronous call.
         let status = unsafe {
             fcitx5_mldsa65_verify(
                 signature.as_ptr(),
@@ -162,6 +165,8 @@ mod rsa_verify_adapter {
             return false;
         }
         let mut algorithm = std::ptr::null_mut();
+        // SAFETY: output storage and both static UTF-16 algorithm arguments stay
+        // valid for BCrypt's synchronous call.
         let opened = unsafe {
             BCryptOpenAlgorithmProvider(
                 &mut algorithm,
@@ -174,6 +179,8 @@ mod rsa_verify_adapter {
             return false;
         }
         let mut key = std::ptr::null_mut();
+        // SAFETY: `algorithm` is a live provider, static blob type is NUL-terminated,
+        // and `public_key`/`key` are valid for the supplied input/output sizes.
         let imported = unsafe {
             BCryptImportKeyPair(
                 algorithm,
@@ -186,6 +193,7 @@ mod rsa_verify_adapter {
             )
         };
         if imported != 0 || key.is_null() {
+            // SAFETY: this branch still exclusively owns the successfully opened provider.
             let _ = unsafe { BCryptCloseAlgorithmProvider(algorithm, 0) };
             return false;
         }
@@ -193,6 +201,8 @@ mod rsa_verify_adapter {
         let padding = BcryptPkcs1PaddingInfo {
             psz_alg_id: BCRYPT_SHA256_ALGORITHM.as_ptr(),
         };
+        // SAFETY: `key` is live, and padding, hash, and signature buffers remain
+        // valid and immutable for BCryptVerifySignature's synchronous read.
         let status = unsafe {
             BCryptVerifySignature(
                 key,
@@ -204,7 +214,9 @@ mod rsa_verify_adapter {
                 BCRYPT_PAD_PKCS1,
             )
         };
+        // SAFETY: `key` is the uniquely owned handle returned by BCryptImportKeyPair.
         let _ = unsafe { BCryptDestroyKey(key) };
+        // SAFETY: `algorithm` remains uniquely owned after its imported key is destroyed.
         let _ = unsafe { BCryptCloseAlgorithmProvider(algorithm, 0) };
         status == 0
     }
@@ -455,6 +467,8 @@ mod miniz_archive_adapter {
             }
             wide_path.push(0);
             let mut handle = std::ptr::null_mut();
+            // SAFETY: `wide_path` is NUL-terminated and the output handle points to
+            // initialized local storage for this synchronous adapter call.
             let opened = unsafe {
                 fcitx5_miniz_open_utf16(wide_path.as_ptr(), MAX_ARCHIVE_BYTES, &mut handle)
             };
@@ -468,6 +482,7 @@ mod miniz_archive_adapter {
         }
 
         pub fn len(&self) -> usize {
+            // SAFETY: `ZipArchive` owns a live miniz handle until its Drop implementation.
             unsafe { fcitx5_miniz_num_files(self.handle) as usize }
         }
 
@@ -480,6 +495,7 @@ mod miniz_archive_adapter {
                 supported: 0,
                 unix_symlink: 0,
             };
+            // SAFETY: the archive handle is live and `raw` is writable C-layout storage.
             let ok = unsafe { fcitx5_miniz_stat(self.handle, index as c_uint, &mut raw) };
             if ok == 0 {
                 return Err(archive_error(
@@ -487,6 +503,7 @@ mod miniz_archive_adapter {
                     "archive entry metadata is invalid",
                 ));
             }
+            // SAFETY: miniz populated `raw.name` as its fixed-size NUL-terminated name field.
             let name = unsafe { CStr::from_ptr(raw.name.as_ptr()) }
                 .to_str()
                 .map_err(|_| {
@@ -508,6 +525,7 @@ mod miniz_archive_adapter {
                 archive_error("unsafe_archive_path", "archive path contains a NUL byte")
             })?;
             let mut index = 0;
+            // SAFETY: the archive handle is live; `name` is NUL-terminated and `index` writable.
             let ok = unsafe { fcitx5_miniz_locate(self.handle, name.as_ptr(), &mut index) };
             if ok == 0 {
                 return Err(archive_error(
@@ -519,6 +537,7 @@ mod miniz_archive_adapter {
         }
 
         pub fn validate(&self, index: usize) -> Result<(), ArchiveError> {
+            // SAFETY: the archive handle is live and `index` is passed by value.
             let ok = unsafe { fcitx5_miniz_validate(self.handle, index as c_uint) };
             if ok == 0 {
                 return Err(archive_error(
@@ -544,6 +563,8 @@ mod miniz_archive_adapter {
                 ));
             }
             let mut output = vec![0_u8; entry.uncompressed_size as usize];
+            // SAFETY: the live archive owns `index`; the Vec supplies a writable
+            // allocation exactly `output.len()` bytes long for this synchronous extraction.
             let ok = unsafe {
                 fcitx5_miniz_extract(
                     self.handle,
@@ -564,6 +585,7 @@ mod miniz_archive_adapter {
 
     impl Drop for ZipArchive {
         fn drop(&mut self) {
+            // SAFETY: Drop runs once and this type uniquely owns the miniz handle.
             unsafe { fcitx5_miniz_close(self.handle) };
         }
     }
@@ -594,14 +616,17 @@ mod win32_fs_adapter {
     }
 
     pub fn current_process_id() -> u32 {
+        // SAFETY: GetCurrentProcessId has no pointer or lifetime preconditions.
         unsafe { GetCurrentProcessId() }
     }
 
     pub fn tick_count64() -> u64 {
+        // SAFETY: GetTickCount64 has no pointer or lifetime preconditions.
         unsafe { GetTickCount64() }
     }
 
     pub fn sleep_ms(milliseconds: u32) {
+        // SAFETY: Sleep has no pointer or ownership preconditions.
         unsafe { Sleep(milliseconds) };
     }
 
@@ -610,6 +635,8 @@ mod win32_fs_adapter {
         let mut destination_wide: Vec<u16> = destination.as_os_str().encode_wide().collect();
         source_wide.push(0);
         destination_wide.push(0);
+        // SAFETY: both local UTF-16 vectors are NUL-terminated and remain live
+        // for MoveFileExW's synchronous call.
         let ok = unsafe {
             MoveFileExW(
                 source_wide.as_ptr(),
@@ -629,6 +656,8 @@ mod win32_fs_adapter {
         let mut destination_wide: Vec<u16> = destination.as_os_str().encode_wide().collect();
         source_wide.push(0);
         destination_wide.push(0);
+        // SAFETY: both local UTF-16 vectors are NUL-terminated and remain live
+        // for MoveFileExW's synchronous call.
         let ok = unsafe {
             MoveFileExW(
                 source_wide.as_ptr(),
@@ -646,6 +675,7 @@ mod win32_fs_adapter {
     pub fn delete_file(path: &Path) -> io::Result<()> {
         let mut path_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
         path_wide.push(0);
+        // SAFETY: `path_wide` is NUL-terminated and remains live for this call.
         let ok = unsafe { DeleteFileW(path_wide.as_ptr()) };
         if ok == 0 {
             Err(io::Error::last_os_error())
@@ -657,6 +687,8 @@ mod win32_fs_adapter {
     pub fn schedule_delete_on_reboot(path: &Path) -> io::Result<()> {
         let mut path_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
         path_wide.push(0);
+        // SAFETY: `path_wide` is NUL-terminated; a null destination is required
+        // by the delayed-delete Windows API contract.
         let ok = unsafe {
             MoveFileExW(
                 path_wide.as_ptr(),
@@ -676,6 +708,8 @@ mod win32_fs_adapter {
         let mut destination_wide: Vec<u16> = destination.as_os_str().encode_wide().collect();
         source_wide.push(0);
         destination_wide.push(0);
+        // SAFETY: both local UTF-16 vectors are NUL-terminated and remain live
+        // for MoveFileExW's synchronous call.
         let ok = unsafe {
             MoveFileExW(
                 source_wide.as_ptr(),
@@ -837,11 +871,13 @@ pub fn write_repository_sequence_state(
             data3: 0,
             data4: [0; 8],
         };
+        // SAFETY: `value` is writable GUID storage for CoCreateGuid.
         let created = unsafe { CoCreateGuid(&mut value) };
         if created != 0 {
             return Err(io::Error::other("CoCreateGuid failed"));
         }
         let copied =
+            // SAFETY: `value` is initialized and `guid_text` is writable for its stated length.
             unsafe { StringFromGUID2(&value, guid_text.as_mut_ptr(), guid_text.len() as i32) };
         if copied <= 0 {
             return Err(io::Error::other("StringFromGUID2 failed"));
@@ -883,6 +919,7 @@ mod repository_sequence_state_ffi {
         }
         // SAFETY: the exported ABI requires a non-null UTF-16 buffer with exactly
         // `len` initialized code units.
+        // SAFETY: the exported ABI requires `ptr` to reference `len` initialized UTF-16 units.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         Some(PathBuf::from(OsString::from_wide(slice)))
     }
@@ -891,6 +928,7 @@ mod repository_sequence_state_ffi {
         if ptr.is_null() {
             return None;
         }
+        // SAFETY: the exported ABI requires `ptr` to reference `len` initialized UTF-16 units.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         String::from_utf16(slice).ok()
     }
@@ -913,6 +951,7 @@ mod repository_sequence_state_ffi {
             return 1;
         };
         let state = read_repository_sequence_state(&data_root, &channel);
+        // SAFETY: the non-null ABI output pointer designates writable state storage.
         unsafe {
             *out_state = Fcitx5RepositorySequenceState {
                 present: state.present as u8,
@@ -1334,6 +1373,10 @@ mod provider_process_adapter {
 
     impl Drop for OwnedHandle {
         fn drop(&mut self) {
+            // SAFETY: Drop uniquely owns this successful Win32 handle and closes it once.
+            // SAFETY: this FFI-owned byte allocation was created by `owned_slice`
+            // with this pointer, length, capacity, and unique ownership transfer.
+            // SAFETY: the result contains the unique Vec allocation transferred by `blob_result`.
             unsafe {
                 let _ = CloseHandle(self.0);
             }
@@ -1342,6 +1385,7 @@ mod provider_process_adapter {
 
     pub fn is_current_process_elevated() -> bool {
         let mut token = std::ptr::null_mut();
+        // SAFETY: the pseudo-process handle is valid and `token` is writable output storage.
         let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
         let Some(token) = OwnedHandle::new(token) else {
             return true;
@@ -1353,6 +1397,7 @@ mod provider_process_adapter {
             token_is_elevated: 0,
         };
         let mut returned = 0_u32;
+        // SAFETY: `token` is a live handle; the C-layout output and byte-count storage are writable.
         let ok = unsafe {
             GetTokenInformation(
                 token.raw(),
@@ -1367,6 +1412,7 @@ mod provider_process_adapter {
 
     pub fn system_cmd_exe() -> io::Result<PathBuf> {
         let mut buffer = vec![0_u16; MAX_PATH];
+        // SAFETY: `buffer` is writable for the exact capacity passed to GetSystemDirectoryW.
         let copied = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
         if copied == 0 {
             return Err(io::Error::last_os_error());
@@ -1415,6 +1461,8 @@ mod provider_process_adapter {
             dw_process_id: 0,
             dw_thread_id: 0,
         };
+        // SAFETY: all UTF-16 vectors are NUL-terminated/mutable as required and
+        // the startup/process records are writable C-layout storage for CreateProcessW.
         let created = unsafe {
             CreateProcessW(
                 command_processor_wide.as_mut_ptr(),
@@ -1436,24 +1484,30 @@ mod provider_process_adapter {
             OwnedHandle::new(process.h_process).ok_or_else(ProviderProcessError::launch)?;
         let thread_handle =
             OwnedHandle::new(process.h_thread).ok_or_else(ProviderProcessError::launch)?;
+        // SAFETY: both OwnedHandle values own live job and process handles.
         let assigned = unsafe { AssignProcessToJobObject(job.raw(), process_handle.raw()) };
         if assigned == FALSE {
+            // SAFETY: the owned process handle remains live until this scope exits.
             unsafe {
                 let _ = TerminateProcess(process_handle.raw(), 2);
             }
             return Err(ProviderProcessError::launch());
         }
+        // SAFETY: `thread_handle` uniquely owns the live suspended thread handle.
         let resumed = unsafe { ResumeThread(thread_handle.raw()) };
         if resumed == u32::MAX {
+            // SAFETY: the owned job handle remains live and can terminate its assigned process.
             unsafe {
                 let _ = TerminateJobObject(job.raw(), 2);
             }
             return Err(ProviderProcessError::launch());
         }
         let timeout_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        // SAFETY: `process_handle` owns a live waitable process handle.
         match unsafe { WaitForSingleObject(process_handle.raw(), timeout_ms) } {
             WAIT_OBJECT_0 => {
                 let mut exit_code = 1_u32;
+                // SAFETY: the process handle is live and `exit_code` is writable output storage.
                 let ok = unsafe { GetExitCodeProcess(process_handle.raw(), &mut exit_code) };
                 if ok == FALSE {
                     return Err(ProviderProcessError::launch());
@@ -1461,6 +1515,7 @@ mod provider_process_adapter {
                 Ok(exit_code as i32)
             }
             WAIT_TIMEOUT => {
+                // SAFETY: the owned job and process handles remain live for termination and wait.
                 unsafe {
                     let _ = TerminateJobObject(job.raw(), 2);
                     let _ = WaitForSingleObject(process_handle.raw(), 5000);
@@ -1472,6 +1527,7 @@ mod provider_process_adapter {
     }
 
     fn create_kill_on_close_job() -> Result<OwnedHandle, ProviderProcessError> {
+        // SAFETY: null security/name arguments select Windows defaults for a new job object.
         let raw = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
         let job = OwnedHandle::new(raw).ok_or_else(ProviderProcessError::launch)?;
         let mut limits = JobObjectExtendedLimitInformation {
@@ -1499,6 +1555,7 @@ mod provider_process_adapter {
             peak_process_memory_used: 0,
             peak_job_memory_used: 0,
         };
+        // SAFETY: `job` is live and `limits` is writable C-layout input storage of the stated size.
         let ok = unsafe {
             SetInformationJobObject(
                 job.raw(),
@@ -3817,6 +3874,8 @@ mod repository_ffi {
 
     fn free_owned_slice(slice: Fcitx5ByteSlice) {
         if !slice.data.is_null() {
+            // SAFETY: this ABI free path accepts only allocations transferred by
+            // `owned_slice`, whose saved length is also the original Vec capacity.
             unsafe {
                 drop(Vec::from_raw_parts(
                     slice.data.cast_mut(),
@@ -3834,6 +3893,7 @@ mod repository_ffi {
         if slice.data.is_null() {
             return None;
         }
+        // SAFETY: the ABI defines this non-null byte slice as readable for `len` bytes.
         Some(unsafe { slice::from_raw_parts(slice.data, slice.len) })
     }
 
@@ -3875,6 +3935,7 @@ mod repository_ffi {
         if trusted_keys.is_null() && trusted_key_count != 0 {
             return None;
         }
+        // SAFETY: the ABI requires this non-null array to contain `trusted_key_count` initialized entries.
         let raw = unsafe { slice::from_raw_parts(trusted_keys, trusted_key_count) };
         raw.iter().map(key_from_raw).collect()
     }
@@ -3938,6 +3999,7 @@ mod repository_ffi {
         if signatures.is_null() {
             return Err("signature envelope signatures array is invalid");
         }
+        // SAFETY: the ABI requires this non-null array to contain `signature_count` initialized entries.
         let raw = unsafe { slice::from_raw_parts(signatures, signature_count) };
         let mut key_ids = BTreeSet::new();
         let mut parsed = Vec::with_capacity(raw.len());
@@ -4213,6 +4275,7 @@ mod repository_ffi {
         if entries.is_null() {
             return not_found;
         }
+        // SAFETY: the ABI requires this non-null array to contain `entry_count` initialized entries.
         let entries = unsafe { slice::from_raw_parts(entries, entry_count) };
         entries
             .iter()
@@ -4230,6 +4293,7 @@ mod repository_ffi {
     #[no_mangle]
     pub unsafe extern "C" fn fcitx5_repository_blob_free(data: *mut u8, len: usize) {
         if !data.is_null() && len != 0 {
+            // SAFETY: this result owns the allocation returned by the paired Rust ABI function.
             unsafe {
                 drop(Vec::from_raw_parts(data, len, len));
             }
@@ -4592,6 +4656,7 @@ mod repository_ffi {
         if index.is_null() {
             return;
         }
+        // SAFETY: the non-null ABI pointer references one initialized index for this call.
         let index = unsafe { &*index };
         free_owned_slice(index.channel);
         free_owned_slice(index.repository_id);
@@ -4601,6 +4666,7 @@ mod repository_ffi {
         free_owned_slice(index.key_id);
         free_owned_slice(index.targets_sha256);
         if !index.packages.is_null() {
+            // SAFETY: the paired ABI free function receives the unique allocation it created.
             unsafe {
                 let packages =
                     Vec::from_raw_parts(index.packages, index.package_count, index.package_count);
@@ -4798,6 +4864,9 @@ pub mod update {
         if len == 0 {
             return Some(PathBuf::new());
         }
+        // SAFETY: the exported ABI requires `ptr` to reference `len` initialized UTF-16 units.
+        // SAFETY: the ABI supplies `ptr` as readable UTF-16 storage for exactly `len` units.
+        // SAFETY: the ABI requires `ptr` to reference `len` initialized UTF-16 units.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         Some(PathBuf::from(OsString::from_wide(slice)))
     }
@@ -4809,6 +4878,9 @@ pub mod update {
         if len == 0 {
             return Some(String::new());
         }
+        // SAFETY: the exported ABI requires `ptr` to reference `len` initialized UTF-16 units.
+        // SAFETY: the ABI supplies `ptr` as readable UTF-16 storage for exactly `len` units.
+        // SAFETY: the ABI requires `ptr` to reference `len` initialized UTF-8 bytes.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         String::from_utf16(slice).ok()
     }
@@ -5840,6 +5912,7 @@ pub mod update {
         };
         match read_update_owner(&root) {
             Ok(owner) => {
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_owner = owner as u32;
                 }
@@ -5868,6 +5941,7 @@ pub mod update {
         };
         match read_deployment_state(&root, &channel) {
             Ok(state) => {
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_state = state;
                 }
@@ -5950,12 +6024,14 @@ pub mod update {
             Ok(value) => {
                 let mut result = result_ok();
                 let _ = write_ascii(&mut result.value, &value);
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_target = result;
                 }
                 0
             }
             Err(message) => {
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_target = result_err("rollback_failed", &message);
                 }
@@ -6056,12 +6132,14 @@ pub mod update {
         {
             Ok(mut result) => {
                 result.status = 0;
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_result = result;
                 }
                 0
             }
             Err(_) => {
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_result = Fcitx5TsfDllUpdateResult {
                         status: 1,
@@ -6092,6 +6170,7 @@ pub mod update {
         };
         match cleanup_old_tsf_dlls(&tsf_arch_directory) {
             Ok(pending) => {
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_pending_count = pending.len();
                 }
@@ -6126,6 +6205,7 @@ pub mod update {
         if value.len() >= out_path_len {
             return 1;
         }
+        // SAFETY: the ABI caller provides `out_path` as writable storage for `out_path_len` UTF-16 units.
         unsafe {
             std::ptr::write_bytes(out_path, 0, out_path_len);
             std::ptr::copy_nonoverlapping(value.as_ptr(), out_path, value.len());
@@ -6165,12 +6245,14 @@ pub mod update {
         match install_runtime_generation(&root, &verified_payload_root, &generation, &build_id) {
             Ok(mut result) => {
                 result.status = 0;
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_result = result;
                 }
                 0
             }
             Err(_) => {
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_result = empty_runtime_generation_install_result(1);
                 }
@@ -6193,6 +6275,7 @@ pub mod update {
         };
         match read_runtime_generation_state(&root) {
             Ok(state) => {
+                // SAFETY: the validated non-null output pointer is writable for one result value.
                 unsafe {
                     *out_state = state;
                 }
@@ -7411,6 +7494,7 @@ mod lifecycle_ffi {
         if ptr.is_null() {
             return None;
         }
+        // SAFETY: the package ABI requires `ptr` to reference `len` initialized UTF-16 units.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         Some(PathBuf::from(OsString::from_wide(slice)))
     }
@@ -7419,6 +7503,7 @@ mod lifecycle_ffi {
         if ptr.is_null() {
             return None;
         }
+        // SAFETY: the package ABI requires `ptr` to reference `len` initialized UTF-8 bytes.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         std::str::from_utf8(slice).ok().map(ToOwned::to_owned)
     }
@@ -7456,6 +7541,7 @@ mod lifecycle_ffi {
         entry_count: usize,
     ) {
         if !entries.is_null() {
+            // SAFETY: the caller transfers one Rust-owned allocation and its exact element count.
             unsafe {
                 drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
                     entries,
@@ -8531,6 +8617,7 @@ mod repair_ffi {
         if slice.data.is_null() {
             return None;
         }
+        // SAFETY: the ABI defines this non-null byte slice as readable for `len` bytes.
         Some(unsafe { slice::from_raw_parts(slice.data, slice.len) })
     }
 
@@ -8571,6 +8658,7 @@ mod repair_ffi {
         if trusted_keys.is_null() {
             return None;
         }
+        // SAFETY: the ABI requires `trusted_keys` to reference this many initialized entries.
         let raw = unsafe { slice::from_raw_parts(trusted_keys, trusted_key_count) };
         raw.iter().map(key_from_raw).collect()
     }
@@ -8585,6 +8673,7 @@ mod repair_ffi {
         if signatures.is_null() {
             return None;
         }
+        // SAFETY: the ABI requires `signatures` to reference this many initialized entries.
         let raw = unsafe { slice::from_raw_parts(signatures, signature_count) };
         raw.iter()
             .map(|entry| {
@@ -8607,6 +8696,7 @@ mod repair_ffi {
         if dependencies.is_null() {
             return None;
         }
+        // SAFETY: the ABI requires `dependencies` to reference this many initialized entries.
         let raw = unsafe { slice::from_raw_parts(dependencies, dependency_count) };
         raw.iter()
             .map(|dependency| {
@@ -8631,6 +8721,7 @@ mod repair_ffi {
         if manifests.is_null() {
             return None;
         }
+        // SAFETY: the ABI requires `manifests` to reference this many initialized entries.
         let raw = unsafe { slice::from_raw_parts(manifests, manifest_count) };
         raw.iter()
             .map(|manifest| {
@@ -8661,6 +8752,7 @@ mod repair_ffi {
         if files.is_null() {
             return Err("parsed manifest file data is invalid");
         }
+        // SAFETY: the ABI requires `files` to reference this many initialized entries.
         let raw = unsafe { slice::from_raw_parts(files, file_count) };
         raw.iter()
             .map(|file| {
@@ -8882,6 +8974,7 @@ mod repair_ffi {
 
     fn free_owned_slice(slice: Fcitx5ByteSlice) {
         if !slice.data.is_null() && slice.len != 0 {
+            // SAFETY: this FFI value owns the Vec allocation and preserves its length as capacity.
             unsafe {
                 drop(Vec::from_raw_parts(
                     slice.data.cast_mut(),
@@ -9330,6 +9423,7 @@ mod repair_ffi {
                 "requested dependency ids are invalid",
             );
         } else {
+            // SAFETY: the ABI requires the non-null array to contain the stated initialized entries.
             let raw = unsafe { slice::from_raw_parts(requested_ids, requested_id_count) };
             let Some(ids) = raw
                 .iter()
@@ -9454,6 +9548,7 @@ mod repair_ffi {
         if manifest.is_null() {
             return;
         }
+        // SAFETY: the non-null ABI pointer references one initialized manifest for this free call.
         let manifest = unsafe { &*manifest };
         free_owned_slice(manifest.id);
         free_owned_slice(manifest.version);
@@ -9466,6 +9561,7 @@ mod repair_ffi {
         free_owned_slice(manifest.source_commit);
         free_owned_slice(manifest.key_id);
         if !manifest.dependencies.is_null() {
+            // SAFETY: this field was allocated by Rust with its count recorded as Vec capacity.
             unsafe {
                 let dependencies = Vec::from_raw_parts(
                     manifest.dependencies,
@@ -9479,6 +9575,7 @@ mod repair_ffi {
             }
         }
         if !manifest.permissions.is_null() {
+            // SAFETY: this field was allocated by Rust with its count recorded as Vec capacity.
             unsafe {
                 let permissions = Vec::from_raw_parts(
                     manifest.permissions,
@@ -9491,6 +9588,7 @@ mod repair_ffi {
             }
         }
         if !manifest.files.is_null() {
+            // SAFETY: this field was allocated by Rust with its count recorded as Vec capacity.
             unsafe {
                 let files =
                     Vec::from_raw_parts(manifest.files, manifest.file_count, manifest.file_count);
@@ -9510,10 +9608,12 @@ mod repair_ffi {
         if envelope.is_null() {
             return;
         }
+        // SAFETY: the non-null ABI pointer references one initialized envelope for this free call.
         let envelope = unsafe { &*envelope };
         free_owned_slice(envelope.signed_object);
         free_owned_slice(envelope.canonicalization);
         if !envelope.signatures.is_null() {
+            // SAFETY: this field was allocated by Rust with its count recorded as Vec capacity.
             unsafe {
                 let signatures = Vec::from_raw_parts(
                     envelope.signatures,
@@ -9535,6 +9635,7 @@ mod repair_ffi {
         id_count: usize,
     ) {
         if !ids.is_null() {
+            // SAFETY: this field was allocated by Rust with its count recorded as Vec capacity.
             unsafe {
                 let ids = Vec::from_raw_parts(ids, id_count, id_count);
                 for id in &ids {
@@ -9555,6 +9656,7 @@ mod repair_ffi {
         key_count: usize,
     ) {
         if !keys.is_null() {
+            // SAFETY: this field was allocated by Rust with its count recorded as Vec capacity.
             unsafe {
                 let slice = Vec::from_raw_parts(keys, key_count, key_count);
                 for key in &slice {
@@ -9652,6 +9754,7 @@ mod repair_ffi {
         if trusted_key.is_null() {
             return stage_error_result("invalid_keyring", "trusted key set is invalid");
         }
+        // SAFETY: the non-null ABI pointer references one initialized trusted-key value for this call.
         let Some(trusted_key) = key_from_raw(unsafe { &*trusted_key }) else {
             return stage_error_result("invalid_keyring", "trusted key set is invalid");
         };
@@ -9701,6 +9804,7 @@ mod repair_ffi {
         if trusted_key.is_null() {
             return error_result("invalid_keyring", "trusted key set is invalid");
         }
+        // SAFETY: the non-null ABI pointer references one initialized trusted-key value for this call.
         let Some(trusted_key) = key_from_raw(unsafe { &*trusted_key }) else {
             return error_result("invalid_keyring", "trusted key set is invalid");
         };
@@ -9739,6 +9843,7 @@ mod repair_ffi {
         if trusted_key.is_null() {
             return error_result("invalid_keyring", "trusted key set is invalid");
         }
+        // SAFETY: the non-null ABI pointer references one initialized trusted-key value for this call.
         let Some(trusted_key) = key_from_raw(unsafe { &*trusted_key }) else {
             return error_result("invalid_keyring", "trusted key set is invalid");
         };
@@ -9843,6 +9948,7 @@ mod repair_ffi {
     #[no_mangle]
     pub unsafe extern "C" fn fcitx5_package_wide_free(ptr: *mut u16, len: usize) {
         if !ptr.is_null() && len != 0 {
+            // SAFETY: the paired ABI allocator transferred this exact Vec allocation to the caller.
             unsafe {
                 drop(Vec::from_raw_parts(ptr, len, len));
             }
@@ -11115,6 +11221,8 @@ mod tests {
         impl RsaSigningFixture {
             pub fn new() -> Self {
                 let mut algorithm = std::ptr::null_mut();
+                // SAFETY: `algorithm` is writable output storage and the static UTF-16
+                // algorithm/provider names remain valid for BCrypt's synchronous call.
                 let opened = unsafe {
                     BCryptOpenAlgorithmProvider(
                         &mut algorithm,
@@ -11125,8 +11233,11 @@ mod tests {
                 };
                 assert_eq!(opened, 0, "RSA algorithm provider should open");
                 let mut key = std::ptr::null_mut();
+                // SAFETY: `algorithm` is live and `key` is writable output storage for
+                // BCryptGenerateKeyPair's synchronous call.
                 let generated = unsafe { BCryptGenerateKeyPair(algorithm, &mut key, 2048, 0) };
                 assert_eq!(generated, 0, "RSA key pair should generate");
+                // SAFETY: `key` is the live handle returned by BCryptGenerateKeyPair.
                 let finalized = unsafe { BCryptFinalizeKeyPair(key, 0) };
                 assert_eq!(finalized, 0, "RSA key pair should finalize");
                 Self { algorithm, key }
@@ -11134,6 +11245,8 @@ mod tests {
 
             pub fn public_blob(&self) -> Vec<u8> {
                 let mut size = 0_u32;
+                // SAFETY: `self.key` is live; the static blob type and `size` output stay
+                // valid for BCryptExportKey's synchronous sizing call.
                 let exported_size = unsafe {
                     BCryptExportKey(
                         self.key,
@@ -11147,6 +11260,8 @@ mod tests {
                 };
                 assert_eq!(exported_size, 0, "RSA public key sizing should succeed");
                 let mut blob = vec![0_u8; size as usize];
+                // SAFETY: `self.key` is live and `blob` provides the exact writable size
+                // returned by the preceding BCryptExportKey sizing call.
                 let exported = unsafe {
                     BCryptExportKey(
                         self.key,
@@ -11169,6 +11284,8 @@ mod tests {
                     psz_alg_id: BCRYPT_SHA256_ALGORITHM.as_ptr(),
                 };
                 let mut size = 0_u32;
+                // SAFETY: `self.key` is live; the hash/padding inputs and `size` output
+                // remain valid for BCryptSignHash's synchronous sizing call.
                 let sized = unsafe {
                     BCryptSignHash(
                         self.key,
@@ -11183,6 +11300,8 @@ mod tests {
                 };
                 assert_eq!(sized, 0, "RSA signature sizing should succeed");
                 let mut signature = vec![0_u8; size as usize];
+                // SAFETY: `self.key` is live and `signature` provides the exact writable
+                // size returned by the preceding BCryptSignHash sizing call.
                 let signed = unsafe {
                     BCryptSignHash(
                         self.key,
@@ -11203,6 +11322,7 @@ mod tests {
 
         impl Drop for RsaSigningFixture {
             fn drop(&mut self) {
+                // SAFETY: this fixture uniquely owns both live BCrypt handles and Drop runs once.
                 unsafe {
                     if !self.key.is_null() {
                         let _ = BCryptDestroyKey(self.key);

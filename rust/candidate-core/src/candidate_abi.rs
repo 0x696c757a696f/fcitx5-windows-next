@@ -272,6 +272,7 @@ pub unsafe extern "C" fn fcitx5_candidate_ui_build_plan(
         let measurements = if measurement_count == 0 {
             &[][..]
         } else {
+            // SAFETY: non-null and a readable `measurement_count` span were checked above.
             unsafe { std::slice::from_raw_parts(measurements, measurement_count) }
         };
         let Some(measurements) = measurements
@@ -312,8 +313,8 @@ pub unsafe extern "C" fn fcitx5_candidate_ui_build_plan(
             }
         }
         if !state.plan.uia.items.is_empty() {
-            // SAFETY: capacities were verified against Rust-owned plan lengths.
             let uia_items =
+                // SAFETY: capacity was checked against this Rust-owned plan length.
                 unsafe { std::slice::from_raw_parts_mut(uia_items, state.plan.uia.items.len()) };
             for (target, source) in uia_items.iter_mut().zip(&state.plan.uia.items) {
                 *target = Fcitx5CandidateUiUiaItemOutput {
@@ -328,8 +329,11 @@ pub unsafe extern "C" fn fcitx5_candidate_ui_build_plan(
     .unwrap_or(0)
 }
 
+// SAFETY: every nested pointer/span in `input` obeys the FFI call contract for this call.
 unsafe fn input_from_ffi(input: Fcitx5CandidateUiInput) -> Option<CandidateUiInput> {
+    // SAFETY: the enclosing FFI input contract keeps its snapshot spans readable for this call.
     let snapshot = unsafe { semantic_snapshot_from_ffi(input.snapshot) }?;
+    // SAFETY: the enclosing FFI input contract keeps its locale UTF-8 span readable for this call.
     let locale = unsafe { utf8_from_ffi(input.locale) }?.to_owned();
     let work_area = rect_from_ffi(input.work_area)?;
     let config = CandidateUiConfig {
@@ -373,6 +377,7 @@ unsafe fn input_from_ffi(input: Fcitx5CandidateUiInput) -> Option<CandidateUiInp
     })
 }
 
+// SAFETY: `snapshot` owns only FFI pointers valid for the duration of this conversion.
 unsafe fn semantic_snapshot_from_ffi(
     snapshot: Fcitx5CandidateModelSnapshot,
 ) -> Option<CandidateSemanticSnapshot> {
@@ -392,8 +397,11 @@ unsafe fn semantic_snapshot_from_ffi(
     for candidate in candidates {
         semantic_candidates.push(CandidateSemanticItem {
             id: candidate.id,
+            // SAFETY: each candidate text span belongs to the validated FFI snapshot.
             label: unsafe { utf8_from_ffi(candidate.label) }?.to_owned(),
+            // SAFETY: each candidate text span belongs to the validated FFI snapshot.
             text: unsafe { utf8_from_ffi(candidate.text) }?.to_owned(),
+            // SAFETY: each candidate text span belongs to the validated FFI snapshot.
             comment: unsafe { utf8_from_ffi(candidate.comment) }?.to_owned(),
         });
     }
@@ -404,8 +412,11 @@ unsafe fn semantic_snapshot_from_ffi(
             composition_id: snapshot.composition_id,
             revision: snapshot.revision,
         },
+        // SAFETY: these text spans belong to the validated FFI snapshot.
         preedit: unsafe { utf8_from_ffi(snapshot.preedit) }?.to_owned(),
+        // SAFETY: these text spans belong to the validated FFI snapshot.
         auxiliary_up: unsafe { utf8_from_ffi(snapshot.auxiliary_up) }?.to_owned(),
+        // SAFETY: these text spans belong to the validated FFI snapshot.
         auxiliary_down: unsafe { utf8_from_ffi(snapshot.auxiliary_down) }?.to_owned(),
         candidates: semantic_candidates,
         selected: (snapshot.has_selected != 0).then_some(snapshot.selected),
@@ -416,6 +427,7 @@ unsafe fn semantic_snapshot_from_ffi(
     })
 }
 
+// SAFETY: `value.ptr` is null for empty text or valid for `value.len` readable UTF-8 bytes.
 unsafe fn utf8_from_ffi<'a>(value: Fcitx5CandidateUtf8) -> Option<&'a str> {
     if value.len > MAX_CANDIDATE_TEXT_UTF8 {
         return None;
@@ -449,6 +461,7 @@ mod tests {
         let state = fcitx5_candidate_ui_create();
         assert!(!state.is_null());
         let mut output = Fcitx5CandidateUiPlanOutput::default();
+        // SAFETY: this test owns `state` and supplies valid output plus null zero-length buffers.
         let result = unsafe {
             fcitx5_candidate_ui_build_plan(
                 state,
@@ -464,6 +477,7 @@ mod tests {
         assert_eq!(result, 1);
         assert_eq!(output.item_count, 0);
         assert_eq!(output.uia_item_count, 0);
+        // SAFETY: this test destroys its unique opaque handle exactly once.
         unsafe { fcitx5_candidate_ui_destroy(state) };
     }
 
@@ -475,6 +489,7 @@ mod tests {
             text_width: f32::NAN,
             ..Fcitx5CandidateUiMeasurement::default()
         }];
+        // SAFETY: this test owns `state` and its measurement/output buffers for the call.
         let result = unsafe {
             fcitx5_candidate_ui_build_plan(
                 state,
@@ -488,6 +503,7 @@ mod tests {
             )
         };
         assert_eq!(result, 0);
+        // SAFETY: this test destroys its unique opaque handle exactly once.
         unsafe { fcitx5_candidate_ui_destroy(state) };
     }
 
@@ -538,9 +554,11 @@ mod tests {
             opacity: 1.0,
         };
         let state = fcitx5_candidate_ui_create();
+        // SAFETY: this test owns `state`; `input` and all nested spans live through the call.
         assert_eq!(unsafe { fcitx5_candidate_ui_apply(state, &input) }, 0);
         let mut output = Fcitx5CandidateUiPlanOutput::default();
         assert_eq!(
+            // SAFETY: this test owns `state` and provides valid output plus null zero-length buffers.
             unsafe {
                 fcitx5_candidate_ui_build_plan(
                     state,
@@ -564,6 +582,7 @@ mod tests {
             ),
             (7, 8, 9, 10)
         );
+        // SAFETY: this test destroys its unique opaque handle exactly once.
         unsafe { fcitx5_candidate_ui_destroy(state) };
     }
 }

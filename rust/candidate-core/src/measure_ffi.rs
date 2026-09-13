@@ -3,6 +3,8 @@
 //! This module is the only unsafe boundary for the measurement engine; the
 //! engine itself is safe Rust in `renderer::MeasureEngine`.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use core::ffi::c_void;
 
 use crate::renderer::{Fcitx5CandidateMeasureSize, MeasureEngine};
@@ -148,11 +150,13 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
     let outputs = if output_count == 0 {
         &[]
     } else {
+        // SAFETY: non-null was checked above and the ABI supplies `output_count` readable records.
         unsafe { std::slice::from_raw_parts(outputs, output_count) }
     };
     let indices = if index_count == 0 {
         &[]
     } else {
+        // SAFETY: non-null was checked above and the ABI supplies `index_count` readable indices.
         unsafe { std::slice::from_raw_parts(indices, index_count) }
     };
     let preedit_text = if preedit_len > 0 && !preedit.is_null() {
@@ -322,6 +326,7 @@ mod tests {
             configured_label_count: 0,
         };
         let mut outputs = [crate::Fcitx5CandidateVisualBuildOutput::null_output(); 2];
+        // SAFETY: fixture storage is live and buffers satisfy the visual-build ABI.
         let built = unsafe {
             crate::fcitx5_candidate_visual_build(
                 &mut arena as *mut _ as *mut c_void,
@@ -336,6 +341,7 @@ mod tests {
         let mut items = [crate::Fcitx5CandidateLayoutSize::default(); 2];
         let mut preedit = crate::Fcitx5CandidateLayoutSize::default();
         let mut scroll_col = 0.0_f32;
+        // SAFETY: engine and all fixture buffers are live and satisfy the measurement ABI.
         let measured = unsafe {
             fcitx5_candidate_measure_visual_items(
                 engine,

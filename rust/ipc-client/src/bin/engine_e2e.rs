@@ -18,6 +18,8 @@
 //! * `--rime-lua`             — Rime Lua translator probe candidate (implies rime)
 //! * `--typing-fuzz`          — reconnect + 4000-iteration stateful typing fuzz
 //! * `--chttrans`             — Ctrl+Shift+F toggle, pinyin "shu", 書 commit
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::collections::HashMap;
 use std::env;

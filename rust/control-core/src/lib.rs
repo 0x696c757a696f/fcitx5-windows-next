@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
@@ -1154,6 +1155,7 @@ impl RegistryKey {
 
 impl Drop for RegistryKey {
     fn drop(&mut self) {
+        // SAFETY: RegistryKey exclusively owns this successfully opened HKEY and closes it once.
         unsafe {
             let _ = RegCloseKey(self.0);
         }
@@ -1170,6 +1172,7 @@ impl FileHandle {
 
 impl Drop for FileHandle {
     fn drop(&mut self) {
+        // SAFETY: FileHandle exclusively owns this successfully opened HANDLE and closes it once.
         unsafe {
             let _ = CloseHandle(self.0);
         }
@@ -1180,6 +1183,7 @@ fn string_from_utf16(value: Fcitx5ControlUtf16) -> Option<OsString> {
     if value.ptr.is_null() {
         return None;
     }
+    // SAFETY: the ABI requires `value.ptr` to reference `value.len` initialized UTF-16 units.
     let slice = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
     Some(OsString::from_wide(slice))
 }
@@ -1194,6 +1198,8 @@ fn write_wide_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
     if !out.is_null() && capacity != 0 {
         let count = value.len().min(capacity);
         if count != 0 {
+            // SAFETY: the ABI guarantees `out` writable for `capacity` units; the
+            // source slice is live and `count` is bounded by both lengths.
             unsafe {
                 std::ptr::copy_nonoverlapping(value.as_ptr(), out, count);
             }
@@ -1290,6 +1296,7 @@ fn primary_lang_id(language: u16) -> u16 {
 }
 
 fn user_default_ui_language_prefers_chinese() -> bool {
+    // SAFETY: GetUserDefaultUILanguage has no pointer, ownership, or lifetime preconditions.
     primary_lang_id(unsafe { GetUserDefaultUILanguage() }) == LANG_CHINESE
 }
 
@@ -1317,11 +1324,13 @@ fn guid_suffix() -> Option<OsString> {
         data3: 0,
         data4: [0; 8],
     };
+    // SAFETY: `guid` is writable C-layout storage for CoCreateGuid.
     let status = unsafe { CoCreateGuid(&mut guid) };
     if status < 0 {
         return None;
     }
     let mut buffer = [0_u16; 40];
+    // SAFETY: `guid` is initialized and `buffer` is writable for its passed capacity.
     let len = unsafe { StringFromGUID2(&guid, buffer.as_mut_ptr(), buffer.len() as i32) };
     if len <= 1 || len as usize > buffer.len() {
         return None;
@@ -1346,6 +1355,7 @@ fn atomic_write_utf8_file(destination: PathBuf, text: &[u8]) -> Result<(), ()> {
     let temporary = temporary_path_for_atomic_write(&destination).ok_or(())?;
     let temporary_wide = wide_z(temporary.as_os_str());
     let destination_wide = wide_z(destination.as_os_str());
+    // SAFETY: `temporary_wide` is NUL-terminated and all null/flag arguments meet CreateFileW's contract.
     let raw_file = unsafe {
         CreateFileW(
             temporary_wide.as_ptr(),
@@ -1362,6 +1372,7 @@ fn atomic_write_utf8_file(destination: PathBuf, text: &[u8]) -> Result<(), ()> {
     }
     let file = FileHandle(raw_file);
     let mut written = 0_u32;
+    // SAFETY: `file` owns a live handle; `text` remains readable for its passed byte length and `written` is writable.
     let write_ok = unsafe {
         WriteFile(
             file.get(),
@@ -1371,14 +1382,17 @@ fn atomic_write_utf8_file(destination: PathBuf, text: &[u8]) -> Result<(), ()> {
             null_mut(),
         ) != 0
     } && written as usize == text.len()
+        // SAFETY: `file` still owns the live synchronous file handle.
         && unsafe { FlushFileBuffers(file.get()) != 0 };
     drop(file);
     if !write_ok {
+        // SAFETY: `temporary_wide` remains a live NUL-terminated path for DeleteFileW.
         unsafe {
             let _ = DeleteFileW(temporary_wide.as_ptr());
         }
         return Err(());
     }
+    // SAFETY: both UTF-16 paths are NUL-terminated and remain live for MoveFileExW.
     let moved = unsafe {
         MoveFileExW(
             temporary_wide.as_ptr(),
@@ -1387,6 +1401,7 @@ fn atomic_write_utf8_file(destination: PathBuf, text: &[u8]) -> Result<(), ()> {
         ) != 0
     };
     if !moved {
+        // SAFETY: `temporary_wide` remains a live NUL-terminated path for DeleteFileW.
         unsafe {
             let _ = DeleteFileW(temporary_wide.as_ptr());
         }
@@ -1503,6 +1518,7 @@ fn move_replace_write_through(
 ) -> Result<(), ()> {
     let source = wide_z(source.as_os_str());
     let destination = wide_z(destination.as_os_str());
+    // SAFETY: both UTF-16 paths are NUL-terminated and remain live for MoveFileExW.
     let moved = unsafe {
         MoveFileExW(
             source.as_ptr(),
@@ -1615,6 +1631,7 @@ fn utf8_slice(value: Fcitx5ControlUtf8) -> Option<&'static [u8]> {
     if value.ptr.is_null() {
         return None;
     }
+    // SAFETY: the ABI requires the non-null UTF-8 pointer to cover exactly `len` initialized bytes.
     Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
 }
 
@@ -1626,6 +1643,8 @@ fn boxed_utf8_result(value: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize)
     let ptr = bytes.as_mut_ptr();
     let len = bytes.len();
     std::mem::forget(bytes);
+    // SAFETY: caller supplied non-null output slots; the Vec allocation is transferred to them once.
+    // SAFETY: validated ABI output pointers are writable for the initialized result fields.
     unsafe {
         *out_ptr = ptr;
         *out_len = len;
@@ -2098,6 +2117,7 @@ fn packages_list_json(list: &Fcitx5ControlPackagesList) -> Option<Vec<u8>> {
     let packages = if list.package_count == 0 {
         &[]
     } else {
+        // SAFETY: the ABI requires `packages` to reference `package_count` initialized package entries.
         unsafe { std::slice::from_raw_parts(list.packages, list.package_count) }
     };
     let mut output = Vec::new();
@@ -2849,6 +2869,8 @@ fn leak_utf16_path(value: &std::path::Path) -> Fcitx5ControlUtf16 {
 unsafe fn free_utf8_slice(value: Fcitx5ControlUtf8) {
     if !value.ptr.is_null() {
         let slice = std::ptr::slice_from_raw_parts_mut(value.ptr as *mut u8, value.len);
+        // SAFETY: this paired ABI free function receives the unique boxed byte slice
+        // allocation and recreates it with the original pointer and length.
         unsafe {
             drop(Box::from_raw(slice));
         }
@@ -2858,6 +2880,8 @@ unsafe fn free_utf8_slice(value: Fcitx5ControlUtf8) {
 unsafe fn free_utf16_slice(value: Fcitx5ControlUtf16) {
     if !value.ptr.is_null() {
         let slice = std::ptr::slice_from_raw_parts_mut(value.ptr as *mut u16, value.len);
+        // SAFETY: this paired ABI free function receives the unique boxed UTF-16 slice
+        // allocation and recreates it with the original pointer and length.
         unsafe {
             drop(Box::from_raw(slice));
         }
@@ -3273,6 +3297,7 @@ fn query_startup(executable_directory: OsString, registry_value: OsString) -> Re
     let expected = startup_command(executable_directory);
     let value_name = wide_z(&registry_value);
     let mut raw_key = null_mut();
+    // SAFETY: static key path is NUL-terminated and `raw_key` is writable output storage.
     let open_result = unsafe {
         RegOpenKeyExW(
             HKEY_CURRENT_USER,
@@ -3288,6 +3313,7 @@ fn query_startup(executable_directory: OsString, registry_value: OsString) -> Re
     let key = RegistryKey(raw_key);
     let mut value_type = 0_u32;
     let mut bytes = 0_u32;
+    // SAFETY: `key` owns a live HKEY and the type/size outputs are writable.
     let size_result = unsafe {
         RegQueryValueExW(
             key.get(),
@@ -3305,6 +3331,7 @@ fn query_startup(executable_directory: OsString, registry_value: OsString) -> Re
         return Err(());
     }
     let mut value = vec![0_u16; (bytes as usize).div_ceil(2)];
+    // SAFETY: `value` is writable for the queried byte count and all output pointers are valid.
     let read_result = unsafe {
         RegQueryValueExW(
             key.get(),
@@ -3335,6 +3362,7 @@ fn set_startup(
 ) -> Result<(), ()> {
     let value_name = wide_z(&registry_value);
     let mut raw_key = null_mut();
+    // SAFETY: static key path is NUL-terminated and all C-layout output pointers are writable.
     let create_result = unsafe {
         RegCreateKeyExW(
             HKEY_CURRENT_USER,
@@ -3354,6 +3382,7 @@ fn set_startup(
     let key = RegistryKey(raw_key);
     let result = if enabled {
         let command = startup_command(executable_directory);
+        // SAFETY: `key` owns a live HKEY; both UTF-16 buffers are NUL-terminated and live for the call.
         unsafe {
             RegSetValueExW(
                 key.get(),
@@ -3365,6 +3394,7 @@ fn set_startup(
             )
         }
     } else {
+        // SAFETY: `key` owns a live HKEY and `value_name` is a live NUL-terminated UTF-16 string.
         let delete_result = unsafe { RegDeleteValueW(key.get(), value_name.as_ptr()) };
         if delete_result == ERROR_FILE_NOT_FOUND {
             ERROR_SUCCESS
@@ -3400,6 +3430,7 @@ pub unsafe extern "C" fn fcitx5_control_startup_query_utf16(
     };
     match query_startup(executable_directory, registry_value) {
         Ok(enabled) => {
+            // SAFETY: caller supplied `out_enabled` as a writable pointer to one byte.
             unsafe {
                 *out_enabled = u8::from(enabled);
             }
@@ -3451,6 +3482,7 @@ pub unsafe extern "C" fn fcitx5_control_parse_config_command_line_utf16(
     let command_line = if command_line.ptr.is_null() {
         &[]
     } else {
+        // SAFETY: the ABI requires the UTF-16 command line buffer to cover its stated length.
         unsafe { std::slice::from_raw_parts(command_line.ptr, command_line.len) }
     };
     let Some((command, locale)) = parse_config_command_line(command_line) else {
@@ -3480,6 +3512,7 @@ pub unsafe extern "C" fn fcitx5_control_config_locale_file_for_override_utf16(
     let override_locale = if override_locale.ptr.is_null() {
         &[]
     } else {
+        // SAFETY: the ABI requires the UTF-16 locale buffer to cover its stated length.
         unsafe { std::slice::from_raw_parts(override_locale.ptr, override_locale.len) }
     };
     let Some(file_name) = config_locale_file_for_override(override_locale) else {
@@ -3528,6 +3561,8 @@ pub unsafe extern "C" fn fcitx5_control_read_file_utf16(
     if out_ptr.is_null() || out_len.is_null() {
         return CONTROL_FILE_READ_IO_ERROR;
     }
+    // SAFETY: non-null output slots are writable; successful results transfer their Vec allocation once.
+    // SAFETY: validated ABI output pointers are writable for the initialized result fields.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -3563,6 +3598,7 @@ pub unsafe extern "C" fn fcitx5_control_read_optional_config_utf16(
     if out_ptr.is_null() || out_len.is_null() {
         return CONTROL_FILE_READ_IO_ERROR;
     }
+    // SAFETY: validated ABI output pointers are writable for the static result slice.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -3601,6 +3637,7 @@ pub unsafe extern "C" fn fcitx5_control_installed_manifest_bytes_utf16(
     if out_ptr.is_null() || out_len.is_null() {
         return CONTROL_FILE_READ_IO_ERROR;
     }
+    // SAFETY: validated ABI output pointers are writable for the static result slice.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -3807,6 +3844,7 @@ pub unsafe extern "C" fn fcitx5_control_schema_json_utf8(
     if out_ptr.is_null() || out_len.is_null() {
         return 1;
     }
+    // SAFETY: both validated output pointers are writable for one pointer/length pair.
     unsafe {
         *out_ptr = CONTROL_SCHEMA_JSON.as_ptr();
         *out_len = CONTROL_SCHEMA_JSON.len();
@@ -3826,6 +3864,7 @@ pub unsafe extern "C" fn fcitx5_control_usage_text_utf8(
     if out_ptr.is_null() || out_len.is_null() {
         return 1;
     }
+    // SAFETY: both validated output pointers are writable for one pointer/length pair.
     unsafe {
         *out_ptr = CONTROL_USAGE_TEXT.as_ptr();
         *out_len = CONTROL_USAGE_TEXT.len();
@@ -3841,6 +3880,7 @@ pub unsafe extern "C" fn fcitx5_control_input_method_id_valid_utf16(id: Fcitx5Co
     if id.ptr.is_null() {
         return 0;
     }
+    // SAFETY: the ABI requires `id.ptr` to cover `id.len` initialized UTF-8 bytes.
     let value = unsafe { std::slice::from_raw_parts(id.ptr, id.len) };
     if value.is_empty() || value.len() > 64 {
         return 0;
@@ -3867,6 +3907,7 @@ pub unsafe extern "C" fn fcitx5_control_json_string_utf8(
     if value.ptr.is_null() {
         return boxed_utf8_result(Vec::new(), out_ptr, out_len);
     }
+    // SAFETY: the ABI requires `value.ptr` to cover `value.len` initialized UTF-8 bytes.
     let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
     match json_string(bytes) {
         Some(escaped) => boxed_utf8_result(escaped, out_ptr, out_len),
@@ -3888,6 +3929,7 @@ pub unsafe extern "C" fn fcitx5_control_status_json_utf8(
     if status.is_null() {
         return boxed_utf8_result(Vec::new(), out_ptr, out_len);
     }
+    // SAFETY: the non-null ABI pointer references one initialized immutable status for this call.
     let status = unsafe { &*status };
     match status_json(status) {
         Some(json) => boxed_utf8_result(json, out_ptr, out_len),
@@ -3909,6 +3951,7 @@ pub unsafe extern "C" fn fcitx5_control_diagnostics_plan_json_utf8(
     if status.is_null() {
         return boxed_utf8_result(Vec::new(), out_ptr, out_len);
     }
+    // SAFETY: the non-null ABI pointer references one initialized immutable status for this call.
     let status = unsafe { &*status };
     match diagnostics_plan_json(status) {
         Some(json) => boxed_utf8_result(json, out_ptr, out_len),
@@ -3930,6 +3973,7 @@ pub unsafe extern "C" fn fcitx5_control_tsf_guard_json_utf8(
     if status.is_null() {
         return boxed_utf8_result(Vec::new(), out_ptr, out_len);
     }
+    // SAFETY: the non-null ABI pointer references one initialized immutable status for this call.
     let status = unsafe { &*status };
     match tsf_guard_json(status) {
         Some(json) => boxed_utf8_result(json, out_ptr, out_len),
@@ -3949,6 +3993,7 @@ pub unsafe extern "C" fn fcitx5_control_tsf_guard_reset_json_utf8(
     if out_ptr.is_null() || out_len.is_null() {
         return 1;
     }
+    // SAFETY: validated ABI output pointers are writable for the static reset JSON slice.
     unsafe {
         *out_ptr = CONTROL_TSF_GUARD_RESET_JSON.as_ptr();
         *out_len = CONTROL_TSF_GUARD_RESET_JSON.len();
@@ -3985,6 +4030,7 @@ pub unsafe extern "C" fn fcitx5_control_launcher_action_sequence(
     let Some(commands) = launcher_action_sequence(action) else {
         return 1;
     };
+    // SAFETY: validated ABI output pointers are writable for the command slice owned by static storage.
     unsafe {
         *out_ptr = commands.as_ptr();
         *out_len = commands.len();
@@ -4006,6 +4052,7 @@ pub unsafe extern "C" fn fcitx5_control_package_repair_json_utf8(
     if repair.is_null() {
         return boxed_utf8_result(Vec::new(), out_ptr, out_len);
     }
+    // SAFETY: the non-null ABI pointer references one initialized immutable repair value for this call.
     let repair = unsafe { &*repair };
     match package_repair_json(repair) {
         Some(json) => boxed_utf8_result(json, out_ptr, out_len),
@@ -4026,10 +4073,12 @@ pub unsafe extern "C" fn fcitx5_control_root_action_utf16(
     if command.ptr.is_null() {
         return CONTROL_ROOT_ACTION_UNKNOWN;
     }
+    // SAFETY: the ABI requires `command.ptr` to cover `command.len` initialized UTF-8 bytes.
     let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
     let value = if value.ptr.is_null() {
         None
     } else {
+        // SAFETY: the ABI requires `value.ptr` to cover `value.len` initialized UTF-8 bytes.
         Some(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
     };
     root_action(command, argc, value)
@@ -4047,6 +4096,7 @@ pub unsafe extern "C" fn fcitx5_control_config_action_utf16(
     if command.ptr.is_null() {
         return CONTROL_CONFIG_ACTION_UNKNOWN;
     }
+    // SAFETY: the ABI requires `command.ptr` to cover `command.len` initialized UTF-8 bytes.
     let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
     config_action(command, argc)
 }
@@ -4063,6 +4113,7 @@ pub unsafe extern "C" fn fcitx5_control_engine_management_action_utf16(
     if command.ptr.is_null() {
         return CONTROL_ENGINE_ACTION_UNKNOWN;
     }
+    // SAFETY: the ABI requires `command.ptr` to cover `command.len` initialized UTF-8 bytes.
     let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
     engine_management_action(command, argc)
 }
@@ -4080,10 +4131,12 @@ pub unsafe extern "C" fn fcitx5_control_package_action_utf16(
     if command.ptr.is_null() {
         return CONTROL_PACKAGE_ACTION_UNKNOWN;
     }
+    // SAFETY: the ABI requires `command.ptr` to cover `command.len` initialized UTF-8 bytes.
     let command = unsafe { std::slice::from_raw_parts(command.ptr, command.len) };
     let state = if state.ptr.is_null() {
         None
     } else {
+        // SAFETY: the ABI requires `state.ptr` to cover `state.len` initialized UTF-8 bytes.
         Some(unsafe { std::slice::from_raw_parts(state.ptr, state.len) })
     };
     package_action(command, argc, state)
@@ -4109,6 +4162,7 @@ pub unsafe extern "C" fn fcitx5_control_addons_json_utf8(
     let addons = if addon_count == 0 {
         &[]
     } else {
+        // SAFETY: the ABI requires `addons` to reference `addon_count` initialized entries.
         unsafe { std::slice::from_raw_parts(addons, addon_count) }
     };
     match addons_json(addons) {
@@ -4137,6 +4191,7 @@ pub unsafe extern "C" fn fcitx5_control_themes_json_utf8(
     let themes = if theme_count == 0 {
         &[]
     } else {
+        // SAFETY: the ABI requires `themes` to reference `theme_count` initialized entries.
         unsafe { std::slice::from_raw_parts(themes, theme_count) }
     };
     match themes_json(themes) {
@@ -4159,6 +4214,7 @@ pub unsafe extern "C" fn fcitx5_control_theme_detail_json_utf8(
     if detail.is_null() {
         return boxed_utf8_result(Vec::new(), out_ptr, out_len);
     }
+    // SAFETY: the non-null ABI pointer references one initialized immutable detail for this call.
     let detail = unsafe { &*detail };
     match theme_detail_json(detail) {
         Some(json) => boxed_utf8_result(json, out_ptr, out_len),
@@ -4180,6 +4236,7 @@ pub unsafe extern "C" fn fcitx5_control_packages_list_json_utf8(
     if list.is_null() {
         return boxed_utf8_result(Vec::new(), out_ptr, out_len);
     }
+    // SAFETY: the non-null ABI pointer references one initialized immutable list for this call.
     let list = unsafe { &*list };
     match packages_list_json(list) {
         Some(json) => boxed_utf8_result(json, out_ptr, out_len),
@@ -4207,6 +4264,7 @@ pub unsafe extern "C" fn fcitx5_control_package_dependencies_json_utf8(
     let dependencies = if dependency_count == 0 {
         &[]
     } else {
+        // SAFETY: the ABI requires `dependencies` to reference `dependency_count` initialized entries.
         unsafe { std::slice::from_raw_parts(dependencies, dependency_count) }
     };
     match package_dependencies_json(dependencies) {
@@ -4234,6 +4292,7 @@ pub unsafe extern "C" fn fcitx5_control_string_array_json_utf8(
     let values = if value_count == 0 {
         &[]
     } else {
+        // SAFETY: the ABI requires `values` to reference `value_count` initialized entries.
         unsafe { std::slice::from_raw_parts(values, value_count) }
     };
     match string_array_json(values) {
@@ -4262,6 +4321,7 @@ pub unsafe extern "C" fn fcitx5_control_config_surfaces_json_utf8(
     let kinds = if kind_count == 0 {
         &[]
     } else {
+        // SAFETY: the ABI requires `kinds` to reference `kind_count` initialized entries.
         unsafe { std::slice::from_raw_parts(kinds, kind_count) }
     };
     match config_surfaces_json(owner, kinds) {
@@ -4296,11 +4356,13 @@ pub unsafe extern "C" fn fcitx5_control_package_config_surface_json_utf8(
     let permissions = if permission_count == 0 {
         &[]
     } else {
+        // SAFETY: the ABI requires `permissions` to reference `permission_count` initialized entries.
         unsafe { std::slice::from_raw_parts(permissions, permission_count) }
     };
     let file_paths = if file_path_count == 0 {
         &[]
     } else {
+        // SAFETY: the ABI requires `file_paths` to reference `file_path_count` initialized entries.
         unsafe { std::slice::from_raw_parts(file_paths, file_path_count) }
     };
     match package_config_surface_json(owner, package_type, permissions, file_paths) {
@@ -4325,6 +4387,7 @@ pub unsafe extern "C" fn fcitx5_control_repository_error_utf8(
     if out_ptr.is_null() || out_len.is_null() {
         return 1;
     }
+    // SAFETY: both validated output pointers are writable for initial null/zero values.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -4362,6 +4425,7 @@ pub unsafe extern "C" fn fcitx5_control_bundled_package_descriptor(
     let Some(value) = bundled_package_descriptor(index) else {
         return 0;
     };
+    // SAFETY: `descriptor` was checked non-null and is writable for one C-layout value.
     unsafe {
         *descriptor = value;
     }
@@ -4460,8 +4524,10 @@ pub unsafe extern "C" fn fcitx5_control_theme_discovery_free(
         return;
     }
     let slice = std::ptr::slice_from_raw_parts_mut(entries.entries, entries.entry_count);
+    // SAFETY: this paired free receives the unique boxed slice and original entry count.
     let entries = unsafe { Box::from_raw(slice) };
     for entry in entries.iter() {
+        // SAFETY: each entry's fields were allocated by this ABI and are freed once with the parent.
         unsafe {
             free_utf16_slice(entry.path);
             free_utf8_slice(entry.id);
@@ -4525,6 +4591,7 @@ pub unsafe extern "C" fn fcitx5_control_theme_summary_free(
     if summary.status != 0 {
         return;
     }
+    // SAFETY: a successful result owns all listed Rust allocations and this free consumes them once.
     unsafe {
         free_utf8_slice(summary.id);
         free_utf8_slice(summary.name);
@@ -4614,6 +4681,7 @@ pub unsafe extern "C" fn fcitx5_control_theme_export_utf8(
     if out_ptr.is_null() || out_len.is_null() {
         return CONTROL_THEME_OPERATION_IO_ERROR;
     }
+    // SAFETY: both validated output pointers are writable for initial null/zero values.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -4653,6 +4721,7 @@ pub unsafe extern "C" fn fcitx5_control_theme_import_file_utf16(
     if out_ptr.is_null() || out_len.is_null() {
         return CONTROL_THEME_OPERATION_IO_ERROR;
     }
+    // SAFETY: both validated output pointers are writable for initial null/zero values.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -4687,6 +4756,7 @@ pub unsafe extern "C" fn fcitx5_control_theme_export_file_utf16(
     if out_ptr.is_null() || out_len.is_null() {
         return CONTROL_THEME_OPERATION_IO_ERROR;
     }
+    // SAFETY: both validated output pointers are writable for initial null/zero values.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -4732,6 +4802,7 @@ pub unsafe extern "C" fn fcitx5_control_theme_duplicate_utf8(
     if out_ptr.is_null() || out_len.is_null() {
         return CONTROL_THEME_OPERATION_IO_ERROR;
     }
+    // SAFETY: both validated output pointers are writable for initial null/zero values.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -4774,6 +4845,7 @@ pub unsafe extern "C" fn fcitx5_control_theme_delete_utf8(
     if out_ptr.is_null() || out_len.is_null() {
         return CONTROL_THEME_OPERATION_IO_ERROR;
     }
+    // SAFETY: both validated output pointers are writable for initial null/zero values.
     unsafe {
         *out_ptr = std::ptr::null_mut();
         *out_len = 0;
@@ -4907,6 +4979,7 @@ pub unsafe extern "C" fn fcitx5_control_repository_max_release_sequence(
     if sequences.is_null() {
         return 0;
     }
+    // SAFETY: the non-null ABI array contains `sequence_count` initialized u64 values.
     let sequences = unsafe { std::slice::from_raw_parts(sequences, sequence_count) };
     repository_max_release_sequence(sequences)
 }
@@ -4925,6 +4998,7 @@ pub unsafe extern "C" fn fcitx5_control_repository_metadata_url_utf16(
     if base_url.ptr.is_null() {
         return 0;
     }
+    // SAFETY: the non-null ABI buffer covers `base_url.len` initialized UTF-16 units.
     let base_url = unsafe { std::slice::from_raw_parts(base_url.ptr, base_url.len) };
     let Some(metadata_name) = utf8_slice(metadata_name) else {
         return 0;
@@ -4986,6 +5060,7 @@ pub unsafe extern "C" fn fcitx5_control_package_detail_json_utf8(
     if detail.is_null() {
         return boxed_utf8_result(Vec::new(), out_ptr, out_len);
     }
+    // SAFETY: the non-null ABI pointer references one initialized immutable detail for this call.
     let detail = unsafe { &*detail };
     match package_detail_json(detail) {
         Some(json) => boxed_utf8_result(json, out_ptr, out_len),
@@ -5002,6 +5077,7 @@ pub unsafe extern "C" fn fcitx5_control_utf8_free(ptr: *mut u8, len: usize) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY: the paired ABI allocator transferred this exact Vec allocation with `len` as capacity.
     unsafe {
         drop(Vec::from_raw_parts(ptr, len, len));
     }
@@ -5084,6 +5160,8 @@ mod tests {
     #[test]
     fn config_locale_file_abi_returns_static_utf16_file_name() {
         let zh = wide("zh-CN");
+        // SAFETY: `zh` owns the UTF-16 range described by this FFI value and
+        // remains immutable and live throughout the call.
         let selected = unsafe {
             fcitx5_control_config_locale_file_for_override_utf16(Fcitx5ControlUtf16 {
                 ptr: zh.as_ptr(),
@@ -5091,11 +5169,15 @@ mod tests {
             })
         };
         assert_eq!(
+            // SAFETY: the returned slice is static UTF-16 owned by Control
+            // Core, and its pointer/length pair remains valid for this read.
             unsafe { std::slice::from_raw_parts(selected.ptr, selected.len) },
             CONFIG_LOCALE_ZH_CN_FILE
         );
 
         let invalid = wide("fr-FR");
+        // SAFETY: `invalid` owns the UTF-16 range described by this FFI value
+        // and remains immutable and live throughout the call.
         let missing = unsafe {
             fcitx5_control_config_locale_file_for_override_utf16(Fcitx5ControlUtf16 {
                 ptr: invalid.as_ptr(),
@@ -5124,6 +5206,8 @@ mod tests {
 
         let path = destination.as_os_str().encode_wide().collect::<Vec<_>>();
         let replacement = b"second = true\n";
+        // SAFETY: `path` and `replacement` borrow initialized, immutable Rust
+        // allocations that remain live for this synchronous FFI call.
         let status = unsafe {
             fcitx5_control_atomic_write_utf8_file_utf16(
                 Fcitx5ControlUtf16 {
@@ -5147,6 +5231,8 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
             .count();
         assert_eq!(leftovers, 0);
+        // SAFETY: a null pointer with zero length is the documented empty-path
+        // sentinel; `replacement` remains initialized and live for this call.
         let null_status = unsafe {
             fcitx5_control_atomic_write_utf8_file_utf16(
                 Fcitx5ControlUtf16 {
@@ -5192,6 +5278,8 @@ mod tests {
         let wide_path = empty_path.as_os_str().encode_wide().collect::<Vec<_>>();
         let mut bytes: *mut u8 = std::ptr::null_mut();
         let mut len = usize::MAX;
+        // SAFETY: `wide_path` owns the UTF-16 input and `bytes`/`len` are
+        // uniquely borrowed aligned output locations for this synchronous call.
         let status = unsafe {
             fcitx5_control_read_file_utf16(
                 Fcitx5ControlUtf16 {
@@ -5205,6 +5293,8 @@ mod tests {
         };
         assert_eq!(status, CONTROL_FILE_READ_OK);
         assert_eq!(len, 0);
+        // SAFETY: Control Core allocated `bytes` for the returned `len`, and
+        // this test has not freed or aliased that ownership yet.
         unsafe {
             fcitx5_control_utf8_free(bytes, len);
         }
@@ -5238,6 +5328,8 @@ mod tests {
         let wide_path = config.as_os_str().encode_wide().collect::<Vec<_>>();
         let mut bytes: *mut u8 = std::ptr::null_mut();
         let mut len = 0;
+        // SAFETY: `wide_path` owns the UTF-16 input and `bytes`/`len` are
+        // uniquely borrowed aligned output locations for this synchronous call.
         let status = unsafe {
             fcitx5_control_read_optional_config_utf16(
                 Fcitx5ControlUtf16 {
@@ -5250,6 +5342,8 @@ mod tests {
         };
         assert_eq!(status, CONTROL_FILE_READ_OK);
         assert_eq!(len, b"format_version = 1\n".len());
+        // SAFETY: Control Core allocated `bytes` for the returned `len`, and
+        // this test has not freed or aliased that ownership yet.
         unsafe {
             fcitx5_control_utf8_free(bytes, len);
         }
@@ -6101,6 +6195,8 @@ mod tests {
             len: 8,
         };
         assert_eq!(
+            // SAFETY: all three UTF-8 views borrow immutable byte literals
+            // that remain initialized, valid, and non-aliasing for this call.
             unsafe {
                 fcitx5_control_theme_record_matches_requested_id_utf8(user, requested, actual)
             },
@@ -6156,6 +6252,8 @@ mod tests {
 
         let install_wide = wide(&install.to_string_lossy());
         let data_wide = wide(&temp.join("data").to_string_lossy());
+        // SAFETY: both UTF-16 views borrow live immutable vectors for this
+        // call; the result owns its returned allocation until freed below.
         let result = unsafe {
             fcitx5_control_discover_themes_utf16(
                 Fcitx5ControlUtf16 {
@@ -6170,6 +6268,8 @@ mod tests {
         };
         assert_eq!(result.status, 0);
         assert_eq!(result.entry_count, 2);
+        // SAFETY: `result` owns the discovery allocation returned above and
+        // has not been freed or copied into another owner.
         unsafe {
             fcitx5_control_theme_discovery_free(result);
         }
@@ -6206,6 +6306,8 @@ background = "#000000"
         assert!(summary.has_light_branch);
         assert!(summary.has_dark_branch);
 
+        // SAFETY: `text` is an initialized immutable byte literal whose
+        // pointer and length remain valid for this synchronous ABI call.
         let result = unsafe {
             fcitx5_control_parse_theme_summary_utf8(Fcitx5ControlUtf8 {
                 ptr: text.as_ptr(),
@@ -6223,6 +6325,8 @@ background = "#000000"
         assert_eq!(utf8_slice(result.description), Some(b"Built in".as_slice()));
         assert_eq!(result.has_light_branch, 1);
         assert_eq!(result.has_dark_branch, 1);
+        // SAFETY: `result` owns the summary allocation returned by Control
+        // Core and this test is its only owner before this free.
         unsafe {
             fcitx5_control_theme_summary_free(result);
         }
@@ -6440,6 +6544,8 @@ background = "#FCFCFCFA"
         let mut ptr = std::ptr::null_mut();
         let mut len = 0;
         assert_eq!(
+            // SAFETY: text and the theme ID are immutable live byte ranges;
+            // `ptr`/`len` are exclusive aligned output locations for this call.
             unsafe {
                 fcitx5_control_resolve_theme_config_utf8(
                     Fcitx5ControlUtf8 {
@@ -6460,6 +6566,8 @@ background = "#FCFCFCFA"
         );
         assert!(!ptr.is_null());
         assert!(len > 0);
+        // SAFETY: Control Core allocated `ptr` for the returned `len`, and
+        // this test still has its sole ownership.
         unsafe {
             fcitx5_control_utf8_free(ptr, len);
         }
@@ -6564,6 +6672,8 @@ background = "${a}"
 
         let install_wide = wide(&install.to_string_lossy());
         let data_wide = wide(&data.to_string_lossy());
+        // SAFETY: both UTF-16 views and the byte-literal ID remain initialized
+        // and live; a null output with zero capacity requests only the size.
         let required = unsafe {
             fcitx5_control_resolve_theme_path_utf16(
                 Fcitx5ControlUtf16 {
@@ -6585,6 +6695,8 @@ background = "${a}"
         };
         assert!(required > 0);
         let mut output = vec![0u16; required];
+        // SAFETY: inputs remain live and `output` is an exclusive aligned
+        // writable range of exactly its advertised capacity.
         let written = unsafe {
             fcitx5_control_resolve_theme_path_utf16(
                 Fcitx5ControlUtf16 {
@@ -6650,10 +6762,12 @@ background = "${a}"
             len: 5,
         };
         assert_eq!(
+            // SAFETY: `any` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_package_architecture_matches_native_utf8(any) },
             1
         );
         assert_eq!(
+            // SAFETY: `unsupported` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_package_architecture_matches_native_utf8(unsupported) },
             0
         );
@@ -6688,10 +6802,12 @@ background = "${a}"
             len: 8,
         };
         assert_eq!(
+            // SAFETY: `section` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_addon_metadata_section_is_addon_utf8(section) },
             1
         );
         assert_eq!(
+            // SAFETY: `key` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_addon_metadata_key_utf8(key) },
             ADDON_METADATA_KEY_ON_DEMAND
         );
@@ -6716,10 +6832,12 @@ background = "${a}"
             len: 4,
         };
         assert_eq!(
+            // SAFETY: `truthy` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_addon_metadata_bool_utf8(truthy) },
             1
         );
         assert_eq!(
+            // SAFETY: `falsey` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_addon_metadata_bool_utf8(falsey) },
             0
         );
@@ -6742,10 +6860,12 @@ background = "${a}"
             len: 5,
         };
         assert_eq!(
+            // SAFETY: both UTF-8 views borrow static initialized byte literals.
             unsafe { fcitx5_control_package_update_available_utf8(1, installed, available) },
             1
         );
         assert_eq!(
+            // SAFETY: both UTF-8 views borrow static initialized byte literals.
             unsafe { fcitx5_control_package_update_available_utf8(0, installed, available) },
             0
         );
@@ -6783,14 +6903,17 @@ background = "${a}"
             len: 9,
         };
         assert_eq!(
+            // SAFETY: `disabled` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_package_state_satisfies_dependency_utf8(disabled) },
             0
         );
         assert_eq!(
+            // SAFETY: `installed` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_package_state_satisfies_dependency_utf8(installed) },
             1
         );
         assert_eq!(
+            // SAFETY: `disabled` borrows a static initialized UTF-8 byte literal.
             unsafe { fcitx5_control_package_state_keeps_installed_version_utf8(disabled) },
             1
         );
@@ -6802,11 +6925,15 @@ background = "${a}"
         assert_eq!(repository_max_release_sequence(&[7]), 7);
         assert_eq!(repository_max_release_sequence(&[3, 12, 9, 12, 1]), 12);
         assert_eq!(
+            // SAFETY: the documented empty slice representation is null with
+            // zero length, so no raw pointer is dereferenced by this call.
             unsafe { fcitx5_control_repository_max_release_sequence(std::ptr::null(), 0) },
             0
         );
         let values = [10_u64, 2, 42, 8];
         assert_eq!(
+            // SAFETY: `values` is a live initialized u64 array matching the
+            // pointer/length pair for the duration of this synchronous call.
             unsafe {
                 fcitx5_control_repository_max_release_sequence(values.as_ptr(), values.len())
             },
@@ -6832,6 +6959,8 @@ background = "${a}"
             ptr: b"index.json".as_ptr(),
             len: 10,
         };
+        // SAFETY: `base` and `name` are live immutable input ranges; null
+        // output plus zero capacity requests only the required UTF-16 length.
         let required = unsafe {
             fcitx5_control_repository_metadata_url_utf16(
                 Fcitx5ControlUtf16 {
@@ -6844,6 +6973,8 @@ background = "${a}"
             )
         };
         let mut output = vec![0_u16; required];
+        // SAFETY: inputs remain live and `output` is an exclusive aligned
+        // writable UTF-16 range of the advertised capacity.
         let written = unsafe {
             fcitx5_control_repository_metadata_url_utf16(
                 Fcitx5ControlUtf16 {
@@ -6878,10 +7009,14 @@ background = "${a}"
             ptr: b"dev".as_ptr(),
             len: 3,
         };
+        // SAFETY: `channel` borrows a static initialized byte literal; null
+        // output plus zero capacity requests only the required UTF-16 length.
         let required = unsafe {
             fcitx5_control_repository_default_base_url_utf16(channel, std::ptr::null_mut(), 0)
         };
         let mut output = vec![0_u16; required];
+        // SAFETY: `channel` remains live and `output` is an exclusive aligned
+        // writable UTF-16 range of the advertised capacity.
         let written = unsafe {
             fcitx5_control_repository_default_base_url_utf16(
                 channel,
@@ -6912,11 +7047,17 @@ background = "${a}"
         let mut bytes = std::ptr::null_mut();
         let mut len = 0_usize;
         assert_eq!(
+            // SAFETY: `sha` borrows a static initialized byte literal and the
+            // output pointer/length locations are uniquely writable for this call.
             unsafe { fcitx5_control_package_transaction_id_utf8(sha, &mut bytes, &mut len) },
             0
         );
         assert!(!bytes.is_null());
+        // SAFETY: Control Core returned ownership of an initialized `len`-byte
+        // allocation at `bytes`, which remains live until the free below.
         let value = unsafe { std::slice::from_raw_parts(bytes, len).to_vec() };
+        // SAFETY: `bytes` is the still-owned allocation returned above, freed
+        // exactly once with the same length.
         unsafe {
             fcitx5_control_utf8_free(bytes, len);
         }
@@ -7070,6 +7211,8 @@ background = "${a}"
         let upper = wide("Rime");
         let empty: Vec<u16> = Vec::new();
         let long = wide(&"a".repeat(65));
+        // SAFETY: each FFI view borrows a live initialized UTF-16 vector for
+        // the duration of these synchronous validation calls.
         unsafe {
             assert_eq!(
                 fcitx5_control_input_method_id_valid_utf16(Fcitx5ControlUtf16 {

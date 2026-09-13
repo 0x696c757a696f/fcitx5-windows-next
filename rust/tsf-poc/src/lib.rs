@@ -1,4 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 #![allow(linker_messages)]
 #![allow(non_snake_case)]
 
@@ -2470,8 +2472,12 @@ impl Fcitx5TsfService {
         // stored and released on Deactivate.
         let thread_event_cookie =
             unsafe { source.AdviseSink(&ITfThreadMgrEventSink::IID, &thread_event_unknown)? };
+        // SAFETY: ITfSource belongs to the same live thread manager. TSF retains
+        // this AddRef'ed sink until the returned cookie is unadvised on Deactivate.
         let thread_focus_cookie =
             unsafe { source.AdviseSink(&ITfThreadFocusSink::IID, &thread_focus_unknown)? };
+        // SAFETY: ITfSource belongs to the same live thread manager. TSF retains
+        // this AddRef'ed sink until the returned cookie is unadvised on Deactivate.
         let active_profile_cookie = unsafe {
             source.AdviseSink(
                 &ITfActiveLanguageProfileNotifySink::IID,
@@ -2650,6 +2656,8 @@ impl Fcitx5TsfService {
         // preconditions. A zero thread id selects the current thread.
         let layout = unsafe { GetKeyboardLayout(0) };
         if scan_code == 0 {
+            // SAFETY: `layout` is the current thread's keyboard layout handle;
+            // this conversion reads no caller-owned memory and retains no handle.
             scan_code = unsafe { MapVirtualKeyExW(virtual_key, MAPVK_VK_TO_VSC_EX, Some(layout)) };
         }
         (virtual_key, scan_code, extended_key, layout.0 as u64)
@@ -3061,6 +3069,9 @@ fn module_reference_count() -> i32 {
     MODULE_REFERENCES.load(Ordering::Acquire)
 }
 
+// SAFETY: COM calls this only with ABI pointers governed by the checks below:
+// `object` must be writable when non-null, and non-null GUID pointers must name
+// initialized GUID values for the duration of this call.
 unsafe fn dll_get_class_object_impl(
     class_id: *const GUID,
     interface_id: *const GUID,
@@ -3069,12 +3080,16 @@ unsafe fn dll_get_class_object_impl(
     if object.is_null() {
         return E_POINTER;
     }
+    // SAFETY: The non-null `object` out pointer is caller-owned writable storage
+    // for one interface pointer; clearing it establishes the COM failure value.
     unsafe {
         *object = null_mut();
     }
     if class_id.is_null() {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
+    // SAFETY: The non-null `class_id` ABI pointer names an initialized GUID that
+    // remains valid for this synchronous COM call.
     let requested_class = unsafe { *class_id };
     if requested_class != FCITX5_TEXT_SERVICE_CLSID {
         return CLASS_E_CLASSNOTAVAILABLE;
@@ -3082,6 +3097,8 @@ unsafe fn dll_get_class_object_impl(
     let requested_interface = if interface_id.is_null() {
         IUnknown::IID
     } else {
+        // SAFETY: The non-null `interface_id` ABI pointer names an initialized
+        // GUID that remains valid for this synchronous COM call.
         unsafe { *interface_id }
     };
     let factory = ComObject::new(Fcitx5TsfClassFactory::new());
@@ -3105,9 +3122,13 @@ fn create_tsf_service_instance(
     if object.is_null() || interface_id.is_null() {
         return Err(E_POINTER.into());
     }
+    // SAFETY: `object` is a non-null caller-owned writable out pointer for one
+    // interface pointer; clearing it establishes the COM failure value.
     unsafe {
         *object = null_mut();
     }
+    // SAFETY: The non-null `interface_id` ABI pointer names an initialized GUID
+    // that remains valid for this synchronous COM call.
     let requested_interface = unsafe { *interface_id };
     let service = ComObject::new(Fcitx5TsfService::new());
     let result = write_interface_for_iid::<Fcitx5TsfService>(
@@ -3157,6 +3178,8 @@ where
     {
         return E_NOINTERFACE;
     }
+    // SAFETY: Callers validate `output` is non-null writable storage; the raw
+    // interface pointer transfers its COM reference to that output slot.
     unsafe {
         *output = raw_interface(object_impl);
     }
@@ -3168,6 +3191,8 @@ where
 ///
 /// Exported for the Windows COM loader. It does not dereference caller-owned
 /// pointers and must never unwind across the DLL boundary.
+// SAFETY: This loader export accepts no raw pointers; its sole ABI invariant is
+// that no Rust panic may cross the Windows system-call boundary.
 pub unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
     trace_event("dll_can_unload_now_enter");
     panic_to_hresult(dll_can_unload_now_impl)
@@ -3180,12 +3205,16 @@ pub unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
 /// by the host. This PoC only writes a null object pointer after validating that
 /// `object` is non-null, returns `HRESULT` on every failure, and must never
 /// unwind across the DLL boundary.
+// SAFETY: The COM loader owns the raw GUID and out-pointer arguments and keeps
+// valid non-null pointers alive for this synchronous call.
 pub unsafe extern "system" fn DllGetClassObject(
     class_id: *const GUID,
     interface_id: *const GUID,
     object: *mut *mut c_void,
 ) -> HRESULT {
     trace_event("dll_get_class_object_enter");
+    // SAFETY: The COM loader supplied these ABI pointers under DllGetClassObject's
+    // documented contract; the helper validates nullable and writable cases.
     panic_to_hresult(|| unsafe { dll_get_class_object_impl(class_id, interface_id, object) })
 }
 
@@ -3195,6 +3224,8 @@ pub unsafe extern "system" fn DllGetClassObject(
 /// Exported for the elevated register helper. Registration is contained behind
 /// COM initialization and all failures are returned as `HRESULT`; this function
 /// must never unwind across the DLL boundary.
+// SAFETY: This export accepts no raw pointers; registration must contain all
+// failures and panics within the Windows system-call boundary.
 pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
     trace_event("dll_register_server_enter");
     panic_to_hresult(register_text_service_impl)
@@ -3205,6 +3236,8 @@ pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
 ///
 /// Exported for the elevated register helper. Unregistration is best-effort and
 /// returns `HRESULT`; this function must never unwind across the DLL boundary.
+// SAFETY: This export accepts no raw pointers; unregistration must contain all
+// failures and panics within the Windows system-call boundary.
 pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
     trace_event("dll_unregister_server_enter");
     panic_to_hresult(unregister_text_service_impl)
@@ -3216,10 +3249,14 @@ pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
 /// `length` is optional. When non-null it must point to writable process-local
 /// memory. The returned pointer is owned by this module and remains valid until
 /// the DLL is unloaded.
+// SAFETY: A non-null `length` must be writable for one `usize` until return;
+// the returned bytes are module-owned and not mutable through this API.
 pub unsafe extern "system" fn Fcitx5TsfPocBehaviorReport(length: *mut usize) -> *const u8 {
     match catch_unwind(|| {
         let report = BEHAVIOR_REPORT.get_or_init(tsf_behavior_differential_report);
         if !length.is_null() {
+            // SAFETY: The caller supplied a non-null writable `usize` out pointer
+            // that remains valid for this synchronous export call.
             unsafe {
                 *length = report.len();
             }
@@ -3229,6 +3266,8 @@ pub unsafe extern "system" fn Fcitx5TsfPocBehaviorReport(length: *mut usize) -> 
         Ok(pointer) => pointer,
         Err(_) => {
             if !length.is_null() {
+                // SAFETY: The caller supplied a non-null writable `usize` out
+                // pointer that remains valid while this failure result is stored.
                 unsafe {
                     *length = 0;
                 }
@@ -3244,10 +3283,14 @@ pub unsafe extern "system" fn Fcitx5TsfPocBehaviorReport(length: *mut usize) -> 
 /// `length` is optional. When non-null it must point to writable process-local
 /// memory. The returned pointer is owned by this module and remains valid until
 /// the DLL is unloaded.
+// SAFETY: A non-null `length` must be writable for one `usize` until return;
+// the returned bytes are module-owned and not mutable through this API.
 pub unsafe extern "system" fn Fcitx5TsfPocProfileIdentityReport(length: *mut usize) -> *const u8 {
     match catch_unwind(|| {
         let report = PROFILE_IDENTITY_REPORT.get_or_init(tsf_profile_identity_report);
         if !length.is_null() {
+            // SAFETY: The caller supplied a non-null writable `usize` out pointer
+            // that remains valid for this synchronous export call.
             unsafe {
                 *length = report.len();
             }
@@ -3257,6 +3300,8 @@ pub unsafe extern "system" fn Fcitx5TsfPocProfileIdentityReport(length: *mut usi
         Ok(pointer) => pointer,
         Err(_) => {
             if !length.is_null() {
+                // SAFETY: The caller supplied a non-null writable `usize` out
+                // pointer that remains valid while this failure result is stored.
                 unsafe {
                     *length = 0;
                 }
@@ -3272,10 +3317,14 @@ pub unsafe extern "system" fn Fcitx5TsfPocProfileIdentityReport(length: *mut usi
 /// `length` is optional. When non-null it must point to writable process-local
 /// memory. The returned pointer is owned by this module and remains valid until
 /// the DLL is unloaded.
+// SAFETY: A non-null `length` must be writable for one `usize` until return;
+// the returned bytes are module-owned and not mutable through this API.
 pub unsafe extern "system" fn Fcitx5TsfPocIpcBoundaryReport(length: *mut usize) -> *const u8 {
     match catch_unwind(|| {
         let report = IPC_BOUNDARY_REPORT.get_or_init(tsf_ipc_boundary_report);
         if !length.is_null() {
+            // SAFETY: The caller supplied a non-null writable `usize` out pointer
+            // that remains valid for this synchronous export call.
             unsafe {
                 *length = report.len();
             }
@@ -3285,6 +3334,8 @@ pub unsafe extern "system" fn Fcitx5TsfPocIpcBoundaryReport(length: *mut usize) 
         Ok(pointer) => pointer,
         Err(_) => {
             if !length.is_null() {
+                // SAFETY: The caller supplied a non-null writable `usize` out
+                // pointer that remains valid while this failure result is stored.
                 unsafe {
                     *length = 0;
                 }
@@ -3300,12 +3351,16 @@ pub unsafe extern "system" fn Fcitx5TsfPocIpcBoundaryReport(length: *mut usize) 
 /// `length` is optional. When non-null it must point to writable process-local
 /// memory. The returned pointer is owned by this module and remains valid until
 /// the DLL is unloaded.
+// SAFETY: A non-null `length` must be writable for one `usize` until return;
+// the returned bytes are module-owned and not mutable through this API.
 pub unsafe extern "system" fn Fcitx5TsfPocCompositionTranscriptReport(
     length: *mut usize,
 ) -> *const u8 {
     match catch_unwind(|| {
         let report = COMPOSITION_TRANSCRIPT_REPORT.get_or_init(tsf_composition_transcript_report);
         if !length.is_null() {
+            // SAFETY: The caller supplied a non-null writable `usize` out pointer
+            // that remains valid for this synchronous export call.
             unsafe {
                 *length = report.len();
             }
@@ -3315,6 +3370,8 @@ pub unsafe extern "system" fn Fcitx5TsfPocCompositionTranscriptReport(
         Ok(pointer) => pointer,
         Err(_) => {
             if !length.is_null() {
+                // SAFETY: The caller supplied a non-null writable `usize` out
+                // pointer that remains valid while this failure result is stored.
                 unsafe {
                     *length = 0;
                 }
@@ -3330,12 +3387,16 @@ pub unsafe extern "system" fn Fcitx5TsfPocCompositionTranscriptReport(
 /// `length` is optional. When non-null it must point to writable process-local
 /// memory. The returned pointer is owned by this module and remains valid until
 /// the DLL is unloaded.
+// SAFETY: A non-null `length` must be writable for one `usize` until return;
+// the returned bytes are module-owned and not mutable through this API.
 pub unsafe extern "system" fn Fcitx5TsfPocDifferentialSummaryReport(
     length: *mut usize,
 ) -> *const u8 {
     match catch_unwind(|| {
         let report = DIFFERENTIAL_SUMMARY_REPORT.get_or_init(tsf_differential_summary_report);
         if !length.is_null() {
+            // SAFETY: The caller supplied a non-null writable `usize` out pointer
+            // that remains valid for this synchronous export call.
             unsafe {
                 *length = report.len();
             }
@@ -3345,6 +3406,8 @@ pub unsafe extern "system" fn Fcitx5TsfPocDifferentialSummaryReport(
         Ok(pointer) => pointer,
         Err(_) => {
             if !length.is_null() {
+                // SAFETY: The caller supplied a non-null writable `usize` out
+                // pointer that remains valid while this failure result is stored.
                 unsafe {
                     *length = 0;
                 }
@@ -3359,6 +3422,8 @@ pub unsafe extern "system" fn Fcitx5TsfPocDifferentialSummaryReport(
 ///
 /// Test-only PoC export used by the artifact smoke to prove that a forced
 /// internal panic is converted to `HRESULT` across the DLL ABI.
+// SAFETY: This test export accepts no raw pointers; the forced panic remains
+// inside `panic_to_hresult` and cannot cross the Windows system-call boundary.
 pub unsafe extern "system" fn Fcitx5TsfPocForcedFailureForTest() -> HRESULT {
     panic_to_hresult(|| panic!("forced Rust TSF PoC ABI panic regression"))
 }
@@ -3450,6 +3515,8 @@ mod tests {
     fn dll_exports_fail_closed_without_object_on_unsupported_class() {
         let unsupported = GUID::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
         let mut object = std::ptr::dangling_mut::<c_void>();
+        // SAFETY: both GUID references are aligned immutable values, and
+        // `object` is a uniquely borrowed writable out-pointer for this call.
         let result = unsafe { DllGetClassObject(&unsupported, &GUID::zeroed(), &mut object) };
         assert_eq!(result, CLASS_E_CLASSNOTAVAILABLE);
         assert!(object.is_null());
@@ -3457,7 +3524,10 @@ mod tests {
 
     #[test]
     fn dll_exports_are_panic_contained_and_unloadable() {
+        // SAFETY: this export has no arguments and only reads module state.
         assert_eq!(unsafe { DllCanUnloadNow() }, S_OK);
+        // SAFETY: the class and IID references are aligned immutable values;
+        // the null output pointer deliberately exercises its documented error path.
         let result = unsafe {
             DllGetClassObject(
                 &FCITX5_TEXT_SERVICE_CLSID,
@@ -3472,6 +3542,8 @@ mod tests {
     fn rust_factory_creates_minimal_tsf_service_interfaces() {
         assert_eq!(module_reference_count(), 0);
         let mut factory_object = null_mut();
+        // SAFETY: the CLSID/IID references are aligned immutable values and
+        // `factory_object` is a unique writable out-pointer for this call.
         let result = unsafe {
             DllGetClassObject(
                 &FCITX5_TEXT_SERVICE_CLSID,
@@ -3481,8 +3553,13 @@ mod tests {
         };
         assert_eq!(result, S_OK);
         assert!(!factory_object.is_null());
+        // SAFETY: this export has no arguments and only reads module state.
         assert_eq!(unsafe { DllCanUnloadNow() }, S_FALSE);
+        // SAFETY: `factory_object` is the non-null COM interface pointer just
+        // returned by `DllGetClassObject`, with its initial owned reference.
         let factory = unsafe { IClassFactory::from_raw(factory_object) };
+        // SAFETY: `factory` owns a valid IClassFactory interface and this call
+        // obtains a COM interface through its documented creation contract.
         let service: ITfTextInputProcessorEx = unsafe {
             factory
                 .CreateInstance(None)
@@ -3496,6 +3573,7 @@ mod tests {
             service.cast().expect("focus sink should be queryable");
         drop((key_sink, thread_sink, focus_sink, service, factory));
         assert_eq!(module_reference_count(), 0);
+        // SAFETY: this export has no arguments and only reads module state.
         assert_eq!(unsafe { DllCanUnloadNow() }, S_OK);
     }
 
@@ -3547,9 +3625,13 @@ mod tests {
     #[test]
     fn behavior_report_export_is_panic_contained_and_length_delimited() {
         let mut length = 0usize;
+        // SAFETY: `length` is a unique aligned out-pointer that remains live
+        // for the duration of this synchronous export call.
         let pointer = unsafe { Fcitx5TsfPocBehaviorReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
+        // SAFETY: the export returned a non-null pointer and initialized length
+        // for its static report, which remains immutable during this read.
         let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
         let report = std::str::from_utf8(bytes).expect("behavior report must be UTF-8 JSON");
         assert!(report.contains(r#""report_export":"panic_contained""#));
@@ -3558,6 +3640,7 @@ mod tests {
 
     #[test]
     fn forced_failure_export_converts_panic_to_hresult() {
+        // SAFETY: this test-only export has no arguments and owns no caller memory.
         assert_eq!(unsafe { Fcitx5TsfPocForcedFailureForTest() }, E_UNEXPECTED);
     }
 
@@ -3742,9 +3825,13 @@ mod tests {
     #[test]
     fn profile_identity_export_is_panic_contained_and_length_delimited() {
         let mut length = 0usize;
+        // SAFETY: `length` is a unique aligned out-pointer that remains live
+        // for the duration of this synchronous export call.
         let pointer = unsafe { Fcitx5TsfPocProfileIdentityReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
+        // SAFETY: the export returned a non-null pointer and initialized length
+        // for its static report, which remains immutable during this read.
         let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
         let report = std::str::from_utf8(bytes).expect("profile identity report should be utf8");
         assert!(report.contains("\"text_service_clsid\":\"3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901\""));
@@ -3811,9 +3898,13 @@ mod tests {
     #[test]
     fn ipc_boundary_export_is_panic_contained_and_length_delimited() {
         let mut length = 0usize;
+        // SAFETY: `length` is a unique aligned out-pointer that remains live
+        // for the duration of this synchronous export call.
         let pointer = unsafe { Fcitx5TsfPocIpcBoundaryReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
+        // SAFETY: the export returned a non-null pointer and initialized length
+        // for its static report, which remains immutable during this read.
         let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
         let report = std::str::from_utf8(bytes).expect("ipc boundary report should be utf8");
         assert!(report.contains("\"bounded_ipc_client_model\":true"));
@@ -3846,9 +3937,13 @@ mod tests {
     #[test]
     fn composition_transcript_export_is_panic_contained_and_length_delimited() {
         let mut length = 0usize;
+        // SAFETY: `length` is a unique aligned out-pointer that remains live
+        // for the duration of this synchronous export call.
         let pointer = unsafe { Fcitx5TsfPocCompositionTranscriptReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
+        // SAFETY: the export returned a non-null pointer and initialized length
+        // for its static report, which remains immutable during this read.
         let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
         let report =
             std::str::from_utf8(bytes).expect("composition transcript report should be utf8");
@@ -3865,9 +3960,13 @@ mod tests {
     #[test]
     fn differential_summary_export_lists_green_and_pending_evidence() {
         let mut length = 0usize;
+        // SAFETY: `length` is a unique aligned out-pointer that remains live
+        // for the duration of this synchronous export call.
         let pointer = unsafe { Fcitx5TsfPocDifferentialSummaryReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
+        // SAFETY: the export returned a non-null pointer and initialized length
+        // for its static report, which remains immutable during this read.
         let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
         let report = std::str::from_utf8(bytes).expect("differential summary should be utf8");
         assert!(report.contains("\"component\":\"fcitx5-tsf-poc\""));
@@ -3885,8 +3984,10 @@ mod tests {
     #[test]
     fn module_unload_uses_refcounted_s_false() {
         module_add_ref();
+        // SAFETY: this export has no arguments and only reads module state.
         assert_eq!(unsafe { DllCanUnloadNow() }, S_FALSE);
         module_release();
+        // SAFETY: this export has no arguments and only reads module state.
         assert_eq!(unsafe { DllCanUnloadNow() }, S_OK);
     }
 }

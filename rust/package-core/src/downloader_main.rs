@@ -55,6 +55,7 @@ struct UrlComponents {
 }
 
 #[link(name = "advapi32")]
+// SAFETY: declarations use the Windows system ABI and exact token structure layouts; callers pass live writable output storage.
 unsafe extern "system" {
     fn OpenProcessToken(
         process_handle: Handle,
@@ -71,6 +72,7 @@ unsafe extern "system" {
 }
 
 #[link(name = "kernel32")]
+// SAFETY: declarations use the Windows system ABI; handle ownership is encapsulated by OwnedHandle below.
 unsafe extern "system" {
     fn GetCurrentProcess() -> Handle;
     fn CloseHandle(object: Handle) -> Bool;
@@ -79,6 +81,7 @@ unsafe extern "system" {
 }
 
 #[link(name = "winhttp")]
+// SAFETY: declarations use the Windows system ABI and WinHTTP layouts; callers retain every buffer and handle for each synchronous call.
 unsafe extern "system" {
     fn WinHttpCloseHandle(handle: Hinternet) -> Bool;
     fn WinHttpCrackUrl(
@@ -146,6 +149,7 @@ struct OwnedHandle(Handle);
 impl Drop for OwnedHandle {
     fn drop(&mut self) {
         if !self.0.is_null() {
+            // SAFETY: OwnedHandle contains a non-null handle obtained from OpenProcessToken and this Drop closes it exactly once.
             unsafe {
                 let _ = CloseHandle(self.0);
             }
@@ -172,6 +176,7 @@ impl InternetHandle {
 impl Drop for InternetHandle {
     fn drop(&mut self) {
         if !self.0.is_null() {
+            // SAFETY: InternetHandle contains a non-null WinHTTP handle returned by WinHTTP and this Drop closes it exactly once.
             unsafe {
                 let _ = WinHttpCloseHandle(self.0);
             }
@@ -203,6 +208,7 @@ fn wide_string_z(value: &str) -> Vec<u16> {
 
 fn is_elevated() -> bool {
     let mut token: Handle = std::ptr::null_mut();
+    // SAFETY: pseudo-process handle is valid for this call and token is aligned writable storage that remains live until ownership transfers to OwnedHandle.
     let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
     if opened == 0 || token.is_null() {
         return true;
@@ -212,6 +218,7 @@ fn is_elevated() -> bool {
         token_is_elevated: 0,
     };
     let mut returned = 0;
+    // SAFETY: token owns a valid token handle; elevation and returned are aligned writable storage with the exact supplied byte length.
     let queried = unsafe {
         GetTokenInformation(
             token.0,
@@ -247,6 +254,7 @@ fn crack_https_url(url: &OsStr) -> Option<(Vec<u16>, InternetPort, Vec<u16>)> {
         extra_info: std::ptr::null_mut(),
         extra_info_length: Dword::MAX,
     };
+    // SAFETY: wide is a live NUL-terminated UTF-16 buffer and components is initialized, correctly sized writable WinHTTP storage.
     let cracked =
         unsafe { WinHttpCrackUrl(wide.as_ptr(), (wide.len() - 1) as Dword, 0, &mut components) };
     if cracked == 0
@@ -258,6 +266,7 @@ fn crack_https_url(url: &OsStr) -> Option<(Vec<u16>, InternetPort, Vec<u16>)> {
     {
         return None;
     }
+    // SAFETY: successful WinHttpCrackUrl returned a non-null host pointer and length into the still-live wide input buffer.
     let host = unsafe {
         std::slice::from_raw_parts(components.host_name, components.host_name_length as usize)
     }
@@ -265,6 +274,7 @@ fn crack_https_url(url: &OsStr) -> Option<(Vec<u16>, InternetPort, Vec<u16>)> {
     let path = if components.url_path.is_null() {
         Vec::new()
     } else {
+        // SAFETY: successful WinHttpCrackUrl returned this non-null path pointer and length into the still-live wide input buffer.
         unsafe {
             std::slice::from_raw_parts(components.url_path, components.url_path_length as usize)
         }
@@ -275,6 +285,7 @@ fn crack_https_url(url: &OsStr) -> Option<(Vec<u16>, InternetPort, Vec<u16>)> {
     }
     let mut target = path;
     if !components.extra_info.is_null() && components.extra_info_length > 0 {
+        // SAFETY: successful WinHttpCrackUrl returned this non-null extra-info pointer and length into the still-live wide input buffer.
         target.extend_from_slice(unsafe {
             std::slice::from_raw_parts(components.extra_info, components.extra_info_length as usize)
         });
@@ -294,6 +305,7 @@ fn partial_path(destination: &Path) -> PathBuf {
 fn publish_file(partial: &Path, destination: &Path) -> Result<(), DownloadError> {
     let partial = wide_z(partial.as_os_str());
     let destination = wide_z(destination.as_os_str());
+    // SAFETY: both path buffers are NUL-terminated UTF-16 and remain live through the synchronous move operation.
     let moved = unsafe {
         MoveFileExW(
             partial.as_ptr(),
@@ -347,6 +359,7 @@ fn download(
 
     let user_agent = wide_string_z("Fcitx5-Package/1");
     let get = wide_string_z("GET");
+    // SAFETY: user_agent is NUL-terminated and live; null proxy pointers are permitted by WinHttpOpen.
     let session = InternetHandle::new(unsafe {
         WinHttpOpen(
             user_agent.as_ptr(),
@@ -356,8 +369,10 @@ fn download(
             0,
         )
     })?;
+    // SAFETY: session owns a live WinHTTP session; host is NUL-terminated and remains live through the call.
     let connection =
         InternetHandle::new(unsafe { WinHttpConnect(session.get(), host.as_ptr(), port, 0) })?;
+    // SAFETY: connection owns a live handle; verb and target are NUL-terminated live buffers; null optional strings are permitted.
     let request = InternetHandle::new(unsafe {
         WinHttpOpenRequest(
             connection.get(),
@@ -370,6 +385,7 @@ fn download(
         )
     })?;
     let mut redirect_policy: Dword = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+    // SAFETY: request owns a live handle and redirect_policy is aligned writable storage for its exact byte size; null optional buffers are permitted.
     let sent = unsafe {
         WinHttpSetOption(
             request.get(),
@@ -393,6 +409,7 @@ fn download(
     }
     let mut status: Dword = 0;
     let mut status_size = std::mem::size_of::<Dword>() as Dword;
+    // SAFETY: request owns a live handle; status and status_size are aligned writable storage with the exact requested header buffer size.
     let queried = unsafe {
         WinHttpQueryHeaders(
             request.get(),
@@ -434,6 +451,7 @@ fn download(
         let mut buffer = vec![0_u8; 64 * 1024];
         loop {
             let mut read = 0;
+            // SAFETY: request owns a live handle; buffer is writable for its stated length and read is aligned writable storage for the call.
             let ok = unsafe {
                 WinHttpReadData(
                     request.get(),

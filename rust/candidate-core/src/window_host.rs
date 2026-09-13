@@ -4,6 +4,8 @@
 //! message pump. The C++ callback remains a narrow adapter for direct Fcitx
 //! objects and the already-frozen candidate interaction state.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use core::ffi::c_void;
 
 const CS_DROPSHADOW: u32 = 0x0002_0000;
@@ -214,6 +216,7 @@ fn quit_exit_code(wparam: usize) -> i32 {
     i32::try_from(wparam).unwrap_or(WM_QUIT_ERROR)
 }
 
+// SAFETY: `window` is a valid HWND whose user-data slot may be queried.
 unsafe fn window_user_data(window: Hwnd) -> isize {
     #[cfg(target_pointer_width = "64")]
     {
@@ -227,6 +230,7 @@ unsafe fn window_user_data(window: Hwnd) -> isize {
     }
 }
 
+// SAFETY: `window` is valid and `value` is the caller's pointer-sized user-data value.
 unsafe fn set_window_user_data(window: Hwnd, value: isize) {
     #[cfg(target_pointer_width = "64")]
     {
@@ -261,6 +265,7 @@ unsafe extern "system" fn candidate_window_procedure(
         }
         // SAFETY: `host` comes from Box::into_raw in the create export and
         // remains owned by this HWND until WM_NCDESTROY.
+        // SAFETY: this valid HWND receives the Box handle created for this exact WM_NCCREATE.
         unsafe { set_window_user_data(window, host.cast::<()>() as isize) };
         return 1;
     }
@@ -311,6 +316,7 @@ unsafe extern "system" fn candidate_window_procedure(
         unsafe { set_window_user_data(window, 0) };
         // If CreateWindowExW later reports failure, its caller still owns the
         // Box. Successful creation transfers ownership to WM_NCDESTROY.
+        // SAFETY: `host` remains valid until this WM_NCDESTROY handler releases it.
         if unsafe { (*host).creation_complete } {
             // SAFETY: WindowHost was allocated with Box::into_raw exactly once.
             unsafe { drop(Box::from_raw(host)) };
@@ -423,6 +429,7 @@ pub extern "C" fn fcitx5_candidate_window_destroy(window: Hwnd) {
     if !window.is_null() {
         // SAFETY: caller supplies an HWND created by this host; Windows runs
         // WM_NCDESTROY, which releases the associated WindowHost.
+        // SAFETY: this host owns the valid HWND and its WM_NCDESTROY releases associated state.
         unsafe { DestroyWindow(window) };
     }
 }
@@ -481,6 +488,7 @@ pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra(
     }
     // SAFETY: `window` is a valid HWND per the caller contract.
     let mut client = Rect::default();
+    // SAFETY: `window` is a live HWND and `client` is writable RECT storage.
     if unsafe { GetClientRect(window, &mut client) } == 0 {
         return 0;
     }
@@ -603,6 +611,7 @@ pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra_to_dc(
 /// # Safety
 ///
 /// Same contracts as [`fcitx5_candidate_window_blit_bgra_to_dc`].
+// SAFETY: `dc` is a live device context and `pixels` names the validated BGRA span below.
 pub(crate) unsafe fn blit_bgra_to_dc(
     dc: Hdc,
     pixels: *const u8,

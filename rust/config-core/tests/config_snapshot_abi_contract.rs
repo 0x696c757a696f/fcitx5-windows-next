@@ -156,8 +156,11 @@ fn native_adapters_can_load_one_resolved_current_snapshot() {
     );
 
     let mut view = Fcitx5ConfigSnapshot::default();
-    // SAFETY: `snapshot` came from the load call and `view` is writable.
+    // SAFETY: `snapshot` came from the load call and remains live; `view` is a
+    // uniquely borrowed, properly aligned output value for this call.
     assert_eq!(
+        // SAFETY: `snapshot` remains live from the load call and `view` is a
+        // unique, aligned writable output value for this invocation.
         unsafe { fcitx5_config_snapshot_view(snapshot, &mut view) },
         1
     );

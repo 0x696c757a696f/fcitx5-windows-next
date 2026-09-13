@@ -198,6 +198,7 @@ mod win32 {
     }
 
     #[link(name = "shell32")]
+    // SAFETY: declarations use the Windows system ABI and exact Win32 layouts; calls below supply valid handles and live aligned buffers.
     unsafe extern "system" {
         fn CloseHandle(object: Handle) -> i32;
         fn GetCurrentProcess() -> Handle;
@@ -279,6 +280,7 @@ mod win32 {
     impl Drop for OwnedHandle {
         fn drop(&mut self) {
             if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
+                // SAFETY: OwnedHandle contains a non-null, non-sentinel Win32 handle and this Drop closes it exactly once.
                 unsafe {
                     let _ = CloseHandle(self.0);
                 }
@@ -288,6 +290,7 @@ mod win32 {
 
     pub fn is_elevated() -> bool {
         let mut token = std::ptr::null_mut();
+        // SAFETY: pseudo-process handle is valid for this call and token is aligned writable storage that remains live until OwnedHandle takes ownership.
         let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
         let Ok(token) = OwnedHandle::new(token) else {
             return false;
@@ -299,6 +302,7 @@ mod win32 {
             token_is_elevated: 0,
         };
         let mut returned = 0;
+        // SAFETY: token owns a valid token handle; elevation and returned are aligned writable storage with the exact supplied byte length.
         let ok = unsafe {
             GetTokenInformation(
                 token.raw(),
@@ -313,6 +317,7 @@ mod win32 {
 
     pub fn module_path() -> Result<PathBuf, DeployError> {
         let mut buffer = vec![0u16; 32768];
+        // SAFETY: buffer is writable for its stated u16 length and remains live for the call; null module selects this executable.
         let length = unsafe {
             GetModuleFileNameW(
                 std::ptr::null_mut(),
@@ -332,6 +337,7 @@ mod win32 {
 
     pub fn program_files_path() -> Result<PathBuf, DeployError> {
         let mut buffer = vec![0u16; 260];
+        // SAFETY: buffer is writable for 260 UTF-16 units and remains live for the call; null hwnd/token are permitted for the current folder.
         let status = unsafe {
             SHGetFolderPathW(
                 std::ptr::null_mut(),
@@ -368,6 +374,7 @@ mod win32 {
         if candidate_wide.len() <= parent_wide.len() {
             return Ok(false);
         }
+        // SAFETY: both canonicalized path buffers are live aligned UTF-16 slices and their explicit lengths exclude no inaccessible memory.
         let result = unsafe {
             CompareStringOrdinal(
                 candidate_wide.as_ptr(),
@@ -381,6 +388,7 @@ mod win32 {
     }
 
     pub fn copy_exclusive_artifact(source: &Path, destination: &Path) -> Result<(), DeployError> {
+        // SAFETY: source conversion creates a live NUL-terminated UTF-16 buffer; null security/template handles are permitted by CreateFileW.
         let input = OwnedHandle::new(unsafe {
             CreateFileW(
                 wide_nul(source).as_ptr(),
@@ -397,6 +405,7 @@ mod win32 {
             reparse_tag: 0,
         };
         let mut size = LargeInteger { quad_part: 0 };
+        // SAFETY: input owns a valid file handle and tag is aligned writable storage with the exact FileAttributeTagInfo byte length.
         let tag_ok = unsafe {
             GetFileInformationByHandleEx(
                 input.raw(),
@@ -405,6 +414,7 @@ mod win32 {
                 std::mem::size_of::<FileAttributeTagInfo>() as u32,
             )
         };
+        // SAFETY: input owns a valid file handle and size is aligned writable LargeInteger storage for the duration of the call.
         let size_ok = unsafe { GetFileSizeEx(input.raw(), &mut size) };
         if tag_ok == 0
             || size_ok == 0
@@ -422,6 +432,7 @@ mod win32 {
                 internal_error(format!("destination directory creation failed: {error}"))
             })?;
         }
+        // SAFETY: destination conversion creates a live NUL-terminated UTF-16 buffer; null security/template handles are permitted by CreateFileW.
         let output = OwnedHandle::new(unsafe {
             CreateFileW(
                 wide_nul(destination).as_ptr(),
@@ -437,6 +448,7 @@ mod win32 {
         let mut buffer = vec![0u8; 64 * 1024];
         loop {
             let mut read = 0;
+            // SAFETY: input owns a valid synchronous file handle; buffer is writable for its stated length and read is aligned writable storage.
             let read_ok = unsafe {
                 ReadFile(
                     input.raw(),
@@ -453,6 +465,7 @@ mod win32 {
                 break;
             }
             let mut written = 0;
+            // SAFETY: output owns a valid synchronous file handle; buffer remains initialized and live for exactly read bytes, and written is writable storage.
             let write_ok = unsafe {
                 WriteFile(
                     output.raw(),
@@ -466,6 +479,7 @@ mod win32 {
                 return Err(package_error("io_error", "protected artifact copy failed"));
             }
         }
+        // SAFETY: output owns a valid file handle and retains exclusive ownership through the flush.
         let flushed = unsafe { FlushFileBuffers(output.raw()) };
         if flushed == 0 {
             return Err(package_error("io_error", "protected artifact flush failed"));

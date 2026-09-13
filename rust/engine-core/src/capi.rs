@@ -75,6 +75,7 @@ pub extern "C" fn fcitx5_engine_core_ledger_new() -> *mut c_void {
 /// `ledger` must be null or a pointer returned by `fcitx5_engine_core_ledger_new`
 /// that has not been freed before.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is null or the unique allocation returned by `ledger_new`, not previously freed.
 pub unsafe extern "C" fn fcitx5_engine_core_ledger_free(ledger: *mut c_void) {
     if ledger.is_null() {
         return;
@@ -101,6 +102,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_free(ledger: *mut c_void) {
 /// concurrently with `destroy`.
 #[cfg(windows)]
 #[unsafe(no_mangle)]
+// SAFETY: non-null `pipe_name` addresses `pipe_name_len` initialized UTF-16 code units for this call.
 pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_create(
     pipe_name: *const u16,
     pipe_name_len: usize,
@@ -144,6 +146,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_create(
 /// concurrency safety.
 #[cfg(windows)]
 #[unsafe(no_mangle)]
+// SAFETY: `publisher` is a live publisher handle; non-null `frame` addresses `frame_len` readable bytes.
 pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_publish(
     publisher: *mut c_void,
     frame: *const u8,
@@ -172,6 +175,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_publish(
 /// concurrently with it or after it begins.
 #[cfg(windows)]
 #[unsafe(no_mangle)]
+// SAFETY: `publisher` is null or the unique allocation returned by publisher creation and not yet destroyed.
 pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_destroy(publisher: *mut c_void) {
     if publisher.is_null() {
         return;
@@ -187,6 +191,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_presentation_publisher_destroy(publi
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique ledger handle and non-null `key` is aligned and initialized.
 pub unsafe extern "C" fn fcitx5_engine_core_ledger_forget(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -210,6 +215,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_forget(
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique ledger handle and non-null `key` is aligned and initialized.
 pub unsafe extern "C" fn fcitx5_engine_core_ledger_begin_key(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -240,6 +246,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_begin_key(
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique ledger handle and non-null `key` is aligned and initialized.
 pub unsafe extern "C" fn fcitx5_engine_core_ledger_select_candidate(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -273,6 +280,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_ledger_select_candidate(
 /// `out_composition_id`/`out_revision` must be writable or null (a null
 /// output pointer fails closed without writing).
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is live; non-null `key` is readable and output pointers are aligned, writable, and non-aliasing.
 pub unsafe extern "C" fn fcitx5_engine_core_ledger_end_result(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -384,6 +392,7 @@ pub extern "C" fn fcitx5_engine_core_session_create() -> *mut c_void {
 /// `session` must be null or a pointer returned by
 /// `fcitx5_engine_core_session_create` that has not been freed before.
 #[unsafe(no_mangle)]
+// SAFETY: `session` is null or the unique allocation returned by `session_create`, not previously destroyed.
 pub unsafe extern "C" fn fcitx5_engine_core_session_destroy(session: *mut c_void) {
     if session.is_null() {
         return;
@@ -406,6 +415,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_session_destroy(session: *mut c_void
 /// # Safety
 /// `session` must be a valid live handle or null.
 #[unsafe(no_mangle)]
+// SAFETY: `session` is a live unique session handle for the duration of this call.
 pub unsafe extern "C" fn fcitx5_engine_core_session_begin_hello(
     session: *mut c_void,
     request_id: u64,
@@ -441,6 +451,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_session_begin_hello(
 /// # Safety
 /// `session` must be a valid live handle or null.
 #[unsafe(no_mangle)]
+// SAFETY: `session` is a live unique session handle for the duration of this call.
 pub unsafe extern "C" fn fcitx5_engine_core_session_accept_frame(
     session: *mut c_void,
     request_id: u64,
@@ -475,6 +486,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_session_accept_frame(
 /// # Safety
 /// `session` must be a valid live handle or null.
 #[unsafe(no_mangle)]
+// SAFETY: `session` is a live unique session handle for the duration of this call.
 pub unsafe extern "C" fn fcitx5_engine_core_session_complete_request(
     session: *mut c_void,
     request_id: u64,
@@ -509,6 +521,7 @@ pub const FCITX_ENGINE_CORE_CONTENT_LOCALE_EN_US: i32 = 4;
 /// # Safety
 /// `input_method_id` must be a valid NUL-terminated string or null.
 #[unsafe(no_mangle)]
+// SAFETY: non-null `input_method` points to a NUL-terminated UTF-8 byte string valid for this call.
 pub unsafe extern "C" fn fcitx5_engine_core_content_locale_for_input_method(
     input_method_id: *const std::os::raw::c_char,
 ) -> i32 {
@@ -540,6 +553,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_content_locale_for_input_method(
 /// allowed); `out` must be writable for `out_capacity` bytes or null with
 /// capacity 0.
 #[unsafe(no_mangle)]
+// SAFETY: non-null `input_method` points to a NUL-terminated UTF-8 byte string valid for this call.
 pub unsafe extern "C" fn fcitx5_engine_core_status_short_label(
     text: *const u8,
     text_len: usize,
@@ -640,6 +654,7 @@ fn cstr_option(pointer: *const std::os::raw::c_char) -> Option<String> {
 /// `event`/`out_decision` must be valid or null; hotkey strings must be
 /// NUL-terminated or null.
 #[unsafe(no_mangle)]
+// SAFETY: non-null `event` is initialized and aligned; non-null `out` is aligned, writable, and non-aliasing.
 pub unsafe extern "C" fn fcitx5_engine_core_handle_key_event(
     event: *const FcitxEngineKeyEventC,
     out_decision: *mut FcitxEngineKeyDecisionC,
@@ -763,6 +778,7 @@ pub const FCITX_ENGINE_CORE_SURROUNDING_TEXT_ACTION_INVALIDATE: i32 = 1;
 /// # Safety
 /// `out_decision` must be writable or null.
 #[unsafe(no_mangle)]
+// SAFETY: non-null `out_decision` is aligned, writable, and non-aliasing for this synchronous call.
 pub unsafe extern "C" fn fcitx5_engine_core_decide_surrounding_text(
     request_valid: i32,
     current_valid: i32,
@@ -807,6 +823,7 @@ pub const FCITX_ENGINE_CORE_IM_SELECTION_DEFAULT: i32 = 2;
 /// # Safety
 /// `out_selection` must be writable or null.
 #[unsafe(no_mangle)]
+// SAFETY: non-null `out_selection` is aligned, writable, and non-aliasing for this synchronous call.
 pub unsafe extern "C" fn fcitx5_engine_core_decide_input_method_selection(
     has_request_im: i32,
     request_im_valid: i32,
@@ -933,6 +950,7 @@ fn candidate_action_value(action: navigation::CandidateAction) -> u32 {
 /// # Safety
 /// `view`/`config`/`out_decision` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: non-null view/config inputs are aligned initialized values; non-null output is aligned, writable, and non-aliasing.
 pub unsafe extern "C" fn fcitx5_engine_core_decide_candidate_action(
     key_sym: u32,
     plain_shortcut: i32,
@@ -948,6 +966,8 @@ pub unsafe extern "C" fn fcitx5_engine_core_decide_candidate_action(
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: caller provides valid pointers (checked above).
         let view = unsafe { *view };
+        // SAFETY: `config` was checked non-null and the ABI caller guarantees an aligned,
+        // initialized `FcitxCandidateConfigC` readable for this synchronous call.
         let config = unsafe { *config };
         navigation::decide_candidate_action(
             key_sym,
@@ -1010,6 +1030,7 @@ pub const FCITX_ENGINE_CORE_IM_ACTION_NEXT: i32 = 2;
 /// `hotkey_toggle`/`hotkey_next` must be valid NUL-terminated strings or
 /// null; `out_action` must be writable or null.
 #[unsafe(no_mangle)]
+// SAFETY: non-null hotkey pointers are NUL-terminated UTF-8 strings and `out_action` is aligned and uniquely writable.
 pub unsafe extern "C" fn fcitx5_engine_core_classify_input_method_switch(
     ctrl: i32,
     shift: i32,
@@ -1063,6 +1084,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_classify_input_method_switch(
 /// # Safety
 /// `ledger` must be a valid live handle; `key`/`caret` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique handle; non-null `key` and `caret` are aligned initialized values.
 pub unsafe extern "C" fn fcitx5_engine_core_set_caret(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1095,6 +1117,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_set_caret(
 /// `ledger` must be a valid live handle; `key`/`out_caret` must be valid or
 /// null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is live; non-null `key` is readable and `out_caret` is aligned, writable, and non-aliasing.
 pub unsafe extern "C" fn fcitx5_engine_core_caret(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1128,6 +1151,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_caret(
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique handle and non-null `key` is aligned and initialized.
 pub unsafe extern "C" fn fcitx5_engine_core_set_popup_allowed(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1158,6 +1182,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_set_popup_allowed(
 /// `ledger` must be a valid live handle; `key`/`out_allowed` must be valid or
 /// null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is live; non-null `key` is readable and `out_allowed` is aligned, writable, and non-aliasing.
 pub unsafe extern "C" fn fcitx5_engine_core_popup_allowed(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1191,6 +1216,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_popup_allowed(
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique handle and non-null `key` is aligned and initialized.
 pub unsafe extern "C" fn fcitx5_engine_core_set_selected_override(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1219,6 +1245,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_set_selected_override(
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique handle and non-null `key` is aligned and initialized.
 pub unsafe extern "C" fn fcitx5_engine_core_clear_selected_override(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1249,6 +1276,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_clear_selected_override(
 /// `ledger` must be a valid live handle; `key`/`out_value` must be valid or
 /// null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is live; non-null `key` is readable and `out_value` is aligned, writable, and non-aliasing.
 pub unsafe extern "C" fn fcitx5_engine_core_selected_override(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1282,6 +1310,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_selected_override(
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique handle and non-null `key` is aligned and initialized.
 pub unsafe extern "C" fn fcitx5_engine_core_set_input_method_overridden(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1313,6 +1342,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_set_input_method_overridden(
 /// `ledger` must be a valid live handle; `key`/`out_overridden` must be valid
 /// or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is live; non-null `key` is readable and `out_overridden` is aligned, writable, and non-aliasing.
 pub unsafe extern "C" fn fcitx5_engine_core_input_method_overridden(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1386,6 +1416,7 @@ pub struct FcitxEngineSnapshotC {
 /// # Safety
 /// `snapshot` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: non-null `snapshot` points to one aligned, initialized snapshot valid for this synchronous read.
 pub unsafe extern "C" fn fcitx5_engine_core_validate_snapshot(
     snapshot: *const FcitxEngineSnapshotC,
 ) -> i32 {
@@ -1427,6 +1458,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_validate_snapshot(
 /// or null; string/candidate pointers inside `snapshot` must reference
 /// readable memory for their documented lengths for the duration of the call.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is live; `key`/flat snapshot are aligned and readable, and each flat buffer remains valid for its length.
 pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_put_flat(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1466,6 +1498,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_put_flat(
 /// # Safety
 /// `ledger` must be a valid live handle; `key` must be valid or null.
 #[unsafe(no_mangle)]
+// SAFETY: `ledger` is a live unique handle and non-null `key` is aligned and initialized.
 pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_take_flat(
     ledger: *mut c_void,
     key: *const FcitxEngineContextKeyC,
@@ -1564,6 +1597,7 @@ fn snapshot_from_flat(
 }
 
 #[unsafe(no_mangle)]
+// SAFETY: non-null `out_offset` is aligned, writable, and non-aliasing for this synchronous call.
 pub unsafe extern "C" fn fcitx5_engine_core_scroll_label_offset(
     vertical: i32,
     cursor: u32,

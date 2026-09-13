@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-
+// 084: per-site SAFETY documentation is enforced by clippy; keep it green.
+#![warn(clippy::undocumented_unsafe_blocks)]
 use std::error::Error;
 use std::ffi::{c_int, c_void};
 use std::fs;
@@ -16,11 +17,17 @@ const MAXIMUM_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
 
 #[link(name = "bcrypt")]
+// SAFETY: This declaration matches BCryptGenRandom's system ABI; callers pass either
+// a null algorithm handle with BCRYPT_USE_SYSTEM_PREFERRED_RNG or a valid handle, plus
+// an exclusive writable output range whose byte length fits the u32 parameter.
 unsafe extern "system" {
     fn BCryptGenRandom(algorithm: *mut c_void, output: *mut u8, output_len: u32, flags: u32)
         -> i32;
 }
 
+// SAFETY: These declarations match the pinned ML-DSA C ABI. Each call site supplies
+// live, non-aliasing input/output buffers with the exact key, message, context, and
+// signature lengths the native implementation requires for the duration of the call.
 unsafe extern "C" {
     fn fcitx5_mldsa65_release_sign_pk_from_sk(public_key: *mut u8, secret_key: *const u8) -> c_int;
     fn fcitx5_mldsa65_release_sign_signature(
@@ -37,13 +44,16 @@ unsafe extern "C" {
 ///
 /// # Safety
 ///
-/// The C caller must provide a valid, writable `output` range of `length` bytes.
+/// For a nonzero `length`, the C caller must provide a non-null, uniquely writable
+/// `output` range of exactly `length` bytes that remains valid for this call. A null
+/// pointer is accepted only when `length` is zero.
 #[no_mangle]
 pub unsafe extern "C" fn randombytes(output: *mut u8, length: usize) -> c_int {
     if output.is_null() && length != 0 {
         return -1;
     }
-    // SAFETY: the native ML-DSA callback contract supplies a writable buffer of `length` bytes.
+    // SAFETY: the callback contract gives this invocation exclusive access to a live
+    // `length`-byte output allocation; null was rejected above unless the length is zero.
     let output = unsafe { std::slice::from_raw_parts_mut(output, length) };
     for chunk in output.chunks_mut(u32::MAX as usize) {
         // SAFETY: each chunk is a live, writable slice whose length fits the Win32 u32 contract.

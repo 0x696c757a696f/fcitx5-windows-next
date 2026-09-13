@@ -1014,6 +1014,8 @@ mod window_smoke {
         let _ = WINDOW_DPI_SCALE.set(effective_dpi_scale);
         WINDOW_WINDUI_DWRITE_TEXT_DRAW_USED.store(false, Ordering::SeqCst);
 
+        // SAFETY: a null module name requests this process's already-loaded executable module.
+        // SAFETY: a null module name requests this process's already-loaded executable module.
         let instance = unsafe { GetModuleHandleW(null()) };
         let window_class = WndClassW {
             style: CS_HREDRAW | CS_VREDRAW,
@@ -1027,10 +1029,12 @@ mod window_smoke {
             lpsz_menu_name: null(),
             lpsz_class_name: class_name.as_ptr(),
         };
+        // SAFETY: window_class and all UTF-16 strings it borrows remain valid for this call.
         let atom = unsafe { RegisterClassW(&window_class) };
         if atom == 0 {
             return Err("RegisterClassW failed for Rust Candidate PoC".to_owned());
         }
+        // SAFETY: all class, title, and instance handles are valid for this synchronous creation call.
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -1070,6 +1074,7 @@ mod window_smoke {
                 label_slot_evidence_json,
             },
         );
+        // SAFETY: hwnd was returned by CreateWindowExW above and has not yet been destroyed.
         unsafe {
             DestroyWindow(hwnd);
         }
@@ -1077,6 +1082,7 @@ mod window_smoke {
     }
 
     fn inspect_window(hwnd: Hwnd, spec: InspectionSpec<'_>) -> Result<String, String> {
+        // SAFETY: hwnd is live; these calls synchronously update only that window's presentation.
         unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             InvalidateRect(hwnd, null(), 0);
@@ -1084,9 +1090,11 @@ mod window_smoke {
         }
 
         let mut rect = Rect::default();
+        // SAFETY: hwnd is live and rect is a writable, properly aligned Rect for the call.
         if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
             return Err("GetWindowRect failed for Rust Candidate PoC".to_owned());
         }
+        // SAFETY: hwnd is live for this non-mutating visibility query.
         if unsafe { IsWindowVisible(hwnd) } == 0 {
             return Err("Rust Candidate PoC window was not visible".to_owned());
         }
@@ -1102,6 +1110,7 @@ mod window_smoke {
         }
 
         let mut text = [0u16; 128];
+        // SAFETY: hwnd is live and text provides writable UTF-16 storage for its declared capacity.
         let title_length = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
         if title_length <= 0 || !text.starts_with(&spec.title[..spec.title.len().saturating_sub(1)])
         {
@@ -1202,11 +1211,13 @@ mod window_smoke {
         if width <= 0 || height <= 0 {
             return Err("cannot capture an empty Rust Candidate PoC window".to_owned());
         }
+        // SAFETY: hwnd is live and the returned DC is released on every path below.
         let window_dc = unsafe { GetWindowDC(hwnd) };
         if window_dc.is_null() {
             return Err("GetWindowDC failed for Rust Candidate PoC".to_owned());
         }
         let candidate_font_name = wide("Microsoft YaHei UI");
+        // SAFETY: candidate_font_name is NUL-terminated and remains valid for this synchronous call.
         let candidate_font = unsafe {
             CreateFontW(
                 -18,
@@ -1228,6 +1239,7 @@ mod window_smoke {
         let old_window_font = if candidate_font.is_null() {
             null_mut()
         } else {
+            // SAFETY: window_dc and candidate_font were returned by GDI and are live here.
             unsafe { SelectObject(window_dc, candidate_font) }
         };
         let text_face = selected_text_face(window_dc);
@@ -1236,6 +1248,7 @@ mod window_smoke {
             && !text_face.eq_ignore_ascii_case("Microsoft YaHei")
             && text_face != "微软雅黑"
         {
+            // SAFETY: these handles were acquired above; this error path restores and releases each owned resource once.
             unsafe {
                 if !old_window_font.is_null() {
                     SelectObject(window_dc, old_window_font);
@@ -1249,8 +1262,10 @@ mod window_smoke {
                 "Rust Candidate PoC did not select a Qingfeng-style CJK-first Microsoft YaHei UI font, got '{text_face}'"
             ));
         }
+        // SAFETY: window_dc is a live display DC acquired for this window.
         let memory_dc = unsafe { CreateCompatibleDC(window_dc) };
         if memory_dc.is_null() {
+            // SAFETY: this error path releases only live GDI objects acquired above.
             unsafe {
                 if !old_window_font.is_null() {
                     SelectObject(window_dc, old_window_font);
@@ -1262,8 +1277,10 @@ mod window_smoke {
             }
             return Err("CreateCompatibleDC failed for Rust Candidate PoC".to_owned());
         }
+        // SAFETY: window_dc is live and width and height were checked positive before capture.
         let bitmap = unsafe { CreateCompatibleBitmap(window_dc, width, height) };
         if bitmap.is_null() {
+            // SAFETY: this error path releases only live GDI objects acquired above.
             unsafe {
                 DeleteDC(memory_dc);
                 if !old_window_font.is_null() {
@@ -1276,9 +1293,12 @@ mod window_smoke {
             }
             return Err("CreateCompatibleBitmap failed for Rust Candidate PoC".to_owned());
         }
+        // SAFETY: memory_dc and bitmap are live compatible GDI objects; bitmap remains selected until restored below.
         let old_object = unsafe { SelectObject(memory_dc, bitmap.cast()) };
+        // SAFETY: both DCs are live and the requested rectangle fits the bitmap allocated with these dimensions.
         let copied = unsafe { BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY) };
         if copied == 0 {
+            // SAFETY: this error path restores the selected object before releasing each live GDI resource.
             unsafe {
                 SelectObject(memory_dc, old_object);
                 DeleteObject(bitmap);
@@ -1294,6 +1314,7 @@ mod window_smoke {
             return Err("BitBlt failed for Rust Candidate PoC".to_owned());
         }
         if !WINDOW_WINDUI_DWRITE_TEXT_DRAW_USED.load(Ordering::SeqCst) {
+            // SAFETY: this error path restores the selected object before releasing each live GDI resource.
             unsafe {
                 SelectObject(memory_dc, old_object);
                 DeleteObject(bitmap);
@@ -1331,6 +1352,7 @@ mod window_smoke {
             },
             bmi_colors: [0],
         };
+        // SAFETY: memory_dc and bitmap are live; pixels is writable for the requested 32-bit image and info is initialized.
         let lines = unsafe {
             GetDIBits(
                 memory_dc,
@@ -1342,6 +1364,7 @@ mod window_smoke {
                 DIB_RGB_COLORS,
             )
         };
+        // SAFETY: this is the matching cleanup for live GDI resources; old_object is restored before bitmap deletion.
         unsafe {
             SelectObject(memory_dc, old_object);
             DeleteObject(bitmap);
@@ -1573,6 +1596,7 @@ mod window_smoke {
             },
             bmi_colors: [0],
         };
+        // SAFETY: hdc is live, pixels covers the declared 32-bit image, and info describes that same buffer.
         unsafe {
             SetDIBitsToDevice(
                 hdc,
@@ -1648,14 +1672,17 @@ mod window_smoke {
     }
 
     fn accessible_name(hwnd: Hwnd) -> Result<String, String> {
+        // SAFETY: null reserved pointer and apartment flag follow CoInitializeEx's COM initialization contract.
         let init_result = unsafe { CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED) };
         let should_uninitialize = init_result >= 0;
         let mut object: *mut c_void = null_mut();
+        // SAFETY: hwnd is live, the interface IID is valid, and object is writable for the returned COM pointer.
         let result = unsafe {
             AccessibleObjectFromWindow(hwnd, OBJID_WINDOW, &IID_IACCESSIBLE, &mut object)
         };
         if result < 0 || object.is_null() {
             if should_uninitialize {
+                // SAFETY: this call balances the successful CoInitializeEx above on this thread.
                 unsafe {
                     CoUninitialize();
                 }
@@ -1676,13 +1703,17 @@ mod window_smoke {
             data2: 0,
         };
         let mut name: *mut u16 = null_mut();
+        // SAFETY: AccessibleObjectFromWindow returned a live IAccessible pointer with a valid vtable and name is writable.
         let name_result =
             unsafe { ((*(*accessible).vtable).get_acc_name)(accessible, variant, &mut name) };
+        // SAFETY: accessible is a live IAccessible pointer with a valid vtable until the release call below.
         let release = unsafe { (*(*accessible).vtable).release };
+        // SAFETY: release is the IAccessible Release method obtained from that live object's vtable.
         unsafe {
             release(accessible);
         }
         if should_uninitialize {
+            // SAFETY: this call balances the successful CoInitializeEx above on this thread.
             unsafe {
                 CoUninitialize();
             }
@@ -1693,9 +1724,12 @@ mod window_smoke {
                 name_result as u32
             ));
         }
+        // SAFETY: get_acc_name succeeded and returned a non-null BSTR whose length SysStringLen may read.
         let length = unsafe { SysStringLen(name) } as usize;
+        // SAFETY: name points to the BSTR allocation, which remains live and contains length UTF-16 code units until freed below.
         let value = unsafe { std::slice::from_raw_parts(name, length) };
         let string = String::from_utf16_lossy(value);
+        // SAFETY: name is the BSTR returned by get_acc_name and has not yet been freed.
         unsafe {
             SysFreeString(name);
         }
@@ -1708,6 +1742,7 @@ mod window_smoke {
     }
 
     fn uia_window_evidence(hwnd: Hwnd) -> Result<UiaEvidence, String> {
+        // SAFETY: null reserved pointer and apartment flag follow CoInitializeEx's COM initialization contract.
         let init_result = unsafe { CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED) };
         let should_uninitialize = init_result >= 0;
         if init_result < 0 && init_result as u32 != 0x80010106 {
@@ -1718,6 +1753,7 @@ mod window_smoke {
         }
 
         let mut automation_object: *mut c_void = null_mut();
+        // SAFETY: CLSID and IID are valid constants and automation_object is writable for the returned COM pointer.
         let create_result = unsafe {
             CoCreateInstance(
                 &CLSID_CUIAUTOMATION,
@@ -1729,6 +1765,7 @@ mod window_smoke {
         };
         if create_result < 0 || automation_object.is_null() {
             if should_uninitialize {
+                // SAFETY: this call balances the successful CoInitializeEx above on this thread.
                 unsafe {
                     CoUninitialize();
                 }
@@ -1741,14 +1778,17 @@ mod window_smoke {
 
         let automation = automation_object.cast::<IUIAutomation>();
         let mut element: *mut IUIAutomationElement = null_mut();
+        // SAFETY: automation is the live COM object returned above, its vtable is valid, and element is writable.
         let element_result = unsafe {
             ((*(*automation).vtable).element_from_handle)(automation, hwnd, &mut element)
         };
+        // SAFETY: automation is still live and this invokes its matching COM Release method exactly once.
         unsafe {
             ((*(*automation).vtable).release)(automation);
         }
         if element_result < 0 || element.is_null() {
             if should_uninitialize {
+                // SAFETY: this call balances the successful CoInitializeEx above on this thread.
                 unsafe {
                     CoUninitialize();
                 }
@@ -1761,10 +1801,12 @@ mod window_smoke {
 
         let name_result = uia_bstr_property(element, UIA_NAME_PROPERTY_ID);
         let control_type_result = uia_i4_property(element, UIA_CONTROL_TYPE_PROPERTY_ID);
+        // SAFETY: element is the live COM pointer returned above and this invokes its matching Release method once.
         unsafe {
             ((*(*element).vtable).release)(element);
         }
         if should_uninitialize {
+            // SAFETY: this call balances the successful CoInitializeEx above on this thread.
             unsafe {
                 CoUninitialize();
             }
@@ -1792,6 +1834,7 @@ mod window_smoke {
         property: i32,
     ) -> Result<String, String> {
         let mut value = empty_variant();
+        // SAFETY: element is live with a valid vtable and value is writable for the requested property VARIANT.
         let result = unsafe {
             ((*(*element).vtable).get_current_property_value)(element, property, &mut value)
         };
@@ -1802,9 +1845,12 @@ mod window_smoke {
             ));
         }
         let bstr = value.data1 as *mut u16;
+        // SAFETY: the successful property query returned a non-null BSTR whose length SysStringLen may read.
         let length = unsafe { SysStringLen(bstr) } as usize;
+        // SAFETY: bstr remains live until SysFreeString below and contains length UTF-16 code units.
         let slice = unsafe { std::slice::from_raw_parts(bstr, length) };
         let string = String::from_utf16_lossy(slice);
+        // SAFETY: bstr is the BSTR returned in value and has not yet been freed.
         unsafe {
             SysFreeString(bstr);
         }
@@ -1813,6 +1859,7 @@ mod window_smoke {
 
     fn uia_i4_property(element: *mut IUIAutomationElement, property: i32) -> Result<i32, String> {
         let mut value = empty_variant();
+        // SAFETY: element is live with a valid vtable and value is writable for the requested property VARIANT.
         let result = unsafe {
             ((*(*element).vtable).get_current_property_value)(element, property, &mut value)
         };
@@ -1841,14 +1888,17 @@ mod window_smoke {
                     f_inc_update: 0,
                     rgb_reserved: [0; 32],
                 };
+                // SAFETY: hwnd is supplied by Windows for this paint message and paint is writable for the paint cycle.
                 let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
                 if !hdc.is_null() {
                     let mut client = Rect::default();
+                    // SAFETY: hwnd is live during message dispatch and client is a writable Rect.
                     if unsafe { GetClientRect(hwnd, &mut client) } != 0 {
                         if let Some(pixels) = render_windui_candidate_surface(&client) {
                             let _ = blit_bgra_to_hdc(hdc, &client, &pixels);
                         }
                     }
+                    // SAFETY: this balances the BeginPaint call above with the same hwnd and PaintStruct.
                     unsafe {
                         EndPaint(hwnd, &paint);
                     }
@@ -1856,6 +1906,7 @@ mod window_smoke {
                 0
             }
             WM_DESTROY => 0,
+            // SAFETY: forwarding unhandled message parameters preserves the Win32 window-procedure contract.
             _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
         }
     }
@@ -1867,18 +1918,23 @@ mod window_smoke {
     fn enable_dpi_awareness() {
         type SetProcessDpiAwarenessContext = unsafe extern "system" fn(isize) -> Bool;
         let user32_name = wide("user32.dll");
+        // SAFETY: user32_name is NUL-terminated and remains valid for this synchronous module lookup.
         let user32 = unsafe { GetModuleHandleW(user32_name.as_ptr()) };
         if !user32.is_null() {
+            // SAFETY: user32 is a loaded module handle and the C string is NUL-terminated for this lookup.
             let proc =
                 unsafe { GetProcAddress(user32, c"SetProcessDpiAwarenessContext".as_ptr().cast()) };
             if !proc.is_null() {
+                // SAFETY: GetProcAddress resolved this exact documented user32 export with the declared ABI and signature.
                 let set_context: SetProcessDpiAwarenessContext =
                     unsafe { std::mem::transmute(proc) };
+                // SAFETY: set_context is the validated SetProcessDpiAwarenessContext function pointer above; -4 is its documented context.
                 if unsafe { set_context(-4) } != 0 {
                     return;
                 }
             }
         }
+        // SAFETY: this process-wide fallback has no pointer arguments and follows the documented Win32 API contract.
         unsafe {
             SetProcessDPIAware();
         }
@@ -1886,6 +1942,7 @@ mod window_smoke {
 
     fn selected_text_face(hdc: Hdc) -> String {
         let mut face = [0_u16; 64];
+        // SAFETY: hdc is live and face provides writable UTF-16 storage for the declared character capacity.
         let length = unsafe { GetTextFaceW(hdc, face.len() as i32, face.as_mut_ptr()) };
         if length <= 0 {
             return String::new();

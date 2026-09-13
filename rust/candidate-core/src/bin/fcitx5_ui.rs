@@ -819,6 +819,7 @@ impl Host {
         let mut client = Rect::default();
         // SAFETY: client is a valid writable RECT.
         if unsafe { GetClientRect(window, &mut client) } == 0
+            // SAFETY: client was initialized by GetClientRect above.
             || unsafe { IsRectEmpty(&client) } != 0
         {
             return true;
@@ -979,6 +980,7 @@ impl Host {
         // as one call. 2 = nothing to paint (empty window).
         // SAFETY: all pointers reference buffers owned by this host for the
         // duration of the call; dc is a valid window DC.
+        // SAFETY: renderer inputs remain valid and non-aliased for this call.
         unsafe {
             fcitx5_candidate_render_window_blit_to_dc(
                 candidates_in.as_ptr(),
@@ -1153,6 +1155,7 @@ fn host_message_callback(
         }
         WM_TIMER => {
             if wparam == K_FOCUS_WATCH_TIMER
+                // SAFETY: window is the HWND dispatched by the host message thunk.
                 && unsafe { IsWindowVisible(window) } != 0
                 && !host.foreground_target_is_valid()
             {
@@ -1244,6 +1247,7 @@ fn reload_visual_config(host: &mut Host) {
 }
 
 fn paint_test_surface_overlay(host: &mut Host) {
+    // SAFETY: host owns a live HWND for the duration of this UI-thread call.
     if !host.interaction_test || unsafe { IsWindowVisible(host.window) } == 0 {
         return;
     }
@@ -1456,6 +1460,7 @@ unsafe extern "system" fn serve_on_frame(
     if !response.candidates.is_null() && response.candidate_count > 0 {
         // SAFETY: candidates references serve-loop storage valid for the callback.
         let records =
+            // SAFETY: candidates is non-null and spans candidate_count records.
             unsafe { std::slice::from_raw_parts(response.candidates, response.candidate_count) };
         out.candidates = records
             .iter()
@@ -1522,6 +1527,7 @@ fn start_serve_thread(window: *mut c_void, test_once: bool) {
         };
         // SAFETY: both string buffers are NUL-terminated for the duration of
         // the blocking serve call; context outlives it on this thread.
+        // SAFETY: all FFI arguments remain valid for the synchronous call.
         unsafe {
             fcitx5_candidate_presentation_serve(
                 generation_units.as_ptr(),
@@ -1912,6 +1918,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     context_a.metadata.revision = 2;
     context_a.selected_candidate = 1;
     host.update(&context_a);
+    // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } != 0
         || !uiless_matches(&host, Some(10), Some(1), Some(false))
     {
@@ -1920,6 +1927,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     }
 
     host.update(&make_uiless_response(1, 20, 200, 1, true, 0));
+    // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } == 0
         || !uiless_matches(&host, Some(20), Some(0), Some(true))
     {
@@ -1929,6 +1937,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
 
     context_a.metadata.revision = 3;
     host.update(&context_a);
+    // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } != 0
         || !uiless_matches(&host, Some(10), None, Some(false))
     {
@@ -1946,6 +1955,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     ended.candidate_total = 0;
     ended.candidate_visibility = 0;
     host.update(&ended);
+    // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } != 0 || host.model.semantic_snapshot().is_some() {
         eprintln!("REG-UILESS-001 composition end retained policy state");
         return false;
@@ -1954,6 +1964,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     let mut reconnected = make_uiless_response(2, 10, 1, 1, false, 1);
     reconnected.metadata.engine_epoch = 2;
     host.update(&reconnected);
+    // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } != 0
         || !uiless_matches(&host, Some(10), Some(1), Some(false))
     {
@@ -2136,6 +2147,7 @@ fn run_interaction_self_test(host: &mut Host) -> bool {
             (current.identity.context_id + 1) as isize,
         );
     }
+    // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } == 0 {
         eprintln!("interaction self-test dismissed the wrong context");
         return false;
@@ -2149,6 +2161,7 @@ fn run_interaction_self_test(host: &mut Host) -> bool {
             current.identity.context_id as isize,
         );
     }
+    // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } != 0 {
         eprintln!("interaction self-test did not dismiss the matching context");
         return false;
