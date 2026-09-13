@@ -31,6 +31,38 @@ architecture, privilege, and credential class used.
    Terminal/VS Code, RDP where declared, and in-use TSF upgrade. Unsupported rows must be named,
    not silently omitted.
 
+## Execution order
+
+This is one evidence campaign, not a set of duplicate release tasks. Every passed row records the
+same immutable package-stage identity; a source change invalidates the campaign and starts a new
+stage. Run the following batches in order, except that Batches 1–4 may collect evidence in parallel
+once the stage exists.
+
+0. **Freeze the candidate stage.** On a clean runner, produce one unsigned package stage from the
+   intended source commit and locked toolchains. Record manifest hash, artifact hashes, architecture,
+   channel, and stage path. No later batch may silently rebuild it.
+1. **Modern host and accessibility.** Test the staged artifacts on Windows 10 1809+ and Windows 11:
+   TSF input in Notepad, Word, Chrome/Edge, VS Code, and Terminal; candidate positioning/DPI;
+   keyboard-only use; UIA; Narrator; and NVDA. This closes the existing 015, 048, 056, and 066
+   manual rows where applicable.
+2. **Signing and privileged lifecycle.** Use the externally controlled production certificate and
+   timestamp service to sign that exact stage. Verify signatures, then exercise per-user and
+   machine install, repair, update, rollback, uninstall, and cross-account ownership through UAC.
+   This closes the 011 and 074 signing/UAC rows.
+3. **Production plugin lifecycle.** If Settings continues to offer online package installation,
+   publish one signed official repository release, then refresh, install, update, disable/enable,
+   repair, and uninstall it from the shipping Settings app. This closes the 035, 049, 064, 067–069
+   online-production rows. Removing online installation from the product would require an explicit
+   specification and UI-scope change; it is not an implicit shortcut.
+4. **Legacy, low-resource, and network resilience.** Run the Win7 SP1 Legacy VM install→register→
+   input→candidate→uninstall path; then run the 2-core/4-GB, low-free-storage, offline, and
+   constrained-network rows. This closes the 015, 070, 072, and 073 external rows. These are v1.8
+   release requirements; deferral requires an explicit support-matrix/specification change.
+5. **CI and promotion rehearsal.** Run the GitHub Actions package/release workflow using the frozen
+   identity, verify Build Once lineage, SBOM, provenance, hashes, and promotion inputs. Only then
+   hand the signed immutable artifacts to `REL-01`; `REL-01` performs final smoke and publication,
+   never recompilation.
+
 ## Hard rules
 
 - `out/secure` credentials are disposable test inputs and stay outside Git; the official ML-DSA
