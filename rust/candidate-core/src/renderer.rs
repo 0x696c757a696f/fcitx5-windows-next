@@ -23,6 +23,7 @@ use windui::spec::Align as WindAlign;
 use windui::text::{DWriteEngine, TextEngine, TextStyle as WindTextStyle};
 
 use crate::axis_layout::{AxisLayoutItem, AxisLayoutResult, WritingMode};
+use crate::theme_tokens::{WECHAT_GREEN_RGB, WHITE_RGB};
 use crate::Rect;
 
 /// ARGB color resolved by the theme/config boundary.
@@ -70,12 +71,16 @@ pub struct RenderTheme {
 
 impl Default for RenderTheme {
     fn default() -> Self {
-        // WeChat-green selection on white (the shipped light look).
         Self {
             background: RenderColor::rgba(255, 255, 255, 255),
             text: RenderColor::rgba(32, 33, 36, 255),
-            selected_background: RenderColor::rgba(240, 250, 231, 255),
-            selected_text: RenderColor::rgba(96, 193, 7, 255),
+            selected_background: RenderColor::rgba(
+                WECHAT_GREEN_RGB[0],
+                WECHAT_GREEN_RGB[1],
+                WECHAT_GREEN_RGB[2],
+                255,
+            ),
+            selected_text: RenderColor::rgba(WHITE_RGB[0], WHITE_RGB[1], WHITE_RGB[2], 255),
             comment_color: RenderColor::rgba(120, 120, 120, 255),
             border: RenderColor::rgba(215, 215, 215, 255),
             scrollbar: RenderColor::rgba(128, 128, 128, 180),
@@ -748,8 +753,8 @@ mod tests {
     };
 
     const WHITE: RenderColor = RenderColor::rgba(255, 255, 255, 255);
-    const GREEN: RenderColor = RenderColor::rgba(96, 193, 7, 255);
-    const GREEN_BG: RenderColor = RenderColor::rgba(240, 250, 231, 255);
+    const GREEN: RenderColor = RenderColor::rgba(255, 255, 255, 255);
+    const GREEN_BG: RenderColor = RenderColor::rgba(7, 193, 96, 255);
 
     fn vertical_input(sizes: &[(f32, f32)]) -> AxisLayoutInput {
         AxisLayoutInput {
@@ -834,6 +839,13 @@ mod tests {
             selection_inflate_y: 2.0,
             corner_radius: 8.0,
         }
+    }
+
+    #[test]
+    fn default_theme_uses_project_wechat_selection_tokens() {
+        let theme = RenderTheme::default();
+        assert_eq!(theme.selected_background, GREEN_BG);
+        assert_eq!(theme.selected_text, GREEN);
     }
 
     #[test]

@@ -41,28 +41,28 @@ pub struct CandidateUiColors {
 }
 
 impl CandidateUiColors {
-    const fn light() -> Self {
+    fn light() -> Self {
         Self {
             background: CandidateUiColor::rgba(255, 255, 255, 255),
             border: CandidateUiColor::rgba(215, 215, 215, 255),
             text: CandidateUiColor::rgba(32, 33, 36, 255),
             annotation: CandidateUiColor::rgba(95, 99, 104, 255),
             label: CandidateUiColor::rgba(95, 99, 104, 255),
-            selected_background: CandidateUiColor::rgba(220, 235, 255, 255),
-            selected_text: CandidateUiColor::rgba(23, 78, 166, 255),
+            selected_background: CandidateUiColor::rgba(7, 193, 96, 255),
+            selected_text: CandidateUiColor::rgba(255, 255, 255, 255),
             scrollbar: CandidateUiColor::rgba(128, 128, 128, 180),
         }
     }
 
-    const fn dark() -> Self {
+    fn dark() -> Self {
         Self {
             background: CandidateUiColor::rgba(32, 33, 36, 255),
             border: CandidateUiColor::rgba(90, 90, 90, 255),
             text: CandidateUiColor::rgba(255, 255, 255, 255),
             annotation: CandidateUiColor::rgba(189, 193, 198, 255),
             label: CandidateUiColor::rgba(189, 193, 198, 255),
-            selected_background: CandidateUiColor::rgba(190, 220, 255, 255),
-            selected_text: CandidateUiColor::rgba(32, 33, 36, 255),
+            selected_background: CandidateUiColor::rgba(7, 193, 96, 255),
+            selected_text: CandidateUiColor::rgba(255, 255, 255, 255),
             scrollbar: CandidateUiColor::rgba(189, 193, 198, 180),
         }
     }

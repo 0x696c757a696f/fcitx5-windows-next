@@ -154,15 +154,13 @@ impl QingfengCandidateTheme {
             background,
             border: QingfengColor::rgb(226, 229, 235),
             text: QingfengColor::rgb(74, 74, 74),
-            selected_text: QingfengColor::rgb(7, 193, 96),
+            selected_text: QingfengColor::rgb(WHITE_RGB[0], WHITE_RGB[1], WHITE_RGB[2]),
             label: QingfengColor::rgb(154, 160, 174),
-            selected_background: QingfengColor {
-                r: 7,
-                g: 193,
-                b: 96,
-                a: 0x1a,
-            }
-            .over(background),
+            selected_background: QingfengColor::rgb(
+                WECHAT_GREEN_RGB[0],
+                WECHAT_GREEN_RGB[1],
+                WECHAT_GREEN_RGB[2],
+            ),
             hover_background: QingfengColor {
                 r: 0,
                 g: 0,
@@ -188,15 +186,13 @@ impl QingfengCandidateTheme {
             background,
             border: QingfengColor::rgb(48, 48, 48),
             text: QingfengColor::rgb(237, 237, 237),
-            selected_text: QingfengColor::rgb(7, 193, 96),
+            selected_text: QingfengColor::rgb(WHITE_RGB[0], WHITE_RGB[1], WHITE_RGB[2]),
             label: QingfengColor::rgb(127, 127, 127),
-            selected_background: QingfengColor {
-                r: 7,
-                g: 193,
-                b: 96,
-                a: 0x33,
-            }
-            .over(background),
+            selected_background: QingfengColor::rgb(
+                WECHAT_GREEN_RGB[0],
+                WECHAT_GREEN_RGB[1],
+                WECHAT_GREEN_RGB[2],
+            ),
             hover_background: QingfengColor {
                 r: 255,
                 g: 255,
@@ -396,7 +392,11 @@ mod tests {
         assert_eq!(plan.source, WINDINPUT_QINGFENG_CANDIDATE_SOURCE);
         assert_eq!(plan.theme.window_radius, 12.0);
         assert_eq!(plan.theme.item_radius, 8.0);
-        assert_eq!(plan.theme.selected_text, QingfengColor::rgb(7, 193, 96));
+        assert_eq!(
+            plan.theme.selected_background,
+            QingfengColor::rgb(7, 193, 96)
+        );
+        assert_eq!(plan.theme.selected_text, QingfengColor::rgb(255, 255, 255));
         assert!(plan.items[0].label_rect.width() >= 30.0);
         assert!(plan.items[0].text_rect.left > plan.items[0].label_rect.right);
     }
@@ -438,8 +438,17 @@ mod tests {
         );
 
         assert_eq!(light.theme.background, QingfengColor::rgb(255, 255, 255));
-        assert_eq!(light.theme.selected_text, QingfengColor::rgb(7, 193, 96));
+        assert_eq!(
+            light.theme.selected_background,
+            QingfengColor::rgb(7, 193, 96)
+        );
+        assert_eq!(light.theme.selected_text, QingfengColor::rgb(255, 255, 255));
         assert_eq!(dark.theme.background, QingfengColor::rgb(24, 24, 24));
-        assert_eq!(dark.theme.selected_text, QingfengColor::rgb(7, 193, 96));
+        assert_eq!(
+            dark.theme.selected_background,
+            QingfengColor::rgb(7, 193, 96)
+        );
+        assert_eq!(dark.theme.selected_text, QingfengColor::rgb(255, 255, 255));
     }
 }
+use crate::theme_tokens::{WECHAT_GREEN_RGB, WHITE_RGB};

@@ -14,6 +14,7 @@ pub mod presentation_server;
 pub mod qingfeng;
 #[cfg(windows)]
 pub mod renderer;
+pub mod theme_tokens;
 mod ui_plan;
 #[cfg(windows)]
 pub mod window_host;
@@ -5297,9 +5298,9 @@ pub fn candidate_preview_paint_plan(
     Ok(CandidatePreviewPaintPlan {
         dpi_scale,
         background_color: 0x00ee_f3f7,
-        selected_background_color: 0x006f_a700,
+        selected_background_color: theme_tokens::WECHAT_GREEN_COLORREF,
         text_color: 0x0020_2020,
-        selected_text_color: 0x00ff_ffff,
+        selected_text_color: theme_tokens::WHITE_COLORREF,
         items,
     })
 }
@@ -7421,7 +7422,8 @@ mod tests {
     fn config_preview_paint_plan_preserves_labels_emoji_and_bounds() {
         let plan =
             candidate_preview_paint_plan(1.0, 596.0, 166.0).expect("candidate preview paint plan");
-        assert_eq!(plan.selected_background_color, 0x006f_a700);
+        assert_eq!(plan.selected_background_color, 0x0060_c107);
+        assert_eq!(plan.selected_text_color, 0x00ff_ffff);
         assert_eq!(plan.items.len(), 3);
         assert!(plan.items[0].selected);
         assert!(plan.items.iter().any(|item| item.text.contains("1.")));
@@ -7575,12 +7577,12 @@ mod axis_layout_ffi_tests {
             text_r: 32,
             text_g: 33,
             text_b: 36,
-            selected_background_r: 240,
-            selected_background_g: 250,
-            selected_background_b: 231,
-            selected_text_r: 96,
-            selected_text_g: 193,
-            selected_text_b: 7,
+            selected_background_r: 7,
+            selected_background_g: 193,
+            selected_background_b: 96,
+            selected_text_r: 255,
+            selected_text_g: 255,
+            selected_text_b: 255,
             comment_r: 120,
             comment_g: 120,
             comment_b: 120,

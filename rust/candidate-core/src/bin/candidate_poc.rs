@@ -263,6 +263,7 @@ mod window_smoke {
             QingfengOrientation, QingfengRect, QingfengThemeMode,
             WINDINPUT_QINGFENG_CANDIDATE_SOURCE,
         },
+        theme_tokens::{WECHAT_GREEN_COLORREF, WHITE_COLORREF},
         vertical_text_columns, CandidateLabelAlign, CandidateLabelDisplay, CandidateLabelScope,
         CandidateLabelSlotConfig, CandidateLabelSlotSource, CandidateLabelStyle,
         CandidateLabelWidthStrategy, Fcitx5CandidateLayoutRect, Fcitx5CandidateRenderItemInput,
@@ -307,8 +308,6 @@ mod window_smoke {
     const COLORREF_BACKGROUND: Dword = 0x00FF_FF_FF;
     const COLORREF_BORDER: Dword = 0x00EB_E5_E2;
     const COLORREF_LABEL: Dword = 0x00AE_A0_9A;
-    const COLORREF_SELECTED_BACKGROUND: Dword = 0x00F0_FA_E7;
-    const COLORREF_SELECTED_TEXT: Dword = 0x0060_C1_07;
     const COLORREF_TEXT: Dword = 0x004A_4A_4A;
     const CS_HREDRAW: Uint = 0x0002;
     const CS_VREDRAW: Uint = 0x0001;
@@ -681,8 +680,8 @@ mod window_smoke {
                 border: COLORREF_BORDER,
                 label: COLORREF_LABEL,
                 text: COLORREF_TEXT,
-                selected_background: COLORREF_SELECTED_BACKGROUND,
-                selected_text: COLORREF_SELECTED_TEXT,
+                selected_background: WECHAT_GREEN_COLORREF,
+                selected_text: WHITE_COLORREF,
                 window_radius: 12,
                 typography: QingfengCandidateTheme::light().typography,
             }
@@ -1453,7 +1452,11 @@ mod window_smoke {
                     &mut canvas,
                     &item.label,
                     &item.label_rect,
-                    theme.label,
+                    if item.selected {
+                        theme.selected_text
+                    } else {
+                        theme.label
+                    },
                     WindAlign::End,
                     theme.typography.label_font_size * dpi_scale,
                 );
@@ -1474,7 +1477,11 @@ mod window_smoke {
                         &mut canvas,
                         &item.comment,
                         &comment_rect,
-                        theme.label,
+                        if item.selected {
+                            theme.selected_text
+                        } else {
+                            theme.label
+                        },
                         WindAlign::Start,
                         theme.typography.comment_font_size * dpi_scale,
                     );
@@ -1490,7 +1497,7 @@ mod window_smoke {
                         rect.y as f32,
                         rect.w as f32,
                         rect.h as f32,
-                        &WindPaint::fill(colorref_to_wind_color(COLORREF_SELECTED_BACKGROUND)),
+                        &WindPaint::fill(colorref_to_wind_color(WECHAT_GREEN_COLORREF)),
                     );
                 }
                 let text_rect = Rect {
@@ -1502,7 +1509,11 @@ mod window_smoke {
                     &mut canvas,
                     text,
                     &text_rect,
-                    COLORREF_TEXT,
+                    if selected == Some(index) {
+                        WHITE_COLORREF
+                    } else {
+                        COLORREF_TEXT
+                    },
                     WindAlign::Start,
                     18.0 * dpi_scale,
                 );
@@ -2779,7 +2790,11 @@ mod window_smoke {
                     &mut canvas,
                     &wide(&ctext),
                     &comment_rect,
-                    theme.label.colorref(),
+                    if is_selected {
+                        theme.selected_text.colorref()
+                    } else {
+                        theme.label.colorref()
+                    },
                     WindAlign::Start,
                     comment_size,
                 );
@@ -2940,8 +2955,8 @@ mod window_smoke {
                 0x00_18_18_18,
                 0x00_3E_3E_3E,
                 0x00_9C_9C_9C,
-                0x00_1F_6F_4A,
-                0x00_2E_E4_7E,
+                WECHAT_GREEN_COLORREF,
+                WHITE_COLORREF,
                 0x00_E8_E8_E8,
             )
         } else {
@@ -2949,8 +2964,8 @@ mod window_smoke {
                 0x00_FF_FF_FF,
                 0x00_EB_E5_E2,
                 0x00_AE_A0_9A,
-                0x00_F0_FA_E7,
-                0x00_60_C1_07,
+                WECHAT_GREEN_COLORREF,
+                WHITE_COLORREF,
                 0x00_4A_4A_4A,
             )
         }
