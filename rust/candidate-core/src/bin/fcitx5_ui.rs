@@ -328,13 +328,14 @@ impl PaintColors {
         };
         let named = |name: &str| map.get(name).and_then(|value| parse_color(value));
         let candidate_text = named("candidate_text").unwrap_or(default_text);
+        let background = named("background").unwrap_or(Rgba {
+            r: 0.97,
+            g: 0.98,
+            b: 0.98,
+            a: 1.0,
+        });
         PaintColors {
-            background: named("background").unwrap_or(Rgba {
-                r: 0.97,
-                g: 0.98,
-                b: 0.98,
-                a: 1.0,
-            }),
+            background,
             candidate_text,
             selected_background: named("selected_background").unwrap_or(Rgba {
                 r: 0.027,
@@ -349,7 +350,10 @@ impl PaintColors {
                 a: 1.0,
             }),
             comment_text: named("comment_text").unwrap_or(candidate_text),
-            border: named("border").unwrap_or(default_text),
+            // A custom theme can request an inner border. The stock popup is
+            // already rounded by its native shell, so its fallback remains a
+            // single surface rather than an accidental second outline.
+            border: named("border").unwrap_or(background),
             preedit_text: named("preedit_text").unwrap_or(candidate_text),
         }
     }

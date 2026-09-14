@@ -41,7 +41,9 @@ font_scale = 0.85
 
 [light.candidate.colors]
 background = "#FFFFFFFF"
-border = "#EDEDEDFF"
+# The native rounded popup owns the outer silhouette. Matching this to the
+# surface avoids a second gray outline one pixel inside that shell.
+border = "#FFFFFFFF"
 candidate_text = "#181818FF"
 label_text = "#7F7F7FFF"
 comment_text = "#7F7F7FFF"

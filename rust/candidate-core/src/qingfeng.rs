@@ -159,7 +159,9 @@ impl QingfengCandidateTheme {
             index_text_gap: 1.0,
             comment_text_gap: 6.0,
             background,
-            border: QingfengColor::rgb(226, 229, 235),
+            // The native rounded popup supplies the outer silhouette. A
+            // contrasting border here becomes a second, inset outline.
+            border: background,
             text: QingfengColor::rgb(74, 74, 74),
             selected_text: QingfengColor::rgb(WHITE_RGB[0], WHITE_RGB[1], WHITE_RGB[2]),
             label: QingfengColor::rgb(154, 160, 174),
@@ -422,6 +424,7 @@ mod tests {
             QingfengColor::rgb(7, 193, 96)
         );
         assert_eq!(plan.theme.selected_text, QingfengColor::rgb(255, 255, 255));
+        assert_eq!(plan.theme.border, plan.theme.background);
         assert!(plan.items[0].label_rect.width() >= 30.0);
         assert!(plan.items[0].text_rect.left > plan.items[0].label_rect.right);
         assert_eq!(
