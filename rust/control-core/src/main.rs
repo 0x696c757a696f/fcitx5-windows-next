@@ -27,7 +27,8 @@ use fcitx5_protocol_core::{
 };
 use fcitx5_windows_common_core::{
     broadcast_visual_config_changed, current_runtime_generation_for_current_process,
-    next_launcher_request_id, CurrentUserRuntimeIdentity, VerifiedPipeClient,
+    default_fcitx5_data_root_for_current_process, next_launcher_request_id,
+    CurrentUserRuntimeIdentity, VerifiedPipeClient,
 };
 
 enum Command {
@@ -117,7 +118,7 @@ fn package_id_argument(arguments: &[OsString], index: usize) -> Result<String, (
 
 fn parse() -> Result<(PathBuf, Command), ()> {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let mut data_root = std::env::current_dir().map_err(|_| ())?;
+    let mut data_root = default_fcitx5_data_root_for_current_process().ok_or(())?;
     let mut command = None;
     let mut index = 0;
     while index < arguments.len() {
