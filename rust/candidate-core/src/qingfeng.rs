@@ -150,7 +150,10 @@ impl QingfengCandidateTheme {
             window_padding: 5.0,
             window_radius: WECHAT_WINDOW_RADIUS_DIP,
             window_border_width: 1.0,
-            item_padding_y: 7.0,
+            // Keep a 34-DIP text box for a 22-DIP candidate run. DirectWrite
+            // needs the extra descent headroom for Latin `gjpqy` and fallback
+            // emoji; a non-overlapping rectangle is not enough.
+            item_padding_y: 4.0,
             item_padding_x: 10.0,
             item_radius: WECHAT_SELECTION_RADIUS_DIP,
             index_text_gap: 1.0,
@@ -182,7 +185,7 @@ impl QingfengCandidateTheme {
             window_padding: 5.0,
             window_radius: WECHAT_WINDOW_RADIUS_DIP,
             window_border_width: 1.0,
-            item_padding_y: 7.0,
+            item_padding_y: 4.0,
             item_padding_x: 10.0,
             item_radius: WECHAT_SELECTION_RADIUS_DIP,
             index_text_gap: 1.0,
@@ -444,6 +447,29 @@ mod tests {
             1.5,
         );
         assert!(plan.items[0].text_rect.width() >= 22.0 * 1.5);
+    }
+
+    #[test]
+    fn candidate_text_box_keeps_descender_headroom() {
+        let plan = qingfeng_candidate_visual_plan(
+            QingfengOrientation::Horizontal,
+            QingfengThemeMode::Light,
+            &[QingfengCandidateVisualInput {
+                label: "1.".to_owned(),
+                text: "gjpqy emoji 😀 e\u{301}".to_owned(),
+                comment: String::new(),
+                selected: true,
+                show_label: true,
+                reserve_label: true,
+            }],
+            20.0,
+            1.0,
+        );
+
+        assert!(
+            plan.items[0].text_rect.height() >= plan.theme.typography.candidate_font_size + 12.0,
+            "candidate text box must leave DirectWrite descent/fallback headroom"
+        );
     }
 
     #[test]

@@ -47,7 +47,9 @@ fn main() {
             typography_snapshot = true;
         } else if arg == "--label-slot-snapshot" {
             let Some(kind) = args.next() else {
-                eprintln!("--label-slot-snapshot requires vertical, horizontal, or grid");
+                eprintln!(
+                    "--label-slot-snapshot requires vertical, horizontal, grid, or glyph-fuzz"
+                );
                 std::process::exit(2);
             };
             label_slot_snapshot = Some(kind.to_string_lossy().into_owned());
@@ -94,7 +96,7 @@ fn main() {
 
     if self_check == window_smoke && render_golden.is_none() && layout_snapshot.is_none() {
         eprintln!(
-            "usage: fcitx5-candidate-poc (--self-check | --window-smoke | --render-golden KIND --out PATH) [--demo-snapshot | --scroll-demo-snapshot | --typography-snapshot | --label-slot-snapshot vertical|horizontal|grid | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
+            "usage: fcitx5-candidate-poc (--self-check | --window-smoke | --render-golden KIND --out PATH) [--demo-snapshot | --scroll-demo-snapshot | --typography-snapshot | --label-slot-snapshot vertical|horizontal|grid|glyph-fuzz | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
         );
         std::process::exit(2);
     }
@@ -2123,6 +2125,22 @@ mod window_smoke {
                         },
                     ],
                 ),
+                "glyph-fuzz" => (
+                    Orientation::Horizontal,
+                    false,
+                    5usize,
+                    1usize,
+                    0usize,
+                    CandidateLabelDisplay::Always,
+                    CandidateLabelScope::Item,
+                    vec![
+                        DemoCandidate { slot: 1, label: "", text: "gjpqy", comment: "" },
+                        DemoCandidate { slot: 2, label: "", text: "emoji 😀", comment: "" },
+                        DemoCandidate { slot: 3, label: "", text: "e\u{301}cole", comment: "" },
+                        DemoCandidate { slot: 4, label: "", text: "中文 gypqj", comment: "" },
+                        DemoCandidate { slot: 5, label: "", text: "👨‍👩‍👧‍👦", comment: "" },
+                    ],
+                ),
                 "grid" => (
                     Orientation::Horizontal,
                     true,
@@ -2172,7 +2190,7 @@ mod window_smoke {
                 ),
                 _ => {
                     return Err(
-                        "--label-slot-snapshot must be vertical, horizontal, grid, vertical-dark, horizontal-dark, or grid-dark".to_owned(),
+                        "--label-slot-snapshot must be vertical, horizontal, grid, glyph-fuzz, vertical-dark, horizontal-dark, or grid-dark".to_owned(),
                     )
                 }
             };
@@ -2386,6 +2404,29 @@ mod window_smoke {
                             * typography.candidate_font_size
                             * dpi_scale
                 });
+        const GLYPH_CLIP_GUARD_PX: f32 = 4.0;
+        let mut text_engine = DWriteEngine::new();
+        text_engine.set_scale(1.0);
+        let glyph_clip_failure = visual_plan.items.iter().find_map(|item| {
+            let style = WindTextStyle {
+                family: Some("Microsoft YaHei UI"),
+                size: typography.candidate_font_size * dpi_scale,
+                weight: 400,
+                italic: false,
+                line_height: None,
+            };
+            let measured = TextEngine::measure(&mut text_engine, &item.text, &style, None);
+            (item.text_rect.height() < measured.h as f32 + GLYPH_CLIP_GUARD_PX).then(|| {
+                format!(
+                    "{:?}: box {:.0}px, DirectWrite {:.0}px + {:.0}px guard",
+                    item.text,
+                    item.text_rect.height(),
+                    measured.h,
+                    GLYPH_CLIP_GUARD_PX
+                )
+            })
+        });
+        let typography_text_height_fits = glyph_clip_failure.is_none();
         let typography_contract = base_kind == "typography"
             && candidates.len() == 5
             && shown_label_count == 5
@@ -2395,6 +2436,11 @@ mod window_smoke {
             && candidates[3].text == "水"
             && candidates[4].text == "收"
             && selected == 0;
+        if let Some(failure) = glyph_clip_failure {
+            return Err(format!(
+                "Candidate text glyph vertical clip guard failed: {failure}"
+            ));
+        }
         if base_kind == "typography"
             && (!typography_contract
                 || !stable_origins
@@ -2404,7 +2450,7 @@ mod window_smoke {
             return Err("Candidate production typography contract failed".to_owned());
         }
         let evidence_json = format!(
-            "  \"label_slot_contract\":true,\n  \"label_slot_snapshot_kind\":\"{}\",\n  \"candidate_visual_theme_mode\":\"{}\",\n  \"candidate_visual_wechat_green\":true,\n  \"label_slot_width\":{:.2},\n  \"label_slot_reserved_count\":{},\n  \"label_slot_shown_count\":{},\n  \"label_slot_selected_scope_reveal\":{},\n  \"label_slot_stable_text_origins\":{},\n  \"label_slot_right_aligned\":true,\n  \"label_slot_rust_drawing\":true,\n  \"windinput_qingfeng_candidate_renderer\":true,\n  \"windinput_qingfeng_source\":\"{}\",\n  \"candidate_visual_typography_tokens\":true,\n  \"candidate_font_size\":{:.2},\n  \"label_font_size\":{:.2},\n  \"comment_font_size\":{:.2},\n  \"row_height\":{:.2},\n  \"candidate_font_size_physical_px\":{:.2},\n  \"label_font_size_physical_px\":{:.2},\n  \"typography_candidate_count\":{},\n  \"typography_all_labels_shown\":{},\n  \"typography_selected_first\":{},\n  \"typography_text_comment_non_overlapping\":{},\n  \"typography_text_fits\":{},\n",
+            "  \"label_slot_contract\":true,\n  \"label_slot_snapshot_kind\":\"{}\",\n  \"candidate_visual_theme_mode\":\"{}\",\n  \"candidate_visual_wechat_green\":true,\n  \"label_slot_width\":{:.2},\n  \"label_slot_reserved_count\":{},\n  \"label_slot_shown_count\":{},\n  \"label_slot_selected_scope_reveal\":{},\n  \"label_slot_stable_text_origins\":{},\n  \"label_slot_right_aligned\":true,\n  \"label_slot_rust_drawing\":true,\n  \"windinput_qingfeng_candidate_renderer\":true,\n  \"windinput_qingfeng_source\":\"{}\",\n  \"candidate_visual_typography_tokens\":true,\n  \"candidate_font_size\":{:.2},\n  \"label_font_size\":{:.2},\n  \"comment_font_size\":{:.2},\n  \"row_height\":{:.2},\n  \"candidate_font_size_physical_px\":{:.2},\n  \"label_font_size_physical_px\":{:.2},\n  \"glyph_clip_guard_px\":{:.2},\n  \"typography_candidate_count\":{},\n  \"typography_all_labels_shown\":{},\n  \"typography_selected_first\":{},\n  \"typography_text_comment_non_overlapping\":{},\n  \"typography_text_fits\":{},\n  \"typography_text_height_fits\":{},\n",
             json_escape(kind),
             if dark_mode { "dark" } else { "light" },
             label_column_width,
@@ -2419,11 +2465,13 @@ mod window_smoke {
             typography.row_height,
             typography.candidate_font_size * dpi_scale,
             typography.label_font_size * dpi_scale,
+            GLYPH_CLIP_GUARD_PX,
             candidates.len(),
             if typography_contract { "true" } else { "false" },
             if typography_contract { "true" } else { "false" },
             if typography_text_comment_non_overlapping { "true" } else { "false" },
             if typography_text_fits { "true" } else { "false" },
+            if typography_text_height_fits { "true" } else { "false" },
         );
         Ok(LabelSlotWindowScenario {
             layout,
@@ -2443,6 +2491,7 @@ mod window_smoke {
                 _ => match base_kind {
                     "vertical" => "label-slot-vertical",
                     "horizontal" => "label-slot-horizontal",
+                    "glyph-fuzz" => "label-slot-glyph-fuzz",
                     _ => "label-slot-grid",
                 },
             },

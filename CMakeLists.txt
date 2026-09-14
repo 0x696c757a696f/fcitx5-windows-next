@@ -1230,7 +1230,7 @@ if(BUILD_TESTING)
     set_tests_properties(
       rust-candidate-poc-scroll-demo-snapshot PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    foreach(FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT vertical horizontal grid vertical-dark horizontal-dark grid-dark)
+    foreach(FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT vertical horizontal grid glyph-fuzz vertical-dark horizontal-dark grid-dark)
       add_test(
         NAME "rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}"
         COMMAND
