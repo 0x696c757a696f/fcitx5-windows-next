@@ -11,6 +11,7 @@ pub mod image;
 pub mod inputs;
 pub mod link;
 pub mod list;
+pub mod menubar;
 pub mod nav;
 pub mod pager;
 pub mod progress;
@@ -20,6 +21,7 @@ pub mod row_source;
 pub mod segmented;
 pub mod select;
 pub mod sortable_table;
+pub mod split;
 pub mod stepper;
 pub mod text_content;
 pub mod virtual_list;
@@ -50,6 +52,7 @@ pub use image::{ImageContent, ImageView};
 pub use inputs::{CheckBox, CheckBoxSize, RadioButton, Slider, Switch, SwitchSize, TextInput};
 pub use link::Link;
 pub use list::ListRow;
+pub use menubar::{MenuBar, MenuBarEntry};
 pub use nav::{AccordionHeader, CollapsibleHeader, ExpandState, NavRow};
 pub use pager::page_count;
 pub use progress::ProgressBar;
@@ -655,7 +658,11 @@ impl Widget for Button {
                 _ => false,
             },
             Event::Key(k) => {
-                if k.pressed && (k.key == Key::Enter || k.key == Key::Space) {
+                // `!k.ctrl`：Ctrl+Enter 是应用级的「提交」通道（见 `TextInput` 里多行
+                // Enter 那条臂），焦点恰好停在某个按钮上时不该被它吃掉——否则「填完表
+                // 按 Ctrl+Enter 提交」会变成「触发焦点所在的取消/粘贴按钮」。按钮的
+                // 激活键是裸 Enter 与空格，加了修饰键本就不是激活语义。
+                if k.pressed && !k.ctrl && (k.key == Key::Enter || k.key == Key::Space) {
                     if let Some(cb) = self.on_click.as_mut() {
                         cb(ctx);
                     }
@@ -709,6 +716,8 @@ pub struct Element {
     visible: bool,
     vis_signal: Option<Signal<bool>>,
     vis_cond: Option<Box<dyn Fn() -> bool>>,
+    /// 运行期权重，见 [`Element::weight_when`]。
+    weight_fn: Option<Box<dyn Fn() -> f32>>,
     clip_children: bool,
     click: Option<ClickFn>,
     on_drop: Option<DropFn>,
@@ -749,6 +758,7 @@ impl Element {
             visible: true,
             vis_signal: None,
             vis_cond: None,
+            weight_fn: None,
             clip_children: false,
             click: None,
             on_drop: None,
@@ -1465,6 +1475,23 @@ impl Element {
         self
     }
 
+    /// 开关翻转后的副作用钩子。仅 `Element::switch(..)` 可用。
+    ///
+    /// 回调收到**已生效的新值**，不必自己再 `set`。典型用途是互斥开关：开了这个就把
+    /// 那个关掉（两个开关各挂一个反向的钩子，两边都可点，不会互相锁死）。
+    #[track_caller]
+    pub fn on_switch_change(mut self, f: impl Fn(&mut EventCtx, bool) + 'static) -> Self {
+        match self
+            .widget
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<Switch>())
+        {
+            Some(s) => s.set_on_change(Box::new(f)),
+            None => debug_assert!(false, "on_switch_change() 只能用于 Element::switch(..)"),
+        }
+        self
+    }
+
     /// 在旋钮右侧显示当前值百分比（如 "65%"）。仅 `Element::slider(..)` 可用。
     #[track_caller]
     pub fn show_value(self, on: bool) -> Self {
@@ -1716,6 +1743,30 @@ impl Element {
     /// ```
     pub fn check_menu(title: impl Into<String>, items: Vec<select::CheckMenuItem>) -> Self {
         Self::base(Layout::None).widget(select::CheckMenu::new(title, items))
+    }
+
+    /// 菜单栏：一排标题，点开即浮层菜单，手感同原生菜单栏——展开期间滑到相邻标题
+    /// 自动切换、←→ 跨菜单、点标题收起、F10 / 单击 Alt 键盘激活、Alt+助记字母直接
+    /// 展开、菜单内按助记字母激活项。项每次展开现建（见 [`MenuBarEntry`]）。
+    ///
+    /// 默认横向撑满（`width_match`），背景由调用方定（通常 `bg_role(Role::Surface)`）。
+    ///
+    /// ```no_run
+    /// # use windui::prelude::*;
+    /// Element::menu_bar(vec![
+    ///     MenuBarEntry::new("文件(F)", || vec![
+    ///         MenuItem::run("打开(O)…", |_ctx| {}, false).shortcut("Ctrl+O").mnemonic('O'),
+    ///         MenuItem::separator(),
+    ///         MenuItem::run("退出(X)", |ctx| ctx.request_close(), false).mnemonic('X'),
+    ///     ]).mnemonic('F'),
+    ///     MenuBarEntry::new("帮助(H)", || vec![MenuItem::run("关于(A)", |_ctx| {}, false).mnemonic('A')])
+    ///         .mnemonic('H'),
+    /// ]).bg_role(Role::Surface);
+    /// ```
+    pub fn menu_bar(entries: Vec<MenuBarEntry>) -> Self {
+        Self::base(Layout::None)
+            .widget(MenuBar::new(entries))
+            .width_match()
     }
 
     /// 复选菜单粘滞：开关项点击后菜单保持展开、可连点多个，点面板外才收起。
@@ -2163,6 +2214,41 @@ impl Element {
             .width_match()
             .height(1)
             .bg_role(crate::style::Role::Divider)
+    }
+
+    /// 可拖动分栏：`first` 与 `second` 沿 `axis` 排布，中间一条分隔条，拖动它改写
+    /// `ratio`（第一栏占比，0..1）。两栏经 [`weight_when`](Self::weight_when) 读同一个
+    /// 信号，故拖动只触发重排、不重建子树。比例存在信号里，应用可持久化（记住上次的
+    /// 分栏位置）或从外部改（快捷键「均分」写 0.5）。默认分隔条 6px、比例钳在 0.1..=0.9，
+    /// 要改用 [`split_opts`](Self::split_opts)。
+    ///
+    /// 返回的是那个线性容器本身，尺寸请自行 `fill()` / `weight(..)`。
+    pub fn split(axis: Axis, first: Element, second: Element, ratio: Signal<f32>) -> Self {
+        Self::split_opts(axis, first, second, ratio, split::SplitOpts::default())
+    }
+
+    /// 带参数的 [`split`](Self::split)。
+    pub fn split_opts(
+        axis: Axis,
+        first: Element,
+        second: Element,
+        ratio: Signal<f32>,
+        opts: split::SplitOpts,
+    ) -> Self {
+        let container = match axis {
+            Axis::Horizontal => Element::row(),
+            Axis::Vertical => Element::col(),
+        };
+        let handle = Element::leaf().widget(split::SplitHandle::new(axis, ratio, opts));
+        let handle = match axis {
+            Axis::Horizontal => handle.width(opts.thickness).height_match(),
+            Axis::Vertical => handle.height(opts.thickness).width_match(),
+        };
+        container
+            .cross(Align::Stretch)
+            .child(first.weight_when(move || ratio.get()))
+            .child(handle)
+            .child(second.weight_when(move || 1.0 - ratio.get()))
     }
 
     /// 标签页：顶部标签条切换、下方内容区按选中项显隐。
@@ -3887,6 +3973,15 @@ impl Element {
         self
     }
 
+    /// 运行期权重：每次测量调用闭包取当前权重，改信号即改分配，**不必重建子树**。
+    /// 只对线性容器（`row`/`col`）的直接子节点有意义；契约同 [`visible_when`](Self::visible_when)
+    /// ——纯函数、帧内值不变。写入信号的一方要记得 `ctx.mark_layout_dirty()`，
+    /// 信号本身只保证重绘。可拖动分栏 [`Element::split`] 就建在它上面。
+    pub fn weight_when(mut self, f: impl Fn() -> f32 + 'static) -> Self {
+        self.weight_fn = Some(Box::new(f));
+        self
+    }
+
     // ---- 间距 ----
     pub fn padding(mut self, p: i32) -> Self {
         self.padding = Insets::all(p);
@@ -4160,6 +4255,7 @@ impl Element {
             visible: self.visible,
             vis_signal: self.vis_signal,
             vis_cond: self.vis_cond,
+            weight_fn: self.weight_fn,
             enabled_static: self.enabled_static,
             enabled: self.enabled,
             en_cond: self.en_cond,
@@ -4432,6 +4528,8 @@ mod tests {
                 pressed: true,
                 shift: false,
                 ctrl: false,
+                alt: false,
+                meta: false,
             },
             Some(handle_id),
         );
@@ -4478,6 +4576,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
 
         tree.dispatch_pointer(
@@ -5885,6 +5985,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         let res = tree.dispatch_key(k(Key::Space), Some(btn));
         assert_eq!(
@@ -6314,6 +6416,8 @@ mod tests {
                 pressed: true,
                 shift: false,
                 ctrl: false,
+                alt: false,
+                meta: false,
             },
             Some(input),
         );
@@ -6365,6 +6469,8 @@ mod tests {
                 pressed: true,
                 shift: false,
                 ctrl: false,
+                alt: false,
+                meta: false,
             },
             Some(input),
         );
@@ -6404,6 +6510,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
 
         assert!(tree.dispatch_key(k(Key::Down), Some(input)).consumed);
@@ -6451,6 +6559,8 @@ b",
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(k(Key::PageDown), Some(input));
         tree.dispatch_key(k(Key::Up), Some(input));
@@ -6496,6 +6606,8 @@ b",
             pressed: true,
             shift,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
 
         assert!(
@@ -6541,6 +6653,8 @@ b",
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
 
         tree.dispatch_key(k(Key::Enter), Some(input));

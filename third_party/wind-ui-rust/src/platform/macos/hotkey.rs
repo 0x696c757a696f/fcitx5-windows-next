@@ -202,9 +202,19 @@ fn mac_keycode_of(key: Key) -> Option<u32> {
         Key::PageUp => 0x74,
         Key::PageDown => 0x79,
         Key::Delete => 0x75, // ForwardDelete（0x33 是退格）
+        Key::Insert => 0x72,
+        Key::F(n) if (1..=12).contains(&n) => return mac_keycode_from_vk(0x70 + u32::from(n) - 1),
+        Key::F(_) => return None,
+        Key::NumpadAdd => 0x45,
+        Key::NumpadSubtract => 0x4E,
+        Key::NumpadMultiply => 0x43,
+        Key::NumpadDivide => 0x4B,
+        Key::ContextMenu => 0x6E,
         Key::Other(vk) => return mac_keycode_from_vk(vk),
         // Backspace 作全局热键无实际用途（与 win32 侧一致）。
         Key::Backspace => return None,
+        // 修饰键本身不能当热键主键（与 win32 侧一致）。
+        Key::Alt => return None,
     })
 }
 
@@ -394,12 +404,20 @@ extern "C" fn hotkey_handler(
 
 impl HotkeyState {
     /// 派发一次热键触发，返回回调声明的窗口操作意图。
+    ///
+    /// TODO(macOS): 回调若调了 `HotkeyCtx::open_window`，请求会留在核心层的旁路队列里
+    /// 无人消费（win32 侧在这一步之后调 `open_callback_windows` 建窗）。队列因此会越积
+    /// 越长，故这里先取空并提示，免得某天真实现了以后突然把历史请求一股脑开出来。
     #[must_use]
     fn dispatch(&mut self, id: usize) -> Option<WindowOp> {
         let slot = self.slots.get_mut(id)?;
         let mut ctx = HotkeyCtx::default();
         (slot.callback)(&mut ctx);
-        ctx.take_op()
+        let op = ctx.take_op();
+        if !crate::event::take_callback_windows().is_empty() {
+            eprintln!("[windui] HotkeyCtx::open_window 在 macOS 上尚未实现，本次请求被忽略");
+        }
+        op
     }
 }
 
@@ -521,6 +539,15 @@ mod tests {
             Key::Delete,
             Key::PageUp,
             Key::PageDown,
+            Key::Insert,
+            Key::F(1),
+            Key::F(5),
+            Key::F(12),
+            Key::NumpadAdd,
+            Key::NumpadSubtract,
+            Key::NumpadMultiply,
+            Key::NumpadDivide,
+            Key::ContextMenu,
         ] {
             let code = mac_keycode_of(key).expect("具名键都该有键码");
             assert_eq!(

@@ -190,6 +190,13 @@ pub trait Widget {
     fn modal_signal(&self) -> Option<Signal<bool>> {
         None
     }
+    /// 本控件若是菜单栏，交出联动信息（各标题的窗口矩形与项生成器；仅 `MenuBar` 实现）。
+    ///
+    /// 宿主靠它响应 F10 / 单击 Alt / Alt+助记键——这些键按下时没有任何菜单展开、
+    /// 焦点也不在菜单栏上，宿主只能扫树找到它。见 [`Tree::menu_bar_link`]。
+    fn menu_bar_link(&self) -> Option<crate::event::MenuBarLink> {
+        None
+    }
     /// 接收 Builder 传入的点击回调（仅交互控件实现）。
     fn take_click(&mut self, _f: ClickFn) {}
     /// 显隐切换时重置交互态（hover/press → 静止，并令下次绘制的补间瞬时落定不动画）。
@@ -387,6 +394,12 @@ pub struct Node {
     /// 运行期可见条件（如 Tab 页绑定选中项、Dialog 绑定显示标志）。
     /// 与 `visible` 取与：返回 false 则该帧不参与测量/布局/绘制/命中。
     pub vis_cond: Option<Box<dyn Fn() -> bool>>,
+    /// 运行期线性权重（None=用 `width`/`height` 里的静态 `Dimension`）。
+    ///
+    /// 父为线性容器时，每次测量把主轴维度换成 `Dimension::Weight(f())`。与 `vis_cond`
+    /// 同一契约：纯函数、帧内值不变。为可拖动分栏而设——权重原本在构建期烘进
+    /// `Dimension`，改一次就得重建整棵子树，拖动分隔条每帧重建两个文件面板不可接受。
+    pub weight_fn: Option<Box<dyn Fn() -> f32>>,
     /// 静态启用标志（`Element::enabled(bool)` / `disabled(bool)`）。是 `visible`
     /// 在启用轴上的对应物——常量禁用不必为此占用一个信号槽。
     pub enabled_static: bool,
@@ -1018,6 +1031,21 @@ impl Tree {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// 线性子节点的 (宽, 高, margin)，主轴维度已套用运行期权重（见 [`Node::weight_fn`]）。
+    fn linear_dims(&self, c: NodeId, horizontal: bool) -> (Dimension, Dimension, Insets) {
+        let n = self.get(c).unwrap();
+        let (mut cw, mut ch) = (n.width, n.height);
+        if let Some(f) = &n.weight_fn {
+            let w = Dimension::Weight(f().max(0.0));
+            if horizontal {
+                cw = w;
+            } else {
+                ch = w;
+            }
+        }
+        (cw, ch, n.margin)
+    }
+
     fn measure_linear(
         &mut self,
         id: NodeId,
@@ -1049,10 +1077,7 @@ impl Tree {
         // 第一遍：非权重子节点。权重子的主轴 margin 在此预扣，使第二遍
         // 的 remaining 恰好等于可供 portion 瓜分的空间（避免超分）。
         for &c in &children {
-            let (cw, ch, cm) = {
-                let n = self.get(c).unwrap();
-                (n.width, n.height, n.margin)
-            };
+            let (cw, ch, cm) = self.linear_dims(c, horizontal);
             let main_dim = if horizontal { cw } else { ch };
             let cross_dim = if horizontal { ch } else { cw };
             let (cm_main, cm_cross) = main_cross_insets(horizontal, cm);
@@ -1089,10 +1114,7 @@ impl Tree {
             let mut allocated = 0;
             let last = weighted.len().saturating_sub(1);
             for (i, &c) in weighted.iter().enumerate() {
-                let (cw, ch, cm) = {
-                    let n = self.get(c).unwrap();
-                    (n.width, n.height, n.margin)
-                };
+                let (cw, ch, cm) = self.linear_dims(c, horizontal);
                 let w = if horizontal { cw.weight() } else { ch.weight() };
                 // 末位补余，消除整数截断误差，实现像素精确分配。
                 let portion = if i == last {
@@ -1865,6 +1887,31 @@ impl EventCtx<'_> {
             min_width,
             anchor_top: None,
             rebuild: None,
+            bar: None,
+            click_through: true,
+        });
+        self.out.repaint = true;
+    }
+    /// 菜单栏专用：展开 `link.current` 那个标题的菜单，面板左上角贴标题左下角，并把
+    /// 联动信息交给宿主（展开期间滑到相邻标题即切换、←→ 跨菜单、点标题收起）。
+    /// 该标题的项生成器返回空则不弹。
+    pub fn show_menu_bar(&mut self, link: crate::event::MenuBarLink) {
+        let Some(slot) = link.slots.get(link.current) else {
+            return;
+        };
+        let items = (slot.build)();
+        if items.is_empty() {
+            return;
+        }
+        let r = slot.rect;
+        self.out.menu = Some(MenuRequest {
+            pos: Point::new(r.x, r.y + r.h),
+            items,
+            min_width: 0,
+            anchor_top: Some(r.y),
+            rebuild: Some(slot.build.clone()),
+            bar: Some(link),
+            click_through: true,
         });
         self.out.repaint = true;
     }
@@ -1880,6 +1927,8 @@ impl EventCtx<'_> {
             min_width: bounds.w,
             anchor_top: Some(bounds.y),
             rebuild: None,
+            bar: None,
+            click_through: false,
         });
         self.out.repaint = true;
     }
@@ -1901,6 +1950,8 @@ impl EventCtx<'_> {
             min_width: bounds.w,
             anchor_top: Some(bounds.y),
             rebuild: Some(rebuild),
+            bar: None,
+            click_through: false,
         });
         self.out.repaint = true;
     }
@@ -2153,6 +2204,17 @@ impl Tree {
     }
 
     /// 节点绝对窗口矩形（累加各级父节点偏移）。
+    /// 树里第一个**可见**菜单栏的联动信息（见 [`Widget::menu_bar_link`]）。
+    ///
+    /// 线性扫一遍槽位：只在 F10 / Alt 这类低频按键时调用，不值得为它维护一份登记表——
+    /// 登记表还得跟着节点增删同步，而"扫一遍"没有可以失步的状态。
+    pub fn menu_bar_link(&self) -> Option<crate::event::MenuBarLink> {
+        self.slots
+            .iter()
+            .filter_map(|s| s.node.as_ref())
+            .filter(|n| n.effective_visible())
+            .find_map(|n| n.widget.menu_bar_link())
+    }
     pub fn abs_bounds(&self, id: NodeId) -> Rect {
         let mut r = match self.get(id) {
             Some(n) => {
@@ -2871,6 +2933,8 @@ impl Tree {
                                 // 同一个构建器交宿主当重建器：粘滞项（复选）点击后菜单不关，
                                 // 靠重跑它把勾选态刷新过来，否则勾了也不变、看着像没生效。
                                 rebuild: Some(cb),
+                                bar: None,
+                                click_through: true,
                             });
                             res.consumed = true;
                         }
@@ -3826,6 +3890,80 @@ mod tests {
         );
     }
 
+    /// 运行期权重：改信号即改分配，无需重建子树——可拖动分栏的根基。
+    #[test]
+    fn weight_fn_reallocates_when_signal_changes() {
+        let ratio = crate::signal::signal(0.25f32);
+        let row = Element::row()
+            .width(400)
+            .height(10)
+            .child(Element::leaf().weight_when(move || ratio.get()))
+            .child(Element::leaf().weight_when(move || 1.0 - ratio.get()));
+        let mut tree = Tree::new();
+        let id = row.build(&mut tree);
+        tree.root = Some(id);
+        let mut te = crate::text::NullTextEngine;
+        tree.layout_root(Size::new(400, 10), &mut te);
+        let kids = tree.get(id).unwrap().children.clone();
+        assert_eq!(tree.abs_bounds(kids[0]).w, 100);
+        assert_eq!(tree.abs_bounds(kids[1]).w, 300);
+
+        ratio.set(0.5);
+        tree.layout_root(Size::new(400, 10), &mut te);
+        assert_eq!(tree.abs_bounds(kids[0]).w, 200, "改信号后重排即生效");
+        assert_eq!(tree.abs_bounds(kids[1]).w, 200);
+    }
+
+    /// 分隔条：按下捕获、拖动改比例、松开释放；比例被钳在上下限内。
+    #[test]
+    fn split_handle_drag_updates_ratio() {
+        let ratio = crate::signal::signal(0.5f32);
+        let split = Element::split(Axis::Horizontal, Element::leaf(), Element::leaf(), ratio)
+            .width(406)
+            .height(100);
+        let mut tree = Tree::new();
+        let id = split.build(&mut tree);
+        tree.root = Some(id);
+        let mut te = crate::text::NullTextEngine;
+        tree.layout_root(Size::new(406, 100), &mut te);
+        let kids = tree.get(id).unwrap().children.clone();
+        let handle = kids[1];
+        let hb = tree.abs_bounds(handle);
+        assert_eq!((hb.x, hb.w), (200, 6), "分隔条落在两栏之间、厚 6px");
+
+        let (mut h, mut cap) = (None, None);
+        let x = hb.x + 3;
+        tree.dispatch_pointer(
+            PointerEvent::single(PointerKind::Down, Point::new(x, 50), MouseButton::Left),
+            &mut h,
+            &mut cap,
+        );
+        assert_eq!(cap, Some(handle), "按下应捕获分隔条");
+        // 拖到 x=103：分隔条中心 103 → 第一栏 100px / 可分配 400px = 0.25
+        tree.dispatch_pointer(
+            PointerEvent::single(PointerKind::Move, Point::new(103, 50), MouseButton::Left),
+            &mut h,
+            &mut cap,
+        );
+        assert!((ratio.get() - 0.25).abs() < 1e-3, "ratio = {}", ratio.get());
+        tree.layout_root(Size::new(406, 100), &mut te);
+        assert_eq!(tree.abs_bounds(kids[0]).w, 100);
+        assert_eq!(tree.abs_bounds(kids[2]).w, 300);
+
+        // 拖出下限：钳在 0.1
+        tree.dispatch_pointer(
+            PointerEvent::single(PointerKind::Move, Point::new(-50, 50), MouseButton::Left),
+            &mut h,
+            &mut cap,
+        );
+        assert!((ratio.get() - 0.1).abs() < 1e-3);
+        tree.dispatch_pointer(
+            PointerEvent::single(PointerKind::Up, Point::new(-50, 50), MouseButton::Left),
+            &mut h,
+            &mut cap,
+        );
+    }
+
     #[test]
     fn weight_ratio_split_is_pixel_exact() {
         // weight 1:2，容器 300，无 margin/spacing → 100 + 200，总和精确等于 300。
@@ -4110,6 +4248,30 @@ mod tests {
         let btn = tree.get(id).unwrap().children[0];
         let b = tree.abs_bounds(btn);
         (tree, btn, Point::new(b.x + b.w / 2, b.y + b.h / 2))
+    }
+
+    /// 按钮的激活键是**裸** Enter / 空格；带 Ctrl 的不激活，也不消费。
+    ///
+    /// 没有后半条时错在哪：Ctrl+Enter 是应用级的提交通道，而表单里焦点常常停在某个
+    /// 按钮上（Tab 过去的、点过「粘贴」的）。按钮若照吃不误，用户按 Ctrl+Enter 提交
+    /// 得到的是「触发了焦点所在的取消按钮」——表单没提交，反倒关掉了。
+    #[test]
+    fn button_activates_on_bare_enter_but_lets_ctrl_enter_pass() {
+        let clicks = signal(0);
+        let (mut tree, btn, _) = overlay_tree(clicks, false);
+        let key = |ctrl| KeyEvent {
+            key: Key::Enter,
+            pressed: true,
+            shift: false,
+            ctrl,
+            alt: false,
+            meta: false,
+        };
+        assert!(tree.dispatch_key(key(false), Some(btn)).consumed);
+        assert_eq!(clicks.get(), 1, "裸 Enter 应激活按钮");
+        let res = tree.dispatch_key(key(true), Some(btn));
+        assert!(!res.consumed, "Ctrl+Enter 不该被按钮消费");
+        assert_eq!(clicks.get(), 1, "Ctrl+Enter 不该触发 on_click");
     }
 
     #[test]
@@ -4907,6 +5069,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(key(Key::Char('a')), Some(input));
         tree.dispatch_key(key(Key::Char('中')), Some(input));
@@ -4938,6 +5102,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(k(Key::Other(0x41), true), Some(input)); // Ctrl+A 全选
         tree.dispatch_key(k(Key::Char('X'), false), Some(input));
@@ -4952,6 +5118,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(k(Key::Home), Some(input)); // 光标到行首
         tree.dispatch_key(k(Key::Delete), Some(input)); // 删首字符
@@ -4967,6 +5135,8 @@ mod tests {
             pressed: true,
             shift: true,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(shift_left, Some(input));
         let bs = KeyEvent {
@@ -4974,6 +5144,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(bs, Some(input));
         assert_eq!(txt.get(), "ab", "Shift 选区后退格应删除选区");
@@ -4999,6 +5171,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(k(Key::Other(0x41), true), Some(input)); // Ctrl+A 全选
         tree.dispatch_key(k(Key::Other(0x43), true), Some(input)); // Ctrl+C 复制
@@ -5028,6 +5202,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(k(Key::Other(0x41), true), Some(input)); // Ctrl+A 全选
         tree.dispatch_key(k(Key::Other(0x43), true), Some(input)); // Ctrl+C
@@ -5048,6 +5224,7 @@ mod tests {
             pos: center,
             button: MouseButton::Left,
             click_count: 3,
+            mods: crate::event::Mods::default(),
         };
         tree.dispatch_pointer(down, &mut h, &mut cap);
         // 全选后输入替换全部内容。
@@ -5056,6 +5233,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(key, Some(input));
         assert_eq!(txt.get(), "Z", "三击全选后输入应替换全部");
@@ -5085,10 +5264,39 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(k(Key::Enter), Some(input));
         tree.dispatch_key(k(Key::Char('c')), Some(input));
         assert_eq!(txt.get(), "ab\nc", "多行 Enter 应插入换行符");
+    }
+
+    /// 多行框里 **Ctrl+Enter 不换行、也不消费** —— 它是留给应用的提交通道。
+    ///
+    /// 没有这条时错在哪：多行框此前对 Enter 一律换行（不看修饰键），于是「多行表单
+    /// 怎么用键盘提交」无解——挂 `on_submit` 收不到，挂在外层的 Widget 也收不到
+    /// （`dispatch_key` 不冒泡）。放开之后 Ctrl+Enter 未被消费即可上达
+    /// `App::on_shortcut`，wind-setting 的加词界面正是靠它。
+    #[test]
+    fn multiline_ctrl_enter_is_left_for_the_app() {
+        let (mut tree, input, txt) = multiline_tree("ab");
+        let res = tree.dispatch_key(
+            KeyEvent {
+                key: Key::Enter,
+                pressed: true,
+                shift: false,
+                ctrl: true,
+                alt: false,
+                meta: false,
+            },
+            Some(input),
+        );
+        assert!(
+            !res.consumed,
+            "多行 Ctrl+Enter 不该被控件消费——消费掉就到不了 App::on_shortcut"
+        );
+        assert_eq!(txt.get(), "ab", "多行 Ctrl+Enter 不得插入换行");
     }
 
     #[test]
@@ -5100,6 +5308,8 @@ mod tests {
                 pressed: true,
                 shift: false,
                 ctrl: false,
+                alt: false,
+                meta: false,
             },
             Some(input),
         );
@@ -5118,6 +5328,8 @@ mod tests {
                 pressed: true,
                 shift: false,
                 ctrl: true,
+                alt: false,
+                meta: false,
             },
             Some(input),
         );
@@ -5144,6 +5356,8 @@ mod tests {
                 pressed: true,
                 shift: false,
                 ctrl: false,
+                alt: false,
+                meta: false,
             },
             Some(input),
         );
@@ -5169,6 +5383,8 @@ mod tests {
                 pressed: true,
                 shift: false,
                 ctrl: false,
+                alt: false,
+                meta: false,
             },
             Some(input),
         );
@@ -5496,6 +5712,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl,
+            alt: false,
+            meta: false,
         }
     }
 
@@ -5639,6 +5857,8 @@ mod tests {
                 pressed: true,
                 shift: true,
                 ctrl: false,
+                alt: false,
+                meta: false,
             },
             Some(field),
         );
@@ -5972,6 +6192,7 @@ mod tests {
             pos: center,
             button: MouseButton::Right,
             click_count: 1,
+            mods: crate::event::Mods::default(),
         };
         let res = tree.dispatch_pointer(down, &mut h, &mut cap);
         let menu = res.menu.expect("右键应请求上下文菜单");
@@ -6010,6 +6231,7 @@ mod tests {
             pos: Point::new(100, 100),
             button: MouseButton::Right,
             click_count: 1,
+            mods: crate::event::Mods::default(),
         };
         let res = tree.dispatch_pointer(down, &mut h, &mut cap);
         let menu = res.menu.expect("右键容器应请求上下文菜单");
@@ -6041,6 +6263,7 @@ mod tests {
             pos: Point::new(100, 100),
             button: MouseButton::Right,
             click_count: 1,
+            mods: crate::event::Mods::default(),
         };
         let res = tree.dispatch_pointer(down, &mut h, &mut cap);
         let menu = res.menu.expect("右键容器应请求上下文菜单");
@@ -6062,6 +6285,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(k(Key::Other(0x41), true), Some(input)); // 全选
         let b = tree.abs_bounds(input);
@@ -6073,6 +6298,7 @@ mod tests {
             pos,
             button: MouseButton::Right,
             click_count: 1,
+            mods: crate::event::Mods::default(),
         };
         let res = tree.dispatch_pointer(down, &mut h, &mut cap);
         let menu = res.menu.expect("右键应请求上下文菜单");
@@ -6094,6 +6320,7 @@ mod tests {
             pos: center,
             button: MouseButton::Left,
             click_count: 2,
+            mods: crate::event::Mods::default(),
         };
         tree.dispatch_pointer(down, &mut h, &mut cap);
         let key = KeyEvent {
@@ -6101,6 +6328,8 @@ mod tests {
             pressed: true,
             shift: false,
             ctrl: false,
+            alt: false,
+            meta: false,
         };
         tree.dispatch_key(key, Some(input));
         assert_eq!(txt.get(), "Z world", "双击应选中首词并被输入替换");

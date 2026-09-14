@@ -9,8 +9,7 @@ param(
 # Sync the vendored `huanfeng/wind-ui-rust` path dependency to a new upstream
 # commit. The vendored tree under `third_party/wind-ui-rust` is consumed as a
 # Rust path dependency (`windui`), so it must stay a flat in-tree copy rather
-# than a git submodule (submodule working trees cannot carry the repo-local
-# Windows patches this project applies).
+# than a git submodule.
 #
 # Vendoring convention:
 #   * In scope:  src/, examples/, Cargo.toml, README.md, README.en.md,
@@ -20,17 +19,8 @@ param(
 #                build.rs/assets only embed an icon into upstream example exes;
 #                the path dependency builds the library, which needs neither.
 #
-# Repo-local Windows portability patches (must always be re-applied after a
-# sync; a sync that cannot apply them fails closed and leaves the tree clean):
-#   * third_party/patches/wind-ui-rust/win32-window-user-data.patch
-#   * third_party/patches/wind-ui-rust/win32-tray-unaligned.patch
-#
 # The pin is recorded in third_party/dependencies.json and in the constant
 # WIND_UI_RUST_REFERENCE_COMMIT in rust/config-poc/src/main.rs.
-#
-# The patches are first verified with `git apply --check` against the clean
-# upstream clone, BEFORE the vendored tree is touched. If any patch would not
-# apply, the script aborts with the vendored tree untouched.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -39,7 +29,6 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $vendorDir = Join-Path $repoRoot 'third_party/wind-ui-rust'
-$patchDir = Join-Path $repoRoot 'third_party/patches/wind-ui-rust'
 $depsFile = Join-Path $repoRoot 'third_party/dependencies.json'
 $configPocMain = Join-Path $repoRoot 'rust/config-poc/src/main.rs'
 $tempParent = Join-Path $repoRoot 'out/tmp'
@@ -65,42 +54,12 @@ function Invoke-Checked {
   return $stdout
 }
 
-function Invoke-GitApply {
-  param([Parameter(Mandatory = $true)] [string] $WorkingDirectory,
-        [Parameter(Mandatory = $true)] [string[]] $Arguments,
-        [string] $Name)
-  $startInfo = [Diagnostics.ProcessStartInfo]::new()
-  $startInfo.FileName = 'git.exe'
-  $startInfo.WorkingDirectory = $WorkingDirectory
-  foreach ($argument in $Arguments) { [void] $startInfo.ArgumentList.Add($argument) }
-  $startInfo.UseShellExecute = $false
-  $startInfo.RedirectStandardOutput = $true
-  $startInfo.RedirectStandardError = $true
-  $startInfo.CreateNoWindow = $true
-  $process = [Diagnostics.Process]::Start($startInfo)
-  $stdout = $process.StandardOutput.ReadToEnd()
-  $stderr = $process.StandardError.ReadToEnd()
-  $process.WaitForExit()
-  if ($process.ExitCode -ne 0) {
-    throw "$Name failed in $WorkingDirectory with exit code $($process.ExitCode): $stderr $stdout"
-  }
-  return $stdout
-}
-
 function Normalize-Lf([string] $Path) {
   $raw = [System.IO.File]::ReadAllText($Path)
   if ($raw.Contains("`r`n")) {
     $raw = $raw -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText($Path, $raw, [System.Text.UTF8Encoding]::new($false))
   }
-}
-
-if (-not (Test-Path -LiteralPath $patchDir -PathType Container)) {
-  throw "Missing wind-ui portability patch directory: $patchDir"
-}
-$patches = @(Get-ChildItem -LiteralPath $patchDir -Filter '*.patch' -File | Sort-Object Name)
-if ($patches.Count -eq 0) {
-  throw "No portability patches found in $patchDir"
 }
 
 if ($Latest) {
@@ -139,15 +98,6 @@ try {
     throw "Resolved HEAD $($actual.Trim()) does not match requested commit $Commit"
   }
 
-  # Fail-closed patch verification against the CLEAN upstream clone, before the
-  # vendored tree is modified. A patch that no longer applies aborts the sync
-  # with the repository tree untouched.
-  foreach ($patch in $patches) {
-    Invoke-GitApply -WorkingDirectory $cloneDir `
-      -Arguments @('apply', '--check', $patch.FullName) `
-      -Name "patch check $($patch.Name)"
-  }
-
   $inScope = @('src', 'examples', 'Cargo.toml', 'README.md', 'README.en.md',
     'LICENSE-APACHE', 'LICENSE-MIT')
   foreach ($entry in $inScope) {
@@ -180,15 +130,6 @@ try {
   $allText = @(Get-ChildItem -LiteralPath (Join-Path $vendorDir 'src') -Recurse -File)
   $allText += @(Get-ChildItem -LiteralPath (Join-Path $vendorDir 'examples') -Recurse -File)
   foreach ($file in $allText) { Normalize-Lf $file.FullName }
-
-  # Apply the repo-local Windows portability patches to the vendored tree.
-  # Run from the repository root with --directory so the patch paths (which are
-  # relative to the vendored tree root) resolve under third_party/wind-ui-rust.
-  foreach ($patch in $patches) {
-    Invoke-GitApply -WorkingDirectory $repoRoot `
-      -Arguments @('apply', '--directory=third_party/wind-ui-rust', $patch.FullName) `
-      -Name "apply $($patch.Name)"
-  }
 
   # Update the dependency pin + upstream version in dependencies.json.
   $upstreamVersion = '0.0.0'

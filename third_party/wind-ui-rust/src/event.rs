@@ -1,7 +1,7 @@
 //! 输入事件类型。平台层产生物理像素坐标，但 `UiHost::on_pointer` 在分发前
 //! 已 ÷scale 转为**逻辑坐标**——控件 `on_event` 收到的 pos 是逻辑坐标。
 
-use crate::geometry::Point;
+use crate::geometry::{Point, Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
@@ -286,6 +286,43 @@ pub enum HotkeyOp {
     SetEnabled(bool),
 }
 
+thread_local! {
+    /// 托盘 / 全局热键回调排队的开窗请求。平台层在**回调返回、借用释放之后**取走并建窗。
+    ///
+    /// **为什么不装在 `HotkeyCtx` / `TrayCtx` 里**：`WindowRequest` 带闭包，既不是
+    /// `Clone` 也不是 `PartialEq`/`Debug`，而 `HotkeyCtx` 是 `Copy`、`Vec<TrayAction>`
+    /// 的相等比较更是下游写测试的正式入口（见 `testing::run_with_tray_ctx` 的文档示例）。
+    /// 把请求塞进那两个类型会连带砸掉这些约定，于是请求走这条旁路、意图那边只留一个
+    /// 位置标记（[`crate::platform::TrayAction::OpenWindow`]）。
+    ///
+    /// 线程局部而非穿构造器，与托盘运行期队列同理：开窗是**应用级**的动作，常驻模式下
+    /// 更可能一个窗口都没有，挂不到任何窗口的宿主上。
+    static PENDING_CALLBACK_WINDOWS: std::cell::RefCell<Vec<WindowRequest>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// 排入一个来自托盘 / 热键回调的开窗请求。
+pub(crate) fn push_callback_window(req: WindowRequest) {
+    PENDING_CALLBACK_WINDOWS.with(|q| q.borrow_mut().push(req));
+}
+
+/// 取走**最早**排队的那个开窗请求（按调用顺序消费）。
+pub(crate) fn take_callback_window() -> Option<WindowRequest> {
+    PENDING_CALLBACK_WINDOWS.with(|q| {
+        let mut q = q.borrow_mut();
+        if q.is_empty() {
+            None
+        } else {
+            Some(q.remove(0))
+        }
+    })
+}
+
+/// 取走全部排队的开窗请求（热键路径：没有意图队列给它们定位置，一次全取）。
+pub(crate) fn take_callback_windows() -> Vec<WindowRequest> {
+    PENDING_CALLBACK_WINDOWS.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
+
 /// 全局热键回调的上下文。
 ///
 /// **刻意只能声明意图，拿不到窗口句柄。** 回调在平台层持有窗口状态借用期间执行，
@@ -305,6 +342,26 @@ impl HotkeyCtx {
     /// 请求隐藏窗口。
     pub fn hide_window(&mut self) {
         self.op = Some(WindowOp::Hide);
+    }
+    /// 请求**新建**一个窗口，语义同
+    /// [`EventCtx::open_window`](crate::core::EventCtx::open_window)。
+    ///
+    /// 零窗口常驻模式（[`App::run_resident`](crate::app::App::run_resident)）下这是热键
+    /// 唯一能唤出界面的途径——那时没有窗口可 `show_window`，进程只有托盘与热键。
+    ///
+    /// 请求不占 [`show_window`](Self::show_window) 那个位置（两者不是同一件事，可并用），
+    /// 由平台层在回调返回后建窗。
+    ///
+    /// ```no_run
+    /// # use windui::prelude::*;
+    /// App::resident("查词")
+    ///     .hotkey(Hotkey::new(Key::Char('D')).ctrl().alt(), |ctx| {
+    ///         ctx.open_window(Window::new("查词", 480, 320).content(|| Element::col().fill()));
+    ///     })
+    ///     .run_resident();
+    /// ```
+    pub fn open_window(&mut self, req: WindowRequest) {
+        push_callback_window(req);
     }
     /// 取出回调声明的意图（供平台层在**释放窗口状态借用之后**执行）。
     ///
@@ -330,6 +387,9 @@ pub enum CursorShape {
     /// 没有它时只能退而用 [`Hand`](Self::Hand)——手型说的是「这里能点」，而分隔条
     /// 要说的是「这里能左右拖」，两者指向不同的操作，用户据此预期的动作也不同。
     SizeWE,
+    /// 上下调整（↕）。横向分栏的分隔条、可拖高的行边界。与 [`SizeWE`](Self::SizeWE)
+    /// 对称：分栏容器两个方向都有，光标形状也得两个方向都有。
+    SizeNS,
 }
 
 /// 指针动作。
@@ -354,6 +414,9 @@ pub struct PointerEvent {
     /// 连续点击计数（由平台层填充）：1=单击，2=双击，3=三击。
     /// 仅 `Down` 有意义；其余动作恒为 1。控件据此实现双击选词/三击选行。
     pub click_count: u8,
+    /// 事件发生时按着的修饰键。列表控件靠它做 Ctrl+点击切换选中、Shift+点击范围选中
+    /// ——桌面软件最基本的选择手势，此前平台层收得到却没送上来。
+    pub mods: Mods,
 }
 
 impl PointerEvent {
@@ -364,6 +427,15 @@ impl PointerEvent {
             pos,
             button,
             click_count: 1,
+            mods: Mods::default(),
+        }
+    }
+
+    /// 带修饰键的单击（测试 Ctrl+点击、Shift+点击用）。
+    pub fn single_with(kind: PointerKind, pos: Point, button: MouseButton, mods: Mods) -> Self {
+        Self {
+            mods,
+            ..Self::single(kind, pos, button)
         }
     }
 }
@@ -388,6 +460,30 @@ pub enum Key {
     PageUp,
     /// 下翻页。见 [`Key::PageUp`]。
     PageDown,
+    /// Insert 键。文件管理器用它「标记并下移」，编辑器用它切换插入/覆盖。
+    Insert,
+    /// 功能键 F1–F12（`F(1)`..=`F(12)`）。
+    ///
+    /// 此前只能经 [`Key::Other`] 里的 Windows 虚拟键码表达（macOS 侧为此对齐了一张
+    /// VK 表），应用要写 `Key::Other(0x74)` 才是 F5——既不可读，也把平台键码泄漏进
+    /// 应用代码。具名以后两平台的映射表各自翻译，应用只认 `F(5)`。
+    F(u8),
+    /// 小键盘 `+`。与主键盘 `Key::Char('+')` 区分：TC 系文件管理器把小键盘的
+    /// `+ - *` 专用于选择/反选，而主键盘的同名字符仍是可输入文本。
+    NumpadAdd,
+    /// 小键盘 `-`。见 [`Key::NumpadAdd`]。
+    NumpadSubtract,
+    /// 小键盘 `*`。见 [`Key::NumpadAdd`]。
+    NumpadMultiply,
+    /// 小键盘 `/`。见 [`Key::NumpadAdd`]。
+    NumpadDivide,
+    /// 键盘上的「菜单」键（Windows 的 Apps 键）：弹出当前项的上下文菜单。
+    ContextMenu,
+    /// Alt 键**本身**（macOS 的 Option）。只有它会带着 `pressed: false` 上来：
+    /// 单击 Alt（按下、期间没碰别的键、松开）是桌面惯例里激活菜单栏的手势，判定
+    /// 必须看到松开那一下。宿主在分发前截下它，控件永远收不到——控件要的是
+    /// [`KeyEvent::alt`] 那个修饰标志，不是这个键。
+    Alt,
     Char(char),
     Other(u32),
 }
@@ -398,8 +494,42 @@ pub struct KeyEvent {
     pub pressed: bool,
     /// Shift 是否按下（用于 Shift+Tab 反向导航、Shift+方向扩展选区）。
     pub shift: bool,
-    /// Ctrl 是否按下（用于 Ctrl+A/C/V/X 等）。
+    /// Ctrl 是否按下（用于 Ctrl+A/C/V/X 等）。macOS 上 Command 也落到这里——
+    /// 平台惯用的「主修饰键」统一成一个标志，应用写一次 `Ctrl+C` 两平台都对。
     pub ctrl: bool,
+    /// Alt（macOS：Option）是否按下。
+    ///
+    /// 没有它时 `Alt+F1`、`Alt+Enter` 这类桌面软件的常规快捷键无从表达：平台层收得到
+    /// 修饰键状态，却在这里被丢掉，应用侧看到的 `Alt+Enter` 与裸 `Enter` 一模一样。
+    pub alt: bool,
+    /// Meta（Windows：Win 键；macOS：Command）是否按下。
+    ///
+    /// macOS 上 Command 同时置 [`ctrl`](Self::ctrl) 与本标志：前者服务「跨平台写一次」，
+    /// 后者留给确需区分 Command 与 Control 的应用（如把 Ctrl+方向留给行首行尾）。
+    pub meta: bool,
+}
+
+impl KeyEvent {
+    /// 按下某键、无任何修饰。测试与合成事件用；四个修饰键都要写一遍的字面量太长。
+    pub const fn pressed(key: Key) -> Self {
+        Self {
+            key,
+            pressed: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        }
+    }
+    /// 修饰键组合，与全局热键的 [`Mods`] 同形，便于键位表按 `(Key, Mods)` 查找。
+    pub const fn mods(&self) -> Mods {
+        Mods {
+            ctrl: self.ctrl,
+            alt: self.alt,
+            shift: self.shift,
+            meta: self.meta,
+        }
+    }
 }
 
 /// 统一事件。
@@ -534,6 +664,21 @@ pub struct MenuItem {
     /// 与 `enabled` 的优先级：禁用胜出（变灰）——不可点的项不该还在喊"危险"。
     /// 与悬停/勾选的优先级：intent 胜出——危险项被指向时更该保持红，而不是变成中性的强调色。
     pub intent: Option<crate::theme::Intent>,
+    /// 助记字母（不分大小写）：菜单展开时按这个字母即激活本项（有子菜单则展开）。
+    /// 标签里首个匹配的字符画下划线；标签里没有这个字母（中文标签常见）就只响应按键、
+    /// 不画线——习惯写法是 `"复制(C)"` 配 `.mnemonic('C')`，括号里的字母自然被画上线。
+    pub mnemonic: Option<char>,
+}
+
+/// 把标签按助记字母切成 `(前缀, 该字符, 后缀)`：首个不分大小写匹配的字符处。
+/// 标签里没有这个字母（中文标签只在括号里带字母时会有）返回 `None`——只响应按键、不画线。
+pub fn mnemonic_split(label: &str, m: char) -> Option<(&str, &str, &str)> {
+    let lower: Vec<char> = m.to_lowercase().collect();
+    let (i, c) = label
+        .char_indices()
+        .find(|(_, c)| c.to_lowercase().eq(lower.iter().copied()))?;
+    let end = i + c.len_utf8();
+    Some((&label[..i], &label[i..end], &label[end..]))
 }
 
 /// 空动作（分隔线/子菜单父项占位，永不执行）。
@@ -561,6 +706,7 @@ impl MenuItem {
             on_trailing_click: None,
             stay_open: false,
             intent: None,
+            mnemonic: None,
         }
     }
     /// 便捷构造：标签 + 合成按键。
@@ -666,6 +812,19 @@ impl MenuItem {
         self.enabled = enabled;
         self
     }
+    /// 设置助记字母（见 [`MenuItem::mnemonic`] 字段）。
+    pub fn mnemonic(mut self, c: char) -> Self {
+        self.mnemonic = Some(c);
+        self
+    }
+    /// 本项是否响应助记字母 `c`（不分大小写；分隔线、禁用项不响应）。
+    pub fn matches_mnemonic(&self, c: char) -> bool {
+        !self.separator
+            && self.enabled
+            && self
+                .mnemonic
+                .is_some_and(|m| m.to_lowercase().eq(c.to_lowercase()))
+    }
 
     /// 改名为 [`MenuItem::icon`]。
     #[deprecated(
@@ -758,6 +917,58 @@ pub struct MenuRequest {
     /// 面板宽度与位置**不随重建变化**——项文本变化会让面板忽宽忽窄，而指针正停在
     /// 上面准备点下一项。宽度以首次弹出的测量结果为准。
     pub rebuild: Option<std::rc::Rc<dyn Fn() -> Vec<MenuItem>>>,
+    /// 发起本菜单的菜单栏（[`EventCtx::show_menu_bar`](crate::core::EventCtx::show_menu_bar)
+    /// 才填）：宿主据此在展开期间做栏级联动——指针滑到相邻标题即切换、←→ 在根级跨菜单、
+    /// 点标题收起。普通右键菜单与下拉留 `None`。
+    pub bar: Option<MenuBarLink>,
+    /// 点在浮层外的那一下是否**穿透**给下面的控件：`true` = 收起菜单，同一下按下照常
+    /// 分发（Windows 的右键菜单开着时点另一行，菜单收起且那一行被选中，不用点两次）；
+    /// `false` = 那一下只负责收起。右键菜单与菜单栏默认穿透；下拉 / 复选菜单不穿透——
+    /// 点别处是"放弃这次选择"，且点回下拉控件自己会立刻再展开一次。
+    pub click_through: bool,
+}
+
+/// 菜单栏交给宿主的联动信息：各标题的位置与项生成器。
+///
+/// 菜单栏控件自己只画标题、收第一下点击；展开之后指针与键盘都归宿主浮层独占，
+/// 控件再也收不到事件。"滑到相邻标题自动切换"这种原生手感只能由宿主做——它得知道
+/// 其它标题在哪、点开是什么，这份信息就是为此打包的。
+///
+/// `open` 是控件与宿主之间的**共享单元格**：宿主切换 / 关闭时写"当前展开（或键盘
+/// 激活）的标题下标"，控件绘制时读它画按下态。不用 `Signal`：它不属于任何窗口的信号
+/// 作用域，控件销毁即随之回收。
+#[derive(Clone)]
+pub struct MenuBarLink {
+    pub slots: Vec<MenuBarSlot>,
+    /// 本次要展开的标题下标。
+    pub current: usize,
+    /// 由键盘打开（F10 / Alt / ←→ 切换）：首项先高亮，让键盘用户看得见起点。
+    /// 鼠标点开则不预选——桌面惯例。
+    pub keyboard: bool,
+    pub open: std::rc::Rc<std::cell::Cell<Option<usize>>>,
+}
+
+/// 菜单栏里的一个标题：窗口坐标下的矩形、助记字母、项生成器。
+#[derive(Clone)]
+pub struct MenuBarSlot {
+    pub rect: Rect,
+    pub mnemonic: Option<char>,
+    /// 每次展开现建：项的启用 / 勾选态因此总反映当前状态。
+    pub build: std::rc::Rc<dyn Fn() -> Vec<MenuItem>>,
+}
+
+impl MenuBarLink {
+    /// 命中点落在哪个标题上。
+    pub fn slot_at(&self, p: Point) -> Option<usize> {
+        self.slots.iter().position(|s| s.rect.contains(p))
+    }
+    /// 响应助记字母 `c` 的标题下标（不分大小写）。
+    pub fn slot_of_mnemonic(&self, c: char) -> Option<usize> {
+        self.slots.iter().position(|s| {
+            s.mnemonic
+                .is_some_and(|m| m.to_lowercase().eq(c.to_lowercase()))
+        })
+    }
 }
 
 /// 子窗口内容的不透明载体。
@@ -800,7 +1011,13 @@ pub struct WindowRequest {
     pub width: i32,
     pub height: i32,
     pub resizable: bool,
+    /// 居中。设了 `owned` 就居中在发起窗口上，否则居中在屏幕上。
     pub centered: bool,
+    /// 归属于**发起它的那个窗口**（Windows 的 owner、macOS 的 child window）：始终浮在
+    /// 它上方、随它最小化 / 隐藏、不单独占任务栏、它关掉时一并关掉。对话框都该设。
+    pub owned: bool,
+    /// 模态（隐含 `owned`）：打开期间发起窗口不接受输入，关闭后焦点回到它。
+    pub modal: bool,
     pub frameless: bool,
     /// 自绘标题栏的拖动区右键是否弹出窗口系统菜单（默认 true）。
     pub system_menu: bool,

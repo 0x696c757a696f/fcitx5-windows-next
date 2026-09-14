@@ -21,6 +21,27 @@ use crate::ui::caret::{CaretOpts, CaretState, CaretStyle};
 use crate::ui::containers::VScrollbar;
 use crate::ui::TextContent;
 
+/// 「方框 + 标签」这类控件（CheckBox / RadioButton）量文字时该用的换行宽度。
+///
+/// **必须与 `paint` 里的 `text_rect` 同口径**（容器宽扣掉方框与间距）。两处口径不一致
+/// 是个会静默出错的组合：`measure` 传 `None` 按单行量、`paint` 却在受限矩形里换行，
+/// 于是布局只分到一行的高度、实际画了两行，控件直接压在下一个元素身上——没有任何
+/// 报错，只有窄容器 + 长标签时才显形。`Label` 一直是按可用宽度量的，所以同一页里
+/// 说明文字排得好好的，只有勾选行在压人。
+///
+/// 窄到放不下方框时（含 `AtMost(0)` 这种「宽度已知为零」的约束）返回 `None`，退回单行
+/// 测量 —— 与加入本函数之前的行为一致。
+///
+/// ⚠️ 不受约束（`MeasureSpec::Unbounded`）走的**不是**这条退化路径：`avail()` 那时给的是
+/// `i32::MAX / 4`，于是换行宽大到用不上，行为同样等价于单行，但路径不同。
+///
+/// 已知限制同 `Label`：换行准确仅保证于宽度确定的容器（`width` / `width_match` /
+/// `weight`）；纯 Wrap 宽度下 `paint` 会在收敛后的窄宽重新换行，行数可能与 measure 不符。
+fn label_wrap_width(avail: Size, box_size: i32, gap: i32) -> Option<f32> {
+    let text_w = avail.w - box_size - gap;
+    (text_w > 0).then_some(text_w as f32)
+}
+
 const BOX_SIZE: i32 = 18;
 const BOX_SIZE_SMALL: i32 = 14;
 const GAP: i32 = 8;
@@ -95,7 +116,7 @@ impl CheckBox {
 }
 
 impl Widget for CheckBox {
-    fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
+    fn measure(&self, avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         let (bsz, gap) = match self.size {
             CheckBoxSize::Normal => (BOX_SIZE, GAP),
             CheckBoxSize::Small => (BOX_SIZE_SMALL, GAP_SMALL),
@@ -104,7 +125,7 @@ impl Widget for CheckBox {
         let t = text.measure(
             self.label.resolve().as_ref(),
             &crate::text::TextStyle::of(style).with_size(fsize),
-            None,
+            label_wrap_width(avail, bsz, gap),
         );
         Size::new(bsz + gap + t.w, bsz.max(t.h))
     }
@@ -269,6 +290,12 @@ impl SwitchSize {
     }
 }
 
+/// 开关翻转**之后**的副作用钩子：回调收到已生效的新值，不需要自己再 `set`。
+///
+/// 与 [`CheckBox`] 的 `on_toggle`（取代默认翻转）方向相反，与
+/// [`crate::ui::CheckMenuItem::on_change`] 同构——`ctx` 恒在首位，新值跟在后面。
+pub type SwitchChangeFn = Box<dyn Fn(&mut EventCtx, bool)>;
+
 pub struct Switch {
     state: Signal<bool>,
     /// 滑块位置补间（0=关、1=开）；同时驱动轨道色 off↔on 渐变。retarget-in-paint。
@@ -276,6 +303,8 @@ pub struct Switch {
     /// 显隐翻转经 `reset_interaction` 复位；复显时首帧靠 `primed` 瞬时落定位置，不回放动画。
     primed: Cell<bool>,
     size: SwitchSize,
+    /// 见 [`SwitchChangeFn`]。`RefCell` 只为在 `&self` 的 `toggle` 里取用，不改内容。
+    on_change: RefCell<Option<SwitchChangeFn>>,
 }
 
 impl Switch {
@@ -286,14 +315,30 @@ impl Switch {
             pos: Cell::new(Transition::new(init)),
             primed: Cell::new(false),
             size: SwitchSize::Normal,
+            on_change: RefCell::new(None),
         }
+    }
+    /// 设置翻转后的副作用钩子（供 Builder 的 `.on_switch_change()` 调用）。
+    pub fn set_on_change(&mut self, f: SwitchChangeFn) {
+        *self.on_change.borrow_mut() = Some(f);
     }
     /// 设置尺寸变体（供 Builder 的 `.small()` 调用）。
     pub fn set_size(&mut self, size: SwitchSize) {
         self.size = size;
     }
     fn toggle(&self, ctx: &mut EventCtx) {
-        self.state.set(!self.state.get());
+        let now = !self.state.get();
+        self.state.set(now);
+        // 钩子在 `set` **之后**跑，且拿的是已生效的新值：回调里常见的动作是去改**别的**
+        // 信号（互斥开关：开了这个就关掉那个），先 set 再通知才不会让它读到旧值。
+        //
+        // 借用在调用前结束——回调可能间接走回本 widget（同一帧里另一个开关的联动），
+        // 持着 `borrow()` 调用就会在那条路上 panic。
+        let cb = self.on_change.borrow_mut().take();
+        if let Some(f) = cb {
+            f(ctx, now);
+            *self.on_change.borrow_mut() = Some(f);
+        }
         ctx.mark_dirty();
     }
 }
@@ -415,11 +460,11 @@ impl RadioButton {
 }
 
 impl Widget for RadioButton {
-    fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
+    fn measure(&self, avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         let t = text.measure(
             self.label.resolve().as_ref(),
             &crate::text::TextStyle::of(style),
-            None,
+            label_wrap_width(avail, BOX_SIZE, GAP),
         );
         Size::new(BOX_SIZE + GAP + t.w, BOX_SIZE.max(t.h))
     }
@@ -1146,6 +1191,8 @@ impl TextInput {
             pressed: true,
             shift: false,
             ctrl: true,
+            alt: false,
+            meta: false,
         };
         vec![
             MenuItem::key("剪切", ctrl(0x58), has_sel && !pw), // VK_X
@@ -2099,7 +2146,14 @@ impl Widget for TextInput {
                     // `dispatch_files`，那个是真冒泡）。所以未消费的按键是**就地消失**，
                     // 不会传给外层容器——想在外层挂 Widget 接 Enter 的写法编译通过、
                     // 逻辑正确、永远不触发。单行 Enter 的唯一出口是 `on_submit`。
-                    Key::Enter if self.is_multiline() => {
+                    //
+                    // **`!k.ctrl` 是承重的**：多行框里 Enter 是编辑器语义（换行），于是
+                    // 「多行表单怎么用键盘提交」在此前完全无解——挂了 `on_submit` 也永远
+                    // 收不到。Ctrl+Enter 从换行里让出来交给 `fire_submit`（下面那条臂），
+                    // 换行与提交这才各有各的键，与业界通例一致（Enter 换行 / Ctrl+Enter
+                    // 发送）。未声明 `on_submit` 的多行框上 Ctrl+Enter 变成不消费，
+                    // 于是能冒到 `App::on_shortcut`——那正是应用级「提交」该待的地方。
+                    Key::Enter if self.is_multiline() && !k.ctrl => {
                         self.insert_newline(ctx);
                         true
                     }
@@ -2114,8 +2168,9 @@ impl Widget for TextInput {
                         true
                     }
                     // 单行的 Enter / 上下键：本控件不处理，交给应用声明的出口。
-                    // 放在多行守卫之后，故多行模式永远走不到这里（Enter 换行、上下移行
-                    // 是编辑器的固有语义，不该被应用截走）。
+                    // 放在多行守卫之后，故多行模式的**裸** Enter 走不到这里（换行、
+                    // 上下移行是编辑器的固有语义，不该被应用截走）；多行的
+                    // **Ctrl+Enter** 则由上面那条臂让出来，与单行 Enter 汇到同一个出口。
                     Key::Enter => self.fire_submit(ctx),
                     // 上下键：单行本控件不用，交给应用。
                     //
@@ -2313,6 +2368,7 @@ mod tests {
         use crate::event::{PointerEvent, PointerKind};
         let ev = PointerEvent {
             click_count: count,
+            mods: crate::event::Mods::default(),
             ..PointerEvent::single(
                 PointerKind::Down,
                 crate::geometry::Point::new(20, 14),
@@ -2988,5 +3044,81 @@ mod anim_tests {
         paint_at(&sw, 0);
         assert_eq!(sw.pos.get().value(), 0.0, "复显应瞬时落定到新状态");
         assert!(!sw.pos.get().is_active(), "复显不应进入动画过渡");
+    }
+}
+
+#[cfg(test)]
+mod label_wrap_tests {
+    use super::{CheckBox, RadioButton, BOX_SIZE, GAP};
+    use crate::core::Widget;
+    use crate::geometry::Size;
+    use crate::signal::signal;
+    use crate::style::Style;
+    use crate::text::LineAwareTextEngine;
+
+    /// 长得放不下的标签必须**按可用宽度折行来量**。
+    ///
+    /// 此前 `measure` 恒传 `None`（单行），而 `paint` 在受限的 `text_rect` 里换行——
+    /// 布局只分到一行高度、实际画了两行，勾选行于是压在下一个元素身上。没有任何报错，
+    /// 只在「窄容器 + 长标签」时显形（实测在卸载向导：带完整用户数据路径的那个勾选，
+    /// 压住了下面解释「还会删哪些文件」的说明文字）。
+    #[test]
+    fn long_label_is_measured_wrapped_not_single_line() {
+        let mut te = LineAwareTextEngine;
+        let style = Style::default();
+        let long = r"删除用户词库和配置数据（C:\Users\Someone\AppData\Roaming\DemoApp）";
+
+        let checked = signal(false);
+        let cb = CheckBox::new(long, checked);
+        let narrow = cb.measure(Size::new(300, 1000), &style, &mut te);
+        let wide = cb.measure(Size::new(4000, 1000), &style, &mut te);
+
+        assert!(
+            narrow.h > wide.h,
+            "窄容器下应折行变高（窄 {} vs 宽 {}）",
+            narrow.h,
+            wide.h
+        );
+        assert!(
+            narrow.w <= 300,
+            "折行后测量宽度不该再超出可用宽度（得到 {}）",
+            narrow.w
+        );
+
+        // RadioButton 与 CheckBox 同构（方框 + 标签、paint 用同样的受限 text_rect），
+        // 只修一个等于留一半。
+        let group = signal(0usize);
+        let rb = RadioButton::new(long, group, 0);
+        let rb_narrow = rb.measure(Size::new(300, 1000), &style, &mut te);
+        let rb_wide = rb.measure(Size::new(4000, 1000), &style, &mut te);
+        assert!(
+            rb_narrow.h > rb_wide.h,
+            "单选按钮同样应折行变高（窄 {} vs 宽 {}）",
+            rb_narrow.h,
+            rb_wide.h
+        );
+    }
+
+    /// 两条退化路径必须与加入折行之前完全一致：宽度未知（`avail.w == 0`，Wrap 语义下
+    /// 常见）、以及窄到连方框都放不下。两者都退回单行测量，而不是把文字挤成每行一个字。
+    #[test]
+    fn unknown_or_tiny_width_falls_back_to_single_line() {
+        let mut te = LineAwareTextEngine;
+        let style = Style::default();
+        let checked = signal(false);
+        let cb = CheckBox::new("一段长到足以折行的标签文字，用来观察退化路径", checked);
+
+        let single = cb.measure(Size::new(4000, 1000), &style, &mut te).h;
+        assert_eq!(
+            cb.measure(Size::new(0, 1000), &style, &mut te).h,
+            single,
+            "宽度未知时应按单行量"
+        );
+        assert_eq!(
+            cb.measure(Size::new(BOX_SIZE + GAP, 1000), &style, &mut te)
+                .h,
+            single,
+            "窄到放不下文字时应按单行量，而不是折成极窄的多行"
+        );
     }
 }

@@ -18,14 +18,14 @@ use std::path::PathBuf;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
-use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadOnly, Message};
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColorSpace, NSCursor,
     NSDragOperation, NSDraggingDestination, NSDraggingInfo, NSEvent, NSEventPhase,
     NSGraphicsContext, NSImage, NSPasteboardType, NSScreen, NSTextInputClient, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindow, NSWindowButton, NSWindowDelegate, NSWindowStyleMask,
-    NSWindowTitleVisibility,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowButton, NSWindowDelegate,
+    NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 // 已弃用但在现行 macOS 仍有效，且读取拖入路径列表最简。
 #[allow(deprecated)]
@@ -41,7 +41,7 @@ use objc2_foundation::{
     NSTimer, NSUInteger,
 };
 
-#[cfg(feature = "gpu")]
+#[cfg(gpu_backend)]
 use objc2_quartz_core::{CAMetalLayer, CATransaction};
 
 use tiny_skia::Pixmap;
@@ -50,8 +50,10 @@ use super::{AppHandler, NewWindow, WindowConfig};
 use crate::event::{Key, KeyEvent, MouseButton, PointerEvent, PointerKind, Preedit, WindowOp};
 use crate::geometry::{Color, Point, Rect, Size};
 use crate::platform::{to_skia_color, Renderer};
-#[cfg(feature = "gpu")]
-use crate::render::gpu::{FrameError, SharedGpu, WindowGpu};
+#[cfg(gpu_backend)]
+use crate::render::gpu::{
+    invalidate_shared_gpu, FrameError, LossAction, LossRecovery, SharedGpu, WindowGpu,
+};
 
 /// sRGB 色彩空间（取不到时退回 DeviceRGB）。
 ///
@@ -115,6 +117,12 @@ thread_local! {
     static CLOSED: RefCell<Vec<Retained<NSWindow>>> = const { RefCell::new(Vec::new()) };
     /// 应用已进入退出流程（`terminate` 已发出），见 [`ContentView::window_will_close`]。
     static TERMINATING: Cell<bool> = const { Cell::new(false) };
+    /// 模态阻断表：`(owner, 正压着它的模态对话框)`。对照 win32 的 `EnableWindow(owner, false)`
+    /// ——AppKit 没有"禁用一个窗口"的原语（`runModalForWindow:` 是嵌套 run loop，与本库
+    /// 的帧模型不合），故由 owner 的视图在事件入口查表自行拒收（见 `blocked_by_modal`）。
+    /// 对话框关闭时从表里除名（`windowWillClose:`）。
+    static MODAL_BLOCKS: RefCell<Vec<(Retained<NSWindow>, Retained<NSWindow>)>> =
+        const { RefCell::new(Vec::new()) };
     /// 主窗——`App::run` 建的那一个。
     ///
     /// 托盘点击与全局热键说的"唤出窗口"指的都是它；子窗（设置页之类）不是这些操作的
@@ -236,6 +244,25 @@ struct LiveWindow {
 /// 两个引用是否指向同一个 `NSWindow`（登记表按对象身份增删，不能用 `==`）。
 fn same_window(a: &NSWindow, b: &NSWindow) -> bool {
     std::ptr::eq(a as *const NSWindow, b as *const NSWindow)
+}
+
+/// 正压着 `owner` 的模态对话框（最后开的那个）。
+fn modal_child_of(owner: &NSWindow) -> Option<Retained<NSWindow>> {
+    MODAL_BLOCKS.with(|m| {
+        m.borrow()
+            .iter()
+            .rev()
+            .find(|(o, _)| same_window(o, owner))
+            .map(|(_, c)| c.clone())
+    })
+}
+
+/// 窗口关闭：它若是模态对话框，解除对 owner 的阻断；它若是 owner，连带的阻断也作废。
+fn modal_release(win: &NSWindow) {
+    MODAL_BLOCKS.with(|m| {
+        m.borrow_mut()
+            .retain(|(o, c)| !same_window(c, win) && !same_window(o, win))
+    });
 }
 
 /// 窗口建成时登记（连同所有权）。
@@ -381,15 +408,18 @@ struct ViewState {
     ///
     /// **声明顺序即析构顺序，这两个字段的先后是必须的**：`WindowGpu` 里的 `wgpu::Surface`
     /// 存着下面那张 layer 的裸指针，layer 先释放就是悬垂。
-    #[cfg(feature = "gpu")]
+    #[cfg(gpu_backend)]
     gpu: Option<WindowGpu>,
     /// 挂在视图 backing layer 下的那张 `CAMetalLayer` 子层（见 [`attach_gpu`]）。
     ///
     /// 这份 `Retained` 是 surface 那个裸指针的**存活担保**：视图的 layer 树里也有它一份，
     /// 但那份由 AppKit 管、我们说了不算，而本字段的生命周期是明确的——它随 `ViewState`
     /// 一起死，且死在 `gpu` 之后。
-    #[cfg(feature = "gpu")]
+    #[cfg(gpu_backend)]
     metal_layer: Option<Retained<CAMetalLayer>>,
+    /// 设备丢失的连续失败计数，决定「再重建一次」还是「切回软渲染」。
+    #[cfg(gpu_backend)]
+    gpu_recovery: LossRecovery,
 }
 
 impl ViewState {
@@ -432,7 +462,7 @@ define_class!(
         ///
         /// 不这么做的话，AppKit 会为视图额外分配一整张窗口大小的 CPU backing store 供
         /// `drawRect:` 用——而我们的像素全在 Metal 子层里，那张缓冲一个字节都不会被写。
-        #[cfg(feature = "gpu")]
+        #[cfg(gpu_backend)]
         #[unsafe(method(wantsUpdateLayer))]
         fn wants_update_layer(&self) -> bool {
             self.ivars().borrow().metal_layer.is_some()
@@ -441,7 +471,7 @@ define_class!(
         /// GPU 路径的出帧点，与下面的 `drawRect:` 等价（含帧内意图的排空，理由见那边）。
         /// `setNeedsDisplay(true)` 在两条路径下分别落到这里和 `drawRect:`，故上层的所有
         /// 标脏调用不必区分后端。
-        #[cfg(feature = "gpu")]
+        #[cfg(gpu_backend)]
         #[unsafe(method(updateLayer))]
         fn update_layer(&self) {
             self.do_draw();
@@ -784,7 +814,7 @@ define_class!(
         // 等 vsync（wgpu 因此先查 `occlusionState`，不可见就直接判 `Occluded`），而窗口
         // 刚 `makeKeyAndOrderFront` 时系统还没把它标成 visible——首帧正好撞上这一档被丢掉。
         // 丢了就再也没人标脏，窗口永远空白（真机上就是这么表现的）。变可见时补一次即可。
-        #[cfg(feature = "gpu")]
+        #[cfg(gpu_backend)]
         #[unsafe(method(windowDidChangeOcclusionState:))]
         fn window_did_change_occlusion_state(&self, _notification: &NSNotification) {
             self.setNeedsDisplay(true);
@@ -815,6 +845,17 @@ define_class!(
                 debug_assert!(false, "windowWillClose: 取不到 window，窗口无法注销");
                 return;
             };
+            // 模态对话框关闭：owner 重新接收输入；owner 关闭：阻断作废。
+            modal_release(&win);
+            // owner 关闭时连带关掉归属窗口（对照 Windows 销毁 owner 时级联销毁 owned
+            // 窗口）：AppKit 只是把 child 从 owner 上摘下来，不会替我们关，留着就是一个
+            // 没了主人的对话框。先关它们再注销自己，"最后一个窗口"的判定才正确。
+            if let Some(children) = win.childWindows() {
+                for c in children.iter() {
+                    win.removeChildWindow(&c);
+                    c.close();
+                }
+            }
             if unregister_window(&win) {
                 // 置位**先于** terminate：它会同步回到本回调（见开头那道闸）。
                 TERMINATING.with(|t| t.set(true));
@@ -933,10 +974,12 @@ impl ContentView {
             partial_invalidate: None,
             interval_timers: Vec::new(),
             color_space,
-            #[cfg(feature = "gpu")]
+            #[cfg(gpu_backend)]
             gpu: None,
-            #[cfg(feature = "gpu")]
+            #[cfg(gpu_backend)]
             metal_layer: None,
+            #[cfg(gpu_backend)]
+            gpu_recovery: LossRecovery::default(),
         };
         let this = Self::alloc(mtm).set_ivars(RefCell::new(state));
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
@@ -1076,7 +1119,7 @@ impl ContentView {
 
         // GPU 路径：像素直接进 `CAMetalLayer` 的 surface，下面 pixmap→CGImage→拷屏那一整套
         // 全不走（连后备缓冲都不分配）。两条路径在窗口创建时二选一，运行期不切换。
-        #[cfg(feature = "gpu")]
+        #[cfg(gpu_backend)]
         if self.ivars().borrow().gpu.is_some() {
             self.draw_gpu(bounds.size, pw, ph, scale);
             self.schedule_next_frame();
@@ -1187,19 +1230,106 @@ impl ContentView {
     ///
     /// 取不到帧不是错误（窗口被遮挡、drawable 一时用尽都会撞上），三档各有各的反应，
     /// 见 [`FrameError`]。只有"重配过还是不行"才提示一次。
-    #[cfg(feature = "gpu")]
+    #[cfg(gpu_backend)]
     fn draw_gpu(&self, size_pt: NSSize, pw: i32, ph: i32, scale: f32) {
         // 两段式（同本文件其余各处）：借用内只跟宿主与 GPU 打交道，可能重入本视图回调的
-        // AppKit 调用（这里是补排一次重绘）留到借用释放之后。
-        let retry = self.draw_gpu_frame(size_pt, pw, ph, scale);
-        if retry {
-            self.setNeedsDisplay(true);
+        // AppKit 调用（补排重绘、动图层树）留到借用释放之后。设备丢失的善后尤其如此
+        // ——重建要碰 `CAMetalLayer`、降级要改视图的 layer 支持，两者都会同步回调进来。
+        match self.draw_gpu_frame(size_pt, pw, ph, scale) {
+            GpuFrameOutcome::Done => {}
+            GpuFrameOutcome::Retry => self.setNeedsDisplay(true),
+            GpuFrameOutcome::Recreate => self.recreate_gpu(),
+            GpuFrameOutcome::Degrade => self.degrade_to_software(),
         }
     }
 
-    /// [`Self::draw_gpu`] 的借用段。返回 `true` 表示这一帧没画成、需要再排一次重绘。
-    #[cfg(feature = "gpu")]
-    fn draw_gpu_frame(&self, size_pt: NSSize, pw: i32, ph: i32, scale: f32) -> bool {
+    /// 设备丢失后重建本窗的 GPU 目标：现有 `CAMetalLayer` 上重新建一条 surface。
+    ///
+    /// **共享设备也可能是坏的那一环**，故先作废自己手上那一代（`invalidate_shared_gpu`
+    /// 带代际守卫，多窗口同时发现丢失时只有第一个真正作废，其余取到新的那一份），再
+    /// `SharedGpu::get` 让它按需重建。反过来只重建 surface 的话，设备本身已经没了时
+    /// 每次都会立刻再丢一帧，三次之后白白降级。
+    ///
+    /// 重建失败不在这里降级——计数由 [`LossRecovery`] 统一管，下一帧的 `Lost` 会把它
+    /// 推到上限。失败时只是这一帧不出，已排的重绘会再来一次。
+    #[cfg(gpu_backend)]
+    fn recreate_gpu(&self) {
+        let (layer, generation) = {
+            let st = self.ivars().borrow();
+            let Some(layer) = st.metal_layer.clone() else {
+                return;
+            };
+            (layer, st.gpu.as_ref().map(|g| g.gpu_generation()))
+        };
+        // 旧目标必须先析构：它持着 surface，而 surface 存着 layer 的裸指针，也占着设备侧
+        // 的 swapchain。留着它去建第二条 surface 等于让同一张 layer 挂两份。
+        {
+            let mut st = self.ivars().borrow_mut();
+            st.gpu = None;
+        }
+        if let Some(gen) = generation {
+            invalidate_shared_gpu(gen);
+        }
+        let Some(gpu) = SharedGpu::get() else {
+            return;
+        };
+        let scale = self
+            .window()
+            .map_or(1.0, |w| w.backingScaleFactor())
+            .max(0.1);
+        let bounds = self.bounds();
+        let size = (
+            (bounds.size.width * scale).round().max(1.0) as u32,
+            (bounds.size.height * scale).round().max(1.0) as u32,
+        );
+        let Some(win_gpu) = build_window_gpu(&gpu, &layer, size) else {
+            return;
+        };
+        {
+            let mut st = self.ivars().borrow_mut();
+            st.gpu = Some(win_gpu);
+        }
+        // 后备纹理是新建的（内容未定义），下一帧必须是整窗——`WindowGpu` 的 `seeded`
+        // 标志本就这么要求，这里补一次整窗失效把它喂上。
+        self.setNeedsDisplay(true);
+    }
+
+    /// 放弃硬件加速，把这个窗口切回软渲染（tiny-skia + CGImage 拷屏）。
+    ///
+    /// 这是设备永久不可用时的**兜底出口**，不是错误路径的终点：窗口内容必须继续更新，
+    /// 用户顶多察觉到 CPU 占用高了些。与 win32 那边「后端报失效 → `WindowState` 换成
+    /// `SkiaBackend`」是同一条语义，只是 macOS 的两条路径不是两个后端对象，而是同一个
+    /// 视图的两条出帧回调（`updateLayer` / `drawRect:`），故切换要动视图的 layer 支持。
+    ///
+    /// 顺序是要害：**先摘 Metal 层、再关掉 layer 支持**。反过来（先 `setWantsLayer(false)`）
+    /// 会让 AppKit 连同 backing layer 一起把子层丢掉，而那张子层正被还没析构的 surface
+    /// 用裸指针指着。
+    #[cfg(gpu_backend)]
+    fn degrade_to_software(&self) {
+        // 先让持 surface 的目标死掉，再动图层树（`metal_layer` 是那个裸指针的存活担保）。
+        let layer = {
+            let mut st = self.ivars().borrow_mut();
+            st.gpu = None;
+            st.metal_layer.take()
+        };
+        if let Some(layer) = layer {
+            layer.removeFromSuperlayer();
+        }
+        // 回到 `drawRect:` 那条路：`wantsUpdateLayer` 现在返回 false（`metal_layer` 已空），
+        // 但光靠它不够——视图仍是 layer-backed 的，AppKit 会继续走 `updateLayer`，而软路径
+        // 要的是 `drawRect:` 才有的绘图上下文（`NSGraphicsContext::currentContext`）。拿不到
+        // 上下文时软路径会一声不响地 return，表现就是「降级了，但窗口再也不更新」。
+        self.setWantsLayer(false);
+        notice_once(
+            &GPU_DEGRADE_NOTICE,
+            "windui: GPU 设备重建连续失败，本窗口已切回软渲染（内容继续更新，CPU 占用会升高）",
+        );
+        self.setNeedsDisplay(true);
+    }
+
+    /// [`Self::draw_gpu`] 的借用段。返回这一帧之后该做什么，见 [`GpuFrameOutcome`]。
+    #[cfg(gpu_backend)]
+    fn draw_gpu_frame(&self, size_pt: NSSize, pw: i32, ph: i32, scale: f32) -> GpuFrameOutcome {
         let mut borrow = self.ivars().borrow_mut();
         let st = &mut *borrow;
         if let Some(layer) = &st.metal_layer {
@@ -1221,7 +1351,7 @@ impl ContentView {
         let bg = st.handler.bg().unwrap_or(st.bg);
         // 分字段借用：`gpu` 与 `handler` 是 `ViewState` 的两个字段，可同时可变借出。
         let Some(gpu) = st.gpu.as_mut() else {
-            return false;
+            return GpuFrameOutcome::Done;
         };
         gpu.resize((pw.max(1) as u32, ph.max(1) as u32));
         match gpu.begin_frame(bg) {
@@ -1233,19 +1363,29 @@ impl ContentView {
                     // 析构时才提交的，present 早于它就会 present 一张空底。
                 }
                 frame.present();
-                false
+                // 画成了：把丢失计数清零。零星的丢失（睡眠唤醒、切换显卡各来一次）之间
+                // 隔着成千上万帧正常渲染，不清零的话它们会一路累加，最终在某个毫不相干
+                // 的时刻把窗口踢回软渲染。
+                st.gpu_recovery.on_frame_ok();
+                GpuFrameOutcome::Done
             }
             // 一时取不到 drawable：补排一次。不补的话这次标脏就白丢了——事件驱动的宿主
             // 没有"下一帧"兜底，界面会停在旧内容上直到用户再动一下。
-            Err(FrameError::Skipped) => true,
+            Err(FrameError::Skipped) => GpuFrameOutcome::Retry,
             // 窗口不可见：重排只会空转，等 `windowDidChangeOcclusionState:` 唤回。
-            Err(FrameError::Occluded) => false,
+            Err(FrameError::Occluded) => GpuFrameOutcome::Done,
+            // 重配过仍取不到：surface 或设备坏了。先试着整条重建，连续失败到上限才放弃
+            // 硬件加速——「第一帧卡住就永久降级」与「坏了却无限重试、窗口一直空白」是
+            // 这里要同时避开的两个失败模式，策略本身在 `LossRecovery` 里带单测。
             Err(FrameError::Lost) => {
                 notice_once(
                     &GPU_LOST_NOTICE,
-                    "windui: GPU surface 已丢失且重配无效，窗口内容不再更新（请以软渲染重启）",
+                    "windui: GPU surface 丢失，正在重建设备（连续失败将切回软渲染）",
                 );
-                false
+                match st.gpu_recovery.on_lost() {
+                    LossAction::Recreate => GpuFrameOutcome::Recreate,
+                    LossAction::Degrade => GpuFrameOutcome::Degrade,
+                }
             }
         }
     }
@@ -1429,18 +1569,44 @@ impl ContentView {
     }
 
     /// 鼠标按下/抬起/移动 → PointerEvent。
+    /// 本窗口是否正被模态对话框压着。是则把对话框拉到前面（对照 Windows 上点被禁用的
+    /// owner 时系统闪一下对话框的行为）并返回 true，调用方应丢弃这次输入。
+    fn blocked_by_modal(&self) -> bool {
+        let Some(me) = self.window() else {
+            return false;
+        };
+        let Some(child) = modal_child_of(&me) else {
+            return false;
+        };
+        child.makeKeyAndOrderFront(None);
+        true
+    }
+
     fn on_pointer(&self, ev: &NSEvent, kind: PointerKind, button: MouseButton) {
+        if self.blocked_by_modal() {
+            return;
+        }
         let pos = self.loc_phys(ev);
         let click_count = if matches!(kind, PointerKind::Down) {
             (ev.clickCount().max(1) as u8).min(3)
         } else {
             1
         };
+        let flags = ev.modifierFlags();
+        let mods = crate::event::Mods {
+            // 与键盘事件同口径：Command 与 Control 都算 ctrl，另用 meta 区分 Command。
+            ctrl: flags.contains(objc2_app_kit::NSEventModifierFlags::Command)
+                || flags.contains(objc2_app_kit::NSEventModifierFlags::Control),
+            alt: flags.contains(objc2_app_kit::NSEventModifierFlags::Option),
+            shift: flags.contains(objc2_app_kit::NSEventModifierFlags::Shift),
+            meta: flags.contains(objc2_app_kit::NSEventModifierFlags::Command),
+        };
         self.dispatch_pointer(PointerEvent {
             kind,
             pos,
             button,
             click_count,
+            mods,
         });
     }
 
@@ -1466,6 +1632,9 @@ impl ContentView {
     /// **未经真机验证**。验法：Mac 触控板在长列表上两指快滑后抬手——预期列表继续滑行
     /// 并逐渐停下；滑行途中再把两指放上触控板，预期立即停住而不是叠加加速。
     fn on_wheel(&self, ev: &NSEvent) {
+        if self.blocked_by_modal() {
+            return;
+        }
         // 新手势起手（手指刚落到触控板上）：清掉上一段的亚像素残差，免得方向相反的
         // 旧残差把新手势的第一格吃掉。鼠标滚轮的 phase 恒为 None，走不到这里。
         let phase = ev.phase();
@@ -1502,6 +1671,9 @@ impl ContentView {
     /// 键盘按下：特殊键直发；普通文本交输入法（IME 提交后经 `insertText:` 回到 Key::Char），
     /// 使中文/emoji 可在文本框输入（对照 win32 的 WM_KEYDOWN + WM_CHAR + IME）。
     fn on_key(&self, ev: &NSEvent) {
+        if self.blocked_by_modal() {
+            return;
+        }
         // 合成进行中：全部交输入法（候选切换/确认/退格在 IME 内完成）。
         if self.ivars().borrow().preedit.is_active() {
             self.route_ime(ev);
@@ -1514,6 +1686,8 @@ impl ContentView {
         // 使 Cmd+C/V/X/A 原生可用。
         let modk = flags.contains(objc2_app_kit::NSEventModifierFlags::Command)
             || flags.contains(objc2_app_kit::NSEventModifierFlags::Control);
+        let alt = flags.contains(objc2_app_kit::NSEventModifierFlags::Option);
+        let meta = flags.contains(objc2_app_kit::NSEventModifierFlags::Command);
 
         let special = map_special(key_code);
         if let Some(k) = special {
@@ -1522,13 +1696,17 @@ impl ContentView {
                 pressed: true,
                 shift,
                 ctrl: modk,
+                alt,
+                meta,
             });
             // 非空格特殊键到此为止；空格还需交输入法产出 Key::Char(' ')（文本框插入空格）。
             if k != Key::Space {
                 return;
             }
         }
-        if modk {
+        // Option+字母同样是快捷键而非文本：输入法会把它变成一个符号，应用要的却是
+        // `Alt+X`。与 Command 走同一条 `Other(大写 ASCII)` 通路，只是 ctrl 不置位。
+        if modk || alt {
             // 快捷键：用 Key::Other(大写 ASCII 码) + ctrl（与 win32 VK 码对齐：'A'=0x41…）。不进输入法。
             if special.is_none() {
                 if let Some(s) = ev.charactersIgnoringModifiers() {
@@ -1538,7 +1716,9 @@ impl ContentView {
                             key: Key::Other(up as u32),
                             pressed: true,
                             shift,
-                            ctrl: true,
+                            ctrl: modk,
+                            alt,
+                            meta,
                         });
                     }
                 }
@@ -1572,6 +1752,8 @@ impl ContentView {
                 pressed: true,
                 shift: false,
                 ctrl: false,
+                alt: false,
+                meta: false,
             });
         }
     }
@@ -1788,7 +1970,19 @@ impl ContentView {
                 NewWindow::Create(cfg, handler) => {
                     // 后端档位取应用级的那份而不是 `cfg.renderer`：子窗配置由应用层现构造，
                     // 不知道主窗当初选了什么（见 `APP_RENDERER`）。
-                    let win = create_window(mtm, &cfg, handler, APP_RENDERER.with(|r| r.get()));
+                    // 归属 / 模态窗口的 owner 就是发起开窗的这个窗口。
+                    let owner = if cfg.owned || cfg.modal {
+                        self.window()
+                    } else {
+                        None
+                    };
+                    let win = create_window(
+                        mtm,
+                        &cfg,
+                        handler,
+                        APP_RENDERER.with(|r| r.get()),
+                        owner.as_deref(),
+                    );
                     win.makeKeyAndOrderFront(None);
                 }
             }
@@ -1827,6 +2021,7 @@ impl ContentView {
             crate::event::CursorShape::Hand => NSCursor::pointingHandCursor(),
             crate::event::CursorShape::Text => NSCursor::IBeamCursor(),
             crate::event::CursorShape::SizeWE => NSCursor::resizeLeftRightCursor(),
+            crate::event::CursorShape::SizeNS => NSCursor::resizeUpDownCursor(),
             crate::event::CursorShape::Arrow => NSCursor::arrowCursor(),
         };
         cursor.set();
@@ -1840,21 +2035,39 @@ impl ContentView {
 /// 这种两处各自看着都对的错位。
 pub(super) fn map_special(key_code: u16) -> Option<Key> {
     Some(match key_code {
-        0x30 => Key::Tab,       // 48
-        0x24 => Key::Enter,     // 36 Return
-        0x4C => Key::Enter,     // 76 KeypadEnter
-        0x35 => Key::Escape,    // 53
-        0x31 => Key::Space,     // 49
-        0x33 => Key::Backspace, // 51 Delete(退格)
-        0x75 => Key::Delete,    // 117 ForwardDelete
-        0x7B => Key::Left,      // 123
-        0x7C => Key::Right,     // 124
-        0x7D => Key::Down,      // 125
-        0x7E => Key::Up,        // 126
-        0x73 => Key::Home,      // 115
-        0x77 => Key::End,       // 119
-        0x74 => Key::PageUp,    // 116
-        0x79 => Key::PageDown,  // 121
+        0x30 => Key::Tab,            // 48
+        0x24 => Key::Enter,          // 36 Return
+        0x4C => Key::Enter,          // 76 KeypadEnter
+        0x35 => Key::Escape,         // 53
+        0x31 => Key::Space,          // 49
+        0x33 => Key::Backspace,      // 51 Delete(退格)
+        0x75 => Key::Delete,         // 117 ForwardDelete
+        0x7B => Key::Left,           // 123
+        0x7C => Key::Right,          // 124
+        0x7D => Key::Down,           // 125
+        0x7E => Key::Up,             // 126
+        0x73 => Key::Home,           // 115
+        0x77 => Key::End,            // 119
+        0x74 => Key::PageUp,         // 116
+        0x79 => Key::PageDown,       // 121
+        0x72 => Key::Insert,         // 114 Help（PC 键盘的 Insert 落在这个键码上）
+        0x7A => Key::F(1),           // 122
+        0x78 => Key::F(2),           // 120
+        0x63 => Key::F(3),           // 99
+        0x76 => Key::F(4),           // 118
+        0x60 => Key::F(5),           // 96
+        0x61 => Key::F(6),           // 97
+        0x62 => Key::F(7),           // 98
+        0x64 => Key::F(8),           // 100
+        0x65 => Key::F(9),           // 101
+        0x6D => Key::F(10),          // 109
+        0x67 => Key::F(11),          // 103
+        0x6F => Key::F(12),          // 111
+        0x45 => Key::NumpadAdd,      // 69 KeypadPlus
+        0x4E => Key::NumpadSubtract, // 78 KeypadMinus
+        0x43 => Key::NumpadMultiply, // 67 KeypadMultiply
+        0x4B => Key::NumpadDivide,   // 75 KeypadDivide
+        0x6E => Key::ContextMenu,    // 110 PC 键盘的 Menu 键
         _ => return None,
     })
 }
@@ -1898,11 +2111,30 @@ impl crate::sync::RawWakeSignal for MacWake {
     }
 }
 
-#[cfg(feature = "gpu")]
+#[cfg(gpu_backend)]
 static GPU_LOST_NOTICE: std::sync::Once = std::sync::Once::new();
 
+#[cfg(gpu_backend)]
+static GPU_DEGRADE_NOTICE: std::sync::Once = std::sync::Once::new();
+
+/// 一帧 GPU 绘制之后该做什么。这些动作**都要在借用释放之后**才能做（它们会同步回调进
+/// 本视图），故借用段只负责判定、不负责执行——与本文件其余各处「先算意图、后执行」的
+/// 两段式一致。
+#[cfg(gpu_backend)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GpuFrameOutcome {
+    /// 这一帧已了结（画成了、或窗口不可见不必再排）。
+    Done,
+    /// 没画成但下一帧多半就好：再排一次重绘。
+    Retry,
+    /// 设备丢失：重建 GPU 目标后再来。
+    Recreate,
+    /// 重建已连续失败到上限：切回软渲染。
+    Degrade,
+}
+
 /// 进程内只提示一次。每帧刷屏没人会看，一次刚好够把判断送到眼前（同 `render/gpu/canvas.rs`）。
-#[cfg(feature = "gpu")]
+#[cfg(gpu_backend)]
 fn notice_once(once: &std::sync::Once, msg: &str) {
     once.call_once(|| eprintln!("{msg}"));
 }
@@ -1915,7 +2147,7 @@ fn notice_once(once: &std::sync::Once, msg: &str) {
 /// | 未设置 | 听 [`Renderer`]：`Auto`/`Gpu` 尝试，`Software` 不试 |
 /// | `0` 或空 | 一律不试。此时 `Renderer::Gpu` **报错终止**——它的用途就是"拿不到 GPU 要告诉我" |
 /// | 其他值 | 一律尝试（`Software` 也当 `Auto`），排障用 |
-#[cfg(feature = "gpu")]
+#[cfg(gpu_backend)]
 fn wants_gpu(renderer: Renderer) -> bool {
     match std::env::var("WINDUI_GPU") {
         Err(_) => renderer.wants_gpu(),
@@ -1931,7 +2163,7 @@ fn wants_gpu(renderer: Renderer) -> bool {
 ///
 /// 失败处理与 win32 的 D2D 接线同语义：`Renderer::Auto` 静默回退软路径（stderr 一行），
 /// `Renderer::Gpu` 报错终止（静默换一条路会让基于它做的验证失去意义）。
-#[cfg(feature = "gpu")]
+#[cfg(gpu_backend)]
 fn attach_gpu(view: &ContentView, window: &NSWindow, renderer: Renderer) {
     if !wants_gpu(renderer) {
         assert!(
@@ -1966,24 +2198,7 @@ fn attach_gpu(view: &ContentView, window: &NSWindow, renderer: Renderer) {
     layer.setOpaque(true);
     set_layer_frame(&layer, bounds.size);
 
-    // 安全：`SurfaceTargetUnsafe::CoreAnimationLayer` 只存裸指针，要求 layer 活得比 surface 久。
-    // 这一条由 `ViewState` 的字段顺序保证：`gpu`（持 surface）声明在 `metal_layer`（持这份
-    // `Retained`）之前，故析构时 surface 先没、layer 后没；两者又同属一个 `ViewState`，
-    // 中途不可能只掉一个。视图的图层树里也持着这张 layer（下面 `addSublayer` 之后），是第二道保险。
-    let surface = unsafe {
-        gpu.instance()
-            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(
-                Retained::as_ptr(&layer) as *mut c_void,
-            ))
-    };
-    let win_gpu = match surface {
-        Ok(s) => WindowGpu::new(gpu, s, size),
-        Err(e) => {
-            eprintln!("[windui] wgpu surface 创建失败: {e}");
-            None
-        }
-    };
-    let Some(win_gpu) = win_gpu else {
+    let Some(win_gpu) = build_window_gpu(&gpu, &layer, size) else {
         assert!(
             !renderer.requires_gpu(),
             "Renderer::Gpu 要求 GPU 渲染，但 CAMetalLayer surface 建不起来。\
@@ -2018,11 +2233,49 @@ fn attach_gpu(view: &ContentView, window: &NSWindow, renderer: Renderer) {
     }
 }
 
+/// 在一张 `CAMetalLayer` 上建出这个窗口的 GPU 呈现目标。
+///
+/// 抽出来是因为有**两个**调用点：窗口创建时的 [`attach_gpu`]，与设备丢失后的
+/// [`ContentView::recreate_gpu`]。两边必须逐字一致——尤其是下面那条安全性论证，它依赖的
+/// 是 `ViewState` 的字段顺序，而重建路径同样要满足它。
+///
+/// # 安全性
+///
+/// `SurfaceTargetUnsafe::CoreAnimationLayer` 只存裸指针，要求 layer 活得比 surface 久。
+/// 这一条由 `ViewState` 的字段顺序保证：`gpu`（持 surface）声明在 `metal_layer`（持那份
+/// `Retained`）之前，故析构时 surface 先没、layer 后没；两者又同属一个 `ViewState`，
+/// 中途不可能只掉一个。视图的图层树里也持着这张 layer，是第二道保险。
+///
+/// 重建路径另有一条要守：新 surface 建成**之前**必须先把旧目标析构掉（见调用点），
+/// 否则同一张 layer 上会同时挂两条 surface。
+#[cfg(gpu_backend)]
+fn build_window_gpu(
+    gpu: &std::sync::Arc<SharedGpu>,
+    // 取 `&Retained` 而不是 `&CAMetalLayer`：`Retained::as_ptr` 要的就是这个，且这样一来
+    // 「调用方手里必须有一份所有权凭据」成了签名上的要求——裸引用给不出那份存活担保。
+    layer: &Retained<CAMetalLayer>,
+    size: (u32, u32),
+) -> Option<WindowGpu> {
+    let surface = unsafe {
+        gpu.instance()
+            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(
+                Retained::as_ptr(layer) as *mut c_void,
+            ))
+    };
+    match surface {
+        Ok(s) => WindowGpu::new(gpu.clone(), s, size),
+        Err(e) => {
+            eprintln!("[windui] wgpu surface 创建失败: {e}");
+            None
+        }
+    }
+}
+
 /// 让 Metal 子层铺满视图（原点恒为 0），并**关掉隐式动画**。
 ///
 /// CALayer 的几何属性默认带 0.25s 隐式动画：不关的话拖动窗口边框时 Metal 层会一路"追"着
 /// 视图慢半拍，看起来像整个界面在弹。
-#[cfg(feature = "gpu")]
+#[cfg(gpu_backend)]
 fn set_layer_frame(layer: &CAMetalLayer, size: NSSize) {
     CATransaction::begin();
     CATransaction::setDisableActions(true);
@@ -2046,7 +2299,9 @@ fn create_window(
     handler: Box<dyn AppHandler>,
     // 只在 `gpu` feature 下用于选后端。签名对两档保持一致（调用方不必分 feature 分支），
     // 故仅在关掉那一档时抑制未使用告警——同 win32 `create_window` 的 `renderer` 参数。
-    #[cfg_attr(not(feature = "gpu"), allow(unused_variables))] renderer: Renderer,
+    #[cfg_attr(not(gpu_backend), allow(unused_variables))] renderer: Renderer,
+    // 归属窗口（`cfg.owned` / `cfg.modal`）：作为它的 child window 挂上去。主窗恒为 `None`。
+    owner: Option<&NSWindow>,
 ) -> Retained<NSWindow> {
     // 内容矩形为逻辑点尺寸（AppKit 在高 DPI 下自动按 backingScale 放大像素）。
     let content_rect = NSRect {
@@ -2129,7 +2384,7 @@ fn create_window(
     // GPU 后端选择：`renderer` 想要 GPU（或 `WINDUI_GPU` 强制）时，把内容视图的呈现换成
     // CAMetalLayer。放在 `setContentView` 之后——layer 要挂进窗口的图层树，且此刻
     // `backingScaleFactor` 才是这个窗口真实的那个。离屏截图走 `run_offscreen`，不到此处。
-    #[cfg(feature = "gpu")]
+    #[cfg(gpu_backend)]
     attach_gpu(&view, &window, renderer);
     window.setAcceptsMouseMovedEvents(true);
     // 登记进活动窗口表（连同所有权）：`windowWillClose:` 据此判断自己是不是最后一个。
@@ -2140,8 +2395,32 @@ fn create_window(
     view.refresh_tracking_area();
     let _ = window.makeFirstResponder(Some(&view));
 
-    if cfg.centered {
-        window.center();
+    match owner {
+        // 有 owner：居中在 owner 上（对话框该出现在它所属的窗口中央），再挂为 child
+        // window——随 owner 移动 / 最小化、始终在其上方。模态另记进阻断表，owner 的
+        // 视图据此拒收输入。
+        Some(o) => {
+            if cfg.centered {
+                let of = o.frame();
+                let wf = window.frame();
+                window.setFrameOrigin(NSPoint {
+                    x: of.origin.x + (of.size.width - wf.size.width) / 2.0,
+                    y: of.origin.y + (of.size.height - wf.size.height) / 2.0,
+                });
+            }
+            // SAFETY: objc2 把 addChildWindow: 标为 unsafe —— 子窗口的所有权由 AppKit 接管,
+            // 调用方必须保证 child 在 owner 之前不被释放。这里 window 已由 register_window
+            // 登记进活动窗口表(连同所有权), owner 也是活着的 NSWindow, 两者都不会提前析构。
+            unsafe { o.addChildWindow_ordered(&window, NSWindowOrderingMode::Above) };
+            if cfg.modal {
+                MODAL_BLOCKS.with(|m| m.borrow_mut().push((o.retain(), window.clone())));
+            }
+        }
+        None => {
+            if cfg.centered {
+                window.center();
+            }
+        }
     }
 
     // 动画帧驱动改为自调度的一次性定时器（见 ContentView::schedule_next_frame）：跟随显示器
@@ -2196,7 +2475,7 @@ pub(crate) fn run_windowed(
 
     // 后端档位登记为应用级：子窗建出来时要跟主窗走同一条渲染路径（见 `APP_RENDERER`）。
     APP_RENDERER.with(|r| r.set(cfg.renderer));
-    let window = create_window(mtm, &cfg, handler, cfg.renderer);
+    let window = create_window(mtm, &cfg, handler, cfg.renderer, None);
 
     // 跨线程唤醒：绑一个不指向任何窗口的句柄（见 MacWake）；后台线程 send 经 dispatch
     // 派回主线程标脏。绑定前积压的 wake 由 WakerShared 的 pending 兜底补发。
@@ -2246,7 +2525,7 @@ pub(crate) fn run_windowed(
     // 实话：`NSApplication::terminate:` 正常情况下直接结束进程，这一行执行不到（`drop(_tray)`
     // 同理，它一直就在这儿）。保留它是因为"事件循环结束就释放设备"这条契约得有个落点——
     // 将来若改用可被 `stop:` 打断的 run loop，缺了它就是设备泄漏，而那种泄漏很难被注意到。
-    #[cfg(feature = "gpu")]
+    #[cfg(gpu_backend)]
     crate::render::gpu::release_shared_gpu();
 }
 

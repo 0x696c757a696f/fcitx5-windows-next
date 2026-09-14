@@ -17,6 +17,25 @@ pub mod win32;
 #[cfg(windows)]
 pub use win32::clipboard::WinClipboard as Clipboard;
 #[cfg(windows)]
+pub use win32::dragdrop::drag_files;
+
+/// 当前活跃窗口的原生句柄（Windows：HWND；其它平台暂无，返回 `None`）。
+///
+/// 给需要直接跟系统打交道的下游用：Shell 上下文菜单、属性对话框、缩略图提取这些
+/// API 都要一个父窗口。只在 UI 线程、事件分发期间或 `ctx.defer_blocking` 的闭包里
+/// 有效——那是消息循环写入它的时机；别的线程或时机拿到的是 0 / 上一次的值。
+#[cfg(windows)]
+pub fn native_window_handle() -> Option<isize> {
+    let h = win32::active_hwnd();
+    (h != 0).then_some(h)
+}
+
+/// 见 Windows 版：macOS 暂未暴露（NSView 指针的生命周期与 windui 的窗口模型还没对齐）。
+#[cfg(not(windows))]
+pub fn native_window_handle() -> Option<isize> {
+    None
+}
+#[cfg(windows)]
 pub use win32::open_url;
 #[cfg(windows)]
 pub(crate) use win32::run;
@@ -27,6 +46,8 @@ pub(crate) use win32::system_prefers_dark;
 pub mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::clipboard::MacClipboard as Clipboard;
+#[cfg(target_os = "macos")]
+pub use macos::drag_files;
 #[cfg(target_os = "macos")]
 pub use macos::open_url;
 #[cfg(target_os = "macos")]
@@ -300,6 +321,8 @@ pub(crate) fn run_offscreen(cfg: &WindowConfig, handler: &mut Box<dyn AppHandler
                         pressed: true,
                         shift: false,
                         ctrl: false,
+                        alt: false,
+                        meta: false,
                     });
                 }
             }
@@ -501,6 +524,14 @@ pub struct WindowConfig {
     /// 无托盘图标也无热键时启用此项，用户将**永远看不到窗口**——故 `App::start_hidden`
     /// 在 debug 期对该组合 panic 提示误用。
     pub start_hidden: bool,
+    /// 零窗口常驻：**不建主窗**直接进消息循环，窗口全关也不退出（见 `App::run_resident`）。
+    ///
+    /// 与 `start_hidden` 是两码事：那个仍然建了窗口、只是不显示，按物理像素分配的
+    /// 后备缓冲一直挂着；这个连窗口都没有，界面按需建、关掉即销毁，渲染资源随
+    /// `WindowState` 的 drop 归还。
+    ///
+    /// 只对主窗那次 `run` 有意义（子窗的配置里恒为 false）。
+    pub resident: bool,
     /// 无标题栏窗口（自定义标题栏）：客户区铺满整窗，保留系统级吸附/阴影/缩放。
     pub frameless: bool,
     /// 自绘标题栏的拖动区右键是否弹出窗口系统菜单（默认 true）。
@@ -517,6 +548,11 @@ pub struct WindowConfig {
     ///
     /// 只对 `ctx.open_window` 开出的子窗有意义：主窗本就唯一，`App` 不提供这个设置。
     pub single: Option<String>,
+    /// 归属于发起它的窗口（见 `crate::event::WindowRequest::owned`）。同样只对子窗有意义：
+    /// 平台建窗时把发起窗口填作 owner（Windows）/ parent（macOS）。
+    pub owned: bool,
+    /// 模态（见 `crate::event::WindowRequest::modal`），隐含 `owned`。
+    pub modal: bool,
     /// 窗口/应用图标（`None` = 用系统默认，Windows 下即窗口类从 exe 资源取的那个）。
     ///
     /// 存的是**源**而非位图：平台层要按当前 DPI 决定光栅化到多少像素（Windows 150%
@@ -546,6 +582,7 @@ impl Default for WindowConfig {
             tray: None,
             hotkeys: Vec::new(),
             start_hidden: false,
+            resident: false,
             frameless: false,
             system_menu: true,
             animations: None,
@@ -553,6 +590,8 @@ impl Default for WindowConfig {
             min_width: 0,
             min_height: 0,
             single: None,
+            owned: false,
+            modal: false,
             icon: None,
         }
     }
@@ -600,10 +639,7 @@ impl Renderer {
     /// 两者都关掉的平台没有可尝试的 GPU 后端，只有 `requires_gpu` 仍需判断
     /// （`Renderer::Gpu` 在那里无从满足，须报错）。
     #[cfg_attr(
-        not(any(
-            all(windows, feature = "d2d"),
-            all(target_os = "macos", feature = "gpu")
-        )),
+        not(any(all(windows, feature = "d2d"), all(target_os = "macos", gpu_backend))),
         allow(dead_code)
     )]
     pub(crate) fn wants_gpu(self) -> bool {
@@ -684,6 +720,16 @@ pub trait AppHandler {
     /// 4×32，却要为此付整窗的账。`render` 之后调用才有意义。
     fn last_frame_damage(&self) -> Option<crate::geometry::Rect> {
         None
+    }
+
+    /// 用户在**客户区之外**按下（标题栏、边框、系统按钮）：收起菜单这类浮层。返回是否
+    /// 需要重绘。
+    ///
+    /// 客户区的指针事件走 `on_pointer`，点外收起菜单在那条路上；非客户区的按下压根不
+    /// 进 `on_pointer`（win32 是 `WM_NCLBUTTONDOWN`，系统拿去拖窗），菜单就一直开着。
+    /// 窗口失活也走同一收尾（宿主在 `on_window_activated(false)` 里自己调）。
+    fn on_dismiss_overlays(&mut self) -> bool {
+        false
     }
 
     /// 窗口激活态变化（前台/后台）。返回是否需要重绘。
@@ -905,6 +951,20 @@ pub enum NewWindow {
     /// 内容闭包**没有被运行**。平台按键去登记表里找那个窗口；找不到就什么都不做
     /// （窗口在判定与执行之间关掉了，属于正常竞态，不是错误）。
     Focus(String),
+}
+
+// ── 拖出到外部程序 ───────────────────────────────────────────────────────────
+
+/// [`drag_files`] 的结果：接收方对拖出的文件执行了什么。
+///
+/// 接收方（资源管理器等）对文件列表**自己完成**复制 / 移动，本方不必再动文件；
+/// 返回值只用于事后刷新或统计。`None` = 没落到任何地方、按了 Esc、或平台不支持。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragEffect {
+    None,
+    Copy,
+    Move,
+    Link,
 }
 
 // ── 文件 / 目录选择对话框 ────────────────────────────────────────────────────
