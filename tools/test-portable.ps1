@@ -100,19 +100,27 @@ try {
       throw 'Portable plugin manager did not expose the complete bundled component set.'
     }
     if ($location -eq 'first') {
-      & (Join-Path $app 'bin/fcitx5-control.exe') --set-presentation dark `
-        builtin:default horizontal enabled 6 'Microsoft YaHei'
-      if ($LASTEXITCODE -ne 0) { throw 'Portable presentation save failed.' }
-      $presentation = (& (Join-Path $app 'bin/fcitx5-control.exe') --get-presentation) |
-        ConvertFrom-Json
-      if ($presentation.appearance_mode -ne 'dark' -or
-          $presentation.orientation -ne 'horizontal' -or
-          -not $presentation.scroll_mode -or
-          $presentation.candidate_page_size -ne '6' -or
-          $presentation.candidate_font -ne 'Microsoft YaHei') {
-        throw 'Portable presentation did not round-trip through the typed Control API.'
-      }
+      $presentationSource = Join-Path $first 'portable-presentation.toml'
+      [IO.File]::WriteAllText($presentationSource, @'
+format_version = 1
+[appearance]
+mode = "dark"
+theme = "builtin:default"
+[candidate]
+layout_type = "scroll"
+page_size = 6
+[fonts.candidate]
+families = ["Microsoft YaHei"]
+'@, [Text.UTF8Encoding]::new($false))
+      & (Join-Path $app 'bin/fcitx5-control.exe') --apply-config $presentationSource
+      if ($LASTEXITCODE -ne 0) { throw 'Portable config apply failed.' }
       $configMarker = [IO.File]::ReadAllText((Join-Path $app 'data/config.toml'))
+      if ($configMarker -notmatch 'mode = "dark"' -or
+          $configMarker -notmatch 'layout_type = "scroll"' -or
+          $configMarker -notmatch 'page_size = 6' -or
+          $configMarker -notmatch '"Microsoft YaHei"') {
+        throw 'Portable config did not persist the typed presentation settings.'
+      }
       $rimeUser = Join-Path $app 'data/Fcitx5/rime/user.dict.yaml'
       New-Item -ItemType Directory -Force -Path (Split-Path -Parent $rimeUser) | Out-Null
       [IO.File]::WriteAllText($rimeUser, $dictionaryMarker,
@@ -121,10 +129,9 @@ try {
       Move-Item -LiteralPath $app -Destination $moved
       $app = $moved
     } else {
-      $presentation = (& (Join-Path $app 'bin/fcitx5-control.exe') --get-presentation) |
-        ConvertFrom-Json
-      if ($presentation.appearance_mode -ne 'dark' -or
-          $presentation.orientation -ne 'horizontal' -or -not $presentation.scroll_mode) {
+      & (Join-Path $app 'bin/fcitx5-control.exe') --validate-config `
+        (Join-Path $app 'data/config.toml')
+      if ($LASTEXITCODE -ne 0) {
         throw 'Moved portable copy did not reload its saved presentation settings.'
       }
       foreach ($preserved in @(
