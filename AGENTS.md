@@ -4,10 +4,15 @@ This repository is an authorized open-source Windows input-method project. Work 
 
 ## Sources of truth
 
-1. `docs/spec-v1.8.md` — long-term engineering specification.
-2. `docs/tasks/PLAN.md` — ordered task queue and gate dependencies.
-3. `docs/tasks/current.md` — the one task authorized for implementation right now.
-4. `docs/tasks/status.md` — execution evidence and pending external verification. Search it by current task ID, subsystem, or evidence key; never read it wholesale.
+1. docs/product-contract.md
+2. docs/current.md
+3. docs/tasks/current.md
+4. docs/tasks/status.md
+5. docs/stabilization.md — only during stabilization tasks
+6. task-referenced ADR/test documents
+
+Do not read historical/completed/reference documents unless
+the current task explicitly requires them.
 
 The full specification is **not** one giant implementation prompt. Read the current task first, then only the specification sections that task references.
 
@@ -20,7 +25,8 @@ Security/compatibility terms in the specification describe defensive constraints
    - `git status --short`
 2. If the work tree contains user changes, preserve them.
 3. Read `docs/tasks/current.md`.
-4. Read only its referenced sections of `docs/spec-v1.8.md`.
+4. Read the task's linked contract, ADR, test plan, and any evidence needed to
+   establish its starting state.
 5. Inspect the current implementation/tests before assuming an older audit finding is still present.
 6. State the smallest subsystem/file set required.
 
@@ -161,8 +167,10 @@ After a task meets all automatable acceptance criteria:
 
 1. Append its HEAD, files changed, tests, and result to `docs/tasks/status.md`.
 2. Copy the completed `docs/tasks/current.md` into `docs/tasks/completed/<task-id>.md`.
-3. Select the next eligible task in `docs/tasks/PLAN.md`.
-4. Copy that task file to `docs/tasks/current.md`.
+3. Select the next explicitly recorded task or create one concise task file
+   when a new bounded slice is authorized.
+4. Replace `docs/tasks/current.md` only after preserving the completed task's
+   evidence in `docs/tasks/status.md` and, when useful, `docs/tasks/completed/`.
 5. Continue automatically only when the next task is tightly coupled to the same subsystem and materially reuses the context already loaded.
 6. At a subsystem or phase boundary, leave the next task selected in `current.md`, record the minimal handoff in `status.md`, and stop the session so the next task starts with fresh context.
 

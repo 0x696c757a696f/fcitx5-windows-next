@@ -1,7 +1,7 @@
 # Rust TSF PoC decision — 2026-08-22
 
 > 2026-08-25 status: superseded by the user-approved Rust TSF shipping cutover recorded in
-> `docs/tasks/current.md`, `docs/tasks/PLAN.md`, `docs/tasks/rebaseline.md`, and `docs/current.md`.
+> `docs/product-contract.md`, `docs/tasks/current.md`, `docs/tasks/status.md`, and `docs/current.md`.
 > This file remains historical decision evidence only. It must not be read as a current instruction
 > to keep the shipping TSF implementation in C++.
 

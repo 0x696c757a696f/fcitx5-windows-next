@@ -104,6 +104,6 @@ The release-shaped package command requires all supported native build lanes and
 | `docs/` | Engineering specification and task evidence |
 | `resources/` | Icons and other project resources |
 
-The engineering queue and current implementation truth are in [`docs/tasks/current.md`](docs/tasks/current.md), [`docs/tasks/PLAN.md`](docs/tasks/PLAN.md), and [`docs/current.md`](docs/current.md). Read [`AGENTS.md`](AGENTS.md) before changing code. Security reporting is described in [`SECURITY.md`](SECURITY.md), and dependency notices are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+The engineering contract and current implementation truth are in [`docs/product-contract.md`](docs/product-contract.md), [`docs/current.md`](docs/current.md), and [`docs/tasks/current.md`](docs/tasks/current.md). Read [`AGENTS.md`](AGENTS.md) before changing code. Security reporting is described in [`SECURITY.md`](SECURITY.md), and dependency notices are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 The root project is released under **GNU GPL version 3 or any later version**; see [`LICENSE`](LICENSE). Some reusable Rust crates declare `LGPL-2.1-or-later`, and third-party components retain their own terms. The applicable license for each component is defined by its file and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

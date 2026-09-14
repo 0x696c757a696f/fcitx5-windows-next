@@ -19,7 +19,7 @@
       implicitly-passed row; settings persistence, real/preview renderer parity, long typing,
       scroll candidates, tray recovery and every bundled engine/addon have current evidence.
 - [ ] Every applicable case in `docs/product-test-plan.md` has current same-lineage evidence; the
-      Config HWND inventory and real tray popup action sweep pass without an untested command.
+      Config semantic-action inventory and real tray popup action sweep pass without an untested action.
 - [ ] Signed production package repository and non-empty protected keyring pass refresh, install,
       update, disable/enable, uninstall, interrupted activation, rollback and offline scenarios.
 - [ ] Compatibility evidence covers the declared Modern and Legacy host/DPI/session matrix; any

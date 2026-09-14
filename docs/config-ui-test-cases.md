@@ -1,8 +1,9 @@
 # Config UI complete interaction test cases
 
-This is the control-level acceptance specification for `fcitx5-config.exe`. The automated
-interaction sweep invokes real Win32 command notifications while suppressing only external or
-destructive effects. Those effects are verified through their lower-level contract and the named
+This is the semantic, control-level acceptance specification for `fcitx5-config.exe`. Automation
+may use a platform adapter to invoke production controls, but its authority is the visible
+semantic action and result—not a Win32 notification, HWND count, or a particular UI toolkit.
+External or destructive effects are verified through their lower-level contract and the named
 desktop/package gate. A visible control that has no row here is a test-design defect.
 
 ## Navigation and common behavior
@@ -32,7 +33,7 @@ desktop/package gate. A visible control that has no row here is a test-design de
 | CFG-VIS-03 | Toggle Scroll mode on/off | dirty/saved state is correct; grid/scroll rendering changes without stale candidate coordinates | interaction sweep + layout/render contracts |
 | CFG-VIS-04 | Select each theme | valid theme ID persists; missing/invalid theme falls back safely | interaction sweep + TOML/theme tests |
 | CFG-VIS-05 | Focus/edit/blur font, including empty, long and non-ASCII names | dirty state; empty/invalid input is rejected without corrupting previous config; valid font persists | interaction sweep + config parser boundary tests |
-| CFG-VIS-06 | Click Preview | preview process uses the real D2D/DWrite CandidateModel renderer and exits with its parent | interaction sweep wiring + renderer self-test + Desktop visual parity |
+| CFG-VIS-06 | Open Preview | preview uses the production CandidateModel/layout/render contract and closes with its parent | interaction sweep wiring + renderer self-test + Desktop visual parity |
 | CFG-VIS-07 | Exercise Live/Deferred paths on Appearance and Theme | saved state is reported only after atomic TOML write; active candidate reloads only committed values | interaction sweep + Control atomic write + live-config reflow |
 
 ## Diagnostics and Repair
@@ -68,14 +69,14 @@ desktop/package gate. A visible control that has no row here is a test-design de
 
 ## Coverage rule
 
-`config-ui-interaction-coverage` must click every command button and trigger every selection/edit
-notification on a safe synthetic model. It enumerates the real child HWND tree after the sweep and
-fails if any non-zero-ID `Button` was not clicked. The current inventory is 19 unique Button HWNDs;
-any shared Apply button is exercised on every Deferred owning page and the shared Install/Update button
-is exercised through both semantic branches. All input-method/theme/appearance combo entries are
-selected, checkboxes are toggled in both directions, both orientation radios are selected, and the
-font edit receives empty, ASCII and non-ASCII edit notifications. This makes adding a button without
-adding a test a reproducible failing case instead of a documentation convention.
+`config-ui-interaction-coverage` must exercise every reachable visible semantic action and each
+selection/edit branch on a safe synthetic model. It must derive its inventory from the production
+accessibility/control semantics and fail when an actionable control lacks coverage; it must not use
+a hard-coded HWND or button count as acceptance. Any shared Apply action is exercised on every
+Deferred-owning page, and Install/Update is exercised through both semantic branches. Input-method,
+theme and appearance choices are selected, toggles run both ways, orientations are selected, and
+font input covers empty, ASCII and non-ASCII values. This makes an untested user action a
+reproducible failure without binding the contract to WTL, Win32, or a particular renderer.
 
 Lower-level tests then prove persistence and transaction semantics. Desktop gates prove Shell, COM,
 UAC and real host integration. A feature is accepted only when all applicable layers pass for the

@@ -6,7 +6,7 @@
 - Governing specification: Frozen v1.6 (decision retained)
 
 > 2026-08-25 status: partially superseded by the current Rust migration policy in
-> `docs/current.md` and `docs/tasks/rebaseline.md`. The WTL/Win32 Config shell remains the current
+> `docs/product-contract.md`, `docs/current.md`, and `docs/tasks/status.md`. The WTL/Win32 Config shell remains the current
 > shipping adapter, but this ADR no longer defines the language map for TSF, Candidate, Launcher,
 > package, updater, or Config ownership. New product-owned code defaults to Rust unless it is the
 > direct Fcitx-facing Engine island or a temporary native adapter with a queued cutover/removal path.

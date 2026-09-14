@@ -9,7 +9,7 @@
 RUST-R2-02 requires the Control CLI/shared process execution boundary to move to Rust after the C++ drain/timeout/cancel semantics are frozen. The v1.8 specification also keeps several Windows-facing or domain-owned surfaces in C++ for this stabilization gate:
 
 > 2026-08-25 status: the list below is historical context for R2-02. Current execution follows
-> `docs/current.md` and `docs/tasks/rebaseline.md`: shipping TSF is Rust, new product-owned
+> `docs/product-contract.md`, `docs/current.md`, and `docs/tasks/status.md`: shipping TSF is Rust, new product-owned
 > Control/Config/package/update logic defaults to Rust, and C++ is allowed only for thin native
 > adapter seams or the direct Fcitx-facing Engine island.
 

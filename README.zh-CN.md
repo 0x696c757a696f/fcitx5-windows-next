@@ -104,6 +104,6 @@ fcitx5-ui.exe        按需显示的候选窗口
 | `docs/` | 工程规格和任务证据 |
 | `resources/` | 图标及其他项目资源 |
 
-工程队列和当前实现事实以 [`docs/tasks/current.md`](docs/tasks/current.md)、[`docs/tasks/PLAN.md`](docs/tasks/PLAN.md) 和 [`docs/current.md`](docs/current.md) 为准。修改代码前请阅读 [`AGENTS.md`](AGENTS.md)。安全报告方式见 [`SECURITY.md`](SECURITY.md)，依赖声明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+工程合同和当前实现事实以 [`docs/product-contract.md`](docs/product-contract.md)、[`docs/current.md`](docs/current.md) 和 [`docs/tasks/current.md`](docs/tasks/current.md) 为准。修改代码前请阅读 [`AGENTS.md`](AGENTS.md)。安全报告方式见 [`SECURITY.md`](SECURITY.md)，依赖声明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 根项目采用 **GNU GPL version 3 或任何更高版本**，详见 [`LICENSE`](LICENSE)。部分可复用 Rust crate 声明为 `LGPL-2.1-or-later`，第三方组件继续遵守各自许可证。每个组件适用的许可证以其许可证文件和 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 为准。

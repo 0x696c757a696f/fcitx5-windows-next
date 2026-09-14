@@ -43,4 +43,5 @@ Execute the final release gate only after stabilization, required external host 
 - Final published artifacts trace to source commit and locked toolchains.
 - No signing-stage recompilation.
 
-After completion, update `docs/tasks/status.md` and advance according to `docs/tasks/PLAN.md`.
+After completion, record same-lineage evidence in `docs/tasks/status.md`, archive this task only
+when its evidence remains useful, and select a new bounded `docs/tasks/current.md` task explicitly.

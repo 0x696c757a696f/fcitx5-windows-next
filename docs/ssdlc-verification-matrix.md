@@ -1,8 +1,9 @@
 # SSDLC and DevSecOps verification matrix
 
-This document is the executable quality contract for the frozen v1.7 specification. A phase
-acceptance note is evidence only when its listed gate has passed for the same source and artifact
-lineage. Missing evidence is a release blocker, not an implied pass.
+This document is the executable quality contract for the current
+[`product contract`](product-contract.md). A phase acceptance note is evidence only when its listed
+gate has passed for the same source and artifact lineage. Missing evidence is a release blocker,
+not an implied pass.
 
 ## Gate model
 
@@ -35,7 +36,7 @@ Entry points are deliberately small:
 | 1B TSF correctness | thin COM DLL, bounded engine call, TSF edit-session commit | TSF activation and key-commit E2E; real Notepad commit | PR + Stable |
 | 2 IPC spoofing/hangs | SID/session namespace, DACL, peer path check, request deadlines, isolated test namespaces | protocol, multi-client, late-response, launcher state and protocol fuzz tests | PR |
 | 3 engine regressions | one engine dispatcher, connection-scoped contexts, explicit epoch/revision, formal backpressure/order/deadline/drop semantics | real Fcitx Pinyin/Rime/Lua tests, typing fuzz, startup/resource baselines | Nightly |
-| 4 UI stalls/incorrect layout | renderer-neutral CandidateModel, independent D2D/DWrite UI, revision snapshots | model/layout contracts, device-loss/safe-mode smoke, render benchmarks, visual/DPI evidence | PR + Stable |
+| 4 UI stalls/incorrect layout | Rust-owned CandidateModel/layout, bounded renderer adapter, revision snapshots | model/layout contracts, device-loss/safe-mode smoke, render benchmarks, visual/DPI evidence | PR + Stable |
 | 5 recovery/security | fail-open TSF, TSF activation guard, crash-loop Safe Mode, bounded restart, no hook/injection, TSF update generation draining without killing hosts | crash-loop, engine-absent Notepad, stale TSF activation fail-open/reset, runtime imports/hijack checks, in-use TSF rename-old/install-new cleanup contract, host compatibility matrix | PR + Win7 VM milestone + Stable |
 | 6 settings/install usability | typed Control API, atomic TOML writes, shared real preview renderer, declared Live/Deferred/Restart-required behavior | config round-trip, UI behavior contract, i18n/resources, portable move and installer/repair/uninstall tests | PR + Nightly + Stable |
 | 7 untrusted package input | downloader/deployer split, strict manifest/path/signature validation, staging + atomic activation | package transaction tests, archive/path fuzz, signature/hash failure, Rime/Lua/addon functional tests | PR + Nightly |

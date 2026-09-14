@@ -1,6 +1,6 @@
 # Product-wide test plan
 
-This is the risk-based test design for the frozen v1.7 product. It complements the
+This is the risk-based test design for the current product contract. It complements the
 requirement traceability in `ssdlc-verification-matrix.md` and the control inventory in
 `config-ui-test-cases.md`. A row is not accepted merely because code exists: the named gate must
 pass against the same artifact lineage. Environment-dependent rows remain open until their real
@@ -24,8 +24,10 @@ security boundary, failure transition and declared environment has a test owner 
 
 ### Config window
 
-`config-ui-interaction-coverage` opens the actual WTL/Win32 window and uses `BM_CLICK` or the real
-control notification. It then enumerates every child `Button` HWND and fails if one was not clicked.
+`config-ui-interaction-coverage` exercises the production Settings surface through its supported
+automation/accessibility adapter. It inventories visible semantic actions and fails if an actionable
+control or branch is not covered; it does not make WTL, Win32, `BM_CLICK`, or an HWND count the
+acceptance authority.
 
 | ID range | Controls and state branches | Expected result |
 |---|---|---|
@@ -38,7 +40,7 @@ control notification. It then enumerates every child `Button` HWND and fails if 
 | UI-APP-004 | Appearance lifecycle | Live values persist immediately; Deferred groups expose Apply/Cancel; active renderer reloads only committed state |
 | UI-THM-001 | every theme combo entry | stable theme ID; invalid/missing theme falls back safely |
 | UI-THM-002 | font empty, ASCII, non-ASCII, over-limit via parser boundary | UI becomes dirty; invalid value cannot replace valid config; valid value round-trips |
-| UI-THM-003 | Preview | launches the production D2D/DWrite renderer path; closes with parent; matches saved layout contract |
+| UI-THM-003 | Preview | uses the production CandidateModel/layout/render contract; closes with parent; matches saved layout contract |
 | UI-THM-004 | Theme lifecycle | same Live/Deferred atomic rules as Appearance; Restart-required is explicit when applicable |
 | UI-DIA-001 | Restart | bounded engine PID/epoch change; host remains responsive |
 | UI-DIA-002 | Diagnostics | structured status is non-empty and contains no S0/S1 input data |
@@ -48,11 +50,11 @@ control notification. It then enumerates every child `Button` HWND and fails if 
 | UI-PKG-003 | Enable and Disable branches | persisted state and one safe engine restart; bundled rows remain read-only |
 | UI-PKG-004 | Uninstall | pending removal, restart/finalize, owned files only, user dictionary retained |
 
-The former 19-button inventory is historical and must be regenerated from the Phase 6 UI after its
-v1.7 Live/Deferred/Restart-required redesign. Automation must exercise every reachable button and
+The former 19-button inventory is historical and must not become acceptance criteria. Automation
+must exercise every reachable semantic action and
 semantic branch; a hard-coded count is not acceptance.
 
-### v1.7 mandatory regressions
+### Mandatory regressions
 
 | ID | Scenario | Required result |
 | --- | --- | --- |
