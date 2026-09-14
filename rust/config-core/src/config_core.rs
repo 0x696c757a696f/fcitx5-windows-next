@@ -150,6 +150,28 @@ pub enum WritingMode {
     VerticalLr,
 }
 
+/// The axis used by the `scroll` layout viewport.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollDirection {
+    /// Candidates scroll left-to-right in rows.
+    #[default]
+    Horizontal,
+    /// Candidates scroll top-to-bottom in a column.
+    Vertical,
+}
+
+/// The order used for `vertical_text` columns.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalTextColumnDirection {
+    /// Traditional CJK columns progress right-to-left.
+    #[default]
+    RightToLeft,
+    /// Columns progress left-to-right.
+    LeftToRight,
+}
+
 /// The unified three-axis candidate layout model. The layout engine and
 /// config boundary read only this model; legacy single-dimension strings
 /// decode into it once at the config boundary.
@@ -166,7 +188,11 @@ pub struct CandidateLayoutOptions {
 /// Decodes the legacy single-dimension `layout_type` vocabulary into the
 /// unified three-axis model. `automatic` keeps the default arrangement axis
 /// because its direction is presentation-decided.
-fn decode_candidate_layout_options(layout_type: &str) -> CandidateLayoutOptions {
+fn decode_candidate_layout_options(
+    layout_type: &str,
+    scroll_direction: ScrollDirection,
+    vertical_text_column_direction: VerticalTextColumnDirection,
+) -> CandidateLayoutOptions {
     match layout_type {
         "stacked" => CandidateLayoutOptions {
             orientation: CandidateOrientation::Vertical,
@@ -179,14 +205,20 @@ fn decode_candidate_layout_options(layout_type: &str) -> CandidateLayoutOptions 
             writing_mode: WritingMode::Horizontal,
         },
         "scroll" => CandidateLayoutOptions {
-            orientation: CandidateOrientation::Horizontal,
+            orientation: match scroll_direction {
+                ScrollDirection::Horizontal => CandidateOrientation::Horizontal,
+                ScrollDirection::Vertical => CandidateOrientation::Vertical,
+            },
             overflow: OverflowBehavior::Scrolling,
             writing_mode: WritingMode::Horizontal,
         },
         "vertical_text" => CandidateLayoutOptions {
             orientation: CandidateOrientation::Vertical,
             overflow: OverflowBehavior::Paging,
-            writing_mode: WritingMode::VerticalRl,
+            writing_mode: match vertical_text_column_direction {
+                VerticalTextColumnDirection::RightToLeft => WritingMode::VerticalRl,
+                VerticalTextColumnDirection::LeftToRight => WritingMode::VerticalLr,
+            },
         },
         // `automatic` and any unrecognized fallback keep the default axis.
         _ => CandidateLayoutOptions {
@@ -203,6 +235,10 @@ fn decode_candidate_layout_options(layout_type: &str) -> CandidateLayoutOptions 
 pub struct CandidateConfig {
     #[serde(default = "default_candidate_layout_type")]
     layout_type: String,
+    #[serde(default)]
+    scroll_direction: ScrollDirection,
+    #[serde(default)]
+    vertical_text_column_direction: VerticalTextColumnDirection,
     page_size: u8,
     max_width_dip: f32,
     scroll_cell_width_dip: f32,
@@ -226,7 +262,23 @@ impl CandidateConfig {
     /// model consumed by the layout engine and config boundary.
     #[must_use]
     pub fn layout_options(&self) -> CandidateLayoutOptions {
-        decode_candidate_layout_options(&self.layout_type)
+        decode_candidate_layout_options(
+            &self.layout_type,
+            self.scroll_direction,
+            self.vertical_text_column_direction,
+        )
+    }
+
+    /// Returns the direction used when `layout_type` is `scroll`.
+    #[must_use]
+    pub fn scroll_direction(&self) -> ScrollDirection {
+        self.scroll_direction
+    }
+
+    /// Returns the column order used when `layout_type` is `vertical_text`.
+    #[must_use]
+    pub fn vertical_text_column_direction(&self) -> VerticalTextColumnDirection {
+        self.vertical_text_column_direction
     }
 
     /// Returns the configured candidate page size.
@@ -612,6 +664,8 @@ impl ConfigOverrides {
         self.appearance.mode = None;
         self.appearance.theme = None;
         self.candidate.layout_type = None;
+        self.candidate.scroll_direction = None;
+        self.candidate.vertical_text_column_direction = None;
         self.candidate.orientation = None;
         self.candidate.page_size = None;
         self.candidate.scroll_mode = None;
@@ -709,6 +763,10 @@ impl AppearanceOverrides {
 pub struct CandidateOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     layout_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scroll_direction: Option<ScrollDirection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vertical_text_column_direction: Option<VerticalTextColumnDirection>,
     /// Legacy `orientation` key, accepted on read and migrated to
     /// `layout_type`; never serialized after normalization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -740,6 +798,8 @@ pub struct CandidateOverrides {
 impl CandidateOverrides {
     fn is_empty(&self) -> bool {
         self.layout_type.is_none()
+            && self.scroll_direction.is_none()
+            && self.vertical_text_column_direction.is_none()
             && self.orientation.is_none()
             && self.page_size.is_none()
             && self.scroll_mode.is_none()
@@ -956,6 +1016,10 @@ pub enum ConfigEdit {
     /// Sets the candidate layout type
     /// (`automatic`/`stacked`/`flow`/`scroll`/`vertical_text`).
     CandidateLayoutType(String),
+    /// Sets the scroll viewport direction.
+    CandidateScrollDirection(ScrollDirection),
+    /// Sets the vertical-text column order.
+    CandidateVerticalTextColumnDirection(VerticalTextColumnDirection),
     /// Sets the candidate page size.
     CandidatePageSize(u8),
     /// Sets the candidate maximum width in DIP.
@@ -985,6 +1049,10 @@ pub enum ConfigField {
     Theme,
     /// Resets the candidate layout type.
     CandidateLayoutType,
+    /// Resets the scroll viewport direction.
+    CandidateScrollDirection,
+    /// Resets the vertical-text column order.
+    CandidateVerticalTextColumnDirection,
     /// Resets the candidate page size.
     CandidatePageSize,
     /// Resets the candidate maximum width.
@@ -1300,6 +1368,17 @@ impl ConfigCore {
         );
         compare_field(
             &mut differences,
+            ConfigField::CandidateScrollDirection,
+            current.candidate.scroll_direction != draft.candidate.scroll_direction,
+        );
+        compare_field(
+            &mut differences,
+            ConfigField::CandidateVerticalTextColumnDirection,
+            current.candidate.vertical_text_column_direction
+                != draft.candidate.vertical_text_column_direction,
+        );
+        compare_field(
+            &mut differences,
             ConfigField::CandidatePageSize,
             current.candidate.page_size != draft.candidate.page_size,
         );
@@ -1383,6 +1462,10 @@ impl ConfigCore {
                 self.draft.candidate.orientation = None;
                 self.draft.candidate.scroll_mode = None;
             }
+            ConfigField::CandidateScrollDirection => self.draft.candidate.scroll_direction = None,
+            ConfigField::CandidateVerticalTextColumnDirection => {
+                self.draft.candidate.vertical_text_column_direction = None;
+            }
             ConfigField::CandidatePageSize => self.draft.candidate.page_size = None,
             ConfigField::CandidateMaxWidthDip => self.draft.candidate.max_width_dip = None,
             ConfigField::CandidateScrollCellWidthDip => {
@@ -1422,6 +1505,12 @@ impl ConfigCore {
                 self.draft.candidate.orientation = None;
                 self.draft.candidate.scroll_mode = None;
                 self.draft.candidate.layout_type = Some(value)
+            }
+            ConfigEdit::CandidateScrollDirection(value) => {
+                self.draft.candidate.scroll_direction = Some(value)
+            }
+            ConfigEdit::CandidateVerticalTextColumnDirection(value) => {
+                self.draft.candidate.vertical_text_column_direction = Some(value)
             }
             ConfigEdit::CandidatePageSize(value) => self.draft.candidate.page_size = Some(value),
             ConfigEdit::CandidateMaxWidthDip(value) => {
@@ -1670,6 +1759,12 @@ fn apply_overrides(resolved: &mut ConfigSnapshot, overrides: &ConfigOverrides) {
     }
     if let Some(value) = overrides.candidate.page_size {
         resolved.candidate.page_size = value;
+    }
+    if let Some(value) = overrides.candidate.scroll_direction {
+        resolved.candidate.scroll_direction = value;
+    }
+    if let Some(value) = overrides.candidate.vertical_text_column_direction {
+        resolved.candidate.vertical_text_column_direction = value;
     }
     if let Some(value) = overrides.candidate.max_width_dip {
         resolved.candidate.max_width_dip = value;
@@ -2025,6 +2120,24 @@ impl ConfigEdit {
             "appearance.mode" => Ok(Self::AppearanceMode(value.to_owned())),
             "appearance.theme" => Ok(Self::Theme(value.to_owned())),
             "candidate.layout_type" => Ok(Self::CandidateLayoutType(value.to_owned())),
+            "candidate.scroll_direction" => match value {
+                "horizontal" => Ok(Self::CandidateScrollDirection(ScrollDirection::Horizontal)),
+                "vertical" => Ok(Self::CandidateScrollDirection(ScrollDirection::Vertical)),
+                _ => Err(ConfigError::Parse {
+                    message: "candidate.scroll_direction must be horizontal or vertical".to_owned(),
+                }),
+            },
+            "candidate.vertical_text_column_direction" => match value {
+                "right_to_left" => Ok(Self::CandidateVerticalTextColumnDirection(
+                    VerticalTextColumnDirection::RightToLeft,
+                )),
+                "left_to_right" => Ok(Self::CandidateVerticalTextColumnDirection(
+                    VerticalTextColumnDirection::LeftToRight,
+                )),
+                _ => Err(ConfigError::Parse {
+                    message: "candidate.vertical_text_column_direction must be right_to_left or left_to_right".to_owned(),
+                }),
+            },
             "candidate.page_size" => {
                 value
                     .parse::<u8>()
@@ -2100,6 +2213,10 @@ impl ConfigField {
             "appearance.mode" => Ok(Self::AppearanceMode),
             "appearance.theme" => Ok(Self::Theme),
             "candidate.layout_type" => Ok(Self::CandidateLayoutType),
+            "candidate.scroll_direction" => Ok(Self::CandidateScrollDirection),
+            "candidate.vertical_text_column_direction" => {
+                Ok(Self::CandidateVerticalTextColumnDirection)
+            }
             "candidate.orientation" | "candidate.scroll_mode" => Ok(Self::CandidateLayoutType),
             "candidate.page_size" => Ok(Self::CandidatePageSize),
             "candidate.max_width_dip" => Ok(Self::CandidateMaxWidthDip),
@@ -2523,7 +2640,11 @@ mod candidate_layout_decode_tests {
     use super::*;
 
     fn options(layout_type: &str) -> CandidateLayoutOptions {
-        decode_candidate_layout_options(layout_type)
+        decode_candidate_layout_options(
+            layout_type,
+            ScrollDirection::Horizontal,
+            VerticalTextColumnDirection::RightToLeft,
+        )
     }
 
     #[test]
@@ -2556,6 +2677,25 @@ mod candidate_layout_decode_tests {
         assert_eq!(decoded.orientation, CandidateOrientation::Vertical);
         assert_eq!(decoded.overflow, OverflowBehavior::Paging);
         assert_eq!(decoded.writing_mode, WritingMode::VerticalRl);
+    }
+
+    #[test]
+    fn persisted_directions_select_the_matching_three_axis_plan() {
+        let scroll = decode_candidate_layout_options(
+            "scroll",
+            ScrollDirection::Vertical,
+            VerticalTextColumnDirection::RightToLeft,
+        );
+        assert_eq!(scroll.orientation, CandidateOrientation::Vertical);
+        assert_eq!(scroll.overflow, OverflowBehavior::Scrolling);
+
+        let vertical_text = decode_candidate_layout_options(
+            "vertical_text",
+            ScrollDirection::Horizontal,
+            VerticalTextColumnDirection::LeftToRight,
+        );
+        assert_eq!(vertical_text.orientation, CandidateOrientation::Vertical);
+        assert_eq!(vertical_text.writing_mode, WritingMode::VerticalLr);
     }
 
     #[test]

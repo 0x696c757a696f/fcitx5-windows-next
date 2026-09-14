@@ -36,7 +36,10 @@ use fcitx5_candidate_core::{
     Fcitx5CandidateResolvedColors, Fcitx5CandidateSelectionIntent,
     Fcitx5CandidateVisualBuildOutput, Rect as FRect,
 };
-use fcitx5_config_core::{ConfigCore, FileStore, VisualSnapshotRequest};
+use fcitx5_config_core::{
+    CandidateOrientation, ConfigCore, FileStore, OverflowBehavior, VisualSnapshotRequest,
+    WritingMode,
+};
 use fcitx5_protocol_core::{CandidateRecord, CaretRect, KeyResponse, Status};
 use fcitx5_windows_common_core::CandidateSelectClient;
 use fcitx5_windows_common_core::{
@@ -409,34 +412,23 @@ fn load_visual_config(safe_mode: bool) -> Option<VisualConfig> {
     );
     let snapshot = ConfigCore::load_visual_snapshot(&store, request);
     let candidate = snapshot.snapshot().candidate();
-    // Layout-type mapping mirrors the frozen C++ decodeNativeLayoutType:
-    // `automatic` keeps the presentation-decided axis.
-    let (orientation, overflow, writing) = match candidate.layout_type() {
-        "stacked" => (
-            FrameOrientation::Vertical,
-            FrameOverflow::Paging,
-            FrameWriting::Horizontal,
-        ),
-        "flow" => (
-            FrameOrientation::Horizontal,
-            FrameOverflow::Wrapping,
-            FrameWriting::Horizontal,
-        ),
-        "scroll" => (
-            FrameOrientation::Horizontal,
-            FrameOverflow::Scrolling,
-            FrameWriting::Horizontal,
-        ),
-        "vertical_text" => (
-            FrameOrientation::Vertical,
-            FrameOverflow::Paging,
-            FrameWriting::VerticalRl,
-        ),
-        _ => (
-            FrameOrientation::Automatic,
-            FrameOverflow::Paging,
-            FrameWriting::Horizontal,
-        ),
+    // Config Core is the only legacy-string decoder. The renderer consumes
+    // its resolved three-axis model, including the two persisted directions.
+    let layout = candidate.layout_options();
+    let orientation = match (candidate.layout_type(), layout.orientation) {
+        ("automatic", _) => FrameOrientation::Automatic,
+        (_, CandidateOrientation::Horizontal) => FrameOrientation::Horizontal,
+        (_, CandidateOrientation::Vertical) => FrameOrientation::Vertical,
+    };
+    let overflow = match layout.overflow {
+        OverflowBehavior::Paging => FrameOverflow::Paging,
+        OverflowBehavior::Scrolling => FrameOverflow::Scrolling,
+        OverflowBehavior::Wrapping => FrameOverflow::Wrapping,
+    };
+    let writing = match layout.writing_mode {
+        WritingMode::Horizontal => FrameWriting::Horizontal,
+        WritingMode::VerticalRl => FrameWriting::VerticalRl,
+        WritingMode::VerticalLr => FrameWriting::VerticalLr,
     };
     let label_style = match candidate.label().style() {
         "plain" => 0,

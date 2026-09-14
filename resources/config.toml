@@ -12,8 +12,12 @@ mode = "system"
 theme = "builtin:default"
 
 [candidate]
-# vertical（纵向，默认）或 horizontal（横向）。
+# automatic、stacked、flow、scroll 或 vertical_text。
 layout_type = "scroll"
+# 仅卷轴布局：horizontal（横向）或 vertical（纵向）。
+scroll_direction = "horizontal"
+# 仅竖排文字布局：right_to_left（默认）或 left_to_right。
+vertical_text_column_direction = "right_to_left"
 # 横向时表示每行候选数；纵向时表示每列候选数。范围 1–9。
 page_size = 5
 # 卷轴模式：引擎提供 BulkCandidateList 时，方向键/PageUp/PageDown/Home/End

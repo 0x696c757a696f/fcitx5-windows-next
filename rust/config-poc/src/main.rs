@@ -8,7 +8,9 @@ use std::thread;
 
 use fcitx5_candidate_core::run_candidate_poc_self_check;
 use fcitx5_config_core::{
-    ConfigCommand, ConfigCore, ConfigEdit, ConfigField, ConfigSnapshot, FileStore, RecoverySource,
+    CandidateOrientation as CoreCandidateOrientation, ConfigCommand, ConfigCore, ConfigEdit,
+    ConfigField, ConfigSnapshot, FileStore, OverflowBehavior as CoreOverflowBehavior,
+    RecoverySource, ScrollDirection, VerticalTextColumnDirection, WritingMode as CoreWritingMode,
 };
 use fcitx5_control_core::{control_schema_json, control_usage_text};
 use fcitx5_package_core::{
@@ -1275,11 +1277,12 @@ struct CandidateLayoutUiOptions {
     orientation: CandidateLayoutOrientation,
     overflow: CandidateLayoutOverflow,
     writing_mode: CandidateWritingMode,
+    scroll_direction: ScrollDirection,
+    vertical_text_column_direction: VerticalTextColumnDirection,
 }
 
 impl CandidateLayoutUiOptions {
-    /// Overflows the selected orientation may display. `Vertical + Wrapping`
-    /// has no semantics in the frozen matrix and is never offered.
+    #[allow(dead_code)]
     fn overflow_choices(self) -> &'static [CandidateLayoutOverflow] {
         match self.orientation {
             CandidateLayoutOrientation::Horizontal => &[
@@ -1320,10 +1323,7 @@ impl CandidateLayoutUiOptions {
         }
     }
 
-    /// When a non-Horizontal writing mode is picked, orientation/overflow do
-    /// not persist: legacy `vertical_text` only carries Vertical+Paging+the
-    /// vertical writing token. Switching back to Horizontal keeps the current
-    /// orientation/overflow pair and only clears the vertical writing.
+    #[allow(dead_code)]
     fn with_writing(self, writing_mode: CandidateWritingMode) -> Self {
         match writing_mode {
             CandidateWritingMode::Horizontal => Self {
@@ -1334,6 +1334,7 @@ impl CandidateLayoutUiOptions {
                 orientation: CandidateLayoutOrientation::Vertical,
                 overflow: CandidateLayoutOverflow::Paging,
                 writing_mode,
+                ..self
             },
         }
     }
@@ -1348,26 +1349,36 @@ impl CandidateLayoutMode {
                 orientation: CandidateLayoutOrientation::Horizontal,
                 overflow: CandidateLayoutOverflow::Paging,
                 writing_mode: CandidateWritingMode::Horizontal,
+                scroll_direction: ScrollDirection::Horizontal,
+                vertical_text_column_direction: VerticalTextColumnDirection::RightToLeft,
             },
             Self::Stacked => CandidateLayoutUiOptions {
                 orientation: CandidateLayoutOrientation::Vertical,
                 overflow: CandidateLayoutOverflow::Paging,
                 writing_mode: CandidateWritingMode::Horizontal,
+                scroll_direction: ScrollDirection::Horizontal,
+                vertical_text_column_direction: VerticalTextColumnDirection::RightToLeft,
             },
             Self::Flow => CandidateLayoutUiOptions {
                 orientation: CandidateLayoutOrientation::Horizontal,
                 overflow: CandidateLayoutOverflow::Wrapping,
                 writing_mode: CandidateWritingMode::Horizontal,
+                scroll_direction: ScrollDirection::Horizontal,
+                vertical_text_column_direction: VerticalTextColumnDirection::RightToLeft,
             },
             Self::Scroll => CandidateLayoutUiOptions {
                 orientation: CandidateLayoutOrientation::Horizontal,
                 overflow: CandidateLayoutOverflow::Scrolling,
                 writing_mode: CandidateWritingMode::Horizontal,
+                scroll_direction: ScrollDirection::Horizontal,
+                vertical_text_column_direction: VerticalTextColumnDirection::RightToLeft,
             },
             Self::VerticalText => CandidateLayoutUiOptions {
                 orientation: CandidateLayoutOrientation::Vertical,
                 overflow: CandidateLayoutOverflow::Paging,
                 writing_mode: CandidateWritingMode::VerticalRl,
+                scroll_direction: ScrollDirection::Horizontal,
+                vertical_text_column_direction: VerticalTextColumnDirection::RightToLeft,
             },
         }
     }
@@ -2122,13 +2133,31 @@ fn reset_candidate_draft(adapter: WindUiSignal<WindUiConfigAdapter>, status: Win
 /// Decodes the current snapshot into the two-axis UI state exactly as Config
 /// Core decodes the legacy string (see `candidate_layout_mode` + `.options()`).
 fn candidate_layout_ui_options(snapshot: &ConfigSnapshot) -> CandidateLayoutUiOptions {
-    candidate_layout_mode(snapshot)
-        .unwrap_or(CandidateLayoutMode::Automatic)
-        .options()
+    let candidate = snapshot.candidate();
+    let layout = candidate.layout_options();
+    CandidateLayoutUiOptions {
+        orientation: match layout.orientation {
+            CoreCandidateOrientation::Horizontal => CandidateLayoutOrientation::Horizontal,
+            CoreCandidateOrientation::Vertical => CandidateLayoutOrientation::Vertical,
+        },
+        overflow: match layout.overflow {
+            CoreOverflowBehavior::Paging => CandidateLayoutOverflow::Paging,
+            CoreOverflowBehavior::Scrolling => CandidateLayoutOverflow::Scrolling,
+            CoreOverflowBehavior::Wrapping => CandidateLayoutOverflow::Wrapping,
+        },
+        writing_mode: match layout.writing_mode {
+            CoreWritingMode::Horizontal => CandidateWritingMode::Horizontal,
+            CoreWritingMode::VerticalRl => CandidateWritingMode::VerticalRl,
+            CoreWritingMode::VerticalLr => CandidateWritingMode::VerticalLr,
+        },
+        scroll_direction: candidate.scroll_direction(),
+        vertical_text_column_direction: candidate.vertical_text_column_direction(),
+    }
 }
 
 /// Re-encodes the edited two-axis state to the single legacy `layout_type`
 /// string and writes it to the Draft as one `CandidateLayoutType` edit.
+#[allow(dead_code)]
 fn commit_candidate_layout_ui(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
@@ -2148,7 +2177,108 @@ fn commit_candidate_layout_ui(
     Ok(())
 }
 
+fn candidate_layout_mode_button(
+    mode: CandidateLayoutMode,
+    selected: WindUiSignal<CandidateLayoutMode>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) -> WindUiElement {
+    let active = WindUiElement::button(mode.label())
+        .small()
+        .tooltip(mode.preview_description(5))
+        .visible_when(move || selected.get() == mode);
+    let inactive = WindUiElement::button(mode.label())
+        .small()
+        .outline_soft()
+        .neutral()
+        .tooltip(mode.preview_description(5))
+        .on_click(move |ctx| {
+            if let Err(error) = update_candidate_draft(
+                adapter,
+                status,
+                "候选布局",
+                ConfigEdit::CandidateLayoutType(mode.options().layout_type().to_owned()),
+            ) {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || selected.get() != mode);
+    WindUiElement::stack().child(active).child(inactive)
+}
+
+fn candidate_scroll_direction_button(
+    direction: ScrollDirection,
+    mode: WindUiSignal<CandidateLayoutMode>,
+    selected: WindUiSignal<CandidateLayoutUiOptions>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) -> WindUiElement {
+    let label = match direction {
+        ScrollDirection::Horizontal => "横向卷轴",
+        ScrollDirection::Vertical => "纵向卷轴",
+    };
+    let active = WindUiElement::button(label).small().visible_when(move || {
+        mode.get() == CandidateLayoutMode::Scroll && selected.get().scroll_direction == direction
+    });
+    let inactive = WindUiElement::button(label)
+        .small()
+        .outline_soft()
+        .neutral()
+        .on_click(move |ctx| {
+            if let Err(error) = update_candidate_draft(
+                adapter,
+                status,
+                "卷轴方向",
+                ConfigEdit::CandidateScrollDirection(direction),
+            ) {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || {
+            mode.get() == CandidateLayoutMode::Scroll
+                && selected.get().scroll_direction != direction
+        });
+    WindUiElement::stack().child(active).child(inactive)
+}
+
+fn candidate_vertical_text_column_button(
+    direction: VerticalTextColumnDirection,
+    mode: WindUiSignal<CandidateLayoutMode>,
+    selected: WindUiSignal<CandidateLayoutUiOptions>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) -> WindUiElement {
+    let label = match direction {
+        VerticalTextColumnDirection::RightToLeft => "从右到左",
+        VerticalTextColumnDirection::LeftToRight => "从左到右",
+    };
+    let active = WindUiElement::button(label).small().visible_when(move || {
+        mode.get() == CandidateLayoutMode::VerticalText
+            && selected.get().vertical_text_column_direction == direction
+    });
+    let inactive = WindUiElement::button(label)
+        .small()
+        .outline_soft()
+        .neutral()
+        .on_click(move |ctx| {
+            if let Err(error) = update_candidate_draft(
+                adapter,
+                status,
+                "竖排文字列方向",
+                ConfigEdit::CandidateVerticalTextColumnDirection(direction),
+            ) {
+                ctx.toast_err(error);
+            }
+        })
+        .visible_when(move || {
+            mode.get() == CandidateLayoutMode::VerticalText
+                && selected.get().vertical_text_column_direction != direction
+        });
+    WindUiElement::stack().child(active).child(inactive)
+}
+
 /// Two clickable orientation cards (横向 / 纵向) with a clear selected state.
+#[allow(dead_code)]
 fn candidate_layout_orientation_card(
     orientation: CandidateLayoutOrientation,
     options: WindUiSignal<CandidateLayoutUiOptions>,
@@ -2197,6 +2327,7 @@ fn candidate_layout_orientation_card(
                             current.overflow
                         },
                         writing_mode: CandidateWritingMode::Horizontal,
+                        ..current
                     }
                 })
             {
@@ -2231,6 +2362,7 @@ fn candidate_layout_orientation_card(
 /// One overflow option. Options not allowed for the current orientation, and
 /// any overflow change while a vertical writing mode is active (which legacy
 /// `vertical_text` fixes to Vertical+Paging), are never offered.
+#[allow(dead_code)]
 fn candidate_layout_overflow_button(
     overflow: CandidateLayoutOverflow,
     options: WindUiSignal<CandidateLayoutUiOptions>,
@@ -2287,6 +2419,7 @@ fn candidate_layout_overflow_button(
 }
 
 /// One advanced writing-mode option (高级 · 文字方向), set apart from layout.
+#[allow(dead_code)]
 fn candidate_layout_writing_button(
     writing: CandidateWritingMode,
     options: WindUiSignal<CandidateLayoutUiOptions>,
@@ -2374,6 +2507,9 @@ fn windui_config_core_candidate_layout_controls(
     theme_mode: WindUiSignal<usize>,
 ) -> WindUiElement {
     let options = adapter.map(|adapter| candidate_layout_ui_options(&adapter.preview()));
+    let mode = adapter.map(|adapter| {
+        candidate_layout_mode(&adapter.preview()).unwrap_or(CandidateLayoutMode::Automatic)
+    });
     let page_size = adapter.map(|adapter| adapter.preview().candidate().page_size());
     let draft_summary = adapter.map(|adapter| {
         let draft = PreviewRenderContext::from_draft(adapter.preview(), 150);
@@ -2385,42 +2521,55 @@ fn windui_config_core_candidate_layout_controls(
         )
     });
 
-    let orientations = WindUiElement::row()
-        .spacing(10)
-        .child(candidate_layout_orientation_card(
-            CandidateLayoutOrientation::Horizontal,
+    let mut modes = WindUiElement::row().spacing(4);
+    for layout_mode in [
+        CandidateLayoutMode::Automatic,
+        CandidateLayoutMode::Stacked,
+        CandidateLayoutMode::Flow,
+        CandidateLayoutMode::Scroll,
+        CandidateLayoutMode::VerticalText,
+    ] {
+        modes = modes.child(candidate_layout_mode_button(
+            layout_mode,
+            mode,
+            adapter,
+            status,
+        ));
+    }
+
+    let scroll_directions = WindUiElement::row()
+        .spacing(4)
+        .child(candidate_scroll_direction_button(
+            ScrollDirection::Horizontal,
+            mode,
+            options,
+            adapter,
+            status,
+        ))
+        .child(candidate_scroll_direction_button(
+            ScrollDirection::Vertical,
+            mode,
             options,
             adapter,
             status,
         ));
-    let orientations = orientations.child(candidate_layout_orientation_card(
-        CandidateLayoutOrientation::Vertical,
-        options,
-        adapter,
-        status,
-    ));
 
-    let mut overflows = WindUiElement::row().spacing(4);
-    for overflow in [
-        CandidateLayoutOverflow::Paging,
-        CandidateLayoutOverflow::Scrolling,
-        CandidateLayoutOverflow::Wrapping,
-    ] {
-        overflows = overflows.child(candidate_layout_overflow_button(
-            overflow, options, adapter, status,
+    let vertical_text_columns = WindUiElement::row()
+        .spacing(4)
+        .child(candidate_vertical_text_column_button(
+            VerticalTextColumnDirection::RightToLeft,
+            mode,
+            options,
+            adapter,
+            status,
+        ))
+        .child(candidate_vertical_text_column_button(
+            VerticalTextColumnDirection::LeftToRight,
+            mode,
+            options,
+            adapter,
+            status,
         ));
-    }
-
-    let mut writings = WindUiElement::row().spacing(4);
-    for writing in [
-        CandidateWritingMode::Horizontal,
-        CandidateWritingMode::VerticalRl,
-        CandidateWritingMode::VerticalLr,
-    ] {
-        writings = writings.child(candidate_layout_writing_button(
-            writing, options, adapter, status,
-        ));
-    }
 
     let mut page_sizes = WindUiElement::row().spacing(4);
     for value in 1..=9 {
@@ -2435,24 +2584,36 @@ fn windui_config_core_candidate_layout_controls(
         .child(windui_settings_section_title("候选窗口"))
         .child(WindUiElement::setting_row_desc(
             "布局",
-            "候选窗口的排布方向（横向 / 纵向）",
-            orientations,
+            "自动、纵排、横排、卷轴或竖排文字",
+            modes,
         ))
-        .child(WindUiElement::setting_row_desc(
-            "候选溢出",
-            "候选超出可见区域时的行为；纵向不提供自动换行",
-            overflows,
-        ))
-        .child(WindUiElement::setting_row_desc(
-            "候选个数",
-            "每页最多显示的候选数（1-9）",
-            page_sizes,
-        ))
-        .child(WindUiElement::setting_row_desc(
-            "高级 · 文字方向",
-            "候选文字自身方向，独立于布局方向",
-            writings,
-        ))
+        .child(
+            WindUiElement::col()
+                .visible_when(move || mode.get() == CandidateLayoutMode::Scroll)
+                .child(WindUiElement::setting_row_desc(
+                    "卷轴方向",
+                    "仅卷轴布局可选",
+                    scroll_directions,
+                )),
+        )
+        .child(
+            WindUiElement::col()
+                .visible_when(move || mode.get() == CandidateLayoutMode::Scroll)
+                .child(WindUiElement::setting_row_desc(
+                    "候选个数",
+                    "仅卷轴布局：视口每页最多显示的候选数（1-9）",
+                    page_sizes,
+                )),
+        )
+        .child(
+            WindUiElement::col()
+                .visible_when(move || mode.get() == CandidateLayoutMode::VerticalText)
+                .child(WindUiElement::setting_row_desc(
+                    "竖排文字列方向",
+                    "仅竖排文字布局可选",
+                    vertical_text_columns,
+                )),
+        )
         .child(windui_candidate_preview_panel(
             options,
             page_size,
@@ -3424,6 +3585,8 @@ impl WindUiConfigAdapter {
     fn reset_candidate_layout(&mut self) {
         for field in [
             ConfigField::CandidateLayoutType,
+            ConfigField::CandidateScrollDirection,
+            ConfigField::CandidateVerticalTextColumnDirection,
             ConfigField::CandidatePageSize,
         ] {
             self.reset(field);
@@ -6067,6 +6230,7 @@ mod tests {
             orientation,
             overflow,
             writing_mode,
+            ..CandidateLayoutUiOptions::default()
         }
     }
 
@@ -6169,67 +6333,49 @@ mod tests {
     }
 
     #[test]
-    fn vertical_orientation_hides_wrapping_from_overflow_choices() {
-        let horizontal = CandidateLayoutUiOptions {
-            orientation: CandidateLayoutOrientation::Horizontal,
-            ..CandidateLayoutUiOptions::default()
-        };
+    fn only_relevant_direction_survives_the_typed_config_round_trip() {
+        let store = FileStore::new();
+        let path = Path::new("candidate-layout-directions.toml");
+        let mut core = ConfigCore::compiled_defaults();
+        core.execute(
+            ConfigCommand::Set(ConfigEdit::CandidateLayoutType("scroll".to_owned())),
+            &store,
+            path,
+        )
+        .expect("scroll layout should set");
+        core.execute(
+            ConfigCommand::Set(ConfigEdit::CandidateScrollDirection(
+                ScrollDirection::Vertical,
+            )),
+            &store,
+            path,
+        )
+        .expect("scroll direction should set");
         assert_eq!(
-            horizontal.overflow_choices(),
-            &[
-                CandidateLayoutOverflow::Paging,
-                CandidateLayoutOverflow::Scrolling,
-                CandidateLayoutOverflow::Wrapping
-            ]
+            candidate_layout_ui_options(&core.preview()).scroll_direction,
+            ScrollDirection::Vertical
         );
-        let vertical = CandidateLayoutUiOptions {
-            orientation: CandidateLayoutOrientation::Vertical,
-            ..CandidateLayoutUiOptions::default()
-        };
-        assert_eq!(
-            vertical.overflow_choices(),
-            &[
-                CandidateLayoutOverflow::Paging,
-                CandidateLayoutOverflow::Scrolling
-            ]
-        );
-    }
 
-    #[test]
-    fn non_horizontal_writing_forces_legacy_vertical_text_semantics() {
-        let vertical_rl = CandidateLayoutUiOptions {
-            orientation: CandidateLayoutOrientation::Vertical,
-            overflow: CandidateLayoutOverflow::Wrapping,
-            writing_mode: CandidateWritingMode::VerticalLr,
-        };
-        assert_eq!(vertical_rl.layout_type(), "vertical_text");
-
-        // Switching writing back to Horizontal keeps the regular two-axis pair.
-        let restored = vertical_rl.with_writing(CandidateWritingMode::Horizontal);
+        core.execute(
+            ConfigCommand::Set(ConfigEdit::CandidateLayoutType("vertical_text".to_owned())),
+            &store,
+            path,
+        )
+        .expect("vertical text layout should set");
+        core.execute(
+            ConfigCommand::Set(ConfigEdit::CandidateVerticalTextColumnDirection(
+                VerticalTextColumnDirection::LeftToRight,
+            )),
+            &store,
+            path,
+        )
+        .expect("vertical text column direction should set");
+        let options = candidate_layout_ui_options(&core.preview());
+        assert_eq!(options.writing_mode, CandidateWritingMode::VerticalLr);
         assert_eq!(
-            restored,
-            ui_options(
-                CandidateLayoutOrientation::Vertical,
-                CandidateLayoutOverflow::Wrapping,
-                CandidateWritingMode::Horizontal
-            )
+            options.vertical_text_column_direction,
+            VerticalTextColumnDirection::LeftToRight
         );
-        // Picking a vertical writing mode fixes orientation/overflow the way
-        // legacy `vertical_text` stores it, and both directions stay vertical.
-        for writing in [
-            CandidateWritingMode::VerticalRl,
-            CandidateWritingMode::VerticalLr,
-        ] {
-            let forced = CandidateLayoutUiOptions {
-                orientation: CandidateLayoutOrientation::Horizontal,
-                overflow: CandidateLayoutOverflow::Scrolling,
-                writing_mode: CandidateWritingMode::Horizontal,
-            }
-            .with_writing(writing);
-            assert_eq!(forced.orientation, CandidateLayoutOrientation::Vertical);
-            assert_eq!(forced.overflow, CandidateLayoutOverflow::Paging);
-            assert_eq!(forced.writing_mode, writing);
-        }
     }
 
     #[test]
