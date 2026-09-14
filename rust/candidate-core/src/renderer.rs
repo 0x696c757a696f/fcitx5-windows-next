@@ -23,7 +23,9 @@ use windui::spec::Align as WindAlign;
 use windui::text::{DWriteEngine, TextEngine, TextStyle as WindTextStyle};
 
 use crate::axis_layout::{AxisLayoutItem, AxisLayoutResult, WritingMode};
-use crate::theme_tokens::{WECHAT_GREEN_RGB, WHITE_RGB};
+use crate::theme_tokens::{
+    WECHAT_GREEN_RGB, WECHAT_SELECTION_RADIUS_DIP, WECHAT_WINDOW_RADIUS_DIP, WHITE_RGB,
+};
 use crate::Rect;
 
 /// ARGB color resolved by the theme/config boundary.
@@ -50,7 +52,7 @@ impl RenderColor {
     }
 }
 
-/// Fully resolved colors + selection inflate + corner radius.
+/// Fully resolved colors + selection inset + outer-surface corner radius.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderTheme {
     pub background: RenderColor,
@@ -65,7 +67,8 @@ pub struct RenderTheme {
     /// Rounded-rect inflation around the selected item (logical px).
     pub selection_inflate_x: f32,
     pub selection_inflate_y: f32,
-    /// Shared window/item corner radius (logical px).
+    /// Outer floating candidate-surface radius (logical px). The selected
+    /// candidate is an inset pill, derived two px tighter than this surface.
     pub corner_radius: f32,
 }
 
@@ -88,7 +91,7 @@ impl Default for RenderTheme {
             preedit_text: RenderColor::rgba(32, 33, 36, 255),
             selection_inflate_x: 2.0,
             selection_inflate_y: 2.0,
-            corner_radius: 8.0,
+            corner_radius: WECHAT_WINDOW_RADIUS_DIP,
         }
     }
 }
@@ -392,10 +395,16 @@ fn draw_selection(
             y,
             w,
             h,
-            input.theme.corner_radius.max(0.0),
+            selection_corner_radius(input.theme.corner_radius, w, h),
             &WindPaint::fill(input.theme.selected_background.wind()),
         );
     }
+}
+
+fn selection_corner_radius(window_radius: f32, width: f32, height: f32) -> f32 {
+    WECHAT_SELECTION_RADIUS_DIP
+        .min((window_radius - 2.0).max(0.0))
+        .min(width.min(height) / 2.0)
 }
 
 fn draw_candidate_horizontal(
@@ -445,9 +454,12 @@ fn draw_candidate_horizontal(
         if label_cell_right > cursor {
             let label_rect = Rect {
                 left: cursor,
-                top: row_top,
+                top: row_top + baseline_offset(geometry.font_size, geometry.label_font_size),
                 right: label_cell_right,
-                bottom: row_top + row_height,
+                bottom: (row_top
+                    + row_height
+                    + baseline_offset(geometry.font_size, geometry.label_font_size))
+                .min(bounds.bottom),
             };
             draw_text_clipped(
                 canvas,
@@ -501,9 +513,12 @@ fn draw_candidate_horizontal(
                 &candidate.comment,
                 Rect {
                     left: comment_left,
-                    top: row_top,
+                    top: row_top + baseline_offset(geometry.font_size, geometry.comment_font_size),
                     right: content_right,
-                    bottom: row_top + row_height,
+                    bottom: (row_top
+                        + row_height
+                        + baseline_offset(geometry.font_size, geometry.comment_font_size))
+                    .min(bounds.bottom),
                 },
                 input.theme.comment_color.wind(),
                 WindAlign::Start,
@@ -511,6 +526,10 @@ fn draw_candidate_horizontal(
             );
         }
     }
+}
+
+fn baseline_offset(candidate_font_size: f32, segment_font_size: f32) -> f32 {
+    (candidate_font_size - segment_font_size).max(0.0)
 }
 
 /// Vertical writing modes: the windui DWrite engine has no vertical text
@@ -837,7 +856,7 @@ mod tests {
             preedit_text: RenderColor::rgba(40, 40, 40, 255),
             selection_inflate_x: 2.0,
             selection_inflate_y: 2.0,
-            corner_radius: 8.0,
+            corner_radius: WECHAT_WINDOW_RADIUS_DIP,
         }
     }
 
@@ -846,6 +865,13 @@ mod tests {
         let theme = RenderTheme::default();
         assert_eq!(theme.selected_background, GREEN_BG);
         assert_eq!(theme.selected_text, GREEN);
+        assert_eq!(theme.corner_radius, WECHAT_WINDOW_RADIUS_DIP);
+    }
+
+    #[test]
+    fn smaller_label_uses_the_candidate_baseline() {
+        assert_eq!(baseline_offset(22.0, 18.0), 4.0);
+        assert_eq!(baseline_offset(18.0, 22.0), 0.0);
     }
 
     #[test]
@@ -893,6 +919,15 @@ mod tests {
                 && (sel[1] as i16 - GREEN_BG.green as i16).abs() <= 2
                 && (sel[0] as i16 - GREEN_BG.blue as i16).abs() <= 2,
             "selection interior is the WeChat-green tint (got BGRA {sel:?})"
+        );
+        let selection_top = ((rect.top - axis.window.top) - 2.0).max(0.0) as u32;
+        let selection_left = ((rect.left - axis.window.left) - 2.0).max(0.0) as u32;
+        let selection_corner = output.pixel(selection_left, selection_top).unwrap();
+        assert!(
+            selection_corner[0] >= 245
+                && selection_corner[1] >= 245
+                && selection_corner[2] >= 245,
+            "the selected candidate has a rounded pill corner, not a square fill (got BGRA {selection_corner:?})"
         );
         // Interior of an unselected row (left of its text start) stays white.
         let rect0 = &axis.items[0].rect;

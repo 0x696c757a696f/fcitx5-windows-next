@@ -4,6 +4,10 @@
 // Source: https://github.com/huanfeng/WindInput, commit 2214bede43b4153f0fdc463928cf3c50184ec2ef.
 // License: MIT, Copyright (c) 2026 WindInput Contributors.
 
+use crate::theme_tokens::{
+    WECHAT_GREEN_RGB, WECHAT_SELECTION_RADIUS_DIP, WECHAT_WINDOW_RADIUS_DIP, WHITE_RGB,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QingfengOrientation {
     Horizontal,
@@ -144,11 +148,11 @@ impl QingfengCandidateTheme {
         Self {
             typography: QingfengCandidateTypography::default(),
             window_padding: 5.0,
-            window_radius: 12.0,
+            window_radius: WECHAT_WINDOW_RADIUS_DIP,
             window_border_width: 1.0,
             item_padding_y: 7.0,
             item_padding_x: 10.0,
-            item_radius: 8.0,
+            item_radius: WECHAT_SELECTION_RADIUS_DIP,
             index_text_gap: 1.0,
             comment_text_gap: 6.0,
             background,
@@ -176,11 +180,11 @@ impl QingfengCandidateTheme {
         Self {
             typography: QingfengCandidateTypography::default(),
             window_padding: 5.0,
-            window_radius: 12.0,
+            window_radius: WECHAT_WINDOW_RADIUS_DIP,
             window_border_width: 1.0,
             item_padding_y: 7.0,
             item_padding_x: 10.0,
-            item_radius: 8.0,
+            item_radius: WECHAT_SELECTION_RADIUS_DIP,
             index_text_gap: 1.0,
             comment_text_gap: 6.0,
             background,
@@ -256,46 +260,53 @@ pub fn qingfeng_candidate_visual_plan(
     } else {
         1
     };
-    let cell_w = if orientation == QingfengOrientation::Vertical {
-        inputs
-            .iter()
-            .map(|input| {
-                let label_w = if input.reserve_label {
-                    label_slot_width.max(input.label.chars().count() as f32 * label_char_w)
-                } else {
-                    0.0
-                };
-                theme.item_padding_x * 2.0
-                    + label_w
-                    + if label_w > 0.0 {
-                        theme.index_text_gap
-                    } else {
-                        0.0
-                    }
-                    + (input.text.chars().count() as f32 * text_char_w).clamp(18.0, 260.0)
-                    + if input.comment.is_empty() {
-                        0.0
-                    } else {
-                        theme.comment_text_gap
-                            + input.comment.chars().count() as f32 * comment_char_w
-                    }
-            })
-            .fold(0.0, f32::max)
+    let item_width = |input: &QingfengCandidateVisualInput| {
+        let label_w = if input.reserve_label {
+            label_slot_width.max(input.label.chars().count() as f32 * label_char_w)
+        } else {
+            0.0
+        };
+        theme.item_padding_x * 2.0
+            + label_w
+            + if label_w > 0.0 {
+                theme.index_text_gap
+            } else {
+                0.0
+            }
+            // Keep the complete CJK/emoji glyph budget. A fixed maximum
+            // produces a non-overlapping rectangle that still clips glyphs.
+            + (input.text.chars().count() as f32 * text_char_w).max(18.0)
+            + if input.comment.is_empty() {
+                0.0
+            } else {
+                theme.comment_text_gap + input.comment.chars().count() as f32 * comment_char_w
+            }
+    };
+    let widest_cell = inputs.iter().map(item_width).fold(0.0_f32, f32::max);
+    let column_widths = if orientation == QingfengOrientation::Horizontal {
+        inputs.iter().map(item_width).collect::<Vec<_>>()
     } else if orientation == QingfengOrientation::Grid {
-        168.0 * dpi_scale.clamp(0.5, 4.0)
+        let mut widths = vec![18.0_f32; columns];
+        for (index, input) in inputs.iter().enumerate() {
+            let column = index % columns;
+            widths[column] = widths[column].max(item_width(input));
+        }
+        widths
     } else {
-        136.0 * dpi_scale.clamp(0.5, 4.0)
+        vec![widest_cell.max(18.0)]
     };
     let mut items = Vec::with_capacity(inputs.len());
     for (index, input) in inputs.iter().enumerate() {
         let row = index / columns;
         let column = index % columns;
-        let left = theme.window_padding + column as f32 * (cell_w + gap);
+        let left = theme.window_padding
+            + column_widths.iter().take(column).sum::<f32>()
+            + column as f32 * gap;
         let top = theme.window_padding + row as f32 * (row_h + gap);
         let item = QingfengRect {
             left,
             top,
-            right: left + cell_w,
+            right: left + column_widths[column],
             bottom: top + row_h,
         };
         let label_w = if input.reserve_label {
@@ -305,11 +316,20 @@ pub fn qingfeng_candidate_visual_plan(
         };
         let content_top = item.top + theme.item_padding_y;
         let content_bottom = item.bottom - theme.item_padding_y;
+        // Labels/comments are smaller than candidates. Shift their layout box
+        // down by the size delta so their glyph baselines share the candidate
+        // baseline instead of merely sharing the row's vertical center.
+        let label_baseline_offset =
+            (theme.typography.candidate_font_size - theme.typography.label_font_size).max(0.0)
+                * scale;
+        let comment_baseline_offset =
+            (theme.typography.candidate_font_size - theme.typography.comment_font_size).max(0.0)
+                * scale;
         let label = QingfengRect {
             left: item.left + theme.item_padding_x,
-            top: content_top,
+            top: content_top + label_baseline_offset,
             right: item.left + theme.item_padding_x + label_w,
-            bottom: content_bottom,
+            bottom: (content_bottom + label_baseline_offset).min(item.bottom),
         };
         let text_left = if label_w > 0.0 {
             label.right + theme.index_text_gap
@@ -328,9 +348,9 @@ pub fn qingfeng_candidate_visual_plan(
         };
         let comment = (comment_w > 0.0).then_some(QingfengRect {
             left: text_right + theme.comment_text_gap,
-            top: content_top,
+            top: content_top + comment_baseline_offset,
             right: item.right - theme.item_padding_x,
-            bottom: content_bottom,
+            bottom: (content_bottom + comment_baseline_offset).min(item.bottom),
         });
         items.push(QingfengCandidateVisualItem {
             label_text: if input.show_label {
@@ -356,7 +376,9 @@ pub fn qingfeng_candidate_visual_plan(
     let window = QingfengRect {
         left: 0.0,
         top: 0.0,
-        right: theme.window_padding * 2.0 + columns as f32 * cell_w + (columns - 1) as f32 * gap,
+        right: theme.window_padding * 2.0
+            + column_widths.iter().sum::<f32>()
+            + (columns - 1) as f32 * gap,
         bottom: theme.window_padding * 2.0 + rows as f32 * row_h + (rows - 1) as f32 * gap,
     };
     QingfengCandidateVisualPlan {
@@ -390,8 +412,8 @@ mod tests {
         );
 
         assert_eq!(plan.source, WINDINPUT_QINGFENG_CANDIDATE_SOURCE);
-        assert_eq!(plan.theme.window_radius, 12.0);
-        assert_eq!(plan.theme.item_radius, 8.0);
+        assert_eq!(plan.theme.window_radius, WECHAT_WINDOW_RADIUS_DIP);
+        assert_eq!(plan.theme.item_radius, WECHAT_SELECTION_RADIUS_DIP);
         assert_eq!(
             plan.theme.selected_background,
             QingfengColor::rgb(7, 193, 96)
@@ -399,6 +421,10 @@ mod tests {
         assert_eq!(plan.theme.selected_text, QingfengColor::rgb(255, 255, 255));
         assert!(plan.items[0].label_rect.width() >= 30.0);
         assert!(plan.items[0].text_rect.left > plan.items[0].label_rect.right);
+        assert_eq!(
+            plan.items[0].label_rect.top - plan.items[0].text_rect.top,
+            4.0
+        );
     }
 
     #[test]
@@ -418,6 +444,98 @@ mod tests {
             1.5,
         );
         assert!(plan.items[0].text_rect.width() >= 22.0 * 1.5);
+    }
+
+    #[test]
+    fn horizontal_items_expand_individually_for_full_cjk_and_emoji_glyphs() {
+        let plan = qingfeng_candidate_visual_plan(
+            QingfengOrientation::Horizontal,
+            QingfengThemeMode::Light,
+            &[
+                QingfengCandidateVisualInput {
+                    label: "1.".to_owned(),
+                    text: "点赞".to_owned(),
+                    comment: String::new(),
+                    selected: true,
+                    show_label: true,
+                    reserve_label: true,
+                },
+                QingfengCandidateVisualInput {
+                    label: "2.".to_owned(),
+                    text: "👍".to_owned(),
+                    comment: String::new(),
+                    selected: false,
+                    show_label: true,
+                    reserve_label: true,
+                },
+                QingfengCandidateVisualInput {
+                    label: "3.".to_owned(),
+                    text: "短暂".to_owned(),
+                    comment: String::new(),
+                    selected: false,
+                    show_label: true,
+                    reserve_label: true,
+                },
+            ],
+            20.0,
+            1.0,
+        );
+        for item in &plan.items {
+            assert!(
+                item.text_rect.width() >= item.text.chars().count() as f32 * 20.0,
+                "{} must fit its full glyph budget",
+                item.text
+            );
+        }
+        assert!(plan.items[1].item_rect.left >= plan.items[0].item_rect.right);
+        assert!(plan.items[2].item_rect.left >= plan.items[1].item_rect.right);
+    }
+
+    #[test]
+    fn grid_sizes_each_column_to_its_own_widest_candidate() {
+        let plan = qingfeng_candidate_visual_plan(
+            QingfengOrientation::Grid,
+            QingfengThemeMode::Light,
+            &[
+                QingfengCandidateVisualInput {
+                    label: "1.".to_owned(),
+                    text: "短".to_owned(),
+                    comment: String::new(),
+                    selected: false,
+                    show_label: true,
+                    reserve_label: true,
+                },
+                QingfengCandidateVisualInput {
+                    label: "2.".to_owned(),
+                    text: "很长的候选文本".to_owned(),
+                    comment: String::new(),
+                    selected: true,
+                    show_label: true,
+                    reserve_label: true,
+                },
+                QingfengCandidateVisualInput {
+                    label: "3.".to_owned(),
+                    text: "中等".to_owned(),
+                    comment: String::new(),
+                    selected: false,
+                    show_label: true,
+                    reserve_label: true,
+                },
+            ],
+            20.0,
+            1.0,
+        );
+        let widest = plan
+            .items
+            .iter()
+            .map(|item| item.item_rect.width())
+            .fold(0.0_f32, f32::max);
+        assert!(plan.items[0].item_rect.width() < widest);
+        assert!(plan.items[2].item_rect.width() < widest);
+        assert!(
+            plan.window.width() < 10.0 + widest * 3.0 + 20.0,
+            "grid must not give every column the longest candidate width"
+        );
     }
 
     #[test]
@@ -451,4 +569,3 @@ mod tests {
         assert_eq!(dark.theme.selected_text, QingfengColor::rgb(255, 255, 255));
     }
 }
-use crate::theme_tokens::{WECHAT_GREEN_RGB, WHITE_RGB};

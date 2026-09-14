@@ -13,6 +13,10 @@ pub const WHITE_RGB: [u8; 3] = [255, 255, 255];
 pub const WECHAT_GREEN_COLORREF: u32 = 0x0060_c107;
 /// White in Win32 `COLORREF` channel order.
 pub const WHITE_COLORREF: u32 = 0x00ff_ffff;
+/// Outer floating candidate-surface radius in device-independent pixels.
+pub const WECHAT_WINDOW_RADIUS_DIP: f32 = 12.0;
+/// Inset selected-candidate pill radius in device-independent pixels.
+pub const WECHAT_SELECTION_RADIUS_DIP: f32 = 10.0;
 
 #[cfg(test)]
 mod tests {
@@ -29,5 +33,11 @@ mod tests {
             (WECHAT_GREEN_COLORREF >> 16) & 0xFF,
             u32::from(WECHAT_GREEN_RGB[2])
         );
+    }
+
+    #[test]
+    fn candidate_shape_tokens_keep_the_selection_as_an_inset_pill() {
+        assert!(WECHAT_WINDOW_RADIUS_DIP > WECHAT_SELECTION_RADIUS_DIP);
+        assert!(WECHAT_SELECTION_RADIUS_DIP > 0.0);
     }
 }
