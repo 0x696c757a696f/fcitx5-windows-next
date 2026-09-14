@@ -142,6 +142,8 @@ pub struct RenderWindowInput<'a> {
     pub theme: &'a RenderTheme,
     /// Font sizes / gaps / preedit row height.
     pub geometry: &'a RenderGeometry,
+    /// Candidate font family selected by the resolved Config snapshot.
+    pub font_family: &'a str,
     /// Preedit text drawn above the candidate rows when present.
     pub preedit: Option<&'a str>,
     /// Logical→physical scale (1.0 at 96 DPI).
@@ -363,7 +365,7 @@ fn draw_preedit(
         },
         input.theme.preedit_text.wind(),
         WindAlign::Start,
-        &text_style(geometry.font_size),
+        &text_style(input.font_family, geometry.font_size),
     );
     // Divider at the bottom of the preedit row (semi-transparent border).
     let divider_y = (row_height - 1.0).max(0.0);
@@ -437,9 +439,9 @@ fn draw_candidate_horizontal(
     let row_top = (bounds.top + pad_y).max(0.0);
     let row_bottom = (bounds.bottom - pad_y).max(row_top);
     let row_height = (row_bottom - row_top).max(1.0);
-    let style_text = text_style(geometry.font_size);
-    let style_label = text_style(geometry.label_font_size);
-    let style_comment = text_style(geometry.comment_font_size);
+    let style_text = text_style(input.font_family, geometry.font_size);
+    let style_label = text_style(input.font_family, geometry.label_font_size);
+    let style_comment = text_style(input.font_family, geometry.comment_font_size);
 
     let text_w = canvas.measure_text(&candidate.text, &style_text).w.max(0) as f32;
 
@@ -579,7 +581,7 @@ fn draw_candidate_vertical(
                     },
                     color,
                     align,
-                    &text_style(size),
+                    &text_style(input.font_family, size),
                 );
             }
         };
@@ -708,9 +710,9 @@ fn draw_text_clipped(
     canvas.restore();
 }
 
-fn text_style(size: f32) -> WindTextStyle<'static> {
+fn text_style<'a>(family: &'a str, size: f32) -> WindTextStyle<'a> {
     WindTextStyle {
-        family: Some("Microsoft YaHei UI"),
+        family: (!family.trim().is_empty()).then_some(family),
         size: size.max(1.0),
         weight: 400,
         italic: false,
@@ -734,8 +736,20 @@ impl MeasureEngine {
     /// Logical-DIP width/height of a single-line UTF-8 run.
     #[must_use]
     pub fn measure(&mut self, text: &str, font_size: f32, dpi_scale: f32) -> (f32, f32) {
+        self.measure_with_family(text, "Microsoft YaHei UI", font_size, dpi_scale)
+    }
+
+    /// Logical-DIP width/height with the resolved candidate font family.
+    #[must_use]
+    pub fn measure_with_family(
+        &mut self,
+        text: &str,
+        family: &str,
+        font_size: f32,
+        dpi_scale: f32,
+    ) -> (f32, f32) {
         self.engine.set_scale(dpi_scale);
-        let style = text_style(font_size);
+        let style = text_style(family, font_size);
         let size = TextEngine::measure(&mut self.engine, text, &style, None);
         (size.w as f32, size.h as f32)
     }
@@ -883,6 +897,7 @@ mod tests {
             candidates: &candidates(),
             theme: &theme(),
             geometry: &geometry(),
+            font_family: "Microsoft YaHei UI",
             preedit: None,
             dpi_scale: 1.0,
             high_contrast: false,
@@ -950,6 +965,7 @@ mod tests {
             candidates: &candidates()[..2],
             theme: &theme(),
             geometry: &geometry(),
+            font_family: "Microsoft YaHei UI",
             preedit: None,
             dpi_scale: 1.0,
             high_contrast: false,
@@ -976,6 +992,7 @@ mod tests {
             candidates: &[],
             theme: &theme(),
             geometry: &geometry(),
+            font_family: "Microsoft YaHei UI",
             preedit: None,
             dpi_scale: 1.0,
             high_contrast: false,

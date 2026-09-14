@@ -23,11 +23,11 @@ State meanings:
 | `candidate.scroll-direction` | 外观 / 候选窗口 | 横向卷轴, 纵向卷轴 | `WindUiConfigAdapter` → `ConfigCore` | `ConfigEdit::CandidateScrollDirection` | Draft sample updates | Deferred / atomic Apply | FullyBound | `only_relevant_direction_survives_the_typed_config_round_trip` |
 | `candidate.page-size` | 外观 / 候选窗口 | 1 through 9 | `WindUiConfigAdapter` → `ConfigCore` | `ConfigEdit::CandidatePageSize` | Draft sample slot visibility updates | Deferred / atomic Apply | FullyBound | `candidate_page_size_is_authoritative_and_strictly_bounded`, `windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply` |
 | `candidate.vertical-text-column-direction` | 外观 / 候选窗口 | 从右到左, 从左到右 | `WindUiConfigAdapter` → `ConfigCore` | `ConfigEdit::CandidateVerticalTextColumnDirection` | Draft sample updates | Deferred / atomic Apply | FullyBound | `only_relevant_direction_survives_the_typed_config_round_trip` |
-| `candidate.preview` | 外观 / 候选窗口 | wubi preview, candidate chips/rows | local WindUI composition plus Config Draft labels | none | local sample only; not final pixels from shipping candidate renderer | none | Fake/Demo | `live_preview_draft_updates_without_external_candidate_window` proves Draft reaction only |
+| `candidate.preview` | 外观 / 候选窗口 | 生产候选预览 | `WindUiConfigAdapter` → `ConfigCore` → shipping CandidateModel/layout/resolved-theme/renderer | typed `ConfigSnapshot` | Draft directly renders production pixels for CJK, Latin, punctuation, emoji, comments, selection, and every supported layout | Deferred: the same Draft is atomically persisted by Apply; Cancel restores Current | FullyBound | `settings_preview::tests`, `visual_draft_tests`, `windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply` |
 | `candidate.apply` | 外观 / 候选窗口 | 应用 | `ConfigCore` | `WindUiConfigAdapter::apply` | Draft remains visible | atomic Current write plus last-known-good path | FullyBound | `windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply` |
 | `candidate.cancel` | 外观 / 候选窗口 | 取消 | `ConfigCore` | `WindUiConfigAdapter::cancel` | restores Current sample | no write | FullyBound | `windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply` |
 | `candidate.reset` | 外观 / 候选窗口 | 重置 | `ConfigCore` | resets layout type, directions and page size fields | Defaults sample becomes visible | no write until Apply | FullyBound | `windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply` |
-| `theme.mode` | 外观 / 主题 | 跟随系统, 浅色, 深色 | local `theme_mode` signal | none | Settings-shell palette only | none | Fake/Demo |
+| `theme.mode` | 外观 / 主题 | 跟随系统, 浅色, 深色 | `WindUiConfigAdapter` → `ConfigCore` | `ConfigEdit::AppearanceMode` | The same Draft selects the resolved preview theme; high contrast remains a host override | Deferred / atomic Apply | FullyBound | `visual_draft_tests`, `settings_preview::tests` |
 | `theme.accent` | 外观 / 主题 | 微信绿, 竹青, 墨绿 | local `accent_pick` signal | none | none | none | Fake/Demo |
 | `theme.window-shadow` | 外观 / 主题 | 窗口投影 | local `window_shadow` signal | none | none | none | Fake/Demo |
 | `appearance.ui-font-size` | 外观 / 排版 | 界面字号 | local `ui_font_size` signal | none | none | none | Fake/Demo |
@@ -53,8 +53,6 @@ does not establish that an online repository has a compatible Windows Rime
 package, or that any package action passed on a real host. Those remain
 separate lifecycle evidence.
 
-The candidate preview is deliberately classified `Fake/Demo`: it reacts to
-Draft state but does not yet consume final pixels from the shipping candidate
-renderer. A future task must replace it through the production CandidateModel,
-layout, resolved-theme and renderer path; it must not turn this classification
-into a claim without that evidence.
+The candidate preview is source-bound to the shipping renderer. This is not a
+claim of real-host UIA, Narrator, or desktop visual evidence; those remain
+MANUAL-PENDING under the release host-evidence gate.

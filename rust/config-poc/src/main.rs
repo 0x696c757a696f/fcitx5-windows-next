@@ -1,12 +1,16 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use std::cell::RefCell;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use fcitx5_candidate_core::run_candidate_poc_self_check;
+use fcitx5_candidate_core::{
+    render_settings_candidate_preview, run_candidate_poc_self_check, SettingsCandidatePreview,
+    SETTINGS_PREVIEW_HEIGHT_DIP, SETTINGS_PREVIEW_WIDTH_DIP,
+};
 use fcitx5_config_core::{
     CandidateOrientation as CoreCandidateOrientation, ConfigCommand, ConfigCore, ConfigEdit,
     ConfigField, ConfigSnapshot, FileStore, OverflowBehavior as CoreOverflowBehavior,
@@ -21,6 +25,8 @@ use fcitx5_package_core::{
 };
 use fcitx5_process_execution_core::run_process_bounded;
 use serde::Deserialize;
+use windui::core::Widget as WindUiWidget;
+use windui::geometry::{Rect as WindUiRect, Size as WindUiSize};
 use windui::prelude::{
     brand_icon as windui_brand_icon, brand_icon_at as windui_brand_icon_at,
     signal as windui_signal, Align as WindUiAlign, App as WindUiApp, Color as WindUiColor,
@@ -28,6 +34,9 @@ use windui::prelude::{
     Sender as WindUiSender, Signal as WindUiSignal, Theme as WindUiTheme,
     ThemeHandle as WindUiThemeHandle, WindowButtonKind as WindUiWindowButtonKind,
 };
+use windui::render::{Canvas as WindUiCanvas, Fit as WindUiImageFit, Image as WindUiImage};
+use windui::style::Style as WindUiStyle;
+use windui::text::TextEngine as WindUiTextEngine;
 
 const CONFIG_POC_COMPONENT: &str = "fcitx5-config-poc";
 const CONFIG_RETIRED_SIDE_BY_SIDE_COMPONENT: &str = "none";
@@ -562,318 +571,102 @@ fn windui_settings_page_title(title: &str, subtitle: &str) -> WindUiElement {
         )
 }
 
-fn candidate_preview_slot_visible(page_size: u8, slot: u8) -> bool {
-    slot <= page_size
+struct WindUiCandidatePreview {
+    frame: WindUiSignal<Option<SettingsCandidatePreview>>,
+    cache: RefCell<Option<(u64, WindUiImage)>>,
 }
 
-fn windui_candidate_preview_chip(
-    text: &str,
-    active: bool,
-    visible: WindUiSignal<bool>,
-) -> WindUiElement {
-    WindUiElement::row()
-        .height(32)
-        .corner(7.0)
-        .padding_xy(12, 0)
-        .cross(WindUiAlign::Center)
-        .bg_role(if active {
-            WindUiRole::Accent
-        } else {
-            WindUiRole::SurfaceAlt
-        })
-        .child(
-            WindUiElement::label(text)
-                .font_size(14.0)
-                .fg_role(if active {
-                    WindUiRole::OnAccent
-                } else {
-                    WindUiRole::Text
-                }),
-        )
-        .visible_when(move || visible.get())
-}
+impl WindUiWidget for WindUiCandidatePreview {
+    fn measure(
+        &self,
+        _avail: WindUiSize,
+        _style: &WindUiStyle,
+        _text: &mut dyn WindUiTextEngine,
+    ) -> WindUiSize {
+        WindUiSize::ZERO
+    }
 
-fn windui_candidate_preview_row(
-    label: &'static str,
-    text: &'static str,
-    comment: &'static str,
-    active: bool,
-    dark: bool,
-    visible: WindUiSignal<bool>,
-) -> WindUiElement {
-    WindUiElement::row()
-        .width_match()
-        .height(38)
-        .cross(WindUiAlign::Center)
-        .spacing(10)
-        .padding_xy(10, 0)
-        .bg_role(if active {
-            WindUiRole::Accent
-        } else if dark {
-            WindUiRole::SurfaceAlt
-        } else {
-            WindUiRole::Bg
-        })
-        .child(
-            WindUiElement::label(label)
-                .font_size(13.0)
-                .fg_role(if active {
-                    WindUiRole::OnAccent
-                } else {
-                    WindUiRole::TextMuted
-                })
-                .width(26),
-        )
-        .child(
-            WindUiElement::label(text)
-                .font_size(16.0)
-                .fg_role(if active {
-                    WindUiRole::OnAccent
-                } else {
-                    WindUiRole::Text
-                })
-                .weight(1.0),
-        )
-        .child(
-            WindUiElement::label(comment)
-                .font_size(12.0)
-                .fg_role(if active {
-                    WindUiRole::OnAccent
-                } else {
-                    WindUiRole::TextMuted
-                }),
-        )
-        .visible_when(move || visible.get())
+    fn paint(
+        &self,
+        _bounds: WindUiRect,
+        content: WindUiRect,
+        _focused: bool,
+        _enabled: bool,
+        canvas: &mut dyn WindUiCanvas,
+        _style: &WindUiStyle,
+    ) {
+        let version = self.frame.version();
+        let _ = self.frame.try_with(|frame| {
+            let Some(frame) = frame else {
+                self.cache.borrow_mut().take();
+                return;
+            };
+            if self
+                .cache
+                .borrow()
+                .as_ref()
+                .is_none_or(|(cached, _)| *cached != version)
+            {
+                let mut rgba = frame.bitmap.pixels.clone();
+                for pixel in rgba.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+                *self.cache.borrow_mut() =
+                    WindUiImage::from_rgba(frame.bitmap.width, frame.bitmap.height, &rgba)
+                        .ok()
+                        .map(|image| (version, image));
+            }
+            if let Some((_, image)) = self.cache.borrow().as_ref() {
+                canvas.draw_image(image, content, WindUiImageFit::Contain, 0.0, 1.0);
+            }
+        });
+    }
 }
 
 fn windui_candidate_preview_panel(
-    options: WindUiSignal<CandidateLayoutUiOptions>,
-    page_size: WindUiSignal<u8>,
-    theme_mode: WindUiSignal<usize>,
+    adapter: WindUiSignal<WindUiConfigAdapter>,
     draft_summary: WindUiSignal<String>,
 ) -> WindUiElement {
-    let preview_description =
-        page_size.map(move |page_size| options.get().preview_description(*page_size));
-    let mode = WindUiElement::row()
-        .cross(WindUiAlign::Center)
-        .spacing(6)
-        .child(
-            WindUiElement::label("wubi")
-                .font_size(12.5)
-                .fg_role(WindUiRole::TextMuted),
+    let frame = adapter.map(|adapter| {
+        render_settings_candidate_preview(
+            &adapter.preview(),
+            1.0,
+            SETTINGS_PREVIEW_WIDTH_DIP,
+            SETTINGS_PREVIEW_HEIGHT_DIP,
+            false,
         )
-        .child(WindUiElement::badge_intent(
-            "preview",
-            WindUiIntent::Neutral,
-        ))
-        .child(
-            WindUiElement::label(" · ")
-                .font_size(12.5)
-                .fg_role(WindUiRole::TextDisabled),
-        )
-        .child(
-            WindUiElement::label("浅色")
-                .font_size(12.5)
-                .fg_role(WindUiRole::Accent)
-                .visible_when(move || theme_mode.get() != 2),
-        )
-        .child(
-            WindUiElement::label("深色")
-                .font_size(12.5)
-                .fg_role(WindUiRole::Accent)
-                .visible_when(move || theme_mode.get() == 2),
-        )
-        .child(
-            WindUiElement::label_signal(preview_description)
-                .font_size(12.5)
-                .fg_role(WindUiRole::Accent),
-        )
-        .child(
-            WindUiElement::label_signal(draft_summary)
-                .font_size(12.5)
-                .fg_role(WindUiRole::TextMuted),
-        );
-
-    let slot_visible = |page_size: WindUiSignal<u8>, slot: u8| {
-        page_size.map(move |count| candidate_preview_slot_visible(*count, slot))
-    };
-    let writing = WindUiElement::col()
-        .width_match()
-        .spacing(2)
-        .padding_xy(8, 6)
-        .bg_role(WindUiRole::SurfaceAlt)
-        .corner(8.0)
-        .child(windui_candidate_preview_row(
-            "一",
-            "是",
-            "",
-            true,
-            false,
-            slot_visible(page_size, 1),
-        ))
-        .child(windui_candidate_preview_row(
-            "二",
-            "识",
-            "",
-            false,
-            false,
-            slot_visible(page_size, 2),
-        ))
-        .child(windui_candidate_preview_row(
-            "三",
-            "实",
-            "",
-            false,
-            false,
-            slot_visible(page_size, 3),
-        ))
-        .visible_when(move || options.get().writing_mode != CandidateWritingMode::Horizontal);
-
-    let vertical = WindUiElement::col()
-        .width_match()
-        .spacing(2)
-        .child(windui_candidate_preview_row(
-            "1.",
-            "是",
-            "",
-            true,
-            false,
-            slot_visible(page_size, 1),
-        ))
-        .child(windui_candidate_preview_row(
-            "2.",
-            "识",
-            "",
-            false,
-            false,
-            slot_visible(page_size, 2),
-        ))
-        .child(windui_candidate_preview_row(
-            "3.",
-            "实",
-            "",
-            false,
-            false,
-            slot_visible(page_size, 3),
-        ))
-        .child(windui_candidate_preview_row(
-            "4.",
-            "水",
-            "~b",
-            false,
-            false,
-            slot_visible(page_size, 4),
-        ))
-        .child(windui_candidate_preview_row(
-            "5.",
-            "收",
-            "~d",
-            false,
-            false,
-            slot_visible(page_size, 5),
-        ))
-        .child(windui_candidate_preview_row(
-            "6.",
-            "十",
-            "",
-            false,
-            false,
-            slot_visible(page_size, 6),
-        ))
-        .child(windui_candidate_preview_row(
-            "7.",
-            "诗",
-            "",
-            false,
-            false,
-            slot_visible(page_size, 7),
-        ))
-        .child(windui_candidate_preview_row(
-            "8.",
-            "式",
-            "",
-            false,
-            false,
-            slot_visible(page_size, 8),
-        ))
-        .child(windui_candidate_preview_row(
-            "9.",
-            "试",
-            "",
-            false,
-            false,
-            slot_visible(page_size, 9),
-        ))
-        .visible_when(move || {
-            options.get().writing_mode == CandidateWritingMode::Horizontal
-                && options.get().orientation == CandidateLayoutOrientation::Vertical
-        });
-
-    let horizontal = WindUiElement::row()
-        .width_match()
-        .spacing(6)
-        .child(windui_candidate_preview_chip(
-            "1. 是",
-            true,
-            slot_visible(page_size, 1),
-        ))
-        .child(windui_candidate_preview_chip(
-            "2. 识",
-            false,
-            slot_visible(page_size, 2),
-        ))
-        .child(windui_candidate_preview_chip(
-            "3. 实",
-            false,
-            slot_visible(page_size, 3),
-        ))
-        .child(windui_candidate_preview_chip(
-            "4. 水 ~b",
-            false,
-            slot_visible(page_size, 4),
-        ))
-        .child(windui_candidate_preview_chip(
-            "5. 收 ~d",
-            false,
-            slot_visible(page_size, 5),
-        ))
-        .child(windui_candidate_preview_chip(
-            "6. 十",
-            false,
-            slot_visible(page_size, 6),
-        ))
-        .child(windui_candidate_preview_chip(
-            "7. 诗",
-            false,
-            slot_visible(page_size, 7),
-        ))
-        .child(windui_candidate_preview_chip(
-            "8. 式",
-            false,
-            slot_visible(page_size, 8),
-        ))
-        .child(windui_candidate_preview_chip(
-            "9. 试",
-            false,
-            slot_visible(page_size, 9),
-        ))
-        .visible_when(move || {
-            options.get().writing_mode == CandidateWritingMode::Horizontal
-                && options.get().orientation == CandidateLayoutOrientation::Horizontal
-        });
-
+        .ok()
+    });
     WindUiElement::col()
         .width_match()
-        .spacing(10)
-        .child(mode)
-        .child(writing)
-        .child(vertical)
-        .child(horizontal)
+        .spacing(8)
         .child(
-            WindUiElement::label("候选序号列固定保留；候选个数由当前设置决定，而不是主题。")
-                .font_size(12.5)
-                .fg_role(WindUiRole::TextMuted)
-                .width_match(),
+            WindUiElement::row()
+                .cross(WindUiAlign::Center)
+                .spacing(6)
+                .child(
+                    WindUiElement::label("生产候选预览")
+                        .font_size(12.5)
+                        .fg_role(WindUiRole::TextMuted),
+                )
+                .child(WindUiElement::badge_intent("draft", WindUiIntent::Neutral))
+                .child(
+                    WindUiElement::label_signal(draft_summary)
+                        .font_size(12.5)
+                        .fg_role(WindUiRole::TextMuted),
+                ),
+        )
+        .child(
+            WindUiElement::leaf()
+                .width_match()
+                .height(176)
+                .corner(12.0)
+                .bg_role(WindUiRole::SurfaceAlt)
+                .widget(WindUiCandidatePreview {
+                    frame,
+                    cache: RefCell::new(None),
+                })
+                .reactive(),
         )
 }
 
@@ -1385,6 +1178,7 @@ impl CandidateLayoutMode {
 }
 
 impl CandidateLayoutUiOptions {
+    #[allow(dead_code)]
     fn preview_description(self, page_size: u8) -> String {
         match self.writing_mode {
             CandidateWritingMode::Horizontal => match (self.orientation, self.overflow) {
@@ -1798,7 +1592,6 @@ fn windui_settings_root(
     let nav = windui_signal(0usize);
     let search = windui_signal(String::new());
     let input_method = windui_signal(0usize);
-    let theme_mode = windui_signal(0usize);
     let accent_pick = windui_signal(0usize);
     let window_shadow = windui_signal(true);
     let ui_font_size = windui_signal(14.0f64);
@@ -1897,11 +1690,7 @@ fn windui_settings_root(
                 "主题、排版与候选预览",
             ))
             .child(windui_settings_card(
-                windui_config_core_candidate_layout_controls(
-                    candidate_adapter,
-                    candidate_status,
-                    theme_mode,
-                ),
+                windui_config_core_candidate_layout_controls(candidate_adapter, candidate_status),
             ))
             .child(windui_settings_card(
                 WindUiElement::col()
@@ -1911,7 +1700,7 @@ fn windui_settings_root(
                     .child(WindUiElement::setting_row_desc(
                         "外观模式",
                         "默认跟随 Windows Light/Dark；High Contrast 优先",
-                        WindUiElement::segmented(vec!["跟随系统", "浅色", "深色"], theme_mode),
+                        windui_appearance_mode_controls(candidate_adapter, candidate_status),
                     ))
                     .child(WindUiElement::setting_row_desc(
                         "强调色",
@@ -2204,6 +1993,36 @@ fn candidate_layout_mode_button(
         })
         .visible_when(move || selected.get() != mode);
     WindUiElement::stack().child(active).child(inactive)
+}
+
+fn windui_appearance_mode_controls(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+) -> WindUiElement {
+    let selected = adapter.map(|adapter| adapter.preview().appearance().mode().to_owned());
+    let mut controls = WindUiElement::row().spacing(6);
+    for (label, mode) in [("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")] {
+        let active = WindUiElement::button(label)
+            .small()
+            .visible_when(move || selected.get() == mode);
+        let inactive = WindUiElement::button(label)
+            .small()
+            .outline_soft()
+            .neutral()
+            .on_click(move |ctx| {
+                if let Err(error) = update_candidate_draft(
+                    adapter,
+                    status,
+                    "外观模式",
+                    ConfigEdit::AppearanceMode(mode.to_owned()),
+                ) {
+                    ctx.toast_err(error);
+                }
+            })
+            .visible_when(move || selected.get() != mode);
+        controls = controls.child(WindUiElement::stack().child(active).child(inactive));
+    }
+    controls
 }
 
 fn candidate_scroll_direction_button(
@@ -2504,7 +2323,6 @@ fn config_core_candidate_page_size_button(
 fn windui_config_core_candidate_layout_controls(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
-    theme_mode: WindUiSignal<usize>,
 ) -> WindUiElement {
     let options = adapter.map(|adapter| candidate_layout_ui_options(&adapter.preview()));
     let mode = adapter.map(|adapter| {
@@ -2614,12 +2432,7 @@ fn windui_config_core_candidate_layout_controls(
                     vertical_text_columns,
                 )),
         )
-        .child(windui_candidate_preview_panel(
-            options,
-            page_size,
-            theme_mode,
-            draft_summary,
-        ))
+        .child(windui_candidate_preview_panel(adapter, draft_summary))
         .child(
             WindUiElement::row()
                 .spacing(8)
@@ -3545,6 +3358,8 @@ impl PreviewRenderContext {
 #[derive(Debug)]
 struct WindUiConfigAdapter {
     path: PathBuf,
+    installation_root: PathBuf,
+    data_root: PathBuf,
     store: FileStore,
     core: ConfigCore,
 }
@@ -3555,7 +3370,18 @@ impl WindUiConfigAdapter {
         let core = ConfigCore::recover(&store, &path)
             .map_err(|error| error.to_string())?
             .core;
-        Ok(Self { path, store, core })
+        let data_root = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+        let installation_root = env::current_exe()
+            .ok()
+            .and_then(|path| path.parent()?.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        Ok(Self {
+            path,
+            installation_root,
+            data_root,
+            store,
+            core,
+        })
     }
 
     #[cfg(test)]
@@ -3564,7 +3390,8 @@ impl WindUiConfigAdapter {
     }
 
     fn preview(&self) -> ConfigSnapshot {
-        self.core.preview()
+        self.core
+            .preview_visual_snapshot(&self.installation_root, &self.data_root, false)
     }
 
     fn set(&mut self, edit: ConfigEdit) -> Result<(), String> {
@@ -6201,9 +6028,7 @@ mod tests {
     #[test]
     fn candidate_page_size_is_authoritative_and_strictly_bounded() {
         for page_size in 1..=9 {
-            let visible_slots = (1..=9)
-                .filter(|slot| candidate_preview_slot_visible(page_size, *slot))
-                .count();
+            let visible_slots = (1..=9).filter(|slot| *slot <= page_size).count();
             assert_eq!(visible_slots, usize::from(page_size));
             assert!(CandidateLayoutMode::Scroll
                 .preview_description(page_size)

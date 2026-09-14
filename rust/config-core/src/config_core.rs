@@ -1331,6 +1331,37 @@ impl ConfigCore {
         self.resolve(&self.draft)
     }
 
+    /// Returns the resolved Draft visual snapshot used by Candidate renderers.
+    ///
+    /// Valid theme values are applied before the Draft overrides, so Settings
+    /// preview and Apply share the same precedence without duplicating parsing.
+    #[must_use]
+    pub fn preview_visual_snapshot(
+        &self,
+        installation_root: &Path,
+        data_root: &Path,
+        system_dark: bool,
+    ) -> ConfigSnapshot {
+        let selected = self.preview();
+        let dark = match selected.appearance.mode.as_str() {
+            "dark" => true,
+            "light" => false,
+            _ => system_dark,
+        };
+        let mut snapshot = self.defaults.clone();
+        if let Some(theme) = load_theme_overrides(
+            installation_root,
+            data_root,
+            selected.appearance.theme(),
+            dark,
+        ) {
+            apply_overrides(&mut snapshot, &theme);
+        }
+        apply_overrides(&mut snapshot, &self.draft);
+        debug_assert!(validate_snapshot(&snapshot).is_ok());
+        snapshot
+    }
+
     /// Validates the complete Draft before any write can occur.
     ///
     /// # Errors
@@ -2726,5 +2757,42 @@ mod candidate_layout_decode_tests {
                 writing_mode: WritingMode::Horizontal,
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod visual_draft_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn draft_visual_snapshot_applies_theme_then_draft_overrides() {
+        let root =
+            std::env::temp_dir().join(format!("fcitx5-config-visual-draft-{}", std::process::id()));
+        let theme = root.join("resources/themes/default/theme.toml");
+        fs::create_dir_all(theme.parent().expect("theme parent")).expect("create theme parent");
+        fs::write(
+            &theme,
+            include_str!("../../../resources/themes/default/theme.toml"),
+        )
+        .expect("write builtin theme");
+
+        let store = FileStore::new();
+        let path = root.join("config.toml");
+        let mut core = ConfigCore::compiled_defaults();
+        for edit in [
+            ConfigEdit::AppearanceMode("dark".to_owned()),
+            ConfigEdit::CandidateFontSizeDip(22.0),
+        ] {
+            core.execute(ConfigCommand::Set(edit), &store, &path)
+                .expect("valid visual draft");
+        }
+        let snapshot = core.preview_visual_snapshot(&root, Path::new(""), false);
+        assert_eq!(
+            snapshot.candidate().colors().get("background"),
+            Some(&"#181818F7".to_owned())
+        );
+        assert_eq!(snapshot.fonts().candidate().size_dip(), 22.0);
+        let _ = fs::remove_dir_all(root);
     }
 }

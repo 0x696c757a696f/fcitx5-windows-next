@@ -14,6 +14,8 @@ pub mod presentation_server;
 pub mod qingfeng;
 #[cfg(windows)]
 pub mod renderer;
+#[cfg(windows)]
+pub mod settings_preview;
 pub mod theme_tokens;
 mod ui_plan;
 #[cfg(windows)]
@@ -23,6 +25,11 @@ pub mod window_host;
 pub use renderer::{
     render_candidate_window, CandidateRenderData, RenderColor, RenderGeometry, RenderTheme,
     RenderWindowInput, RenderWindowOutput,
+};
+#[cfg(windows)]
+pub use settings_preview::{
+    render_settings_candidate_preview, SettingsCandidatePreview, SETTINGS_PREVIEW_HEIGHT_DIP,
+    SETTINGS_PREVIEW_WIDTH_DIP,
 };
 
 pub use candidate_abi::{
@@ -4150,6 +4157,7 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
             item_padding_y: geometry.item_padding_y,
             preedit_height: geometry.preedit_height,
         },
+        font_family: "Microsoft YaHei UI",
         preedit: preedit.as_deref(),
         dpi_scale,
         high_contrast: high_contrast != 0,
