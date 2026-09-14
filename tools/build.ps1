@@ -375,6 +375,12 @@ try {
       }
       foreach ($targetArchitecture in Get-Architectures) {
         Invoke-ConfigureAndBuild $targetArchitecture $true
+        # The Rust register CLI is a release-stage input but intentionally is
+        # not an ALL target for ordinary development builds. Build it here,
+        # before the PE audit and staging consume it, without widening dev.
+        Invoke-Native (Get-CMakeCommand) @('--build', (Get-BuildDirectory $targetArchitecture),
+                                           '--config', $Configuration, '--target',
+                                           'fcitx5_register')
         Invoke-Tests $targetArchitecture
         & (Join-Path $PSScriptRoot 'check-runtime-security.ps1') `
           -Architecture $targetArchitecture -Configuration $Configuration
