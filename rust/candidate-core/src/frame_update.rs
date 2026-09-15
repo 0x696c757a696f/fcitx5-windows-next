@@ -359,6 +359,10 @@ pub fn frame_update(
     // 10. Measure loop over the live arena outputs.
     let measure_params = MeasureLoopParams {
         horizontal,
+        vertical: matches!(
+            config.writing,
+            FrameWriting::VerticalRl | FrameWriting::VerticalLr
+        ),
         scroll_mode: config.scroll_mode,
         label_gap: config.label_gap_dip * scale,
         item_padding_x: config.item_padding_x_dip * scale,

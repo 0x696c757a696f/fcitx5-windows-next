@@ -534,6 +534,67 @@ fn baseline_offset(candidate_font_size: f32, segment_font_size: f32) -> f32 {
     (candidate_font_size - segment_font_size).max(0.0)
 }
 
+/// Shared vertical glyph-row advance, expressed as a ratio of the candidate
+/// font size. The measure loop and the vertical renderer must use this exact
+/// step so the measured column height always covers every drawn glyph.
+pub(crate) const VERTICAL_GLYPH_STEP_RATIO: f32 = 1.6;
+
+/// Splits `text` into the clusters the vertical renderer stacks one per row.
+/// A new cluster starts at every char that is not a continuation: combining
+/// marks, variation selectors, skin-tone modifiers, the keycap, ZWJ (and the
+/// char right after it) all attach to the previous cluster; regional-indicator
+/// flags pair two at a time. This keeps an emoji or flag on one row without a
+/// Unicode segmentation dependency.
+pub(crate) fn grapheme_clusters(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    fn is_extend(ch: char) -> bool {
+        matches!(
+            ch,
+            '\u{20E3}' // keycap (also inside the combining range below)
+                | '\u{0300}'..='\u{036F}'
+                | '\u{1AB0}'..='\u{1AFF}'
+                | '\u{20D0}'..='\u{20FF}'
+                | '\u{FE20}'..='\u{FE2F}'
+                | '\u{FE00}'..='\u{FE0F}'
+                | '\u{E0100}'..='\u{E01EF}'
+                | '\u{1F3FB}'..='\u{1F3FF}'
+        )
+    }
+    fn is_regional(ch: char) -> bool {
+        ('\u{1F1E6}'..='\u{1F1FF}').contains(&ch)
+    }
+
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut clusters = Vec::new();
+    let mut start = 0usize;
+    let mut regional_run = 0usize;
+    for i in 0..chars.len() {
+        let (byte, ch) = chars[i];
+        let new_cluster = i != 0
+            && !(is_extend(ch)
+                || ch == '\u{200D}'
+                || chars[i - 1].1 == '\u{200D}'
+                || (is_regional(chars[i - 1].1) && is_regional(ch) && regional_run % 2 == 1));
+        if is_regional(ch) {
+            regional_run = if i > 0 && is_regional(chars[i - 1].1) {
+                regional_run + 1
+            } else {
+                1
+            };
+        } else {
+            regional_run = 0;
+        }
+        if new_cluster {
+            clusters.push(&text[start..byte]);
+            start = byte;
+        }
+    }
+    clusters.push(&text[start..]);
+    clusters
+}
+
 /// Vertical writing modes: the windui DWrite engine has no vertical text
 /// flow, so each glyph is typeset horizontally, one glyph per row, top →
 /// bottom, centered in the column cell (CJK reads as a vertical column of
@@ -562,7 +623,9 @@ fn draw_candidate_vertical(
     } else {
         input.theme.text.wind()
     };
-    let glyph_step = (geometry.font_size * 1.6).ceil().max(1.0);
+    let glyph_step = (geometry.font_size * VERTICAL_GLYPH_STEP_RATIO)
+        .ceil()
+        .max(1.0);
     let column_left = (left + pad_x).min(right);
     let column_right = (right - pad_x).max(column_left);
     let mut cell_text =
@@ -598,13 +661,12 @@ fn draw_candidate_vertical(
         );
         y += geometry.font_size;
     }
-    for glyph in candidate.text.chars() {
+    for glyph in grapheme_clusters(&candidate.text) {
         if y >= bottom {
             break;
         }
-        let glyph_text: String = glyph.to_string();
         cell_text(
-            &glyph_text,
+            glyph,
             y,
             y + glyph_step,
             geometry.font_size,

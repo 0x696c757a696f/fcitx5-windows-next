@@ -7,13 +7,16 @@
 
 use core::ffi::c_void;
 
-use crate::renderer::{Fcitx5CandidateMeasureSize, MeasureEngine};
+use crate::renderer::{
+    grapheme_clusters, Fcitx5CandidateMeasureSize, MeasureEngine, VERTICAL_GLYPH_STEP_RATIO,
+};
 use crate::{Fcitx5CandidateLayoutSize, Fcitx5CandidateVisualBuildOutput};
 
 /// Parameters for one measure-loop run (frozen from the C++ `update()`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MeasureLoopParams {
     pub horizontal: bool,
+    pub vertical: bool,
     pub scroll_mode: bool,
     pub label_gap: f32,
     pub item_padding_x: f32,
@@ -63,23 +66,46 @@ pub(crate) fn measure_visual_items(
         let output = &outputs[*index];
         let mut width = 0.0_f32;
         let mut height = 0.0_f32;
-        if params.scroll_mode && params.horizontal && output.reserved_label.len == 0 {
-            width += scroll_label_column_width + params.label_gap;
-        }
-        for (value, size) in [
-            (field(&output.reserved_label), params.label_font_size),
-            (field(&output.text), params.font_size),
-            (field(&output.comment), params.comment_font_size),
-        ] {
-            if value.is_empty() {
-                continue;
+        if params.vertical {
+            let label = field(&output.label);
+            let text = field(&output.text);
+            let glyph_step = (params.font_size * VERTICAL_GLYPH_STEP_RATIO)
+                .ceil()
+                .max(1.0);
+            for (value, size) in [
+                (label.as_str(), params.label_font_size),
+                (text.as_str(), params.font_size),
+            ] {
+                for cluster in grapheme_clusters(value) {
+                    let (cluster_width, _) = engine.measure(cluster, size, params.dpi_scale);
+                    width = width.max(cluster_width);
+                }
             }
-            let (run_width, run_height) = engine.measure(&value, size, params.dpi_scale);
-            width += run_width;
-            height = height.max(run_height);
-        }
-        if output.reserved_label.len != 0 {
-            width += params.label_gap;
+            let label_height = if label.is_empty() {
+                0.0
+            } else {
+                params.font_size
+            };
+            height = label_height + grapheme_clusters(text.as_str()).len() as f32 * glyph_step;
+        } else {
+            if params.scroll_mode && params.horizontal && output.reserved_label.len == 0 {
+                width += scroll_label_column_width + params.label_gap;
+            }
+            for (value, size) in [
+                (field(&output.reserved_label), params.label_font_size),
+                (field(&output.text), params.font_size),
+                (field(&output.comment), params.comment_font_size),
+            ] {
+                if value.is_empty() {
+                    continue;
+                }
+                let (run_width, run_height) = engine.measure(&value, size, params.dpi_scale);
+                width += run_width;
+                height = height.max(run_height);
+            }
+            if output.reserved_label.len != 0 {
+                width += params.label_gap;
+            }
         }
         items.push(Fcitx5CandidateLayoutSize {
             width: width + params.item_padding_x * 2.0,
@@ -169,6 +195,7 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
     };
     let params = MeasureLoopParams {
         horizontal: horizontal != 0,
+        vertical: false,
         scroll_mode: scroll_mode != 0,
         label_gap,
         item_padding_x,
@@ -289,14 +316,6 @@ mod tests {
         unsafe { fcitx5_candidate_measure_destroy(engine) };
     }
 
-    /// Re-encodes one arena output field the way the C++ host did before this
-    /// ABI existed: invalid UTF-8 in the raw model text collapses lossily.
-    fn field(value: &crate::Fcitx5CandidateUtf8) -> String {
-        // SAFETY: the test constructs these slices from live strings.
-        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
-            .into_owned()
-    }
-
     #[test]
     fn measure_visual_items_follows_the_frozen_update_measure_loop() {
         let engine = fcitx5_candidate_measure_create();
@@ -376,6 +395,82 @@ mod tests {
         assert_eq!(preedit.width, 0.0, "no preedit input → zero panel");
         // SAFETY: engine is the unique allocation from create.
         unsafe { fcitx5_candidate_measure_destroy(engine) };
+    }
+
+    #[test]
+    fn vertical_column_height_covers_every_glyph() {
+        let mut engine = MeasureEngine::new();
+        let mut arena = crate::CandidateVisualArena::default();
+        let inputs = [crate::Fcitx5CandidateVisualBuildInput {
+            label: str_field("1"),
+            text: str_field("你好吗"),
+            comment: str_field(""),
+            label_style: 1,
+            labels_visible: 1,
+            reservation_action: 0,
+            reservation_slot: 0,
+        }];
+        let config = crate::Fcitx5CandidateVisualBuildConfig {
+            configured_labels: core::ptr::null(),
+            configured_label_count: 0,
+        };
+        let mut outputs = [crate::Fcitx5CandidateVisualBuildOutput::null_output(); 1];
+        // SAFETY: fixture storage is live and buffers satisfy the visual-build ABI.
+        let built = unsafe {
+            crate::fcitx5_candidate_visual_build(
+                &mut arena as *mut _ as *mut c_void,
+                inputs.as_ptr(),
+                1,
+                &config,
+                outputs.as_mut_ptr(),
+            )
+        };
+        assert_eq!(built, 1);
+        let indices = [0usize];
+        let font_size = 16.0_f32;
+        let item_padding_y = 4.0_f32;
+        let glyph_step = (font_size * VERTICAL_GLYPH_STEP_RATIO).ceil().max(1.0);
+        let vertical = MeasureLoopParams {
+            horizontal: false,
+            vertical: true,
+            scroll_mode: false,
+            label_gap: 4.0,
+            item_padding_x: 10.0,
+            item_padding_y,
+            font_size,
+            label_font_size: 12.0,
+            comment_font_size: 11.0,
+            dpi_scale: 1.0,
+        };
+        let (vertical_items, _, _) =
+            measure_visual_items(&mut engine, &outputs, &indices, None, &vertical)
+                .expect("vertical measure loop must succeed");
+        assert!(
+            vertical_items[0].height >= 3.0 * glyph_step + item_padding_y * 2.0,
+            "vertical column must cover all 3 glyph rows: {:?}",
+            vertical_items[0]
+        );
+
+        // A skin-tone modifier must join its base emoji on one row, and a
+        // regional-indicator flag must pair two at a time.
+        assert_eq!(grapheme_clusters("👍🏽").len(), 1);
+        assert_eq!(grapheme_clusters("🇺🇸").len(), 1);
+
+        // The frozen horizontal measure is one short row, so the vertical
+        // height requirement only holds once the vertical path is selected.
+        let horizontal = MeasureLoopParams {
+            horizontal: true,
+            vertical: false,
+            ..vertical
+        };
+        let (horizontal_items, _, _) =
+            measure_visual_items(&mut engine, &outputs, &indices, None, &horizontal)
+                .expect("horizontal measure loop must succeed");
+        assert!(
+            horizontal_items[0].height < 3.0 * glyph_step + item_padding_y * 2.0,
+            "horizontal single-row measure must stay below the vertical column height: {:?}",
+            horizontal_items[0]
+        );
     }
 
     fn out_preedit(

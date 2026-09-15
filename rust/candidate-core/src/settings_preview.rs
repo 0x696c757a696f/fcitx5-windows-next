@@ -8,8 +8,8 @@ use fcitx5_config_core::{
 
 use crate::axis_layout::{self, CandidateLayoutOptions, OverflowBehavior, WritingMode};
 use crate::renderer::{
-    render_candidate_window, CandidateRenderData, MeasureEngine, RenderColor, RenderGeometry,
-    RenderTheme, RenderWindowOutput,
+    grapheme_clusters, render_candidate_window, CandidateRenderData, MeasureEngine, RenderColor,
+    RenderGeometry, RenderTheme, RenderWindowOutput, VERTICAL_GLYPH_STEP_RATIO,
 };
 use crate::{
     format_candidate_label, CandidateLabelStyle, Orientation, Placement, Point, Rect, Size,
@@ -181,7 +181,7 @@ fn label_style(value: &str) -> CandidateLabelStyle {
     }
 }
 
-fn preview_candidates(snapshot: &ConfigSnapshot) -> Vec<CandidateRenderData> {
+fn preview_candidates(snapshot: &ConfigSnapshot, writing: WritingMode) -> Vec<CandidateRenderData> {
     const SAMPLE: [(&str, &str); 9] = [
         ("你", "first"),
         ("你好", "phrase"),
@@ -193,8 +193,23 @@ fn preview_candidates(snapshot: &ConfigSnapshot) -> Vec<CandidateRenderData> {
         ("候选", "comment"),
         ("稳定", "preview"),
     ];
+    // The Settings canvas is deliberately fixed-size. A vertical preview uses
+    // representative, complete columns rather than squeezing a long Latin
+    // run into a surface that cannot physically contain it.
+    const VERTICAL_SAMPLE: [(&str, &str); 5] = [
+        ("你", ""),
+        ("你好", ""),
+        ("输入", ""),
+        ("，。", ""),
+        ("😀", ""),
+    ];
     let label = snapshot.candidate().label();
-    SAMPLE
+    let sample: &[(&str, &str)] = if writing == WritingMode::Horizontal {
+        &SAMPLE
+    } else {
+        &VERTICAL_SAMPLE
+    };
+    sample
         .iter()
         .enumerate()
         .map(|(index, (text, comment))| CandidateRenderData {
@@ -213,6 +228,79 @@ fn preview_candidates(snapshot: &ConfigSnapshot) -> Vec<CandidateRenderData> {
             comment: (*comment).to_owned(),
         })
         .collect()
+}
+
+fn preview_item_size(
+    measure: &mut MeasureEngine,
+    item: &CandidateRenderData,
+    geometry: &RenderGeometry,
+    font_family: &str,
+    dpi_scale: f32,
+    writing: WritingMode,
+) -> Size {
+    if writing != WritingMode::Horizontal {
+        let (label_width, _) = measure.measure_with_family(
+            &item.label,
+            font_family,
+            geometry.label_font_size,
+            dpi_scale,
+        );
+        let glyph_width = grapheme_clusters(&item.text)
+            .iter()
+            .fold(0.0_f32, |width, glyph| {
+                width.max(
+                    measure
+                        .measure_with_family(glyph, font_family, geometry.font_size, dpi_scale)
+                        .0,
+                )
+            });
+        return Size {
+            width: label_width.max(glyph_width) + geometry.item_padding_x * 2.0,
+            height: if item.label.is_empty() {
+                0.0
+            } else {
+                geometry.font_size.max(1.0)
+            } + (geometry.font_size * VERTICAL_GLYPH_STEP_RATIO)
+                .ceil()
+                .max(1.0)
+                * grapheme_clusters(&item.text).len() as f32
+                + geometry.item_padding_y * 2.0,
+        };
+    }
+    let (label_width, label_height) = measure.measure_with_family(
+        &item.label,
+        font_family,
+        geometry.label_font_size,
+        dpi_scale,
+    );
+    let (text_width, text_height) =
+        measure.measure_with_family(&item.text, font_family, geometry.font_size, dpi_scale);
+    let (comment_width, comment_height) = measure.measure_with_family(
+        &item.comment,
+        font_family,
+        geometry.comment_font_size,
+        dpi_scale,
+    );
+    Size {
+        width: geometry.item_padding_x * 2.0
+            + label_width
+            + if item.label.is_empty() {
+                0.0
+            } else {
+                geometry.label_gap
+            }
+            + text_width
+            + if item.comment.is_empty() {
+                0.0
+            } else {
+                geometry.label_gap + comment_width
+            },
+        height: geometry.item_padding_y * 2.0
+            + label_height
+                .max(text_height)
+                .max(comment_height)
+                .max(geometry.font_size),
+    }
 }
 
 /// Renders the embedded Settings preview through the same candidate layout and
@@ -255,49 +343,24 @@ pub fn render_settings_candidate_preview(
         item_padding_y: candidate.geometry().item_padding_y_dip(),
         preedit_height: 34.0,
     };
-    let candidates = preview_candidates(snapshot);
+    let options = axis_options(snapshot);
+    let candidates = preview_candidates(snapshot, options.writing_mode);
     let mut measure = MeasureEngine::new();
     let sizes = candidates
         .iter()
         .map(|item| {
-            let (label_width, label_height) = measure.measure_with_family(
-                &item.label,
+            preview_item_size(
+                &mut measure,
+                item,
+                &geometry,
                 font_family,
-                geometry.label_font_size,
                 dpi_scale,
-            );
-            let (text_width, text_height) =
-                measure.measure_with_family(&item.text, font_family, geometry.font_size, dpi_scale);
-            let (comment_width, comment_height) = measure.measure_with_family(
-                &item.comment,
-                font_family,
-                geometry.comment_font_size,
-                dpi_scale,
-            );
-            Size {
-                width: geometry.item_padding_x * 2.0
-                    + label_width
-                    + if item.label.is_empty() {
-                        0.0
-                    } else {
-                        geometry.label_gap
-                    }
-                    + text_width
-                    + if item.comment.is_empty() {
-                        0.0
-                    } else {
-                        geometry.label_gap + comment_width
-                    },
-                height: geometry.item_padding_y * 2.0
-                    + label_height
-                        .max(text_height)
-                        .max(comment_height)
-                        .max(geometry.font_size),
-            }
+                options.writing_mode,
+            )
         })
         .collect();
     let axis_result = axis_layout::layout(&axis_layout::AxisLayoutInput {
-        options: axis_options(snapshot),
+        options,
         items: sizes,
         caret: Point::default(),
         caret_height: 0.0,
@@ -319,10 +382,11 @@ pub fn render_settings_candidate_preview(
         placement: Placement::Unlocked,
     });
     let preedit = (candidate.preedit_mode() == "panel").then_some("ni hao · preview");
+    let theme = render_theme(snapshot, high_contrast);
     let bitmap = render_candidate_window(&crate::renderer::RenderWindowInput {
         axis_result: &axis_result,
         candidates: &candidates,
-        theme: &render_theme(snapshot, high_contrast),
+        theme: &theme,
         geometry: &geometry,
         font_family,
         preedit,
@@ -333,8 +397,40 @@ pub fn render_settings_candidate_preview(
     if bitmap.pixels.is_empty() {
         return Err("settings candidate preview produced no pixels".to_owned());
     }
+
+    // Compose the content-tight bitmap onto a full-size surface so every layout
+    // preview shares the same physical canvas and is drawn at true 1:1 size.
+    let surface_width = (width_dip * dpi_scale).ceil() as u32;
+    let surface_height = (height_dip * dpi_scale).ceil() as u32;
+    let surface_stride = surface_width * 4;
+    let inset = (8.0 * dpi_scale).round() as u32;
+    let background = [
+        theme.background.blue,
+        theme.background.green,
+        theme.background.red,
+        theme.background.alpha,
+    ];
+    let mut pixels = Vec::with_capacity((surface_width * surface_height * 4) as usize);
+    for _ in 0..surface_width * surface_height {
+        pixels.extend_from_slice(&background);
+    }
+    let copy_width = bitmap.width.min(surface_width.saturating_sub(inset));
+    let copy_height = bitmap.height.min(surface_height.saturating_sub(inset));
+    for row in 0..copy_height {
+        let src_start = (row * bitmap.stride) as usize;
+        let dst_start = ((inset + row) * surface_stride + inset * 4) as usize;
+        let copy_bytes = copy_width as usize * 4;
+        pixels[dst_start..dst_start + copy_bytes]
+            .copy_from_slice(&bitmap.pixels[src_start..src_start + copy_bytes]);
+    }
+
     Ok(SettingsCandidatePreview {
-        bitmap,
+        bitmap: RenderWindowOutput {
+            pixels,
+            width: surface_width,
+            height: surface_height,
+            stride: surface_stride,
+        },
         high_contrast,
     })
 }
@@ -369,6 +465,37 @@ mod tests {
             )
             .expect("every persisted layout mode should render");
             assert!(!preview.bitmap.pixels.is_empty(), "{layout}");
+        }
+    }
+
+    #[test]
+    fn preview_surface_is_canvas_sized_for_every_layout() {
+        for layout in ["automatic", "stacked", "flow", "scroll", "vertical_text"] {
+            let preview = render_settings_candidate_preview(
+                &snapshot(layout),
+                1.0,
+                SETTINGS_PREVIEW_WIDTH_DIP,
+                SETTINGS_PREVIEW_HEIGHT_DIP,
+                false,
+            )
+            .expect("every persisted layout mode should render");
+            assert_eq!(
+                preview.bitmap.width, SETTINGS_PREVIEW_WIDTH_DIP as u32,
+                "{layout}"
+            );
+            assert_eq!(
+                preview.bitmap.height, SETTINGS_PREVIEW_HEIGHT_DIP as u32,
+                "{layout}"
+            );
+            let first = &preview.bitmap.pixels[..4];
+            assert!(
+                preview
+                    .bitmap
+                    .pixels
+                    .chunks_exact(4)
+                    .any(|pixel| pixel != first),
+                "{layout} preview must not be a single uniform color"
+            );
         }
     }
 

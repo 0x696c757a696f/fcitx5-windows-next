@@ -617,7 +617,7 @@ impl WindUiWidget for WindUiCandidatePreview {
                         .map(|image| (version, image));
             }
             if let Some((_, image)) = self.cache.borrow().as_ref() {
-                canvas.draw_image(image, content, WindUiImageFit::Contain, 0.0, 1.0);
+                canvas.draw_image(image, content, WindUiImageFit::None, 0.0, 1.0);
             }
         });
     }

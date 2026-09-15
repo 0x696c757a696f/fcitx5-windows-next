@@ -337,6 +337,8 @@ impl PaintColors {
             b: 0.98,
             a: 1.0,
         });
+        // These fallbacks must mirror resources/themes/default/theme.toml so a
+        // missing key can never produce an invisible selection (green on green).
         PaintColors {
             background,
             candidate_text,
@@ -344,12 +346,12 @@ impl PaintColors {
                 r: 0.027,
                 g: 0.757,
                 b: 0.376,
-                a: 0.10,
+                a: 1.0,
             }),
             selected_candidate_text: named("selected_candidate_text").unwrap_or(Rgba {
-                r: 0.027,
-                g: 0.757,
-                b: 0.376,
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
                 a: 1.0,
             }),
             comment_text: named("comment_text").unwrap_or(candidate_text),
@@ -2349,4 +2351,27 @@ fn main() -> std::process::ExitCode {
         fcitx5_candidate_window_destroy(host.window);
     }
     std::process::ExitCode::from((exit & 0xFF) as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_fallbacks_never_collide_with_selected_background() {
+        let colors = PaintColors::from_map(&BTreeMap::new());
+        let selected_background = colors.selected_background;
+        let selected_text = colors.selected_candidate_text;
+        assert_eq!(
+            selected_background.a, 1.0,
+            "selected_background fallback must be opaque"
+        );
+        let differs = (selected_background.r - selected_text.r).abs() > 0.25
+            || (selected_background.g - selected_text.g).abs() > 0.25
+            || (selected_background.b - selected_text.b).abs() > 0.25;
+        assert!(
+            differs,
+            "selected text fallback must differ from selected background"
+        );
+    }
 }
