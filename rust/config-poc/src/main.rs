@@ -6852,6 +6852,88 @@ mod tests {
         );
     }
 
+    #[test]
+    fn candidate_layout_controls_cover_every_reachable_button_state() {
+        let directory = TestDirectory::new("candidate-layout-controls");
+        let path = directory.path().join("config.toml");
+        let mut adapter = WindUiConfigAdapter::load(path).expect("adapter should load defaults");
+
+        for layout in ["automatic", "stacked", "flow"] {
+            adapter
+                .set(ConfigEdit::CandidateLayoutType(layout.to_owned()))
+                .expect("layout button should update Draft");
+            assert_eq!(adapter.preview().candidate().layout_type(), layout);
+            adapter
+                .apply()
+                .expect("apply should persist every layout button");
+        }
+
+        for direction in [ScrollDirection::Horizontal, ScrollDirection::Vertical] {
+            for page_size in 1..=9 {
+                adapter
+                    .set(ConfigEdit::CandidateLayoutType("scroll".to_owned()))
+                    .expect("scroll mode should update Draft");
+                adapter
+                    .set(ConfigEdit::CandidateScrollDirection(direction))
+                    .expect("scroll direction button should update Draft");
+                adapter
+                    .set(ConfigEdit::CandidatePageSize(page_size))
+                    .expect("candidate-count button should update Draft");
+                let preview = adapter.preview();
+                let candidate = preview.candidate();
+                assert_eq!(candidate.layout_type(), "scroll");
+                assert_eq!(candidate.scroll_direction(), direction);
+                assert_eq!(candidate.page_size(), page_size);
+                adapter
+                    .apply()
+                    .expect("apply should persist every scroll button combination");
+            }
+        }
+
+        for direction in [
+            VerticalTextColumnDirection::RightToLeft,
+            VerticalTextColumnDirection::LeftToRight,
+        ] {
+            adapter
+                .set(ConfigEdit::CandidateLayoutType("vertical_text".to_owned()))
+                .expect("vertical-text mode should update Draft");
+            adapter
+                .set(ConfigEdit::CandidateVerticalTextColumnDirection(direction))
+                .expect("column direction button should update Draft");
+            let preview = adapter.preview();
+            let candidate = preview.candidate();
+            assert_eq!(candidate.layout_type(), "vertical_text");
+            assert_eq!(candidate.vertical_text_column_direction(), direction);
+            adapter
+                .apply()
+                .expect("apply should persist both column-direction buttons");
+        }
+
+        adapter
+            .set(ConfigEdit::CandidatePageSize(1))
+            .expect("draft change should succeed before cancel");
+        adapter.cancel();
+        assert_eq!(adapter.preview().candidate().layout_type(), "vertical_text");
+        assert_eq!(
+            adapter
+                .preview()
+                .candidate()
+                .vertical_text_column_direction(),
+            VerticalTextColumnDirection::LeftToRight
+        );
+
+        adapter.reset_candidate_layout();
+        let preview = adapter.preview();
+        let candidate = preview.candidate();
+        assert_eq!(candidate.layout_type(), "scroll");
+        assert_eq!(candidate.scroll_direction(), ScrollDirection::Horizontal);
+        assert_eq!(
+            candidate.vertical_text_column_direction(),
+            VerticalTextColumnDirection::RightToLeft
+        );
+        assert_eq!(candidate.page_size(), 5);
+    }
+
     fn package_json(id: &str, installed: Option<&str>, state: Option<&str>) -> String {
         format!(
             r#"{{"format_version":1,"repository_available":true,"repository_error":null,"packages":[{{"id":"{id}","title":"Rime","summary":"Rime input method","type":"addon","available_version":"1.2.3","installed_version":{},"state":{},"update_available":false}}]}}"#,

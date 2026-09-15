@@ -398,27 +398,28 @@ pub fn render_settings_candidate_preview(
         return Err("settings candidate preview produced no pixels".to_owned());
     }
 
-    // Compose the content-tight bitmap onto a full-size surface so every layout
-    // preview shares the same physical canvas and is drawn at true 1:1 size.
+    // Compose the content-tight bitmap onto a full-size preview stage. The
+    // candidate window stays 1:1; centering it makes narrow layouts comparable
+    // without stretching them or pinning them to a corner.
     let surface_width = (width_dip * dpi_scale).ceil() as u32;
     let surface_height = (height_dip * dpi_scale).ceil() as u32;
     let surface_stride = surface_width * 4;
-    let inset = (8.0 * dpi_scale).round() as u32;
-    let background = [
-        theme.background.blue,
-        theme.background.green,
-        theme.background.red,
-        theme.background.alpha,
-    ];
+    let background = if high_contrast {
+        [32, 32, 32, 255]
+    } else {
+        [252, 249, 246, 255]
+    };
     let mut pixels = Vec::with_capacity((surface_width * surface_height * 4) as usize);
     for _ in 0..surface_width * surface_height {
         pixels.extend_from_slice(&background);
     }
-    let copy_width = bitmap.width.min(surface_width.saturating_sub(inset));
-    let copy_height = bitmap.height.min(surface_height.saturating_sub(inset));
+    let copy_width = bitmap.width.min(surface_width);
+    let copy_height = bitmap.height.min(surface_height);
+    let origin_x = (surface_width - copy_width) / 2;
+    let origin_y = (surface_height - copy_height) / 2;
     for row in 0..copy_height {
         let src_start = (row * bitmap.stride) as usize;
-        let dst_start = ((inset + row) * surface_stride + inset * 4) as usize;
+        let dst_start = ((origin_y + row) * surface_stride + origin_x * 4) as usize;
         let copy_bytes = copy_width as usize * 4;
         pixels[dst_start..dst_start + copy_bytes]
             .copy_from_slice(&bitmap.pixels[src_start..src_start + copy_bytes]);
@@ -438,18 +439,27 @@ pub fn render_settings_candidate_preview(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fcitx5_config_core::{ConfigCommand, ConfigCore, ConfigEdit, FileStore};
+    use fcitx5_config_core::{
+        ConfigCommand, ConfigCore, ConfigEdit, FileStore, ScrollDirection,
+        VerticalTextColumnDirection,
+    };
     use std::path::Path;
 
     fn snapshot(layout: &str) -> ConfigSnapshot {
+        snapshot_with(vec![ConfigEdit::CandidateLayoutType(layout.to_owned())])
+    }
+
+    fn snapshot_with(edits: Vec<ConfigEdit>) -> ConfigSnapshot {
         let store = FileStore::new();
         let mut core = ConfigCore::compiled_defaults();
-        core.execute(
-            ConfigCommand::Set(ConfigEdit::CandidateLayoutType(layout.to_owned())),
-            &store,
-            Path::new("settings-preview.toml"),
-        )
-        .expect("preview fixture layout is valid");
+        for edit in edits {
+            core.execute(
+                ConfigCommand::Set(edit),
+                &store,
+                Path::new("settings-preview.toml"),
+            )
+            .expect("preview fixture edit is valid");
+        }
         core.preview()
     }
 
@@ -495,6 +505,105 @@ mod tests {
                     .chunks_exact(4)
                     .any(|pixel| pixel != first),
                 "{layout} preview must not be a single uniform color"
+            );
+        }
+    }
+
+    #[test]
+    fn every_layout_centers_the_unscaled_candidate_window_on_the_preview_stage() {
+        const STAGE: [u8; 4] = [252, 249, 246, 255];
+        for layout in ["automatic", "stacked", "flow", "scroll", "vertical_text"] {
+            let preview = render_settings_candidate_preview(
+                &snapshot(layout),
+                1.0,
+                SETTINGS_PREVIEW_WIDTH_DIP,
+                SETTINGS_PREVIEW_HEIGHT_DIP,
+                false,
+            )
+            .expect("every persisted layout mode should render");
+            let mut bounds = (preview.bitmap.width, preview.bitmap.height, 0_u32, 0_u32);
+            for (index, pixel) in preview.bitmap.pixels.chunks_exact(4).enumerate() {
+                if pixel != STAGE {
+                    let x = index as u32 % preview.bitmap.width;
+                    let y = index as u32 / preview.bitmap.width;
+                    bounds.0 = bounds.0.min(x);
+                    bounds.1 = bounds.1.min(y);
+                    bounds.2 = bounds.2.max(x);
+                    bounds.3 = bounds.3.max(y);
+                }
+            }
+            let left = bounds.0;
+            let top = bounds.1;
+            let right = preview.bitmap.width - 1 - bounds.2;
+            let bottom = preview.bitmap.height - 1 - bounds.3;
+            assert!(
+                left.abs_diff(right) <= 1,
+                "{layout} must be horizontally centered"
+            );
+            assert!(
+                top.abs_diff(bottom) <= 1,
+                "{layout} must be vertically centered"
+            );
+        }
+    }
+
+    #[test]
+    fn every_reachable_candidate_layout_button_combination_renders_in_bounds() {
+        let mut cases = vec![
+            ("automatic", snapshot("automatic")),
+            ("stacked", snapshot("stacked")),
+            ("flow", snapshot("flow")),
+        ];
+        for direction in [ScrollDirection::Horizontal, ScrollDirection::Vertical] {
+            for page_size in 1..=9 {
+                cases.push((
+                    "scroll",
+                    snapshot_with(vec![
+                        ConfigEdit::CandidateLayoutType("scroll".to_owned()),
+                        ConfigEdit::CandidateScrollDirection(direction),
+                        ConfigEdit::CandidatePageSize(page_size),
+                    ]),
+                ));
+            }
+        }
+        for direction in [
+            VerticalTextColumnDirection::RightToLeft,
+            VerticalTextColumnDirection::LeftToRight,
+        ] {
+            cases.push((
+                "vertical_text",
+                snapshot_with(vec![
+                    ConfigEdit::CandidateLayoutType("vertical_text".to_owned()),
+                    ConfigEdit::CandidateVerticalTextColumnDirection(direction),
+                ]),
+            ));
+        }
+
+        assert_eq!(cases.len(), 23);
+        for (name, snapshot) in cases {
+            let preview = render_settings_candidate_preview(
+                &snapshot,
+                1.0,
+                SETTINGS_PREVIEW_WIDTH_DIP,
+                SETTINGS_PREVIEW_HEIGHT_DIP,
+                false,
+            )
+            .expect("every reachable candidate layout state should render");
+            assert_eq!(
+                preview.bitmap.width, SETTINGS_PREVIEW_WIDTH_DIP as u32,
+                "{name}"
+            );
+            assert_eq!(
+                preview.bitmap.height, SETTINGS_PREVIEW_HEIGHT_DIP as u32,
+                "{name}"
+            );
+            assert!(
+                preview
+                    .bitmap
+                    .pixels
+                    .chunks_exact(4)
+                    .any(|pixel| pixel != [252, 249, 246, 255]),
+                "{name} must paint a candidate window"
             );
         }
     }
