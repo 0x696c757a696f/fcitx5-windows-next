@@ -8,7 +8,8 @@
 use core::ffi::c_void;
 
 use crate::renderer::{
-    grapheme_clusters, Fcitx5CandidateMeasureSize, MeasureEngine, VERTICAL_GLYPH_STEP_RATIO,
+    grapheme_clusters, horizontal_run_plan, Fcitx5CandidateMeasureSize, MeasureEngine,
+    VERTICAL_GLYPH_STEP_RATIO,
 };
 use crate::{Fcitx5CandidateLayoutSize, Fcitx5CandidateVisualBuildOutput};
 
@@ -25,6 +26,10 @@ pub(crate) struct MeasureLoopParams {
     pub label_font_size: f32,
     pub comment_font_size: f32,
     pub dpi_scale: f32,
+    /// Hard total window width. Zero preserves the unbounded ABI helper.
+    pub max_width: f32,
+    /// Outer window padding included in `max_width`.
+    pub window_padding_x: f32,
 }
 
 /// The frozen measure loop over live arena outputs: optional scroll-label
@@ -64,11 +69,10 @@ pub(crate) fn measure_visual_items(
     let mut items = Vec::with_capacity(indices.len());
     for index in indices {
         let output = &outputs[*index];
-        let mut width = 0.0_f32;
-        let mut height = 0.0_f32;
-        if params.vertical {
+        let (width, height) = if params.vertical {
             let label = field(&output.label);
             let text = field(&output.text);
+            let mut width = 0.0_f32;
             let glyph_step = (params.font_size * VERTICAL_GLYPH_STEP_RATIO)
                 .ceil()
                 .max(1.0);
@@ -86,27 +90,39 @@ pub(crate) fn measure_visual_items(
             } else {
                 params.font_size
             };
-            height = label_height + grapheme_clusters(text.as_str()).len() as f32 * glyph_step;
+            (
+                width,
+                label_height + grapheme_clusters(text.as_str()).len() as f32 * glyph_step,
+            )
         } else {
-            if params.scroll_mode && params.horizontal && output.reserved_label.len == 0 {
-                width += scroll_label_column_width + params.label_gap;
-            }
-            for (value, size) in [
-                (field(&output.reserved_label), params.label_font_size),
-                (field(&output.text), params.font_size),
-                (field(&output.comment), params.comment_font_size),
-            ] {
-                if value.is_empty() {
-                    continue;
-                }
-                let (run_width, run_height) = engine.measure(&value, size, params.dpi_scale);
-                width += run_width;
-                height = height.max(run_height);
-            }
-            if output.reserved_label.len != 0 {
-                width += params.label_gap;
-            }
-        }
+            let label = field(&output.label);
+            let text = field(&output.text);
+            let comment = field(&output.comment);
+            let bounded = params.max_width > 0.0 && !(params.scroll_mode && params.horizontal);
+            let available = if bounded {
+                (params.max_width - params.window_padding_x * 2.0 - params.item_padding_x * 2.0)
+                    .max(1.0)
+            } else {
+                f32::INFINITY
+            };
+            let plan = horizontal_run_plan(
+                &label,
+                if params.scroll_mode && params.horizontal {
+                    scroll_label_column_width
+                } else {
+                    0.0
+                },
+                &text,
+                &comment,
+                available,
+                params.label_gap,
+                params.label_font_size,
+                params.font_size,
+                params.comment_font_size,
+                |value, size| engine.measure(value, size, params.dpi_scale),
+            );
+            (plan.width, plan.height)
+        };
         items.push(Fcitx5CandidateLayoutSize {
             width: width + params.item_padding_x * 2.0,
             height: height + params.item_padding_y * 2.0,
@@ -204,6 +220,8 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
         label_font_size,
         comment_font_size,
         dpi_scale,
+        max_width: 0.0,
+        window_padding_x: 0.0,
     };
     let Some((items, panel, scroll_label_column_width)) =
         measure_visual_items(engine, outputs, indices, preedit_text.as_deref(), &params)
@@ -441,6 +459,8 @@ mod tests {
             label_font_size: 12.0,
             comment_font_size: 11.0,
             dpi_scale: 1.0,
+            max_width: 0.0,
+            window_padding_x: 0.0,
         };
         let (vertical_items, _, _) =
             measure_visual_items(&mut engine, &outputs, &indices, None, &vertical)

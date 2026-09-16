@@ -14,8 +14,6 @@ pub mod presentation_server;
 pub mod qingfeng;
 #[cfg(windows)]
 pub mod renderer;
-#[cfg(windows)]
-pub mod settings_preview;
 pub mod theme_tokens;
 mod ui_plan;
 #[cfg(windows)]
@@ -25,11 +23,6 @@ pub mod window_host;
 pub use renderer::{
     render_candidate_window, CandidateRenderData, RenderColor, RenderGeometry, RenderTheme,
     RenderWindowInput, RenderWindowOutput,
-};
-#[cfg(windows)]
-pub use settings_preview::{
-    render_settings_candidate_preview, SettingsCandidatePreview, SETTINGS_PREVIEW_HEIGHT_DIP,
-    SETTINGS_PREVIEW_WIDTH_DIP,
 };
 
 pub use candidate_abi::{
@@ -4043,6 +4036,11 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
                 std::slice::from_raw_parts(c.label, c.label_len)
             })
             .into_owned(),
+            // SAFETY: each reserved-label span is valid for its declared length during rendering.
+            reserved_label: String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(c.reserved_label, c.reserved_label_len)
+            })
+            .into_owned(),
             // SAFETY: each candidate text span is valid for its declared length during rendering.
             text: String::from_utf8_lossy(unsafe {
                 std::slice::from_raw_parts(c.text, c.text_len)
@@ -4084,10 +4082,23 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
         column_gap: geometry.column_gap,
         page_size: geometry.page_size as usize,
         selected: selected as usize,
-        scroll_override: None,
+        scroll_override: (geometry.scroll_override_px >= 0.0)
+            .then_some(geometry.scroll_override_px),
         placement: Placement::Unlocked,
     };
     let axis_result = crate::axis_layout::layout(&axis_input);
+    let (_, _, pixel_width, pixel_height) = renderer::render_pixel_extent(
+        &axis_result,
+        preedit.as_deref(),
+        geometry.preedit_height,
+        dpi_scale,
+    );
+    let Some(required) = (pixel_width as usize)
+        .checked_mul(pixel_height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return 1;
+    };
     let out_window = Fcitx5CandidateRenderOutput {
         window_x: axis_result.window.left,
         window_y: axis_result.window.top,
@@ -4096,6 +4107,22 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
         pixel_stride: 0,
         pixel_byte_len: 0,
     };
+    if out_pixel_capacity < required {
+        if !out.is_null() {
+            // SAFETY: the non-null output pointer is writable for one render result.
+            unsafe {
+                *out = Fcitx5CandidateRenderOutput {
+                    pixel_stride: pixel_width.saturating_mul(4),
+                    pixel_byte_len: required as u64,
+                    ..out_window
+                };
+            }
+        }
+        return 2;
+    }
+    if required > 0 && out_pixels.is_null() {
+        return 1;
+    }
     let render = renderer::render_candidate_window(&renderer::RenderWindowInput {
         axis_result: &axis_result,
         candidates: &data,
@@ -4156,6 +4183,7 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
             item_padding_x: geometry.item_padding_x,
             item_padding_y: geometry.item_padding_y,
             preedit_height: geometry.preedit_height,
+            scroll_mode: geometry.overflow == 1,
         },
         font_family: "Microsoft YaHei UI",
         preedit: preedit.as_deref(),
@@ -4167,23 +4195,7 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
             None
         },
     });
-    let required = render.pixels.len();
-    if out_pixel_capacity < required {
-        if !out.is_null() {
-            // SAFETY: the non-null output pointer is writable for one render result.
-            unsafe {
-                *out = Fcitx5CandidateRenderOutput {
-                    pixel_stride: render.stride,
-                    pixel_byte_len: required as u64,
-                    ..out_window
-                };
-            }
-        }
-        return 2;
-    }
-    if required > 0 && out_pixels.is_null() {
-        return 1;
-    }
+    debug_assert_eq!(render.pixels.len(), required);
     if required > 0 {
         // SAFETY: the validated output pixel buffer has `required` writable bytes and does not alias render storage.
         unsafe { std::ptr::copy_nonoverlapping(render.pixels.as_ptr(), out_pixels, required) };
@@ -4210,6 +4222,8 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
 pub struct Fcitx5CandidateRenderCandidateInput {
     pub label: *const u8,
     pub label_len: usize,
+    pub reserved_label: *const u8,
+    pub reserved_label_len: usize,
     pub text: *const u8,
     pub text_len: usize,
     pub comment: *const u8,
@@ -4276,6 +4290,8 @@ pub struct Fcitx5CandidateRenderGeometryInput {
     pub orientation: u8,
     pub overflow: u8,
     pub writing: u8,
+    /// Manual scroll offset in physical pixels; negative means auto.
+    pub scroll_override_px: f32,
 }
 
 /// Geometry + pixel buffer descriptor returned by `fcitx5_candidate_render_window`.
@@ -7631,6 +7647,7 @@ mod axis_layout_ffi_tests {
             orientation: 1,
             overflow: 0,
             writing: 0,
+            scroll_override_px: -1.0,
         }
     }
 
@@ -7640,10 +7657,13 @@ mod axis_layout_ffi_tests {
         let cand_text = |text: &str, label: &str, comment: &str| {
             let (text_p, text_len) = utf8_slice(text);
             let (label_p, label_len) = utf8_slice(label);
+            let (reserved_label_p, reserved_label_len) = utf8_slice(label);
             let (comment_p, comment_len) = utf8_slice(comment);
             Fcitx5CandidateRenderCandidateInput {
                 label: label_p,
                 label_len,
+                reserved_label: reserved_label_p,
+                reserved_label_len,
                 text: text_p,
                 text_len,
                 comment: comment_p,

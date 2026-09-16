@@ -248,7 +248,7 @@ struct CaptureEvidence {
   std::size_t non_background_pixels{};
 };
 
-CaptureEvidence capture_window(HWND window, const fs::path& path) {
+CaptureEvidence capture_window(HWND window, const fs::path& path, std::string_view context) {
   const RECT rectangle = window_rectangle(window);
   const int width = rectangle.right - rectangle.left;
   const int height = rectangle.bottom - rectangle.top;
@@ -270,6 +270,11 @@ CaptureEvidence capture_window(HWND window, const fs::path& path) {
     throw std::runtime_error("CreateCompatibleBitmap failed for candidate UI screenshot");
   }
   HGDIOBJ old_object = SelectObject(memory_dc, bitmap);
+  // A demo candidate window can be visible before its first invalidated paint
+  // is dispatched. Force that paint before asking the native host to print so
+  // the screenshot contract observes the same frame a user sees.
+  RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+  UpdateWindow(window);
   SendMessageW(window, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(memory_dc), 0);
 
   BITMAPINFO info{};
@@ -300,6 +305,24 @@ CaptureEvidence capture_window(HWND window, const fs::path& path) {
     }
     return count;
   };
+  // The candidate host is a no-activate popup. On a busy desktop Windows can
+  // report the final window size before the first paint reaches the window DC.
+  // Give that same HWND a bounded, synchronous paint opportunity before
+  // falling back to PrintWindow/screen capture.
+  for (unsigned attempt = 0; attempt < 8U && count_non_background(pixels) < 64U; ++attempt) {
+    Sleep(25U);
+    RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+    UpdateWindow(window);
+    SendMessageW(window, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(memory_dc), 0);
+    if (GetDIBits(memory_dc, bitmap, 0, static_cast<UINT>(height), pixels.data(), &info,
+                  DIB_RGB_COLORS) == 0) {
+      SelectObject(memory_dc, old_object);
+      DeleteObject(bitmap);
+      DeleteDC(memory_dc);
+      ReleaseDC(window, window_dc);
+      throw std::runtime_error("GetDIBits retry failed for candidate UI screenshot");
+    }
+  }
   if (count_non_background(pixels) < 64U) {
     const BOOL printed = PrintWindow(window, memory_dc, PW_RENDERFULLCONTENT);
     if (printed != FALSE &&
@@ -353,7 +376,8 @@ CaptureEvidence capture_window(HWND window, const fs::path& path) {
     checksum ^= pixel;
     checksum *= 1099511628211ULL;
   }
-  expect(non_background > 0, "candidate UI screenshot did not contain visible content");
+  expect(non_background > 0,
+         std::string(context) + " screenshot did not contain visible content");
 
   BITMAPFILEHEADER file_header{};
   file_header.bfType = 0x4D42;
@@ -524,7 +548,8 @@ int wmain(int argc, wchar_t** argv) {
     expect(vertical_width > 0 && vertical_height > 0,
            "vertical candidate preview has an invalid size");
     const auto cpp_demo_screenshot = temporary.path() / L"cpp-candidate-demo.bmp";
-    const CaptureEvidence cpp_demo = capture_window(window, cpp_demo_screenshot);
+    const CaptureEvidence cpp_demo =
+        capture_window(window, cpp_demo_screenshot, "vertical candidate UI");
     expect(cpp_demo.bytes > 0 && cpp_demo.non_background_pixels > 0 && cpp_demo.checksum != 0,
            "C++ candidate demo screenshot evidence is invalid");
 
@@ -597,7 +622,8 @@ int wmain(int argc, wchar_t** argv) {
            "horizontal scroll viewport did not clamp to the configured width budget: ordinary " +
                size_text(horizontal) + ", scroll " + size_text(horizontal_scroll));
     const auto cpp_scroll_screenshot = temporary.path() / L"cpp-candidate-scroll-demo.bmp";
-    const CaptureEvidence cpp_scroll = capture_window(scroll_window, cpp_scroll_screenshot);
+    const CaptureEvidence cpp_scroll =
+        capture_window(scroll_window, cpp_scroll_screenshot, "scroll candidate UI");
     expect(cpp_scroll.bytes > 0 && cpp_scroll.non_background_pixels > 0 &&
                cpp_scroll.checksum != 0,
            "C++ candidate scroll-demo screenshot evidence is invalid");

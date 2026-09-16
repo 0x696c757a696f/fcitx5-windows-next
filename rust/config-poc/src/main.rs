@@ -1,16 +1,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::cell::RefCell;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use fcitx5_candidate_core::{
-    render_settings_candidate_preview, run_candidate_poc_self_check, SettingsCandidatePreview,
-    SETTINGS_PREVIEW_HEIGHT_DIP, SETTINGS_PREVIEW_WIDTH_DIP,
-};
+use fcitx5_candidate_core::run_candidate_poc_self_check;
 use fcitx5_config_core::{
     CandidateOrientation as CoreCandidateOrientation, ConfigCommand, ConfigCore, ConfigEdit,
     ConfigField, ConfigSnapshot, FileStore, OverflowBehavior as CoreOverflowBehavior,
@@ -20,13 +16,11 @@ use fcitx5_control_core::{control_schema_json, control_usage_text};
 use fcitx5_package_core::{
     finalize_package_removal_entries, find_repository_package, mark_package_for_removal_entries,
     parse_lockfile, parse_manifest, parse_repository_index_with_policy, parse_trusted_keys,
-    set_package_state_entries, validate_manifest_compatibility, PackageLifecycleState,
+    set_package_state_entries, validate_manifest_compatibility, PackageId, PackageLifecycleState,
     RepositoryVerificationPolicy,
 };
 use fcitx5_process_execution_core::run_process_bounded;
 use serde::Deserialize;
-use windui::core::Widget as WindUiWidget;
-use windui::geometry::{Rect as WindUiRect, Size as WindUiSize};
 use windui::prelude::{
     brand_icon as windui_brand_icon, brand_icon_at as windui_brand_icon_at,
     signal as windui_signal, Align as WindUiAlign, App as WindUiApp, Color as WindUiColor,
@@ -34,9 +28,6 @@ use windui::prelude::{
     Sender as WindUiSender, Signal as WindUiSignal, Theme as WindUiTheme,
     ThemeHandle as WindUiThemeHandle, WindowButtonKind as WindUiWindowButtonKind,
 };
-use windui::render::{Canvas as WindUiCanvas, Fit as WindUiImageFit, Image as WindUiImage};
-use windui::style::Style as WindUiStyle;
-use windui::text::TextEngine as WindUiTextEngine;
 
 const CONFIG_POC_COMPONENT: &str = "fcitx5-config-poc";
 const CONFIG_RETIRED_SIDE_BY_SIDE_COMPONENT: &str = "none";
@@ -571,105 +562,6 @@ fn windui_settings_page_title(title: &str, subtitle: &str) -> WindUiElement {
         )
 }
 
-struct WindUiCandidatePreview {
-    frame: WindUiSignal<Option<SettingsCandidatePreview>>,
-    cache: RefCell<Option<(u64, WindUiImage)>>,
-}
-
-impl WindUiWidget for WindUiCandidatePreview {
-    fn measure(
-        &self,
-        _avail: WindUiSize,
-        _style: &WindUiStyle,
-        _text: &mut dyn WindUiTextEngine,
-    ) -> WindUiSize {
-        WindUiSize::ZERO
-    }
-
-    fn paint(
-        &self,
-        _bounds: WindUiRect,
-        content: WindUiRect,
-        _focused: bool,
-        _enabled: bool,
-        canvas: &mut dyn WindUiCanvas,
-        _style: &WindUiStyle,
-    ) {
-        let version = self.frame.version();
-        let _ = self.frame.try_with(|frame| {
-            let Some(frame) = frame else {
-                self.cache.borrow_mut().take();
-                return;
-            };
-            if self
-                .cache
-                .borrow()
-                .as_ref()
-                .is_none_or(|(cached, _)| *cached != version)
-            {
-                let mut rgba = frame.bitmap.pixels.clone();
-                for pixel in rgba.chunks_exact_mut(4) {
-                    pixel.swap(0, 2);
-                }
-                *self.cache.borrow_mut() =
-                    WindUiImage::from_rgba(frame.bitmap.width, frame.bitmap.height, &rgba)
-                        .ok()
-                        .map(|image| (version, image));
-            }
-            if let Some((_, image)) = self.cache.borrow().as_ref() {
-                canvas.draw_image(image, content, WindUiImageFit::None, 0.0, 1.0);
-            }
-        });
-    }
-}
-
-fn windui_candidate_preview_panel(
-    adapter: WindUiSignal<WindUiConfigAdapter>,
-    draft_summary: WindUiSignal<String>,
-) -> WindUiElement {
-    let frame = adapter.map(|adapter| {
-        render_settings_candidate_preview(
-            &adapter.preview(),
-            1.0,
-            SETTINGS_PREVIEW_WIDTH_DIP,
-            SETTINGS_PREVIEW_HEIGHT_DIP,
-            false,
-        )
-        .ok()
-    });
-    WindUiElement::col()
-        .width_match()
-        .spacing(8)
-        .child(
-            WindUiElement::row()
-                .cross(WindUiAlign::Center)
-                .spacing(6)
-                .child(
-                    WindUiElement::label("生产候选预览")
-                        .font_size(12.5)
-                        .fg_role(WindUiRole::TextMuted),
-                )
-                .child(WindUiElement::badge_intent("draft", WindUiIntent::Neutral))
-                .child(
-                    WindUiElement::label_signal(draft_summary)
-                        .font_size(12.5)
-                        .fg_role(WindUiRole::TextMuted),
-                ),
-        )
-        .child(
-            WindUiElement::leaf()
-                .width_match()
-                .height(176)
-                .corner(12.0)
-                .bg_role(WindUiRole::SurfaceAlt)
-                .widget(WindUiCandidatePreview {
-                    frame,
-                    cache: RefCell::new(None),
-                })
-                .reactive(),
-        )
-}
-
 #[derive(Clone, Copy)]
 struct PluginCatalogEntry {
     id: &'static str,
@@ -847,6 +739,71 @@ impl PluginManagerSnapshot {
     }
 }
 
+/// A row shown by the plugin manager. The reference catalog supplies stable
+/// human-facing grouping, while Control remains authoritative for package
+/// identity, metadata, availability, and lifecycle state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PluginCatalogRow {
+    id: String,
+    title: String,
+    summary: String,
+    category: String,
+    package: Option<ControlPackage>,
+    loaded: bool,
+}
+
+fn is_reference_plugin(id: &str) -> Option<&'static PluginCatalogEntry> {
+    FCITX5_PLUGIN_CATALOG.iter().find(|plugin| plugin.id == id)
+}
+
+fn is_plugin_package(package: &ControlPackage) -> bool {
+    package.package_type == "addon"
+        || (package.package_type == "unknown" && package.installed_version.is_some())
+}
+
+fn plugin_catalog_rows(snapshot: &PluginManagerSnapshot) -> Vec<PluginCatalogRow> {
+    let mut rows = Vec::with_capacity(FCITX5_PLUGIN_CATALOG.len() + snapshot.packages.len());
+    for reference in FCITX5_PLUGIN_CATALOG {
+        let package = snapshot
+            .package(reference.id)
+            .filter(|package| is_plugin_package(package))
+            .cloned();
+        let (title, summary) = package
+            .as_ref()
+            .map(|package| (package.title.clone(), package.summary.clone()))
+            .unwrap_or_else(|| (reference.id.to_owned(), reference.summary.to_owned()));
+        rows.push(PluginCatalogRow {
+            id: reference.id.to_owned(),
+            title,
+            summary,
+            category: reference.category.to_owned(),
+            package,
+            loaded: snapshot.loaded,
+        });
+    }
+
+    let mut extra = snapshot
+        .packages
+        .iter()
+        .filter(|package| {
+            package.package_type != "inputmethod-data"
+                && is_plugin_package(package)
+                && is_reference_plugin(&package.id).is_none()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    extra.sort_by(|left, right| left.id.cmp(&right.id));
+    rows.extend(extra.into_iter().map(|package| PluginCatalogRow {
+        id: package.id.clone(),
+        title: package.title.clone(),
+        summary: package.summary.clone(),
+        category: "扩展".to_owned(),
+        package: Some(package),
+        loaded: snapshot.loaded,
+    }));
+    rows
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PluginOperation {
     List,
@@ -856,6 +813,14 @@ enum PluginOperation {
     SetState { id: String, enabled: bool },
     Remove(String),
     Repair,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PluginAction {
+    Install,
+    Update,
+    Toggle,
+    Remove,
 }
 
 impl PluginOperation {
@@ -879,16 +844,15 @@ struct PluginResponse {
     result: Result<PluginManagerSnapshot, String>,
 }
 
-fn plugin_catalog_entry(id: &str) -> Option<&'static PluginCatalogEntry> {
-    FCITX5_PLUGIN_CATALOG.iter().find(|plugin| plugin.id == id)
+fn valid_package_id(id: &str) -> bool {
+    PackageId::parse(id).is_ok()
 }
 
 fn plugin_control_arguments(operation: &PluginOperation) -> Result<Vec<OsString>, String> {
     let package_id = |id: &str| {
-        plugin_catalog_entry(id)
-            .filter(|plugin| plugin.windows_package)
-            .map(|plugin| OsString::from(plugin.id))
-            .ok_or_else(|| format!("不受支持的 Windows 插件包：{id}"))
+        valid_package_id(id)
+            .then(|| OsString::from(id))
+            .ok_or_else(|| format!("插件包 ID 无效：{id}"))
     };
     Ok(match operation {
         PluginOperation::List => vec![OsString::from("--packages-list")],
@@ -911,6 +875,39 @@ fn plugin_control_arguments(operation: &PluginOperation) -> Result<Vec<OsString>
     })
 }
 
+fn plugin_operation_for(
+    snapshot: &PluginManagerSnapshot,
+    id: &str,
+    action: PluginAction,
+) -> Option<PluginOperation> {
+    let package = snapshot.package(id)?;
+    if !is_plugin_package(package) {
+        return None;
+    }
+    match action {
+        PluginAction::Install => (snapshot.repository_available
+            && package.available_version.is_some()
+            && package.installed_version.is_none()
+            && !matches!(
+                package.state.as_deref(),
+                Some("trust-failed" | "incompatible" | "pending-restart")
+            ))
+        .then(|| PluginOperation::Install(id.to_owned())),
+        PluginAction::Update => (package.update_available
+            && package_allows_installed_action(package))
+        .then(|| PluginOperation::Update(id.to_owned())),
+        PluginAction::Toggle => {
+            package_allows_installed_action(package).then(|| PluginOperation::SetState {
+                id: id.to_owned(),
+                enabled: package.state.as_deref() == Some("disabled"),
+            })
+        }
+        PluginAction::Remove => {
+            package_allows_installed_action(package).then(|| PluginOperation::Remove(id.to_owned()))
+        }
+    }
+}
+
 fn parse_control_package_list(output: &str) -> Result<PluginManagerSnapshot, String> {
     if output.len() > CONTROL_MAX_OUTPUT_BYTES {
         return Err("Control 返回的插件目录超过大小限制".to_owned());
@@ -925,12 +922,7 @@ fn parse_control_package_list(output: &str) -> Result<PluginManagerSnapshot, Str
         .as_ref()
         .is_some_and(|error| error.len() > 64)
         || parsed.packages.iter().any(|package| {
-            package.id.is_empty()
-                || package.id.len() > 128
-                || !package
-                    .id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            PackageId::parse(&package.id).is_err()
                 || package.title.is_empty()
                 || package.title.len() > 256
                 || package.summary.len() > 4096
@@ -1221,16 +1213,12 @@ fn spawn_plugin_operation(sender: WindUiSender<PluginResponse>, operation: Plugi
     });
 }
 
-fn plugin_status(snapshot: &PluginManagerSnapshot, plugin: PluginCatalogEntry) -> String {
-    if !snapshot.loaded {
+fn plugin_status(row: &PluginCatalogRow) -> String {
+    if !row.loaded {
         return "正在读取".to_owned();
     }
-    let Some(package) = snapshot.package(plugin.id) else {
-        return if plugin.windows_package {
-            "当前仓库无包".to_owned()
-        } else {
-            "暂无 Windows 包".to_owned()
-        };
+    let Some(package) = row.package.as_ref() else {
+        return "当前无已验证 Windows 包".to_owned();
     };
     if package.update_available {
         return "可更新".to_owned();
@@ -1256,15 +1244,24 @@ fn package_allows_installed_action(package: &ControlPackage) -> bool {
 }
 
 fn windui_plugin_row(
-    index: usize,
-    plugin: PluginCatalogEntry,
-    selected: WindUiSignal<usize>,
+    row: PluginCatalogRow,
+    selected: WindUiSignal<String>,
     snapshot: WindUiSignal<PluginManagerSnapshot>,
 ) -> WindUiElement {
-    let status = snapshot.map(move |state| plugin_status(state, plugin));
+    let status = plugin_status(&row);
+    let row_id = row.id.clone();
+    let title = row.title.clone();
+    let summary = format!("{} · {}", row.id, row.summary);
+    let category = row.category.clone();
+    let select_id = row_id.clone();
     WindUiElement::row()
         .clickable()
-        .on_click(move |_| selected.set(index))
+        .on_click(move |_| {
+            selected.set(select_id.clone());
+            // Re-evaluate the detail signals immediately while keeping the
+            // selected identity stable across dynamic list refreshes.
+            snapshot.set(snapshot.get());
+        })
         .width_match()
         .height(58)
         .cross(WindUiAlign::Center)
@@ -1275,57 +1272,44 @@ fn windui_plugin_row(
             WindUiElement::col()
                 .weight(1.0)
                 .spacing(2)
+                .child(WindUiElement::label(title).font_size(13.5).font_weight(600))
                 .child(
-                    WindUiElement::label(plugin.id)
-                        .font_size(13.5)
-                        .font_weight(600),
-                )
-                .child(
-                    WindUiElement::label(plugin.summary)
+                    WindUiElement::label(summary)
                         .font_size(12.0)
                         .fg_role(WindUiRole::TextMuted),
                 ),
         )
         .child(
-            WindUiElement::label(plugin.category)
+            WindUiElement::label(category)
                 .font_size(12.0)
                 .fg_role(WindUiRole::TextMuted)
                 .width(54),
         )
-        .child(WindUiElement::badge_intent(
-            status,
-            if plugin.windows_package {
-                WindUiIntent::Primary
-            } else {
-                WindUiIntent::Neutral
-            },
-        ))
+        .child(WindUiElement::badge_intent(status, WindUiIntent::Neutral))
 }
 
 fn windui_plugin_action(
     label: &'static str,
     operation: impl Fn(&PluginManagerSnapshot, &str) -> Option<PluginOperation> + Copy + 'static,
-    selected: WindUiSignal<usize>,
+    selected: WindUiSignal<String>,
     snapshot: WindUiSignal<PluginManagerSnapshot>,
     busy: WindUiSignal<bool>,
     status: WindUiSignal<String>,
     sender: WindUiSender<PluginResponse>,
 ) -> WindUiElement {
-    let enabled_operation = move || {
-        let plugin = FCITX5_PLUGIN_CATALOG[selected.get()];
-        !busy.get() && operation(&snapshot.get(), plugin.id).is_some()
-    };
+    let enabled_operation =
+        move || !busy.get() && operation(&snapshot.get(), &selected.get()).is_some();
     WindUiElement::button(label)
         .small()
         .outline()
         .enabled_when(enabled_operation)
         .on_click(move |_| {
-            let plugin = FCITX5_PLUGIN_CATALOG[selected.get()];
-            let Some(operation) = operation(&snapshot.get(), plugin.id) else {
+            let selected_id = selected.get();
+            let Some(operation) = operation(&snapshot.get(), &selected_id) else {
                 return;
             };
             busy.set(true);
-            status.set(format!("正在{} {}", operation.label(), plugin.id));
+            status.set(format!("正在{} {}", operation.label(), selected_id));
             spawn_plugin_operation(sender.clone(), operation);
         })
 }
@@ -1336,7 +1320,8 @@ fn windui_plugins_page(
     operation_status: WindUiSignal<String>,
     sender: WindUiSender<PluginResponse>,
 ) -> WindUiElement {
-    let selected = windui_signal(0usize);
+    let selected = windui_signal("fcitx5-chinese-addons".to_owned());
+    let rows = snapshot.map(plugin_catalog_rows);
     let repository = snapshot.map(|state| {
         if !state.loaded {
             "官方仓库 · 正在读取".to_owned()
@@ -1353,18 +1338,35 @@ fn windui_plugins_page(
             )
         }
     });
-    let detail = selected.map(|index| {
-        let plugin = FCITX5_PLUGIN_CATALOG[*index];
-        format!("{} · {}", plugin.id, plugin.category)
+    let detail = snapshot.map(move |state| {
+        let id = selected.get();
+        let category = is_reference_plugin(&id)
+            .map(|plugin| plugin.category)
+            .unwrap_or("扩展");
+        state
+            .package(&id)
+            .map(|package| {
+                format!(
+                    "{} · {} · {}",
+                    package.title, category, package.package_type
+                )
+            })
+            .unwrap_or_else(|| format!("{} · {}", id, category))
     });
-    let summary = selected.map(|index| {
-        let plugin = FCITX5_PLUGIN_CATALOG[*index];
-        plugin.summary.to_owned()
+    let summary = snapshot.map(move |state| {
+        let id = selected.get();
+        state
+            .package(&id)
+            .map(|package| package.summary.clone())
+            .or_else(|| is_reference_plugin(&id).map(|plugin| plugin.summary.to_owned()))
+            .unwrap_or_else(|| "由官方 Control 目录提供元数据".to_owned())
     });
-    let mut list = WindUiElement::col().width_match().spacing(5);
-    for (index, plugin) in FCITX5_PLUGIN_CATALOG.iter().copied().enumerate() {
-        list = list.child(windui_plugin_row(index, plugin, selected, snapshot));
-    }
+    let list = WindUiElement::list_signal(
+        rows,
+        |row| row.id.clone(),
+        move |row| windui_plugin_row(row, selected, snapshot),
+    )
+    .width_match();
     let refresh_sender = sender.clone();
     let install_sender = sender.clone();
     let update_sender = sender.clone();
@@ -1373,17 +1375,7 @@ fn windui_plugins_page(
     let actions = vec![
         windui_plugin_action(
             "安装",
-            |state, id| {
-                let package = state.package(id)?;
-                (state.repository_available
-                    && package.available_version.is_some()
-                    && package.installed_version.is_none()
-                    && !matches!(
-                        package.state.as_deref(),
-                        Some("trust-failed" | "incompatible" | "pending-restart")
-                    ))
-                .then(|| PluginOperation::Install(id.to_owned()))
-            },
+            |state, id| plugin_operation_for(state, id, PluginAction::Install),
             selected,
             snapshot,
             busy,
@@ -1392,13 +1384,7 @@ fn windui_plugins_page(
         ),
         windui_plugin_action(
             "更新",
-            |state, id| {
-                let package = state.package(id)?;
-                (state.repository_available
-                    && package.update_available
-                    && package_allows_installed_action(package))
-                .then(|| PluginOperation::Update(id.to_owned()))
-            },
+            |state, id| plugin_operation_for(state, id, PluginAction::Update),
             selected,
             snapshot,
             busy,
@@ -1407,13 +1393,7 @@ fn windui_plugins_page(
         ),
         windui_plugin_action(
             "启用/禁用",
-            |state, id| {
-                let package = state.package(id)?;
-                package_allows_installed_action(package).then(|| PluginOperation::SetState {
-                    id: id.to_owned(),
-                    enabled: package.state.as_deref() == Some("disabled"),
-                })
-            },
+            |state, id| plugin_operation_for(state, id, PluginAction::Toggle),
             selected,
             snapshot,
             busy,
@@ -1422,11 +1402,7 @@ fn windui_plugins_page(
         ),
         windui_plugin_action(
             "卸载",
-            |state, id| {
-                let package = state.package(id)?;
-                package_allows_installed_action(package)
-                    .then(|| PluginOperation::Remove(id.to_owned()))
-            },
+            |state, id| plugin_operation_for(state, id, PluginAction::Remove),
             selected,
             snapshot,
             busy,
@@ -1448,9 +1424,11 @@ fn windui_plugins_page(
             .fill()
             .spacing(8)
             .child(
-                WindUiElement::label(format!("插件目录 · {} 项", FCITX5_PLUGIN_CATALOG.len()))
-                    .font_size(15.0)
-                    .font_weight(700),
+                WindUiElement::label_signal(
+                    rows.map(|rows| format!("插件目录 · {} 项", rows.len())),
+                )
+                .font_size(15.0)
+                .font_weight(700),
             )
             .child(WindUiElement::scroll().weight(1.0).child(list)),
     )
@@ -1481,7 +1459,7 @@ fn windui_plugins_page(
             .child(WindUiElement::flex_spacer())
             .child(
                 WindUiElement::label(format!(
-                    "固定清单：fcitx5-plugins@{}\n无签名 Windows 包的条目不会启用操作。",
+                    "官方参考：fcitx5-plugins@{}\n操作权限与可用版本完全来自已验证的 Control 目录。",
                     FCITX5_PLUGINS_REFERENCE_COMMIT
                 ))
                 .font_size(11.5)
@@ -2329,16 +2307,6 @@ fn windui_config_core_candidate_layout_controls(
         candidate_layout_mode(&adapter.preview()).unwrap_or(CandidateLayoutMode::Automatic)
     });
     let page_size = adapter.map(|adapter| adapter.preview().candidate().page_size());
-    let draft_summary = adapter.map(|adapter| {
-        let draft = PreviewRenderContext::from_draft(adapter.preview(), 150);
-        format!(
-            "Draft · {} · {:.0}px · {}",
-            draft.font_family(),
-            draft.effective_font_px(),
-            draft.draft.candidate().preedit_mode(),
-        )
-    });
-
     let mut modes = WindUiElement::row().spacing(4);
     for layout_mode in [
         CandidateLayoutMode::Automatic,
@@ -2432,7 +2400,6 @@ fn windui_config_core_candidate_layout_controls(
                     vertical_text_columns,
                 )),
         )
-        .child(windui_candidate_preview_panel(adapter, draft_summary))
         .child(
             WindUiElement::row()
                 .spacing(8)
@@ -6946,6 +6913,30 @@ mod tests {
         )
     }
 
+    fn package_json_with(
+        id: &str,
+        title: &str,
+        summary: &str,
+        package_type: &str,
+        available: Option<&str>,
+        installed: Option<&str>,
+        state: Option<&str>,
+        update_available: bool,
+        repository_available: bool,
+    ) -> String {
+        let optional = |value: Option<&str>| {
+            value
+                .map(|value| format!(r#""{value}""#))
+                .unwrap_or_else(|| "null".to_owned())
+        };
+        format!(
+            r#"{{"format_version":1,"repository_available":{repository_available},"repository_error":null,"packages":[{{"id":"{id}","title":"{title}","summary":"{summary}","type":"{package_type}","available_version":{},"installed_version":{},"state":{},"update_available":{update_available}}}]}}"#,
+            optional(available),
+            optional(installed),
+            optional(state),
+        )
+    }
+
     #[test]
     fn pinned_plugin_catalog_is_complete_and_unique() {
         assert_eq!(FCITX5_PLUGIN_CATALOG.len(), 21);
@@ -6967,7 +6958,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_control_arguments_are_fixed_and_catalog_bounded() {
+    fn plugin_control_arguments_validate_ids_without_a_catalog_whitelist() {
         assert_eq!(
             plugin_control_arguments(&PluginOperation::SetState {
                 id: "fcitx5-rime".to_owned(),
@@ -6982,8 +6973,16 @@ mod tests {
             "fcitx5-rime --packages-repair".to_owned()
         ))
         .is_err());
+        assert_eq!(
+            plugin_control_arguments(&PluginOperation::Install("fcitx5-mozc".to_owned()))
+                .expect("valid package IDs are not restricted to the reference catalog"),
+            ["--packages-install", "fcitx5-mozc"]
+                .map(OsString::from)
+                .to_vec()
+        );
         assert!(
-            plugin_control_arguments(&PluginOperation::Install("fcitx5-mozc".to_owned())).is_err()
+            plugin_control_arguments(&PluginOperation::Install("vendor.addon_1".to_owned()))
+                .is_ok()
         );
     }
 
@@ -7002,6 +7001,152 @@ mod tests {
         ))
         .is_err());
         assert!(parse_control_package_list(&"x".repeat(CONTROL_MAX_OUTPUT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn plugin_operation_matrix_keeps_state_actions_available_offline() {
+        let available = parse_control_package_list(&package_json_with(
+            "community-addon",
+            "Community",
+            "Community addon",
+            "addon",
+            Some("1.2.3"),
+            None,
+            None,
+            false,
+            true,
+        ))
+        .expect("available package");
+        assert_eq!(
+            plugin_operation_for(&available, "community-addon", PluginAction::Install),
+            Some(PluginOperation::Install("community-addon".to_owned()))
+        );
+        assert_eq!(
+            plugin_operation_for(&available, "community-addon", PluginAction::Update),
+            None
+        );
+
+        let installed = parse_control_package_list(&package_json_with(
+            "community-addon",
+            "Community",
+            "Community addon",
+            "addon",
+            Some("2.0.0"),
+            Some("1.0.0"),
+            Some("enabled"),
+            true,
+            false,
+        ))
+        .expect("installed package");
+        assert_eq!(
+            plugin_operation_for(&installed, "community-addon", PluginAction::Update),
+            Some(PluginOperation::Update("community-addon".to_owned()))
+        );
+        assert_eq!(
+            plugin_operation_for(&installed, "community-addon", PluginAction::Toggle),
+            Some(PluginOperation::SetState {
+                id: "community-addon".to_owned(),
+                enabled: false,
+            })
+        );
+        assert_eq!(
+            plugin_operation_for(&installed, "community-addon", PluginAction::Remove),
+            Some(PluginOperation::Remove("community-addon".to_owned()))
+        );
+
+        let offline = PluginManagerSnapshot {
+            repository_available: false,
+            ..installed
+        };
+        assert_eq!(
+            plugin_operation_for(&offline, "community-addon", PluginAction::Toggle),
+            Some(PluginOperation::SetState {
+                id: "community-addon".to_owned(),
+                enabled: false,
+            })
+        );
+        assert_eq!(
+            plugin_operation_for(&offline, "community-addon", PluginAction::Remove),
+            Some(PluginOperation::Remove("community-addon".to_owned()))
+        );
+    }
+
+    #[test]
+    fn plugin_catalog_rows_merge_control_metadata_and_dynamic_addons() {
+        let snapshot = parse_control_package_list(
+            r#"{"format_version":1,"repository_available":true,"repository_error":null,"packages":[
+                {"id":"fcitx5-rime","title":"Control Rime","summary":"Control-owned summary","type":"addon","available_version":"2.0.0","installed_version":"1.0.0","state":"enabled","update_available":true},
+                {"id":"community-addon","title":"Community Addon","summary":"Dynamic addon","type":"addon","available_version":"1.0.0","installed_version":null,"state":null,"update_available":false},
+                {"id":"legacy-installed","title":"Legacy Installed","summary":"Installed unknown package","type":"unknown","available_version":null,"installed_version":"0.9.0","state":"enabled","update_available":false},
+                {"id":"core-package","title":"Core","summary":"Not a plugin","type":"core","available_version":null,"installed_version":"1.0.0","state":"bundled","update_available":false},
+                {"id":"theme-package","title":"Theme","summary":"Not an addon","type":"theme","available_version":null,"installed_version":"1.0.0","state":"installed","update_available":false},
+                {"id":"community-addon-data","title":"Data","summary":"Dependency","type":"inputmethod-data","available_version":"1.0.0","installed_version":null,"state":null,"update_available":false}
+            ]}"#,
+        )
+        .expect("valid Control package list");
+        let rows = plugin_catalog_rows(&snapshot);
+        let ids = rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            ids.len(),
+            23,
+            "21 references plus addon and installed unknown"
+        );
+        assert_eq!(ids.iter().filter(|id| **id == "fcitx5-rime").count(), 1);
+        assert!(ids.contains(&"community-addon"));
+        assert!(ids.contains(&"legacy-installed"));
+        assert!(!ids.contains(&"core-package"));
+        assert!(!ids.contains(&"theme-package"));
+        assert!(!ids.contains(&"community-addon-data"));
+
+        let rime = rows
+            .iter()
+            .find(|row| row.id == "fcitx5-rime")
+            .expect("rime row");
+        assert_eq!(rime.title, "Control Rime");
+        assert_eq!(rime.summary, "Control-owned summary");
+        assert!(rime.package.is_some());
+
+        let mozc = rows
+            .iter()
+            .find(|row| row.id == "fcitx5-mozc")
+            .expect("reference row remains visible");
+        assert!(mozc.package.is_none());
+        assert_eq!(
+            plugin_operation_for(&snapshot, "fcitx5-mozc", PluginAction::Install),
+            None,
+            "source-only reference rows never manufacture actions"
+        );
+    }
+
+    #[test]
+    fn reference_id_does_not_make_non_addon_package_actionable() {
+        let snapshot = parse_control_package_list(
+            r#"{"format_version":1,"repository_available":true,"repository_error":null,"packages":[
+                {"id":"fcitx5-mozc","title":"Mozc translation","summary":"Not a plugin","type":"translation","available_version":"2.0.0","installed_version":"1.0.0","state":"installed","update_available":true}
+            ]}"#,
+        )
+        .expect("valid non-addon reference collision");
+
+        let row = plugin_catalog_rows(&snapshot)
+            .into_iter()
+            .find(|row| row.id == "fcitx5-mozc")
+            .expect("reference row remains visible");
+        assert!(
+            row.package.is_none(),
+            "non-addon metadata is not a plugin row"
+        );
+        for action in [
+            PluginAction::Install,
+            PluginAction::Update,
+            PluginAction::Toggle,
+            PluginAction::Remove,
+        ] {
+            assert_eq!(
+                plugin_operation_for(&snapshot, "fcitx5-mozc", action),
+                None,
+                "reference collision must not expose {action:?}"
+            );
+        }
     }
 
     #[test]

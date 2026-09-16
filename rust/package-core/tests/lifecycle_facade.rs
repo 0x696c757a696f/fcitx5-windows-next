@@ -173,6 +173,77 @@ impl PackageTransactionExecutor for RecordingExecutor {
     }
 }
 
+struct MutatingFailingExecutor {
+    activations: usize,
+    rollback_called: bool,
+    fail_after: usize,
+}
+
+impl Default for MutatingFailingExecutor {
+    fn default() -> Self {
+        Self {
+            activations: 0,
+            rollback_called: false,
+            fail_after: 2,
+        }
+    }
+}
+
+impl PackageTransactionExecutor for MutatingFailingExecutor {
+    fn stage(
+        &mut self,
+        _archive_path: &Path,
+        package_root: &Path,
+        transaction_id: &str,
+        _trusted_keys: &[TrustedKey],
+    ) -> Result<PathBuf, PackageFacadeError> {
+        let staged = package_root.join("staging").join(transaction_id);
+        std::fs::create_dir_all(&staged).expect("fixture staged directory should create");
+        Ok(staged)
+    }
+
+    fn activate(
+        &mut self,
+        _staged_root: &Path,
+        package_root: &Path,
+        _trusted_keys: &[TrustedKey],
+    ) -> Result<(), PackageFacadeError> {
+        self.activations += 1;
+        let version = package_root
+            .join("versions")
+            .join("partial-addon")
+            .join(format!("activation-{}", self.activations));
+        std::fs::create_dir_all(&version).expect("fixture version directory should create");
+        std::fs::write(version.join("payload.txt"), b"partial activation")
+            .expect("fixture payload should write");
+        std::fs::write(package_root.join("packages.lock"), b"partial-lock")
+            .expect("fixture lock should write");
+        if self.activations >= self.fail_after {
+            Err(PackageFacadeError::new(
+                "activation_failed",
+                "fixture failed after mutating installed state",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn rollback(
+        &mut self,
+        package_root: &Path,
+        transaction_id: &str,
+    ) -> Result<(), PackageFacadeError> {
+        self.rollback_called = true;
+        std::fs::remove_dir_all(package_root.join("staging").join(transaction_id))
+            .or_else(|error| {
+                (error.kind() == std::io::ErrorKind::NotFound)
+                    .then_some(())
+                    .ok_or(error)
+            })
+            .map_err(|error| PackageFacadeError::new("io_error", error.to_string()))
+    }
+}
+
 fn repository(sequence: u64, expires_at: &str, dependencies: &str, addon_hash: &str) -> String {
     let data_hash = addon_hash;
     let targets = format!(
@@ -278,6 +349,107 @@ fn bad_signature_leaves_previous_verified_cache_untouched() {
     assert_eq!(
         std::fs::read(cache).expect("cache should remain"),
         b"previous verified cache"
+    );
+}
+
+#[test]
+fn transport_failure_leaves_verified_repository_cache_and_transaction_state_untouched() {
+    let fixture = FixtureRoot::new();
+    let facade = fixture.facade();
+    let repository_dir = fixture.data_root().join("repository");
+    std::fs::create_dir_all(&repository_dir).expect("repository cache should create");
+    let index = repository_dir.join("index.json");
+    let signature = repository_dir.join("index.sig.json");
+    let sequence = repository_dir.join("sequence-stable.json");
+    std::fs::write(&index, b"last verified repository").expect("repository cache should write");
+    std::fs::write(&signature, b"last verified signature")
+        .expect("repository signature should write");
+    std::fs::write(
+        &sequence,
+        b"format_version=1\nchannel=stable\nmax_release_sequence=8\n",
+    )
+    .expect("repository sequence should write");
+    let repository_before = std::fs::read(&index).expect("repository cache should read");
+    let signature_before = std::fs::read(&signature).expect("repository signature should read");
+    let sequence_before = std::fs::read(&sequence).expect("repository sequence should read");
+
+    let mut refresh_transport = FixtureTransport::default();
+    let refresh_error = facade
+        .refresh_repository(
+            RepositoryRefreshRequest {
+                index_url: "https://packages.example.invalid/index.json",
+                signature_url: "https://packages.example.invalid/index.sig.json",
+                repository_id: "fcitx5-windows-next",
+                channel: "stable",
+                mirror_id: "official",
+                now_seconds: 1_786_950_000,
+            },
+            &mut refresh_transport,
+        )
+        .expect_err("refresh transport failure must be returned");
+    assert_eq!(refresh_error.code(), "network_error");
+    assert_eq!(refresh_transport.calls, 1);
+    assert_eq!(
+        std::fs::read(&index).expect("repository cache should remain"),
+        repository_before
+    );
+    assert_eq!(
+        std::fs::read(&signature).expect("repository signature should remain"),
+        signature_before
+    );
+    assert_eq!(
+        std::fs::read(&sequence).expect("repository sequence should remain"),
+        sequence_before
+    );
+
+    let package_root = fixture.data_root().join("packages");
+    let transaction = package_root.join("transactions").join("previous.state");
+    let archive_cache = package_root
+        .join("archive-cache")
+        .join("previous-fcpkg.fcpkg");
+    std::fs::create_dir_all(transaction.parent().expect("transaction parent"))
+        .expect("transaction parent should create");
+    std::fs::create_dir_all(archive_cache.parent().expect("archive cache parent"))
+        .expect("archive cache parent should create");
+    std::fs::write(
+        &transaction,
+        b"format_version=1\ntransaction=previous\nstate=committed\n",
+    )
+    .expect("previous transaction should write");
+    std::fs::write(&archive_cache, b"last verified archive")
+        .expect("previous archive cache should write");
+    let transaction_before = std::fs::read(&transaction).expect("transaction should read");
+    let archive_before = std::fs::read(&archive_cache).expect("archive cache should read");
+    let request = PackageInstallRequest {
+        requested_ids: &["fcitx5-rime"],
+        transaction_id: "download-failure",
+    };
+    let mut download_transport = FixtureTransport::default();
+    let mut executor = RecordingExecutor::default();
+    let download_error = facade
+        .install_or_update_from_repository(
+            &repository_index(),
+            request,
+            &mut download_transport,
+            &mut executor,
+        )
+        .expect_err("download transport failure must be returned");
+    assert_eq!(download_error.code(), "network_error");
+    assert_eq!(download_transport.calls, 1);
+    assert_eq!(
+        std::fs::read(&transaction).expect("previous transaction should remain"),
+        transaction_before
+    );
+    assert_eq!(
+        std::fs::read(&archive_cache).expect("previous archive cache should remain"),
+        archive_before
+    );
+    assert!(
+        !package_root
+            .join("transactions")
+            .join("download-failure.state")
+            .exists(),
+        "failed download must not leave its transaction journal"
     );
 }
 
@@ -408,6 +580,57 @@ fn successful_install_reports_exact_dependency_plan() {
     assert_eq!(result.plan().entries().len(), 2);
     assert_eq!(executor.stages, 2);
     assert_eq!(executor.activations, 2);
+}
+
+#[test]
+fn partial_multi_package_activation_restores_filesystem_and_lockfile() {
+    let fixture = FixtureRoot::new();
+    let facade = fixture.facade();
+    let package_root = fixture.data_root().join("packages");
+    let old_payload = package_root.join("versions/old-addon/1.0.0/payload.txt");
+    std::fs::create_dir_all(old_payload.parent().expect("old payload parent"))
+        .expect("old payload parent should create");
+    std::fs::write(&old_payload, b"known-good").expect("old payload should write");
+    let old_lock = package_root.join("packages.lock");
+    std::fs::write(&old_lock, b"known-good-lock").expect("old lock should write");
+
+    let request = PackageInstallRequest {
+        requested_ids: &["fcitx5-rime"],
+        transaction_id: "transactional-install",
+    };
+    let archive = vec![0_u8; 12];
+    let mut transport = FixtureTransport::with([archive.clone(), archive]);
+    let mut executor = MutatingFailingExecutor::default();
+    let error = facade
+        .install_or_update_from_repository(
+            &repository_index(),
+            request,
+            &mut transport,
+            &mut executor,
+        )
+        .expect_err("a later package failure must fail the complete transaction");
+
+    assert_eq!(error.code(), "activation_failed");
+    assert!(executor.rollback_called);
+    assert_eq!(
+        std::fs::read(&old_payload).expect("old payload should be restored"),
+        b"known-good"
+    );
+    assert_eq!(
+        std::fs::read(&old_lock).expect("old lock should be restored"),
+        b"known-good-lock"
+    );
+    assert!(
+        !package_root.join("versions/partial-addon").exists(),
+        "partial activation must not survive rollback"
+    );
+    assert!(!package_root
+        .join("transactions/transactional-install.state")
+        .exists());
+    assert!(!package_root
+        .join("transactions/transactional-install.backup")
+        .exists());
+    assert!(!package_root.join("staging/transactional-install").exists());
 }
 
 #[test]

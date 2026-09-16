@@ -23,9 +23,22 @@ $legacyArgs = @(
 )
 
 $results = @()
+$targetRoot = $env:CARGO_TARGET_DIR
+if ([string]::IsNullOrWhiteSpace($targetRoot)) {
+  $targetRoot = Join-Path $repo 'target'
+} elseif (-not [System.IO.Path]::IsPathRooted($targetRoot)) {
+  $targetRoot = Join-Path $repo $targetRoot
+}
+$configExecutable = Join-Path $targetRoot "$CargoTarget\debug\fcitx5-config.exe"
+
+& $CargoExecutable build --locked --manifest-path (Join-Path $repo 'Cargo.toml') `
+  -p fcitx5-config-poc --bin fcitx5-config --target $CargoTarget
+if (-not (Test-Path -LiteralPath $configExecutable -PathType Leaf)) {
+  throw "Rust Config legacy CLI executable is missing after build: $configExecutable"
+}
+
 foreach ($legacyArg in $legacyArgs) {
-  $output = & $CargoExecutable run --locked --manifest-path (Join-Path $repo 'Cargo.toml') `
-    -p fcitx5-config-poc --bin fcitx5-config --target $CargoTarget -- $legacyArg
+  $output = & $configExecutable $legacyArg
   $joined = $output -join "`n"
   if ($joined -notmatch '"legacy_config_cli_compat":true') {
     throw "Rust Config legacy CLI output for $legacyArg did not report compatibility."

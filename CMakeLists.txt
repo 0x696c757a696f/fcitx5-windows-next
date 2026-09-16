@@ -598,9 +598,12 @@ set(FCITX_RUST_CONFIG_SHIPPING_EXE
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-config.exe")
 set(FCITX_CONFIG_APP_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
 set(FCITX_CONFIG_SHIPPING_EXE "${FCITX_CONFIG_APP_OUTPUT_DIR}/fcitx5-config.exe")
+set(FCITX_CONFIG_RUST_LINEAGE_SOURCE_EXE
+    "${FCITX_CONFIG_APP_OUTPUT_DIR}/fcitx5-config-rust-lineage-source.exe")
 add_custom_target(
   fcitx5_config_shipping
   BYPRODUCTS "${FCITX_CONFIG_SHIPPING_EXE}"
+              "${FCITX_CONFIG_RUST_LINEAGE_SOURCE_EXE}"
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
@@ -612,6 +615,10 @@ add_custom_target(
   COMMAND
     "${CMAKE_COMMAND}" -E copy_if_different
     "${FCITX_RUST_CONFIG_SHIPPING_EXE}"
+    "${FCITX_CONFIG_RUST_LINEAGE_SOURCE_EXE}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different
+    "${FCITX_CONFIG_RUST_LINEAGE_SOURCE_EXE}"
     "${FCITX_CONFIG_SHIPPING_EXE}"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/locales"
@@ -1038,6 +1045,7 @@ if(BUILD_TESTING)
       -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-shipping-lineage.ps1"
       -CargoTarget "${FCITX_RUST_TARGET}" -CargoProfile
       "$<IF:$<CONFIG:Debug>,dev,release>"
+      -RustShippingSourceExe "${FCITX_CONFIG_RUST_LINEAGE_SOURCE_EXE}"
       -ShippingConfigExe "${FCITX_CONFIG_SHIPPING_EXE}" -OutputDirectory
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage" -Report
       "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-lineage.json")
@@ -1355,7 +1363,11 @@ if(BUILD_TESTING)
   set_tests_properties(candidate-ui-locale-contract PROPERTIES TIMEOUT 5)
   add_test(NAME candidate-ui-ux-contract
            COMMAND "${FCITX_UI_EXE}" --candidate-ux-self-test --safe-mode)
-  set_tests_properties(candidate-ui-ux-contract PROPERTIES TIMEOUT 5)
+  # The matrix opens and tears down every supported layout at three DPI
+  # scales. Keep the test bounded, but allow a low-resource host to finish
+  # its real Win32/DWrite lifecycle without turning a passing contract into a
+  # timing failure.
+  set_tests_properties(candidate-ui-ux-contract PROPERTIES TIMEOUT 60)
   add_test(NAME candidate-ui-live-config-reflow
            COMMAND "${FCITX_UI_EXE}" --self-test --reload-test)
 

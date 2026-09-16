@@ -371,6 +371,8 @@ pub fn frame_update(
         label_font_size: config.font_size_dip * config.label_font_scale * scale,
         comment_font_size: config.font_size_dip * config.annotation_font_scale * scale,
         dpi_scale: scale,
+        max_width: config.max_width_dip * scale,
+        window_padding_x: config.padding_x_dip * scale,
     };
     let Some((items, preedit_panel_size, _scroll_label_column)) = measure_visual_items(
         state.measure,

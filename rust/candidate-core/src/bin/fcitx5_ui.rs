@@ -911,7 +911,7 @@ impl Host {
             item_padding_y: vc.item_padding_y_dip * scale,
             preedit_height,
             max_width: vc.max_width_dip * scale,
-            max_height: 0.0,
+            max_height: (client.bottom - client.top).max(0) as f32,
             padding_x: vc.padding_x_dip * scale,
             padding_y: vc.padding_y_dip * scale,
             row_gap: vc.row_gap_dip * scale,
@@ -931,6 +931,7 @@ impl Host {
                 FrameWriting::VerticalLr => 2,
                 FrameWriting::Horizontal => 0,
             },
+            scroll_override_px: self.scroll.override_px(),
         };
         let built: &[Fcitx5CandidateVisualBuildOutput] = self.arena.built_outputs();
         let count = if self.visible_indices.is_empty() {
@@ -956,6 +957,8 @@ impl Host {
             candidates_in.push(Fcitx5CandidateRenderCandidateInput {
                 label: output.label.ptr,
                 label_len: output.label.len,
+                reserved_label: output.reserved_label.ptr,
+                reserved_label_len: output.reserved_label.len,
                 text: output.text.ptr,
                 text_len: output.text.len,
                 comment: output.comment.ptr,
@@ -1679,6 +1682,14 @@ fn window_width(host: &Host) -> i32 {
     rect.right - rect.left
 }
 
+fn update_and_paint(host: &mut Host, response: KeyResponse) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        host.update(&response);
+        host.paint_once()
+    }))
+    .unwrap_or(false)
+}
+
 fn run_candidate_ux_self_test(host: &mut Host) -> bool {
     host.visual_config.scroll_mode = false;
     host.visual_config.orientation = FrameOrientation::Automatic;
@@ -1815,6 +1826,341 @@ fn run_candidate_ux_self_test(host: &mut Host) -> bool {
         );
         return false;
     }
+
+    struct RuntimeCase {
+        name: &'static str,
+        orientation: FrameOrientation,
+        overflow: FrameOverflow,
+        writing: FrameWriting,
+        scroll_mode: bool,
+        page: u32,
+        page_size: u32,
+        candidate_bulk: bool,
+        selected: usize,
+        max_width_dip: f32,
+        locale: &'static str,
+        candidates: Vec<CandidateRecord>,
+    }
+
+    let cases = [
+        RuntimeCase {
+            name: "automatic-cjk",
+            orientation: FrameOrientation::Automatic,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            page: 0,
+            page_size: 3,
+            candidate_bulk: false,
+            selected: 1,
+            max_width_dip: 720.0,
+            locale: "zh-CN",
+            candidates: vec![
+                record(1, "1", "你", ""),
+                record(2, "2", "好", ""),
+                record(3, "3", "中文", ""),
+            ],
+        },
+        RuntimeCase {
+            name: "paging-horizontal",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            page: 0,
+            page_size: 3,
+            candidate_bulk: false,
+            selected: 1,
+            max_width_dip: 720.0,
+            locale: "en-US",
+            candidates: vec![
+                record(1, "1", "alpha", ""),
+                record(2, "2", "beta", ""),
+                record(3, "3", "gamma", ""),
+                record(4, "4", "delta", ""),
+                record(5, "5", "epsilon", ""),
+            ],
+        },
+        RuntimeCase {
+            name: "paging-vertical",
+            orientation: FrameOrientation::Vertical,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            page: 0,
+            page_size: 3,
+            candidate_bulk: false,
+            selected: 1,
+            max_width_dip: 720.0,
+            locale: "en-US",
+            candidates: vec![
+                record(1, "1", "alpha", ""),
+                record(2, "2", "beta", ""),
+                record(3, "3", "gamma", ""),
+                record(4, "4", "delta", ""),
+                record(5, "5", "epsilon", ""),
+            ],
+        },
+        RuntimeCase {
+            name: "wrapping",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Wrapping,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            page: 0,
+            page_size: 0,
+            candidate_bulk: false,
+            selected: 2,
+            max_width_dip: 320.0,
+            locale: "en-US",
+            candidates: vec![
+                record(1, "1", "alpha candidate", ""),
+                record(2, "2", "bravo candidate", ""),
+                record(3, "3", "charlie candidate", ""),
+                record(4, "4", "delta candidate", ""),
+            ],
+        },
+        RuntimeCase {
+            name: "scrolling-horizontal",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Scrolling,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: true,
+            page: 1,
+            page_size: 6,
+            candidate_bulk: true,
+            selected: 31,
+            max_width_dip: 420.0,
+            locale: "en-US",
+            candidates: (0..32)
+                .map(|index| {
+                    record(
+                        index as u64 + 1,
+                        &(index + 1).to_string(),
+                        &format!("candidate-{index:02}"),
+                        "",
+                    )
+                })
+                .collect(),
+        },
+        RuntimeCase {
+            name: "scrolling-vertical",
+            orientation: FrameOrientation::Vertical,
+            overflow: FrameOverflow::Scrolling,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: true,
+            page: 1,
+            page_size: 6,
+            candidate_bulk: true,
+            selected: 47,
+            max_width_dip: 420.0,
+            locale: "en-US",
+            candidates: (0..48)
+                .map(|index| {
+                    record(
+                        index as u64 + 1,
+                        &(index + 1).to_string(),
+                        &format!("vertical candidate {index:02}"),
+                        "",
+                    )
+                })
+                .collect(),
+        },
+        RuntimeCase {
+            name: "vertical-rl",
+            orientation: FrameOrientation::Vertical,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::VerticalRl,
+            scroll_mode: false,
+            page: 0,
+            page_size: 4,
+            candidate_bulk: false,
+            selected: 1,
+            max_width_dip: 420.0,
+            locale: "zh-CN",
+            candidates: vec![
+                record(1, "1", "你", ""),
+                record(2, "2", "好", ""),
+                record(3, "3", "中文", ""),
+                record(4, "4", "输入法", ""),
+            ],
+        },
+        RuntimeCase {
+            name: "vertical-lr",
+            orientation: FrameOrientation::Vertical,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::VerticalLr,
+            scroll_mode: false,
+            page: 0,
+            page_size: 4,
+            candidate_bulk: false,
+            selected: 1,
+            max_width_dip: 420.0,
+            locale: "zh-CN",
+            candidates: vec![
+                record(1, "1", "你", ""),
+                record(2, "2", "好", ""),
+                record(3, "3", "中文", ""),
+                record(4, "4", "输入法", ""),
+            ],
+        },
+        RuntimeCase {
+            name: "long-candidate-comment",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            page: 0,
+            page_size: 2,
+            candidate_bulk: false,
+            selected: 0,
+            max_width_dip: 720.0,
+            locale: "en-US",
+            candidates: vec![
+                record(
+                    1,
+                    "1",
+                    "candidate with a deliberately long text value",
+                    "annotation that remains inside the candidate cell",
+                ),
+                record(2, "2", "short", ""),
+            ],
+        },
+        RuntimeCase {
+            name: "thumbs-up-skin-tone",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            page: 0,
+            page_size: 2,
+            candidate_bulk: false,
+            selected: 0,
+            max_width_dip: 720.0,
+            locale: "en-US",
+            candidates: vec![record(1, "1", "👍🏽", ""), record(2, "2", "good", "")],
+        },
+        RuntimeCase {
+            name: "flag",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            page: 0,
+            page_size: 2,
+            candidate_bulk: false,
+            selected: 0,
+            max_width_dip: 720.0,
+            locale: "en-US",
+            candidates: vec![record(1, "1", "🇨🇳", ""), record(2, "2", "flag", "")],
+        },
+        RuntimeCase {
+            name: "zwj-family",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            page: 0,
+            page_size: 2,
+            candidate_bulk: false,
+            selected: 0,
+            max_width_dip: 720.0,
+            locale: "en-US",
+            candidates: vec![record(1, "1", "👨‍👩‍👧‍👦", ""), record(2, "2", "family", "")],
+        },
+    ];
+
+    let saved_visual_config = host.visual_config.clone();
+    for (dpi_index, dpi) in [96_u32, 144, 192].into_iter().enumerate() {
+        for (case_index, case) in cases.iter().enumerate() {
+            host.model.reset();
+            host.presentation.reset();
+            host.scroll.reset();
+            host.visual_config.orientation = case.orientation;
+            host.visual_config.overflow = case.overflow;
+            host.visual_config.writing = case.writing;
+            host.visual_config.scroll_mode = case.scroll_mode;
+            host.visual_config.max_width_dip = case.max_width_dip;
+
+            let mut response = make_ux_response(
+                2_000 + (case_index as u64 * 10) + dpi_index as u64,
+                1,
+                case.locale,
+                case.candidates.clone(),
+                100,
+            );
+            response.candidate_page = case.page;
+            response.candidate_page_size = case.page_size;
+            response.candidate_bulk = case.candidate_bulk;
+            response.selected_candidate = case.selected as u32;
+            response.caret.dpi = dpi;
+
+            if !update_and_paint(host, response) {
+                eprintln!(
+                    "REG-CAND-UX-MATRIX-001: {} at dpi {dpi} failed update/paint or panicked",
+                    case.name
+                );
+                host.visual_config = saved_visual_config;
+                return false;
+            }
+
+            let expected_horizontal = match case.writing {
+                FrameWriting::Horizontal => !matches!(case.orientation, FrameOrientation::Vertical),
+                FrameWriting::VerticalRl | FrameWriting::VerticalLr => false,
+            };
+            let presentation = host.presentation.output();
+            let mut client = Rect::default();
+            // SAFETY: client is a valid writable RECT for the live test window.
+            let client_ok = unsafe { GetClientRect(host.window, &mut client) } != 0;
+            let client_width = (client.right - client.left) as f32;
+            let client_height = (client.bottom - client.top) as f32;
+            let selected_slot = host
+                .visible_indices
+                .iter()
+                .position(|index| *index == case.selected);
+            let geometry_ok = client_ok
+                && client_width.is_finite()
+                && client_height.is_finite()
+                && client_width > 0.0
+                && client_height > 0.0
+                && host.arena.built_outputs().len() == case.candidates.len()
+                && host.item_rects.len() == host.visible_indices.len()
+                && host.item_rects.iter().all(|rect| {
+                    rect.left.is_finite()
+                        && rect.top.is_finite()
+                        && rect.right.is_finite()
+                        && rect.bottom.is_finite()
+                        && rect.right > rect.left
+                        && rect.bottom > rect.top
+                        && (case.overflow == FrameOverflow::Scrolling
+                            || (rect.left >= -1.0
+                                && rect.top >= -1.0
+                                && rect.right <= client_width + 1.0
+                                && rect.bottom <= client_height + 1.0))
+                });
+            let selected_ok = selected_slot.is_some_and(|slot| {
+                let rect = host.item_rects[slot];
+                rect.left >= -1.0
+                    && rect.top >= -1.0
+                    && rect.right <= client_width + 1.0
+                    && rect.bottom <= client_height + 1.0
+            });
+            if presentation.has_selected == 0
+                || presentation.selected != case.selected
+                || host.resolved_horizontal != expected_horizontal
+                || !geometry_ok
+                || !selected_ok
+            {
+                eprintln!(
+                    "REG-CAND-UX-MATRIX-001: {} at dpi {dpi} failed selection/layout geometry",
+                    case.name
+                );
+                host.visual_config = saved_visual_config;
+                return false;
+            }
+        }
+    }
+    host.visual_config = saved_visual_config;
     true
 }
 

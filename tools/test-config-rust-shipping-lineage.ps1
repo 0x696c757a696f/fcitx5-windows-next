@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory = $true)] [string] $CargoTarget,
   [ValidateSet('dev', 'release')] [string] $CargoProfile = 'dev',
   [Parameter(Mandatory = $true)] [string] $OutputDirectory,
+  [string] $RustShippingSourceExe = '',
   [string] $ShippingConfigExe = '',
   [Parameter(Mandatory = $true)] [string] $Report
 )
@@ -59,9 +60,22 @@ $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
   [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
 }
 $profileDirectory = if ($CargoProfile -eq 'dev') { 'debug' } else { 'release' }
-$rustShipping = Join-Path $targetRoot "$CargoTarget\$profileDirectory\fcitx5-config.exe"
+$rustShippingOutput = Join-Path $targetRoot "$CargoTarget\$profileDirectory\fcitx5-config.exe"
+if (-not (Test-Path -LiteralPath $rustShippingOutput -PathType Leaf)) {
+  throw "Rust Config shipping executable was not built: $rustShippingOutput"
+}
+
+# CTest also runs Cargo tests. They can legitimately refresh the shared Cargo
+# target directory after CMake copied the shipping executable. Compare against
+# the immutable snapshot made by the CMake shipping target instead of a path
+# whose contents other tests are allowed to rebuild.
+$rustShipping = if ([string]::IsNullOrWhiteSpace($RustShippingSourceExe)) {
+  $rustShippingOutput
+} else {
+  [IO.Path]::GetFullPath($RustShippingSourceExe)
+}
 if (-not (Test-Path -LiteralPath $rustShipping -PathType Leaf)) {
-  throw "Rust Config shipping executable was not built: $rustShipping"
+  throw "Rust Config shipping lineage snapshot is missing: $rustShipping"
 }
 
 $shippingExe = if ([string]::IsNullOrWhiteSpace($ShippingConfigExe)) {

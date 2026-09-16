@@ -36,15 +36,15 @@ foreach ($root in @($sources, $buildRoot, $stage)) {
 }
 
 $sourcePins = @(
-  @{ Name = 'fcitx5'; Url = 'https://github.com/fcitx/fcitx5.git'; Commit = 'd6552a5b52b4ff75cae3fb6dc949ef379171b2b9' },
-  @{ Name = 'libime'; Url = 'https://github.com/fcitx/libime.git'; Commit = 'ecd23795ff7ea63a55a1b88fc4767946b999e102' },
-  @{ Name = 'fcitx5-chinese-addons'; Url = 'https://github.com/fcitx/fcitx5-chinese-addons.git'; Commit = 'fa65a9b46f805fc491b88c53f6b0159fd6f756af' },
-  @{ Name = 'fcitx5-rime'; Url = 'https://github.com/fcitx/fcitx5-rime.git'; Commit = '00be19a18ea5b5d1748f9fe6f6bad50f42f96781' },
-  @{ Name = 'fcitx5-lua'; Url = 'https://github.com/fcitx/fcitx5-lua.git'; Commit = '9bf8d3dd2c6240d8e3e194d09547acbfa6a81204' },
-  @{ Name = 'fcitx5-unikey'; Url = 'https://github.com/fcitx/fcitx5-unikey.git'; Commit = 'ed9170c35c1a6275d105e03d7f9bc4f674c1469c' },
-  @{ Name = 'librime'; Url = 'https://github.com/rime/librime.git'; Commit = '2479df58cb51480299f94afe53d7b1790ecf0eb1' },
-  @{ Name = 'librime-lua'; Url = 'https://github.com/hchunhui/librime-lua.git'; Commit = 'ad1e4a6c98abf634dd34242a747f9b1d5d069fbe' },
-  @{ Name = 'librime-octagram'; Url = 'https://github.com/lotem/librime-octagram.git'; Commit = '57d18b9f58e5284bd891d559f6bdd16cf60341e9' },
+  @{ Name = 'fcitx5'; Url = 'https://github.com/fcitx/fcitx5.git'; Commit = 'cdd0b9d900770d1ad1229d759213215d5dc23a90' },
+  @{ Name = 'libime'; Url = 'https://github.com/fcitx/libime.git'; Commit = '92bf7144d31d42549d35e5db348dc79100cb2074' },
+  @{ Name = 'fcitx5-chinese-addons'; Url = 'https://github.com/fcitx/fcitx5-chinese-addons.git'; Commit = 'bc84e3acb022f5b6b5bed254b14ba19d05023645' },
+  @{ Name = 'fcitx5-rime'; Url = 'https://github.com/fcitx/fcitx5-rime.git'; Commit = '4e996319edea790495edc2c91893e9af4c4e6d6a' },
+  @{ Name = 'fcitx5-lua'; Url = 'https://github.com/fcitx/fcitx5-lua.git'; Commit = '05db9ee519d448a64ccbe216044e8e0342e8c536' },
+  @{ Name = 'fcitx5-unikey'; Url = 'https://github.com/fcitx/fcitx5-unikey.git'; Commit = '53f82a1e01dc0484f46dc8ed419d586cebd2f114' },
+  @{ Name = 'librime'; Url = 'https://github.com/rime/librime.git'; Commit = '33e78140250125871856cdc5b42ddc6a5fcd3cd4' },
+  @{ Name = 'librime-lua'; Url = 'https://github.com/hchunhui/librime-lua.git'; Commit = '68f9c364a2d25a04c7d4794981d7c796b05ab627' },
+  @{ Name = 'librime-octagram'; Url = 'https://github.com/lotem/librime-octagram.git'; Commit = 'dfcc15115788c828d9dd7b4bff68067d3ce2ffb8' },
   @{ Name = 'librime-proto'; Url = 'https://github.com/lotem/librime-proto.git'; Commit = '657a923cd4c333e681dc943e6894e6f6d42d25b4' },
   @{ Name = 'librime-predict'; Url = 'https://github.com/rime/librime-predict.git'; Commit = '920bd41ebf6f9bf6855d14fbe80212e54e749791' }
 )

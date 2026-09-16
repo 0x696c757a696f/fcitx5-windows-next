@@ -24,11 +24,14 @@ const WINHTTP_ACCESS_TYPE_DEFAULT_PROXY: Dword = 0;
 const WINHTTP_FLAG_SECURE: Dword = 0x0080_0000;
 const WINHTTP_OPTION_REDIRECT_POLICY: Dword = 88;
 const WINHTTP_OPTION_REDIRECT_POLICY_NEVER: Dword = 0;
+const WINHTTP_QUERY_LOCATION: Dword = 33;
 const WINHTTP_QUERY_STATUS_CODE: Dword = 19;
 const WINHTTP_QUERY_FLAG_NUMBER: Dword = 0x2000_0000;
 const MOVEFILE_WRITE_THROUGH: Dword = 0x0000_0008;
 const MAXIMUM_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAXIMUM_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
+const MAXIMUM_REDIRECTS: u8 = 5;
+const MAXIMUM_REDIRECT_LOCATION_BYTES: Dword = 4098;
 
 #[repr(C)]
 struct TokenElevation {
@@ -296,6 +299,108 @@ fn crack_https_url(url: &OsStr) -> Option<(Vec<u16>, InternetPort, Vec<u16>)> {
     Some((host_z, components.port, target))
 }
 
+fn validate_redirect_location(location: Option<&str>) -> Result<OsString, DownloadError> {
+    let Some(location) = location else {
+        return Err(DownloadError::new(
+            "redirect_location_missing",
+            "redirect response has no Location header",
+        ));
+    };
+    if location
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+    {
+        return Err(DownloadError::new(
+            "redirect_http_downgrade",
+            "redirect Location must use HTTPS",
+        ));
+    }
+    if validate_https_repository_url(location).is_err() {
+        return Err(DownloadError::new(
+            "redirect_location_invalid",
+            "redirect Location must be an absolute credential-free HTTPS URL",
+        ));
+    }
+    let target = OsString::from(location);
+    if crack_https_url(&target).is_none() {
+        return Err(DownloadError::new(
+            "redirect_location_invalid",
+            "redirect Location must be an absolute credential-free HTTPS URL",
+        ));
+    }
+    Ok(target)
+}
+
+fn redirect_response(status: Dword, redirects_followed: u8) -> Result<bool, DownloadError> {
+    match status {
+        200 => Ok(false),
+        301 | 302 | 303 | 307 | 308 if redirects_followed < MAXIMUM_REDIRECTS => Ok(true),
+        301 | 302 | 303 | 307 | 308 => Err(DownloadError::new(
+            "redirect_limit_exceeded",
+            "maximum redirect count exceeded",
+        )),
+        _ => Err(DownloadError::new(
+            "network_error",
+            "repository returned a non-200 response",
+        )),
+    }
+}
+
+fn query_location(request: Hinternet) -> Result<OsString, DownloadError> {
+    let mut required = 0;
+    // SAFETY: request owns a live handle; a null buffer is used only to query the required header size, and required is aligned writable storage.
+    unsafe {
+        let _ = WinHttpQueryHeaders(
+            request,
+            WINHTTP_QUERY_LOCATION,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            &mut required,
+            std::ptr::null_mut(),
+        );
+    }
+    if required == 0 {
+        return validate_redirect_location(None);
+    }
+    if required % 2 != 0 || required > MAXIMUM_REDIRECT_LOCATION_BYTES {
+        return Err(DownloadError::new(
+            "redirect_location_invalid",
+            "redirect Location must be an absolute credential-free HTTPS URL",
+        ));
+    }
+    let mut buffer = vec![0_u16; required as usize / 2];
+    let mut length = required;
+    // SAFETY: request owns a live handle; buffer is writable UTF-16 storage sized from WinHTTP's exact byte count, and length is aligned writable storage.
+    let queried = unsafe {
+        WinHttpQueryHeaders(
+            request,
+            WINHTTP_QUERY_LOCATION,
+            std::ptr::null(),
+            buffer.as_mut_ptr().cast::<c_void>(),
+            &mut length,
+            std::ptr::null_mut(),
+        )
+    };
+    if queried == 0 || length == 0 || length % 2 != 0 || length > required {
+        return Err(DownloadError::new(
+            "redirect_location_invalid",
+            "redirect Location must be an absolute credential-free HTTPS URL",
+        ));
+    }
+    let units = length as usize / 2;
+    let end = buffer[..units]
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(units);
+    let location = String::from_utf16(&buffer[..end]).map_err(|_| {
+        DownloadError::new(
+            "redirect_location_invalid",
+            "redirect Location must be an absolute credential-free HTTPS URL",
+        )
+    })?;
+    validate_redirect_location(Some(&location))
+}
+
 fn partial_path(destination: &Path) -> PathBuf {
     let mut value = OsString::from(destination.as_os_str());
     value.push(".download");
@@ -350,7 +455,7 @@ fn download(
         DownloadError::new("invalid_download", "download URL is not valid Unicode")
     })?;
     validate_https_repository_url(url_text).map_err(facade_error)?;
-    let Some((host, port, target)) = crack_https_url(url) else {
+    if crack_https_url(url).is_none() {
         return Err(DownloadError::new(
             "invalid_download",
             "only credential-free HTTPS is allowed",
@@ -369,63 +474,78 @@ fn download(
             0,
         )
     })?;
-    // SAFETY: session owns a live WinHTTP session; host is NUL-terminated and remains live through the call.
-    let connection =
-        InternetHandle::new(unsafe { WinHttpConnect(session.get(), host.as_ptr(), port, 0) })?;
-    // SAFETY: connection owns a live handle; verb and target are NUL-terminated live buffers; null optional strings are permitted.
-    let request = InternetHandle::new(unsafe {
-        WinHttpOpenRequest(
-            connection.get(),
-            get.as_ptr(),
-            target.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            WINHTTP_FLAG_SECURE,
-        )
-    })?;
-    let mut redirect_policy: Dword = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
-    // SAFETY: request owns a live handle and redirect_policy is aligned writable storage for its exact byte size; null optional buffers are permitted.
-    let sent = unsafe {
-        WinHttpSetOption(
-            request.get(),
-            WINHTTP_OPTION_REDIRECT_POLICY,
-            (&mut redirect_policy as *mut Dword).cast::<c_void>(),
-            std::mem::size_of::<Dword>() as Dword,
-        ) != 0
-            && WinHttpSendRequest(
-                request.get(),
+    let mut current_url = url.to_os_string();
+    let mut redirects_followed = 0;
+    let (_connection, request) = loop {
+        let Some((host, port, target)) = crack_https_url(&current_url) else {
+            return Err(DownloadError::new(
+                "redirect_location_invalid",
+                "redirect Location must be an absolute credential-free HTTPS URL",
+            ));
+        };
+        // SAFETY: session owns a live WinHTTP session; host is NUL-terminated and remains live through the call.
+        let connection =
+            InternetHandle::new(unsafe { WinHttpConnect(session.get(), host.as_ptr(), port, 0) })?;
+        // SAFETY: connection owns a live handle; verb and target are NUL-terminated live buffers; null optional strings are permitted.
+        let request = InternetHandle::new(unsafe {
+            WinHttpOpenRequest(
+                connection.get(),
+                get.as_ptr(),
+                target.as_ptr(),
                 std::ptr::null(),
-                0,
-                std::ptr::null_mut(),
-                0,
-                0,
-                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                WINHTTP_FLAG_SECURE,
+            )
+        })?;
+        let mut redirect_policy: Dword = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        // SAFETY: request owns a live handle and redirect_policy is aligned writable storage for its exact byte size; null optional buffers are permitted.
+        let sent = unsafe {
+            WinHttpSetOption(
+                request.get(),
+                WINHTTP_OPTION_REDIRECT_POLICY,
+                (&mut redirect_policy as *mut Dword).cast::<c_void>(),
+                std::mem::size_of::<Dword>() as Dword,
             ) != 0
-            && WinHttpReceiveResponse(request.get(), std::ptr::null_mut()) != 0
+                && WinHttpSendRequest(
+                    request.get(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    0,
+                ) != 0
+                && WinHttpReceiveResponse(request.get(), std::ptr::null_mut()) != 0
+        };
+        if !sent {
+            return Err(DownloadError::new("network_error", "HTTPS request failed"));
+        }
+        let mut status: Dword = 0;
+        let mut status_size = std::mem::size_of::<Dword>() as Dword;
+        // SAFETY: request owns a live handle; status and status_size are aligned writable storage with the exact requested header buffer size.
+        let queried = unsafe {
+            WinHttpQueryHeaders(
+                request.get(),
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                std::ptr::null(),
+                (&mut status as *mut Dword).cast::<c_void>(),
+                &mut status_size,
+                std::ptr::null_mut(),
+            )
+        };
+        if queried == 0 {
+            return Err(DownloadError::new(
+                "network_error",
+                "repository returned a non-200 response",
+            ));
+        }
+        if !redirect_response(status, redirects_followed)? {
+            break (connection, request);
+        }
+        current_url = query_location(request.get())?;
+        redirects_followed += 1;
     };
-    if !sent {
-        return Err(DownloadError::new("network_error", "HTTPS request failed"));
-    }
-    let mut status: Dword = 0;
-    let mut status_size = std::mem::size_of::<Dword>() as Dword;
-    // SAFETY: request owns a live handle; status and status_size are aligned writable storage with the exact requested header buffer size.
-    let queried = unsafe {
-        WinHttpQueryHeaders(
-            request.get(),
-            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-            std::ptr::null(),
-            (&mut status as *mut Dword).cast::<c_void>(),
-            &mut status_size,
-            std::ptr::null_mut(),
-        )
-    };
-    if queried == 0 || status != 200 {
-        return Err(DownloadError::new(
-            "network_error",
-            "repository returned a non-200 response",
-        ));
-    }
 
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)
@@ -566,6 +686,62 @@ mod tests {
     }
 
     #[test]
+    fn redirect_location_validation_is_network_independent() {
+        let accepted = validate_redirect_location(Some("https://example.invalid/next"))
+            .expect("credential-free HTTPS redirect should be accepted");
+        assert_eq!(accepted, OsString::from("https://example.invalid/next"));
+        assert_eq!(
+            validate_redirect_location(None)
+                .expect_err("missing Location must be rejected")
+                .code,
+            "redirect_location_missing"
+        );
+        assert_eq!(
+            validate_redirect_location(Some("http://example.invalid/next"))
+                .expect_err("HTTP downgrade must be rejected")
+                .code,
+            "redirect_http_downgrade"
+        );
+        for location in [
+            "https://user@example.invalid/next",
+            "https://example.invalid/next#fragment",
+            "https:///next",
+            "/next",
+        ] {
+            assert_eq!(
+                validate_redirect_location(Some(location))
+                    .expect_err("unsafe or malformed Location must be rejected")
+                    .code,
+                "redirect_location_invalid",
+                "unexpected error code for {location}"
+            );
+        }
+    }
+
+    #[test]
+    fn redirect_statuses_accept_only_bounded_redirects_and_final_200() {
+        assert!(!redirect_response(200, MAXIMUM_REDIRECTS).expect("final 200 should be accepted"));
+        for status in [301, 302, 303, 307, 308] {
+            assert!(redirect_response(status, MAXIMUM_REDIRECTS - 1)
+                .expect("supported redirect should be followed"));
+            assert_eq!(
+                redirect_response(status, MAXIMUM_REDIRECTS)
+                    .expect_err("sixth redirect must be rejected")
+                    .code,
+                "redirect_limit_exceeded"
+            );
+        }
+        for status in [300, 304, 305, 306, 309] {
+            assert_eq!(
+                redirect_response(status, 0)
+                    .expect_err("unsupported response status must be rejected")
+                    .code,
+                "network_error"
+            );
+        }
+    }
+
+    #[test]
     fn invalid_usage_and_version_are_stable() {
         assert_eq!(run(&[OsString::from("fcitx5-downloader")]), 1);
         assert_eq!(
@@ -607,7 +783,9 @@ mod tests {
     fn win32_constants_preserve_downloader_contract() {
         assert_eq!(WINHTTP_OPTION_REDIRECT_POLICY, 88);
         assert_eq!(WINHTTP_OPTION_REDIRECT_POLICY_NEVER, 0);
+        assert_eq!(WINHTTP_QUERY_LOCATION, 33);
         assert_eq!(MAXIMUM_MANIFEST_BYTES, 1024 * 1024);
         assert_eq!(MAXIMUM_DOWNLOAD_BYTES, 128 * 1024 * 1024);
+        assert_eq!(MAXIMUM_REDIRECTS, 5);
     }
 }

@@ -358,7 +358,12 @@ impl PackageCoreFacade {
         fs::create_dir_all(&package_root).map_err(|error| {
             PackageFacadeError::new("io_error", format!("package root creation failed: {error}"))
         })?;
+        self.ensure_transaction_paths_available(&transaction_id)?;
         self.write_transaction_state(&transaction_id, TransactionState::Prepared)?;
+        if let Err(error) = self.create_transaction_snapshot(&transaction_id) {
+            self.cleanup_transaction_artifacts(&transaction_id);
+            return Err(error);
+        }
 
         let mut activation_started = false;
         let result = (|| {
@@ -401,16 +406,25 @@ impl PackageCoreFacade {
                 })
             }
             Err(error) => {
-                let rollback = if activation_started {
-                    executor.rollback(&package_root, &transaction_id)
+                let mut rollback_errors = Vec::new();
+                if activation_started {
+                    if let Err(rollback_error) = executor.rollback(&package_root, &transaction_id) {
+                        rollback_errors.push(rollback_error.to_string());
+                    }
+                    if let Err(rollback_error) = self.restore_transaction_snapshot(&transaction_id)
+                    {
+                        rollback_errors.push(rollback_error.to_string());
+                    }
+                }
+                if rollback_errors.is_empty() {
+                    self.cleanup_transaction_artifacts(&transaction_id);
                 } else {
-                    Ok(())
-                };
-                self.cleanup_transaction_artifacts(&transaction_id);
-                if let Err(rollback_error) = rollback {
                     return Err(PackageFacadeError::new(
                         "recovery_required",
-                        format!("{error}; rollback also failed: {rollback_error}"),
+                        format!(
+                            "{error}; rollback also failed: {}",
+                            rollback_errors.join("; ")
+                        ),
                     ));
                 }
                 Err(error)
@@ -725,6 +739,108 @@ impl PackageCoreFacade {
             .join(format!("{transaction_id}.state"))
     }
 
+    fn transaction_snapshot_path(&self, transaction_id: &str) -> PathBuf {
+        self.package_root()
+            .join("transactions")
+            .join(format!("{transaction_id}.backup"))
+    }
+
+    fn ensure_transaction_paths_available(
+        &self,
+        transaction_id: &str,
+    ) -> Result<(), PackageFacadeError> {
+        if self.transaction_state_path(transaction_id).exists()
+            || self.transaction_snapshot_path(transaction_id).exists()
+        {
+            return Err(PackageFacadeError::new(
+                "transaction_exists",
+                "package transaction is already in progress",
+            ));
+        }
+        Ok(())
+    }
+
+    fn create_transaction_snapshot(&self, transaction_id: &str) -> Result<(), PackageFacadeError> {
+        let package_root = self.package_root();
+        let snapshot = self.transaction_snapshot_path(transaction_id);
+        fs::create_dir(&snapshot).map_err(|error| {
+            PackageFacadeError::new(
+                "io_error",
+                format!("transaction snapshot creation failed: {error}"),
+            )
+        })?;
+        let result = (|| {
+            copy_optional_tree(&package_root.join("versions"), &snapshot.join("versions"))?;
+            copy_optional_tree(&package_root.join("manifests"), &snapshot.join("manifests"))?;
+            copy_optional_file(
+                &package_root.join("packages.lock"),
+                &snapshot.join("packages.lock"),
+            )?;
+            Ok::<(), std::io::Error>(())
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_dir_all(&snapshot);
+            return Err(PackageFacadeError::new(
+                "io_error",
+                format!("transaction snapshot failed: {error}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn restore_transaction_snapshot(&self, transaction_id: &str) -> Result<(), PackageFacadeError> {
+        let package_root = self.package_root();
+        let snapshot = self.transaction_snapshot_path(transaction_id);
+        if !snapshot.is_dir() {
+            return Err(PackageFacadeError::new(
+                "recovery_required",
+                "transaction snapshot is missing",
+            ));
+        }
+        remove_path_if_present(&package_root.join("versions")).map_err(|error| {
+            PackageFacadeError::new(
+                "io_error",
+                format!("old package versions removal failed: {error}"),
+            )
+        })?;
+        remove_path_if_present(&package_root.join("manifests")).map_err(|error| {
+            PackageFacadeError::new(
+                "io_error",
+                format!("old package manifests removal failed: {error}"),
+            )
+        })?;
+        remove_path_if_present(&package_root.join("packages.lock")).map_err(|error| {
+            PackageFacadeError::new(
+                "io_error",
+                format!("old package lock removal failed: {error}"),
+            )
+        })?;
+        copy_optional_tree(&snapshot.join("versions"), &package_root.join("versions")).map_err(
+            |error| {
+                PackageFacadeError::new(
+                    "io_error",
+                    format!("package versions restore failed: {error}"),
+                )
+            },
+        )?;
+        copy_optional_tree(&snapshot.join("manifests"), &package_root.join("manifests")).map_err(
+            |error| {
+                PackageFacadeError::new(
+                    "io_error",
+                    format!("package manifests restore failed: {error}"),
+                )
+            },
+        )?;
+        copy_optional_file(
+            &snapshot.join("packages.lock"),
+            &package_root.join("packages.lock"),
+        )
+        .map_err(|error| {
+            PackageFacadeError::new("io_error", format!("packages.lock restore failed: {error}"))
+        })?;
+        Ok(())
+    }
+
     fn write_transaction_state(
         &self,
         transaction_id: &str,
@@ -752,6 +868,7 @@ impl PackageCoreFacade {
     fn cleanup_transaction_artifacts(&self, transaction_id: &str) {
         let package_root = self.package_root();
         let _ = fs::remove_dir_all(package_root.join("staging").join(transaction_id));
+        let _ = fs::remove_dir_all(self.transaction_snapshot_path(transaction_id));
         let _ = fs::remove_file(self.transaction_state_path(transaction_id));
         let cache = package_root.join("archive-cache");
         if let Ok(entries) = fs::read_dir(cache) {
@@ -1279,6 +1396,80 @@ fn ensure_bound(bytes: &[u8], maximum: u64, label: &str) -> Result<(), PackageFa
         ));
     }
     Ok(())
+}
+
+fn copy_optional_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(source) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "package transaction tree contains a non-directory reparse entry",
+                ));
+            }
+            copy_tree(source, destination)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "package transaction tree contains a reparse entry",
+            ));
+        }
+        if metadata.is_dir() {
+            copy_tree(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            fs::copy(&source_path, &destination_path)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "package transaction tree contains an unsupported entry",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn copy_optional_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(source) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "package transaction lock is not a regular file",
+                ));
+            }
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(source, destination)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_path_if_present(path: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            fs::remove_dir_all(path)
+        }
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn read_bounded_file(path: impl AsRef<Path>, maximum: u64) -> Result<Vec<u8>, PackageFacadeError> {
