@@ -169,12 +169,17 @@ int main(int argc, char** argv) {
         const auto error = ico_sizes(root / "resources/icons/fcitx5-error.ico");
         const auto tsf = ico_sizes(root / "resources/icons/fcitx5-tsf.ico");
         if (product != expected || paused != expected || error != expected || tsf != expected) {
-            std::cerr << "Modern Penguin ICO sizes or order are incorrect\n";
+            std::cerr << "approved penguin ICO sizes or order are incorrect\n";
+            return 1;
+        }
+        const auto master = root / "resources/icons/source/fcitx5-master-approved.png";
+        if (!std::filesystem::is_regular_file(master) || std::filesystem::file_size(master) == 0) {
+            std::cerr << "approved penguin master is missing\n";
             return 1;
         }
         const auto preview = root / "resources/icons/fcitx5-icons-preview.png";
         if (!std::filesystem::exists(preview) || std::filesystem::file_size(preview) == 0) {
-            std::cerr << "Modern Penguin preview is missing\n";
+            std::cerr << "approved penguin preview is missing\n";
             return 1;
         }
 
@@ -191,33 +196,31 @@ int main(int argc, char** argv) {
                 "IDI_FCITX5_ERROR ICON \"../icons/fcitx5-error.ico\"",
             }) ||
             !contains_all(tsfRc, {"IDI_FCITX5_TSF ICON \"../icons/fcitx5-tsf.ico\""})) {
-            std::cerr << "Modern Penguin ICO resources are not wired through RC files\n";
+            std::cerr << "approved penguin ICO resources are not wired through RC files\n";
             return 1;
         }
         if (!contains_all(installer, {"SetupIconFile=..\\resources\\icons\\fcitx5.ico"})) {
-            std::cerr << "installer is missing the Modern Penguin setup icon\n";
+            std::cerr << "installer is missing the approved penguin setup icon\n";
             return 1;
         }
         if (!contains_all(script, {
-                "Modern Penguin", "PLATE", "PENGUIN", "BELLY", "BEAK", "BRAND_TEAL",
-                "render_product_icon", "render_tsf_icon", "write_ico",
-                "micro-penguin", "compact penguin", "full penguin",
-                "MICRO_MIN_FACE_WIDTH_PX", "MICRO_MIN_BEAK_WIDTH_PX",
-                "MICRO_MIN_EYE_SEPARATION_PX",
-                "struct.pack", "ICO_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)",
-                "no text", "language glyph", "keyboard symbol", "third-party trademark",
-                "online asset", "font dependency", "never resizes one large master",
+                "MASTER_SOURCE", "load_master", "square_frame", "render_master_icon",
+                "add_status_badge", "write_ico", "ImageFilter.UnsharpMask",
+                "ICO_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)",
+                "BADGE_GLYPH = (255, 255, 255, 255)", "draw.line",
+                "does not redraw or reinterpret the penguin",
             }) ||
             !contains_all(docs, {
-                "Modern Penguin", "deep-navy", "rounded-square", "transparent outside",
-                "penguin silhouette", "warm-white", "orange beak", "Fcitx teal",
-                "lower-right state badge", "warm-white border", "independently",
-                "not a downscaled product master", "micro-penguin", "compact penguin",
-                "exactly these nine frames", "16, 20, 24, 32, 40, 48, 64, 128, 256",
-                "no text", "no language characters", "no Windows", "keyboard symbols",
-                "third-party trademarks", "online or font assets",
+                "user-approved scarf penguin artwork", "fcitx5-master-approved.png",
+                "only visual authority", "original project branding artwork",
+                "lower-right amber or red badge", "tighter face/scarf crop",
+                "white pause bars", "white diagonal X",
+                "deterministic alpha trimming", "does not redraw the penguin",
+                "exactly these nine authored frames",
+                "16, 20, 24, 32, 40, 48, 64, 128, 256",
+                "not Explorer, taskbar, accessibility, or host evidence",
             })) {
-            std::cerr << "Modern Penguin script or documentation constraints are incomplete\n";
+            std::cerr << "approved penguin script or documentation constraints are incomplete\n";
             return 1;
         }
 #if defined(_WIN32)
