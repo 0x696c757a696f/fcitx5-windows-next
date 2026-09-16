@@ -172,6 +172,12 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerOptions)
 
+set(FCITX_APP_RESOURCE_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/resource.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5.ico"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/build-support/windows_resource.rs")
+
 configure_file(
   cmake/version.h.in
   "${CMAKE_CURRENT_BINARY_DIR}/generated/fcitx5_windows/version.h"
@@ -242,8 +248,12 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/launcher-core/build.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/launcher-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/launcher-core/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/build-support/windows_resource.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/launcher.rc"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/resource.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5.ico"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5-paused.ico"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5-error.ico"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-launcher.exe")
 
@@ -586,6 +596,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/src/main.rs"
+    ${FCITX_APP_RESOURCE_FILES}
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/process-execution-core/src/lib.rs"
@@ -632,6 +643,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml"
+    ${FCITX_APP_RESOURCE_FILES}
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/control-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
@@ -678,6 +690,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/bin/fcitx5_ui.rs"
+    ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-ui.exe candidate-UI host binary")
 
@@ -695,6 +708,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/tsf.rc"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/resource.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5-tsf.ico"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/build-support/windows_resource.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-poc/build.rs"
@@ -725,6 +739,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/register-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/register-core/src/main.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-register-cli.ps1"
+    ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-register CLI")
 
@@ -745,6 +760,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/bootstrap_main.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-bootstrap-cli.ps1"
+    ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-bootstrap CLI")
 
@@ -767,6 +783,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/release-pqc-signer/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/release-pqc-signer/build.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/release-pqc-signer/src/main.rs"
+    ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust release-only PQC signer")
 
@@ -781,6 +798,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-package-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+  DEPENDS ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-package CLI")
 
@@ -802,6 +820,7 @@ add_custom_command(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/build.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/c/miniz_archive.c"
+    ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-package-core staticlib")
 add_custom_target(fcitx5_package_core_rustlib
@@ -829,6 +848,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/downloader_main.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-downloader-cli.ps1"
+    ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-downloader CLI")
 
@@ -850,6 +870,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/deployer_main.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-deployer-cli.ps1"
+    ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-deployer CLI")
 
@@ -864,6 +885,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-provider-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+  DEPENDS ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-provider CLI")
 
@@ -885,6 +907,7 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/updater_main.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-updater-cli.ps1"
+    ${FCITX_APP_RESOURCE_FILES}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Building Rust fcitx5-updater CLI")
 
@@ -897,10 +920,41 @@ if(BUILD_TESTING)
   add_test(NAME release-identity-contract COMMAND fcitx5_release_identity_test)
 
   add_executable(fcitx5_brand_resource_test tests/unit/brand_resource_test.cpp)
+  target_include_directories(
+    fcitx5_brand_resource_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows")
   fcitx_apply_project_options(fcitx5_brand_resource_test)
   fcitx_apply_binary_hardening(fcitx5_brand_resource_test)
+  add_dependencies(
+    fcitx5_brand_resource_test
+    fcitx5_launcher
+    fcitx5_control
+    fcitx5_config_shipping
+    fcitx5_ui_rustbin
+    fcitx5_tsf
+    fcitx5_register
+    fcitx5_bootstrap
+    fcitx5_release_pqc_signer
+    fcitx5_package
+    fcitx5_downloader
+    fcitx5_deployer
+    fcitx5_provider
+    fcitx5_updater)
   add_test(NAME brand-resource-contract
-           COMMAND fcitx5_brand_resource_test "${CMAKE_CURRENT_SOURCE_DIR}")
+           COMMAND
+             fcitx5_brand_resource_test "${CMAKE_CURRENT_SOURCE_DIR}"
+             --launcher "${FCITX_LAUNCHER_SHIPPING_EXE}"
+             --normal "${FCITX_CONTROL_EXE}"
+             --normal "${FCITX_CONFIG_SHIPPING_EXE}"
+             --normal "${FCITX_UI_EXE}"
+             --normal "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-register.exe"
+             --normal "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-bootstrap.exe"
+             --normal "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-release-pqc-signer.exe"
+             --normal "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-package.exe"
+             --normal "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-downloader.exe"
+             --normal "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-deployer.exe"
+             --normal "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-provider.exe"
+             --normal "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-updater.exe"
+             --tsf "${FCITX_SHIPPING_TSF_DLL}")
 
   add_test(NAME release-plugin-source-contract
            COMMAND "${FCITX_PWSH_EXECUTABLE}"

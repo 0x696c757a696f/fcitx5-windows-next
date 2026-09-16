@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[path = "../build-support/windows_resource.rs"]
+mod windows_resource;
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -10,6 +13,15 @@ fn main() {
         .nth(2)
         .expect("repo root")
         .to_path_buf();
+    let resources = repo_root.join("resources").join("windows");
+    let icon = repo_root.join("resources").join("icons").join("fcitx5.ico");
+    windows_resource::compile_for_bins(
+        &resources.join("app.rc"),
+        &resources,
+        &[icon.as_path()],
+        "fcitx5-release-pqc-signer.res",
+        &["fcitx5-release-pqc-signer"],
+    );
     let mldsa_root = env::var_os("FCITX_MLDSA_NATIVE_SOURCE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| repo_root.join("out/toolchains/mldsa-native-2.0.0/mldsa-native-2.0.0"));

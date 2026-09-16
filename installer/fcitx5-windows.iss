@@ -44,6 +44,7 @@ OutputBaseFilename=fcitx5-windows-{#ProductVersion}{#ArtifactSuffix}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\resources\icons\fcitx5.ico
 UninstallDisplayIcon={app}\bin\fcitx5-config.exe
 ChangesEnvironment=no
 CloseApplications=no
