@@ -1050,6 +1050,23 @@ impl Element {
         self
     }
 
+    /// 聚焦，**即使别处已有焦点也夺过来**（见 [`Autofocus::Take`](crate::core::Autofocus::Take)）。
+    ///
+    /// 给**就地编辑**用：列表里原地改名、地址栏原地改路径——输入框是被用户按键唤出来的，
+    /// 出现的唯一理由就是接收接下来的输入。用 [`autofocus`](Self::autofocus) 的话它会对
+    /// 已有焦点让位，键入继续落到唤出它的那个控件上，表现为「光标在框里闪，字却打进了
+    /// 别处」。配合 [`select_range`](Self::select_range) 可只选主名。
+    pub fn autofocus_take(mut self) -> Self {
+        self.autofocus = Some(crate::core::Autofocus::Take);
+        self
+    }
+
+    /// [`autofocus_take`](Self::autofocus_take) + 全选已有内容（地址栏语义）。
+    pub fn autofocus_take_select_all(mut self) -> Self {
+        self.autofocus = Some(crate::core::Autofocus::TakeSelectAll);
+        self
+    }
+
     /// 标记为窗口拖动区（自定义标题栏）：无边框窗口中在此区域按下可拖动窗口。
     /// 命中沿父链生效——标记标题栏容器即其内非交互空白处都可拖；落在子按钮/输入等
     /// 可聚焦控件上不拖（交控件处理）。仅在 `App::frameless()` 窗口有意义。
@@ -1569,6 +1586,35 @@ impl Element {
     #[track_caller]
     pub fn on_submit(self, f: impl FnMut(&mut crate::core::EventCtx) + 'static) -> Self {
         self.config_text_input_widget(|ti| ti.set_on_submit(f), "on_submit()")
+    }
+
+    /// **预置选区** `[start, end)`（字符索引）：重命名框只选主名、不选扩展名——
+    /// 资源管理器 / TC 的 F2 语义，改名时直接覆盖打字而扩展名原样保留。
+    ///
+    /// 与 [`autofocus`](Self::autofocus) 搭配；与 `autofocus_select_all` 互斥（后者会在
+    /// 聚焦那一帧合成 Ctrl+A 覆盖掉它，debug 构建下断言）。越界钳到正文长度；
+    /// `start == end` 只放光标。节点隐藏后再显示时按同一区间重新兑现（区间随文本
+    /// 变化的场景——重命名框每次主名长度不同——每次打开重建输入框即可）。
+    /// 仅 `Element::text_input(..)` 可用。
+    ///
+    /// ```
+    /// # use windui::prelude::*;
+    /// let name = signal("report.final.txt".to_string());
+    /// // 主名 = 最后一个点之前；点在开头（`.gitignore`）或没有点时整名全选
+    /// let stem = name.with(|s| match s.rfind('.') {
+    ///     Some(i) if i > 0 => s[..i].chars().count(),
+    ///     _ => s.chars().count(),
+    /// });
+    /// let ui = Element::text_input(name, "").autofocus().select_range(0, stem);
+    /// ```
+    #[track_caller]
+    pub fn select_range(self, start: usize, end: usize) -> Self {
+        debug_assert!(
+            !self.autofocus.is_some_and(|a| a.selects_all()),
+            "select_range() 与 autofocus_select_all() / autofocus_take_select_all() 互斥：\
+             后者会合成 Ctrl+A 覆盖预置选区"
+        );
+        self.config_text_input_widget(|ti| ti.set_selection(start, end), "select_range()")
     }
 
     /// **本控件未处理的导航键的出口**：候选列表游标用（↑↓ 在候选间移动，配合
@@ -4010,6 +4056,14 @@ impl Element {
         self.margin = Insets::symmetric(h, v);
         self
     }
+    /// 四边**分别**给外边距，是 [`padding_edges`](Self::padding_edges) 的外侧对应物。
+    ///
+    /// 用在一边紧贴分隔线、另一边要留气口的场合：`margin_xy` 只能两边同给，
+    /// 凑出一侧的留白会让另一侧跟着白白缩进同样多。
+    pub fn margin_edges(mut self, m: Insets) -> Self {
+        self.margin = m;
+        self
+    }
 
     // ---- 对齐/布局参数 ----
     pub fn align(mut self, a: Align) -> Self {
@@ -4263,6 +4317,7 @@ impl Element {
             context_menu: self.context_menu,
             window_drag: self.window_drag,
             autofocus: self.autofocus,
+            autofocus_done: false,
             focusable: self.focusable,
             tooltip: self.tooltip,
             focused: false,

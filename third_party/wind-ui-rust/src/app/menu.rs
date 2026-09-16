@@ -368,8 +368,10 @@ impl UiHost {
     /// 越窗下缘时：若 `anchor_top` 有值（下拉控件顶部 y），优先向上翻转（菜单底对齐控件顶），
     /// 保证控件自身不被遮挡；否则退化为向上钳制。
     ///
-    /// `tall`：菜单栏的菜单不受 [`MENU_MAX_H`] 约束，可视高度只受窗口下缘限制——
-    /// 应用菜单动辄二十项，原生菜单栏也是整列铺开而非滚动。下拉与右键菜单仍走上限。
+    /// 可视高度只在**放不下**时才滚动：`tall`（菜单栏的菜单）按锚点到窗口下缘算；
+    /// 下拉（`anchor_top` 有值）按锚点上下两侧空间较大者算——面板只能落在控件一侧，
+    /// 否则会盖住控件自己；右键菜单按整窗高算。仅无窗口尺寸（离屏 / 测试）时退回
+    /// [`MENU_MAX_H`]。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_level(
         &mut self,
@@ -391,12 +393,25 @@ impl UiHost {
         let ws = self.logical_size;
         // MENU_EDGE_MARGIN：弹层与窗口四边保留距离，避免滚动条落入 resize 边框区。
         let em = if ws.w > 0 { MENU_EDGE_MARGIN } else { 0 };
-        // 面板可视高度：常规不超过 MENU_MAX_H，也不超过窗口高的 3/4；菜单栏的菜单只受
-        // 锚点到窗口下缘的空间限制（放不下才滚动）。
-        let max_h = if tall && ws.h > 0 {
+        // 面板可视高度：只在**放不下**时才滚动——原生菜单也是整列铺开，二十来项就得
+        // 滚的菜单操作起来很不便。菜单栏的菜单受锚点到窗口下缘限制；下拉只能占控件
+        // 上方或下方之一（取较大者），否则面板会把控件自己盖住；右键菜单受整窗高限制
+        // （放不下会翻转或贴边，见下面的 y 调整）。无窗口尺寸（离屏 / 测试）时退回
+        // MENU_MAX_H。最低两项高，但再矮也不超过窗口本身（恢复窗口 / 换 DPI 的中间帧
+        // 逻辑尺寸会短暂很小，不钳会画到窗口外）。
+        let max_h = if ws.h <= 0 {
+            MENU_MAX_H
+        } else if tall {
             (ws.h - ay - em).max(MENU_ITEM_H * 2)
+        } else if let Some(top) = anchor_top {
+            (ws.h - ay - em).max(top - em).max(MENU_ITEM_H * 2)
         } else {
-            MENU_MAX_H.min(if ws.h > 0 { ws.h * 3 / 4 } else { MENU_MAX_H })
+            (ws.h - 2 * em).max(MENU_ITEM_H * 2)
+        };
+        let max_h = if ws.h > 0 {
+            max_h.min((ws.h - 2 * em).max(1))
+        } else {
+            max_h
         };
         let h = content_h.min(max_h);
         let mut x = ax;
@@ -611,7 +626,9 @@ impl UiHost {
     pub(super) fn handle_alt_key(&mut self, ev: KeyEvent) -> bool {
         if ev.pressed {
             self.menu.alt_pending = true;
-            return false;
+            // 按下 Alt 即亮出助记字母下划线（Windows 同款时机），不必等松开——
+            // 用户按住 Alt 正是在找"该配哪个字母"。
+            return self.set_mnemonics_visible(true);
         }
         if !std::mem::take(&mut self.menu.alt_pending) {
             return false;
@@ -633,6 +650,19 @@ impl UiHost {
         }
     }
 
+    /// 助记字母下划线的显隐（与菜单栏控件共享的单元格）。返回是否需要重绘。
+    fn set_mnemonics_visible(&mut self, on: bool) -> bool {
+        let Some(link) = self.tree.menu_bar_link() else {
+            return false;
+        };
+        if link.mnemonics.get() == on {
+            return false;
+        }
+        link.mnemonics.set(on);
+        self.damage.needs_full = true;
+        true
+    }
+
     /// 任何别的键按下都打断"单击 Alt"的判定（Alt+X 组合不是单击）。
     pub(super) fn note_key_press(&mut self, ev: KeyEvent) {
         if ev.pressed && ev.key != Key::Alt {
@@ -643,6 +673,7 @@ impl UiHost {
     /// 指针按下：打断"单击 Alt"判定，退出菜单栏键盘激活态。
     pub(super) fn note_pointer_down(&mut self) {
         self.menu.alt_pending = false;
+        self.set_mnemonics_visible(false);
         self.menu_bar_disarm();
     }
 
@@ -650,6 +681,7 @@ impl UiHost {
     /// 非客户区按下与窗口失活走这里（见 `AppHandler::on_dismiss_overlays`）。
     pub(super) fn dismiss_overlays(&mut self) -> bool {
         self.menu.alt_pending = false;
+        self.set_mnemonics_visible(false);
         let had_menu = self.menu.is_open();
         let had_armed = self.menu.is_armed();
         if had_menu {
@@ -707,6 +739,7 @@ impl UiHost {
         match ev.key {
             Key::F(10) if !ev.shift && !ev.alt => match self.tree.menu_bar_link() {
                 Some(link) => {
+                    link.mnemonics.set(true);
                     self.menu_bar_arm(link, 0);
                     true
                 }
@@ -1464,6 +1497,50 @@ mod tests {
     use crate::app::test_support::{dropdown_handler, key_ev};
     use crate::app::App;
     use crate::ui::Element;
+
+    /// 回归：下拉菜单放不下时不能把控件自己盖住。非 `tall` 上限改成整窗高之后，
+    /// 长列表的面板高≈窗高，"向上翻转"必然失败而退到贴边钳制，面板铺满整窗。
+    /// 现在下拉的上限取锚点上下两侧较大者，面板必落在控件一侧。
+    #[test]
+    fn dropdown_panel_never_covers_its_own_control() {
+        use crate::event::MenuItem;
+        let (mut host, _sel) = dropdown_handler();
+        // dropdown_handler 的窗口是 300x200；控件顶 80、锚点（控件底）100，40 项远放不下
+        let items: Vec<MenuItem> = (0..40)
+            .map(|i| MenuItem::run(format!("项 {i}"), |_ctx| {}, false))
+            .collect();
+        let level = host.build_level(items, 10, 100, 120, None, Some(80), false);
+        let r = level.rect;
+        assert!(
+            r.bottom() <= 80 || r.y >= 100,
+            "面板 {:?} 与控件 80..100 相交",
+            r
+        );
+        assert!(
+            r.y >= 0 && r.bottom() <= 200,
+            "面板 {:?} 溢出 300x200 的窗口",
+            r
+        );
+        assert!(level.content_h > r.h, "放不下时应滚动而不是撑满整窗");
+    }
+
+    /// 极矮窗口：非 `tall` 菜单的 60 px 下限不能让面板伸到窗口外。
+    #[test]
+    fn menu_never_taller_than_a_tiny_window() {
+        use crate::event::MenuItem;
+        let (mut host, _sel) = dropdown_handler();
+        host.logical_size = crate::geometry::Size::new(300, 50);
+        let items: Vec<MenuItem> = (0..10)
+            .map(|i| MenuItem::run(format!("项 {i}"), |_ctx| {}, false))
+            .collect();
+        let level = host.build_level(items, 10, 20, 120, None, None, false);
+        let r = level.rect;
+        assert!(
+            r.y >= 0 && r.bottom() <= 50,
+            "面板 {:?} 溢出 50 高的窗口",
+            r
+        );
+    }
 
     /// 回归：滚动条的命中区纵向必须与轨道一致。此前判据只写了 `x >= right - 16`，
     /// 完全不约束 y，而滑块只画在 `y+4` 起、高 `h-8` 的轨道内——点面板右缘最顶或
@@ -2236,6 +2313,97 @@ mod tests {
             alt: true,
             meta: false,
         }
+    }
+
+    /// 菜单栏 + 一个可聚焦的输入框：用于焦点相关的回归。
+    fn menubar_with_input() -> UiHost {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use crate::ui::MenuBarEntry;
+        use tiny_skia::Pixmap;
+        let text = crate::signal::signal(String::new());
+        let app = App::new("t", 400, 300).content(
+            Element::col()
+                .width(400)
+                .height(300)
+                .child(
+                    Element::menu_bar(vec![MenuBarEntry::new("文件(F)", || {
+                        vec![MenuItem::run("新建(N)", |_ctx| {}, false).mnemonic('N')]
+                    })
+                    .mnemonic('F')])
+                    .height(28),
+                )
+                .child(Element::text_input(text, "").height(30).width(200)),
+        );
+        let mut handler = app.into_handler_for_test();
+        handler.set_scale(1.0);
+        let mut pm = Pixmap::new(400, 300).unwrap();
+        handler.render(
+            &mut PixmapTarget { pixmap: &mut pm },
+            crate::geometry::Size::new(400, 300),
+        );
+        handler
+    }
+
+    /// 回归：按下菜单栏不能把别处的焦点清掉。
+    ///
+    /// 没有这条豁免时错在哪：按下菜单栏是一次"点在焦点控件之外"，宿主按 blur 语义
+    /// 把焦点清成 None，而 `Tree::dispatch_key` 的目标是 `Option<NodeId>`——没有焦点
+    /// 时整个按键事件被丢弃。表现是「点开过一次菜单，此后所有快捷键全部失灵」，
+    /// 且界面毫无异常，无从查起。原生菜单栏同样保留焦点（菜单开着时编辑框光标还在闪）。
+    #[test]
+    fn menu_bar_press_keeps_focus_elsewhere() {
+        let mut h = menubar_with_input();
+        // 前置：让输入框拿到焦点
+        // 点输入框拿到焦点
+        pointer(&mut h, PointerKind::Down, Point::new(100, 45));
+        pointer(&mut h, PointerKind::Up, Point::new(100, 45));
+        let focused = h.focus.current.expect("点输入框应聚焦");
+
+        // 点菜单栏标题：菜单展开，但焦点原地不动
+        let t0 = bar_center(&h, 0);
+        pointer(&mut h, PointerKind::Down, t0);
+        assert!(h.menu.is_open(), "前置：按下标题应展开菜单");
+        assert_eq!(
+            h.focus.current,
+            Some(focused),
+            "打开菜单不该让输入框失焦，否则关掉菜单后按键无处可去"
+        );
+
+        // 关掉菜单，焦点仍在
+        h.close_menu();
+        assert_eq!(h.focus.current, Some(focused), "关菜单后焦点仍该在输入框上");
+    }
+
+    /// 助记字母的下划线只在键盘触达菜单栏之后显示：纯鼠标操作的界面上不挂一排下划线。
+    /// 与 Windows 一致——按下 Alt 就亮，再动鼠标就灭。
+    #[test]
+    fn mnemonic_underlines_show_only_after_keyboard_reaches_the_bar() {
+        use crate::platform::AppHandler;
+        let mut h = menubar_with_input();
+        // 控件与宿主共享同一个单元格，取一次即可（树不重建）
+        let cell = h.tree.menu_bar_link().unwrap().mnemonics.clone();
+        assert!(!cell.get(), "默认不画下划线");
+
+        h.on_key(alt_key(true));
+        assert!(cell.get(), "按下 Alt 即亮出助记字母");
+
+        // 鼠标一动就灭
+        let t0 = bar_center(&h, 0);
+        pointer(&mut h, PointerKind::Down, t0);
+        assert!(!cell.get(), "改用鼠标后不再画下划线");
+        h.close_menu();
+
+        // F10 同样是键盘触达
+        h.on_key(KeyEvent {
+            key: Key::F(10),
+            pressed: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        });
+        assert!(cell.get(), "F10 激活菜单栏也该亮出助记字母");
     }
 
     /// 原生菜单栏的核心手感：按下标题即展开；展开期间指针**滑到**相邻标题就切过去，

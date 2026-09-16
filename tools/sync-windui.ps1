@@ -29,9 +29,14 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $vendorDir = Join-Path $repoRoot 'third_party/wind-ui-rust'
+$patchDir = Join-Path $repoRoot 'third_party/patches/wind-ui-rust'
 $depsFile = Join-Path $repoRoot 'third_party/dependencies.json'
 $configPocMain = Join-Path $repoRoot 'rust/config-poc/src/main.rs'
 $tempParent = Join-Path $repoRoot 'out/tmp'
+New-Item -ItemType Directory -Force -Path $tempParent | Out-Null
+$stamp = [System.Guid]::NewGuid().ToString('N')
+$script:SyncLogPath = Join-Path $tempParent "wind-ui-sync-$stamp.log"
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 function Invoke-Checked {
   param([Parameter(Mandatory = $true)] [string] $FilePath,
@@ -45,11 +50,31 @@ function Invoke-Checked {
   $startInfo.RedirectStandardError = $true
   $startInfo.CreateNoWindow = $true
   $process = [Diagnostics.Process]::Start($startInfo)
-  $stdout = $process.StandardOutput.ReadToEnd()
-  $stderr = $process.StandardError.ReadToEnd()
+  # Drain both redirected streams concurrently. Reading one stream to EOF
+  # before the other can deadlock when Cargo fills the warning/error pipe.
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+  $stderrTask = $process.StandardError.ReadToEndAsync()
   $process.WaitForExit()
-  if ($process.ExitCode -ne 0) {
-    throw "$Name failed with exit code $($process.ExitCode): $stderr $stdout"
+  $stdout = $stdoutTask.GetAwaiter().GetResult()
+  $stderr = $stderrTask.GetAwaiter().GetResult()
+  $exitCode = $process.ExitCode
+  $log = @(
+    "=== $Name ==="
+    "EXE: $FilePath"
+    "ARGS: $($Arguments -join ' ')"
+    "EXIT: $exitCode"
+    '--- STDOUT ---'
+    $stdout
+    '--- STDERR ---'
+    $stderr
+    ''
+  ) -join "`n"
+  [System.IO.File]::AppendAllText($script:SyncLogPath, $log, $utf8NoBom)
+  if ($stderr) {
+    Write-Host $stderr -NoNewline
+  }
+  if ($exitCode -ne 0) {
+    throw "$Name failed with exit code $exitCode. Full output: $script:SyncLogPath"
   }
   return $stdout
 }
@@ -85,8 +110,6 @@ if (-not (Test-Path -LiteralPath $cargo)) {
   if (-not $cargo) { throw 'Cargo executable not found.' }
 }
 
-New-Item -ItemType Directory -Force -Path $tempParent | Out-Null
-$stamp = [System.Guid]::NewGuid().ToString('N')
 $cloneDir = Join-Path $tempParent "wind-ui-sync-$stamp"
 $cloneRemoved = $false
 try {
@@ -98,8 +121,96 @@ try {
     throw "Resolved HEAD $($actual.Trim()) does not match requested commit $Commit"
   }
 
+  # The vendored tree carries the two temporary Windows compatibility fixes for
+  # upstream issue #17. The failure was discovered on i686, but the source
+  # patches are intentionally architecture-neutral. Check and apply them
+  # against the clean official checkout before copying anything into the
+  # repository. If an upstream commit contains either fix, the check must fail
+  # loudly so the queue can be reviewed and removed deliberately instead of
+  # being silently skipped.
+  $patches = @(
+    (Join-Path $patchDir 'win32-window-user-data.patch'),
+    (Join-Path $patchDir 'win32-tray-unaligned.patch')
+  )
+  foreach ($patch in $patches) {
+    if (-not (Test-Path -LiteralPath $patch -PathType Leaf)) {
+      throw "Required local WindUI patch is missing: $patch"
+    }
+  }
+  try {
+    foreach ($patch in $patches) {
+      Invoke-Checked -FilePath 'git.exe' -Arguments @(
+        '-C', $cloneDir, 'apply', '--check', '--whitespace=nowarn', $patch
+      ) -Name "git apply --check $([System.IO.Path]::GetFileName($patch))"
+    }
+    foreach ($patch in $patches) {
+      Invoke-Checked -FilePath 'git.exe' -Arguments @(
+        '-C', $cloneDir, 'apply', '--whitespace=nowarn', $patch
+      ) -Name "git apply $([System.IO.Path]::GetFileName($patch))"
+    }
+  } catch {
+    throw "local WindUI patch no longer applies; verify upstream contains issue #17 fix before dropping patch. $($_.Exception.Message)"
+  }
+
   $inScope = @('src', 'examples', 'Cargo.toml', 'README.md', 'README.en.md',
     'LICENSE-APACHE', 'LICENSE-MIT')
+
+  # Normalize the disposable official checkout before touching the vendor tree.
+  # The previous order copied first and then rewrote vendor files in place; that
+  # can fail with ERROR_USER_MAPPED_FILE when an IDE or analyzer has a section
+  # mapped from an existing vendor example. The clone is not a live consumer.
+  foreach ($name in @('Cargo.toml', 'README.md', 'README.en.md', 'LICENSE-APACHE', 'LICENSE-MIT')) {
+    $path = Join-Path $cloneDir $name
+    if (Test-Path -LiteralPath $path) { Normalize-Lf $path }
+  }
+  $allText = @(Get-ChildItem -LiteralPath (Join-Path $cloneDir 'src') -Recurse -File)
+  $allText += @(Get-ChildItem -LiteralPath (Join-Path $cloneDir 'examples') -Recurse -File)
+  foreach ($file in $allText) { Normalize-Lf $file.FullName }
+
+  # Validate the patched upstream crate before copying it into the vendor tree.
+  # WindUI intentionally has no committed Cargo.lock and is excluded from the
+  # root workspace, so these isolated checks are unlocked. Cargo may create a
+  # temporary lockfile in the disposable clone; neither it nor the target
+  # directory is copied into the repository.
+  $windUiManifest = Join-Path $cloneDir 'Cargo.toml'
+  $windUiTargetDir = Join-Path $tempParent "wind-ui-check-$stamp"
+  $windUiManifestText = [System.IO.File]::ReadAllText($windUiManifest)
+  $windUiHadLockfile = Test-Path -LiteralPath (Join-Path $cloneDir 'Cargo.lock')
+  $windUiWorkspaceMarkerAdded = $false
+  try {
+    # The checkout lives below this repository's root Cargo workspace. Add a
+    # disposable workspace root marker only for these isolated checks; never
+    # copy it into the vendor tree.
+    if (-not [regex]::IsMatch($windUiManifestText, '(?m)^\[workspace\]\s*$')) {
+      $workspaceText = $windUiManifestText.TrimEnd("`r", "`n") +
+        "`n`n[workspace]`nresolver = `"2`"`n"
+      [System.IO.File]::WriteAllText($windUiManifest, $workspaceText,
+        [System.Text.UTF8Encoding]::new($false))
+      $windUiWorkspaceMarkerAdded = $true
+    }
+    Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'check',
+      '--manifest-path', $windUiManifest,
+      '--target', 'i686-pc-windows-msvc',
+      '--target-dir', $windUiTargetDir,
+      '--no-default-features') -Name 'cargo check windui i686'
+    Write-Output 'patched official wind-ui-rust i686 check passed.'
+    Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'check',
+      '--manifest-path', $windUiManifest,
+      '--target', 'aarch64-pc-windows-msvc',
+      '--target-dir', $windUiTargetDir,
+      '--no-default-features') -Name 'cargo check windui arm64'
+    Write-Output 'patched official wind-ui-rust arm64 check passed.'
+  } finally {
+    if ($windUiWorkspaceMarkerAdded) {
+      [System.IO.File]::WriteAllText($windUiManifest, $windUiManifestText,
+        [System.Text.UTF8Encoding]::new($false))
+    }
+    $temporaryLock = Join-Path $cloneDir 'Cargo.lock'
+    if (-not $windUiHadLockfile -and (Test-Path -LiteralPath $temporaryLock)) {
+      Remove-Item -LiteralPath $temporaryLock -Force
+    }
+  }
+
   foreach ($entry in $inScope) {
     $source = Join-Path $cloneDir $entry
     if (-not (Test-Path -LiteralPath $source)) {
@@ -119,17 +230,6 @@ try {
       Copy-Item -LiteralPath $source -Destination $destination -Force
     }
   }
-
-  # Normalize every copied vendored file to LF (the repo stores LF only via
-  # `.gitattributes`: `* text=auto eol=lf`). Fresh upstream clones are checked
-  # out with CRLF on Windows, so copy then normalize the whole tree.
-  foreach ($name in @('Cargo.toml', 'README.md', 'README.en.md', 'LICENSE-APACHE', 'LICENSE-MIT')) {
-    $path = Join-Path $vendorDir $name
-    if (Test-Path -LiteralPath $path) { Normalize-Lf $path }
-  }
-  $allText = @(Get-ChildItem -LiteralPath (Join-Path $vendorDir 'src') -Recurse -File)
-  $allText += @(Get-ChildItem -LiteralPath (Join-Path $vendorDir 'examples') -Recurse -File)
-  foreach ($file in $allText) { Normalize-Lf $file.FullName }
 
   # Update the dependency pin + upstream version in dependencies.json.
   $upstreamVersion = '0.0.0'
@@ -171,13 +271,14 @@ try {
   [System.IO.File]::WriteAllText($configPocMain, $configText,
     [System.Text.UTF8Encoding]::new($false))
 
-  Write-Output "wind-ui-rust synced to $Commit (upstream version $upstreamVersion)."
-
   # Run the affected consumer tests.
   Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'test', '--locked',
     '-p', 'fcitx5-config-poc', '-p', 'fcitx5-config-qa',
     '--target', 'x86_64-pc-windows-msvc') -Name 'cargo test config consumers'
   Write-Output 'config-poc/config-qa tests passed.'
+  Write-Output "wind-ui-rust synced to $Commit (upstream version $upstreamVersion)."
+  Write-Output "Full sync log: $script:SyncLogPath"
+
 } finally {
   if (-not $cloneRemoved -and (Test-Path -LiteralPath $cloneDir)) {
     Remove-Item -LiteralPath $cloneDir -Recurse -Force -ErrorAction SilentlyContinue

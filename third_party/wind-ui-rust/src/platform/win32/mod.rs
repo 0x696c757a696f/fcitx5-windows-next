@@ -72,12 +72,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DPICHANGED,
     WM_DROPFILES, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY,
     WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE,
-    WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN,
-    WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETICON,
-    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_TOUCH,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    WS_THICKFRAME,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE,
+    WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SETICON, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_TIMER, WM_TOUCH, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
 };
 // 窗口图标（`App::icon`）：HICON 由 tray 那份 RGBA 转换复用，销毁归 WindowState::drop。
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -170,6 +170,45 @@ unsafe fn find_single_window(key: &str) -> Option<HWND> {
     LIVE_WINDOWS
         .with(|w| w.borrow().find_single(key))
         .map(|v| HWND(v as *mut _))
+}
+
+/// 带这个单例键的窗口当前是否开着（[`crate::event::window_open`] 的落地）。
+///
+/// 读的是窗口登记表而非 `state_from` 那份裸指针状态，故**任何时机都可调**，包括热键
+/// 回调正被派发、平台层持有某个 `WindowState` 借用的时候——两者不是同一份数据
+/// （同 `open_pending_windows` 里那条注释）。
+pub(crate) fn single_window_open(key: &str) -> bool {
+    LIVE_WINDOWS.with(|w| w.borrow().find_single(key).is_some())
+}
+
+/// 关掉带这个单例键的窗口（托盘 / 热键回调的 `close_window` 意图）。
+///
+/// **投递 `WM_CLOSE` 而不是直接 `DestroyWindow`**：前者走的是窗口自己的关闭决策链
+/// （`Window::on_close_request` 会被问到），与用户点关闭按钮同义；后者绕过一切拦截，
+/// 那是「退出应用」才该有的强度（见 `quit_app`）。
+///
+/// 用 `PostMessageW` 而非 `SendMessageW`：本函数的调用点在意图落地段，同步送进去会当场
+/// 重入窗口过程（铁律 6），而投递让关闭发生在消息循环的下一轮、所有借用都已释放之后。
+///
+/// 投递也正是「同一个键既关又开」不成立的根源，故那个错法在这里当场报出来：本次关窗
+/// 要等下一轮才生效，而紧随其后的开窗是**即时**的，那一刻旧窗口仍在 `LIVE_WINDOWS` 里，
+/// 于是 `Window::single` 的去重命中、开窗退化成「激活那个正在关闭的窗口」，随后它被关掉
+/// ——用户看到的是「按了一下，窗口没了」，现场没有任何东西指向起因。
+///
+/// 检查放在这里而不是某一条路径上，是为了**两条路都覆盖**：热键的关窗请求走旁路队列由
+/// `apply_app_effects` 落地，托盘的则按声明顺序在 `run_tray_actions` 里落地，只有它们的
+/// 共同落点才拦得住两边。
+unsafe fn close_single_window(key: &str) {
+    if crate::event::key_collides(key, &crate::event::pending_window_singles()) {
+        eprintln!(
+            "[windui] 同一个回调里对单例键 {key} 既 close_window 又 open_window：关窗是投递、\
+             开窗是即时，本次开窗会命中那个尚未关掉的窗口而退化成激活它，随后它被关掉——\
+             净结果是一个窗口都没有。请分两次回调，或改用不同的键。"
+        );
+    }
+    if let Some(hwnd) = find_single_window(key) {
+        let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+    }
 }
 
 /// 注销一个已销毁的窗口，返回它是否是最后一个（调用方据此 `PostQuitMessage`）。
@@ -545,6 +584,11 @@ unsafe extern "system" fn app_host_proc(
 unsafe fn apply_app_effects(repaint: bool) {
     apply_tray_ops();
     apply_app_hotkey_ops();
+    // 关窗排在开窗之前：两者作用于**不同的键**时这个次序才有意义（关掉设置窗、开出主窗）。
+    // 同一个键既关又开是不支持的，理由与诊断都在 `close_single_window` 上。
+    for key in crate::event::take_callback_closes() {
+        close_single_window(&key);
+    }
     open_callback_windows();
     // 跨窗脏标记必须取走，不能只看 `repaint`：`ThemeHandle::set`（主题回调里最常见的
     // 那一句）与任何一次写信号都会立起它，而窗口路径是由 `broadcast_signal_dirty` 消费的
@@ -591,6 +635,9 @@ unsafe fn quit_app() {
     // 不会被执行，可配置还留在队列里，随后的应用级收尾就会把它建出来：退出途中闪一个
     // 窗口出来。截断点必须两条队列对齐，否则"Quit 之后的意图一律丢弃"就只兑现了一半。
     let _ = crate::event::take_callback_windows();
+    // 关窗请求同样截断。留着不会开出窗口，但会在退出途中对**正在销毁**的窗口投一条
+    // `WM_CLOSE`，那是拿随时可能失效的句柄调 OS——与上面那条是同一个理由。
+    let _ = crate::event::take_callback_closes();
     let windows = live_windows();
     for h in &windows {
         let _ = DestroyWindow(*h);
@@ -995,8 +1042,12 @@ struct ClickTracker {
 }
 
 impl ClickTracker {
-    /// 按 Down 事件更新连续点击计数：与上次同按键、在系统双击时限与漂移阈值内则递增
-    /// （封顶到 3 支持三击），否则重置为 1。返回本次点击的计数。
+    /// 按 Down 事件更新连续点击计数：与上次同按键、在系统双击时限与漂移阈值内则递增，
+    /// 否则重置为 1。返回本次点击的计数。
+    ///
+    /// 到 3 之后**回到 1** 而不是钉在 3 上。钉住会让"同一位置连着快点"永远报 >=2：
+    /// 文件列表里双击进了目录，紧接着在同一坐标单击一下新内容，就会被当成双击再进一层。
+    /// Win32 原生的 `WM_LBUTTONDBLCLK` 也是发完就重新起算，这里只是把它推广到三击。
     fn bump(
         &mut self,
         button: i32,
@@ -1012,8 +1063,8 @@ impl ClickTracker {
             && now_ms.wrapping_sub(self.time_ms) <= dbl_ms
             && (x - self.x).abs() <= dx
             && (y - self.y).abs() <= dy;
-        let count = if continued {
-            (self.count + 1).min(3)
+        let count = if continued && self.count < 3 {
+            self.count + 1
         } else {
             1
         };
@@ -1526,6 +1577,15 @@ unsafe fn run_windowed(
         }
     }
 
+    // 常驻模式的「启动即开窗」（`App::start_window`）：请求已由 `launch` 排在旁路队列上，
+    // 这里取走建出来。必须在进循环**之前**——队列的其余消费点都挂在托盘 / 热键消息上，
+    // 而那两样要等用户动手才来，请求会一直躺着，表现为"双击图标没反应"。
+    //
+    // 非常驻时这条是空转：那条路的窗口是上面那个主窗，队列里什么都没有。
+    if cfg.resident {
+        open_callback_windows();
+    }
+
     run_message_loop();
 
     // 销毁 App 级宿主：触发托盘图标 NIM_DELETE 与全局热键注销。放在消息循环之后——
@@ -1882,6 +1942,16 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_RBUTTONDOWN => {
             handle_pointer(hwnd, PointerKind::Down, MouseButton::Right, lparam);
+            LRESULT(0)
+        }
+        // 中键：浏览器与文件管理器用它「关掉这一项」，是标准手势而非小众功能。
+        // 此前这两条消息根本没接，`MouseButton::Middle` 因此永远到不了控件。
+        WM_MBUTTONDOWN => {
+            handle_pointer(hwnd, PointerKind::Down, MouseButton::Middle, lparam);
+            LRESULT(0)
+        }
+        WM_MBUTTONUP => {
+            handle_pointer(hwnd, PointerKind::Up, MouseButton::Middle, lparam);
             LRESULT(0)
         }
         WM_RBUTTONUP => {
@@ -2721,6 +2791,8 @@ unsafe fn run_tray_actions(main: Option<HWND>, actions: Vec<tray::TrayAction>) {
             }
             // 位置标记：取队首那个配置建窗（见 `TrayAction::OpenWindow`）。
             tray::TrayAction::OpenWindow => open_callback_window(),
+            // 键就在意图里，不必查旁路队列（见 `TrayAction::CloseWindow`）。
+            tray::TrayAction::CloseWindow(key) => close_single_window(&key),
             // 不走 WindowOp：托盘「退出」是应用的唯一真实出口，**刻意绕过
             // `hide_on_close`**（否则开了关闭转隐藏的应用将永远退不掉）。
             //
@@ -2869,7 +2941,6 @@ unsafe fn handle_pointer_at(hwnd: HWND, kind: PointerKind, button: MouseButton, 
         let btn = match button {
             MouseButton::Left => 1,
             MouseButton::Right => 2,
-            // Middle 当前不可达：无 WM_MBUTTONDOWN 分发；保留映射以备后续接入。
             MouseButton::Middle => 3,
         };
         let now = GetMessageTime() as u32;
@@ -3747,7 +3818,12 @@ mod tests {
         assert_eq!(t.bump(1, 10, 10, 1000, DBL, DX, DY), 1, "首击=单击");
         assert_eq!(t.bump(1, 11, 11, 1100, DBL, DX, DY), 2, "时限内同位=双击");
         assert_eq!(t.bump(1, 12, 12, 1200, DBL, DX, DY), 3, "继续=三击");
-        assert_eq!(t.bump(1, 12, 12, 1300, DBL, DX, DY), 3, "封顶于三击");
+        assert_eq!(
+            t.bump(1, 12, 12, 1300, DBL, DX, DY),
+            1,
+            "三击之后重新起算，不得钉在 3：钉住会让同位快点永远报 >=2，             文件列表双击进目录后再单击一下就又进一层"
+        );
+        assert_eq!(t.bump(1, 12, 12, 1400, DBL, DX, DY), 2, "新一轮的第二下=双击");
         // 超出时限：重置。
         assert_eq!(t.bump(1, 12, 12, 2000, DBL, DX, DY), 1, "超时重置为单击");
     }

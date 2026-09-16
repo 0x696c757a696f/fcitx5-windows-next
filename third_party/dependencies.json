@@ -279,8 +279,8 @@
     },
     {
       "name": "wind-ui-rust",
-      "version": "0.16.1+a5a93e4f",
-      "source": "https://github.com/huanfeng/wind-ui-rust/tree/a5a93e4f6a9c60a55cc2d64b422e2fe9f30bf88d",
+      "version": "0.18.0+980eb5ef",
+      "source": "https://github.com/huanfeng/wind-ui-rust/tree/980eb5ef132d2aacc0ae801e7cdc11a433f88206",
       "license": "MIT OR Apache-2.0"
     },
     {

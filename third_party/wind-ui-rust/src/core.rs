@@ -174,6 +174,16 @@ pub trait Widget {
     fn focusable(&self) -> bool {
         false
     }
+    /// 按下本控件既不夺取焦点、也**不清掉别处的焦点**（默认 false，即通行的 blur 语义）。
+    ///
+    /// 为菜单栏而设，原生菜单栏正是如此：打开菜单时编辑框里的光标还在闪，关掉菜单
+    /// 接着打字。没有这条豁免时错在哪：按下菜单栏是一次"点在焦点控件之外"，宿主按
+    /// blur 语义把焦点清成 `None`，而 [`Tree::dispatch_key`] 的目标是 `Option<NodeId>`
+    /// ——没有焦点时整个按键事件被丢弃。于是**点开过一次菜单，此后所有快捷键全部失灵**，
+    /// 且看不出原因（界面毫无变化）。
+    fn preserves_focus(&self) -> bool {
+        false
+    }
     /// 本节点是否为**模态层根**（仅对话框遮罩）：可见时把 Tab 焦点环圈在其子树内，
     /// 使键盘无法走到被遮罩盖住、鼠标点都点不到的控件上（见 [`Tree::focusable_order`]）。
     ///
@@ -345,6 +355,27 @@ pub enum Autofocus {
     /// （见 `TextInput::context_menu_items`）。故对不处理 Ctrl+A 的控件是无害空操作，
     /// 与 [`Focus`](Self::Focus) 等价。
     FocusSelectAll,
+    /// 聚焦，**即使别处已有焦点也夺过来**。
+    ///
+    /// [`Focus`](Self::Focus) 与 [`FocusSelectAll`](Self::FocusSelectAll) 在「这一帧
+    /// 焦点已有归属」时主动让位——它们的定位是"没人要焦点时给个归宿"的兜底，抢走
+    /// 用户刚点中的控件是不对的。但**就地编辑**（列表里原地改名、地址栏原地改路径）
+    /// 的语义相反：这个输入框是被用户的按键唤出来的，它出现的唯一理由就是接收接下来
+    /// 的输入。让位的话，键入会继续落到唤出它的那个控件上——看得见光标却打不进字。
+    Take,
+    /// [`Take`](Self::Take) + 全选已有内容（地址栏语义）。
+    TakeSelectAll,
+}
+
+impl Autofocus {
+    /// 是否夺取已有焦点（见 [`Take`](Self::Take)）。
+    pub fn takes_focus(self) -> bool {
+        matches!(self, Autofocus::Take | Autofocus::TakeSelectAll)
+    }
+    /// 兑现后是否全选正文。
+    pub fn selects_all(self) -> bool {
+        matches!(self, Autofocus::FocusSelectAll | Autofocus::TakeSelectAll)
+    }
 }
 
 /// 树节点。几何为物理像素，`bounds` 相对父节点。
@@ -477,6 +508,13 @@ pub struct Node {
     /// 声明式初始焦点（`None`=不参与）。宿主在布局稳定后**一次性**兑现，见
     /// [`Autofocus`] 与 `UiHost::refresh_focus`。
     pub autofocus: Option<Autofocus>,
+    /// 本节点的 autofocus 已兑现过。
+    ///
+    /// 记在节点上而不是只有宿主那个全局标志：[`Autofocus::Take`] 的语义是"**每次出现**
+    /// 都夺取焦点"，而全局标志一经置位就再不复位（只有窗口隐藏→唤起会 rearm），
+    /// 于是**窗口生命周期内第二个**要求自动聚焦的控件永远拿不到焦点——就地编辑框
+    /// 因此第二次唤出就打不进字。节点销毁时这个标志随之消失，天然不会错认复用的 id。
+    pub autofocus_done: bool,
 }
 
 struct Slot {
@@ -1094,7 +1132,14 @@ impl Tree {
                 main_dim
             };
             let main_child = child_spec(main_eff, main_avail, main_unbounded);
-            let cross_child = child_spec(cross_dim, cross_avail, cross_unbounded);
+            // 交叉轴上先扣掉子节点自己的 margin 再发约束：不扣的话 `Match` 会量到整条
+            // 交叉轴，arrange 再按 margin.left 右移，净效果是**朝末端溢出一个 margin**
+            // （表现为卡片盖住旁边的分隔线）。主轴一直是预扣的，这里是补上交叉轴那一半。
+            let cross_child = child_spec(
+                cross_dim,
+                (cross_avail - cm_cross).max(0),
+                cross_unbounded,
+            );
             let (cwspec, chspec) = if horizontal {
                 (main_child, cross_child)
             } else {
@@ -1124,9 +1169,11 @@ impl Tree {
                 };
                 allocated += portion;
                 let main_child = MeasureSpec::exactly(portion);
+                let (_, cm_cross) = main_cross_insets(horizontal, cm);
+                // 同上：交叉轴约束须先扣 margin（见第一遍里的注释）。
                 let cross_child = child_spec(
                     if horizontal { ch } else { cw },
-                    cross_avail,
+                    (cross_avail - cm_cross).max(0),
                     cross_unbounded,
                 );
                 let (cwspec, chspec) = if horizontal {
@@ -1135,7 +1182,6 @@ impl Tree {
                     (cross_child, main_child)
                 };
                 let s = self.measure(c, cwspec, chspec, text);
-                let (_, cm_cross) = main_cross_insets(horizontal, cm);
                 let (s_main, s_cross) = main_cross(horizontal, s);
                 used_main += s_main; // margin 已预扣，此处只加 portion
                 max_cross = max_cross.max(s_cross + cm_cross);
@@ -2196,6 +2242,17 @@ impl Tree {
     ///
     /// 判据取命中节点的祖先链而非"本次有没有控件 `request_focus`"：焦点控件的
     /// 内部子节点、以及按下被上层容器先消费的情况，都不该被误判成点了空白。
+    /// 命中点所在的祖先链上是否有 [`Widget::preserves_focus`] 的控件（菜单栏）。
+    /// 宿主据此跳过一次失焦裁决。
+    pub fn hit_preserves_focus(&self, pos: Point) -> bool {
+        let Some(hit) = self.hit_test(pos) else {
+            return false;
+        };
+        self.ancestor_chain(hit)
+            .into_iter()
+            .any(|id| self.get(id).is_some_and(|n| n.widget.preserves_focus()))
+    }
+
     pub fn hit_inside(&self, pos: Point, id: NodeId) -> bool {
         let Some(hit) = self.hit_test(pos) else {
             return false;
@@ -3081,10 +3138,37 @@ impl Tree {
     /// 取交集而不是全树扫描：`order` 已经过滤掉了不可见、被禁用、被模态遮住的节点
     /// （见 [`Tree::focusable_order`]）。少了这一层，对话框弹着的那一帧就会把焦点
     /// 兑现给遮罩后面的输入框——键盘从此能打到用户看不见的地方。
+    /// 焦点环里第一个**尚未兑现**的 autofocus 节点。
+    ///
+    /// [`Autofocus::Take`] 类优先：它们是被用户动作唤出来的（就地编辑框），比"给个
+    /// 归宿"式的兜底更该拿到焦点，而焦点环顺序是按布局排的、与这份轻重无关。
     pub fn first_autofocus(&self, order: &[NodeId]) -> Option<(NodeId, Autofocus)> {
+        let pending = |id: &NodeId| {
+            self.get(*id)
+                .filter(|n| !n.autofocus_done)
+                .and_then(|n| n.autofocus)
+                .map(|a| (*id, a))
+        };
         order
             .iter()
-            .find_map(|&id| self.get(id).and_then(|n| n.autofocus).map(|a| (id, a)))
+            .find_map(|id| pending(id).filter(|(_, a)| a.takes_focus()))
+            .or_else(|| order.iter().find_map(pending))
+    }
+
+    /// 标记某节点的 autofocus 已兑现。
+    pub fn mark_autofocus_done(&mut self, id: NodeId) {
+        if let Some(n) = self.get_mut(id) {
+            n.autofocus_done = true;
+        }
+    }
+
+    /// 清掉所有节点的"已兑现"标记（窗口重新唤起时与宿主的全局标志一起复位）。
+    pub fn clear_autofocus_done(&mut self) {
+        for slot in self.slots.iter_mut() {
+            if let Some(n) = slot.node.as_mut() {
+                n.autofocus_done = false;
+            }
+        }
     }
 
     pub fn set_focused(&mut self, id: Option<NodeId>, old: Option<NodeId>) {
@@ -3860,6 +3944,45 @@ mod tests {
             CursorShape::Hand,
             "悬停在 clickable 卡片内的子控件上应显示手型"
         );
+    }
+
+    #[test]
+    fn cross_axis_match_with_margin_dont_overflow() {
+        // 交叉轴的对称情形：col 里的 `width_match` 子节点带左右 margin。
+        // 曾经交叉轴不预扣 margin——子量到整条 200，arrange 再右移 4，
+        // 右沿落到 204，把紧邻的分隔线压在身下（面板卡片就是这么盖住分栏拖柄的）。
+        let tree = layout(
+            Element::col()
+                .width(200)
+                .height(60)
+                .child(Element::leaf().width_match().height(20).margin_xy(4, 0)),
+            200,
+            60,
+        );
+        let root = tree.root.unwrap();
+        let kid = tree.get(root).unwrap().children[0];
+        let b = tree.get(kid).unwrap().bounds;
+        assert_eq!(b.x, 4, "左沿=margin");
+        assert_eq!(b.w, 192, "宽应为 200-4-4");
+        assert_eq!(b.x + b.w, 196, "右沿须留出右 margin，不得溢到 204");
+    }
+
+    #[test]
+    fn cross_axis_match_with_margin_dont_overflow_under_weight() {
+        // 同上，但父容器的这个子是**权重子**（第二遍分配那条路径）。
+        let tree = layout(
+            Element::col()
+                .width(200)
+                .height(60)
+                .child(Element::leaf().width_match().margin_xy(4, 0).weight(1.0)),
+            200,
+            60,
+        );
+        let root = tree.root.unwrap();
+        let kid = tree.get(root).unwrap().children[0];
+        let b = tree.get(kid).unwrap().bounds;
+        assert_eq!(b.x, 4, "左沿=margin");
+        assert_eq!(b.w, 192, "权重子的交叉轴同样要扣 margin");
     }
 
     #[test]
@@ -5523,6 +5646,64 @@ mod tests {
         fn clip_rect(&mut self, r: Rect) {
             self.inner.clip_rect(r);
         }
+    }
+
+    /// **整窗帧**里内容远高于视口的节点也要剪枝——这是"长列表"的日常形态。
+    ///
+    /// 与下面那条局部帧的用例形态不同，抓的东西也不同：那条测的是"小脏区里少画点"，
+    /// 而这条测的是"整窗帧里，一个高 60 万 px 的列表只画视口那一屏"。后端若在整窗帧
+    /// 返回 `cull_rect() == None`（D2D 一度根本没实现，吃的是 trait 默认值），
+    /// 绘制遍历就会把全部三万行都画一遍——下游实测帧耗时 828 ms、内存多占 44 MB，
+    /// 而画面与只画一屏**完全一样**，所以肉眼和像素断言都发现不了，只能靠图元计数。
+    #[test]
+    fn full_frame_culling_skips_rows_far_below_the_viewport() {
+        const VIEW_H: i32 = 400;
+        const ROW_H: i32 = 20;
+        const ROWS: i32 = 3000; // 内容高 60000 px，是视口的 150 倍
+        let mut root = Element::col().width(240).height(ROWS * ROW_H);
+        for i in 0..ROWS {
+            root = root.child(
+                Element::row()
+                    .width_match()
+                    .height(ROW_H)
+                    .child(Element::label(format!("行 {i}")).weight(1.0)),
+            );
+        }
+        let mut tree = Tree::new();
+        let id = root.build(&mut tree);
+        tree.root = Some(id);
+        let mut te = crate::text::NullTextEngine;
+        // 视口只有 400 高，内容 60000——布局按内容高排，绘制该只碰视口那一屏
+        tree.layout_root(Size::new(240, ROWS * ROW_H), &mut te);
+
+        let count = |cull: Option<Rect>| -> usize {
+            let mut pm = tiny_skia::Pixmap::new(240, VIEW_H as u32).unwrap();
+            let mut eng = crate::text::NullTextEngine;
+            let mut inner = crate::render::SkiaCanvas::with_text_offset(
+                &mut pm,
+                &mut eng,
+                1.0,
+                Point::new(0, 0),
+            );
+            let mut c = CountingCanvas {
+                inner: &mut inner,
+                cull,
+                texts: 0,
+                strokes: 0,
+                fills: 0,
+            };
+            tree.paint(&mut c);
+            c.texts
+        };
+
+        let all = count(None); // 后端报不出范围时的老行为
+        let viewport = count(Some(Rect::new(0, 0, 240, VIEW_H)));
+        assert_eq!(all, ROWS as usize, "不剪枝就是每行都画");
+        assert!(
+            viewport <= (VIEW_H / ROW_H) as usize + 4,
+            "整窗帧也该只画视口那一屏（约 {} 行），实际画了 {viewport} 行",
+            VIEW_H / ROW_H
+        );
     }
 
     /// 局部帧的节点剪枝：**画面必须逐像素等同于不剪枝**，同时确实省掉了图元提交。

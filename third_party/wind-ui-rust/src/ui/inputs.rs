@@ -841,6 +841,10 @@ pub struct TextInput {
     /// `.` 只能有一个，逐字符判定说不清这些。同一把尺子同时管住键入与粘贴，
     /// 不会出现"打不进去但能粘进去"。
     filter: Option<FilterFn>,
+    /// 预置选区（[`crate::ui::Element::select_range`]）。存下来而不是只在建树时写一次
+    /// 光标：节点隐藏 / 禁用时框架会调 `reset_interaction` 清掉选区，复显时要按它再
+    /// 兑现一次——同一个重命名框第二次打开也得是"只选主名"。
+    preset_selection: Option<(usize, usize)>,
     /// 「本控件被点了」的通知（见 [`crate::ui::Element::on_click`]）。
     ///
     /// 与 Button 的同名回调**语义不同**：那里 on_click 就是激活本身，这里只是旁路通知，
@@ -887,12 +891,30 @@ impl TextInput {
             on_nav_key: None,
             filter: None,
             on_click: None,
+            preset_selection: None,
         }
     }
 
     /// 可变访问配置（供 Builder 配置）。
     pub fn config_mut(&mut self) -> &mut TextConfig {
         &mut self.config
+    }
+
+    /// 预置选区 `[start, end)`（字符索引，越界钳到正文长度；`start == end` 只放光标）。
+    /// 记为预设并立即兑现；此后每次 `reset_interaction`（隐藏 / 禁用）再兑现一次。
+    /// 供 Builder；下游用 [`crate::ui::Element::select_range`]。
+    pub fn set_selection(&mut self, start: usize, end: usize) {
+        self.preset_selection = Some((start, end));
+        self.apply_selection(start, end);
+    }
+
+    fn apply_selection(&mut self, start: usize, end: usize) {
+        let n = self.char_count();
+        let s = start.min(n);
+        let e = end.min(n);
+        self.cursor = e;
+        self.anchor = if s == e { None } else { Some(s) };
+        self.follow_cursor.set(true);
     }
 
     /// 设置单行 Enter 回调（供 Builder；下游用 [`crate::ui::Element::on_submit`]）。
@@ -2180,7 +2202,14 @@ impl Widget for TextInput {
                     Key::Up | Key::Down if !self.is_multiline() => self.fire_nav_key(ctx, *k),
                     // 翻页键两种模式都转发：本控件不做翻页（多行的上下移行只按视觉行走），
                     // 交给应用翻候选页 / 翻文档。
-                    Key::Tab | Key::PageUp | Key::PageDown => self.fire_nav_key(ctx, *k),
+                    //
+                    // Escape 同样转发，且同 Tab 默认不消费：输入框自己不用它，而"取消"
+                    // 这件事只有应用知道该怎么做——收起就地编辑框、关掉补全浮层、
+                    // 放弃这次输入。没有这条时应用**根本收不到 Escape**（它既不在本控件
+                    // 的处理表里，也不算被消费），只能眼看着它径直走到宿主的关窗兜底。
+                    Key::Tab | Key::PageUp | Key::PageDown | Key::Escape => {
+                        self.fire_nav_key(ctx, *k)
+                    }
                     Key::Left => {
                         if !k.shift {
                             if let Some((s, _)) = self.selection() {
@@ -2299,9 +2328,15 @@ impl Widget for TextInput {
     }
     fn reset_interaction(&mut self) {
         // 复用同一对话框切换编辑目标时（隐藏→再显示），清掉上一条残留的选区/拖选状态，
-        // 光标落到（新填充文本的）文末，避免带着旧选区进入下一次编辑。
-        self.anchor = None;
-        self.cursor = self.char_count();
+        // 光标落到（新填充文本的）文末，避免带着旧选区进入下一次编辑；有预置选区的
+        // 按预置再兑现一次（钳到新正文长度）。
+        match self.preset_selection {
+            Some((s, e)) => self.apply_selection(s, e),
+            None => {
+                self.anchor = None;
+                self.cursor = self.char_count();
+            }
+        }
         self.dragging = false;
         self.goal_x.set(None);
         self.follow_cursor.set(true);
@@ -2327,6 +2362,58 @@ mod tests {
     fn run(s: &str, idx: usize) -> (usize, usize) {
         let chars: Vec<char> = s.chars().collect();
         word_run(&chars, idx)
+    }
+
+    /// Escape 要能到达 `on_nav_key`：就地编辑框靠它取消。
+    ///
+    /// 没有这条转发时错在哪：Escape 既不在 TextInput 的处理表里、也不算被消费，
+    /// 于是径直走到宿主的关窗兜底——应用侧写了取消回调却永远不触发，表现为
+    /// 「按 Esc 退不出编辑框」，而代码看着完全正确。
+    #[test]
+    fn escape_reaches_on_nav_key() {
+        use crate::core::Widget;
+        use crate::event::{Event, Key, KeyEvent};
+        let text = signal(String::from("abc"));
+        let mut ti = TextInput::new(text, String::new());
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let s2 = seen.clone();
+        ti.set_on_nav_key(move |_ctx, ev| {
+            if ev.key == Key::Escape {
+                s2.set(s2.get() + 1);
+                return true;
+            }
+            false
+        });
+        let ev = Event::Key(KeyEvent {
+            key: Key::Escape,
+            pressed: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        });
+        let consumed = crate::testing::run_with_ctx(|ctx| {
+            ti.on_event(ctx, &ev);
+        });
+        let _ = consumed;
+        assert_eq!(seen.get(), 1, "Escape 应转发给 on_nav_key");
+    }
+
+    #[test]
+    fn reset_interaction_rearms_preset_selection() {
+        use crate::core::Widget;
+        // 重命名框第二次打开：隐藏时框架调 reset_interaction，预置选区要重新兑现，
+        // 而不是像无预置那样清掉。正文变短时钳到新长度。
+        let text = signal(String::from("README.md"));
+        let mut ti = TextInput::new(text, String::new());
+        ti.set_selection(0, 6);
+        ti.anchor = None;
+        ti.cursor = 9;
+        ti.reset_interaction();
+        assert_eq!(ti.selection(), Some((0, 6)));
+        text.set("ab.c".into());
+        ti.reset_interaction();
+        assert_eq!(ti.selection(), Some((0, 4)), "钳到新正文长度");
     }
 
     #[test]
