@@ -910,7 +910,11 @@ impl Host {
             item_padding_x: vc.item_padding_x_dip * scale,
             item_padding_y: vc.item_padding_y_dip * scale,
             preedit_height,
-            max_width: vc.max_width_dip * scale,
+            // Frame update may expand a too-small configured max width to
+            // preserve the fixed label/text/comment columns. Reuse the
+            // actual client width so paint consumes the same effective
+            // window budget instead of clipping the expanded layout.
+            max_width: (vc.max_width_dip * scale).max((client.right - client.left).max(0) as f32),
             max_height: (client.bottom - client.top).max(0) as f32,
             padding_x: vc.padding_x_dip * scale,
             padding_y: vc.padding_y_dip * scale,
@@ -1724,6 +1728,274 @@ fn update_and_paint(host: &mut Host, response: KeyResponse) -> bool {
     .unwrap_or(false)
 }
 
+fn run_candidate_ux_fuzz_stage(host: &mut Host) -> bool {
+    struct Mode {
+        name: &'static str,
+        orientation: FrameOrientation,
+        overflow: FrameOverflow,
+        writing: FrameWriting,
+        scroll_mode: bool,
+        candidate_bulk: bool,
+        max_width_dip: f32,
+    }
+
+    let modes = [
+        Mode {
+            name: "automatic",
+            orientation: FrameOrientation::Automatic,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            candidate_bulk: false,
+            max_width_dip: 520.0,
+        },
+        Mode {
+            name: "paging-horizontal",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            candidate_bulk: false,
+            max_width_dip: 900.0,
+        },
+        Mode {
+            name: "paging-vertical",
+            orientation: FrameOrientation::Vertical,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            candidate_bulk: false,
+            max_width_dip: 520.0,
+        },
+        Mode {
+            name: "wrapping",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Wrapping,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: false,
+            candidate_bulk: false,
+            max_width_dip: 320.0,
+        },
+        Mode {
+            name: "scroll-horizontal",
+            orientation: FrameOrientation::Horizontal,
+            overflow: FrameOverflow::Scrolling,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: true,
+            candidate_bulk: true,
+            max_width_dip: 420.0,
+        },
+        Mode {
+            name: "scroll-vertical",
+            orientation: FrameOrientation::Vertical,
+            overflow: FrameOverflow::Scrolling,
+            writing: FrameWriting::Horizontal,
+            scroll_mode: true,
+            candidate_bulk: true,
+            max_width_dip: 420.0,
+        },
+        Mode {
+            name: "vertical-text-rl",
+            orientation: FrameOrientation::Vertical,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::VerticalRl,
+            scroll_mode: false,
+            candidate_bulk: false,
+            max_width_dip: 420.0,
+        },
+        Mode {
+            name: "vertical-text-lr",
+            orientation: FrameOrientation::Vertical,
+            overflow: FrameOverflow::Paging,
+            writing: FrameWriting::VerticalLr,
+            scroll_mode: false,
+            candidate_bulk: false,
+            max_width_dip: 420.0,
+        },
+    ];
+
+    let mut iterations = 0usize;
+    for (mode_index, mode) in modes.iter().enumerate() {
+        for page_size in 1_u32..=9 {
+            iterations += 1;
+            let stress = mode.name == "automatic" && page_size >= 7;
+            let count = if mode.name == "automatic" {
+                // Automatic orientation is intentionally exercised with a complete
+                // visible page: the resolver treats compact CJK pages as horizontal
+                // only when all candidates fit the configured page size.  The stress
+                // pages use long annotations, which must resolve vertical, while
+                // staying within the native vertical viewport at high DPI.
+                if stress {
+                    (page_size as usize).min(4)
+                } else {
+                    page_size as usize
+                }
+            } else {
+                (page_size as usize + 6).max(12)
+            };
+            let candidates: Vec<_> = (0..count)
+                .map(|index| {
+                    let text = if stress {
+                        "这是一条很长的候选文字用于自动布局压力回归"
+                    } else if mode.name == "automatic" {
+                        "你好"
+                    } else if mode.name == "paging-horizontal" {
+                        "你"
+                    } else {
+                        match index % 6 {
+                            0 => "alpha",
+                            1 => "你好",
+                            2 => "Windows Next",
+                            3 => "😀",
+                            4 => "👍🏽",
+                            _ => "👨‍👩‍👧‍👦",
+                        }
+                    };
+                    let comment = if stress {
+                        "这是一段很长的注释 annotation 用于自动布局压力回归"
+                    } else if mode.name == "automatic" {
+                        ""
+                    } else if mode.name == "paging-horizontal" {
+                        ""
+                    } else {
+                        match index % 4 {
+                            0 => "",
+                            1 => "注释",
+                            2 => "annotation",
+                            _ => "候选说明",
+                        }
+                    };
+                    record(index as u64 + 1, &format!("{}.", index + 1), text, comment)
+                })
+                .collect();
+            let selected = match page_size % 3 {
+                0 => 0,
+                1 => count / 2,
+                _ => count - 1,
+            };
+            host.model.reset();
+            host.presentation.reset();
+            host.scroll.reset();
+            host.visual_config.orientation = mode.orientation;
+            host.visual_config.overflow = mode.overflow;
+            host.visual_config.writing = mode.writing;
+            host.visual_config.scroll_mode = mode.scroll_mode;
+            host.visual_config.max_width_dip = mode.max_width_dip;
+
+            let dpi = [96_u32, 144, 192][(page_size as usize - 1) % 3];
+            let composition = 30_000 + (mode_index as u64 * 100) + page_size as u64;
+            let mut response = make_ux_response(
+                composition,
+                1,
+                if mode.name == "automatic" {
+                    "zh-CN"
+                } else {
+                    "en-US"
+                },
+                candidates,
+                100,
+            );
+            response.candidate_page_size = page_size;
+            response.candidate_page = if mode.scroll_mode {
+                0
+            } else {
+                (selected / page_size as usize) as u32
+            };
+            response.candidate_total = count as u32;
+            response.candidate_bulk = mode.candidate_bulk;
+            response.selected_candidate = if mode.candidate_bulk {
+                selected as u32
+            } else {
+                (selected % page_size as usize) as u32
+            };
+            response.caret.dpi = dpi;
+
+            if !update_and_paint(host, response) {
+                eprintln!(
+                    "REG-CAND-UX-FUZZ-001: {} page_size={page_size} dpi={dpi} failed update/paint",
+                    mode.name
+                );
+                return false;
+            }
+
+            let mut client = Rect::default();
+            // SAFETY: client is a valid writable RECT for the live test window.
+            let client_ok = unsafe { GetClientRect(host.window, &mut client) } != 0;
+            let client_width = (client.right - client.left) as f32;
+            let client_height = (client.bottom - client.top) as f32;
+            let expected_selected = if mode.candidate_bulk {
+                selected
+            } else {
+                selected % page_size as usize
+            };
+            let selected_slot = host
+                .visible_indices
+                .iter()
+                .position(|index| *index == expected_selected);
+            let geometry_ok = client_ok
+                && client_width.is_finite()
+                && client_height.is_finite()
+                && client_width > 0.0
+                && client_height > 0.0
+                && host.arena.built_outputs().len() == count
+                && host.item_rects.len() == host.visible_indices.len()
+                && host.item_rects.iter().all(|rect| {
+                    rect.left.is_finite()
+                        && rect.top.is_finite()
+                        && rect.right.is_finite()
+                        && rect.bottom.is_finite()
+                        && rect.right > rect.left
+                        && rect.bottom > rect.top
+                        && (mode.scroll_mode
+                            || (rect.left >= -1.0
+                                && rect.top >= -1.0
+                                && rect.right <= client_width + 1.0
+                                && rect.bottom <= client_height + 1.0))
+                });
+            let selected_ok = selected_slot.is_some_and(|slot| {
+                let rect = host.item_rects[slot];
+                rect.left >= -1.0
+                    && rect.top >= -1.0
+                    && rect.right <= client_width + 1.0
+                    && rect.bottom <= client_height + 1.0
+            });
+            let expected_horizontal = if mode.orientation == FrameOrientation::Automatic {
+                !stress
+            } else {
+                mode.writing == FrameWriting::Horizontal
+                    && mode.orientation != FrameOrientation::Vertical
+            };
+            let presentation = host.presentation.output();
+            if presentation.has_selected == 0
+                || presentation.selected != expected_selected
+                || host.resolved_horizontal != expected_horizontal
+                || !geometry_ok
+                || !selected_ok
+            {
+                eprintln!(
+                    "REG-CAND-UX-FUZZ-001: {} page_size={page_size} dpi={dpi} selection/layout failed: selected={} expected_selected={expected_selected} visible={:?} slot={selected_slot:?} horizontal={} expected={} client=({client_width}x{client_height}) arena={} geometry_ok={} selected_ok={} rects={:?}",
+                    mode.name,
+                    presentation.selected,
+                    host.visible_indices,
+                    host.resolved_horizontal,
+                    expected_horizontal,
+                    host.arena.built_outputs().len(),
+                    geometry_ok,
+                    selected_ok,
+                    host.item_rects
+                );
+                return false;
+            }
+        }
+    }
+    if iterations != 72 {
+        eprintln!("REG-CAND-UX-FUZZ-001: expected 72 iterations, got {iterations}");
+        return false;
+    }
+    println!("candidate-ux-fuzz-seed=0x43414e445f46555a iterations={iterations}");
+    true
+}
+
 fn run_candidate_ux_self_test(host: &mut Host) -> bool {
     host.visual_config.scroll_mode = false;
     host.visual_config.orientation = FrameOrientation::Automatic;
@@ -2193,6 +2465,10 @@ fn run_candidate_ux_self_test(host: &mut Host) -> bool {
                 return false;
             }
         }
+    }
+    if !run_candidate_ux_fuzz_stage(host) {
+        host.visual_config = saved_visual_config;
+        return false;
     }
     host.visual_config = saved_visual_config;
     true

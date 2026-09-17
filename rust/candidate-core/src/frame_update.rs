@@ -381,23 +381,53 @@ pub fn frame_update(
         max_width: config.max_width_dip * scale,
         window_padding_x: config.padding_x_dip * scale,
     };
-    let Some((items, preedit_panel_size, _scroll_label_column)) = measure_visual_items(
-        state.measure,
-        state.arena.built_outputs(),
-        &render_indices,
-        Some(&String::from_utf8_lossy(&preedit_utf8)),
-        &measure_params,
-    ) else {
+    let Some((items, preedit_panel_size, _scroll_label_column, horizontal_effective_width)) =
+        measure_visual_items(
+            state.measure,
+            state.arena.built_outputs(),
+            &render_indices,
+            Some(&String::from_utf8_lossy(&preedit_utf8)),
+            &measure_params,
+        )
+    else {
         return FrameUpdateOutcome::Dismiss;
     };
     let preedit_panel_width = preedit_panel_size.width;
     let preedit_panel_height = preedit_panel_size.height;
+    // A too-small configured max width cannot contain every grapheme in each
+    // fixed horizontal column. The renderer reports the minimum viable
+    // item width through measurement; expand the owning window to that width
+    // instead of allowing axis layout to clip a label, text, or comment.
+    let configured_max_width = config.max_width_dip * scale;
+    let work_width = (work_area.right - work_area.left).max(0.0);
+    let measured_item_window_width = items
+        .iter()
+        .map(|item| item.width)
+        .chain([preedit_panel_width])
+        .fold(0.0_f32, f32::max)
+        + measure_params.window_padding_x * 2.0;
+    let shared_column_window_width = if horizontal_effective_width.is_finite() {
+        horizontal_effective_width
+            + measure_params.item_padding_x * 2.0
+            + measure_params.window_padding_x * 2.0
+    } else {
+        0.0
+    };
+    let minimum_horizontal_window_width =
+        measured_item_window_width.max(shared_column_window_width);
+    let layout_max_width = if horizontal && !config.scroll_mode {
+        configured_max_width
+            .max(minimum_horizontal_window_width)
+            .min(work_width)
+    } else {
+        configured_max_width
+    };
 
     // 11. Automatic-orientation downgrade.
     if config.orientation == FrameOrientation::Automatic && horizontal {
         let item_widths: Vec<f32> = items.iter().map(|item| item.width).collect();
         let work_width = (work_area.right - work_area.left).max(0.0);
-        let hard_limit = config.max_width_dip * scale.min(work_width);
+        let hard_limit = layout_max_width.min(work_width);
         // SAFETY: `fcitx5_candidate_horizontal_natural_downgrade` reads only
         // `item_widths.as_ptr()` for `item_widths.len()` elements (both valid
         // above) and the scalar arguments; it writes nothing and cannot retain
@@ -441,7 +471,7 @@ pub fn frame_update(
         },
         caret_height: (last_caret.bottom - last_caret.top).max(1.0),
         work_area,
-        max_width: config.max_width_dip * scale,
+        max_width: layout_max_width,
         max_height: 0.0,
         padding_x: config.padding_x_dip * scale,
         padding_y: config.padding_y_dip * scale,
@@ -481,7 +511,7 @@ pub fn frame_update(
         preedit_panel_height,
         preedit_panel_width,
         row_gap: config.row_gap_dip * scale,
-        max_width: config.max_width_dip * scale,
+        max_width: layout_max_width,
         work_left: work_area.left,
         work_top: work_area.top,
         work_right: work_area.right,

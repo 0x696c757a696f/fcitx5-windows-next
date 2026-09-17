@@ -6,7 +6,10 @@ use crate::qingfeng::{
     qingfeng_candidate_visual_plan, QingfengCandidateVisualInput, QingfengOrientation,
     QingfengThemeMode,
 };
-use crate::renderer::grapheme_clusters;
+use crate::renderer::{
+    grapheme_clusters, horizontal_column_anchors, horizontal_run_plan_with_anchors,
+    HorizontalColumnAnchors, HorizontalColumnInput,
+};
 use crate::{Orientation, Placement, Point, Rect, Size};
 
 const SEED: u64 = 0x4341_4E44_5F46_555A;
@@ -40,27 +43,112 @@ impl Rng {
     }
 }
 
-const TEXT_CORPUS: &[&str] = &[
-    "hello",
-    "你好世界",
-    "中文Windows Next",
-    "e\u{301}",
-    "😀",
-    "👍🏽",
-    "🇨🇳",
-    "👨‍👩‍👧‍👦",
-    "1️⃣",
-    "候选·注释·Rime",
-];
-
-fn corpus_value(rng: &mut Rng, long: bool) -> String {
-    let base = TEXT_CORPUS[rng.below(TEXT_CORPUS.len())];
-    let repeats = if long {
-        8 + rng.below(16)
-    } else {
-        1 + rng.below(3)
+fn candidate_fixture(
+    rng: &mut Rng,
+    iteration: usize,
+    index: usize,
+    selected: bool,
+) -> QingfengCandidateVisualInput {
+    let text = match (iteration + index + rng.below(10)) % 10 {
+        0 => "alpha",
+        1 => "你好",
+        2 => "这是一个非常非常长的候选词条",
+        3 => "中文Windows Next",
+        4 => "e\u{301}",
+        5 => "😀",
+        6 => "👍🏽",
+        7 => "🇨🇳",
+        8 => "👨‍👩‍👧‍👦",
+        _ => "1️⃣",
+    }
+    .to_owned();
+    let comment = match (iteration + index) % 4 {
+        0 => String::new(),
+        1 => "注释".to_owned(),
+        2 => "annotation 注释".to_owned(),
+        _ => "这是一个很长的候选注释 annotation".to_owned(),
     };
-    base.repeat(repeats)
+    QingfengCandidateVisualInput {
+        label: format!("{}.", index + 1),
+        text,
+        comment,
+        selected,
+        show_label: true,
+        reserve_label: true,
+    }
+}
+
+fn deterministic_measure(value: &str, font_size: f32) -> (f32, f32) {
+    let clusters = grapheme_clusters(value);
+    let width_factor = if value.chars().all(|character| character.is_ascii()) {
+        0.58
+    } else {
+        1.0
+    };
+    (
+        clusters.len() as f32 * font_size * width_factor,
+        font_size * 1.25,
+    )
+}
+
+fn measured_candidate_size(
+    candidate: &QingfengCandidateVisualInput,
+    anchors: HorizontalColumnAnchors,
+    max_width: f32,
+    dpi: f32,
+) -> Result<Size, String> {
+    check_text_clusters(&candidate.label)?;
+    check_text_clusters(&candidate.text)?;
+    check_text_clusters(&candidate.comment)?;
+    let plan = horizontal_run_plan_with_anchors(
+        &candidate.label,
+        &candidate.text,
+        &candidate.comment,
+        max_width,
+        4.0 * dpi,
+        14.0 * dpi,
+        18.0 * dpi,
+        14.0 * dpi,
+        anchors,
+        deterministic_measure,
+    );
+    if plan
+        .lines
+        .iter()
+        .map(|line| line.label.as_str())
+        .collect::<String>()
+        != candidate.label
+        || plan
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<String>()
+            != candidate.text
+        || plan
+            .lines
+            .iter()
+            .map(|line| line.comment.as_str())
+            .collect::<String>()
+            != candidate.comment
+        || !plan.width.is_finite()
+        || !plan.height.is_finite()
+        || plan.width < 0.0
+        || plan.height < 0.0
+        || plan.lines.iter().any(|line| {
+            (!line.label.is_empty() && line.label_x != anchors.label_x)
+                || (!line.text.is_empty() && line.text_x != anchors.text_x)
+                || (!line.comment.is_empty() && line.comment_x != anchors.comment_x)
+        })
+    {
+        return Err(format!(
+            "run plan lost candidate text label={:?} text={:?} comment={:?} plan={plan:?}",
+            candidate.label, candidate.text, candidate.comment
+        ));
+    }
+    Ok(Size {
+        width: (plan.width + 16.0 * dpi).max(24.0 * dpi),
+        height: (plan.height + 12.0 * dpi).max(24.0 * dpi),
+    })
 }
 
 fn finite_rect(rect: Rect) -> bool {
@@ -205,7 +293,19 @@ fn check_qingfeng_case(
     {
         return Err("Qingfeng plan has invalid window or item count".to_owned());
     }
-    for item in &plan.items {
+    for (index, (input, item)) in inputs.iter().zip(&plan.items).enumerate() {
+        if item.label_text != input.label
+            || item.text != input.text
+            || item.comment != input.comment
+        {
+            return Err(format!(
+                "Qingfeng item {index} lost text label={:?}/{:?} text={:?}/{:?} comment={:?}/{:?}",
+                input.label, item.label_text, input.text, item.text, input.comment, item.comment
+            ));
+        }
+        check_text_clusters(&item.label_text)?;
+        check_text_clusters(&item.text)?;
+        check_text_clusters(&item.comment)?;
         let item_rect = Rect {
             left: item.item_rect.left,
             top: item.item_rect.top,
@@ -277,17 +377,84 @@ fn candidate_text_layout_property_fuzz_smoke() {
         let selected = rng.below(count);
         let page_size = 1 + rng.below(9);
         let dpi = [1.0, 1.25, 1.5, 2.0][rng.below(4)];
-        let items: Vec<Size> = (0..count)
-            .map(|_| Size {
-                width: rng.between(22.0, 92.0) * dpi,
-                height: rng.between(22.0, 46.0) * dpi,
+        let candidate_budget = rng.between(120.0, 360.0) * dpi;
+        let qingfeng_selected = selected.min(count.min(18) - 1);
+        let candidate_inputs: Vec<_> = (0..count)
+            .map(|index| candidate_fixture(&mut rng, iteration, index, index == qingfeng_selected))
+            .collect();
+        let column_inputs: Vec<_> = candidate_inputs
+            .iter()
+            .map(|candidate| HorizontalColumnInput {
+                label: &candidate.label,
+                reserved_label: &candidate.label,
+                text: &candidate.text,
+                comment: &candidate.comment,
             })
             .collect();
+        let anchors = horizontal_column_anchors(
+            &column_inputs,
+            24.0 * dpi,
+            candidate_budget,
+            4.0 * dpi,
+            14.0 * dpi,
+            18.0 * dpi,
+            14.0 * dpi,
+            deterministic_measure,
+        );
+        let mut reordered = column_inputs.clone();
+        reordered.reverse();
+        assert_eq!(
+            anchors,
+            horizontal_column_anchors(
+                &reordered,
+                24.0 * dpi,
+                candidate_budget,
+                4.0 * dpi,
+                14.0 * dpi,
+                18.0 * dpi,
+                14.0 * dpi,
+                deterministic_measure,
+            ),
+            "candidate order changed horizontal anchors"
+        );
+        if ![
+            anchors.label_x,
+            anchors.text_x,
+            anchors.comment_x,
+            anchors.label_width,
+            anchors.text_width,
+            anchors.comment_width,
+        ]
+        .into_iter()
+        .all(f32::is_finite)
+            || !(anchors.label_x <= anchors.text_x && anchors.text_x <= anchors.comment_x)
+        {
+            panic!(
+                "seed=0x{SEED:016x} iteration={iteration}: invalid horizontal anchors {anchors:?}"
+            );
+        }
+        let items: Vec<Size> = candidate_inputs
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                measured_candidate_size(candidate, anchors, candidate_budget, dpi).unwrap_or_else(
+                    |error| {
+                        panic!(
+                            "seed=0x{SEED:016x} iteration={iteration} candidate={index} \
+                         text={:?} comment={:?}: {error}",
+                            candidate.text, candidate.comment
+                        )
+                    },
+                )
+            })
+            .collect();
+        let widest_item = items.iter().map(|item| item.width).fold(0.0_f32, f32::max);
+        let tallest_item = items.iter().map(|item| item.height).fold(0.0_f32, f32::max);
         let work_area = Rect {
             left: 0.0,
             top: 0.0,
-            right: rng.between(280.0, 980.0),
-            bottom: rng.between(220.0, 720.0),
+            right: (widest_item + rng.between(280.0, 980.0)).max(640.0),
+            bottom: (tallest_item + rng.between(220.0, 720.0)).max(420.0),
         };
         let layout_case = iteration % 10;
         // Every generated candidate must fit individually; overflow pressure
@@ -406,21 +573,8 @@ fn candidate_text_layout_property_fuzz_smoke() {
                 max_height,
             ),
             7..=9 => {
-                let inputs: Vec<_> = (0..count.min(18))
-                    .map(|index| QingfengCandidateVisualInput {
-                        label: format!("{}.", index + 1),
-                        text: corpus_value(&mut rng, index % 7 == 0),
-                        comment: if index % 3 == 0 {
-                            corpus_value(&mut rng, false)
-                        } else {
-                            String::new()
-                        },
-                        selected: index == selected.min(count.min(18) - 1),
-                        show_label: true,
-                        reserve_label: true,
-                    })
-                    .collect();
-                for input in &inputs {
+                let inputs = &candidate_inputs[..count.min(18)];
+                for input in inputs {
                     check_text_clusters(&input.text).unwrap_or_else(|error| {
                         panic!(
                             "seed=0x{SEED:016x} iteration={iteration} layout={layout_name} \
@@ -440,7 +594,7 @@ fn candidate_text_layout_property_fuzz_smoke() {
                         8 => QingfengOrientation::Vertical,
                         _ => QingfengOrientation::Grid,
                     },
-                    &inputs,
+                    inputs,
                     dpi,
                 )
             }

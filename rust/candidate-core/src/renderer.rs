@@ -115,6 +115,10 @@ pub struct RenderGeometry {
     /// fit today and still need the scroll label column reserved so its text
     /// origin does not jump when the next candidate arrives.
     pub scroll_mode: bool,
+    /// Hard total window width used by the measure and paint passes.
+    pub max_width: f32,
+    /// Outer horizontal padding already included in `max_width`.
+    pub window_padding_x: f32,
 }
 
 impl Default for RenderGeometry {
@@ -128,6 +132,8 @@ impl Default for RenderGeometry {
             item_padding_y: 6.0,
             preedit_height: 34.0,
             scroll_mode: false,
+            max_width: 0.0,
+            window_padding_x: 0.0,
         }
     }
 }
@@ -149,6 +155,29 @@ enum HorizontalSegment {
     Comment,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HorizontalColumnInput<'a> {
+    pub label: &'a str,
+    pub reserved_label: &'a str,
+    pub text: &'a str,
+    pub comment: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct HorizontalColumnAnchors {
+    pub label_x: f32,
+    pub text_x: f32,
+    pub comment_x: f32,
+    pub label_width: f32,
+    pub text_width: f32,
+    pub comment_width: f32,
+    /// Effective content width required to keep every non-empty segment on
+    /// one row with distinct columns. A configured max width below this
+    /// minimum is expanded by the owning window layout rather than turning
+    /// the candidate into a vertical stack.
+    pub effective_width: f32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct HorizontalRunLine {
     pub label: String,
@@ -156,10 +185,14 @@ pub(crate) struct HorizontalRunLine {
     pub comment: String,
     pub width: f32,
     pub height: f32,
+    pub label_x: f32,
+    pub text_x: f32,
+    pub comment_x: f32,
     /// Stable label-column width used before candidate text.
     pub label_slot_width: f32,
     label_width: f32,
-    last_segment: Option<HorizontalSegment>,
+    text_width: f32,
+    comment_width: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -167,37 +200,144 @@ pub(crate) struct HorizontalRunPlan {
     pub lines: Vec<HorizontalRunLine>,
     pub width: f32,
     pub height: f32,
+    pub anchors: HorizontalColumnAnchors,
+}
+
+fn line_with_anchors(anchors: HorizontalColumnAnchors) -> HorizontalRunLine {
+    HorizontalRunLine {
+        label_x: anchors.label_x,
+        text_x: anchors.text_x,
+        comment_x: anchors.comment_x,
+        label_slot_width: anchors.label_width,
+        ..HorizontalRunLine::default()
+    }
+}
+
+/// Return the raw candidate-content budget shared by measurement and paint.
+/// `horizontal_column_anchors` consumes the two inter-column gaps from this
+/// value; callers must not pass an already measured item width here.
+pub(crate) fn horizontal_available_width(
+    max_width: f32,
+    window_padding_x: f32,
+    item_padding_x: f32,
+    scroll_mode: bool,
+) -> f32 {
+    if scroll_mode || !max_width.is_finite() || max_width <= 0.0 {
+        return f32::INFINITY;
+    }
+    (max_width.max(1.0) - window_padding_x.max(0.0) * 2.0 - item_padding_x.max(0.0) * 2.0).max(1.0)
+}
+
+/// Compute one set of columns for the entire visible candidate set.
+///
+/// The returned x values are relative to the candidate content origin. When
+/// a finite budget is too small, `effective_width` expands to the minimum
+/// viable one-row window; every segment keeps its x anchor and wrapping
+/// remains grapheme-safe.
+pub(crate) fn horizontal_column_anchors<F>(
+    candidates: &[HorizontalColumnInput<'_>],
+    reserved_label_width: f32,
+    max_width: f32,
+    label_gap: f32,
+    label_font_size: f32,
+    text_font_size: f32,
+    comment_font_size: f32,
+    mut measure: F,
+) -> HorizontalColumnAnchors
+where
+    F: FnMut(&str, f32) -> (f32, f32),
+{
+    let mut label_width = reserved_label_width.max(0.0);
+    let mut text_width = 0.0_f32;
+    let mut comment_width = 0.0_f32;
+    for candidate in candidates {
+        if !candidate.label.is_empty() {
+            label_width = label_width.max(measure(candidate.label, label_font_size).0.max(0.0));
+        }
+        if !candidate.reserved_label.is_empty() {
+            label_width = label_width.max(
+                measure(candidate.reserved_label, label_font_size)
+                    .0
+                    .max(0.0),
+            );
+        }
+        if !candidate.text.is_empty() {
+            text_width = text_width.max(measure(candidate.text, text_font_size).0.max(0.0));
+        }
+        if !candidate.comment.is_empty() {
+            comment_width =
+                comment_width.max(measure(candidate.comment, comment_font_size).0.max(0.0));
+        }
+    }
+    let gap = label_gap.max(0.0);
+    let required_text_width = candidates
+        .iter()
+        .filter(|candidate| !candidate.text.is_empty())
+        .flat_map(|candidate| grapheme_clusters(candidate.text))
+        .map(|cluster| measure(cluster, text_font_size).0.max(0.0))
+        .reduce(f32::max)
+        .unwrap_or(0.0);
+    let required_comment_width = candidates
+        .iter()
+        .filter(|candidate| !candidate.comment.is_empty())
+        .flat_map(|candidate| grapheme_clusters(candidate.comment))
+        .map(|cluster| measure(cluster, comment_font_size).0.max(0.0))
+        .reduce(f32::max)
+        .unwrap_or(0.0);
+    let effective_width = if max_width.is_finite() {
+        // Preserve a single-row column model. If the configured width cannot
+        // fit the first grapheme of each populated column, the window must
+        // grow to this minimum; stacking segments would change their shared
+        // baseline and make the candidate internally inconsistent.
+        max_width
+            .max(1.0)
+            .max(label_width + required_text_width + required_comment_width + gap * 2.0)
+    } else {
+        f32::INFINITY
+    };
+    if effective_width.is_finite() {
+        let content_budget = (effective_width - gap * 2.0).max(1.0);
+        label_width = label_width.min(content_budget);
+        let available_after_label = (content_budget - label_width).max(0.0);
+        if required_text_width > 0.0 && required_comment_width > 0.0 {
+            text_width = text_width
+                .min((available_after_label - required_comment_width).max(required_text_width))
+                .max(required_text_width);
+            comment_width = comment_width
+                .min((available_after_label - text_width).max(required_comment_width))
+                .max(required_comment_width);
+        } else if required_text_width > 0.0 {
+            text_width = text_width
+                .min(available_after_label)
+                .max(required_text_width);
+            comment_width = 0.0;
+        } else if required_comment_width > 0.0 {
+            comment_width = comment_width
+                .min(available_after_label)
+                .max(required_comment_width);
+            text_width = 0.0;
+        } else {
+            text_width = text_width.min(available_after_label);
+            comment_width = comment_width.min((available_after_label - text_width).max(0.0));
+        }
+    }
+    let text_x = label_width + gap;
+    let comment_x = text_x + text_width + gap;
+    HorizontalColumnAnchors {
+        label_x: 0.0,
+        text_x,
+        comment_x,
+        label_width,
+        text_width,
+        comment_width,
+        effective_width,
+    }
 }
 
 /// Make the exact horizontal lines used by both measurement and painting.
 /// Breaks happen only between the repository's grapheme clusters, so a long
 /// candidate or comment grows vertically instead of being silently dropped.
-fn horizontal_segment_gap(
-    line: &HorizontalRunLine,
-    segment: HorizontalSegment,
-    reserved_label_width: f32,
-    label_gap: f32,
-) -> f32 {
-    if segment == HorizontalSegment::Text && line.last_segment.is_none() {
-        if reserved_label_width > 0.0 {
-            reserved_label_width + label_gap.max(0.0)
-        } else {
-            0.0
-        }
-    } else if line.last_segment.is_some() && line.last_segment != Some(segment) {
-        let segment_gap = label_gap.max(0.0);
-        if segment == HorizontalSegment::Text && line.last_segment == Some(HorizontalSegment::Label)
-        {
-            let slot_width = reserved_label_width.max(line.label_width);
-            segment_gap + (slot_width - line.label_width).max(0.0)
-        } else {
-            segment_gap
-        }
-    } else {
-        0.0
-    }
-}
-
+#[cfg(test)]
 pub(crate) fn horizontal_run_plan<F>(
     label: &str,
     reserved_label_width: f32,
@@ -213,13 +353,60 @@ pub(crate) fn horizontal_run_plan<F>(
 where
     F: FnMut(&str, f32) -> (f32, f32),
 {
-    let budget = if max_width.is_finite() {
+    let candidate = [HorizontalColumnInput {
+        label,
+        reserved_label: "",
+        text,
+        comment,
+    }];
+    let anchors = horizontal_column_anchors(
+        &candidate,
+        reserved_label_width,
+        max_width,
+        label_gap,
+        label_font_size,
+        text_font_size,
+        comment_font_size,
+        &mut measure,
+    );
+    horizontal_run_plan_with_anchors(
+        label,
+        text,
+        comment,
+        max_width,
+        label_gap,
+        label_font_size,
+        text_font_size,
+        comment_font_size,
+        anchors,
+        measure,
+    )
+}
+
+pub(crate) fn horizontal_run_plan_with_anchors<F>(
+    label: &str,
+    text: &str,
+    comment: &str,
+    max_width: f32,
+    _label_gap: f32,
+    label_font_size: f32,
+    text_font_size: f32,
+    comment_font_size: f32,
+    anchors: HorizontalColumnAnchors,
+    mut measure: F,
+) -> HorizontalRunPlan
+where
+    F: FnMut(&str, f32) -> (f32, f32),
+{
+    let budget = if anchors.effective_width.is_finite() {
+        max_width.max(anchors.effective_width).max(1.0)
+    } else if max_width.is_finite() {
         max_width.max(1.0)
     } else {
         f32::INFINITY
     };
     let mut lines = Vec::new();
-    let mut line = HorizontalRunLine::default();
+    let mut line = line_with_anchors(anchors);
 
     let push_cluster = |line: &mut HorizontalRunLine,
                         segment: HorizontalSegment,
@@ -229,11 +416,24 @@ where
      -> bool {
         let (cluster_width, cluster_height) = measure(cluster, font_size);
         let cluster_width = cluster_width.max(0.0);
-        let gap = horizontal_segment_gap(line, segment, reserved_label_width, label_gap);
-        if line.last_segment.is_some()
-            && line.width + gap + cluster_width > budget
-            && line.width > 0.0
-        {
+        let (segment_x, segment_width, segment_capacity) = match segment {
+            HorizontalSegment::Label => {
+                (anchors.label_x, &mut line.label_width, anchors.label_width)
+            }
+            HorizontalSegment::Text => (anchors.text_x, &mut line.text_width, anchors.text_width),
+            HorizontalSegment::Comment => (
+                anchors.comment_x,
+                &mut line.comment_width,
+                anchors.comment_width,
+            ),
+        };
+        let right = segment_x + *segment_width + cluster_width;
+        let first_cluster = line.width <= f32::EPSILON && *segment_width <= f32::EPSILON;
+        let fits_slot = *segment_width + cluster_width <= segment_capacity + 0.001;
+        if right > budget + 0.001 {
+            return false;
+        }
+        if !fits_slot && !(first_cluster && right <= budget) {
             return false;
         }
         let target = match segment {
@@ -242,15 +442,9 @@ where
             HorizontalSegment::Comment => &mut line.comment,
         };
         target.push_str(cluster);
-        line.width += gap + cluster_width;
+        *segment_width += cluster_width;
+        line.width = line.width.max(right);
         line.height = line.height.max(cluster_height);
-        if segment == HorizontalSegment::Label {
-            line.label_width += cluster_width;
-            line.label_slot_width = reserved_label_width.max(line.label_width);
-        } else if segment == HorizontalSegment::Text && line.last_segment.is_none() {
-            line.label_slot_width = reserved_label_width;
-        }
-        line.last_segment = Some(segment);
         true
     };
 
@@ -263,38 +457,24 @@ where
         if clusters.is_empty() {
             continue;
         }
-        // Most candidate runs fit as a whole. Measure that common case once;
-        // only the genuinely oversized run takes the grapheme-safe wrapping
-        // path below.
-        let (full_width, full_height) = measure(value, font_size);
-        let gap = horizontal_segment_gap(&line, segment, reserved_label_width, label_gap);
-        if line.width + gap + full_width <= budget {
-            let target = match segment {
-                HorizontalSegment::Label => &mut line.label,
-                HorizontalSegment::Text => &mut line.text,
-                HorizontalSegment::Comment => &mut line.comment,
-            };
-            target.push_str(value);
-            line.width += gap + full_width.max(0.0);
-            line.height = line.height.max(full_height.max(0.0));
-            if segment == HorizontalSegment::Label {
-                line.label_width += full_width.max(0.0);
-                line.label_slot_width = reserved_label_width.max(line.label_width);
-            } else if segment == HorizontalSegment::Text && line.last_segment.is_none() {
-                line.label_slot_width = reserved_label_width;
-            }
-            line.last_segment = Some(segment);
-            continue;
-        }
         for cluster in clusters {
             if !push_cluster(&mut line, segment, cluster, font_size, &mut measure) {
-                lines.push(line);
-                line = HorizontalRunLine::default();
-                let _ = push_cluster(&mut line, segment, cluster, font_size, &mut measure);
+                if line.width > 0.0 {
+                    lines.push(line);
+                    line = line_with_anchors(anchors);
+                }
+                // The effective inline width reserves the first grapheme of
+                // every populated column, so retrying on a fresh line keeps
+                // the same x anchor without dropping or overflowing it.
+                let pushed = push_cluster(&mut line, segment, cluster, font_size, &mut measure);
+                debug_assert!(
+                    pushed,
+                    "inline fallback overflow: segment={segment:?} cluster={cluster:?} anchors={anchors:?} budget={budget}"
+                );
             }
         }
     }
-    if line.last_segment.is_some() {
+    if line.width > 0.0 {
         lines.push(line);
     }
     let width = lines.iter().map(|line| line.width).fold(0.0, f32::max);
@@ -303,6 +483,7 @@ where
         lines,
         width,
         height,
+        anchors,
     }
 }
 
@@ -469,6 +650,32 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
     } else {
         0.0
     };
+    let horizontal_inputs: Vec<_> = input
+        .candidates
+        .iter()
+        .map(|candidate| HorizontalColumnInput {
+            label: &candidate.label,
+            reserved_label: &candidate.reserved_label,
+            text: &candidate.text,
+            comment: &candidate.comment,
+        })
+        .collect();
+    let horizontal_budget = horizontal_available_width(
+        input.geometry.max_width,
+        input.geometry.window_padding_x,
+        input.geometry.item_padding_x,
+        input.geometry.scroll_mode,
+    );
+    let horizontal_anchors = horizontal_column_anchors(
+        &horizontal_inputs,
+        scroll_label_slot_width,
+        horizontal_budget,
+        input.geometry.label_gap,
+        input.geometry.label_font_size,
+        input.geometry.font_size,
+        input.geometry.comment_font_size,
+        |value, size| measurement_cache.measure(&mut canvas, input.font_family, value, size),
+    );
     if let Some(selected) = input.selected {
         if let Some(item) = axis.items.get(selected).filter(|item| item.visible) {
             draw_selection(&mut canvas, input, window_w, window_h, item, y_offset);
@@ -502,7 +709,7 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
                 candidate,
                 selected,
                 y_offset,
-                scroll_label_slot_width,
+                horizontal_anchors,
                 &mut measurement_cache,
             );
         } else {
@@ -659,7 +866,7 @@ fn draw_candidate_horizontal(
     candidate: &CandidateRenderData,
     selected: bool,
     _y_offset: f32,
-    scroll_label_slot_width: f32,
+    horizontal_anchors: HorizontalColumnAnchors,
     measurement_cache: &mut TextMeasurementCache,
 ) {
     let origin = &input.axis_result.window;
@@ -692,11 +899,15 @@ fn draw_candidate_horizontal(
     let available_width = if geometry.scroll_mode {
         natural_content_width
     } else {
-        (content_right - content_left).max(1.0)
+        horizontal_available_width(
+            geometry.max_width,
+            geometry.window_padding_x,
+            geometry.item_padding_x,
+            false,
+        )
     };
-    let plan = horizontal_run_plan(
+    let plan = horizontal_run_plan_with_anchors(
         &candidate.label,
-        scroll_label_slot_width,
         &candidate.text,
         &candidate.comment,
         available_width,
@@ -704,6 +915,7 @@ fn draw_candidate_horizontal(
         geometry.label_font_size,
         geometry.font_size,
         geometry.comment_font_size,
+        horizontal_anchors,
         |value, size| measurement_cache.measure(canvas, input.font_family, value, size),
     );
     let text_color = if selected {
@@ -718,7 +930,16 @@ fn draw_candidate_horizontal(
         }
         let line_height = line.height.max(1.0);
         let line_bottom = (line_top + line_height).min(row_bottom);
-        let mut cursor = content_left;
+        let mut baseline = line_top;
+        for (value, style) in [
+            (&line.label, &style_label),
+            (&line.text, &style_text),
+            (&line.comment, &style_comment),
+        ] {
+            if !value.is_empty() {
+                baseline = baseline.max(line_top + canvas.text_line_metrics(value, style).ascent);
+            }
+        }
         if line.label_slot_width > 0.0 && !line.label.is_empty() {
             let label_w = measurement_cache
                 .measure(
@@ -728,66 +949,75 @@ fn draw_candidate_horizontal(
                     geometry.label_font_size,
                 )
                 .0;
-            let right = (cursor + label_w).min(content_right);
-            if right > cursor {
+            let label_left = (content_left + line.label_x).min(content_right);
+            let right = (label_left + label_w).min(content_right);
+            if right > label_left {
+                let rect = horizontal_segment_rect(
+                    canvas,
+                    &line.label,
+                    &style_label,
+                    label_left,
+                    right,
+                    baseline,
+                    line_bottom,
+                );
                 draw_text_clipped(
                     canvas,
                     &line.label,
-                    Rect {
-                        left: cursor,
-                        top: line_top
-                            + baseline_offset(geometry.font_size, geometry.label_font_size),
-                        right,
-                        bottom: line_bottom,
-                    },
+                    rect,
                     text_color,
-                    WindAlign::End,
+                    WindAlign::Start,
                     &style_label,
                 );
             }
-            cursor = (content_left + line.label_slot_width + label_gap).min(content_right);
-        } else if line.label_slot_width > 0.0 {
-            cursor = (content_left + line.label_slot_width + label_gap).min(content_right);
         }
         if !line.text.is_empty() {
             let text_w = measurement_cache
                 .measure(canvas, input.font_family, &line.text, geometry.font_size)
                 .0;
-            let right = (cursor + text_w).min(content_right);
-            if right > cursor {
+            let text_left = (content_left + line.text_x).min(content_right);
+            let text_right = if !line.comment.is_empty() {
+                (content_left + line.comment_x - label_gap).min(content_right)
+            } else {
+                content_right
+            };
+            let right = (text_left + text_w).min(text_right.max(text_left));
+            if right > text_left {
+                let rect = horizontal_segment_rect(
+                    canvas,
+                    &line.text,
+                    &style_text,
+                    text_left,
+                    right,
+                    baseline,
+                    line_bottom,
+                );
                 draw_text_clipped(
                     canvas,
                     &line.text,
-                    Rect {
-                        left: cursor,
-                        top: line_top,
-                        right,
-                        bottom: line_bottom,
-                    },
+                    rect,
                     text_color,
                     WindAlign::Start,
                     &style_text,
                 );
             }
-            cursor = right;
         }
         if !line.comment.is_empty() {
-            let comment_left = if line.label.is_empty() && line.text.is_empty() {
-                cursor
-            } else {
-                (cursor + label_gap).min(content_right)
-            };
+            let comment_left = (content_left + line.comment_x).min(content_right);
             if comment_left < content_right {
+                let rect = horizontal_segment_rect(
+                    canvas,
+                    &line.comment,
+                    &style_comment,
+                    comment_left,
+                    content_right,
+                    baseline,
+                    line_bottom,
+                );
                 draw_text_clipped(
                     canvas,
                     &line.comment,
-                    Rect {
-                        left: comment_left,
-                        top: line_top
-                            + baseline_offset(geometry.font_size, geometry.comment_font_size),
-                        right: content_right,
-                        bottom: line_bottom,
-                    },
+                    rect,
                     input.theme.comment_color.wind(),
                     WindAlign::Start,
                     &style_comment,
@@ -798,8 +1028,22 @@ fn draw_candidate_horizontal(
     }
 }
 
-fn baseline_offset(candidate_font_size: f32, segment_font_size: f32) -> f32 {
-    (candidate_font_size - segment_font_size).max(0.0)
+fn horizontal_segment_rect(
+    canvas: &mut SkiaCanvas<'_>,
+    text: &str,
+    style: &WindTextStyle<'_>,
+    left: f32,
+    right: f32,
+    baseline: f32,
+    row_bottom: f32,
+) -> Rect {
+    let metrics = canvas.text_line_metrics(text, style);
+    Rect {
+        left,
+        top: (baseline - metrics.ascent).max(0.0),
+        right,
+        bottom: (baseline + metrics.descent).min(row_bottom),
+    }
 }
 
 fn horizontal_scroll_label_slot_width<F>(candidates: &[CandidateRenderData], mut measure: F) -> f32
@@ -1212,6 +1456,8 @@ mod tests {
             item_padding_y: 6.0,
             preedit_height: 30.0,
             scroll_mode: false,
+            max_width: 0.0,
+            window_padding_x: 0.0,
         }
     }
 
@@ -1240,10 +1486,431 @@ mod tests {
         assert_eq!(theme.corner_radius, WECHAT_WINDOW_RADIUS_DIP);
     }
 
+    fn anchor_measure(value: &str, size: f32) -> (f32, f32) {
+        (grapheme_clusters(value).len() as f32 * size, size)
+    }
+
     #[test]
-    fn smaller_label_uses_the_candidate_baseline() {
-        assert_eq!(baseline_offset(22.0, 18.0), 4.0);
-        assert_eq!(baseline_offset(18.0, 22.0), 0.0);
+    fn horizontal_columns_are_stable_across_candidate_lengths() {
+        let candidates = vec![
+            HorizontalColumnInput {
+                label: "1.",
+                reserved_label: "1.",
+                text: "你",
+                comment: "注",
+            },
+            HorizontalColumnInput {
+                label: "10.",
+                reserved_label: "10.",
+                text: "你好",
+                comment: "注释",
+            },
+            HorizontalColumnInput {
+                label: "100.",
+                reserved_label: "100.",
+                text: "这是一个明显更长的候选正文",
+                comment: "这是一段明显更长的注释",
+            },
+        ];
+        let anchors = horizontal_column_anchors(
+            &candidates,
+            0.0,
+            f32::INFINITY,
+            4.0,
+            15.3,
+            18.0,
+            14.4,
+            anchor_measure,
+        );
+        let mut reordered = candidates.clone();
+        reordered.reverse();
+        assert_eq!(
+            anchors,
+            horizontal_column_anchors(
+                &reordered,
+                0.0,
+                f32::INFINITY,
+                4.0,
+                15.3,
+                18.0,
+                14.4,
+                anchor_measure,
+            )
+        );
+        assert!(anchors.label_x < anchors.text_x && anchors.text_x < anchors.comment_x);
+    }
+
+    #[test]
+    fn horizontal_wrapping_preserves_segment_column_anchors() {
+        let candidate = HorizontalColumnInput {
+            label: "100.",
+            reserved_label: "100.",
+            text: "候选文字候选文字😀👨‍👩‍👧‍👦",
+            comment: "注释信息注释信息这是一个很长的注释",
+        };
+        let anchors = horizontal_column_anchors(
+            &[candidate],
+            0.0,
+            160.0,
+            4.0,
+            15.3,
+            18.0,
+            14.4,
+            anchor_measure,
+        );
+        let plan = horizontal_run_plan_with_anchors(
+            candidate.label,
+            candidate.text,
+            candidate.comment,
+            160.0,
+            4.0,
+            15.3,
+            18.0,
+            14.4,
+            anchors,
+            anchor_measure,
+        );
+        assert!(plan.lines.len() > 1, "fixture must wrap: {plan:?}");
+        assert_eq!(
+            plan.lines
+                .iter()
+                .map(|line| line.label.as_str())
+                .collect::<String>(),
+            candidate.label
+        );
+        assert_eq!(
+            plan.lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<String>(),
+            candidate.text
+        );
+        assert_eq!(
+            plan.lines
+                .iter()
+                .map(|line| line.comment.as_str())
+                .collect::<String>(),
+            candidate.comment
+        );
+        for line in &plan.lines {
+            if !line.label.is_empty() {
+                assert_eq!(line.label_x, anchors.label_x);
+            }
+            if !line.text.is_empty() {
+                assert_eq!(line.text_x, anchors.text_x);
+            }
+            if !line.comment.is_empty() {
+                assert_eq!(line.comment_x, anchors.comment_x);
+            }
+        }
+    }
+
+    #[test]
+    fn tiny_width_expands_inline_columns_without_dropping_candidate_text() {
+        let candidate = HorizontalColumnInput {
+            label: "100.",
+            reserved_label: "100.",
+            text: "你好",
+            comment: "这是一个非常非常长的候选注释 annotation",
+        };
+        let assert_case = |budget: f32| {
+            let anchors = horizontal_column_anchors(
+                &[candidate],
+                0.0,
+                budget,
+                4.0,
+                15.3,
+                18.0,
+                14.4,
+                anchor_measure,
+            );
+            let plan = horizontal_run_plan_with_anchors(
+                candidate.label,
+                candidate.text,
+                candidate.comment,
+                budget,
+                4.0,
+                15.3,
+                18.0,
+                14.4,
+                anchors,
+                anchor_measure,
+            );
+            assert!(
+                anchors.text_width > 0.0,
+                "text needs a drawable slot: {anchors:?}"
+            );
+            assert!(
+                anchors.effective_width >= budget,
+                "effective width must not shrink the requested budget: {anchors:?}"
+            );
+            assert!(anchors.text_x > anchors.label_x);
+            assert!(anchors.comment_x > anchors.text_x);
+            assert_eq!(
+                plan.lines
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect::<String>(),
+                candidate.text
+            );
+            assert_eq!(
+                plan.lines
+                    .iter()
+                    .map(|line| line.comment.as_str())
+                    .collect::<String>(),
+                candidate.comment
+            );
+            for line in &plan.lines {
+                assert!(
+                    line.width <= anchors.effective_width + 0.001,
+                    "line exceeds budget: {line:?}"
+                );
+                if !line.text.is_empty() {
+                    assert!(line.text_width > 0.0);
+                }
+                if !line.comment.is_empty() {
+                    assert!(line.comment_width > 0.0);
+                }
+                if !line.text.is_empty() && !line.comment.is_empty() {
+                    assert!(line.text_x + line.text_width <= line.comment_x + 0.001);
+                }
+            }
+        };
+
+        // Positive text slot: normal inline columns remain unchanged.
+        assert_case(140.0);
+        // Former zero-slot input: expand the minimum viable one-row window
+        // instead of stacking segments or allowing a grapheme to overflow.
+        assert_case(80.0);
+    }
+
+    fn first_dark_pixel(
+        output: &RenderWindowOutput,
+        x_start: u32,
+        x_end: u32,
+        y_start: u32,
+        y_end: u32,
+    ) -> Option<u32> {
+        (x_start..x_end.min(output.width)).find(|x| {
+            (y_start..y_end.min(output.height)).any(|y| {
+                let Some([blue, green, red, _]) = output.pixel(*x, y) else {
+                    return false;
+                };
+                red < 180 && green < 180 && blue < 180
+            })
+        })
+    }
+
+    fn last_dark_pixel_y(
+        output: &RenderWindowOutput,
+        x_start: u32,
+        x_end: u32,
+        y_start: u32,
+        y_end: u32,
+    ) -> Option<u32> {
+        (y_start..y_end.min(output.height)).rev().find(|y| {
+            (x_start..x_end.min(output.width)).any(|x| {
+                let Some([blue, green, red, _]) = output.pixel(x, *y) else {
+                    return false;
+                };
+                red < 180 && green < 180 && blue < 180
+            })
+        })
+    }
+
+    #[test]
+    fn rendered_horizontal_columns_do_not_drift() {
+        let axis = axis_layout(&vertical_input(&[(420.0, 120.0); 3]));
+        let candidates = vec![
+            CandidateRenderData {
+                label: "1.".to_owned(),
+                reserved_label: "1.".to_owned(),
+                text: "A".to_owned(),
+                comment: "C".to_owned(),
+            },
+            CandidateRenderData {
+                label: "10.".to_owned(),
+                reserved_label: "10.".to_owned(),
+                text: "AB".to_owned(),
+                comment: "CC".to_owned(),
+            },
+            CandidateRenderData {
+                label: "100.".to_owned(),
+                reserved_label: "100.".to_owned(),
+                text: "A long candidate".to_owned(),
+                comment: "C long annotation".to_owned(),
+            },
+        ];
+        let geometry = geometry();
+        let output = render_candidate_window(&RenderWindowInput {
+            axis_result: &axis,
+            candidates: &candidates,
+            theme: &theme(),
+            geometry: &geometry,
+            font_family: "Microsoft YaHei UI",
+            preedit: None,
+            dpi_scale: 1.0,
+            high_contrast: false,
+            selected: None,
+        });
+        let mut measure_pixmap = Pixmap::new(1, 1).expect("measurement pixmap");
+        let mut measure_engine = DWriteEngine::new();
+        let mut measure_canvas =
+            SkiaCanvas::with_text(&mut measure_pixmap, &mut measure_engine, 1.0);
+        let mut measurement_cache = TextMeasurementCache::default();
+        let anchor_inputs: Vec<_> = candidates
+            .iter()
+            .map(|candidate| HorizontalColumnInput {
+                label: &candidate.label,
+                reserved_label: &candidate.reserved_label,
+                text: &candidate.text,
+                comment: &candidate.comment,
+            })
+            .collect();
+        let anchors = horizontal_column_anchors(
+            &anchor_inputs,
+            0.0,
+            404.0,
+            geometry.label_gap,
+            geometry.label_font_size,
+            geometry.font_size,
+            geometry.comment_font_size,
+            |value, size| {
+                measurement_cache.measure(&mut measure_canvas, "Microsoft YaHei UI", value, size)
+            },
+        );
+        let mut columns = [Vec::new(), Vec::new(), Vec::new()];
+        for item in &axis.items {
+            let content_left =
+                (item.rect.left - axis.window.left) as u32 + geometry.item_padding_x as u32;
+            let top = (item.rect.top - axis.window.top) as u32 + geometry.item_padding_y as u32;
+            let bottom = (item.rect.bottom - axis.window.top) as u32;
+            let expected = [
+                content_left + anchors.label_x as u32,
+                content_left + anchors.text_x as u32,
+                content_left + anchors.comment_x as u32,
+            ];
+            columns[0].push(
+                first_dark_pixel(
+                    &output,
+                    expected[0].saturating_sub(2),
+                    expected[0] + 30,
+                    top,
+                    bottom,
+                )
+                .expect("label glyph must be visible"),
+            );
+            columns[1].push(
+                first_dark_pixel(
+                    &output,
+                    expected[1].saturating_sub(2),
+                    expected[1] + 30,
+                    top,
+                    bottom,
+                )
+                .expect("text glyph must be visible"),
+            );
+            columns[2].push(
+                first_dark_pixel(
+                    &output,
+                    expected[2].saturating_sub(2),
+                    expected[2] + 30,
+                    top,
+                    bottom,
+                )
+                .expect("comment glyph must be visible"),
+            );
+        }
+        for column in columns {
+            let min = *column.iter().min().unwrap();
+            let max = *column.iter().max().unwrap();
+            assert!(max - min <= 2, "column drifted: {column:?}");
+        }
+    }
+
+    #[test]
+    fn rendered_horizontal_segments_share_visual_baseline() {
+        let axis = axis_layout(&vertical_input(&[(420.0, 120.0)]));
+        let candidates = vec![CandidateRenderData {
+            label: "g".to_owned(),
+            reserved_label: "g".to_owned(),
+            text: "g".to_owned(),
+            comment: "g".to_owned(),
+        }];
+        let geometry = RenderGeometry {
+            font_size: 24.0,
+            label_font_size: 18.0,
+            comment_font_size: 15.0,
+            ..geometry()
+        };
+        let output = render_candidate_window(&RenderWindowInput {
+            axis_result: &axis,
+            candidates: &candidates,
+            theme: &theme(),
+            geometry: &geometry,
+            font_family: "Microsoft YaHei UI",
+            preedit: None,
+            dpi_scale: 1.0,
+            high_contrast: false,
+            selected: None,
+        });
+        let mut measure_pixmap = Pixmap::new(1, 1).expect("measurement pixmap");
+        let mut measure_engine = DWriteEngine::new();
+        let mut measure_canvas =
+            SkiaCanvas::with_text(&mut measure_pixmap, &mut measure_engine, 1.0);
+        let mut measurement_cache = TextMeasurementCache::default();
+        let anchors = horizontal_column_anchors(
+            &[HorizontalColumnInput {
+                label: "g",
+                reserved_label: "g",
+                text: "g",
+                comment: "g",
+            }],
+            0.0,
+            f32::INFINITY,
+            geometry.label_gap,
+            geometry.label_font_size,
+            geometry.font_size,
+            geometry.comment_font_size,
+            |value, size| {
+                measurement_cache.measure(&mut measure_canvas, "Microsoft YaHei UI", value, size)
+            },
+        );
+        let item = &axis.items[0];
+        let content_left =
+            (item.rect.left - axis.window.left) as u32 + geometry.item_padding_x as u32;
+        let top = (item.rect.top - axis.window.top) as u32 + geometry.item_padding_y as u32;
+        let bottom = (item.rect.bottom - axis.window.top) as u32;
+        let styles = [
+            text_style("Microsoft YaHei UI", geometry.label_font_size),
+            text_style("Microsoft YaHei UI", geometry.font_size),
+            text_style("Microsoft YaHei UI", geometry.comment_font_size),
+        ];
+        let expected_baseline = top as f32
+            + styles
+                .iter()
+                .map(|style| measure_canvas.text_line_metrics("g", style).ascent)
+                .fold(0.0, f32::max);
+        let bottoms = [anchors.label_x, anchors.text_x, anchors.comment_x].map(|x| {
+            last_dark_pixel_y(
+                &output,
+                content_left + x as u32,
+                content_left + x as u32 + 30,
+                top,
+                bottom,
+            )
+            .expect("baseline glyph must be visible")
+        });
+        let min = *bottoms.iter().min().expect("three segment pixels");
+        let max = *bottoms.iter().max().expect("three segment pixels");
+        assert!(expected_baseline > top as f32);
+        assert!(
+            bottoms
+                .iter()
+                .all(|bottom| (*bottom as f32 - expected_baseline).abs() <= 8.0),
+            "glyph pixels disagree with DWrite baseline metrics: {bottoms:?}, expected={expected_baseline}"
+        );
+        assert!(max - min <= 2, "visual baselines drifted: {bottoms:?}");
     }
 
     #[test]

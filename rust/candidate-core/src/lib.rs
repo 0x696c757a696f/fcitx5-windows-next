@@ -4283,6 +4283,8 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
             item_padding_y: geometry.item_padding_y,
             preedit_height: geometry.preedit_height,
             scroll_mode: geometry.overflow == 1,
+            max_width: geometry.max_width,
+            window_padding_x: geometry.padding_x,
         },
         font_family: "Microsoft YaHei UI",
         preedit: preedit.as_deref(),

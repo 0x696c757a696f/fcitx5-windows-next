@@ -8,8 +8,9 @@
 use core::ffi::c_void;
 
 use crate::renderer::{
-    grapheme_clusters, horizontal_run_plan, Fcitx5CandidateMeasureSize, MeasureEngine,
-    VERTICAL_GLYPH_STEP_RATIO,
+    grapheme_clusters, horizontal_available_width, horizontal_column_anchors,
+    horizontal_run_plan_with_anchors, Fcitx5CandidateMeasureSize, HorizontalColumnInput,
+    MeasureEngine, VERTICAL_GLYPH_STEP_RATIO,
 };
 use crate::{Fcitx5CandidateLayoutSize, Fcitx5CandidateVisualBuildOutput};
 
@@ -35,7 +36,9 @@ pub(crate) struct MeasureLoopParams {
 /// The frozen measure loop over live arena outputs: optional scroll-label
 /// column width, per-item reserved/text/comment runs, and the padded preedit
 /// panel. Returns `(items, preedit_panel, scroll_label_column_width)` or
-/// `None` when any render index is out of range.
+/// The fourth return value is the shared horizontal effective content width
+/// required by the renderer. `None` is returned when any render index is out
+/// of range.
 pub(crate) fn measure_visual_items(
     engine: &mut MeasureEngine,
     outputs: &[Fcitx5CandidateVisualBuildOutput],
@@ -46,6 +49,7 @@ pub(crate) fn measure_visual_items(
     Vec<Fcitx5CandidateLayoutSize>,
     Fcitx5CandidateLayoutSize,
     f32,
+    f32,
 )> {
     if indices.iter().any(|index| *index >= outputs.len()) {
         return None;
@@ -55,19 +59,60 @@ pub(crate) fn measure_visual_items(
         String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
             .into_owned()
     };
+    let fields: Vec<(String, String, String, String)> = indices
+        .iter()
+        .map(|index| {
+            let output = &outputs[*index];
+            (
+                field(&output.label),
+                field(&output.reserved_label),
+                field(&output.text),
+                field(&output.comment),
+            )
+        })
+        .collect();
+    let column_inputs: Vec<_> = fields
+        .iter()
+        .map(
+            |(label, reserved_label, text, comment)| HorizontalColumnInput {
+                label,
+                reserved_label,
+                text,
+                comment,
+            },
+        )
+        .collect();
     let mut scroll_label_column_width = 0.0_f32;
     if params.scroll_mode && params.horizontal {
-        for index in indices {
-            let reserved = field(&outputs[*index].reserved_label);
-            if reserved.is_empty() {
-                continue;
+        for (_, reserved, _, _) in &fields {
+            if !reserved.is_empty() {
+                let (width, _) = engine.measure(reserved, params.label_font_size, params.dpi_scale);
+                scroll_label_column_width = scroll_label_column_width.max(width);
             }
-            let (width, _) = engine.measure(&reserved, params.label_font_size, params.dpi_scale);
-            scroll_label_column_width = scroll_label_column_width.max(width);
         }
     }
+    let horizontal_available = horizontal_available_width(
+        params.max_width,
+        params.window_padding_x,
+        params.item_padding_x,
+        params.scroll_mode,
+    );
+    let horizontal_anchors = horizontal_column_anchors(
+        &column_inputs,
+        if params.scroll_mode && params.horizontal {
+            scroll_label_column_width
+        } else {
+            0.0
+        },
+        horizontal_available,
+        params.label_gap,
+        params.label_font_size,
+        params.font_size,
+        params.comment_font_size,
+        |value, size| engine.measure(value, size, params.dpi_scale),
+    );
     let mut items = Vec::with_capacity(indices.len());
-    for index in indices {
+    for (position, index) in indices.iter().enumerate() {
         let output = &outputs[*index];
         let (width, height) = if params.vertical {
             let label = field(&output.label);
@@ -95,30 +140,17 @@ pub(crate) fn measure_visual_items(
                 label_height + grapheme_clusters(text.as_str()).len() as f32 * glyph_step,
             )
         } else {
-            let label = field(&output.label);
-            let text = field(&output.text);
-            let comment = field(&output.comment);
-            let bounded = params.max_width > 0.0 && !(params.scroll_mode && params.horizontal);
-            let available = if bounded {
-                (params.max_width - params.window_padding_x * 2.0 - params.item_padding_x * 2.0)
-                    .max(1.0)
-            } else {
-                f32::INFINITY
-            };
-            let plan = horizontal_run_plan(
-                &label,
-                if params.scroll_mode && params.horizontal {
-                    scroll_label_column_width
-                } else {
-                    0.0
-                },
-                &text,
-                &comment,
-                available,
+            let (label, _, text, comment) = &fields[position];
+            let plan = horizontal_run_plan_with_anchors(
+                label,
+                text,
+                comment,
+                horizontal_available,
                 params.label_gap,
                 params.label_font_size,
                 params.font_size,
                 params.comment_font_size,
+                horizontal_anchors,
                 |value, size| engine.measure(value, size, params.dpi_scale),
             );
             (plan.width, plan.height)
@@ -139,7 +171,12 @@ pub(crate) fn measure_visual_items(
             };
         }
     }
-    Some((items, panel, scroll_label_column_width))
+    Some((
+        items,
+        panel,
+        scroll_label_column_width,
+        horizontal_anchors.effective_width,
+    ))
 }
 
 /// Measures rendered-item sizes exactly like the shipping C++ `update()`
@@ -223,7 +260,7 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
         max_width: 0.0,
         window_padding_x: 0.0,
     };
-    let Some((items, panel, scroll_label_column_width)) =
+    let Some((items, panel, scroll_label_column_width, _horizontal_effective_width)) =
         measure_visual_items(engine, outputs, indices, preedit_text.as_deref(), &params)
     else {
         return 0;
@@ -416,6 +453,71 @@ mod tests {
     }
 
     #[test]
+    fn measurement_and_render_use_identical_horizontal_anchors_without_comments() {
+        let mut engine = MeasureEngine::new();
+        let candidates = [
+            HorizontalColumnInput {
+                label: "1.",
+                reserved_label: "1.",
+                text: "你",
+                comment: "",
+            },
+            HorizontalColumnInput {
+                label: "100.",
+                reserved_label: "100.",
+                text: "中文输入法",
+                comment: "",
+            },
+        ];
+        let params = MeasureLoopParams {
+            horizontal: true,
+            vertical: false,
+            scroll_mode: false,
+            label_gap: 4.0,
+            item_padding_x: 8.0,
+            item_padding_y: 6.0,
+            font_size: 18.0,
+            label_font_size: 15.3,
+            comment_font_size: 14.4,
+            dpi_scale: 1.0,
+            max_width: 240.0,
+            window_padding_x: 12.0,
+        };
+        let available = horizontal_available_width(
+            params.max_width,
+            params.window_padding_x,
+            params.item_padding_x,
+            params.scroll_mode,
+        );
+        let anchors = horizontal_column_anchors(
+            &candidates,
+            0.0,
+            available,
+            params.label_gap,
+            params.label_font_size,
+            params.font_size,
+            params.comment_font_size,
+            |value, size| engine.measure(value, size, params.dpi_scale),
+        );
+        for candidate in candidates {
+            let plan = horizontal_run_plan_with_anchors(
+                candidate.label,
+                candidate.text,
+                candidate.comment,
+                available,
+                params.label_gap,
+                params.label_font_size,
+                params.font_size,
+                params.comment_font_size,
+                anchors,
+                |value, size| engine.measure(value, size, params.dpi_scale),
+            );
+            assert_eq!(plan.anchors, anchors);
+            assert!(plan.lines.iter().all(|line| line.comment.is_empty()));
+        }
+    }
+
+    #[test]
     fn vertical_column_height_covers_every_glyph() {
         let mut engine = MeasureEngine::new();
         let mut arena = crate::CandidateVisualArena::default();
@@ -462,7 +564,7 @@ mod tests {
             max_width: 0.0,
             window_padding_x: 0.0,
         };
-        let (vertical_items, _, _) =
+        let (vertical_items, _, _, _) =
             measure_visual_items(&mut engine, &outputs, &indices, None, &vertical)
                 .expect("vertical measure loop must succeed");
         assert!(
@@ -483,7 +585,7 @@ mod tests {
             vertical: false,
             ..vertical
         };
-        let (horizontal_items, _, _) =
+        let (horizontal_items, _, _, _) =
             measure_visual_items(&mut engine, &outputs, &indices, None, &horizontal)
                 .expect("horizontal measure loop must succeed");
         assert!(
