@@ -1960,26 +1960,27 @@ fn run_candidate_ux_fuzz_stage(host: &mut Host) -> bool {
                     && rect.right <= client_width + 1.0
                     && rect.bottom <= client_height + 1.0
             });
-            let expected_horizontal = if mode.orientation == FrameOrientation::Automatic {
-                !stress
-            } else {
-                mode.writing == FrameWriting::Horizontal
-                    && mode.orientation != FrameOrientation::Vertical
+            let expected_horizontal = match mode.orientation {
+                FrameOrientation::Horizontal => Some(true),
+                FrameOrientation::Vertical => Some(false),
+                FrameOrientation::Automatic if stress => Some(false),
+                FrameOrientation::Automatic => None,
             };
+            let direction_ok =
+                expected_horizontal.map_or(true, |expected| host.resolved_horizontal == expected);
             let presentation = host.presentation.output();
             if presentation.has_selected == 0
                 || presentation.selected != expected_selected
-                || host.resolved_horizontal != expected_horizontal
+                || !direction_ok
                 || !geometry_ok
                 || !selected_ok
             {
                 eprintln!(
-                    "REG-CAND-UX-FUZZ-001: {} page_size={page_size} dpi={dpi} selection/layout failed: selected={} expected_selected={expected_selected} visible={:?} slot={selected_slot:?} horizontal={} expected={} client=({client_width}x{client_height}) arena={} geometry_ok={} selected_ok={} rects={:?}",
+                    "REG-CAND-UX-FUZZ-001: {} page_size={page_size} dpi={dpi} selection/layout failed: selected={} expected_selected={expected_selected} visible={:?} slot={selected_slot:?} horizontal={} expected_final={expected_horizontal:?} client=({client_width}x{client_height}) arena={} geometry_ok={} selected_ok={} rects={:?}",
                     mode.name,
                     presentation.selected,
                     host.visible_indices,
                     host.resolved_horizontal,
-                    expected_horizontal,
                     host.arena.built_outputs().len(),
                     geometry_ok,
                     selected_ok,
