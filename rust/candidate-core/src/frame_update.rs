@@ -363,6 +363,14 @@ pub fn frame_update(
     );
     let mut horizontal = resolved == Orientation::Horizontal;
 
+    let configured_max_width = config.max_width_dip * scale;
+    let work_width = (work_area.right - work_area.left).max(0.0);
+    let measurement_max_width = if horizontal && !config.scroll_mode && work_width > 0.0 {
+        configured_max_width.min(work_width)
+    } else {
+        configured_max_width
+    };
+
     // 10. Measure loop over the live arena outputs.
     let measure_params = MeasureLoopParams {
         horizontal,
@@ -378,7 +386,7 @@ pub fn frame_update(
         label_font_size: config.font_size_dip * config.label_font_scale * scale,
         comment_font_size: config.font_size_dip * config.annotation_font_scale * scale,
         dpi_scale: scale,
-        max_width: config.max_width_dip * scale,
+        max_width: measurement_max_width,
         window_padding_x: config.padding_x_dip * scale,
     };
     let Some((items, preedit_panel_size, _scroll_label_column, horizontal_effective_width)) =
@@ -398,8 +406,6 @@ pub fn frame_update(
     // fixed horizontal column. The renderer reports the minimum viable
     // item width through measurement; expand the owning window to that width
     // instead of allowing axis layout to clip a label, text, or comment.
-    let configured_max_width = config.max_width_dip * scale;
-    let work_width = (work_area.right - work_area.left).max(0.0);
     let measured_item_window_width = items
         .iter()
         .map(|item| item.width)
@@ -880,5 +886,93 @@ mod tests {
             ),
             FrameUpdateOutcome::HidePopup
         ));
+    }
+
+    #[test]
+    fn horizontal_measurement_stays_inside_narrow_work_area_at_high_dpi() {
+        let mut long_response = response();
+        long_response.metadata.revision = 10;
+        long_response.candidate_page_size = 2;
+        long_response.candidate_total = 2;
+        long_response.caret.dpi = 144;
+        long_response.candidates = vec![
+            CandidateRecord {
+                id: 1,
+                label_utf8: b"1".to_vec(),
+                text_utf8: b"candidate with a deliberately long text value".to_vec(),
+                comment_utf8: b"annotation that remains inside the candidate cell".to_vec(),
+            },
+            CandidateRecord {
+                id: 2,
+                label_utf8: b"2".to_vec(),
+                text_utf8: b"short".to_vec(),
+                comment_utf8: Vec::new(),
+            },
+        ];
+
+        let mut narrow_config = config();
+        narrow_config.orientation = FrameOrientation::Horizontal;
+        narrow_config.max_width_dip = 720.0;
+        narrow_config.scroll_mode = false;
+        narrow_config.font_size_dip = 27.0;
+        let narrow_work_area = Rect {
+            left: 0.0,
+            top: 0.0,
+            right: 1024.0,
+            bottom: 4000.0,
+        };
+
+        let mut model = CandidateModel::default();
+        let mut presentation = CandidatePresentationState::default();
+        let mut scroll = CandidateScrollState::default();
+        let mut click_guard = CandidateClickGuardState::default();
+        let mut focus_watch = CandidateFocusWatchState::default();
+        let mut arena = CandidateVisualArena::default();
+        let mut measure = MeasureEngine::new();
+        let mut last_caret = FrameCaret::default();
+        let configured: Vec<String> = Vec::new();
+        let mut state = FrameState {
+            model: &mut model,
+            presentation: &mut presentation,
+            scroll: &mut scroll,
+            click_guard: &mut click_guard,
+            focus_watch: &mut focus_watch,
+            arena: &mut arena,
+            measure: &mut measure,
+            content_locale: "en-US",
+            configured_labels: &configured,
+        };
+
+        let FrameUpdateOutcome::Proceed(outputs) = frame_update(
+            &mut state,
+            narrow_config,
+            &long_response,
+            &mut last_caret,
+            narrow_work_area,
+            4321,
+        ) else {
+            panic!("expected Proceed for long candidate geometry regression");
+        };
+        assert!(outputs.window_width <= narrow_work_area.right + f32::EPSILON);
+        assert!(
+            outputs.visible_indices.contains(&0),
+            "selected candidate must remain visible: {:?}",
+            outputs.visible_indices
+        );
+        for rect in &outputs.item_rects {
+            assert!(
+                rect.left >= -f32::EPSILON
+                    && rect.top >= -f32::EPSILON
+                    && rect.right <= outputs.window_width + f32::EPSILON
+                    && rect.bottom <= outputs.window_height + f32::EPSILON,
+                "item rect must stay inside client window: rect={rect:?}, window={}x{}",
+                outputs.window_width,
+                outputs.window_height
+            );
+            assert!(
+                rect.right >= rect.left && rect.bottom >= rect.top,
+                "item rect must have non-negative area: {rect:?}"
+            );
+        }
     }
 }

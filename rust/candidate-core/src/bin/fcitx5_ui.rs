@@ -1589,6 +1589,7 @@ fn synthetic_preview(host: &mut Host, scroll_demo: bool) {
     response.metadata.context_id = 1;
     response.metadata.composition_id = 1;
     response.metadata.revision = 1;
+    response.preedit_utf8 = b"ni".to_vec();
     if scroll_demo {
         const WORDS: [&str; 42] = [
             "我", "哦", "窝", "沃", "握", "卧", "涡", "蜗", "渥", "幄", "斡", "龌", "喔", "莴",
@@ -2675,6 +2676,7 @@ fn run_scroll_expansion_self_test(host: &mut Host) -> bool {
         response.candidate_bulk = true;
         response.candidate_end = true;
         response.candidate_visibility = 1;
+        response.preedit_utf8 = b"ni".to_vec();
         response.caret = CaretRect {
             valid: true,
             left: 100,
@@ -2743,6 +2745,7 @@ fn run_scroll_expansion_self_test(host: &mut Host) -> bool {
 }
 
 fn run_interaction_self_test(host: &mut Host) -> bool {
+    synthetic_preview(host, false);
     if host.item_rects.len() < 2 || host.visible_indices.len() < 2 {
         eprintln!("interaction self-test has insufficient items");
         return false;
