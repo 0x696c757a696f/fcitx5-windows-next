@@ -19,6 +19,9 @@ mod ui_plan;
 #[cfg(windows)]
 pub mod window_host;
 
+#[cfg(all(test, windows))]
+mod fuzz_regression;
+
 #[cfg(windows)]
 pub use renderer::{
     render_candidate_window, CandidateRenderData, RenderColor, RenderGeometry, RenderTheme,
@@ -964,6 +967,47 @@ fn resolve_rgb(
     ]
 }
 
+fn srgb_luminance(color: [u8; 3]) -> f32 {
+    let channel = |value: u8| {
+        let value = f32::from(value) / 255.0;
+        if value <= 0.03928 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
+}
+
+fn contrast_ratio(first: [u8; 3], second: [u8; 3]) -> f32 {
+    let first = srgb_luminance(first);
+    let second = srgb_luminance(second);
+    (first.max(second) + 0.05) / (first.min(second) + 0.05)
+}
+
+fn readable_selected_text(selected_text: [u8; 3], selected_background: [u8; 3]) -> [u8; 3] {
+    // A persisted/custom theme may carry the old green-on-green pair even
+    // when the built-in theme is correct. Keep the user's background, but
+    // fail closed to whichever neutral text color has stronger contrast when
+    // the requested foreground is not readable.
+    // Candidate text is rendered at a large UI size; preserve the product's
+    // white-on-WeChat-green appearance once it clears the large-text floor.
+    // The shipped 27px candidate text is large UI text. Keep the white
+    // WeChat-green treatment for the stock accent (#07c160), while still
+    // rejecting genuinely invisible custom foregrounds.
+    const MIN_SELECTED_TEXT_CONTRAST: f32 = 2.0;
+    if contrast_ratio(selected_text, selected_background) >= MIN_SELECTED_TEXT_CONTRAST {
+        return selected_text;
+    }
+    let white = [255, 255, 255];
+    let black = [0, 0, 0];
+    if contrast_ratio(white, selected_background) >= MIN_SELECTED_TEXT_CONTRAST {
+        white
+    } else {
+        black
+    }
+}
+
 /// Resolves the eight paint colors from config colors and the high-contrast
 /// policy, mirroring the frozen shipping `paintOnceToDC` color mapping.
 /// Resolved eight paint colors (Rust-native form of
@@ -980,11 +1024,16 @@ pub fn resolve_paint_colors(
     high_contrast: bool,
 ) -> Fcitx5CandidateResolvedColors {
     let hc = high_contrast;
+    let selected_background = resolve_rgb(selected_background, hc, COLOR_HIGHLIGHT_COLORREF_BGR);
+    let selected_text = readable_selected_text(
+        resolve_rgb(selected_text, hc, COLOR_HIGHLIGHTTEXT_COLORREF_BGR),
+        selected_background,
+    );
     Fcitx5CandidateResolvedColors {
         background: resolve_rgb(background, hc, COLOR_WINDOW_COLORREF_BGR),
         text: resolve_rgb(candidate_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
-        selected_background: resolve_rgb(selected_background, hc, COLOR_HIGHLIGHT_COLORREF_BGR),
-        selected_text: resolve_rgb(selected_text, hc, COLOR_HIGHLIGHTTEXT_COLORREF_BGR),
+        selected_background,
+        selected_text,
         comment: resolve_rgb(comment_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
         border: resolve_rgb(border, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
         preedit_text: resolve_rgb(preedit_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
@@ -1169,6 +1218,10 @@ impl CandidateVisualArena {
     ) -> usize {
         self.strings.clear();
         self.outputs.clear();
+        // Each visual record owns four byte buffers. Reserve the outer vector
+        // before exposing any pointers; a later Vec reallocation would leave
+        // every previously returned `Fcitx5CandidateUtf8::ptr` dangling.
+        self.strings.reserve(inputs.len().saturating_mul(4));
         let mut owned = |text: &[u8]| -> Fcitx5CandidateUtf8 {
             self.strings.push(text.to_vec());
             let stored = self.strings.last().expect("pushed above");
@@ -1585,6 +1638,35 @@ mod candidate_visual_arena_tests {
         assert_eq!(read(&outputs[2].label), "", "hidden labels stay empty");
         assert_eq!(outputs[2].source_label, 0);
         assert_eq!(read(&outputs[2].comment), "  hàn");
+    }
+
+    #[test]
+    fn build_keeps_text_pointers_valid_across_the_full_candidate_batch() {
+        let arena = CandidateVisualArena::default();
+        let texts: Vec<String> = (0..32).map(|index| format!("候选{index}🙂")).collect();
+        let labels: Vec<String> = (1..=32).map(|index| index.to_string()).collect();
+        let inputs: Vec<_> = texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| input(&labels[index], text, "注释", 1))
+            .collect();
+        let mut outputs = vec![Fcitx5CandidateVisualBuildOutput::null_output(); inputs.len()];
+        let config = empty_config();
+        // SAFETY: this test supplies live arena/input/config/output storage for the declared count.
+        let built = unsafe {
+            fcitx5_candidate_visual_build(
+                &arena as *const _ as *mut c_void,
+                inputs.as_ptr(),
+                inputs.len(),
+                &config,
+                outputs.as_mut_ptr(),
+            )
+        };
+        assert_eq!(built, inputs.len());
+        for (output, expected) in outputs.iter().zip(texts) {
+            assert_eq!(read(&output.text), expected);
+            assert_eq!(read(&output.comment), "  注释");
+        }
     }
 
     #[test]
@@ -2909,7 +2991,24 @@ mod candidate_paint_color_tests {
         assert_eq!(ok, 1);
         assert_eq!(resolved.background, [247, 250, 250]);
         assert_eq!(resolved.selected_background, [7, 193, 96]);
+        assert_eq!(resolved.selected_text, [255, 255, 255]);
         assert_eq!(resolved.border, [209, 209, 209]);
+    }
+
+    #[test]
+    fn selected_text_fails_closed_when_a_theme_requests_green_on_green() {
+        let resolved = resolve_paint_colors(
+            color(1.0, 1.0, 1.0),
+            color(0.1, 0.1, 0.1),
+            color(0.027, 0.757, 0.376),
+            color(0.027, 0.757, 0.376),
+            color(0.1, 0.1, 0.1),
+            color(0.8, 0.8, 0.8),
+            color(0.1, 0.1, 0.1),
+            false,
+        );
+        assert_eq!(resolved.selected_text, [255, 255, 255]);
+        assert!(contrast_ratio(resolved.selected_text, resolved.selected_background) >= 2.0);
     }
 
     #[test]

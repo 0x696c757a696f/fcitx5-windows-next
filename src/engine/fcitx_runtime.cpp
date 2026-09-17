@@ -625,9 +625,12 @@ class FcitxRuntime::Impl final {
         const bool hasCandidates = candidateList && !candidateList->empty();
         std::uint64_t composition = 0;
         std::uint64_t revision = 0;
+        // An empty preedit terminates the typing composition.  Fcitx may
+        // briefly retain its old candidate list while processing Backspace,
+        // but that stale list must not keep the Rust/TSF composition alive.
         (void)fcitx5_engine_core_ledger_end_result(
-            ledger.get(), &ledgerKey, (!output.preeditUtf8.empty() || hasCandidates) ? 1 : 0,
-            &composition, &revision);
+            ledger.get(), &ledgerKey, !output.preeditUtf8.empty() ? 1 : 0, &composition,
+            &revision);
         if (hasCandidates) {
             const int fcitxPageSize = std::clamp(candidateList->size(), 0, kMaximumCandidateViews);
             const auto* bulk = candidateList->toBulk();
@@ -693,7 +696,10 @@ class FcitxRuntime::Impl final {
             output.candidateTotal = static_cast<std::uint32_t>(size);
             if (realBulk)
                 output.candidateTotal = static_cast<std::uint32_t>(reportedTotal);
-            output.candidateVisibility = output.preeditUtf8.empty() ? 2U : 1U;
+            // An empty preedit terminates the typing session. Do not expose
+            // the stale Fcitx candidate list as a prediction popup: Backspace
+            // must close the real candidate window immediately.
+            output.candidateVisibility = output.preeditUtf8.empty() ? 0U : 1U;
         }
         output.compositionId = composition;
         output.revision = revision;

@@ -1394,6 +1394,16 @@ if(BUILD_TESTING)
           "${FCITX_RUST_TARGET}" fuzz_smoke_consumes_deterministic_random_bytes -- --exact)
       set_tests_properties(
         rust-protocol-fuzz-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+      add_test(
+        NAME rust-candidate-core-fuzz-smoke
+        COMMAND
+          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+          "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --lib --target
+          "${FCITX_RUST_TARGET}" fuzz_regression::candidate_text_layout_property_fuzz_smoke --
+          --exact --nocapture)
+      set_tests_properties(
+        rust-candidate-core-fuzz-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
   else()
     message(STATUS "Cargo was not found; Rust R1 package-core tests are not registered.")

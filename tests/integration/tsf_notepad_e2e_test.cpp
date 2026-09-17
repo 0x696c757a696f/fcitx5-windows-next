@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <cwchar>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -226,6 +227,18 @@ bool waitCandidateWindowVisible() {
     return false;
 }
 
+void holdCandidateWindowForEvidence() {
+    wchar_t value[32]{};
+    const DWORD length = GetEnvironmentVariableW(
+        L"FCITX5_CANDIDATE_WINDOW_HOLD_MS", value, static_cast<DWORD>(std::size(value)));
+    if (length == 0 || length >= std::size(value))
+        return;
+    const unsigned long requested = std::wcstoul(value, nullptr, 10);
+    const auto hold = std::min<unsigned long>(requested, 30'000UL);
+    if (hold != 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(hold));
+}
+
 std::wstring clipboardText() {
     if (!OpenClipboard(nullptr))
         return {};
@@ -299,10 +312,13 @@ int wmain(int argc, wchar_t** argv) {
         argc >= 2 && std::wstring_view(argv[1]) == L"--sample";
     const bool candidateWindowMode =
         argc >= 2 && std::wstring_view(argv[1]) == L"--candidate-window";
+    const bool candidateBackspaceMode =
+        argc >= 2 && std::wstring_view(argv[1]) == L"--candidate-backspace";
     if (argc < 1 || argc > 5 || (passthrough && argc > 2) ||
         (rawHarness && argc > 2) || (sampleMode && argc != 5) ||
-        (candidateWindowMode && argc != 3) ||
-        (!passthrough && !rawHarness && !sampleMode && !candidateWindowMode && argc > 2))
+        ((candidateWindowMode || candidateBackspaceMode) && argc != 3) ||
+        (!passthrough && !rawHarness && !sampleMode && !candidateWindowMode &&
+         !candidateBackspaceMode && argc > 2))
         return 1;
     // The engine executable is an optional argument used only in the real-input
     // mode. It is published through FCITX5_TEST_ENGINE_PATH so the development
@@ -310,10 +326,12 @@ int wmain(int argc, wchar_t** argv) {
     // from the DLL location; the variable is inherited by the Notepad child
     // process. The passthrough mode deliberately omits it: that mode verifies
     // the fail-open path when no engine is available.
-    if (!passthrough && !rawHarness && (sampleMode || candidateWindowMode || argc == 2)) {
+    if (!passthrough && !rawHarness &&
+        (sampleMode || candidateWindowMode || candidateBackspaceMode || argc == 2)) {
         const std::wstring enginePath(sampleMode       ? argv[4]
-                                      : candidateWindowMode ? argv[2]
-                                                            : argv[1]);
+                                      : (candidateWindowMode || candidateBackspaceMode)
+                                          ? argv[2]
+                                          : argv[1]);
         if (enginePath.empty() || !SetEnvironmentVariableW(L"FCITX5_TEST_ENGINE_PATH",
                                                            enginePath.c_str()))
             return 1;
@@ -365,7 +383,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!sendVirtualKey(VK_SPACE))
             return 8;
     } else if (candidateWindowMode) {
-        if (!sendVirtualKey('N'))
+        if (!sendVirtualKey('N') || !sendVirtualKey('I'))
             return 8;
         if (!waitCandidateWindowVisible()) {
             const bool tsfLoaded = processHasModule(process.dwProcessId, L"fcitx5-tsf.dll");
@@ -379,7 +397,29 @@ int wmain(int argc, wchar_t** argv) {
             return 10;
         }
         std::cout << "Notepad TSF candidate window smoke passed\n";
+        holdCandidateWindowForEvidence();
         return 0;
+    } else if (candidateBackspaceMode) {
+        if (!sendVirtualKey('N') || !sendVirtualKey('I') || !waitCandidateWindowVisible())
+            return 10;
+        if (!sendVirtualKey(VK_BACK))
+            return 8;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        if (!candidateWindowVisible()) {
+            std::cerr << "Candidate UI disappeared after the first Backspace\n";
+            return 11;
+        }
+        if (!sendVirtualKey(VK_BACK))
+            return 8;
+        for (int attempt = 0; attempt < 40; ++attempt) {
+            if (!candidateWindowVisible()) {
+                std::cout << "Notepad TSF Backspace candidate dismissal passed\n";
+                return 0;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        std::cerr << "Candidate UI remained visible after the composition was cleared\n";
+        return 12;
     } else {
         if (!sendVirtualKey('N') || !sendVirtualKey('I'))
             return 8;

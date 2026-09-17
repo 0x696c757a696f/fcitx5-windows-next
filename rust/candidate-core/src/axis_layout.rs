@@ -336,16 +336,25 @@ fn paged_vertical(input: &AxisLayoutInput, options: CandidateLayoutOptions) -> A
     let padding_x = input.padding_x.max(0.0);
     let padding_y = input.padding_y.max(0.0);
     let row_gap = input.row_gap.max(0.0);
-    let count = page_capacity(input).min(input.items.len());
+    let max_count = page_capacity(input).min(input.items.len());
+    let content_budget = (height_budget(input) - padding_y * 2.0).max(0.0);
+    let mut count = 0;
     let mut width = 0.0_f32;
     let mut height = 0.0_f32;
-    for item in input.items.iter().take(count) {
-        width = width.max(item.width);
-        if height > 0.0 {
-            height += row_gap;
+    for item in input.items.iter().take(max_count) {
+        let next_height = if count == 0 {
+            item.height
+        } else {
+            height + row_gap + item.height
+        };
+        if count > 0 && next_height > content_budget {
+            break;
         }
-        height += item.height;
+        width = width.max(item.width);
+        height = next_height;
+        count += 1;
     }
+    count = count.max(1.min(max_count));
     let window_width = (width + padding_x * 2.0).min(width_budget(input));
     let window_height = (height + padding_y * 2.0).min(height_budget(input));
     let (window, placement) = place_window(input, window_width, window_height);
@@ -610,10 +619,36 @@ fn vertical_columns(input: &AxisLayoutInput, options: CandidateLayoutOptions) ->
     let padding_y = input.padding_y.max(0.0);
     let column_gap = input.column_gap.max(0.0);
     let scrolling = options.overflow == OverflowBehavior::Scrolling;
-    let count = if scrolling {
+    let max_count = if scrolling {
         input.items.len()
     } else {
         page_capacity(input).min(input.items.len())
+    };
+    let count = if scrolling {
+        max_count
+    } else {
+        // A paged vertical-writing window is a column viewport too. Do not
+        // place a complete column outside the width budget; the next page
+        // starts at the first column that does not fit.
+        let content_budget = (width_budget(input) - padding_x * 2.0).max(0.0);
+        let mut width = 0.0_f32;
+        let mut count = 0;
+        for item in input.items.iter().take(max_count) {
+            let item_width = item.width.max(1.0);
+            let next_width = if count == 0 {
+                item_width
+            } else {
+                width + column_gap + item_width
+            };
+            if count > 0 && next_width > content_budget {
+                break;
+            }
+            width = next_width;
+            count += 1;
+        }
+        // An individual candidate wider than the budget remains one complete
+        // column; callers must not silently drop the selected candidate.
+        count.max(1.min(max_count))
     };
     let left_to_right = options.writing_mode == WritingMode::VerticalLr;
     let (mut rects, columns_width, columns_height) =

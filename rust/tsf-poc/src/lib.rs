@@ -7,16 +7,19 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::os::windows::ffi::OsStringExt;
 use std::panic::{catch_unwind, UnwindSafe};
 use std::path::PathBuf;
 use std::process::Command;
 use std::ptr::null_mut;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::Arc;
 use std::sync::OnceLock;
-use std::thread::sleep;
+use std::thread::{sleep, JoinHandle};
 use std::time::Duration;
 
 use fcitx5_protocol_core as protocol;
@@ -42,7 +45,7 @@ use windows::Win32::System::Registry::{
 use windows::Win32::System::Variant::{VariantClear, VT_EMPTY, VT_UNKNOWN};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, GetKeyState, GetKeyboardLayout, MapVirtualKeyExW, HKL, MAPVK_VK_TO_VSC_EX,
+    GetFocus, GetKeyState, GetKeyboardLayout, MapVirtualKeyExW, HKL, MAPVK_VK_TO_VSC_EX, VK_BACK,
     VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_OEM_1, VK_OEM_4,
     VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR,
     VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_UP,
@@ -960,6 +963,94 @@ const SURROUNDING_LIMIT_UTF16: i32 = 128;
 const PEER_POLICY_EXACT_EXECUTABLE: u32 = 0;
 const PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION: u32 = 1;
 const CANDIDATE_VISIBILITY_HIDDEN: u8 = 0;
+const CANDIDATE_NOTIFICATION_MESSAGE: u32 = 0x8000 + 0x5A;
+const CANDIDATE_NOTIFICATION_CLASS: &[u16] = &[
+    b'F' as u16,
+    b'c' as u16,
+    b'i' as u16,
+    b't' as u16,
+    b'x' as u16,
+    b'5' as u16,
+    b'T' as u16,
+    b's' as u16,
+    b'f' as u16,
+    b'N' as u16,
+    b'o' as u16,
+    b't' as u16,
+    b'i' as u16,
+    b'f' as u16,
+    b'y' as u16,
+    0,
+];
+const WM_NCCREATE: u32 = 0x0081;
+const WM_NCDESTROY: u32 = 0x0082;
+const GWL_USERDATA: i32 = -21;
+const HWND_MESSAGE: *mut c_void = -3_isize as *mut c_void;
+
+#[repr(C)]
+struct CandidateDispatchWndClass {
+    style: u32,
+    window_proc: Option<CandidateDispatchWndProc>,
+    class_extra: i32,
+    window_extra: i32,
+    instance: *mut c_void,
+    icon: *mut c_void,
+    cursor: *mut c_void,
+    background: *mut c_void,
+    menu_name: *const u16,
+    class_name: *const u16,
+}
+
+#[repr(C)]
+struct CandidateDispatchCreateStruct {
+    create_params: *mut c_void,
+    instance: *mut c_void,
+    menu: *mut c_void,
+    parent: *mut c_void,
+    height: i32,
+    width: i32,
+    y: i32,
+    x: i32,
+    style: i32,
+    name: *const u16,
+    class: *const u16,
+    extended_style: u32,
+}
+
+type CandidateDispatchWndProc = unsafe extern "system" fn(*mut c_void, u32, usize, isize) -> isize;
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn CreateWindowExW(
+        extended_style: u32,
+        class_name: *const u16,
+        window_name: *const u16,
+        style: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        parent: *mut c_void,
+        menu: *mut c_void,
+        instance: *mut c_void,
+        parameter: *mut c_void,
+    ) -> *mut c_void;
+    fn DefWindowProcW(window: *mut c_void, message: u32, wparam: usize, lparam: isize) -> isize;
+    fn DestroyWindow(window: *mut c_void) -> i32;
+    #[cfg(target_pointer_width = "64")]
+    fn GetWindowLongPtrW(window: *mut c_void, index: i32) -> isize;
+    fn PostMessageW(window: *mut c_void, message: u32, wparam: usize, lparam: isize) -> i32;
+    fn RegisterClassW(class: *const CandidateDispatchWndClass) -> u16;
+    #[cfg(target_pointer_width = "64")]
+    fn SetWindowLongPtrW(window: *mut c_void, index: i32, value: isize) -> isize;
+}
+
+#[cfg(target_pointer_width = "32")]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn GetWindowLongW(window: *mut c_void, index: i32) -> i32;
+    fn SetWindowLongW(window: *mut c_void, index: i32, value: i32) -> i32;
+}
 
 fn trace_event(event: &str) {
     let Some(path) = std::env::var_os("FCITX5_TSF_TRACE_PATH") else {
@@ -978,6 +1069,160 @@ fn trace_wide_event(prefix: &str, value: &[u16]) {
         Ok(value) => trace_event(&format!("{prefix}={value}")),
         Err(_) => trace_event(&format!("{prefix}=<invalid-utf16>")),
     }
+}
+
+#[cfg(target_pointer_width = "64")]
+unsafe fn candidate_dispatch_user_data(window: *mut c_void) -> isize {
+    // SAFETY: `window` is the live message-only HWND created by this module.
+    unsafe { GetWindowLongPtrW(window, GWL_USERDATA) }
+}
+
+#[cfg(target_pointer_width = "32")]
+unsafe fn candidate_dispatch_user_data(window: *mut c_void) -> isize {
+    // SAFETY: x86 uses the documented GetWindowLongW macro target.
+    unsafe { GetWindowLongW(window, GWL_USERDATA) as isize }
+}
+
+#[cfg(target_pointer_width = "64")]
+unsafe fn set_candidate_dispatch_user_data(window: *mut c_void, value: isize) {
+    // SAFETY: `window` is the live message-only HWND and `value` is pointer-sized.
+    unsafe { SetWindowLongPtrW(window, GWL_USERDATA, value) };
+}
+
+#[cfg(target_pointer_width = "32")]
+unsafe fn set_candidate_dispatch_user_data(window: *mut c_void, value: isize) {
+    // SAFETY: x86 pointer-sized values fit the documented Win32 storage slot.
+    unsafe { SetWindowLongW(window, GWL_USERDATA, value as i32) };
+}
+
+unsafe extern "system" fn candidate_dispatch_window_procedure(
+    window: *mut c_void,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    if message == WM_NCCREATE {
+        if lparam == 0 {
+            return 0;
+        }
+        // SAFETY: Windows supplies CREATESTRUCTW for WM_NCCREATE.
+        let create = unsafe { &*(lparam as *const CandidateDispatchCreateStruct) };
+        if create.create_params.is_null() {
+            return 0;
+        }
+        // SAFETY: the service COM object owns this pointer until Deactivate
+        // destroys the message-only window on the same TSF thread.
+        unsafe {
+            set_candidate_dispatch_user_data(window, create.create_params as isize);
+        }
+        return 1;
+    }
+
+    if message == CANDIDATE_NOTIFICATION_MESSAGE {
+        // SAFETY: the user-data slot is either zero or the service pointer set
+        // during WM_NCCREATE; the window is processed on the TSF thread.
+        let service =
+            unsafe { candidate_dispatch_user_data(window) } as *const Fcitx5TsfService_Impl;
+        if !service.is_null() {
+            // SAFETY: the window is destroyed before the service is released,
+            // and this callback runs on the TSF thread that owns its RefCells.
+            unsafe { (&*service).handle_candidate_notification() };
+        }
+        return 0;
+    }
+
+    if message == WM_NCDESTROY {
+        // SAFETY: window is still valid while processing WM_NCDESTROY.
+        unsafe { set_candidate_dispatch_user_data(window, 0) };
+    }
+    // SAFETY: forwards unrelated messages to the standard window procedure.
+    unsafe { DefWindowProcW(window, message, wparam, lparam) }
+}
+
+fn create_candidate_dispatch_window(service: *const Fcitx5TsfService_Impl) -> *mut c_void {
+    let class = CandidateDispatchWndClass {
+        style: 0,
+        window_proc: Some(candidate_dispatch_window_procedure),
+        class_extra: 0,
+        window_extra: 0,
+        instance: null_mut(),
+        icon: null_mut(),
+        cursor: null_mut(),
+        background: null_mut(),
+        menu_name: std::ptr::null(),
+        class_name: CANDIDATE_NOTIFICATION_CLASS.as_ptr(),
+    };
+    // SAFETY: class-name storage remains valid for the synchronous calls.
+    unsafe { RegisterClassW(&class) };
+    const EMPTY: [u16; 1] = [0];
+    // SAFETY: service is a live TSF COM object for the lifetime of this HWND.
+    unsafe {
+        CreateWindowExW(
+            0,
+            CANDIDATE_NOTIFICATION_CLASS.as_ptr(),
+            EMPTY.as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            null_mut(),
+            null_mut(),
+            service.cast_mut().cast(),
+        )
+    }
+}
+
+fn start_candidate_notification_watch(
+    event_name: Option<OsString>,
+    window: *mut c_void,
+) -> Option<(Arc<AtomicBool>, JoinHandle<()>)> {
+    let event_name = event_name?;
+    if window.is_null() {
+        return None;
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let window_address = window as usize;
+    let thread = std::thread::Builder::new()
+        .name("fcitx5-tsf-candidate-notification".to_owned())
+        .spawn(move || {
+            let Some(identity) = common::CurrentUserRuntimeIdentity::current() else {
+                trace_event("candidate_notification_watch_identity_failed");
+                return;
+            };
+            let Some(security) = identity.security_attributes() else {
+                trace_event("candidate_notification_watch_security_failed");
+                return;
+            };
+            let Ok(event) = common::NamedEvent::create(&event_name, &security) else {
+                trace_event("candidate_notification_watch_event_failed");
+                return;
+            };
+            trace_event("candidate_notification_watch_started");
+            while !thread_stop.load(Ordering::Acquire) {
+                if event.is_signaled() {
+                    let _ = event.reset();
+                    // SAFETY: the TSF thread owns the message-only window. The
+                    // stop path destroys it before joining this worker; a late
+                    // post therefore fails harmlessly instead of dereferencing
+                    // the stale handle here.
+                    unsafe {
+                        let _ = PostMessageW(
+                            window_address as *mut c_void,
+                            CANDIDATE_NOTIFICATION_MESSAGE,
+                            0,
+                            0,
+                        );
+                    }
+                }
+                sleep(Duration::from_millis(10));
+            }
+            trace_event("candidate_notification_watch_stopped");
+        })
+        .ok()?;
+    Some((stop, thread))
 }
 
 fn activation_guard_disabled() -> bool {
@@ -1021,6 +1266,13 @@ struct EngineKeyResult {
     forward_key: bool,
 }
 
+fn should_begin_candidate_ui(applied: bool, result: &EngineKeyResult) -> bool {
+    applied
+        && !result.preedit.is_empty()
+        && result.candidate_visibility != CANDIDATE_VISIBILITY_HIDDEN
+        && !result.candidates.is_empty()
+}
+
 #[derive(Clone, Debug)]
 struct CachedKeyResult {
     context_id: u64,
@@ -1053,6 +1305,8 @@ impl Drop for PipeHandle {
 struct EngineClient {
     pipe_name: Vec<u16>,
     launcher_pipe_name: Vec<u16>,
+    generation: Vec<u16>,
+    test_namespace: Vec<u16>,
     expected_engine_path: Vec<u16>,
     expected_launcher_path: Vec<u16>,
     identity: CurrentIdentity,
@@ -1109,6 +1363,8 @@ impl EngineClient {
         Some(Self {
             pipe_name,
             launcher_pipe_name,
+            generation,
+            test_namespace,
             expected_engine_path,
             expected_launcher_path,
             identity,
@@ -1122,12 +1378,22 @@ impl EngineClient {
         test_namespace: &[u16],
         channel: &[u16],
     ) -> Option<Vec<u16>> {
+        Self::local_name(identity, generation, test_namespace, 0, channel)
+    }
+
+    fn local_name(
+        identity: &CurrentIdentity,
+        generation: &[u16],
+        test_namespace: &[u16],
+        kind: u32,
+        channel: &[u16],
+    ) -> Option<Vec<u16>> {
         query_wide_string(|output, capacity| {
             // SAFETY: all UTF-16 slices live for this call and no pointer is
             // retained by the common helper.
             unsafe {
                 common::fcitx5_windows_common_local_name_utf16(
-                    0,
+                    kind,
                     identity.user_sid.as_ptr(),
                     identity.user_sid.len(),
                     identity.session_id,
@@ -1142,6 +1408,19 @@ impl EngineClient {
                 )
             }
         })
+    }
+
+    fn candidate_notification_name(&self) -> Option<OsString> {
+        let channel = format!("candidate-{}", std::process::id());
+        let channel: Vec<u16> = channel.encode_utf16().collect();
+        let name = Self::local_name(
+            &self.identity,
+            &self.generation,
+            &self.test_namespace,
+            1,
+            &channel,
+        )?;
+        Some(OsString::from_wide(&name))
     }
 
     fn disconnect(&mut self) {
@@ -1622,6 +1901,74 @@ impl EngineClient {
             .tap_trace(),
         )
     }
+
+    fn poll_state(&mut self, context_id: u64) -> Option<EngineKeyResult> {
+        let context_state = self.contexts.get(&context_id).cloned()?;
+        let deadline =
+            common::fcitx5_windows_common_deadline_after_milliseconds(INPUT_DEADLINE_MILLISECONDS);
+        if !self.ensure_engine_available(deadline) || !self.handshake(deadline) {
+            self.disconnect();
+            return None;
+        }
+        let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
+        let request = protocol::StateRequest {
+            metadata: protocol::Metadata {
+                request_id,
+                engine_epoch: self.engine_epoch,
+                session_id: self.identity.session_id,
+                context_id,
+                composition_id: context_state.composition_id,
+                revision: context_state.revision,
+                ..protocol::Metadata::default()
+            },
+        };
+        let request = protocol::encode_state_request(&request)?;
+        let response_bytes = self.transact(request, deadline)?;
+        let frame = protocol::decode_frame(&response_bytes)?;
+        let response = protocol::decode_key_response(&frame)?;
+        if response.status != protocol::Status::Ok
+            || response.metadata.response_to != request_id
+            || response.metadata.engine_epoch != self.engine_epoch
+            || response.metadata.session_id != self.identity.session_id
+            || response.metadata.context_id != context_id
+            || response.metadata.revision <= context_state.revision
+        {
+            trace_event("engine_client_state_poll_rejected");
+            self.disconnect();
+            return None;
+        }
+        self.engine_epoch = response.metadata.engine_epoch;
+        self.contexts.insert(
+            context_id,
+            EngineContextState {
+                composition_id: response.metadata.composition_id,
+                revision: response.metadata.revision,
+            },
+        );
+        let commit = String::from_utf8(response.commit_utf8).ok()?;
+        let preedit = String::from_utf8(response.preedit_utf8).ok()?;
+        let mut candidates = Vec::with_capacity(response.candidates.len());
+        for candidate in response.candidates {
+            let text = String::from_utf8(candidate.text_utf8).ok()?;
+            candidates.push(CandidateUiRecord { text });
+        }
+        Some(
+            EngineKeyResult {
+                handled: response.handled,
+                commit,
+                preedit,
+                candidates,
+                selected_candidate: response.selected_candidate,
+                candidate_page: response.candidate_page,
+                candidate_visibility: response.candidate_visibility,
+                delete_surrounding_text: response.delete_surrounding_text,
+                delete_surrounding_offset: response.delete_surrounding_offset,
+                delete_surrounding_size: response.delete_surrounding_size,
+                forward_key: response.forward_key,
+            }
+            .tap_trace(),
+        )
+    }
 }
 
 trait TraceEngineKeyResult {
@@ -1815,7 +2162,8 @@ fn is_text_or_candidate_key(virtual_key: u16) -> bool {
         || (b'0' as u16..=b'9' as u16).contains(&virtual_key)
         || matches!(
             virtual_key,
-            key if key == VK_SPACE.0
+            key if key == VK_BACK.0
+                || key == VK_SPACE.0
                 || key == VK_RETURN.0
                 || key == VK_LEFT.0
                 || key == VK_RIGHT.0
@@ -1852,6 +2200,11 @@ struct TsfRuntimeState {
     composition: Option<ITfComposition>,
     engine_client: Option<EngineClient>,
     pending_key: Option<CachedKeyResult>,
+    candidate_context_id: Option<u64>,
+    candidate_context: Option<ITfContext>,
+    candidate_dispatch_window: *mut c_void,
+    candidate_notification_stop: Option<Arc<AtomicBool>>,
+    candidate_notification_thread: Option<JoinHandle<()>>,
     popup_allowed: bool,
 }
 
@@ -1871,6 +2224,11 @@ impl TsfRuntimeState {
         self.composition = None;
         self.engine_client = None;
         self.pending_key = None;
+        self.candidate_context_id = None;
+        self.candidate_context = None;
+        self.candidate_dispatch_window = null_mut();
+        self.candidate_notification_stop = None;
+        self.candidate_notification_thread = None;
         self.popup_allowed = true;
     }
 }
@@ -2496,12 +2854,55 @@ impl Fcitx5TsfService {
         runtime.ui_element_manager = ui_element_manager;
         runtime.engine_client = engine_client;
         runtime.popup_allowed = true;
+        let dispatch_window = create_candidate_dispatch_window(service as *const _);
+        if dispatch_window.is_null() {
+            trace_event("candidate_notification_window_create_failed");
+        } else {
+            runtime.candidate_dispatch_window = dispatch_window;
+            let event_name = runtime
+                .engine_client
+                .as_ref()
+                .and_then(EngineClient::candidate_notification_name);
+            if let Some((stop, thread)) =
+                start_candidate_notification_watch(event_name, dispatch_window)
+            {
+                runtime.candidate_notification_stop = Some(stop);
+                runtime.candidate_notification_thread = Some(thread);
+            } else {
+                trace_event("candidate_notification_watch_not_started");
+            }
+        }
         self.state.borrow_mut().activate();
         trace_event("activate_runtime_success");
         Ok(())
     }
 
+    fn stop_candidate_notification_watch(&self) {
+        let (stop, thread, window) = {
+            let mut runtime = self.runtime.borrow_mut();
+            (
+                runtime.candidate_notification_stop.take(),
+                runtime.candidate_notification_thread.take(),
+                std::mem::replace(&mut runtime.candidate_dispatch_window, null_mut()),
+            )
+        };
+        if let Some(stop) = stop {
+            stop.store(true, Ordering::Release);
+        }
+        if !window.is_null() {
+            // SAFETY: this is the message-only HWND created by Activate and
+            // destruction happens on the owning TSF thread.
+            unsafe {
+                let _ = DestroyWindow(window);
+            }
+        }
+        if let Some(thread) = thread {
+            let _ = thread.join();
+        }
+    }
+
     fn deactivate_runtime(&self) -> Result<()> {
+        self.stop_candidate_notification_watch();
         let mut runtime = self.runtime.borrow_mut();
         if let (Some(manager), id) = (&runtime.ui_element_manager, runtime.candidate_ui_element_id)
         {
@@ -2538,6 +2939,14 @@ impl Fcitx5TsfService {
     fn should_test_eat_key(&self, wparam: WPARAM) -> bool {
         let runtime = self.runtime.borrow();
         if runtime.guard_fail_open {
+            return false;
+        }
+        // Backspace must reach the engine while a composition is active so
+        // the engine can publish the empty-preedit dismissal.  Before a
+        // composition exists, let the host handle ordinary text deletion;
+        // forwarding that no-op to the engine would create a context before
+        // the first text key and reduce the first-key cold-start deadline.
+        if wparam.0 as u16 == VK_BACK.0 && runtime.composition.is_none() {
             return false;
         }
         is_text_or_candidate_key(wparam.0 as u16)
@@ -2732,8 +3141,8 @@ impl Fcitx5TsfService {
         } else {
             result.handled
         };
-        if applied && result.candidate_visibility != CANDIDATE_VISIBILITY_HIDDEN {
-            self.begin_candidate_ui(&result);
+        if should_begin_candidate_ui(applied, &result) {
+            self.begin_candidate_ui(context, &result);
         } else if result.candidate_visibility == CANDIDATE_VISIBILITY_HIDDEN
             || !result.commit.is_empty()
             || result.preedit.is_empty()
@@ -2746,6 +3155,38 @@ impl Fcitx5TsfService {
             &result.preedit,
         ));
         Ok(applied || result.handled)
+    }
+
+    fn handle_candidate_notification(&self) {
+        let Some((context, result)) = ({
+            let mut runtime = self.runtime.borrow_mut();
+            if !runtime.active || runtime.guard_fail_open {
+                None
+            } else {
+                match (
+                    runtime.candidate_context_id,
+                    runtime.candidate_context.clone(),
+                ) {
+                    (Some(context_id), Some(context)) => {
+                        let result = runtime
+                            .engine_client
+                            .as_mut()
+                            .and_then(|client| client.poll_state(context_id));
+                        Some((context, result))
+                    }
+                    _ => None,
+                }
+            }
+        }) else {
+            trace_event("candidate_notification_ignored_without_context");
+            return;
+        };
+        if let Some(result) = result {
+            let _ = self.apply_engine_result(&context, result);
+        } else {
+            trace_event("candidate_notification_poll_failed");
+            self.end_candidate_ui();
+        }
     }
 
     fn request_edit(&self, context: &ITfContext, action: TextEditAction) -> Result<bool> {
@@ -2779,7 +3220,7 @@ impl Fcitx5TsfService {
         Ok(true)
     }
 
-    fn begin_candidate_ui(&self, result: &EngineKeyResult) {
+    fn begin_candidate_ui(&self, context: &ITfContext, result: &EngineKeyResult) {
         if result.candidates.is_empty()
             || result.candidate_visibility == CANDIDATE_VISIBILITY_HIDDEN
         {
@@ -2812,6 +3253,8 @@ impl Fcitx5TsfService {
                 runtime.popup_allowed = show.as_bool();
                 runtime.candidate_ui_element_id = id;
                 runtime.candidate_ui_element = Some(candidate_list);
+                runtime.candidate_context_id = Some(Self::context_id(context));
+                runtime.candidate_context = Some(context.clone());
             }
         }
     }
@@ -2827,6 +3270,8 @@ impl Fcitx5TsfService {
         }
         runtime.candidate_ui_element_id = TF_INVALID_UIELEMENTID;
         runtime.candidate_ui_element = None;
+        runtime.candidate_context_id = None;
+        runtime.candidate_context = None;
     }
 
     fn clear_context_composition(&self, context: &ITfContext) -> Result<()> {
@@ -3471,6 +3916,7 @@ mod tests {
         for key in [
             b'N' as u16,
             b'2' as u16,
+            VK_BACK.0,
             VK_SPACE.0,
             VK_RETURN.0,
             VK_LEFT.0,
@@ -3494,6 +3940,20 @@ mod tests {
         }
         assert!(!is_text_or_candidate_key(VK_CONTROL.0));
         assert!(!is_text_or_candidate_key(VK_MENU.0));
+    }
+
+    #[test]
+    fn empty_preedit_never_reopens_candidate_ui_as_prediction() {
+        let result = EngineKeyResult {
+            handled: true,
+            preedit: String::new(),
+            candidates: vec![CandidateUiRecord {
+                text: "残留候选".to_owned(),
+            }],
+            candidate_visibility: 2,
+            ..EngineKeyResult::default()
+        };
+        assert!(!should_begin_candidate_ui(true, &result));
     }
 
     #[test]

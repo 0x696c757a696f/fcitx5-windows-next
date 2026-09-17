@@ -592,6 +592,12 @@ fn run_context_isolation(client: &mut EngineClient, first_run_rime: bool) -> Res
                 utf8(&back.preedit)
             ));
         }
+        if back.candidate_visibility != 0 {
+            return Err(format!(
+                "Rime first context candidate popup remained visible after Backspace: visibility={}",
+                back.candidate_visibility
+            ));
+        }
         let resume = client
             .process_key(second_context, b'I' as u32, 0, 0)
             .ok_or("rime resume transport failed")?;

@@ -225,6 +225,13 @@ pub fn frame_update(
         return FrameUpdateOutcome::Ignored;
     };
 
+    // A composition candidate window cannot survive an empty preedit. The
+    // engine may briefly expose its old Fcitx candidate list while processing
+    // Backspace; fail closed here instead of repainting that stale list.
+    if current.visibility == 1 && current.preedit.is_empty() {
+        return FrameUpdateOutcome::HidePopup;
+    }
+
     // 2. Presentation apply.
     let presentation_applied = state
         .presentation
@@ -803,5 +810,45 @@ mod tests {
             matches!(outcome, FrameUpdateOutcome::Dismiss),
             "expected Dismiss, got {outcome:?}"
         );
+    }
+
+    #[test]
+    fn frame_update_hides_stale_composition_candidates_after_backspace() {
+        let stale = KeyResponse {
+            preedit_utf8: Vec::new(),
+            candidate_visibility: 1,
+            ..response()
+        };
+        let mut model = CandidateModel::default();
+        let mut presentation = CandidatePresentationState::default();
+        let mut scroll = CandidateScrollState::default();
+        let mut click_guard = CandidateClickGuardState::default();
+        let mut focus_watch = CandidateFocusWatchState::default();
+        let mut arena = CandidateVisualArena::default();
+        let mut measure = MeasureEngine::new();
+        let mut last_caret = FrameCaret::default();
+        let configured = Vec::new();
+        let mut state = FrameState {
+            model: &mut model,
+            presentation: &mut presentation,
+            scroll: &mut scroll,
+            click_guard: &mut click_guard,
+            focus_watch: &mut focus_watch,
+            arena: &mut arena,
+            measure: &mut measure,
+            content_locale: "en-US",
+            configured_labels: &configured,
+        };
+        assert!(matches!(
+            frame_update(
+                &mut state,
+                config(),
+                &stale,
+                &mut last_caret,
+                work_area(),
+                1,
+            ),
+            FrameUpdateOutcome::HidePopup
+        ));
     }
 }

@@ -965,10 +965,16 @@ impl Host {
                 comment_len: output.comment.len,
             });
             let bounds = self.item_rects.get(slot).copied().unwrap_or_default();
-            sizes_in.push(Fcitx5CandidateLayoutSize {
-                width: bounds.right - bounds.left,
-                height: bounds.bottom - bounds.top,
-            });
+            // `item_rects` is the layout output's content rectangle: layout
+            // already removed one item padding inset from each edge.  The
+            // renderer receives the full item size and applies that inset
+            // when it builds the text row.  Reconstruct the full size here so
+            // the renderer does not subtract the same padding twice.
+            sizes_in.push(restore_render_item_size(
+                bounds,
+                geometry.item_padding_x,
+                geometry.item_padding_y,
+            ));
         }
         let presentation_output = self.presentation.output();
         let selected: u64 = if presentation_output.has_selected != 0 {
@@ -983,6 +989,11 @@ impl Host {
         // duration of the call; dc is a valid window DC.
         // SAFETY: renderer inputs remain valid and non-aliased for this call.
         unsafe {
+            // Host::update already converts the logical-DIP configuration and
+            // item rectangles to device pixels.  The shipping window renderer
+            // must therefore consume device-pixel geometry as-is; passing the
+            // monitor scale again would scale the bitmap and glyph metrics a
+            // second time, clipping candidate text at non-96-DPI settings.
             fcitx5_candidate_render_window_blit_to_dc(
                 candidates_in.as_ptr(),
                 sizes_in.as_ptr(),
@@ -991,7 +1002,7 @@ impl Host {
                 &geometry,
                 preedit.as_ptr(),
                 preedit.len(),
-                scale,
+                1.0,
                 u8::from(high_contrast),
                 selected,
                 dc,
@@ -1012,6 +1023,29 @@ impl Host {
             return;
         }
         let _ = self.paint_once_to_dc(dc, &client);
+    }
+}
+
+fn restore_render_item_size(
+    bounds: FRect,
+    padding_x: f32,
+    padding_y: f32,
+) -> Fcitx5CandidateLayoutSize {
+    let content_width = (bounds.right - bounds.left).max(0.0);
+    let content_height = (bounds.bottom - bounds.top).max(0.0);
+    let padding_x = padding_x.max(0.0);
+    let padding_y = padding_y.max(0.0);
+    Fcitx5CandidateLayoutSize {
+        width: if content_width > 0.0 {
+            content_width + padding_x * 2.0
+        } else {
+            0.0
+        },
+        height: if content_height > 0.0 {
+            content_height + padding_y * 2.0
+        } else {
+            0.0
+        },
     }
 }
 
@@ -2702,6 +2736,20 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paint_restores_full_item_extent_from_assembly_content_rect() {
+        let bounds = FRect {
+            left: 8.0,
+            top: 4.0,
+            right: 108.0,
+            bottom: 22.0,
+        };
+        let size = restore_render_item_size(bounds, 8.0, 4.0);
+
+        assert_eq!(size.width, 116.0);
+        assert_eq!(size.height, 26.0);
+    }
 
     #[test]
     fn selected_fallbacks_never_collide_with_selected_background() {
