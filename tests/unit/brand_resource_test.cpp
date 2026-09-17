@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -98,6 +99,35 @@ std::vector<int> ico_sizes(const std::filesystem::path& path) {
     return sizes;
 }
 
+std::vector<std::vector<unsigned char>> ico_frames(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        throw std::runtime_error("could not open ico file");
+    const auto file_size = std::filesystem::file_size(path);
+    std::vector<unsigned char> bytes(file_size);
+    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!input || bytes.size() < 6 || bytes[0] != 0 || bytes[1] != 0 || bytes[2] != 1 ||
+        bytes[3] != 0) {
+        throw std::runtime_error("ICO header is invalid");
+    }
+    const std::uint16_t count = static_cast<std::uint16_t>(bytes[4]) |
+                                (static_cast<std::uint16_t>(bytes[5]) << 8);
+    const std::size_t directory_end = 6u + 16u * count;
+    if (count == 0 || bytes.size() < directory_end)
+        throw std::runtime_error("ICO directory is invalid");
+    std::vector<std::vector<unsigned char>> frames;
+    frames.reserve(count);
+    for (std::uint16_t index = 0; index < count; ++index) {
+        const std::size_t entry = 6u + 16u * index;
+        const std::uint32_t length = little_endian(bytes.data() + entry + 8);
+        const std::uint32_t offset = little_endian(bytes.data() + entry + 12);
+        if (offset < directory_end || static_cast<std::uint64_t>(offset) + length > bytes.size())
+            throw std::runtime_error("ICO frame is outside the file");
+        frames.emplace_back(bytes.begin() + offset, bytes.begin() + offset + length);
+    }
+    return frames;
+}
+
 bool contains_all(const std::string& text, std::initializer_list<const char*> required) {
     for (const char* value : required) {
         if (text.find(value) == std::string::npos)
@@ -135,7 +165,8 @@ ArtifactPaths parse_artifact_paths(int argc, char** argv) {
 #if defined(_WIN32)
 void require_group_icon(const std::filesystem::path& path,
                         const char* label,
-                        std::initializer_list<int> ids) {
+                        std::initializer_list<int> ids,
+                        const std::vector<std::vector<unsigned char>>* expected_frames = nullptr) {
     if (!std::filesystem::is_regular_file(path))
         throw std::runtime_error(std::string(label) + " artifact is missing");
     const HMODULE module = LoadLibraryExW(
@@ -147,6 +178,41 @@ void require_group_icon(const std::filesystem::path& path,
             FreeLibrary(module);
             throw std::runtime_error(std::string(label) + " is missing RT_GROUP_ICON resource " +
                                      std::to_string(id));
+        }
+    }
+    if (expected_frames) {
+        const HRSRC group = FindResourceW(module, MAKEINTRESOURCEW(*ids.begin()), RT_GROUP_ICON);
+        const HGLOBAL loaded = LoadResource(module, group);
+        const auto* bytes = static_cast<const unsigned char*>(LockResource(loaded));
+        const DWORD size = SizeofResource(module, group);
+        if (!bytes || size < 6 || bytes[0] != 0 || bytes[1] != 0 || bytes[2] != 1 ||
+            bytes[3] != 0) {
+            FreeLibrary(module);
+            throw std::runtime_error(std::string(label) + " has an invalid RT_GROUP_ICON");
+        }
+        const std::uint16_t count = static_cast<std::uint16_t>(bytes[4]) |
+                                    (static_cast<std::uint16_t>(bytes[5]) << 8);
+        if (count != expected_frames->size() || size < 6u + 14u * count) {
+            FreeLibrary(module);
+            throw std::runtime_error(std::string(label) + " has an unexpected icon frame count");
+        }
+        for (std::uint16_t index = 0; index < count; ++index) {
+            const unsigned char* entry = bytes + 6u + 14u * index;
+            const WORD icon_id = static_cast<WORD>(entry[12]) |
+                                 (static_cast<WORD>(entry[13]) << 8);
+            const HRSRC icon = FindResourceW(module, MAKEINTRESOURCEW(icon_id), RT_ICON);
+            const HGLOBAL icon_loaded = icon ? LoadResource(module, icon) : nullptr;
+            const auto* icon_bytes = icon_loaded
+                                         ? static_cast<const unsigned char*>(LockResource(icon_loaded))
+                                         : nullptr;
+            const DWORD icon_size = icon ? SizeofResource(module, icon) : 0;
+            const auto& expected = (*expected_frames)[index];
+            if (!icon_bytes || icon_size != expected.size() ||
+                std::memcmp(icon_bytes, expected.data(), expected.size()) != 0) {
+                FreeLibrary(module);
+                throw std::runtime_error(std::string(label) +
+                                         " does not contain the approved ICO frame data");
+            }
         }
     }
     FreeLibrary(module);
@@ -165,6 +231,7 @@ int main(int argc, char** argv) {
         const ArtifactPaths artifacts = parse_artifact_paths(argc, argv);
         const std::vector<int> expected = {16, 20, 24, 32, 40, 48, 64, 128, 256};
         const auto product = ico_sizes(root / "resources/icons/fcitx5.ico");
+        const auto product_frames = ico_frames(root / "resources/icons/fcitx5.ico");
         const auto paused = ico_sizes(root / "resources/icons/fcitx5-paused.ico");
         const auto error = ico_sizes(root / "resources/icons/fcitx5-error.ico");
         const auto tsf = ico_sizes(root / "resources/icons/fcitx5-tsf.ico");
@@ -228,7 +295,7 @@ int main(int argc, char** argv) {
             require_group_icon(*artifacts.launcher, "launcher", {101, 102, 103});
         }
         for (const auto& normal : artifacts.normal) {
-            require_group_icon(normal, "shipping executable", {101});
+            require_group_icon(normal, "shipping executable", {101}, &product_frames);
         }
         if (artifacts.tsf) {
             require_group_icon(*artifacts.tsf, "TSF DLL", {104});

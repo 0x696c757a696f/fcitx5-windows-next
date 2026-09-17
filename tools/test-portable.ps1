@@ -56,12 +56,25 @@ function Test-PackageOutputWritable {
 try {
   Expand-Archive -LiteralPath $zip -DestinationPath $first
   $app = Join-Path $first 'Fcitx5'
+  $manifest = Get-Content -LiteralPath (Join-Path $app 'manifest.json') -Raw |
+    ConvertFrom-Json
+  $entryPointHashes = @{}
   foreach ($location in @('first', 'moved')) {
     foreach ($entry in @('Start Fcitx5.exe', 'Fcitx5 Settings.exe',
                          'Unregister Fcitx5.exe')) {
       $entryPath = Join-Path $app $entry
       if (-not (Test-Path -LiteralPath $entryPath -PathType Leaf)) {
         throw "Missing portable entry point at $location location: $entry"
+      }
+      $entryHash = (Get-FileHash -LiteralPath $entryPath -Algorithm SHA256).Hash
+      if ($location -eq 'first') {
+        $entryPointHashes[$entry] = $entryHash
+        $manifestFile = @($manifest.files | Where-Object path -eq $entry)
+        if ($manifestFile.Count -ne 1 -or $manifestFile[0].sha256 -ne $entryHash.ToLowerInvariant()) {
+          throw "Portable manifest hash does not match entry point: $entry"
+        }
+      } elseif ($entryPointHashes[$entry] -ne $entryHash) {
+        throw "Portable move changed entry point bytes: $entry"
       }
       $entryTest = Start-Process -FilePath $entryPath -ArgumentList '--self-test' `
         -Wait -PassThru -WindowStyle Hidden

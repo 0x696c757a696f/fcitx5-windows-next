@@ -375,6 +375,11 @@ try {
       }
       foreach ($targetArchitecture in Get-Architectures) {
         Invoke-ConfigureAndBuild $targetArchitecture $true
+        # Bootstrap is a package input, not an ALL target. Build it explicitly
+        # in both architecture lanes so staging never consumes an older copy.
+        Invoke-Native (Get-CMakeCommand) @('--build', (Get-BuildDirectory $targetArchitecture),
+                                           '--config', $Configuration, '--target',
+                                           'fcitx5_bootstrap')
         # The Rust register CLI is a release-stage input but intentionally is
         # not an ALL target for ordinary development builds. Build it here,
         # before the PE audit and staging consume it, without widening dev.

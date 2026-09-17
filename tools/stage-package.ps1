@@ -14,6 +14,8 @@ $outRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'out/package'))
 $core = Join-Path $repoRoot 'out/stage/fcitx5'
 $x64 = Join-Path $repoRoot 'out/build/windows-x64-release/Release'
 $x86 = Join-Path $repoRoot 'out/build/windows-x86-release/Release'
+$bootstrap = Join-Path $x64 'fcitx5-bootstrap.exe'
+$approvedIcon = Join-Path $repoRoot 'resources/icons/fcitx5.ico'
 $work = Join-Path $outRoot ('stage-' + [guid]::NewGuid().ToString('N'))
 $root = Join-Path $work 'Fcitx5'
 $artifacts = Join-Path $outRoot 'artifacts'
@@ -32,13 +34,72 @@ $required = @(
   (Join-Path $x64 'fcitx5-package.exe'), (Join-Path $x64 'fcitx5-downloader.exe'),
   (Join-Path $x64 'fcitx5-deployer.exe'), (Join-Path $x64 'fcitx5-provider.exe'),
   (Join-Path $x64 'fcitx5-updater.exe'),
-  (Join-Path $x64 'fcitx5-bootstrap.exe'),
+  $bootstrap,
   (Join-Path $x64 'fcitx5-release-pqc-signer.exe'),
   (Join-Path $x64 'fcitx5-register.exe'), (Join-Path $x64 'fcitx5-tsf.dll'),
   (Join-Path $x86 'fcitx5-register.exe'), (Join-Path $x86 'fcitx5-tsf.dll'))
 foreach ($path in $required) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package input: $path" }
 }
+if (-not (Test-Path -LiteralPath $approvedIcon -PathType Leaf)) {
+  throw "Missing approved application icon: $approvedIcon"
+}
+$bootstrapInfo = Get-Item -LiteralPath $bootstrap
+$iconInfo = Get-Item -LiteralPath $approvedIcon
+if ($bootstrapInfo.LastWriteTimeUtc -lt $iconInfo.LastWriteTimeUtc) {
+  throw "Stale fcitx5-bootstrap.exe: rebuild after resources/icons/fcitx5.ico changed."
+}
+
+if (-not ('Fcitx5.StagePeResources' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace Fcitx5
+{
+public static class StagePeResources
+{
+    private const uint LoadLibraryAsDatafile = 0x00000002;
+    private const uint LoadLibraryAsImageResource = 0x00000020;
+    private const int RtGroupIcon = 14;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr LoadLibraryEx(string fileName, IntPtr file, uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr FindResource(IntPtr module, IntPtr name, IntPtr type);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FreeLibrary(IntPtr module);
+
+    public static bool HasGroupIcon(string fileName, int resourceId)
+    {
+        var module = LoadLibraryEx(fileName, IntPtr.Zero,
+            LoadLibraryAsDatafile | LoadLibraryAsImageResource);
+        if (module == IntPtr.Zero)
+            return false;
+        try
+        {
+            return FindResource(module, new IntPtr(resourceId),
+                new IntPtr(RtGroupIcon)) != IntPtr.Zero;
+        }
+        finally
+        {
+            FreeLibrary(module);
+        }
+    }
+}
+}
+'@ -Language CSharp -ErrorAction Stop
+}
+
+function Assert-ApprovedGroupIcon([string] $path, [string] $label) {
+  if (-not [Fcitx5.StagePeResources]::HasGroupIcon($path, 101)) {
+    throw "$label is missing RT_GROUP_ICON resource 101 from resources/icons/fcitx5.ico: $path"
+  }
+}
+
+Assert-ApprovedGroupIcon $bootstrap 'fcitx5-bootstrap.exe'
 
 New-Item -ItemType Directory -Force -Path $root, $artifacts | Out-Null
 Copy-Item -LiteralPath (Join-Path $core 'bin') -Destination $root -Recurse
@@ -59,8 +120,19 @@ foreach ($name in @('fcitx5-config.exe', 'fcitx5-control.exe', 'fcitx5-launcher.
 }
 foreach ($name in @('Start Fcitx5.exe', 'Fcitx5 Settings.exe',
                      'Unregister Fcitx5.exe')) {
-  Copy-Item -LiteralPath (Join-Path $x64 'fcitx5-bootstrap.exe') `
+  Copy-Item -LiteralPath $bootstrap `
     -Destination (Join-Path $root $name) -Force
+}
+
+$bootstrapHash = (Get-FileHash -LiteralPath $bootstrap -Algorithm SHA256).Hash
+foreach ($name in @('Start Fcitx5.exe', 'Fcitx5 Settings.exe',
+                     'Unregister Fcitx5.exe')) {
+  $finalPath = Join-Path $root $name
+  Assert-ApprovedGroupIcon $finalPath $name
+  $finalHash = (Get-FileHash -LiteralPath $finalPath -Algorithm SHA256).Hash
+  if ($finalHash -ne $bootstrapHash) {
+    throw "$name does not preserve the approved bootstrap PE resource chain."
+  }
 }
 Copy-Item -LiteralPath (Join-Path $x86 'fcitx5-register.exe') `
   -Destination (Join-Path $bin 'fcitx5-register-x86.exe') -Force

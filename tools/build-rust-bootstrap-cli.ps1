@@ -3,7 +3,9 @@ param(
   [Parameter(Mandatory)] [string] $CargoExecutable,
   [Parameter(Mandatory)] [string] $CargoTarget,
   [Parameter(Mandatory)] [string] $OutputDirectory,
-  [Parameter(Mandatory)] [string] $Version
+  [Parameter(Mandatory)] [string] $Version,
+  [ValidateSet('dev', 'release')]
+  [string] $Profile = 'dev'
 )
 
 Set-StrictMode -Version Latest
@@ -32,8 +34,15 @@ if ([string]::IsNullOrWhiteSpace($env:RUSTC_WRAPPER)) {
   }
 }
 
-& $CargoExecutable build --locked --manifest-path (Join-Path $repoRoot 'Cargo.toml') `
-  -p fcitx5-package-core --bin fcitx5-bootstrap --target $CargoTarget
+$cargoArguments = @(
+  'build', '--locked', '--manifest-path', (Join-Path $repoRoot 'Cargo.toml'),
+  '-p', 'fcitx5-package-core', '--bin', 'fcitx5-bootstrap', '--target', $CargoTarget)
+$profileDirectory = 'debug'
+if ($Profile -eq 'release') {
+  $cargoArguments += '--release'
+  $profileDirectory = 'release'
+}
+& $CargoExecutable @cargoArguments
 if ($LASTEXITCODE -ne 0) {
   throw 'Rust fcitx5-bootstrap CLI build failed.'
 }
@@ -43,7 +52,7 @@ $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
 } else {
   [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
 }
-$rustExe = Join-Path $targetRoot (Join-Path $CargoTarget 'debug/fcitx5-bootstrap.exe')
+$rustExe = Join-Path $targetRoot (Join-Path $CargoTarget "$profileDirectory/fcitx5-bootstrap.exe")
 if (-not (Test-Path -LiteralPath $rustExe -PathType Leaf)) {
   throw "Missing Rust bootstrap CLI binary: $rustExe"
 }

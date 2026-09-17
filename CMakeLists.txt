@@ -754,10 +754,12 @@ add_custom_target(
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-bootstrap-cli.ps1"
     -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget "${FCITX_RUST_TARGET}"
     -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>" -Version "${PROJECT_VERSION}"
+    -Profile "$<IF:$<CONFIG:Debug>,dev,release>"
   DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/build.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/package-core/src/bootstrap_main.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-rust-bootstrap-cli.ps1"
     ${FCITX_APP_RESOURCE_FILES}
