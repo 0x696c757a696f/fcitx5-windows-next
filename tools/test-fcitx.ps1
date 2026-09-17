@@ -11,7 +11,6 @@ $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $stage = if ($StageRoot) { [IO.Path]::GetFullPath($StageRoot) } else {
   Join-Path $repoRoot 'out/stage/fcitx5'
 }
-$engine = Join-Path $stage 'bin/fcitx5-engine.exe'
 $bash = Join-Path $repoRoot 'out/toolchains/msys64/usr/bin/bash.exe'
 
 & (Join-Path $PSScriptRoot 'prepare-fast-toolchain.ps1') -InstallLocal
@@ -90,9 +89,65 @@ try {
 }
 
 $testDataParent = [IO.Path]::GetFullPath((Join-Path $repoRoot 'out/test-data'))
+$testRoots = @()
+$currentPath = Join-Path $stage 'current.json'
+$currentGeneration = $null
+if (Test-Path -LiteralPath $currentPath -PathType Leaf) {
+  $currentGeneration = [string](Get-Content -LiteralPath $currentPath -Raw |
+    ConvertFrom-Json).current_generation
+}
+if ([string]::IsNullOrWhiteSpace($currentGeneration)) {
+  $currentGeneration = (git -C $repoRoot rev-parse --short=12 HEAD).Trim().ToLowerInvariant()
+}
+if ($currentGeneration -notmatch '^[a-z0-9_-]{1,32}$') {
+  throw "Invalid engine test release generation: $currentGeneration"
+}
+$packagedRuntimeRoot = Join-Path $stage (Join-Path 'runtime' $currentGeneration)
+$packagedRuntimeEngine = Join-Path $packagedRuntimeRoot 'bin/fcitx5-engine.exe'
+$syntheticRuntime = -not (Test-Path -LiteralPath $packagedRuntimeEngine -PathType Leaf)
+if ($syntheticRuntime) {
+  $syntheticRuntimeBase = Join-Path $testDataParent ('fcitx-runtime-' + [guid]::NewGuid().ToString('N'))
+  $testRoots += $syntheticRuntimeBase
+  $runtimeRoot = Join-Path $syntheticRuntimeBase (Join-Path 'runtime' $currentGeneration)
+  New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+  foreach ($name in @('bin', 'lib', 'share', 'themes', 'data')) {
+    $source = Join-Path $stage $name
+    if (Test-Path -LiteralPath $source) {
+      Copy-Item -LiteralPath $source -Destination $runtimeRoot -Recurse -Force
+    }
+  }
+} else {
+  $runtimeRoot = $packagedRuntimeRoot
+}
+$engine = Join-Path $runtimeRoot 'bin/fcitx5-engine.exe'
+if (-not (Test-Path -LiteralPath $engine -PathType Leaf)) {
+  throw "Staged real engine missing from runtime/$currentGeneration/bin: $engine"
+}
+$previousGeneration = [Environment]::GetEnvironmentVariable(
+  'FCITX5_RELEASE_GENERATION', 'Process')
+$previousNamespace = [Environment]::GetEnvironmentVariable(
+  'FCITX5_TEST_NAMESPACE', 'Process')
+[Environment]::SetEnvironmentVariable(
+  'FCITX5_RELEASE_GENERATION', $currentGeneration, 'Process')
+
+function Invoke-EngineE2e([string] $Build, [string] $EnginePath, [string[]] $Scenario) {
+  $previousScenarioNamespace = [Environment]::GetEnvironmentVariable(
+    'FCITX5_TEST_NAMESPACE', 'Process')
+  try {
+    $scenarioNamespace = 'engine-e2e-' + [guid]::NewGuid().ToString('N')
+    [Environment]::SetEnvironmentVariable(
+      'FCITX5_TEST_NAMESPACE', $scenarioNamespace, 'Process')
+    $arguments = @($EnginePath) + $Scenario
+    & (Join-Path $Build "$Configuration/engine_e2e.exe") @arguments
+    if ($LASTEXITCODE -ne 0) { throw "engine_e2e failed with exit code $LASTEXITCODE" }
+  } finally {
+    [Environment]::SetEnvironmentVariable(
+      'FCITX5_TEST_NAMESPACE', $previousScenarioNamespace, 'Process')
+  }
+}
+
 $previousUserDataRoot = [Environment]::GetEnvironmentVariable('FCITX_USER_DATA_ROOT', 'Process')
 $previousLuaMarker = [Environment]::GetEnvironmentVariable('FCITX_LUA_TEST_MARKER', 'Process')
-$testRoots = @()
 try {
   foreach ($architecture in @('x64', 'x86')) {
     Import-MsvcEnvironment $architecture
@@ -111,23 +166,19 @@ try {
     $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
     & $cmake --build $build --config $Configuration --target fcitx5_engine_e2e fcitx5_ui_rustbin
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    Copy-Item -LiteralPath (Join-Path $build "$Configuration/fcitx5-ui.exe") `
-      -Destination (Join-Path $stage 'bin/fcitx5-ui.exe') -Force
+    $builtUi = Join-Path $build "$Configuration/fcitx5-ui.exe"
+    if ($syntheticRuntime) {
+      Copy-Item -LiteralPath $builtUi `
+        -Destination (Join-Path $runtimeRoot 'bin/fcitx5-ui.exe') -Force
+    }
     Write-Host "Running real Fcitx acceptance: $architecture baseline"
-    & (Join-Path $build "$Configuration/engine_e2e.exe") $engine
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Invoke-EngineE2e $build $engine @()
     Write-Host "Running real Fcitx acceptance: $architecture typing-fuzz"
-    & (Join-Path $build "$Configuration/engine_e2e.exe") `
-      $engine --typing-fuzz
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Invoke-EngineE2e $build $engine @('--typing-fuzz')
     Write-Host "Running real Fcitx acceptance: $architecture chttrans"
-    & (Join-Path $build "$Configuration/engine_e2e.exe") `
-      $engine --chttrans
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Invoke-EngineE2e $build $engine @('--chttrans')
     Write-Host "Running real Fcitx acceptance: $architecture safe-mode"
-    & (Join-Path $build "$Configuration/engine_e2e.exe") `
-      $engine --safe-mode
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Invoke-EngineE2e $build $engine @('--safe-mode')
     if (-not (Test-Path -LiteralPath $luaMarker -PathType Leaf) -or
         (Get-Content -LiteralPath $luaMarker -Raw) -ne "fcitx5-lua-ok`n") {
       throw "fcitx5-lua did not execute the isolated functional extension for $architecture."
@@ -160,9 +211,7 @@ default = "rime"
   foreach ($architecture in @('x64', 'x86')) {
     $build = Join-Path $repoRoot "out/build/windows-$architecture-dev"
     Write-Host "Running real Fcitx acceptance: $architecture rime-lua"
-    & (Join-Path $build "$Configuration/engine_e2e.exe") `
-      $engine --rime-lua
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Invoke-EngineE2e $build $engine @('--rime-lua')
   }
   foreach ($required in @('build/luna_pinyin.schema.yaml', 'build/luna_pinyin.prism.bin')) {
     if (-not (Test-Path -LiteralPath (Join-Path $rimeUserDirectory $required) -PathType Leaf)) {
@@ -177,6 +226,10 @@ default = "rime"
     'FCITX_USER_DATA_ROOT', $previousUserDataRoot, 'Process')
   [Environment]::SetEnvironmentVariable(
     'FCITX_LUA_TEST_MARKER', $previousLuaMarker, 'Process')
+  [Environment]::SetEnvironmentVariable(
+    'FCITX5_RELEASE_GENERATION', $previousGeneration, 'Process')
+  [Environment]::SetEnvironmentVariable(
+    'FCITX5_TEST_NAMESPACE', $previousNamespace, 'Process')
   foreach ($testRoot in $testRoots) {
     $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
     $testPrefix = $testDataParent.TrimEnd('\') + '\'

@@ -28,7 +28,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fcitx5_ipc_client::{EngineClient, KeyOutcome};
 use fcitx5_windows_common_core::{
@@ -86,6 +86,81 @@ fn parse_flags(arguments: &[String]) -> Option<Flags> {
         return None;
     }
     Some(flags)
+}
+
+struct TestEnvironment {
+    generation: String,
+    namespace: String,
+    user_data_root: PathBuf,
+}
+
+fn valid_stage_generation(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 32
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
+}
+
+fn stage_generation_from_engine_path(engine: &Path) -> Option<String> {
+    let file_name = engine.file_name()?.to_str()?;
+    if !file_name.eq_ignore_ascii_case("fcitx5-engine.exe") {
+        return None;
+    }
+    let bin_dir = engine.parent()?;
+    if !bin_dir.file_name()?.to_str()?.eq_ignore_ascii_case("bin") {
+        return None;
+    }
+    let generation_dir = bin_dir.parent()?;
+    let generation = generation_dir.file_name()?.to_str()?;
+    if !valid_stage_generation(generation) {
+        return None;
+    }
+    if !generation_dir
+        .parent()?
+        .file_name()?
+        .to_str()?
+        .eq_ignore_ascii_case("runtime")
+    {
+        return None;
+    }
+    Some(generation.to_owned())
+}
+
+fn bind_test_environment(engine: &Path) -> Result<TestEnvironment, String> {
+    let generation = stage_generation_from_engine_path(engine).ok_or_else(|| {
+        "tested engine is not under runtime/<generation>/bin/fcitx5-engine.exe".to_owned()
+    })?;
+    env::set_var("FCITX5_RELEASE_GENERATION", &generation);
+
+    let namespace = env::var("FCITX5_TEST_NAMESPACE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("engine-e2e-{}", std::process::id()));
+    env::set_var("FCITX5_TEST_NAMESPACE", &namespace);
+
+    let user_data_root = if let Some(root) =
+        env::var_os("FCITX_USER_DATA_ROOT").filter(|value| !value.is_empty())
+    {
+        PathBuf::from(root)
+    } else {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("system clock before Unix epoch: {error}"))?
+            .as_nanos();
+        let root =
+            env::temp_dir().join(format!("fcitx5-engine-e2e-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&root)
+            .map_err(|error| format!("create isolated engine user data root failed: {error}"))?;
+        env::set_var("FCITX_USER_DATA_ROOT", &root);
+        root
+    };
+
+    Ok(TestEnvironment {
+        generation,
+        namespace,
+        user_data_root,
+    })
 }
 
 /// A spawned real-engine process plus its ready/stop kernel events, mirroring
@@ -1130,11 +1205,19 @@ fn main() {
         eprintln!("invalid scenario flags");
         std::process::exit(1);
     };
-    // Respect an injected namespace (candidate-ui runner); otherwise default
-    // to a process-unique namespace exactly like the C++ test.
-    let injected = env::var("FCITX5_TEST_NAMESPACE").ok();
-    let namespace = injected.unwrap_or_else(|| format!("engine-{}", std::process::id()));
-    env::set_var("FCITX5_TEST_NAMESPACE", namespace);
+    let environment = match bind_test_environment(&engine_path) {
+        Ok(environment) => environment,
+        Err(message) => {
+            eprintln!("real-Fcitx acceptance failed: {message}");
+            std::process::exit(1);
+        }
+    };
+    println!(
+        "engine-e2e-generation={} engine-e2e-namespace={} engine-e2e-user-data-root={}",
+        environment.generation,
+        environment.namespace,
+        environment.user_data_root.display()
+    );
 
     match run_main(&engine_path, &flags) {
         Ok(()) => {}
@@ -1142,5 +1225,50 @@ fn main() {
             eprintln!("real-Fcitx acceptance failed: {message}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stage_generation_from_engine_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn stage_generation_from_engine_path_accepts_runtime_bin() {
+        let path = Path::new(r"C:\stage\Fcitx5\runtime\33cc36c163b5\bin\fcitx5-engine.exe");
+        assert_eq!(
+            stage_generation_from_engine_path(path).as_deref(),
+            Some("33cc36c163b5")
+        );
+    }
+
+    #[test]
+    fn stage_generation_from_engine_path_rejects_build_tree() {
+        let path = Path::new(r"C:\build\Release\engine_e2e.exe");
+        assert!(stage_generation_from_engine_path(path).is_none());
+    }
+
+    #[test]
+    fn stage_generation_from_engine_path_rejects_missing_generation() {
+        let path = Path::new(r"C:\stage\Fcitx5\runtime\bin\fcitx5-engine.exe");
+        assert!(stage_generation_from_engine_path(path).is_none());
+    }
+
+    #[test]
+    fn stage_generation_from_engine_path_rejects_invalid_generation() {
+        for generation in ["Release", "has space"] {
+            let path = PathBuf::from(format!(
+                r"C:\stage\Fcitx5\runtime\{generation}\bin\fcitx5-engine.exe"
+            ));
+            assert!(
+                stage_generation_from_engine_path(&path).is_none(),
+                "{generation}"
+            );
+        }
+        let too_long = "a".repeat(33);
+        let path = PathBuf::from(format!(
+            r"C:\stage\Fcitx5\runtime\{too_long}\bin\fcitx5-engine.exe"
+        ));
+        assert!(stage_generation_from_engine_path(&path).is_none());
     }
 }

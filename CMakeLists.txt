@@ -912,6 +912,25 @@ add_custom_target(
   COMMENT "Building Rust fcitx5-updater CLI")
 
 if(BUILD_TESTING)
+  # Real-engine E2E is opt-in: it needs a staged runtime and performs the
+  # complete x64/x86 fixture/lifecycle run through tools/test-fcitx.ps1.
+  # Never register it for ordinary CTest runs without an explicit stage.
+  if(DEFINED ENV{FCITX_E2E_STAGE_ROOT} AND NOT
+     "$ENV{FCITX_E2E_STAGE_ROOT}" STREQUAL "")
+    add_test(
+      NAME engine-e2e
+      COMMAND "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile
+              -ExecutionPolicy Bypass
+              -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-fcitx.ps1"
+              -Configuration "$<CONFIG>"
+              -StageRoot "$ENV{FCITX_E2E_STAGE_ROOT}")
+    set_tests_properties(engine-e2e PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      TIMEOUT 1800
+      LABELS "real-host;engine;e2e"
+      RUN_SERIAL TRUE)
+  endif()
+
   add_executable(fcitx5_release_identity_test tests/unit/release_identity_test.cpp)
   target_link_libraries(
     fcitx5_release_identity_test PRIVATE fcitx5::windows_common fcitx5::release_identity ole32)
