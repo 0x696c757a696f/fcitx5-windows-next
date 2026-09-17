@@ -11,8 +11,9 @@ use fcitx5_register_core::{
     REGISTER_ARTIFACT_HELPER_LOCATION, REGISTER_ARTIFACT_INVALID_ARGUMENT, REGISTER_ARTIFACT_OK,
     REGISTER_ARTIFACT_PAIRED_DLL_MISSING, REGISTER_DLL_ARGUMENT_OK, REGISTER_OPERATION_REGISTER,
     REGISTER_OPERATION_REMOVE_USER_SHADOW, REGISTER_OPERATION_REPAIR, REGISTER_OPERATION_STATUS,
-    REGISTER_OPERATION_UNREGISTER, REGISTER_OPERATION_VALIDATE_ARTIFACT,
-    REGISTER_STATUS_NOT_REGISTERED, REGISTER_STATUS_PATH_MISMATCH, REGISTER_STATUS_REGISTERED,
+    REGISTER_OPERATION_UNREGISTER, REGISTER_OPERATION_USER_PROFILE_STATUS,
+    REGISTER_OPERATION_VALIDATE_ARTIFACT, REGISTER_STATUS_NOT_REGISTERED,
+    REGISTER_STATUS_PATH_MISMATCH, REGISTER_STATUS_REGISTERED,
 };
 
 fn current_architecture_bits() -> u32 {
@@ -29,7 +30,7 @@ fn version() -> &'static str {
 
 fn usage() {
     eprintln!(
-        "Usage: fcitx5-register --register|--unregister|--repair|--status|--validate-artifact|--remove-user-shadow --dll ABSOLUTE_PATH"
+        "Usage: fcitx5-register --register|--unregister|--repair|--status|--user-profile-status|--validate-artifact|--remove-user-shadow --dll ABSOLUTE_PATH"
     );
 }
 
@@ -133,6 +134,28 @@ fn run(args: &[OsString]) -> i32 {
         }
         eprintln!("Current-user TSF registration shadow could not be removed.");
         return 7;
+    }
+
+    if operation == REGISTER_OPERATION_USER_PROFILE_STATUS {
+        if !dll.is_file() {
+            eprintln!("TSF DLL does not exist: {}", dll.display());
+            return 2;
+        }
+        let result = invoke_registration_export(&dll, operation_export(operation));
+        return match result {
+            0 => {
+                println!("user_profile_enabled");
+                0
+            }
+            1 => {
+                println!("user_profile_disabled");
+                3
+            }
+            _ => {
+                eprintln!("Registration operation failed: 0x{:08x}", result as u32);
+                6
+            }
+        };
     }
 
     if !matches!(

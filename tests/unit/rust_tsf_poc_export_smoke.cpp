@@ -50,6 +50,7 @@ int wmain(int argc, wchar_t** argv) {
     using IpcBoundaryReport = const char*(__stdcall*)(size_t*);
     using CompositionTranscriptReport = const char*(__stdcall*)(size_t*);
     using DifferentialSummaryReport = const char*(__stdcall*)(size_t*);
+    using CurrentUserProfileStatus = HRESULT(__stdcall*)();
     using ForcedFailure = HRESULT(__stdcall*)();
     const auto getClassObject = resolveProcAddress<GetClassObject>(module, "DllGetClassObject");
     const auto canUnloadNow = resolveProcAddress<CanUnloadNow>(module, "DllCanUnloadNow");
@@ -63,11 +64,13 @@ int wmain(int argc, wchar_t** argv) {
         module, "Fcitx5TsfPocCompositionTranscriptReport");
     const auto differentialSummaryReport = resolveProcAddress<DifferentialSummaryReport>(
         module, "Fcitx5TsfPocDifferentialSummaryReport");
+    const auto currentUserProfileStatus = resolveProcAddress<CurrentUserProfileStatus>(
+        module, "Fcitx5TsfCurrentUserProfileStatus");
     const auto forcedFailure =
         resolveProcAddress<ForcedFailure>(module, "Fcitx5TsfPocForcedFailureForTest");
     if (!getClassObject || !canUnloadNow || !behaviorReport || !profileIdentityReport ||
         !ipcBoundaryReport || !compositionTranscriptReport || !differentialSummaryReport ||
-        !forcedFailure) {
+        !currentUserProfileStatus || !forcedFailure) {
         std::cerr << "Rust TSF PoC exports missing\n";
         FreeLibrary(module);
         return 1;

@@ -47,6 +47,7 @@ pub const REGISTER_OPERATION_UNREGISTER: u32 = 3;
 pub const REGISTER_OPERATION_STATUS: u32 = 4;
 pub const REGISTER_OPERATION_VALIDATE_ARTIFACT: u32 = 5;
 pub const REGISTER_OPERATION_REMOVE_USER_SHADOW: u32 = 6;
+pub const REGISTER_OPERATION_USER_PROFILE_STATUS: u32 = 7;
 
 pub const REGISTER_DLL_ARGUMENT_OK: u32 = 0;
 pub const REGISTER_DLL_ARGUMENT_INVALID: u32 = 1;
@@ -54,6 +55,7 @@ pub const REGISTER_DLL_ARGUMENT_INVALID: u32 = 1;
 pub const REGISTER_EXPORT_NONE: u32 = 0;
 pub const REGISTER_EXPORT_REGISTER_SERVER: u32 = 1;
 pub const REGISTER_EXPORT_UNREGISTER_SERVER: u32 = 2;
+pub const REGISTER_EXPORT_USER_PROFILE_STATUS: u32 = 3;
 
 pub const REGISTER_STATUS_REGISTERED: u32 = 0;
 pub const REGISTER_STATUS_NOT_REGISTERED: u32 = 1;
@@ -254,6 +256,7 @@ pub fn parse_operation(operation: &OsStr) -> u32 {
         "--status" => REGISTER_OPERATION_STATUS,
         "--validate-artifact" => REGISTER_OPERATION_VALIDATE_ARTIFACT,
         "--remove-user-shadow" => REGISTER_OPERATION_REMOVE_USER_SHADOW,
+        "--user-profile-status" => REGISTER_OPERATION_USER_PROFILE_STATUS,
         _ => REGISTER_OPERATION_UNKNOWN,
     }
 }
@@ -277,6 +280,7 @@ pub fn operation_export(operation: u32) -> u32 {
     match operation {
         REGISTER_OPERATION_REGISTER | REGISTER_OPERATION_REPAIR => REGISTER_EXPORT_REGISTER_SERVER,
         REGISTER_OPERATION_UNREGISTER => REGISTER_EXPORT_UNREGISTER_SERVER,
+        REGISTER_OPERATION_USER_PROFILE_STATUS => REGISTER_EXPORT_USER_PROFILE_STATUS,
         _ => REGISTER_EXPORT_NONE,
     }
 }
@@ -407,6 +411,7 @@ pub fn invoke_registration_export(dll: &Path, export_kind: u32) -> Hresult {
     let export_name = match export_kind {
         REGISTER_EXPORT_REGISTER_SERVER => c"DllRegisterServer".as_ptr(),
         REGISTER_EXPORT_UNREGISTER_SERVER => c"DllUnregisterServer".as_ptr(),
+        REGISTER_EXPORT_USER_PROFILE_STATUS => c"Fcitx5TsfCurrentUserProfileStatus".as_ptr(),
         _ => return hresult_from_win32(ERROR_INVALID_PARAMETER),
     };
     let dll = wide_z(dll.as_os_str());
@@ -430,12 +435,12 @@ pub fn invoke_registration_export(dll: &Path, export_kind: u32) -> Hresult {
     }
     let library = Library(module);
     // SAFETY: `library` owns a live module and `export_name` points to one of
-    // the two static NUL-terminated export names selected above.
+    // the static NUL-terminated export names selected above.
     let function = unsafe { GetProcAddress(library.get(), export_name) };
     if function.is_null() {
         return hresult_from_win32(ERROR_PROC_NOT_FOUND);
     }
-    // SAFETY: DllRegisterServer and DllUnregisterServer have the documented
+    // SAFETY: All supported registration exports have the documented
     // zero-argument system ABI returning HRESULT, matching this function type.
     let function: unsafe extern "system" fn() -> Hresult = unsafe { std::mem::transmute(function) };
     // SAFETY: The function pointer was resolved from the live module with its
@@ -554,6 +559,10 @@ mod tests {
             REGISTER_OPERATION_REMOVE_USER_SHADOW
         );
         assert_eq!(
+            parse_operation(OsStr::new("--user-profile-status")),
+            REGISTER_OPERATION_USER_PROFILE_STATUS
+        );
+        assert_eq!(
             parse_operation(OsStr::new("--bad")),
             REGISTER_OPERATION_UNKNOWN
         );
@@ -586,6 +595,10 @@ mod tests {
             0
         );
         assert_eq!(
+            operation_requires_admin(REGISTER_OPERATION_USER_PROFILE_STATUS),
+            0
+        );
+        assert_eq!(
             operation_export(REGISTER_OPERATION_REGISTER),
             REGISTER_EXPORT_REGISTER_SERVER
         );
@@ -600,6 +613,10 @@ mod tests {
         assert_eq!(
             operation_export(REGISTER_OPERATION_STATUS),
             REGISTER_EXPORT_NONE
+        );
+        assert_eq!(
+            operation_export(REGISTER_OPERATION_USER_PROFILE_STATUS),
+            REGISTER_EXPORT_USER_PROFILE_STATUS
         );
     }
 

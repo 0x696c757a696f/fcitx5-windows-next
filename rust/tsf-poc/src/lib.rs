@@ -55,14 +55,14 @@ use windows::Win32::UI::TextServices::{
     ITfActiveLanguageProfileNotifySink_Impl, ITfCandidateListUIElement,
     ITfCandidateListUIElement_Impl, ITfCategoryMgr, ITfComposition, ITfCompositionSink,
     ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfDocumentMgr, ITfEditSession,
-    ITfEditSession_Impl, ITfInputProcessorProfileMgr, ITfInputScope, ITfKeyEventSink,
-    ITfKeyEventSink_Impl, ITfKeystrokeMgr, ITfRange, ITfSource, ITfTextInputProcessor,
-    ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl,
-    ITfThreadFocusSink, ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink,
-    ITfThreadMgrEventSink_Impl, ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, InputScope,
-    GUID_PROP_INPUTSCOPE, GUID_TFCAT_TIP_KEYBOARD, IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET,
-    IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD, IS_PRIVATE, TF_DEFAULT_SELECTION, TF_ES_READ,
-    TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
+    ITfEditSession_Impl, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles, ITfInputScope,
+    ITfKeyEventSink, ITfKeyEventSink_Impl, ITfKeystrokeMgr, ITfRange, ITfSource,
+    ITfTextInputProcessor, ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl,
+    ITfTextInputProcessor_Impl, ITfThreadFocusSink, ITfThreadFocusSink_Impl, ITfThreadMgr,
+    ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl, ITfUIElement, ITfUIElementMgr,
+    ITfUIElement_Impl, InputScope, GUID_PROP_INPUTSCOPE, GUID_TFCAT_TIP_KEYBOARD,
+    IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD,
+    IS_PRIVATE, TF_DEFAULT_SELECTION, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
 use windows_core::{
@@ -434,6 +434,38 @@ fn with_com_initialized(operation: impl FnOnce() -> HRESULT) -> HRESULT {
         unsafe { CoUninitialize() };
     }
     result
+}
+
+fn current_user_profile_status_impl() -> HRESULT {
+    with_com_initialized(|| {
+        // SAFETY: CoCreateInstance is called after COM initialization and
+        // requests the system TSF profile manager interface.
+        let profiles = match unsafe {
+            CoCreateInstance::<_, ITfInputProcessorProfiles>(
+                &CLSID_TF_InputProcessorProfiles,
+                None,
+                CLSCTX_INPROC_SERVER,
+            )
+        } {
+            Ok(profiles) => profiles,
+            Err(error) => return error.code(),
+        };
+        // SAFETY: The interface is live and the identity pointers refer to
+        // immutable process-local constants. This call only reads the current
+        // user's enabled state; it does not change profile or language-list
+        // state.
+        match unsafe {
+            profiles.IsEnabledLanguageProfile(
+                &FCITX5_TEXT_SERVICE_CLSID,
+                LANG_ZH_CN,
+                &FCITX5_LANGUAGE_PROFILE_GUID,
+            )
+        } {
+            Ok(enabled) if enabled.as_bool() => S_OK,
+            Ok(_) => S_FALSE,
+            Err(error) => error.code(),
+        }
+    })
 }
 
 fn register_text_service_impl() -> HRESULT {
@@ -3686,6 +3718,19 @@ pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
 pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
     trace_event("dll_unregister_server_enter");
     panic_to_hresult(unregister_text_service_impl)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// Exported for the non-elevated register helper. This export accepts no raw
+/// pointers, only reads the current user's TSF profile state, and must never
+/// unwind across the DLL boundary.
+// SAFETY: This export accepts no raw pointers; the read-only query contains
+// failures and panics within the Windows system-call boundary.
+pub unsafe extern "system" fn Fcitx5TsfCurrentUserProfileStatus() -> HRESULT {
+    trace_event("current_user_profile_status_enter");
+    panic_to_hresult(current_user_profile_status_impl)
 }
 
 #[no_mangle]
