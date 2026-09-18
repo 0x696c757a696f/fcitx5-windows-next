@@ -453,3 +453,10 @@ Do not use this file as a substitute for test logs. Record concise evidence only
 - **P3 stacked base**: `c159be0` → `4ead534` → `e5a1d69` → then P3 content. P3 and the P4 preview-owner audit were **not** executed in this goal.
 - Full evidence: `docs/tasks/orphan-wip-iteration-46-47-report.md`.
 - Manual/environment notes: first x64 Release attempt failed on a Kaspersky-quarantined `fcitx5-bootstrap.exe` (`Copy-Item … access denied`); unchanged re-run was green. 084 UNSAFE-SAFETY-COMMENT-COVERAGE (480 sites) remains pending.
+
+## Integration — P3 stacked base landed on main (user-requested merge)
+
+- `28e6e51` → merge `ba36e880b90e75a2aa54b5bf3579ccf87e394c94` ("merge: integrate WindUI replayable UIA delta", from `c2c/windui-replayability-iter44` = `4ead534`) → merge `78df1dbcce67dd73c1fea9778bd3f586db76eafc` ("merge: integrate verified Settings prerequisite", `e5a1d69`). `--no-ff`, 24 paths total.
+- **Excluded by decision**: `240d762` (Candidate runtime/UI) stays on `c2c/orphan-wip-triage` for the Candidate workstream — hence `fcitx5-candidate-core` reports 112 tests on main vs 116 with that commit.
+- **Post-merge gate on main (all green)**: `git diff --check` PASS; root `Cargo.lock` diff 0 lines; only `third_party/wind-ui-rust/Cargo.toml` changed (two windows-rs features from the vendored UIA delta), 0 workspace `Cargo.toml` changes; Rust full tests x64 + x86 (config-core 28, control-core 68, config-poc 66, candidate-core 112, 0 failed, exit 0 each); CTest 8 lanes x64 8/8 and x86 8/8; `tools/verify-windui-vendor-coverage.ps1` GUARD_EXIT=0 (11 covered / 168 upstream / 128 vendored); merged vendored subtree byte-identical to `4ead534` (0 differing files); `tools/verify-product.ps1 pr -Architecture x64` EXIT=0 with `100% tests passed, 0 tests failed out of 81` (82.64 s).
+- Next: P3 Iteration 45 content starts from this base; P4 preview-owner read-only audit follows P3. Both are outside this session's scope until a goal is focused.
