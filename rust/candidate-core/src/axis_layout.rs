@@ -355,12 +355,34 @@ fn paged_vertical(input: &AxisLayoutInput, options: CandidateLayoutOptions) -> A
         count += 1;
     }
     count = count.max(1.min(max_count));
+    let mut first_visible = 0;
+    let selected = clamped_selected(input);
+    if selected >= count {
+        // Preserve the old prefix whenever it already contains the selected
+        // candidate. Otherwise build a contiguous page ending at selected,
+        // backfilling as many preceding candidates as the two budgets allow.
+        first_visible = selected;
+        count = 1;
+        width = input.items[selected].width;
+        height = input.items[selected].height;
+        while first_visible > 0 && count < max_count {
+            let preceding = &input.items[first_visible - 1];
+            let next_height = height + row_gap + preceding.height;
+            if next_height > content_budget {
+                break;
+            }
+            first_visible -= 1;
+            count += 1;
+            width = width.max(preceding.width);
+            height = next_height;
+        }
+    }
     let window_width = (width + padding_x * 2.0).min(width_budget(input));
     let window_height = (height + padding_y * 2.0).min(height_budget(input));
     let (window, placement) = place_window(input, window_width, window_height);
     let mut y = window.top + padding_y;
     let mut items = Vec::with_capacity(count);
-    for item in input.items.iter().take(count) {
+    for item in input.items.iter().skip(first_visible).take(count) {
         let rect = Rect {
             left: window.left + padding_x,
             top: y,
@@ -383,7 +405,7 @@ fn paged_vertical(input: &AxisLayoutInput, options: CandidateLayoutOptions) -> A
             width: window_width,
             height: window_height,
         },
-        first_visible: 0,
+        first_visible,
     }
 }
 
@@ -800,6 +822,25 @@ mod tests {
                 assert!(entry.rect.top > result.items[local - 1].rect.bottom);
             }
         }
+    }
+
+    #[test]
+    fn paging_vertical_reanchors_page_when_selected_is_beyond_height_budget() {
+        let mut input = input(vec![item(100.0, 50.0); 4]);
+        input.options.orientation = Orientation::Vertical;
+        input.page_size = 4;
+        input.selected = 3;
+        input.work_area.bottom = 170.0;
+        input.padding_x = 4.0;
+        input.padding_y = 4.0;
+        input.row_gap = 5.0;
+
+        let result = layout(&input);
+
+        assert!(result.first_visible > 0, "selected page must re-anchor");
+        assert_eq!(result.items.len(), 3);
+        assert!(result.first_visible + result.items.len() <= input.items.len());
+        assert!(result.first_visible + result.items.len() > input.selected);
     }
 
     #[test]

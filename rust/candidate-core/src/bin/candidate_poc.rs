@@ -19,6 +19,7 @@ fn main() {
     let mut dpi_scale = 1.0_f32;
     let mut report: Option<PathBuf> = None;
     let mut screenshot: Option<PathBuf> = None;
+    let mut comparison_screenshot: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         if arg == "--self-check" {
@@ -88,6 +89,12 @@ fn main() {
                 std::process::exit(2);
             };
             screenshot = Some(PathBuf::from(path));
+        } else if arg == "--comparison-screenshot" {
+            let Some(path) = args.next() else {
+                eprintln!("--comparison-screenshot requires a path");
+                std::process::exit(2);
+            };
+            comparison_screenshot = Some(PathBuf::from(path));
         } else {
             eprintln!("unknown argument: {}", arg.to_string_lossy());
             std::process::exit(2);
@@ -96,7 +103,7 @@ fn main() {
 
     if self_check == window_smoke && render_golden.is_none() && layout_snapshot.is_none() {
         eprintln!(
-            "usage: fcitx5-candidate-poc (--self-check | --window-smoke | --render-golden KIND --out PATH) [--demo-snapshot | --scroll-demo-snapshot | --typography-snapshot | --label-slot-snapshot vertical|horizontal|grid|glyph-fuzz | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH]"
+            "usage: fcitx5-candidate-poc (--self-check | --window-smoke | --render-golden KIND --out PATH) [--demo-snapshot | --scroll-demo-snapshot | --typography-snapshot | --label-slot-snapshot vertical|horizontal|grid|glyph-fuzz | --host-snapshot HOST] [--dpi-scale VALUE] [--report PATH] [--screenshot PATH] [--comparison-screenshot PATH]"
         );
         std::process::exit(2);
     }
@@ -167,6 +174,7 @@ fn main() {
             label_slot_snapshot.as_deref(),
             host_snapshot.as_deref(),
             dpi_scale,
+            comparison_screenshot.as_deref(),
         )
     };
 
@@ -230,6 +238,7 @@ fn run_window_smoke(
     label_slot_snapshot: Option<&str>,
     host_snapshot: Option<&str>,
     dpi_scale: f32,
+    comparison_screenshot: Option<&Path>,
 ) -> Result<String, String> {
     window_smoke::run(
         screenshot,
@@ -239,6 +248,7 @@ fn run_window_smoke(
         label_slot_snapshot,
         host_snapshot,
         dpi_scale,
+        comparison_screenshot,
     )
 }
 
@@ -251,6 +261,7 @@ fn run_window_smoke(
     _label_slot_snapshot: Option<&str>,
     _host_snapshot: Option<&str>,
     _dpi_scale: f32,
+    _comparison_screenshot: Option<&Path>,
 ) -> Result<String, String> {
     Err("window smoke is only available on Windows".to_owned())
 }
@@ -258,27 +269,27 @@ fn run_window_smoke(
 #[cfg(windows)]
 mod window_smoke {
     use fcitx5_candidate_core::{
+        CandidateLabelAlign, CandidateLabelDisplay, CandidateLabelScope, CandidateLabelSlotConfig,
+        CandidateLabelSlotSource, CandidateLabelStyle, CandidateLabelWidthStrategy,
+        Fcitx5CandidateLayoutRect, Fcitx5CandidateRenderItemInput, LayoutInput, Orientation,
+        Placement, PocCandidate, PocScenario, Point, Rect as CoreRect, Size,
         candidate_label_slot_plan, candidate_poc_scenarios, candidate_render_segments,
         flow_paged_bounds, format_candidate_label, layout,
         qingfeng::{
-            qingfeng_candidate_visual_plan, QingfengCandidateTheme, QingfengCandidateVisualInput,
-            QingfengOrientation, QingfengRect, QingfengThemeMode,
-            WINDINPUT_QINGFENG_CANDIDATE_SOURCE,
+            QingfengCandidateTheme, QingfengCandidateVisualInput, QingfengOrientation,
+            QingfengRect, QingfengThemeMode, WINDINPUT_QINGFENG_CANDIDATE_SOURCE,
+            qingfeng_candidate_visual_plan,
         },
         theme_tokens::{WECHAT_GREEN_COLORREF, WHITE_COLORREF},
-        vertical_text_columns, CandidateLabelAlign, CandidateLabelDisplay, CandidateLabelScope,
-        CandidateLabelSlotConfig, CandidateLabelSlotSource, CandidateLabelStyle,
-        CandidateLabelWidthStrategy, Fcitx5CandidateLayoutRect, Fcitx5CandidateRenderItemInput,
-        LayoutInput, Orientation, Placement, PocCandidate, PocScenario, Point, Rect as CoreRect,
-        Size,
+        vertical_text_columns,
     };
     use std::ffi::c_void;
     use std::fs;
     use std::path::Path;
     use std::ptr::{null, null_mut};
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         OnceLock,
+        atomic::{AtomicBool, Ordering},
     };
     use tiny_skia::Pixmap;
     use windui::geometry::{Color as WindColor, Rect as WindRect};
@@ -324,6 +335,11 @@ mod window_smoke {
     const FF_DONTCARE: Dword = 0;
     const FW_NORMAL: i32 = 400;
     const GB2312_CHARSET: Dword = 134;
+    const COMPARISON_CANVAS_WIDTH: usize = 840;
+    const COMPARISON_CANVAS_HEIGHT: usize = 240;
+    const COMPARISON_MARGIN_X: usize = 20;
+    const COMPARISON_MARGIN_Y: usize = 12;
+    const COMPARISON_SCALE: f32 = 1.0;
     const OUT_DEFAULT_PRECIS: Dword = 0;
     const UIA_CONTROL_TYPE_PROPERTY_ID: i32 = 30003;
     const UIA_NAME_PROPERTY_ID: i32 = 30005;
@@ -640,6 +656,20 @@ mod window_smoke {
         checksum: u64,
         path: String,
         text_face: String,
+        width: i32,
+        height: i32,
+        pixels: Vec<u8>,
+    }
+
+    struct ComparisonEvidence {
+        bytes: usize,
+        checksum: u64,
+        path: String,
+        width: i32,
+        height: i32,
+        source_width: i32,
+        source_height: i32,
+        scale: f32,
     }
 
     struct LayoutEvidence {
@@ -719,6 +749,7 @@ mod window_smoke {
         scroll_mode: bool,
         expects_emoji: bool,
         label_slot_evidence_json: String,
+        comparison_screenshot: Option<&'a Path>,
     }
 
     pub fn run(
@@ -729,6 +760,7 @@ mod window_smoke {
         label_slot_snapshot: Option<&str>,
         host_snapshot: Option<&str>,
         dpi_scale: f32,
+        comparison_screenshot: Option<&Path>,
     ) -> Result<String, String> {
         if !(0.5..=4.0).contains(&dpi_scale) || !dpi_scale.is_finite() {
             return Err(
@@ -1073,6 +1105,7 @@ mod window_smoke {
                 scroll_mode,
                 expects_emoji: emoji_candidate_render_path,
                 label_slot_evidence_json,
+                comparison_screenshot,
             },
         );
         // SAFETY: hwnd was returned by CreateWindowExW above and has not yet been destroyed.
@@ -1143,10 +1176,20 @@ mod window_smoke {
                 uia.control_type
             ));
         }
-        let capture = if let Some(path) = spec.screenshot {
-            Some(capture_window(hwnd, actual_width, actual_height, path)?)
+        if spec.comparison_screenshot.is_some() && !comparison_snapshot_kind(spec.snapshot_name) {
+            return Err(
+                "comparison screenshots are reserved for the six label-slot snapshots".to_owned(),
+            );
+        }
+        let (capture, comparison) = if let Some(path) = spec.screenshot {
+            let capture = capture_window(hwnd, actual_width, actual_height, path)?;
+            let comparison = spec
+                .comparison_screenshot
+                .map(|comparison_path| write_comparison_capture(comparison_path, &capture))
+                .transpose()?;
+            (Some(capture), comparison)
         } else {
-            None
+            (None, None)
         };
         let capture_json = capture.as_ref().map_or_else(
             || {
@@ -1156,12 +1199,34 @@ mod window_smoke {
             },
             |capture| {
                 format!(
-                    "  \"screenshot_written\":true,\n  \"screenshot_path\":\"{}\",\n  \"screenshot_bytes\":{},\n  \"visual_non_background_pixels\":{},\n  \"visual_checksum\":{},\n  \"candidate_visual_text_face\":\"{}\",\n",
+                    "  \"screenshot_written\":true,\n  \"screenshot_path\":\"{}\",\n  \"screenshot_bytes\":{},\n  \"visual_non_background_pixels\":{},\n  \"visual_checksum\":{},\n  \"intrinsic_window_width\":{},\n  \"intrinsic_window_height\":{},\n  \"candidate_visual_text_face\":\"{}\",\n",
                     json_escape(&capture.path),
                     capture.bytes,
                     capture.non_background_pixels,
                     capture.checksum,
+                    capture.width,
+                    capture.height,
                     json_escape(&capture.text_face)
+                )
+            },
+        );
+        let comparison_json = comparison.as_ref().map_or_else(
+            || {
+                String::from(
+                    "  \"comparison_screenshot_written\":false,\n  \"comparison_screenshot_path\":\"\",\n  \"comparison_screenshot_bytes\":0,\n  \"comparison_screenshot_checksum\":0,\n  \"comparison_canvas_width\":0,\n  \"comparison_canvas_height\":0,\n  \"comparison_source_width\":0,\n  \"comparison_source_height\":0,\n  \"comparison_scale\":0.0,\n",
+                )
+            },
+            |comparison| {
+                format!(
+                    "  \"comparison_screenshot_written\":true,\n  \"comparison_screenshot_path\":\"{}\",\n  \"comparison_screenshot_bytes\":{},\n  \"comparison_screenshot_checksum\":{},\n  \"comparison_canvas_width\":{},\n  \"comparison_canvas_height\":{},\n  \"comparison_source_width\":{},\n  \"comparison_source_height\":{},\n  \"comparison_scale\":{:.1},\n",
+                    json_escape(&comparison.path),
+                    comparison.bytes,
+                    comparison.checksum,
+                    comparison.width,
+                    comparison.height,
+                    comparison.source_width,
+                    comparison.source_height,
+                    comparison.scale,
                 )
             },
         );
@@ -1198,7 +1263,7 @@ mod window_smoke {
             rect.bottom,
             uia.control_type,
             capture_json,
-            spec.label_slot_evidence_json,
+            format!("{}{}", spec.label_slot_evidence_json, comparison_json),
             if spec.expects_emoji { "true" } else { "false" }
         ))
     }
@@ -1404,6 +1469,9 @@ mod window_smoke {
             checksum,
             path: path.display().to_string(),
             text_face,
+            width,
+            height,
+            pixels,
         })
     }
 
@@ -1655,6 +1723,151 @@ mod window_smoke {
         bytes.extend_from_slice(pixels);
         fs::write(path, bytes)
             .map_err(|error| format!("failed to write Rust Candidate PoC screenshot: {error}"))
+    }
+
+    fn comparison_snapshot_kind(snapshot_name: &str) -> bool {
+        matches!(
+            snapshot_name,
+            "label-slot-vertical"
+                | "label-slot-horizontal"
+                | "label-slot-grid"
+                | "label-slot-vertical-dark"
+                | "label-slot-horizontal-dark"
+                | "label-slot-grid-dark"
+        )
+    }
+
+    fn comparison_canvas_pixels(
+        source_width: i32,
+        source_height: i32,
+        source_pixels: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        if source_width <= 0 || source_height <= 0 {
+            return Err("comparison source dimensions must be positive".to_owned());
+        }
+        let source_width = usize::try_from(source_width)
+            .map_err(|_| "comparison source width overflowed usize".to_owned())?;
+        let source_height = usize::try_from(source_height)
+            .map_err(|_| "comparison source height overflowed usize".to_owned())?;
+        let source_len = source_width
+            .checked_mul(source_height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| "comparison source pixel buffer size overflowed".to_owned())?;
+        if source_pixels.len() != source_len {
+            return Err(format!(
+                "comparison source pixel buffer has {} bytes, expected {source_len}",
+                source_pixels.len()
+            ));
+        }
+        let right = COMPARISON_MARGIN_X
+            .checked_add(source_width)
+            .ok_or_else(|| "comparison source width exceeded comparison canvas".to_owned())?;
+        let bottom = COMPARISON_MARGIN_Y
+            .checked_add(source_height)
+            .ok_or_else(|| "comparison source height exceeded comparison canvas".to_owned())?;
+        if right > COMPARISON_CANVAS_WIDTH || bottom > COMPARISON_CANVAS_HEIGHT {
+            return Err(format!(
+                "comparison source {source_width}x{source_height} does not fit {}x{} canvas",
+                COMPARISON_CANVAS_WIDTH, COMPARISON_CANVAS_HEIGHT
+            ));
+        }
+
+        let canvas_len = COMPARISON_CANVAS_WIDTH
+            .checked_mul(COMPARISON_CANVAS_HEIGHT)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| "comparison canvas pixel buffer size overflowed".to_owned())?;
+        let background = source_pixels
+            .get(..4)
+            .ok_or_else(|| "comparison source has no background pixel".to_owned())?;
+        let mut canvas = vec![0u8; canvas_len];
+        for pixel in canvas.chunks_exact_mut(4) {
+            pixel.copy_from_slice(background);
+        }
+        for row in 0..source_height {
+            let source_start = row * source_width * 4;
+            let source_end = source_start + source_width * 4;
+            let canvas_start =
+                ((COMPARISON_MARGIN_Y + row) * COMPARISON_CANVAS_WIDTH + COMPARISON_MARGIN_X) * 4;
+            let canvas_end = canvas_start + source_width * 4;
+            canvas[canvas_start..canvas_end]
+                .copy_from_slice(&source_pixels[source_start..source_end]);
+        }
+        Ok(canvas)
+    }
+
+    fn write_comparison_capture(
+        path: &Path,
+        capture: &CaptureEvidence,
+    ) -> Result<ComparisonEvidence, String> {
+        let pixels = comparison_canvas_pixels(capture.width, capture.height, &capture.pixels)?;
+        write_bmp(
+            path,
+            COMPARISON_CANVAS_WIDTH as i32,
+            COMPARISON_CANVAS_HEIGHT as i32,
+            &pixels,
+        )?;
+        let metadata = fs::metadata(path)
+            .map_err(|error| format!("comparison screenshot metadata failed: {error}"))?;
+        Ok(ComparisonEvidence {
+            bytes: metadata.len() as usize,
+            checksum: fnv1a64(&pixels),
+            path: path.display().to_string(),
+            width: COMPARISON_CANVAS_WIDTH as i32,
+            height: COMPARISON_CANVAS_HEIGHT as i32,
+            source_width: capture.width,
+            source_height: capture.height,
+            scale: COMPARISON_SCALE,
+        })
+    }
+
+    #[cfg(test)]
+    mod comparison_tests {
+        use super::{
+            COMPARISON_CANVAS_HEIGHT, COMPARISON_CANVAS_WIDTH, COMPARISON_MARGIN_X,
+            COMPARISON_MARGIN_Y, comparison_canvas_pixels, comparison_snapshot_kind,
+        };
+
+        #[test]
+        fn comparison_canvas_keeps_fixed_dimensions_and_exact_source_pixels() {
+            let source_width = 3;
+            let source_height = 2;
+            let source = (0..source_width * source_height * 4)
+                .map(|value| value as u8)
+                .collect::<Vec<_>>();
+            let canvas =
+                comparison_canvas_pixels(source_width, source_height, &source).expect("canvas");
+            assert_eq!(
+                canvas.len(),
+                COMPARISON_CANVAS_WIDTH * COMPARISON_CANVAS_HEIGHT * 4
+            );
+            for row in 0..source_height as usize {
+                let source_start = row * source_width as usize * 4;
+                let canvas_start = ((COMPARISON_MARGIN_Y + row) * COMPARISON_CANVAS_WIDTH
+                    + COMPARISON_MARGIN_X)
+                    * 4;
+                assert_eq!(
+                    &canvas[canvas_start..canvas_start + source_width as usize * 4],
+                    &source[source_start..source_start + source_width as usize * 4]
+                );
+            }
+        }
+
+        #[test]
+        fn comparison_cases_cover_all_six_label_slot_snapshots() {
+            for name in [
+                "label-slot-vertical",
+                "label-slot-horizontal",
+                "label-slot-grid",
+                "label-slot-vertical-dark",
+                "label-slot-horizontal-dark",
+                "label-slot-grid-dark",
+            ] {
+                assert!(comparison_snapshot_kind(name), "{name}");
+            }
+            assert_ne!((423, 216), (801, 78));
+            assert_ne!((801, 78), (729, 156));
+            assert_ne!((423, 216), (729, 156));
+        }
     }
 
     fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -2456,7 +2669,11 @@ mod window_smoke {
             label_column_width,
             reserved_label_count,
             shown_label_count,
-            if display == CandidateLabelDisplay::SelectedScope { "true" } else { "false" },
+            if display == CandidateLabelDisplay::SelectedScope {
+                "true"
+            } else {
+                "false"
+            },
             if stable_origins { "true" } else { "false" },
             json_escape(WINDINPUT_QINGFENG_CANDIDATE_SOURCE),
             typography.candidate_font_size,
@@ -2469,9 +2686,21 @@ mod window_smoke {
             candidates.len(),
             if typography_contract { "true" } else { "false" },
             if typography_contract { "true" } else { "false" },
-            if typography_text_comment_non_overlapping { "true" } else { "false" },
-            if typography_text_fits { "true" } else { "false" },
-            if typography_text_height_fits { "true" } else { "false" },
+            if typography_text_comment_non_overlapping {
+                "true"
+            } else {
+                "false"
+            },
+            if typography_text_fits {
+                "true"
+            } else {
+                "false"
+            },
+            if typography_text_height_fits {
+                "true"
+            } else {
+                "false"
+            },
         );
         Ok(LabelSlotWindowScenario {
             layout,
@@ -2544,7 +2773,7 @@ mod window_smoke {
                 return Err(
                     "--render-golden must be vertical, vertical-dark, scroll, or scroll-dark"
                         .to_owned(),
-                )
+                );
             }
         };
         let theme_mode = if dark {

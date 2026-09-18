@@ -482,6 +482,7 @@ struct Host {
     window: *mut c_void,
     item_rects: Vec<FRect>,
     visible_indices: Vec<usize>,
+    selected_slot: Option<usize>,
     has_scrollbar: bool,
     font_dpi_scale: f32,
     selection_inflate_x: f32,
@@ -531,6 +532,7 @@ impl Host {
             window: ptr::null_mut(),
             item_rects: Vec::new(),
             visible_indices: Vec::new(),
+            selected_slot: None,
             has_scrollbar: false,
             font_dpi_scale: 1.0,
             selection_inflate_x: 0.0,
@@ -675,6 +677,7 @@ impl Host {
         };
         self.item_rects = outputs.item_rects;
         self.visible_indices = outputs.visible_indices;
+        self.selected_slot = outputs.selected_slot;
         self.has_scrollbar = outputs.has_scrollbar;
         self.font_dpi_scale = outputs.font_scale;
         self.selection_inflate_x = outputs.selection_inflate_x;
@@ -717,6 +720,7 @@ impl Host {
         }
         self.pointer.clear();
         self.click_guard.clear();
+        self.selected_slot = None;
     }
 
     fn dismiss_presentation(&mut self) {
@@ -980,12 +984,7 @@ impl Host {
                 geometry.item_padding_y,
             ));
         }
-        let presentation_output = self.presentation.output();
-        let selected: u64 = if presentation_output.has_selected != 0 {
-            presentation_output.selected as u64
-        } else {
-            u64::MAX
-        };
+        let selected = self.selected_slot.map_or(u64::MAX, |slot| slot as u64);
         let preedit = &self.preedit_panel_text;
         // The renderer owns size query, buffer render, and the DIB StretchBlt
         // as one call. 2 = nothing to paint (empty window).
