@@ -2382,15 +2382,11 @@ fn windui_config_core_candidate_layout_controls(
                     scroll_directions,
                 )),
         )
-        .child(
-            WindUiElement::col()
-                .visible_when(move || mode.get() == CandidateLayoutMode::Scroll)
-                .child(WindUiElement::setting_row_desc(
-                    "候选个数",
-                    "仅卷轴布局：视口每页最多显示的候选数（1-9）",
-                    page_sizes,
-                )),
-        )
+        .child(WindUiElement::col().child(WindUiElement::setting_row_desc(
+            "候选个数",
+            "每页最大候选数（1-9）",
+            page_sizes,
+        )))
         .child(
             WindUiElement::col()
                 .visible_when(move || mode.get() == CandidateLayoutMode::VerticalText)
@@ -4028,7 +4024,9 @@ fn run_windui_settings_window(_screenshot_from_args: bool) -> Result<String, Str
 fn frozen_settings_model() -> ConfigPocModel {
     ConfigPocModel {
         product_name: "Fcitx5 for Windows Next",
-        languages: vec!["system", "en-US", "zh-CN"],
+        languages: vec![
+            "system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
+        ],
         pages: vec![
             PageModel {
                 id: PageId::InputMethods,
@@ -4124,7 +4122,9 @@ fn validate_model(model: &ConfigPocModel) -> Result<(), String> {
 }
 
 fn require_languages(model: &ConfigPocModel) -> Result<(), String> {
-    for required in ["system", "en-US", "zh-CN"] {
+    for required in [
+        "system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
+    ] {
         if !model.languages.contains(&required) {
             return Err(format!("missing language option {required}"));
         }
@@ -4879,7 +4879,11 @@ struct SettingsState {
 }
 
 fn apply_language(settings: &mut SettingsState, language: &'static str) -> Result<(), String> {
-    if !["system", "en-US", "zh-CN"].contains(&language) {
+    if ![
+        "system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
+    ]
+    .contains(&language)
+    {
         return Err("settings.language.unsupported".to_owned());
     }
     settings.language = language;
@@ -5993,6 +5997,30 @@ mod tests {
     }
 
     #[test]
+    fn settings_language_policy_lists_supported_locales() {
+        let model = frozen_settings_model();
+        assert_eq!(
+            model.languages,
+            vec![
+                "system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
+            ]
+        );
+        require_languages(&model).expect("all supported locales should be in the Settings policy");
+
+        let mut settings = SettingsState {
+            language: "system",
+            candidate_font: "Microsoft YaHei",
+            advanced_appearance: false,
+            preview_revision: 1,
+        };
+        for language in model.languages.iter().copied() {
+            apply_language(&mut settings, language).expect("supported locale should apply");
+            assert_eq!(settings.language, language);
+        }
+        assert!(apply_language(&mut settings, "fr-FR").is_err());
+    }
+
+    #[test]
     fn candidate_page_size_is_authoritative_and_strictly_bounded() {
         for page_size in 1..=9 {
             let visible_slots = (1..=9).filter(|slot| *slot <= page_size).count();
@@ -6011,6 +6039,27 @@ mod tests {
                 format!("卷轴布局（每页最多 {page_size} 个候选）")
             );
         }
+    }
+
+    #[test]
+    fn candidate_page_size_control_is_not_scroll_visibility_guarded() {
+        let source = include_str!("../src/main.rs");
+        let controls = source
+            .split_once("fn windui_config_core_candidate_layout_controls(")
+            .and_then(|(_, rest)| rest.split_once("\nfn "))
+            .map(|(body, _)| body)
+            .expect("candidate layout controls should remain a single source section");
+        let page_size_label = controls
+            .find("\"候选个数\"")
+            .expect("candidate page-size row should remain named");
+        let row_start = controls[..page_size_label]
+            .rfind("WindUiElement::col()")
+            .expect("candidate page-size row should have a layout container");
+        let page_size_row = &controls[row_start..page_size_label];
+
+        assert!(controls.contains("每页最大候选数（1-9）"));
+        assert!(!page_size_row.contains("CandidateLayoutMode::Scroll"));
+        assert!(!page_size_row.contains(".visible_when"));
     }
 
     fn ui_options(
@@ -6783,40 +6832,67 @@ mod tests {
 
     #[test]
     fn windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply() {
-        let directory = TestDirectory::new("windui-candidate-adapter");
-        let path = directory.path().join("config.toml");
-        let mut adapter = WindUiConfigAdapter::load(path).expect("adapter should load defaults");
+        for layout in ["automatic", "stacked", "flow", "scroll", "vertical_text"] {
+            for page_size in 1..=9 {
+                let directory = TestDirectory::new(&format!(
+                    "windui-candidate-adapter-{layout}-{page_size}"
+                ));
+                let path = directory.path().join("config.toml");
+                let mut adapter =
+                    WindUiConfigAdapter::load(path).expect("adapter should load defaults");
 
-        adapter
-            .set(ConfigEdit::CandidatePageSize(7))
-            .expect("GUI edit should update Draft");
-        assert_eq!(adapter.preview().candidate().page_size(), 7);
-        assert!(
-            !adapter.path().exists(),
-            "editing Draft must not write Current"
-        );
+                adapter
+                    .set(ConfigEdit::CandidateLayoutType(layout.to_owned()))
+                    .expect("layout edit should update Draft");
+                adapter
+                    .set(ConfigEdit::CandidatePageSize(page_size))
+                    .expect("page-size edit should update Draft");
+                let preview = adapter.preview();
+                let candidate = preview.candidate();
+                assert_eq!(candidate.layout_type(), layout);
+                assert_eq!(candidate.page_size(), page_size);
+                assert!(
+                    !adapter.path().exists(),
+                    "editing Draft must not write Current"
+                );
 
-        adapter.cancel();
-        assert_eq!(adapter.preview().candidate().page_size(), 5);
-        assert!(!adapter.path().exists(), "cancel must not write Current");
+                adapter.cancel();
+                let preview = adapter.preview();
+                let candidate = preview.candidate();
+                assert_eq!(candidate.layout_type(), "scroll");
+                assert_eq!(candidate.page_size(), 5);
+                assert!(!adapter.path().exists(), "cancel must not write Current");
 
-        adapter
-            .set(ConfigEdit::CandidatePageSize(8))
-            .expect("GUI edit should update Draft");
-        adapter.reset(ConfigField::CandidatePageSize);
-        assert_eq!(adapter.preview().candidate().page_size(), 5);
-        assert!(!adapter.path().exists(), "reset must not write Current");
+                adapter
+                    .set(ConfigEdit::CandidateLayoutType(layout.to_owned()))
+                    .expect("layout edit should update Draft before reset");
+                adapter
+                    .set(ConfigEdit::CandidatePageSize(page_size))
+                    .expect("page-size edit should update Draft before reset");
+                adapter.reset(ConfigField::CandidatePageSize);
+                let preview = adapter.preview();
+                let candidate = preview.candidate();
+                assert_eq!(candidate.layout_type(), layout);
+                assert_eq!(candidate.page_size(), 5);
+                assert!(!adapter.path().exists(), "reset must not write Current");
 
-        adapter
-            .set(ConfigEdit::CandidatePageSize(7))
-            .expect("GUI edit should update Draft");
-        adapter.apply().expect("apply should commit Draft");
-        assert_eq!(adapter.preview().candidate().page_size(), 7);
-        assert!(adapter.path().is_file(), "apply must create Current");
-        assert!(
-            FileStore::last_known_good_path(adapter.path()).is_file(),
-            "apply must create a usable LKG"
-        );
+                adapter
+                    .set(ConfigEdit::CandidatePageSize(page_size))
+                    .expect("page-size edit should update Draft before apply");
+                adapter.apply().expect("apply should commit Draft");
+                assert!(adapter.path().is_file(), "apply must create Current");
+                assert!(
+                    FileStore::last_known_good_path(adapter.path()).is_file(),
+                    "apply must create a usable LKG"
+                );
+                let persisted = WindUiConfigAdapter::load(adapter.path().to_path_buf())
+                    .expect("applied Current should be readable");
+                let preview = persisted.preview();
+                let candidate = preview.candidate();
+                assert_eq!(candidate.layout_type(), layout);
+                assert_eq!(candidate.page_size(), page_size);
+            }
+        }
     }
 
     #[test]

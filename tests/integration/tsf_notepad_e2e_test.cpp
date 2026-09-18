@@ -414,6 +414,7 @@ int wmain(int argc, wchar_t** argv) {
         for (int attempt = 0; attempt < 40; ++attempt) {
             if (!candidateWindowVisible()) {
                 std::cout << "Notepad TSF Backspace candidate dismissal passed\n";
+                holdCandidateWindowForEvidence();
                 return 0;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));

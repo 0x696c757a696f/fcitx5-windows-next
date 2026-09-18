@@ -134,6 +134,9 @@ pub struct FrameUpdateOutputs {
     pub has_scrollbar: bool,
     pub item_rects: Vec<Rect>,
     pub visible_indices: Vec<usize>,
+    /// Local slot of the selected candidate in the visible render slice.
+    /// `visible_indices` remains source indices for click dispatch.
+    pub selected_slot: Option<usize>,
     /// Panel-mode preedit text (UTF-8; empty when none).
     pub preedit_utf8: Vec<u8>,
     pub selection_inflate_x: f32,
@@ -539,6 +542,31 @@ pub fn frame_update(
         return FrameUpdateOutcome::Dismiss;
     }
 
+    let visible_indices = if axis_result.items.len() < render_indices.len() {
+        let start = axis_result.first_visible;
+        let Some(end) = start.checked_add(assembly.item_count) else {
+            return FrameUpdateOutcome::Dismiss;
+        };
+        if end > render_indices.len() {
+            return FrameUpdateOutcome::Dismiss;
+        }
+        render_indices[start..end].to_vec()
+    } else {
+        render_indices
+            .iter()
+            .copied()
+            .take(assembly.item_count)
+            .collect()
+    };
+
+    let selection_start = (axis_result.items.len() < render_indices.len())
+        .then_some(axis_result.first_visible)
+        .unwrap_or(0);
+    let selected_slot = (presentation_output.has_selected != 0)
+        .then(|| selected_index.checked_sub(selection_start))
+        .flatten()
+        .filter(|slot| *slot < assembly.item_count);
+
     FrameUpdateOutcome::Proceed(FrameUpdateOutputs {
         font_scale: scale,
         window_left: assembly.window_left,
@@ -563,10 +591,8 @@ pub fn frame_update(
                 bottom: rect.bottom,
             })
             .collect(),
-        visible_indices: render_indices
-            .into_iter()
-            .take(assembly.item_count)
-            .collect(),
+        visible_indices,
+        selected_slot,
         preedit_utf8,
         selection_inflate_x: config.item_padding_x_dip * scale * 0.65,
         selection_inflate_y: config.item_padding_y_dip * scale * 0.55,
@@ -974,5 +1000,135 @@ mod tests {
                 "item rect must have non-negative area: {rect:?}"
             );
         }
+    }
+
+    #[test]
+    fn frame_update_maps_selected_candidate_after_vertical_page_reanchor() {
+        let mut vertical_response = response();
+        vertical_response.metadata.revision = 11;
+        vertical_response.candidate_page_size = 4;
+        vertical_response.candidate_total = 4;
+        vertical_response.selected_candidate = 3;
+        vertical_response.caret.dpi = 144;
+        vertical_response.candidates = (0..4)
+            .map(|index| CandidateRecord {
+                id: index as u64 + 1,
+                label_utf8: format!("{}", index + 1).into_bytes(),
+                text_utf8: format!("candidate {index}").into_bytes(),
+                comment_utf8: Vec::new(),
+            })
+            .collect();
+
+        let mut vertical_config = config();
+        vertical_config.orientation = FrameOrientation::Vertical;
+        vertical_config.font_size_dip = 40.0;
+        vertical_config.padding_y_dip = 4.0;
+        vertical_config.row_gap_dip = 4.0;
+        let constrained_work_area = Rect {
+            left: 0.0,
+            top: 0.0,
+            right: 800.0,
+            bottom: 800.0,
+        };
+
+        let mut model = CandidateModel::default();
+        let mut presentation = CandidatePresentationState::default();
+        let mut scroll = CandidateScrollState::default();
+        let mut click_guard = CandidateClickGuardState::default();
+        let mut focus_watch = CandidateFocusWatchState::default();
+        let mut arena = CandidateVisualArena::default();
+        let mut measure = MeasureEngine::new();
+        let mut last_caret = FrameCaret::default();
+        let configured: Vec<String> = Vec::new();
+        let mut state = FrameState {
+            model: &mut model,
+            presentation: &mut presentation,
+            scroll: &mut scroll,
+            click_guard: &mut click_guard,
+            focus_watch: &mut focus_watch,
+            arena: &mut arena,
+            measure: &mut measure,
+            content_locale: "en-US",
+            configured_labels: &configured,
+        };
+
+        let FrameUpdateOutcome::Proceed(outputs) = frame_update(
+            &mut state,
+            vertical_config,
+            &vertical_response,
+            &mut last_caret,
+            constrained_work_area,
+            4321,
+        ) else {
+            panic!("expected Proceed for vertical paging regression");
+        };
+
+        assert!(
+            outputs.visible_indices.contains(&3),
+            "selected candidate must remain visible: {:?}",
+            outputs.visible_indices
+        );
+        assert_eq!(
+            outputs.selected_slot,
+            Some(2),
+            "paint selection must use the visible local slot after page reanchor"
+        );
+        assert_eq!(outputs.item_rects.len(), outputs.visible_indices.len());
+        for rect in &outputs.item_rects {
+            assert!(
+                rect.left >= -f32::EPSILON,
+                "rect must start inside client: {rect:?}"
+            );
+            assert!(
+                rect.top >= -f32::EPSILON,
+                "rect must start inside client: {rect:?}"
+            );
+            assert!(
+                rect.right <= outputs.window_width + f32::EPSILON,
+                "rect must fit client width: rect={rect:?}, window={}x{}",
+                outputs.window_width,
+                outputs.window_height
+            );
+            assert!(
+                rect.bottom <= outputs.window_height + f32::EPSILON,
+                "rect must fit client height: rect={rect:?}, window={}x{}",
+                outputs.window_width,
+                outputs.window_height
+            );
+        }
+
+        vertical_response.metadata.revision = 12;
+        vertical_response.candidate_page = 1;
+        vertical_response.candidate_total = 8;
+        vertical_response.candidate_bulk = true;
+        vertical_response.candidates = (0..8)
+            .map(|index| CandidateRecord {
+                id: index as u64 + 1,
+                label_utf8: format!("{}", index + 1).into_bytes(),
+                text_utf8: format!("candidate {index}").into_bytes(),
+                comment_utf8: Vec::new(),
+            })
+            .collect();
+
+        let FrameUpdateOutcome::Proceed(bulk_outputs) = frame_update(
+            &mut state,
+            vertical_config,
+            &vertical_response,
+            &mut last_caret,
+            constrained_work_area,
+            4321,
+        ) else {
+            panic!("expected Proceed for bulk-page paint-selection regression");
+        };
+        assert_eq!(
+            bulk_outputs.visible_indices,
+            vec![5, 6, 7],
+            "bulk page render plan must retain source indices"
+        );
+        assert_eq!(
+            bulk_outputs.selected_slot,
+            Some(2),
+            "bulk page selection must be local to the visible render slice"
+        );
     }
 }

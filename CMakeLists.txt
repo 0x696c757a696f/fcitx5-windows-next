@@ -1314,6 +1314,13 @@ if(BUILD_TESTING)
       rust-candidate-poc-scroll-demo-snapshot PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     foreach(FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT vertical horizontal grid glyph-fuzz vertical-dark horizontal-dark grid-dark)
+      set(FCITX_CANDIDATE_LABEL_SLOT_COMPARISON_ARGS)
+      if(NOT FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT STREQUAL "glyph-fuzz")
+        set(
+          FCITX_CANDIDATE_LABEL_SLOT_COMPARISON_ARGS
+          --comparison-screenshot
+          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}-compare.bmp")
+      endif()
       add_test(
         NAME "rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}"
         COMMAND
@@ -1324,7 +1331,8 @@ if(BUILD_TESTING)
           --label-slot-snapshot "${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" --dpi-scale 1.50 --report
           "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.json"
           --screenshot
-          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.bmp")
+          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.bmp"
+          ${FCITX_CANDIDATE_LABEL_SLOT_COMPARISON_ARGS})
       set_tests_properties(
         "rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
