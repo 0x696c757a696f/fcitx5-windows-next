@@ -467,11 +467,16 @@ mod tests {
             HICON(std::ptr::null_mut()),
             "提示",
         );
-        assert_eq!(nid.uFlags, NIF_ICON | NIF_MESSAGE | NIF_TIP);
-        assert_eq!(nid.uCallbackMessage, WM_TRAYICON, "漏了它则图标点了没反应");
-        assert_eq!(nid.uID, 1);
-        let tip: String = nid
-            .szTip
+        // `NOTIFYICONDATAW` is packed on Windows. Copy fields by value before
+        // assertions/iteration so x86 never creates an unaligned reference.
+        let flags = nid.uFlags;
+        let callback_message = nid.uCallbackMessage;
+        let id = nid.uID;
+        let tip_buffer = nid.szTip;
+        assert_eq!(flags, NIF_ICON | NIF_MESSAGE | NIF_TIP);
+        assert_eq!(callback_message, WM_TRAYICON, "漏了它则图标点了没反应");
+        assert_eq!(id, 1);
+        let tip: String = tip_buffer
             .iter()
             .take_while(|c| **c != 0)
             .map(|c| char::from_u32(*c as u32).unwrap())
@@ -491,9 +496,10 @@ mod tests {
             HICON(std::ptr::null_mut()),
             &long,
         );
-        let n = nid.szTip.len();
-        assert_eq!(nid.szTip[n - 1], 0, "定长缓冲必须以 NUL 收尾");
-        assert!(nid.szTip[..n - 1].iter().all(|c| *c != 0), "截断前应写满");
+        let tip_buffer = nid.szTip;
+        let n = tip_buffer.len();
+        assert_eq!(tip_buffer[n - 1], 0, "定长缓冲必须以 NUL 收尾");
+        assert!(tip_buffer[..n - 1].iter().all(|c| *c != 0), "截断前应写满");
     }
 
     /// 注册成功时按消息号精确匹配。

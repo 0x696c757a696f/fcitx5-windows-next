@@ -9,6 +9,7 @@ pub(super) mod d2d;
 pub mod dragdrop;
 pub mod hotkey;
 pub mod tray;
+mod accessibility;
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
@@ -24,8 +25,9 @@ use windows::Win32::Graphics::Dwm::{
     DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetDC, GetDeviceCaps, GetMonitorInfoW, InvalidateRect, MonitorFromWindow,
-    ReleaseDC, ScreenToClient, SetDIBitsToDevice, UpdateWindow, BITMAPINFO, BITMAPINFOHEADER,
+    BeginPaint, ClientToScreen, EndPaint, GetDC, GetDeviceCaps, GetMonitorInfoW, InvalidateRect,
+    MonitorFromWindow, ReleaseDC, ScreenToClient, SetDIBitsToDevice, UpdateWindow, BITMAPINFO,
+    BITMAPINFOHEADER,
     BI_RGB, DEFAULT_CHARSET, DIB_RGB_COLORS, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     PAINTSTRUCT, VREFRESH,
 };
@@ -71,7 +73,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE,
     WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DPICHANGED,
     WM_DROPFILES, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY,
-    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
+    WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN,
+    WM_KEYUP,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE,
     WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
@@ -79,6 +82,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_TIMER, WM_TOUCH, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
 };
+use windows::Win32::UI::Accessibility::UiaReturnRawElementProvider;
 // 窗口图标（`App::icon`）：HICON 由 tray 那份 RGBA 转换复用，销毁归 WindowState::drop。
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, SendMessageW, HICON, ICON_BIG, ICON_SMALL, SM_CXICON, SM_CXSMICON,
@@ -1146,6 +1150,10 @@ const CLASS_NAME: PCWSTR = w!("WindUiWindowClass");
 /// 跨线程唤醒消息（WM_APP+2；WM_APP+1 已用于托盘）。
 const WM_APP_WAKE: u32 = WM_APP + 2;
 
+/// The UIA provider sends synchronous requests through this window message.  Only this
+/// `wnd_proc` arm reads the AppHandler accessibility seam; the provider never reaches into
+/// WindowState directly.
+
 /// 跨线程唤醒句柄：仅持 HWND 数值，PostMessage 线程安全。
 struct Win32Wake {
     hwnd: isize,
@@ -1783,6 +1791,15 @@ unsafe fn window_frame_interval_ms(hwnd: HWND) -> u128 {
     (1000 / fps.max(1)) as u128
 }
 
+/// True only for the OS UIA root-object request (`UiaRootObjectId`).
+///
+/// Every other `WM_GETOBJECT` object id — notably the MSAA `OBJID_CLIENT` value — must continue
+/// to fall through to `DefWindowProcW` untouched, so this gate is deliberately exact rather than
+/// a range check.
+fn is_uia_root_object(lparam: LPARAM) -> bool {
+    lparam.0 == windows::Win32::UI::Accessibility::UiaRootObjectId as isize
+}
+
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -1802,6 +1819,41 @@ unsafe extern "system" fn wnd_proc(
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as _);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        accessibility::WM_APP_ACCESSIBILITY => {
+            let request = lparam.0 as *mut accessibility::BridgeRequest;
+            if request.is_null() {
+                return LRESULT(0);
+            }
+            let Some(state) = state_from(hwnd) else {
+                return LRESULT(0);
+            };
+            // SAFETY: the provider allocates this request on its stack and SendMessageW keeps
+            // it alive until this synchronous arm returns. The request never escapes here.
+            unsafe {
+                match (*request).operation {
+                    accessibility::BridgeOperation::Snapshot => {
+                        (*request).snapshot = state.handler.accessibility_snapshot();
+                    }
+                    accessibility::BridgeOperation::Action { id, action } => {
+                        (*request).action_result = Some(state.handler.accessibility_action(id, action));
+                    }
+                }
+                (*request).delivered = true;
+            }
+            LRESULT(1)
+        }
+        WM_GETOBJECT if is_uia_root_object(lparam) => {
+            // Check liveness before constructing the root provider, then end the WindowState
+            // borrow before calling the OS UIA hand-off routine.
+            if state_from(hwnd).is_none() {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+            let provider = accessibility::root_provider(hwnd);
+            // SAFETY: `hwnd` is alive and owned by this thread, `wparam`/`lparam` are the
+            // unmodified WM_GETOBJECT parameters, and `provider` outlives the call. The
+            // borrow keeps the COM reference alive across the OS UIA hand-off.
+            UiaReturnRawElementProvider(hwnd, wparam, lparam, &provider)
         }
         WM_PAINT => {
             if let Some(state) = state_from(hwnd) {
@@ -3749,7 +3801,18 @@ mod live_windows_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{accumulate_char, ClickTracker};
+    use super::{accumulate_char, is_uia_root_object, ClickTracker, LPARAM};
+
+    #[test]
+    fn only_the_uia_root_object_id_takes_the_accessibility_path() {
+        // The UIA root request is the single object id that may create a raw provider.
+        let root = LPARAM(windows::Win32::UI::Accessibility::UiaRootObjectId as isize);
+        assert!(is_uia_root_object(root));
+        // MSAA client (`OBJID_CLIENT` = -4) and the window object (`OBJID_WINDOW` = 0) are not
+        // UIA roots and must keep the legacy `DefWindowProcW` path.
+        assert!(!is_uia_root_object(LPARAM(-4)));
+        assert!(!is_uia_root_object(LPARAM(0)));
+    }
 
     #[test]
     fn bmp_char_passes_through() {

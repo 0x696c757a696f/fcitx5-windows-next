@@ -6,6 +6,7 @@
 // 图形绘制 API 以标量坐标传参（x,y,w,h,radius,width,paint）是有意设计，放宽该 lint。
 #![allow(clippy::too_many_arguments)]
 
+pub mod accessibility;
 pub mod anim;
 pub mod app;
 pub mod core;
@@ -27,6 +28,10 @@ pub mod theme;
 pub mod ui;
 
 pub mod prelude {
+    pub use crate::accessibility::{
+        AccessibilityAction, AccessibilityNode, AccessibilityNodeId, AccessibilityRole,
+        AccessibilitySnapshot,
+    };
     pub use crate::app::{App, HotkeyHandle, ThemeHandle, Window};
     pub use crate::event::{
         window_open, window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, Key, MenuBarLink,
