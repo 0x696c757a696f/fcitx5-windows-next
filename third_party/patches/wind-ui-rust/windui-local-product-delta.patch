@@ -1,0 +1,2042 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 2dcf43e..8de25e1 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -88,6 +88,7 @@ windows = { version = "0.62", features = [
+     "Win32_Graphics_DirectWrite",
+     "Win32_Media",
+     "Win32_UI_WindowsAndMessaging",
++    "Win32_UI_Accessibility",
+     "Win32_UI_Controls",
+     "Win32_UI_HiDpi",
+     "Win32_UI_Shell",
+@@ -104,6 +105,7 @@ windows = { version = "0.62", features = [
+     "Win32_System_Threading",
+     "Win32_Security",
+     "Win32_System_Ole",
++    "Win32_System_Variant",
+     # 拖出（DoDragDrop）：IDropSource 的按键位在 SystemServices，IDataObject 的
+     # STGMEDIUM 挂在 Com_StructuredStorage 下。
+     "Win32_System_SystemServices",
+diff --git a/examples/uia_smoke.rs b/examples/uia_smoke.rs
+new file mode 100644
+index 0000000..a3513e5
+--- /dev/null
++++ b/examples/uia_smoke.rs
+@@ -0,0 +1,350 @@
++//! 双进程真实 HWND 的 OS UIA 冒烟：验证 Win32 raw UIA provider 能被**独立进程**的
++//! UI Automation 客户端看到。
++//!
++//! 用法：
++//!   cargo run --example uia_smoke            # 客户端（父进程，默认）
++//!   cargo run --example uia_smoke -- --host  # 宿主（子进程，被父进程拉起）
++//!
++//! 之所以要两个进程：provider 与 client 在同一 UI 线程里会互相读到自己的缓存，
++//! 只有跨进程才真正经过 `WM_GETOBJECT` 与 OS 的 UIA 客户端栈。
++
++#[cfg(not(windows))]
++fn main() {
++    eprintln!("uia_smoke: Windows only");
++}
++
++#[cfg(windows)]
++fn main() {
++    let is_host = std::env::args().any(|argument| argument == "--host");
++    match if is_host { run_host() } else { run_client() } {
++        Ok(()) => {}
++        Err(error) => {
++            eprintln!("uia_smoke FAILED: {error}");
++            std::process::exit(1);
++        }
++    }
++}
++
++#[cfg(windows)]
++const HOST_TITLE: &str = "WindUI UIA smoke host";
++#[cfg(windows)]
++const STATIC_LABEL: &str = "Accessibility smoke";
++#[cfg(windows)]
++const DYNAMIC_INITIAL: &str = "Invoked 0";
++#[cfg(windows)]
++const DYNAMIC_AFTER: &str = "Invoked 1";
++#[cfg(windows)]
++const BUTTON_NAME: &str = "Invoke me";
++#[cfg(windows)]
++const HIDDEN_NAME: &str = "Hidden button";
++
++/// 宿主：一个普通 WindUI 窗口，内容固定。Button 的回调只把动态标签改成 `Invoked 1`。
++#[cfg(windows)]
++fn run_host() -> Result<(), String> {
++    use windui::prelude::*;
++
++    let invoked = windui::signal::signal(false);
++    let dynamic = invoked.map(|flag| {
++        if *flag {
++            DYNAMIC_AFTER.to_owned()
++        } else {
++            DYNAMIC_INITIAL.to_owned()
++        }
++    });
++
++    let ui = Element::col()
++        .fill()
++        .padding(16)
++        .spacing(12)
++        .child(
++            Element::label(STATIC_LABEL)
++                .font_size(18.0)
++                .width_match()
++                .height(28),
++        )
++        .child(
++            Element::label_signal(dynamic)
++                .font_size(16.0)
++                .width_match()
++                .height(24),
++        )
++        .child(
++            Element::row()
++                .width_match()
++                .height(40)
++                .spacing(12)
++                .child(Element::button(BUTTON_NAME).on_click(move |_| invoked.set(true)))
++                .child(Element::button(HIDDEN_NAME).visible(false)),
++        );
++
++    App::new(HOST_TITLE, 420, 260).content(ui).run();
++    Ok(())
++}
++
++#[cfg(windows)]
++fn run_client() -> Result<(), String> {
++    use std::time::{Duration, Instant};
++    use windows::core::w;
++    use windows::Win32::Foundation::HWND;
++    use windows::Win32::System::Com::{
++        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
++    };
++    use windows::Win32::UI::Accessibility::{
++        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
++        TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_InvokePatternId, UIA_TextControlTypeId,
++        UIA_WindowControlTypeId,
++    };
++    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
++
++    // SAFETY: the COM apartment is initialized for this thread before any UIA object is created;
++    // RPC_E_CHANGED_MODE only means another apartment mode is already active, which is harmless.
++    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
++
++    let exe = std::env::current_exe().map_err(|error| format!("current_exe failed: {error}"))?;
++    let mut host = std::process::Command::new(&exe)
++        .arg("--host")
++        .spawn()
++        .map_err(|error| format!("host spawn failed: {error}"))?;
++    let host_pid = host.id();
++
++    let outcome = (|| -> Result<(), String> {
++        let hwnd = wait_for_host_window(&mut host)?;
++        // SAFETY: CUIAutomation is a documented in-proc coclass and the apartment is initialized.
++        let automation: IUIAutomation =
++            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
++                .map_err(|error| format!("CoCreateInstance(CUIAutomation) failed: {error}"))?;
++        // SAFETY: `hwnd` is a live window owned by the host process.
++        let root = unsafe { automation.ElementFromHandle(hwnd) }
++            .map_err(|error| format!("ElementFromHandle failed: {error}"))?;
++
++        // (1) root is the Window element.
++        let root_type = current_control_type(&root)?;
++        if root_type != UIA_WindowControlTypeId.0 {
++            return Err(format!("root control type was {root_type}, expected Window"));
++        }
++
++        // (2) the flattened semantic tree exposes Text and Button, and never the hidden button.
++        let elements = descendants(&automation, &root)?;
++        let mut names = Vec::new();
++        let mut button: Option<IUIAutomationElement> = None;
++        let mut saw_static = false;
++        let mut saw_dynamic = false;
++        for element in &elements {
++            let name = current_name(element)?;
++            let kind = current_control_type(element)?;
++            names.push(format!("{name}({kind})"));
++            if name == HIDDEN_NAME {
++                return Err("hidden button was exposed to UIA".to_owned());
++            }
++            if kind == UIA_TextControlTypeId.0 && name == STATIC_LABEL {
++                saw_static = true;
++            }
++            if kind == UIA_TextControlTypeId.0 && name == DYNAMIC_INITIAL {
++                saw_dynamic = true;
++            }
++            if kind == UIA_ButtonControlTypeId.0 && name == BUTTON_NAME {
++                button = Some(element.clone());
++            }
++        }
++        if !saw_static {
++            return Err(format!("static label missing; saw {names:?}"));
++        }
++        if !saw_dynamic {
++            return Err(format!("initial dynamic label missing; saw {names:?}"));
++        }
++        let button = button.ok_or_else(|| format!("invoke button missing; saw {names:?}"))?;
++
++        // (3) Button properties.
++        // SAFETY: provider elements are only queried while the host window is alive.
++        let enabled = unsafe { button.CurrentIsEnabled() }
++            .map_err(|error| format!("CurrentIsEnabled failed: {error}"))?
++            .as_bool();
++        let focusable = unsafe { button.CurrentIsKeyboardFocusable() }
++            .map_err(|error| format!("CurrentIsKeyboardFocusable failed: {error}"))?
++            .as_bool();
++        if !enabled {
++            return Err("invoke button reported disabled".to_owned());
++        }
++        if !focusable {
++            return Err("invoke button reported not keyboard focusable".to_owned());
++        }
++
++        // (4) BoundingRectangle is inside the real window rectangle (physical screen pixels).
++        let window_rect = window_rect(hwnd)?;
++        // SAFETY: same as above.
++        let bounds = unsafe { button.CurrentBoundingRectangle() }
++            .map_err(|error| format!("CurrentBoundingRectangle failed: {error}"))?;
++        if bounds.left < window_rect.left
++            || bounds.top < window_rect.top
++            || bounds.right > window_rect.right
++            || bounds.bottom > window_rect.bottom
++        {
++            return Err(format!(
++                "button bounds {bounds:?} escaped window rect {window_rect:?}"
++            ));
++        }
++
++        // (5) SetFocus is visible through the OS UIA client.
++        // SAFETY: same as above.
++        unsafe { button.SetFocus() }.map_err(|error| format!("SetFocus failed: {error}"))?;
++        poll_until(Duration::from_secs(3), || {
++            // SAFETY: same as above.
++            unsafe { button.CurrentHasKeyboardFocus() }
++                .map(|value| value.as_bool())
++                .unwrap_or(false)
++        })
++        .map_err(|_| "HasKeyboardFocus stayed false after SetFocus".to_owned())?;
++
++        // (6) Invoke through the real UIA pattern, then observe the dynamic label change.
++        // SAFETY: the pattern id is the documented Invoke pattern.
++        let pattern: IUIAutomationInvokePattern = unsafe {
++            button
++                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
++        }
++        .map_err(|error| format!("InvokePattern unavailable: {error}"))?;
++        // SAFETY: the pattern was obtained from a live provider element.
++        unsafe { pattern.Invoke() }.map_err(|error| format!("Invoke failed: {error}"))?;
++        poll_until(Duration::from_secs(5), || {
++            let Ok(elements) = descendants(&automation, &root) else {
++                return false;
++            };
++            elements.iter().any(|element| {
++                current_control_type(element) == Ok(UIA_TextControlTypeId.0)
++                    && current_name(element).as_deref() == Ok(DYNAMIC_AFTER)
++            })
++        })
++        .map_err(|_| format!("dynamic label never became {DYNAMIC_AFTER}"))?;
++        println!(
++            "uia_smoke OK: root=Window, {} descendant(s) [{}], Invoke produced {DYNAMIC_AFTER}",
++            names.len(),
++            names.join(" | ")
++        );
++
++        // (7) After the host dies, held elements must fail as unavailable, not hang or crash.
++        let _ = host.kill();
++        let _ = host.wait();
++        std::thread::sleep(Duration::from_millis(500));
++        // SAFETY: intentionally querying a stale element; a failure here is the expected outcome.
++        let stale = unsafe { button.CurrentName() };
++        match stale {
++            Err(error) => println!("stale element reported: {error}"),
++            Ok(name) => {
++                return Err(format!(
++                    "stale element still answered with {:?}",
++                    name.to_string()
++                ))
++            }
++        }
++        Ok(())
++    })();
++
++    if outcome.is_err() {
++        let _ = host.kill();
++        let _ = host.wait();
++    }
++    outcome
++}
++
++#[cfg(windows)]
++fn wait_for_host_window(
++    host: &mut std::process::Child,
++) -> Result<windows::Win32::Foundation::HWND, String> {
++    use std::time::{Duration, Instant};
++    use windows::core::w;
++    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
++
++    let host_pid = host.id();
++    let deadline = Instant::now() + Duration::from_secs(15);
++    while Instant::now() < deadline {
++        if let Some(status) = host
++            .try_wait()
++            .map_err(|error| format!("host try_wait failed: {error}"))?
++        {
++            return Err(format!("host exited before showing a window: {status}"));
++        }
++        // SAFETY: a null class name matches any class; the title is a static wide literal.
++        // `FindWindowW` reports "no such window" as `Err(HRESULT(0))`, which is a normal
++        // not-found result here rather than a failure.
++        if let Ok(hwnd) = unsafe { FindWindowW(None, w!("WindUI UIA smoke host")) } {
++            if !hwnd.is_invalid() {
++                let mut pid = 0_u32;
++                // SAFETY: `hwnd` came from FindWindowW and `pid` is a valid out pointer.
++                unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
++                if pid == host_pid {
++                    return Ok(hwnd);
++                }
++            }
++        }
++        std::thread::sleep(Duration::from_millis(50));
++    }
++    Err("host window did not appear within 15s".to_owned())
++}
++
++#[cfg(windows)]
++fn descendants(
++    automation: &windows::Win32::UI::Accessibility::IUIAutomation,
++    root: &windows::Win32::UI::Accessibility::IUIAutomationElement,
++) -> Result<Vec<windows::Win32::UI::Accessibility::IUIAutomationElement>, String> {
++    use windows::Win32::UI::Accessibility::TreeScope_Descendants;
++
++    // SAFETY: `automation` is a live IUIAutomation and the condition is created per call.
++    let condition = unsafe { automation.CreateTrueCondition() }
++        .map_err(|error| format!("CreateTrueCondition failed: {error}"))?;
++    // SAFETY: `root` is a live element and the condition outlives the call.
++    let found = unsafe { root.FindAll(TreeScope_Descendants, &condition) }
++        .map_err(|error| format!("FindAll failed: {error}"))?;
++    // SAFETY: `found` is a live element array.
++    let count = unsafe { found.Length() }.map_err(|error| format!("Length failed: {error}"))?;
++    let mut elements = Vec::new();
++    for index in 0..count {
++        // SAFETY: index is within the array length reported above.
++        if let Ok(element) = unsafe { found.GetElement(index) } {
++            elements.push(element);
++        }
++    }
++    Ok(elements)
++}
++
++#[cfg(windows)]
++fn current_name(
++    element: &windows::Win32::UI::Accessibility::IUIAutomationElement,
++) -> Result<String, String> {
++    // SAFETY: element is a live provider element.
++    unsafe { element.CurrentName() }
++        .map(|value| value.to_string())
++        .map_err(|error| format!("CurrentName failed: {error}"))
++}
++
++#[cfg(windows)]
++fn current_control_type(
++    element: &windows::Win32::UI::Accessibility::IUIAutomationElement,
++) -> Result<i32, String> {
++    // SAFETY: element is a live provider element.
++    unsafe { element.CurrentControlType() }
++        .map(|value| value.0)
++        .map_err(|error| format!("CurrentControlType failed: {error}"))
++}
++
++#[cfg(windows)]
++fn window_rect(hwnd: windows::Win32::Foundation::HWND) -> Result<windows::Win32::Foundation::RECT, String> {
++    use windows::Win32::Foundation::RECT;
++    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
++
++    let mut rect = RECT::default();
++    // SAFETY: `hwnd` is the live host window and `rect` is a valid out pointer.
++    unsafe { GetWindowRect(hwnd, &mut rect) }
++        .map_err(|error| format!("GetWindowRect failed: {error}"))?;
++    Ok(rect)
++}
++
++#[cfg(windows)]
++fn poll_until(timeout: std::time::Duration, mut predicate: impl FnMut() -> bool) -> Result<(), ()> {
++    let deadline = std::time::Instant::now() + timeout;
++    while std::time::Instant::now() < deadline {
++        if predicate() {
++            return Ok(());
++        }
++        std::thread::sleep(std::time::Duration::from_millis(50));
++    }
++    Err(())
++}
+diff --git a/src/accessibility.rs b/src/accessibility.rs
+new file mode 100644
+index 0000000..9ab7ca0
+--- /dev/null
++++ b/src/accessibility.rs
+@@ -0,0 +1,485 @@
++//! Platform-neutral accessibility projection for the real WindUI tree.
++//!
++//! This is deliberately a projection, not a second UI state tree: every node and every value
++//! comes from the current [`Tree`]. Platform adapters can query the snapshot and route actions
++//! back through the normal event path.
++
++use crate::core::{DispatchResult, NodeId, Tree};
++use crate::event::{Key, KeyEvent};
++use crate::geometry::Rect;
++
++/// The first supported semantic slice. Containers without a role are flattened.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum AccessibilityRole {
++    Window,
++    Text,
++    Button,
++}
++
++/// Actions that a platform adapter may route to the real tree.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum AccessibilityAction {
++    SetFocus,
++    Invoke,
++}
++
++/// Platform-neutral result for an accessibility request.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum AccessibilityActionResult {
++    Performed,
++    NodeUnavailable,
++    NotVisible,
++    Disabled,
++    NotFocusable,
++    UnsupportedAction,
++}
++
++/// Direct wrapper around WindUI's generation-checked arena identity.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct AccessibilityNodeId(NodeId);
++
++impl AccessibilityNodeId {
++    pub(crate) fn from_node_id(id: NodeId) -> Self {
++        Self(id)
++    }
++
++    pub(crate) fn node_id(self) -> NodeId {
++        self.0
++    }
++
++    pub fn index(self) -> u32 {
++        self.0.index()
++    }
++
++    pub fn generation(self) -> u32 {
++        self.0.generation()
++    }
++}
++
++/// One visible semantic node in the current WindUI tree.
++#[derive(Clone, Debug, PartialEq)]
++pub struct AccessibilityNode {
++    pub id: AccessibilityNodeId,
++    pub parent: Option<AccessibilityNodeId>,
++    pub children: Vec<AccessibilityNodeId>,
++    pub role: AccessibilityRole,
++    pub name: String,
++    pub description: Option<String>,
++    pub bounds: Rect,
++    pub enabled: bool,
++    pub focusable: bool,
++    pub focused: bool,
++    pub truncated: Option<bool>,
++    pub supported_actions: Vec<AccessibilityAction>,
++}
++
++/// Immutable, ordered snapshot of the current semantic projection.
++#[derive(Clone, Debug, Default, PartialEq)]
++pub struct AccessibilitySnapshot {
++    pub root: Option<AccessibilityNodeId>,
++    pub nodes: Vec<AccessibilityNode>,
++}
++
++impl AccessibilitySnapshot {
++    pub fn node(&self, id: AccessibilityNodeId) -> Option<&AccessibilityNode> {
++        self.nodes.iter().find(|node| node.id == id)
++    }
++
++    pub fn contains(&self, id: AccessibilityNodeId) -> bool {
++        self.node(id).is_some()
++    }
++}
++
++impl Tree {
++    /// Validate an action against the current real tree, including ancestor visibility and
++    /// enabled state. This is intentionally kept in the tree so platform adapters cannot
++    /// accidentally create a second validity or action policy.
++    pub(crate) fn validate_accessibility_action(
++        &self,
++        id: AccessibilityNodeId,
++        action: AccessibilityAction,
++    ) -> AccessibilityActionResult {
++        let node_id = id.node_id();
++        let Some(node) = self.get(node_id) else {
++            return AccessibilityActionResult::NodeUnavailable;
++        };
++        if !self.accessibility_visible(node_id) {
++            return AccessibilityActionResult::NotVisible;
++        }
++        if !self.node_enabled(node_id) {
++            return AccessibilityActionResult::Disabled;
++        }
++        match action {
++            AccessibilityAction::SetFocus => {
++                if self.focusable_order().contains(&node_id) {
++                    AccessibilityActionResult::Performed
++                } else {
++                    AccessibilityActionResult::NotFocusable
++                }
++            }
++            AccessibilityAction::Invoke => {
++                if node.widget.accessibility_role() == Some(AccessibilityRole::Button) {
++                    AccessibilityActionResult::Performed
++                } else {
++                    AccessibilityActionResult::UnsupportedAction
++                }
++            }
++        }
++    }
++
++    /// Execute an already validated action through the existing keyboard event path.
++    /// `UiHost` owns focus, scrolling and dispatch-effect consumption; `Tree` only owns the
++    /// generation-checked target and the normal widget event route.
++    pub(crate) fn dispatch_accessibility_action(
++        &mut self,
++        id: AccessibilityNodeId,
++        action: AccessibilityAction,
++    ) -> (AccessibilityActionResult, crate::core::DispatchResult) {
++        let result = self.validate_accessibility_action(id, action);
++        if result != AccessibilityActionResult::Performed {
++            return (result, DispatchResult::default());
++        }
++        match action {
++            AccessibilityAction::SetFocus => (result, DispatchResult::default()),
++            AccessibilityAction::Invoke => (
++                result,
++                self.dispatch_key(
++                    KeyEvent {
++                        key: Key::Enter,
++                        pressed: true,
++                        shift: false,
++                        ctrl: false,
++                        alt: false,
++                        meta: false,
++                    },
++                    Some(id.node_id()),
++                ),
++            ),
++        }
++    }
++
++    fn accessibility_visible(&self, id: NodeId) -> bool {
++        let mut current = Some(id);
++        while let Some(current_id) = current {
++            let Some(node) = self.get(current_id) else {
++                return false;
++            };
++            if !node.effective_visible() {
++                return false;
++            }
++            current = node.parent;
++        }
++        true
++    }
++
++    /// Projects the real visible tree into a stable semantic snapshot.
++    ///
++    /// Hidden subtrees are excluded. Pure layout nodes are flattened so changes in internal
++    /// `Row`/`Col`/`Stack` structure do not become user-visible accessibility churn.
++    pub fn accessibility_snapshot(&self) -> AccessibilitySnapshot {
++        let mut snapshot = AccessibilitySnapshot::default();
++        let Some(root) = self.root else {
++            return snapshot;
++        };
++        let Some(root_node) = self.get(root) else {
++            return snapshot;
++        };
++        if !root_node.effective_visible() {
++            return snapshot;
++        }
++
++        let root_id = AccessibilityNodeId::from_node_id(root);
++        snapshot.root = Some(root_id);
++        snapshot.nodes.push(AccessibilityNode {
++            id: root_id,
++            parent: None,
++            children: Vec::new(),
++            role: AccessibilityRole::Window,
++            name: root_node.widget.accessibility_name().unwrap_or_default(),
++            description: root_node
++                .tooltip
++                .clone()
++                .or_else(|| root_node.widget.accessibility_description()),
++            bounds: self.abs_bounds(root),
++            enabled: root_node.own_enabled(),
++            focusable: false,
++            focused: root_node.focused,
++            truncated: root_node.widget.text_truncated(),
++            supported_actions: Vec::new(),
++        });
++
++        for &child in &root_node.children {
++            self.collect_accessibility(
++                child,
++                root_id,
++                true,
++                root_node.own_enabled(),
++                &mut snapshot,
++            );
++        }
++        snapshot
++    }
++
++    fn collect_accessibility(
++        &self,
++        id: NodeId,
++        semantic_parent: AccessibilityNodeId,
++        parent_visible: bool,
++        parent_enabled: bool,
++        snapshot: &mut AccessibilitySnapshot,
++    ) {
++        let Some(node) = self.get(id) else {
++            return;
++        };
++        let visible = parent_visible && node.effective_visible();
++        if !visible {
++            return;
++        }
++        let enabled = parent_enabled && node.own_enabled();
++        let semantic_role = node.widget.accessibility_role();
++        let next_parent = if let Some(role) = semantic_role {
++            let focusable = node.focusable.unwrap_or_else(|| node.widget.focusable());
++            let mut actions = Vec::with_capacity(2);
++            if focusable {
++                actions.push(AccessibilityAction::SetFocus);
++            }
++            if role == AccessibilityRole::Button {
++                actions.push(AccessibilityAction::Invoke);
++            }
++            let id = AccessibilityNodeId::from_node_id(id);
++            snapshot.nodes.push(AccessibilityNode {
++                id,
++                parent: Some(semantic_parent),
++                children: Vec::new(),
++                role,
++                name: node.widget.accessibility_name().unwrap_or_default(),
++                description: node
++                    .tooltip
++                    .clone()
++                    .or_else(|| node.widget.accessibility_description()),
++                bounds: self.abs_bounds(id.node_id()),
++                enabled,
++                focusable,
++                focused: node.focused,
++                truncated: node.widget.text_truncated(),
++                supported_actions: actions,
++            });
++            if let Some(parent) = snapshot.node_mut(semantic_parent) {
++                parent.children.push(id);
++            }
++            id
++        } else {
++            semantic_parent
++        };
++
++        for &child in &node.children {
++            self.collect_accessibility(child, next_parent, visible, enabled, snapshot);
++        }
++    }
++}
++
++impl AccessibilitySnapshot {
++    fn node_mut(&mut self, id: AccessibilityNodeId) -> Option<&mut AccessibilityNode> {
++        self.nodes.iter_mut().find(|node| node.id == id)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::geometry::Size;
++    use crate::signal::signal;
++    use crate::text::{LineAwareTextEngine, NullTextEngine};
++    use crate::ui::{Element, Truncate};
++
++    fn snapshot_for(root: Element) -> AccessibilitySnapshot {
++        let mut tree = Tree::new();
++        let root_id = root.build(&mut tree);
++        tree.root = Some(root_id);
++        let mut text = NullTextEngine;
++        tree.layout_root(Size::new(400, 240), &mut text);
++        tree.accessibility_snapshot()
++    }
++
++    #[test]
++    fn snapshot_flattens_layout_and_excludes_hidden_subtrees() {
++        let snapshot = snapshot_for(
++            Element::col()
++                .child(Element::row().child(Element::button("Visible")))
++                .child(
++                    Element::stack()
++                        .visible(false)
++                        .child(Element::button("Hidden")),
++                ),
++        );
++        assert_eq!(snapshot.nodes.len(), 2);
++        let root = snapshot.node(snapshot.root.unwrap()).unwrap();
++        assert_eq!(root.children.len(), 1);
++        let button = snapshot.node(root.children[0]).unwrap();
++        assert_eq!(button.role, AccessibilityRole::Button);
++        assert_eq!(button.name, "Visible");
++        assert_eq!(button.parent, snapshot.root);
++    }
++
++    #[test]
++    fn dynamic_name_tracks_real_text_content() {
++        let label = signal(String::from("Before"));
++        let snapshot_before = snapshot_for(Element::col().child(Element::button(label.clone())));
++        assert_eq!(snapshot_before.nodes[1].name, "Before");
++        label.set(String::from("After"));
++        let snapshot_after = snapshot_for(Element::col().child(Element::button(label)));
++        assert_eq!(snapshot_after.nodes[1].name, "After");
++    }
++
++    #[test]
++    fn snapshot_uses_absolute_bounds_and_focus_state() {
++        let clicks = signal(0);
++        let root = Element::stack()
++            .padding_xy(10, 12)
++            .child(Element::button("Focus").on_click(move |_| clicks.set(clicks.get() + 1)));
++        let mut tree = Tree::new();
++        let root_id = root.build(&mut tree);
++        tree.root = Some(root_id);
++        let button_id = tree.get(root_id).unwrap().children[0];
++        let mut text = NullTextEngine;
++        tree.layout_root(Size::new(300, 180), &mut text);
++        tree.set_focused(Some(button_id), None);
++        let snapshot = tree.accessibility_snapshot();
++        let button = snapshot
++            .nodes
++            .iter()
++            .find(|node| node.role == AccessibilityRole::Button)
++            .unwrap();
++        assert_eq!(button.bounds, tree.abs_bounds(button_id));
++        assert!(button.focusable);
++        assert!(button.focused);
++        assert!(button
++            .supported_actions
++            .contains(&AccessibilityAction::SetFocus));
++        assert!(button
++            .supported_actions
++            .contains(&AccessibilityAction::Invoke));
++    }
++
++    #[test]
++    fn label_truncation_is_projected_from_real_widget_state() {
++        let mut tree = Tree::new();
++        let root_id = Element::col()
++            .child(
++                Element::label("这是一段需要折成好几行才放得下的较长说明文字")
++                    .width(60)
++                    .max_lines(2)
++                    .truncate(Truncate::End),
++            )
++            .build(&mut tree);
++        tree.root = Some(root_id);
++        let mut text = LineAwareTextEngine;
++        tree.layout_root(Size::new(400, 240), &mut text);
++        let snapshot = tree.accessibility_snapshot();
++        let label = snapshot.node(snapshot.root.unwrap()).unwrap();
++        assert_eq!(label.role, AccessibilityRole::Window);
++        let text = snapshot
++            .nodes
++            .iter()
++            .find(|node| node.role == AccessibilityRole::Text)
++            .unwrap();
++        assert_eq!(text.truncated, Some(true));
++    }
++
++    #[test]
++    fn removed_node_generation_is_not_returned() {
++        let mut tree = Tree::new();
++        let root = Element::col()
++            .child(Element::button("Old"))
++            .build(&mut tree);
++        tree.root = Some(root);
++        let old = tree.get(root).unwrap().children[0];
++        tree.remove(old);
++        let snapshot = tree.accessibility_snapshot();
++        assert!(!snapshot.nodes.iter().any(|node| node.id.node_id() == old));
++        assert!(tree.get(old).is_none());
++    }
++
++    #[test]
++    fn accessibility_set_focus_updates_real_snapshot() {
++        let mut tree = Tree::new();
++        let root = Element::col()
++            .child(Element::button("Focus"))
++            .build(&mut tree);
++        tree.root = Some(root);
++        tree.layout_root(Size::new(300, 120), &mut NullTextEngine);
++        let button = tree.get(root).unwrap().children[0];
++        let id = AccessibilityNodeId::from_node_id(button);
++
++        let (result, effects) =
++            tree.dispatch_accessibility_action(id, AccessibilityAction::SetFocus);
++        assert_eq!(result, AccessibilityActionResult::Performed);
++        assert!(!effects.consumed);
++        tree.set_focused(Some(button), None);
++        assert!(tree.accessibility_snapshot().node(id).unwrap().focused);
++    }
++
++    #[test]
++    fn accessibility_rejects_hidden_disabled_nonfocusable_and_stale_targets() {
++        let show = signal(false);
++        let enabled = signal(false);
++        let mut tree = Tree::new();
++        let root = Element::col()
++            .child(Element::button("Hidden").visible_signal(show))
++            .child(Element::button("Disabled").enabled_signal(enabled))
++            .child(Element::button("Not focusable").focusable(false))
++            .build(&mut tree);
++        tree.root = Some(root);
++        tree.layout_root(Size::new(400, 180), &mut NullTextEngine);
++        let children = tree.get(root).unwrap().children.clone();
++        assert_eq!(
++            tree.validate_accessibility_action(
++                AccessibilityNodeId::from_node_id(children[0]),
++                AccessibilityAction::Invoke,
++            ),
++            AccessibilityActionResult::NotVisible
++        );
++        assert_eq!(
++            tree.validate_accessibility_action(
++                AccessibilityNodeId::from_node_id(children[1]),
++                AccessibilityAction::Invoke,
++            ),
++            AccessibilityActionResult::Disabled
++        );
++        assert_eq!(
++            tree.validate_accessibility_action(
++                AccessibilityNodeId::from_node_id(children[2]),
++                AccessibilityAction::SetFocus,
++            ),
++            AccessibilityActionResult::NotFocusable
++        );
++        let stale = AccessibilityNodeId::from_node_id(children[0]);
++        tree.remove(children[0]);
++        assert_eq!(
++            tree.validate_accessibility_action(stale, AccessibilityAction::Invoke),
++            AccessibilityActionResult::NodeUnavailable
++        );
++    }
++
++    #[test]
++    fn accessibility_invoke_uses_button_event_path_exactly_once() {
++        let clicks = signal(0);
++        let mut tree = Tree::new();
++        let root = Element::col()
++            .child(Element::button("Invoke").on_click({
++                let clicks = clicks.clone();
++                move |_| clicks.set(clicks.get() + 1)
++            }))
++            .build(&mut tree);
++        tree.root = Some(root);
++        tree.layout_root(Size::new(300, 120), &mut NullTextEngine);
++        let button = tree.get(root).unwrap().children[0];
++        let (result, effects) = tree.dispatch_accessibility_action(
++            AccessibilityNodeId::from_node_id(button),
++            AccessibilityAction::Invoke,
++        );
++        assert_eq!(result, AccessibilityActionResult::Performed);
++        assert!(effects.consumed);
++        assert_eq!(clicks.get(), 1);
++    }
++}
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 7ced649..3670245 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -22,6 +22,9 @@ use std::time::Duration;
+ 
+ use crate::sync::{new_channel, Sender, WakerShared};
+ 
++use crate::accessibility::{
++    AccessibilityAction, AccessibilityActionResult, AccessibilityNodeId, AccessibilitySnapshot,
++};
+ use crate::core::{DamageReq, DispatchResult, EventCtx, NodeId, Tree};
+ use crate::event::{
+     CursorShape, Key, MouseButton, PointerEvent, PointerKind, WindowOp, WindowRequest,
+@@ -3196,6 +3199,44 @@ impl AppHandler for UiHost {
+         repaint
+     }
+ 
++    fn accessibility_snapshot(&self) -> Option<AccessibilitySnapshot> {
++        Some(self.tree.accessibility_snapshot())
++    }
++
++    fn accessibility_action(
++        &mut self,
++        id: AccessibilityNodeId,
++        action: AccessibilityAction,
++    ) -> AccessibilityActionResult {
++        self.enter();
++        let node_id = id.node_id();
++        let (result, dispatch) = self.tree.dispatch_accessibility_action(id, action);
++        if result != AccessibilityActionResult::Performed {
++            return result;
++        }
++        match action {
++            AccessibilityAction::SetFocus => {
++                let old = self.focus.current;
++                self.tree.set_focused(Some(node_id), old);
++                self.focus.current = Some(node_id);
++                self.focus.visible = false;
++                self.tree.scroll_into_view(node_id);
++                self.damage.needs_relayout = true;
++                self.damage.needs_full = true;
++            }
++            AccessibilityAction::Invoke => {
++                let (repaint, damage, _) =
++                    self.apply_dispatch_effects(dispatch, FocusSource::Pointer, None);
++                self.apply_damage(damage);
++                self.damage.needs_relayout = true;
++                if repaint {
++                    self.damage.needs_full = true;
++                }
++            }
++        }
++        result
++    }
++
+     fn wants_close(&self) -> bool {
+         self.close
+     }
+@@ -3507,6 +3548,58 @@ mod test_support {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn accessibility_handler_routes_focus_and_invoke_through_real_host() {
++        use crate::platform::AppHandler;
++        use crate::render::PixmapTarget;
++        use tiny_skia::Pixmap;
++
++        let invoked = crate::signal::signal(0);
++        let app = App::new("accessibility", 300, 160).content(
++            Element::col().child(Element::button("Invoke").on_click({
++                let invoked = invoked.clone();
++                move |_| invoked.set(invoked.get() + 1)
++            })),
++        );
++        let mut handler = app.into_handler_for_test();
++        let mut pixmap = Pixmap::new(300, 160).unwrap();
++        handler.render(
++            &mut PixmapTarget {
++                pixmap: &mut pixmap,
++            },
++            Size::new(300, 160),
++        );
++
++        let snapshot = handler
++            .accessibility_snapshot()
++            .expect("UiHost must expose its owned semantic snapshot");
++        let button = snapshot
++            .nodes
++            .iter()
++            .find(|node| node.role == crate::accessibility::AccessibilityRole::Button)
++            .cloned()
++            .expect("button must be projected");
++        assert_eq!(
++            handler.accessibility_action(button.id, AccessibilityAction::Invoke),
++            AccessibilityActionResult::Performed
++        );
++        assert_eq!(invoked.get(), 1, "Invoke must use the normal callback exactly once");
++
++        assert_eq!(
++            handler.accessibility_action(button.id, AccessibilityAction::SetFocus),
++            AccessibilityActionResult::Performed
++        );
++        assert!(
++            handler
++                .accessibility_snapshot()
++                .unwrap()
++                .node(button.id)
++                .unwrap()
++                .focused,
++            "SetFocus must update the real tree snapshot"
++        );
++    }
++
+     /// ESC 的处理次序：先收锚定浮层，再关对话框，最后才轮到关窗口。
+     ///
+     /// 这条排序必须端到端地测。`Tree::close_topmost_overlay` 自己的单测证明不了它——
+diff --git a/src/core.rs b/src/core.rs
+index d8ea742..5bee133 100644
+--- a/src/core.rs
++++ b/src/core.rs
+@@ -131,6 +131,18 @@ pub struct NodeId {
+     generation: u32,
+ }
+ 
++impl NodeId {
++    /// Arena slot index. The generation remains part of the identity.
++    pub fn index(self) -> u32 {
++        self.index
++    }
++
++    /// Arena generation. A changed generation invalidates providers for old nodes.
++    pub fn generation(self) -> u32 {
++        self.generation
++    }
++}
++
+ /// 紧凑格式 `#12`（复用过的槽位带代际：`#12g2`）。
+ ///
+ /// 手写而非 `derive`：派生格式是 `NodeId { index: 12, generation: 0 }`，一行诊断里塞三五个
+@@ -148,6 +160,18 @@ impl std::fmt::Debug for NodeId {
+ 
+ /// 纯内容控件接口。不持有也不访问树。
+ pub trait Widget {
++    /// Platform-neutral accessibility role. Pure layout widgets return `None`.
++    fn accessibility_role(&self) -> Option<crate::accessibility::AccessibilityRole> {
++        None
++    }
++    /// Current localized accessibility name. `None` means this widget has no semantic label.
++    fn accessibility_name(&self) -> Option<String> {
++        None
++    }
++    /// Optional localized accessibility help/description.
++    fn accessibility_description(&self) -> Option<String> {
++        None
++    }
+     /// 内容固有尺寸（content box，不含 padding）。容器/空控件返回 ZERO。
+     /// `text` 供需要测量文本的控件（如 Label）使用。
+     fn measure(&self, _avail: Size, _style: &Style, _text: &mut dyn TextEngine) -> Size {
+diff --git a/src/lib.rs b/src/lib.rs
+index 39b0c73..645b222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -6,6 +6,7 @@
+ // 图形绘制 API 以标量坐标传参（x,y,w,h,radius,width,paint）是有意设计，放宽该 lint。
+ #![allow(clippy::too_many_arguments)]
+ 
++pub mod accessibility;
+ pub mod anim;
+ pub mod app;
+ pub mod core;
+@@ -27,6 +28,10 @@ pub mod theme;
+ pub mod ui;
+ 
+ pub mod prelude {
++    pub use crate::accessibility::{
++        AccessibilityAction, AccessibilityNode, AccessibilityNodeId, AccessibilityRole,
++        AccessibilitySnapshot,
++    };
+     pub use crate::app::{App, HotkeyHandle, ThemeHandle, Window};
+     pub use crate::event::{
+         window_open, window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, Key, MenuBarLink,
+diff --git a/src/platform/mod.rs b/src/platform/mod.rs
+index b409483..686085a 100644
+--- a/src/platform/mod.rs
++++ b/src/platform/mod.rs
+@@ -674,6 +674,19 @@ pub trait AppHandler {
+     fn on_key(&mut self, _ev: KeyEvent) -> bool {
+         false
+     }
++    /// Current owned semantic projection of the real WindUI tree, for platform accessibility
++    /// adapters. The default keeps existing non-UiHost handlers source-compatible.
++    fn accessibility_snapshot(&self) -> Option<crate::accessibility::AccessibilitySnapshot> {
++        None
++    }
++    /// Route a platform accessibility request back to the real WindUI event/focus path.
++    fn accessibility_action(
++        &mut self,
++        _id: crate::accessibility::AccessibilityNodeId,
++        _action: crate::accessibility::AccessibilityAction,
++    ) -> crate::accessibility::AccessibilityActionResult {
++        crate::accessibility::AccessibilityActionResult::UnsupportedAction
++    }
+     /// 是否请求关闭窗口（事件处理后由平台查询）。
+     fn wants_close(&self) -> bool {
+         false
+diff --git a/src/platform/win32/accessibility.rs b/src/platform/win32/accessibility.rs
+new file mode 100644
+index 0000000..536dddd
+--- /dev/null
++++ b/src/platform/win32/accessibility.rs
+@@ -0,0 +1,761 @@
++//! Native UI Automation provider for a WindUI HWND.
++//!
++//! The provider is intentionally a stateless COM façade.  It stores only the HWND and the
++//! generation-checked semantic target; every property, navigation, focus, and invoke request
++//! is synchronously evaluated by the owning UI thread through the private window message below.
++//! This keeps UIA from becoming a second tree, cache, or cross-thread `Tree` owner.
++
++#![deny(unsafe_op_in_unsafe_fn)]
++
++use std::mem::{ManuallyDrop, zeroed};
++use std::ptr::null_mut;
++
++use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
++use windows::Win32::Graphics::Gdi::ClientToScreen;
++use windows::Win32::System::Com::SAFEARRAY;
++use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
++use windows::Win32::System::Variant::{
++    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BSTR, VT_BOOL, VT_I4,
++};
++use windows::Win32::UI::Accessibility::{
++    IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
++    IRawElementProviderFragmentRoot, IRawElementProviderFragmentRoot_Impl,
++    IRawElementProviderFragment_Impl, IRawElementProviderSimple, IRawElementProviderSimple_Impl,
++    NavigateDirection, NavigateDirection_FirstChild, NavigateDirection_LastChild,
++    NavigateDirection_NextSibling, NavigateDirection_PreviousSibling, NavigateDirection_Parent,
++    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ButtonControlTypeId,
++    UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED,
++    UIA_E_NOTSUPPORTED, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
++    UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId,
++    UIA_TextControlTypeId, UIA_WindowControlTypeId, UiaAppendRuntimeId, UiaRect,
++};
++use windows::Win32::UI::HiDpi::GetDpiForWindow;
++use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_APP};
++use windows_core::{implement, BSTR, ComObject, Error, HRESULT, IUnknown, Result};
++
++use crate::accessibility::{
++    AccessibilityAction, AccessibilityActionResult, AccessibilityNode, AccessibilityNodeId,
++    AccessibilityRole, AccessibilitySnapshot,
++};
++
++/// WM_APP+3 is reserved for synchronous UIA bridge calls.  WM_APP+1 is the tray message and
++/// WM_APP+2 is the cross-thread wake message.
++pub(crate) const WM_APP_ACCESSIBILITY: u32 = WM_APP + 3;
++
++#[derive(Clone, Copy, Debug)]
++pub(crate) enum BridgeOperation {
++    Snapshot,
++    Action {
++        id: AccessibilityNodeId,
++        action: AccessibilityAction,
++    },
++}
++
++/// Stack-owned request.  The pointer is used only for the duration of synchronous SendMessageW;
++/// no pointer or WindUI state escapes the UI-thread message handler.
++pub(crate) struct BridgeRequest {
++    pub(crate) operation: BridgeOperation,
++    pub(crate) delivered: bool,
++    pub(crate) snapshot: Option<AccessibilitySnapshot>,
++    pub(crate) action_result: Option<AccessibilityActionResult>,
++}
++
++impl BridgeRequest {
++    fn snapshot() -> Self {
++        Self {
++            operation: BridgeOperation::Snapshot,
++            delivered: false,
++            snapshot: None,
++            action_result: None,
++        }
++    }
++
++    fn action(id: AccessibilityNodeId, action: AccessibilityAction) -> Self {
++        Self {
++            operation: BridgeOperation::Action { id, action },
++            delivered: false,
++            snapshot: None,
++            action_result: None,
++        }
++    }
++}
++
++pub(crate) fn bridge_snapshot(hwnd: HWND) -> Option<AccessibilitySnapshot> {
++    let mut request = BridgeRequest::snapshot();
++    if !send_request(hwnd, &mut request) {
++        return None;
++    }
++    request.snapshot
++}
++
++pub(crate) fn bridge_action(
++    hwnd: HWND,
++    id: AccessibilityNodeId,
++    action: AccessibilityAction,
++) -> AccessibilityActionResult {
++    let mut request = BridgeRequest::action(id, action);
++    if !send_request(hwnd, &mut request) {
++        return AccessibilityActionResult::NodeUnavailable;
++    }
++    request
++        .action_result
++        .unwrap_or(AccessibilityActionResult::NodeUnavailable)
++}
++
++fn send_request(hwnd: HWND, request: &mut BridgeRequest) -> bool {
++    // SAFETY: request is stack-owned and SendMessageW is synchronous; the window procedure does
++    // not retain the pointer. The HWND is supplied by UIA for a live provider and a failed send
++    // is treated as an unavailable element.
++    let result = unsafe {
++        SendMessageW(
++            hwnd,
++            WM_APP_ACCESSIBILITY,
++            Some(WPARAM(0)),
++            Some(LPARAM(request as *mut BridgeRequest as isize)),
++        )
++    };
++    result.0 != 0 && request.delivered
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum ProviderTarget {
++    Root,
++    Node(AccessibilityNodeId),
++}
++
++#[derive(Clone, Copy, Debug)]
++struct ProviderState {
++    hwnd: HWND,
++    target: ProviderTarget,
++}
++
++#[implement(IRawElementProviderSimple, IRawElementProviderFragment)]
++struct ElementProvider(ProviderState);
++
++#[implement(
++    IRawElementProviderSimple,
++    IRawElementProviderFragment,
++    IRawElementProviderFragmentRoot
++)]
++struct RootProvider(ProviderState);
++
++#[implement(IInvokeProvider)]
++struct InvokeProvider(ProviderState);
++
++pub(crate) fn root_provider(hwnd: HWND) -> IRawElementProviderSimple {
++    ComObject::new(RootProvider(ProviderState {
++        hwnd,
++        target: ProviderTarget::Root,
++    }))
++    .into_interface()
++}
++
++fn root_fragment(hwnd: HWND) -> IRawElementProviderFragment {
++    ComObject::new(RootProvider(ProviderState {
++        hwnd,
++        target: ProviderTarget::Root,
++    }))
++    .into_interface()
++}
++
++fn element_fragment(hwnd: HWND, id: AccessibilityNodeId) -> IRawElementProviderFragment {
++    ComObject::new(ElementProvider(ProviderState {
++        hwnd,
++        target: ProviderTarget::Node(id),
++    }))
++    .into_interface()
++}
++
++fn provider_for(hwnd: HWND, snapshot: &AccessibilitySnapshot, id: AccessibilityNodeId) -> IRawElementProviderFragment {
++    if snapshot.root == Some(id) {
++        root_fragment(hwnd)
++    } else {
++        element_fragment(hwnd, id)
++    }
++}
++
++/// The raw-provider ABI cannot express a null COM interface: the windows-rs interface types are
++/// `NonNull`-backed, so `zeroed()` is invalid and aborts the process. UIA expects a fragment to
++/// report "no such element" / "no such pattern" as a failed HRESULT, which its client side
++/// treats as "nothing there".
++fn no_element_error() -> Error {
++    Error::from_hresult(HRESULT(0x8000_4005_u32 as i32))
++}
++
++fn uia_error(code: u32) -> Error {
++    Error::from_hresult(HRESULT(code as i32))
++}
++
++fn unavailable<T>() -> Result<T> {
++    Err(uia_error(UIA_E_ELEMENTNOTAVAILABLE))
++}
++
++fn unsupported<T>() -> Result<T> {
++    Err(uia_error(UIA_E_NOTSUPPORTED))
++}
++
++fn disabled<T>() -> Result<T> {
++    Err(uia_error(UIA_E_ELEMENTNOTENABLED))
++}
++
++fn snapshot_for(state: ProviderState) -> Result<AccessibilitySnapshot> {
++    bridge_snapshot(state.hwnd).ok_or_else(|| uia_error(UIA_E_ELEMENTNOTAVAILABLE))
++}
++
++fn node_for(state: ProviderState) -> Result<(AccessibilitySnapshot, AccessibilityNode)> {
++    let snapshot = snapshot_for(state)?;
++    let id = match state.target {
++        ProviderTarget::Root => snapshot.root.ok_or_else(|| uia_error(UIA_E_ELEMENTNOTAVAILABLE))?,
++        ProviderTarget::Node(id) => id,
++    };
++    let node = snapshot
++        .node(id)
++        .cloned()
++        .ok_or_else(|| uia_error(UIA_E_ELEMENTNOTAVAILABLE))?;
++    Ok((snapshot, node))
++}
++
++fn action_result(result: AccessibilityActionResult) -> Result<()> {
++    match result {
++        AccessibilityActionResult::Performed => Ok(()),
++        AccessibilityActionResult::Disabled => disabled(),
++        AccessibilityActionResult::NodeUnavailable | AccessibilityActionResult::NotVisible => {
++            unavailable()
++        }
++        AccessibilityActionResult::NotFocusable | AccessibilityActionResult::UnsupportedAction => {
++            unsupported()
++        }
++    }
++}
++
++fn control_type(role: AccessibilityRole) -> i32 {
++    match role {
++        AccessibilityRole::Window => UIA_WindowControlTypeId.0,
++        AccessibilityRole::Text => UIA_TextControlTypeId.0,
++        AccessibilityRole::Button => UIA_ButtonControlTypeId.0,
++    }
++}
++
++fn bstr_variant(value: &str) -> VARIANT {
++    let value = BSTR::from(value);
++    VARIANT {
++        Anonymous: VARIANT_0 {
++            Anonymous: ManuallyDrop::new(VARIANT_0_0 {
++                vt: VT_BSTR,
++                wReserved1: 0,
++                wReserved2: 0,
++                wReserved3: 0,
++                Anonymous: VARIANT_0_0_0 {
++                    bstrVal: ManuallyDrop::new(value),
++                },
++            }),
++        },
++    }
++}
++
++fn bool_variant(value: bool) -> VARIANT {
++    VARIANT {
++        Anonymous: VARIANT_0 {
++            Anonymous: ManuallyDrop::new(VARIANT_0_0 {
++                vt: VT_BOOL,
++                wReserved1: 0,
++                wReserved2: 0,
++                wReserved3: 0,
++                Anonymous: VARIANT_0_0_0 {
++                    boolVal: value.into(),
++                },
++            }),
++        },
++    }
++}
++
++fn i32_variant(value: i32) -> VARIANT {
++    VARIANT {
++        Anonymous: VARIANT_0 {
++            Anonymous: ManuallyDrop::new(VARIANT_0_0 {
++                vt: VT_I4,
++                wReserved1: 0,
++                wReserved2: 0,
++                wReserved3: 0,
++                Anonymous: VARIANT_0_0_0 { lVal: value },
++            }),
++        },
++    }
++}
++
++fn property_value(state: ProviderState, property_id: i32) -> Result<VARIANT> {
++    let (_, node) = node_for(state)?;
++    let value = match property_id {
++        id if id == UIA_NamePropertyId.0 => bstr_variant(&node.name),
++        id if id == UIA_ControlTypePropertyId.0 => i32_variant(control_type(node.role)),
++        id if id == UIA_IsEnabledPropertyId.0 => bool_variant(node.enabled),
++        id if id == UIA_IsKeyboardFocusablePropertyId.0 => bool_variant(node.focusable),
++        id if id == UIA_HasKeyboardFocusPropertyId.0 => bool_variant(node.focused),
++        _ => VARIANT::default(),
++    };
++    Ok(value)
++}
++
++fn pattern_provider(state: ProviderState, pattern_id: i32) -> Result<IUnknown> {
++    if pattern_id != UIA_InvokePatternId.0 {
++        return Err(no_element_error());
++    }
++    let (_, node) = node_for(state)?;
++    if node.role != AccessibilityRole::Button
++        || !node.supported_actions.contains(&AccessibilityAction::Invoke)
++    {
++        return Err(no_element_error());
++    }
++    Ok(InvokeProvider(state).into())
++}
++
++fn fragment_for_neighbor(
++    state: ProviderState,
++    snapshot: &AccessibilitySnapshot,
++    id: Option<AccessibilityNodeId>,
++) -> Result<IRawElementProviderFragment> {
++    id.map(|id| provider_for(state.hwnd, snapshot, id))
++        .ok_or_else(no_element_error)
++}
++
++fn neighbor(
++    state: ProviderState,
++    direction: NavigateDirection,
++) -> Result<IRawElementProviderFragment> {
++    let (snapshot, node) = node_for(state)?;
++    let id = match direction {
++        NavigateDirection_Parent => node.parent,
++        NavigateDirection_FirstChild => node.children.first().copied(),
++        NavigateDirection_LastChild => node.children.last().copied(),
++        NavigateDirection_NextSibling | NavigateDirection_PreviousSibling => {
++            let Some(parent_id) = node.parent else {
++                return Err(no_element_error());
++            };
++            let Some(parent) = snapshot.node(parent_id) else {
++                return unavailable();
++            };
++            let Some(index) = parent.children.iter().position(|candidate| *candidate == node.id)
++            else {
++                return unavailable();
++            };
++            if direction == NavigateDirection_NextSibling {
++                parent.children.get(index + 1).copied()
++            } else {
++                index.checked_sub(1).and_then(|i| parent.children.get(i).copied())
++            }
++        }
++        _ => return unsupported(),
++    };
++    fragment_for_neighbor(state, &snapshot, id)
++}
++
++/// Scales a semantic (logical DIP) rectangle into physical client pixels.
++///
++/// Kept separate from the OS calls in [`scaled_screen_rect`] so the 100%/150% conversions are
++/// unit-testable without an HWND. The snapshot itself is never rewritten: it stays in logical
++/// coordinates and only this projection is physical.
++fn scale_logical_rect(bounds: crate::geometry::Rect, scale: f64) -> (i32, i32, i32, i32) {
++    (
++        (f64::from(bounds.x) * scale).round() as i32,
++        (f64::from(bounds.y) * scale).round() as i32,
++        (f64::from(bounds.right()) * scale).round() as i32,
++        (f64::from(bounds.bottom()) * scale).round() as i32,
++    )
++}
++
++fn scaled_screen_rect(state: ProviderState, node: &AccessibilityNode) -> Result<UiaRect> {
++    // SAFETY: `state.hwnd` is the live window handle of the provider that created this element;
++    // the call only reads the window's DPI and a failure returns 0, which the following
++    // `.max(96)` clamps to the documented 96-DPI baseline.
++    let dpi = unsafe { GetDpiForWindow(state.hwnd) }.max(96);
++    let scale = f64::from(dpi) / 96.0;
++    let (x, y, right, bottom) = scale_logical_rect(node.bounds, scale);
++    let mut origin = POINT { x, y };
++    // SAFETY: origin is a valid stack POINT and hwnd is the provider's live window handle.
++    if !unsafe { ClientToScreen(state.hwnd, &mut origin) }.as_bool() {
++        return unavailable();
++    }
++    Ok(UiaRect {
++        left: f64::from(origin.x),
++        top: f64::from(origin.y),
++        width: f64::from(right - x),
++        height: f64::from(bottom - y),
++    })
++}
++
++fn runtime_id(id: AccessibilityNodeId) -> Result<*mut SAFEARRAY> {
++    let values = [UiaAppendRuntimeId as i32, id.index() as i32, id.generation() as i32];
++    // SAFETY: SafeArrayCreateVector allocates a COM-owned VT_I4 array; ownership is transferred to
++    // UIA on success. Every put uses a valid element index and pointer to a live i32.
++    let array = unsafe { SafeArrayCreateVector(VT_I4, 0, values.len() as u32) };
++    if array.is_null() {
++        return Err(Error::from_thread());
++    }
++    for (index, value) in values.iter().enumerate() {
++        let index = index as i32;
++        // SAFETY: `array` was allocated immediately above and has not been transferred to UIA
++        // yet, and `index` is bounded by `values.len()`, so both arguments refer to live storage
++        // owned by this stack frame for the duration of the call.
++        if unsafe { SafeArrayPutElement(array, &index, value as *const i32 as *const _) }.is_err() {
++            // SAFETY: array was allocated above and has not been transferred to UIA.
++            let _ = unsafe { SafeArrayDestroy(array) };
++            return Err(Error::from_thread());
++        }
++    }
++    Ok(array)
++}
++
++fn focused_fragment(state: ProviderState, snapshot: &AccessibilitySnapshot) -> Result<IRawElementProviderFragment> {
++    let id = snapshot
++        .nodes
++        .iter()
++        .find(|node| node.focused)
++        .map(|node| node.id);
++    id.map(|id| provider_for(state.hwnd, snapshot, id))
++        .ok_or_else(no_element_error)
++}
++
++fn deepest_at_point(
++    state: ProviderState,
++    snapshot: &AccessibilitySnapshot,
++    x: f64,
++    y: f64,
++) -> Result<IRawElementProviderFragment> {
++    let mut best: Option<(usize, AccessibilityNodeId)> = None;
++    for node in &snapshot.nodes {
++        let rect = scaled_screen_rect(state, node)?;
++        let contains = x >= rect.left
++            && y >= rect.top
++            && x < rect.left + rect.width
++            && y < rect.top + rect.height;
++        if !contains {
++            continue;
++        }
++        let depth = depth(snapshot, node.id);
++        if best.is_none_or(|(best_depth, _)| depth >= best_depth) {
++            best = Some((depth, node.id));
++        }
++    }
++    best.map(|(_, id)| provider_for(state.hwnd, snapshot, id))
++        .ok_or_else(no_element_error)
++}
++
++fn depth(snapshot: &AccessibilitySnapshot, mut id: AccessibilityNodeId) -> usize {
++    let mut depth = 0;
++    while let Some(node) = snapshot.node(id) {
++        let Some(parent) = node.parent else {
++            break;
++        };
++        depth += 1;
++        id = parent;
++    }
++    depth
++}
++
++#[allow(non_snake_case)]
++impl IRawElementProviderSimple_Impl for ElementProvider_Impl {
++    fn ProviderOptions(&self) -> Result<ProviderOptions> {
++        Ok(ProviderOptions_ServerSideProvider)
++    }
++
++    fn GetPatternProvider(&self, patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID) -> Result<IUnknown> {
++        pattern_provider(self.0, patternid.0)
++    }
++
++    fn GetPropertyValue(
++        &self,
++        propertyid: windows::Win32::UI::Accessibility::UIA_PROPERTY_ID,
++    ) -> Result<VARIANT> {
++        property_value(self.0, propertyid.0)
++    }
++
++    fn HostRawElementProvider(&self) -> Result<IRawElementProviderSimple> {
++        // A fragment (non-root) reports "no host provider" as a failure; the ABI cannot express
++        // a null interface.
++        Err(no_element_error())
++    }
++}
++
++#[allow(non_snake_case)]
++impl IRawElementProviderFragment_Impl for ElementProvider_Impl {
++    fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
++        neighbor(self.0, direction)
++    }
++
++    fn GetRuntimeId(&self) -> Result<*mut SAFEARRAY> {
++        match self.0.target {
++            ProviderTarget::Node(id) => runtime_id(id),
++            ProviderTarget::Root => Err(Error::from_hresult(HRESULT(0x80004001u32 as i32))),
++        }
++    }
++
++    fn BoundingRectangle(&self) -> Result<UiaRect> {
++        let (_, node) = node_for(self.0)?;
++        scaled_screen_rect(self.0, &node)
++    }
++
++    fn GetEmbeddedFragmentRoots(&self) -> Result<*mut SAFEARRAY> {
++        Ok(null_mut())
++    }
++
++    fn SetFocus(&self) -> Result<()> {
++        let id = match self.0.target {
++            ProviderTarget::Node(id) => id,
++            ProviderTarget::Root => return unsupported(),
++        };
++        action_result(bridge_action(self.0.hwnd, id, AccessibilityAction::SetFocus))
++    }
++
++    fn FragmentRoot(&self) -> Result<IRawElementProviderFragmentRoot> {
++        Ok(ComObject::new(RootProvider(ProviderState {
++            hwnd: self.0.hwnd,
++            target: ProviderTarget::Root,
++        }))
++        .into_interface())
++    }
++}
++
++#[allow(non_snake_case)]
++impl IRawElementProviderSimple_Impl for RootProvider_Impl {
++    fn ProviderOptions(&self) -> Result<ProviderOptions> {
++        Ok(ProviderOptions_ServerSideProvider)
++    }
++
++    fn GetPatternProvider(&self, patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID) -> Result<IUnknown> {
++        pattern_provider(self.0, patternid.0)
++    }
++
++    fn GetPropertyValue(
++        &self,
++        propertyid: windows::Win32::UI::Accessibility::UIA_PROPERTY_ID,
++    ) -> Result<VARIANT> {
++        property_value(self.0, propertyid.0)
++    }
++
++    fn HostRawElementProvider(&self) -> Result<IRawElementProviderSimple> {
++        match self.0.target {
++            // SAFETY: this arm runs only for the Root provider, and the HWND was validated as a
++            // live window before the provider was constructed. The call merely wraps that HWND in
++            // a COM provider; no ownership is transferred away from `self`.
++            ProviderTarget::Root => unsafe {
++                windows::Win32::UI::Accessibility::UiaHostProviderFromHwnd(self.0.hwnd)
++            },
++            ProviderTarget::Node(_) => Err(no_element_error()),
++        }
++    }
++}
++
++#[allow(non_snake_case)]
++impl IRawElementProviderFragment_Impl for RootProvider_Impl {
++    fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
++        neighbor(self.0, direction)
++    }
++
++    fn GetRuntimeId(&self) -> Result<*mut SAFEARRAY> {
++        Err(Error::from_hresult(HRESULT(0x80004001u32 as i32)))
++    }
++
++    fn BoundingRectangle(&self) -> Result<UiaRect> {
++        let (_, node) = node_for(self.0)?;
++        scaled_screen_rect(self.0, &node)
++    }
++
++    fn GetEmbeddedFragmentRoots(&self) -> Result<*mut SAFEARRAY> {
++        Ok(null_mut())
++    }
++
++    fn SetFocus(&self) -> Result<()> {
++        unsupported()
++    }
++
++    fn FragmentRoot(&self) -> Result<IRawElementProviderFragmentRoot> {
++        Ok(ComObject::new(RootProvider(self.0)).into_interface())
++    }
++}
++
++#[allow(non_snake_case)]
++impl IRawElementProviderFragmentRoot_Impl for RootProvider_Impl {
++    fn ElementProviderFromPoint(&self, x: f64, y: f64) -> Result<IRawElementProviderFragment> {
++        let snapshot = snapshot_for(self.0)?;
++        deepest_at_point(self.0, &snapshot, x, y)
++    }
++
++    fn GetFocus(&self) -> Result<IRawElementProviderFragment> {
++        let snapshot = snapshot_for(self.0)?;
++        focused_fragment(self.0, &snapshot)
++    }
++}
++
++#[allow(non_snake_case)]
++impl IInvokeProvider_Impl for InvokeProvider_Impl {
++    fn Invoke(&self) -> Result<()> {
++        let id = match self.0.target {
++            ProviderTarget::Node(id) => id,
++            ProviderTarget::Root => return unsupported(),
++        };
++        action_result(bridge_action(self.0.hwnd, id, AccessibilityAction::Invoke))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    // Only the runtime-id test reads a COM array back, so this import stays out of the library
++    // build (where it would be unused).
++    use windows::Win32::System::Ole::SafeArrayGetElement;
++
++    #[test]
++    fn runtime_id_contains_uia_marker_index_and_generation() {
++        // `NodeId` keeps its fields private to the arena, so obtain a real id
++        // from a tree insert and assert the accessibility id preserves both
++        // index and generation (no test-only `NodeId` constructor is added).
++        let mut tree = crate::core::Tree::new();
++        let node_id = crate::ui::Element::button("probe").build(&mut tree);
++        let id = AccessibilityNodeId::from_node_id(node_id);
++        assert_eq!(id.index(), node_id.index());
++        assert_eq!(id.generation(), node_id.generation());
++
++        // The child runtime id must carry the UIA marker followed by the arena index and the
++        // generation, in that order. Root never reaches here (it uses the UIA host rules).
++        let array = runtime_id(id).expect("runtime id array");
++        assert!(!array.is_null());
++        let read = |index: i32| -> i32 {
++            let mut value = 0_i32;
++            // SAFETY: `array` was allocated by `runtime_id` immediately above and owns exactly
++            // three VT_I4 elements, so every index passed here is in range and the destination is
++            // a live i32 owned by this stack frame.
++            unsafe { SafeArrayGetElement(array, &index, &mut value as *mut i32 as *mut _) }
++                .expect("runtime id element in range");
++            value
++        };
++        assert_eq!(read(0), UiaAppendRuntimeId as i32);
++        assert_eq!(read(1), id.index() as i32);
++        assert_eq!(read(2), id.generation() as i32);
++        // SAFETY: UIA never received this array, so ownership is still ours to release.
++        unsafe { SafeArrayDestroy(array) };
++    }
++
++    #[test]
++    fn bounds_scale_is_dpi_correct_at_100_and_150_percent() {
++        // `Rect::new(x, y, w, h)` -> right = 40, bottom = 60.
++        let logical = crate::geometry::Rect::new(10, 20, 30, 40);
++        // 100%: the projection is the identity.
++        assert_eq!(scale_logical_rect(logical, 1.0), (10, 20, 40, 60));
++        // 150%: every edge scales and rounds, and width/height stay consistent.
++        let (x, y, right, bottom) = scale_logical_rect(logical, 1.5);
++        assert_eq!((x, y, right, bottom), (15, 30, 60, 90));
++        assert_eq!(right - x, 45, "150% width must be 1.5x the 30 DIP width");
++        assert_eq!(bottom - y, 60, "150% height must be 1.5x the 40 DIP height");
++        // A fractional edge must round rather than truncate.
++        let odd = crate::geometry::Rect::new(0, 0, 10, 0);
++        assert_eq!(scale_logical_rect(odd, 1.5).2, 15);
++    }
++
++    #[test]
++    fn logical_to_physical_formula_is_dpi_stable() {
++        let logical = crate::geometry::Rect::new(10, 20, 30, 40);
++        let scale = 1.5_f64;
++        assert_eq!((f64::from(logical.x) * scale).round(), 15.0);
++        assert_eq!((f64::from(logical.bottom()) * scale).round(), 90.0);
++    }
++
++    #[test]
++    fn request_that_was_not_delivered_reports_unavailable() {
++        let mut tree = crate::core::Tree::new();
++        let node_id = crate::ui::Element::button("probe").build(&mut tree);
++        let id = AccessibilityNodeId::from_node_id(node_id);
++        let request = BridgeRequest::action(id, AccessibilityAction::Invoke);
++        assert!(!request.delivered);
++        assert!(request.action_result.is_none());
++        // Mirrors the fallback in `bridge_action`.
++        let mapped = request
++            .action_result
++            .unwrap_or(AccessibilityActionResult::NodeUnavailable);
++        assert!(matches!(mapped, AccessibilityActionResult::NodeUnavailable));
++    }
++
++    #[test]
++    fn null_hwnd_query_reports_unavailable() {
++        // A provider whose window is gone must fail closed as element-unavailable, never panic.
++        let hwnd = HWND(std::ptr::null_mut());
++        assert!(bridge_snapshot(hwnd).is_none());
++        let mut tree = crate::core::Tree::new();
++        let node_id = crate::ui::Element::button("probe").build(&mut tree);
++        let id = AccessibilityNodeId::from_node_id(node_id);
++        assert!(matches!(
++            bridge_action(hwnd, id, AccessibilityAction::Invoke),
++            AccessibilityActionResult::NodeUnavailable
++        ));
++    }
++
++    #[test]
++    fn stale_generation_action_reports_unavailable() {
++        // An id obtained from a different arena must not resolve: the validation is generation
++        // checked, so the other tree reports it as unavailable rather than invoking a stranger.
++        let mut source = crate::core::Tree::new();
++        let node_id = crate::ui::Element::button("probe").build(&mut source);
++        let stale = AccessibilityNodeId::from_node_id(node_id);
++        let empty = crate::core::Tree::new();
++        assert!(matches!(
++            empty.validate_accessibility_action(stale, AccessibilityAction::Invoke),
++            AccessibilityActionResult::NodeUnavailable
++        ));
++    }
++
++    /// The semantic snapshot is flattened by `app::UiHost`; these two helpers drive navigation
++    /// and hit-testing and are pure functions of that snapshot, so they are testable without an
++    /// HWND (the provider methods that wrap them do need a live window).
++    fn probe_snapshot() -> crate::accessibility::AccessibilitySnapshot {
++        use crate::geometry::Size;
++        use crate::text::NullTextEngine;
++        let mut tree = crate::core::Tree::new();
++        let root_id = crate::ui::Element::col()
++            .child(crate::ui::Element::row().child(crate::ui::Element::button("deep")))
++            .build(&mut tree);
++        tree.root = Some(root_id);
++        let mut text = NullTextEngine;
++        tree.layout_root(Size::new(400, 240), &mut text);
++        tree.accessibility_snapshot()
++    }
++
++    #[test]
++    fn control_type_maps_the_three_semantic_roles() {
++        use windows::Win32::UI::Accessibility::{
++            UIA_ButtonControlTypeId, UIA_TextControlTypeId, UIA_WindowControlTypeId,
++        };
++        assert_eq!(
++            control_type(AccessibilityRole::Window),
++            UIA_WindowControlTypeId.0
++        );
++        assert_eq!(
++            control_type(AccessibilityRole::Text),
++            UIA_TextControlTypeId.0
++        );
++        assert_eq!(
++            control_type(AccessibilityRole::Button),
++            UIA_ButtonControlTypeId.0
++        );
++    }
++
++    #[test]
++    fn depth_follows_the_semantic_parent_chain() {
++        let snapshot = probe_snapshot();
++        let root_depth = snapshot
++            .nodes
++            .iter()
++            .map(|node| depth(&snapshot, node.id))
++            .min()
++            .expect("snapshot has a root");
++        let deepest = snapshot
++            .nodes
++            .iter()
++            .map(|node| depth(&snapshot, node.id))
++            .max()
++            .expect("snapshot has a root");
++        assert_eq!(root_depth, 0, "the semantic root has no ancestors");
++        assert!(
++            deepest > root_depth,
++            "a nested Button must be deeper than the root"
++        );
++    }
++}
+diff --git a/src/platform/win32/mod.rs b/src/platform/win32/mod.rs
+index 4f7c0da..541befe 100644
+--- a/src/platform/win32/mod.rs
++++ b/src/platform/win32/mod.rs
+@@ -9,6 +9,7 @@ pub(super) mod d2d;
+ pub mod dragdrop;
+ pub mod hotkey;
+ pub mod tray;
++mod accessibility;
+ 
+ use std::cell::{Cell, RefCell};
+ use std::ffi::c_void;
+@@ -24,8 +25,9 @@ use windows::Win32::Graphics::Dwm::{
+     DWMWCP_ROUND,
+ };
+ use windows::Win32::Graphics::Gdi::{
+-    BeginPaint, EndPaint, GetDC, GetDeviceCaps, GetMonitorInfoW, InvalidateRect, MonitorFromWindow,
+-    ReleaseDC, ScreenToClient, SetDIBitsToDevice, UpdateWindow, BITMAPINFO, BITMAPINFOHEADER,
++    BeginPaint, ClientToScreen, EndPaint, GetDC, GetDeviceCaps, GetMonitorInfoW, InvalidateRect,
++    MonitorFromWindow, ReleaseDC, ScreenToClient, SetDIBitsToDevice, UpdateWindow, BITMAPINFO,
++    BITMAPINFOHEADER,
+     BI_RGB, DEFAULT_CHARSET, DIB_RGB_COLORS, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+     PAINTSTRUCT, VREFRESH,
+ };
+@@ -71,7 +73,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
+     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE,
+     WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DPICHANGED,
+     WM_DROPFILES, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY,
+-    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
++    WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN,
++    WM_KEYUP,
+     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+     WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE,
+     WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+@@ -79,6 +82,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
+     WM_TIMER, WM_TOUCH, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+ };
++use windows::Win32::UI::Accessibility::UiaReturnRawElementProvider;
+ // 窗口图标（`App::icon`）：HICON 由 tray 那份 RGBA 转换复用，销毁归 WindowState::drop。
+ use windows::Win32::UI::WindowsAndMessaging::{
+     DestroyIcon, SendMessageW, HICON, ICON_BIG, ICON_SMALL, SM_CXICON, SM_CXSMICON,
+@@ -1146,6 +1150,10 @@ const CLASS_NAME: PCWSTR = w!("WindUiWindowClass");
+ /// 跨线程唤醒消息（WM_APP+2；WM_APP+1 已用于托盘）。
+ const WM_APP_WAKE: u32 = WM_APP + 2;
+ 
++/// The UIA provider sends synchronous requests through this window message.  Only this
++/// `wnd_proc` arm reads the AppHandler accessibility seam; the provider never reaches into
++/// WindowState directly.
++
+ /// 跨线程唤醒句柄：仅持 HWND 数值，PostMessage 线程安全。
+ struct Win32Wake {
+     hwnd: isize,
+@@ -1783,6 +1791,15 @@ unsafe fn window_frame_interval_ms(hwnd: HWND) -> u128 {
+     (1000 / fps.max(1)) as u128
+ }
+ 
++/// True only for the OS UIA root-object request (`UiaRootObjectId`).
++///
++/// Every other `WM_GETOBJECT` object id — notably the MSAA `OBJID_CLIENT` value — must continue
++/// to fall through to `DefWindowProcW` untouched, so this gate is deliberately exact rather than
++/// a range check.
++fn is_uia_root_object(lparam: LPARAM) -> bool {
++    lparam.0 == windows::Win32::UI::Accessibility::UiaRootObjectId as isize
++}
++
+ unsafe extern "system" fn wnd_proc(
+     hwnd: HWND,
+     msg: u32,
+@@ -1803,6 +1820,41 @@ unsafe extern "system" fn wnd_proc(
+             }
+             DefWindowProcW(hwnd, msg, wparam, lparam)
+         }
++        accessibility::WM_APP_ACCESSIBILITY => {
++            let request = lparam.0 as *mut accessibility::BridgeRequest;
++            if request.is_null() {
++                return LRESULT(0);
++            }
++            let Some(state) = state_from(hwnd) else {
++                return LRESULT(0);
++            };
++            // SAFETY: the provider allocates this request on its stack and SendMessageW keeps
++            // it alive until this synchronous arm returns. The request never escapes here.
++            unsafe {
++                match (*request).operation {
++                    accessibility::BridgeOperation::Snapshot => {
++                        (*request).snapshot = state.handler.accessibility_snapshot();
++                    }
++                    accessibility::BridgeOperation::Action { id, action } => {
++                        (*request).action_result = Some(state.handler.accessibility_action(id, action));
++                    }
++                }
++                (*request).delivered = true;
++            }
++            LRESULT(1)
++        }
++        WM_GETOBJECT if is_uia_root_object(lparam) => {
++            // Check liveness before constructing the root provider, then end the WindowState
++            // borrow before calling the OS UIA hand-off routine.
++            if state_from(hwnd).is_none() {
++                return DefWindowProcW(hwnd, msg, wparam, lparam);
++            }
++            let provider = accessibility::root_provider(hwnd);
++            // SAFETY: `hwnd` is alive and owned by this thread, `wparam`/`lparam` are the
++            // unmodified WM_GETOBJECT parameters, and `provider` outlives the call. The
++            // borrow keeps the COM reference alive across the OS UIA hand-off.
++            UiaReturnRawElementProvider(hwnd, wparam, lparam, &provider)
++        }
+         WM_PAINT => {
+             if let Some(state) = state_from(hwnd) {
+                 state.paint(hwnd);
+@@ -3749,7 +3801,18 @@ mod live_windows_tests {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{accumulate_char, ClickTracker};
++    use super::{accumulate_char, is_uia_root_object, ClickTracker, LPARAM};
++
++    #[test]
++    fn only_the_uia_root_object_id_takes_the_accessibility_path() {
++        // The UIA root request is the single object id that may create a raw provider.
++        let root = LPARAM(windows::Win32::UI::Accessibility::UiaRootObjectId as isize);
++        assert!(is_uia_root_object(root));
++        // MSAA client (`OBJID_CLIENT` = -4) and the window object (`OBJID_WINDOW` = 0) are not
++        // UIA roots and must keep the legacy `DefWindowProcW` path.
++        assert!(!is_uia_root_object(LPARAM(-4)));
++        assert!(!is_uia_root_object(LPARAM(0)));
++    }
+ 
+     #[test]
+     fn bmp_char_passes_through() {
+diff --git a/src/platform/win32/tray.rs b/src/platform/win32/tray.rs
+index 21cca39..df977df 100644
+--- a/src/platform/win32/tray.rs
++++ b/src/platform/win32/tray.rs
+@@ -467,11 +467,16 @@ mod tests {
+             HICON(std::ptr::null_mut()),
+             "提示",
+         );
+-        assert_eq!(nid.uFlags, NIF_ICON | NIF_MESSAGE | NIF_TIP);
+-        assert_eq!(nid.uCallbackMessage, WM_TRAYICON, "漏了它则图标点了没反应");
+-        assert_eq!(nid.uID, 1);
+-        let tip: String = nid
+-            .szTip
++        // `NOTIFYICONDATAW` is packed on Windows. Copy fields by value before
++        // assertions/iteration so x86 never creates an unaligned reference.
++        let flags = nid.uFlags;
++        let callback_message = nid.uCallbackMessage;
++        let id = nid.uID;
++        let tip_buffer = nid.szTip;
++        assert_eq!(flags, NIF_ICON | NIF_MESSAGE | NIF_TIP);
++        assert_eq!(callback_message, WM_TRAYICON, "漏了它则图标点了没反应");
++        assert_eq!(id, 1);
++        let tip: String = tip_buffer
+             .iter()
+             .take_while(|c| **c != 0)
+             .map(|c| char::from_u32(*c as u32).unwrap())
+@@ -491,9 +496,10 @@ mod tests {
+             HICON(std::ptr::null_mut()),
+             &long,
+         );
+-        let n = nid.szTip.len();
+-        assert_eq!(nid.szTip[n - 1], 0, "定长缓冲必须以 NUL 收尾");
+-        assert!(nid.szTip[..n - 1].iter().all(|c| *c != 0), "截断前应写满");
++        let tip_buffer = nid.szTip;
++        let n = tip_buffer.len();
++        assert_eq!(tip_buffer[n - 1], 0, "定长缓冲必须以 NUL 收尾");
++        assert!(tip_buffer[..n - 1].iter().all(|c| *c != 0), "截断前应写满");
+     }
+ 
+     /// 注册成功时按消息号精确匹配。
+diff --git a/src/ui/mod.rs b/src/ui/mod.rs
+index 7fc9436..9f5f3d1 100644
+--- a/src/ui/mod.rs
++++ b/src/ui/mod.rs
+@@ -204,6 +204,12 @@ impl Label {
+ }
+ 
+ impl Widget for Label {
++    fn accessibility_role(&self) -> Option<crate::accessibility::AccessibilityRole> {
++        Some(crate::accessibility::AccessibilityRole::Text)
++    }
++    fn accessibility_name(&self) -> Option<String> {
++        Some(self.text.resolve().into_owned())
++    }
+     fn measure(&self, avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
+         // 绑了信号时这里现取当前值——文案变化因此**自然改变测量宽度**，无需控件自己
+         // 比对版本号：写信号已经把本帧顶成整窗帧（见 `Signal` 的失效通道），而整窗帧
+@@ -428,6 +434,12 @@ impl Button {
+ }
+ 
+ impl Widget for Button {
++    fn accessibility_role(&self) -> Option<crate::accessibility::AccessibilityRole> {
++        Some(crate::accessibility::AccessibilityRole::Button)
++    }
++    fn accessibility_name(&self) -> Option<String> {
++        Some(self.label.resolve().into_owned())
++    }
+     fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
+         // 绑了信号的按钮在这里现取当前文案，故换字必然改变按钮宽度——点击已把本帧
+         // 顶成整窗帧（`DamageReq::Layout`），整窗帧必先 layout_root 重新 measure。

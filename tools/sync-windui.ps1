@@ -122,15 +122,21 @@ try {
   }
 
   # The vendored tree carries the two temporary Windows compatibility fixes for
-  # upstream issue #17. The failure was discovered on i686, but the source
-  # patches are intentionally architecture-neutral. Check and apply them
-  # against the clean official checkout before copying anything into the
-  # repository. If an upstream commit contains either fix, the check must fail
-  # loudly so the queue can be reviewed and removed deliberately instead of
-  # being silently skipped.
+  # upstream issue #17, plus one catch-up patch that captures this repository's
+  # own product delta (accessibility surface and its smoke). The failure was
+  # discovered on i686, but the source patches are intentionally
+  # architecture-neutral. Check and apply them against the clean official
+  # checkout before copying anything into the repository. If an upstream commit
+  # contains either fix, the check must fail loudly so the queue can be reviewed
+  # and removed deliberately instead of being silently skipped.
+  #
+  # `windui-local-product-delta.patch` is generated from
+  # `<pinned commit> + the two patches above` to this repository's vendored
+  # state, so it must stay LAST: it is a delta against that exact baseline.
   $patches = @(
     (Join-Path $patchDir 'win32-window-user-data.patch'),
-    (Join-Path $patchDir 'win32-tray-unaligned.patch')
+    (Join-Path $patchDir 'win32-tray-unaligned.patch'),
+    (Join-Path $patchDir 'windui-local-product-delta.patch')
   )
   foreach ($patch in $patches) {
     if (-not (Test-Path -LiteralPath $patch -PathType Leaf)) {
