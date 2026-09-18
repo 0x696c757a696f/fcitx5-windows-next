@@ -204,6 +204,12 @@ impl Label {
 }
 
 impl Widget for Label {
+    fn accessibility_role(&self) -> Option<crate::accessibility::AccessibilityRole> {
+        Some(crate::accessibility::AccessibilityRole::Text)
+    }
+    fn accessibility_name(&self) -> Option<String> {
+        Some(self.text.resolve().into_owned())
+    }
     fn measure(&self, avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         // 绑了信号时这里现取当前值——文案变化因此**自然改变测量宽度**，无需控件自己
         // 比对版本号：写信号已经把本帧顶成整窗帧（见 `Signal` 的失效通道），而整窗帧
@@ -428,6 +434,12 @@ impl Button {
 }
 
 impl Widget for Button {
+    fn accessibility_role(&self) -> Option<crate::accessibility::AccessibilityRole> {
+        Some(crate::accessibility::AccessibilityRole::Button)
+    }
+    fn accessibility_name(&self) -> Option<String> {
+        Some(self.label.resolve().into_owned())
+    }
     fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         // 绑了信号的按钮在这里现取当前文案，故换字必然改变按钮宽度——点击已把本帧
         // 顶成整窗帧（`DamageReq::Layout`），整窗帧必先 layout_root 重新 measure。
