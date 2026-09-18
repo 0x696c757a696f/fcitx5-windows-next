@@ -128,29 +128,68 @@ const CONTROL_PACKAGE_TYPE_INPUT_METHOD_DATA: u32 = 2;
 const CONTROL_PACKAGE_TYPE_THEME: u32 = 3;
 const CONTROL_PACKAGE_TYPE_TRANSLATION: u32 = 4;
 const LANG_CHINESE: u16 = 0x04;
-const CONFIG_LOCALE_EN_US_FILE: &[u16] = &[
-    b'e' as u16,
-    b'n' as u16,
-    b'-' as u16,
-    b'U' as u16,
-    b'S' as u16,
-    b'.' as u16,
-    b'j' as u16,
-    b's' as u16,
-    b'o' as u16,
-    b'n' as u16,
-];
-const CONFIG_LOCALE_ZH_CN_FILE: &[u16] = &[
-    b'z' as u16,
-    b'h' as u16,
-    b'-' as u16,
-    b'C' as u16,
-    b'N' as u16,
-    b'.' as u16,
-    b'j' as u16,
-    b's' as u16,
-    b'o' as u16,
-    b'n' as u16,
+const LANG_JAPANESE: u16 = 0x11;
+const LANG_KOREAN: u16 = 0x12;
+const LANG_THAI: u16 = 0x1e;
+const LANG_VIETNAMESE: u16 = 0x2a;
+const LANG_SINHALA: u16 = 0x5b;
+const SUBLANG_CHINESE_TRADITIONAL: u16 = 0x01;
+const SUBLANG_CHINESE_SIMPLIFIED: u16 = 0x02;
+const SUBLANG_CHINESE_HONG_KONG: u16 = 0x03;
+const SUBLANG_CHINESE_SINGAPORE: u16 = 0x04;
+const SUBLANG_CHINESE_MACAO: u16 = 0x05;
+
+const fn ascii_wide<const N: usize>(value: &[u8; N]) -> [u16; N] {
+    let mut result = [0; N];
+    let mut index = 0;
+    while index < N {
+        result[index] = value[index] as u16;
+        index += 1;
+    }
+    result
+}
+
+const CONFIG_LOCALE_EN_US_FILE: &[u16] = &ascii_wide(b"en-US.json");
+const CONFIG_LOCALE_ZH_CN_FILE: &[u16] = &ascii_wide(b"zh-CN.json");
+const CONFIG_LOCALE_ZH_TW_FILE: &[u16] = &ascii_wide(b"zh-TW.json");
+const CONFIG_LOCALE_JA_JP_FILE: &[u16] = &ascii_wide(b"ja-JP.json");
+const CONFIG_LOCALE_KO_KR_FILE: &[u16] = &ascii_wide(b"ko-KR.json");
+const CONFIG_LOCALE_VI_VN_FILE: &[u16] = &ascii_wide(b"vi-VN.json");
+const CONFIG_LOCALE_TH_TH_FILE: &[u16] = &ascii_wide(b"th-TH.json");
+const CONFIG_LOCALE_SI_LK_FILE: &[u16] = &ascii_wide(b"si-LK.json");
+const CONFIG_LOCALE_FILES: &[(&str, &[u16])] = &[
+    (
+        fcitx5_config_core::UI_LANGUAGE_EN_US,
+        CONFIG_LOCALE_EN_US_FILE,
+    ),
+    (
+        fcitx5_config_core::UI_LANGUAGE_ZH_CN,
+        CONFIG_LOCALE_ZH_CN_FILE,
+    ),
+    (
+        fcitx5_config_core::UI_LANGUAGE_ZH_TW,
+        CONFIG_LOCALE_ZH_TW_FILE,
+    ),
+    (
+        fcitx5_config_core::UI_LANGUAGE_JA_JP,
+        CONFIG_LOCALE_JA_JP_FILE,
+    ),
+    (
+        fcitx5_config_core::UI_LANGUAGE_KO_KR,
+        CONFIG_LOCALE_KO_KR_FILE,
+    ),
+    (
+        fcitx5_config_core::UI_LANGUAGE_VI_VN,
+        CONFIG_LOCALE_VI_VN_FILE,
+    ),
+    (
+        fcitx5_config_core::UI_LANGUAGE_TH_TH,
+        CONFIG_LOCALE_TH_TH_FILE,
+    ),
+    (
+        fcitx5_config_core::UI_LANGUAGE_SI_LK,
+        CONFIG_LOCALE_SI_LK_FILE,
+    ),
 ];
 const CONTROL_ENGINE_ACTION_UNKNOWN: u32 = 0;
 const CONTROL_ENGINE_ACTION_GET_INPUT_METHODS: u32 = 1;
@@ -1295,26 +1334,45 @@ fn primary_lang_id(language: u16) -> u16 {
     language & 0x03ff
 }
 
-fn user_default_ui_language_prefers_chinese() -> bool {
+fn sub_lang_id(language: u16) -> u16 {
+    language >> 10
+}
+
+fn config_locale_file_for_system_language(language: u16) -> &'static [u16] {
+    match primary_lang_id(language) {
+        LANG_CHINESE => match sub_lang_id(language) {
+            SUBLANG_CHINESE_SIMPLIFIED | SUBLANG_CHINESE_SINGAPORE => CONFIG_LOCALE_ZH_CN_FILE,
+            SUBLANG_CHINESE_TRADITIONAL | SUBLANG_CHINESE_HONG_KONG | SUBLANG_CHINESE_MACAO => {
+                CONFIG_LOCALE_ZH_TW_FILE
+            }
+            _ => CONFIG_LOCALE_EN_US_FILE,
+        },
+        LANG_JAPANESE => CONFIG_LOCALE_JA_JP_FILE,
+        LANG_KOREAN => CONFIG_LOCALE_KO_KR_FILE,
+        LANG_VIETNAMESE => CONFIG_LOCALE_VI_VN_FILE,
+        LANG_THAI => CONFIG_LOCALE_TH_TH_FILE,
+        LANG_SINHALA => CONFIG_LOCALE_SI_LK_FILE,
+        _ => CONFIG_LOCALE_EN_US_FILE,
+    }
+}
+
+fn user_default_ui_language_locale_file() -> &'static [u16] {
     // SAFETY: GetUserDefaultUILanguage has no pointer, ownership, or lifetime preconditions.
-    primary_lang_id(unsafe { GetUserDefaultUILanguage() }) == LANG_CHINESE
+    config_locale_file_for_system_language(unsafe { GetUserDefaultUILanguage() })
 }
 
 fn config_locale_file_for_override(override_locale: &[u16]) -> Option<&'static [u16]> {
-    if override_locale.is_empty() || utf16_eq_ascii(override_locale, b"system") {
-        return Some(if user_default_ui_language_prefers_chinese() {
-            CONFIG_LOCALE_ZH_CN_FILE
-        } else {
-            CONFIG_LOCALE_EN_US_FILE
-        });
+    if override_locale.is_empty()
+        || utf16_eq_ascii(
+            override_locale,
+            fcitx5_config_core::UI_LANGUAGE_SYSTEM.as_bytes(),
+        )
+    {
+        return Some(user_default_ui_language_locale_file());
     }
-    if utf16_eq_ascii(override_locale, b"zh-CN") {
-        return Some(CONFIG_LOCALE_ZH_CN_FILE);
-    }
-    if utf16_eq_ascii(override_locale, b"en-US") {
-        return Some(CONFIG_LOCALE_EN_US_FILE);
-    }
-    None
+    CONFIG_LOCALE_FILES.iter().find_map(|(locale, file)| {
+        utf16_eq_ascii(override_locale, locale.as_bytes()).then_some(*file)
+    })
 }
 
 fn guid_suffix() -> Option<OsString> {
@@ -5142,19 +5200,135 @@ mod tests {
 
     #[test]
     fn config_locale_file_selection_matches_cpp_contract() {
-        assert_eq!(
-            config_locale_file_for_override(&wide("zh-CN")).expect("zh locale"),
-            CONFIG_LOCALE_ZH_CN_FILE
-        );
-        assert_eq!(
-            config_locale_file_for_override(&wide("en-US")).expect("en locale"),
-            CONFIG_LOCALE_EN_US_FILE
-        );
+        for &(locale, expected_file) in CONFIG_LOCALE_FILES {
+            assert_eq!(
+                config_locale_file_for_override(&wide(locale)).expect("canonical locale"),
+                expected_file,
+                "{locale} should select its canonical locale file"
+            );
+        }
         assert!(config_locale_file_for_override(&wide("fr-FR")).is_none());
         assert!(matches!(
             config_locale_file_for_override(&wide("system")),
-            Some(CONFIG_LOCALE_EN_US_FILE) | Some(CONFIG_LOCALE_ZH_CN_FILE)
+            Some(CONFIG_LOCALE_EN_US_FILE)
+                | Some(CONFIG_LOCALE_ZH_CN_FILE)
+                | Some(CONFIG_LOCALE_ZH_TW_FILE)
+                | Some(CONFIG_LOCALE_JA_JP_FILE)
+                | Some(CONFIG_LOCALE_KO_KR_FILE)
+                | Some(CONFIG_LOCALE_VI_VN_FILE)
+                | Some(CONFIG_LOCALE_TH_TH_FILE)
+                | Some(CONFIG_LOCALE_SI_LK_FILE)
         ));
+    }
+
+    #[test]
+    fn system_locale_mapping_covers_phase_a_languages_and_falls_back_to_english() {
+        let cases = [
+            (0x0804, CONFIG_LOCALE_ZH_CN_FILE),
+            (0x1004, CONFIG_LOCALE_ZH_CN_FILE),
+            (0x0404, CONFIG_LOCALE_ZH_TW_FILE),
+            (0x0c04, CONFIG_LOCALE_ZH_TW_FILE),
+            (0x1404, CONFIG_LOCALE_ZH_TW_FILE),
+            (0x0411, CONFIG_LOCALE_JA_JP_FILE),
+            (0x0412, CONFIG_LOCALE_KO_KR_FILE),
+            (0x042a, CONFIG_LOCALE_VI_VN_FILE),
+            (0x041e, CONFIG_LOCALE_TH_TH_FILE),
+            (0x045b, CONFIG_LOCALE_SI_LK_FILE),
+        ];
+        for (language, expected_file) in cases {
+            assert_eq!(
+                config_locale_file_for_system_language(language),
+                expected_file,
+                "Windows LANGID {language:#06x} should select its canonical locale file"
+            );
+        }
+        assert_eq!(
+            config_locale_file_for_system_language(0x040c),
+            CONFIG_LOCALE_EN_US_FILE
+        );
+        assert_eq!(
+            config_locale_file_for_system_language(LANG_CHINESE),
+            CONFIG_LOCALE_EN_US_FILE
+        );
+    }
+
+    #[test]
+    fn phase_a_locale_resources_are_utf8_complete_and_nonempty() {
+        fn entries(bytes: &[u8]) -> std::collections::BTreeMap<&str, &str> {
+            let document = std::str::from_utf8(bytes).expect("locale resource must be UTF-8");
+            let mut lines = document.lines();
+            assert_eq!(lines.next().map(str::trim), Some("{"));
+            let mut result = std::collections::BTreeMap::new();
+            let mut closed = false;
+            for line in lines {
+                let line = line.trim();
+                if line == "}" {
+                    closed = true;
+                    break;
+                }
+                let line = line.strip_prefix(',').unwrap_or(line);
+                let line = line.strip_suffix(',').unwrap_or(line);
+                let (key, value) = line.split_once(':').expect("flat locale entry");
+                let key = key
+                    .trim()
+                    .strip_prefix('"')
+                    .and_then(|key| key.strip_suffix('"'))
+                    .expect("quoted locale key");
+                let value = value.trim();
+                assert!(!value.is_empty(), "{key} must have a value");
+                if key == "format_version" {
+                    assert_eq!(value, "1");
+                } else {
+                    assert!(value.starts_with('"') && value.ends_with('"'));
+                    assert!(
+                        !value[1..value.len() - 1].trim().is_empty(),
+                        "{key} is blank"
+                    );
+                }
+                assert!(result.insert(key, value).is_none(), "duplicate key: {key}");
+            }
+            assert!(closed, "locale resource must close its JSON object");
+            result
+        }
+
+        let canonical = entries(include_bytes!("../../../locales/en-US.json"));
+        for (locale, bytes) in [
+            (
+                "zh-CN",
+                include_bytes!("../../../locales/zh-CN.json") as &[u8],
+            ),
+            (
+                "zh-TW",
+                include_bytes!("../../../locales/zh-TW.json") as &[u8],
+            ),
+            (
+                "ja-JP",
+                include_bytes!("../../../locales/ja-JP.json") as &[u8],
+            ),
+            (
+                "ko-KR",
+                include_bytes!("../../../locales/ko-KR.json") as &[u8],
+            ),
+            (
+                "vi-VN",
+                include_bytes!("../../../locales/vi-VN.json") as &[u8],
+            ),
+            (
+                "th-TH",
+                include_bytes!("../../../locales/th-TH.json") as &[u8],
+            ),
+            (
+                "si-LK",
+                include_bytes!("../../../locales/si-LK.json") as &[u8],
+            ),
+        ] {
+            let translated = entries(bytes);
+            assert_eq!(
+                translated.keys().collect::<Vec<_>>(),
+                canonical.keys().collect::<Vec<_>>(),
+                "{locale} keys must match en-US"
+            );
+        }
     }
 
     #[test]

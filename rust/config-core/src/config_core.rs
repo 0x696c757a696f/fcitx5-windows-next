@@ -20,6 +20,38 @@ const BUILTIN_THEME_METADATA_ID: &str = "builtin.default";
 const COMPILED_DEFAULTS: &str = include_str!("../../../resources/config.toml");
 static STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Uses the Windows display language.
+pub const UI_LANGUAGE_SYSTEM: &str = "system";
+/// Uses the English (United States) UI locale.
+pub const UI_LANGUAGE_EN_US: &str = "en-US";
+/// Uses the Simplified Chinese UI locale.
+pub const UI_LANGUAGE_ZH_CN: &str = "zh-CN";
+/// Uses the Traditional Chinese UI locale.
+pub const UI_LANGUAGE_ZH_TW: &str = "zh-TW";
+/// Uses the Japanese UI locale.
+pub const UI_LANGUAGE_JA_JP: &str = "ja-JP";
+/// Uses the Korean UI locale.
+pub const UI_LANGUAGE_KO_KR: &str = "ko-KR";
+/// Uses the Vietnamese UI locale.
+pub const UI_LANGUAGE_VI_VN: &str = "vi-VN";
+/// Uses the Thai UI locale.
+pub const UI_LANGUAGE_TH_TH: &str = "th-TH";
+/// Uses the Sinhala (Sri Lanka) UI locale.
+pub const UI_LANGUAGE_SI_LK: &str = "si-LK";
+
+/// Canonical UI language values accepted by Config Core.
+pub const UI_LANGUAGE_VALUES: &[&str] = &[
+    UI_LANGUAGE_SYSTEM,
+    UI_LANGUAGE_EN_US,
+    UI_LANGUAGE_ZH_CN,
+    UI_LANGUAGE_ZH_TW,
+    UI_LANGUAGE_JA_JP,
+    UI_LANGUAGE_KO_KR,
+    UI_LANGUAGE_VI_VN,
+    UI_LANGUAGE_TH_TH,
+    UI_LANGUAGE_SI_LK,
+];
+
 /// A typed, fully resolved configuration snapshot suitable for rendering.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2426,11 +2458,7 @@ fn validate_snapshot(snapshot: &ConfigSnapshot) -> Result<(), ConfigError> {
     if snapshot.format_version != CONFIG_FORMAT_VERSION {
         return invalid("format_version must be 1");
     }
-    validate_one_of(
-        "ui.language",
-        &snapshot.ui.language,
-        &["system", "en-US", "zh-CN"],
-    )?;
+    validate_one_of("ui.language", &snapshot.ui.language, UI_LANGUAGE_VALUES)?;
     validate_one_of(
         "appearance.mode",
         &snapshot.appearance.mode,
