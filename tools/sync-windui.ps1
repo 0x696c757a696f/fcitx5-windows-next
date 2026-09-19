@@ -149,8 +149,6 @@ try {
       Invoke-Checked -FilePath 'git.exe' -Arguments @(
         '-C', $cloneDir, 'apply', '--check', '--whitespace=nowarn', $patch
       ) -Name "git apply --check $([System.IO.Path]::GetFileName($patch))"
-    }
-    foreach ($patch in $patches) {
       Invoke-Checked -FilePath 'git.exe' -Arguments @(
         '-C', $cloneDir, 'apply', '--whitespace=nowarn', $patch
       ) -Name "git apply $([System.IO.Path]::GetFileName($patch))"
