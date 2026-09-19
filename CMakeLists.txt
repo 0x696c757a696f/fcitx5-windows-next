@@ -1080,6 +1080,19 @@ if(BUILD_TESTING)
       --candidate-ui-exe "${FCITX_UI_EXE}" --out
       "${CMAKE_CURRENT_BINARY_DIR}/rust-config-ui-preview-qa")
   set_tests_properties(rust-config-ui-preview-qa PROPERTIES TIMEOUT 60)
+  foreach(FCITX_UIA_LOCALE en-US ja-JP ko-KR si-LK th-TH vi-VN zh-CN zh-TW)
+    add_test(
+      NAME settings-uia-real-hwnd-${FCITX_UIA_LOCALE}
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-qa --target
+        "${FCITX_RUST_TARGET}" -- --uia-smoke --config-exe
+        "${FCITX_CONFIG_SHIPPING_EXE}" --locale ${FCITX_UIA_LOCALE} --report
+        "${CMAKE_CURRENT_BINARY_DIR}/settings-uia-real-hwnd-${FCITX_UIA_LOCALE}.json")
+    set_tests_properties(settings-uia-real-hwnd-${FCITX_UIA_LOCALE} PROPERTIES
+                         LABELS "interactive-uia" SKIP_RETURN_CODE 77 TIMEOUT 120)
+  endforeach()
   add_test(
     NAME rust-config-poc-contract
     COMMAND
