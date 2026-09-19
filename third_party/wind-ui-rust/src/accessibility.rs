@@ -100,7 +100,7 @@ impl Tree {
         action: AccessibilityAction,
     ) -> AccessibilityActionResult {
         let node_id = id.node_id();
-        let Some(node) = self.get(node_id) else {
+        let Some(_node) = self.get(node_id) else {
             return AccessibilityActionResult::NodeUnavailable;
         };
         if !self.accessibility_visible(node_id) {
@@ -118,7 +118,11 @@ impl Tree {
                 }
             }
             AccessibilityAction::Invoke => {
-                if node.widget.accessibility_role() == Some(AccessibilityRole::Button) {
+                if self
+                    .accessibility_snapshot()
+                    .node(id)
+                    .is_some_and(|node| node.supported_actions.contains(&AccessibilityAction::Invoke))
+                {
                     AccessibilityActionResult::Performed
                 } else {
                     AccessibilityActionResult::UnsupportedAction
@@ -141,20 +145,34 @@ impl Tree {
         }
         match action {
             AccessibilityAction::SetFocus => (result, DispatchResult::default()),
-            AccessibilityAction::Invoke => (
-                result,
-                self.dispatch_key(
-                    KeyEvent {
-                        key: Key::Enter,
-                        pressed: true,
-                        shift: false,
-                        ctrl: false,
-                        alt: false,
-                        meta: false,
-                    },
-                    Some(id.node_id()),
-                ),
-            ),
+            AccessibilityAction::Invoke => {
+                let mut target = id.node_id();
+                let mut current = Some(id.node_id());
+                while let Some(node_id) = current {
+                    if self.get(node_id).is_some_and(|node| {
+                        node.widget.accessibility_invokable()
+                            || node.widget.accessibility_role() == Some(AccessibilityRole::Button)
+                    }) {
+                        target = node_id;
+                        break;
+                    }
+                    current = self.get(node_id).and_then(|node| node.parent);
+                }
+                (
+                    result,
+                    self.dispatch_key(
+                        KeyEvent {
+                            key: Key::Enter,
+                            pressed: true,
+                            shift: false,
+                            ctrl: false,
+                            alt: false,
+                            meta: false,
+                        },
+                        Some(target),
+                    ),
+                )
+            }
         }
     }
 
@@ -214,6 +232,7 @@ impl Tree {
                 root_id,
                 true,
                 root_node.own_enabled(),
+                false,
                 &mut snapshot,
             );
         }
@@ -226,6 +245,7 @@ impl Tree {
         semantic_parent: AccessibilityNodeId,
         parent_visible: bool,
         parent_enabled: bool,
+        parent_invokable: bool,
         snapshot: &mut AccessibilitySnapshot,
     ) {
         let Some(node) = self.get(id) else {
@@ -236,6 +256,7 @@ impl Tree {
             return;
         }
         let enabled = parent_enabled && node.own_enabled();
+        let invokable = parent_invokable || node.widget.accessibility_invokable();
         let semantic_role = node.widget.accessibility_role();
         let next_parent = if let Some(role) = semantic_role {
             let focusable = node.focusable.unwrap_or_else(|| node.widget.focusable());
@@ -243,7 +264,7 @@ impl Tree {
             if focusable {
                 actions.push(AccessibilityAction::SetFocus);
             }
-            if role == AccessibilityRole::Button {
+            if role == AccessibilityRole::Button || invokable {
                 actions.push(AccessibilityAction::Invoke);
             }
             let id = AccessibilityNodeId::from_node_id(id);
@@ -273,7 +294,7 @@ impl Tree {
         };
 
         for &child in &node.children {
-            self.collect_accessibility(child, next_parent, visible, enabled, snapshot);
+            self.collect_accessibility(child, next_parent, visible, enabled, invokable, snapshot);
         }
     }
 }
@@ -287,6 +308,35 @@ impl AccessibilitySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clickable_control_projects_invoke_without_button_role() {
+        let mut tree = Tree::new();
+        let root_id = Element::col()
+            .child(
+                Element::row()
+                    .clickable()
+                    .on_click(|_| {})
+                    .child(Element::label("外观")),
+            )
+            .build(&mut tree);
+        tree.root = Some(root_id);
+        let mut text = NullTextEngine;
+        tree.layout_root(Size::new(300, 180), &mut text);
+        let snapshot = tree.accessibility_snapshot();
+        let label = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "外观")
+            .expect("nav label node must be projected");
+        assert_eq!(label.role, AccessibilityRole::Text);
+        assert!(
+            label
+                .supported_actions
+                .contains(&AccessibilityAction::Invoke),
+            "a clickable control must project Invoke regardless of its role"
+        );
+    }
     use crate::geometry::Size;
     use crate::signal::signal;
     use crate::text::{LineAwareTextEngine, NullTextEngine};

@@ -36,9 +36,11 @@ const DYNAMIC_AFTER: &str = "Invoked 1";
 #[cfg(windows)]
 const BUTTON_NAME: &str = "Invoke me";
 #[cfg(windows)]
+const CLICKABLE_ROW_NAME: &str = "Clickable row";
+#[cfg(windows)]
 const HIDDEN_NAME: &str = "Hidden button";
 
-/// 宿主：一个普通 WindUI 窗口，内容固定。Button 的回调只把动态标签改成 `Invoked 1`。
+/// 宿主：一个普通 WindUI 窗口，内容固定。可点击行的回调把动态标签改成 `Invoked 1`。
 #[cfg(windows)]
 fn run_host() -> Result<(), String> {
     use windui::prelude::*;
@@ -73,6 +75,14 @@ fn run_host() -> Result<(), String> {
                 .width_match()
                 .height(40)
                 .spacing(12)
+                .child(
+                    Element::row()
+                        .width(180)
+                        .height(40)
+                        .clickable()
+                        .on_click(move |_| invoked.set(true))
+                        .child(Element::label(CLICKABLE_ROW_NAME)),
+                )
                 .child(Element::button(BUTTON_NAME).on_click(move |_| invoked.set(true)))
                 .child(Element::button(HIDDEN_NAME).visible(false)),
         );
@@ -83,18 +93,15 @@ fn run_host() -> Result<(), String> {
 
 #[cfg(windows)]
 fn run_client() -> Result<(), String> {
-    use std::time::{Duration, Instant};
-    use windows::core::w;
-    use windows::Win32::Foundation::HWND;
+    use std::time::Duration;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
-        TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_InvokePatternId, UIA_TextControlTypeId,
-        UIA_WindowControlTypeId,
+        UIA_ButtonControlTypeId, UIA_E_ELEMENTNOTAVAILABLE, UIA_InvokePatternId,
+        UIA_TextControlTypeId, UIA_WindowControlTypeId,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
 
     // SAFETY: the COM apartment is initialized for this thread before any UIA object is created;
     // RPC_E_CHANGED_MODE only means another apartment mode is already active, which is harmless.
@@ -105,8 +112,6 @@ fn run_client() -> Result<(), String> {
         .arg("--host")
         .spawn()
         .map_err(|error| format!("host spawn failed: {error}"))?;
-    let host_pid = host.id();
-
     let outcome = (|| -> Result<(), String> {
         let hwnd = wait_for_host_window(&mut host)?;
         // SAFETY: CUIAutomation is a documented in-proc coclass and the apartment is initialized.
@@ -127,6 +132,7 @@ fn run_client() -> Result<(), String> {
         let elements = descendants(&automation, &root)?;
         let mut names = Vec::new();
         let mut button: Option<IUIAutomationElement> = None;
+        let mut clickable_row: Option<IUIAutomationElement> = None;
         let mut saw_static = false;
         let mut saw_dynamic = false;
         for element in &elements {
@@ -145,6 +151,9 @@ fn run_client() -> Result<(), String> {
             if kind == UIA_ButtonControlTypeId.0 && name == BUTTON_NAME {
                 button = Some(element.clone());
             }
+            if kind == UIA_TextControlTypeId.0 && name == CLICKABLE_ROW_NAME {
+                clickable_row = Some(element.clone());
+            }
         }
         if !saw_static {
             return Err(format!("static label missing; saw {names:?}"));
@@ -153,6 +162,8 @@ fn run_client() -> Result<(), String> {
             return Err(format!("initial dynamic label missing; saw {names:?}"));
         }
         let button = button.ok_or_else(|| format!("invoke button missing; saw {names:?}"))?;
+        let clickable_row = clickable_row
+            .ok_or_else(|| format!("clickable row missing; saw {names:?}"))?;
 
         // (3) Button properties.
         // SAFETY: provider elements are only queried while the host window is alive.
@@ -169,18 +180,21 @@ fn run_client() -> Result<(), String> {
             return Err("invoke button reported not keyboard focusable".to_owned());
         }
 
-        // (4) BoundingRectangle is inside the real window rectangle (physical screen pixels).
+        // (4) BoundingRectangle is a UIA VT_ARRAY|VT_R8 four-double rect, exposed by
+        // CurrentBoundingRectangle as physical screen pixels inside the real window rectangle.
         let window_rect = window_rect(hwnd)?;
         // SAFETY: same as above.
-        let bounds = unsafe { button.CurrentBoundingRectangle() }
+        let bounds = unsafe { clickable_row.CurrentBoundingRectangle() }
             .map_err(|error| format!("CurrentBoundingRectangle failed: {error}"))?;
-        if bounds.left < window_rect.left
+        if bounds.left >= bounds.right
+            || bounds.top >= bounds.bottom
+            || bounds.left < window_rect.left
             || bounds.top < window_rect.top
             || bounds.right > window_rect.right
             || bounds.bottom > window_rect.bottom
         {
             return Err(format!(
-                "button bounds {bounds:?} escaped window rect {window_rect:?}"
+                "clickable row bounds {bounds:?} escaped/invalid in window rect {window_rect:?}"
             ));
         }
 
@@ -195,15 +209,19 @@ fn run_client() -> Result<(), String> {
         })
         .map_err(|_| "HasKeyboardFocus stayed false after SetFocus".to_owned())?;
 
-        // (6) Invoke through the real UIA pattern, then observe the dynamic label change.
-        // SAFETY: the pattern id is the documented Invoke pattern.
-        let pattern: IUIAutomationInvokePattern = unsafe {
-            button
-                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+        // (6) Non-Button semantic Invoke: row exposes a non-null pattern and one callback-driven
+        // state change from `Invoked 0` to `Invoked 1`.
+        if current_control_type(&clickable_row)? == UIA_ButtonControlTypeId.0 {
+            return Err("clickable row unexpectedly projected as Button".to_owned());
         }
-        .map_err(|error| format!("InvokePattern unavailable: {error}"))?;
+        // SAFETY: the pattern id is the documented Invoke pattern.
+        let row_pattern: IUIAutomationInvokePattern = unsafe {
+            clickable_row.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+        }
+        .map_err(|error| format!("clickable row InvokePattern unavailable: {error}"))?;
         // SAFETY: the pattern was obtained from a live provider element.
-        unsafe { pattern.Invoke() }.map_err(|error| format!("Invoke failed: {error}"))?;
+        unsafe { row_pattern.Invoke() }
+            .map_err(|error| format!("clickable row Invoke failed: {error}"))?;
         poll_until(Duration::from_secs(5), || {
             let Ok(elements) = descendants(&automation, &root) else {
                 return false;
@@ -214,20 +232,35 @@ fn run_client() -> Result<(), String> {
             })
         })
         .map_err(|_| format!("dynamic label never became {DYNAMIC_AFTER}"))?;
+
+        // (7) Existing Button invoke path still works.
+        // SAFETY: the pattern id is the documented Invoke pattern.
+        let button_pattern: IUIAutomationInvokePattern = unsafe {
+            button.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+        }
+        .map_err(|error| format!("button InvokePattern unavailable: {error}"))?;
+        // SAFETY: the pattern was obtained from a live provider element.
+        unsafe { button_pattern.Invoke() }
+            .map_err(|error| format!("button Invoke failed: {error}"))?;
         println!(
-            "uia_smoke OK: root=Window, {} descendant(s) [{}], Invoke produced {DYNAMIC_AFTER}",
+            "uia_smoke OK: root=Window, {} descendant(s) [{}], row Invoke produced {DYNAMIC_AFTER}, button Invoke OK",
             names.len(),
             names.join(" | ")
         );
 
-        // (7) After the host dies, held elements must fail as unavailable, not hang or crash.
+        // (8) After the host dies, held elements must fail as unavailable, not hang or crash.
         let _ = host.kill();
         let _ = host.wait();
         std::thread::sleep(Duration::from_millis(500));
         // SAFETY: intentionally querying a stale element; a failure here is the expected outcome.
         let stale = unsafe { button.CurrentName() };
         match stale {
-            Err(error) => println!("stale element reported: {error}"),
+            Err(error) if error.code().0 as u32 == UIA_E_ELEMENTNOTAVAILABLE => {
+                println!("stale element reported: {error}")
+            }
+            Err(error) => {
+                return Err(format!("stale element returned unexpected HRESULT: {error}"))
+            }
             Ok(name) => {
                 return Err(format!(
                     "stale element still answered with {:?}",

@@ -560,6 +560,10 @@ impl Widget for Clickable {
     fn focusable(&self) -> bool {
         true
     }
+    /// 可点击容器具备语义激活能力：UIA 的 Invoke pattern 据此暴露，与角色类型无关。
+    fn accessibility_invokable(&self) -> bool {
+        true
+    }
     fn take_click(&mut self, f: ClickFn) {
         self.on_click = Some(f);
     }
