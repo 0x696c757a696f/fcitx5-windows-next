@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
 use windows::Win32::System::Variant::{
-    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BSTR, VT_BOOL, VT_I4,
+    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_ARRAY, VT_BSTR, VT_BOOL, VT_I4, VT_R8,
 };
 use windows::Win32::UI::Accessibility::{
     IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
@@ -23,7 +23,8 @@ use windows::Win32::UI::Accessibility::{
     IRawElementProviderFragment_Impl, IRawElementProviderSimple, IRawElementProviderSimple_Impl,
     NavigateDirection, NavigateDirection_FirstChild, NavigateDirection_LastChild,
     NavigateDirection_NextSibling, NavigateDirection_PreviousSibling, NavigateDirection_Parent,
-    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ButtonControlTypeId,
+    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_BoundingRectanglePropertyId,
+    UIA_ButtonControlTypeId,
     UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED,
     UIA_E_NOTSUPPORTED, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
     UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId,
@@ -283,6 +284,43 @@ fn i32_variant(value: i32) -> VARIANT {
     }
 }
 
+/// Build the UIA-required `VT_ARRAY | VT_R8` VARIANT holding `[left, top, width, height]`.
+///
+/// The geometry comes from the same authority as
+/// [`IRawElementProviderFragment::BoundingRectangle`]; this only re-packages it. Ownership of the
+/// SAFEARRAY transfers to UIA together with the returned VARIANT.
+fn double_array_variant(rect: &UiaRect) -> Result<VARIANT> {
+    let values = [rect.left, rect.top, rect.width, rect.height];
+    // SAFETY: SafeArrayCreateVector allocates a COM-owned VT_R8 vector of the requested length;
+    // every put below uses an in-range index and a pointer to a live f64.
+    let array = unsafe { SafeArrayCreateVector(VT_R8, 0, values.len() as u32) };
+    if array.is_null() {
+        return Err(Error::from_thread());
+    }
+    for (index, value) in values.iter().enumerate() {
+        let index = index as i32;
+        // SAFETY: `array` was allocated immediately above with `values.len()` elements and is
+        // still owned locally here, so the index is in range and the source is a live f64.
+        let put = unsafe { SafeArrayPutElement(array, &index, (value as *const f64).cast()) };
+        if let Err(error) = put {
+            // SAFETY: `array` is still owned locally (it was never handed to UIA on this path).
+            unsafe { SafeArrayDestroy(array) };
+            return Err(error);
+        }
+    }
+    Ok(VARIANT {
+        Anonymous: VARIANT_0 {
+            Anonymous: ManuallyDrop::new(VARIANT_0_0 {
+                vt: VT_ARRAY | VT_R8,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: VARIANT_0_0_0 { parray: array },
+            }),
+        },
+    })
+}
+
 fn property_value(state: ProviderState, property_id: i32) -> Result<VARIANT> {
     let (_, node) = node_for(state)?;
     let value = match property_id {
@@ -291,6 +329,9 @@ fn property_value(state: ProviderState, property_id: i32) -> Result<VARIANT> {
         id if id == UIA_IsEnabledPropertyId.0 => bool_variant(node.enabled),
         id if id == UIA_IsKeyboardFocusablePropertyId.0 => bool_variant(node.focusable),
         id if id == UIA_HasKeyboardFocusPropertyId.0 => bool_variant(node.focused),
+        id if id == UIA_BoundingRectanglePropertyId.0 => {
+            double_array_variant(&scaled_screen_rect(state, &node)?)?
+        }
         _ => VARIANT::default(),
     };
     Ok(value)
@@ -301,9 +342,10 @@ fn pattern_provider(state: ProviderState, pattern_id: i32) -> Result<IUnknown> {
         return Err(no_element_error());
     }
     let (_, node) = node_for(state)?;
-    if node.role != AccessibilityRole::Button
-        || !node.supported_actions.contains(&AccessibilityAction::Invoke)
-    {
+    // Invoke 的暴露由平台无关语义模型给出的能力决定（`supported_actions` 是否含
+    // `AccessibilityAction::Invoke`），**不由角色类型决定**：语义节点可以是 Text 角色
+    // 同时可被激活。
+    if !node.supported_actions.contains(&AccessibilityAction::Invoke) {
         return Err(no_element_error());
     }
     Ok(InvokeProvider(state).into())
@@ -600,6 +642,37 @@ impl IInvokeProvider_Impl for InvokeProvider_Impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounding_rectangle_property_variant_is_four_element_r8_array() {
+        let rect = UiaRect {
+            left: 10.0,
+            top: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let value = double_array_variant(&rect).expect("rect variant");
+        // SAFETY: the variant owns a VT_ARRAY|VT_R8 vector created by `double_array_variant`,
+        // and every SafeArray access below uses an in-range index on that live vector.
+        unsafe {
+            assert_eq!(value.Anonymous.Anonymous.vt, VT_ARRAY | VT_R8);
+            let array = value.Anonymous.Anonymous.Anonymous.parray;
+            assert!(!array.is_null(), "rect variant must own a SAFEARRAY");
+            let low = windows::Win32::System::Ole::SafeArrayGetLBound(array, 1).expect("lbound");
+            let high = windows::Win32::System::Ole::SafeArrayGetUBound(array, 1).expect("ubound");
+            assert_eq!(high - low + 1, 4, "UIA requires exactly four values");
+            let mut out = [0.0f64; 4];
+            for offset in 0..4 {
+                assert!(windows::Win32::System::Ole::SafeArrayGetElement(
+                    array,
+                    &(low + offset),
+                    (&mut out[offset as usize] as *mut f64).cast()
+                )
+                .is_ok());
+            }
+            assert_eq!(out, [10.0, 20.0, 30.0, 40.0]);
+        }
+    }
     // Only the runtime-id test reads a COM array back, so this import stays out of the library
     // build (where it would be unused).
     use windows::Win32::System::Ole::SafeArrayGetElement;

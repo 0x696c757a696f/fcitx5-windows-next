@@ -308,6 +308,15 @@ pub trait Widget {
     fn text_truncated(&self) -> Option<bool> {
         None
     }
+    /// 本控件是否具备语义上的「激活」能力：由 [`Element::clickable()`] 接入的可点击容器
+    /// 返回 `true`，其余控件保持默认 `false`。
+    ///
+    /// UIA 的 Invoke pattern 只依据这条**能力**与 [`AccessibilityAction::Invoke`] 是否存在
+    /// 来决定，**不由角色类型**（如 `AccessibilityRole::Button`）决定——语义节点可以是
+    /// Text 角色同时可被激活。
+    fn accessibility_invokable(&self) -> bool {
+        false
+    }
     /// 控件自报的悬停提示，**优先于**节点上 `.tooltip(..)` 设的静态文本。
     ///
     /// 给自绘控件用：图表类控件整个是一个节点，提示内容取决于指针落在哪个数据点上

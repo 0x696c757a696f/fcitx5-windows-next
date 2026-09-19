@@ -136,7 +136,8 @@ try {
   $patches = @(
     (Join-Path $patchDir 'win32-window-user-data.patch'),
     (Join-Path $patchDir 'win32-tray-unaligned.patch'),
-    (Join-Path $patchDir 'windui-local-product-delta.patch')
+    (Join-Path $patchDir 'windui-local-product-delta.patch'),
+    (Join-Path $patchDir 'win32-uia-bounds-invoke.patch')
   )
   foreach ($patch in $patches) {
     if (-not (Test-Path -LiteralPath $patch -PathType Leaf)) {
