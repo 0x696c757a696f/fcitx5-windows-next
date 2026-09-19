@@ -166,5 +166,20 @@
   "dialog.trust_failure.body": "ไม่สามารถตรวจสอบลายเซ็นที่เก็บหรือแพ็กเกจได้ การติดตั้งและการอัปเดตจะถูกบล็อกจนกว่าจะมีข้อมูลเมตาที่เชื่อถือได้",
   "dialog.button.ok": "ตกลง",
   "dialog.button.cancel": "ยกเลิก",
-  "dialog.button.continue": "ดำเนินการต่อ"
+  "dialog.button.continue": "ดำเนินการต่อ",
+  "settings.candidate.section": "หน้าต่างคำแนะนำ",
+  "settings.candidate.layout": "เค้าโครง",
+  "settings.candidate.layout.desc": "อัตโนมัติ เรียงตั้ง เรียงนอน เลื่อน หรือข้อความแนวตั้ง",
+  "settings.candidate.layout.automatic": "อัตโนมัติ",
+  "settings.candidate.layout.stacked": "เรียงตั้ง",
+  "settings.candidate.layout.flow": "เรียงนอน",
+  "settings.candidate.layout.scroll": "เลื่อน",
+  "settings.candidate.layout.vertical_text": "ข้อความแนวตั้ง",
+  "settings.candidate.scroll_direction": "ทิศทางการเลื่อน",
+  "settings.candidate.scroll_direction.desc": "ใช้ได้กับเค้าโครงแบบเลื่อนเท่านั้น",
+  "settings.candidate.count": "จำนวนคำแนะนำ",
+  "settings.candidate.count.desc": "จำนวนคำแนะนำสูงสุดต่อหน้า (1-9)",
+  "settings.candidate.vertical_text_columns": "ทิศทางคอลัมน์ข้อความแนวตั้ง",
+  "settings.candidate.vertical_text_columns.desc": "ใช้ได้กับเค้าโครงข้อความแนวตั้งเท่านั้น",
+  "settings.candidate.reset": "รีเซ็ต"
 }

@@ -166,5 +166,20 @@
   "dialog.trust_failure.body": "ගබඩා හෝ පැකේජ අත්සන සත්‍යාපනය කළ නොහැක. විශ්වාසදායක පාරදත්ත ලැබෙන තෙක් ස්ථාපනය සහ යාවත්කාලීන අවහිර කර ඇත.",
   "dialog.button.ok": "හරි",
   "dialog.button.cancel": "අවලංගු කරන්න",
-  "dialog.button.continue": "ඉදිරියට"
+  "dialog.button.continue": "ඉදිරියට",
+  "settings.candidate.section": "අපේක්ෂක කවුළුව",
+  "settings.candidate.layout": "පිරිසැලසුම",
+  "settings.candidate.layout.desc": "ස්වයංක්‍රීය, සිරස් පෙළගැස්ම, තිරස් පෙළගැස්ම, ස්ක්‍රෝල් හෝ සිරස් පෙළ",
+  "settings.candidate.layout.automatic": "ස්වයංක්‍රීය",
+  "settings.candidate.layout.stacked": "සිරස් පෙළගැස්ම",
+  "settings.candidate.layout.flow": "තිරස් පෙළගැස්ම",
+  "settings.candidate.layout.scroll": "ස්ක්‍රෝල්",
+  "settings.candidate.layout.vertical_text": "සිරස් පෙළ",
+  "settings.candidate.scroll_direction": "ස්ක්‍රෝල් දිශාව",
+  "settings.candidate.scroll_direction.desc": "ස්ක්‍රෝල් පිරිසැලසුමට පමණි",
+  "settings.candidate.count": "අපේක්ෂක ගණන",
+  "settings.candidate.count.desc": "එක් පිටුවක උපරිම අපේක්ෂක ගණන (1-9)",
+  "settings.candidate.vertical_text_columns": "සිරස් පෙළ තීරු දිශාව",
+  "settings.candidate.vertical_text_columns.desc": "සිරස් පෙළ පිරිසැලසුමට පමණි",
+  "settings.candidate.reset": "යළි සකසන්න"
 }

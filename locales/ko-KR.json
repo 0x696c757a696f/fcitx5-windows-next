@@ -166,5 +166,20 @@
   "dialog.trust_failure.body": "저장소 또는 패키지 서명을 검증할 수 없습니다. 신뢰할 수 있는 메타데이터를 사용할 수 있을 때까지 설치 및 업데이트가 차단됩니다.",
   "dialog.button.ok": "확인",
   "dialog.button.cancel": "취소",
-  "dialog.button.continue": "계속"
+  "dialog.button.continue": "계속",
+  "settings.candidate.section": "후보 창",
+  "settings.candidate.layout": "레이아웃",
+  "settings.candidate.layout.desc": "자동, 세로 배열, 가로 배열, 스크롤 또는 세로쓰기",
+  "settings.candidate.layout.automatic": "자동",
+  "settings.candidate.layout.stacked": "세로 배열",
+  "settings.candidate.layout.flow": "가로 배열",
+  "settings.candidate.layout.scroll": "스크롤",
+  "settings.candidate.layout.vertical_text": "세로쓰기",
+  "settings.candidate.scroll_direction": "스크롤 방향",
+  "settings.candidate.scroll_direction.desc": "스크롤 레이아웃에서만 선택할 수 있습니다",
+  "settings.candidate.count": "후보 개수",
+  "settings.candidate.count.desc": "페이지당 최대 후보 수(1-9)",
+  "settings.candidate.vertical_text_columns": "세로쓰기 열 방향",
+  "settings.candidate.vertical_text_columns.desc": "세로쓰기 레이아웃에서만 선택할 수 있습니다",
+  "settings.candidate.reset": "초기화"
 }

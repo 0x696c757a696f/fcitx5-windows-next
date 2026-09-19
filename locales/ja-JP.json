@@ -166,5 +166,20 @@
   "dialog.trust_failure.body": "リポジトリまたはパッケージの署名を検証できませんでした。信頼済みメタデータが利用可能になるまで、インストールと更新はブロックされます。",
   "dialog.button.ok": "OK",
   "dialog.button.cancel": "キャンセル",
-  "dialog.button.continue": "続行"
+  "dialog.button.continue": "続行",
+  "settings.candidate.section": "候補ウィンドウ",
+  "settings.candidate.layout": "レイアウト",
+  "settings.candidate.layout.desc": "自動、縦並び、横並び、スクロール、縦書き",
+  "settings.candidate.layout.automatic": "自動",
+  "settings.candidate.layout.stacked": "縦並び",
+  "settings.candidate.layout.flow": "横並び",
+  "settings.candidate.layout.scroll": "スクロール",
+  "settings.candidate.layout.vertical_text": "縦書き",
+  "settings.candidate.scroll_direction": "スクロール方向",
+  "settings.candidate.scroll_direction.desc": "スクロールレイアウトのみ選択できます",
+  "settings.candidate.count": "候補数",
+  "settings.candidate.count.desc": "1ページあたりの最大候補数（1〜9）",
+  "settings.candidate.vertical_text_columns": "縦書きの列方向",
+  "settings.candidate.vertical_text_columns.desc": "縦書きレイアウトのみ選択できます",
+  "settings.candidate.reset": "リセット"
 }

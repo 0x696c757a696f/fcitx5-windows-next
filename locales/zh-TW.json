@@ -166,5 +166,20 @@
   "dialog.trust_failure.body": "無法驗證存放庫或套件簽章。在受信任中繼資料可用前，安裝和更新動作會遭封鎖。",
   "dialog.button.ok": "確定",
   "dialog.button.cancel": "取消",
-  "dialog.button.continue": "繼續"
+  "dialog.button.continue": "繼續",
+  "settings.candidate.section": "候選視窗",
+  "settings.candidate.layout": "版面配置",
+  "settings.candidate.layout.desc": "自動、縱排、橫排、捲動或直排文字",
+  "settings.candidate.layout.automatic": "自動",
+  "settings.candidate.layout.stacked": "縱排",
+  "settings.candidate.layout.flow": "橫排",
+  "settings.candidate.layout.scroll": "捲動",
+  "settings.candidate.layout.vertical_text": "直排文字",
+  "settings.candidate.scroll_direction": "捲動方向",
+  "settings.candidate.scroll_direction.desc": "僅捲動版面可選",
+  "settings.candidate.count": "候選字數量",
+  "settings.candidate.count.desc": "每頁候選字上限（1-9）",
+  "settings.candidate.vertical_text_columns": "直排文字欄位方向",
+  "settings.candidate.vertical_text_columns.desc": "僅直排文字版面可選",
+  "settings.candidate.reset": "重設"
 }

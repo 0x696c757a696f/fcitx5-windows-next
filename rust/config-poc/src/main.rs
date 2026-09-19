@@ -1,5 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod locale_catalog;
+
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -345,19 +347,33 @@ fn windui_appearance_reference_tree() -> WindUiElement {
         .padding(22)
         .spacing(6)
         .child(
-            WindUiElement::label("Appearance")
+            WindUiElement::label(locale_catalog::label("nav.appearance", "Appearance"))
                 .font_size(20.0)
                 .fg_role(WindUiRole::Text)
                 .height(34)
                 .width_match(),
         )
         .child(WindUiElement::setting_row(
-            "Theme",
-            WindUiElement::segmented(vec!["System", "Light", "Dark"], theme_mode),
+            locale_catalog::label("theme.label", "Theme"),
+            WindUiElement::segmented(
+                vec![
+                    locale_catalog::label("mode.system", "System"),
+                    locale_catalog::label("mode.light", "Light"),
+                    locale_catalog::label("mode.dark", "Dark"),
+                ],
+                theme_mode,
+            ),
         ))
         .child(WindUiElement::setting_row(
-            "Candidate layout",
-            WindUiElement::segmented(vec!["Follow", "Horizontal", "Vertical"], layout_mode),
+            locale_catalog::label("candidate.layout", "Candidate layout"),
+            WindUiElement::segmented(
+                vec![
+                    locale_catalog::label("candidate.automatic", "Follow"),
+                    locale_catalog::label("candidate.horizontal", "Horizontal"),
+                    locale_catalog::label("candidate.vertical", "Vertical"),
+                ],
+                layout_mode,
+            ),
         ))
         .child(WindUiElement::setting_row(
             "Window shadow",
@@ -427,7 +443,7 @@ fn windui_settings_shell_wrap(subtitle: &str, body: WindUiElement) -> WindUiElem
         .child(body.weight(1.0))
 }
 
-fn windui_settings_section_title(title: &str) -> WindUiElement {
+fn windui_settings_section_title(title: impl Into<String>) -> WindUiElement {
     WindUiElement::row()
         .cross(WindUiAlign::Center)
         .spacing(10)
@@ -438,7 +454,7 @@ fn windui_settings_section_title(title: &str) -> WindUiElement {
                 .bg_role(WindUiRole::Accent),
         )
         .child(
-            WindUiElement::label(title)
+            WindUiElement::label(title.into())
                 .font_size(15.0)
                 .font_weight(700)
                 .fg_role(WindUiRole::Text),
@@ -457,7 +473,7 @@ fn windui_settings_card(body: WindUiElement) -> WindUiElement {
 }
 
 fn windui_settings_nav_item(
-    name: &'static str,
+    name: &str,
     glyph: &'static str,
     i: usize,
     selected: WindUiSignal<usize>,
@@ -543,19 +559,19 @@ fn windui_settings_nav_item(
         .child(indicator)
 }
 
-fn windui_settings_page_title(title: &str, subtitle: &str) -> WindUiElement {
+fn windui_settings_page_title(title: impl Into<String>, subtitle: impl Into<String>) -> WindUiElement {
     WindUiElement::row()
         .width_match()
         .cross(WindUiAlign::Center)
         .spacing(10)
         .child(
-            WindUiElement::label(title)
+            WindUiElement::label(title.into())
                 .font_size(24.0)
                 .font_weight(700)
                 .fg_role(WindUiRole::Text),
         )
         .child(
-            WindUiElement::label(subtitle)
+            WindUiElement::label(subtitle.into())
                 .font_size(13.0)
                 .fg_role(WindUiRole::TextMuted)
                 .weight(1.0),
@@ -824,16 +840,20 @@ enum PluginAction {
 }
 
 impl PluginOperation {
-    fn label(&self) -> &'static str {
+    fn label(&self) -> String {
         match self {
-            Self::List => "读取",
-            Self::Refresh => "刷新",
-            Self::Install(_) => "安装",
-            Self::Update(_) => "更新",
-            Self::SetState { enabled: true, .. } => "启用",
-            Self::SetState { enabled: false, .. } => "禁用",
-            Self::Remove(_) => "卸载",
-            Self::Repair => "修复",
+            Self::List => locale_catalog::label("packages.refresh", "读取"),
+            Self::Refresh => locale_catalog::label("packages.refresh", "刷新"),
+            Self::Install(_) => locale_catalog::label("packages.install_update", "安装"),
+            Self::Update(_) => locale_catalog::label("packages.install_update", "更新"),
+            Self::SetState { enabled: true, .. } => {
+                locale_catalog::label("packages.enable_disable", "启用")
+            }
+            Self::SetState { enabled: false, .. } => {
+                locale_catalog::label("packages.enable_disable", "禁用")
+            }
+            Self::Remove(_) => locale_catalog::label("packages.uninstall", "卸载"),
+            Self::Repair => locale_catalog::label("action.repair", "修复"),
         }
     }
 }
@@ -1006,13 +1026,15 @@ enum CandidateLayoutMode {
 
 impl CandidateLayoutMode {
     #[cfg_attr(not(test), allow(dead_code))]
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::Automatic => "自动",
-            Self::Stacked => "纵排",
-            Self::Flow => "横排",
-            Self::Scroll => "卷轴",
-            Self::VerticalText => "竖排文字",
+            Self::Automatic => locale_catalog::label("settings.candidate.layout.automatic", "自动"),
+            Self::Stacked => locale_catalog::label("settings.candidate.layout.stacked", "纵排"),
+            Self::Flow => locale_catalog::label("settings.candidate.layout.flow", "横排"),
+            Self::Scroll => locale_catalog::label("settings.candidate.layout.scroll", "卷轴"),
+            Self::VerticalText => {
+                locale_catalog::label("settings.candidate.layout.vertical_text", "竖排文字")
+            }
         }
     }
 
@@ -1215,23 +1237,27 @@ fn spawn_plugin_operation(sender: WindUiSender<PluginResponse>, operation: Plugi
 
 fn plugin_status(row: &PluginCatalogRow) -> String {
     if !row.loaded {
-        return "正在读取".to_owned();
+        return locale_catalog::label("operation.status.running", "正在读取");
     }
     let Some(package) = row.package.as_ref() else {
-        return "当前无已验证 Windows 包".to_owned();
+        return locale_catalog::label("packages.state.unavailable", "当前无已验证 Windows 包");
     };
     if package.update_available {
-        return "可更新".to_owned();
+        return locale_catalog::label("packages.state.update_available", "可更新");
     }
     match package.state.as_deref() {
-        Some("bundled") => "已内置".to_owned(),
-        Some("disabled") => "已禁用".to_owned(),
-        Some("trust-failed") => "信任失败".to_owned(),
-        Some("incompatible") => "不兼容".to_owned(),
-        Some("pending-restart") => "等待重启".to_owned(),
-        _ if package.installed_version.is_some() => "已启用".to_owned(),
-        _ if package.available_version.is_some() => "可安装".to_owned(),
-        _ => "不可用".to_owned(),
+        Some("bundled") => locale_catalog::label("packages.state.bundled", "已内置"),
+        Some("disabled") => locale_catalog::label("packages.state.disabled", "已禁用"),
+        Some("trust-failed") => locale_catalog::label("packages.state.trust_failed", "信任失败"),
+        Some("incompatible") => locale_catalog::label("packages.state.incompatible", "不兼容"),
+        Some("pending-restart") => locale_catalog::label("packages.state.pending_restart", "等待重启"),
+        _ if package.installed_version.is_some() => {
+            locale_catalog::label("packages.state.enabled", "已启用")
+        }
+        _ if package.available_version.is_some() => {
+            locale_catalog::label("packages.state.available_online", "可安装")
+        }
+        _ => locale_catalog::label("packages.state.unavailable", "不可用"),
     }
 }
 
@@ -1289,7 +1315,7 @@ fn windui_plugin_row(
 }
 
 fn windui_plugin_action(
-    label: &'static str,
+    label: String,
     operation: impl Fn(&PluginManagerSnapshot, &str) -> Option<PluginOperation> + Copy + 'static,
     selected: WindUiSignal<String>,
     snapshot: WindUiSignal<PluginManagerSnapshot>,
@@ -1374,7 +1400,7 @@ fn windui_plugins_page(
     let remove_sender = sender.clone();
     let actions = vec![
         windui_plugin_action(
-            "安装",
+            locale_catalog::label("packages.install_update", "安装"),
             |state, id| plugin_operation_for(state, id, PluginAction::Install),
             selected,
             snapshot,
@@ -1383,7 +1409,7 @@ fn windui_plugins_page(
             install_sender,
         ),
         windui_plugin_action(
-            "更新",
+            locale_catalog::label("packages.install_update", "更新"),
             |state, id| plugin_operation_for(state, id, PluginAction::Update),
             selected,
             snapshot,
@@ -1392,7 +1418,7 @@ fn windui_plugins_page(
             update_sender,
         ),
         windui_plugin_action(
-            "启用/禁用",
+            locale_catalog::label("packages.enable_disable", "启用/禁用"),
             |state, id| plugin_operation_for(state, id, PluginAction::Toggle),
             selected,
             snapshot,
@@ -1401,7 +1427,7 @@ fn windui_plugins_page(
             toggle_sender,
         ),
         windui_plugin_action(
-            "卸载",
+            locale_catalog::label("packages.uninstall", "卸载"),
             |state, id| plugin_operation_for(state, id, PluginAction::Remove),
             selected,
             snapshot,
@@ -1409,7 +1435,7 @@ fn windui_plugins_page(
             operation_status,
             remove_sender,
         ),
-        WindUiElement::button("修复")
+        WindUiElement::button(locale_catalog::label("action.repair", "修复"))
             .small()
             .outline()
             .enabled_when(move || !busy.get())
@@ -1474,7 +1500,7 @@ fn windui_plugins_page(
         .padding(24)
         .spacing(14)
         .child(windui_settings_page_title(
-            "插件与扩展",
+            locale_catalog::label("packages.title", "插件与扩展"),
             "fcitx5-plugins 目录与受信 Windows 包",
         ))
         .child(
@@ -1489,7 +1515,7 @@ fn windui_plugins_page(
                         .weight(1.0),
                 )
                 .child(
-                    WindUiElement::button("刷新插件目录")
+                    WindUiElement::button(locale_catalog::label("packages.refresh", "刷新插件目录"))
                         .small()
                         .outline()
                         .enabled_when(move || !busy.get())
@@ -1586,7 +1612,17 @@ fn windui_settings_root(
     ];
     let mut nav_col = WindUiElement::col().width_match().spacing(3);
     for (i, (name, glyph)) in NAV.iter().enumerate() {
-        nav_col = nav_col.child(windui_settings_nav_item(name, glyph, i, nav));
+        let key = match i {
+            0 => "nav.general",
+            1 => "nav.appearance",
+            2 => "nav.theme",
+            3 => "nav.packages",
+            4 => "nav.diagnostics",
+            5 => "nav.repair",
+            _ => unreachable!(),
+        };
+        let localized_name = locale_catalog::label(key, name);
+        nav_col = nav_col.child(windui_settings_nav_item(&localized_name, glyph, i, nav));
     }
 
     let sidebar = WindUiElement::col()
@@ -1608,16 +1644,19 @@ fn windui_settings_root(
             .padding(24)
             .spacing(20)
             .child(windui_settings_page_title(
-                "输入设置",
+                locale_catalog::label("nav.general", "输入设置"),
                 "输入法、候选窗口与快捷键",
             ))
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
                     .spacing(16)
-                    .child(windui_settings_section_title("输入法"))
+                    .child(windui_settings_section_title(locale_catalog::label(
+                        "general.input_method",
+                        "输入法",
+                    )))
                     .child(WindUiElement::setting_row_desc(
-                        "默认输入法",
+                        locale_catalog::label("general.input_method", "默认输入法"),
                         "Fcitx 内部切换 engine；Windows 侧仍保持单一 Fcitx5 profile",
                         WindUiElement::dropdown(vec!["五笔", "拼音", "Rime", "Mozc"], input_method)
                             .width(180),
@@ -1627,7 +1666,10 @@ fn windui_settings_root(
                 WindUiElement::col()
                     .width_match()
                     .spacing(14)
-                    .child(windui_settings_section_title("快捷键"))
+                    .child(windui_settings_section_title(locale_catalog::label(
+                        "nav.theme",
+                        "快捷键",
+                    )))
                     .child(
                         WindUiElement::tag_field(
                             "添加键位...",
@@ -1664,7 +1706,7 @@ fn windui_settings_root(
             .padding(24)
             .spacing(20)
             .child(windui_settings_page_title(
-                "外观设置",
+                locale_catalog::label("nav.appearance", "外观设置"),
                 "主题、排版与候选预览",
             ))
             .child(windui_settings_card(
@@ -1676,7 +1718,7 @@ fn windui_settings_root(
                     .spacing(16)
                     .child(windui_settings_section_title("主题"))
                     .child(WindUiElement::setting_row_desc(
-                        "外观模式",
+                        locale_catalog::label("appearance.mode", "外观模式"),
                         "默认跟随 Windows Light/Dark；High Contrast 优先",
                         windui_appearance_mode_controls(candidate_adapter, candidate_status),
                     ))
@@ -1722,12 +1764,15 @@ fn windui_settings_root(
             windui_plugins_page(plugin_snapshot, plugin_busy, plugin_status, plugin_sender)
                 .visible_when(move || nav.get() == 3),
         );
-    for (i, title) in [
-        (2usize, "按键设置"),
-        (4usize, "更新"),
-        (5usize, "诊断与修复"),
+    for (i, (title, key)) in [
+        (2usize, ("按键设置", "nav.theme")),
+        (4usize, ("更新", "updates.title")),
+        (5usize, ("诊断与修复", "nav.repair")),
     ] {
-        content = content.child(windui_nav_placeholder(title).visible_when(move || nav.get() == i));
+        content = content.child(
+            windui_nav_placeholder(&locale_catalog::label(key, title))
+                .visible_when(move || nav.get() == i),
+        );
     }
 
     let footer = WindUiElement::row()
@@ -1751,24 +1796,27 @@ fn windui_settings_root(
                 ),
         )
         .child(
-            WindUiElement::label("配置已就绪")
+            WindUiElement::label(locale_catalog::label(
+                "operation.status.idle",
+                "配置已就绪",
+            ))
                 .font_size(12.5)
                 .fg_role(WindUiRole::TextMuted),
         )
         .child(WindUiElement::flex_spacer())
         .child(
-            WindUiElement::button("恢复本页")
+            WindUiElement::button(locale_catalog::label("action.reset_config", "恢复本页"))
                 .small()
                 .outline()
                 .neutral(),
         )
         .child(
-            WindUiElement::button("重新加载")
+            WindUiElement::button(locale_catalog::label("action.refresh", "重新加载"))
                 .small()
                 .outline()
                 .neutral(),
         )
-        .child(WindUiElement::button("保存设置").small());
+        .child(WindUiElement::button(locale_catalog::label("action.apply", "保存设置")).small());
 
     let body = WindUiElement::col()
         .fill()
@@ -1979,8 +2027,12 @@ fn windui_appearance_mode_controls(
 ) -> WindUiElement {
     let selected = adapter.map(|adapter| adapter.preview().appearance().mode().to_owned());
     let mut controls = WindUiElement::row().spacing(6);
-    for (label, mode) in [("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")] {
-        let active = WindUiElement::button(label)
+    for (label, mode) in [
+        (locale_catalog::label("mode.system", "跟随系统"), "system"),
+        (locale_catalog::label("mode.light", "浅色"), "light"),
+        (locale_catalog::label("mode.dark", "深色"), "dark"),
+    ] {
+        let active = WindUiElement::button(label.clone())
             .small()
             .visible_when(move || selected.get() == mode);
         let inactive = WindUiElement::button(label)
@@ -2083,8 +2135,8 @@ fn candidate_layout_orientation_card(
     status: WindUiSignal<String>,
 ) -> WindUiElement {
     let label = match orientation {
-        CandidateLayoutOrientation::Horizontal => "横向",
-        CandidateLayoutOrientation::Vertical => "纵向",
+        CandidateLayoutOrientation::Horizontal => locale_catalog::label("candidate.horizontal", "横向"),
+        CandidateLayoutOrientation::Vertical => locale_catalog::label("candidate.vertical", "纵向"),
     };
     let description = match orientation {
         CandidateLayoutOrientation::Horizontal => "单行或多行横向排列",
@@ -2097,7 +2149,7 @@ fn candidate_layout_orientation_card(
         .spacing(2)
         .width(122)
         .child(
-            WindUiElement::label(label)
+            WindUiElement::label(label.clone())
                 .font_size(13.5)
                 .font_weight(600)
                 .fg_role(WindUiRole::OnAccent),
@@ -2298,6 +2350,18 @@ fn config_core_candidate_page_size_button(
     WindUiElement::stack().child(active).child(inactive)
 }
 
+fn candidate_layout_grid_rows() -> [&'static [CandidateLayoutMode]; 3] {
+    [
+        &[CandidateLayoutMode::Automatic, CandidateLayoutMode::Stacked],
+        &[CandidateLayoutMode::Flow, CandidateLayoutMode::Scroll],
+        &[CandidateLayoutMode::VerticalText],
+    ]
+}
+
+fn candidate_page_size_grid_rows() -> [[u8; 3]; 3] {
+    [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+}
+
 fn windui_config_core_candidate_layout_controls(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
@@ -2307,20 +2371,18 @@ fn windui_config_core_candidate_layout_controls(
         candidate_layout_mode(&adapter.preview()).unwrap_or(CandidateLayoutMode::Automatic)
     });
     let page_size = adapter.map(|adapter| adapter.preview().candidate().page_size());
-    let mut modes = WindUiElement::row().spacing(4);
-    for layout_mode in [
-        CandidateLayoutMode::Automatic,
-        CandidateLayoutMode::Stacked,
-        CandidateLayoutMode::Flow,
-        CandidateLayoutMode::Scroll,
-        CandidateLayoutMode::VerticalText,
-    ] {
-        modes = modes.child(candidate_layout_mode_button(
-            layout_mode,
-            mode,
-            adapter,
-            status,
-        ));
+    let mut modes = WindUiElement::col().spacing(4);
+    for layout_row in candidate_layout_grid_rows() {
+        let mut row = WindUiElement::row().spacing(4);
+        for layout_mode in layout_row {
+            row = row.child(candidate_layout_mode_button(
+                *layout_mode,
+                mode,
+                adapter,
+                status,
+            ));
+        }
+        modes = modes.child(row);
     }
 
     let scroll_directions = WindUiElement::row()
@@ -2357,68 +2419,94 @@ fn windui_config_core_candidate_layout_controls(
             status,
         ));
 
-    let mut page_sizes = WindUiElement::row().spacing(4);
-    for value in 1..=9 {
-        page_sizes = page_sizes.child(config_core_candidate_page_size_button(
-            value, page_size, adapter, status,
-        ));
+    let mut page_sizes = WindUiElement::col().spacing(4);
+    for page_size_row in candidate_page_size_grid_rows() {
+        let mut row = WindUiElement::row().spacing(4);
+        for value in page_size_row {
+            row = row.child(config_core_candidate_page_size_button(
+                value, page_size, adapter, status,
+            ));
+        }
+        page_sizes = page_sizes.child(row);
     }
 
     WindUiElement::col()
         .width_match()
         .spacing(14)
-        .child(windui_settings_section_title("候选窗口"))
+        .child(windui_settings_section_title(locale_catalog::label(
+            "settings.candidate.section",
+            "候选窗口",
+        )))
         .child(WindUiElement::setting_row_desc(
-            "布局",
-            "自动、纵排、横排、卷轴或竖排文字",
+            locale_catalog::label("settings.candidate.layout", "布局"),
+            locale_catalog::label(
+                "settings.candidate.layout.desc",
+                "自动、纵排、横排、卷轴或竖排文字",
+            ),
             modes,
         ))
         .child(
             WindUiElement::col()
                 .visible_when(move || mode.get() == CandidateLayoutMode::Scroll)
                 .child(WindUiElement::setting_row_desc(
-                    "卷轴方向",
-                    "仅卷轴布局可选",
+                    locale_catalog::label("settings.candidate.scroll_direction", "卷轴方向"),
+                    locale_catalog::label(
+                        "settings.candidate.scroll_direction.desc",
+                        "仅卷轴布局可选",
+                    ),
                     scroll_directions,
                 )),
         )
         .child(WindUiElement::col().child(WindUiElement::setting_row_desc(
-            "候选个数",
-            "每页最大候选数（1-9）",
+            locale_catalog::label("settings.candidate.count", "候选个数"),
+            locale_catalog::label("settings.candidate.count.desc", "每页最大候选数（1-9）"),
             page_sizes,
         )))
         .child(
             WindUiElement::col()
                 .visible_when(move || mode.get() == CandidateLayoutMode::VerticalText)
                 .child(WindUiElement::setting_row_desc(
-                    "竖排文字列方向",
-                    "仅竖排文字布局可选",
+                    locale_catalog::label(
+                        "settings.candidate.vertical_text_columns",
+                        "竖排文字列方向",
+                    ),
+                    locale_catalog::label(
+                        "settings.candidate.vertical_text_columns.desc",
+                        "仅竖排文字布局可选",
+                    ),
                     vertical_text_columns,
                 )),
         )
         .child(
             WindUiElement::row()
                 .spacing(8)
-                .child(WindUiElement::button("应用").on_click(move |ctx| {
-                    if let Err(error) = apply_candidate_draft(adapter, status) {
-                        ctx.toast_err(error);
-                    } else {
-                        ctx.toast_ok("候选布局已应用");
-                    }
-                }))
                 .child(
-                    WindUiElement::button("取消")
+                    WindUiElement::button(locale_catalog::label("action.apply", "应用")).on_click(
+                        move |ctx| {
+                            if let Err(error) = apply_candidate_draft(adapter, status) {
+                                ctx.toast_err(error);
+                            } else {
+                                ctx.toast_ok("候选布局已应用");
+                            }
+                        },
+                    ),
+                )
+                .child(
+                    WindUiElement::button(locale_catalog::label("dialog.button.cancel", "取消"))
                         .outline_soft()
                         .on_click(move |_| {
                             cancel_candidate_draft(adapter, status);
                         }),
                 )
                 .child(
-                    WindUiElement::button("重置")
-                        .outline_soft()
-                        .on_click(move |_| {
-                            reset_candidate_draft(adapter, status);
-                        }),
+                    WindUiElement::button(locale_catalog::label(
+                        "settings.candidate.reset",
+                        "重置",
+                    ))
+                    .outline_soft()
+                    .on_click(move |_| {
+                        reset_candidate_draft(adapter, status);
+                    }),
                 ),
         )
         .child(
@@ -3539,6 +3627,26 @@ pub(crate) fn main() {
             set_run_mode(&mut mode, RunMode::SelfCheck);
         } else if arg == "--window-smoke" {
             set_run_mode(&mut mode, RunMode::WindowSmoke);
+        } else if let Some(value) = arg.to_str().and_then(|value| value.strip_prefix("--lang=")) {
+            parse_lang_argument(value)
+                .and_then(|_| locale_catalog::install(value))
+                .unwrap_or_else(|error| {
+                    eprintln!("{error}");
+                    std::process::exit(2);
+                });
+        } else if arg == "--lang" {
+            let value = args
+                .next()
+                .and_then(|value| value.into_string().ok())
+                .ok_or_else(|| "--lang requires a locale".to_owned())
+                .and_then(|value| {
+                    parse_lang_argument(&value).and_then(|_| locale_catalog::install(&value))
+                })
+                .unwrap_or_else(|error| {
+                    eprintln!("{error}");
+                    std::process::exit(2);
+                });
+            let _ = value;
         } else if arg == "--config" {
             let cli = parse_config_core_cli(&mut args).unwrap_or_else(|error| {
                 eprintln!("{error}");
@@ -3636,7 +3744,7 @@ pub(crate) fn main() {
         RunMode::Interactive
     } else {
         eprintln!(
-            "usage: fcitx5-config-poc [--self-check | --window-smoke | --screenshot PATH | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test] [--report PATH]"
+            "usage: fcitx5-config-poc [--lang=<locale>] [--self-check | --window-smoke | --screenshot PATH | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test] [--report PATH]\n  --lang=<locale>  QA-only, non-persistent display-language override (en-US, zh-CN, zh-TW, ja-JP, ko-KR, vi-VN, th-TH, si-LK)"
         );
         std::process::exit(2);
     };
@@ -3664,6 +3772,10 @@ pub(crate) fn main() {
             std::process::exit(1);
         }
     }
+}
+
+fn parse_lang_argument(value: &str) -> Result<(), String> {
+    locale_catalog::validate_locale_name(value)
 }
 
 fn parse_config_core_cli(
@@ -5985,6 +6097,14 @@ mod tests {
     }
 
     #[test]
+    fn lang_argument_accepts_supported_locales_and_rejects_unsupported() {
+        assert!(parse_lang_argument("fr-FR").is_err());
+        for locale in locale_catalog::SUPPORTED_UI_LOCALES {
+            assert!(parse_lang_argument(locale).is_ok());
+        }
+    }
+
+    #[test]
     fn candidate_layout_uses_frozen_names_and_migrated_semantics() {
         assert_eq!(CandidateLayoutMode::Automatic.label(), "自动");
         assert_eq!(CandidateLayoutMode::Stacked.label(), "纵排");
@@ -6001,9 +6121,7 @@ mod tests {
         let model = frozen_settings_model();
         assert_eq!(
             model.languages,
-            vec![
-                "system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
-            ]
+            vec!["system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",]
         );
         require_languages(&model).expect("all supported locales should be in the Settings policy");
 
@@ -6018,6 +6136,39 @@ mod tests {
             assert_eq!(settings.language, language);
         }
         assert!(apply_language(&mut settings, "fr-FR").is_err());
+    }
+
+    #[test]
+    fn candidate_layout_grid_rows_preserve_order_and_uniqueness() {
+        let rows = candidate_layout_grid_rows();
+        assert_eq!(rows.map(<[_]>::len), [2, 2, 1]);
+        let flattened = rows.into_iter().flatten().copied().collect::<Vec<_>>();
+        assert_eq!(
+            flattened,
+            vec![
+                CandidateLayoutMode::Automatic,
+                CandidateLayoutMode::Stacked,
+                CandidateLayoutMode::Flow,
+                CandidateLayoutMode::Scroll,
+                CandidateLayoutMode::VerticalText,
+            ]
+        );
+        let mut unique = flattened.clone();
+        unique.sort_by_key(|mode| *mode as u8);
+        unique.dedup();
+        assert_eq!(unique.len(), 5);
+    }
+
+    #[test]
+    fn candidate_page_size_grid_rows_are_ascending_and_unique() {
+        let rows = candidate_page_size_grid_rows();
+        assert_eq!(rows, [[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+        let flattened = rows.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(flattened, (1..=9).collect::<Vec<_>>());
+        let mut unique = flattened.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), 9);
     }
 
     #[test]
@@ -6834,9 +6985,8 @@ mod tests {
     fn windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply() {
         for layout in ["automatic", "stacked", "flow", "scroll", "vertical_text"] {
             for page_size in 1..=9 {
-                let directory = TestDirectory::new(&format!(
-                    "windui-candidate-adapter-{layout}-{page_size}"
-                ));
+                let directory =
+                    TestDirectory::new(&format!("windui-candidate-adapter-{layout}-{page_size}"));
                 let path = directory.path().join("config.toml");
                 let mut adapter =
                     WindUiConfigAdapter::load(path).expect("adapter should load defaults");

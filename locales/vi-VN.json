@@ -166,5 +166,20 @@
   "dialog.trust_failure.body": "Không thể xác minh chữ ký kho hoặc gói. Cài đặt và cập nhật bị chặn cho đến khi có siêu dữ liệu đáng tin cậy.",
   "dialog.button.ok": "OK",
   "dialog.button.cancel": "Hủy",
-  "dialog.button.continue": "Tiếp tục"
+  "dialog.button.continue": "Tiếp tục",
+  "settings.candidate.section": "Cửa sổ gợi ý",
+  "settings.candidate.layout": "Bố cục",
+  "settings.candidate.layout.desc": "Tự động, xếp dọc, xếp ngang, cuộn hoặc chữ dọc",
+  "settings.candidate.layout.automatic": "Tự động",
+  "settings.candidate.layout.stacked": "Xếp dọc",
+  "settings.candidate.layout.flow": "Xếp ngang",
+  "settings.candidate.layout.scroll": "Cuộn",
+  "settings.candidate.layout.vertical_text": "Chữ dọc",
+  "settings.candidate.scroll_direction": "Hướng cuộn",
+  "settings.candidate.scroll_direction.desc": "Chỉ áp dụng cho bố cục cuộn",
+  "settings.candidate.count": "Số lượng gợi ý",
+  "settings.candidate.count.desc": "Số gợi ý tối đa mỗi trang (1-9)",
+  "settings.candidate.vertical_text_columns": "Hướng cột chữ dọc",
+  "settings.candidate.vertical_text_columns.desc": "Chỉ áp dụng cho bố cục chữ dọc",
+  "settings.candidate.reset": "Đặt lại"
 }
