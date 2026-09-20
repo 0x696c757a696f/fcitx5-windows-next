@@ -1,0 +1,498 @@
+diff --git a/examples/uia_smoke.rs b/examples/uia_smoke.rs
+index a3513e5..a19bc0d 100644
+--- a/examples/uia_smoke.rs
++++ b/examples/uia_smoke.rs
+@@ -36,9 +36,11 @@ const DYNAMIC_AFTER: &str = "Invoked 1";
+ #[cfg(windows)]
+ const BUTTON_NAME: &str = "Invoke me";
+ #[cfg(windows)]
++const CLICKABLE_ROW_NAME: &str = "Clickable row";
++#[cfg(windows)]
+ const HIDDEN_NAME: &str = "Hidden button";
+ 
+-/// 宿主：一个普通 WindUI 窗口，内容固定。Button 的回调只把动态标签改成 `Invoked 1`。
++/// 宿主：一个普通 WindUI 窗口，内容固定。可点击行的回调把动态标签改成 `Invoked 1`。
+ #[cfg(windows)]
+ fn run_host() -> Result<(), String> {
+     use windui::prelude::*;
+@@ -73,6 +75,14 @@ fn run_host() -> Result<(), String> {
+                 .width_match()
+                 .height(40)
+                 .spacing(12)
++                .child(
++                    Element::row()
++                        .width(180)
++                        .height(40)
++                        .clickable()
++                        .on_click(move |_| invoked.set(true))
++                        .child(Element::label(CLICKABLE_ROW_NAME)),
++                )
+                 .child(Element::button(BUTTON_NAME).on_click(move |_| invoked.set(true)))
+                 .child(Element::button(HIDDEN_NAME).visible(false)),
+         );
+@@ -83,18 +93,15 @@ fn run_host() -> Result<(), String> {
+ 
+ #[cfg(windows)]
+ fn run_client() -> Result<(), String> {
+-    use std::time::{Duration, Instant};
+-    use windows::core::w;
+-    use windows::Win32::Foundation::HWND;
++    use std::time::Duration;
+     use windows::Win32::System::Com::{
+         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+     };
+     use windows::Win32::UI::Accessibility::{
+         CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+-        TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_InvokePatternId, UIA_TextControlTypeId,
+-        UIA_WindowControlTypeId,
++        UIA_ButtonControlTypeId, UIA_E_ELEMENTNOTAVAILABLE, UIA_InvokePatternId,
++        UIA_TextControlTypeId, UIA_WindowControlTypeId,
+     };
+-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
+ 
+     // SAFETY: the COM apartment is initialized for this thread before any UIA object is created;
+     // RPC_E_CHANGED_MODE only means another apartment mode is already active, which is harmless.
+@@ -105,8 +112,6 @@ fn run_client() -> Result<(), String> {
+         .arg("--host")
+         .spawn()
+         .map_err(|error| format!("host spawn failed: {error}"))?;
+-    let host_pid = host.id();
+-
+     let outcome = (|| -> Result<(), String> {
+         let hwnd = wait_for_host_window(&mut host)?;
+         // SAFETY: CUIAutomation is a documented in-proc coclass and the apartment is initialized.
+@@ -127,6 +132,7 @@ fn run_client() -> Result<(), String> {
+         let elements = descendants(&automation, &root)?;
+         let mut names = Vec::new();
+         let mut button: Option<IUIAutomationElement> = None;
++        let mut clickable_row: Option<IUIAutomationElement> = None;
+         let mut saw_static = false;
+         let mut saw_dynamic = false;
+         for element in &elements {
+@@ -145,6 +151,9 @@ fn run_client() -> Result<(), String> {
+             if kind == UIA_ButtonControlTypeId.0 && name == BUTTON_NAME {
+                 button = Some(element.clone());
+             }
++            if kind == UIA_TextControlTypeId.0 && name == CLICKABLE_ROW_NAME {
++                clickable_row = Some(element.clone());
++            }
+         }
+         if !saw_static {
+             return Err(format!("static label missing; saw {names:?}"));
+@@ -153,6 +162,8 @@ fn run_client() -> Result<(), String> {
+             return Err(format!("initial dynamic label missing; saw {names:?}"));
+         }
+         let button = button.ok_or_else(|| format!("invoke button missing; saw {names:?}"))?;
++        let clickable_row = clickable_row
++            .ok_or_else(|| format!("clickable row missing; saw {names:?}"))?;
+ 
+         // (3) Button properties.
+         // SAFETY: provider elements are only queried while the host window is alive.
+@@ -169,18 +180,21 @@ fn run_client() -> Result<(), String> {
+             return Err("invoke button reported not keyboard focusable".to_owned());
+         }
+ 
+-        // (4) BoundingRectangle is inside the real window rectangle (physical screen pixels).
++        // (4) BoundingRectangle is a UIA VT_ARRAY|VT_R8 four-double rect, exposed by
++        // CurrentBoundingRectangle as physical screen pixels inside the real window rectangle.
+         let window_rect = window_rect(hwnd)?;
+         // SAFETY: same as above.
+-        let bounds = unsafe { button.CurrentBoundingRectangle() }
++        let bounds = unsafe { clickable_row.CurrentBoundingRectangle() }
+             .map_err(|error| format!("CurrentBoundingRectangle failed: {error}"))?;
+-        if bounds.left < window_rect.left
++        if bounds.left >= bounds.right
++            || bounds.top >= bounds.bottom
++            || bounds.left < window_rect.left
+             || bounds.top < window_rect.top
+             || bounds.right > window_rect.right
+             || bounds.bottom > window_rect.bottom
+         {
+             return Err(format!(
+-                "button bounds {bounds:?} escaped window rect {window_rect:?}"
++                "clickable row bounds {bounds:?} escaped/invalid in window rect {window_rect:?}"
+             ));
+         }
+ 
+@@ -195,15 +209,19 @@ fn run_client() -> Result<(), String> {
+         })
+         .map_err(|_| "HasKeyboardFocus stayed false after SetFocus".to_owned())?;
+ 
+-        // (6) Invoke through the real UIA pattern, then observe the dynamic label change.
++        // (6) Non-Button semantic Invoke: row exposes a non-null pattern and one callback-driven
++        // state change from `Invoked 0` to `Invoked 1`.
++        if current_control_type(&clickable_row)? == UIA_ButtonControlTypeId.0 {
++            return Err("clickable row unexpectedly projected as Button".to_owned());
++        }
+         // SAFETY: the pattern id is the documented Invoke pattern.
+-        let pattern: IUIAutomationInvokePattern = unsafe {
+-            button
+-                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
++        let row_pattern: IUIAutomationInvokePattern = unsafe {
++            clickable_row.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+         }
+-        .map_err(|error| format!("InvokePattern unavailable: {error}"))?;
++        .map_err(|error| format!("clickable row InvokePattern unavailable: {error}"))?;
+         // SAFETY: the pattern was obtained from a live provider element.
+-        unsafe { pattern.Invoke() }.map_err(|error| format!("Invoke failed: {error}"))?;
++        unsafe { row_pattern.Invoke() }
++            .map_err(|error| format!("clickable row Invoke failed: {error}"))?;
+         poll_until(Duration::from_secs(5), || {
+             let Ok(elements) = descendants(&automation, &root) else {
+                 return false;
+@@ -214,20 +232,35 @@ fn run_client() -> Result<(), String> {
+             })
+         })
+         .map_err(|_| format!("dynamic label never became {DYNAMIC_AFTER}"))?;
++
++        // (7) Existing Button invoke path still works.
++        // SAFETY: the pattern id is the documented Invoke pattern.
++        let button_pattern: IUIAutomationInvokePattern = unsafe {
++            button.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
++        }
++        .map_err(|error| format!("button InvokePattern unavailable: {error}"))?;
++        // SAFETY: the pattern was obtained from a live provider element.
++        unsafe { button_pattern.Invoke() }
++            .map_err(|error| format!("button Invoke failed: {error}"))?;
+         println!(
+-            "uia_smoke OK: root=Window, {} descendant(s) [{}], Invoke produced {DYNAMIC_AFTER}",
++            "uia_smoke OK: root=Window, {} descendant(s) [{}], row Invoke produced {DYNAMIC_AFTER}, button Invoke OK",
+             names.len(),
+             names.join(" | ")
+         );
+ 
+-        // (7) After the host dies, held elements must fail as unavailable, not hang or crash.
++        // (8) After the host dies, held elements must fail as unavailable, not hang or crash.
+         let _ = host.kill();
+         let _ = host.wait();
+         std::thread::sleep(Duration::from_millis(500));
+         // SAFETY: intentionally querying a stale element; a failure here is the expected outcome.
+         let stale = unsafe { button.CurrentName() };
+         match stale {
+-            Err(error) => println!("stale element reported: {error}"),
++            Err(error) if error.code().0 as u32 == UIA_E_ELEMENTNOTAVAILABLE => {
++                println!("stale element reported: {error}")
++            }
++            Err(error) => {
++                return Err(format!("stale element returned unexpected HRESULT: {error}"))
++            }
+             Ok(name) => {
+                 return Err(format!(
+                     "stale element still answered with {:?}",
+diff --git a/src/accessibility.rs b/src/accessibility.rs
+index 9ab7ca0..62b95f5 100644
+--- a/src/accessibility.rs
++++ b/src/accessibility.rs
+@@ -100,7 +100,7 @@ impl Tree {
+         action: AccessibilityAction,
+     ) -> AccessibilityActionResult {
+         let node_id = id.node_id();
+-        let Some(node) = self.get(node_id) else {
++        let Some(_node) = self.get(node_id) else {
+             return AccessibilityActionResult::NodeUnavailable;
+         };
+         if !self.accessibility_visible(node_id) {
+@@ -118,7 +118,11 @@ impl Tree {
+                 }
+             }
+             AccessibilityAction::Invoke => {
+-                if node.widget.accessibility_role() == Some(AccessibilityRole::Button) {
++                if self
++                    .accessibility_snapshot()
++                    .node(id)
++                    .is_some_and(|node| node.supported_actions.contains(&AccessibilityAction::Invoke))
++                {
+                     AccessibilityActionResult::Performed
+                 } else {
+                     AccessibilityActionResult::UnsupportedAction
+@@ -141,20 +145,34 @@ impl Tree {
+         }
+         match action {
+             AccessibilityAction::SetFocus => (result, DispatchResult::default()),
+-            AccessibilityAction::Invoke => (
+-                result,
+-                self.dispatch_key(
+-                    KeyEvent {
+-                        key: Key::Enter,
+-                        pressed: true,
+-                        shift: false,
+-                        ctrl: false,
+-                        alt: false,
+-                        meta: false,
+-                    },
+-                    Some(id.node_id()),
+-                ),
+-            ),
++            AccessibilityAction::Invoke => {
++                let mut target = id.node_id();
++                let mut current = Some(id.node_id());
++                while let Some(node_id) = current {
++                    if self.get(node_id).is_some_and(|node| {
++                        node.widget.accessibility_invokable()
++                            || node.widget.accessibility_role() == Some(AccessibilityRole::Button)
++                    }) {
++                        target = node_id;
++                        break;
++                    }
++                    current = self.get(node_id).and_then(|node| node.parent);
++                }
++                (
++                    result,
++                    self.dispatch_key(
++                        KeyEvent {
++                            key: Key::Enter,
++                            pressed: true,
++                            shift: false,
++                            ctrl: false,
++                            alt: false,
++                            meta: false,
++                        },
++                        Some(target),
++                    ),
++                )
++            }
+         }
+     }
+ 
+@@ -214,6 +232,7 @@ impl Tree {
+                 root_id,
+                 true,
+                 root_node.own_enabled(),
++                false,
+                 &mut snapshot,
+             );
+         }
+@@ -226,6 +245,7 @@ impl Tree {
+         semantic_parent: AccessibilityNodeId,
+         parent_visible: bool,
+         parent_enabled: bool,
++        parent_invokable: bool,
+         snapshot: &mut AccessibilitySnapshot,
+     ) {
+         let Some(node) = self.get(id) else {
+@@ -236,6 +256,7 @@ impl Tree {
+             return;
+         }
+         let enabled = parent_enabled && node.own_enabled();
++        let invokable = parent_invokable || node.widget.accessibility_invokable();
+         let semantic_role = node.widget.accessibility_role();
+         let next_parent = if let Some(role) = semantic_role {
+             let focusable = node.focusable.unwrap_or_else(|| node.widget.focusable());
+@@ -243,7 +264,7 @@ impl Tree {
+             if focusable {
+                 actions.push(AccessibilityAction::SetFocus);
+             }
+-            if role == AccessibilityRole::Button {
++            if role == AccessibilityRole::Button || invokable {
+                 actions.push(AccessibilityAction::Invoke);
+             }
+             let id = AccessibilityNodeId::from_node_id(id);
+@@ -273,7 +294,7 @@ impl Tree {
+         };
+ 
+         for &child in &node.children {
+-            self.collect_accessibility(child, next_parent, visible, enabled, snapshot);
++            self.collect_accessibility(child, next_parent, visible, enabled, invokable, snapshot);
+         }
+     }
+ }
+@@ -287,6 +308,35 @@ impl AccessibilitySnapshot {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn clickable_control_projects_invoke_without_button_role() {
++        let mut tree = Tree::new();
++        let root_id = Element::col()
++            .child(
++                Element::row()
++                    .clickable()
++                    .on_click(|_| {})
++                    .child(Element::label("外观")),
++            )
++            .build(&mut tree);
++        tree.root = Some(root_id);
++        let mut text = NullTextEngine;
++        tree.layout_root(Size::new(300, 180), &mut text);
++        let snapshot = tree.accessibility_snapshot();
++        let label = snapshot
++            .nodes
++            .iter()
++            .find(|node| node.name == "外观")
++            .expect("nav label node must be projected");
++        assert_eq!(label.role, AccessibilityRole::Text);
++        assert!(
++            label
++                .supported_actions
++                .contains(&AccessibilityAction::Invoke),
++            "a clickable control must project Invoke regardless of its role"
++        );
++    }
+     use crate::geometry::Size;
+     use crate::signal::signal;
+     use crate::text::{LineAwareTextEngine, NullTextEngine};
+diff --git a/src/core.rs b/src/core.rs
+index 5bee133..83835ec 100644
+--- a/src/core.rs
++++ b/src/core.rs
+@@ -308,6 +308,15 @@ pub trait Widget {
+     fn text_truncated(&self) -> Option<bool> {
+         None
+     }
++    /// 本控件是否具备语义上的「激活」能力：由 [`Element::clickable()`] 接入的可点击容器
++    /// 返回 `true`，其余控件保持默认 `false`。
++    ///
++    /// UIA 的 Invoke pattern 只依据这条**能力**与 [`AccessibilityAction::Invoke`] 是否存在
++    /// 来决定，**不由角色类型**（如 `AccessibilityRole::Button`）决定——语义节点可以是
++    /// Text 角色同时可被激活。
++    fn accessibility_invokable(&self) -> bool {
++        false
++    }
+     /// 控件自报的悬停提示，**优先于**节点上 `.tooltip(..)` 设的静态文本。
+     ///
+     /// 给自绘控件用：图表类控件整个是一个节点，提示内容取决于指针落在哪个数据点上
+diff --git a/src/platform/win32/accessibility.rs b/src/platform/win32/accessibility.rs
+index 536dddd..37b39dd 100644
+--- a/src/platform/win32/accessibility.rs
++++ b/src/platform/win32/accessibility.rs
+@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Gdi::ClientToScreen;
+ use windows::Win32::System::Com::SAFEARRAY;
+ use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
+ use windows::Win32::System::Variant::{
+-    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BSTR, VT_BOOL, VT_I4,
++    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_ARRAY, VT_BSTR, VT_BOOL, VT_I4, VT_R8,
+ };
+ use windows::Win32::UI::Accessibility::{
+     IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
+@@ -23,7 +23,8 @@ use windows::Win32::UI::Accessibility::{
+     IRawElementProviderFragment_Impl, IRawElementProviderSimple, IRawElementProviderSimple_Impl,
+     NavigateDirection, NavigateDirection_FirstChild, NavigateDirection_LastChild,
+     NavigateDirection_NextSibling, NavigateDirection_PreviousSibling, NavigateDirection_Parent,
+-    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ButtonControlTypeId,
++    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_BoundingRectanglePropertyId,
++    UIA_ButtonControlTypeId,
+     UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED,
+     UIA_E_NOTSUPPORTED, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
+     UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId,
+@@ -283,6 +284,43 @@ fn i32_variant(value: i32) -> VARIANT {
+     }
+ }
+ 
++/// Build the UIA-required `VT_ARRAY | VT_R8` VARIANT holding `[left, top, width, height]`.
++///
++/// The geometry comes from the same authority as
++/// [`IRawElementProviderFragment::BoundingRectangle`]; this only re-packages it. Ownership of the
++/// SAFEARRAY transfers to UIA together with the returned VARIANT.
++fn double_array_variant(rect: &UiaRect) -> Result<VARIANT> {
++    let values = [rect.left, rect.top, rect.width, rect.height];
++    // SAFETY: SafeArrayCreateVector allocates a COM-owned VT_R8 vector of the requested length;
++    // every put below uses an in-range index and a pointer to a live f64.
++    let array = unsafe { SafeArrayCreateVector(VT_R8, 0, values.len() as u32) };
++    if array.is_null() {
++        return Err(Error::from_thread());
++    }
++    for (index, value) in values.iter().enumerate() {
++        let index = index as i32;
++        // SAFETY: `array` was allocated immediately above with `values.len()` elements and is
++        // still owned locally here, so the index is in range and the source is a live f64.
++        let put = unsafe { SafeArrayPutElement(array, &index, (value as *const f64).cast()) };
++        if let Err(error) = put {
++            // SAFETY: `array` is still owned locally (it was never handed to UIA on this path).
++            unsafe { SafeArrayDestroy(array) };
++            return Err(error);
++        }
++    }
++    Ok(VARIANT {
++        Anonymous: VARIANT_0 {
++            Anonymous: ManuallyDrop::new(VARIANT_0_0 {
++                vt: VT_ARRAY | VT_R8,
++                wReserved1: 0,
++                wReserved2: 0,
++                wReserved3: 0,
++                Anonymous: VARIANT_0_0_0 { parray: array },
++            }),
++        },
++    })
++}
++
+ fn property_value(state: ProviderState, property_id: i32) -> Result<VARIANT> {
+     let (_, node) = node_for(state)?;
+     let value = match property_id {
+@@ -291,6 +329,9 @@ fn property_value(state: ProviderState, property_id: i32) -> Result<VARIANT> {
+         id if id == UIA_IsEnabledPropertyId.0 => bool_variant(node.enabled),
+         id if id == UIA_IsKeyboardFocusablePropertyId.0 => bool_variant(node.focusable),
+         id if id == UIA_HasKeyboardFocusPropertyId.0 => bool_variant(node.focused),
++        id if id == UIA_BoundingRectanglePropertyId.0 => {
++            double_array_variant(&scaled_screen_rect(state, &node)?)?
++        }
+         _ => VARIANT::default(),
+     };
+     Ok(value)
+@@ -301,9 +342,10 @@ fn pattern_provider(state: ProviderState, pattern_id: i32) -> Result<IUnknown> {
+         return Err(no_element_error());
+     }
+     let (_, node) = node_for(state)?;
+-    if node.role != AccessibilityRole::Button
+-        || !node.supported_actions.contains(&AccessibilityAction::Invoke)
+-    {
++    // Invoke 的暴露由平台无关语义模型给出的能力决定（`supported_actions` 是否含
++    // `AccessibilityAction::Invoke`），**不由角色类型决定**：语义节点可以是 Text 角色
++    // 同时可被激活。
++    if !node.supported_actions.contains(&AccessibilityAction::Invoke) {
+         return Err(no_element_error());
+     }
+     Ok(InvokeProvider(state).into())
+@@ -600,6 +642,37 @@ impl IInvokeProvider_Impl for InvokeProvider_Impl {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn bounding_rectangle_property_variant_is_four_element_r8_array() {
++        let rect = UiaRect {
++            left: 10.0,
++            top: 20.0,
++            width: 30.0,
++            height: 40.0,
++        };
++        let value = double_array_variant(&rect).expect("rect variant");
++        // SAFETY: the variant owns a VT_ARRAY|VT_R8 vector created by `double_array_variant`,
++        // and every SafeArray access below uses an in-range index on that live vector.
++        unsafe {
++            assert_eq!(value.Anonymous.Anonymous.vt, VT_ARRAY | VT_R8);
++            let array = value.Anonymous.Anonymous.Anonymous.parray;
++            assert!(!array.is_null(), "rect variant must own a SAFEARRAY");
++            let low = windows::Win32::System::Ole::SafeArrayGetLBound(array, 1).expect("lbound");
++            let high = windows::Win32::System::Ole::SafeArrayGetUBound(array, 1).expect("ubound");
++            assert_eq!(high - low + 1, 4, "UIA requires exactly four values");
++            let mut out = [0.0f64; 4];
++            for offset in 0..4 {
++                assert!(windows::Win32::System::Ole::SafeArrayGetElement(
++                    array,
++                    &(low + offset),
++                    (&mut out[offset as usize] as *mut f64).cast()
++                )
++                .is_ok());
++            }
++            assert_eq!(out, [10.0, 20.0, 30.0, 40.0]);
++        }
++    }
+     // Only the runtime-id test reads a COM array back, so this import stays out of the library
+     // build (where it would be unused).
+     use windows::Win32::System::Ole::SafeArrayGetElement;
+diff --git a/src/ui/containers.rs b/src/ui/containers.rs
+index b6695ef..21c16a0 100644
+--- a/src/ui/containers.rs
++++ b/src/ui/containers.rs
+@@ -560,6 +560,10 @@ impl Widget for Clickable {
+     fn focusable(&self) -> bool {
+         true
+     }
++    /// 可点击容器具备语义激活能力：UIA 的 Invoke pattern 据此暴露，与角色类型无关。
++    fn accessibility_invokable(&self) -> bool {
++        true
++    }
+     fn take_click(&mut self, f: ClickFn) {
+         self.on_click = Some(f);
+     }
