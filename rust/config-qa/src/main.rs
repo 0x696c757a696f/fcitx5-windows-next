@@ -33,7 +33,7 @@ mod windows_driver {
     const UIA_CONTROL_TYPE_PROPERTY_ID: i32 = 30003;
     const UIA_IS_KEYBOARD_FOCUSABLE_PROPERTY_ID: i32 = 30009;
     const UIA_IS_ENABLED_PROPERTY_ID: i32 = 30010;
-    const UIA_BOUNDING_RECTANGLE_PROPERTY_ID: i32 = 30020;
+    const UIA_BOUNDING_RECTANGLE_PROPERTY_ID: i32 = 30001;
     const UIA_INVOKE_PATTERN_ID: i32 = 10000;
     const BUTTON: i32 = 50000;
     const TEXT: i32 = 50020;
@@ -73,7 +73,7 @@ mod windows_driver {
     }
     #[repr(C)] struct ElementVtable {
         qi: usize, add_ref: usize, release: unsafe extern "system" fn(*mut Element) -> u32,
-        set_focus: usize, get_runtime_id: usize, find_first: usize,
+        set_focus: unsafe extern "system" fn(*mut Element) -> Hresult, get_runtime_id: usize, find_first: usize,
         find_all: unsafe extern "system" fn(*mut Element, i32, *mut Condition, *mut *mut ElementArray) -> Hresult,
         find_first_build_cache: usize, find_all_build_cache: usize, build_updated_cache: usize,
         get_current_property_value: unsafe extern "system" fn(*mut Element, i32, *mut Variant) -> Hresult,
@@ -96,7 +96,7 @@ mod windows_driver {
 
     #[link(name = "ole32")] unsafe extern "system" { fn CoInitializeEx(p: *mut c_void, flags: Dword) -> Hresult; fn CoUninitialize(); fn CoCreateInstance(c: *const Guid, o: *mut c_void, ctx: Dword, i: *const Guid, p: *mut *mut c_void) -> Hresult; }
     #[link(name = "oleaut32")] unsafe extern "system" { fn SysStringLen(p: *const u16) -> u32; fn SysFreeString(p: *mut u16); fn SafeArrayGetLBound(a: *mut c_void, d: Dword, p: *mut i32) -> Hresult; fn SafeArrayGetUBound(a: *mut c_void, d: Dword, p: *mut i32) -> Hresult; fn SafeArrayGetElement(a: *mut c_void, idx: *const i32, out: *mut c_void) -> Hresult; fn VariantClear(v: *mut Variant) -> Hresult; }
-    #[link(name = "user32")] unsafe extern "system" { fn EnumWindows(f: unsafe extern "system" fn(Hwnd, Lparam) -> Bool, l: Lparam) -> Bool; fn GetWindowThreadProcessId(w: Hwnd, p: *mut Dword) -> Dword; fn GetClassNameW(w: Hwnd, b: *mut u16, n: i32) -> i32; fn GetWindowRect(w: Hwnd, r: *mut Rect) -> Bool; fn OpenInputDesktop(flags: Dword, inherit: Bool, access: Dword) -> Handle; fn GetProcessWindowStation() -> Handle; fn GetUserObjectInformationW(h: Handle, index: i32, data: *mut c_void, len: Dword, needed: *mut Dword) -> Bool; fn CloseDesktop(h: Handle) -> Bool; fn CloseWindowStation(h: Handle) -> Bool; }
+    #[link(name = "user32")] unsafe extern "system" { fn EnumWindows(f: unsafe extern "system" fn(Hwnd, Lparam) -> Bool, l: Lparam) -> Bool; fn GetWindowThreadProcessId(w: Hwnd, p: *mut Dword) -> Dword; fn GetClassNameW(w: Hwnd, b: *mut u16, n: i32) -> i32; fn GetWindowRect(w: Hwnd, r: *mut Rect) -> Bool; fn OpenInputDesktop(flags: Dword, inherit: Bool, access: Dword) -> Handle; fn SetForegroundWindow(w: Hwnd) -> Bool; fn ShowWindow(w: Hwnd, cmd: i32) -> Bool; fn SendMessageW(w: Hwnd, msg: u32, wp: usize, lp: isize) -> isize; fn GetProcessWindowStation() -> Handle; fn GetUserObjectInformationW(h: Handle, index: i32, data: *mut c_void, len: Dword, needed: *mut Dword) -> Bool; fn CloseDesktop(h: Handle) -> Bool; fn CloseWindowStation(h: Handle) -> Bool; }
     #[link(name = "kernel32")] unsafe extern "system" { fn GetTempPathW(n: Dword, b: *mut u16) -> Dword; fn OpenProcess(access: Dword, inherit: Bool, pid: Dword) -> Handle; fn TerminateProcess(h: Handle, code: u32) -> Bool; fn CloseHandle(h: Handle) -> Bool; }
 
     #[derive(Clone)] struct Args { exe: PathBuf, locale: String, report: Option<PathBuf> }
@@ -106,7 +106,9 @@ mod windows_driver {
     struct Com { automation: *mut Automation, root: *mut Element, array: *mut ElementArray, condition: *mut Condition }
     struct Case { strings: Strings, hwnd: Hwnd, window_rect: Rect, root_control_type: i32, items: Vec<Item>, com: Com, child: Child, app: PathBuf, config_path: PathBuf, ui_before: String }
 
-    pub fn main() { let code = match run() { Ok(json) => { println!("{json}"); 0 }, Err(error) => { println!("{{\"result\":\"FAIL\",\"reason\":{}}}", json_string(&error)); 1 }, }; std::process::exit(code); }
+    fn probe_hwnd_from_args() -> Option<Hwnd> { let mut it = std::env::args_os().skip(1); while let Some(a) = it.next() { if a == "--probe-hwnd" { let raw = it.next()?.to_string_lossy().into_owned(); let digits = raw.trim_start_matches("0x"); return usize::from_str_radix(digits, 16).ok().map(|value| value as Hwnd); } } None }
+    fn run_probe(hwnd: Hwnd) -> Result<String, String> { let com = unsafe { Com::new(hwnd)? }; let ct = unsafe { property_i4(com.root, UIA_CONTROL_TYPE_PROPERTY_ID) }; let rect = unsafe { variant(com.root, UIA_BOUNDING_RECTANGLE_PROPERTY_ID) }; let ex = unsafe { variant_ex(com.root, UIA_BOUNDING_RECTANGLE_PROPERTY_ID) }; let (rvt, rd1) = match &rect { Ok(v) => (format!("0x{:04x}", v.vt), format!("0x{:x}", v.data1)), Err(error) => ("err".to_owned(), error.clone()) }; let evt = match &ex { Ok(v) => format!("0x{:04x}", v.vt), Err(error) => error.clone() }; Ok(format!("{{\"probe_hwnd\":\"0x{:x}\",\"control_type\":{:?},\"rect_vt\":\"{}\",\"rect_data1\":\"{}\",\"rect_ex_vt\":\"{}\"}}", hwnd as usize, ct, rvt, rd1, evt)) }
+    pub fn main() { if let Some(hwnd) = probe_hwnd_from_args() { let code = match run_probe(hwnd) { Ok(json) => { println!("{json}"); 0 }, Err(error) => { println!("{{\"result\":\"FAIL\",\"reason\":{}}}", json_string(&error)); 1 }, }; std::process::exit(code); } let code = match run() { Ok(json) => { println!("{json}"); 0 }, Err(error) => { println!("{{\"result\":\"FAIL\",\"reason\":{}}}", json_string(&error)); 1 }, }; std::process::exit(code); }
 
     fn run() -> Result<String, String> {
         let args = parse_args(std::env::args_os().skip(1))?;
@@ -117,6 +119,8 @@ mod windows_driver {
         let mut child = Command::new(app.join("fcitx5-config.exe")).arg(format!("--lang={}", args.locale)).current_dir(&app).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("launch Settings: {e}"))?;
         let hwnd = match find_window_until(child.id(), Duration::from_secs(20)) { Ok(h) => h, Err(_) => { terminate(&mut child); return Ok(skip_json(&args.locale, "Settings window not found within 20 seconds")); } };
         let mut window_rect = Rect::default(); unsafe { GetWindowRect(hwnd, &mut window_rect); }
+        unsafe { ShowWindow(hwnd, 5); SetForegroundWindow(hwnd); }
+        sleep(Duration::from_millis(400));
         let mut com = Com::new(hwnd)?;
         let root_control_type = unsafe { property_i4(com.root, UIA_CONTROL_TYPE_PROPERTY_ID)? };
         if root_control_type != WINDOW { return fail_case(&mut child, &com, format!("root ControlType {root_control_type}, expected {WINDOW}")); }
@@ -137,6 +141,21 @@ mod windows_driver {
             return fail_case(&mut case.child, &case.com, format!("Appearance navigation did not expose candidate section within 5 seconds: {:?}", case.strings.section));
         }
         eprintln!("TRACE navigation-window-done validating");
+        if let Some(section) = case.items.iter().find(|item| item.name == case.strings.section) { unsafe { let _ = ((*(*section.element).vtable).set_focus)(section.element); } sleep(Duration::from_millis(250)); }
+        unsafe { SendMessageW(hwnd, 0x0005, 0, (((window_rect.bottom - window_rect.top) as isize) << 16) | ((window_rect.right - window_rect.left) as isize & 0xffff)); }
+        sleep(Duration::from_millis(200));
+        let mut stable = 0usize;
+        let layout_start = Instant::now();
+        while layout_start.elapsed() < Duration::from_secs(20) {
+            case.items = unsafe { refresh_items(&mut case.com)? };
+            let ready = visible_count(&case.items, &case.strings.section) >= 1
+                && visible_count(&case.items, &case.strings.nav) >= 1
+                && visible_count(&case.items, &case.strings.apply) >= 1
+                && case.strings.layouts.iter().all(|layout| visible_count(&case.items, layout) >= 1)
+                && (1..=9).all(|value| visible_count(&case.items, &value.to_string()) >= 1);
+            if ready { stable += 1; if stable >= 3 { break; } } else { stable = 0; }
+            sleep(Duration::from_millis(150));
+        }
         validate(&case)?;
         eprintln!("TRACE semantics-validated");
         eprintln!("TRACE about-to-invoke-flow");
@@ -155,7 +174,19 @@ mod windows_driver {
         let after = json_string_value_in_object(&readback, "ui", "language").unwrap_or_default();
         if layout != "flow" || page_size != 7 { return fail_case(&mut case.child, &case.com, format!("readback candidate expected layout_type=flow,page_size=7, got {layout},{page_size}")); }
         if after != case.ui_before { return fail_case(&mut case.child, &case.com, format!("readback ui.language changed from {:?} to {:?}", case.ui_before, after)); }
-        case.items = unsafe { refresh_items(&mut case.com)? };
+        let mut rect_stable = 0usize;
+        unsafe { SendMessageW(hwnd, 0x0005, 0, (((window_rect.bottom - window_rect.top) as isize) << 16) | ((window_rect.right - window_rect.left) as isize & 0xffff)); }
+        sleep(Duration::from_millis(200));
+        let rect_start = Instant::now();
+        while rect_start.elapsed() < Duration::from_secs(20) {
+            case.items = unsafe { refresh_items(&mut case.com)? };
+            let ready = visible_count(&case.items, &case.strings.section) >= 1
+                && visible_count(&case.items, &case.strings.apply) >= 1
+                && case.strings.layouts.iter().all(|layout| visible_count(&case.items, layout) >= 1)
+                && (1..=9).all(|value| visible_count(&case.items, &value.to_string()) >= 1);
+            if ready { rect_stable += 1; if rect_stable >= 3 { break; } } else { rect_stable = 0; }
+            sleep(Duration::from_millis(150));
+        }
         let fresh_root_rect = unsafe { property_rect(case.com.root) };
         let stale = stale_check(&mut case)?;
         let rect_notes = rect_failures(&case, &fresh_root_rect);
@@ -207,12 +238,13 @@ mod windows_driver {
     unsafe fn property_bool(e: *mut Element, id: i32) -> Result<bool, String> { let v = variant(e, id)?; if v.vt != VT_BOOL { return Err(format!("property {id} returned VARIANT vt {}", v.vt)); } Ok(v.data1 as i16 == VARIANT_TRUE) }
     unsafe fn property_name(e: *mut Element) -> Result<String, String> { let v = variant(e, UIA_NAME_PROPERTY_ID)?; if v.vt != VT_BSTR || v.data1 == 0 { return Ok(String::new()); } let p = v.data1 as *mut u16; let n = SysStringLen(p) as usize; let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n)); SysFreeString(p); Ok(s) }
     unsafe fn variant_ex(e: *mut Element, id: i32) -> Result<Variant, String> { let mut v = Variant { vt: 0, r1: 0, r2: 0, r3: 0, data1: 0, data2: 0 }; let hr = ((*(*e).vtable).get_current_property_value_ex)(e, id, 1, &mut v); if hr < 0 { return Err(format!("GetCurrentPropertyValueEx({id}) HRESULT 0x{hr:08x}")); } Ok(v) }
-    unsafe fn property_rect(e: *mut Element) -> Result<[f64; 4], String> { let v = variant(e, UIA_BOUNDING_RECTANGLE_PROPERTY_ID)?; if v.vt != (VT_ARRAY | VT_R8) { let exvt = match variant_ex(e, UIA_BOUNDING_RECTANGLE_PROPERTY_ID) { Ok(x) => format!("vt=0x{:04x}", x.vt), Err(e2) => e2 }; return Err(format!("BoundingRectangle VARIANT vt=0x{:04x} data1=0x{:x} (expected 0x2005); GetCurrentPropertyValueEx(ignoreDefault=TRUE) -> {exvt}", v.vt, v.data1)); } let a = v.data1 as *mut c_void; let mut low = 0; let mut high = 0; if SafeArrayGetLBound(a, 1, &mut low) < 0 || SafeArrayGetUBound(a, 1, &mut high) < 0 { return Err(format!("BoundingRectangle SAFEARRAY bounds unreadable lb={low} ub={high}")); } let mut out = [0.0; 4]; for i in low..=high { if i - low < 4 { SafeArrayGetElement(a, &i, (&mut out[(i - low) as usize] as *mut f64).cast()); } } VariantClear((&v as *const Variant).cast_mut()); Ok(out) }
+    unsafe fn property_rect(e: *mut Element) -> Result<[f64; 4], String> { let v = variant(e, UIA_BOUNDING_RECTANGLE_PROPERTY_ID)?; if v.vt != (VT_ARRAY | VT_R8) { let exvt = match variant_ex(e, UIA_BOUNDING_RECTANGLE_PROPERTY_ID) { Ok(x) => format!("vt=0x{:04x}", x.vt), Err(e2) => e2 }; return Err(format!("BoundingRectangle VARIANT vt=0x{:04x} data1=0x{:x} (expected 0x2005); GetCurrentPropertyValueEx(ignoreDefault=TRUE) -> {exvt}", v.vt, v.data1)); } let a = v.data1 as *mut c_void; let mut low = 0; let mut high = 0; if SafeArrayGetLBound(a, 1, &mut low) < 0 || SafeArrayGetUBound(a, 1, &mut high) < 0 { return Err(format!("BoundingRectangle SAFEARRAY bounds unreadable lb={low} ub={high}")); } let mut out = [0.0; 4]; for i in low..=high { if i - low < 4 { SafeArrayGetElement(a, &i, (&mut out[(i - low) as usize] as *mut f64).cast()); } } VariantClear((&v as *const Variant).cast_mut()); Ok([out[0], out[1], out[0] + out[2], out[1] + out[3]]) }
     unsafe fn has_invoke(e: *mut Element) -> bool { let mut p = null_mut(); let hr = ((*(*e).vtable).get_current_pattern)(e, UIA_INVOKE_PATTERN_ID, &mut p); if hr != S_OK || p.is_null() { return false; } ((*((p as *mut Unknown).read()).vtable).release)(p.cast()); true }
     unsafe fn refresh_items(com: &mut Com) -> Result<Vec<Item>, String> { if !com.array.is_null() { ((*(*com.array).vtable).release)(com.array); com.array = null_mut(); } let mut hr = 0; let mut attempts = 0; while attempts < 40 { hr = ((*(*com.root).vtable).find_all)(com.root, TREE_SCOPE_DESCENDANTS, com.condition, &mut com.array); if hr >= 0 && !com.array.is_null() { break; } attempts += 1; sleep(Duration::from_millis(100)); } if hr < 0 || com.array.is_null() { return Err(format!("FindAll HRESULT 0x{hr:08x} after {attempts} retries")); } let mut len = 0; ((*(*com.array).vtable).length)(com.array, &mut len); let mut out = Vec::with_capacity(len as usize); for i in 0..len { let mut e = null_mut(); let hr = ((*(*com.array).vtable).get_element)(com.array, i, &mut e); if hr < 0 || e.is_null() { return Err(format!("element array index {i} HRESULT 0x{hr:08x}")); } let (rect, rect_error) = rect_soft(e); out.push(Item { element: e, name: property_name(e)?, control_type: property_i4(e, UIA_CONTROL_TYPE_PROPERTY_ID)?, enabled: property_bool(e, UIA_IS_ENABLED_PROPERTY_ID)?, focusable: property_bool(e, UIA_IS_KEYBOARD_FOCUSABLE_PROPERTY_ID)?, rect, rect_error, invoke: has_invoke(e) }); } Ok(out) }
 
     unsafe fn rect_soft(e: *mut Element) -> ([f64; 4], Option<String>) { match property_rect(e) { Ok(v) => (v, None), Err(err) => ([0.0; 4], Some(err)) } }
-    fn rect_failures(case: &Case, root_rect: &Result<[f64; 4], String>) -> Vec<String> { let mut out = Vec::new(); let r = case.window_rect; match root_rect { Ok(v) => { if v[2] <= v[0] || v[3] <= v[1] { out.push(format!("root rect empty {v:?}")); } else if v[0] < r.left as f64 || v[1] < r.top as f64 || v[2] > r.right as f64 || v[3] > r.bottom as f64 { out.push(format!("root rect {v:?} outside window rect")); } }, Err(e) => out.push(format!("root rect unreadable: {e}")) } for item in &case.items { if let Some(err) = &item.rect_error { out.push(format!("{} rect unavailable: {err}", item.name)); } else if item.rect[2] <= item.rect[0] || item.rect[3] <= item.rect[1] { out.push(format!("{} rect empty {:?}", item.name, item.rect)); } else if item.rect[0] < r.left as f64 || item.rect[1] < r.top as f64 || item.rect[2] > r.right as f64 || item.rect[3] > r.bottom as f64 { out.push(format!("{} rect {:?} outside window rect", item.name, item.rect)); } } out }
+    fn visible_count(items: &[Item], name: &str) -> usize { items.iter().filter(|item| item.name == name && item.rect_error.is_none() && item.rect[2] > item.rect[0] && item.rect[3] > item.rect[1]).count() }
+    fn rect_failures(case: &Case, _root_rect: &Result<[f64; 4], String>) -> Vec<String> { let mut out = Vec::new(); let r = case.window_rect; let s = &case.strings; let mut asserted: Vec<String> = vec![s.nav.clone(), s.section.clone(), s.apply.clone(), s.cancel.clone(), s.reset.clone()]; for layout in s.layouts.iter() { asserted.push(layout.clone()); } for value in 1..=9 { asserted.push(value.to_string()); } let mut table: Vec<String> = Vec::new(); for name in &asserted { let mut visible = 0usize; let mut observed: Vec<String> = Vec::new(); for item in case.items.iter().filter(|item| &item.name == name) { match &item.rect_error { Some(err) => observed.push(format!("unavailable({err})")), None => observed.push(format!("{:?}", item.rect)) } if item.rect_error.is_some() { continue; } if item.rect[2] <= item.rect[0] || item.rect[3] <= item.rect[1] { continue; } visible += 1; if item.rect[0] < r.left as f64 || item.rect[1] < r.top as f64 || item.rect[2] > r.right as f64 || item.rect[3] > r.bottom as f64 { out.push(format!("{name} rect {:?} outside window rect", item.rect)); } } table.push(format!("{name}[{visible}]={}", observed.join("+"))); if visible == 0 { out.push(format!("{name} has no visible instance with a non-empty bounding rect; observed: {}", observed.join(" , "))); } } if !out.is_empty() { out.push(format!("TABLE {}", table.join(" | "))); } out }
     fn validate_nav(case: &Case) -> Result<(), String> { let s = &case.strings; let named: Vec<_> = case.items.iter().filter(|i| i.name == s.nav).collect(); let nav_matches: Vec<_> = named.iter().filter(|i| i.invoke).copied().collect(); if nav_matches.len() != 1 { let detail: Vec<String> = named.iter().map(|i| format!("type={} invoke={} enabled={} focusable={} rect={:?}", i.control_type, i.invoke, i.enabled, i.focusable, i.rect)).collect(); return Err(format!("nav.appearance {:?} invoke-capable entries = {} (expected exactly one); total with that name = {}; details: {}", s.nav, nav_matches.len(), named.len(), detail.join(" | "))); } let nav = nav_matches[0]; if !nav.enabled { return Err(format!("nav.appearance {:?} enabled={}", s.nav, nav.enabled)); } Ok(()) }
     fn validate(case: &Case) -> Result<(), String> { let s = &case.strings; let required = [(&s.apply, BUTTON, false, "settings.candidate.apply"), (&s.section, TEXT, false, "settings.candidate.section"), (&s.reset, BUTTON, false, "settings.candidate.reset"), (&s.cancel, BUTTON, false, "settings.candidate.cancel")]; for (name, ty, needs_invoke, key) in required { let matches: Vec<_> = case.items.iter().filter(|i| i.name == *name).collect(); if matches.is_empty() { return Err(format!("missing {key} element named {:?}", name)); } if matches.len() > 1 && (ty == BUTTON || needs_invoke) { return Err(format!("duplicate {key} element named {:?}", name)); } for item in matches { check_item(case, item, ty, needs_invoke, key)?; } }
         for name in &s.layouts { let matches: Vec<_> = case.items.iter().filter(|i| i.name == *name).collect(); if matches.len() != 1 { return Err(format!("layout {:?} enumerated {} times, expected exactly one", name, matches.len())); } check_item(case, matches[0], BUTTON, true, "layout")?; }
@@ -243,7 +275,7 @@ mod preview_qa;
 
 #[cfg(windows)]
 fn main() {
-    if std::env::args_os().any(|value| value == "--uia-smoke") {
+    if std::env::args_os().any(|value| value == "--uia-smoke" || value == "--probe-hwnd") {
         windows_driver::main();
     } else {
         preview_qa::main();
