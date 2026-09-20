@@ -181,5 +181,6 @@
   "settings.candidate.count.desc": "每頁候選字上限（1-9）",
   "settings.candidate.vertical_text_columns": "直排文字欄位方向",
   "settings.candidate.vertical_text_columns.desc": "僅直排文字版面可選",
-  "settings.candidate.reset": "重設"
+  "settings.candidate.reset": "重設",
+  "action.save_settings": "儲存設定"
 }

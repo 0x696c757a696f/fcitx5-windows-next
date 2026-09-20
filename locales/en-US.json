@@ -181,5 +181,6 @@
   ,"settings.candidate.count.desc": "Maximum candidates per page (1-9)"
   ,"settings.candidate.vertical_text_columns": "Vertical text column direction"
   ,"settings.candidate.vertical_text_columns.desc": "Available for the vertical text layout only"
-  ,"settings.candidate.reset": "Reset"
+  ,"settings.candidate.reset": "Reset",
+  "action.save_settings": "Save settings"
 }

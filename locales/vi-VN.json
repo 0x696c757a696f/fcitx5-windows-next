@@ -181,5 +181,6 @@
   "settings.candidate.count.desc": "Số gợi ý tối đa mỗi trang (1-9)",
   "settings.candidate.vertical_text_columns": "Hướng cột chữ dọc",
   "settings.candidate.vertical_text_columns.desc": "Chỉ áp dụng cho bố cục chữ dọc",
-  "settings.candidate.reset": "Đặt lại"
+  "settings.candidate.reset": "Đặt lại",
+  "action.save_settings": "Lưu cài đặt"
 }

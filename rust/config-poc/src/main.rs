@@ -1816,7 +1816,7 @@ fn windui_settings_root(
                 .outline()
                 .neutral(),
         )
-        .child(WindUiElement::button(locale_catalog::label("action.apply", "保存设置")).small());
+        .child(WindUiElement::button(locale_catalog::label("action.save_settings", "保存设置")).small());
 
     let body = WindUiElement::col()
         .fill()

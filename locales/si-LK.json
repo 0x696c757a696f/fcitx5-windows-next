@@ -181,5 +181,6 @@
   "settings.candidate.count.desc": "එක් පිටුවක උපරිම අපේක්ෂක ගණන (1-9)",
   "settings.candidate.vertical_text_columns": "සිරස් පෙළ තීරු දිශාව",
   "settings.candidate.vertical_text_columns.desc": "සිරස් පෙළ පිරිසැලසුමට පමණි",
-  "settings.candidate.reset": "යළි සකසන්න"
+  "settings.candidate.reset": "යළි සකසන්න",
+  "action.save_settings": "සැකසුම් සුරකින්න"
 }

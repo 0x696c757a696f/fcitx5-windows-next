@@ -181,5 +181,6 @@
   "settings.candidate.count.desc": "1ページあたりの最大候補数（1〜9）",
   "settings.candidate.vertical_text_columns": "縦書きの列方向",
   "settings.candidate.vertical_text_columns.desc": "縦書きレイアウトのみ選択できます",
-  "settings.candidate.reset": "リセット"
+  "settings.candidate.reset": "リセット",
+  "action.save_settings": "設定を保存"
 }

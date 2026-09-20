@@ -181,5 +181,6 @@
   "settings.candidate.count.desc": "จำนวนคำแนะนำสูงสุดต่อหน้า (1-9)",
   "settings.candidate.vertical_text_columns": "ทิศทางคอลัมน์ข้อความแนวตั้ง",
   "settings.candidate.vertical_text_columns.desc": "ใช้ได้กับเค้าโครงข้อความแนวตั้งเท่านั้น",
-  "settings.candidate.reset": "รีเซ็ต"
+  "settings.candidate.reset": "รีเซ็ต",
+  "action.save_settings": "บันทึกการตั้งค่า"
 }
