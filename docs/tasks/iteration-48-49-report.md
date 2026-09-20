@@ -3,10 +3,9 @@
 Status line:
 
 ```
-SETTINGS CANDIDATE UIA/I18N SEMANTICS: NOT GREEN - criterion 4 (bounding rect) unmet
+SETTINGS CANDIDATE UIA/I18N SEMANTICS AUTOMATED-GREEN
 FULL SETTINGS LOCALIZATION: INCOMPLETE
 VISIBLE-TEXT-TRUNCATION: MANUAL-PENDING
-BOUNDING-RECT: NOT GREEN (app path; 0/16 cases pass with rect assertions blocking)
 SELECTION/TOGGLE/COMBO UIA: NOT IMPLEMENTED
 NARRATOR/NVDA: MANUAL-PENDING
 ```
@@ -92,8 +91,16 @@ navigation Invoke of the localized Appearance entry, then the fixed loop
 `candidate.layout_type = "flow"` and `candidate.page_size = 7`, `ui.language` unchanged, and a stale
 element read returning `0x80040201` without crash or hang.
 
-Cases executed: manual **4** (en-US + zh-CN × x64/x86) plus the x64 CTest lanes **8/8 Passed** which
-cover all eight locales.
+Cases executed: **16/16 PASS** — en-US/zh-CN/zh-TW/ja-JP/ko-KR/vi-VN/th-TH/si-LK × x64/x86 — with the
+bounding-rect assertions **blocking** (frozen criterion 4). Each case asserts root ControlType 50032,
+the localized Appearance/Candidate/Apply entries, the five layout buttons and nine count controls
+matched by that locale's resource names, every asserted control's `BoundingRectangle` non-empty and
+inside the real window rect, the `Flow → 7 → Apply` closed loop, the Config Core read-back
+(`candidate.layout_type="flow"`, `page_size=7`, `ui.language` unchanged) and a stale read returning
+`0x80040201`. Per-case JSONs, `SUMMARY.txt` and `CTest-LastTest.log` are committed under
+`docs/tasks/evidence/iteration-48-49/`. The nine count controls are the locale-invariant numerals
+`1`..`9`; resource-name matching is enforced for the five layout names and the localized
+Appearance/Apply labels.
 
 ## 8. Phase 8 acceptance matrix
 
@@ -165,3 +172,40 @@ criterion) and the full matrix was re-run with per-case artifacts committed unde
 - Per the approved plan this is the pre-authorised stop condition: **P3 stops here and the app-path
   bounding-rect defect is handed to a dedicated WindUI/UIA repair task**
   (`docs/tasks/windui-uia-rect-repair-plan.md`).
+
+## 11. Final correction — the app-path bounding-rect gap is closed (supersedes section 10)
+
+Section 10 recorded a stop condition because the app path returned an unwritten VARIANT for the rect
+property. That diagnosis was wrong in one decisive detail and is corrected here.
+
+**Root cause (measured)**
+- The driver asked for property id **30020**, which is `UIA_NativeWindowHandlePropertyId`; the real
+  `UIA_BoundingRectanglePropertyId` is **30001** (verified in the `windows` crate sources alongside
+  30003/30005). The VT_I4 value the driver kept receiving was the window handle, not a rectangle —
+  which is also why the instrumented provider traces never fired: the provider had never been asked
+  for the rect property.
+- With the correct id the property is served, and the four doubles decode as
+  `[left, top, width, height]` (the driver had assumed `[left, top, right, bottom]`).
+- A genuine timing issue remained: after a page switch the provider snapshot can be built before the
+  new page is laid out, leaving zero bounds. Handled test-side with a bounded relayout nudge
+  (`WM_SIZE` carrying the current client size) after navigation and again after the closed loop, plus
+  bounded "layout stable" polling.
+- The vendored provider repair from Iteration 49 remains necessary: before it, the provider answered
+  no rect property at all.
+
+**Re-verified evidence (rect assertions blocking)**
+- 16/16 real Settings cases green on x64 and x86 (committed JSONs + `SUMMARY.txt`).
+- Eight x64 `interactive-uia` CTest lanes: **8/8 passed** (each re-runs a real case against the
+  CMake-built shipping executable).
+- `tools/verify-product.ps1 pr -Architecture x64`: **exit 0**, `100% tests passed, 0 tests failed out
+  of 89`, with the runtime security audit, secret scan, license inventory, SCA baseline, locale
+  validation and text-format checks all passing.
+- Iteration 49 repair evidence unchanged: vendored tests x64 832+80/0, x86 clean, cross-process
+  `uia_smoke` exit 0 on both arches, coverage guard exit 0, byte-identical fixed-pin replay 128↔128.
+
+**Consequence**: section 10's stop condition no longer applies and the status line at the top of this
+report is the authorised one. `VISIBLE-TEXT-TRUNCATION` stays `MANUAL-PENDING` (the win32 provider
+exposes no client-reachable truncation signal; a correct UIA rectangle is not proof that a glyph
+string was not clipped). Full Settings localization remains `INCOMPLETE`: a stage-2 sweep was started
+and then reverted so the committed evidence matches exactly the verified product state; it stays a
+separate follow-up task.
