@@ -159,9 +159,11 @@ mod windows_driver {
         let fresh_root_rect = unsafe { property_rect(case.com.root) };
         let stale = stale_check(&mut case)?;
         let rect_notes = rect_failures(&case, &fresh_root_rect);
-        let rect_state = if rect_notes.is_empty() { "AUTOMATED-GREEN".to_owned() } else { format!("MANUAL-PENDING:{} element(s) unavailable", rect_notes.len()) };
+        if !rect_notes.is_empty() {
+            return fail_case(&mut case.child, &case.com, format!("BoundingRectangle assertions failed for {} element(s): {}", rect_notes.len(), rect_notes.iter().take(3).cloned().collect::<Vec<_>>().join(" | ")));
+        }
         let json = success_json(&case, &layout, page_size, &after, stale);
-        let json = format!("{},\"bounding_rect_status\":\"{}\"}}", json.trim_end_matches('}'), rect_state);
+        let json = format!("{},\"bounding_rect_status\":\"AUTOMATED-GREEN\"}}", json.trim_end_matches('}'));
         if let Some(path) = &args.report { fs::write(path, &json).map_err(|e| format!("write report {}: {e}", path.display()))?; }
         Ok(json)
     }

@@ -3,10 +3,10 @@
 Status line:
 
 ```
-SETTINGS CANDIDATE UIA/I18N SEMANTICS AUTOMATED-GREEN
+SETTINGS CANDIDATE UIA/I18N SEMANTICS: NOT GREEN - criterion 4 (bounding rect) unmet
 FULL SETTINGS LOCALIZATION: INCOMPLETE
 VISIBLE-TEXT-TRUNCATION: MANUAL-PENDING
-BOUNDING-RECT (app path): MANUAL-PENDING
+BOUNDING-RECT: NOT GREEN (app path; 0/16 cases pass with rect assertions blocking)
 SELECTION/TOGGLE/COMBO UIA: NOT IMPLEMENTED
 NARRATOR/NVDA: MANUAL-PENDING
 ```
@@ -36,7 +36,7 @@ list (`--lang=fr-FR` → exit 2 both arches); accepted values exit 0; never writ
 
 ## 4. Locale resources (verified)
 
-8 files, **182 keys each**, exact parity, UTF-8, no BOM, non-empty (`tools/check-locales.ps1` exit 0).
+8 files, **183 keys each** (measured; an earlier draft said 182), exact parity, UTF-8, no BOM, non-empty (`tools/check-locales.ps1` exit 0).
 15 new `settings.candidate.*` keys authored in all 8 locales; all 120 strings diffed byte-for-byte
 against the spec (including a Zero-Width-Joiner correction in the 5 si-LK values). 7 non-en-US
 locales each differ from en-US in all 15 new keys (anchor criterion).
@@ -85,7 +85,7 @@ was not rewritten; coverage guard exit 0 (12 covered / 168 upstream / 128 vendor
 `interactive-uia`, `SKIP_RETURN_CODE 77` and `TIMEOUT 120`.
 
 Measured per case (all exit 0): root `ControlType = 50032`, 65 descendants, 26 Buttons, **37
-invoke-capable**, the 5 layout names and 9 digit names matching the locale resource exactly,
+invoke-capable**, the 5 layout names matching the locale resource exactly and the nine count controls being the locale-invariant digits `1`..`9`,
 navigation Invoke of the localized Appearance entry, then the fixed loop
 `Flow → 7 → Apply`, then a Config Core reload via the product's own CLI
 (`fcitx5-config.exe --config <app>/data/config.toml get`) asserting
@@ -140,3 +140,28 @@ original implementation was restored from `159c579` as its own module and `main`
    produced when that worker died (infrastructure failure). Not folded into the Iteration 49 vendor
    repair, as required.
 6. **`NARRATOR/NVDA: MANUAL-PENDING`**, `SELECTION/TOGGLE/COMBO UIA: NOT IMPLEMENTED` — unchanged.
+
+## 10. Correction (supersedes section 7 and section 9 items 1 and 3)
+
+After this report was first written, the bounding-rect assertion was restored to **blocking** (the frozen
+criterion) and the full matrix was re-run with per-case artifacts committed under
+`docs/tasks/evidence/iteration-48-49/`:
+
+- **16 real cases** (en-US, zh-CN, zh-TW, ja-JP, ko-KR, vi-VN, th-TH, si-LK × x64/x86) → **0/16 pass**.
+  Every case fails **only** on the bounding-rect clause; the navigation Invoke, the semantic assertions,
+  the `Flow → 7 → Apply` round-trip, the Config Core read-back and the stale-element check all still
+  succeed, as recorded in each case log (`SUMMARY.txt` carries the exit code and reason per case).
+- The eight x64 `interactive-uia` CTest lanes therefore **fail** as well (same single clause);
+  `CTest-LastTest.log` is committed alongside the case logs.
+- Consequently the status line in section 1 is withdrawn and replaced by the honest block at the top of
+  this report: `SETTINGS CANDIDATE UIA/I18N SEMANTICS: NOT GREEN`.
+- Root cause summary (unchanged): the vendored provider repair is landed and proven cross-process by
+  `uia_smoke` (x64 + x86 exit 0, rect `VT_ARRAY|VT_R8` four finite values), but on the Settings
+  application path a cross-process client still receives an unwritten VARIANT
+  (`vt=0x0003`, or `0x000D` via `GetCurrentPropertyValueEx(ignoreDefaultValue=TRUE)`) for all 66
+  enumerated elements, including the root. Traces on both provider rect error branches
+  (`scaled_screen_rect`, `double_array_variant`) never fire, so the provider appears never to be
+  consulted for this property on that path.
+- Per the approved plan this is the pre-authorised stop condition: **P3 stops here and the app-path
+  bounding-rect defect is handed to a dedicated WindUI/UIA repair task**
+  (`docs/tasks/windui-uia-rect-repair-plan.md`).
