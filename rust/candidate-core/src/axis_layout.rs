@@ -337,30 +337,42 @@ fn paged_vertical(input: &AxisLayoutInput, options: CandidateLayoutOptions) -> A
     let padding_y = input.padding_y.max(0.0);
     let row_gap = input.row_gap.max(0.0);
     let max_count = page_capacity(input).min(input.items.len());
+    if max_count == 0 {
+        return AxisLayoutResult::default();
+    }
     let content_budget = (height_budget(input) - padding_y * 2.0).max(0.0);
-    let mut count = 0;
-    let mut width = 0.0_f32;
-    let mut height = 0.0_f32;
-    for item in input.items.iter().take(max_count) {
-        let next_height = if count == 0 {
-            item.height
-        } else {
-            height + row_gap + item.height
-        };
-        if count > 0 && next_height > content_budget {
+    let selected = input.selected.min(max_count - 1);
+    let mut first = selected;
+    let mut end = selected + 1;
+    let mut width = input.items[selected].width;
+    let mut height = input.items[selected].height;
+
+    while end < max_count {
+        let item = input.items[end];
+        let next_height = height + row_gap + item.height;
+        if next_height > content_budget {
             break;
         }
         width = width.max(item.width);
         height = next_height;
-        count += 1;
+        end += 1;
     }
-    count = count.max(1.min(max_count));
+    while first > 0 {
+        let item = input.items[first - 1];
+        let next_height = height + row_gap + item.height;
+        if next_height > content_budget {
+            break;
+        }
+        width = width.max(item.width);
+        height = next_height;
+        first -= 1;
+    }
     let window_width = (width + padding_x * 2.0).min(width_budget(input));
     let window_height = (height + padding_y * 2.0).min(height_budget(input));
     let (window, placement) = place_window(input, window_width, window_height);
     let mut y = window.top + padding_y;
-    let mut items = Vec::with_capacity(count);
-    for item in input.items.iter().take(count) {
+    let mut items = Vec::with_capacity(end - first);
+    for item in input.items.iter().take(end).skip(first) {
         let rect = Rect {
             left: window.left + padding_x,
             top: y,
@@ -383,7 +395,7 @@ fn paged_vertical(input: &AxisLayoutInput, options: CandidateLayoutOptions) -> A
             width: window_width,
             height: window_height,
         },
-        first_visible: 0,
+        first_visible: first,
     }
 }
 
@@ -800,6 +812,34 @@ mod tests {
                 assert!(entry.rect.top > result.items[local - 1].rect.bottom);
             }
         }
+    }
+
+    #[test]
+    fn paging_vertical_keeps_selected_candidate_in_a_short_viewport() {
+        let mut input = input(vec![item(100.0, 30.0); 4]);
+        input.options = options();
+        input.options.orientation = Orientation::Vertical;
+        input.options.overflow = OverflowBehavior::Paging;
+        input.max_height = 90.0;
+        input.padding_y = 8.0;
+        input.row_gap = 8.0;
+        input.page_size = 8;
+        input.selected = 3;
+
+        let result = layout(&input);
+
+        assert_eq!(result.first_visible, 2);
+        assert_eq!(result.items.len(), 2);
+        assert!(close(
+            result.items[0].rect.top,
+            result.window.top + input.padding_y
+        ));
+        assert!(close(
+            result.items[1].rect.top,
+            result.items[0].rect.bottom + input.row_gap
+        ));
+        assert!(result.items.iter().all(|item| item.visible));
+        assert!(result.items[1].rect.bottom <= result.window.bottom);
     }
 
     #[test]

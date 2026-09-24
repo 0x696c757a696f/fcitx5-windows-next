@@ -565,6 +565,11 @@ pub fn frame_update(
             .collect(),
         visible_indices: render_indices
             .into_iter()
+            .skip(if axis_result.items.len() < render_count {
+                axis_result.first_visible
+            } else {
+                0
+            })
             .take(assembly.item_count)
             .collect(),
         preedit_utf8,
