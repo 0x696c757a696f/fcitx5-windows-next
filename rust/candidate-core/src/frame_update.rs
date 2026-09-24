@@ -388,6 +388,8 @@ pub fn frame_update(
         dpi_scale: scale,
         max_width: measurement_max_width,
         window_padding_x: config.padding_x_dip * scale,
+        max_height: (work_area.bottom - work_area.top).max(0.0),
+        window_padding_y: config.padding_y_dip * scale,
     };
     let Some((items, preedit_panel_size, _scroll_label_column, horizontal_effective_width)) =
         measure_visual_items(

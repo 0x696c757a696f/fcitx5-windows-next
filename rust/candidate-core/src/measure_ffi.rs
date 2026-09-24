@@ -31,6 +31,11 @@ pub(crate) struct MeasureLoopParams {
     pub max_width: f32,
     /// Outer window padding included in `max_width`.
     pub window_padding_x: f32,
+    /// Hard total window height for vertical text. Zero keeps the legacy
+    /// unbounded helper behavior.
+    pub max_height: f32,
+    /// Outer vertical window padding included in `max_height`.
+    pub window_padding_y: f32,
 }
 
 /// The frozen measure loop over live arena outputs: optional scroll-label
@@ -117,27 +122,44 @@ pub(crate) fn measure_visual_items(
         let (width, height) = if params.vertical {
             let label = field(&output.label);
             let text = field(&output.text);
-            let mut width = 0.0_f32;
             let glyph_step = (params.font_size * VERTICAL_GLYPH_STEP_RATIO)
                 .ceil()
                 .max(1.0);
-            for (value, size) in [
-                (label.as_str(), params.label_font_size),
-                (text.as_str(), params.font_size),
-            ] {
-                for cluster in grapheme_clusters(value) {
-                    let (cluster_width, _) = engine.measure(cluster, size, params.dpi_scale);
-                    width = width.max(cluster_width);
-                }
+            let label_width = engine
+                .measure(&label, params.label_font_size, params.dpi_scale)
+                .0
+                .max(0.0);
+            let mut glyph_width = 0.0_f32;
+            let clusters = grapheme_clusters(&text);
+            for cluster in &clusters {
+                let (cluster_width, _) =
+                    engine.measure(cluster, params.font_size, params.dpi_scale);
+                glyph_width = glyph_width.max(cluster_width.max(0.0));
             }
             let label_height = if label.is_empty() {
                 0.0
             } else {
                 params.font_size
             };
+            // A vertical-writing candidate is indivisible for selection, but
+            // its glyph column is not: continue long text in adjacent columns
+            // before it reaches the work-area edge. Keep the same row budget
+            // in measurement and painting so the final grapheme is never
+            // silently clipped by the renderer's window bounds.
+            let available_height = if params.max_height > 0.0 {
+                (params.max_height
+                    - params.window_padding_y.max(0.0) * 2.0
+                    - params.item_padding_y.max(0.0) * 2.0
+                    - label_height)
+                    .max(glyph_step)
+            } else {
+                f32::INFINITY
+            };
+            let rows_per_column = (available_height / glyph_step).floor().max(1.0) as usize;
+            let columns = clusters.len().div_ceil(rows_per_column).max(1);
             (
-                width,
-                label_height + grapheme_clusters(text.as_str()).len() as f32 * glyph_step,
+                label_width.max(glyph_width) * columns as f32,
+                label_height + clusters.len().min(rows_per_column) as f32 * glyph_step,
             )
         } else {
             let (label, _, text, comment) = &fields[position];
@@ -259,6 +281,8 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
         dpi_scale,
         max_width: 0.0,
         window_padding_x: 0.0,
+        max_height: 0.0,
+        window_padding_y: 0.0,
     };
     let Some((items, panel, scroll_label_column_width, _horizontal_effective_width)) =
         measure_visual_items(engine, outputs, indices, preedit_text.as_deref(), &params)
@@ -482,6 +506,8 @@ mod tests {
             dpi_scale: 1.0,
             max_width: 240.0,
             window_padding_x: 12.0,
+            max_height: 0.0,
+            window_padding_y: 0.0,
         };
         let available = horizontal_available_width(
             params.max_width,
@@ -563,6 +589,8 @@ mod tests {
             dpi_scale: 1.0,
             max_width: 0.0,
             window_padding_x: 0.0,
+            max_height: 0.0,
+            window_padding_y: 0.0,
         };
         let (vertical_items, _, _, _) =
             measure_visual_items(&mut engine, &outputs, &indices, None, &vertical)
@@ -592,6 +620,67 @@ mod tests {
             horizontal_items[0].height < 3.0 * glyph_step + item_padding_y * 2.0,
             "horizontal single-row measure must stay below the vertical column height: {:?}",
             horizontal_items[0]
+        );
+    }
+
+    #[test]
+    fn long_vertical_text_wraps_into_measured_columns_before_window_edge() {
+        let mut engine = MeasureEngine::new();
+        let mut arena = crate::CandidateVisualArena::default();
+        let inputs = [crate::Fcitx5CandidateVisualBuildInput {
+            label: str_field("3."),
+            text: str_field("Windows Next"),
+            comment: str_field(""),
+            label_style: 1,
+            labels_visible: 1,
+            reservation_action: 0,
+            reservation_slot: 0,
+        }];
+        let config = crate::Fcitx5CandidateVisualBuildConfig {
+            configured_labels: core::ptr::null(),
+            configured_label_count: 0,
+        };
+        let mut outputs = [crate::Fcitx5CandidateVisualBuildOutput::null_output(); 1];
+        // SAFETY: fixture storage is live and buffers satisfy the visual-build ABI.
+        let built = unsafe {
+            crate::fcitx5_candidate_visual_build(
+                &mut arena as *mut _ as *mut c_void,
+                inputs.as_ptr(),
+                1,
+                &config,
+                outputs.as_mut_ptr(),
+            )
+        };
+        assert_eq!(built, 1);
+        let params = MeasureLoopParams {
+            horizontal: false,
+            vertical: true,
+            scroll_mode: false,
+            label_gap: 4.0,
+            item_padding_x: 8.0,
+            item_padding_y: 8.0,
+            font_size: 46.0,
+            label_font_size: 39.0,
+            comment_font_size: 36.0,
+            dpi_scale: 2.0,
+            max_width: 280.0,
+            window_padding_x: 8.0,
+            max_height: 728.0,
+            window_padding_y: 8.0,
+        };
+        let (items, _, _, _) = measure_visual_items(&mut engine, &outputs, &[0], None, &params)
+            .expect("vertical measure loop must succeed");
+        let glyph_count = grapheme_clusters("Windows Next").len();
+        let single_column_width = engine.measure("W", params.font_size, params.dpi_scale).0;
+        assert!(items[0].width > single_column_width + params.item_padding_x * 2.0);
+        assert!(
+            items[0].height + params.window_padding_y * 2.0 <= params.max_height,
+            "wrapped candidate must fit the viewport: {:?}",
+            items[0]
+        );
+        assert!(
+            glyph_count > 8,
+            "fixture must exercise a second text column"
         );
     }
 

@@ -1148,53 +1148,73 @@ fn draw_candidate_vertical(
     let glyph_step = (geometry.font_size * VERTICAL_GLYPH_STEP_RATIO)
         .ceil()
         .max(1.0);
-    let column_left = (left + pad_x).min(right);
-    let column_right = (right - pad_x).max(column_left);
-    let mut cell_text =
-        |text: &str, cell_top: f32, cell_bottom: f32, size: f32, align: WindAlign| {
-            let cell_top = cell_top.max(top);
-            let cell_bottom = cell_bottom.min(bottom);
-            if cell_bottom > cell_top {
-                draw_text_clipped(
-                    canvas,
-                    text,
-                    Rect {
-                        left: column_left,
-                        top: cell_top,
-                        right: column_right,
-                        bottom: cell_bottom,
-                    },
-                    color,
-                    align,
-                    &text_style(input.font_family, size),
-                );
-            }
-        };
-    let mut y = top;
+    let content_left = (left + pad_x).min(right);
+    let content_right = (right - pad_x).max(content_left);
+    let glyphs = grapheme_clusters(&candidate.text);
+    let label_height = if candidate.label.is_empty() {
+        0.0
+    } else {
+        geometry.font_size
+    };
+    let text_top = top + label_height;
+    let available_text_height =
+        (bottom - text_top - geometry.item_padding_y.max(0.0) * 2.0).max(glyph_step);
+    let rows_per_column = (available_text_height / glyph_step).floor().max(1.0) as usize;
+    let columns = glyphs.len().div_ceil(rows_per_column).max(1);
+    let column_width = (content_right - content_left) / columns as f32;
     // Label draws once above the glyph stack (column head), like the frozen
-    // vertical_text screenshot renderer.
+    // vertical_text screenshot renderer, in the first text column.
     if !candidate.label.is_empty() {
-        cell_text(
+        let first_column = if item.writing == WritingMode::VerticalRl {
+            columns - 1
+        } else {
+            0
+        };
+        let label_left = content_left + first_column as f32 * column_width;
+        draw_text_clipped(
+            canvas,
             &candidate.label,
-            y,
-            y + geometry.font_size,
-            geometry.label_font_size,
+            Rect {
+                left: label_left,
+                top,
+                right: if first_column + 1 == columns {
+                    content_right
+                } else {
+                    label_left + column_width
+                },
+                bottom: (top + label_height).min(bottom),
+            },
+            color,
             WindAlign::Center,
+            &text_style(input.font_family, geometry.label_font_size),
         );
-        y += geometry.font_size;
     }
-    for glyph in grapheme_clusters(&candidate.text) {
-        if y >= bottom {
-            break;
-        }
-        cell_text(
+    for (index, glyph) in glyphs.into_iter().enumerate() {
+        let logical_column = index / rows_per_column;
+        let column = if item.writing == WritingMode::VerticalRl {
+            columns - 1 - logical_column
+        } else {
+            logical_column
+        };
+        let cell_left = content_left + column as f32 * column_width;
+        let cell_top = text_top + (index % rows_per_column) as f32 * glyph_step;
+        draw_text_clipped(
+            canvas,
             glyph,
-            y,
-            y + glyph_step,
-            geometry.font_size,
+            Rect {
+                left: cell_left,
+                top: cell_top,
+                right: if column + 1 == columns {
+                    content_right
+                } else {
+                    cell_left + column_width
+                },
+                bottom: (cell_top + glyph_step).min(bottom),
+            },
+            color,
             WindAlign::Center,
+            &text_style(input.font_family, geometry.font_size),
         );
-        y += glyph_step;
     }
 }
 
@@ -1716,6 +1736,64 @@ mod tests {
                 red < 180 && green < 180 && blue < 180
             })
         })
+    }
+
+    #[test]
+    fn long_vertical_candidate_draws_every_wrapped_text_column() {
+        let mut axis_input = vertical_input(&[(96.0, 128.0)]);
+        axis_input.options = CandidateLayoutOptions {
+            orientation: crate::Orientation::Vertical,
+            overflow: OverflowBehavior::Paging,
+            writing_mode: WritingMode::VerticalRl,
+        };
+        let axis = axis_layout(&axis_input);
+        let candidate = CandidateRenderData {
+            label: "3.".to_owned(),
+            reserved_label: "3.".to_owned(),
+            text: "Windows Next".to_owned(),
+            comment: String::new(),
+        };
+        let mut geometry = geometry();
+        geometry.font_size = 20.0;
+        geometry.label_font_size = 17.0;
+        geometry.item_padding_y = 6.0;
+        let output = render_candidate_window(&RenderWindowInput {
+            axis_result: &axis,
+            candidates: std::slice::from_ref(&candidate),
+            theme: &theme(),
+            geometry: &geometry,
+            font_family: "Microsoft YaHei UI",
+            preedit: None,
+            dpi_scale: 1.0,
+            high_contrast: false,
+            selected: None,
+        });
+        let item = axis.items.first().expect("one vertical candidate");
+        let left = (item.rect.left - axis.window.left) as u32 + geometry.item_padding_x as u32;
+        let right = (item.rect.right - axis.window.left) as u32 - geometry.item_padding_x as u32;
+        let top = (item.rect.top - axis.window.top) as u32 + 30;
+        let bottom = (item.rect.bottom - axis.window.top) as u32;
+        let columns = grapheme_clusters(&candidate.text).len().div_ceil(3);
+        let column_width = (right - left) / columns as u32;
+        for column in 0..columns {
+            let physical_column = columns - 1 - column;
+            let column_left = left + physical_column as u32 * column_width;
+            assert!(
+                first_dark_pixel(
+                    &output,
+                    column_left,
+                    if physical_column + 1 == columns {
+                        right
+                    } else {
+                        column_left + column_width
+                    },
+                    top,
+                    bottom,
+                )
+                .is_some(),
+                "vertical text column {column} must contain visible glyph pixels"
+            );
+        }
     }
 
     #[test]
