@@ -128,7 +128,7 @@
   "packages.online_unavailable": "Các thành phần đi kèm vẫn dùng được; khóa kho trực tuyến đáng tin cậy chưa được cung cấp.",
   "packages.online_error": "Làm mới kho trực tuyến thất bại; các thành phần cục bộ vẫn được hiển thị.",
   "language.selector": "Ngôn ngữ",
-  "language.option.system": "Dùng ngôn ngữ hiển thị Windows",
+  "language.option.system": "Mặc định hệ thống",
   "language.option.en-US": "English",
   "language.option.zh-CN": "Tiếng Trung giản thể",
   "language.restart_required": "Khởi động lại Cài đặt để áp dụng ngôn ngữ đã chọn.",

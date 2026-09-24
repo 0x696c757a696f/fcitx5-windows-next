@@ -1,9 +1,9 @@
-# REL-01 — Release Gate
+# 087 — Finish WindUI Settings localization
 
-Status: selected / external evidence gate.
+Status: selected / implementation task.
 
-The next eligible work is the release evidence gate at
-[`release/REL-01-RELEASE-GATE.md`](release/REL-01-RELEASE-GATE.md). Its real-host,
-production-signing, UAC, accessibility, online plugin-lifecycle, and CI evidence
-must remain explicitly manual or externally verified. Do not substitute local
-fixtures, source checks, or simulated interactions for those results.
+See [`087-SETTINGS-CORE-I18N-001.md`](087-SETTINGS-CORE-I18N-001.md).
+REL-01 remains manual-pending for production signing, elevated UAC, real-host and
+screen-reader evidence, online signed-plugin lifecycle, constrained-host cases,
+and externally verifiable CI/publication. Local code work does not satisfy those
+release gates.

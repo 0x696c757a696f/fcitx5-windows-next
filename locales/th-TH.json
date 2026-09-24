@@ -128,7 +128,7 @@
   "packages.online_unavailable": "ส่วนประกอบที่มาพร้อมผลิตภัณฑ์ยังใช้ได้ แต่ยังไม่ได้จัดเตรียมคีย์ที่เก็บออนไลน์ที่เชื่อถือได้",
   "packages.online_error": "รีเฟรชที่เก็บออนไลน์ล้มเหลว ส่วนประกอบในเครื่องที่พร้อมใช้ยังแสดงอยู่",
   "language.selector": "ภาษา",
-  "language.option.system": "ใช้ภาษาที่แสดงของ Windows",
+  "language.option.system": "ค่าเริ่มต้นระบบ",
   "language.option.en-US": "English",
   "language.option.zh-CN": "จีนตัวย่อ",
   "language.restart_required": "เริ่มการตั้งค่าใหม่เพื่อใช้ภาษาที่เลือก",

@@ -1,5 +1,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod settings_locale;
+use settings_locale::{is_supported_locale, LocaleCatalog};
+
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -457,7 +460,7 @@ fn windui_settings_card(body: WindUiElement) -> WindUiElement {
 }
 
 fn windui_settings_nav_item(
-    name: &'static str,
+    name: String,
     glyph: &'static str,
     i: usize,
     selected: WindUiSignal<usize>,
@@ -493,7 +496,7 @@ fn windui_settings_nav_item(
         .bg_role_alpha(WindUiRole::Accent, 0.12)
         .child(chip(true))
         .child(
-            WindUiElement::label(name)
+            WindUiElement::label(&name)
                 .font_size(13.0)
                 .font_weight(600)
                 .fg_role(WindUiRole::Accent)
@@ -513,7 +516,7 @@ fn windui_settings_nav_item(
         .padding_xy(10, 0)
         .child(chip(false))
         .child(
-            WindUiElement::label(name)
+            WindUiElement::label(&name)
                 .font_size(13.0)
                 .font_weight(500)
                 .fg_role(WindUiRole::TextMuted)
@@ -1566,6 +1569,7 @@ fn windui_settings_root(
     plugin_sender: WindUiSender<PluginResponse>,
     candidate_adapter: WindUiSignal<WindUiConfigAdapter>,
     candidate_status: WindUiSignal<String>,
+    locale: LocaleCatalog,
 ) -> WindUiElement {
     let nav = windui_signal(0usize);
     let search = windui_signal(String::new());
@@ -1575,17 +1579,19 @@ fn windui_settings_root(
     let ui_font_size = windui_signal(14.0f64);
     let ui_scale = windui_signal(0.5f32);
     let compact = windui_signal(false);
+    let language_controls =
+        windui_settings_language_controls(candidate_adapter, candidate_status, &locale);
 
-    const NAV: [(&str, &str); 6] = [
-        ("输入", "\u{270E}"),
-        ("外观", "\u{25D0}"),
-        ("按键", "\u{2328}"),
-        ("插件", "\u{25A4}"),
-        ("更新", "\u{21BB}"),
-        ("诊断", "\u{24D8}"),
+    const NAV_GLYPHS: [&str; 6] = [
+        "\u{270E}", "\u{25D0}", "\u{2328}", "\u{25A4}", "\u{21BB}", "\u{24D8}",
     ];
     let mut nav_col = WindUiElement::col().width_match().spacing(3);
-    for (i, (name, glyph)) in NAV.iter().enumerate() {
+    for (i, (name, glyph)) in locale
+        .navigation_labels()
+        .into_iter()
+        .zip(NAV_GLYPHS)
+        .enumerate()
+    {
         nav_col = nav_col.child(windui_settings_nav_item(name, glyph, i, nav));
     }
 
@@ -1608,7 +1614,7 @@ fn windui_settings_root(
             .padding(24)
             .spacing(20)
             .child(windui_settings_page_title(
-                "输入设置",
+                &locale.text("nav.general"),
                 "输入法、候选窗口与快捷键",
             ))
             .child(windui_settings_card(
@@ -1664,12 +1670,13 @@ fn windui_settings_root(
             .padding(24)
             .spacing(20)
             .child(windui_settings_page_title(
-                "外观设置",
+                &locale.text("nav.appearance"),
                 "主题、排版与候选预览",
             ))
             .child(windui_settings_card(
                 windui_config_core_candidate_layout_controls(candidate_adapter, candidate_status),
             ))
+            .child(windui_settings_card(language_controls))
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
@@ -1723,11 +1730,13 @@ fn windui_settings_root(
                 .visible_when(move || nav.get() == 3),
         );
     for (i, title) in [
-        (2usize, "按键设置"),
-        (4usize, "更新"),
-        (5usize, "诊断与修复"),
+        (2usize, "nav.theme"),
+        (4usize, "updates.title"),
+        (5usize, "nav.repair"),
     ] {
-        content = content.child(windui_nav_placeholder(title).visible_when(move || nav.get() == i));
+        content = content.child(
+            windui_nav_placeholder(&locale.text(title)).visible_when(move || nav.get() == i),
+        );
     }
 
     let footer = WindUiElement::row()
@@ -1792,6 +1801,77 @@ fn windui_settings_root(
         .fill()
         .bg_role(WindUiRole::Bg)
         .child(windui_settings_shell_wrap("设置", body))
+}
+
+fn windui_settings_language_controls(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
+) -> WindUiElement {
+    const LANGUAGES: [(&str, &str); 9] = [
+        ("system", "language.option.system"),
+        ("en-US", "language.option.en-US"),
+        ("zh-CN", "language.option.zh-CN"),
+        ("zh-TW", "zh-TW"),
+        ("ja-JP", "ja-JP"),
+        ("ko-KR", "ko-KR"),
+        ("vi-VN", "vi-VN"),
+        ("th-TH", "th-TH"),
+        ("si-LK", "si-LK"),
+    ];
+    const LANGUAGE_NAMES: [&str; 6] = ["繁體中文", "日本語", "한국어", "Tiếng Việt", "ไทย", "සිංහල"];
+    let selected_language = adapter.with(|adapter| adapter.preview().ui().language().to_owned());
+    let selected_index = LANGUAGES
+        .iter()
+        .position(|(language, _)| *language == selected_language)
+        .unwrap_or(0);
+    let selection = windui_signal(selected_index);
+    let labels = LANGUAGES
+        .iter()
+        .enumerate()
+        .map(|(index, (_, key))| match index {
+            0..=2 => locale.text(key),
+            other => LANGUAGE_NAMES[other - 3].to_owned(),
+        })
+        .collect::<Vec<_>>();
+    let apply_label = locale.text("action.apply");
+    let pending_message = locale.text("status.unsaved");
+    let restart_message = locale.text("language.restart_required");
+
+    WindUiElement::col()
+        .width_match()
+        .spacing(10)
+        .child(WindUiElement::setting_row_desc(
+            locale.text("language.selector"),
+            &restart_message,
+            WindUiElement::dropdown(labels, selection).width(230),
+        ))
+        .child(
+            WindUiElement::button(apply_label)
+                .small()
+                .on_click(move |ctx| {
+                    let has_pending_changes =
+                        adapter.with(|adapter| !adapter.core.diff().is_empty());
+                    if has_pending_changes {
+                        ctx.toast_err(pending_message.clone());
+                        return;
+                    }
+                    let index = selection.get().min(LANGUAGES.len() - 1);
+                    let mut result = Ok(());
+                    adapter.update(|adapter| {
+                        result = adapter
+                            .set(ConfigEdit::UiLanguage(LANGUAGES[index].0.to_owned()))
+                            .and_then(|()| adapter.apply());
+                    });
+                    match result {
+                        Ok(()) => {
+                            status.set(restart_message.clone());
+                            ctx.toast_ok(restart_message.clone());
+                        }
+                        Err(error) => ctx.toast_err(error),
+                    }
+                }),
+        )
 }
 
 fn windui_theme_toggle(handle: WindUiThemeHandle, dark: WindUiSignal<bool>) -> WindUiElement {
@@ -2440,6 +2520,7 @@ fn windui_settings_default_shell_probe() -> WindUiElement {
     let (candidate_adapter, candidate_status) =
         windui_candidate_config_manager(PathBuf::from("windui-settings-default-shell-probe.toml"))
             .expect("compiled Config Core defaults should initialize the wind-ui probe");
+    let locale = LocaleCatalog::new("system", fcitx5_control_core::current_settings_ui_locale());
     windui_settings_root(
         snapshot,
         busy,
@@ -2447,6 +2528,7 @@ fn windui_settings_default_shell_probe() -> WindUiElement {
         sender,
         candidate_adapter,
         candidate_status,
+        locale,
     )
 }
 
@@ -3533,6 +3615,7 @@ pub(crate) fn main() {
     let mut args = env::args_os().skip(1);
     let mut mode: Option<RunMode> = None;
     let mut report: Option<PathBuf> = None;
+    let mut locale_preview: Option<String> = None;
 
     while let Some(arg) = args.next() {
         if arg == "--self-check" {
@@ -3551,6 +3634,16 @@ pub(crate) fn main() {
                 std::process::exit(2);
             };
             set_run_mode(&mut mode, RunMode::WindUiScreenshot);
+        } else if arg == "--locale-preview" {
+            let Some(locale) = args.next().and_then(|value| value.into_string().ok()) else {
+                eprintln!("--locale-preview requires a supported locale tag");
+                std::process::exit(2);
+            };
+            if !is_supported_locale(&locale) {
+                eprintln!("unsupported Settings locale preview: {locale}");
+                std::process::exit(2);
+            }
+            locale_preview = Some(locale);
         } else if arg == "--scale" {
             let Some(_scale) = args.next() else {
                 eprintln!("--scale requires a value");
@@ -3641,9 +3734,14 @@ pub(crate) fn main() {
         std::process::exit(2);
     };
 
+    if locale_preview.is_some() && !matches!(&mode, RunMode::WindUiScreenshot) {
+        eprintln!("--locale-preview is only valid with --screenshot");
+        std::process::exit(2);
+    }
+
     let result = match mode {
         RunMode::Interactive => run_default_interactive_window(),
-        RunMode::WindUiScreenshot => run_windui_settings_window(true),
+        RunMode::WindUiScreenshot => run_windui_settings_window(true, locale_preview.as_deref()),
         RunMode::SelfCheck => run_self_check(),
         RunMode::WindowSmoke => run_window_smoke(),
         RunMode::LegacyHeadless(legacy) => run_legacy_headless_check(legacy),
@@ -3976,7 +4074,7 @@ fn run_window_smoke() -> Result<String, String> {
 
 #[cfg(windows)]
 fn run_default_interactive_window() -> Result<String, String> {
-    run_windui_settings_window(false)
+    run_windui_settings_window(false, None)
 }
 
 #[cfg(not(windows))]
@@ -3985,7 +4083,10 @@ fn run_default_interactive_window() -> Result<String, String> {
 }
 
 #[cfg(windows)]
-fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, String> {
+fn run_windui_settings_window(
+    screenshot_from_args: bool,
+    locale_preview: Option<&str>,
+) -> Result<String, String> {
     let model = frozen_settings_model();
     validate_model(&model)?;
     validate_windui_rust_adoption()?;
@@ -3997,9 +4098,15 @@ fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, Stri
     if screenshot_from_args {
         app = app.screenshot_from_args();
     }
-    let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, true);
+    let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, !screenshot_from_args);
     let (candidate_adapter, candidate_status) =
         windui_candidate_config_manager(windui_config_path()?)?;
+    let configured_locale =
+        candidate_adapter.with(|adapter| adapter.preview().ui().language().to_owned());
+    let locale = LocaleCatalog::new(
+        locale_preview.unwrap_or(&configured_locale),
+        fcitx5_control_core::current_settings_ui_locale(),
+    );
     app.content(windui_settings_root(
         snapshot,
         busy,
@@ -4007,6 +4114,7 @@ fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, Stri
         sender,
         candidate_adapter,
         candidate_status,
+        locale,
     ))
     .run();
     Ok(format!(
@@ -4017,7 +4125,10 @@ fn run_windui_settings_window(screenshot_from_args: bool) -> Result<String, Stri
 }
 
 #[cfg(not(windows))]
-fn run_windui_settings_window(_screenshot_from_args: bool) -> Result<String, String> {
+fn run_windui_settings_window(
+    _screenshot_from_args: bool,
+    _locale_preview: Option<&str>,
+) -> Result<String, String> {
     Err("Rust wind-ui Settings Shell requires Windows".to_owned())
 }
 
@@ -6001,9 +6112,7 @@ mod tests {
         let model = frozen_settings_model();
         assert_eq!(
             model.languages,
-            vec![
-                "system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
-            ]
+            vec!["system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",]
         );
         require_languages(&model).expect("all supported locales should be in the Settings policy");
 
@@ -6834,9 +6943,8 @@ mod tests {
     fn windui_candidate_adapter_uses_one_draft_for_preview_cancel_reset_and_apply() {
         for layout in ["automatic", "stacked", "flow", "scroll", "vertical_text"] {
             for page_size in 1..=9 {
-                let directory = TestDirectory::new(&format!(
-                    "windui-candidate-adapter-{layout}-{page_size}"
-                ));
+                let directory =
+                    TestDirectory::new(&format!("windui-candidate-adapter-{layout}-{page_size}"));
                 let path = directory.path().join("config.toml");
                 let mut adapter =
                     WindUiConfigAdapter::load(path).expect("adapter should load defaults");

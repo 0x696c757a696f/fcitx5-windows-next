@@ -128,7 +128,7 @@
   "packages.online_unavailable": "同梱コンポーネントは利用できますが、信頼済みオンライン リポジトリのキーはまだ設定されていません。",
   "packages.online_error": "オンライン リポジトリの更新に失敗しました。ローカルで利用可能なコンポーネントは引き続き表示されます。",
   "language.selector": "言語",
-  "language.option.system": "Windows の表示言語を使用",
+  "language.option.system": "システムに従う",
   "language.option.en-US": "English",
   "language.option.zh-CN": "簡体字中国語",
   "language.restart_required": "選択した言語を適用するには設定を再起動してください。",

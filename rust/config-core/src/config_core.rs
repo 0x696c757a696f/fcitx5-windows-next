@@ -2823,4 +2823,29 @@ mod visual_draft_tests {
         assert_eq!(snapshot.fonts().candidate().size_dip(), 22.0);
         let _ = fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn selected_ui_language_survives_settings_close_and_reopen() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-config-language-reopen-{}-{}",
+            std::process::id(),
+            STAGE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).expect("create temporary config directory");
+        let path = root.join("config.toml");
+        let store = FileStore::new();
+        let mut core = ConfigCore::compiled_defaults();
+        core.execute(
+            ConfigCommand::Set(ConfigEdit::UiLanguage("ja-JP".to_owned())),
+            &store,
+            &path,
+        )
+        .expect("select supported UI language");
+        core.apply(&store, &path, CommitFault::None)
+            .expect("persist selected UI language");
+
+        let reopened = ConfigCore::load(&store, &path).expect("reopen persisted config");
+        assert_eq!(reopened.current().ui().language(), "ja-JP");
+        let _ = fs::remove_dir_all(root);
+    }
 }

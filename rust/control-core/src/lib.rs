@@ -1361,6 +1361,16 @@ fn user_default_ui_language_locale_file() -> &'static [u16] {
     config_locale_file_for_system_language(unsafe { GetUserDefaultUILanguage() })
 }
 
+/// Returns the canonical supported Settings locale for the Windows display language.
+#[must_use]
+pub fn current_settings_ui_locale() -> &'static str {
+    let file = user_default_ui_language_locale_file();
+    CONFIG_LOCALE_FILES
+        .iter()
+        .find_map(|(locale, candidate)| (*candidate == file).then_some(*locale))
+        .unwrap_or(fcitx5_config_core::UI_LANGUAGE_EN_US)
+}
+
 fn config_locale_file_for_override(override_locale: &[u16]) -> Option<&'static [u16]> {
     if override_locale.is_empty()
         || utf16_eq_ascii(

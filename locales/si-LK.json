@@ -128,7 +128,7 @@
   "packages.online_unavailable": "සමඟ ඇතුළත් සංරචක භාවිත කළ හැක, නමුත් විශ්වාසදායක මාර්ගගත ගබඩා යතුරු සපයා නැත.",
   "packages.online_error": "මාර්ගගත ගබඩාව නැවුම් කිරීම අසාර්ථකයි; ස්ථානීයව ඇති සංරචක තවදුරටත් පෙන්වයි.",
   "language.selector": "භාෂාව",
-  "language.option.system": "Windows දර්ශන භාෂාව භාවිත කරන්න",
+  "language.option.system": "පද්ධති පෙරනිමිය",
   "language.option.en-US": "English",
   "language.option.zh-CN": "සරල චීන",
   "language.restart_required": "තෝරාගත් භාෂාව යෙදීමට සැකසුම් නැවත අරඹන්න.",

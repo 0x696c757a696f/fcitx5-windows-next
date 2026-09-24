@@ -128,7 +128,7 @@
   "packages.online_unavailable": "隨附元件可使用；尚未佈建受信任的線上存放庫金鑰。",
   "packages.online_error": "線上存放庫重新整理失敗；仍會顯示本機可用元件。",
   "language.selector": "語言",
-  "language.option.system": "使用 Windows 顯示語言",
+  "language.option.system": "跟隨系統",
   "language.option.en-US": "English",
   "language.option.zh-CN": "簡體中文",
   "language.restart_required": "請重新啟動設定以套用所選語言。",

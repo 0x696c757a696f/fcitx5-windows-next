@@ -128,7 +128,7 @@
   "packages.online_unavailable": "포함된 구성 요소는 사용할 수 있지만 신뢰할 수 있는 온라인 저장소 키가 아직 준비되지 않았습니다.",
   "packages.online_error": "온라인 저장소 새로 고침에 실패했습니다. 로컬에서 사용 가능한 구성 요소는 계속 표시됩니다.",
   "language.selector": "언어",
-  "language.option.system": "Windows 표시 언어 사용",
+  "language.option.system": "시스템 기본값",
   "language.option.en-US": "English",
   "language.option.zh-CN": "중국어 간체",
   "language.restart_required": "선택한 언어를 적용하려면 설정을 다시 시작하세요.",
