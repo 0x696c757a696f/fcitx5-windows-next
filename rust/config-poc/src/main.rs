@@ -1,4 +1,4 @@
-#![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
 mod settings_locale;
 use settings_locale::{is_supported_locale, LocaleCatalog};
@@ -29,7 +29,8 @@ use windui::prelude::{
     signal as windui_signal, Align as WindUiAlign, App as WindUiApp, Color as WindUiColor,
     Element as WindUiElement, Fit as WindUiFit, Intent as WindUiIntent, Role as WindUiRole,
     Sender as WindUiSender, Signal as WindUiSignal, Theme as WindUiTheme,
-    ThemeHandle as WindUiThemeHandle, WindowButtonKind as WindUiWindowButtonKind,
+    ThemeHandle as WindUiThemeHandle, Truncate as WindUiTruncate,
+    WindowButtonKind as WindUiWindowButtonKind,
 };
 
 const CONFIG_POC_COMPONENT: &str = "fcitx5-config-poc";
@@ -568,8 +569,7 @@ fn windui_settings_page_title(title: &str, subtitle: &str) -> WindUiElement {
 #[derive(Clone, Copy)]
 struct PluginCatalogEntry {
     id: &'static str,
-    category: &'static str,
-    summary: &'static str,
+    #[allow(dead_code)]
     windows_package: bool,
 }
 
@@ -579,128 +579,86 @@ const CONTROL_MAX_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const FCITX5_PLUGIN_CATALOG: &[PluginCatalogEntry] = &[
     PluginCatalogEntry {
         id: "fcitx5-chinese-addons",
-        category: "中文",
-        summary: "拼音、双拼与词库扩展",
         windows_package: true,
     },
     PluginCatalogEntry {
         id: "fcitx5-table-extra",
-        category: "中文",
-        summary: "额外码表输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-chewing",
-        category: "中文",
-        summary: "Chewing 酷音输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "libime-jyutping",
-        category: "中文",
-        summary: "粤语拼音输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-zhuyin",
-        category: "中文",
-        summary: "注音输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-mozc",
-        category: "日文",
-        summary: "Mozc 日文输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-skk",
-        category: "日文",
-        summary: "SKK 日文输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-anthy",
-        category: "日文",
-        summary: "Anthy 日文输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-kkc",
-        category: "日文",
-        summary: "Kana Kanji 转换",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-cskk",
-        category: "日文",
-        summary: "libcskk 输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-hangul",
-        category: "韩文",
-        summary: "Hangul 输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-hallelujah",
-        category: "英文",
-        summary: "英文补全输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-sayura",
-        category: "僧伽罗文",
-        summary: "Sayura 输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-libthai",
-        category: "泰文",
-        summary: "泰文输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-bamboo",
-        category: "越南文",
-        summary: "Bamboo 输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-unikey",
-        category: "越南文",
-        summary: "Unikey 输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-rime",
-        category: "通用",
-        summary: "Rime 输入法与词库桥接",
         windows_package: true,
     },
     PluginCatalogEntry {
         id: "fcitx5-m17n",
-        category: "通用",
-        summary: "m17n 多语言输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-table-other",
-        category: "通用",
-        summary: "其它码表输入法",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-keyman",
-        category: "通用",
-        summary: "Keyman 输入法桥接",
         windows_package: false,
     },
     PluginCatalogEntry {
         id: "fcitx5-lua",
-        category: "其它",
-        summary: "Lua 扩展与脚本接口",
         windows_package: true,
     },
 ];
@@ -764,7 +722,24 @@ fn is_plugin_package(package: &ControlPackage) -> bool {
         || (package.package_type == "unknown" && package.installed_version.is_some())
 }
 
-fn plugin_catalog_rows(snapshot: &PluginManagerSnapshot) -> Vec<PluginCatalogRow> {
+fn plugin_package_type_label(locale: &LocaleCatalog, package_type: &str) -> String {
+    let key = match package_type {
+        "addon" => Some("packages.type.addon"),
+        "inputmethod-data" => Some("packages.type.input_method_data"),
+        "theme" => Some("packages.type.theme"),
+        "translation" => Some("packages.type.translation"),
+        "core" => Some("packages.type.core"),
+        "component" => Some("packages.type.component"),
+        _ => None,
+    };
+    key.map(|key| locale.text(key))
+        .unwrap_or_else(|| package_type.to_owned())
+}
+
+fn plugin_catalog_rows(
+    snapshot: &PluginManagerSnapshot,
+    locale: &LocaleCatalog,
+) -> Vec<PluginCatalogRow> {
     let mut rows = Vec::with_capacity(FCITX5_PLUGIN_CATALOG.len() + snapshot.packages.len());
     for reference in FCITX5_PLUGIN_CATALOG {
         let package = snapshot
@@ -774,12 +749,17 @@ fn plugin_catalog_rows(snapshot: &PluginManagerSnapshot) -> Vec<PluginCatalogRow
         let (title, summary) = package
             .as_ref()
             .map(|package| (package.title.clone(), package.summary.clone()))
-            .unwrap_or_else(|| (reference.id.to_owned(), reference.summary.to_owned()));
+            .unwrap_or_else(|| {
+                (
+                    reference.id.to_owned(),
+                    locale.text("settings.plugins.fallback_metadata"),
+                )
+            });
         rows.push(PluginCatalogRow {
             id: reference.id.to_owned(),
             title,
             summary,
-            category: reference.category.to_owned(),
+            category: locale.text("settings.plugins.fallback_category"),
             package,
             loaded: snapshot.loaded,
         });
@@ -800,7 +780,7 @@ fn plugin_catalog_rows(snapshot: &PluginManagerSnapshot) -> Vec<PluginCatalogRow
         id: package.id.clone(),
         title: package.title.clone(),
         summary: package.summary.clone(),
-        category: "扩展".to_owned(),
+        category: locale.text("settings.plugins.fallback_category"),
         package: Some(package),
         loaded: snapshot.loaded,
     }));
@@ -827,16 +807,20 @@ enum PluginAction {
 }
 
 impl PluginOperation {
-    fn label(&self) -> &'static str {
+    fn label(&self, locale: &LocaleCatalog) -> String {
         match self {
-            Self::List => "读取",
-            Self::Refresh => "刷新",
-            Self::Install(_) => "安装",
-            Self::Update(_) => "更新",
-            Self::SetState { enabled: true, .. } => "启用",
-            Self::SetState { enabled: false, .. } => "禁用",
-            Self::Remove(_) => "卸载",
-            Self::Repair => "修复",
+            Self::List => locale.text("settings.plugins.operation.list"),
+            Self::Refresh => locale.text("settings.plugins.operation.refresh"),
+            Self::Install(_) => locale.text("settings.plugins.operation.install"),
+            Self::Update(_) => locale.text("settings.plugins.operation.update"),
+            Self::SetState { enabled: true, .. } => {
+                locale.text("settings.plugins.operation.enable")
+            }
+            Self::SetState { enabled: false, .. } => {
+                locale.text("settings.plugins.operation.disable")
+            }
+            Self::Remove(_) => locale.text("settings.plugins.operation.remove"),
+            Self::Repair => locale.text("settings.plugins.operation.repair"),
         }
     }
 }
@@ -965,6 +949,31 @@ fn parse_control_package_list(output: &str) -> Result<PluginManagerSnapshot, Str
         repository_error: parsed.repository_error,
         packages: parsed.packages,
     })
+}
+
+fn localized_plugin_error(locale: &LocaleCatalog, error: &str) -> String {
+    if let Some(id) = error.strip_prefix("插件包 ID 无效：") {
+        return locale.format("settings.plugins.error.invalid_id", &[("id", id)]);
+    }
+    let key = match error {
+        "Control 返回的插件目录超过大小限制" => {
+            "settings.plugins.error.catalog_too_large"
+        }
+        "Control 插件目录版本或条目数无效" => {
+            "settings.plugins.error.catalog_version_invalid"
+        }
+        "Control 插件目录字段无效" => "settings.plugins.error.catalog_fields_invalid",
+        "配置程序路径没有父目录" => "settings.plugins.error.control_unavailable",
+        _ if error.starts_with("Control 插件目录 JSON 无效：")
+            || error.starts_with("无法定位配置程序：")
+            || error.starts_with("运行 fcitx5-control.exe 失败：")
+            || error.starts_with("fcitx5-control.exe 返回失败") =>
+        {
+            "settings.plugins.error.control_unavailable"
+        }
+        _ => return error.to_owned(),
+    };
+    locale.text(key)
 }
 
 fn control_executable() -> Result<PathBuf, String> {
@@ -1216,26 +1225,27 @@ fn spawn_plugin_operation(sender: WindUiSender<PluginResponse>, operation: Plugi
     });
 }
 
-fn plugin_status(row: &PluginCatalogRow) -> String {
+fn plugin_status(row: &PluginCatalogRow, locale: &LocaleCatalog) -> String {
     if !row.loaded {
-        return "正在读取".to_owned();
+        return locale.text("operation.status.running");
     }
     let Some(package) = row.package.as_ref() else {
-        return "当前无已验证 Windows 包".to_owned();
+        return locale.text("packages.state.unavailable");
     };
     if package.update_available {
-        return "可更新".to_owned();
+        return locale.text("packages.state.update_available");
     }
-    match package.state.as_deref() {
-        Some("bundled") => "已内置".to_owned(),
-        Some("disabled") => "已禁用".to_owned(),
-        Some("trust-failed") => "信任失败".to_owned(),
-        Some("incompatible") => "不兼容".to_owned(),
-        Some("pending-restart") => "等待重启".to_owned(),
-        _ if package.installed_version.is_some() => "已启用".to_owned(),
-        _ if package.available_version.is_some() => "可安装".to_owned(),
-        _ => "不可用".to_owned(),
-    }
+    let key = match package.state.as_deref() {
+        Some("bundled") => "packages.state.bundled",
+        Some("disabled") => "packages.state.disabled",
+        Some("trust-failed") => "packages.state.trust_failed",
+        Some("incompatible") => "packages.state.incompatible",
+        Some("pending-restart") => "packages.state.pending_restart",
+        _ if package.installed_version.is_some() => "packages.state.enabled",
+        _ if package.available_version.is_some() => "packages.state.available_online",
+        _ => "packages.state.unavailable",
+    };
+    locale.text(key)
 }
 
 fn package_allows_installed_action(package: &ControlPackage) -> bool {
@@ -1250,8 +1260,9 @@ fn windui_plugin_row(
     row: PluginCatalogRow,
     selected: WindUiSignal<String>,
     snapshot: WindUiSignal<PluginManagerSnapshot>,
+    locale: LocaleCatalog,
 ) -> WindUiElement {
-    let status = plugin_status(&row);
+    let status = plugin_status(&row, &locale);
     let row_id = row.id.clone();
     let title = row.title.clone();
     let summary = format!("{} · {}", row.id, row.summary);
@@ -1275,30 +1286,40 @@ fn windui_plugin_row(
             WindUiElement::col()
                 .weight(1.0)
                 .spacing(2)
-                .child(WindUiElement::label(title).font_size(13.5).font_weight(600))
+                .child(
+                    WindUiElement::label(title.clone())
+                        .font_size(13.5)
+                        .font_weight(600)
+                        .max_lines(1)
+                        .truncate(WindUiTruncate::End)
+                        .tooltip(title),
+                )
                 .child(
                     WindUiElement::label(summary)
                         .font_size(12.0)
-                        .fg_role(WindUiRole::TextMuted),
+                        .fg_role(WindUiRole::TextMuted)
+                        .max_lines(1)
+                        .truncate(WindUiTruncate::End),
                 ),
         )
         .child(
             WindUiElement::label(category)
                 .font_size(12.0)
                 .fg_role(WindUiRole::TextMuted)
-                .width(54),
+                .width(72),
         )
         .child(WindUiElement::badge_intent(status, WindUiIntent::Neutral))
 }
 
 fn windui_plugin_action(
-    label: &'static str,
+    label: String,
     operation: impl Fn(&PluginManagerSnapshot, &str) -> Option<PluginOperation> + Copy + 'static,
     selected: WindUiSignal<String>,
     snapshot: WindUiSignal<PluginManagerSnapshot>,
     busy: WindUiSignal<bool>,
     status: WindUiSignal<String>,
     sender: WindUiSender<PluginResponse>,
+    locale: LocaleCatalog,
 ) -> WindUiElement {
     let enabled_operation =
         move || !busy.get() && operation(&snapshot.get(), &selected.get()).is_some();
@@ -1312,7 +1333,11 @@ fn windui_plugin_action(
                 return;
             };
             busy.set(true);
-            status.set(format!("正在{} {}", operation.label(), selected_id));
+            let operation_label = operation.label(&locale);
+            status.set(locale.format(
+                "settings.plugins.operation.running",
+                &[("operation", &operation_label), ("id", &selected_id)],
+            ));
             spawn_plugin_operation(sender.clone(), operation);
         })
 }
@@ -1322,103 +1347,115 @@ fn windui_plugins_page(
     busy: WindUiSignal<bool>,
     operation_status: WindUiSignal<String>,
     sender: WindUiSender<PluginResponse>,
+    locale: LocaleCatalog,
 ) -> WindUiElement {
     let selected = windui_signal("fcitx5-chinese-addons".to_owned());
-    let rows = snapshot.map(plugin_catalog_rows);
-    let repository = snapshot.map(|state| {
+    let rows_locale = locale.clone();
+    let rows = snapshot.map(move |state| plugin_catalog_rows(&state, &rows_locale));
+    let repository_locale = locale.clone();
+    let repository = snapshot.map(move |state| {
         if !state.loaded {
-            "官方仓库 · 正在读取".to_owned()
+            repository_locale.text("settings.plugins.repository.loading")
         } else if state.repository_available {
-            "官方仓库 · 签名目录可用".to_owned()
+            repository_locale.text("settings.plugins.repository.ready")
         } else {
-            format!(
-                "官方仓库 · 不可用{}",
-                state
-                    .repository_error
-                    .as_deref()
-                    .map(|error| format!("：{error}"))
-                    .unwrap_or_default()
+            let detail = state
+                .repository_error
+                .as_deref()
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default();
+            repository_locale.format(
+                "settings.plugins.repository.unavailable",
+                &[("detail", &detail)],
             )
         }
     });
+    let detail_locale = locale.clone();
     let detail = snapshot.map(move |state| {
         let id = selected.get();
-        let category = is_reference_plugin(&id)
-            .map(|plugin| plugin.category)
-            .unwrap_or("扩展");
+        let category = detail_locale.text("settings.plugins.fallback_category");
         state
             .package(&id)
             .map(|package| {
                 format!(
                     "{} · {} · {}",
-                    package.title, category, package.package_type
+                    package.title,
+                    category,
+                    plugin_package_type_label(&detail_locale, &package.package_type)
                 )
             })
             .unwrap_or_else(|| format!("{} · {}", id, category))
     });
+    let summary_locale = locale.clone();
     let summary = snapshot.map(move |state| {
         let id = selected.get();
         state
             .package(&id)
             .map(|package| package.summary.clone())
-            .or_else(|| is_reference_plugin(&id).map(|plugin| plugin.summary.to_owned()))
-            .unwrap_or_else(|| "由官方 Control 目录提供元数据".to_owned())
+            .unwrap_or_else(|| summary_locale.text("settings.plugins.fallback_metadata"))
     });
+    let row_locale = locale.clone();
     let list = WindUiElement::list_signal(
         rows,
         |row| row.id.clone(),
-        move |row| windui_plugin_row(row, selected, snapshot),
+        move |row| windui_plugin_row(row, selected, snapshot, row_locale.clone()),
     )
     .width_match();
     let refresh_sender = sender.clone();
+    let repair_locale = locale.clone();
+    let refresh_locale = locale.clone();
     let install_sender = sender.clone();
     let update_sender = sender.clone();
     let toggle_sender = sender.clone();
     let remove_sender = sender.clone();
     let actions = vec![
         windui_plugin_action(
-            "安装",
+            locale.text("settings.plugins.operation.install"),
             |state, id| plugin_operation_for(state, id, PluginAction::Install),
             selected,
             snapshot,
             busy,
             operation_status,
             install_sender,
+            locale.clone(),
         ),
         windui_plugin_action(
-            "更新",
+            locale.text("settings.plugins.operation.update"),
             |state, id| plugin_operation_for(state, id, PluginAction::Update),
             selected,
             snapshot,
             busy,
             operation_status,
             update_sender,
+            locale.clone(),
         ),
         windui_plugin_action(
-            "启用/禁用",
+            locale.text("packages.enable_disable"),
             |state, id| plugin_operation_for(state, id, PluginAction::Toggle),
             selected,
             snapshot,
             busy,
             operation_status,
             toggle_sender,
+            locale.clone(),
         ),
         windui_plugin_action(
-            "卸载",
+            locale.text("packages.uninstall"),
             |state, id| plugin_operation_for(state, id, PluginAction::Remove),
             selected,
             snapshot,
             busy,
             operation_status,
             remove_sender,
+            locale.clone(),
         ),
-        WindUiElement::button("修复")
+        WindUiElement::button(locale.text("settings.plugins.operation.repair"))
             .small()
             .outline()
             .enabled_when(move || !busy.get())
             .on_click(move |_| {
                 busy.set(true);
-                operation_status.set("正在修复插件包状态".to_owned());
+                operation_status.set(repair_locale.text("settings.plugins.operation.repairing"));
                 spawn_plugin_operation(sender.clone(), PluginOperation::Repair);
             }),
     ];
@@ -1427,9 +1464,15 @@ fn windui_plugins_page(
             .fill()
             .spacing(8)
             .child(
-                WindUiElement::label_signal(
-                    rows.map(|rows| format!("插件目录 · {} 项", rows.len())),
-                )
+                WindUiElement::label_signal(rows.map({
+                    let locale = locale.clone();
+                    move |rows| {
+                        locale.format(
+                            "settings.plugins.catalog_count",
+                            &[("count", &rows.len().to_string())],
+                        )
+                    }
+                }))
                 .font_size(15.0)
                 .font_weight(700),
             )
@@ -1438,37 +1481,38 @@ fn windui_plugins_page(
     .height_match()
     .weight(1.0);
     let detail_panel = windui_settings_card(
-        WindUiElement::col()
-            .fill()
-            .spacing(12)
-            .child(
-                WindUiElement::label_signal(detail)
-                    .font_size(13.0)
-                    .font_weight(700),
-            )
-            .child(
-                WindUiElement::label_signal(summary)
-                    .font_size(12.5)
-                    .fg_role(WindUiRole::TextMuted),
-            )
-            .child(WindUiElement::divider())
-            .child(WindUiElement::grid(2, 8, actions).width_match())
-            .child(
-                WindUiElement::label_signal(operation_status)
-                    .font_size(12.5)
+        WindUiElement::scroll().fill().child(
+            WindUiElement::col()
+                .width_match()
+                .spacing(12)
+                .child(
+                    WindUiElement::label_signal(detail)
+                        .font_size(13.0)
+                        .font_weight(700),
+                )
+                .child(
+                    WindUiElement::label_signal(summary)
+                        .font_size(12.5)
+                        .fg_role(WindUiRole::TextMuted),
+                )
+                .child(WindUiElement::divider())
+                .child(WindUiElement::grid(1, 6, actions).width_match())
+                .child(
+                    WindUiElement::label_signal(operation_status)
+                        .font_size(12.5)
+                        .fg_role(WindUiRole::TextMuted)
+                        .width_match(),
+                )
+                .child(
+                    WindUiElement::label(locale.format(
+                        "settings.plugins.reference_note",
+                        &[("commit", FCITX5_PLUGINS_REFERENCE_COMMIT)],
+                    ))
+                    .font_size(11.5)
                     .fg_role(WindUiRole::TextMuted)
                     .width_match(),
-            )
-            .child(WindUiElement::flex_spacer())
-            .child(
-                WindUiElement::label(format!(
-                    "官方参考：fcitx5-plugins@{}\n操作权限与可用版本完全来自已验证的 Control 目录。",
-                    FCITX5_PLUGINS_REFERENCE_COMMIT
-                ))
-                .font_size(11.5)
-                .fg_role(WindUiRole::TextMuted)
-                .width_match(),
-            ),
+                ),
+        ),
     )
     .width(300)
     .height_match();
@@ -1477,8 +1521,8 @@ fn windui_plugins_page(
         .padding(24)
         .spacing(14)
         .child(windui_settings_page_title(
-            "插件与扩展",
-            "fcitx5-plugins 目录与受信 Windows 包",
+            &locale.text("nav.packages"),
+            &locale.text("settings.plugins.subtitle"),
         ))
         .child(
             WindUiElement::row()
@@ -1492,13 +1536,14 @@ fn windui_plugins_page(
                         .weight(1.0),
                 )
                 .child(
-                    WindUiElement::button("刷新插件目录")
+                    WindUiElement::button(locale.text("packages.refresh"))
                         .small()
                         .outline()
                         .enabled_when(move || !busy.get())
                         .on_click(move |_| {
                             busy.set(true);
-                            operation_status.set("正在刷新签名插件目录".to_owned());
+                            operation_status
+                                .set(refresh_locale.text("settings.plugins.refresh_signed"));
                             spawn_plugin_operation(
                                 refresh_sender.clone(),
                                 PluginOperation::Refresh,
@@ -1541,7 +1586,7 @@ fn windui_hotkey_row(name: &str, keys: &str) -> WindUiElement {
         )
 }
 
-fn windui_nav_placeholder(title: &str) -> WindUiElement {
+fn windui_nav_placeholder(title: &str, locale: &LocaleCatalog) -> WindUiElement {
     WindUiElement::scroll().fill().child(
         WindUiElement::col()
             .width_match()
@@ -1554,7 +1599,7 @@ fn windui_nav_placeholder(title: &str) -> WindUiElement {
                     .fg_role(WindUiRole::Text),
             )
             .child(windui_settings_card(
-                WindUiElement::label("此页会绑定对应 Rust 配置模型与 Control API。")
+                WindUiElement::label(locale.text("settings.placeholder.description"))
                     .font_size(14.0)
                     .fg_role(WindUiRole::TextMuted)
                     .width_match(),
@@ -1571,6 +1616,7 @@ fn windui_settings_root(
     candidate_status: WindUiSignal<String>,
     locale: LocaleCatalog,
 ) -> WindUiElement {
+    candidate_status.set(locale.text("settings.candidate.draft_loaded"));
     let nav = windui_signal(0usize);
     let search = windui_signal(String::new());
     let input_method = windui_signal(0usize);
@@ -1581,6 +1627,7 @@ fn windui_settings_root(
     let compact = windui_signal(false);
     let language_controls =
         windui_settings_language_controls(candidate_adapter, candidate_status, &locale);
+    let plugin_locale = locale.clone();
 
     const NAV_GLYPHS: [&str; 6] = [
         "\u{270E}", "\u{25D0}", "\u{2328}", "\u{25A4}", "\u{21BB}", "\u{24D8}",
@@ -1602,7 +1649,7 @@ fn windui_settings_root(
         .padding_xy(10, 12)
         .spacing(12)
         .child(
-            WindUiElement::text_input(search, "搜索设置...")
+            WindUiElement::text_input(search, locale.text("settings.search"))
                 .leading_icon('\u{1F50D}')
                 .width_match(),
         )
@@ -1615,34 +1662,65 @@ fn windui_settings_root(
             .spacing(20)
             .child(windui_settings_page_title(
                 &locale.text("nav.general"),
-                "输入法、候选窗口与快捷键",
+                &locale.text("settings.input.subtitle"),
             ))
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
                     .spacing(16)
-                    .child(windui_settings_section_title("输入法"))
+                    .child(windui_settings_section_title(
+                        &locale.text("settings.input.section"),
+                    ))
                     .child(WindUiElement::setting_row_desc(
-                        "默认输入法",
-                        "Fcitx 内部切换 engine；Windows 侧仍保持单一 Fcitx5 profile",
-                        WindUiElement::dropdown(vec!["五笔", "拼音", "Rime", "Mozc"], input_method)
-                            .width(180),
+                        locale.text("general.input_method"),
+                        &locale.text("settings.input.profile_hint"),
+                        WindUiElement::dropdown(
+                            ["wubi", "pinyin", "rime", "mozc"]
+                                .map(|name| locale.text(&format!("settings.input.engine.{name}")))
+                                .into(),
+                            input_method,
+                        )
+                        .width(180),
                     )),
             ))
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
                     .spacing(14)
-                    .child(windui_settings_section_title("快捷键"))
+                    .child(windui_settings_section_title(
+                        &locale.text("settings.shortcuts.section"),
+                    ))
                     .child(
                         WindUiElement::tag_field(
-                            "添加键位...",
+                            locale.text("shortcuts.placeholder"),
                             vec![
-                                WindUiElement::chip("Ctrl+Space", |ctx| {
-                                    ctx.toast("移除 Ctrl+Space")
+                                WindUiElement::chip("Ctrl+Space", {
+                                    let locale = locale.clone();
+                                    move |ctx| {
+                                        ctx.toast(locale.format(
+                                            "settings.shortcuts.remove",
+                                            &[("key", "Ctrl+Space")],
+                                        ))
+                                    }
                                 }),
-                                WindUiElement::chip("Shift", |ctx| ctx.toast("移除 Shift")),
-                                WindUiElement::chip("Ctrl+.", |ctx| ctx.toast("移除 Ctrl+.")),
+                                WindUiElement::chip("Shift", {
+                                    let locale = locale.clone();
+                                    move |ctx| {
+                                        ctx.toast(locale.format(
+                                            "settings.shortcuts.remove",
+                                            &[("key", "Shift")],
+                                        ))
+                                    }
+                                }),
+                                WindUiElement::chip("Ctrl+.", {
+                                    let locale = locale.clone();
+                                    move |ctx| {
+                                        ctx.toast(locale.format(
+                                            "settings.shortcuts.remove",
+                                            &[("key", "Ctrl+.")],
+                                        ))
+                                    }
+                                }),
                             ],
                         )
                         .width_match(),
@@ -1653,10 +1731,22 @@ fn windui_settings_root(
                             2,
                             12,
                             vec![
-                                windui_hotkey_row("中英切换", "Shift"),
-                                windui_hotkey_row("简繁切换", "Ctrl+Shift+F"),
-                                windui_hotkey_row("全半角", "Shift+Space"),
-                                windui_hotkey_row("标点切换", "Ctrl+."),
+                                windui_hotkey_row(
+                                    &locale.text("settings.shortcuts.toggle_language"),
+                                    "Shift",
+                                ),
+                                windui_hotkey_row(
+                                    &locale.text("settings.shortcuts.toggle_script"),
+                                    "Ctrl+Shift+F",
+                                ),
+                                windui_hotkey_row(
+                                    &locale.text("settings.shortcuts.toggle_width"),
+                                    "Shift+Space",
+                                ),
+                                windui_hotkey_row(
+                                    &locale.text("settings.shortcuts.toggle_punctuation"),
+                                    "Ctrl+.",
+                                ),
                             ],
                         )
                         .width_match(),
@@ -1671,30 +1761,45 @@ fn windui_settings_root(
             .spacing(20)
             .child(windui_settings_page_title(
                 &locale.text("nav.appearance"),
-                "主题、排版与候选预览",
+                &locale.text("settings.appearance.subtitle"),
             ))
             .child(windui_settings_card(
-                windui_config_core_candidate_layout_controls(candidate_adapter, candidate_status),
+                windui_config_core_candidate_layout_controls(
+                    candidate_adapter,
+                    candidate_status,
+                    locale.clone(),
+                ),
             ))
             .child(windui_settings_card(language_controls))
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
                     .spacing(16)
-                    .child(windui_settings_section_title("主题"))
-                    .child(WindUiElement::setting_row_desc(
-                        "外观模式",
-                        "默认跟随 Windows Light/Dark；High Contrast 优先",
-                        windui_appearance_mode_controls(candidate_adapter, candidate_status),
+                    .child(windui_settings_section_title(
+                        &locale.text("settings.theme.section"),
                     ))
                     .child(WindUiElement::setting_row_desc(
-                        "强调色",
-                        "用于选中态、主按钮与进度条",
-                        WindUiElement::dropdown(vec!["微信绿", "竹青", "墨绿"], accent_pick)
-                            .width(180),
+                        locale.text("appearance.mode"),
+                        &locale.text("settings.appearance.mode_hint"),
+                        windui_appearance_mode_controls(
+                            candidate_adapter,
+                            candidate_status,
+                            &locale,
+                        ),
+                    ))
+                    .child(WindUiElement::setting_row_desc(
+                        &locale.text("settings.theme.accent"),
+                        &locale.text("settings.theme.accent_hint"),
+                        WindUiElement::dropdown(
+                            ["wechat_green", "bamboo", "dark_green"]
+                                .map(|name| locale.text(&format!("settings.accent.{name}")))
+                                .into(),
+                            accent_pick,
+                        )
+                        .width(180),
                     ))
                     .child(WindUiElement::setting_row(
-                        "窗口投影",
+                        locale.text("settings.theme.shadow"),
                         WindUiElement::switch(window_shadow),
                     )),
             ))
@@ -1702,19 +1807,21 @@ fn windui_settings_root(
                 WindUiElement::col()
                     .width_match()
                     .spacing(16)
-                    .child(windui_settings_section_title("排版"))
+                    .child(windui_settings_section_title(
+                        &locale.text("settings.typography.section"),
+                    ))
                     .child(WindUiElement::setting_row_desc(
-                        "界面字号",
-                        "影响设置窗与候选窗正文字号",
+                        &locale.text("settings.typography.font_size"),
+                        &locale.text("settings.typography.font_size_hint"),
                         WindUiElement::stepper(ui_font_size, 11.0, 20.0, 1.0),
                     ))
                     .child(WindUiElement::setting_row_desc(
-                        "界面缩放",
-                        "在高 DPI 屏上整体放大界面",
+                        &locale.text("settings.typography.scale"),
+                        &locale.text("settings.typography.scale_hint"),
                         WindUiElement::slider(ui_scale).width(180),
                     ))
                     .child(WindUiElement::setting_row(
-                        "紧凑模式",
+                        &locale.text("settings.typography.compact"),
                         WindUiElement::switch(compact),
                     )),
             )),
@@ -1726,8 +1833,14 @@ fn windui_settings_root(
         .child(input_page.visible_when(move || nav.get() == 0))
         .child(appearance_page.visible_when(move || nav.get() == 1))
         .child(
-            windui_plugins_page(plugin_snapshot, plugin_busy, plugin_status, plugin_sender)
-                .visible_when(move || nav.get() == 3),
+            windui_plugins_page(
+                plugin_snapshot,
+                plugin_busy,
+                plugin_status,
+                plugin_sender,
+                plugin_locale,
+            )
+            .visible_when(move || nav.get() == 3),
         );
     for (i, title) in [
         (2usize, "nav.theme"),
@@ -1735,7 +1848,8 @@ fn windui_settings_root(
         (5usize, "nav.repair"),
     ] {
         content = content.child(
-            windui_nav_placeholder(&locale.text(title)).visible_when(move || nav.get() == i),
+            windui_nav_placeholder(&locale.text(title), &locale)
+                .visible_when(move || nav.get() == i),
         );
     }
 
@@ -1760,24 +1874,24 @@ fn windui_settings_root(
                 ),
         )
         .child(
-            WindUiElement::label("配置已就绪")
+            WindUiElement::label(locale.text("settings.ready"))
                 .font_size(12.5)
                 .fg_role(WindUiRole::TextMuted),
         )
         .child(WindUiElement::flex_spacer())
         .child(
-            WindUiElement::button("恢复本页")
+            WindUiElement::button(locale.text("settings.restore_page"))
                 .small()
                 .outline()
                 .neutral(),
         )
         .child(
-            WindUiElement::button("重新加载")
+            WindUiElement::button(locale.text("settings.reload"))
                 .small()
                 .outline()
                 .neutral(),
         )
-        .child(WindUiElement::button("保存设置").small());
+        .child(WindUiElement::button(locale.text("settings.save")).small());
 
     let body = WindUiElement::col()
         .fill()
@@ -1800,7 +1914,7 @@ fn windui_settings_root(
     WindUiElement::stack()
         .fill()
         .bg_role(WindUiRole::Bg)
-        .child(windui_settings_shell_wrap("设置", body))
+        .child(windui_settings_shell_wrap(&locale.text("app.title"), body))
 }
 
 fn windui_settings_language_controls(
@@ -1874,9 +1988,13 @@ fn windui_settings_language_controls(
         )
 }
 
-fn windui_theme_toggle(handle: WindUiThemeHandle, dark: WindUiSignal<bool>) -> WindUiElement {
+fn windui_theme_toggle(
+    handle: WindUiThemeHandle,
+    dark: WindUiSignal<bool>,
+    locale: LocaleCatalog,
+) -> WindUiElement {
     WindUiElement::icon_button("◐")
-        .tooltip("切换明暗主题")
+        .tooltip(locale.text("settings.theme.toggle"))
         .fg_role(WindUiRole::TextMuted)
         .on_click(move |_| {
             let next = !dark.get();
@@ -1888,6 +2006,7 @@ fn windui_theme_toggle(handle: WindUiThemeHandle, dark: WindUiSignal<bool>) -> W
 fn windui_plugin_manager(
     app: &mut WindUiApp,
     initial_load: bool,
+    locale: LocaleCatalog,
 ) -> (
     WindUiSignal<PluginManagerSnapshot>,
     WindUiSignal<bool>,
@@ -1897,25 +2016,36 @@ fn windui_plugin_manager(
     let snapshot = windui_signal(PluginManagerSnapshot::default());
     let busy = windui_signal(initial_load);
     let status = windui_signal(if initial_load {
-        "正在通过 fcitx5-control.exe 读取插件状态".to_owned()
+        locale.text("settings.plugins.control_reading")
     } else {
-        "选择插件后可执行受信包操作".to_owned()
+        locale.text("settings.plugins.choose_operation")
     });
+    let response_locale = locale.clone();
     let sender = app.channel::<PluginResponse>(move |ctx, response| {
         busy.set(false);
         match response.result {
             Ok(next) => {
                 let count = next.packages.len();
-                status.set(format!(
-                    "{}完成，已从 Control 读取 {count} 个 Windows 包状态",
-                    response.operation.label()
+                let operation_label = response.operation.label(&response_locale);
+                status.set(response_locale.format(
+                    "settings.plugins.completed",
+                    &[
+                        ("operation", &operation_label),
+                        ("count", &count.to_string()),
+                    ],
                 ));
                 snapshot.set(next);
-                ctx.toast_ok(format!("插件{}完成", response.operation.label()));
+                ctx.toast_ok(operation_label);
             }
             Err(error) => {
-                status.set(error.clone());
-                ctx.toast_err(error);
+                let operation_label = response.operation.label(&response_locale);
+                let message = response_locale.format(
+                    "settings.plugins.operation_failed",
+                    &[("operation", &operation_label)],
+                );
+                let detail = localized_plugin_error(&response_locale, &error);
+                status.set(format!("{message}: {detail}"));
+                ctx.toast_err(format!("{message}: {detail}"));
             }
         }
     });
@@ -1930,7 +2060,7 @@ fn windui_candidate_config_manager(
 ) -> Result<(WindUiSignal<WindUiConfigAdapter>, WindUiSignal<String>), String> {
     Ok((
         windui_signal(WindUiConfigAdapter::load(path)?),
-        windui_signal("候选布局 Draft 已从 Config Core 读取".to_owned()),
+        windui_signal(String::new()),
     ))
 }
 
@@ -1945,36 +2075,43 @@ fn update_candidate_draft(
     status: WindUiSignal<String>,
     label: &str,
     edit: ConfigEdit,
+    locale: &LocaleCatalog,
 ) -> Result<(), String> {
     let mut result = Ok(());
     adapter.update(|adapter| result = adapter.set(edit));
     result?;
-    status.set(format!("{label}已更新 Draft；点击应用后保存"));
+    status.set(locale.format("settings.candidate.draft_updated", &[("control", label)]));
     Ok(())
 }
 
 fn apply_candidate_draft(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> Result<(), String> {
     let mut result = Ok(());
     adapter.update(|adapter| result = adapter.apply());
     result?;
-    status.set("候选布局已应用并写入 Config Core".to_owned());
+    status.set(locale.text("settings.candidate.applied"));
     Ok(())
 }
 
 fn cancel_candidate_draft(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) {
     adapter.update(WindUiConfigAdapter::cancel);
-    status.set("已放弃 Draft 更改".to_owned());
+    status.set(locale.text("settings.candidate.draft_discarded"));
 }
 
-fn reset_candidate_draft(adapter: WindUiSignal<WindUiConfigAdapter>, status: WindUiSignal<String>) {
+fn reset_candidate_draft(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
+) {
     adapter.update(WindUiConfigAdapter::reset_candidate_layout);
-    status.set("候选布局 Draft 已恢复默认继承值".to_owned());
+    status.set(locale.text("settings.candidate.draft_reset"));
 }
 
 /// Decodes the current snapshot into the two-axis UI state exactly as Config
@@ -2008,8 +2145,9 @@ fn candidate_layout_ui_options(snapshot: &ConfigSnapshot) -> CandidateLayoutUiOp
 fn commit_candidate_layout_ui(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
-    control: &'static str,
+    control: &str,
     edit: impl Fn(CandidateLayoutUiOptions) -> CandidateLayoutUiOptions + 'static,
+    locale: &LocaleCatalog,
 ) -> Result<(), String> {
     let mut result = Ok(());
     adapter.update(|adapter| {
@@ -2020,7 +2158,7 @@ fn commit_candidate_layout_ui(
         ));
     });
     result?;
-    status.set(format!("{control}已更新 Draft；点击应用后保存"));
+    status.set(locale.format("settings.candidate.draft_updated", &[("control", control)]));
     Ok(())
 }
 
@@ -2029,22 +2167,34 @@ fn candidate_layout_mode_button(
     selected: WindUiSignal<CandidateLayoutMode>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> WindUiElement {
-    let active = WindUiElement::button(mode.label())
+    let label_key = match mode {
+        CandidateLayoutMode::Automatic => "candidate.automatic",
+        CandidateLayoutMode::Stacked => "candidate.vertical",
+        CandidateLayoutMode::Flow => "candidate.horizontal",
+        CandidateLayoutMode::Scroll => "candidate.scroll",
+        CandidateLayoutMode::VerticalText => "settings.candidate.mode.vertical_text",
+    };
+    let label = locale.text(label_key);
+    let tooltip = locale.text("settings.candidate.layout_hint");
+    let callback_locale = (*locale).clone();
+    let active = WindUiElement::button(label.clone())
         .small()
-        .tooltip(mode.preview_description(5))
+        .tooltip(tooltip.clone())
         .visible_when(move || selected.get() == mode);
-    let inactive = WindUiElement::button(mode.label())
+    let inactive = WindUiElement::button(label)
         .small()
         .outline_soft()
         .neutral()
-        .tooltip(mode.preview_description(5))
+        .tooltip(tooltip)
         .on_click(move |ctx| {
             if let Err(error) = update_candidate_draft(
                 adapter,
                 status,
-                "候选布局",
+                &callback_locale.text("candidate.layout"),
                 ConfigEdit::CandidateLayoutType(mode.options().layout_type().to_owned()),
+                &callback_locale,
             ) {
                 ctx.toast_err(error);
             }
@@ -2056,11 +2206,18 @@ fn candidate_layout_mode_button(
 fn windui_appearance_mode_controls(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> WindUiElement {
     let selected = adapter.map(|adapter| adapter.preview().appearance().mode().to_owned());
     let mut controls = WindUiElement::row().spacing(6);
-    for (label, mode) in [("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")] {
-        let active = WindUiElement::button(label)
+    for (key, mode) in [
+        ("mode.system", "system"),
+        ("mode.light", "light"),
+        ("mode.dark", "dark"),
+    ] {
+        let label = locale.text(key);
+        let callback_locale = (*locale).clone();
+        let active = WindUiElement::button(label.clone())
             .small()
             .visible_when(move || selected.get() == mode);
         let inactive = WindUiElement::button(label)
@@ -2071,8 +2228,9 @@ fn windui_appearance_mode_controls(
                 if let Err(error) = update_candidate_draft(
                     adapter,
                     status,
-                    "外观模式",
+                    &callback_locale.text("appearance.mode"),
                     ConfigEdit::AppearanceMode(mode.to_owned()),
+                    &callback_locale,
                 ) {
                     ctx.toast_err(error);
                 }
@@ -2089,14 +2247,19 @@ fn candidate_scroll_direction_button(
     selected: WindUiSignal<CandidateLayoutUiOptions>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> WindUiElement {
     let label = match direction {
-        ScrollDirection::Horizontal => "横向卷轴",
-        ScrollDirection::Vertical => "纵向卷轴",
+        ScrollDirection::Horizontal => locale.text("settings.candidate.horizontal_scroll"),
+        ScrollDirection::Vertical => locale.text("settings.candidate.vertical_scroll"),
     };
-    let active = WindUiElement::button(label).small().visible_when(move || {
-        mode.get() == CandidateLayoutMode::Scroll && selected.get().scroll_direction == direction
-    });
+    let active = WindUiElement::button(label.clone())
+        .small()
+        .visible_when(move || {
+            mode.get() == CandidateLayoutMode::Scroll
+                && selected.get().scroll_direction == direction
+        });
+    let callback_locale = (*locale).clone();
     let inactive = WindUiElement::button(label)
         .small()
         .outline_soft()
@@ -2105,8 +2268,9 @@ fn candidate_scroll_direction_button(
             if let Err(error) = update_candidate_draft(
                 adapter,
                 status,
-                "卷轴方向",
+                &callback_locale.text("settings.candidate.scroll_direction"),
                 ConfigEdit::CandidateScrollDirection(direction),
+                &callback_locale,
             ) {
                 ctx.toast_err(error);
             }
@@ -2124,15 +2288,19 @@ fn candidate_vertical_text_column_button(
     selected: WindUiSignal<CandidateLayoutUiOptions>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> WindUiElement {
     let label = match direction {
-        VerticalTextColumnDirection::RightToLeft => "从右到左",
-        VerticalTextColumnDirection::LeftToRight => "从左到右",
+        VerticalTextColumnDirection::RightToLeft => locale.text("settings.candidate.right_to_left"),
+        VerticalTextColumnDirection::LeftToRight => locale.text("settings.candidate.left_to_right"),
     };
-    let active = WindUiElement::button(label).small().visible_when(move || {
-        mode.get() == CandidateLayoutMode::VerticalText
-            && selected.get().vertical_text_column_direction == direction
-    });
+    let active = WindUiElement::button(label.clone())
+        .small()
+        .visible_when(move || {
+            mode.get() == CandidateLayoutMode::VerticalText
+                && selected.get().vertical_text_column_direction == direction
+        });
+    let callback_locale = (*locale).clone();
     let inactive = WindUiElement::button(label)
         .small()
         .outline_soft()
@@ -2141,8 +2309,9 @@ fn candidate_vertical_text_column_button(
             if let Err(error) = update_candidate_draft(
                 adapter,
                 status,
-                "竖排文字列方向",
+                &callback_locale.text("settings.candidate.column_direction"),
                 ConfigEdit::CandidateVerticalTextColumnDirection(direction),
+                &callback_locale,
             ) {
                 ctx.toast_err(error);
             }
@@ -2161,14 +2330,23 @@ fn candidate_layout_orientation_card(
     options: WindUiSignal<CandidateLayoutUiOptions>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> WindUiElement {
     let label = match orientation {
-        CandidateLayoutOrientation::Horizontal => "横向",
-        CandidateLayoutOrientation::Vertical => "纵向",
+        CandidateLayoutOrientation::Horizontal => {
+            locale.text("settings.candidate.orientation.horizontal")
+        }
+        CandidateLayoutOrientation::Vertical => {
+            locale.text("settings.candidate.orientation.vertical")
+        }
     };
     let description = match orientation {
-        CandidateLayoutOrientation::Horizontal => "单行或多行横向排列",
-        CandidateLayoutOrientation::Vertical => "候选自上而下逐行排列",
+        CandidateLayoutOrientation::Horizontal => {
+            locale.text("settings.candidate.orientation.horizontal_hint")
+        }
+        CandidateLayoutOrientation::Vertical => {
+            locale.text("settings.candidate.orientation.vertical_hint")
+        }
     };
     let active = WindUiElement::col()
         .padding(10)
@@ -2177,37 +2355,40 @@ fn candidate_layout_orientation_card(
         .spacing(2)
         .width(122)
         .child(
-            WindUiElement::label(label)
+            WindUiElement::label(label.clone())
                 .font_size(13.5)
                 .font_weight(600)
                 .fg_role(WindUiRole::OnAccent),
         )
         .child(
-            WindUiElement::label(description)
+            WindUiElement::label(description.clone())
                 .font_size(11.0)
                 .fg_role(WindUiRole::OnAccent)
                 .width_match(),
         )
         .visible_when(move || options.get().orientation == orientation);
+    let callback_locale = (*locale).clone();
     let inactive = WindUiElement::col()
         .clickable()
         .on_click(move |ctx| {
-            if let Err(error) =
-                commit_candidate_layout_ui(adapter, status, "布局", move |current| {
-                    CandidateLayoutUiOptions {
-                        orientation,
-                        overflow: if orientation == CandidateLayoutOrientation::Vertical
-                            && current.overflow == CandidateLayoutOverflow::Wrapping
-                        {
-                            CandidateLayoutOverflow::Paging
-                        } else {
-                            current.overflow
-                        },
-                        writing_mode: CandidateWritingMode::Horizontal,
-                        ..current
-                    }
-                })
-            {
+            if let Err(error) = commit_candidate_layout_ui(
+                adapter,
+                status,
+                &callback_locale.text("candidate.layout"),
+                move |current| CandidateLayoutUiOptions {
+                    orientation,
+                    overflow: if orientation == CandidateLayoutOrientation::Vertical
+                        && current.overflow == CandidateLayoutOverflow::Wrapping
+                    {
+                        CandidateLayoutOverflow::Paging
+                    } else {
+                        current.overflow
+                    },
+                    writing_mode: CandidateWritingMode::Horizontal,
+                    ..current
+                },
+                &callback_locale,
+            ) {
                 ctx.toast_err(error);
             }
         })
@@ -2245,45 +2426,53 @@ fn candidate_layout_overflow_button(
     options: WindUiSignal<CandidateLayoutUiOptions>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> WindUiElement {
     let label = match overflow {
-        CandidateLayoutOverflow::Paging => "分页",
-        CandidateLayoutOverflow::Scrolling => "卷轴",
-        CandidateLayoutOverflow::Wrapping => "自动换行",
+        CandidateLayoutOverflow::Paging => locale.text("settings.candidate.overflow.paging"),
+        CandidateLayoutOverflow::Scrolling => locale.text("settings.candidate.overflow.scrolling"),
+        CandidateLayoutOverflow::Wrapping => locale.text("settings.candidate.overflow.wrapping"),
     };
     let available = options.map(move |current| current.overflow_choices().contains(&overflow));
-    let active = WindUiElement::button(label)
+    let callback_locale = (*locale).clone();
+    let hint = locale.text("settings.candidate.overflow_hint");
+    let active = WindUiElement::button(label.clone())
         .small()
-        .tooltip("候选超出可见区域时的行为")
+        .tooltip(hint.clone())
         .on_click(move |ctx| {
-            if let Err(error) =
-                commit_candidate_layout_ui(adapter, status, "候选溢出", move |current| {
-                    CandidateLayoutUiOptions {
-                        overflow,
-                        writing_mode: CandidateWritingMode::Horizontal,
-                        ..current
-                    }
-                })
-            {
+            if let Err(error) = commit_candidate_layout_ui(
+                adapter,
+                status,
+                &callback_locale.text("settings.candidate.overflow_hint"),
+                move |current| CandidateLayoutUiOptions {
+                    overflow,
+                    writing_mode: CandidateWritingMode::Horizontal,
+                    ..current
+                },
+                &callback_locale,
+            ) {
                 ctx.toast_err(error);
             }
         })
         .visible_when(move || available.get() && options.get().overflow == overflow);
+    let callback_locale = (*locale).clone();
     let inactive = WindUiElement::button(label)
         .small()
         .outline_soft()
         .neutral()
-        .tooltip("候选超出可见区域时的行为")
+        .tooltip(hint)
         .on_click(move |ctx| {
-            if let Err(error) =
-                commit_candidate_layout_ui(adapter, status, "候选溢出", move |current| {
-                    CandidateLayoutUiOptions {
-                        overflow,
-                        writing_mode: CandidateWritingMode::Horizontal,
-                        ..current
-                    }
-                })
-            {
+            if let Err(error) = commit_candidate_layout_ui(
+                adapter,
+                status,
+                &callback_locale.text("settings.candidate.overflow_hint"),
+                move |current| CandidateLayoutUiOptions {
+                    overflow,
+                    writing_mode: CandidateWritingMode::Horizontal,
+                    ..current
+                },
+                &callback_locale,
+            ) {
                 ctx.toast_err(error);
             }
         })
@@ -2302,36 +2491,44 @@ fn candidate_layout_writing_button(
     options: WindUiSignal<CandidateLayoutUiOptions>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> WindUiElement {
     let label = match writing {
-        CandidateWritingMode::Horizontal => "横排",
-        CandidateWritingMode::VerticalRl => "竖排从右到左",
-        CandidateWritingMode::VerticalLr => "竖排从左到右",
+        CandidateWritingMode::Horizontal => locale.text("settings.candidate.writing.horizontal"),
+        CandidateWritingMode::VerticalRl => locale.text("settings.candidate.writing.vertical_rl"),
+        CandidateWritingMode::VerticalLr => locale.text("settings.candidate.writing.vertical_lr"),
     };
-    let active = WindUiElement::button(label)
+    let callback_locale = (*locale).clone();
+    let hint = locale.text("settings.candidate.writing_hint");
+    let active = WindUiElement::button(label.clone())
         .small()
-        .tooltip("候选文字自身的排布方向（独立于布局方向）")
+        .tooltip(hint.clone())
         .on_click(move |ctx| {
-            if let Err(error) =
-                commit_candidate_layout_ui(adapter, status, "文字方向", move |current| {
-                    current.with_writing(writing)
-                })
-            {
+            if let Err(error) = commit_candidate_layout_ui(
+                adapter,
+                status,
+                &callback_locale.text("settings.candidate.writing_hint"),
+                move |current| current.with_writing(writing),
+                &callback_locale,
+            ) {
                 ctx.toast_err(error);
             }
         })
         .visible_when(move || options.get().writing_mode == writing);
+    let callback_locale = (*locale).clone();
     let inactive = WindUiElement::button(label)
         .small()
         .outline_soft()
         .neutral()
-        .tooltip("候选文字自身的排布方向（独立于布局方向）")
+        .tooltip(hint)
         .on_click(move |ctx| {
-            if let Err(error) =
-                commit_candidate_layout_ui(adapter, status, "文字方向", move |current| {
-                    current.with_writing(writing)
-                })
-            {
+            if let Err(error) = commit_candidate_layout_ui(
+                adapter,
+                status,
+                &callback_locale.text("settings.candidate.writing_hint"),
+                move |current| current.with_writing(writing),
+                &callback_locale,
+            ) {
                 ctx.toast_err(error);
             }
         })
@@ -2344,16 +2541,23 @@ fn config_core_candidate_page_size_button(
     selected: WindUiSignal<u8>,
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: &LocaleCatalog,
 ) -> WindUiElement {
+    let hint = locale.text("settings.candidate.page_size_hint");
+    let control = locale.text("candidate.page_size");
+    let active_locale = (*locale).clone();
+    let inactive_locale = active_locale.clone();
+    let inactive_control = control.clone();
     let active = WindUiElement::button(value.to_string())
         .small()
-        .tooltip("设置每页最大候选数")
+        .tooltip(hint.clone())
         .on_click(move |ctx| {
             if let Err(error) = update_candidate_draft(
                 adapter,
                 status,
-                "候选个数",
+                &control,
                 ConfigEdit::CandidatePageSize(value),
+                &active_locale,
             ) {
                 ctx.toast_err(error);
             }
@@ -2363,13 +2567,14 @@ fn config_core_candidate_page_size_button(
         .small()
         .outline_soft()
         .neutral()
-        .tooltip("设置每页最大候选数")
+        .tooltip(hint)
         .on_click(move |ctx| {
             if let Err(error) = update_candidate_draft(
                 adapter,
                 status,
-                "候选个数",
+                &inactive_control,
                 ConfigEdit::CandidatePageSize(value),
+                &inactive_locale,
             ) {
                 ctx.toast_err(error);
             }
@@ -2378,9 +2583,27 @@ fn config_core_candidate_page_size_button(
     WindUiElement::stack().child(active).child(inactive)
 }
 
+fn windui_settings_control_group(
+    label: String,
+    description: String,
+    controls: WindUiElement,
+) -> WindUiElement {
+    WindUiElement::col()
+        .width_match()
+        .spacing(4)
+        .child(WindUiElement::label(label).font_size(14.0).font_weight(600))
+        .child(
+            WindUiElement::label(description)
+                .font_size(12.5)
+                .fg_role(WindUiRole::TextMuted),
+        )
+        .child(controls)
+}
+
 fn windui_config_core_candidate_layout_controls(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
+    locale: LocaleCatalog,
 ) -> WindUiElement {
     let options = adapter.map(|adapter| candidate_layout_ui_options(&adapter.preview()));
     let mode = adapter.map(|adapter| {
@@ -2400,6 +2623,7 @@ fn windui_config_core_candidate_layout_controls(
             mode,
             adapter,
             status,
+            &locale,
         ));
     }
 
@@ -2411,6 +2635,7 @@ fn windui_config_core_candidate_layout_controls(
             options,
             adapter,
             status,
+            &locale,
         ))
         .child(candidate_scroll_direction_button(
             ScrollDirection::Vertical,
@@ -2418,6 +2643,7 @@ fn windui_config_core_candidate_layout_controls(
             options,
             adapter,
             status,
+            &locale,
         ));
 
     let vertical_text_columns = WindUiElement::row()
@@ -2428,6 +2654,7 @@ fn windui_config_core_candidate_layout_controls(
             options,
             adapter,
             status,
+            &locale,
         ))
         .child(candidate_vertical_text_column_button(
             VerticalTextColumnDirection::LeftToRight,
@@ -2435,69 +2662,83 @@ fn windui_config_core_candidate_layout_controls(
             options,
             adapter,
             status,
+            &locale,
         ));
 
     let mut page_sizes = WindUiElement::row().spacing(4);
     for value in 1..=9 {
         page_sizes = page_sizes.child(config_core_candidate_page_size_button(
-            value, page_size, adapter, status,
+            value, page_size, adapter, status, &locale,
         ));
     }
 
     WindUiElement::col()
         .width_match()
         .spacing(14)
-        .child(windui_settings_section_title("候选窗口"))
-        .child(WindUiElement::setting_row_desc(
-            "布局",
-            "自动、纵排、横排、卷轴或竖排文字",
+        .child(windui_settings_section_title(
+            &locale.text("settings.candidate.section"),
+        ))
+        .child(windui_settings_control_group(
+            locale.text("candidate.layout"),
+            locale.text("settings.candidate.layout_hint"),
             modes,
         ))
         .child(
             WindUiElement::col()
                 .visible_when(move || mode.get() == CandidateLayoutMode::Scroll)
-                .child(WindUiElement::setting_row_desc(
-                    "卷轴方向",
-                    "仅卷轴布局可选",
+                .child(windui_settings_control_group(
+                    locale.text("settings.candidate.scroll_direction"),
+                    locale.text("settings.candidate.scroll_direction_hint"),
                     scroll_directions,
                 )),
         )
         .child(WindUiElement::col().child(WindUiElement::setting_row_desc(
-            "候选个数",
-            "每页最大候选数（1-9）",
+            &locale.text("candidate.page_size"),
+            &locale.text("settings.candidate.page_size_hint"),
             page_sizes,
         )))
         .child(
             WindUiElement::col()
                 .visible_when(move || mode.get() == CandidateLayoutMode::VerticalText)
-                .child(WindUiElement::setting_row_desc(
-                    "竖排文字列方向",
-                    "仅竖排文字布局可选",
+                .child(windui_settings_control_group(
+                    locale.text("settings.candidate.column_direction"),
+                    locale.text("settings.candidate.column_direction_hint"),
                     vertical_text_columns,
                 )),
         )
         .child(
             WindUiElement::row()
                 .spacing(8)
-                .child(WindUiElement::button("应用").on_click(move |ctx| {
-                    if let Err(error) = apply_candidate_draft(adapter, status) {
-                        ctx.toast_err(error);
-                    } else {
-                        ctx.toast_ok("候选布局已应用");
-                    }
-                }))
                 .child(
-                    WindUiElement::button("取消")
+                    WindUiElement::button(locale.text("settings.candidate.apply")).on_click({
+                        let locale = locale.clone();
+                        move |ctx| {
+                            if let Err(error) = apply_candidate_draft(adapter, status, &locale) {
+                                ctx.toast_err(error);
+                            } else {
+                                ctx.toast_ok(locale.text("settings.candidate.applied"));
+                            }
+                        }
+                    }),
+                )
+                .child(
+                    WindUiElement::button(locale.text("settings.candidate.cancel"))
                         .outline_soft()
-                        .on_click(move |_| {
-                            cancel_candidate_draft(adapter, status);
+                        .on_click({
+                            let locale = locale.clone();
+                            move |_| {
+                                cancel_candidate_draft(adapter, status, &locale);
+                            }
                         }),
                 )
                 .child(
-                    WindUiElement::button("重置")
+                    WindUiElement::button(locale.text("settings.candidate.reset"))
                         .outline_soft()
-                        .on_click(move |_| {
-                            reset_candidate_draft(adapter, status);
+                        .on_click({
+                            let locale = locale.clone();
+                            move |_| {
+                                reset_candidate_draft(adapter, status, &locale);
+                            }
                         }),
                 ),
         )
@@ -2515,12 +2756,12 @@ fn windui_settings_default_shell_probe() -> WindUiElement {
         .frameless()
         .theme(windui_settings_shell_theme(false));
     let handle = app.theme_handle();
-    let _toggle = windui_theme_toggle(handle, dark);
-    let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, false);
+    let locale = LocaleCatalog::new("system", fcitx5_control_core::current_settings_ui_locale());
+    let _toggle = windui_theme_toggle(handle, dark, locale.clone());
+    let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, false, locale.clone());
     let (candidate_adapter, candidate_status) =
         windui_candidate_config_manager(PathBuf::from("windui-settings-default-shell-probe.toml"))
             .expect("compiled Config Core defaults should initialize the wind-ui probe");
-    let locale = LocaleCatalog::new("system", fcitx5_control_core::current_settings_ui_locale());
     windui_settings_root(
         snapshot,
         busy,
@@ -4098,7 +4339,6 @@ fn run_windui_settings_window(
     if screenshot_from_args {
         app = app.screenshot_from_args();
     }
-    let (snapshot, busy, status, sender) = windui_plugin_manager(&mut app, !screenshot_from_args);
     let (candidate_adapter, candidate_status) =
         windui_candidate_config_manager(windui_config_path()?)?;
     let configured_locale =
@@ -4107,6 +4347,8 @@ fn run_windui_settings_window(
         locale_preview.unwrap_or(&configured_locale),
         fcitx5_control_core::current_settings_ui_locale(),
     );
+    let (snapshot, busy, status, sender) =
+        windui_plugin_manager(&mut app, !screenshot_from_args, locale.clone());
     app.content(windui_settings_root(
         snapshot,
         busy,
@@ -6159,14 +6401,14 @@ mod tests {
             .map(|(body, _)| body)
             .expect("candidate layout controls should remain a single source section");
         let page_size_label = controls
-            .find("\"候选个数\"")
+            .find("\"candidate.page_size\"")
             .expect("candidate page-size row should remain named");
         let row_start = controls[..page_size_label]
             .rfind("WindUiElement::col()")
             .expect("candidate page-size row should have a layout container");
         let page_size_row = &controls[row_start..page_size_label];
 
-        assert!(controls.contains("每页最大候选数（1-9）"));
+        assert!(controls.contains("settings.candidate.page_size_hint"));
         assert!(!page_size_row.contains("CandidateLayoutMode::Scroll"));
         assert!(!page_size_row.contains(".visible_when"));
     }
@@ -7188,6 +7430,49 @@ mod tests {
     }
 
     #[test]
+    fn plugin_manager_internal_errors_are_localized_for_every_supported_locale() {
+        for locale in [
+            "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
+        ] {
+            let catalog = LocaleCatalog::new(locale, "en-US");
+            for (error, key) in [
+                (
+                    "插件包 ID 无效：bad/id",
+                    "settings.plugins.error.invalid_id",
+                ),
+                (
+                    "Control 返回的插件目录超过大小限制",
+                    "settings.plugins.error.catalog_too_large",
+                ),
+                (
+                    "Control 插件目录版本或条目数无效",
+                    "settings.plugins.error.catalog_version_invalid",
+                ),
+                (
+                    "Control 插件目录字段无效",
+                    "settings.plugins.error.catalog_fields_invalid",
+                ),
+                (
+                    "Control 插件目录 JSON 无效：details",
+                    "settings.plugins.error.control_unavailable",
+                ),
+                (
+                    "运行 fcitx5-control.exe 失败：details",
+                    "settings.plugins.error.control_unavailable",
+                ),
+            ] {
+                let translated = localized_plugin_error(&catalog, error);
+                let expected = if key.ends_with("invalid_id") {
+                    catalog.format(key, &[("id", "bad/id")])
+                } else {
+                    catalog.text(key)
+                };
+                assert_eq!(translated, expected, "{locale} did not use {key}");
+            }
+        }
+    }
+
+    #[test]
     fn plugin_operation_matrix_keeps_state_actions_available_offline() {
         let available = parse_control_package_list(&package_json_with(
             "community-addon",
@@ -7268,7 +7553,8 @@ mod tests {
             ]}"#,
         )
         .expect("valid Control package list");
-        let rows = plugin_catalog_rows(&snapshot);
+        let locale = LocaleCatalog::new("en-US", "en-US");
+        let rows = plugin_catalog_rows(&snapshot, &locale);
         let ids = rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>();
         assert_eq!(
             ids.len(),
@@ -7311,7 +7597,8 @@ mod tests {
         )
         .expect("valid non-addon reference collision");
 
-        let row = plugin_catalog_rows(&snapshot)
+        let locale = LocaleCatalog::new("en-US", "en-US");
+        let row = plugin_catalog_rows(&snapshot, &locale)
             .into_iter()
             .find(|row| row.id == "fcitx5-mozc")
             .expect("reference row remains visible");

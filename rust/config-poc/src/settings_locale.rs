@@ -29,6 +29,104 @@ const NAVIGATION_KEYS: [&str; 6] = [
     "updates.title",
     "nav.repair",
 ];
+#[cfg(test)]
+const WINDUI_SETTINGS_KEYS: &[&str] = &[
+    "settings.search",
+    "settings.input.subtitle",
+    "settings.input.section",
+    "settings.input.profile_hint",
+    "settings.input.engine.wubi",
+    "settings.input.engine.pinyin",
+    "settings.input.engine.rime",
+    "settings.input.engine.mozc",
+    "settings.shortcuts.section",
+    "settings.shortcuts.remove",
+    "settings.shortcuts.toggle_language",
+    "settings.shortcuts.toggle_script",
+    "settings.shortcuts.toggle_width",
+    "settings.shortcuts.toggle_punctuation",
+    "settings.appearance.subtitle",
+    "settings.theme.section",
+    "settings.theme.accent",
+    "settings.theme.accent_hint",
+    "settings.theme.shadow",
+    "settings.appearance.mode_hint",
+    "settings.accent.wechat_green",
+    "settings.accent.bamboo",
+    "settings.accent.dark_green",
+    "settings.typography.section",
+    "settings.typography.font_size",
+    "settings.typography.font_size_hint",
+    "settings.typography.scale",
+    "settings.typography.scale_hint",
+    "settings.typography.compact",
+    "settings.ready",
+    "settings.restore_page",
+    "settings.reload",
+    "settings.save",
+    "settings.theme.toggle",
+    "settings.placeholder.description",
+    "settings.candidate.section",
+    "settings.candidate.layout_hint",
+    "settings.candidate.mode.vertical_text",
+    "settings.candidate.scroll_direction",
+    "settings.candidate.scroll_direction_hint",
+    "settings.candidate.horizontal_scroll",
+    "settings.candidate.vertical_scroll",
+    "settings.candidate.column_direction",
+    "settings.candidate.column_direction_hint",
+    "settings.candidate.right_to_left",
+    "settings.candidate.left_to_right",
+    "settings.candidate.orientation.horizontal",
+    "settings.candidate.orientation.vertical",
+    "settings.candidate.orientation.horizontal_hint",
+    "settings.candidate.orientation.vertical_hint",
+    "settings.candidate.overflow.paging",
+    "settings.candidate.overflow.scrolling",
+    "settings.candidate.overflow.wrapping",
+    "settings.candidate.overflow_hint",
+    "settings.candidate.writing.horizontal",
+    "settings.candidate.writing.vertical_rl",
+    "settings.candidate.writing.vertical_lr",
+    "settings.candidate.writing_hint",
+    "settings.candidate.page_size_hint",
+    "settings.candidate.apply",
+    "settings.candidate.cancel",
+    "settings.candidate.reset",
+    "settings.candidate.applied",
+    "settings.candidate.draft_updated",
+    "settings.candidate.draft_loaded",
+    "settings.candidate.draft_discarded",
+    "settings.candidate.draft_reset",
+    "settings.plugins.subtitle",
+    "settings.plugins.repository.loading",
+    "settings.plugins.repository.ready",
+    "settings.plugins.repository.unavailable",
+    "settings.plugins.fallback_category",
+    "settings.plugins.fallback_metadata",
+    "settings.plugins.operation.list",
+    "settings.plugins.operation.refresh",
+    "settings.plugins.operation.install",
+    "settings.plugins.operation.update",
+    "settings.plugins.operation.enable",
+    "settings.plugins.operation.disable",
+    "settings.plugins.operation.remove",
+    "settings.plugins.operation.repair",
+    "settings.plugins.operation.running",
+    "settings.plugins.operation.repairing",
+    "settings.plugins.catalog_count",
+    "settings.plugins.reference_note",
+    "settings.plugins.refresh_signed",
+    "settings.plugins.control_reading",
+    "settings.plugins.choose_operation",
+    "settings.plugins.completed",
+    "settings.plugins.operation_failed",
+    "settings.plugins.error.invalid_id",
+    "settings.plugins.error.catalog_too_large",
+    "settings.plugins.error.catalog_version_invalid",
+    "settings.plugins.error.catalog_fields_invalid",
+    "settings.plugins.error.control_unavailable",
+];
 
 pub(crate) fn resolve_locale(configured: &str, system: &str) -> &'static str {
     let requested = if configured == "system" {
@@ -76,6 +174,14 @@ impl LocaleCatalog {
             .cloned()
             .unwrap_or_else(|| key.to_owned())
     }
+
+    pub(crate) fn format(&self, key: &str, arguments: &[(&str, &str)]) -> String {
+        arguments
+            .iter()
+            .fold(self.text(key), |message, (name, value)| {
+                message.replace(&format!("{{{name}}}"), value)
+            })
+    }
 }
 
 fn catalog(locale: &str) -> BTreeMap<String, String> {
@@ -99,7 +205,14 @@ fn catalog(locale: &str) -> BTreeMap<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_locale, LocaleCatalog, CATALOGS, NAVIGATION_KEYS};
+    use super::{resolve_locale, LocaleCatalog, CATALOGS, NAVIGATION_KEYS, WINDUI_SETTINGS_KEYS};
+
+    fn function_source<'a>(source: &'a str, signature: &str) -> &'a str {
+        source
+            .split_once(signature)
+            .and_then(|(_, rest)| rest.split_once("\nfn ").map(|(body, _)| body))
+            .unwrap_or_else(|| panic!("missing function {signature}"))
+    }
 
     #[test]
     fn settings_locale_resolves_system_and_explicit_locales() {
@@ -140,5 +253,47 @@ mod tests {
         let locale = LocaleCatalog::new("ja-JP", "en-US");
         assert_eq!(locale.text("action.apply"), "適用");
         assert_eq!(locale.text("settings.missing.key"), "settings.missing.key");
+    }
+
+    #[test]
+    fn localized_message_arguments_are_substituted_without_losing_unicode() {
+        let locale = LocaleCatalog::new("zh-CN", "en-US");
+        assert_eq!(
+            locale.format("settings.plugins.catalog_count", &[("count", "7")]),
+            "插件目录 · 7 项"
+        );
+    }
+
+    #[test]
+    fn windui_settings_construction_has_no_embedded_han_copy() {
+        let source = include_str!("main.rs");
+        for signature in [
+            "fn windui_settings_root(",
+            "fn windui_plugins_page(",
+            "fn windui_theme_toggle(",
+            "fn candidate_layout_mode_button(",
+            "fn windui_config_core_candidate_layout_controls(",
+        ] {
+            let body = function_source(source, signature);
+            assert!(
+                !body
+                    .chars()
+                    .any(|character| matches!(character as u32, 0x3400..=0x9fff)),
+                "{signature} must resolve visible text through locale catalogs"
+            );
+        }
+    }
+
+    #[test]
+    fn every_windui_settings_key_exists_in_all_eight_catalogs() {
+        for (locale, _) in CATALOGS {
+            let catalog = LocaleCatalog::new(locale, "en-US");
+            for key in WINDUI_SETTINGS_KEYS {
+                assert!(
+                    catalog.contains_localized(key),
+                    "{locale} is missing WindUI Settings key {key}"
+                );
+            }
+        }
     }
 }
