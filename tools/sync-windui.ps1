@@ -12,7 +12,7 @@ param(
 # than a git submodule.
 #
 # Vendoring convention:
-#   * In scope:  src/, examples/, Cargo.toml, README.md, README.en.md,
+#   * In scope:  src/, examples/, i18n/, Cargo.toml, README.md, README.en.md,
 #                LICENSE-APACHE, LICENSE-MIT
 #   * Excluded:  build.rs, assets/, CHANGELOG.md, docs/, scripts/, .github/,
 #                .githooks/, AGENTS.md, and other upstream meta files.
@@ -121,21 +121,11 @@ try {
     throw "Resolved HEAD $($actual.Trim()) does not match requested commit $Commit"
   }
 
-  # The vendored tree carries the two temporary Windows compatibility fixes for
-  # upstream issue #17, plus one catch-up patch that captures this repository's
-  # own product delta (accessibility surface and its smoke). The failure was
-  # discovered on i686, but the source patches are intentionally
-  # architecture-neutral. Check and apply them against the clean official
-  # checkout before copying anything into the repository. If an upstream commit
-  # contains either fix, the check must fail loudly so the queue can be reviewed
-  # and removed deliberately instead of being silently skipped.
-  #
-  # `windui-local-product-delta.patch` is generated from
-  # `<pinned commit> + the two patches above` to this repository's vendored
-  # state, so it must stay LAST: it is a delta against that exact baseline.
+  # Upstream now contains both Windows fixes previously carried for issue #17.
+  # Only this repository's product-specific accessibility delta remains local.
+  # Check it against the clean upstream checkout before copying anything into
+  # the repository.
   $patches = @(
-    (Join-Path $patchDir 'win32-window-user-data.patch'),
-    (Join-Path $patchDir 'win32-tray-unaligned.patch'),
     (Join-Path $patchDir 'windui-local-product-delta.patch')
   )
   foreach ($patch in $patches) {
@@ -155,10 +145,10 @@ try {
       ) -Name "git apply $([System.IO.Path]::GetFileName($patch))"
     }
   } catch {
-    throw "local WindUI patch no longer applies; verify upstream contains issue #17 fix before dropping patch. $($_.Exception.Message)"
+    throw "local WindUI product delta no longer applies to upstream. $($_.Exception.Message)"
   }
 
-  $inScope = @('src', 'examples', 'Cargo.toml', 'README.md', 'README.en.md',
+  $inScope = @('src', 'examples', 'i18n', 'Cargo.toml', 'README.md', 'README.en.md',
     'LICENSE-APACHE', 'LICENSE-MIT')
 
   # Normalize the disposable official checkout before touching the vendor tree.
@@ -278,6 +268,8 @@ try {
     [System.Text.UTF8Encoding]::new($false))
 
   # Run the affected consumer tests.
+  Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'update',
+    '--package', 'windui', '--offline') -Name 'cargo update windui lockfile'
   Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'test', '--locked',
     '-p', 'fcitx5-config-poc', '-p', 'fcitx5-config-qa',
     '--target', 'x86_64-pc-windows-msvc') -Name 'cargo test config consumers'

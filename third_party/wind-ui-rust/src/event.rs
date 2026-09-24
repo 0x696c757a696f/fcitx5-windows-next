@@ -205,6 +205,10 @@ impl ShortcutCtx {
 
 /// 标准窗口系统菜单四项：还原 / 最小化 / 最大化 /（分隔）/ 关闭。
 ///
+/// 文案取自框架自带译文的 `windui.window.*`，随
+/// [`LocaleHandle::set`](crate::i18n::LocaleHandle::set) 走；下游想改字（而不是改语言）
+/// 就用同名 key 覆盖，见 [`Locales`](crate::i18n::Locales)。
+///
 /// 禁用态按 [`window_state()`] 当场决定，故**必须在菜单弹出的那一刻调用**（`on_context_menu`
 /// 的构建器里正合适），不能在构建界面时预先算好一份存起来——那份会停在窗口刚建出来的状态上。
 ///
@@ -233,7 +237,9 @@ pub fn system_menu_items() -> Vec<MenuItem> {
     let item = |label: &str, enabled: bool, f: fn(&mut crate::core::EventCtx)| {
         MenuItem::run(label, f, false).enabled(enabled)
     };
-    let close = item("关闭", true, |ctx| ctx.request_close());
+    let close = item(&crate::tr!("windui.window.close"), true, |ctx| {
+        ctx.request_close()
+    });
     let close = if cfg!(target_os = "windows") {
         close.shortcut("Alt+F4")
     } else {
@@ -242,11 +248,19 @@ pub fn system_menu_items() -> Vec<MenuItem> {
     vec![
         // 「还原」只在最大化时可用。最小化态在这里不可达（窗口最小化时标题栏点不到），
         // 但 `ctx.restore()` 两种都能还原，故无需分支。
-        item("还原", st.maximized, |ctx| ctx.restore()),
-        item("最小化", st.minimizable, |ctx| ctx.minimize()),
-        item("最大化", st.maximizable && !st.maximized, |ctx| {
-            ctx.maximize()
+        item(&crate::tr!("windui.window.restore"), st.maximized, |ctx| {
+            ctx.restore()
         }),
+        item(
+            &crate::tr!("windui.window.minimize"),
+            st.minimizable,
+            |ctx| ctx.minimize(),
+        ),
+        item(
+            &crate::tr!("windui.window.maximize"),
+            st.maximizable && !st.maximized,
+            |ctx| ctx.maximize(),
+        ),
         MenuItem::separator(),
         close,
     ]
@@ -523,8 +537,13 @@ pub struct PointerEvent {
     pub kind: PointerKind,
     pub pos: Point,
     pub button: MouseButton,
-    /// 连续点击计数（由平台层填充）：1=单击，2=双击，3=三击。
-    /// 仅 `Down` 有意义；其余动作恒为 1。控件据此实现双击选词/三击选行。
+    /// 连续点击计数（由平台层填充）：1=单击，2=双击。仅 `Down` 有意义，其余动作恒为 1。
+    ///
+    /// **到 2 即重新起算**，与 Win32（`WM_LBUTTONDBLCLK` 发完就重算）和 Qt 一致：
+    /// 一串快点得到 1,2,1,2,… 而不是 1,2,3,3,…。不这样的话"双击进目录、紧接着再双击
+    /// 往下钻"里的第三、四下会被读成 3 和 1，一次都匹配不上双击，连续钻目录就断了。
+    ///
+    /// 代价是平台层不再报三击。需要三击选段的文本控件用 [`TripleClick`] 自己认。
     pub click_count: u8,
     /// 事件发生时按着的修饰键。列表控件靠它做 Ctrl+点击切换选中、Shift+点击范围选中
     /// ——桌面软件最基本的选择手势，此前平台层收得到却没送上来。
@@ -549,6 +568,59 @@ impl PointerEvent {
             mods,
             ..Self::single(kind, pos, button)
         }
+    }
+}
+
+/// 三击判定器：给需要"三击选段/选行"的文本控件用。
+///
+/// 平台层的 [`PointerEvent::click_count`] 到 2 就重新起算，所以一次真正的三击到达时
+/// 是 `1, 2, 1`——第三下伪装成新一轮的首击。这个结构把它认回来：记下最近那次双击的
+/// 时刻与位置，若紧接着来的首击仍在双击时限与漂移阈值内，就判为三击。
+///
+/// 为什么这份策略归控件而不归平台：第三下究竟是"三击的最后一下"还是"新一轮双击的
+/// 第一下"，在消息层面无法区分。文本里前者几乎总是对的，列表里后者几乎总是对的
+/// （双击进目录后接着双击往下钻）。让各自的控件按自己的语境决定，比在平台层押一边强。
+#[derive(Default, Clone, Copy, Debug)]
+pub struct TripleClick {
+    last_dbl: Option<(std::time::Instant, Point)>,
+}
+
+impl TripleClick {
+    /// 喂一次左键 `Down`，返回**有效**连击数：1 / 2 / 3。
+    ///
+    /// 非左键、非 `Down` 一律原样放行且不动内部状态。这道关是必须的：`TextInput`
+    /// 声明了 `wants_right_click()`，于是**所有**非左键的 Down 都会投递进来，右键
+    /// 在上游分流了、中键却会一路落到调用点。不挡的话，左键双击选词后原地按一下
+    /// 中键（滚轮误按、Linux 的中键粘贴习惯）就会被认成三击、整段被选中。
+    ///
+    /// 平台已经给出 >= 3 的（合成事件、或将来某个自己数三击的平台）原样放行，
+    /// 不再二次判定。
+    pub fn feed(&mut self, p: &PointerEvent) -> u8 {
+        if p.kind != PointerKind::Down || p.button != MouseButton::Left {
+            return p.click_count.max(1);
+        }
+        if p.click_count >= 3 {
+            self.last_dbl = None;
+            return p.click_count;
+        }
+        if p.click_count == 2 {
+            self.last_dbl = Some((std::time::Instant::now(), p.pos));
+            return 2;
+        }
+        // 首击：紧跟在一次就近的双击之后，即视为三击。
+        //
+        // 阈值取**系统**的双击设置而不是写死的常量：平台层判第一、二下用的就是它，
+        // 两边不同口径的话，把双击速度调慢的用户会遇到"双击好使、三击不灵"。
+        let (ms, drift) = crate::platform::double_click_thresholds();
+        if let Some((t, at)) = self.last_dbl.take() {
+            if t.elapsed().as_millis() <= u128::from(ms)
+                && (p.pos.x - at.x).abs() <= drift
+                && (p.pos.y - at.y).abs() <= drift
+            {
+                return 3;
+            }
+        }
+        1
     }
 }
 
@@ -741,6 +813,14 @@ pub struct MenuItem {
     pub enabled: bool,
     /// 当前选中项（下拉用，渲染勾选标记）。
     pub checked: bool,
+    /// 这一项**是个开关**（不管此刻勾没勾）。由 [`check`](MenuItem::check) 置位，
+    /// 或由 [`run`](MenuItem::run) 的 `checked = true` 推出来。
+    ///
+    /// 与 `checked` 分开，是因为勾选列的宽度不能随勾选态变：面板宽度在菜单**打开
+    /// 那一刻**就定死了（见 `ContextMenu::refresh_items` 的"保留 rect"），粘滞菜单
+    /// 里点一下开关就重算列宽的话，标签会集体右移到面板装不下的地方去。
+    /// 按"是不是开关"预留，一次打开内就稳定了。
+    pub checkable: bool,
     /// 前置图标（字符/emoji，None=无图标列）。
     pub icon: Option<String>,
     /// 尾随快捷键文本（如 "⌘C"）。submenu 非空时显示右箭头优先。
@@ -808,6 +888,7 @@ impl MenuItem {
             action,
             enabled: true,
             checked: false,
+            checkable: false,
             icon: None,
             shortcut: None,
             separator: false,
@@ -839,6 +920,9 @@ impl MenuItem {
         Self {
             label: label.into(),
             checked,
+            // 这条构造只给"当前勾没勾"，推不出"是不是开关"。勾着的必然要留位；
+            // 没勾的一律当普通动作项——真开关请改用 `.check(..)` 显式声明。
+            checkable: checked,
             ..Self::base(MenuAction::Run(std::rc::Rc::new(f)))
         }
     }
@@ -877,9 +961,14 @@ impl MenuItem {
         self.shortcut = Some(s.into());
         self
     }
-    /// 设置选中勾。
+    /// 声明这是个开关项，并给出它此刻的勾选态。
+    ///
+    /// 传 `false` 也算声明：菜单会照样为它留出勾选列，于是同一个菜单里勾与不勾的
+    /// 项标签对得齐，翻转开关时也不会整列跳动（见 [`checkable`](MenuItem::checkable)）。
+    /// 不想留位的纯动作项，就别调这个方法。
     pub fn check(mut self, checked: bool) -> Self {
         self.checked = checked;
+        self.checkable = true;
         self
     }
     /// 设置第二行小字说明（该项渲染为两行，行高变高）。
@@ -1124,6 +1213,11 @@ impl WindowContent {
 /// 平台在事件分发**完全返回**后才真正建窗。
 pub struct WindowRequest {
     pub title: String,
+    /// 标题的**来源**（`Window::title`）。`None` = 标题定格在 `title` 那一份。
+    ///
+    /// 与 `title` 并存而不是取代它：平台在窗口出现**之前**就要一个字符串，而
+    /// [`TextContent`](crate::ui::TextContent) 要到那之后才由宿主每帧现算。
+    pub title_src: Option<crate::ui::TextContent>,
     pub width: i32,
     pub height: i32,
     pub resizable: bool,
@@ -1287,5 +1381,72 @@ mod tests {
         assert_eq!(ToastKind::Error.default_duration_ms(), 5000);
         assert_eq!(ToastKind::Success.default_duration_ms(), 3000);
         assert_eq!(ToastKind::Info.default_duration_ms(), 3000);
+    }
+}
+
+#[cfg(test)]
+mod triple_click_tests {
+    use super::*;
+
+    fn down(count: u8, x: i32, y: i32) -> PointerEvent {
+        PointerEvent {
+            kind: PointerKind::Down,
+            pos: Point::new(x, y),
+            button: MouseButton::Left,
+            click_count: count,
+            mods: Mods::default(),
+        }
+    }
+
+    #[test]
+    fn 平台的_1_2_1_认回三击() {
+        let mut t = TripleClick::default();
+        assert_eq!(t.feed(&down(1, 10, 10)), 1);
+        assert_eq!(t.feed(&down(2, 10, 10)), 2, "双击原样放行");
+        assert_eq!(
+            t.feed(&down(1, 11, 10)),
+            3,
+            "平台把三击的最后一下报成新一轮首击，这里认回来"
+        );
+        assert_eq!(t.feed(&down(1, 11, 10)), 1, "认过一次就不再重复认");
+    }
+
+    #[test]
+    fn 离得远的首击不算三击() {
+        let mut t = TripleClick::default();
+        t.feed(&down(2, 10, 10));
+        assert_eq!(t.feed(&down(1, 200, 10)), 1, "漂移超阈值：是另一处的新单击");
+    }
+
+    #[test]
+    fn 非左键与非按下一律不参与三击判定() {
+        // TextInput 声明了 wants_right_click，中键会一路落到调用点（见 feed 的文档）。
+        // 左键双击之后原地按一下中键，不得被认成三击。
+        let mut t = TripleClick::default();
+        assert_eq!(t.feed(&down(2, 10, 10)), 2);
+        let mid = PointerEvent {
+            button: MouseButton::Middle,
+            ..down(1, 10, 10)
+        };
+        assert_eq!(t.feed(&mid), 1, "中键不得窃取那次双击");
+        // 中键既没消费也没污染状态：随后的左键首击仍应认回三击
+        assert_eq!(t.feed(&down(1, 10, 10)), 3, "左键的三击序列不受中键影响");
+
+        // 非 Down（Up / Move）同样不参与
+        let mut t2 = TripleClick::default();
+        t2.feed(&down(2, 10, 10));
+        let up = PointerEvent {
+            kind: PointerKind::Up,
+            ..down(1, 10, 10)
+        };
+        assert_eq!(t2.feed(&up), 1);
+        assert_eq!(t2.feed(&down(1, 10, 10)), 3, "抬起不该吃掉三击");
+    }
+
+    #[test]
+    fn 平台已给三击的原样放行() {
+        // 合成事件与非 win32 平台可能直接给 >= 3，不该被二次判定改写。
+        let mut t = TripleClick::default();
+        assert_eq!(t.feed(&down(3, 10, 10)), 3);
     }
 }

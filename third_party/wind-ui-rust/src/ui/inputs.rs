@@ -561,7 +561,7 @@ impl Widget for RadioButton {
 // ---------------- Slider ----------------
 
 /// 值标签额外占用的宽度（px），仅 `show_value` 开启时生效。"100%" 约 4 字符。
-const VALUE_LABEL_W: i32 = 44;
+pub(crate) const VALUE_LABEL_W: i32 = 44;
 
 pub struct Slider {
     value: Signal<f32>, // 0.0..=1.0
@@ -583,17 +583,27 @@ impl Slider {
         self.show_value = on;
     }
 
+    /// 轨道占用的宽度：`show_value` 时右侧让给值标签。绘制与指针换算共用这一处，
+    /// 否则旋钮视觉到头后鼠标还得多拖一个标签宽才换算到 100%（#11）。
+    fn track_w(&self, w: i32) -> i32 {
+        if self.show_value {
+            w - VALUE_LABEL_W
+        } else {
+            w
+        }
+    }
+
     fn set_from_pos(&self, ctx: &mut EventCtx, x: i32) {
         let b = ctx.bounds();
         let r = KNOB_R;
-        let usable = (b.w - 2 * r).max(1);
+        let usable = (self.track_w(b.w) - 2 * r).max(1);
         let v = ((x - b.x - r) as f32 / usable as f32).clamp(0.0, 1.0);
         self.value.set(v);
         ctx.mark_dirty();
     }
 }
 
-const KNOB_R: i32 = 9;
+pub(crate) const KNOB_R: i32 = 9;
 
 impl Widget for Slider {
     fn measure(&self, _avail: Size, style: &Style, _text: &mut dyn TextEngine) -> Size {
@@ -621,12 +631,7 @@ impl Widget for Slider {
         let (pal, tg) = (&th.palette, &th.toggle);
         let accent = if enabled { tg.accent(pal) } else { pal.track };
 
-        // show_value 时把轨道限制在左侧，右侧留给标签。
-        let track_w = if self.show_value {
-            bounds.w - VALUE_LABEL_W
-        } else {
-            bounds.w
-        };
+        let track_w = self.track_w(bounds.w);
         let cy = bounds.y as f32 + bounds.h as f32 / 2.0;
         let r = KNOB_R as f32;
         let x0 = bounds.x as f32 + r;
@@ -806,6 +811,8 @@ pub struct TextInput {
     /// 插入光标的闪烁相位与平滑移动状态（见 [`crate::ui::caret`]）。
     caret: CaretState,
     dragging: bool,
+    /// 三击选段的判定（平台层只数到 2，见 [`crate::event::TripleClick`]）。
+    triple: crate::event::TripleClick,
     scrollbar: VScrollbar,
     /// true 时 paint 将视口滚到光标位置（键盘移动/鼠标点击后设置）；
     /// 滚轮滚动不设置，避免 paint 每帧重置 scroll_y。
@@ -880,6 +887,7 @@ impl TextInput {
             caret_local: Cell::new(None),
             caret: CaretState::new(),
             dragging: false,
+            triple: crate::event::TripleClick::default(),
             scrollbar: VScrollbar::new(),
             follow_cursor: Cell::new(true),
             hover_in_scrollbar: Cell::new(false),
@@ -1204,6 +1212,9 @@ impl TextInput {
         self.cursor = self.char_count();
     }
     /// 构建右键上下文菜单项。动作经合成 Ctrl+X/C/V/A 回送到本控件，故无需感知"菜单"。
+    ///
+    /// 文案走 `tr!` 而不是 `t!`：`MenuItem.label` 是 `String`，且菜单**每次弹出重建**，
+    /// 当场定格正是对的——换语言后下一次右键弹出来就是新语言。
     fn context_menu_items(&self) -> Vec<MenuItem> {
         let has_sel = self.selection().is_some();
         let has_text = self.char_count() > 0;
@@ -1217,10 +1228,10 @@ impl TextInput {
             meta: false,
         };
         vec![
-            MenuItem::key("剪切", ctrl(0x58), has_sel && !pw), // VK_X
-            MenuItem::key("复制", ctrl(0x43), has_sel && !pw), // VK_C
-            MenuItem::key("粘贴", ctrl(0x56), true),           // VK_V
-            MenuItem::key("全选", ctrl(0x41), has_text),       // VK_A
+            MenuItem::key(crate::tr!("windui.menu.cut"), ctrl(0x58), has_sel && !pw), // VK_X
+            MenuItem::key(crate::tr!("windui.menu.copy"), ctrl(0x43), has_sel && !pw), // VK_C
+            MenuItem::key(crate::tr!("windui.menu.paste"), ctrl(0x56), true),         // VK_V
+            MenuItem::key(crate::tr!("windui.menu.select_all"), ctrl(0x41), has_text), // VK_A
         ]
     }
     /// 选中 `idx` 所在逻辑行（两 '\n' 之间）。单行文本无 '\n' 即全选。
@@ -2010,7 +2021,9 @@ impl Widget for TextInput {
                         self.fire_click(ctx);
                     }
                     // 双击选词 / 三击选段。不进入拖选。
-                    match p.click_count {
+                    // 三击由本控件自己认：平台层的计数到 2 就重新起算（那是列表
+                    // "双击进目录后接着双击"所必须的），一次真三击到达时是 1,2,1。
+                    match self.triple.feed(p) {
                         2 => {
                             let idx = self.pos_to_index(ctx, p.pos.x, p.pos.y);
                             self.select_word(idx);

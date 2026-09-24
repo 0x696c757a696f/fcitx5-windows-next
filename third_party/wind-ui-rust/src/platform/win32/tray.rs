@@ -184,8 +184,14 @@ impl Drop for PopupMenu {
 }
 
 impl TrayState {
-    /// 构建右键菜单。只 `CreatePopupMenu` + `AppendMenuW`，两者都不重入
-    /// `wnd_proc`，故可在持有 `WindowState` 借用期间安全调用。
+    /// 构建右键菜单。可在持有 `WindowState` 借用期间安全调用——但理由比"只调两个 API"
+    /// 长一点，值得写清楚，否则下一个人照着旧注释判断"这里还能加点别的"就会判错：
+    ///
+    /// - `CreatePopupMenu` / `AppendMenuW` 都不重入 `wnd_proc`；
+    /// - 循环里还有 `label.resolve()` 与 `checked.get()`。前者碰 i18n 的 `CURRENT`
+    ///   （debug 下缺 key 还会碰 `WARNED` 并 `log::warn!`），后者碰信号运行时——
+    ///   都是**与 `WindowState` 无关的另外几个 `RefCell`**，且都只在本函数内借完即还，
+    ///   不会与外层那个借用相撞。
     pub(crate) fn build_menu(&self) -> Option<PopupMenu> {
         let hmenu = unsafe { CreatePopupMenu() }.ok()?;
         for (i, it) in self.tray.items.iter().enumerate() {
@@ -207,7 +213,8 @@ impl TrayState {
                     if enabled.is_some_and(|e| !e.get()) {
                         flags |= MF_GRAYED;
                     }
-                    let w = wide_nul(label);
+                    // 现取：标签可能是译文或信号，构建菜单的这一刻才是它该被解析的时候。
+                    let w = wide_nul(&label.resolve());
                     // 命令 id = 序号+1（分隔线不可选，故返回 id 必对应 Action）。
                     unsafe {
                         let _ = AppendMenuW(hmenu, flags, i + 1, PCWSTR(w.as_ptr()));
@@ -286,11 +293,8 @@ pub(crate) fn notify(hwnd: HWND, uid: u32, title: &str, body: &str) {
     unsafe {
         let mut nid = base_nid(hwnd, uid);
         nid.uFlags = NIF_INFO;
-        // `NOTIFYICONDATAW` is packed by the Windows ABI. `addr_of_mut!`
-        // avoids creating an unaligned reference before making the temporary
-        // slice used by the bounded UTF-16 copy.
-        copy_wide_packed(std::ptr::addr_of_mut!(nid.szInfoTitle).cast(), 64, title);
-        copy_wide_packed(std::ptr::addr_of_mut!(nid.szInfo).cast(), 256, body);
+        nid.szInfoTitle = wide_buf(title);
+        nid.szInfo = wide_buf(body);
         nid.dwInfoFlags = NIIF_INFO;
         let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
     }
@@ -305,7 +309,7 @@ pub(crate) fn set_tooltip(hwnd: HWND, uid: u32, tip: &str) {
     unsafe {
         let mut nid = base_nid(hwnd, uid);
         nid.uFlags = NIF_TIP;
-        copy_wide_packed(std::ptr::addr_of_mut!(nid.szTip).cast(), 128, tip);
+        nid.szTip = wide_buf(tip);
         let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
     }
 }
@@ -357,10 +361,20 @@ fn add_nid(hwnd: HWND, uid: u32, hicon: HICON, tip: &str) -> NOTIFYICONDATAW {
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
     nid.hIcon = hicon;
-    // SAFETY: `nid` is a live local NOTIFYICONDATAW and the field size is the
-    // Windows ABI-defined 128-element tooltip buffer.
-    unsafe { copy_wide_packed(std::ptr::addr_of_mut!(nid.szTip).cast(), 128, tip) };
+    nid.szTip = wide_buf(tip);
     nid
+}
+
+/// &str → 定长 UTF-16 数组（截断 + NUL 收尾），长度由赋值目标推导。
+///
+/// **按值整体赋给字段，而不是借 `&mut nid.szTip` 原地写**：32 位 Windows 上
+/// `NOTIFYICONDATAW` 是 `repr(C, packed(1))`，对其字段取引用是 E0793 硬错误
+/// （x86_64/aarch64 上是自然对齐，故只有 i686 编译才暴露，#17）。读写 packed 字段的
+/// **值**始终合法，也免去裸指针与手写的数组长度。
+fn wide_buf<const N: usize>(s: &str) -> [u16; N] {
+    let mut buf = [0u16; N];
+    copy_wide(&mut buf, s);
+    buf
 }
 
 /// 把 &str 写入定长 UTF-16 缓冲（截断 + NUL 收尾）。
@@ -380,17 +394,6 @@ fn copy_wide(dst: &mut [u16], s: &str) {
         }
     }
     dst[n - 1] = 0;
-}
-
-/// Write a packed Win32 UTF-16 field without ever borrowing it by reference.
-///
-/// # Safety
-/// `dst` must point to `len` writable `u16` elements within the packed
-/// `NOTIFYICONDATAW` value supplied by the caller.
-unsafe fn copy_wide_packed(dst: *mut u16, len: usize, s: &str) {
-    // SAFETY: callers pass the address and ABI-defined element count of a
-    // writable NOTIFYICONDATAW character array.
-    copy_wide(unsafe { std::slice::from_raw_parts_mut(dst, len) }, s);
 }
 
 /// &str → 以 NUL 结尾的 UTF-16。

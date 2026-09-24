@@ -1,7 +1,8 @@
 //! Win32 窗口、消息循环与 GDI 呈现。
 //!
-//! 渲染全在 CPU：单份 tiny-skia `Pixmap`（RGBA 预乘）作后备缓冲；呈现时原地
-//! R/B 交换为 BGRA 后 `SetDIBitsToDevice` 直接拷屏。空闲时阻塞在 `GetMessageW`，零 CPU。
+//! 渲染全在 CPU：单份 tiny-skia `Pixmap`（RGBA 预乘、跨帧持久）作绘制目标；呈现时
+//! 「拷贝 + R/B 交换」进一块 BGRA 上传缓冲，再 `SetDIBitsToDevice` 拷屏。不在 pixmap 上
+//! 原地交换，是因为宿主的局部重绘要靠它保存上一帧画面。空闲时阻塞在 `GetMessageW`，零 CPU。
 
 pub mod clipboard;
 #[cfg(feature = "d2d")]
@@ -396,9 +397,8 @@ unsafe extern "system" fn app_host_proc(
         WM_NCCREATE => {
             let cs = lparam.0 as *const CREATESTRUCTW;
             if !cs.is_null() {
-                // `SetWindowLongPtrW` is exposed as `SetWindowLongW` on x86 by
-                // the windows crate, so let the target-specific API choose the
-                // integer width for this pointer-sized user-data slot.
+                // `as _` 而非 `as isize`：32 位目标上 windows crate 把它映射成
+                // `SetWindowLongW`（收 i32），让目标自己的签名定整数宽度（#17）。
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*cs).lpCreateParams as _);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -807,7 +807,19 @@ trait WinRenderBackend {
 
 /// CPU 软件渲染后端：tiny-skia `Pixmap` 作后备缓冲，`SetDIBitsToDevice` 呈现。
 struct SkiaBackend {
+    /// 宿主的绘制目标：**RGBA、跨帧持久**。局部帧只更新脏区，其余行保留上一帧内容
+    /// ——宿主正是据此做局部重绘，无需自己再存一份后备缓冲。
     pixmap: Option<Pixmap>,
+    /// 上传缓冲：**BGRA**（GDI 32bpp 字节序），呈现时从 `pixmap`「拷贝 + 交换 R/B」得到。
+    ///
+    /// 不在 `pixmap` 上原地交换，是因为那会把它毁成 BGRA，宿主就拿不到「上一帧的 RGBA
+    /// 画面」来重建局部帧未变的区域，只能自己再整窗拷一份（旧实现的 `DamageState::back`）。
+    ///
+    /// **这么改不是为了快**：1920×1080（物理 2880×1676）实测，删掉的 seed_back（稳态
+    /// 1.2ms）恰好被这里新增的拷贝开销抵消（原地交换 2.7ms → 拷贝+交换 3.9ms，差值来自
+    /// write-allocate 的额外写流量）。Windows 上持平，macOS 因为本就不交换只有「删掉」
+    /// 没有「新增」，净省约 0.5ms。保留的理由是少一层中转，不是速度。
+    upload: Vec<u8>,
     buf_w: i32,
     buf_h: i32,
     /// 缓冲刚（重）建，内容尚未画满：这一帧必须整窗上传，不能只送脏区。
@@ -818,6 +830,7 @@ impl SkiaBackend {
     fn new() -> Self {
         Self {
             pixmap: None,
+            upload: Vec::new(),
             fresh: true,
             buf_w: 0,
             buf_h: 0,
@@ -832,6 +845,7 @@ impl SkiaBackend {
             return;
         }
         self.pixmap = Some(Pixmap::new(w as u32, h as u32).expect("分配 pixmap 失败"));
+        self.upload = vec![0u8; (w as usize) * (h as usize) * 4];
         self.buf_w = w;
         self.buf_h = h;
         // 新缓冲全 0：在宿主重新画满之前，任何"只上传脏区"都会把没画过的黑底送上屏。
@@ -857,6 +871,13 @@ impl WinRenderBackend for SkiaBackend {
             return false;
         }
         self.ensure(w, h);
+
+        // 缓冲刚重建：内容不完整，必须让宿主本帧画**整窗**。宿主的后备缓冲已经取消
+        // （pixmap 自己就是"上一帧画面"），少了这一步它可能只画脏区，而下面整窗上传
+        // 会把从未画过的部分送上屏。
+        if self.fresh {
+            handler.request_full_frame();
+        }
 
         let size = Size::new(self.buf_w, self.buf_h);
         let pixmap = self.pixmap.as_mut().unwrap();
@@ -904,20 +925,21 @@ impl WinRenderBackend for SkiaBackend {
             let _ = EndPaint(hwnd, &ps);
             return false;
         }
-        let pixmap = self.pixmap.as_mut().unwrap();
-        // RGBA 预乘 → BGRA（GDI 32bpp 字节序）原地交换 R/B。**只翻本帧重画过的那个矩形**：
-        // 其余像素早已是上一帧交换过的 BGRA，再翻一次就成了红蓝颠倒。按整行翻是不够的
-        // ——脏区左右两侧同样是"已翻过"的（见 `swap_rb_rect`）。
+        // RGBA 预乘 → BGRA（GDI 32bpp 字节序）：从 pixmap **拷贝**进上传缓冲并交换 R/B。
+        // pixmap 本身不动，它保持 RGBA 供宿主下一帧做局部重绘（见 `SkiaBackend::upload`）。
         //
-        // 交换之后整张缓冲恒为 BGRA，故下面按行上传 union 范围是安全的。
+        // **只处理本帧重画过的那块**：upload 其余部分留着上一帧交换好的 BGRA，而下面
+        // 按行上传的 union 范围（并进了系统失效区）正靠它们才是对的。按整行拷也不行
+        // ——脏区左右两侧本帧并没有重画，拷过去的会是 pixmap 里同样没变的旧像素，
+        // 结果虽然正确却白搬一遍，脏区越小浪费越大。
         let stride = (self.buf_w * 4) as usize;
-        match drawn {
-            Some(d) => swap_rb_rect(pixmap.data_mut(), self.buf_w, d),
-            None => swap_rb_inplace(
-                &mut pixmap.data_mut()[dy0 as usize * stride..dy1 as usize * stride],
-            ),
+        {
+            let buf_w = self.buf_w;
+            let r = drawn.unwrap_or_else(|| Rect::new(0, dy0, buf_w, dy1 - dy0));
+            let pixmap = self.pixmap.as_ref().unwrap();
+            copy_swap_rect(pixmap.data(), &mut self.upload, buf_w, r);
         }
-        let bits = pixmap.data()[y0 as usize * stride..].as_ptr() as *const c_void;
+        let bits = self.upload[y0 as usize * stride..].as_ptr() as *const c_void;
 
         // top-down DIB 描述：直接从缓冲拷到设备，无需独立 DIB section。
         let bmi = BITMAPINFO {
@@ -1035,6 +1057,14 @@ const TOUCH_THRESHOLD: i32 = 12;
 /// 触摸速度平滑系数（新样本权重）：低通滤噪，又不过度滞后。
 const TOUCH_VEL_SMOOTH: f32 = 0.4;
 
+/// 系统的双击时限（毫秒）与漂移阈值（每侧逻辑像素）。
+///
+/// `SM_CXDOUBLECLK` 是双击矩形的**全宽**、以首击为中心，故每侧容差取其半——
+/// 与 [`ClickTracker::bump`] 的调用点同一算法。
+pub(crate) fn double_click_thresholds() -> (u32, i32) {
+    unsafe { (GetDoubleClickTime(), GetSystemMetrics(SM_CXDOUBLECLK) / 2) }
+}
+
 /// 连续点击跟踪状态。在平台层把多次快速同位点击折算为 click_count。
 #[derive(Default, Clone, Copy)]
 struct ClickTracker {
@@ -1049,9 +1079,11 @@ impl ClickTracker {
     /// 按 Down 事件更新连续点击计数：与上次同按键、在系统双击时限与漂移阈值内则递增，
     /// 否则重置为 1。返回本次点击的计数。
     ///
-    /// 到 3 之后**回到 1** 而不是钉在 3 上。钉住会让"同一位置连着快点"永远报 >=2：
-    /// 文件列表里双击进了目录，紧接着在同一坐标单击一下新内容，就会被当成双击再进一层。
-    /// Win32 原生的 `WM_LBUTTONDBLCLK` 也是发完就重新起算，这里只是把它推广到三击。
+    /// **到 2 即重新起算**（1,2,1,2,…），与 Win32 原生的 `WM_LBUTTONDBLCLK` 一致。
+    /// 曾经数到 3：钉在 3 上会让同位连点永远报 >=2（单击也进目录）；改成循环到 3 之后
+    /// 又让"双击进目录、紧接着再双击往下钻"的第三、四下读成 3 和 1，一次都匹配不上。
+    /// 第三下到底是三击的尾巴还是新一轮双击的头，消息层面分不出来——平台按 Win32 的
+    /// 成例判成后者，要三击的文本控件用 `event::TripleClick` 自己认。
     fn bump(
         &mut self,
         button: i32,
@@ -1067,7 +1099,7 @@ impl ClickTracker {
             && now_ms.wrapping_sub(self.time_ms) <= dbl_ms
             && (x - self.x).abs() <= dx
             && (y - self.y).abs() <= dy;
-        let count = if continued && self.count < 3 {
+        let count = if continued && self.count < 2 {
             self.count + 1
         } else {
             1
@@ -1117,30 +1149,51 @@ impl WindowState {
     }
 }
 
-/// 只对缓冲里的一个**矩形**做 R/B 交换（按行切片，逐行只翻 `[x, x+w)` 那一段）。
+/// 把 `src`（RGBA）的矩形 `r` 拷进 `dst`（BGRA）的同一位置，逐行只搬 `[x, x+w)` 那一段。
 ///
-/// 局部帧只把脏**矩形**重画成 RGBA，其余像素仍是上一帧交换过的 BGRA。若按整行翻，
-/// 脏区左右两侧那些已是 BGRA 的像素会被翻第二次 → 红蓝颠倒。灰/白/黑处 R≈G≈B 看不出来，
-/// 只有饱和色显形，故这类错误极易漏网——务必按矩形翻。
-fn swap_rb_rect(data: &mut [u8], buf_w: i32, r: Rect) {
+/// 两片缓冲同尺寸同 stride。**按矩形而非整行**搬：矩形之外本帧并没有重画，`dst` 那些
+/// 位置留着上一帧交换好的 BGRA，正是"上传范围并进了系统失效区"时要用的内容。按整行
+/// 搬虽然结果也对（拷过去的是 `src` 里同样没变的旧像素），却白搬一遍，脏区越小越亏。
+///
+/// `r` 由调用方钳进缓冲边界；这里再取一次交集兜底，避免越界 panic。
+fn copy_swap_rect(src: &[u8], dst: &mut [u8], buf_w: i32, r: Rect) {
+    // 行数只由 `src` 推算，`dst` 更短的话下面会越界 panic。当前由 `ensure` 两块一起
+    // 重建保证同长——这是不变量，不是兜底，所以在这里钉住。
+    debug_assert_eq!(
+        src.len(),
+        dst.len(),
+        "上传缓冲与 pixmap 必须同尺寸同 stride"
+    );
     let stride = buf_w as usize * 4;
+    let rows = (src.len() / stride.max(1)) as i32;
+    let r = r.intersect(&Rect::new(0, 0, buf_w, rows));
+    if r.is_empty() {
+        return;
+    }
     for y in r.y..r.bottom() {
         let row = y as usize * stride;
         let (a, b) = (row + r.x as usize * 4, row + r.right() as usize * 4);
-        swap_rb_inplace(&mut data[a..b]);
+        copy_swap_range(&src[a..b], &mut dst[a..b]);
     }
 }
 
-/// 原地把一段 RGBA 逐像素交换 R/B（→ BGRA），供 GDI 直接呈现。
-fn swap_rb_inplace(data: &mut [u8]) {
-    let n = data.len() / 4;
-    let p = data.as_mut_ptr() as *mut u32;
+/// 把一段 RGBA 拷进 BGRA（交换 R/B），供 GDI 直接呈现。两片长度须相等。
+///
+/// **按 u32 整字做位运算，不要逐字节 shuffle**：`d[0]=s[2]; d[1]=s[1]; …` 那种写法
+/// LLVM 向量化不了。1920×1080（物理 2880×1676）实测三种写法：逐字节 shuffle 7.0ms、
+/// `u32::from_ne_bytes` 从 slice 逐字节组装 12.0ms（最差）、裸指针 u32 读写 3.9ms——
+/// 同一件事差了三倍，而这条是每帧必经的路径，写法不能随手挑。
+fn copy_swap_range(src: &[u8], dst: &mut [u8]) {
+    debug_assert_eq!(src.len(), dst.len());
+    let n = src.len() / 4;
+    let sp = src.as_ptr() as *const u32;
+    let dp = dst.as_mut_ptr() as *mut u32;
     for i in 0..n {
         unsafe {
-            // 字节 [R,G,B,A] → [B,G,R,A]：交换 byte0 与 byte2。
-            let v = p.add(i).read_unaligned();
+            // 字节 [R,G,B,A] → [B,G,R,A]。alpha 原样带着：GDI 的 BI_RGB 32bpp 忽略它。
+            let v = sp.add(i).read_unaligned();
             let s = (v & 0xFF00_FF00) | ((v & 0x0000_00FF) << 16) | ((v & 0x00FF_0000) >> 16);
-            p.add(i).write_unaligned(s);
+            dp.add(i).write_unaligned(s);
         }
     }
 }
@@ -1813,10 +1866,8 @@ unsafe extern "system" fn wnd_proc(
             // 取出 CreateWindow 传入的 WindowState 指针并挂到 HWND
             let cs = lparam.0 as *const CREATESTRUCTW;
             if !cs.is_null() {
-                let state_ptr = (*cs).lpCreateParams as isize;
-                // The windows crate maps this API to the x86 `LONG` variant on
-                // 32-bit targets; the pointer is already target-sized here.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as _);
+                // `as _`：32 位目标上此 API 收 i32，理由同 `app_host_proc`（#17）。
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*cs).lpCreateParams as _);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -1912,6 +1963,15 @@ unsafe extern "system" fn wnd_proc(
             push_window_state(hwnd);
             // 最小化（客户区 0×0）：无可见内容，跳过 resize/重绘，避免 1×1 无效缓冲。
             if wparam.0 as u32 == SIZE_MINIMIZED {
+                // 收进托盘：最小化**已经发生**，这里再把窗口藏掉，任务栏按钮随之消失。
+                //
+                // 放在这条消息上而不是拦下最小化请求，是因为最小化的来源不止自绘标题栏
+                // 那颗按钮：系统标题栏、任务栏点击、Win+Down、Alt+Space 菜单都能触发，
+                // 而它们根本不经过核心层的 WindowOp。代价是会闪一下最小化动画。
+                let hide = state_from(hwnd).is_some_and(|s| s.handler.hide_on_minimize());
+                if hide {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
                 return LRESULT(0);
             }
             // 客户区变化：通知后端调整缓冲（D2D 需 ResizeBuffers；Skia 为懒建无副作用），
@@ -2534,6 +2594,10 @@ unsafe fn handle_nchittest(hwnd: HWND, lparam: LPARAM) -> LRESULT {
 unsafe fn apply_window_op(hwnd: HWND) {
     let op = state_from(hwnd).and_then(|s| s.handler.take_window_op());
     run_window_op(hwnd, op);
+    // 标题同点消费：本函数在事件路径与 WM_PAINT 两处都被调用，正是
+    // `take_window_title` 契约要求的两个时机（换语言可能发生在点击回调里，也可能
+    // 发生在 on_interval 里）。
+    apply_window_title(hwnd);
     // 运行期热键操作与窗口操作同点消费（HotkeyHandle 排队 → 此处落地）。
     // Register/UnregisterHotKey 不向本窗口同步派发消息，可在借用内直接执行。
     apply_hotkey_ops(hwnd);
@@ -2660,13 +2724,7 @@ unsafe fn materialize_window(item: NewWindow) {
     }
 }
 
-/// 消费运行期热键操作队列（改绑/启停），落地到 `HotkeyState`。
-///
-/// 队列在窗口的 handler 上（`HotkeyHandle` 排进去的），而 `HotkeyState` 在 App 级宿主上，
-/// 故要跨两个 state。**先取完队列、释放窗口那份借用，再借宿主**：两份借用不重叠，
-/// 与铁律 6 同一个理由——中间隔着的 `Register/UnregisterHotKey` 虽不向本线程同步派发
-/// 消息，但让两个 `&mut` 同时活着本身就是别名。
-/// 落实运行期托盘意图（`TrayHandle::set_tooltip`）。
+/// 落实运行期托盘意图（`TrayHandle::set_tooltip` / `notify`）。
 ///
 /// 队列是线程局部的（托盘是应用级单例，不属于任何窗口），故这里不需要 hwnd——
 /// 投递目标从 app 宿主上的 `TrayState` 取。**先取出目标释放借用，再调
@@ -2695,10 +2753,20 @@ unsafe fn apply_tray_ops() {
                     ts.remember_tooltip(s);
                 }
             }
+            // 气泡是一次性的，shell 重启后无需重放，故不进 `TrayState`。
+            crate::platform::tray::TrayOp::Notify { title, body } => {
+                tray::notify(h, uid, &title, &body);
+            }
         }
     }
 }
 
+/// 消费运行期热键操作队列（改绑/启停），落地到 `HotkeyState`。
+///
+/// 队列在窗口的 handler 上（`HotkeyHandle` 排进去的），而 `HotkeyState` 在 App 级宿主上，
+/// 故要跨两个 state。**先取完队列、释放窗口那份借用，再借宿主**：两份借用不重叠，
+/// 与铁律 6 同一个理由——中间隔着的 `Register/UnregisterHotKey` 虽不向本线程同步派发
+/// 消息，但让两个 `&mut` 同时活着本身就是别名。
 unsafe fn apply_hotkey_ops(hwnd: HWND) {
     let ops = match state_from(hwnd) {
         Some(state) => state.handler.take_hotkey_ops(),
@@ -2841,6 +2909,19 @@ unsafe fn run_tray_actions(main: Option<HWND>, actions: Vec<tray::TrayAction>) {
                     run_window_op(hwnd, Some(WindowOp::Hide));
                 }
             }
+            // 真实可见性说了算。最小化了也算"不可见"：那时用户按托盘图标要的显然是
+            // 把窗口拿回来，而不是把一个已经看不见的窗口再藏一次。
+            tray::TrayAction::Toggle => {
+                if let Some(hwnd) = main {
+                    let visible = IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool();
+                    let op = if visible {
+                        WindowOp::Hide
+                    } else {
+                        WindowOp::Show
+                    };
+                    run_window_op(hwnd, Some(op));
+                }
+            }
             // 位置标记：取队首那个配置建窗（见 `TrayAction::OpenWindow`）。
             tray::TrayAction::OpenWindow => open_callback_window(),
             // 键就在意图里，不必查旁路队列（见 `TrayAction::CloseWindow`）。
@@ -2887,9 +2968,18 @@ pub(crate) fn show_and_activate(hwnd: HWND) {
     unsafe {
         // 先问再显示：`ShowWindow` 之后 `IsWindowVisible` 恒为真，跃迁就无从判断了。
         let was_hidden = !IsWindowVisible(hwnd).as_bool();
+        // 隐藏与最小化是**两个独立的位**，可以同时为真——`hide_on_minimize` 就是这么
+        // 造出来的（先最小化、再 SW_HIDE）。那种复合态下单发 SW_RESTORE 只清得掉最小化，
+        // 窗口仍然是隐藏的：点托盘图标看着毫无反应。所以先显示、再还原。
+        //
+        // 不能图省事换成一句 SW_SHOWNORMAL：它会把最大化过的窗口还原成普通大小，
+        // 用户最大化着收进托盘，再拿回来就缩了。
+        if was_hidden {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
-        } else {
+        } else if !was_hidden {
             let _ = ShowWindow(hwnd, SW_SHOW);
         }
         let _ = SetForegroundWindow(hwnd);
@@ -2940,6 +3030,58 @@ pub fn open_url(url: &str) {
             PCWSTR::null(),
             SW_SHOWNORMAL,
         );
+    }
+}
+
+/// 把宿主现算出来的窗口标题推给系统。没变化时 `take_window_title` 返回 `None`，
+/// 这里一次 OS 调用都不发——`SetWindowTextW` 会同步重绘非客户区，不是免费的。
+///
+/// 两段式同 `apply_window_op`：借用在取出标题那条语句结束时释放，`SetWindowTextW`
+/// 会同步派发 `WM_SETTEXT` 重入 `wnd_proc`（铁律 6）。
+unsafe fn apply_window_title(hwnd: HWND) {
+    let title = state_from(hwnd).and_then(|s| s.handler.take_window_title());
+    if let Some(title) = title {
+        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let _ =
+            windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
+    }
+}
+
+/// 用户偏好的界面语言（BCP-47，按优先级排序）。
+///
+/// 用 `GetUserPreferredUILanguages` 而不是 `GetUserDefaultLocaleName`：后者给的是**区域
+/// 格式**（数字/日期的写法），与「界面用哪种语言」是两个设置项——把系统语言设成英文、
+/// 区域留在中国的机器相当常见，读错那个会把英文界面的用户判成中文。
+///
+/// 返回的是双 NUL 结尾的多串：每种语言一串，整体再以一个空串收尾。
+pub fn system_locales() -> Vec<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
+    unsafe {
+        let mut count: u32 = 0;
+        let mut chars: u32 = 0;
+        // 第一次调用只问长度（缓冲区传 None）。
+        if GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, None, &mut chars).is_err()
+            || chars == 0
+        {
+            return Vec::new();
+        }
+        let mut buf = vec![0u16; chars as usize];
+        if GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME,
+            &mut count,
+            Some(PWSTR(buf.as_mut_ptr())),
+            &mut chars,
+        )
+        .is_err()
+        {
+            return Vec::new();
+        }
+        buf.truncate(chars as usize);
+        buf.split(|c| *c == 0)
+            .filter(|s| !s.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect()
     }
 }
 
@@ -3606,7 +3748,7 @@ unsafe fn state_from<'a>(hwnd: HWND) -> Option<&'a mut WindowState> {
 
 #[cfg(test)]
 mod live_windows_tests {
-    use super::{should_quit_on_last_window, swap_rb_inplace, swap_rb_rect, LiveWindows, Rect};
+    use super::{copy_swap_rect, should_quit_on_last_window, LiveWindows, Rect};
 
     /// 常规模式：最后一个窗口关掉才退出，之前不退。
     #[test]
@@ -3664,50 +3806,157 @@ mod live_windows_tests {
         assert!(w.remove(20));
     }
 
-    /// 回归：局部帧的 R/B 交换必须按**矩形**做，不能按整行。
+    /// 回归：局部帧只把脏**矩形**搬进上传缓冲，且搬完整张缓冲仍等于 pixmap 的 R/B 交换。
     ///
-    /// 曾按整行翻：脏区左右两侧那些**已是 BGRA** 的像素会被翻第二次，红蓝颠倒。
-    /// 灰/白/黑处 R≈G≈B 看不出来，只有饱和色显形——所以示例界面全绿、用户应用里
-    /// 有彩色的那几行出错。这里用一个红色底（R 与 B 差别最大）建模整条序列。
+    /// 这条守两件事。**正确性**：pixmap 恒为 RGBA 且跨帧持久，upload 恒为 BGRA，两者
+    /// 必须逐像素对应——局部帧只搬脏区，脏区之外靠的是上一帧搬过去的内容，一旦那部分
+    /// 与 pixmap 失配，窗口被遮挡后重新暴露（系统失效区大于本帧脏区）就会送上错像素。
+    /// **不多搬**：矩形之外 pixmap 本帧根本没变，搬过去纯属白费带宽，脏区越小越亏。
+    ///
+    /// 旧实现是在 pixmap 上原地交换，那时还有第三件事要守：按整行翻会把脏区左右两侧
+    /// 「已是 BGRA」的像素翻第二次 → 红蓝颠倒，且灰/白/黑处 R≈G≈B 看不出来、只有饱和色
+    /// 显形。改成拷进独立缓冲后这个错误不复存在（拷贝幂等），故这里用红/蓝两色建模的
+    /// 重点从"翻了几次"转成了"搬没搬对、搬没搬多"。
+    // 用 chunks_exact 而非 as_chunks：后者要 Rust 1.88，而本 crate 已发布到 crates.io
+    // 且未声明 rust-version（同 `render/skia.rs` 的 `fast_fill_rect`）。
+    #[allow(clippy::chunks_exact_to_as_chunks)]
     #[test]
-    fn partial_frame_swaps_only_the_damage_rect() {
+    fn partial_frame_uploads_only_the_damage_rect() {
         const W: i32 = 8;
         const H: i32 = 4;
-        let rgba_red = [0xFFu8, 0x00, 0x00, 0xFF]; // R=255 B=0
-        let bgra_red = [0x00u8, 0x00, 0xFF, 0xFF]; // 交换后
-        let mut buf: Vec<u8> = rgba_red
+        const STRIDE: usize = (W * 4) as usize;
+        let red_rgba = [0xFFu8, 0x00, 0x00, 0xFF];
+        let blue_rgba = [0x00u8, 0x00, 0xFF, 0xFF];
+        let swapped = |p: &[u8]| [p[2], p[1], p[0], p[3]];
+
+        let mut pixmap: Vec<u8> = red_rgba
             .iter()
             .copied()
             .cycle()
             .take((W * H * 4) as usize)
             .collect();
+        let mut upload = vec![0u8; (W * H * 4) as usize];
 
-        // 第一帧：整窗。宿主画出 RGBA，平台整窗交换 → 全缓冲变 BGRA。
-        swap_rb_inplace(&mut buf);
-        assert!(buf.chunks(4).all(|p| p == bgra_red), "整窗帧后应全为 BGRA");
+        // 第一帧整窗：整张搬过去。
+        copy_swap_rect(&pixmap, &mut upload, W, Rect::new(0, 0, W, H));
+        for (u, p) in upload.chunks_exact(4).zip(pixmap.chunks_exact(4)) {
+            assert_eq!(
+                u,
+                swapped(p),
+                "整窗帧后 upload 应逐像素等于 pixmap 的 R/B 交换"
+            );
+        }
 
-        // 第二帧：局部。宿主只把脏矩形重画成 RGBA（模拟 blit_back_rect_to：逐行只写这几列）。
+        // 第二帧局部：宿主只把脏矩形改成另一种颜色（R 与 B 差别最大，搬错立刻显形）。
         let dmg = Rect::new(2, 1, 3, 2);
-        let stride = (W * 4) as usize;
         for y in dmg.y..dmg.bottom() {
             for x in dmg.x..dmg.right() {
-                let o = y as usize * stride + x as usize * 4;
-                buf[o..o + 4].copy_from_slice(&rgba_red);
+                let o = y as usize * STRIDE + x as usize * 4;
+                pixmap[o..o + 4].copy_from_slice(&blue_rgba);
             }
         }
-        swap_rb_rect(&mut buf, W, dmg);
-
-        // 判据：整张缓冲仍恒为 BGRA。脏区左右两侧若被二次交换，这里就会读到 RGBA。
+        // 脏区之外全部填哨兵：若实现多搬了，哨兵会被覆盖。
+        const SENTINEL: u8 = 0x5A;
         for y in 0..H {
             for x in 0..W {
-                let o = y as usize * stride + x as usize * 4;
-                assert_eq!(
-                    &buf[o..o + 4],
-                    &bgra_red,
-                    "({x},{y}) 应为 BGRA；脏区是 {dmg:?}，此处若成 RGBA 即被翻了两次"
-                );
+                let inside = x >= dmg.x && x < dmg.right() && y >= dmg.y && y < dmg.bottom();
+                if !inside {
+                    let o = y as usize * STRIDE + x as usize * 4;
+                    upload[o..o + 4].fill(SENTINEL);
+                }
             }
         }
+        copy_swap_rect(&pixmap, &mut upload, W, dmg);
+
+        for y in 0..H {
+            for x in 0..W {
+                let o = y as usize * STRIDE + x as usize * 4;
+                let inside = x >= dmg.x && x < dmg.right() && y >= dmg.y && y < dmg.bottom();
+                if inside {
+                    assert_eq!(
+                        &upload[o..o + 4],
+                        &swapped(&pixmap[o..o + 4]),
+                        "({x},{y}) 在脏区内，应搬成 pixmap 的 R/B 交换"
+                    );
+                } else {
+                    assert!(
+                        upload[o..o + 4].iter().all(|&b| b == SENTINEL),
+                        "({x},{y}) 在脏区 {dmg:?} 之外却被搬过，白费带宽"
+                    );
+                }
+            }
+        }
+    }
+
+    /// 越界的脏矩形只做交集：不得 panic，且**钳后写的仍是正确的那几个像素**。
+    ///
+    /// 上游把脏区钳进缓冲边界是常态，但 `copy_swap_rect` 直接对切片下标，钳漏一次
+    /// 就是越界 panic——真窗口上表现为缩放窗口时偶发崩溃。故自己再兜一层。
+    ///
+    /// 光断言「不 panic」不够：把交集算错（比如钳成空、或钳掉了本该搬的行）同样不
+    /// panic，画面却少一块。所以逐像素对账「该搬的搬了、不该碰的没碰」。
+    ///
+    /// `dst` 比 `src` 短那条不在这里测：`copy_swap_rect` 开头的 `debug_assert_eq!` 声明
+    /// 那是**调用方的不变量**（`ensure` 两块一起重建），不是要兜的输入。
+    #[test]
+    fn copy_swap_rect_clamps_out_of_bounds() {
+        const W: i32 = 4;
+        const H: i32 = 3;
+        const STRIDE: usize = (W * 4) as usize;
+        const UNTOUCHED: u8 = 0xCD;
+        // src 每个像素带各自的坐标指纹，搬错位置立刻显形。
+        let mut src = vec![0u8; (W * H * 4) as usize];
+        for y in 0..H {
+            for x in 0..W {
+                let o = y as usize * STRIDE + x as usize * 4;
+                src[o..o + 4].copy_from_slice(&[x as u8, y as u8, 0x80, 0xFF]);
+            }
+        }
+        let swapped = |x: i32, y: i32| [0x80u8, y as u8, x as u8, 0xFF];
+
+        // 期望交集由测试独立算出，不从被测实现反推。
+        let cases: [(Rect, Rect); 6] = [
+            (Rect::new(-5, -5, 100, 100), Rect::new(0, 0, W, H)), // 四面都超 → 整幅
+            (Rect::new(3, 2, 10, 10), Rect::new(3, 2, 1, 1)),     // 右下超 → 只剩一格
+            (Rect::new(-2, -1, 4, 3), Rect::new(0, 0, 2, 2)),     // 左上超 → x0/y0 生效
+            (Rect::new(10, 10, 4, 4), Rect::new(0, 0, 0, 0)),     // 整个在外 → 空
+            (Rect::new(0, 0, 0, 0), Rect::new(0, 0, 0, 0)),       // 空
+            (Rect::new(1, 1, -3, -3), Rect::new(0, 0, 0, 0)),     // 负尺寸 → 空
+        ];
+        for (r, want) in cases {
+            let mut dst = vec![UNTOUCHED; (W * H * 4) as usize];
+            copy_swap_rect(&src, &mut dst, W, r);
+            for y in 0..H {
+                for x in 0..W {
+                    let o = y as usize * STRIDE + x as usize * 4;
+                    let inside = !want.is_empty()
+                        && x >= want.x
+                        && x < want.right()
+                        && y >= want.y
+                        && y < want.bottom();
+                    if inside {
+                        assert_eq!(
+                            &dst[o..o + 4],
+                            &swapped(x, y),
+                            "{r:?} 钳成 {want:?}：({x},{y}) 该搬却没搬对"
+                        );
+                    } else {
+                        assert!(
+                            dst[o..o + 4].iter().all(|&b| b == UNTOUCHED),
+                            "{r:?} 钳成 {want:?}：({x},{y}) 在交集外却被写了"
+                        );
+                    }
+                }
+            }
+        }
+
+        // buf_w = 0：stride 为 0，行数推算会除零。单独走一遍确认不炸。
+        let mut dst = vec![UNTOUCHED; (W * H * 4) as usize];
+        copy_swap_rect(&src, &mut dst, 0, Rect::new(0, 0, 4, 4));
+        assert!(
+            dst.iter().all(|&b| b == UNTOUCHED),
+            "buf_w=0 时没有任何有效像素，不该写出任何东西"
+        );
     }
 
     /// 注销一个没登记过的句柄不得报告「已空」。
@@ -3876,19 +4125,25 @@ mod tests {
     const DY: i32 = 4;
 
     #[test]
-    fn double_then_triple_then_reset() {
+    fn 双击之后重新起算_连续双击每一对都成立() {
         let mut t = ClickTracker::default();
         assert_eq!(t.bump(1, 10, 10, 1000, DBL, DX, DY), 1, "首击=单击");
         assert_eq!(t.bump(1, 11, 11, 1100, DBL, DX, DY), 2, "时限内同位=双击");
-        assert_eq!(t.bump(1, 12, 12, 1200, DBL, DX, DY), 3, "继续=三击");
+        // 连着往下钻目录：第三、四下必须重新构成一对双击，否则第二次双击落空。
+        assert_eq!(t.bump(1, 12, 12, 1200, DBL, DX, DY), 1, "双击后重新起算");
         assert_eq!(
             t.bump(1, 12, 12, 1300, DBL, DX, DY),
-            1,
-            "三击之后重新起算，不得钉在 3：钉住会让同位快点永远报 >=2，             文件列表双击进目录后再单击一下就又进一层"
+            2,
+            "第二次双击照样成立"
         );
-        assert_eq!(t.bump(1, 12, 12, 1400, DBL, DX, DY), 2, "新一轮的第二下=双击");
+        assert_eq!(t.bump(1, 12, 12, 1400, DBL, DX, DY), 1);
+        assert_eq!(
+            t.bump(1, 12, 12, 1500, DBL, DX, DY),
+            2,
+            "第三次双击照样成立"
+        );
         // 超出时限：重置。
-        assert_eq!(t.bump(1, 12, 12, 2000, DBL, DX, DY), 1, "超时重置为单击");
+        assert_eq!(t.bump(1, 12, 12, 2200, DBL, DX, DY), 1, "超时重置为单击");
     }
 
     #[test]

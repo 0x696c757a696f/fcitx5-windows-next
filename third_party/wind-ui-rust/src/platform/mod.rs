@@ -1,4 +1,4 @@
-//! 平台抽象层。按目标平台分发到具体后端：Windows→`win32`，macOS→`macos`。
+//! 平台抽象层。按目标平台分发到具体后端：Windows→`win32`，macOS→`macos`，Linux→`linux`（X11）。
 //!
 //! 各后端对外暴露同形的 API（`run` / `open_url` / `Clipboard`），由本模块按 `cfg` 统一
 //! re-export；上层（`app`/`lib::prelude`）只依赖 `crate::platform::*`，不直接触碰任何具体
@@ -35,6 +35,49 @@ pub fn native_window_handle() -> Option<isize> {
 pub fn native_window_handle() -> Option<isize> {
     None
 }
+/// 系统的双击时限（毫秒）与漂移阈值（每侧逻辑像素）。
+///
+/// 平台层折算 `click_count` 用的就是这两个值；控件侧认三击
+/// （[`crate::event::TripleClick`]）必须用**同一套**，否则把双击速度调慢的用户
+/// 会遇到"双击好使、三击不灵"——第一、二下按系统阈值判，第三下却按写死的判。
+#[cfg(windows)]
+pub fn double_click_thresholds() -> (u32, i32) {
+    win32::double_click_thresholds()
+}
+
+/// 见 Windows 版。非 Windows 暂用 Windows 的默认值兜底。
+///
+/// macOS 本应读 `NSEvent::doubleClickInterval`；没有接上是因为改这里的人手上没有
+/// 能编译验证的 macOS 环境，与其塞一段编不过的猜测，不如把缺口写明。
+#[cfg(not(windows))]
+pub fn double_click_thresholds() -> (u32, i32) {
+    (500, 4)
+}
+
+/// 用户偏好的界面语言（BCP-47，按优先级排序）。
+///
+/// 供 [`Initial::System`](crate::i18n::Initial::System) 挑启动语言。按**偏好列表**而不是
+/// 单一语言返回：用户可能把「英文优先、中文次之」设成一串，只取第一项会在应用没有英文
+/// 译文时直接掉到 fallback，而本该轮到中文。
+///
+/// 无法取得时返回空表——调用方据此走 fallback，不需要区分"取不到"和"没有偏好"。
+#[cfg(windows)]
+pub fn system_locales() -> Vec<String> {
+    win32::system_locales()
+}
+
+/// 见 Windows 版。
+#[cfg(target_os = "macos")]
+pub fn system_locales() -> Vec<String> {
+    macos::system_locales()
+}
+
+/// 见 Windows 版。
+#[cfg(target_os = "linux")]
+pub fn system_locales() -> Vec<String> {
+    linux::system_locales()
+}
+
 #[cfg(windows)]
 pub use win32::open_url;
 #[cfg(windows)]
@@ -68,8 +111,23 @@ pub(crate) fn single_window_open(_key: &str) -> bool {
     false
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
-compile_error!("windui 目前仅支持 Windows 与 macOS 平台");
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::clipboard::X11Clipboard as Clipboard;
+#[cfg(target_os = "linux")]
+pub use linux::drag_files;
+#[cfg(target_os = "linux")]
+pub use linux::open_url;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::run;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::single_window_open;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::system_prefers_dark;
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+compile_error!("windui 目前仅支持 Windows、macOS 与 Linux（X11）平台");
 
 /// 托盘的平台无关声明层（`Tray` / `TrayMenuItem` / `TrayCtx` / `TrayAction`）。
 pub mod tray;
@@ -917,6 +975,33 @@ pub trait AppHandler {
         None
     }
 
+    /// 最小化是否应该改为隐藏窗口（见 [`App::hide_on_minimize`]）。
+    ///
+    /// 平台在**最小化已经发生之后**问（win32 是 `WM_SIZE` 的 `SIZE_MINIMIZED`），
+    /// 而不是拦下最小化请求：最小化的来源不止自绘标题栏那颗按钮，还有系统标题栏、
+    /// 任务栏点击、Win+Down、Alt+Space 菜单——拦请求只堵得住第一种，而"收进托盘"
+    /// 是应用级语义，哪条路进来都该一样。
+    ///
+    /// [`App::hide_on_minimize`]: crate::app::App::hide_on_minimize
+    fn hide_on_minimize(&self) -> bool {
+        false
+    }
+
+    /// 窗口标题若与上次推送的不同，返回新标题（平台随即调 `SetWindowTextW` /
+    /// `setTitle:`）。**拉取式**：宿主不记"要不要改"，每次问都现算一遍当前标题。
+    ///
+    /// 为什么是拉取而不是像 `WindowOp` 那样排一条意图：标题的来源是
+    /// [`TextContent`](crate::ui::TextContent)，它可能绑在信号上、也可能是条待翻译消息
+    /// （[`t!`](crate::t)）。这两种都**不经过任何显式调用**就会变——换语言只动线程局部的
+    /// 译文目录，写信号只动信号运行时，谁都不会顺手去排一条"改标题"的意图。排队式
+    /// 就得在每个可能改变它的地方补一次通知，漏一处的症状是"换了语言标题还是旧的"。
+    ///
+    /// 平台在**事件分发后与出帧后**都要问一次：语言可以在点击回调里换（事件路径），
+    /// 也可以在 `on_interval`/`on_message` 里换（帧路径）。
+    fn take_window_title(&mut self) -> Option<String> {
+        None
+    }
+
     /// 窗口状态/能力发生变化时推送最新快照（最大化、最小化、能否最大化…）。
     ///
     /// **单向推送而非让宿主回查**：查询要么把窗口句柄交给核心（违反平台缝合），要么让
@@ -1032,6 +1117,13 @@ fn inject_parent(d: rfd::FileDialog) -> rfd::FileDialog {
 }
 
 #[cfg(target_os = "macos")]
+fn inject_parent(d: rfd::FileDialog) -> rfd::FileDialog {
+    d
+}
+
+/// Linux：门户对话框按窗口标识定父窗口，而本后端的窗口句柄尚未对外暴露（见
+/// `native_window_handle`），暂不注入——对话框照常弹出，只是不挂在主窗口上。
+#[cfg(target_os = "linux")]
 fn inject_parent(d: rfd::FileDialog) -> rfd::FileDialog {
     d
 }

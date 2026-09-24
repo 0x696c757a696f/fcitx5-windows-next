@@ -12,7 +12,7 @@
 //! | [`tooltip`] | 悬停提示浮层：延时、抑制、翻转定位 |
 //! | [`fling`] | 触摸惯性滑动与平移残差 |
 //! | [`focus`] | 焦点归属：Tab 顺序、焦点环、模态移交 |
-//! | [`damage`] | 局部重绘仲裁与后备缓冲 |
+//! | [`damage`] | 局部重绘仲裁 |
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -137,6 +137,7 @@ impl Window {
                 bg: None,
                 // 占位。取不走：`content` 是唯一产出 `WindowRequest` 的方法，
                 // 没调它就拿不到能交给 `open_window` 的值——类型上已经封死。
+                title_src: None,
                 content: crate::event::WindowContent::new(|| NoContent),
                 close_handler: None,
                 intervals: Vec::new(),
@@ -145,6 +146,30 @@ impl Window {
                 icon: None,
             },
         }
+    }
+
+    /// 窗口标题，收 [`TextContent`](crate::ui::TextContent)：能绑信号、也能是一条待翻译
+    /// 消息（[`t!`](crate::t)），两种都随值变化自动重发给系统。与 [`App::title`] 同一套
+    /// 拉取式机制，子窗各有自己的宿主，故各自跟随。
+    ///
+    /// ```no_run
+    /// # use windui::prelude::*;
+    /// # let _ =
+    /// Window::new("占位", 420, 320).title(t!("app.settings_title")).content(|| Element::col())
+    /// # ;
+    /// ```
+    ///
+    /// 与 [`Window::new`] 的第一个参数并存：那个是**建窗时**的标题（平台在窗口出现前就
+    /// 要一个字符串），本修饰符是此后的来源。建窗那一刻也会用它算一次，故不会先闪一下
+    /// 占位标题。
+    ///
+    /// **单例窗（[`Window::single`]）的既有窗口不受后续请求影响**——那是单例的既定语义
+    /// （见该方法），与标题来源无关：已经开着的那个窗口照常按**它自己**那份来源跟随语言。
+    pub fn title(mut self, title: impl Into<crate::ui::TextContent>) -> Self {
+        let t = title.into();
+        self.req.title = t.resolve().into_owned();
+        self.req.title_src = Some(t);
+        self
     }
 
     /// 把本窗口设为**单例**：同一个 `key` 同时只存在一个窗口。
@@ -596,6 +621,9 @@ fn build_new_window(
     // `UiHost::new` 内部的 `root.build(&mut tree)` 也在作用域外——那里创建的是
     // 节点而非信号，控件自带的信号由控件自己的 `SignalScope` 管。
     host.scope = Some(scope);
+    // 标题来源交给这个子窗自己的宿主：此后它每帧现算、变了才推给系统，与主窗同一条路
+    // （见 `AppHandler::take_window_title`）。子窗各有一份宿主，故各跟各的。
+    host.title_src = req.title_src;
     NewWindow::Create(Box::new(cfg), Box::new(host) as Box<dyn AppHandler>)
 }
 
@@ -831,7 +859,8 @@ pub(crate) fn take_app_hotkey_ops() -> Vec<(usize, crate::event::HotkeyOp)> {
 ///
 /// 逐个取而不是一次取完：托盘的 `TrayAction::OpenWindow` 是位置标记，执行到哪一个就
 /// 取哪一个，顺序才跟得上回调里的调用顺序。
-// macOS 尚未消费这两条路（见 `platform/macos` 里的 TODO），在那里它们暂时无人调用。
+// macOS 尚未消费这两条路（见 `platform/macos` 里的 TODO），在那里它们暂时无人调用；
+// Linux 只有热键路径（取全部），逐个取的托盘路径无人调用。
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn take_callback_window(is_open: &dyn Fn(&str) -> bool) -> Option<NewWindow> {
     let req = crate::event::take_callback_window()?;
@@ -847,7 +876,7 @@ pub(crate) fn take_callback_window(is_open: &dyn Fn(&str) -> bool) -> Option<New
 ///
 /// 这条路是可达的：`App::channel` 的 pump 一次排空全部消息，排空后才统一落地开窗请求，
 /// 故「用户双击图标没反应、再双击一次」这类两条消息就会落进同一批。
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 pub(crate) fn take_callback_windows(is_open: &dyn Fn(&str) -> bool) -> Vec<NewWindow> {
     let mut batch: std::collections::HashSet<String> = std::collections::HashSet::new();
     crate::event::take_callback_windows()
@@ -942,11 +971,17 @@ pub struct App {
     /// 关闭请求转为隐藏窗口。与 `close_handler` 同属核心层的关闭决策链输入，
     /// 平台层对此无感知，故不放 `WindowConfig`。
     hide_on_close: bool,
+    /// 最小化转为隐藏窗口（收进托盘）。与 `hide_on_close` 不同，这一项**平台层要问**
+    /// （`UiHost::hide_on_minimize`）：最小化可以由系统标题栏、任务栏、Win+Down 触发，
+    /// 那些路径根本不经过核心层。
+    hide_on_minimize: bool,
     /// 用户是否经 `App::bg` 显式指定了窗口背景（是 → 固定色；否 → 清屏色随主题
     /// palette.bg 热切换，修"切暗色主题后清屏仍是亮色底"）。
     bg_explicit: bool,
     /// 运行期热键操作队列（`hotkey_handle` 句柄写入、UiHost 中转、平台消费）。
     hotkey_ops: Rc<RefCell<Vec<(usize, crate::event::HotkeyOp)>>>,
+    /// 窗口标题的**来源**（见 [`App::title`]）。`None` = 标题定格在建窗那一份。
+    title_src: Option<crate::ui::TextContent>,
 }
 
 impl App {
@@ -998,8 +1033,10 @@ impl App {
             start_window: None,
             system_theme: None,
             hide_on_close: false,
+            hide_on_minimize: false,
             bg_explicit: false,
             hotkey_ops: Rc::new(RefCell::new(Vec::new())),
+            title_src: None,
         }
     }
 
@@ -1165,6 +1202,58 @@ impl App {
     /// 只是被丢弃（见 `TrayHandle::set_tooltip`）。
     pub fn tray_handle(&mut self) -> crate::platform::TrayHandle {
         crate::platform::TrayHandle::new()
+    }
+
+    /// 窗口标题，收 [`TextContent`](crate::ui::TextContent)：于是它能绑信号、也能是
+    /// 一条待翻译消息，**两种都随值变化自动重发给系统**。
+    ///
+    /// ```no_run
+    /// # use windui::prelude::*;
+    /// let app = App::new("占位", 400, 300).title(t!("app.title"));   // 换语言即改标题
+    /// let doc = signal(String::from("未命名"));
+    /// let app2 = App::new("占位", 400, 300).title(doc);              // 写信号即改标题
+    /// ```
+    ///
+    /// 与 [`App::new`] 的第一个参数并存：那个是**建窗时**的标题（平台在窗口出现前就要
+    /// 一个字符串），本修饰符是**此后**的来源。只写 `App::new` 的应用行为完全不变。
+    ///
+    /// 子窗口用 [`Window::title`](crate::app::Window::title)，机制完全相同。
+    pub fn title(mut self, title: impl Into<crate::ui::TextContent>) -> Self {
+        let t = title.into();
+        // 建窗那一刻也用它：否则窗口会先闪一下 `App::new` 给的占位标题。
+        self.cfg.title = t.resolve().into_owned();
+        self.title_src = Some(t);
+        self
+    }
+
+    /// 装载多语言译文目录（见 [`Locales`](crate::i18n::Locales)）。
+    ///
+    /// 不调用它也能跑：框架自带文案（`windui.*`）有内置的中英两份兜底，应用自己的 key
+    /// 则全部 miss。默认语言是 `zh-CN`——**不跟随系统**，要跟随得在 `Locales` 上显式写
+    /// [`Initial::System`](crate::i18n::Initial::System)。理由见该枚举的文档。
+    ///
+    /// ```ignore
+    /// // ignore：`include_str!` 的路径相对源文件解析，doctest 里取不到。
+    /// // 这套 API 的编译核验在 `examples/i18n.rs`。
+    /// # use windui::prelude::*;
+    /// let app = App::new("Demo", 400, 300).locales(
+    ///     Locales::builder()
+    ///         .embed(include_str!("../i18n/zh-CN.toml"))
+    ///         .load_dir("i18n")
+    ///         .build(),
+    /// );
+    /// ```
+    pub fn locales(self, locales: crate::i18n::Locales) -> Self {
+        crate::i18n::install(locales);
+        self
+    }
+
+    /// 运行期语言句柄：克隆进控件回调，`set("en")` 即热切换，下一帧整树跟随。
+    ///
+    /// 与 [`Self::theme_handle`] 并列，但**取它不要求先调 [`Self::locales`]**——语言状态
+    /// 在线程局部里，句柄自己不持有任何东西（见 [`LocaleHandle`](crate::i18n::LocaleHandle)）。
+    pub fn locale_handle(&mut self) -> crate::i18n::LocaleHandle {
+        crate::i18n::LocaleHandle::new()
     }
 
     pub fn theme_handle(&mut self) -> ThemeHandle {
@@ -1510,6 +1599,25 @@ impl App {
     /// # Panics
     ///
     /// debug 期，若既无托盘图标也无全局热键则 panic：窗口一旦被隐藏就再也无法唤起。
+    /// 最小化转为隐藏窗口：窗口从任务栏消失，只留托盘图标。
+    ///
+    /// 与 [`hide_on_close`](Self::hide_on_close) 并列，管的是另一颗按钮。二者都开着
+    /// 才是常见的托盘应用形态：最小化收起来、关闭也收起来，真退出走托盘菜单。
+    ///
+    /// 实现上是**最小化发生之后再隐藏**，不是拦下最小化：最小化的来源不止自绘标题栏
+    /// 那颗按钮，还有系统标题栏、任务栏点击、Win+Down、Alt+Space 菜单。拦请求只堵得住
+    /// 第一种，而"收进托盘"是应用级语义，哪条路进来都该一样。代价是会闪一下最小化
+    /// 动画——Windows 上的托盘应用普遍如此。
+    ///
+    /// # Panics
+    ///
+    /// debug 期，若既无托盘图标也无全局热键则 panic：窗口一旦被隐藏就再也无法唤起，
+    /// 同 [`start_hidden`](Self::start_hidden)。
+    pub fn hide_on_minimize(mut self) -> Self {
+        self.hide_on_minimize = true;
+        self
+    }
+
     pub fn hide_on_close(mut self) -> Self {
         self.hide_on_close = true;
         self
@@ -1972,7 +2080,7 @@ impl App {
         let handler: Box<dyn AppHandler> = if let Some(f) = self.render {
             Box::new(ClosureHandler { f })
         } else if let Some(root) = self.content {
-            Box::new(UiHost::new(
+            let mut host = UiHost::new(
                 root,
                 &cfg,
                 theme_src,
@@ -1985,7 +2093,13 @@ impl App {
                 self.shortcut,
                 host_theme,
                 self.hide_on_close,
-            ))
+            );
+            // 建好再塞而不是加到 `UiHost::new` 的参数表里：那张表已有 12 个位置参数，
+            // 而**子窗口**那条构造路径（`build_new_window`）并不支持标题来源，多一个
+            // 恒为 `None` 的参数只会让两处都更难读。
+            host.title_src = self.title_src;
+            host.hide_on_minimize = self.hide_on_minimize;
+            Box::new(host)
         } else {
             Box::new(ClosureHandler {
                 f: Box::new(|_, _| {}),
@@ -2000,7 +2114,7 @@ impl App {
             Some(h) => h,
             None => ThemeHandle::new(Rc::new(self.theme.unwrap_or_default())),
         };
-        UiHost::new(
+        let mut host = UiHost::new(
             self.content.unwrap(),
             &self.cfg,
             theme_src,
@@ -2013,7 +2127,10 @@ impl App {
             self.shortcut,
             self.system_theme,
             self.hide_on_close,
-        )
+        );
+        host.title_src = self.title_src;
+        host.hide_on_minimize = self.hide_on_minimize;
+        host
     }
 
     fn shared_waker(&mut self) -> crate::sync::Waker {
@@ -2102,6 +2219,8 @@ impl AppHandler for ClosureHandler {
 struct UiHost {
     tree: Tree,
     engine: PlatformTextEngine,
+    /// 上一帧所用的语言目录（指针比对用，见 `begin_frame`）。
+    lang_seen: Option<Rc<crate::i18n::Catalog>>,
     hover: Option<NodeId>,
     capture: Option<NodeId>,
     close: bool,
@@ -2120,7 +2239,7 @@ struct UiHost {
     /// 最近一次指针事件的命中结果，供离屏截图路径诊断（见 `AppHandler::last_pointer_hit`）。
     /// 只在指针路径写，不参与任何绘制决策。
     last_hit: Option<crate::platform::PointerHit>,
-    /// 局部重绘仲裁与后备缓冲，见 [`damage`]。
+    /// 局部重绘仲裁，见 [`damage`]。
     damage: DamageState,
     /// 最近一帧的逻辑窗口尺寸（菜单弹出位置钳制用）。
     logical_size: Size,
@@ -2140,6 +2259,11 @@ struct UiHost {
     bg_follows_theme: bool,
     /// 运行期热键操作队列（HotkeyHandle 写入；平台经 `take_hotkey_ops` 消费）。
     hotkey_ops: Rc<RefCell<Vec<(usize, crate::event::HotkeyOp)>>>,
+    /// 窗口标题的来源（见 [`App::title`]）。`None` = 标题定格在建窗那一份，
+    /// `take_window_title` 恒返回 `None`，平台一次多余的调用都不会发生。
+    title_src: Option<crate::ui::TextContent>,
+    /// 上次推送给系统的标题。拉取式比对的另一半，见 `take_window_title`。
+    title_last: String,
     /// 一次「按下关闭浮层」后，吞掉随之而来的 Up：避免该 Up 下发到控件树重新激活
     /// 浮层下方控件（典型：下拉按钮点一下又弹一遍——Down 关、Up 再开）。
     swallow_up: bool,
@@ -2164,6 +2288,9 @@ struct UiHost {
     system_theme: Option<SystemThemeHandler>,
     /// 关闭请求转为隐藏窗口（常驻托盘类应用）。
     hide_on_close: bool,
+    /// 最小化转为隐藏窗口。平台层经 `UiHost::hide_on_minimize` 拉取——最小化可以从
+    /// 系统标题栏、任务栏、Win+Down 进来，那些路径不经过核心层。
+    hide_on_minimize: bool,
     /// 正在跑关闭决策链（防 `on_close_request` 回调内再请求关闭导致的自我递归）。
     resolving_close: bool,
     /// 待创建的子窗口（`ctx.open_window` 排入，平台在事件分发完全返回后取走）。
@@ -2363,6 +2490,7 @@ impl UiHost {
         Self {
             tree,
             engine: PlatformTextEngine::new(),
+            lang_seen: None,
             hover: None,
             capture: None,
             close: false,
@@ -2383,6 +2511,9 @@ impl UiHost {
             bg,
             bg_follows_theme,
             hotkey_ops,
+            title_src: None,
+            // 以建窗标题为起点：平台已经拿这一份建了窗，首次轮询不该把同样的字再推一遍。
+            title_last: cfg.title.clone(),
             swallow_up: false,
             host_id: crate::sync::next_host_id(),
             interval_cbs,
@@ -2393,6 +2524,8 @@ impl UiHost {
             shortcut,
             system_theme,
             hide_on_close,
+            // 参数表已经有 12 个位置参数，这一项跟 `title_src` 一样建完再塞
+            hide_on_minimize: false,
             resolving_close: false,
             pending_windows: Vec::new(),
             scope: None,
@@ -2433,11 +2566,12 @@ impl UiHost {
         ev: crate::event::PointerEvent,
         res: &mut crate::core::DispatchResult,
     ) {
-        // 默认接管**仅限 Windows**。macOS 没有"标题栏右键出系统菜单"这个惯例，更要紧的是
-        // 它的平台层还不推送窗口状态（`on_window_state` 未实现），真弹出来「还原」会永远
-        // 是灰的、「最大化」在已放大时也还亮着——宁可不弹，也不弹一个状态说谎的菜单。
+        // 默认接管限 Windows 与 Linux（两者的桌面都有标题栏右键出窗口菜单的惯例，平台层
+        // 也都推送窗口状态）。macOS 没有这个惯例，更要紧的是它的平台层还不推送窗口状态
+        // （`on_window_state` 未实现），真弹出来「还原」会永远是灰的、「最大化」在已放大
+        // 时也还亮着——宁可不弹，也不弹一个状态说谎的菜单。
         // 想在 macOS 上自己做，`window_state()` 与 `system_menu_items()` 照常可用。
-        if !cfg!(target_os = "windows") {
+        if !cfg!(any(target_os = "windows", target_os = "linux")) {
             return;
         }
         if !self.frameless
@@ -2616,7 +2750,24 @@ impl UiHost {
         // 多窗口下每帧各注各的）。
         crate::ui::caret::set_window_active(self.window_active);
         // 从运行期句柄刷新主题快照（热切换下一帧生效），注入线程局部供控件读取。
-        self.theme = self.theme_src.current();
+        //
+        // 主题 / 语言换了就**整窗重排**，判据是快照指针变没变，而不是 `set` 时发出的
+        // `anim::request_repaint`：那一位是帧概念，本帧 `render` 开头的 `reset_request`
+        // 会先把它清掉——在控件回调里换语言，请求活不到下一帧，那一帧只按按钮自己的小
+        // 脏区局部重画，别处文字停在旧语言上（「第一次点语言按钮没反应」）。指针比对
+        // 也顺带覆盖了别的窗口里换的、以及 `LocaleHandle::reload`。
+        let theme = self.theme_src.current();
+        let lang = crate::i18n::current();
+        let lang_changed = self
+            .lang_seen
+            .as_ref()
+            .is_some_and(|seen| !Rc::ptr_eq(seen, &lang));
+        if !Rc::ptr_eq(&theme, &self.theme) || lang_changed {
+            self.damage.needs_full = true;
+            self.damage.needs_relayout = true;
+        }
+        self.lang_seen = Some(lang);
+        self.theme = theme;
         crate::theme::set_current(self.theme.clone());
         // 清屏色随主题（未经 App::bg 显式固定时）：暗色主题下窗口底色同步转暗。
         if self.bg_follows_theme {
@@ -2828,7 +2979,7 @@ fn prof_frame(kind: &str, frame_t0: std::time::Instant) {
 
 impl AppHandler for UiHost {
     /// 一帧的调度流程：帧起始 → 惯性步进 → 条件重排 → 重绘决策 →（局部快路 |
-    /// 全窗绘制 + 三层浮层 + 种入后备缓冲）。各段的实质逻辑都在下面的私有方法与
+    /// 全窗绘制 + 三层浮层）。各段的实质逻辑都在下面的私有方法与
     /// 子模块里，这里只负责顺序。
     fn render(&mut self, target: &mut dyn crate::render::RenderTarget, size: Size) {
         // 帧耗时计时（WINDUI_FPS=1 时在左上角显示，用于排查渲染开销）。
@@ -2879,7 +3030,7 @@ impl AppHandler for UiHost {
             return;
         }
 
-        // ---- 全窗重绘：完整布局 + 整树绘制 + 浮层；结果种入后备缓冲供后续局部帧复用。----
+        // ---- 全窗重绘：完整布局 + 整树绘制 + 浮层；结果留在 pixmap 里供后续局部帧复用。----
         // 清底由这里做，不再由平台每帧无条件 fill：局部帧根本不需要清（内容随后被脏区
         // 覆盖），而那一次 fill 是整窗的，与脏区多小无关。
         //
@@ -2914,13 +3065,11 @@ impl AppHandler for UiHost {
             paint_fps(&mut *canvas, frame_t0);
         }
         drop(canvas);
-        // 种入后备缓冲（整窗），供后续局部帧重建未变区域。
-        // 只有软后端要做这一步：它的后备缓冲在**宿主**这边（`damage.back`），得从刚画好的
-        // pixmap 拷一份。GPU 后端同样走局部重绘，但它的"上一帧"就在目标自己的常驻色纹理
-        // 上——绘制本来就画在那张上面，无所谓种入（见 `render/gpu/surface.rs::BackBuffer`）。
-        if let Some(pixmap) = target.as_pixmap() {
-            self.seed_back(pixmap, size);
-        }
+        // 不再需要「种入后备缓冲」这一步：软后端的 pixmap 由平台跨帧持有且恒为 RGBA
+        // （win32 另备 BGRA 上传缓冲，不再原地交换毁掉它），刚画好的这一帧本身就是下一个
+        // 局部帧要复用的「上一帧画面」。此前每个整窗帧要为此整窗拷贝一次（1920×1080 的
+        // 物理 2880×1676 下稳态 1.2ms，Windows 上被平台侧新增的拷贝抵消，净收益在 macOS）。
+        // GPU 后端同理，它的上一帧在常驻色纹理上。
         self.finish_frame_damage();
         prof_frame("full", frame_t0);
     }
@@ -2999,9 +3148,14 @@ impl AppHandler for UiHost {
             // tooltip 浮层画在控件自身范围之外（指针旁），普通 Label 又没有 hover
             // 视觉、不会主动上报 repaint——若不在此强制请求一次重绘，移出后旧提示
             // 残留不消失、移入后也要等到别的事件凑巧触发重绘才会出现（不稳定）。
-            let node_has_tooltip = |id: Option<NodeId>| {
-                id.is_some_and(|h| self.tree.get(h).is_some_and(|n| n.tooltip.is_some()))
-            };
+            //
+            // ★ 判据必须走 `node_tooltip`（与 `TooltipState::will_show`、与浮层自己的
+            //   `paint` 同源），不能只看节点上的静态 `n.tooltip`：那样会漏掉控件的**动态**
+            //   提示（`Widget::tooltip()`），于是带动态提示的控件正好落进上面这段注释描述
+            //   的坑里——时而弹得出、时而要等别的事件凑巧重绘，表现为"悬停有时没反应"。
+            //   一处判据只留一个出处，三处各写一份迟早再分家一次。
+            let node_has_tooltip =
+                |id: Option<NodeId>| id.is_some_and(|h| self.tree.node_tooltip(h).is_some());
             if node_has_tooltip(old_hover) || node_has_tooltip(hover) {
                 res.repaint = true;
             }
@@ -3400,6 +3554,23 @@ impl AppHandler for UiHost {
 
     fn take_window_op(&mut self) -> Option<WindowOp> {
         self.pending_window_op.take()
+    }
+
+    fn hide_on_minimize(&self) -> bool {
+        self.hide_on_minimize
+    }
+
+    /// 现算标题并与上次推送的比对（契约见 [`AppHandler::take_window_title`]）。
+    ///
+    /// 比对是必须的：平台每次事件与每帧都问，而 `SetWindowTextW` 不是免费的——它会同步
+    /// 重绘非客户区。不比对就是每帧一次无谓的标题栏重画。
+    fn take_window_title(&mut self) -> Option<String> {
+        let now = self.title_src.as_ref()?.resolve().into_owned();
+        if now == self.title_last {
+            return None;
+        }
+        self.title_last = now.clone();
+        Some(now)
     }
 
     fn on_window_state(&mut self, st: crate::event::WindowState) {
@@ -3904,6 +4075,29 @@ mod tests {
         );
     }
 
+    /// hide_on_minimize 是**拉取式**的：平台层在 WM_SIZE/SIZE_MINIMIZED 里问一次，
+    /// 而不是像 hide_on_close 那样留一条 WindowOp 意图。
+    ///
+    /// 两者形状不同是有理由的：关闭必经核心层的决策链（`on_close_request`），最小化
+    /// 却可以从系统标题栏、任务栏、Win+Down 直接进来，核心层根本不在场。
+    #[test]
+    fn hide_on_minimize_is_pulled_by_platform() {
+        let app = App::new("t", 100, 100).content(Element::col());
+        let host = app.into_handler_for_test();
+        assert!(!host.hide_on_minimize(), "默认不该改最小化的行为");
+
+        let app = App::new("t", 100, 100)
+            .hide_on_minimize()
+            .content(Element::col());
+        let mut host = app.into_handler_for_test();
+        assert!(host.hide_on_minimize());
+        assert_eq!(
+            host.take_window_op(),
+            None,
+            "它不排意图——排了平台就会在最小化之外又隐藏一次"
+        );
+    }
+
     /// 默认（未开 hide_on_close）：关闭请求获准 → 真关，不留窗口操作。
     #[test]
     fn close_request_closes_by_default() {
@@ -4174,6 +4368,224 @@ mod tests {
         );
     }
 
+    /// 换语言与换主题走同一条失效契约：都必须请求跨窗刷新。
+    ///
+    /// 理由与换主题逐字相同（见上一条）：译文目录为所有窗口共享，而 `request_repaint`
+    /// 只唤起当前窗口。少这一笔，设置窗里点了"English"，主窗还停在中文——除非应用碰巧
+    /// 同时写了个信号。
+    #[test]
+    fn locale_switch_requests_cross_window_refresh() {
+        let mut app = App::new("t", 100, 100);
+        let lang = app.locale_handle();
+        let _h = app.content(Element::col().fill()).into_handler_for_test();
+        crate::i18n::install(
+            crate::i18n::Locales::builder()
+                .embed("[meta]\nlocale = \"zh-CN\"\n[t]\na = \"甲\"\n")
+                .embed("[meta]\nlocale = \"en\"\n[t]\na = \"A\"\n")
+                .build(),
+        );
+        // 清掉建树期间可能积累的标记，隔离本次断言。
+        let _ = crate::signal::take_cross_window_dirty();
+
+        assert!(lang.set("en"));
+        assert!(
+            crate::signal::take_cross_window_dirty(),
+            "换语言必须请求跨窗刷新，否则其他窗口停在旧语言"
+        );
+    }
+
+    /// 窗口标题跟随语言，且**只在真的变了时**才推给系统。
+    ///
+    /// 三条断言各挡一类错：
+    /// 1. 建窗后立刻问一次必须是 `None`——平台已经拿 `cfg.title` 建过窗，再推一遍是
+    ///    白白让标题栏重绘一次（每帧都问，这一次就是每帧一次）。
+    /// 2. 换语言后必须给出新标题——这正是 `App::title` 存在的理由。
+    /// 3. 紧接着再问必须是 `None`——比对逻辑真的生效了，而不是每次都返回 `Some`。
+    #[test]
+    fn window_title_follows_the_language() {
+        use crate::platform::AppHandler;
+        crate::i18n::install(
+            crate::i18n::Locales::builder()
+                .embed("[meta]\nlocale = \"zh-CN\"\n[app]\ntitle = \"演示\"\n")
+                .embed("[meta]\nlocale = \"en\"\n[app]\ntitle = \"Demo\"\n")
+                .initial(crate::i18n::Initial::Fixed("zh-CN".into()))
+                .build(),
+        );
+        let lang = crate::i18n::LocaleHandle::new();
+        let mut host = App::new("占位", 100, 100)
+            .title(crate::t!("app.title"))
+            .content(Element::col().fill())
+            .into_handler_for_test();
+
+        assert_eq!(
+            host.take_window_title(),
+            None,
+            "建窗时标题已是译文，首次轮询不该再推一遍"
+        );
+
+        assert!(lang.set("en"));
+        assert_eq!(host.take_window_title().as_deref(), Some("Demo"));
+        assert_eq!(host.take_window_title(), None, "没再变化就不该重复推送");
+    }
+
+    /// 子窗口的标题也跟随语言（`Window::title`）。
+    ///
+    /// 子窗各有一份自己的宿主，所以这条不是"主窗那套顺带生效"，而是标题来源要真的
+    /// 一路送到子窗宿主上：`Window::title` → `WindowRequest::title_src` →
+    /// `build_new_window` → 那个 `UiHost`。中间任一环漏接的症状都是"子窗标题不跟随"，
+    /// 而子窗要真窗口才看得见，自测最容易漏。
+    #[test]
+    fn child_window_title_follows_the_language() {
+        use crate::platform::AppHandler;
+        crate::i18n::install(
+            crate::i18n::Locales::builder()
+                .embed("[meta]\nlocale = \"zh-CN\"\n[app]\nsettings = \"设置\"\n")
+                .embed("[meta]\nlocale = \"en\"\n[app]\nsettings = \"Settings\"\n")
+                .initial(crate::i18n::Initial::Fixed("zh-CN".into()))
+                .build(),
+        );
+        let lang = crate::i18n::LocaleHandle::new();
+        let mut h = App::new("main", 200, 200)
+            .content(Element::col().fill())
+            .into_handler_for_test();
+
+        let root = h.tree.root.expect("根节点");
+        let res = h.tree.run_detached(root, |ctx| {
+            ctx.open_window(
+                Window::new("占位", 420, 320)
+                    .title(crate::t!("app.settings"))
+                    .content(|| Element::col().fill()),
+            );
+        });
+        h.apply_app_effects(res);
+        let (cfg, mut child) = expect_create(
+            h.take_new_windows(&|_| false)
+                .into_iter()
+                .next()
+                .expect("应有一个待建子窗"),
+        );
+
+        assert_eq!(
+            cfg.title, "设置",
+            "建窗那一刻就该是译文，不能先闪一下 `Window::new` 给的占位标题"
+        );
+        assert_eq!(child.take_window_title(), None, "首次轮询不该重推同一份");
+
+        assert!(lang.set("en"));
+        assert_eq!(child.take_window_title().as_deref(), Some("Settings"));
+        assert_eq!(child.take_window_title(), None, "没再变化就不该重复推送");
+    }
+
+    /// 只写 `App::new` 的应用行为不变：没有标题来源就永远不推。
+    ///
+    /// 这条守的是兼容性——`take_window_title` 是每帧都调的新通路，它对既有应用必须
+    /// 完全无声。
+    #[test]
+    fn window_title_is_never_pushed_without_a_source() {
+        use crate::platform::AppHandler;
+        let mut host = App::new("固定标题", 100, 100)
+            .content(Element::col().fill())
+            .into_handler_for_test();
+        assert_eq!(host.take_window_title(), None);
+        assert!(crate::i18n::LocaleHandle::new().set("en"));
+        assert_eq!(
+            host.take_window_title(),
+            None,
+            "没有标题来源，换语言也不该推"
+        );
+    }
+
+    /// 在**控件回调里**换语言，紧接着的那一帧必须整窗重画。
+    ///
+    /// `LocaleHandle::set` 经 `anim::request_repaint` 请求整窗，而那一位是帧概念：
+    /// 下一帧 `render` 开头的 `reset_request` 会先把它清掉。回调里发出的请求因此活不到
+    /// 下一帧——实测症状是「启动后第一次点语言按钮界面不变，再点一次才切过去」：
+    /// 那一帧只按按钮自己的小脏区局部重画，别处的文字停在旧语言上。
+    #[test]
+    fn language_switch_from_a_click_repaints_the_whole_window() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        crate::i18n::install(
+            crate::i18n::Locales::builder()
+                .embed("[meta]\nlocale = \"zh-CN\"\n[t]\nlabel = \"短\"\n")
+                .embed("[meta]\nlocale = \"en\"\n[t]\nlabel = \"long\"\n")
+                .initial(crate::i18n::Initial::Fixed("zh-CN".into()))
+                .build(),
+        );
+        let lang = crate::i18n::LocaleHandle::new();
+        let mut host = App::new("t", 300, 200)
+            .content(
+                Element::col()
+                    .child(
+                        Element::button("EN")
+                            .width(80)
+                            .height(30)
+                            .on_click(move |_| {
+                                lang.set("en");
+                            }),
+                    )
+                    .child(Element::label(crate::t!("t.label")).width(200)),
+            )
+            .into_handler_for_test();
+        host.set_scale(1.0);
+        let mut pm = tiny_skia::Pixmap::new(300, 200).unwrap();
+        host.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        for kind in [PointerKind::Move, PointerKind::Down, PointerKind::Up] {
+            host.on_pointer(PointerEvent::single(
+                kind,
+                Point::new(20, 10),
+                MouseButton::Left,
+            ));
+        }
+        assert_eq!(crate::i18n::language(), "en", "前提：点击确实换了语言");
+        host.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        assert!(
+            host.damage.last_frame_full,
+            "换语言后的那一帧必须整窗：否则只重画按钮，别处的文字停在旧语言上"
+        );
+    }
+
+    /// 换语言后**整窗重排**：文本宽度变了会顶动同一行里的后续控件。
+    ///
+    /// 这条盯的是"只重画改字的那个控件"这一类错。判据故意取**兄弟节点的位置**而不是
+    /// 标签自己的宽度：后者在只重画单个控件的实现下也会变，唯有兄弟被顶走才证明重排
+    /// 真的发生了。
+    ///
+    /// 验收靠故意破坏：把 `i18n::invalidate` 里的 `request_repaint` 去掉，或让
+    /// `TextContent::Msg` 在构建期定格（改成 `Static`），这条必须红。
+    #[test]
+    fn switching_language_moves_the_sibling_control() {
+        crate::i18n::install(
+            crate::i18n::Locales::builder()
+                .embed("[meta]\nlocale = \"zh-CN\"\n[t]\nlabel = \"短\"\n")
+                .embed("[meta]\nlocale = \"en\"\n[t]\nlabel = \"a considerably longer label\"\n")
+                .initial(crate::i18n::Initial::Fixed("zh-CN".into()))
+                .build(),
+        );
+        let lang = crate::i18n::LocaleHandle::new();
+        let mut host = App::new("t", 400, 200)
+            .content(
+                Element::row()
+                    .child(Element::label(crate::t!("t.label")))
+                    .child(Element::button("X")),
+            )
+            .into_handler_for_test();
+        layout_once(&mut host, 400, 200);
+        let root = host.tree.root.expect("根节点");
+        let button = host.tree.get(root).expect("根").children[1];
+        let before = host.tree.abs_bounds(button).x;
+
+        assert!(lang.set("en"));
+        layout_once(&mut host, 400, 200);
+        let after = host.tree.abs_bounds(button).x;
+
+        assert!(
+            after > before,
+            "换成更长的译文后，同一行里的按钮应被顶右（{before} → {after}）"
+        );
+    }
+
     /// 经 `App::bg` 显式固定的底色不跟随主题（既定语义，勿因上一条回归而改掉）。
     ///
     /// 与既有的 `explicit_bg_stays_fixed_across_theme_switch` 是两件事：那条查的是
@@ -4403,10 +4815,11 @@ mod tests {
             })
         });
 
-        assert!(
-            dispatch_system_theme_changed(true) || true,
-            "回调是否请求重绘由它自己决定，这里只要求它被跑到"
-        );
+        // 返回值（回调有没有请求重绘）由回调自己决定，这里不作要求；「被跑到」由下一行
+        // 的 `seen` 断言。此前写作 `assert!(f(..) || true, ..)`，那是个**恒真**的断言——
+        // 什么都没验，还让 `cargo clippy --all-targets` 直接编译失败
+        // （`overly_complex_bool_expr` 是 deny 级）。
+        let _ = dispatch_system_theme_changed(true);
         assert_eq!(seen.get(), Some(true), "应用级主题回调必须被调用");
         let (cfg, _host) =
             expect_create(take_callback_window(&|_| false).expect("回调里的开窗请求应已排队"));
@@ -5290,6 +5703,101 @@ mod tests {
     }
 
     #[test]
+    fn window_opened_from_on_update_reaches_the_host() {
+        // 回归：`on_update`（响应式相位）不经 DispatchResult，此前只把 toast 与 focus
+        // 上交，其余副作用整个丢弃。于是在 on_update 里 `ctx.open_window` **什么都不
+        // 发生、也没有任何报错**——而"把命令排进队列、下一帧由某个控件的 on_update
+        // 兑现"是很自然的写法，那条命令十有八九要开个对话框。
+        use crate::core::Widget;
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use std::cell::Cell as StdCell;
+        use std::rc::Rc;
+        use tiny_skia::Pixmap;
+
+        struct OpenOnce(Rc<StdCell<bool>>);
+        impl Widget for OpenOnce {
+            fn on_update(&mut self, ctx: &mut crate::core::EventCtx) {
+                if self.0.get() {
+                    return;
+                }
+                self.0.set(true);
+                ctx.open_window(
+                    Window::new("from-update", 100, 80)
+                        .content(|| Element::leaf().width(10).height(10)),
+                );
+            }
+        }
+
+        let fired = Rc::new(StdCell::new(false));
+        let ui = Element::stack().fill().child(
+            Element::leaf()
+                .width(20)
+                .height(20)
+                .widget(OpenOnce(fired.clone()))
+                .reactive(),
+        );
+        let app = App::new("t", 40, 40).content(ui);
+        let mut handler = app.into_handler_for_test();
+        handler.set_scale(1.0);
+        let mut pm = Pixmap::new(40, 40).unwrap();
+        handler.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(40, 40));
+
+        assert!(fired.get(), "on_update 应当被调到");
+        assert_eq!(
+            handler.take_new_windows(&|_| false).len(),
+            1,
+            "on_update 里请求的窗口必须交到宿主手上"
+        );
+    }
+
+    #[test]
+    fn dialog_deferred_from_on_update_reaches_the_host() {
+        // 同上一条，`ctx.defer_blocking`：应用把「弹系统右键菜单」排到下一帧由 on_update
+        // 兑现，菜单曾永远不出来。平台在绘制后调 `take_dialog_request`，这里走同一个出口。
+        use crate::core::Widget;
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use std::cell::Cell as StdCell;
+        use std::rc::Rc;
+        use tiny_skia::Pixmap;
+
+        struct DeferOnce(Rc<StdCell<bool>>, Rc<StdCell<bool>>);
+        impl Widget for DeferOnce {
+            fn on_update(&mut self, ctx: &mut crate::core::EventCtx) {
+                if self.0.get() {
+                    return;
+                }
+                self.0.set(true);
+                let ran = self.1.clone();
+                ctx.defer_blocking(move || ran.set(true));
+            }
+        }
+
+        let fired = Rc::new(StdCell::new(false));
+        let ran = Rc::new(StdCell::new(false));
+        let ui = Element::stack().fill().child(
+            Element::leaf()
+                .width(20)
+                .height(20)
+                .widget(DeferOnce(fired.clone(), ran.clone()))
+                .reactive(),
+        );
+        let app = App::new("t", 40, 40).content(ui);
+        let mut handler = app.into_handler_for_test();
+        handler.set_scale(1.0);
+        let mut pm = Pixmap::new(40, 40).unwrap();
+        handler.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(40, 40));
+
+        assert!(fired.get(), "on_update 应当被调到");
+        let req = handler
+            .take_dialog_request()
+            .expect("on_update 里的 defer_blocking 必须交到宿主手上");
+        req.run();
+        assert!(ran.get(), "取到的正是那个闭包");
+    }
+
+    #[test]
     fn hiding_node_resets_its_interaction_state() {
         // 回归：控件在按下/悬停态被隐藏（如关闭其所在对话框）时，框架应调 reset_interaction
         // 重置其交互态，避免下次显示瞬间闪出旧的按下/悬停态。
@@ -6066,7 +6574,7 @@ mod tests {
     }
 
     /// 默认接管：无边框窗口的拖动区右键，零代码弹出系统菜单。
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
     fn frameless_drag_region_right_click_opens_system_menu() {
         use crate::event::MouseButton;
@@ -6161,7 +6669,7 @@ mod tests {
     ///
     /// 用 End+Enter 而不是算像素点最后一项：项高/内边距是菜单的实现细节，
     /// 按它们算坐标的测试会在改版式时误报。
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
     fn system_menu_close_goes_through_the_close_guard() {
         use crate::event::{Key, KeyEvent, MouseButton};
@@ -6199,9 +6707,9 @@ mod tests {
     /// macOS 上默认**不**接管：系统无此惯例，且平台层还不推送窗口状态——
     /// 弹出来的菜单会拿 `from_config` 那份猜测值画禁用态，「还原」永远是灰的、
     /// 「最大化」在已放大时也还亮。宁可不弹，也不弹一个状态说谎的菜单。
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     #[test]
-    fn system_menu_is_windows_only_for_now() {
+    fn system_menu_is_not_taken_over_on_macos() {
         use crate::event::MouseButton;
         let mut host = App::new("t", 200, 120)
             .frameless()
@@ -6209,9 +6717,6 @@ mod tests {
             .into_handler_for_test();
         layout_once(&mut host, 200, 120);
         press(&mut host, 60, 16, MouseButton::Right);
-        assert!(
-            menu_rows(&host).is_empty(),
-            "非 Windows 平台不该默认接管标题栏右键"
-        );
+        assert!(menu_rows(&host).is_empty(), "macOS 不该默认接管标题栏右键");
     }
 }

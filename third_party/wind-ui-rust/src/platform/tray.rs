@@ -31,6 +31,8 @@ use std::rc::Rc;
 pub enum TrayOp {
     /// 换鼠标悬停提示。
     SetTooltip(String),
+    /// 弹出系统通知。与托盘回调的 [`TrayAction::Notify`] 走同一平台实现。
+    Notify { title: String, body: String },
 }
 
 thread_local! {
@@ -99,6 +101,20 @@ impl TrayHandle {
         crate::anim::request_repaint();
     }
 
+    /// 弹出系统通知。与托盘菜单里的 [`TrayCtx::notify`] 是同一条平台实现，区别只在
+    /// 发起方：这里是**应用状态**变了（后台任务完成、同步失败），不必先有一次托盘交互。
+    ///
+    /// 通知挂在托盘图标上（Win32 的气泡本就是 `NOTIFYICONDATAW` 的一部分），故没装托盘时
+    /// 同样被丢弃；Linux 尚无托盘，也一并丢弃。
+    pub fn notify(&self, title: impl Into<String>, body: impl Into<String>) {
+        self.queue.borrow_mut().push(TrayOp::Notify {
+            title: title.into(),
+            body: body.into(),
+        });
+        // 踢一帧的理由同 `set_tooltip`：发起方多在后台状态回调里，之后未必再有事件。
+        crate::anim::request_repaint();
+    }
+
     /// 已排队、尚未被平台层消费的意图（按调用顺序）。**只读不取走**，故对真句柄
     /// 调用也是安全的，不会把宿主该执行的改动偷掉。
     pub fn pending_ops(&self) -> Vec<TrayOp> {
@@ -121,6 +137,12 @@ pub enum TrayAction {
     Show,
     /// 隐藏窗口（最小化到托盘），进程继续存活。
     Hide,
+    /// 在显示与隐藏之间切换，由**平台层**按窗口当前的真实可见性决定往哪边走。
+    ///
+    /// 为什么不让应用自己记一个 bool：窗口可以从应用不经手的地方隐去——最小化到托盘
+    /// （`App::hide_on_minimize`）、用户点任务栏、Win+D 显示桌面。应用记的那份状态
+    /// 会跟真实情况岔开，症状是"最小化之后点托盘图标没反应，要点两下才出来"。
+    Toggle,
     /// 退出应用。**刻意绕过 `hide_on_close`**——托盘退出是常驻工具的唯一真实出口，
     /// 若也转成隐藏，开了关闭转隐藏的应用将永远退不掉。
     Quit,
@@ -173,6 +195,13 @@ impl TrayCtx {
     /// 隐藏窗口（最小化到托盘）。
     pub fn hide_window(&mut self) {
         self.actions.push(TrayAction::Hide);
+    }
+    /// 在显示与隐藏之间切换（左键单击最常见的用法）。
+    ///
+    /// 由平台按窗口此刻**真实的**可见性决定往哪边走，应用不必自己记——见
+    /// [`TrayAction::Toggle`]。
+    pub fn toggle_window(&mut self) {
+        self.actions.push(TrayAction::Toggle);
     }
     /// 退出应用。
     pub fn quit(&mut self) {
@@ -249,9 +278,15 @@ pub(crate) fn invoke(cb: Option<&mut TrayFn>) -> Vec<TrayAction> {
     ctx.take_actions()
 }
 
+// Linux 后端尚无托盘，菜单项的标签 / 勾选态与按下标取回调在那里无人读取。
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(crate) enum ItemKind {
     Action {
-        label: String,
+        /// 标签。收 [`TextContent`] 而不是 `String`，于是它能是一条待翻译消息
+        /// （[`t!`](crate::t)）或一个信号——**托盘菜单在每次弹出时才构建**
+        /// （win32 `build_menu`、macOS `pop_menu`），那时才解析，于是换语言下一次
+        /// 右键就是新文案，不必重建整个 `Tray`。
+        label: crate::ui::TextContent,
         /// 勾选态绑定（None=从不打勾）；菜单弹出时读当前值。
         checked: Option<Signal<bool>>,
         /// 禁用态绑定（None=始终可用）；菜单弹出时读当前值，false 则灰显且不可点。
@@ -268,7 +303,13 @@ pub struct TrayMenuItem {
 
 impl TrayMenuItem {
     /// 普通项：点击触发回调。
-    pub fn item(label: impl Into<String>, cb: impl FnMut(&mut TrayCtx) + 'static) -> Self {
+    ///
+    /// 标签可传 `&str` / `String` / `Signal<String>` / [`t!`](crate::t)，与控件文案同一套
+    /// 规则（见 [`TextContent`]）。菜单每次弹出时现取，故信号与语言都自动跟随。
+    pub fn item(
+        label: impl Into<crate::ui::TextContent>,
+        cb: impl FnMut(&mut TrayCtx) + 'static,
+    ) -> Self {
         Self {
             kind: ItemKind::Action {
                 label: label.into(),
@@ -285,7 +326,7 @@ impl TrayMenuItem {
     /// 托盘菜单在 UI 线程构建、勾选态也在 UI 线程的菜单弹出路径上读取，
     /// 把构建好的 `Tray` 搬到别的线程会在编译期就被拦下。
     pub fn check(
-        label: impl Into<String>,
+        label: impl Into<crate::ui::TextContent>,
         checked: Signal<bool>,
         cb: impl FnMut(&mut TrayCtx) + 'static,
     ) -> Self {
@@ -362,6 +403,7 @@ impl Tray {
         self
     }
     /// 取指定下标菜单项的回调（平台层在模态菜单关闭后分发用）。
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) fn item_callback(&mut self, idx: usize) -> Option<&mut TrayFn> {
         self.items.get_mut(idx)?.callback()
     }
@@ -416,6 +458,40 @@ mod tests {
         );
     }
 
+    /// 标签是**弹出时现取**而非构建时定格——托盘菜单在应用启动时就建好了，
+    /// 而它可能活到用户换过语言之后。
+    ///
+    /// 本测试钉住的是「存储不提前定格」这一半；另一半（平台在 `build_menu` /
+    /// `pop_menu` 里真的调 `resolve`）要真托盘才验得到，但那一半有编译器兜底：
+    /// `label` 的类型已不是 `String`，忘了解析根本编不过。
+    #[test]
+    fn label_is_taken_when_the_menu_pops_not_when_it_is_built() {
+        crate::i18n::install(
+            crate::i18n::Locales::builder()
+                .embed("[meta]\nlocale = \"zh-CN\"\n[tray]\nquit = \"退出\"\n")
+                .embed("[meta]\nlocale = \"en\"\n[tray]\nquit = \"Quit\"\n")
+                .initial(crate::i18n::Initial::Fixed("zh-CN".into()))
+                .build(),
+        );
+        let it = TrayMenuItem::item(crate::t!("tray.quit"), |_| {});
+        let ItemKind::Action { label, .. } = &it.kind else {
+            unreachable!("item() 建的就是 Action 项");
+        };
+        assert_eq!(label.resolve(), "退出");
+
+        assert!(crate::i18n::LocaleHandle::new().set("en"));
+        assert_eq!(
+            label.resolve(),
+            "Quit",
+            "换语言后下一次弹出就该是新文案，不必重建整个 Tray"
+        );
+
+        // 复原：`LOCALES`/`CURRENT` 是线程局部的，而 libtest 会复用线程。留一个只装着
+        // `[tray] quit`、语言停在 en 的目录给下一条测试，会让「不 install 就该读到
+        // windui.*」那类断言按调度顺序随机红——最难查的那种 flaky。
+        crate::i18n::install(crate::i18n::Locales::default());
+    }
+
     /// 勾选态是**弹出时现读**而非构建时快照：构建完菜单项后翻转信号，
     /// 下一次弹出就该显示新状态（这正是 `check` 收信号而非 `bool` 的全部理由）。
     #[test]
@@ -462,6 +538,24 @@ mod tests {
                     body: "正文".into()
                 },
                 TrayAction::Show,
+            ]
+        );
+    }
+
+    /// 运行期通知与改提示走同一条意图队列，按调用顺序排队（不会被合并或重排）。
+    #[test]
+    fn runtime_handle_queues_notification_in_call_order() {
+        let handle = TrayHandle::detached();
+        handle.set_tooltip("同步中");
+        handle.notify("同步完成", "已上传 3 个文件");
+        assert_eq!(
+            handle.pending_ops(),
+            vec![
+                TrayOp::SetTooltip("同步中".into()),
+                TrayOp::Notify {
+                    title: "同步完成".into(),
+                    body: "已上传 3 个文件".into(),
+                },
             ]
         );
     }

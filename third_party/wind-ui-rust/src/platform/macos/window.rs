@@ -1140,6 +1140,21 @@ impl ContentView {
             // 脏区那一块。只有**新建**的缓冲要在这里清一次：它的内容是透明黑，而宿主
             // 未必立刻走全窗帧。
             let fresh = st.ensure_pixmap(pw, ph);
+            // 缓冲刚重建：内容不完整，必须让宿主本帧画**整窗**（对照 win32 的同名分支）。
+            // 少了这一步，窗口纯缩放（backingScaleFactor 不变，走不到 `set_scale`）时宿主
+            // 手里若还有小脏区（光标闪烁就够），就会只画脏区，整张 CGImage 上屏后除脏区
+            // 外全是纯底色；GPU 降级到软路径的第一帧同理。
+            //
+            // 与宿主侧那道闸门**互补，不是冗余**：宿主比的是「与上一次渲染的尺寸是否
+            // 相同」（`decide_repaint` 里的 `last_size`），于是两类重建它看不见——
+            // ① 尺寸压根没变的重建，典型是 `degrade_to_software`（GPU 窗口降级到软路径，
+            //    窗口一点没变，pixmap 却是头一回分配）；
+            // ② 尺寸变了又变回来、期间一帧都没出的（两次 layout 之间没有 `drawRect:`）。
+            // 这两类只能靠这里。反过来，本函数只在这个视图被绘制时才跑，跨平台的一致性
+            // 由宿主那道保证。删任何一道之前先确认另一道覆盖得到。
+            if fresh {
+                st.handler.request_full_frame();
+            }
             let bg = st.handler.bg().unwrap_or(st.bg);
             let pixmap = st.pixmap.as_mut().unwrap();
             if fresh {
@@ -1154,7 +1169,7 @@ impl ContentView {
             };
             st.handler.render(&mut tgt, size);
             // 与本次失效区对账。`last_frame_damage()` 为 `None` 表示宿主把这一帧升级成了
-            // 整帧（重排、浮层、后备缓冲失效…都会触发）；为 `Some(r)` 时 `r` 也可能比预测
+            // 整帧（重排、浮层、缓冲尺寸不符…都会触发）；为 `Some(r)` 时 `r` 也可能比预测
             // 略大——`render_partial` 会再外扩 AA 余量并对齐 4 像素网格。两种都算"跑出去了"，
             // 出了借用补一次整窗失效（多一帧，换绝不留陈旧像素）。
             escaped = damage_escapes(partial, st.handler.last_frame_damage());
@@ -1587,8 +1602,16 @@ impl ContentView {
             return;
         }
         let pos = self.loc_phys(ev);
+        // 折进 1 / 2 的循环，与 win32 的 `ClickTracker` 同口径：AppKit 的 clickCount
+        // 会一直数上去（3、4、5…），照搬会让"双击进目录、紧接着再双击往下钻"的第三、
+        // 四下读成 3 和 4，一次都匹配不上双击。三击由 `event::TripleClick` 在控件侧认。
         let click_count = if matches!(kind, PointerKind::Down) {
-            (ev.clickCount().max(1) as u8).min(3)
+            let n = ev.clickCount().max(1) as u32;
+            if n.is_multiple_of(2) {
+                2
+            } else {
+                1
+            }
         } else {
             1
         };
@@ -1912,6 +1935,13 @@ impl ContentView {
         // 与本窗的 `ViewState` 是两份东西——借用已释放，这里不会与之相撞。
         for (id, hop) in hotkey_ops {
             super::hotkey::apply(id, hop);
+        }
+        // 标题同点消费：`after_event` 在事件路径与两条出帧路径（drawRect: / updateLayer）
+        // 都被调用，正是 `take_window_title` 契约要求的时机。借用已释放——`setTitle:`
+        // 会同步走一遍 AppKit，不能持着 `ViewState` 调。
+        let title = self.ivars().borrow_mut().handler.take_window_title();
+        if let (Some(title), Some(win)) = (title, self.window()) {
+            win.setTitle(&objc2_foundation::NSString::from_str(&title));
         }
         if let Some(op) = op {
             if let Some(win) = self.window() {
