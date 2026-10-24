@@ -192,6 +192,12 @@ pub fn layout(input: &AxisLayoutInput) -> AxisLayoutResult {
     match (options.orientation, options.overflow) {
         (Orientation::Horizontal, OverflowBehavior::Paging) => paged_horizontal(input, options),
         (Orientation::Vertical, OverflowBehavior::Paging) => paged_vertical(input, options),
+        (Orientation::Horizontal, OverflowBehavior::Scrolling) if input.page_size > 0 => {
+            scroll_grid_rows(input, options)
+        }
+        (Orientation::Vertical, OverflowBehavior::Scrolling) if input.page_size > 0 => {
+            scroll_grid_columns(input, options)
+        }
         (Orientation::Horizontal, OverflowBehavior::Scrolling) => scroll_horizontal(input, options),
         (Orientation::Vertical, OverflowBehavior::Scrolling) => scroll_vertical(input, options),
         (Orientation::Horizontal, OverflowBehavior::Wrapping) => wrapped(input, options),
@@ -464,6 +470,225 @@ fn scroll_horizontal(input: &AxisLayoutInput, options: CandidateLayoutOptions) -
         items.push(AxisLayoutItem {
             rect,
             visible: intersects(rect, window),
+            writing: options.writing_mode,
+        });
+    }
+    AxisLayoutResult {
+        window,
+        placement,
+        items,
+        viewport_offset: (scroll_max > 0.0).then_some((dx, 0.0)),
+        content_size: Size {
+            width: natural_width,
+            height: natural_height,
+        },
+        first_visible: if first_visible == usize::MAX {
+            0
+        } else {
+            first_visible
+        },
+    }
+}
+
+/// Most grid lines (rows or columns) a scrolling grid shows at once.
+const SCROLL_GRID_VISIBLE_LINES: usize = 6;
+
+/// Grid line length for a scrolling grid: one page per row (horizontal) or
+/// per column (vertical), matching the presentation state's scroll columns.
+fn scroll_grid_line_len(input: &AxisLayoutInput) -> usize {
+    input.page_size.clamp(1, 9)
+}
+
+/// Shrinks columns to fit `available`, taking width from the widest columns
+/// first so short candidates keep their full glyph budget.
+fn shrink_widest_columns(widths: &mut [f32], available: f32) {
+    let mut sorted = widths.to_vec();
+    sorted.sort_by(|a, b| b.total_cmp(a));
+    let mut cap = available.max(0.0) / sorted.len().max(1) as f32;
+    for k in 1..=sorted.len() {
+        let rest: f32 = sorted[k..].iter().sum();
+        let shared = (available - rest) / k as f32;
+        if k == sorted.len() || shared >= sorted[k] {
+            cap = shared.max(0.0);
+            break;
+        }
+    }
+    for width in widths.iter_mut() {
+        *width = width.min(cap);
+    }
+}
+
+/// Horizontal + Scrolling with a page size: a matrix with one page per row.
+/// Each column takes its widest candidate, and the viewport scrolls vertically
+/// so the highlighted row stays centred.
+fn scroll_grid_rows(input: &AxisLayoutInput, options: CandidateLayoutOptions) -> AxisLayoutResult {
+    let padding_x = input.padding_x.max(0.0);
+    let padding_y = input.padding_y.max(0.0);
+    let column_gap = input.column_gap.max(0.0);
+    let row_gap = input.row_gap.max(0.0);
+    let columns = scroll_grid_line_len(input).min(input.items.len());
+    let rows = input.items.len().div_ceil(columns);
+    let mut column_widths = vec![0.0_f32; columns];
+    let mut row_height = 0.0_f32;
+    for (index, item) in input.items.iter().enumerate() {
+        let column = index % columns;
+        column_widths[column] = column_widths[column].max(item.width);
+        row_height = row_height.max(item.height);
+    }
+    let gaps = column_gap * (columns - 1) as f32;
+    let natural_columns: f32 = column_widths.iter().sum();
+    let natural_width = natural_columns + gaps + padding_x * 2.0;
+    let window_width = natural_width.min(width_budget(input));
+    let available = (window_width - padding_x * 2.0 - gaps).max(0.0);
+    if natural_columns > available {
+        shrink_widest_columns(&mut column_widths, available);
+    }
+    let pitch = row_height + row_gap;
+    let lines_height =
+        |count: usize| count as f32 * row_height + count.saturating_sub(1) as f32 * row_gap;
+    let natural_height = lines_height(rows) + padding_y * 2.0;
+    let fitting_rows = if pitch > 0.0 {
+        (((height_budget(input) - padding_y * 2.0 + row_gap) / pitch).floor() as usize).max(1)
+    } else {
+        rows
+    };
+    let visible_rows = rows.min(SCROLL_GRID_VISIBLE_LINES).min(fitting_rows);
+    let window_height = (lines_height(visible_rows) + padding_y * 2.0).min(height_budget(input));
+    let (window, placement) = place_window(input, window_width, window_height);
+    let selected_row = clamped_selected(input) / columns;
+    // Keep the highlighted page in the middle row, like Rabbit's flow paging.
+    let first_row = selected_row
+        .saturating_sub(visible_rows.div_ceil(2) - 1)
+        .min(rows - visible_rows);
+    let scroll_max = (natural_height - window_height).max(0.0);
+    let dy = input
+        .scroll_override
+        .unwrap_or(first_row as f32 * pitch)
+        .clamp(0.0, scroll_max);
+    let mut column_lefts = Vec::with_capacity(columns);
+    let mut x = window.left + padding_x;
+    for width in &column_widths {
+        column_lefts.push(x);
+        x += width + column_gap;
+    }
+    let mut items = Vec::with_capacity(input.items.len());
+    let mut first_visible = usize::MAX;
+    for index in 0..input.items.len() {
+        let (row, column) = (index / columns, index % columns);
+        let top = window.top + padding_y + row as f32 * pitch - dy;
+        let rect = Rect {
+            left: column_lefts[column],
+            top,
+            right: column_lefts[column] + column_widths[column],
+            bottom: top + row_height,
+        };
+        let visible = intersects(rect, window);
+        if visible && first_visible == usize::MAX {
+            first_visible = index;
+        }
+        items.push(AxisLayoutItem {
+            rect,
+            visible,
+            writing: options.writing_mode,
+        });
+    }
+    AxisLayoutResult {
+        window,
+        placement,
+        items,
+        viewport_offset: (scroll_max > 0.0).then_some((0.0, dy)),
+        content_size: Size {
+            width: natural_width,
+            height: natural_height,
+        },
+        first_visible: if first_visible == usize::MAX {
+            0
+        } else {
+            first_visible
+        },
+    }
+}
+
+/// Vertical + Scrolling with a page size: a matrix with one page per column.
+/// Each column takes its widest candidate, and the viewport scrolls whole
+/// column groups horizontally so the highlighted column stays visible.
+fn scroll_grid_columns(
+    input: &AxisLayoutInput,
+    options: CandidateLayoutOptions,
+) -> AxisLayoutResult {
+    let padding_x = input.padding_x.max(0.0);
+    let padding_y = input.padding_y.max(0.0);
+    let column_gap = input.column_gap.max(0.0);
+    let row_gap = input.row_gap.max(0.0);
+    let rows_per_column = scroll_grid_line_len(input).min(input.items.len());
+    let columns = input.items.len().div_ceil(rows_per_column);
+    let mut column_widths = vec![0.0_f32; columns];
+    let mut row_height = 0.0_f32;
+    for (index, item) in input.items.iter().enumerate() {
+        let column = index / rows_per_column;
+        column_widths[column] = column_widths[column].max(item.width);
+        row_height = row_height.max(item.height);
+    }
+    let mut column_offsets = Vec::with_capacity(columns);
+    let mut content_width = 0.0_f32;
+    for width in &column_widths {
+        if content_width > 0.0 {
+            content_width += column_gap;
+        }
+        column_offsets.push(content_width);
+        content_width += width;
+    }
+    let natural_width = content_width + padding_x * 2.0;
+    let budget = width_budget(input);
+    let window_width = natural_width.min(budget);
+    let content_budget = (window_width - padding_x * 2.0).max(0.0);
+    // Group columns into viewports that fit the width budget (at most
+    // SCROLL_GRID_VISIBLE_LINES each) and show the group holding the highlight.
+    let selected_column = clamped_selected(input) / rows_per_column;
+    let mut first_column = 0;
+    loop {
+        let mut end = first_column + 1;
+        while end < columns
+            && end - first_column < SCROLL_GRID_VISIBLE_LINES
+            && column_offsets[end] + column_widths[end] - column_offsets[first_column]
+                <= content_budget
+        {
+            end += 1;
+        }
+        if selected_column < end || end >= columns {
+            break;
+        }
+        first_column = end;
+    }
+    let natural_height = rows_per_column as f32 * row_height
+        + (rows_per_column - 1) as f32 * row_gap
+        + padding_y * 2.0;
+    let window_height = natural_height.min(height_budget(input));
+    let (window, placement) = place_window(input, window_width, window_height);
+    let scroll_max = (natural_width - window_width).max(0.0);
+    let dx = input
+        .scroll_override
+        .unwrap_or(column_offsets[first_column])
+        .clamp(0.0, scroll_max);
+    let mut items = Vec::with_capacity(input.items.len());
+    let mut first_visible = usize::MAX;
+    for index in 0..input.items.len() {
+        let (column, row) = (index / rows_per_column, index % rows_per_column);
+        let left = window.left + padding_x + column_offsets[column] - dx;
+        let top = window.top + padding_y + row as f32 * (row_height + row_gap);
+        let rect = Rect {
+            left,
+            top,
+            right: left + column_widths[column].min(content_budget),
+            bottom: top + row_height,
+        };
+        let visible = intersects(rect, window);
+        if visible && first_visible == usize::MAX {
+            first_visible = index;
+        }
+        items.push(AxisLayoutItem {
+            rect,
+            visible,
             writing: options.writing_mode,
         });
     }
@@ -883,6 +1108,77 @@ mod tests {
         assert!(highlighted.rect.top >= result.window.top);
         assert!(highlighted.rect.bottom <= result.window.bottom);
         assert!(close(result.window.bottom - result.window.top, 200.0));
+    }
+
+    #[test]
+    fn scrolling_horizontal_with_page_size_lays_one_page_per_row() {
+        let widths = [120.0, 40.0, 40.0, 60.0, 40.0, 50.0, 40.0, 90.0, 40.0, 40.0];
+        let mut input = input(widths.iter().map(|width| item(*width, 24.0)).collect());
+        input.options = options().with_overflow(OverflowBehavior::Scrolling);
+        input.page_size = 5;
+        input.selected = 7;
+        let result = layout(&input);
+        assert_eq!(result.items.len(), 10);
+        for column in 0..5 {
+            let first = result.items[column].rect;
+            let second = result.items[column + 5].rect;
+            assert!(close(first.left, second.left), "column {column} aligned");
+            assert!(second.top > first.bottom, "second page on its own row");
+        }
+        for (entry, natural) in result.items.iter().zip(widths) {
+            assert!(entry.rect.right - entry.rect.left >= natural - 0.01);
+            assert!(entry.rect.right <= result.window.right);
+        }
+        assert!(result.items.iter().all(|entry| entry.visible));
+        assert!(result.viewport_offset.is_none());
+    }
+
+    #[test]
+    fn scrolling_horizontal_grid_keeps_highlighted_row_centred() {
+        let mut input = input(vec![item(40.0, 24.0); 60]);
+        input.options = options().with_overflow(OverflowBehavior::Scrolling);
+        input.page_size = 5;
+        input.selected = 32;
+        let result = layout(&input);
+        let (dx, dy) = result.viewport_offset.expect("twelve rows must scroll");
+        assert!(close(dx, 0.0));
+        assert!(dy > 0.0);
+        let window_height = result.window.bottom - result.window.top;
+        assert!(close(
+            window_height,
+            6.0 * 24.0 + 5.0 * input.row_gap + input.padding_y * 2.0
+        ));
+        let highlighted = result.items[32].rect;
+        assert!(result.items[32].visible);
+        // Row 6 of 12 sits in the third visible row.
+        assert!(close(
+            highlighted.top,
+            result.window.top + input.padding_y + 2.0 * (24.0 + input.row_gap)
+        ));
+        assert!(result.items.iter().filter(|entry| entry.visible).count() >= 30);
+    }
+
+    #[test]
+    fn scrolling_vertical_with_page_size_lays_one_page_per_column() {
+        let mut input = input(vec![item(60.0, 24.0); 12]);
+        input.options = options().with_overflow(OverflowBehavior::Scrolling);
+        input.options.orientation = Orientation::Vertical;
+        input.page_size = 4;
+        input.selected = 9;
+        let result = layout(&input);
+        assert_eq!(result.items.len(), 12);
+        for row in 0..4 {
+            let first = result.items[row].rect;
+            let second = result.items[row + 4].rect;
+            assert!(close(first.top, second.top), "row {row} aligned");
+            assert!(second.left > first.right, "second page in its own column");
+        }
+        let window_height = result.window.bottom - result.window.top;
+        assert!(close(
+            window_height,
+            4.0 * 24.0 + 3.0 * input.row_gap + input.padding_y * 2.0
+        ));
+        assert!(result.items[9].visible);
     }
 
     #[test]
