@@ -620,14 +620,26 @@ fn scroll_grid_columns(
     let padding_y = input.padding_y.max(0.0);
     let column_gap = input.column_gap.max(0.0);
     let row_gap = input.row_gap.max(0.0);
-    let rows_per_column = scroll_grid_line_len(input).min(input.items.len());
+    let row_height = input
+        .items
+        .iter()
+        .fold(0.0_f32, |height, item| height.max(item.height));
+    let pitch = row_height + row_gap;
+    // A column never grows taller than the height budget: a page that does not
+    // fit continues in the next column instead of falling off the window.
+    let fitting_rows = if pitch > 0.0 {
+        (((height_budget(input) - padding_y * 2.0 + row_gap) / pitch).floor() as usize).max(1)
+    } else {
+        usize::MAX
+    };
+    let rows_per_column = scroll_grid_line_len(input)
+        .min(input.items.len())
+        .min(fitting_rows);
     let columns = input.items.len().div_ceil(rows_per_column);
     let mut column_widths = vec![0.0_f32; columns];
-    let mut row_height = 0.0_f32;
     for (index, item) in input.items.iter().enumerate() {
         let column = index / rows_per_column;
         column_widths[column] = column_widths[column].max(item.width);
-        row_height = row_height.max(item.height);
     }
     let mut column_offsets = Vec::with_capacity(columns);
     let mut content_width = 0.0_f32;

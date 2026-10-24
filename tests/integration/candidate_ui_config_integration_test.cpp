@@ -610,15 +610,13 @@ int wmain(int argc, wchar_t** argv) {
     const RECT horizontal_scroll = wait_for_stable_size(scroll_window);
     const LONG horizontal_scroll_width = horizontal_scroll.right - horizontal_scroll.left;
     const LONG horizontal_scroll_height = horizontal_scroll.bottom - horizontal_scroll.top;
-    // 080 froze the three-axis design: Scrolling is a single-row (horizontal)
-    // viewport that scrolls past the visible space with scroll-into-view
-    // highlighting, NOT the pre-080 multi-row grid. The viewport clamps to
-    // the configured max-width budget and keeps the ordinary row height.
-    expect(horizontal_scroll_width > 0 && horizontal_scroll_height <= horizontal_height + 6,
-           "horizontal scroll viewport left the frozen single-row design: ordinary " +
+    // Scrolling with a page size is a page-per-row matrix (Rabbit-style flow
+    // paging): expanded pages stack as aligned rows instead of piling onto one
+    // ever-longer row, and the window still clamps to the max-width budget.
+    expect(horizontal_scroll_width > 0 && horizontal_scroll_height > horizontal_height + 6,
+           "horizontal scroll viewport did not stack pages as matrix rows: ordinary " +
                size_text(horizontal) + ", scroll " + size_text(horizontal_scroll));
-    expect(horizontal_scroll_width > horizontal_width &&
-               horizontal_scroll_width <= 720 + 24,
+    expect(horizontal_scroll_width <= 720 + 24,
            "horizontal scroll viewport did not clamp to the configured width budget: ordinary " +
                size_text(horizontal) + ", scroll " + size_text(horizontal_scroll));
     const auto cpp_scroll_screenshot = temporary.path() / L"cpp-candidate-scroll-demo.bmp";
