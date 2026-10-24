@@ -141,6 +141,15 @@ pub struct FrameUpdateOutputs {
     /// Final presentation orientation after the automatic downgrade check
     /// (true = horizontal).
     pub horizontal: bool,
+    /// Window-local y where the candidate area starts, below any preedit row.
+    pub candidate_top: f32,
+    /// Scroll offset and natural content size of the candidate viewport.
+    pub viewport_offset: Option<(f32, f32)>,
+    pub content_size: Size,
+    /// Width budget and anchor grouping the items were measured with; paint
+    /// reuses both so it plans exactly the lines that were measured.
+    pub measure_max_width: f32,
+    pub anchor_stride: usize,
 }
 
 fn frame_overflow(config: &FrameConfig) -> OverflowBehavior {
@@ -408,6 +417,7 @@ pub fn frame_update(
             page_size,
         ),
     };
+    let mut anchor_stride = measure_params.anchor_stride;
     let Some((mut items, preedit_panel_size, _scroll_label_column, horizontal_effective_width)) =
         measure_visual_items(
             state.measure,
@@ -471,12 +481,11 @@ pub fn frame_update(
             horizontal = false;
             // A vertical list aligns every candidate's columns, while the
             // horizontal row just measured kept each one natural.
+            anchor_stride =
+                crate::axis_layout::horizontal_anchor_stride(layout_options(false), page_size);
             let vertical_params = MeasureLoopParams {
                 horizontal: false,
-                anchor_stride: crate::axis_layout::horizontal_anchor_stride(
-                    layout_options(false),
-                    page_size,
-                ),
+                anchor_stride,
                 ..measure_params
             };
             let Some((vertical_items, ..)) = measure_visual_items(
@@ -607,6 +616,15 @@ pub fn frame_update(
         selection_inflate_x: config.item_padding_x_dip * scale * 0.65,
         selection_inflate_y: config.item_padding_y_dip * scale * 0.55,
         horizontal,
+        candidate_top: if preedit_panel_height > 0.0 {
+            preedit_panel_height + config.row_gap_dip * scale
+        } else {
+            0.0
+        },
+        viewport_offset: axis_result.viewport_offset,
+        content_size: axis_result.content_size,
+        measure_max_width: measurement_max_width,
+        anchor_stride,
     })
 }
 
