@@ -610,15 +610,13 @@ int wmain(int argc, wchar_t** argv) {
     const RECT horizontal_scroll = wait_for_stable_size(scroll_window);
     const LONG horizontal_scroll_width = horizontal_scroll.right - horizontal_scroll.left;
     const LONG horizontal_scroll_height = horizontal_scroll.bottom - horizontal_scroll.top;
-    // 080 froze the three-axis design: Scrolling is a single-row (horizontal)
-    // viewport that scrolls past the visible space with scroll-into-view
-    // highlighting, NOT the pre-080 multi-row grid. The viewport clamps to
-    // the configured max-width budget and keeps the ordinary row height.
-    expect(horizontal_scroll_width > 0 && horizontal_scroll_height <= horizontal_height + 6,
-           "horizontal scroll viewport left the frozen single-row design: ordinary " +
+    // Scrolling with a page size is a page-per-row matrix (Rabbit-style flow
+    // paging): expanded pages stack as aligned rows instead of piling onto one
+    // ever-longer row, and the window still clamps to the max-width budget.
+    expect(horizontal_scroll_width > 0 && horizontal_scroll_height > horizontal_height + 6,
+           "horizontal scroll viewport did not stack pages as matrix rows: ordinary " +
                size_text(horizontal) + ", scroll " + size_text(horizontal_scroll));
-    expect(horizontal_scroll_width > horizontal_width &&
-               horizontal_scroll_width <= 720 + 24,
+    expect(horizontal_scroll_width <= 720 + 24,
            "horizontal scroll viewport did not clamp to the configured width budget: ordinary " +
                size_text(horizontal) + ", scroll " + size_text(horizontal_scroll));
     const auto cpp_scroll_screenshot = temporary.path() / L"cpp-candidate-scroll-demo.bmp";
@@ -645,10 +643,9 @@ int wmain(int argc, wchar_t** argv) {
                     "Rust candidate scroll-demo snapshot did not enable scroll mode");
     expect_contains(rust_scroll, "\"candidate_count\":60",
                     "Rust candidate scroll-demo snapshot did not use the C++ scroll candidate count");
-    // 082: the frozen 080 Scrolling design shows one viewport row — the PoC
-    // scroll demo now lays out the current viewport row, not the pre-080
-    // six-row grid.
-    expect_rust_layout_paint_evidence(rust_scroll, 6,
+    // Scrolling is a page-per-row matrix: the PoC scroll demo shows six page
+    // rows of six candidates, matching the shipping window.
+    expect_rust_layout_paint_evidence(rust_scroll, 36,
                                       "Rust candidate scroll-demo snapshot");
     expect_contains(rust_scroll, "\"screenshot_written\":true",
                     "Rust candidate scroll-demo snapshot did not write screenshot evidence");
@@ -664,8 +661,8 @@ int wmain(int argc, wchar_t** argv) {
         json_int_field(rust_scroll, "window_right") - json_int_field(rust_scroll, "window_left");
     const int rust_scroll_height =
         json_int_field(rust_scroll, "window_bottom") - json_int_field(rust_scroll, "window_top");
-    // 082: under the frozen 080 Scrolling design the horizontal viewport
-    // expands along the scroll axis (width), not into extra rows.
+    // The matrix grows into extra rows; its width still exceeds the
+    // three-candidate vertical demo.
     expect(rust_scroll_width > rust_demo_width && rust_scroll_height > 0,
            "Rust candidate scroll-demo snapshot did not expand beyond the vertical demo width");
     expect(rust_scroll_width <= horizontal_scroll_width * 3 &&

@@ -592,7 +592,7 @@ fn candidate_text_layout_property_fuzz_smoke() {
                     match layout_case {
                         7 => QingfengOrientation::Horizontal,
                         8 => QingfengOrientation::Vertical,
-                        _ => QingfengOrientation::Grid,
+                        _ => QingfengOrientation::Grid { columns: 3 },
                     },
                     inputs,
                     dpi,

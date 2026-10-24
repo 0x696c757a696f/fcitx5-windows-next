@@ -1,0 +1,94 @@
+name: Preview Package
+
+# Unsigned developer-preview builds of the installer and portable ZIP for
+# every change on main (or on demand). These are not release artifacts:
+# signing and publishing stay in release.yml.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-package-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  package:
+    name: Installer and portable ZIP
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+      - name: Require PowerShell 7
+        run: |
+          if ($PSVersionTable.PSEdition -ne 'Core' -or
+              $PSVersionTable.PSVersion.Major -ne 7) {
+            throw "PowerShell 7 is required; found $($PSVersionTable.PSVersion)."
+          }
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Restore Rust toolchain and target cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            out/toolchains/rust/rustup-home
+            out/toolchains/rust/cargo-home/registry
+            out/toolchains/rust/cargo-home/git
+            out/toolchains/rust/cargo-home/bin
+            out/toolchains/rust/target
+          key: ${{ runner.os }}-release-rust-msvc-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust/**/Cargo.toml', 'tools/prepare-rust.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-release-rust-msvc-
+            ${{ runner.os }}-rust-msvc-
+
+      - name: Install sccache compiler cache
+        uses: Mozilla-Actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Restore fast Windows toolchain cache
+        uses: actions/cache@v6
+        with:
+          path: out/toolchains/fast
+          key: ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.17.0-${{ hashFiles('tools/prepare-fast-toolchain.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.17.0-
+            ${{ runner.os }}-fast-toolchain-
+
+      - name: Prepare fast Windows toolchain
+        run: ./tools/prepare-fast-toolchain.ps1 -InstallForCI
+
+      - name: Configure CI compiler cache
+        run: ./tools/configure-ci-cache.ps1
+
+      - name: Build, test, and stage the unsigned package
+        run: ./tools/verify-product.ps1 package -Version 0.1.0 -Channel nightly
+
+      - name: Show compiler cache stats
+        if: always()
+        run: |
+          $sccache = Get-Command sccache -ErrorAction SilentlyContinue
+          if ($sccache) {
+            & $sccache.Source --show-stats
+          }
+
+      - name: Upload installer and portable ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: fcitx5-windows-preview-${{ github.sha }}
+          path: |
+            out/package/artifacts/*-setup.exe
+            out/package/artifacts/*-portable.zip
+          retention-days: 14
+          if-no-files-found: error

@@ -783,9 +783,9 @@ mod window_smoke {
                     column_gap: 8.0 * dpi_scale,
                     scroll_mode: true,
                     scroll_columns: 6,
-                    // 082: align the scroll-demo differential with the frozen 080 design —
-                    // horizontal Scrolling is a single-row viewport, not a grid.
-                    scroll_visible_rows: 1,
+                    // Horizontal Scrolling is a page-per-row matrix (Rabbit-style flow
+                    // paging), so the demo shows six page rows like the shipping window.
+                    scroll_visible_rows: 6,
                     selected: 18,
                     scroll_cell_width: 96.0 * dpi_scale,
                     ..LayoutInput::default()
@@ -2306,7 +2306,7 @@ mod window_smoke {
             .collect::<Vec<_>>();
         let (segments, label_column_width) = candidate_render_segments(&render_inputs);
         let qingfeng_orientation = if scroll_mode {
-            QingfengOrientation::Grid
+            QingfengOrientation::Grid { columns }
         } else if orientation == Orientation::Vertical {
             QingfengOrientation::Vertical
         } else {

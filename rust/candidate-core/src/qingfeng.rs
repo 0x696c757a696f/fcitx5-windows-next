@@ -7,12 +7,13 @@
 use crate::theme_tokens::{
     WECHAT_GREEN_RGB, WECHAT_SELECTION_RADIUS_DIP, WECHAT_WINDOW_RADIUS_DIP, WHITE_RGB,
 };
+use crate::{layout, LayoutInput, Orientation, Placement, Point, Rect, Size};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QingfengOrientation {
     Horizontal,
     Vertical,
-    Grid,
+    Grid { columns: usize },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -256,15 +257,8 @@ pub fn qingfeng_candidate_visual_plan(
     let comment_char_w = theme.typography.comment_font_size * 0.72 * scale;
     let gap = match orientation {
         QingfengOrientation::Vertical => 4.0,
-        QingfengOrientation::Horizontal | QingfengOrientation::Grid => 10.0,
+        QingfengOrientation::Horizontal | QingfengOrientation::Grid { .. } => 10.0,
     } * dpi_scale.clamp(0.5, 4.0);
-    let columns = if orientation == QingfengOrientation::Grid {
-        3
-    } else if orientation == QingfengOrientation::Horizontal {
-        inputs.len().max(1)
-    } else {
-        1
-    };
     let item_width = |input: &QingfengCandidateVisualInput| {
         let label_w = if input.reserve_label {
             label_slot_width.max(input.label.chars().count() as f32 * label_char_w)
@@ -287,32 +281,57 @@ pub fn qingfeng_candidate_visual_plan(
                 theme.comment_text_gap + input.comment.chars().count() as f32 * comment_char_w
             }
     };
-    let widest_cell = inputs.iter().map(item_width).fold(0.0_f32, f32::max);
-    let column_widths = if orientation == QingfengOrientation::Horizontal {
-        inputs.iter().map(item_width).collect::<Vec<_>>()
-    } else if orientation == QingfengOrientation::Grid {
-        let mut widths = vec![18.0_f32; columns];
-        for (index, input) in inputs.iter().enumerate() {
-            let column = index % columns;
-            widths[column] = widths[column].max(item_width(input));
+    // Geometry comes from the production `layout()` so this visual plan can
+    // never drift from the shipping candidate window.
+    let widest_cell = inputs.iter().map(item_width).fold(18.0_f32, f32::max);
+    let (layout_orientation, scroll_mode, columns) = match orientation {
+        QingfengOrientation::Vertical => (Orientation::Vertical, false, 1),
+        QingfengOrientation::Horizontal => (Orientation::Horizontal, false, inputs.len().max(1)),
+        QingfengOrientation::Grid { columns } => {
+            (Orientation::Horizontal, true, columns.clamp(1, 9))
         }
-        widths
-    } else {
-        vec![widest_cell.max(18.0)]
     };
+    let unbounded = 1.0e6_f32;
+    let layout = layout(&LayoutInput {
+        orientation: layout_orientation,
+        items: inputs
+            .iter()
+            .map(|input| Size {
+                width: if orientation == QingfengOrientation::Vertical {
+                    widest_cell
+                } else {
+                    item_width(input).max(18.0)
+                },
+                height: row_h,
+            })
+            .collect(),
+        caret: Point::default(),
+        caret_height: 0.0,
+        work_area: Rect {
+            left: 0.0,
+            top: 0.0,
+            right: unbounded,
+            bottom: unbounded,
+        },
+        max_width: unbounded,
+        padding_x: theme.window_padding,
+        padding_y: theme.window_padding,
+        row_gap: gap,
+        column_gap: gap,
+        placement: Placement::Below,
+        scroll_mode,
+        scroll_columns: columns,
+        scroll_visible_rows: inputs.len().div_ceil(columns).clamp(1, 6),
+        selected: inputs.iter().position(|input| input.selected).unwrap_or(0),
+        scroll_cell_width: 0.0,
+    });
     let mut items = Vec::with_capacity(inputs.len());
-    for (index, input) in inputs.iter().enumerate() {
-        let row = index / columns;
-        let column = index % columns;
-        let left = theme.window_padding
-            + column_widths.iter().take(column).sum::<f32>()
-            + column as f32 * gap;
-        let top = theme.window_padding + row as f32 * (row_h + gap);
+    for (input, rect) in inputs.iter().zip(layout.items.iter()) {
         let item = QingfengRect {
-            left,
-            top,
-            right: left + column_widths[column],
-            bottom: top + row_h,
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
         };
         let label_w = if input.reserve_label {
             label_slot_width.max(input.label.chars().count() as f32 * label_char_w)
@@ -377,14 +396,20 @@ pub fn qingfeng_candidate_visual_plan(
             comment_rect: comment,
         });
     }
-    let rows = inputs.len().div_ceil(columns).max(1);
-    let window = QingfengRect {
-        left: 0.0,
-        top: 0.0,
-        right: theme.window_padding * 2.0
-            + column_widths.iter().sum::<f32>()
-            + (columns - 1) as f32 * gap,
-        bottom: theme.window_padding * 2.0 + rows as f32 * row_h + (rows - 1) as f32 * gap,
+    let window = if inputs.is_empty() {
+        QingfengRect {
+            left: 0.0,
+            top: 0.0,
+            right: theme.window_padding * 2.0 + 18.0,
+            bottom: theme.window_padding * 2.0 + row_h,
+        }
+    } else {
+        QingfengRect {
+            left: 0.0,
+            top: 0.0,
+            right: layout.window.right,
+            bottom: layout.window.bottom,
+        }
     };
     QingfengCandidateVisualPlan {
         source: WINDINPUT_QINGFENG_CANDIDATE_SOURCE,
@@ -523,7 +548,7 @@ mod tests {
     #[test]
     fn grid_sizes_each_column_to_its_own_widest_candidate() {
         let plan = qingfeng_candidate_visual_plan(
-            QingfengOrientation::Grid,
+            QingfengOrientation::Grid { columns: 3 },
             QingfengThemeMode::Light,
             &[
                 QingfengCandidateVisualInput {
