@@ -4854,6 +4854,27 @@ impl CompositionLayoutState {
     }
 }
 
+/// Shrinks grid columns to fit `available`, taking width from the widest
+/// columns first so short candidates keep their full glyph budget.
+fn shrink_grid_columns(widths: &mut [f32], available: f32) {
+    let mut sorted = widths.to_vec();
+    sorted.sort_by(|a, b| b.total_cmp(a));
+    // Cap the k widest columns at one shared width; pick the smallest k whose
+    // cap still leaves every remaining column at its natural width.
+    let mut cap = available.max(0.0) / sorted.len().max(1) as f32;
+    for k in 1..=sorted.len() {
+        let rest: f32 = sorted[k..].iter().sum();
+        let shared = (available - rest) / k as f32;
+        if k == sorted.len() || shared >= sorted[k] {
+            cap = shared.max(0.0);
+            break;
+        }
+    }
+    for width in widths.iter_mut() {
+        *width = width.min(cap);
+    }
+}
+
 pub fn layout(input: &LayoutInput) -> LayoutResult {
     let mut result = LayoutResult::default();
     if input.scroll_mode && !input.items.is_empty() {
@@ -5009,24 +5030,28 @@ pub fn layout(input: &LayoutInput) -> LayoutResult {
             .fold(0.0_f32, |height, item| height.max(item.height));
         let work_width = (input.work_area.right - input.work_area.left).max(0.0);
         let work_height = (input.work_area.bottom - input.work_area.top).max(0.0);
-        let mut content_width = 0.0_f32;
-        for row in 0..shown_rows {
-            let mut row_width = 0.0_f32;
-            for column in 0..columns {
-                let index = first_visible + row * columns + column;
-                if index >= end {
-                    break;
-                }
-                if row_width > 0.0 {
-                    row_width += input.column_gap;
-                }
-                row_width += input.items[index].width;
-            }
-            content_width = content_width.max(row_width);
+        // Each grid column takes the widest candidate it shows, so a long
+        // candidate never shares an equal split with short neighbours.
+        let used_columns = columns.min(end - first_visible);
+        let mut column_widths = vec![0.0_f32; used_columns];
+        for index in first_visible..end {
+            let column = (index - first_visible) % columns;
+            column_widths[column] = column_widths[column].max(input.items[index].width);
         }
-        let width = (content_width + input.padding_x * 2.0)
-            .min(input.max_width)
+        let column_gaps = input.column_gap * used_columns.saturating_sub(1) as f32;
+        let natural_columns_width: f32 = column_widths.iter().sum();
+        let max_width = if input.max_width > 0.0 {
+            input.max_width
+        } else {
+            work_width
+        };
+        let width = (natural_columns_width + column_gaps + input.padding_x * 2.0)
+            .min(max_width)
             .min(work_width);
+        let available_columns_width = (width - input.padding_x * 2.0 - column_gaps).max(0.0);
+        if natural_columns_width > available_columns_width && natural_columns_width > 0.0 {
+            shrink_grid_columns(&mut column_widths, available_columns_width);
+        }
         let height = (input.padding_y * 2.0
             + row_height * shown_rows as f32
             + input.row_gap * shown_rows.saturating_sub(1) as f32)
@@ -5058,20 +5083,22 @@ pub fn layout(input: &LayoutInput) -> LayoutResult {
         };
         result.placement = placement;
         result.first_visible = first_visible;
-        let usable_width =
-            (width - input.padding_x * 2.0 - input.column_gap * columns.saturating_sub(1) as f32)
-                .max(0.0);
-        let cell_width = usable_width / columns as f32;
+        let mut column_lefts = Vec::with_capacity(used_columns);
+        let mut x = left + input.padding_x;
+        for column_width in &column_widths {
+            column_lefts.push(x);
+            x += column_width + input.column_gap;
+        }
         for index in result.first_visible..end {
             let local = index - result.first_visible;
             let row = local / columns;
             let column = local % columns;
-            let x = left + input.padding_x + column as f32 * (cell_width + input.column_gap);
+            let x = column_lefts[column];
             let y = top + input.padding_y + row as f32 * (row_height + input.row_gap);
             result.items.push(Rect {
                 left: x,
                 top: y,
-                right: x + cell_width,
+                right: x + column_widths[column],
                 bottom: y + row_height,
             });
             result.item_indices.push(index);
@@ -7102,6 +7129,85 @@ mod tests {
         assert_eq!(next_viewport.item_indices.last(), Some(&59));
         assert!(next_viewport.has_scrollbar);
         assert!(next_viewport.scrollbar_thumb.bottom <= next_viewport.scrollbar_track.bottom);
+    }
+
+    #[test]
+    fn horizontal_scroll_grid_gives_each_column_its_widest_candidate() {
+        let widths = [200.0, 40.0, 40.0, 60.0, 40.0, 40.0, 50.0, 120.0, 40.0];
+        let input = LayoutInput {
+            scroll_mode: true,
+            scroll_columns: 3,
+            scroll_visible_rows: 6,
+            caret: Point { x: 100.0, y: 100.0 },
+            caret_height: 24.0,
+            work_area: Rect {
+                left: 0.0,
+                top: 0.0,
+                right: 1920.0,
+                bottom: 1080.0,
+            },
+            max_width: 860.0,
+            items: widths
+                .iter()
+                .map(|width| Size {
+                    width: *width,
+                    height: 34.0,
+                })
+                .collect(),
+            orientation: Orientation::Horizontal,
+            ..LayoutInput::default()
+        };
+        let grid = layout(&input);
+        assert_eq!(grid.items.len(), 9);
+        for (rect, natural) in grid.items.iter().zip(widths) {
+            assert!(rect.right - rect.left >= natural - 0.01);
+        }
+        for row in grid.items.chunks(3) {
+            for pair in row.windows(2) {
+                assert!(pair[0].right + input.column_gap <= pair[1].left + 0.01);
+            }
+        }
+        for column in 0..3 {
+            let left = grid.items[column].left;
+            assert!(grid
+                .items
+                .iter()
+                .skip(column)
+                .step_by(3)
+                .all(|r| (r.left - left).abs() < 0.01));
+        }
+        let expected = 200.0 + 120.0 + 40.0 + input.column_gap * 2.0 + input.padding_x * 2.0;
+        assert!((width(&grid) - expected).abs() <= 0.01);
+    }
+
+    #[test]
+    fn horizontal_scroll_grid_shrinks_widest_columns_first() {
+        let input = LayoutInput {
+            scroll_mode: true,
+            scroll_columns: 3,
+            scroll_visible_rows: 6,
+            work_area: Rect {
+                left: 0.0,
+                top: 0.0,
+                right: 1920.0,
+                bottom: 1080.0,
+            },
+            max_width: 300.0,
+            items: [500.0, 40.0, 60.0]
+                .iter()
+                .map(|width| Size {
+                    width: *width,
+                    height: 34.0,
+                })
+                .collect(),
+            orientation: Orientation::Horizontal,
+            ..LayoutInput::default()
+        };
+        let grid = layout(&input);
+        assert!(width(&grid) <= 300.0 + 0.01);
+        assert!((grid.items[1].right - grid.items[1].left - 40.0).abs() < 0.01);
+        assert!((grid.items[2].right - grid.items[2].left - 60.0).abs() < 0.01);
+        assert!(grid.items[2].right <= grid.window.right - input.padding_x + 0.01);
     }
 
     #[test]
