@@ -281,10 +281,19 @@ foreach ($name in @('protocols', 'services', 'networks')) {
   }
 }
 
-$packageNames = $packagePins | ForEach-Object { $_.Split('=', 2)[0] }
 if (-not $SkipToolchainSync) {
   Invoke-Msys "pacman -Syu --noconfirm"
-  Invoke-Msys "pacman -S --needed --noconfirm $($packageNames -join ' ')"
+  # Install the exact pinned builds rather than whatever the sync database
+  # currently offers, so a fresh toolchain matches Assert-Pins.
+  $packageUrls = $packagePins | ForEach-Object {
+    $parts = $_.Split('=', 2)
+    if ($parts[0].StartsWith('mingw-w64-clang-x86_64-', [StringComparison]::Ordinal)) {
+      "https://repo.msys2.org/mingw/clang64/$($parts[0])-$($parts[1])-any.pkg.tar.zst"
+    } else {
+      "https://repo.msys2.org/msys/x86_64/$($parts[0])-$($parts[1])-x86_64.pkg.tar.zst"
+    }
+  }
+  Invoke-Msys "pacman -U --needed --noconfirm $($packageUrls -join ' ')"
 }
 
 foreach ($pin in $sourcePins) {
