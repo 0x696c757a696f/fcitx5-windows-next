@@ -4,7 +4,7 @@
     {
       "id": "inno-setup",
       "version": "7.0.2",
-      "url": "https://files.jrsoftware.org/is/7/innosetup-7.0.2-x64.exe",
+      "url": "https://github.com/jrsoftware/issrc/releases/download/is-7_0_2/innosetup-7.0.2-x64.exe",
       "archive": "innosetup-7.0.2-x64.exe",
       "size": 17020192,
       "sha256": "5AD54CA3DEF786F8F4212552E54CC6D8D61329E2D24A1CFEE0571D42C2684FF1",
