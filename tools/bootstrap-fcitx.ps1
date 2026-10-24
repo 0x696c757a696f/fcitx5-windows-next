@@ -83,6 +83,7 @@ $packagePins = @(
   'mingw-w64-clang-x86_64-libc++=22.1.8-1',
   'mingw-w64-clang-x86_64-libunwind=22.1.8-1',
   'mingw-w64-clang-x86_64-libwinpthread=14.0.0.r302.gd7f3c5201-1',
+  'mingw-w64-clang-x86_64-winpthreads=14.0.0.r302.gd7f3c5201-1',
   'mingw-w64-clang-x86_64-pkgconf=1~3.0.5-1',
   'mingw-w64-clang-x86_64-capnproto=1.4.0-3',
   'mingw-w64-clang-x86_64-gflags=2.3.0-1',
