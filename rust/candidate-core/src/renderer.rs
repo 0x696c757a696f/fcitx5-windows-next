@@ -251,27 +251,24 @@ pub(crate) fn horizontal_column_anchors<F>(
 where
     F: FnMut(&str, f32) -> (f32, f32),
 {
+    // Size each slot exactly as the run plan fills it: one grapheme cluster
+    // at a time. Measurements are whole pixels, so a cluster sum can exceed
+    // the whole-string width and would otherwise wrap the last glyph.
+    let mut cluster_sum = |value: &str, font_size: f32| -> f32 {
+        grapheme_clusters(value)
+            .into_iter()
+            .map(|cluster| measure(cluster, font_size).0.max(0.0))
+            .sum()
+    };
     let mut label_width = reserved_label_width.max(0.0);
     let mut text_width = 0.0_f32;
     let mut comment_width = 0.0_f32;
     for candidate in candidates {
-        if !candidate.label.is_empty() {
-            label_width = label_width.max(measure(candidate.label, label_font_size).0.max(0.0));
-        }
-        if !candidate.reserved_label.is_empty() {
-            label_width = label_width.max(
-                measure(candidate.reserved_label, label_font_size)
-                    .0
-                    .max(0.0),
-            );
-        }
-        if !candidate.text.is_empty() {
-            text_width = text_width.max(measure(candidate.text, text_font_size).0.max(0.0));
-        }
-        if !candidate.comment.is_empty() {
-            comment_width =
-                comment_width.max(measure(candidate.comment, comment_font_size).0.max(0.0));
-        }
+        label_width = label_width
+            .max(cluster_sum(candidate.label, label_font_size))
+            .max(cluster_sum(candidate.reserved_label, label_font_size));
+        text_width = text_width.max(cluster_sum(candidate.text, text_font_size));
+        comment_width = comment_width.max(cluster_sum(candidate.comment, comment_font_size));
     }
     let gap = label_gap.max(0.0);
     let required_text_width = candidates
@@ -1654,6 +1651,43 @@ mod tests {
             )
         );
         assert!(anchors.label_x < anchors.text_x && anchors.text_x < anchors.comment_x);
+    }
+
+    #[test]
+    fn whole_pixel_cluster_widths_never_wrap_the_widest_candidate() {
+        // Whole-pixel measurement: three 26.4 px glyphs measure 80 px as one
+        // run but 27 px each, so the slot must hold the cluster sum.
+        let measure = |value: &str, size: f32| {
+            let glyphs = grapheme_clusters(value).len() as f32;
+            ((glyphs * size * 1.1).ceil(), size)
+        };
+        let candidates: Vec<_> = ["经济的", "就觉得", "解决的"]
+            .into_iter()
+            .map(|text| HorizontalColumnInput {
+                label: "1.",
+                reserved_label: "",
+                text,
+                comment: "",
+            })
+            .collect();
+        let anchors =
+            horizontal_column_anchors(&candidates, 0.0, 900.0, 4.0, 20.0, 24.0, 19.0, measure);
+        for candidate in &candidates {
+            let plan = horizontal_run_plan_with_anchors(
+                candidate.label,
+                candidate.text,
+                candidate.comment,
+                900.0,
+                4.0,
+                20.0,
+                24.0,
+                19.0,
+                anchors,
+                measure,
+            );
+            assert_eq!(plan.lines.len(), 1, "{} wrapped", candidate.text);
+            assert_eq!(plan.lines[0].text, candidate.text);
+        }
     }
 
     #[test]
