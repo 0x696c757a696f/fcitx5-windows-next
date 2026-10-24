@@ -136,6 +136,22 @@ function Invoke-Msys([string] $Command) {
   }
 }
 
+# MSYS2 mirrors rate-limit bursts (HTTP 429); pacman keeps what it already
+# downloaded, so a retry after a short wait usually completes.
+function Invoke-MsysDownload([string] $Command) {
+  for ($attempt = 1; ; $attempt++) {
+    try {
+      Invoke-Msys $Command
+      return
+    } catch {
+      if ($attempt -ge 4) { throw }
+      $delay = 15 * [Math]::Pow(2, $attempt - 1)
+      Write-Warning "Attempt $attempt failed; retrying in $delay s: $_"
+      Start-Sleep -Seconds $delay
+    }
+  }
+}
+
 function Get-RepositoryGitPrefix([string] $Repository) {
   $safeDirectory = [IO.Path]::GetFullPath($Repository).Replace('\', '/')
   return @('-c', "safe.directory=$safeDirectory", '-C', $Repository)
@@ -289,7 +305,7 @@ foreach ($name in @('protocols', 'services', 'networks')) {
 }
 
 if (-not $SkipToolchainSync) {
-  Invoke-Msys "pacman -Syu --noconfirm"
+  Invoke-MsysDownload "pacman -Syu --noconfirm"
   # Install the exact pinned builds rather than whatever the sync database
   # currently offers, so a fresh toolchain matches Assert-Pins.
   $packageUrls = $packagePins | ForEach-Object {
@@ -300,7 +316,7 @@ if (-not $SkipToolchainSync) {
       "https://repo.msys2.org/msys/x86_64/$($parts[0])-$($parts[1])-x86_64.pkg.tar.zst"
     }
   }
-  Invoke-Msys "pacman -U --needed --noconfirm $($packageUrls -join ' ')"
+  Invoke-MsysDownload "pacman -U --needed --noconfirm $($packageUrls -join ' ')"
 }
 
 foreach ($pin in $sourcePins) {
