@@ -1493,6 +1493,29 @@ mod candidate_window_assembly_tests {
     }
 
     #[test]
+    fn assembly_width_follows_content_within_one_composition() {
+        let mut presentation = CandidatePresentationState::default();
+        let mut input = base_input();
+        input.presentation = &mut presentation as *mut CandidatePresentationState as *const c_void;
+        let mut widths = Vec::new();
+        for window_w in [420.0, 140.0, 500.0] {
+            input.window_w = window_w;
+            let mut output = Fcitx5CandidateWindowAssemblyOutput::default();
+            // SAFETY: live input/output storage; the item count is zero.
+            let ok = unsafe {
+                fcitx5_candidate_window_assembly(&input, &mut output, core::ptr::null_mut())
+            };
+            assert_eq!(ok, 1);
+            widths.push(output.window_width);
+        }
+        assert_eq!(
+            widths,
+            [420.0, 140.0, 500.0],
+            "backspace shrinks the window again"
+        );
+    }
+
+    #[test]
     fn assembly_preedit_block_shifts_above_placement_and_sets_panel() {
         let mut input = base_input();
         input.placement = 2; // Above
@@ -2197,24 +2220,6 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_set_placement(
     1
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_presentation_create`.
-pub unsafe extern "C" fn fcitx5_candidate_presentation_stable_window_width(
-    state: *mut c_void,
-    measured_width: f32,
-    max_allowed_width: f32,
-) -> f32 {
-    if state.is_null() {
-        return 0.0;
-    }
-    // SAFETY: the API contract supplies a live uniquely borrowed presentation allocation.
-    unsafe { &mut *state.cast::<CandidatePresentationState>() }
-        .stable_window_width(measured_width, max_allowed_width)
-}
-
 /// Axis-layout item rect + visibility handed to the window-assembly ABI.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -2295,19 +2300,9 @@ pub fn window_assembly(
     let measured_width = (input.window_w.max(input.preedit_panel_width))
         .min(input.max_width)
         .min(work_width);
-    let stable_max = input.max_width.min(work_width);
-    let window_width = if input.presentation.is_null() {
-        measured_width
-    } else {
-        // SAFETY: the caller contract guarantees this presentation pointer.
-        unsafe {
-            fcitx5_candidate_presentation_stable_window_width(
-                input.presentation.cast_mut(),
-                measured_width,
-                stable_max,
-            )
-        }
-    };
+    // The window follows its content: it shrinks again when a backspace
+    // brings back shorter candidates.
+    let window_width = measured_width;
     let window_height = (input.window_h + preedit_block).min(work_height);
     let window_left = input
         .window_x
@@ -4285,6 +4280,15 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
             scroll_mode: geometry.overflow == 1,
             max_width: geometry.max_width,
             window_padding_x: geometry.padding_x,
+            grid_columns: if orientation == Orientation::Horizontal
+                && overflow == crate::axis_layout::OverflowBehavior::Scrolling
+                && writing_mode == crate::axis_layout::WritingMode::Horizontal
+                && geometry.page_size > 0
+            {
+                crate::axis_layout::scroll_grid_line_len_for(geometry.page_size as usize)
+            } else {
+                0
+            },
         },
         font_family: "Microsoft YaHei UI",
         preedit: preedit.as_deref(),
@@ -4612,7 +4616,6 @@ pub struct CandidatePresentationOutput {
     pub candidate_bulk: u8,
     pub page_size: u32,
     pub placement: u32,
-    pub stable_width: f32,
 }
 
 #[repr(C)]
@@ -4755,7 +4758,6 @@ impl CandidatePresentationState {
             candidate_bulk: u8::from(self.candidate_bulk),
             page_size: self.page_size,
             placement: placement_to_ffi(self.placement),
-            stable_width: self.layout.stable_width,
         }
     }
 
@@ -4784,32 +4786,24 @@ impl CandidatePresentationState {
         }
         Some(count)
     }
-
-    pub fn stable_window_width(&mut self, measured_width: f32, max_allowed_width: f32) -> f32 {
-        self.layout
-            .stable_window_width(measured_width, max_allowed_width)
-    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct CompositionLayoutState {
     identity: Option<CompositionIdentity>,
     auto_orientation: Option<Orientation>,
-    stable_width: f32,
 }
 
 impl CompositionLayoutState {
     pub fn reset(&mut self) {
         self.identity = None;
         self.auto_orientation = None;
-        self.stable_width = 0.0;
     }
 
     pub fn begin(&mut self, identity: CompositionIdentity) {
         if self.identity != Some(identity) {
             self.identity = Some(identity);
             self.auto_orientation = None;
-            self.stable_width = 0.0;
         }
     }
 
@@ -4837,20 +4831,6 @@ impl CompositionLayoutState {
                 orientation
             }
         }
-    }
-
-    pub fn stable_window_width(&mut self, measured_width: f32, max_allowed_width: f32) -> f32 {
-        let max_allowed_width = max_allowed_width.max(0.0);
-        if self.stable_width > max_allowed_width {
-            self.stable_width = max_allowed_width;
-        }
-        let width = if self.stable_width > 0.0 && measured_width < self.stable_width {
-            self.stable_width
-        } else {
-            measured_width.min(max_allowed_width)
-        };
-        self.stable_width = self.stable_width.max(width);
-        width
     }
 }
 
@@ -7352,19 +7332,11 @@ mod tests {
             Orientation::Vertical
         );
 
-        let long = state.stable_window_width(420.0, 720.0);
-        let short = state.stable_window_width(140.0, 720.0);
-        let longer = state.stable_window_width(500.0, 720.0);
-        assert_eq!(long, 420.0);
-        assert_eq!(short, 420.0);
-        assert_eq!(longer, 500.0);
-
         state.begin(CompositionIdentity {
             engine_epoch: 1,
             context_id: 2,
             composition_id: 4,
         });
-        assert_eq!(state.stable_window_width(140.0, 720.0), 140.0);
         assert_eq!(
             state.resolve_orientation(
                 PresentationOrientation::Automatic,
@@ -7499,7 +7471,6 @@ mod tests {
         assert_eq!(output.scroll_mode, 0);
         assert_eq!(output.scroll_expanded, 0);
         assert_eq!(output.placement, 0);
-        assert_eq!(output.stable_width, 0.0);
     }
 
     #[test]

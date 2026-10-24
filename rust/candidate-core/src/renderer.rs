@@ -119,6 +119,9 @@ pub struct RenderGeometry {
     pub max_width: f32,
     /// Outer horizontal padding already included in `max_width`.
     pub window_padding_x: f32,
+    /// Grid columns of a horizontal scrolling grid (0 = one shared set of
+    /// label/text/comment anchors for every candidate).
+    pub grid_columns: usize,
 }
 
 impl Default for RenderGeometry {
@@ -134,6 +137,7 @@ impl Default for RenderGeometry {
             scroll_mode: false,
             max_width: 0.0,
             window_padding_x: 0.0,
+            grid_columns: 0,
         }
     }
 }
@@ -247,27 +251,24 @@ pub(crate) fn horizontal_column_anchors<F>(
 where
     F: FnMut(&str, f32) -> (f32, f32),
 {
+    // Size each slot exactly as the run plan fills it: one grapheme cluster
+    // at a time. Measurements are whole pixels, so a cluster sum can exceed
+    // the whole-string width and would otherwise wrap the last glyph.
+    let mut cluster_sum = |value: &str, font_size: f32| -> f32 {
+        grapheme_clusters(value)
+            .into_iter()
+            .map(|cluster| measure(cluster, font_size).0.max(0.0))
+            .sum()
+    };
     let mut label_width = reserved_label_width.max(0.0);
     let mut text_width = 0.0_f32;
     let mut comment_width = 0.0_f32;
     for candidate in candidates {
-        if !candidate.label.is_empty() {
-            label_width = label_width.max(measure(candidate.label, label_font_size).0.max(0.0));
-        }
-        if !candidate.reserved_label.is_empty() {
-            label_width = label_width.max(
-                measure(candidate.reserved_label, label_font_size)
-                    .0
-                    .max(0.0),
-            );
-        }
-        if !candidate.text.is_empty() {
-            text_width = text_width.max(measure(candidate.text, text_font_size).0.max(0.0));
-        }
-        if !candidate.comment.is_empty() {
-            comment_width =
-                comment_width.max(measure(candidate.comment, comment_font_size).0.max(0.0));
-        }
+        label_width = label_width
+            .max(cluster_sum(candidate.label, label_font_size))
+            .max(cluster_sum(candidate.reserved_label, label_font_size));
+        text_width = text_width.max(cluster_sum(candidate.text, text_font_size));
+        comment_width = comment_width.max(cluster_sum(candidate.comment, comment_font_size));
     }
     let gap = label_gap.max(0.0);
     let required_text_width = candidates
@@ -332,6 +333,56 @@ where
         comment_width,
         effective_width,
     }
+}
+
+/// Anchors for every candidate, in candidate order. With `grid_columns` set
+/// (a horizontal scrolling grid with one page per row), label, text and
+/// comment align within each grid column only, so a long word or comment in
+/// one column no longer widens every cell of the matrix.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn horizontal_candidate_anchors<F>(
+    candidates: &[HorizontalColumnInput<'_>],
+    grid_columns: usize,
+    reserved_label_width: f32,
+    max_width: f32,
+    label_gap: f32,
+    label_font_size: f32,
+    text_font_size: f32,
+    comment_font_size: f32,
+    mut measure: F,
+) -> Vec<HorizontalColumnAnchors>
+where
+    F: FnMut(&str, f32) -> (f32, f32),
+{
+    let mut anchors_for = |group: &[HorizontalColumnInput<'_>]| {
+        horizontal_column_anchors(
+            group,
+            reserved_label_width,
+            max_width,
+            label_gap,
+            label_font_size,
+            text_font_size,
+            comment_font_size,
+            &mut measure,
+        )
+    };
+    if grid_columns == 0 {
+        return vec![anchors_for(candidates); candidates.len()];
+    }
+    let per_column: Vec<_> = (0..grid_columns.min(candidates.len()))
+        .map(|column| {
+            let group: Vec<_> = candidates
+                .iter()
+                .skip(column)
+                .step_by(grid_columns)
+                .copied()
+                .collect();
+            anchors_for(&group)
+        })
+        .collect();
+    (0..candidates.len())
+        .map(|index| per_column[index % grid_columns])
+        .collect()
 }
 
 /// Make the exact horizontal lines used by both measurement and painting.
@@ -666,8 +717,9 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
         input.geometry.item_padding_x,
         input.geometry.scroll_mode,
     );
-    let horizontal_anchors = horizontal_column_anchors(
+    let horizontal_anchors = horizontal_candidate_anchors(
         &horizontal_inputs,
+        input.geometry.grid_columns,
         scroll_label_slot_width,
         horizontal_budget,
         input.geometry.label_gap,
@@ -709,7 +761,7 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
                 candidate,
                 selected,
                 y_offset,
-                horizontal_anchors,
+                horizontal_anchors[index],
                 &mut measurement_cache,
             );
         } else {
@@ -1478,6 +1530,7 @@ mod tests {
             scroll_mode: false,
             max_width: 0.0,
             window_padding_x: 0.0,
+            grid_columns: 0,
         }
     }
 
@@ -1508,6 +1561,46 @@ mod tests {
 
     fn anchor_measure(value: &str, size: f32) -> (f32, f32) {
         (grapheme_clusters(value).len() as f32 * size, size)
+    }
+
+    #[test]
+    fn grid_anchors_align_within_each_grid_column_only() {
+        let candidate = |text, comment| HorizontalColumnInput {
+            label: "",
+            reserved_label: "1.",
+            text,
+            comment,
+        };
+        // Two grid columns: column 0 holds short words, column 1 a long word
+        // with a comment.
+        let candidates = [
+            candidate("的", ""),
+            candidate("地", "de"),
+            candidate("点", ""),
+            candidate("的确如此", ""),
+        ];
+        let anchors = |grid_columns| {
+            horizontal_candidate_anchors(
+                &candidates,
+                grid_columns,
+                0.0,
+                f32::INFINITY,
+                4.0,
+                15.0,
+                18.0,
+                14.0,
+                anchor_measure,
+            )
+        };
+        let shared = anchors(0);
+        assert!(shared.windows(2).all(|pair| pair[0] == pair[1]));
+        let grid = anchors(2);
+        assert_eq!(grid[0], grid[2]);
+        assert_eq!(grid[1], grid[3]);
+        assert_eq!(grid[0].text_width, 18.0, "column 0 keeps short words");
+        assert_eq!(grid[0].comment_width, 0.0);
+        assert_eq!(grid[1].text_width, 72.0);
+        assert_eq!(grid[0].text_x, grid[1].text_x, "label slot stays shared");
     }
 
     #[test]
@@ -1558,6 +1651,43 @@ mod tests {
             )
         );
         assert!(anchors.label_x < anchors.text_x && anchors.text_x < anchors.comment_x);
+    }
+
+    #[test]
+    fn whole_pixel_cluster_widths_never_wrap_the_widest_candidate() {
+        // Whole-pixel measurement: three 26.4 px glyphs measure 80 px as one
+        // run but 27 px each, so the slot must hold the cluster sum.
+        let measure = |value: &str, size: f32| {
+            let glyphs = grapheme_clusters(value).len() as f32;
+            ((glyphs * size * 1.1).ceil(), size)
+        };
+        let candidates: Vec<_> = ["经济的", "就觉得", "解决的"]
+            .into_iter()
+            .map(|text| HorizontalColumnInput {
+                label: "1.",
+                reserved_label: "",
+                text,
+                comment: "",
+            })
+            .collect();
+        let anchors =
+            horizontal_column_anchors(&candidates, 0.0, 900.0, 4.0, 20.0, 24.0, 19.0, measure);
+        for candidate in &candidates {
+            let plan = horizontal_run_plan_with_anchors(
+                candidate.label,
+                candidate.text,
+                candidate.comment,
+                900.0,
+                4.0,
+                20.0,
+                24.0,
+                19.0,
+                anchors,
+                measure,
+            );
+            assert_eq!(plan.lines.len(), 1, "{} wrapped", candidate.text);
+            assert_eq!(plan.lines[0].text, candidate.text);
+        }
     }
 
     #[test]

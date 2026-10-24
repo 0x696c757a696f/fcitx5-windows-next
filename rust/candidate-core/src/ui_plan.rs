@@ -403,10 +403,8 @@ impl CandidateUiState {
             scroll_cell_width: config.scroll_cell_width.max(40.0),
         });
         self.presentation.set_placement(layout_result.placement);
-        let width = self.presentation.stable_window_width(
-            layout_result.window.right - layout_result.window.left,
-            (input.work_area.right - input.work_area.left).min(config.max_width),
-        );
+        let width = (layout_result.window.right - layout_result.window.left)
+            .min((input.work_area.right - input.work_area.left).min(config.max_width));
         let window = Rect {
             right: layout_result.window.left + width.max(0.0),
             ..layout_result.window

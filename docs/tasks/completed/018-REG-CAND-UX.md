@@ -29,7 +29,7 @@ Improve candidate presentation without changing input semantics: add Auto/Horizo
 
 ## Required validation
 
-- `REG-CAND-STABLE-001`: long→short→long candidates within one composition.
+- `REG-CAND-STABLE-001`: long→short→long candidates within one composition; the window width follows the content each time.
 - `REG-CAND-AUTO-001`: Chinese short candidates, long annotation, non-Chinese engine, edge-of-screen.
 - Explicit override precedence.
 - DPI/multi-monitor and candidate interaction regressions.

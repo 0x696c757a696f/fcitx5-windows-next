@@ -123,6 +123,15 @@ jobs:
           # The first bootstrap verifies and unpacks the MSYS2 archive with
           # Git for Windows' xz and gpg, which are not on PATH by default.
           $env:PATH = "$env:PATH;C:\Program Files\Git\usr\bin"
+          # The cache does not restore the Rime plugin junctions as junctions;
+          # drop whatever came back so bootstrap links the pinned checkouts.
+          foreach ($plugin in @('librime-lua', 'librime-octagram', 'librime-proto', 'librime-predict')) {
+            $link = "out/sources/librime/plugins/$plugin"
+            if (-not (Test-Path -LiteralPath $link)) { continue }
+            $item = Get-Item -LiteralPath $link -Force
+            if ($item.LinkType -eq 'Junction') { continue }
+            if ($item.LinkType) { $item.Delete() } else { Remove-Item -LiteralPath $link -Recurse -Force }
+          }
           # native-engine runs several cargo builds in parallel through this
           # sccache; start its server once so they do not race to spawn it.
           & ./out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe --start-server

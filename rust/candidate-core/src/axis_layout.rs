@@ -496,7 +496,13 @@ const SCROLL_GRID_VISIBLE_LINES: usize = 6;
 /// Grid line length for a scrolling grid: one page per row (horizontal) or
 /// per column (vertical), matching the presentation state's scroll columns.
 fn scroll_grid_line_len(input: &AxisLayoutInput) -> usize {
-    input.page_size.clamp(1, 9)
+    scroll_grid_line_len_for(input.page_size)
+}
+
+/// Grid line length for a page size; shared with measurement and paint so
+/// they group candidates into the same grid columns as the layout.
+pub(crate) fn scroll_grid_line_len_for(page_size: usize) -> usize {
+    page_size.clamp(1, 9)
 }
 
 /// Shrinks columns to fit `available`, taking width from the widest columns
@@ -576,10 +582,12 @@ fn scroll_grid_rows(input: &AxisLayoutInput, options: CandidateLayoutOptions) ->
     for index in 0..input.items.len() {
         let (row, column) = (index / columns, index % columns);
         let top = window.top + padding_y + row as f32 * pitch - dy;
+        // Columns align on their left edge; each cell (and its highlight)
+        // keeps its own width instead of stretching to the widest row.
         let rect = Rect {
             left: column_lefts[column],
             top,
-            right: column_lefts[column] + column_widths[column],
+            right: column_lefts[column] + column_widths[column].min(input.items[index].width),
             bottom: top + row_height,
         };
         let visible = intersects(rect, window);
@@ -1138,9 +1146,15 @@ mod tests {
             assert!(second.top > first.bottom, "second page on its own row");
         }
         for (entry, natural) in result.items.iter().zip(widths) {
-            assert!(entry.rect.right - entry.rect.left >= natural - 0.01);
+            // A cell hugs its own candidate rather than the widest one in
+            // its column, so the highlight stays tight.
+            assert!(close(entry.rect.right - entry.rect.left, natural));
             assert!(entry.rect.right <= result.window.right);
         }
+        assert!(close(
+            result.items[3].rect.left - result.items[2].rect.left,
+            90.0 + input.column_gap
+        ));
         assert!(result.items.iter().all(|entry| entry.visible));
         assert!(result.viewport_offset.is_none());
     }

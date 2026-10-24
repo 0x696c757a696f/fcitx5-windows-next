@@ -2120,17 +2120,17 @@ fn run_candidate_ux_self_test(host: &mut Host) -> bool {
         short_candidates.clone(),
         100,
     ));
-    let stable_short_width = window_width(host);
+    let short_width = window_width(host);
     host.update(&make_ux_response(806, 3, "zh-CN", long_candidates, 100));
     let second_long_width = window_width(host);
     host.update(&make_ux_response(807, 1, "zh-CN", short_candidates, 100));
     let reset_short_width = window_width(host);
-    if stable_short_width + 1 < long_width
-        || second_long_width + 1 < long_width
-        || reset_short_width >= long_width - 4
+    if short_width >= long_width - 4
+        || second_long_width.abs_diff(long_width) > 1
+        || reset_short_width.abs_diff(short_width) > 1
     {
         eprintln!(
-            "REG-CAND-STABLE-001: width hysteresis/reset failed: long={long_width} stableShort={stable_short_width} secondLong={second_long_width} resetShort={reset_short_width}"
+            "REG-CAND-STABLE-001: width does not follow content: long={long_width} short={short_width} secondLong={second_long_width} resetShort={reset_short_width}"
         );
         return false;
     }
