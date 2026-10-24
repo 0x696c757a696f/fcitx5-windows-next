@@ -2313,11 +2313,9 @@ pub fn window_assembly(
     }
     window_top = window_top.clamp(input.work_top, input.work_bottom - window_height);
 
-    let candidate_offset = if placement == Placement::Below {
-        preedit_block
-    } else {
-        0.0
-    };
+    // Paint always draws the preedit row at the top of the window, so the
+    // candidates sit below it whichever side of the caret the window is on.
+    let candidate_offset = preedit_block;
     if preedit_block > 0.0 {
         out.preedit_panel = Fcitx5CandidateLayoutRect {
             left: input.item_padding_x,
@@ -2893,6 +2891,15 @@ impl CandidateScrollState {
         next
     }
 
+    /// One wheel step from the viewport's current offset, kept inside
+    /// `0..=max`. Turning the wheel forward (positive delta) scrolls back
+    /// toward the first candidates.
+    pub fn wheel_viewport(&mut self, current: f32, max: f32, delta: i32) -> f32 {
+        let next = (current - (delta as f32 / 120.0) * Self::LINE_HEIGHT).clamp(0.0, max.max(0.0));
+        self.override_px = Some(next);
+        next
+    }
+
     #[must_use]
     pub fn override_px(&self) -> f32 {
         self.override_px.unwrap_or(-1.0)
@@ -3172,6 +3179,24 @@ mod candidate_scroll_state_tests {
         assert_eq!(state.wheel(-120), 0.0, "clamped at zero");
         state.reset();
         assert_eq!(state.override_px(), -1.0, "reset restores auto scroll");
+    }
+
+    #[test]
+    fn viewport_wheel_starts_from_the_shown_offset_and_stays_in_range() {
+        let mut state = CandidateScrollState::default();
+        assert_eq!(
+            state.wheel_viewport(100.0, 200.0, -120),
+            128.0,
+            "back = down"
+        );
+        assert_eq!(
+            state.wheel_viewport(100.0, 200.0, 120),
+            72.0,
+            "forward = up"
+        );
+        assert_eq!(state.wheel_viewport(190.0, 200.0, -240), 200.0);
+        assert_eq!(state.wheel_viewport(10.0, 200.0, 120), 0.0);
+        assert_eq!(state.override_px(), 0.0);
     }
 
     #[test]
@@ -4044,6 +4069,49 @@ fn rect_to_ffi(rect: Rect) -> Fcitx5CandidateLayoutRect {
     }
 }
 
+#[cfg(windows)]
+fn render_theme(theme: &Fcitx5CandidateRenderThemeInput) -> renderer::RenderTheme {
+    renderer::RenderTheme {
+        background: RenderColor::rgba(
+            theme.background_r,
+            theme.background_g,
+            theme.background_b,
+            255,
+        ),
+        text: RenderColor::rgba(theme.text_r, theme.text_g, theme.text_b, 255),
+        selected_background: RenderColor::rgba(
+            theme.selected_background_r,
+            theme.selected_background_g,
+            theme.selected_background_b,
+            255,
+        ),
+        selected_text: RenderColor::rgba(
+            theme.selected_text_r,
+            theme.selected_text_g,
+            theme.selected_text_b,
+            255,
+        ),
+        comment_color: RenderColor::rgba(theme.comment_r, theme.comment_g, theme.comment_b, 255),
+        border: RenderColor::rgba(theme.border_r, theme.border_g, theme.border_b, 255),
+        scrollbar: RenderColor::rgba(theme.scrollbar_r, theme.scrollbar_g, theme.scrollbar_b, 255),
+        preedit_background: RenderColor::rgba(
+            theme.preedit_background_r,
+            theme.preedit_background_g,
+            theme.preedit_background_b,
+            255,
+        ),
+        preedit_text: RenderColor::rgba(
+            theme.preedit_text_r,
+            theme.preedit_text_g,
+            theme.preedit_text_b,
+            255,
+        ),
+        selection_inflate_x: theme.selection_inflate_x,
+        selection_inflate_y: theme.selection_inflate_y,
+        corner_radius: theme.corner_radius,
+    }
+}
+
 /// Background of the C render-window ABI: lays out the given candidates (each
 /// with a measured logical size, exactly like the axis-layout ABI input), runs
 /// the frozen three-axis geometry, then renders the complete window bitmap
@@ -4220,55 +4288,7 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
     let render = renderer::render_candidate_window(&renderer::RenderWindowInput {
         axis_result: &axis_result,
         candidates: &data,
-        theme: &renderer::RenderTheme {
-            background: RenderColor::rgba(
-                theme.background_r,
-                theme.background_g,
-                theme.background_b,
-                255,
-            ),
-            text: RenderColor::rgba(theme.text_r, theme.text_g, theme.text_b, 255),
-            selected_background: RenderColor::rgba(
-                theme.selected_background_r,
-                theme.selected_background_g,
-                theme.selected_background_b,
-                255,
-            ),
-            selected_text: RenderColor::rgba(
-                theme.selected_text_r,
-                theme.selected_text_g,
-                theme.selected_text_b,
-                255,
-            ),
-            comment_color: RenderColor::rgba(
-                theme.comment_r,
-                theme.comment_g,
-                theme.comment_b,
-                255,
-            ),
-            border: RenderColor::rgba(theme.border_r, theme.border_g, theme.border_b, 255),
-            scrollbar: RenderColor::rgba(
-                theme.scrollbar_r,
-                theme.scrollbar_g,
-                theme.scrollbar_b,
-                255,
-            ),
-            preedit_background: RenderColor::rgba(
-                theme.preedit_background_r,
-                theme.preedit_background_g,
-                theme.preedit_background_b,
-                255,
-            ),
-            preedit_text: RenderColor::rgba(
-                theme.preedit_text_r,
-                theme.preedit_text_g,
-                theme.preedit_text_b,
-                255,
-            ),
-            selection_inflate_x: theme.selection_inflate_x,
-            selection_inflate_y: theme.selection_inflate_y,
-            corner_radius: theme.corner_radius,
-        },
+        theme: &render_theme(&theme),
         geometry: &renderer::RenderGeometry {
             font_size: geometry.font_size,
             label_font_size: geometry.label_font_size,
@@ -4495,6 +4515,113 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window_blit_to_dc(
         )
     };
     i32::from(blitted != 0)
+}
+
+/// One frame to paint, positioned exactly as the frame update laid it out.
+#[cfg(windows)]
+pub struct FramePaint<'a> {
+    pub candidates: &'a [CandidateRenderData],
+    /// Window-local content rects from the frame update, one per candidate.
+    pub item_rects: &'a [Rect],
+    pub window_width: f32,
+    pub window_height: f32,
+    /// Window-local y where the candidate area starts, below the preedit row.
+    pub candidate_top: f32,
+    pub viewport_offset: Option<(f32, f32)>,
+    pub content_size: Size,
+    pub writing: axis_layout::WritingMode,
+    pub theme: Fcitx5CandidateRenderThemeInput,
+    pub geometry: RenderGeometry,
+    pub preedit: Option<&'a str>,
+    pub high_contrast: bool,
+    pub selected: Option<usize>,
+}
+
+/// Paints `frame` into `dc` without laying the candidates out again, so the
+/// pixels land on the same rects the window uses for hit testing.
+///
+/// # Safety
+///
+/// `dc` must be a live device context for the call.
+#[cfg(windows)]
+pub unsafe fn render_frame_to_dc(
+    frame: &FramePaint<'_>,
+    dc: *mut c_void,
+    client_width: i32,
+    client_height: i32,
+) -> bool {
+    let preedit = frame.preedit.filter(|text| !text.is_empty());
+    let candidate_top = if preedit.is_some() {
+        frame.candidate_top
+    } else {
+        0.0
+    };
+    let window = Rect {
+        left: 0.0,
+        top: 0.0,
+        right: frame.window_width,
+        bottom: (frame.window_height - candidate_top).max(0.0),
+    };
+    // The frame stores content rects; the renderer insets item padding itself.
+    let pad_x = frame.geometry.item_padding_x.max(0.0);
+    let pad_y = frame.geometry.item_padding_y.max(0.0);
+    let items: Vec<axis_layout::AxisLayoutItem> = frame
+        .item_rects
+        .iter()
+        .map(|rect| {
+            let rect = Rect {
+                left: rect.left - pad_x,
+                top: rect.top - pad_y - candidate_top,
+                right: rect.right + pad_x,
+                bottom: rect.bottom + pad_y - candidate_top,
+            };
+            axis_layout::AxisLayoutItem {
+                rect,
+                visible: rect.left < window.right
+                    && rect.right > window.left
+                    && rect.top < window.bottom
+                    && rect.bottom > window.top,
+                writing: frame.writing,
+            }
+        })
+        .collect();
+    let axis_result = axis_layout::AxisLayoutResult {
+        window,
+        placement: Placement::Unlocked,
+        first_visible: items.iter().position(|item| item.visible).unwrap_or(0),
+        items,
+        viewport_offset: frame.viewport_offset,
+        content_size: frame.content_size,
+    };
+    let geometry = RenderGeometry {
+        preedit_height: candidate_top,
+        ..frame.geometry
+    };
+    let render = renderer::render_candidate_window(&renderer::RenderWindowInput {
+        axis_result: &axis_result,
+        candidates: frame.candidates,
+        theme: &render_theme(&frame.theme),
+        geometry: &geometry,
+        font_family: "Microsoft YaHei UI",
+        preedit,
+        dpi_scale: 1.0,
+        high_contrast: frame.high_contrast,
+        selected: frame.selected,
+    });
+    if render.pixels.is_empty() {
+        return false;
+    }
+    // SAFETY: `dc` validity is the caller's contract.
+    unsafe {
+        crate::window_host::blit_bgra_to_dc(
+            dc,
+            render.pixels.as_ptr(),
+            render.pixels.len(),
+            render.stride as usize,
+            client_width,
+            client_height,
+        ) != 0
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

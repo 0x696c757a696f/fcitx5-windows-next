@@ -16,6 +16,7 @@ use std::ffi::{c_void, OsStr};
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 
+use fcitx5_candidate_core::axis_layout::WritingMode as AxisWritingMode;
 use fcitx5_candidate_core::frame_update::{
     frame_update, FrameCaret, FrameConfig, FrameOrientation, FrameOverflow, FrameState,
     FrameUpdateOutcome, FrameWriting,
@@ -27,15 +28,13 @@ use fcitx5_candidate_core::window_host::{
 };
 use fcitx5_candidate_core::{
     content_locale_or_default, content_locale_valid, default_dwrite_locale,
-    fcitx5_candidate_render_window_blit_to_dc, fcitx5_candidate_selection_intent,
-    parse_candidate_command_line, resolve_paint_colors, selection_intent_valid,
-    CandidateClickGuardState, CandidateFocusWatchState, CandidateModel, CandidatePointerState,
-    CandidatePresentationState, CandidateScrollState, CandidateVisualArena,
-    Fcitx5CandidateConfigColor, Fcitx5CandidateLayoutSize, Fcitx5CandidateRenderCandidateInput,
-    Fcitx5CandidateRenderGeometryInput, Fcitx5CandidateRenderThemeInput,
-    Fcitx5CandidateResolvedColors, Fcitx5CandidateSelectionIntent,
-    Fcitx5CandidateVisualBuildOutput, Rect as FRect,
+    fcitx5_candidate_selection_intent, parse_candidate_command_line, resolve_paint_colors,
+    selection_intent_valid, CandidateClickGuardState, CandidateFocusWatchState, CandidateModel,
+    CandidatePointerState, CandidatePresentationState, CandidateScrollState, CandidateVisualArena,
+    Fcitx5CandidateConfigColor, Fcitx5CandidateRenderThemeInput, Fcitx5CandidateResolvedColors,
+    Fcitx5CandidateSelectionIntent, Fcitx5CandidateVisualBuildOutput, Rect as FRect, Size as FSize,
 };
+use fcitx5_candidate_core::{render_frame_to_dc, CandidateRenderData, FramePaint, RenderGeometry};
 use fcitx5_config_core::{
     CandidateOrientation, ConfigCore, FileStore, OverflowBehavior, VisualSnapshotRequest,
     WritingMode,
@@ -490,6 +489,11 @@ struct Host {
     preedit_panel_text: Vec<u8>,
     preedit_panel_rect: Option<(f32, f32, f32, f32)>,
     preedit_divider_y: f32,
+    candidate_top: f32,
+    viewport_offset: Option<(f32, f32)>,
+    content_size: FSize,
+    measure_max_width: f32,
+    anchor_stride: usize,
     candidate_page_size: u32,
     last_caret: FrameCaret,
     content_locale_utf8: String,
@@ -539,6 +543,11 @@ impl Host {
             preedit_panel_text: Vec::new(),
             preedit_panel_rect: None,
             preedit_divider_y: 0.0,
+            candidate_top: 0.0,
+            viewport_offset: None,
+            content_size: FSize::default(),
+            measure_max_width: 0.0,
+            anchor_stride: 1,
             candidate_page_size: 0,
             last_caret: FrameCaret::default(),
             content_locale_utf8: String::new(),
@@ -680,6 +689,11 @@ impl Host {
         self.selection_inflate_x = outputs.selection_inflate_x;
         self.selection_inflate_y = outputs.selection_inflate_y;
         self.resolved_horizontal = outputs.horizontal;
+        self.candidate_top = outputs.candidate_top;
+        self.viewport_offset = outputs.viewport_offset;
+        self.content_size = outputs.content_size;
+        self.measure_max_width = outputs.measure_max_width;
+        self.anchor_stride = outputs.anchor_stride;
         self.preedit_panel_rect = outputs
             .preedit_panel
             .map(|rect| (rect.left, rect.top, rect.right, rect.bottom));
@@ -709,6 +723,39 @@ impl Host {
         }
     }
 
+    /// Scrolls the candidate viewport one wheel step and moves the item rects
+    /// with it, so paint and hit testing keep agreeing without a relayout.
+    fn scroll_viewport(&mut self, delta: i32) {
+        let Some((dx, dy)) = self.viewport_offset else {
+            return;
+        };
+        let mut client = Rect::default();
+        // SAFETY: client is a valid writable RECT.
+        if unsafe { GetClientRect(self.window, &mut client) } == 0 {
+            return;
+        }
+        let extent_x = (client.right - client.left) as f32;
+        let extent_y = (client.bottom - client.top) as f32 - self.candidate_top;
+        let vertical = self.content_size.height > extent_y + 0.5;
+        let (current, max) = if vertical {
+            (dy, self.content_size.height - extent_y)
+        } else {
+            (dx, self.content_size.width - extent_x)
+        };
+        let next = self.scroll.wheel_viewport(current, max, delta);
+        let shift = next - current;
+        for rect in &mut self.item_rects {
+            if vertical {
+                rect.top -= shift;
+                rect.bottom -= shift;
+            } else {
+                rect.left -= shift;
+                rect.right -= shift;
+            }
+        }
+        self.viewport_offset = Some(if vertical { (dx, next) } else { (next, dy) });
+    }
+
     fn hide_popup(&mut self) {
         let window = self.window;
         // SAFETY: window is a valid HWND.
@@ -733,6 +780,8 @@ impl Host {
         self.preedit_panel_text.clear();
         self.preedit_panel_rect = None;
         self.preedit_divider_y = 0.0;
+        self.candidate_top = 0.0;
+        self.viewport_offset = None;
         self.resolved_horizontal = false;
         self.target_foreground = ptr::null_mut();
         self.focus_watch.reset();
@@ -902,124 +951,74 @@ impl Host {
             selection_inflate_y: self.selection_inflate_y,
             corner_radius: vc.corner_radius_dip,
         };
-        let preedit_height = self
-            .preedit_panel_rect
-            .map(|(_, top, _, bottom)| bottom - top)
-            .unwrap_or(0.0);
-        let geometry = Fcitx5CandidateRenderGeometryInput {
-            font_size: vc.font_size_dip * scale,
-            label_font_size: vc.font_size_dip * vc.label_font_scale * scale,
-            comment_font_size: vc.font_size_dip * vc.annotation_font_scale * scale,
-            label_gap: vc.label_gap_dip * scale,
-            item_padding_x: vc.item_padding_x_dip * scale,
-            item_padding_y: vc.item_padding_y_dip * scale,
-            preedit_height,
-            // Frame update may expand a too-small configured max width to
-            // preserve the fixed label/text/comment columns. Reuse the
-            // actual client width so paint consumes the same effective
-            // window budget instead of clipping the expanded layout.
-            max_width: (vc.max_width_dip * scale).max((client.right - client.left).max(0) as f32),
-            max_height: (client.bottom - client.top).max(0) as f32,
-            padding_x: vc.padding_x_dip * scale,
-            padding_y: vc.padding_y_dip * scale,
-            row_gap: vc.row_gap_dip * scale,
-            column_gap: vc.column_gap_dip * scale,
-            page_size: self.candidate_page_size,
-            // Lay out along the orientation the frame update resolved, so an
-            // automatic layout paints the row it measured.
-            orientation: u8::from(!self.resolved_horizontal),
-            overflow: match vc.writing {
-                FrameWriting::VerticalRl | FrameWriting::VerticalLr => 0_u8,
-                _ => match vc.overflow {
-                    FrameOverflow::Wrapping => 2,
-                    FrameOverflow::Scrolling => 1,
-                    FrameOverflow::Paging => 0,
-                },
-            },
-            writing: match vc.writing {
-                FrameWriting::VerticalRl => 1_u8,
-                FrameWriting::VerticalLr => 2,
-                FrameWriting::Horizontal => 0,
-            },
-            scroll_override_px: self.scroll.override_px(),
-        };
         let built: &[Fcitx5CandidateVisualBuildOutput] = self.arena.built_outputs();
-        let count = if self.visible_indices.is_empty() {
-            built.len()
-        } else {
-            self.visible_indices.len()
+        let utf8 = |value: &fcitx5_candidate_core::Fcitx5CandidateUtf8| -> String {
+            if value.len == 0 {
+                return String::new();
+            }
+            // SAFETY: arena-owned strings stay valid until the next build.
+            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
+                .into_owned()
         };
-        let mut candidates_in: Vec<Fcitx5CandidateRenderCandidateInput> = Vec::with_capacity(count);
-        let mut sizes_in: Vec<Fcitx5CandidateLayoutSize> = Vec::with_capacity(count);
-        for slot in 0..count {
-            let index = if self.visible_indices.is_empty() {
-                slot
-            } else {
-                self.visible_indices
-                    .get(slot)
-                    .copied()
-                    .unwrap_or(0)
-                    .min(built.len().saturating_sub(1))
-            };
-            let Some(output) = built.get(index) else {
-                continue;
-            };
-            candidates_in.push(Fcitx5CandidateRenderCandidateInput {
-                label: output.label.ptr,
-                label_len: output.label.len,
-                reserved_label: output.reserved_label.ptr,
-                reserved_label_len: output.reserved_label.len,
-                text: output.text.ptr,
-                text_len: output.text.len,
-                comment: output.comment.ptr,
-                comment_len: output.comment.len,
-            });
-            let bounds = self.item_rects.get(slot).copied().unwrap_or_default();
-            // `item_rects` is the layout output's content rectangle: layout
-            // already removed one item padding inset from each edge.  The
-            // renderer receives the full item size and applies that inset
-            // when it builds the text row.  Reconstruct the full size here so
-            // the renderer does not subtract the same padding twice.
-            sizes_in.push(restore_render_item_size(
-                bounds,
-                geometry.item_padding_x,
-                geometry.item_padding_y,
-            ));
+        let candidates: Vec<CandidateRenderData> = self
+            .visible_indices
+            .iter()
+            .filter_map(|index| built.get(*index))
+            .map(|output| CandidateRenderData {
+                label: utf8(&output.label),
+                reserved_label: utf8(&output.reserved_label),
+                text: utf8(&output.text),
+                comment: utf8(&output.comment),
+            })
+            .collect();
+        if candidates.len() != self.item_rects.len() {
+            self.clear_dc(dc, client);
+            return true;
         }
         let presentation_output = self.presentation.output();
-        let selected: u64 = if presentation_output.has_selected != 0 {
-            presentation_output.selected as u64
-        } else {
-            u64::MAX
+        let selected = (presentation_output.has_selected != 0)
+            .then(|| {
+                self.visible_indices
+                    .iter()
+                    .position(|index| *index == presentation_output.selected)
+            })
+            .flatten();
+        let preedit = String::from_utf8_lossy(&self.preedit_panel_text);
+        let frame = FramePaint {
+            candidates: &candidates,
+            item_rects: &self.item_rects,
+            window_width: (client.right - client.left).max(0) as f32,
+            window_height: (client.bottom - client.top).max(0) as f32,
+            candidate_top: self.candidate_top,
+            viewport_offset: self.viewport_offset,
+            content_size: self.content_size,
+            writing: match vc.writing {
+                FrameWriting::VerticalRl => AxisWritingMode::VerticalRl,
+                FrameWriting::VerticalLr => AxisWritingMode::VerticalLr,
+                FrameWriting::Horizontal => AxisWritingMode::Horizontal,
+            },
+            theme,
+            // Host::update already converted the DIP configuration to device
+            // pixels, so paint measures at scale 1.0 exactly like the frame.
+            geometry: RenderGeometry {
+                font_size: vc.font_size_dip * scale,
+                label_font_size: vc.font_size_dip * vc.label_font_scale * scale,
+                comment_font_size: vc.font_size_dip * vc.annotation_font_scale * scale,
+                label_gap: vc.label_gap_dip * scale,
+                item_padding_x: vc.item_padding_x_dip * scale,
+                item_padding_y: vc.item_padding_y_dip * scale,
+                preedit_height: self.candidate_top,
+                scroll_mode: vc.scroll_mode,
+                max_width: self.measure_max_width,
+                window_padding_x: vc.padding_x_dip * scale,
+                anchor_stride: self.anchor_stride,
+            },
+            preedit: Some(preedit.as_ref()),
+            high_contrast,
+            selected,
         };
-        let preedit = &self.preedit_panel_text;
-        // The renderer owns size query, buffer render, and the DIB StretchBlt
-        // as one call. 2 = nothing to paint (empty window).
-        // SAFETY: all pointers reference buffers owned by this host for the
-        // duration of the call; dc is a valid window DC.
-        // SAFETY: renderer inputs remain valid and non-aliased for this call.
-        unsafe {
-            // Host::update already converts the logical-DIP configuration and
-            // item rectangles to device pixels.  The shipping window renderer
-            // must therefore consume device-pixel geometry as-is; passing the
-            // monitor scale again would scale the bitmap and glyph metrics a
-            // second time, clipping candidate text at non-96-DPI settings.
-            fcitx5_candidate_render_window_blit_to_dc(
-                candidates_in.as_ptr(),
-                sizes_in.as_ptr(),
-                candidates_in.len(),
-                &theme,
-                &geometry,
-                preedit.as_ptr(),
-                preedit.len(),
-                1.0,
-                u8::from(high_contrast),
-                selected,
-                dc,
-                client.right,
-                client.bottom,
-            );
-        }
+        // SAFETY: dc is a live window DC for this call.
+        unsafe { render_frame_to_dc(&frame, dc, client.right, client.bottom) };
         true
     }
 
@@ -1033,29 +1032,6 @@ impl Host {
             return;
         }
         let _ = self.paint_once_to_dc(dc, &client);
-    }
-}
-
-fn restore_render_item_size(
-    bounds: FRect,
-    padding_x: f32,
-    padding_y: f32,
-) -> Fcitx5CandidateLayoutSize {
-    let content_width = (bounds.right - bounds.left).max(0.0);
-    let content_height = (bounds.bottom - bounds.top).max(0.0);
-    let padding_x = padding_x.max(0.0);
-    let padding_y = padding_y.max(0.0);
-    Fcitx5CandidateLayoutSize {
-        width: if content_width > 0.0 {
-            content_width + padding_x * 2.0
-        } else {
-            0.0
-        },
-        height: if content_height > 0.0 {
-            content_height + padding_y * 2.0
-        } else {
-            0.0
-        },
     }
 }
 
@@ -1245,7 +1221,7 @@ fn host_message_callback(
         WM_MOUSEWHEEL => {
             let delta = ((wparam as isize) >> 16) as i16 as i32;
             if host.visual_config.scroll_mode {
-                host.scroll.wheel(delta);
+                host.scroll_viewport(delta);
                 // SAFETY: window is valid.
                 unsafe { InvalidateRect(window, ptr::null(), 0) };
             } else {
@@ -3022,20 +2998,6 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn paint_restores_full_item_extent_from_assembly_content_rect() {
-        let bounds = FRect {
-            left: 8.0,
-            top: 4.0,
-            right: 108.0,
-            bottom: 22.0,
-        };
-        let size = restore_render_item_size(bounds, 8.0, 4.0);
-
-        assert_eq!(size.width, 116.0);
-        assert_eq!(size.height, 26.0);
-    }
 
     #[test]
     fn selected_fallbacks_never_collide_with_selected_background() {

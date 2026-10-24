@@ -904,7 +904,7 @@ fn draw_selection(
     let x = (item.rect.left - origin.left - inflate_x).max(0.0);
     let y = (item.rect.top - origin.top - inflate_y + y_offset).max(0.0);
     let right = (item.rect.right - origin.left + inflate_x).min(window_w);
-    let bottom = (item.rect.bottom - origin.top + inflate_y).min(window_h);
+    let bottom = (item.rect.bottom - origin.top + inflate_y + y_offset).min(window_h);
     let w = (right - x).max(0.0);
     let h = (bottom - y).max(0.0);
     if w > 0.0 && h > 0.0 {
@@ -933,15 +933,15 @@ fn draw_candidate_horizontal(
     item: &AxisLayoutItem,
     candidate: &CandidateRenderData,
     selected: bool,
-    _y_offset: f32,
+    y_offset: f32,
     horizontal_anchors: HorizontalColumnAnchors,
     measurement_cache: &mut TextMeasurementCache,
 ) {
     let origin = &input.axis_result.window;
     let left = (item.rect.left - origin.left).clamp(0.0, window_w);
-    let top = (item.rect.top - origin.top).clamp(0.0, window_h);
+    let top = (item.rect.top - origin.top + y_offset).clamp(0.0, window_h);
     let right = (item.rect.right - origin.left).clamp(left, window_w);
-    let bottom = (item.rect.bottom - origin.top).clamp(top, window_h);
+    let bottom = (item.rect.bottom - origin.top + y_offset).clamp(top, window_h);
     let bounds = Rect {
         left,
         top,
