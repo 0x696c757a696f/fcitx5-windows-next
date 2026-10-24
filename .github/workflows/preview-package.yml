@@ -85,6 +85,7 @@ jobs:
       - name: Prepare Rust for the native engine
         run: |
           ./tools/prepare-rust.ps1
+          ./tools/prepare-package-dependencies.ps1
           rustup target add x86_64-pc-windows-gnu --toolchain 1.98.0-x86_64-pc-windows-msvc
           # native-engine invokes cargo from the repository CARGO_HOME. The
           # runner's rustup lives elsewhere, so give that bin directory rustup
