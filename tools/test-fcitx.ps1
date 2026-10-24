@@ -27,6 +27,21 @@ function Get-VcVarsArgument([string] $TargetArchitecture) {
   }
 }
 
+function Compress-MsvcSearchPaths {
+  # Each vcvarsall import prepends its directories again. Drop repeats so a
+  # process that imports several lanes stays under cmd's line length limit.
+  foreach ($name in @('PATH', 'INCLUDE', 'LIB', 'LIBPATH')) {
+    $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+    if ([string]::IsNullOrEmpty($value)) { continue }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $kept = foreach ($entry in $value.Split(';')) {
+      $trimmed = $entry.Trim()
+      if ($trimmed -and $seen.Add($trimmed.TrimEnd('\'))) { $trimmed }
+    }
+    [Environment]::SetEnvironmentVariable($name, ($kept -join ';'), 'Process')
+  }
+}
+
 function Import-MsvcEnvironment([string] $TargetArchitecture) {
   $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
   if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
@@ -47,6 +62,7 @@ function Import-MsvcEnvironment([string] $TargetArchitecture) {
     throw "vcvarsall.bat not found under Visual Studio installation: $installationPath"
   }
   $vcvarsArgument = Get-VcVarsArgument $TargetArchitecture
+  Compress-MsvcSearchPaths
   $command = "`"$vcvars`" $vcvarsArgument >nul && set"
   $environmentLines = & $env:ComSpec /d /s /c $command
   if ($LASTEXITCODE -ne 0) {
