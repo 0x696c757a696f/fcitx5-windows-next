@@ -1,11 +1,15 @@
 [CmdletBinding()]
-param([string] $Version = '0.1.0')
+param(
+  [string] $Version = '0.1.0',
+  [string] $Channel = 'stable'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $outRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'out'))
-$zip = Join-Path $outRoot "package/artifacts/fcitx5-windows-$Version-portable.zip"
+$artifactSuffix = if ($Channel -eq 'stable') { '' } else { "-$Channel" }
+$zip = Join-Path $outRoot "package/artifacts/fcitx5-windows-$Version$artifactSuffix-portable.zip"
 if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw "Missing portable ZIP: $zip" }
 
 $smokeRoot = Join-Path $outRoot ('portable-smoke-' + [guid]::NewGuid().ToString('N'))

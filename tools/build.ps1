@@ -417,7 +417,7 @@ try {
       & (Join-Path $PSScriptRoot 'check-text-format.ps1')
       & (Join-Path $PSScriptRoot 'test-signing-credential-policy.ps1')
       & (Join-Path $PSScriptRoot 'stage-package.ps1') -Version $Version -Channel $Channel
-      & (Join-Path $PSScriptRoot 'test-portable.ps1')
+      & (Join-Path $PSScriptRoot 'test-portable.ps1') -Version $Version -Channel $Channel
       Write-Host 'Package gate passed using the tested Release artifacts.'
     }
     'release' {
