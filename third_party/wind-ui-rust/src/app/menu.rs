@@ -16,21 +16,104 @@ use crate::theme::Theme;
 use super::focus::FocusSource;
 use super::UiHost;
 
-pub(super) const MENU_ITEM_H: i32 = 30;
+pub(super) const MENU_ITEM_H: i32 = 32;
+/// 菜单滚轮：单次 `|delta| >= MENU_WHEEL_COARSE` 的事件照旧按 `max(|delta| / 3, MENU_ITEM_H)`
+/// 滚（win32 / X11 一格 = 120 → 40 像素；macOS 鼠标滚轮一行 = 40 单位 → 兜底一整项，
+/// 不兜底就只剩 13 像素、不到半项）。更小的量（高精度滚轮、触控板一帧几个单位）按每 120
+/// 单位 `MENU_WHEEL_PX` 像素比例换算、零头攒着——原先它们也兜底一整项，一抹就飞到底。
+const MENU_WHEEL_COARSE: i32 = 40;
+const MENU_WHEEL_PX: i32 = 40;
 /// 两行项（带 subtitle）行高。
 const MENU_ITEM_H_TALL: i32 = 46;
 const MENU_SEP_H: i32 = 9;
 pub(super) const MENU_PAD_X: i32 = 12;
 pub(super) const MENU_VPAD: i32 = 6;
 const MENU_MIN_W: i32 = 140;
+
+/// 菜单项文字色。优先级：禁用 > intent > 常规。与悬停无关——悬停只换底（中性叠层），
+/// 字保持原色，与 Windows 11 / shadcn 菜单一致；强调色留给勾选标记这类"状态"。
+/// intent 压过常规：危险项被指向时仍是红；禁用压过 intent：不可点的项不该还在喊危险。
+fn item_text_color(
+    it: &MenuItem,
+    mt: &crate::theme::MenuTheme,
+    pal: &crate::theme::Palette,
+) -> crate::geometry::Color {
+    match (it.enabled, it.intent) {
+        (false, _) => mt.text_disabled(pal),
+        (true, Some(intent)) => intent.badge_colors(pal).1,
+        _ => mt.text(pal),
+    }
+}
+/// 菜单项字号：正文档（`metrics.font_md`），与控件里的文字同大。
+fn menu_font() -> f32 {
+    crate::theme::current().metrics.font_md
+}
+/// 双行项的副标题字号。
+fn menu_font_small() -> f32 {
+    crate::theme::current().metrics.font_xs
+}
+/// 快捷键提示字号。
+fn menu_font_shortcut() -> f32 {
+    crate::theme::current().metrics.font_sm
+}
 /// 滚动条命中区宽度。刻意宽于可见滑块（5px）：细滑块难点中，留出横向容错。
 /// 纵向不留容错——见 [`MenuLevel::scrollbar_geom`]。
 const SCROLLBAR_HIT_W: i32 = 16;
 /// 下拉菜单面板最大可视高度（超出后启用滚动）。
 const MENU_MAX_H: i32 = 320;
-const MENU_FONT: f32 = 13.5;
 /// 图标列宽（有图标项时预留），也用作尾随可点击图标的命中/绘制列宽。
 pub(super) const MENU_ICON_W: i32 = 18;
+/// 位图图标的边长（逻辑 px），居中放在图标列里。
+const MENU_IMAGE_PX: i32 = 16;
+
+thread_local! {
+    /// 着过色的菜单位图图标：(模板地址, 颜色) → 成品。
+    ///
+    /// 不缓存的话每次重绘（悬停换行就是一次）都会着出一张新图；GPU 后端按图片对象
+    /// 缓存纹理，新图就得重新上传，还会把缓存里别的图挤出去。同一项只会有正常 /
+    /// 悬停 / 禁用两三种颜色，命中率很高；条数到顶就整表清空，菜单图标本来就不多。
+    #[allow(clippy::type_complexity)]
+    static TINTED: std::cell::RefCell<
+        std::collections::HashMap<
+            (usize, u32),
+            (std::rc::Weak<crate::render::image::Image>, crate::render::image::Image),
+        >,
+    > =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// 缓存的条数上限。
+const TINTED_CAP: usize = 256;
+
+fn tinted_icon(
+    img: &Rc<crate::render::image::Image>,
+    color: crate::geometry::Color,
+) -> crate::render::image::Image {
+    let key = (
+        Rc::as_ptr(img) as usize,
+        u32::from_be_bytes([color.r, color.g, color.b, color.a]),
+    );
+    TINTED.with(|c| {
+        let mut c = c.borrow_mut();
+        // 键里的地址可能被已释放模板的后来者复用：再用 Weak 确认还是同一张
+        if let Some((src, hit)) = c.get(&key) {
+            if src.upgrade().is_some_and(|s| Rc::ptr_eq(&s, img)) {
+                return hit.clone();
+            }
+        }
+        if c.len() >= TINTED_CAP {
+            c.clear();
+        }
+        let out = img.tinted(color);
+        c.insert(key, (Rc::downgrade(img), out.clone()));
+        out
+    })
+}
+
+/// 这一项占不占图标列（字形或位图任一）。
+fn has_icon(it: &MenuItem) -> bool {
+    it.icon.is_some() || it.icon_image.is_some()
+}
 /// 勾选列的宽度（对勾画在这里，在图标列之前）。
 ///
 /// 对勾**必须**有自己的一列，不能挤在尾随区里：那里已经被子菜单箭头与快捷键占着，
@@ -48,6 +131,81 @@ const BADGE_H: i32 = 20;
 /// 菜单弹层距窗口四边最小留白（逻辑像素）：与 resize 边框区域宽度对齐，
 /// 确保弹层滚动条不会覆盖到缩放操作区域，无需修改 WM_NCHITTEST 优先级。
 const MENU_EDGE_MARGIN: i32 = 10;
+
+/// 右键菜单与指针之间的间距（逻辑像素）。
+///
+/// 面板左上角若恰好落在指针上，指针就在面板内：误点右键后想原地左键关掉，那一下却
+/// 落在面板的上内边距里——既不命中项、也不算点外面，菜单纹丝不动，非得先挪鼠标。
+/// 错开这几像素，原地一点就是"点外面"，与主流桌面一致。
+const POINTER_GAP: i32 = 2;
+
+/// 右键菜单围绕指针 `p` 放置，返回面板矩形（高可能小于 `content_h`，此时滚动）。
+///
+/// 原则：**指针永远不落在面板里**——否则弹出瞬间就有一项被指着，原地左键关菜单变成
+/// 执行它。故放不下时是**翻到指针另一侧**（右边放不下翻到左边、下边放不下翻到上边，
+/// 面板的角贴着指针），而不是贴窗口边钳制——钳制会把面板推到指针底下。
+///
+/// 上下两侧都装不下整列时：横向已在指针旁边（面板与指针不同列）就仍按整窗高贴边，
+/// 指针碰不到它；横向也没让开（窗口太窄）才退到较大一侧滚动。较大一侧也不足两项
+/// （含上下内边距）高（极矮窗口）时只能贴边钳制——那时窗口本身就装不下菜单，顾不上指针了。
+fn place_at_pointer(ws: crate::geometry::Size, em: i32, p: Point, w: i32, content_h: i32) -> Rect {
+    let g = POINTER_GAP;
+    let x = pointer_x(ws, em, p.x, w);
+    if ws.w <= 0 || ws.h <= 0 {
+        // 离屏 / 测试无窗口尺寸：不翻转，仍错开指针。
+        return Rect::new(x, (p.y + g).max(em), w, content_h.min(MENU_MAX_H));
+    }
+    // 按最终 x 判断：两侧都放不下而贴边时，面板也未必罩住指针所在列。
+    let beside = !(x <= p.x && p.x < x + w);
+    let full = (ws.h - 2 * em).max(1);
+    let below = ws.h - em - (p.y + g);
+    let above = p.y - g - em;
+    let min_side = MENU_ITEM_H * 2 + 2 * MENU_VPAD;
+    let (y, h) = if content_h <= below {
+        (p.y + g, content_h)
+    } else if content_h <= above {
+        (p.y - g - content_h, content_h)
+    } else if !beside && below.max(above) >= min_side {
+        if below >= above {
+            (p.y + g, below)
+        } else {
+            (em, above)
+        }
+    } else {
+        let h = content_h.min(full);
+        ((ws.h - h - em).max(em), h)
+    };
+    Rect::new(x, y, w, h)
+}
+
+/// 右键菜单的 x：指针右侧放得下就放右侧，否则翻到左侧（右缘贴指针），两侧都不行贴窗口右缘。
+/// 无窗口尺寸（离屏 / 测试）时不翻转。规则见 [`place_at_pointer`]。
+fn pointer_x(ws: crate::geometry::Size, em: i32, px: i32, w: i32) -> i32 {
+    let g = POINTER_GAP;
+    if ws.w <= 0 || ws.h <= 0 {
+        (px + g).max(em)
+    } else if px + g + w <= ws.w - em {
+        px + g
+    } else if px - g - w >= em {
+        px - g - w
+    } else {
+        (ws.w - w - em).max(em)
+    }
+}
+
+/// 下拉 / 菜单栏 / 子菜单的 x：期望左沿 `ax`，越窗右缘时有父级（`flip_right` = 父级左沿）
+/// 就翻到父级左侧，否则向左收到贴边。
+fn anchored_x(ws: crate::geometry::Size, em: i32, ax: i32, w: i32, flip_right: Option<i32>) -> i32 {
+    let x = if ws.w > 0 && ax + w > ws.w - em {
+        match flip_right {
+            Some(parent_left) => parent_left - w,
+            None => ws.w - w - em,
+        }
+    } else {
+        ax
+    };
+    x.max(em)
+}
 
 /// 单项行高：分隔线固定细线高；带 subtitle 的项两行更高；否则单行标准高。
 fn menu_item_height(it: &MenuItem) -> i32 {
@@ -89,6 +247,21 @@ fn menu_item_selectable(it: &MenuItem) -> bool {
     !it.separator && it.enabled
 }
 
+/// 面板横向锚点：记下打开时的放置输入，换字族重新测宽后据此重算 x。
+///
+/// 记输入而不是记结果：宽度变了，"贴着指针右侧 / 翻到指针左侧"之类的判定要重做；
+/// 只保住左沿的话，翻到指针左侧的右键菜单变宽后会长过指针，且换回原字体也回不到原位。
+#[derive(Clone, Copy, Debug)]
+pub(super) enum HAnchor {
+    /// 右键菜单：围绕指针放置。重测时整块按 [`place_at_pointer`] 重放——纵向规则依赖
+    /// 横向结果（面板与指针是否同列），只重算 x 会让变宽后的面板罩住指针。
+    Pointer(Point),
+    /// 下拉 / 菜单栏：期望左沿，放不下向左收，见 [`anchored_x`]。
+    Left(i32),
+    /// 子菜单：贴父级右缘，放不下翻到父级左侧。
+    Parent,
+}
+
 /// 单级菜单面板：一组项 + 面板矩形 + 悬停项 + 是否含图标列。
 pub(super) struct MenuLevel {
     pub(super) items: Vec<MenuItem>,
@@ -103,10 +276,17 @@ pub(super) struct MenuLevel {
     pub(super) has_checks: bool,
     /// 该级由父级哪一项展开（根级为 None）；用于避免同项重复重建子菜单。
     pub(super) spawn: Option<usize>,
+    /// 打开时请求的最小宽度（下拉 = 控件宽）。换默认字族时据此重新测宽，见
+    /// [`UiHost::remeasure_menu`]。
+    pub(super) min_width: i32,
+    /// 打开时的横向锚点，重新测宽时按同一套规则重算 x（见 [`HAnchor`]）。
+    pub(super) anchor: HAnchor,
     /// 项内容总高（含上下内边距，未截断）；超出 rect.h 时启用滚动。
     pub(super) content_h: i32,
     /// 当前滚动偏移（像素，0=顶部）。
     pub(super) scroll: i32,
+    /// 高精度滚轮 / 触控板的亚格零头（见 `WheelCarry`）。
+    pub(super) wheel: crate::event::WheelCarry,
 }
 
 impl MenuLevel {
@@ -241,7 +421,8 @@ impl ContextMenu {
     }
 
     /// 粘滞项点击后原地刷新各级项：沿 `spawn` 路径把重建结果逐级换进去，
-    /// **保留每级的 rect/scroll/hover**（见 `MenuRequest::rebuild` 关于宽度不变的说明）。
+    /// **保留每级的 rect/scroll/hover**（见 `MenuRequest::rebuild` 关于宽度不变的说明；
+    /// 唯一会改宽的是换默认字族，见 [`UiHost::remeasure_menu`]）。
     /// 重建后项数变少导致某级的 spawn 越界或不再是子菜单父项时，截断其后的级。
     fn refresh_items(&mut self) {
         let Some(rb) = self.rebuild.clone() else {
@@ -263,7 +444,7 @@ impl ContextMenu {
                 normalize_separators(&mut s);
                 s
             });
-            self.levels[k].has_icons = items.iter().any(|it| it.icon.is_some());
+            self.levels[k].has_icons = items.iter().any(has_icon);
             // 只增不减：宽度是按打开时那一刻算的，这里把列收掉会让标签左移、
             // 右边多出一截空白；而万一重建后冒出了新的开关项，列还是得有。
             self.levels[k].has_checks |= items.iter().any(|it| it.checkable);
@@ -327,6 +508,9 @@ pub(super) struct MenuHost {
     pub(super) armed: Option<MenuBarLink>,
     /// 单击 Alt 的判定：按下之后没碰别的键。松开时它还是 true 才算"单击"。
     alt_pending: bool,
+    /// 展开淡入进度（0→1）。挂在宿主而非 `ContextMenu` 上：菜单栏滑到相邻标题是换一个
+    /// `ContextMenu`，那一下不该重新淡入。
+    fade: std::cell::Cell<crate::anim::Transition<f32>>,
 }
 
 impl MenuHost {
@@ -362,9 +546,17 @@ impl MenuHost {
 impl UiHost {
     /// 测量一组菜单项所需面板宽度（勾选列 + 图标列 + 标签 + 尾随快捷键/箭头），
     /// 并返回这一级要不要那两个前置列。
-    fn level_width(&mut self, items: &[MenuItem], min_width: i32) -> (i32, bool, bool) {
-        let has_icons = items.iter().any(|it| it.icon.is_some());
-        let has_checks = items.iter().any(|it| it.checkable);
+    ///
+    /// `keep_checks`：这一级已经让出了勾选列（粘滞刷新对它只增不减，见
+    /// [`ContextMenu::refresh_items`]），即使项里已没有开关也照算——绘制按那一位偏移标签。
+    fn level_width(
+        &mut self,
+        items: &[MenuItem],
+        min_width: i32,
+        keep_checks: bool,
+    ) -> (i32, bool, bool) {
+        let has_icons = items.iter().any(has_icon);
+        let has_checks = keep_checks || items.iter().any(|it| it.checkable);
         let mut max_label = 0;
         let mut max_trail = 0;
         for it in items {
@@ -373,13 +565,13 @@ impl UiHost {
             }
             max_label = max_label.max(
                 self.engine
-                    .measure(&it.label, &TextStyle::new(MENU_FONT), None)
+                    .measure(&it.label, &TextStyle::new(menu_font()), None)
                     .w,
             );
             if let Some(sub) = &it.subtitle {
                 max_label = max_label.max(
                     self.engine
-                        .measure(sub, &TextStyle::new(MENU_FONT - 2.5), None)
+                        .measure(sub, &TextStyle::new(menu_font_small()), None)
                         .w,
                 );
             }
@@ -387,14 +579,18 @@ impl UiHost {
                 10
             } else if let Some(s) = &it.shortcut {
                 self.engine
-                    .measure(s, &TextStyle::new(MENU_FONT - 2.0), None)
+                    .measure(s, &TextStyle::new(menu_font_shortcut()), None)
                     .w
             } else {
                 0
             };
             let mut total = tw;
             if let Some((text, _)) = &it.badge {
-                let bw = self.engine.measure(text, &TextStyle::new(12.0), None).w + 2 * BADGE_PAD_X;
+                let bw = self
+                    .engine
+                    .measure(text, &TextStyle::new(menu_font_small()), None)
+                    .w
+                    + 2 * BADGE_PAD_X;
                 total += if total > 0 { MENU_GAP } else { 0 } + bw;
             }
             if it.trailing_icon.is_some() {
@@ -414,18 +610,20 @@ impl UiHost {
             0
         };
         let w = (MENU_PAD_X + check_w + icon_w + max_label + trail_w + MENU_PAD_X)
-            .max(MENU_MIN_W)
-            .max(min_width);
+            // 调用方给了宽度就以它为准（下拉与控件同宽，可以比 140 窄）；没给才兜默认下限。
+            .max(if min_width > 0 { min_width } else { MENU_MIN_W });
         (w, has_icons, has_checks)
     }
 
-    /// 构造一级面板：锚点 (ax, ay) 为期望左上角；越窗右缘时按 `flip_right` 左翻；
+    /// 构造一级面板。右键菜单（无 `flip_right` / `anchor_top`、非 `tall`）以 (ax, ay)
+    /// 为**指针位置**，围绕它放置，见 [`place_at_pointer`]；其余以 (ax, ay) 为期望左上角：
+    /// 越窗右缘时按 `flip_right` 左翻；
     /// 越窗下缘时：若 `anchor_top` 有值（下拉控件顶部 y），优先向上翻转（菜单底对齐控件顶），
     /// 保证控件自身不被遮挡；否则退化为向上钳制。
     ///
     /// 可视高度只在**放不下**时才滚动：`tall`（菜单栏的菜单）按锚点到窗口下缘算；
     /// 下拉（`anchor_top` 有值）按锚点上下两侧空间较大者算——面板只能落在控件一侧，
-    /// 否则会盖住控件自己；右键菜单按整窗高算。仅无窗口尺寸（离屏 / 测试）时退回
+    /// 否则会盖住控件自己；非菜单栏的子菜单按整窗高算。仅无窗口尺寸（离屏 / 测试）时退回
     /// [`MENU_MAX_H`]。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_level(
@@ -442,16 +640,112 @@ impl UiHost {
         // 与各级子菜单——都经过这里，故规范化对整棵菜单生效。
         let mut items = items;
         normalize_separators(&mut items);
-        let (w, has_icons, has_checks) = self.level_width(&items, min_width);
+        let (w, has_icons, has_checks) = self.level_width(&items, min_width, false);
         let body: i32 = items.iter().map(menu_item_height).sum();
         let content_h = body + 2 * MENU_VPAD;
         let ws = self.logical_size;
         // MENU_EDGE_MARGIN：弹层与窗口四边保留距离，避免滚动条落入 resize 边框区。
         let em = if ws.w > 0 { MENU_EDGE_MARGIN } else { 0 };
+        // 根级、无控件锚点、非菜单栏 = 右键菜单：围绕指针放置，规则另见 `place_at_pointer`。
+        let at_pointer = flip_right.is_none() && anchor_top.is_none() && !tall;
+        let rect = if at_pointer {
+            place_at_pointer(ws, em, Point::new(ax, ay), w, content_h)
+        } else {
+            Self::place_anchored(ws, em, ax, ay, w, content_h, flip_right, anchor_top, tall)
+        };
+        let h = rect.h;
+        // 计算初始滚动偏移：使 checked 项（当前选中）居中于可视区域。
+        let initial_scroll = if content_h > h {
+            let mut offset = MENU_VPAD;
+            let mut result = 0i32;
+            for it in &items {
+                let ih = menu_item_height(it);
+                if it.checked {
+                    result = offset + ih / 2 - h / 2;
+                    break;
+                }
+                offset += ih;
+            }
+            result.clamp(0, (content_h - h).max(0))
+        } else {
+            0
+        };
+        MenuLevel {
+            items,
+            rect,
+            hover: None,
+            has_icons,
+            has_checks,
+            spawn: None,
+            min_width,
+            anchor: if flip_right.is_some() {
+                HAnchor::Parent
+            } else if at_pointer {
+                HAnchor::Pointer(Point::new(ax, ay))
+            } else {
+                HAnchor::Left(ax)
+            },
+            content_h,
+            scroll: initial_scroll,
+            wheel: Default::default(),
+        }
+    }
+
+    /// 默认字族换了、菜单还开着：逐级按新字体重新测宽。
+    ///
+    /// 宽度原本只在打开时量一次（粘滞刷新也刻意不改，见 [`ContextMenu::refresh_items`]），
+    /// 换成更宽的字体后标签会压住快捷键、溢出面板。位置按打开时的锚点（[`HAnchor`]）
+    /// 用同一套规则重算：下拉 / 菜单栏 / 子菜单只动宽与 x，纵向几何、滚动与悬停原样
+    /// 保留；右键菜单整块重放（滚动量钳到新范围）。子级在父级之后算，贴父级的新边。
+    pub(super) fn remeasure_menu(&mut self) {
+        let Some(mut m) = self.menu.active.take() else {
+            return;
+        };
+        let ws = self.logical_size;
+        let em = if ws.w > 0 { MENU_EDGE_MARGIN } else { 0 };
+        for k in 0..m.levels.len() {
+            let lvl = &m.levels[k];
+            // 两个列位只随项变、与字体无关，打开时已定，这里不取。
+            let (w, _, _) = self.level_width(&lvl.items, lvl.min_width, lvl.has_checks);
+            let r = lvl.rect;
+            let parent = k.checked_sub(1).map(|i| m.levels[i].rect);
+            let left = |ax: i32| Rect::new(anchored_x(ws, em, ax, w, None), r.y, w, r.h);
+            let rect = match (lvl.anchor, parent) {
+                (HAnchor::Pointer(p), _) => place_at_pointer(ws, em, p, w, lvl.content_h),
+                (HAnchor::Left(ax), _) => left(ax),
+                (HAnchor::Parent, Some(p)) => {
+                    let x = anchored_x(ws, em, p.right() - 2, w, Some(p.x + 2));
+                    Rect::new(x, r.y, w, r.h)
+                }
+                // 无父级的 `Parent` 生产路径里不会出现（子级都由 spawn 压在父级之后），
+                // 退回按当前左沿处理而不是越界。
+                (HAnchor::Parent, None) => left(r.x),
+            };
+            let lvl = &mut m.levels[k];
+            lvl.rect = rect;
+            let max_sc = lvl.max_scroll();
+            lvl.scroll = lvl.scroll.clamp(0, max_sc);
+        }
+        self.menu.active = Some(m);
+    }
+
+    /// 下拉 / 菜单栏 / 子菜单的定位：锚点 (ax, ay) 为期望左上角，返回面板矩形。
+    #[allow(clippy::too_many_arguments)]
+    fn place_anchored(
+        ws: crate::geometry::Size,
+        em: i32,
+        ax: i32,
+        ay: i32,
+        w: i32,
+        content_h: i32,
+        flip_right: Option<i32>,
+        anchor_top: Option<i32>,
+        tall: bool,
+    ) -> Rect {
         // 面板可视高度：只在**放不下**时才滚动——原生菜单也是整列铺开，二十来项就得
         // 滚的菜单操作起来很不便。菜单栏的菜单受锚点到窗口下缘限制；下拉只能占控件
-        // 上方或下方之一（取较大者），否则面板会把控件自己盖住；右键菜单受整窗高限制
-        // （放不下会翻转或贴边，见下面的 y 调整）。无窗口尺寸（离屏 / 测试）时退回
+        // 上方或下方之一（取较大者），否则面板会把控件自己盖住；非菜单栏的子菜单受整窗高限制
+        // （放不下贴边，见下面的 y 调整）。无窗口尺寸（离屏 / 测试）时退回
         // MENU_MAX_H。最低两项高，但再矮也不超过窗口本身（恢复窗口 / 换 DPI 的中间帧
         // 逻辑尺寸会短暂很小，不钳会画到窗口外）。
         let max_h = if ws.h <= 0 {
@@ -469,15 +763,8 @@ impl UiHost {
             max_h
         };
         let h = content_h.min(max_h);
-        let mut x = ax;
+        let x = anchored_x(ws, em, ax, w, flip_right);
         let mut y = ay;
-        if ws.w > 0 && x + w > ws.w - em {
-            x = match flip_right {
-                Some(parent_left) => (parent_left - w).max(em),
-                None => (ws.w - w - em).max(em),
-            };
-        }
-        x = x.max(em);
         if ws.h > 0 && y + h > ws.h - em {
             if let Some(top) = anchor_top {
                 // 下拉控件：优先向上翻转（菜单底对齐控件顶），避免遮住控件。
@@ -499,32 +786,7 @@ impl UiHost {
             }
         }
         y = y.max(em);
-        // 计算初始滚动偏移：使 checked 项（当前选中）居中于可视区域。
-        let initial_scroll = if content_h > h {
-            let mut offset = MENU_VPAD;
-            let mut result = 0i32;
-            for it in &items {
-                let ih = menu_item_height(it);
-                if it.checked {
-                    result = offset + ih / 2 - h / 2;
-                    break;
-                }
-                offset += ih;
-            }
-            result.clamp(0, (content_h - h).max(0))
-        } else {
-            0
-        };
-        MenuLevel {
-            items,
-            rect: Rect::new(x, y, w, h),
-            hover: None,
-            has_icons,
-            has_checks,
-            spawn: None,
-            content_h,
-            scroll: initial_scroll,
-        }
+        Rect::new(x, y, w, h)
     }
 
     /// 打开上下文菜单（根级）。
@@ -558,6 +820,17 @@ impl UiHost {
             }
         );
         self.menu_bar_disarm();
+        // 菜单栏在标题间切换时已有面板展开，换面板不再淡入（与系统菜单栏一致）。
+        // 只认菜单栏到菜单栏：开着右键菜单再右键别处，是一个新菜单，照常淡入。
+        let switching =
+            req.bar.is_some() && self.menu.active.as_ref().is_some_and(|m| m.bar.is_some());
+        self.menu
+            .fade
+            .set(crate::anim::Transition::new(if switching {
+                1.0
+            } else {
+                0.0
+            }));
         self.menu.active = Some(ContextMenu {
             levels: vec![level],
             target,
@@ -565,6 +838,8 @@ impl UiHost {
             bar: req.bar,
             click_through: req.click_through,
         });
+        // 浮层画在控件树之外，任何节点的局部脏区都盖不住它；与 `close_menu` 对称。
+        self.damage.needs_full = true;
     }
 
     /// 这一下指针事件是否该"收起菜单并穿透"：穿透菜单、按下、落在所有面板之外、也不在
@@ -998,8 +1273,18 @@ impl UiHost {
                 // 滚轮在菜单面板内滚动：delta>0=上滚（内容下移，scroll 减小）。
                 if let Some(k) = self.menu.active.as_ref().and_then(|m| m.level_at(ev.pos)) {
                     let level = &mut self.menu.active.as_mut().unwrap().levels[k];
-                    let step = (delta.abs() / 3).max(MENU_ITEM_H);
-                    let dir = if delta > 0 { -step } else { step };
+                    // 粗粒度（整格 / macOS 一行）照旧、细粒度按比例，见 `MENU_WHEEL_COARSE`。
+                    let dir = if delta.abs() >= MENU_WHEEL_COARSE {
+                        level.wheel.reset();
+                        let step = (delta.abs() / 3).max(MENU_ITEM_H);
+                        if delta > 0 {
+                            -step
+                        } else {
+                            step
+                        }
+                    } else {
+                        level.wheel.scroll_px(delta, MENU_WHEEL_PX)
+                    };
                     level.scroll = (level.scroll + dir).clamp(0, level.max_scroll());
                 }
                 true
@@ -1340,6 +1625,41 @@ impl MenuHost {
         let Some(menu) = self.active.as_ref() else {
             return;
         };
+        // 展开淡入。收起是瞬时的（选中即消失，与系统菜单一致）：淡出的残影只会挡住
+        // 用户刚选完要看的结果。菜单不滑动——宿主层画布没有平移，且菜单要的是"快"。
+        let mut fade = self.fade.get();
+        if fade.target() != 1.0 {
+            fade.retarget(1.0, theme.anim.fast(), crate::anim::Easing::DECELERATE);
+            self.fade.set(fade);
+        }
+        let alpha = fade.value();
+        // 面板连同投影的范围（投影参数走主题，见 `MenuTheme::shadow`）：脏区与离屏层都按它。
+        let sh = theme.menu.shadow();
+        let pad = crate::render::shadow_reach(0.0, sh.blur, sh.dx, sh.dy);
+        let area = menu
+            .levels
+            .iter()
+            .map(|l| l.rect)
+            .reduce(|a, b| a.union(&b))
+            .map(|r| r.inflate(pad));
+        if fade.is_active() {
+            if let Some(r) = area {
+                crate::anim::request_repaint_in(r);
+            }
+        }
+        if alpha < 1.0 {
+            match area {
+                Some(r) => canvas.push_layer_in(alpha, r),
+                None => canvas.push_layer(alpha),
+            }
+        }
+        self.paint_levels(menu, canvas, theme);
+        if alpha < 1.0 {
+            canvas.pop_layer();
+        }
+    }
+
+    fn paint_levels(&self, menu: &ContextMenu, canvas: &mut dyn Canvas, theme: &Theme) {
         let (pal, mt) = (&theme.palette, &theme.menu);
         for (li, level) in menu.levels.iter().enumerate() {
             let r = level.rect;
@@ -1350,7 +1670,7 @@ impl MenuHost {
                 r.y as f32 + sh.dy,
                 r.w as f32,
                 r.h as f32,
-                10.0,
+                theme.metrics.corner_lg,
                 sh.blur,
                 sh.color,
             );
@@ -1359,7 +1679,7 @@ impl MenuHost {
                 r.y as f32,
                 r.w as f32,
                 r.h as f32,
-                10.0,
+                theme.metrics.corner_lg,
                 &Paint::fill(mt.bg(pal)),
             );
             canvas.stroke_round_rect(
@@ -1367,8 +1687,8 @@ impl MenuHost {
                 r.y as f32,
                 r.w as f32,
                 r.h as f32,
-                10.0,
-                1.0,
+                theme.metrics.corner_lg,
+                theme.metrics.border_width.to_logical(canvas.dpi_scale()),
                 &Paint::fill(mt.border(pal)),
             );
             let child_spawn = menu.levels.get(li + 1).and_then(|l| l.spawn);
@@ -1398,19 +1718,12 @@ impl MenuHost {
                         (top + 1) as f32,
                         (r.w - 8) as f32,
                         (h - 2) as f32,
-                        6.0,
+                        theme.metrics.corner_md,
                         &Paint::fill(mt.hover(pal)),
                     );
                 }
-                // 取色优先级：禁用 > intent > 悬停/勾选 > 常规。
-                // intent 压过悬停是有意的——危险项被指向时更该保持红，而不是变成与
-                // 「复制」同款的强调色；禁用压过 intent 也是——不可点的项不该还在喊危险。
-                let color = match (it.enabled, it.intent) {
-                    (false, _) => mt.text_disabled(pal),
-                    (true, Some(intent)) => intent.badge_colors(pal).1,
-                    _ if active => mt.accent(pal),
-                    _ => mt.text(pal),
-                };
+                // 取色规则见 `item_text_color`。
+                let color = item_text_color(it, mt, pal);
                 // 勾选列（在图标列之前）。整级一旦有勾选项就恒占这一列，未勾的项在
                 // 这里留白——让所有标签左沿对齐，而不是勾一个缩一格。
                 if level.has_checks && it.checked {
@@ -1419,18 +1732,29 @@ impl MenuHost {
                         Rect::new(r.x + MENU_PAD_X, top, MENU_CHECK_W, h),
                         if it.enabled { mt.accent(pal) } else { color },
                         crate::spec::Align::Center,
-                        &TextStyle::new(MENU_FONT),
+                        &TextStyle::new(menu_font()),
                     );
                 }
-                // 图标列。
-                if let Some(icon) = &it.icon {
+                // 图标列：位图优先（按文字色着色，禁用 / 悬停与文字同步变色），否则字形。
+                if let Some(img) = &it.icon_image {
+                    let ir = Rect::new(level.icon_x(), top, MENU_ICON_W, h);
+                    let s = MENU_IMAGE_PX.min(ir.w).min(ir.h);
+                    let dst = Rect::new(ir.x + (ir.w - s) / 2, ir.y + (ir.h - s) / 2, s, s);
+                    canvas.draw_image(
+                        &tinted_icon(img, color),
+                        dst,
+                        crate::render::image::Fit::Contain,
+                        0.0,
+                        1.0,
+                    );
+                } else if let Some(icon) = &it.icon {
                     let ir = Rect::new(level.icon_x(), top, MENU_ICON_W, h);
                     canvas.draw_text(
                         icon,
                         ir,
                         color,
                         crate::spec::Align::Center,
-                        &TextStyle::new(MENU_FONT),
+                        &TextStyle::new(menu_font()),
                     );
                 }
                 // 尾随区域从右向左依次收窄：可点击图标 → 徽章胶囊 → 剩余内容右边界。
@@ -1442,13 +1766,16 @@ impl MenuHost {
                         ir,
                         color,
                         crate::spec::Align::Center,
-                        &TextStyle::new(MENU_FONT),
+                        &TextStyle::new(menu_font()),
                     );
                     content_right -= MENU_ICON_W + MENU_GAP;
                 }
                 if let Some((text, intent)) = &it.badge {
                     let (fill, fg) = intent.badge_colors(pal);
-                    let bw = canvas.measure_text(text, &TextStyle::new(12.0)).w + 2 * BADGE_PAD_X;
+                    let bw = canvas
+                        .measure_text(text, &TextStyle::new(menu_font_small()))
+                        .w
+                        + 2 * BADGE_PAD_X;
                     let br = Rect::new(content_right - bw, top + (h - BADGE_H) / 2, bw, BADGE_H);
                     canvas.fill_round_rect(
                         br.x as f32,
@@ -1463,7 +1790,7 @@ impl MenuHost {
                         br,
                         fg,
                         crate::spec::Align::Center,
-                        &TextStyle::new(12.0),
+                        &TextStyle::new(menu_font_small()),
                     );
                     content_right -= bw + MENU_GAP;
                 }
@@ -1476,7 +1803,7 @@ impl MenuHost {
                         lr,
                         color,
                         crate::spec::Align::Start,
-                        &TextStyle::new(MENU_FONT),
+                        &TextStyle::new(menu_font()),
                     );
                     let sr = Rect::new(label_x, top + h / 2, label_w, h - h / 2);
                     canvas.draw_text(
@@ -1484,7 +1811,7 @@ impl MenuHost {
                         sr,
                         mt.text_disabled(pal),
                         crate::spec::Align::Start,
-                        &TextStyle::new(MENU_FONT - 2.5),
+                        &TextStyle::new(menu_font_small()),
                     );
                 } else {
                     let lr = Rect::new(label_x, top, label_w, h);
@@ -1493,7 +1820,7 @@ impl MenuHost {
                         lr,
                         color,
                         crate::spec::Align::Start,
-                        &TextStyle::new(MENU_FONT),
+                        &TextStyle::new(menu_font()),
                     );
                 }
                 // 助记字母下划线：标签里首个匹配字符的正下方一条细线。
@@ -1501,11 +1828,11 @@ impl MenuHost {
                     .mnemonic
                     .and_then(|m| crate::event::mnemonic_split(&it.label, m))
                 {
-                    let ts = TextStyle::new(MENU_FONT);
+                    let ts = TextStyle::new(menu_font());
                     let x0 = label_x + canvas.measure_text(pre, &ts).w;
                     let cw = canvas.measure_text(ch, &ts).w;
                     let line_h = if it.subtitle.is_some() { h / 2 } else { h };
-                    let y = top + (line_h + MENU_FONT as i32) / 2 + 1;
+                    let y = top + (line_h + menu_font() as i32) / 2 + 1;
                     canvas.fill_rect(x0 as f32, y as f32, cw as f32, 1.0, &Paint::fill(color));
                 }
                 // 尾随：子菜单箭头 › / 快捷键 / 勾选（收窄到 content_right，避免与徽章/图标重叠）。
@@ -1516,7 +1843,7 @@ impl MenuHost {
                         tr,
                         color,
                         crate::spec::Align::End,
-                        &TextStyle::new(MENU_FONT + 1.0),
+                        &TextStyle::new(menu_font() + 1.0),
                     );
                 } else if let Some(s) = &it.shortcut {
                     canvas.draw_text(
@@ -1524,7 +1851,7 @@ impl MenuHost {
                         tr,
                         mt.text_disabled(pal),
                         crate::spec::Align::End,
-                        &TextStyle::new(MENU_FONT - 2.0),
+                        &TextStyle::new(menu_font_shortcut()),
                     );
                 }
             }
@@ -1546,6 +1873,34 @@ impl MenuHost {
 
 #[cfg(test)]
 mod tests {
+
+    fn icon_img() -> Rc<crate::render::image::Image> {
+        Rc::new(crate::render::image::Image::from_rgba(2, 2, &[0, 0, 0, 255].repeat(4)).unwrap())
+    }
+
+    /// 只给位图图标、不给字形的项，也要占图标列——否则图标画进标签里、标签不缩进。
+    #[test]
+    fn 位图图标也占图标列() {
+        let it = MenuItem::run("复制", |_| {}, false).icon_image(icon_img());
+        assert!(has_icon(&it));
+        assert!(!has_icon(&MenuItem::run("粘贴", |_| {}, false)));
+    }
+
+    /// 着色缓存：同一模板同一颜色复用成品（像素不必每帧重着），换色另算。
+    #[test]
+    fn 菜单图标着色按模板与颜色缓存() {
+        use crate::geometry::Color;
+        let n = || TINTED.with(|c| c.borrow().len());
+        let img = icon_img();
+        let red = Color::rgba(255, 0, 0, 255);
+        let before = n();
+        tinted_icon(&img, red);
+        tinted_icon(&img, red);
+        assert_eq!(n(), before + 1, "同色第二次应命中缓存");
+        tinted_icon(&img, Color::rgba(0, 0, 255, 255));
+        assert_eq!(n(), before + 2, "换色得另着一份");
+    }
+
     use super::*;
     use crate::app::test_support::{dropdown_handler, key_ev};
     use crate::app::App;
@@ -1575,6 +1930,58 @@ mod tests {
             r
         );
         assert!(level.content_h > r.h, "放不下时应滚动而不是撑满整窗");
+    }
+
+    /// 调用方给的 `min_width` 以它为准，可以比默认下限 140 窄——下拉面板要与控件同宽，
+    /// 60 宽的下拉此前会弹出 140 宽的面板；不给（0）时仍兜 140。
+    #[test]
+    fn explicit_min_width_overrides_default_floor() {
+        use crate::event::MenuItem;
+        let (mut host, _sel) = dropdown_handler();
+        let items = || -> Vec<MenuItem> {
+            ["甲", "乙"]
+                .into_iter()
+                .map(|t| MenuItem::run(t, |_ctx| {}, false))
+                .collect()
+        };
+        let content_only = host
+            .build_level(items(), 10, 20, 0, None, None, false)
+            .rect
+            .w;
+        assert_eq!(
+            content_only, MENU_MIN_W,
+            "前提：两项短标签按内容不足 140，取默认下限"
+        );
+        let narrow = host
+            .build_level(items(), 10, 20, 60, None, None, false)
+            .rect
+            .w;
+        assert!(
+            (60..MENU_MIN_W).contains(&narrow),
+            "给了 60 的面板宽 {narrow}，应不小于 60 且不再被顶到 140"
+        );
+        let wide = host
+            .build_level(items(), 10, 20, 200, None, None, false)
+            .rect
+            .w;
+        assert_eq!(wide, 200, "比内容宽的 min_width 照常生效");
+    }
+
+    /// `MenuRequest::new` 的默认值与 `show_menu(.., 0)` 相同，`show_menu_request` 原样转交。
+    #[test]
+    fn show_menu_request_forwards_click_through() {
+        use crate::event::{MenuItem, MenuRequest};
+        let pos = Point::new(5, 6);
+        let out = crate::testing::run_with_ctx(|ctx| {
+            let mut req = MenuRequest::new(pos, vec![MenuItem::run("甲", |_ctx| {}, false)]);
+            assert!(req.click_through, "默认与右键菜单一致：点外面穿透");
+            assert_eq!(req.min_width, 0);
+            req.click_through = false;
+            ctx.show_menu_request(req);
+        });
+        let req = out.menu.expect("应发出菜单请求");
+        assert_eq!(req.pos, pos);
+        assert!(!req.click_through);
     }
 
     /// 极矮窗口：非 `tall` 菜单的 60 px 下限不能让面板伸到窗口外。
@@ -1614,8 +2021,11 @@ mod tests {
             has_icons: false,
             has_checks: false,
             spawn: None,
+            min_width: 0,
+            anchor: HAnchor::Left(0),
             content_h: 10 * MENU_ITEM_H + 2 * MENU_VPAD,
             scroll: 0,
+            wheel: Default::default(),
         };
         let (track, _, _) = level.scrollbar_geom().expect("内容超高应有滚动条");
         let r = level.rect;
@@ -1657,9 +2067,12 @@ mod tests {
             has_icons: false,
             has_checks: false,
             spawn: None,
+            min_width: 0,
+            anchor: HAnchor::Left(0),
             content_h: 10 * MENU_ITEM_H + 2 * MENU_VPAD,
             // 滚半行：行边界落在边带内部，两条边带底下都确实压着行。
             scroll: MENU_ITEM_H / 2,
+            wheel: Default::default(),
         };
         let (r, x) = (level.rect, level.rect.x + 20);
         let rows = level.item_rows();
@@ -1744,6 +2157,61 @@ mod tests {
         assert!(trashed.get(), "点击尾随图标应触发其自身回调");
         assert!(!selected.get(), "点击尾随图标不应触发主项 action（选中）");
         assert!(app.menu.active.is_none(), "点击后菜单应关闭");
+    }
+
+    /// 滚轮滚长菜单：整格（±120）与改动前完全一样（每格 40 像素）；触控板 / 高精度滚轮的
+    /// 小量按比例累加，不再每个小 frame 都滚一整项（改动前 `max(|d|/3, 行高)` 兜底 30 像素，
+    /// 12 次 ±10 会滚 360 像素，一抹到底）。
+    #[test]
+    fn menu_wheel_notch_unchanged_and_sub_notch_accumulates() {
+        use crate::event::{MenuItem, MouseButton, PointerEvent, PointerKind};
+        use crate::geometry::Point;
+
+        let app = App::new("t", 400, 300).content(Element::col());
+        let mut app = app.into_handler_for_test();
+        let target = app.tree.root.unwrap();
+        let items: Vec<MenuItem> = (0..40)
+            .map(|i| MenuItem::run(format!("项 {i}"), |_ctx| {}, false))
+            .collect();
+        let level = app.build_level(items, 20, 20, 0, None, None, false);
+        assert!(level.max_scroll() > 400, "前置：菜单要足够长才能滚");
+        app.menu.active = Some(ContextMenu {
+            levels: vec![level],
+            target,
+            rebuild: None,
+            bar: None,
+            click_through: false,
+        });
+        let rect = app.menu.active.as_ref().unwrap().levels[0].rect;
+        let at = Point::new(rect.x + 10, rect.y + rect.h / 2);
+        let mut wheel = |d: i32| {
+            app.handle_menu_pointer(PointerEvent::single(
+                PointerKind::Wheel(d),
+                at,
+                MouseButton::Left,
+            ));
+            app.menu.active.as_ref().unwrap().levels[0].scroll
+        };
+        assert_eq!(wheel(-120), 40, "一格向下 40 像素（与改动前相同）");
+        assert_eq!(wheel(-240), 120, "两格 80 像素");
+        assert_eq!(wheel(120), 80, "向上一格");
+        assert_eq!(
+            wheel(-40),
+            80 + MENU_ITEM_H,
+            "macOS 鼠标滚轮一行（40 单位）仍兜底一整项"
+        );
+        assert_eq!(wheel(40), 80);
+        let base = 80;
+        let mut last = base;
+        for _ in 0..12 {
+            last = wheel(-10);
+        }
+        assert_eq!(last - base, 40, "12 次 1/12 格合计一格");
+        assert_eq!(
+            wheel(-10) - last,
+            3,
+            "单次小量按比例（400/120 取整），不再兜底一整项"
+        );
     }
 
     #[test]
@@ -2081,8 +2549,11 @@ mod tests {
             has_icons: false,
             has_checks: false,
             spawn,
+            min_width: 0,
+            anchor: HAnchor::Left(0),
             content_h: 0,
             scroll: 0,
+            wheel: Default::default(),
         };
         let mut sub = build()[1].submenu.clone();
         normalize_separators(&mut sub);
@@ -2113,35 +2584,23 @@ mod tests {
         );
     }
 
-    /// `danger()` 项用 palette.danger 上色，且**悬停时不退回强调色**；禁用则一律灰。
+    /// `danger()` 项用 palette.danger 上色（悬停不改字色，故悬停时同样是红）；禁用则一律灰。
     #[test]
-    fn danger_item_keeps_its_color_over_hover_but_not_over_disabled() {
+    fn danger_item_keeps_its_color_but_not_over_disabled() {
         let pal = crate::theme::Palette::default();
-        // 复刻绘制侧的取色规则（见菜单绘制处的 match）。
-        let pick = |it: &MenuItem, active: bool| match (it.enabled, it.intent) {
-            (false, _) => pal.text_disabled,
-            (true, Some(i)) => i.badge_colors(&pal).1,
-            _ if active => pal.accent,
-            _ => pal.text,
-        };
+        let mt = crate::theme::MenuTheme::default();
         let del = MenuItem::run("删除", |_ctx| {}, false).danger();
-        assert_eq!(pick(&del, false), pal.danger, "常态应为危险色");
-        assert_eq!(
-            pick(&del, true),
-            pal.danger,
-            "悬停仍应是危险色，不该变成 accent"
-        );
+        assert_eq!(item_text_color(&del, &mt, &pal), pal.danger, "应为危险色");
         let del_off = MenuItem::run("删除", |_ctx| {}, false)
             .danger()
             .enabled(false);
         assert_eq!(
-            pick(&del_off, false),
+            item_text_color(&del_off, &mt, &pal),
             pal.text_disabled,
             "禁用胜过 intent——不可点的项不该还在喊危险"
         );
         let plain = MenuItem::run("复制", |_ctx| {}, false);
-        assert_eq!(pick(&plain, false), pal.text);
-        assert_eq!(pick(&plain, true), pal.accent, "普通项悬停仍走强调色");
+        assert_eq!(item_text_color(&plain, &mt, &pal), pal.text);
     }
 
     /// 指针移出菜单面板后不留残影高亮。
@@ -2651,6 +3110,44 @@ mod tests {
         assert!(!h.menu.is_armed(), "再按 F10 退出激活态");
     }
 
+    /// `menu_bar_tracked`：单击 Alt 激活后，下一帧信号为真；再单击退出后回到假。
+    /// 紧凑标题栏靠它决定盖在菜单栏上的那层何时撤开。
+    #[test]
+    fn tracked_menu_bar_reports_active_state() {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use crate::ui::MenuBarEntry;
+        let active = crate::signal::signal(false);
+        let app = App::new("t", 400, 300).content(
+            Element::col().width(400).height(300).child(
+                Element::menu_bar_tracked(
+                    vec![MenuBarEntry::new("文件(F)", Vec::new).mnemonic('F')],
+                    active,
+                )
+                .height(28),
+            ),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        let mut pm = tiny_skia::Pixmap::new(400, 300).unwrap();
+        let mut draw = |h: &mut UiHost| {
+            h.render(
+                &mut PixmapTarget { pixmap: &mut pm },
+                crate::geometry::Size::new(400, 300),
+            )
+        };
+        draw(&mut h);
+        assert!(!active.get());
+        h.on_key(alt_key(true));
+        h.on_key(alt_key(false));
+        draw(&mut h);
+        assert!(active.get(), "单击 Alt 后应报告激活");
+        h.on_key(alt_key(true));
+        h.on_key(alt_key(false));
+        draw(&mut h);
+        assert!(!active.get(), "再单击退出后应回到未激活");
+    }
+
     /// 单击 Alt（按下、没碰别的键、松开）切换激活态；Alt+X 这种组合不算单击。
     /// 面板展开时单击 Alt 收起面板。
     #[test]
@@ -2814,10 +3311,130 @@ mod tests {
             MouseButton::Right,
         ));
         assert!(h.menu.is_open(), "右键别处应直接换成那里的菜单");
+        let r = h.menu.active.as_ref().unwrap().levels[0].rect;
+        assert!(
+            !r.contains(other) && r.x > other.x && r.x - other.x <= 4,
+            "新菜单 {r:?} 应紧挨新的点击处 {other:?} 右侧"
+        );
+    }
+
+    /// 按钮弹出的菜单（`MenuRequest::below`，不穿透）：窗口矮、下方放不下时翻到按钮上方
+    /// 而不盖住按钮；点外面收起后，弹菜单那个按钮的悬停态立即撤掉（悬停移到指针所在处），
+    /// 不用等鼠标再动一下。
+    #[test]
+    fn button_menu_flips_above_and_releases_hover_on_dismiss() {
+        use crate::event::{MenuItem, MenuRequest, MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+        // 按钮贴窗口底：下方只剩 8px，菜单必须翻上去。
+        let app = App::new("t", 300, 120).content(
+            Element::col()
+                .padding_xy(10, 0)
+                .child(Element::leaf().height(82))
+                .child(
+                    Element::row()
+                        .spacing(10)
+                        .child(Element::button("弹").width(80).height(30).on_click(|ctx| {
+                            let items = vec![
+                                MenuItem::run("一", |_| {}, false),
+                                MenuItem::run("二", |_| {}, false),
+                            ];
+                            let mut req = MenuRequest::below(ctx.bounds(), items);
+                            req.click_through = false;
+                            ctx.show_menu_request(req);
+                        }))
+                        .child(Element::button("别处").width(80).height(30)),
+                ),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 120).unwrap();
+        h.render(
+            &mut PixmapTarget { pixmap: &mut pm },
+            crate::geometry::Size::new(300, 120),
+        );
+        let order = h.tree.focusable_order();
+        let (b1, b2) = (h.tree.abs_bounds(order[0]), h.tree.abs_bounds(order[1]));
+        let at = |r: crate::geometry::Rect| Point::new(r.x + r.w / 2, r.y + r.h / 2);
+        let ev = |k, p| PointerEvent::single(k, p, MouseButton::Left);
+        h.on_pointer(ev(PointerKind::Move, at(b1)));
+        h.on_pointer(ev(PointerKind::Down, at(b1)));
+        h.on_pointer(ev(PointerKind::Up, at(b1)));
+        h.render(
+            &mut PixmapTarget { pixmap: &mut pm },
+            crate::geometry::Size::new(300, 120),
+        );
+        let panel = h.menu.active.as_ref().expect("前提：菜单已弹出").levels[0].rect;
+        assert!(
+            panel.intersect(&b1).is_empty(),
+            "面板 {panel:?} 不得盖住按钮 {b1:?}"
+        );
+        assert_eq!(h.hover, Some(order[0]), "前提：开菜单前悬停在按钮上");
+
+        h.on_pointer(ev(PointerKind::Move, at(b2)));
+        h.on_pointer(ev(PointerKind::Down, at(b2)));
+        assert!(!h.menu.is_open(), "前提：点外面收起了菜单");
+        assert_ne!(h.hover, Some(order[0]), "收起后弹菜单的按钮不得还挂着悬停");
+        assert_eq!(h.hover, Some(order[1]), "悬停应落到指针此刻所在的控件");
+    }
+
+    /// 穿透菜单（`below` 的默认）点空白处收起、Escape 收起：弹菜单的按钮都不得还挂着
+    /// 悬停。穿透那一下会继续往下分发，但树上只有 Move 才重判悬停，而菜单开着期间的
+    /// Move 全被浮层吃了；Escape 走键盘路径，要用菜单开着期间记下的指针位置重判。
+    #[test]
+    fn hover_released_after_click_through_and_escape_dismiss() {
+        use crate::event::{MenuItem, MenuRequest, MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+        let app = App::new("t", 300, 200).content(
+            Element::row()
+                .padding(10)
+                .spacing(10)
+                .child(Element::button("弹").width(80).height(30).on_click(|ctx| {
+                    let items = vec![MenuItem::run("一", |_| {}, false)];
+                    ctx.show_menu_request(MenuRequest::below(ctx.bounds(), items));
+                }))
+                .child(Element::button("别处").width(80).height(30)),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 200).unwrap();
+        let size = crate::geometry::Size::new(300, 200);
+        h.render(&mut PixmapTarget { pixmap: &mut pm }, size);
+        let order = h.tree.focusable_order();
+        let (b1, b2) = (h.tree.abs_bounds(order[0]), h.tree.abs_bounds(order[1]));
+        let at = |r: crate::geometry::Rect| Point::new(r.x + r.w / 2, r.y + r.h / 2);
+        let ev = |k, p| PointerEvent::single(k, p, MouseButton::Left);
+        let open = |h: &mut crate::app::UiHost, pm: &mut Pixmap| {
+            h.on_pointer(ev(PointerKind::Move, at(b1)));
+            h.on_pointer(ev(PointerKind::Down, at(b1)));
+            h.on_pointer(ev(PointerKind::Up, at(b1)));
+            h.render(&mut PixmapTarget { pixmap: pm }, size);
+            assert!(h.menu.is_open(), "前提：菜单已弹出");
+            assert_eq!(h.hover, Some(order[0]), "前提：悬停在弹菜单的按钮上");
+        };
+
+        // 穿透菜单，点右下角空白处收起。
+        open(&mut h, &mut pm);
+        let blank = Point::new(280, 180);
+        h.on_pointer(ev(PointerKind::Down, blank));
+        assert!(!h.menu.is_open(), "前提：点外面收起了菜单");
+        assert_ne!(h.hover, Some(order[0]), "穿透收起后按钮不得还挂着悬停");
+        h.on_pointer(ev(PointerKind::Up, blank));
+
+        // 菜单开着时指针移到「别处」上，再按 Escape 收起。
+        open(&mut h, &mut pm);
+        h.on_pointer(ev(PointerKind::Move, at(b2)));
+        h.on_key(crate::app::test_support::key_ev()(
+            crate::event::Key::Escape,
+        ));
+        assert!(!h.menu.is_open(), "前提：Escape 收起了菜单");
         assert_eq!(
-            h.menu.active.as_ref().unwrap().levels[0].rect.x,
-            other.x,
-            "新菜单应锚在新的点击处"
+            h.hover,
+            Some(order[1]),
+            "Escape 收起后悬停应落到指针所在的控件"
         );
     }
 
@@ -2926,5 +3543,348 @@ mod tests {
             "捕获丢失后拖拽态必须清掉，否则滑块会一直粘着指针"
         );
         assert!(repaint, "收掉拖拽属于可见变化，应请求重绘");
+    }
+
+    /// 建一个 300x300、整窗右键弹 `n` 项菜单的宿主，并渲染一帧让布局与窗口尺寸就位。
+    fn context_menu_host(n: usize) -> crate::app::UiHost {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let app =
+            App::new("t", 300, 300).content(Element::col().width(300).height(300).on_context_menu(
+                move || {
+                    (0..n)
+                        .map(|i| MenuItem::run(format!("项 {i}"), |_ctx| {}, false))
+                        .collect()
+                },
+            ));
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 300).unwrap();
+        h.render(
+            &mut PixmapTarget { pixmap: &mut pm },
+            crate::geometry::Size::new(300, 300),
+        );
+        h
+    }
+
+    /// 在 `p` 处右键（按下 + 松开），返回弹出的根级面板矩形。
+    fn right_click(h: &mut crate::app::UiHost, p: Point) -> Rect {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        for kind in [PointerKind::Down, PointerKind::Up] {
+            h.on_pointer(PointerEvent::single(kind, p, MouseButton::Right));
+        }
+        assert!(h.menu.is_open(), "右键应弹出菜单");
+        h.menu.active.as_ref().unwrap().levels[0].rect
+    }
+
+    /// 误点右键后原地左键就能关掉菜单：面板不得罩住指针。此前面板左上角恰在指针上，
+    /// 那一下落在上内边距里——不命中项也不算点外面，菜单不动，必须先挪鼠标。
+    #[test]
+    fn context_menu_opens_off_the_pointer_and_closes_on_click_in_place() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+
+        let mut h = context_menu_host(3);
+        let p = Point::new(100, 100);
+        let r = right_click(&mut h, p);
+        assert!(!r.contains(p), "面板 {r:?} 罩住了指针 {p:?}");
+        assert!(
+            r.x > p.x && r.y > p.y,
+            "空间充足时面板应在指针右下方：{r:?}"
+        );
+        h.on_pointer(PointerEvent::single(
+            PointerKind::Down,
+            p,
+            MouseButton::Left,
+        ));
+        assert!(!h.menu.is_open(), "原地左键应关闭菜单");
+    }
+
+    /// 下方放不下：面板翻到指针上方（底边贴指针），指针不落在任何项上。此前是贴窗口
+    /// 底边钳制，面板被推到指针底下，弹出瞬间就有一项被指着。
+    #[test]
+    fn context_menu_flips_above_the_pointer_near_the_bottom() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+
+        let mut h = context_menu_host(4);
+        let p = Point::new(100, 270);
+        let r = right_click(&mut h, p);
+        assert!(r.bottom() <= p.y, "面板 {r:?} 应整个在指针 {p:?} 上方");
+        assert!(r.x > p.x, "横向仍在指针右侧：{r:?}");
+        h.on_pointer(PointerEvent::single(
+            PointerKind::Move,
+            p,
+            MouseButton::Left,
+        ));
+        assert_eq!(
+            h.menu.active.as_ref().unwrap().levels[0].hover,
+            None,
+            "指针不应指着任何项"
+        );
+    }
+
+    /// 右侧放不下：面板翻到指针左边（右边贴指针），而不是贴窗口右缘盖住指针。
+    #[test]
+    fn context_menu_flips_left_of_the_pointer_near_the_right_edge() {
+        let mut h = context_menu_host(3);
+        let p = Point::new(270, 100);
+        let r = right_click(&mut h, p);
+        assert!(r.right() <= p.x, "面板 {r:?} 应整个在指针 {p:?} 左侧");
+        assert!(r.y > p.y, "纵向仍在指针下方：{r:?}");
+    }
+
+    /// 上下都装不下整列时的两条退路（纯定位函数，免得为造极端窗口搭整套宿主）。
+    #[test]
+    fn context_menu_placement_when_neither_side_fits() {
+        use crate::geometry::Size;
+        let em = MENU_EDGE_MARGIN;
+        let content_h = 20 * MENU_ITEM_H + 2 * MENU_VPAD;
+
+        // 横向让开了：整窗高贴边、不滚动——面板与指针不同列，指针碰不到它。
+        let ws = Size::new(600, 300);
+        let p = Point::new(100, 150);
+        let r = place_at_pointer(ws, em, p, 160, content_h);
+        assert!(!r.contains(p), "{r:?} 罩住了指针");
+        assert_eq!(r.h, ws.h - 2 * em, "应占满整窗可用高");
+
+        // 窗口太窄横向让不开：退到较大一侧（这里是下方）滚动，面板不跨过指针所在行。
+        let ws = Size::new(180, 300);
+        let p = Point::new(90, 120);
+        let r = place_at_pointer(ws, em, p, 160, content_h);
+        assert!(!r.contains(p), "{r:?} 罩住了指针");
+        assert!(r.y > p.y && r.bottom() <= ws.h - em, "应落在下方：{r:?}");
+        assert!(r.h < content_h, "放不下时应滚动");
+
+        // 同样横向让不开、但上方空间更大：退到上方滚动，面板底在指针之上、顶贴边距。
+        let p = Point::new(90, 200);
+        let r = place_at_pointer(ws, em, p, 160, content_h);
+        assert!(r.bottom() <= p.y && r.y == em, "应落在上方并贴顶：{r:?}");
+        assert!(r.h < content_h, "放不下时应滚动");
+
+        // 横向让不开、两侧都不足两项高的极矮窗口：只能贴边钳制，但不得越出窗口。
+        let ws = Size::new(180, 80);
+        let r = place_at_pointer(ws, em, Point::new(90, 40), 160, content_h);
+        assert!(
+            r.y >= em && r.bottom() <= ws.h - em && r.h > 0,
+            "极矮窗口面板 {r:?} 越界"
+        );
+    }
+
+    /// 右下角：同时翻到指针左侧与上方，面板右下角贴着指针。
+    #[test]
+    fn context_menu_flips_both_ways_in_the_bottom_right_corner() {
+        use crate::geometry::Size;
+        let em = MENU_EDGE_MARGIN;
+        let ws = Size::new(400, 300);
+        let p = Point::new(380, 280);
+        let r = place_at_pointer(ws, em, p, 160, 5 * MENU_ITEM_H + 2 * MENU_VPAD);
+        assert!(
+            r.right() <= p.x && r.bottom() <= p.y,
+            "{r:?} 应在指针左上方"
+        );
+        assert!(r.x >= em && r.y >= em, "{r:?} 越出边距");
+    }
+
+    /// 窗口窄到两侧都放不下面板、贴边后面板仍在指针右边：按"已让开"处理，整窗高铺开
+    /// 而不是退到半边滚动（判据看最终 x，而不是"左右是否放得下"）。
+    #[test]
+    fn context_menu_beside_check_uses_final_x() {
+        use crate::geometry::Size;
+        let em = MENU_EDGE_MARGIN;
+        let ws = Size::new(200, 300);
+        let content_h = 20 * MENU_ITEM_H + 2 * MENU_VPAD;
+        // w=170：右侧放得下需 p.x≤18、左侧需 p.x≥182，p.x=19 都不成立 → 贴边 x=20，
+        // 指针仍在面板左侧 1px。
+        let p = Point::new(19, 150);
+        let r = place_at_pointer(ws, em, p, 170, content_h);
+        assert!(!r.contains(p), "{r:?} 罩住了指针");
+        assert_eq!(r.h, ws.h - 2 * em, "指针不在面板列内，应整窗高铺开");
+    }
+
+    /// 一窄一宽两款各平台自带的字体：比例字体里的 i 远窄于等宽字体。
+    #[cfg(windows)]
+    const FAMILIES: (&str, &str) = ("Segoe UI", "Consolas");
+    #[cfg(target_os = "macos")]
+    const FAMILIES: (&str, &str) = ("Helvetica", "Menlo");
+    #[cfg(not(any(windows, target_os = "macos")))]
+    const FAMILIES: (&str, &str) = ("DejaVu Sans", "DejaVu Sans Mono");
+
+    /// 800×300 的真实宿主，默认字族为窄的那款；返回宿主、主题句柄与出帧闭包所需的画布。
+    fn family_host() -> (UiHost, crate::app::ThemeHandle, tiny_skia::Pixmap) {
+        use crate::platform::AppHandler;
+        let theme = crate::theme::Theme {
+            font_family: Some(FAMILIES.0.into()),
+            ..Default::default()
+        };
+        let mut app = App::new("t", 800, 300).theme(theme);
+        let handle = app.theme_handle();
+        let mut host = app.content(Element::col()).into_handler_for_test();
+        host.set_scale(1.0);
+        // 前提：两款字体本机都在且宽度确有差别。缺字体时两边会回落到同一款，下面的
+        // 断言就会以「没变宽」的样子失败，看起来像实现的错——在这里先分开。
+        let probe = "i".repeat(40);
+        let w = |h: &mut UiHost, f: &str| {
+            let ts = TextStyle {
+                family: Some(f),
+                ..TextStyle::new(menu_font())
+            };
+            h.engine.measure(&probe, &ts, None).w
+        };
+        let (n, wd) = (w(&mut host, FAMILIES.0), w(&mut host, FAMILIES.1));
+        assert!(wd > n + 40, "本机缺 {:?} 之一：{n} vs {wd}", FAMILIES);
+        let mut pm = tiny_skia::Pixmap::new(800, 300).unwrap();
+        frame(&mut host, &mut pm);
+        (host, handle, pm)
+    }
+
+    fn frame(h: &mut UiHost, pm: &mut tiny_skia::Pixmap) {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        h.render(
+            &mut PixmapTarget { pixmap: pm },
+            crate::geometry::Size::new(800, 300),
+        );
+    }
+
+    /// 根级（`build_level` 的参数）+ 由第 0 项展开的子菜单，项为 40 个 i。
+    fn open_family_menu(
+        host: &mut UiHost,
+        ax: i32,
+        min_width: i32,
+        anchor_top: Option<i32>,
+    ) -> (Rect, Rect) {
+        use crate::event::MenuItem;
+        let label = "i".repeat(40);
+        let sub = vec![MenuItem::run(label.clone(), |_ctx| {}, false)];
+        let items = vec![MenuItem::submenu(label, sub)];
+        let target = host.tree.root.expect("根节点");
+        let level = host.build_level(items, ax, 20, min_width, None, anchor_top, false);
+        host.menu.active = Some(ContextMenu {
+            levels: vec![level],
+            target,
+            rebuild: None,
+            bar: None,
+            click_through: false,
+        });
+        assert!(host.menu_spawn_submenu(0, 0), "应展开子菜单");
+        menu_rects(host)
+    }
+
+    fn menu_rects(h: &UiHost) -> (Rect, Rect) {
+        let m = h.menu.active.as_ref().expect("菜单仍开着");
+        (m.levels[0].rect, m.levels[1].rect)
+    }
+
+    /// 菜单开着时换默认字族（典型：粘滞的「字体」菜单项），面板要按新字体重新测宽，
+    /// 子菜单跟着贴到父级新的右缘。宽度原先只在打开时量一次，换成更宽的字体后标签
+    /// 溢出面板、压住子菜单。
+    #[test]
+    fn open_menu_remeasures_when_default_family_changes() {
+        let (mut host, handle, mut pm) = family_host();
+        let (root0, child0) = open_family_menu(&mut host, 20, 0, None);
+        assert_eq!(child0.x, root0.right() - 2, "前提：子菜单贴在父级右缘");
+
+        handle.update(|t| t.font_family = Some(FAMILIES.1.into()));
+        frame(&mut host, &mut pm);
+        let (root1, child1) = menu_rects(&host);
+        assert!(root1.w > root0.w, "根级应变宽：{} → {}", root0.w, root1.w);
+        assert_eq!(
+            (root1.x, root1.y, root1.h),
+            (root0.x, root0.y, root0.h),
+            "只改宽"
+        );
+        assert!(
+            child1.w > child0.w,
+            "子级同样重测：{} → {}",
+            child0.w,
+            child1.w
+        );
+        if child1.x >= root1.x {
+            assert_eq!(child1.x, root1.right() - 2, "子级贴父级新右缘");
+        } else {
+            assert_eq!(child1.right(), root1.x + 2, "放不下时翻到父级左侧");
+        }
+        assert!(
+            child1.right() <= 800 - MENU_EDGE_MARGIN,
+            "不出窗口：{child1:?}"
+        );
+
+        // 换回去：宽度回到打开时的值，不是只增不减。
+        handle.update(|t| t.font_family = Some(FAMILIES.0.into()));
+        frame(&mut host, &mut pm);
+        assert_eq!(menu_rects(&host), (root0, child0));
+    }
+
+    /// 右键菜单在窗口右缘翻到指针左侧（右缘贴指针）：变宽后仍是右缘贴指针、向左长，
+    /// 而不是左沿不动、长过指针；子级跟着翻到父级左侧。换回原字体回到原位。
+    #[test]
+    fn remeasure_keeps_flipped_pointer_menu_anchored_at_the_pointer() {
+        let (mut host, handle, mut pm) = family_host();
+        let px = 790;
+        let (root0, child0) = open_family_menu(&mut host, px, 0, None);
+        assert_eq!(root0.right(), px - POINTER_GAP, "前提：已翻到指针左侧");
+        assert_eq!(child0.right(), root0.x + 2, "前提：子级翻到父级左侧");
+
+        handle.update(|t| t.font_family = Some(FAMILIES.1.into()));
+        frame(&mut host, &mut pm);
+        let (root1, child1) = menu_rects(&host);
+        assert!(root1.w > root0.w);
+        assert_eq!(root1.right(), px - POINTER_GAP, "右缘仍贴指针：{root1:?}");
+        assert_eq!(child1.right(), root1.x + 2, "子级贴父级新左沿：{child1:?}");
+
+        handle.update(|t| t.font_family = Some(FAMILIES.0.into()));
+        frame(&mut host, &mut pm);
+        assert_eq!(menu_rects(&host), (root0, child0));
+    }
+
+    /// 下拉的最小宽度（控件宽）在重测后仍是下限；粘滞刷新留下的勾选列照算宽度——
+    /// 绘制按 `has_checks` 偏移标签，测宽漏了这一列标签就溢出面板。
+    #[test]
+    fn remeasure_keeps_min_width_and_the_retained_check_column() {
+        let (mut host, handle, mut pm) = family_host();
+        // 最小宽度取在两款字体的测量值之间：窄字体下它是下限，宽字体下让位给测量值。
+        let (narrow, _) = open_family_menu(&mut host, 20, 0, Some(10));
+        handle.update(|t| t.font_family = Some(FAMILIES.1.into()));
+        frame(&mut host, &mut pm);
+        let wide = menu_rects(&host).0.w;
+        handle.update(|t| t.font_family = Some(FAMILIES.0.into()));
+        frame(&mut host, &mut pm);
+        let mid = (narrow.w + wide) / 2;
+        assert!(
+            narrow.w < mid && mid < wide,
+            "前提：{} < {mid} < {wide}",
+            narrow.w
+        );
+
+        let (root0, _) = open_family_menu(&mut host, 20, mid, Some(10));
+        assert_eq!(root0.w, mid, "窄字体下取最小宽度");
+        handle.update(|t| t.font_family = Some(FAMILIES.1.into()));
+        frame(&mut host, &mut pm);
+        let root1 = menu_rects(&host).0;
+        assert_eq!(
+            (root1.x, root1.w),
+            (root0.x, wide),
+            "宽字体下按测量值、左沿不动"
+        );
+        handle.update(|t| t.font_family = Some(FAMILIES.0.into()));
+        frame(&mut host, &mut pm);
+        assert_eq!(menu_rects(&host).0, root0, "换回仍以最小宽度为下限");
+
+        let (_, _) = open_family_menu(&mut host, 20, 0, None);
+        // 模拟粘滞刷新后项里已无开关、列仍保留（`refresh_items` 只增不减）。
+        host.menu.active.as_mut().unwrap().levels[0].has_checks = true;
+        handle.update(|t| t.font_family = Some(FAMILIES.1.into()));
+        frame(&mut host, &mut pm);
+        let items = host.menu.active.as_ref().unwrap().levels[0].items.clone();
+        let (bare, _, _) = host.level_width(&items, 0, false);
+        assert_eq!(
+            menu_rects(&host).0.w,
+            bare + MENU_CHECK_W + MENU_GAP,
+            "保留的勾选列要算进宽度"
+        );
     }
 }

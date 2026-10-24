@@ -14,9 +14,9 @@ if ((@($inventory.packages.id) -join ',') -cne 'fcitx5-rime,fcitx5-lua,fcitx5-un
   throw 'Release plugin inventory does not preserve the reviewed package order.'
 }
 $expectedCommits = @{
-  'fcitx5-rime' = '4e996319edea790495edc2c91893e9af4c4e6d6a'
-  'fcitx5-lua' = '05db9ee519d448a64ccbe216044e8e0342e8c536'
-  'fcitx5-unikey' = '53f82a1e01dc0484f46dc8ed419d586cebd2f114'
+  'fcitx5-rime' = 'f5048611ea60e53955d5f013f608551e85d38f09'
+  'fcitx5-lua' = '9bf8d3dd2c6240d8e3e194d09547acbfa6a81204'
+  'fcitx5-unikey' = 'ed9170c35c1a6275d105e03d7f9bc4f674c1469c'
 }
 foreach ($plugin in @($inventory.packages)) {
   if ($plugin.architecture -ne 'x64' -or $plugin.source.commit -ne $expectedCommits[$plugin.id] -or

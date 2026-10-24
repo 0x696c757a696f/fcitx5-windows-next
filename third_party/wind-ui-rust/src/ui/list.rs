@@ -15,10 +15,9 @@ use crate::signal::Signal;
 use crate::spec::Align;
 use crate::style::Style;
 use crate::text::TextEngine;
-use crate::ui::ImageContent;
+use crate::ui::{ImageContent, TextContent};
 
-/// 行高（逻辑 px）。
-pub const ROW_H: i32 = 36;
+/// 行内水平内边距（逻辑 px）。行高取主题 `metrics.row_h`。
 const PAD_X: i32 = 12;
 /// 行内图标与文字间距。
 const ICON_GAP: i32 = 8;
@@ -29,10 +28,10 @@ const ICON_GAP: i32 = 8;
 /// 圆角 pill 选中样式的内缩与圆角（逻辑 px）。侧栏导航等用，更贴近现代设计稿。
 const PILL_INSET_X: f32 = 6.0;
 const PILL_INSET_Y: f32 = 3.0;
-const PILL_RADIUS: f32 = 7.0;
 
 pub struct ListRow {
-    label: String,
+    /// 行标签。存 [`TextContent`]，paint 时现取——传 `t!` 进来换语言即跟随。
+    label: TextContent,
     icon: Option<ImageContent>,
     group: Signal<usize>,
     index: usize,
@@ -45,13 +44,15 @@ pub struct ListRow {
     bg_color: Cell<Color>,
     /// 选中左缘强调条补间（0..1）：淡入。
     sel: Cell<Transition<f32>>,
+    /// 标签单行截断（行高固定，放不下就 `text…`，不折行压到下一行）。
+    fit: super::text_fit::SingleLine,
 }
 
 impl ListRow {
-    pub fn new(label: String, group: Signal<usize>, index: usize) -> Self {
+    pub fn new(label: impl Into<TextContent>, group: Signal<usize>, index: usize) -> Self {
         let on = if group.get() == index { 1.0 } else { 0.0 };
         Self {
-            label,
+            label: label.into(),
             icon: None,
             group,
             index,
@@ -60,6 +61,7 @@ impl ListRow {
             bg_amt: Cell::new(Transition::new(on)),
             bg_color: Cell::new(Color::TRANSPARENT),
             sel: Cell::new(Transition::new(on)),
+            fit: Default::default(),
         }
     }
     /// 前置图标（图片内容）。
@@ -98,7 +100,7 @@ impl ListRow {
 
 impl Widget for ListRow {
     fn measure(&self, avail: Size, _style: &Style, _text: &mut dyn TextEngine) -> Size {
-        Size::new(avail.w.max(0), ROW_H)
+        Size::new(avail.w.max(0), crate::theme::current().metrics.row_h)
     }
 
     fn paint(
@@ -147,7 +149,7 @@ impl Widget for ListRow {
                     y + PILL_INSET_Y,
                     (w - 2.0 * PILL_INSET_X).max(0.0),
                     (h - 2.0 * PILL_INSET_Y).max(0.0),
-                    PILL_RADIUS,
+                    th.metrics.corner_md,
                     &Paint::fill(c),
                 );
             } else {
@@ -167,7 +169,13 @@ impl Widget for ListRow {
         let sel_amt = selt.animate();
         self.sel.set(selt);
         if sel_amt > 0.0 {
-            canvas.fill_rect(x, y, 3.0, h, &Paint::fill(pal.accent.scale_alpha(sel_amt)));
+            canvas.fill_rect(
+                x,
+                y,
+                3.0,
+                h,
+                &Paint::fill(pal.accent_text().scale_alpha(sel_amt)),
+            );
         }
         // 前置图标：方形、垂直居中；文字相应右移。禁用走 Disabled 调制。
         let vstate = if !enabled {
@@ -206,8 +214,10 @@ impl Widget for ListRow {
         };
         let tw = (bounds.right() - PAD_X - text_x).max(0);
         let tr = Rect::new(text_x, bounds.y, tw, bounds.h);
-        canvas.draw_text(
-            &self.label,
+        // 截断缓存按文字散列做键：`t!` 换语言后 resolve 出新文字，缓存自然失效。
+        self.fit.draw_text(
+            canvas,
+            &self.label.resolve(),
             tr,
             color,
             Align::Start,
@@ -284,15 +294,15 @@ mod tests {
     fn row_with_icon_paints_icon_area() {
         let group = signal(0);
         let red = Image::from_rgba(4, 4, &[255u8, 0, 0, 255].repeat(4 * 4)).unwrap();
-        let row = ListRow::new("Inbox".into(), group, 0)
+        let row = ListRow::new("Inbox", group, 0)
             .icon_content(ImageContent::new(Some(red)).fit(Fit::Fill));
-        let mut pm = Pixmap::new(200, ROW_H as u32).unwrap();
+        let mut pm = Pixmap::new(200, crate::theme::current().metrics.row_h as u32).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
         {
             let mut c = SkiaCanvas::new(&mut pm);
             row.paint(
-                Rect::new(0, 0, 200, ROW_H),
-                Rect::new(0, 0, 200, ROW_H),
+                Rect::new(0, 0, 200, crate::theme::current().metrics.row_h),
+                Rect::new(0, 0, 200, crate::theme::current().metrics.row_h),
                 false,
                 true,
                 &mut c,
@@ -300,9 +310,12 @@ mod tests {
             );
         }
         // 图标方块中心（PAD_X 起、垂直居中）应为红色。
-        let side = ROW_H - 14;
+        let side = crate::theme::current().metrics.row_h - 14;
         let p = pm
-            .pixel((PAD_X + side / 2) as u32, (ROW_H / 2) as u32)
+            .pixel(
+                (PAD_X + side / 2) as u32,
+                (crate::theme::current().metrics.row_h / 2) as u32,
+            )
             .unwrap();
         assert!(
             p.red() > 180 && p.green() < 90,
@@ -316,9 +329,48 @@ mod tests {
     #[test]
     fn row_visual_state_tracks_selection() {
         let group = signal(1);
-        let selected = ListRow::new("A".into(), group, 1);
+        let selected = ListRow::new("A", group, 1);
         assert_eq!(selected.visual_state(), VisualState::Selected);
-        let other = ListRow::new("B".into(), group, 2);
+        let other = ListRow::new("B", group, 2);
         assert_eq!(other.visual_state(), VisualState::Normal);
+    }
+}
+
+/// 行高固定的列表行配长标签：截成单行，不折行压到下一行。
+#[cfg(test)]
+mod overflow_tests {
+    use super::*;
+    use crate::core::Layout;
+    use crate::signal::signal;
+    use crate::ui::text_fit::ink::*;
+    use crate::ui::Element;
+
+    /// 经 `Element::list` 的真实结构：第一行的字不得落进第二行（第二行标签留空、
+    /// 选中索引指向不存在的行，免得别的墨混进来）。
+    #[test]
+    fn long_list_label_stays_in_its_row() {
+        assert_wraps_taller(LONG_LATIN, 14.0, 120, crate::theme::current().metrics.row_h);
+        // 根节点总被撑满窗口，显式宽要钉在下一层才生效。
+        let list = Element::list(vec![LONG_LATIN, ""], signal(99usize));
+        let el = Element::col().children([Element::col().width(120).height(150).children([list])]);
+        let (pm, row) = paint_at(el, 200, 200, &[0, 0, 0]);
+        assert_eq!(row.w, 120);
+        assert_eq!(row.h, crate::theme::current().metrics.row_h);
+        assert_no_ink_outside(&pm, row, "列表行");
+    }
+
+    /// Wrap 宽：行宽取父给的可用宽（窄窗），同样只占一行。
+    #[test]
+    fn long_list_label_stays_in_its_row_wrap_width() {
+        assert_wraps_taller(LONG_LATIN, 14.0, 120, crate::theme::current().metrics.row_h);
+        let row = Element::base(Layout::None)
+            .widget(ListRow::new(LONG_LATIN, signal(99usize), 0))
+            .height(crate::theme::current().metrics.row_h);
+        let el = Element::col()
+            .width_match()
+            .children([row, Element::col().height(80).width_match()]);
+        let (pm, row) = paint_first_child(el, 120, 150);
+        assert!(row.w <= 120, "Wrap 宽应受父宽约束：{row:?}");
+        assert_no_ink_outside(&pm, row, "列表行 Wrap 宽");
     }
 }

@@ -1,0 +1,719 @@
+//! 输入法：`zwp_text_input_v3` 的纯逻辑部分（有单测），协议对象的收发在 `ime.rs`。
+//!
+//! # 协议要点
+//!
+//! - 文本焦点跟键盘焦点走：合成器发 `enter(surface)` / `leave`；焦点落在可编辑控件上时客户端
+//!   `enable` + 状态请求 + `commit`，离开可编辑控件时 `disable` + `commit`。`enter` 之后与
+//!   `disable` 之后，之前送出的状态全部作废，要重发。
+//! - 状态请求（`set_content_type` / `set_cursor_rectangle` / `set_surrounding_text`）都是
+//!   双缓冲的，`commit` 时生效。合成器数我们的 `commit` 次数作为 `done` 的 serial。
+//! - 输入法发来的 `preedit_string` / `commit_string` / `delete_surrounding_text` 也是双缓冲，
+//!   到 `done` 才按规定顺序一次性应用：清旧合成串 → 删周围文本 → 插入提交串 → 设新合成串。
+//! - `done` 的 serial 与我们的 `commit` 次数不符：文本照常应用，但**不改**状态，积压的状态
+//!   请求等到 serial 对上的 `done` 再发（协议原文）。
+//!
+//! 文本里的下标、长度都是 UTF-8 **字节**；框架的合成串与选区用**字符**，换算在这里做。
+
+use crate::event::{ImeHints, Preedit};
+
+/// 协议规定 `set_surrounding_text` 的文本不超过 4000 字节。
+pub(super) const SURROUNDING_MAX: usize = 4000;
+
+/// 希望输入法看到的状态（`None` = 焦点不在可编辑控件上，应 `disable`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Want {
+    /// 光标矩形（表面逻辑坐标）：x, y, w, h。
+    pub rect: (i32, i32, i32, i32),
+    /// 周围文本与光标 / 锚点（字节）。`None` = 宿主没给选区（不是文本控件），不发。密码框
+    /// 宿主给空正文，这里发空串（不把密码交给输入法）。
+    pub surrounding: Option<(String, u32, u32)>,
+    /// 焦点控件的身份：变了 = 换了输入框，协议要求重新 `enable`。
+    pub field: u64,
+    /// 内容类型（多行 / 密码）。
+    pub hints: ImeHints,
+}
+
+/// 要发的协议请求，按顺序。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Req {
+    Enable,
+    Disable,
+    /// 内容类型（多行 / 密码）。
+    ContentType(ImeHints),
+    Rect(i32, i32, i32, i32),
+    Surrounding(String, i32, i32),
+    Commit,
+}
+
+/// 删周围文本：协议的长度相对光标、**不含选区**——选区之前删 `before` 个字符、之后删 `after`
+/// 个，选区本身保留。`selected` 是选区的字符数（0 = 没有选区）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Delete {
+    pub before: usize,
+    pub after: usize,
+    pub selected: usize,
+}
+
+impl Delete {
+    pub fn is_empty(&self) -> bool {
+        self.before == 0 && self.after == 0
+    }
+}
+
+/// `done` 时要应用的一批改动（顺序见模块说明）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Batch {
+    /// 删周围文本（已按上次送出的周围文本从字节换算成字符）。
+    pub delete: Delete,
+    pub commit: Option<String>,
+    /// 新合成串（空 = 没有合成）。
+    pub preedit: Preedit,
+}
+
+#[derive(Default)]
+pub(super) struct TextInputState {
+    /// 当前有文本焦点（收到了 `enter`、还没 `leave`）。
+    entered: bool,
+    /// 已送出的 `commit` 次数。
+    commits: u32,
+    /// 最近一次 `done` 的 serial 与 `commits` 不符：状态请求先压着。
+    stale: bool,
+    /// 最近一次 `enable` 随之 `commit` 后的 serial。`done` 的 serial 比它小，说明合成器发出
+    /// 这批改动时还没处理我们的 `enable`：那是给上一个输入框的，合成串丢掉（提交串照收，免得丢字）。
+    enabled_at: u32,
+    /// 已随 `commit` 送出、合成器那边生效的状态。`enabled == false` 时其余无意义。
+    enabled: bool,
+    rect: Option<(i32, i32, i32, i32)>,
+    surrounding: Option<(String, u32, u32)>,
+    field: Option<u64>,
+    hints: Option<ImeHints>,
+    // ── 输入法发来、等 `done` 的 ──
+    preedit: Option<(String, i32, i32)>,
+    commit: Option<String>,
+    delete: (u32, u32),
+}
+
+impl TextInputState {
+    pub fn enabled(&self) -> bool {
+        self.entered && self.enabled
+    }
+
+    /// 文本焦点进来：之前的状态作废。
+    pub fn on_enter(&mut self) {
+        self.entered = true;
+        self.forget_sent();
+    }
+
+    /// 文本焦点离开：状态作废，没 `done` 的输入法改动丢弃。调用方负责清掉本地合成串。
+    pub fn on_leave(&mut self) {
+        self.entered = false;
+        self.forget_sent();
+        self.preedit = None;
+        self.commit = None;
+        self.delete = (0, 0);
+    }
+
+    fn forget_sent(&mut self) {
+        self.enabled = false;
+        self.rect = None;
+        self.surrounding = None;
+        self.field = None;
+        self.hints = None;
+        self.stale = false;
+    }
+
+    pub fn on_preedit(&mut self, text: Option<String>, begin: i32, end: i32) {
+        self.preedit = Some((text.unwrap_or_default(), begin, end));
+    }
+
+    pub fn on_commit_string(&mut self, text: Option<String>) {
+        self.commit = text;
+    }
+
+    pub fn on_delete(&mut self, before: u32, after: u32) {
+        self.delete = (before, after);
+    }
+
+    /// `done`：取出这一批改动，并按 serial 对账。
+    pub fn on_done(&mut self, serial: u32) -> Batch {
+        self.stale = serial != self.commits;
+        if serial < self.enabled_at {
+            // 迟到的一批：合成串与删除都是按上一个输入框算的，只留提交串。
+            self.preedit = None;
+            self.delete = (0, 0);
+        }
+        let (before, after) = std::mem::take(&mut self.delete);
+        // 删周围文本按「上次送出的周围文本」换算字节 → 字符（协议的长度相对于它）。没送过
+        // （密码框等）就按一字节一字符近似——输入法没有上下文时本就极少发删除。
+        let delete = match &self.surrounding {
+            Some((text, cursor, anchor)) => {
+                let (lo, hi) = (
+                    (*cursor).min(*anchor) as usize,
+                    (*cursor).max(*anchor) as usize,
+                );
+                Delete {
+                    before: chars_before(text, lo, before as usize),
+                    after: chars_after(text, hi, after as usize),
+                    selected: chars_after(text, lo, hi - lo),
+                }
+            }
+            None => Delete {
+                before: before as usize,
+                after: after as usize,
+                selected: 0,
+            },
+        };
+        let preedit = match self.preedit.take() {
+            Some((text, begin, end)) => preedit_from_bytes(text, begin, end),
+            None => Preedit::default(),
+        };
+        Batch {
+            delete,
+            commit: self.commit.take().filter(|s| !s.is_empty()),
+            preedit,
+        }
+    }
+
+    /// 让合成器那边的状态跟上 `want`，返回要发的请求（空 = 什么都不用发）。
+    pub fn sync(&mut self, want: Option<&Want>) -> Vec<Req> {
+        if !self.entered {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        // 焦点换到了另一个输入框（同一表面内也算）：协议要求重新 `enable`，先 `disable` 收掉
+        // 上一个——输入法据此换上下文（中英状态、联想），也不会把旧框的合成串带过来。
+        if want.is_some_and(|w| self.enabled && self.field != Some(w.field)) {
+            out.extend([Req::Disable, Req::Commit]);
+            self.commits = self.commits.wrapping_add(1);
+            self.forget_sent();
+        }
+        match want {
+            None => {
+                if self.enabled {
+                    out.push(Req::Disable);
+                    self.forget_sent();
+                }
+            }
+            Some(w) if !self.enabled => {
+                // enable 重置一切状态：把全部状态随它一起送。
+                out.extend([Req::Enable, Req::ContentType(w.hints)]);
+                // enable 连同输入法那边的合成 / 提交 / 删除状态一起重置（协议原文）：本地还没
+                // `done` 的也作废，免得刚放弃的合成串随一个迟到的 `done` 冒回来。
+                self.preedit = None;
+                self.commit = None;
+                self.delete = (0, 0);
+                self.enabled = true;
+                self.field = Some(w.field);
+                self.hints = Some(w.hints);
+                self.stale = false;
+                self.push_state(w, &mut out, true);
+            }
+            // serial 没对上：状态请求等下一个对得上的 `done`。（换框 / `reset` 走上面的 enable
+            // 分支，照常带全部状态——enable 本身就重置了状态，没有「旧状态」可冲突，有意为之。）
+            Some(_) if self.stale => {}
+            Some(w) => self.push_state(w, &mut out, false),
+        }
+        if out.last().is_some_and(|r| *r != Req::Commit) {
+            out.push(Req::Commit);
+            self.commits = self.commits.wrapping_add(1);
+        }
+        if out.contains(&Req::Enable) {
+            self.enabled_at = self.commits;
+        }
+        out
+    }
+
+    /// 放弃进行中的合成：`disable` 再 `enable`，输入法随之丢掉它手里的合成串。
+    pub fn reset(&mut self, want: &Want) -> Vec<Req> {
+        if !self.enabled() {
+            return Vec::new();
+        }
+        let mut out = self.sync(None);
+        out.extend(self.sync(Some(want)));
+        out
+    }
+
+    fn push_state(&mut self, w: &Want, out: &mut Vec<Req>, all: bool) {
+        if !all && self.hints != Some(w.hints) {
+            out.push(Req::ContentType(w.hints));
+            self.hints = Some(w.hints);
+        }
+        if all || self.rect != Some(w.rect) {
+            let (x, y, ww, h) = w.rect;
+            out.push(Req::Rect(x, y, ww, h));
+            self.rect = Some(w.rect);
+        }
+        if (all || self.surrounding != w.surrounding) && w.surrounding.is_some() {
+            if let Some((t, c, a)) = &w.surrounding {
+                out.push(Req::Surrounding(t.clone(), *c as i32, *a as i32));
+            }
+        }
+        self.surrounding = w.surrounding.clone();
+    }
+}
+
+/// 一次对账前的决定（`ime.rs` 的 `ime_update` 照此执行）。
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct UpdatePlan {
+    /// 先撤掉本地合成串：合成中焦点换到了另一个控件，或离开了文本控件。
+    pub clear_preedit: bool,
+    /// 这一轮不对账：窗口待重画，宿主报的光标还是上一帧的，交给重画后的收尾。
+    pub defer: bool,
+}
+
+/// - `old_field`：上次对账时的焦点控件（`None` = 当时没有文本焦点）。
+/// - `new_field`：现在的（`None` = 没有文本焦点，或被模态挡住）。
+/// - `composing`：本地正显示着合成串。`pending_paint`：窗口可见且待重画。
+///
+/// 撤合成串不受推迟影响（先撤，旧框就不会多显示一帧）；第一次拿到文本焦点不算「换了」。
+pub(super) fn plan_update(
+    old_field: Option<u64>,
+    new_field: Option<u64>,
+    composing: bool,
+    pending_paint: bool,
+) -> UpdatePlan {
+    let switched = match new_field {
+        None => true,
+        Some(n) => old_field.is_some_and(|o| o != n),
+    };
+    UpdatePlan {
+        clear_preedit: composing && switched,
+        defer: pending_paint,
+    }
+}
+
+/// 输入法的合成串（字节下标的光标）→ 框架的 `Preedit`（字符下标）。两端都是 -1 表示隐藏光标，
+/// 这里把光标放在末尾；两端不同时那一段作为「选中分句」高亮。
+fn preedit_from_bytes(text: String, begin: i32, end: i32) -> Preedit {
+    let len = text.chars().count();
+    let to_char = |b: i32| -> Option<usize> {
+        let b = usize::try_from(b).ok()?;
+        text.is_char_boundary(b).then(|| text[..b].chars().count())
+    };
+    let (b, e) = (to_char(begin), to_char(end));
+    let caret = b.unwrap_or(len).min(len);
+    let sel = match (b, e) {
+        (Some(b), Some(e)) if b != e => Some((b.min(e), b.max(e))),
+        _ => None,
+    };
+    Preedit {
+        text,
+        caret,
+        sel,
+        spans: Vec::new(),
+    }
+}
+
+/// 从字节下标 `cursor` 往前数 `bytes` 个字节，含多少个字符（落在字符中间的按整字符算）。
+fn chars_before(text: &str, cursor: usize, bytes: usize) -> usize {
+    let cursor = cursor.min(text.len());
+    let start = cursor.saturating_sub(bytes);
+    text.char_indices()
+        .filter(|&(i, _)| i >= start && i < cursor)
+        .count()
+}
+
+/// 从字节下标 `cursor` 往后数 `bytes` 个字节，含多少个字符。
+fn chars_after(text: &str, cursor: usize, bytes: usize) -> usize {
+    let cursor = cursor.min(text.len());
+    let end = cursor.saturating_add(bytes);
+    text.char_indices()
+        .filter(|&(i, _)| i >= cursor && i < end)
+        .count()
+}
+
+/// 框架给的正文与选区（字符下标）→ 协议的周围文本与光标 / 锚点（字节）。超过
+/// [`SURROUNDING_MAX`] 时截取光标附近的一段（前后各约一半，落在字符边界上）。
+pub(super) fn surrounding(text: &str, sel: (usize, usize)) -> (String, u32, u32) {
+    let byte_of = |c: usize| text.char_indices().nth(c).map_or(text.len(), |(i, _)| i);
+    // 选区的 start 是锚点、end 是光标（框架只给有序范围，方向无从得知；输入法只关心范围）。
+    let (anchor, cursor) = (byte_of(sel.0), byte_of(sel.1));
+    if text.len() <= SURROUNDING_MAX {
+        return (text.to_string(), cursor as u32, anchor as u32);
+    }
+    // 以光标为中心取一段；靠近末尾时往前多取，用满上限。选区超长时锚点被钳到段的边上，
+    // 光标（输入法最关心的）始终在段内。
+    let half = SURROUNDING_MAX / 2;
+    let mut start = cursor
+        .saturating_sub(half)
+        .min(text.len() - SURROUNDING_MAX);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = (start + SURROUNDING_MAX).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let clip = |b: usize| (b.clamp(start, end) - start) as u32;
+    (text[start..end].to_string(), clip(cursor), clip(anchor))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn want(x: i32) -> Want {
+        Want {
+            rect: (x, 10, 1, 20),
+            surrounding: Some(("ab".into(), 2, 2)),
+            field: 1,
+            hints: ImeHints::default(),
+        }
+    }
+
+    #[test]
+    fn switching_to_another_field_disables_then_reenables_with_its_content_type() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&want(1)));
+        let pw = ImeHints {
+            multiline: false,
+            password: true,
+        };
+        let other = Want {
+            field: 2,
+            hints: pw,
+            surrounding: None,
+            ..want(1)
+        };
+        assert_eq!(
+            s.sync(Some(&other)),
+            vec![
+                Req::Disable,
+                Req::Commit,
+                Req::Enable,
+                Req::ContentType(pw),
+                Req::Rect(1, 10, 1, 20),
+                Req::Commit
+            ],
+            "同一表面内换输入框：光标位置恰好相同也要重新 enable"
+        );
+        assert_eq!(
+            s.on_done(3),
+            Batch::default(),
+            "首次 + 切换时的两次 commit 都计数"
+        );
+        assert!(!s.stale);
+        assert!(s.sync(Some(&other)).is_empty());
+    }
+
+    #[test]
+    fn switching_fields_while_stale_still_reenables_with_full_state() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&want(1))); // commits = 1
+        s.on_done(0); // serial 对不上 → stale
+        assert!(s.sync(Some(&want(5))).is_empty(), "同一框：状态请求压着");
+        let r = s.sync(Some(&Want {
+            field: 2,
+            ..want(5)
+        }));
+        assert_eq!(r[..3], [Req::Disable, Req::Commit, Req::Enable]);
+        assert!(
+            r.contains(&Req::Rect(5, 10, 1, 20)),
+            "enable 之后带全部状态"
+        );
+        assert!(!s.stale, "enable 重置状态，stale 随之解除");
+    }
+
+    #[test]
+    fn enable_discards_input_method_events_not_yet_done() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&want(1)));
+        s.on_preedit(Some("zhong".into()), 5, 5);
+        s.on_commit_string(Some("x".into()));
+        s.reset(&want(1)); // 放弃合成：disable + enable
+        assert_eq!(s.on_done(3), Batch::default(), "放弃之前的合成串不再冒出来");
+    }
+
+    #[test]
+    fn a_batch_the_compositor_sent_before_seeing_our_enable_keeps_only_the_commit() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        // commits = 1，enabled_at = 1。
+        s.sync(Some(&want(1)));
+        // 换框：disable(2) + enable(3)，enabled_at = 3。
+        s.sync(Some(&Want {
+            field: 2,
+            ..want(1)
+        }));
+        // 合成器还没处理我们的换框时发出的一批（serial 1）：给上一个框的。
+        s.on_preedit(Some("zhong".into()), 5, 5);
+        s.on_commit_string(Some("中".into()));
+        s.on_delete(3, 0);
+        let b = s.on_done(1);
+        assert_eq!(b.preedit, Preedit::default(), "旧框的合成串不落到新框");
+        assert!(b.delete.is_empty(), "删除按旧框的正文算，不能用");
+        assert_eq!(b.commit.as_deref(), Some("中"), "提交串照收，免得丢字");
+        // serial 对上之后照常。
+        s.on_preedit(Some("ni".into()), 2, 2);
+        assert_eq!(s.on_done(3).preedit.text, "ni");
+    }
+
+    #[test]
+    fn content_type_change_on_the_same_field_is_sent_without_reenabling() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&want(1)));
+        let ml = ImeHints {
+            multiline: true,
+            password: false,
+        };
+        assert_eq!(
+            s.sync(Some(&Want {
+                hints: ml,
+                ..want(1)
+            })),
+            vec![Req::ContentType(ml), Req::Commit]
+        );
+    }
+
+    #[test]
+    fn switching_fields_while_composing_clears_the_preedit_first() {
+        assert_eq!(
+            plan_update(Some(1), Some(2), true, false),
+            UpdatePlan {
+                clear_preedit: true,
+                defer: false
+            }
+        );
+        assert!(
+            plan_update(Some(1), None, true, false).clear_preedit,
+            "离开文本控件（或被模态挡住）也撤"
+        );
+        assert!(
+            !plan_update(Some(1), Some(1), true, false).clear_preedit,
+            "同一个框：不撤"
+        );
+        assert!(
+            !plan_update(Some(1), Some(2), false, false).clear_preedit,
+            "没在合成：无可撤"
+        );
+        assert!(
+            !plan_update(None, Some(2), true, false).clear_preedit,
+            "第一次拿到文本焦点不算「换了」"
+        );
+    }
+
+    #[test]
+    fn pending_repaint_defers_the_sync_but_not_the_preedit_clear() {
+        assert_eq!(
+            plan_update(Some(1), Some(2), true, true),
+            UpdatePlan {
+                clear_preedit: true,
+                defer: true
+            },
+            "旧框的合成串现在就撤，状态等重画后再对"
+        );
+        assert!(plan_update(Some(1), Some(1), false, true).defer);
+        assert!(!plan_update(Some(1), Some(1), false, false).defer);
+    }
+
+    #[test]
+    fn nothing_is_sent_before_enter() {
+        let mut s = TextInputState::default();
+        assert!(s.sync(Some(&want(1))).is_empty());
+    }
+
+    #[test]
+    fn enable_sends_the_whole_state_once_then_only_changes() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        assert_eq!(
+            s.sync(Some(&want(1))),
+            vec![
+                Req::Enable,
+                Req::ContentType(ImeHints::default()),
+                Req::Rect(1, 10, 1, 20),
+                Req::Surrounding("ab".into(), 2, 2),
+                Req::Commit
+            ]
+        );
+        assert!(s.sync(Some(&want(1))).is_empty(), "没变化：不再 commit");
+        assert_eq!(
+            s.sync(Some(&want(5))),
+            vec![Req::Rect(5, 10, 1, 20), Req::Commit],
+            "只有光标动了"
+        );
+    }
+
+    #[test]
+    fn disable_is_sent_once_and_leaving_editable_focus_then_back_reenables() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&want(1)));
+        assert_eq!(s.sync(None), vec![Req::Disable, Req::Commit]);
+        assert!(s.sync(None).is_empty(), "disable 去重");
+        assert_eq!(s.sync(Some(&want(1)))[0], Req::Enable);
+    }
+
+    #[test]
+    fn enter_invalidates_what_was_sent() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&want(1)));
+        s.on_leave();
+        assert!(
+            s.sync(Some(&want(1))).is_empty(),
+            "leave 之后请求会被忽略，不发"
+        );
+        s.on_enter();
+        assert_eq!(
+            s.sync(Some(&want(1)))[0],
+            Req::Enable,
+            "enter 之后要重新 enable"
+        );
+        // 换到本应用的另一个表面：合成器也会发 enter，之前的状态同样作废。
+        s.on_enter();
+        assert_eq!(s.sync(Some(&want(1)))[0], Req::Enable);
+    }
+
+    #[test]
+    fn done_applies_the_batch_in_protocol_order_and_resets_it() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&Want {
+            rect: (0, 0, 1, 1),
+            surrounding: Some(("你好ab".into(), 6, 6)),
+            field: 1,
+            hints: ImeHints::default(),
+        }));
+        s.on_delete(6, 1);
+        s.on_commit_string(Some("世界".into()));
+        s.on_preedit(Some("zhong".into()), 5, 5);
+        let b = s.on_done(1);
+        assert_eq!(
+            b.delete,
+            Delete {
+                before: 2,
+                after: 1,
+                selected: 0
+            },
+            "6 字节 = 两个汉字；后面 1 字节 = a"
+        );
+        assert_eq!(b.commit.as_deref(), Some("世界"));
+        assert_eq!(
+            b.preedit,
+            Preedit {
+                text: "zhong".into(),
+                caret: 5,
+                sel: None,
+                spans: Vec::new(),
+            }
+        );
+        assert_eq!(s.on_done(1), Batch::default(), "done 之后回到初值");
+    }
+
+    #[test]
+    fn mismatched_serial_still_applies_text_but_holds_state_requests() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&want(1))); // commits = 1
+        s.on_commit_string(Some("x".into()));
+        let b = s.on_done(0);
+        assert_eq!(b.commit.as_deref(), Some("x"), "文本照常应用");
+        assert!(s.sync(Some(&want(9))).is_empty(), "状态请求压着");
+        s.on_done(1);
+        assert_eq!(
+            s.sync(Some(&want(9))),
+            vec![Req::Rect(9, 10, 1, 20), Req::Commit],
+            "serial 对上后补发"
+        );
+        assert!(!s.sync(None).is_empty(), "disable 不受 serial 限制");
+    }
+
+    #[test]
+    fn serial_counts_every_commit() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        s.sync(Some(&want(1)));
+        s.sync(Some(&want(2)));
+        s.sync(Some(&want(3)));
+        assert_eq!(s.on_done(3), Batch::default());
+        assert!(!s.stale);
+    }
+
+    #[test]
+    fn preedit_cursor_bytes_become_chars_and_hidden_cursor_goes_to_end() {
+        let p = preedit_from_bytes("中文ab".into(), 3, 3);
+        assert_eq!((p.caret, p.sel), (1, None));
+        let p = preedit_from_bytes("中文ab".into(), -1, -1);
+        assert_eq!(p.caret, 4);
+        let p = preedit_from_bytes("中文ab".into(), 0, 6);
+        assert_eq!((p.caret, p.sel), (0, Some((0, 2))), "两端不同 = 高亮分句");
+        let p = preedit_from_bytes("中文".into(), 1, 1);
+        assert_eq!(p.caret, 2, "落在字符中间的非法下标：光标放末尾");
+    }
+
+    #[test]
+    fn reset_disables_then_reenables_only_when_enabled() {
+        let mut s = TextInputState::default();
+        assert!(s.reset(&want(1)).is_empty());
+        s.on_enter();
+        s.sync(Some(&want(1)));
+        let r = s.reset(&want(1));
+        assert_eq!(r[..2], [Req::Disable, Req::Commit]);
+        assert_eq!(r[2], Req::Enable);
+        assert_eq!(r.last(), Some(&Req::Commit));
+    }
+
+    #[test]
+    fn surrounding_converts_char_selection_to_bytes() {
+        assert_eq!(surrounding("你好ab", (2, 3)), ("你好ab".into(), 7, 6));
+        assert_eq!(surrounding("", (0, 0)), (String::new(), 0, 0));
+    }
+
+    #[test]
+    fn long_surrounding_is_clipped_around_the_cursor_on_char_boundaries() {
+        let text: String = "字".repeat(3000); // 9000 字节
+        let (t, c, a) = surrounding(&text, (2000, 2000));
+        assert!(t.len() <= SURROUNDING_MAX);
+        assert!(t.chars().all(|ch| ch == '字'), "没有切坏字符");
+        assert_eq!(c, a);
+        assert!(t.is_char_boundary(c as usize));
+        assert!(
+            (c as usize) > 1000 && (c as usize) < 3000,
+            "光标在截取段中部附近：{c}"
+        );
+    }
+
+    #[test]
+    fn delete_is_measured_outside_the_selection() {
+        let mut s = TextInputState::default();
+        s.on_enter();
+        // 「你好ab」里选中了「好」（字节 3..6，光标在 6）。
+        s.sync(Some(&Want {
+            rect: (0, 0, 1, 1),
+            surrounding: Some(("你好ab".into(), 6, 3)),
+            field: 1,
+            hints: ImeHints::default(),
+        }));
+        s.on_delete(6, 2);
+        assert_eq!(
+            s.on_done(1).delete,
+            Delete {
+                before: 1,
+                after: 2,
+                selected: 1
+            },
+            "选区前只有「你」可删、选区后删「ab」，选区里的「好」保留"
+        );
+    }
+
+    #[test]
+    fn long_surrounding_near_the_end_uses_the_whole_budget() {
+        let text: String = "a".repeat(9000);
+        let (t, c, _) = surrounding(&text, (8990, 8990));
+        assert_eq!(t.len(), SURROUNDING_MAX);
+        assert_eq!(c as usize, SURROUNDING_MAX - 10);
+    }
+
+    #[test]
+    fn delete_lengths_count_whole_chars() {
+        assert_eq!(chars_before("a你b", 4, 3), 1);
+        assert_eq!(chars_before("a你b", 4, 4), 2);
+        assert_eq!(chars_after("a你b", 1, 3), 1);
+        assert_eq!(chars_after("a你b", 1, 100), 2);
+    }
+}

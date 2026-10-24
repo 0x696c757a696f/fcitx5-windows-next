@@ -61,6 +61,8 @@ struct SavedStyle {
     bg: Option<Brush>,
     shadow: Option<Shadow>,
     corner: f32,
+    /// 行若设了四角半径（`Element::corners`），浮起期间让位给主题的统一圆角，结束时原样还原。
+    corners: Option<crate::geometry::Corners>,
 }
 
 /// 手柄与列表共享的拖拽状态。
@@ -471,7 +473,7 @@ impl ReorderList {
             let mut c = self.ctl.borrow_mut();
             c.phase = Phase::Dragging;
             c.cur_y = y;
-            c.tweens = vec![Transition::new(0.0); slots.len()];
+            c.tweens = vec![Transition::new(0.0).movement(); slots.len()];
             c.slots = slots;
             c.to = from;
             c.row_id = Some(row_id);
@@ -490,10 +492,13 @@ impl ReorderList {
                 bg: n.style.bg.clone(),
                 shadow: n.style.shadow,
                 corner: n.style.corner_radius,
+                corners: n.style.corner_radii,
             };
             n.style.bg = Some(Brush::Solid(bg));
             n.style.shadow = Some(shadow);
             n.style.corner_radius = corner;
+            // 四角半径优先于统一半径：不清掉的话浮起样式的圆角不生效。
+            n.style.corner_radii = None;
             self.ctl.borrow_mut().saved = Some(saved);
         }
     }
@@ -521,6 +526,7 @@ impl ReorderList {
                     n.style.bg = s.bg;
                     n.style.shadow = s.shadow;
                     n.style.corner_radius = s.corner;
+                    n.style.corner_radii = s.corners;
                 }
             }
         }
@@ -613,7 +619,7 @@ impl Widget for ReorderList {
                         c.phase = Phase::Settling;
                         let (from, dy) = (c.from, c.drag_dy());
                         if let Some(t) = c.tweens.get_mut(from) {
-                            *t = Transition::new(dy as f32);
+                            t.settle(dy as f32);
                         }
                         drop(c);
                         ctx.release_capture();
@@ -653,7 +659,7 @@ impl Widget for ReorderList {
             if c.phase == Phase::Dragging {
                 let (from, dy) = (c.from, c.drag_dy());
                 if let Some(t) = c.tweens.get_mut(from) {
-                    *t = Transition::new(dy as f32);
+                    t.settle(dy as f32);
                 }
             }
             c.phase = Phase::Settling;
@@ -711,7 +717,7 @@ impl Widget for ReorderList {
                 };
                 if dragging && i == from {
                     // 被拖行直接跟指针：补间会产生橡皮筋般的滞后感。
-                    *t = Transition::new(drag_dy);
+                    t.settle(drag_dy);
                     drag_dy
                 } else {
                     let dur = if i == from { fast } else { normal };

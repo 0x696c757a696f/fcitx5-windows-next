@@ -17,6 +17,7 @@
 
 pub mod clipboard;
 pub mod hotkey;
+pub mod open_files;
 pub mod tray;
 pub mod url_scheme;
 pub mod window;
@@ -30,18 +31,13 @@ pub(crate) fn run(
     waker: Option<std::sync::Arc<crate::sync::WakerShared>>,
     single: Option<crate::single_instance::SingleInstance>,
 ) {
-    // 全局动画开关：显式配置优先；否则截屏路径恒开（保证终态稳定）、窗口路径随系统设置。
-    let os_default = if cfg.screenshot.is_some() {
-        true
-    } else {
-        os_animations_enabled()
-    };
-    crate::anim::set_enabled(cfg.animations.unwrap_or(os_default));
+    super::apply_motion_level(&cfg, os_reduce_motion);
     // 光标闪烁走**插入符**设置（`NSTextInsertionPointBlinkPeriod*`），不跟"减弱动态效果"
-    // 走：两者在系统里本就是分开的开关。应用显式 `animations(false)` 时连它一起关。
-    crate::ui::caret::set_blink_period_ms(match cfg.animations {
-        Some(false) => None,
-        _ => os_caret_blink_half_ms(),
+    // 走：两者在系统里本就是分开的开关。应用把动效强制关死时连它一起关。
+    crate::ui::caret::set_blink_period_ms(if super::motion_forced_off(&cfg) {
+        None
+    } else {
+        os_caret_blink_half_ms()
     });
 
     if let Some(path) = cfg.screenshot.clone() {
@@ -104,10 +100,9 @@ pub(crate) fn activate_app(app: &objc2_app_kit::NSApplication) {
     }
 }
 
-/// 查询系统“显示动画”偏好（减弱动态效果）。占位：默认开。
-fn os_animations_enabled() -> bool {
-    // TODO(macos): 读取 NSWorkspace.accessibilityDisplayShouldReduceMotion，取反。
-    true
+/// 系统是否要求减弱动态效果（辅助功能 › 显示 › 减弱动态效果）。
+fn os_reduce_motion() -> bool {
+    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
 }
 
 /// 查询系统**插入符**闪烁半周期（ms）。`None` = 用户关掉了闪烁。
@@ -165,6 +160,15 @@ pub(crate) fn system_prefers_dark() -> bool {
 pub fn drag_files(
     _paths: &[impl AsRef<std::path::Path>],
     _allow_move: bool,
+) -> crate::platform::DragEffect {
+    crate::platform::DragEffect::None
+}
+
+/// 见 win32 `drag_files_with`。拖出未接入，`before_drop` 不会被调。
+pub fn drag_files_with(
+    _paths: &[impl AsRef<std::path::Path>],
+    _allow_move: bool,
+    _before_drop: Option<Box<dyn FnOnce() -> bool>>,
 ) -> crate::platform::DragEffect {
     crate::platform::DragEffect::None
 }

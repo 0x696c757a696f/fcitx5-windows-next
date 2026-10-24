@@ -20,7 +20,7 @@
 //! 自带的输入框在关掉客户区动画后插入符照样闪。故：
 //! - **闪烁**看 [`blink_period_ms`]（由宿主启动时从平台注入；`None` = 系统要求不闪），
 //!   周期也跟着它走，与 [`crate::anim::enabled`] 无关。
-//! - **平滑移动**是过渡动画，归 [`crate::anim::enabled`] 管，关掉即瞬移。
+//! - **平滑移动**是位移类过渡，归 [`crate::anim::movement_enabled`] 管：减弱动效或关闭动画时瞬移。
 //! - [`set_animated`] 是总闸（截图/视觉回归用）：关掉则恒实心、不滑行、不续帧。
 //! - **窗口失活**（[`set_window_active`]）同样转静态：后台窗口没有理由按刷新率出帧。
 
@@ -51,7 +51,10 @@ const PHASE_MIN_ALPHA: f32 = 0.35;
 /// 平滑移动时长（ms）。够短，滑行读起来是"跟手"而不是"追不上"。
 pub const MOVE_MS: u32 = 90;
 /// 默认光标宽度（逻辑 px，绘制时向下吸附到整数物理像素）。
-pub const DEFAULT_WIDTH: f32 = 2.0;
+///
+/// 取 1.5 而不是 2：吸附是向下取整，2 在 150% 下正好落成 3 物理像素，明显偏粗；1.5 在
+/// 150% 下是 2、200% 下是 3。代价是 100% / 125% 下只有 1 物理像素——与系统插入符同宽。
+pub const DEFAULT_WIDTH: f32 = 1.5;
 /// alpha 低于此值视作不可见，跳过绘制（同时省掉反色重绘的一次排版）。
 const ALPHA_EPS: f32 = 0.004;
 
@@ -332,7 +335,7 @@ impl CaretState {
     ///
     /// `same_line` 为假（换行/首次出现）时不滑行：跨行滑行会让光标斜着飞越文字。
     fn resolve_x(&self, target_x: i32, same_line: bool, smooth: bool) -> (f32, bool) {
-        let smooth = smooth && animated() && anim::enabled();
+        let smooth = smooth && animated() && anim::movement_enabled();
         let target = target_x as f32;
         let mut tr = match self.x.get() {
             // 换行/首次出现：不滑行，直接落到新位置。

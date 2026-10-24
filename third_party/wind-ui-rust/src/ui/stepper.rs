@@ -142,20 +142,7 @@ impl NumSpec {
     /// 用 parse 当门禁会让"删光重打"和"打小数点"直接卡死。真正的取值合法性交给
     /// [`Self::parse`] 与提交时的钳制。
     fn accepts(&self, s: &str) -> bool {
-        let body = match s.strip_prefix('-') {
-            // 负号只在允许负值时放行，且只能打头（`body` 里再出现即非法）。
-            Some(rest) if self.min < 0.0 => rest,
-            Some(_) => return false,
-            None => s,
-        };
-        if body.contains('-') {
-            return false;
-        }
-        let dots = body.chars().filter(|c| *c == '.').count();
-        if dots > usize::from(self.decimals > 0) {
-            return false;
-        }
-        body.chars().all(|c| c.is_ascii_digit() || c == '.')
+        accepts_number(s, self.min < 0.0, self.decimals > 0)
     }
 
     /// 正文 → 数值。半成品（空串 / `-` / `.`）返回 `None`，表示"这一刻没有可用值"。
@@ -166,6 +153,27 @@ impl NumSpec {
         }
         t.parse::<f64>().ok().filter(|v| v.is_finite())
     }
+}
+
+/// 数字输入的准入判据（见 [`NumSpec::accepts`]）：只认 ASCII 数字，`allow_negative` 时
+/// 允许打头的一个 `-`，`allow_decimal` 时允许一个 `.`。半成品（`""`、`"-"`、`"1."`）放行。
+///
+/// `Element::stepper` 与 `.numeric()` 共用这一把尺子，两处「能打进去什么」不会分叉。
+pub(crate) fn accepts_number(s: &str, allow_negative: bool, allow_decimal: bool) -> bool {
+    let body = match s.strip_prefix('-') {
+        // 负号只在允许负值时放行，且只能打头（`body` 里再出现即非法）。
+        Some(rest) if allow_negative => rest,
+        Some(_) => return false,
+        None => s,
+    };
+    if body.contains('-') {
+        return false;
+    }
+    let dots = body.chars().filter(|c| *c == '.').count();
+    if dots > usize::from(allow_decimal) {
+        return false;
+    }
+    body.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
 // ---------------- 共享状态 ----------------
@@ -256,12 +264,19 @@ impl Widget for StepperFrame {
         canvas.fill_round_rect(x, y, w, h, corner, &Paint::fill(bg));
 
         // 焦点在中部输入框身上，本节点自己永远拿不到焦点，故读共享标志。
-        let border = if self.shared.focused.get() {
-            pal.accent
+        // 聚焦加粗与输入框、下拉框同一规则（`border_width_focus`）。
+        let focused = self.shared.focused.get();
+        let border = if focused {
+            pal.accent_text()
         } else {
             st.border(pal)
         };
-        let bw = th.metrics.border_width.to_logical(canvas.dpi_scale());
+        let bw = if focused {
+            th.metrics.border_width_focus
+        } else {
+            th.metrics.border_width
+        }
+        .to_logical(canvas.dpi_scale());
         canvas.stroke_round_rect(x, y, w, h, corner, bw, &Paint::fill(border));
 
         let div = Paint::fill(st.border(pal));
@@ -355,7 +370,12 @@ impl StepperButton {
 
 impl Widget for StepperButton {
     fn measure(&self, _avail: Size, style: &Style, _text: &mut dyn TextEngine) -> Size {
-        Size::new(BTN_W, (style.font_size as i32) + 16)
+        Size::new(
+            BTN_W,
+            crate::theme::current()
+                .metrics
+                .control_height(style.font_size()),
+        )
     }
 
     fn paint(
@@ -714,6 +734,10 @@ impl Widget for NumberField {
     fn focusable(&self) -> bool {
         self.inner.focusable()
     }
+    /// 焦点由外层 `StepperFrame` 的整圈外框表达；焦点环若画在本节点上，只会圈住中间那段。
+    fn frame_shows_focus(&self) -> bool {
+        true
+    }
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         self.inner.as_any_mut()
     }
@@ -731,6 +755,16 @@ impl Widget for NumberField {
     }
     fn ime_text(&self) -> Option<String> {
         self.inner.ime_text()
+    }
+    fn ime_hints(&self) -> crate::event::ImeHints {
+        self.inner.ime_hints()
+    }
+    fn accepts_ime(&self) -> bool {
+        // 与 `ime_caret` 一并转发：只读的数值框也该关掉输入法。
+        self.inner.accepts_ime()
+    }
+    fn accepts_text(&self) -> bool {
+        self.inner.accepts_text()
     }
     fn wants_right_click(&self) -> bool {
         self.inner.wants_right_click()

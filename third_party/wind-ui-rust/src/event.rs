@@ -1,7 +1,7 @@
 //! 输入事件类型。平台层产生物理像素坐标，但 `UiHost::on_pointer` 在分发前
 //! 已 ÷scale 转为**逻辑坐标**——控件 `on_event` 收到的 pos 是逻辑坐标。
 
-use crate::geometry::{Point, Rect};
+use crate::geometry::{Color, Point, Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
@@ -184,9 +184,39 @@ pub fn system_prefers_dark() -> bool {
 pub struct ShortcutCtx {
     pub(crate) focus_main: bool,
     pub(crate) close: bool,
+    pub(crate) focused: Option<crate::core::NodeId>,
+    pub(crate) focus_text: bool,
 }
 
 impl ShortcutCtx {
+    /// 按下这个键时持有键盘焦点的节点（网页的 `document.activeElement`），无焦点为 `None`。
+    ///
+    /// 能走到快捷键回调，说明焦点控件**没要**这个键（它先于回调拿到每一个键）；但没要
+    /// 不等于应用该抢——比如方向键落在文本框行首没得移，应用的"←翻页"仍不该触发。
+    /// 判据用 [`focus_accepts_text`](Self::focus_accepts_text) 更直接。
+    pub fn focused_node(&self) -> Option<crate::core::NodeId> {
+        self.focused
+    }
+
+    /// 焦点是否落在接受文字输入的控件上（可编辑文本框等，只读框不算）。
+    ///
+    /// 「焦点在输入框里时全局快捷键让路」的标准判据：
+    ///
+    /// ```no_run
+    /// # use windui::prelude::*;
+    /// # use windui::event::Key;
+    /// App::new("t", 400, 300).on_shortcut(|ctx, ev| match ev.key {
+    ///     Key::Left if !ctx.focus_accepts_text() => {
+    ///         // 翻到上一页……
+    ///         true
+    ///     }
+    ///     _ => false,
+    /// });
+    /// ```
+    pub fn focus_accepts_text(&self) -> bool {
+        self.focus_text
+    }
+
     /// 把键盘焦点交还给声明了 [`Element::autofocus`](crate::ui::Element::autofocus)
     /// 的那个控件，并按其模式处理（`autofocus_select_all` 会一并全选）。
     ///
@@ -516,6 +546,74 @@ pub enum CursorShape {
     /// 上下调整（↕）。横向分栏的分隔条、可拖高的行边界。与 [`SizeWE`](Self::SizeWE)
     /// 对称：分栏容器两个方向都有，光标形状也得两个方向都有。
     SizeNS,
+    /// 四向移动（✥，CSS `cursor: move`）。浮动面板的标题条、可拖动的整块内容。
+    ///
+    /// 与 [`SizeWE`](Self::SizeWE) / [`SizeNS`](Self::SizeNS) 说的「沿一个方向拉大小」不同，
+    /// 它说的是「按住这里，整块跟着走」。macOS 没有公开的四向箭头 API，取系统自带的
+    /// HIServices `move` 光标资源，读不到时退回张开的手。
+    SizeAll,
+}
+
+/// 滚轮量 → 像素位移的换算，**留着不足 1 像素的零头**给下一次。
+///
+/// 滚轮量以 1/120 格为单位（`PointerKind::Wheel`）。整格（±120 的倍数）换算与直接
+/// `-delta * px_per_notch / 120` 完全相同；高精度滚轮 / 触控板一次只报几个单位，直接
+/// 整除会得 0、永远滚不动（Wayland 的 `axis_value120` 与触控板连续量就是这样），
+/// 所以零头攒着。换方向时旧零头作废，不拿来抵消新方向。
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct WheelCarry {
+    /// 未兑现的位移，单位 1/120 像素（正 = 向下）。
+    rem: i32,
+}
+
+impl WheelCarry {
+    /// 本次滚轮对应的像素位移（正 = 内容向下滚、scroll 增大；与 `delta` 符号相反）。
+    pub(crate) fn scroll_px(&mut self, delta: i32, px_per_notch: i32) -> i32 {
+        let total = -delta * px_per_notch;
+        if total.signum() * self.rem.signum() < 0 {
+            self.rem = 0;
+        }
+        let t = total + self.rem;
+        self.rem = t % 120;
+        t / 120
+    }
+
+    /// 滚到头冒泡给外层时丢掉零头：那一下没有在本控件兑现。
+    pub(crate) fn reset(&mut self) {
+        self.rem = 0;
+    }
+}
+
+#[cfg(test)]
+mod wheel_carry_tests {
+    use super::WheelCarry;
+
+    #[test]
+    fn whole_notches_match_plain_division() {
+        let mut c = WheelCarry::default();
+        for d in [120, -120, 240, -360, 60] {
+            assert_eq!(c.scroll_px(d, 48), -d * 48 / 120, "delta {d}");
+        }
+    }
+
+    #[test]
+    fn fractions_accumulate() {
+        let mut c = WheelCarry::default();
+        assert_eq!(c.scroll_px(-1, 48), 0);
+        assert_eq!(c.scroll_px(-2, 48), 1, "3/120 格 × 48 = 1.2 像素");
+        c.reset();
+        assert_eq!(c.scroll_px(-2, 48), 0, "reset 后从零攒起");
+    }
+
+    #[test]
+    fn direction_change_drops_the_old_fraction() {
+        let mut c = WheelCarry::default();
+        assert_eq!(c.scroll_px(-2, 48), 0, "攒下 0.8 像素（向下）");
+        // 改向上：有复位时 -0.4 像素、没复位时会被旧的 0.8 抵成 +0.4。
+        assert_eq!(c.scroll_px(1, 48), 0);
+        // 再向上 1.2 像素：有复位时累计 -1.6 → 出 -1；没复位时累计 -0.8 → 出 0。
+        assert_eq!(c.scroll_px(3, 48), -1, "旧方向的零头不能拿来抵消新方向");
+    }
 }
 
 /// 指针动作。
@@ -530,6 +628,12 @@ pub enum PointerKind {
     Leave,
     /// 滚轮，携带步进量（正=上滚）。
     Wheel(i32),
+    /// 横向滚轮（触控板横滑、倾斜滚轮），单位同 `Wheel`，**正=向左滚**（朝内容起点，
+    /// 与 `Wheel` 正=上滚同向）。各平台原始符号不一，平台层统一换算成这个约定。
+    ///
+    /// Shift+竖向滚轮不在平台层转换，仍以 `Wheel` 送达、`mods.shift` 置位，由滚动容器
+    /// 自己转成横向。
+    HWheel(i32),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -745,6 +849,43 @@ pub struct Preedit {
     /// 合成串内当前「选中分句」的字符范围。日文分节转换会把长串切成几段、
     /// 高亮其中一段；中文拼音一般整段或 `None`。
     pub sel: Option<(usize, usize)>,
+    /// 输入法指定的逐段样式（下划线线型、粗细、颜色）。空 = 输入法没给，控件按默认画法
+    /// （细实线下划线，选中分句加粗）；非空时控件照着画，`sel` 只用来标位置、不再决定粗细，
+    /// 没被任何一段覆盖的字不加修饰。目前只有 win32 的 TSF 输入法会给（见 `App::ime_inline`）。
+    pub spans: Vec<PreeditSpan>,
+}
+
+/// 合成串里一段的显示样式（见 [`Preedit::spans`]），对应 TSF 的 `TF_DISPLAYATTRIBUTE`。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PreeditSpan {
+    /// 字符范围 `start..end`（合成串内的字符索引）。
+    pub range: (usize, usize),
+    /// 下划线线型。
+    pub underline: UnderlineStyle,
+    /// 粗下划线（通常标当前正在转换的分句）。
+    pub bold: bool,
+    /// 下划线颜色。`None` = 跟随 `fg`，再没有就用主题的合成串下划线色。
+    pub line: Option<Color>,
+    /// 文字颜色。`None` = 正文色。
+    pub fg: Option<Color>,
+    /// 背景色。`None` = 不画背景。
+    pub bg: Option<Color>,
+}
+
+/// 合成串下划线线型。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UnderlineStyle {
+    /// 不画下划线。
+    None,
+    /// 实线。
+    #[default]
+    Solid,
+    /// 点线。
+    Dot,
+    /// 虚线。
+    Dash,
+    /// 波浪线。
+    Squiggle,
 }
 
 impl Preedit {
@@ -757,6 +898,25 @@ impl Preedit {
     pub fn char_len(&self) -> usize {
         self.text.chars().count()
     }
+}
+
+/// 可编辑文本控件交给输入法的内容类型（见 `Widget::ime_hints`）。平台据此给输入法提示：
+/// 密码框不联想、不记忆（Wayland 的 `sensitive_data` / `hidden_text`），多行框里回车是换行。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImeHints {
+    /// 多行编辑（回车插入换行，而不是提交）。
+    pub multiline: bool,
+    /// 密码输入：输入法不应联想、记忆或显示明文候选。
+    pub password: bool,
+}
+
+/// 焦点文本控件的身份与内容类型（见 `AppHandler::ime_field`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImeField {
+    /// 焦点控件的身份：焦点换到另一个控件必变（输入法据此换上下文）。只用于比较相等。
+    pub id: u64,
+    /// 焦点控件的内容类型（见 `Widget::ime_hints`）。
+    pub hints: ImeHints,
 }
 
 /// 浮层菜单/下拉项的动作。两种：向焦点控件合成按键（右键菜单复用控件键盘处理、
@@ -823,6 +983,9 @@ pub struct MenuItem {
     pub checkable: bool,
     /// 前置图标（字符/emoji，None=无图标列）。
     pub icon: Option<String>,
+    /// 前置位图图标（单色模板，绘制时按本项文字色着色：禁用变灰、悬停随强调色）。
+    /// 与 [`icon`](Self::icon) 同占图标列；两者都给时用位图。
+    pub icon_image: Option<std::rc::Rc<crate::render::image::Image>>,
     /// 尾随快捷键文本（如 "⌘C"）。submenu 非空时显示右箭头优先。
     pub shortcut: Option<String>,
     /// 分隔线项（label/action 忽略，渲染为细线，不可命中）。
@@ -890,6 +1053,7 @@ impl MenuItem {
             checked: false,
             checkable: false,
             icon: None,
+            icon_image: None,
             shortcut: None,
             separator: false,
             submenu: Vec::new(),
@@ -954,6 +1118,14 @@ impl MenuItem {
     /// 设置前置图标（字符/emoji）。
     pub fn icon(mut self, icon: impl Into<String>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+    /// 设置前置位图图标（单色模板，按本项文字色着色）。
+    ///
+    /// 给"同一组命令在工具栏是图标按钮、在菜单里是一行字"这类场景：菜单里带上同一个
+    /// 图标，两边一眼对得上。模板颜色无关紧要，只用其 alpha。
+    pub fn icon_image(mut self, img: std::rc::Rc<crate::render::image::Image>) -> Self {
+        self.icon_image = Some(img);
         self
     }
     /// 设置尾随快捷键文本。
@@ -1116,7 +1288,8 @@ pub struct MenuRequest {
     /// 使勾选态/标签在菜单不关闭的前提下原地刷新。`None` 则粘滞项点击后菜单内容不变。
     ///
     /// 面板宽度与位置**不随重建变化**——项文本变化会让面板忽宽忽窄，而指针正停在
-    /// 上面准备点下一项。宽度以首次弹出的测量结果为准。
+    /// 上面准备点下一项。宽度以首次弹出的测量结果为准；例外是菜单开着时换了
+    /// [`Theme::font_family`](crate::theme::Theme::font_family)，宿主按新字体重新测宽。
     pub rebuild: Option<std::rc::Rc<dyn Fn() -> Vec<MenuItem>>>,
     /// 发起本菜单的菜单栏（[`EventCtx::show_menu_bar`](crate::core::EventCtx::show_menu_bar)
     /// 才填）：宿主据此在展开期间做栏级联动——指针滑到相邻标题即切换、←→ 在根级跨菜单、
@@ -1127,6 +1300,35 @@ pub struct MenuRequest {
     /// `false` = 那一下只负责收起。右键菜单与菜单栏默认穿透；下拉 / 复选菜单不穿透——
     /// 点别处是"放弃这次选择"，且点回下拉控件自己会立刻再展开一次。
     pub click_through: bool,
+}
+
+impl MenuRequest {
+    /// 在 `pos` 弹出的普通菜单，其余字段取 [`EventCtx::show_menu`](crate::core::EventCtx::show_menu)
+    /// 的默认值：按内容定宽、不翻转、不重建、点外面穿透。改字段后交给
+    /// [`EventCtx::show_menu_request`](crate::core::EventCtx::show_menu_request)。
+    pub fn new(pos: Point, items: Vec<MenuItem>) -> Self {
+        Self {
+            pos,
+            items,
+            min_width: 0,
+            anchor_top: None,
+            rebuild: None,
+            bar: None,
+            click_through: true,
+        }
+    }
+
+    /// 贴着控件弹出：面板左上角贴 `bounds` 左下角，下方放不下时翻到控件**顶边**以上，
+    /// 不遮住控件。按钮弹菜单用它——[`new`](Self::new) 的 `pos` 按指针位置处理，放不下
+    /// 时翻到那个点的另一侧，传控件底边进去就会翻上来盖住控件本身。
+    ///
+    /// 与 [`EventCtx::show_dropdown_menu`](crate::core::EventCtx::show_dropdown_menu) 同一
+    /// 锚定语义，区别是宽度按内容、点外面穿透（可改 `click_through`）。
+    pub fn below(bounds: Rect, items: Vec<MenuItem>) -> Self {
+        let mut req = Self::new(Point::new(bounds.x, bounds.y + bounds.h), items);
+        req.anchor_top = Some(bounds.y);
+        req
+    }
 }
 
 /// 菜单栏交给宿主的联动信息：各标题的位置与项生成器。
@@ -1243,6 +1445,11 @@ pub struct WindowRequest {
     /// 必须是**每个窗口自己的**：平台在 `WM_CLOSE` / `windowShouldClose:` 里同步等这个
     /// `bool`，问的是"这个窗口能不能关"。跨窗共享的 `Signal` 表达不了它。
     pub close_handler: Option<WindowCloseHandler>,
+    /// 本窗口的激活态回调（`Window::on_window_activated`）。参数是新的激活态。
+    ///
+    /// 必须是**每个窗口自己的**：激活态是这个窗口的事，主窗那份（`App::on_window_activated`）
+    /// 只归主窗——设置窗被关掉重建成子窗之后，「回到窗口就刷新」也得跟过去。
+    pub activate_handler: Option<WindowActivateHandler>,
     /// 本窗口的周期回调（`Window::on_interval`）。随窗口关闭一并停止。
     pub intervals: Vec<(std::time::Duration, WindowIntervalFn)>,
     /// 窗口级快捷键回调（`Window::on_shortcut`）。返回 true = 已处理。
@@ -1259,6 +1466,12 @@ pub struct WindowRequest {
     /// 窗口图标（`Window::icon`）。`None` 则跟随系统默认——子窗**不会**自动继承主窗
     /// 那次 `App::icon`：那是设到主窗 HWND 上的，不是设到窗口类上的。
     pub icon: Option<crate::icon::IconSource>,
+    /// 外框左上角的屏幕位置（`Window::position`），口径见 `WindowConfig::position`。
+    pub position: Option<(i32, i32)>,
+    /// 不在任务栏占按钮（`Window::skip_taskbar`），各平台落地见 `WindowConfig::skip_taskbar`。
+    pub skip_taskbar: bool,
+    /// 无边框外框取色策略（`Window::window_outline`），见 `WindowOutline`。
+    pub window_outline: crate::platform::WindowOutline,
 }
 
 /// 窗口关闭拦截器：返回 `true` 放行、`false` 取消。
@@ -1266,6 +1479,9 @@ pub struct WindowRequest {
 /// 与 `App::on_close_request` 收的是同一种闭包——那个作用在主窗，这个作用在
 /// [`WindowRequest`] 对应的子窗上。
 pub type WindowCloseHandler = Box<dyn FnMut(&mut crate::core::EventCtx) -> bool>;
+
+/// 窗口激活态回调：参数为「是否激活（前台）」。与 `App::on_window_activated` 收的是同一种闭包。
+pub type WindowActivateHandler = Box<dyn FnMut(&mut crate::core::EventCtx, bool)>;
 
 /// 窗口周期回调，与 `App::on_interval` 同形。
 pub type WindowIntervalFn = Box<dyn FnMut(&mut crate::core::EventCtx)>;

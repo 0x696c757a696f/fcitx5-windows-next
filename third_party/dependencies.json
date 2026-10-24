@@ -3,20 +3,20 @@
   "packages": [
     {
       "name": "fcitx5",
-      "version": "5.1.22+windows.cdd0b9d",
-      "source": "https://github.com/fcitx/fcitx5/tree/cdd0b9d900770d1ad1229d759213215d5dc23a90",
+      "version": "5.1.23+windows.456ff90",
+      "source": "https://github.com/fcitx/fcitx5/tree/456ff901705de75a979fa4b75b4be35edc73aeb9",
       "license": "LGPL-2.1-or-later AND Unicode-DFS-2016"
     },
     {
       "name": "libime",
-      "version": "1.1.14",
-      "source": "https://github.com/fcitx/libime/tree/92bf7144d31d42549d35e5db348dc79100cb2074",
+      "version": "1.1.17",
+      "source": "https://github.com/fcitx/libime/tree/9ed13b335b560b838b77ed9eab5330598dbc021e",
       "license": "LGPL-2.1-or-later"
     },
     {
       "name": "fcitx5-chinese-addons",
-      "version": "5.1.12",
-      "source": "https://github.com/fcitx/fcitx5-chinese-addons/tree/bc84e3acb022f5b6b5bed254b14ba19d05023645",
+      "version": "5.1.15",
+      "source": "https://github.com/fcitx/fcitx5-chinese-addons/tree/e8d930f402e359cfd76a101ee3e46815d1331d83",
       "license": "GPL-2.0-or-later AND LGPL-2.1-or-later"
     },
     {
@@ -412,8 +412,8 @@
     },
     {
       "name": "wind-ui-rust",
-      "version": "0.20.0+8f0c4da9",
-      "source": "https://github.com/huanfeng/wind-ui-rust/tree/8f0c4da9777adeefe48310bd3aad9db45936d2c2",
+      "version": "0.30.0+d9792f0b",
+      "source": "https://github.com/huanfeng/wind-ui-rust/tree/d9792f0bf8f5cc7efead985dd07696476461b135",
       "license": "MIT OR Apache-2.0"
     },
     {

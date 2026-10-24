@@ -230,7 +230,7 @@ fn header_cell(
     };
     // 标题占剩余宽度，单行 + 末尾省略号（空间不足时截断标题，不影响箭头）。
     let title_el = Element::label(title.to_string())
-        .font_size(13.0)
+        .font_size(crate::theme::current().metrics.font_sm)
         .font_weight(600)
         .fg_role(Role::TextMuted)
         .max_lines(1)
@@ -260,8 +260,8 @@ fn header_cell(
         .child(inner)
 }
 
-/// 正文行悬停高亮的叠层不透明度（叠层取主题文字色，明暗自适应；"轻微"故低于 clickable 的 0.06）。
-const ROW_HOVER_A: f32 = 0.05;
+/// 正文行悬停高亮的叠层不透明度（叠层取主题文字色，明暗自适应；与全库 hover 同一档）。
+const ROW_HOVER_A: f32 = crate::theme::HOVER_ALPHA;
 
 /// 只读表格正文行的悬停高亮 widget：悬停时在整行背景（斑马纹）之上、单元格内容之下绘制
 /// 一层轻微半透明叠层（主题文字色低 alpha，明暗自适应），带淡入淡出。无点击/焦点/手型，
@@ -408,7 +408,7 @@ fn action_header_cell(title: &str, weight: f32) -> Element {
         .padding_xy(TABLE_CELL_PAD_X, TABLE_HEADER_PAD_Y)
         .child(
             Element::label(title.to_string())
-                .font_size(13.0)
+                .font_size(crate::theme::current().metrics.font_sm)
                 .font_weight(600)
                 .fg_role(Role::TextMuted)
                 .max_lines(1)
@@ -433,7 +433,7 @@ fn data_cell(
         Some(custom) => action_cell(custom, w),
         None => Element::table_cell_pad_lines(
             Element::label(cell.to_string())
-                .font_size(13.0)
+                .font_size(crate::theme::current().metrics.font_sm)
                 .max_lines(lines.max(1))
                 .truncate(Truncate::End),
             lines.max(1),
@@ -851,7 +851,7 @@ const SELECT_COL_W: i32 = 40;
 /// 复选框方框边长 px（与 CheckBox 一致，便于自绘全选框视觉统一）。
 const SEL_BOX: i32 = 18;
 /// 选中行高亮叠层不透明度（accent 低 alpha；叠在斑马纹之上、悬停层之下）。
-const ROW_SELECTED_A: f32 = 0.12;
+const ROW_SELECTED_A: f32 = crate::theme::SELECTED_ALPHA;
 
 /// 首列复选框单元格：固定宽，内含绑定该行选择信号的复选框（水平居中 + 垂直居中）。
 fn select_cell(row_sel: Signal<bool>) -> Element {
@@ -1063,12 +1063,13 @@ impl Widget for SelectAllCheck {
                 &mark,
             );
         } else if some {
-            // 部分选中：横杠（indeterminate）。
-            canvas.draw_line(
-                box_x + 4.5 * s,
-                box_y + 9.0 * s,
-                box_x + 13.5 * s,
-                box_y + 9.0 * s,
+            // 部分选中：横杠（indeterminate）。用折线而不是 `draw_line`：后者会把横线的线宽
+            // 取成整数物理像素，125% / 175% 下横杠比对勾细半个像素，切换全选 / 半选时粗细跳一下。
+            canvas.draw_polyline(
+                &[
+                    (box_x + 4.5 * s, box_y + 9.0 * s),
+                    (box_x + 13.5 * s, box_y + 9.0 * s),
+                ],
                 2.0,
                 &mark,
             );
@@ -1942,7 +1943,8 @@ mod tests {
         let root = tree.root.unwrap();
         let scroll = *tree.get(root).unwrap().children.last().unwrap();
         assert!(
-            tree.scroll_range(scroll).is_some_and(|(_, max)| max > 0),
+            tree.scroll_range(scroll, crate::spec::Axis::Vertical)
+                .is_some_and(|(_, max)| max > 0),
             "20 行应溢出，正文应可滚"
         );
         // 在正文区域派发向下滚轮（delta<0），正文应滚动。
@@ -2484,5 +2486,59 @@ mod tests {
         // 应用换页/换排序：写回新一页数据 → 下次布局触发 PagedBody 重建，不 panic 即路径健康。
         rows.set(vec![vec!["z".to_string()], vec!["y".to_string()]]);
         tree.layout_root(Size::new(400, 300), &mut crate::text::NullTextEngine);
+    }
+
+    /// 全选框里对勾与半选横杠的粗细一致：横杠若走 `draw_line`，线宽会被取整，125% / 175%
+    /// 下比对勾（折线，不取整）细半个物理像素，切换时跳一下。
+    /// 按墨量 / 笔画长度估出线宽来比。
+    #[test]
+    fn select_all_check_and_dash_share_stroke_width() {
+        use crate::render::skia::SkiaCanvas;
+        use tiny_skia::Pixmap;
+        // 在 `scale` 下画全选框，返回方框内标记的总墨量（纯 on_accent 像素记 1）。
+        let mark_ink = |all: bool, scale: f32| -> f32 {
+            let sel = vec![signal(true), signal(all)];
+            let n = (SELECT_COL_W as f32 * scale) as u32;
+            let mut pm = Pixmap::new(n, n).unwrap();
+            let mut eng = crate::text::NullTextEngine;
+            let mut c = SkiaCanvas::with_text(&mut pm, &mut eng, scale);
+            let b = Rect::new(0, 0, SELECT_COL_W, SELECT_COL_W);
+            SelectAllCheck::new(sel).paint(b, b, false, true, &mut c, &Style::default());
+            let th = crate::theme::current();
+            let (bg, fg) = (th.toggle.accent(&th.palette), th.palette.on_accent);
+            // 取前后景差最大的通道换算覆盖率。
+            let ch = |c: Color| [c.r, c.g, c.b];
+            let k = (0..3)
+                .max_by_key(|&i| (ch(fg)[i] as i32 - ch(bg)[i] as i32).abs())
+                .unwrap();
+            let (b0, f0) = (ch(bg)[k] as f32, ch(fg)[k] as f32);
+            let o = ((SELECT_COL_W - SEL_BOX) / 2) as f32 * scale;
+            let side = SEL_BOX as f32 * scale;
+            let mut ink = 0.0;
+            for y in (o + 1.0) as u32..(o + side - 1.0) as u32 {
+                for x in (o + 1.0) as u32..(o + side - 1.0) as u32 {
+                    let px = pm.pixel(x, y).unwrap();
+                    if px.alpha() == 0 {
+                        continue; // 圆角外没画到的像素，不算墨
+                    }
+                    let px = px.demultiply();
+                    let v = [px.red(), px.green(), px.blue()][k] as f32;
+                    ink += ((v - b0) / (f0 - b0)).clamp(0.0, 1.0);
+                }
+            }
+            ink
+        };
+        // 18px 基准下的笔画长度：对勾两段 4√2 + 10，横杠 9。
+        // 能拦住回归的是 125%（取整后 2 对 2.5）与 175%（3 对 3.5）；150% 下两者都是
+        // 3 物理像素，取不取整都一样，只作陪跑。
+        let check_len = 4.0 * std::f32::consts::SQRT_2 + 10.0;
+        for scale in [1.25_f32, 1.5, 1.75] {
+            let check_w = mark_ink(true, scale) / (check_len * scale);
+            let dash_w = mark_ink(false, scale) / (9.0 * scale);
+            assert!(
+                (check_w / dash_w - 1.0).abs() < 0.12,
+                "{scale}x：对勾线宽 {check_w:.2} 应与横杠 {dash_w:.2} 一致"
+            );
+        }
     }
 }

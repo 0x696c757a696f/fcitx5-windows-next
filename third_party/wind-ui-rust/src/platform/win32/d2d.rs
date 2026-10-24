@@ -16,7 +16,8 @@ use windows::core::{Interface, HRESULT, PCWSTR};
 use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_COMPOSITE_MODE_SOURCE_OVER,
-    D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
+    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_WINDING, D2D1_GRADIENT_STOP,
+    D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
 };
 use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1Shadow, D2D1CreateFactory, ID2D1Bitmap1, ID2D1Brush, ID2D1Device, ID2D1DeviceContext,
@@ -37,9 +38,10 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWRITE_TEXT_ALIGNMENT_TRAILING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -56,6 +58,10 @@ use windows_numerics::{Matrix3x2, Vector2};
 use super::{AppHandler, WinRenderBackend};
 use crate::geometry::{Color, Size};
 use crate::render::{Canvas, Gradient, Paint, RenderTarget};
+use crate::text::dwrite::{
+    apply_private_use, font_choice, registered_private_use_font, PrivateUseFont, ResolvedFamily,
+    DEFAULT_FAMILY,
+};
 
 /// GPU 呈现后端。持有 D3D11/DXGI/D2D 的 COM 对象与 swapchain。
 pub(super) struct D2DBackend {
@@ -87,9 +93,12 @@ pub(super) struct D2DBackend {
     /// device-**独立**资源（进程级系统字体缓存），设备丢失**无需**重建——
     /// 不同于 solid/渐变缓存，**别**放进 Task 11 的设备丢失重建清单。
     dwrite_factory: IDWriteFactory,
-    /// TextFormat 缓存：键 (family, 逻辑字号 bits, 字重)，与软引擎 `DWriteEngine::format` 同构。
+    /// 私用区回退字体（图标字体）：创建时从注册表取的快照，与软引擎同时同源，见
+    /// [`registered_private_use_font`]。设备丢失重建时沿用，不重读。
+    private_use: Option<PrivateUseFont>,
+    /// TextFormat 缓存（键 `FormatKey`），与软引擎 `DWriteEngine::format` 同构。
     /// IDWriteTextFormat 亦 device-independent，设备丢失无需清空。对齐不进 key（在 layout 上设）。
-    format_cache: HashMap<(String, u32, u16, Option<u32>), IDWriteTextFormat>,
+    format_cache: HashMap<FormatKey, IDWriteTextFormat>,
     /// 文字 layout 缓存（键 `LayoutKey`）：`IDWriteTextLayout` 是重对象（字形整形/换行排版），
     /// 每帧每文字重建会 churn 驱动内存——官方文档明确要复用。device-independent，设备丢失无需清。
     layout_cache: HashMap<LayoutKey, IDWriteTextLayout>,
@@ -97,7 +106,7 @@ pub(super) struct D2DBackend {
     /// `ID2D1Bitmap1`。绝不每帧重建——图片每帧可画几十次，每次 `CreateBitmap` 会 churn 驱动内存
     /// 到几百 M（与 layout/grad 同源的内存累积坑）。device-**dependent**（绑定 context）：
     /// Task 11 设备丢失重建 context 时必须 `image_cache.clear()`（同 solid/grad_cache）。
-    image_cache: HashMap<u64, ID2D1Bitmap1>,
+    image_cache: ImageCache,
     /// `image_cache` 已占字节（见 [`IMAGE_CACHE_MAX_BYTES`]）。
     image_bytes: u64,
     /// 离屏烘焙用的第二个设备上下文：主帧 BeginDraw 期间主 ctx 禁止 SetTarget，故用独立 ctx
@@ -131,8 +140,12 @@ pub(super) struct D2DBackend {
 /// 连续重建失败上限：超过即放弃 GPU、降级软渲染。
 const MAX_RECREATE_FAILS: u32 = 3;
 
-/// 文字 layout 缓存键：(family, text, 字号 bits, 字重, maxWidth bits, maxHeight bits)。
-type LayoutKey = (String, String, u32, u16, Option<u32>, u32, u32);
+/// TextFormat 缓存键：(解析后的家族名, 逻辑字号 bits, 字重, 斜体, 行高 bits)。
+type FormatKey = (String, u32, u16, bool, Option<u32>);
+
+/// 文字 layout 缓存键：(family 原值, text, 字号 bits, 字重, 斜体, 行高 bits, maxWidth bits,
+/// maxHeight bits)。用原值而非解析结果做键，依赖「同一名字解析结果不变」，见 `FAMILY_CACHE`。
+type LayoutKey = (String, String, u32, u16, bool, Option<u32>, u32, u32);
 
 /// 烘焙阴影缓存键：(圆角 px, 模糊 bits, 颜色 rgba, 宽 px, 高 px)。
 ///
@@ -156,6 +169,27 @@ const SHADOW_CACHE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 /// 两者差着五个数量级。64 条 16×16 是 64 KB，64 条 4000×3000 却是 3 GB——
 /// 浏览一遍图片目录就能把显存撑爆，而条数计数器还显示得好好的。
 const IMAGE_CACHE_MAX_BYTES: u64 = 48 * 1024 * 1024;
+
+/// 图片位图缓存：键 = `Image::cache_id()`。
+type ImageCache = HashMap<u64, CachedBitmap>;
+
+struct CachedBitmap {
+    bitmap: ID2D1Bitmap1,
+    /// 图片释放后这一条再也不会命中，帧首据此丢掉（见 `Image::liveness`）。
+    alive: crate::render::image::ImageLiveness,
+    bytes: u64,
+}
+
+/// 丢掉图片已释放的位图，字节账同步扣掉。
+fn drop_dead_images(cache: &mut ImageCache, total: &mut u64) {
+    cache.retain(|_, e| {
+        let keep = e.alive.is_alive();
+        if !keep {
+            *total -= e.bytes;
+        }
+        keep
+    });
+}
 
 /// 9-slice 代理图两端固定段之外，中间留出的均匀带宽度（像素）。
 ///
@@ -381,6 +415,7 @@ unsafe fn try_create_inner(hwnd: HWND, w: i32, h: i32) -> Option<D2DBackend> {
         solid,
         grad_cache: HashMap::new(),
         dwrite_factory: shared.dwrite_factory.clone(),
+        private_use: registered_private_use_font(),
         format_cache: HashMap::new(),
         layout_cache: HashMap::new(),
         image_cache: HashMap::new(),
@@ -437,7 +472,9 @@ impl D2DBackend {
         let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
         let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
         match try_create_inner(hwnd, w, h) {
-            Some(fresh) => {
+            Some(mut fresh) => {
+                // 回退字体与设备无关，沿用创建时那份：重读注册表可能与软引擎的快照分叉。
+                fresh.private_use = self.private_use.take();
                 *self = fresh;
                 true
             }
@@ -498,6 +535,7 @@ impl WinRenderBackend for D2DBackend {
         let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
         let size = Size::new(rc.right - rc.left, rc.bottom - rc.top);
 
+        drop_dead_images(&mut self.image_cache, &mut self.image_bytes);
         self.context.BeginDraw();
         self.context.Clear(Some(&d2d_color(bg)));
         // 单线程 STA：把 ctx/solid/渐变缓存借给本帧 target，由 handler 渲染控件树。
@@ -509,6 +547,7 @@ impl WinRenderBackend for D2DBackend {
                 solid: &self.solid,
                 grad_cache: &mut self.grad_cache,
                 dwrite_factory: &self.dwrite_factory,
+                private_use: self.private_use.as_ref(),
                 format_cache: &mut self.format_cache,
                 layout_cache: &mut self.layout_cache,
                 image_cache: &mut self.image_cache,
@@ -553,9 +592,10 @@ struct D2DTarget<'a> {
     solid: &'a ID2D1SolidColorBrush,
     grad_cache: &'a mut HashMap<GradKey, ID2D1Brush>,
     dwrite_factory: &'a IDWriteFactory,
-    format_cache: &'a mut HashMap<(String, u32, u16, Option<u32>), IDWriteTextFormat>,
+    private_use: Option<&'a PrivateUseFont>,
+    format_cache: &'a mut HashMap<FormatKey, IDWriteTextFormat>,
     layout_cache: &'a mut HashMap<LayoutKey, IDWriteTextLayout>,
-    image_cache: &'a mut HashMap<u64, ID2D1Bitmap1>,
+    image_cache: &'a mut ImageCache,
     image_bytes: &'a mut u64,
     bake_ctx: &'a ID2D1DeviceContext,
     shadow_effect: &'a mut Option<ID2D1Effect>,
@@ -582,6 +622,7 @@ impl RenderTarget for D2DTarget<'_> {
             solid: self.solid,
             grad_cache: self.grad_cache,
             dwrite_factory: self.dwrite_factory,
+            private_use: self.private_use,
             format_cache: self.format_cache,
             layout_cache: self.layout_cache,
             image_cache: self.image_cache,
@@ -610,11 +651,13 @@ struct D2DCanvas<'a> {
     grad_cache: &'a mut HashMap<GradKey, ID2D1Brush>,
     /// DirectWrite 工厂（借入）：建 format/layout。
     dwrite_factory: &'a IDWriteFactory,
-    /// TextFormat 缓存（借入，可变）：按 (family, 逻辑字号 bits, 字重) 复用。
-    format_cache: &'a mut HashMap<(String, u32, u16, Option<u32>), IDWriteTextFormat>,
+    /// 私用区回退字体（借入）：见 `D2DBackend::private_use`。
+    private_use: Option<&'a PrivateUseFont>,
+    /// TextFormat 缓存（借入，可变）：键 `FormatKey`。
+    format_cache: &'a mut HashMap<FormatKey, IDWriteTextFormat>,
     layout_cache: &'a mut HashMap<LayoutKey, IDWriteTextLayout>,
     /// 图片位图缓存（借入，可变）：按 `Image::cache_id()` 复用 GPU 位图，避免每帧 `CreateBitmap`。
-    image_cache: &'a mut HashMap<u64, ID2D1Bitmap1>,
+    image_cache: &'a mut ImageCache,
     /// `image_cache` 已占字节（借入，可变）：见 [`IMAGE_CACHE_MAX_BYTES`]。
     image_bytes: &'a mut u64,
     /// 离屏烘焙阴影用的第二个设备上下文（借入）。
@@ -651,13 +694,14 @@ impl D2DCanvas<'_> {
         maxw: f32,
         maxh: f32,
     ) -> Option<IDWriteTextLayout> {
-        let fam = ts.family.unwrap_or(DEFAULT_FAMILY).to_string();
-        let weight = ts.weight;
+        // 键用调用方原值即可：原值到解析结果是确定映射。斜体必须进键——漏掉它，同字族
+        // 同字号的正体与斜体会互相顶替，谁先进缓存就画谁。
         let key: LayoutKey = (
-            fam,
+            ts.family_or_default().unwrap_or(DEFAULT_FAMILY).to_string(),
             text.to_string(),
             ts.size.to_bits(),
-            weight,
+            ts.weight,
+            ts.italic,
             ts.line_height.map(f32::to_bits),
             maxw.to_bits(),
             maxh.to_bits(),
@@ -672,6 +716,11 @@ impl D2DCanvas<'_> {
                 .CreateTextLayout(&text_w, &format, maxw, maxh)
         }
         .ok()?;
+        // 私用区（图标字体）与软引擎同源：布局是软引擎量的，这里不切字体就画成方框、宽度也
+        // 对不上。绘制期的测量（光标定位、命中）同样走这里，所以不能只当它是「绘制」的事。
+        if let Some(puf) = self.private_use {
+            apply_private_use(puf, &layout, &text_w);
+        }
         // 防无界增长（文本输入/计数器等动态文字）：超阈值整体清空重建。
         if self.layout_cache.len() > 512 {
             self.layout_cache.clear();
@@ -688,8 +737,8 @@ impl D2DCanvas<'_> {
     /// + `PREMULTIPLIED` 一致（无需 R/B 交换，区别于后备缓冲的 BGRA）。
     fn image_bitmap(&mut self, img: &crate::render::image::Image) -> Option<ID2D1Bitmap1> {
         let id = img.cache_id();
-        if let Some(b) = self.image_cache.get(&id) {
-            return Some(b.clone());
+        if let Some(e) = self.image_cache.get(&id) {
+            return Some(e.bitmap.clone());
         }
         let pm = img.pixmap(); // 预乘 RGBA8
         let (w, h) = (img.width(), img.height());
@@ -726,7 +775,14 @@ impl D2DCanvas<'_> {
             self.image_cache.clear();
             *self.image_bytes = 0;
         }
-        self.image_cache.insert(id, bitmap.clone());
+        self.image_cache.insert(
+            id,
+            CachedBitmap {
+                bitmap: bitmap.clone(),
+                alive: img.liveness(),
+                bytes,
+            },
+        );
         *self.image_bytes += bytes;
         Some(bitmap)
     }
@@ -890,6 +946,24 @@ impl D2DCanvas<'_> {
     /// 描边/线用纯色画刷（渐变仅作用于填充，描边退化用 paint.color，与 SkiaCanvas 一致）。
     fn stroke_brush(&self, paint: &Paint) -> ID2D1Brush {
         self.solid_brush(paint.color)
+    }
+
+    /// 离屏合成层：后续绘制重定向到层，PopLayer 时按 opacity 整体合回父层（子树统一
+    /// 不透明度）。`content` 为层内容范围，D2D 据此分配层资源。
+    fn push_layer_bounded(&mut self, opacity: f32, content: D2D_RECT_F) {
+        let params = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: content,
+            geometricMask: std::mem::ManuallyDrop::new(None),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: opacity.clamp(0.0, 1.0),
+            opacityBrush: std::mem::ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
+        // layer 传 None：让 D2D 自行分配/复用层资源（device context 重载支持）。
+        unsafe { self.ctx.PushLayer(&params, None) };
+        self.pushed_layers += 1;
+        self.sync_text_aa();
     }
 
     /// 按当前层深度同步文字抗锯齿模式：**层内恒 GRAYSCALE、层外恒 ClearType**。
@@ -1071,16 +1145,24 @@ impl D2DCanvas<'_> {
     }
 
     /// 取/建 `IDWriteTextFormat`（逻辑字号；DPI scale 由 SetTransform 应用，**不**在此 ×scale）。
-    /// 缓存键 (family, 逻辑字号 bits, 字重, 行高 bits) 与软引擎 `DWriteEngine::format` 同构，
-    /// 保证两后端字体/字重/行距一致。family 缺省 `DEFAULT_FAMILY`、locale 固定 "zh-cn"。
+    /// 字体选择与软引擎走同一个 [`font_choice`]（族名解析 + 字重/斜体取舍），缓存键也与
+    /// 软引擎 `DWriteEngine::format` 同构，保证两后端字体/字重/斜体/行距一致。locale 固定 "zh-cn"。
     /// 对齐**不**进 key（在 layout 上设），避免污染缓存的 format。
+    ///
+    /// 族名必须解析：选字体的界面列的是 GDI 名，「思源宋体 SemiBold」这类带字重后缀的名字
+    /// DirectWrite 不认，原样交过去会静默落回默认字体——软后端正常、开 GPU 就失效。
     fn text_format(&mut self, ts: &crate::text::TextStyle) -> Option<IDWriteTextFormat> {
-        let fam = ts.family.unwrap_or(DEFAULT_FAMILY).to_string();
-        let (weight, size) = (ts.weight, ts.size);
+        let ResolvedFamily {
+            family: fam,
+            weight,
+            italic,
+        } = font_choice(self.dwrite_factory, ts);
+        let size = ts.size;
         let key = (
             fam.clone(),
             size.to_bits(),
             weight,
+            italic,
             ts.line_height.map(f32::to_bits),
         );
         if let Some(f) = self.format_cache.get(&key) {
@@ -1099,7 +1181,11 @@ impl D2DCanvas<'_> {
                     PCWSTR(fam_w.as_ptr()),
                     None,
                     dw_weight,
-                    DWRITE_FONT_STYLE_NORMAL,
+                    if italic {
+                        DWRITE_FONT_STYLE_ITALIC
+                    } else {
+                        DWRITE_FONT_STYLE_NORMAL
+                    },
                     DWRITE_FONT_STRETCH_NORMAL,
                     size, // 逻辑字号：D2D 变换会放大到物理像素，绝不在此 ×scale
                     PCWSTR(locale.as_ptr()),
@@ -1172,11 +1258,15 @@ impl Canvas for D2DCanvas<'_> {
     }
 
     fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, paint: &Paint) {
+        // 对齐物理像素，与软 / wgpu 后端及本后端的描边同一份公式（见 `align_to_device`）。
+        // 缺了它，150% 下选中底、悬停高亮的上下边落在半像素上，各糊出一行。
+        let (x, y, w, h) = crate::render::align_to_device(x, y, w, h, self.scale);
         let brush = self.fill_brush(paint, x, y, w, h);
         unsafe { self.ctx.FillRectangle(&rect_f(x, y, w, h), &brush) };
     }
 
     fn fill_round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, paint: &Paint) {
+        let (x, y, w, h) = crate::render::align_to_device(x, y, w, h, self.scale);
         let brush = self.fill_brush(paint, x, y, w, h);
         let r = radius.min(w / 2.0).min(h / 2.0).max(0.0);
         let rr = D2D1_ROUNDED_RECT {
@@ -1200,13 +1290,10 @@ impl Canvas for D2DCanvas<'_> {
         // 对齐物理像素整数坐标：矩形四边乘以 scale 取整后还原，
         // 使描边中心（边 + half_width）在物理坐标上落在半像素（n+0.5），
         // 从而描边两侧各 0.5px 恰好覆盖完整一列物理像素，消除 125%/150% 等
-        // 非整数 DPI 下的亚像素抗锯齿模糊。
-        let s = self.scale;
-        let x0 = (x * s).round() / s;
-        let y0 = (y * s).round() / s;
-        let x1 = ((x + w) * s).round() / s;
-        let y1 = ((y + h) * s).round() / s;
-        let (x, y, w, h) = (x0, y0, x1 - x0, y1 - y0);
+        // 非整数 DPI 下的亚像素抗锯齿模糊。与填充同一份公式，否则底色与边框会错开。
+        let (x, y, w, h) = crate::render::align_to_device(x, y, w, h, self.scale);
+        // 线宽也取整数个物理像素，否则 150% 下 1px 边框是一实一虚两行
+        let width = crate::render::align_stroke_width(width, self.scale);
 
         let width = width.min(w / 2.0).min(h / 2.0).max(0.0);
         let half = width / 2.0;
@@ -1223,6 +1310,7 @@ impl Canvas for D2DCanvas<'_> {
     }
 
     fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, paint: &Paint) {
+        let (x0, y0, x1, y1, width) = crate::render::align_line(x0, y0, x1, y1, width, self.scale);
         let brush = self.stroke_brush(paint);
         unsafe {
             self.ctx
@@ -1239,6 +1327,48 @@ impl Canvas for D2DCanvas<'_> {
             radiusY: r,
         };
         unsafe { self.ctx.FillEllipse(&ellipse, &brush) };
+    }
+
+    fn fill_polygon(&mut self, contours: &[&[(f32, f32)]], paint: &Paint) {
+        // D2D 路径几何：一次性光栅化，边缘双向抗锯齿，与软路径同为非零环绕规则。
+        // 建不出几何（极少见的设备状态）时退回 trait 的逐行扫描实现，不至于什么都不画。
+        let drawable: Vec<&[(f32, f32)]> =
+            contours.iter().copied().filter(|c| c.len() >= 3).collect();
+        if drawable.is_empty() {
+            return;
+        }
+        let geometry = unsafe {
+            let Ok(factory) = self.ctx.GetFactory() else {
+                return crate::render::fill_polygon_rows(self, &drawable, paint);
+            };
+            let Ok(geometry) = factory.CreatePathGeometry() else {
+                return crate::render::fill_polygon_rows(self, &drawable, paint);
+            };
+            let Ok(sink) = geometry.Open() else {
+                return crate::render::fill_polygon_rows(self, &drawable, paint);
+            };
+            sink.SetFillMode(D2D1_FILL_MODE_WINDING);
+            for c in &drawable {
+                sink.BeginFigure(vec2(c[0].0, c[0].1), D2D1_FIGURE_BEGIN_FILLED);
+                let rest: Vec<Vector2> = c[1..].iter().map(|&(x, y)| vec2(x, y)).collect();
+                sink.AddLines(&rest);
+                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            }
+            if sink.Close().is_err() {
+                return crate::render::fill_polygon_rows(self, &drawable, paint);
+            }
+            geometry
+        };
+        // 渐变包围盒取所有顶点的外接矩形（与软路径同一约定）。
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for &(x, y) in drawable.iter().flat_map(|c| c.iter()) {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        let brush = self.fill_brush(paint, x0, y0, x1 - x0, y1 - y0);
+        unsafe {
+            self.ctx
+                .FillGeometry(&geometry, &brush, None::<&ID2D1Brush>)
+        };
     }
 
     fn draw_shadow(
@@ -1597,6 +1727,22 @@ impl Canvas for D2DCanvas<'_> {
         )
     }
 
+    fn text_advance(&mut self, text: &str, ts: &crate::text::TextStyle) -> f32 {
+        // 与 measure_text 同一次排版，只是不取整（d2d 整体工作在逻辑坐标，无需除 scale）。
+        if text.is_empty() {
+            return 0.0;
+        }
+        let fallback = text.chars().count() as f32 * ts.size * 0.6;
+        let Some(layout) = self.text_layout(text, ts, f32::MAX, f32::MAX) else {
+            return fallback;
+        };
+        let mut m = windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_METRICS::default();
+        if unsafe { layout.GetMetrics(&mut m) }.is_err() {
+            return fallback;
+        }
+        m.widthIncludingTrailingWhitespace
+    }
+
     fn measure_text_wrapped(
         &mut self,
         text: &str,
@@ -1663,21 +1809,19 @@ impl Canvas for D2DCanvas<'_> {
     }
 
     fn push_layer(&mut self, opacity: f32) {
-        // 离屏合成层：后续绘制重定向到层，PopLayer 时按 opacity 整体合回父层
-        // （子树统一不透明度）。无限 contentBounds 不裁剪层内容（裁剪由 clip 栈负责）。
-        let params = D2D1_LAYER_PARAMETERS1 {
-            contentBounds: INFINITE_RECT,
-            geometricMask: std::mem::ManuallyDrop::new(None),
-            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            maskTransform: Matrix3x2::identity(),
-            opacity: opacity.clamp(0.0, 1.0),
-            opacityBrush: std::mem::ManuallyDrop::new(None),
-            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
-        };
-        // layer 传 None：让 D2D 自行分配/复用层资源（device context 重载支持）。
-        unsafe { self.ctx.PushLayer(&params, None) };
-        self.pushed_layers += 1;
-        self.sync_text_aa();
+        // 无限 contentBounds 不裁剪层内容（裁剪由 clip 栈负责）。
+        self.push_layer_bounded(opacity, INFINITE_RECT);
+    }
+
+    /// 告知 D2D 层内容的范围（逻辑坐标，与绘制同一空间），它据此只为这块分配层资源。
+    fn push_layer_in(&mut self, opacity: f32, bounds: crate::geometry::Rect) {
+        let b = rect_f(
+            bounds.x as f32,
+            bounds.y as f32,
+            bounds.w as f32,
+            bounds.h as f32,
+        );
+        self.push_layer_bounded(opacity, b);
     }
 
     fn pop_layer(&mut self) {
@@ -1712,7 +1856,19 @@ impl Canvas for D2DCanvas<'_> {
         // PushAxisAlignedClip 自动与现有 clip 栈求交，无需手算交集。
         // 逻辑坐标：当前 SetTransform(scale) 会对 clip rect 施加缩放（仅缩放不旋转，
         // axis-aligned 仍成立）。ALIASED 与软后端的整数矩形 mask 边缘语义一致。
-        let rect = rect_f(r.x as f32, r.y as f32, r.w as f32, r.h as f32);
+        // 边界按物理像素取整后再还原成逻辑值，直接用软后端 mask 的 `Rect::scaled`：
+        // ALIASED 裁剪按像素中心判定，边落在半像素上时会和对齐过的底色差出一列。
+        // 不走 `align_to_device`——它受 `PixelSnap` 管，`with_pixel_snap(Off)` 里画图标时
+        // 裁剪区会跟着落到半像素上，而软 / GPU 后端的裁剪始终取整。
+        let s = self.scale;
+        debug_assert!(s > 0.0, "D2D 画布缩放必须为正，实得 {s}");
+        let p = r.scaled(s);
+        let rect = rect_f(
+            p.x as f32 / s,
+            p.y as f32 / s,
+            p.w as f32 / s,
+            p.h as f32 / s,
+        );
         unsafe {
             self.ctx
                 .PushAxisAlignedClip(&rect, D2D1_ANTIALIAS_MODE_ALIASED)
@@ -1729,9 +1885,6 @@ const INFINITE_RECT: D2D_RECT_F = D2D_RECT_F {
     right: 1e7,
     bottom: 1e7,
 };
-
-/// 中文友好默认字体，与软引擎 `DWriteEngine` 的 `DEFAULT_FAMILY` 同值（两后端字体一致）。
-const DEFAULT_FAMILY: &str = "Microsoft YaHei UI";
 
 /// `&str` → UTF-16（不含 NUL），供 `CreateTextLayout`（带长度，不需 NUL）。
 fn wide(s: &str) -> Vec<u16> {
@@ -1810,6 +1963,7 @@ pub(crate) mod offscreen {
         ctx: ID2D1DeviceContext,
         bake_ctx: ID2D1DeviceContext,
         dwrite_factory: IDWriteFactory,
+        private_use: Option<PrivateUseFont>,
         solid: ID2D1SolidColorBrush,
         /// 渲染目标位图（与窗口后端的后备缓冲同格式：BGRA8 预乘、96 DPI）。
         target: ID2D1Bitmap1,
@@ -1818,9 +1972,9 @@ pub(crate) mod offscreen {
         w: u32,
         h: u32,
         grad_cache: HashMap<GradKey, ID2D1Brush>,
-        format_cache: HashMap<(String, u32, u16, Option<u32>), IDWriteTextFormat>,
+        format_cache: HashMap<FormatKey, IDWriteTextFormat>,
         layout_cache: HashMap<LayoutKey, IDWriteTextLayout>,
-        image_cache: HashMap<u64, ID2D1Bitmap1>,
+        image_cache: ImageCache,
         image_bytes: u64,
         shadow_effect: Option<ID2D1Effect>,
         shadow_cache: HashMap<ShadowKey, ID2D1Bitmap1>,
@@ -1832,6 +1986,12 @@ pub(crate) mod offscreen {
         #[cfg(test)]
         pub(crate) fn cached_images(&self) -> usize {
             self.image_cache.len()
+        }
+
+        /// 缓存位图的字节账。**仅供测试**。
+        #[cfg(test)]
+        pub(crate) fn cached_image_bytes(&self) -> u64 {
+            self.image_bytes
         }
 
         /// 建一个 `w×h` 的离屏后端。无可用 D2D 运行时返回 `None`（绝不 panic）。
@@ -1884,6 +2044,7 @@ pub(crate) mod offscreen {
                 ctx,
                 bake_ctx,
                 dwrite_factory,
+                private_use: registered_private_use_font(),
                 solid,
                 target,
                 staging,
@@ -1918,6 +2079,7 @@ pub(crate) mod offscreen {
                 // 与 try_create_inner 同样的初始状态，否则测的不是生产配置。
                 self.ctx
                     .SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+                drop_dead_images(&mut self.image_cache, &mut self.image_bytes);
                 self.ctx.BeginDraw();
                 self.ctx.Clear(Some(&d2d_color(bg)));
                 {
@@ -1927,6 +2089,7 @@ pub(crate) mod offscreen {
                         solid: &self.solid,
                         grad_cache: &mut self.grad_cache,
                         dwrite_factory: &self.dwrite_factory,
+                        private_use: self.private_use.as_ref(),
                         format_cache: &mut self.format_cache,
                         layout_cache: &mut self.layout_cache,
                         image_cache: &mut self.image_cache,
@@ -2090,6 +2253,46 @@ mod tests {
     /// 没有这条时错在哪：这个缓存同时装 16×16 的文件图标与整屏的图片预览，两者差着
     /// 五个数量级。只看条数的话，64 条 4000×3000 就是 3 GB 显存，而计数器才走到 64。
     /// 用两张大图把预算撑过去，断言缓存被清空重建（条数回到 1），而不是一路涨上去。
+    /// 图片释放后它的位图下一帧就离开缓存，不等积满整批清空。
+    ///
+    /// 没有这条时错在哪：id 永不复用，释放了的图片那一条再也不会命中，却一直占着
+    /// 显存——应用每换一份文档重建一次图标，关掉的文档的图标就留在缓存里。
+    #[test]
+    fn released_image_leaves_cache_next_frame() {
+        use crate::render::image::Image;
+        let mut backend =
+            OffscreenBackend::new(64, 64).expect("D2D 离屏渲染不可用：硬件与 WARP 都没建起来");
+        let draw = |backend: &mut OffscreenBackend, img: &Image| {
+            backend
+                .draw(1.0, Color::rgb(255, 255, 255), |c| {
+                    c.draw_image(
+                        img,
+                        Rect::new(0, 0, 8, 8),
+                        crate::render::image::Fit::Fill,
+                        0.0,
+                        1.0,
+                    );
+                })
+                .expect("离屏帧读回失败");
+        };
+        let img = || {
+            let pm = Pixmap::new(32, 32).unwrap();
+            Image::from_png_bytes(&pm.encode_png().unwrap()).unwrap()
+        };
+        let (a, b) = (img(), img());
+        draw(&mut backend, &a);
+        draw(&mut backend, &b);
+        assert_eq!(backend.cached_images(), 2);
+        drop(a);
+        draw(&mut backend, &b);
+        assert_eq!(backend.cached_images(), 1, "已释放图片的位图应被丢掉");
+        assert_eq!(
+            backend.cached_image_bytes(),
+            32 * 32 * 4,
+            "字节账应同步扣掉"
+        );
+    }
+
     #[test]
     fn image_cache_is_capped_by_bytes_not_only_by_count() {
         use crate::render::image::Image;
@@ -2175,6 +2378,38 @@ mod tests {
             px(&pm, 15, 15),
             [255, 255, 255, 255],
             "物理 (15,15) 应在矩形外"
+        );
+    }
+
+    /// 150% 下奇数逻辑坐标的填充边落在半物理像素上：对齐后只有整行纯色与纯白，
+    /// 不能有半透明的过渡行（选中底、悬停高亮"发糊"的根因）。横线同理。
+    #[test]
+    fn fills_and_lines_snap_to_physical_pixels_at_150_percent() {
+        let blue = Paint::fill(Color::rgb(0, 0, 255));
+        let pm = render(60, 90, 1.5, |c| {
+            // 逻辑 y 11..21 → 物理 16.5..31.5
+            c.fill_rect(3.0, 11.0, 20.0, 10.0, &blue);
+            c.fill_round_rect(3.0, 25.0, 20.0, 9.0, 2.0, &blue);
+            // 1 逻辑像素的横线：物理 1.5 宽，不对齐时是一实一虚两行
+            c.draw_line(0.0, 37.0, 30.0, 37.0, 1.0, &blue);
+            // 1 逻辑像素的边框：位置与线宽都要对齐，不然内侧多出半行
+            c.stroke_round_rect(3.0, 41.0, 20.0, 15.0, 2.0, 1.0, &blue);
+        });
+        let x = 15;
+        let mut blue_rows = 0;
+        for y in 0..90 {
+            let p = px(&pm, x, y);
+            assert!(
+                p == [0, 0, 255, 255] || p == [255, 255, 255, 255],
+                "物理行 {y} 是半透明过渡色 {p:?}，边没对齐到像素"
+            );
+            if (62..84).contains(&y) && p == [0, 0, 255, 255] {
+                blue_rows += 1;
+            }
+        }
+        assert_eq!(
+            blue_rows, 2,
+            "边框上下各 1 物理像素（1 逻辑像素在 150% 下取 1）"
         );
     }
 
@@ -2433,6 +2668,33 @@ mod tests {
         assert_eq!(n, 0, "矩形裁剪必须软硬逐像素一致");
     }
 
+    /// 裁剪区不受 `PixelSnap` 管：`with_pixel_snap(Off)` 作用域里，150% 下奇数逻辑坐标的
+    /// 裁剪（边落在 `n.5` 物理像素）仍与软后端逐像素一致。曾经 D2D 的裁剪经
+    /// `align_to_device` 取整，作用域一关就落到半像素上，ALIASED 按像素中心判定差出一列。
+    #[test]
+    fn clip_ignores_pixel_snap_scope() {
+        use crate::render::{with_pixel_snap, PixelSnap};
+        let red = Color::rgb(200, 60, 60);
+        // 默认档也跑一遍：两档结果都必须与软后端一致
+        for mode in [PixelSnap::Off, PixelSnap::Edges] {
+            let draw = move |c: &mut dyn Canvas| {
+                with_pixel_snap(mode, || {
+                    c.save();
+                    c.clip_rect(Rect::new(21, 21, 41, 31));
+                    c.fill_rect(0.0, 0.0, 120.0, 90.0, &Paint::fill(red));
+                    c.restore();
+                })
+            };
+            let g = render(180, 135, 1.5, draw);
+            let s = render_soft(180, 135, 1.5, draw);
+            let diff = (0..g.height())
+                .flat_map(|y| (0..g.width()).map(move |x| (x, y)))
+                .filter(|&(x, y)| px(&g, x, y)[..3] != px(&s, x, y)[..3])
+                .count();
+            assert_eq!(diff, 0, "{mode:?} 下裁剪区与软后端差 {diff} 个像素");
+        }
+    }
+
     /// 渐变：只容许舍入级偏差（≤2/255）。
     ///
     /// **斜轴那一档是本测试的重点**。线性画刷原先一律在单位空间 [0,1]² 构造、再用
@@ -2584,5 +2846,137 @@ mod tests {
         for x in 100..180 {
             assert_eq!(px(&pm, x, y), baseline, "中段 x={x} 与基准不同：出现接缝");
         }
+    }
+
+    /// D2D 画布上量一段文字的宽（逻辑像素）。
+    fn d2d_width(ts: &TextStyle) -> i32 {
+        let mut w = 0;
+        render(8, 8, 1.0, |c| {
+            w = c.measure_text("Hamburgefonstiv 0123456789", ts).w
+        });
+        w
+    }
+
+    /// 带字重后缀的 GDI 名（「Segoe UI Semibold」，形态同「思源宋体 SemiBold」）在 GPU 后端
+    /// 必须解析成「Segoe UI」+ 自带字重，与软后端同源。
+    ///
+    /// 修复前 D2D 把名字原样交给 DirectWrite，后者不认、静默落回默认字体的常规字重——
+    /// 软后端正常、开 GPU 就失效。第二条断言正是那时的结果。
+    #[test]
+    fn gdi_face_name_resolves_like_the_soft_backend() {
+        let f: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).unwrap() };
+        let mut named = TextStyle::new(20.0);
+        named.family = Some("Segoe UI Semibold");
+        let want = font_choice(&f, &named);
+        assert_eq!(
+            want.family, "Segoe UI",
+            "前提：该名字应解析回 DirectWrite 家族名"
+        );
+        let mut explicit = TextStyle::new(20.0).with_weight(want.weight);
+        explicit.family = Some("Segoe UI");
+        let mut regular = TextStyle::new(20.0);
+        regular.family = Some("Segoe UI");
+        assert_ne!(
+            d2d_width(&explicit),
+            d2d_width(&regular),
+            "前提：字重须影响字宽，否则下面的断言分不出对错"
+        );
+        assert_eq!(
+            d2d_width(&named),
+            d2d_width(&explicit),
+            "GDI 名应画成解析出的家族 + 自带字重"
+        );
+    }
+
+    /// 斜体在 GPU 后端要真画成斜体。修复前 D2D 一律传 `DWRITE_FONT_STYLE_NORMAL`，
+    /// 两张图逐像素相同。
+    #[test]
+    fn italic_is_drawn_italic() {
+        let draw = |italic: bool| {
+            render(160, 40, 1.0, |c| {
+                c.draw_text(
+                    "Hamburg",
+                    Rect::new(4, 4, 150, 30),
+                    Color::rgb(0, 0, 0),
+                    Align::Start,
+                    &TextStyle::new(20.0).with_italic(italic),
+                )
+            })
+        };
+        // 用 assert! 而非 assert_ne!：失败时后者会把两张整图的像素全打出来。
+        // 注意每次 render 都是新后端、缓存全空，所以这条守不住「缓存键漏斜体」，见下一条。
+        assert!(
+            draw(false).data() != draw(true).data(),
+            "斜体与正体应画出不同的字形"
+        );
+    }
+
+    /// 同一个后端里先画正体、再画斜体，斜体那次不能命中正体的缓存。
+    ///
+    /// 上一条测试两次 `render` 各开一个后端、缓存都是空的，`FormatKey`/`LayoutKey` 漏了
+    /// 斜体它也照样通过——先进缓存的那套被后者复用、谁先画就是谁的毛病只有共用缓存才显形。
+    #[test]
+    fn italic_does_not_reuse_the_upright_cache_entry() {
+        let line = |c: &mut dyn Canvas, italic: bool, y: i32| {
+            c.draw_text(
+                "Hamburg",
+                Rect::new(4, y, 150, 30),
+                Color::rgb(0, 0, 0),
+                Align::Start,
+                &TextStyle::new(20.0).with_italic(italic),
+            )
+        };
+        let both = render(160, 80, 1.0, |c| {
+            line(c, false, 4);
+            line(c, true, 44);
+        });
+        let alone = render(160, 80, 1.0, |c| line(c, true, 44));
+        let rows = |pm: &Pixmap| pm.data()[(44 * 160 * 4) as usize..].to_vec();
+        assert!(
+            rows(&both) == rows(&alone),
+            "同一后端里后画的斜体应与单独画的斜体逐像素相同，而非沿用正体的缓存"
+        );
+    }
+
+    /// 注册了私用区回退字体后，D2D 画图标要与软引擎同源：宽度与软引擎量的一致。
+    ///
+    /// 修复前 D2D 不切回退字体，图标落回主字体的方框——布局却是软引擎按图标宽度排的，
+    /// 两边对不上。第一条前提断言保证「切没切字体」在宽度上分得出来。
+    #[test]
+    fn private_use_glyphs_match_the_soft_engine() {
+        use crate::text::TextEngine;
+        // Segoe MDL2 Assets：Win10 起系统自带的图标字体，字形全在 BMP 私用区。
+        const ICON_FONT: &str = r"C:\Windows\Fonts\segmdl2.ttf";
+        // 主字体对私用区多半没有字形（画方框）；拿一串图标放大宽度差。
+        const ICONS: &str = "\u{E700}\u{E721}\u{E713}\u{E8BB}";
+        assert!(
+            std::path::Path::new(ICON_FONT).exists(),
+            "测试前提：{ICON_FONT} 应随 Win10/11 自带"
+        );
+        let ts = TextStyle::new(20.0);
+        let d2d = || {
+            let mut w = 0;
+            // 同一后端量两次、取第二次：第二次命中 layout 缓存，守住「命中路径也带着图标字体」。
+            render(8, 8, 1.0, |c| {
+                c.measure_text(ICONS, &ts);
+                w = c.measure_text(ICONS, &ts).w;
+            });
+            w
+        };
+        let before = d2d();
+        crate::text::register_private_use_font(ICON_FONT, "Segoe MDL2 Assets")
+            .expect("注册系统图标字体");
+        let after = d2d();
+        let mut soft = crate::text::DWriteEngine::new();
+        soft.set_scale(1.0);
+        let soft_w = soft.measure(ICONS, &ts, None).w;
+        assert_ne!(
+            soft_w, before,
+            "前提：切到图标字体须改变宽度，否则分不出对错"
+        );
+        assert!(
+            (after - soft_w).abs() <= 1,
+            "D2D 应与软引擎同样切到图标字体：D2D {after}，软引擎 {soft_w}"
+        );
     }
 }

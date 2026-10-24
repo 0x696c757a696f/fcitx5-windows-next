@@ -26,8 +26,9 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
     LoadIconW, RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, HICON, HMENU, ICONINFO,
-    IDI_APPLICATION, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WM_APP, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
+    IDI_APPLICATION, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN,
+    TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+    WM_RBUTTONUP,
 };
 
 /// 托盘回调消息（WM_APP+1）：lParam 低位为鼠标动作（legacy v0 编码）。
@@ -254,6 +255,20 @@ impl TrayState {
     pub(crate) fn remember_tooltip(&mut self, tip: String) {
         self.tooltip = tip;
     }
+
+    /// 换上新图标（`set_icon` 之后调用，不论 shell 当时接不接受），并销毁被换下的那个
+    /// （若是自建的）。
+    ///
+    /// 记下它是为了 shell 重启时按现在的图标重放（`readd_target` 取的就是 `self.hicon`）。
+    /// shell 登记图标时自己拷一份，旧句柄随时销毁都不影响托盘上显示的那张。
+    pub(crate) fn swap_icon(&mut self, hicon: HICON) {
+        let old = std::mem::replace(&mut self.hicon, hicon);
+        if std::mem::replace(&mut self.owns_icon, true) {
+            unsafe {
+                let _ = DestroyIcon(old);
+            }
+        }
+    }
 }
 
 /// Shell 重启后重新登记托盘图标。
@@ -314,6 +329,19 @@ pub(crate) fn set_tooltip(hwnd: HWND, uid: u32, tip: &str) {
     }
 }
 
+/// 换托盘图标（`NIF_ICON` + `NIM_MODIFY`），返回 shell 是否接受。
+///
+/// 只带 `NIF_ICON`：`NIM_MODIFY` 只改 `uFlags` 声明的字段，提示文字原样保留。
+/// **自由函数而非 `&TrayState` 方法，理由同 [`notify`]**。
+pub(crate) fn set_icon(hwnd: HWND, uid: u32, hicon: HICON) -> bool {
+    unsafe {
+        let mut nid = base_nid(hwnd, uid);
+        nid.uFlags = NIF_ICON;
+        nid.hIcon = hicon;
+        Shell_NotifyIconW(NIM_MODIFY, &nid).as_bool()
+    }
+}
+
 /// 弹出原生右键菜单，返回选中项的命令 id（0=未选/取消）。按值消费 `menu`，
 /// 其 `Drop` 负责 `DestroyMenu`（含提前返回与 panic 路径）。
 ///
@@ -325,9 +353,12 @@ pub(crate) unsafe fn track_menu(hwnd: HWND, menu: PopupMenu) -> usize {
     let _ = GetCursorPos(&mut pt);
     // 必须前置窗口，否则菜单点击外部不消失（Win32 经典要求）。
     let _ = SetForegroundWindow(hwnd);
+    // 以光标为右下角朝左上展开。不给对齐标志时菜单以光标为左上角朝右下长，而托盘区多在
+    // 屏幕底部右侧——菜单下半截落到任务栏底下被遮住。任务栏在顶部或左侧时朝左上会出屏，
+    // 系统会把菜单挪回屏内，不需要按任务栏方位分支。
     let cmd = TrackPopupMenu(
         menu.0,
-        TPM_RIGHTBUTTON | TPM_RETURNCMD,
+        TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_BOTTOMALIGN | TPM_RIGHTALIGN,
         pt.x,
         pt.y,
         Some(0),

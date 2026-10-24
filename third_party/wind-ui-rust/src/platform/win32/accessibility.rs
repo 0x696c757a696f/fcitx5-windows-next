@@ -7,7 +7,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::mem::{ManuallyDrop, zeroed};
+use std::mem::ManuallyDrop;
 use std::ptr::null_mut;
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
@@ -318,6 +318,7 @@ fn fragment_for_neighbor(
         .ok_or_else(no_element_error)
 }
 
+#[allow(non_upper_case_globals)]
 fn neighbor(
     state: ProviderState,
     direction: NavigateDirection,

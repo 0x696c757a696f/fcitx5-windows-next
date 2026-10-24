@@ -32,7 +32,7 @@ use super::layer::LayerTexture;
 use super::prim::{PrimBatch, PrimRenderer, MAX_BATCH};
 use super::tex::{image_item, place_image, ImageItem, MAX_IMAGE_BATCH};
 use super::text::{glyph_item, text_item, RunKey, TextItem, MAX_TEXT_BATCH};
-use crate::geometry::{Color, Rect, Size};
+use crate::geometry::{Color, Corners, Rect, Size};
 use crate::render::image::{Fit, Image};
 use crate::render::{Canvas, Paint, RenderTarget};
 use crate::spec::Align;
@@ -585,6 +585,8 @@ impl Canvas for WgpuCanvas<'_> {
         // ① 对齐物理像素整数坐标：四边乘 scale 取整后还原，使描边中心落在物理半像素上，
         //    两侧各 0.5px 恰好覆盖完整一列像素，消除 125%/150% 等非整数 DPI 的亚像素糊边。
         let (x, y, w, h) = crate::render::align_to_device(x, y, w, h, self.scale);
+        // 线宽也取整数个物理像素，否则 150% 下 1px 边框是一实一虚两行
+        let width = crate::render::align_stroke_width(width, self.scale);
         // ② 线宽 clamp 到半边。
         let width = width.min(w / 2.0).min(h / 2.0).max(0.0);
         let half = width / 2.0;
@@ -604,6 +606,8 @@ impl Canvas for WgpuCanvas<'_> {
 
     fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, paint: &Paint) {
         self.before_prim();
+        // 横竖线对齐物理像素（三个后端同一份公式，见 `align_line`）
+        let (x0, y0, x1, y1, width) = crate::render::align_line(x0, y0, x1, y1, width, self.scale);
         // 端帽是 Butt（skia.rs:262 的 `LineCap::Butt`）：线段两端不外延，
         // 几何上就是一个以线段为中轴的旋转矩形——`sd_segment_box` 直接给这个形状。
         let (clip, m) = (self.clip_phys(), self.aa_margin());
@@ -617,6 +621,51 @@ impl Canvas for WgpuCanvas<'_> {
         let (clip, m) = (self.clip_phys(), self.aa_margin());
         self.batch.push_circle(cx, cy, r, paint, clip, m);
         self.maybe_flush();
+    }
+
+    // 四角各异：本后端的 `fill_polygon` 只有逐行兜底（弧段是物理行台阶、渐变退成纯色），
+    // 故改为按象限裁剪、每块画原生的 SDF 圆角矩形。见 `render::by_quadrants`。
+    fn fill_round_rect_corners(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        corners: Corners,
+        paint: &Paint,
+    ) {
+        if corners.is_uniform() {
+            self.fill_round_rect(x, y, w, h, corners.top_left, paint);
+            return;
+        }
+        let done = crate::render::by_quadrants(self, x, y, w, h, corners, |c, r| {
+            c.fill_round_rect(x, y, w, h, r, paint)
+        });
+        if !done {
+            crate::render::fill_round_rect_corners_poly(self, x, y, w, h, corners, paint);
+        }
+    }
+
+    fn stroke_round_rect_corners(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        corners: Corners,
+        width: f32,
+        paint: &Paint,
+    ) {
+        if corners.is_uniform() {
+            self.stroke_round_rect(x, y, w, h, corners.top_left, width, paint);
+            return;
+        }
+        let done = crate::render::by_quadrants(self, x, y, w, h, corners, |c, r| {
+            c.stroke_round_rect(x, y, w, h, r, width, paint)
+        });
+        if !done {
+            crate::render::stroke_round_rect_corners_poly(self, x, y, w, h, corners, width, paint);
+        }
     }
 
     fn draw_shadow(
@@ -787,7 +836,9 @@ impl Canvas for WgpuCanvas<'_> {
             (clip[2] - clip[0]) as i32,
             (clip[3] - clip[1]) as i32,
         );
-        if prect.inflate(4).intersect(&clip_rect).is_empty() {
+        // 剔除看字形可能范围而非 rect 本身：装不下时字会向下溢出 rect，见 `text_cull_rect`。
+        let cull = crate::render::text_cull_rect(rect, ts).scaled(s);
+        if cull.inflate(4).intersect(&clip_rect).is_empty() {
             return;
         }
 
@@ -894,6 +945,10 @@ impl Canvas for WgpuCanvas<'_> {
         self.engine.measure(text, ts, Some(max_width))
     }
 
+    fn text_advance(&mut self, text: &str, ts: &TextStyle) -> f32 {
+        self.engine.advance(text, ts)
+    }
+
     fn text_line_metrics(&mut self, text: &str, ts: &TextStyle) -> LineMetrics {
         self.engine.line_metrics(text, ts)
     }
@@ -924,6 +979,15 @@ impl Canvas for WgpuCanvas<'_> {
         }
     }
 
+    fn push_layer_scaled(&mut self, opacity: f32, bounds: Rect, scale: f32, pivot: (f32, f32)) {
+        self.push_layer_in(opacity, bounds);
+        if let Some(Some(l)) = self.layers.last_mut() {
+            if scale.is_finite() && scale > 0.0 && (scale - 1.0).abs() > crate::render::ZOOM_EPS {
+                l.zoom = Some((scale, pivot));
+            }
+        }
+    }
+
     fn pop_layer(&mut self) {
         // 守卫防下溢（仿软后端 `pop_layer` 的 `if let Some`）。
         debug_assert!(!self.layers.is_empty(), "pop_layer 多于 push_layer");
@@ -940,15 +1004,26 @@ impl Canvas for WgpuCanvas<'_> {
         // （层内容自身已被各自的 clip 裁过，这里再裁一次只会重复剪切）。
         let (w, h) = self.size;
         let full = [0.0, 0.0, w as f32, h as f32];
+        // 缩放合成：quad 绕支点（换算到物理坐标）缩放、线性采样；否则层与目标 1:1，
+        // nearest 免掉一次无谓的重采样。
+        let (quad, nearest) = match top.zoom {
+            Some((z, (px, py))) => {
+                let (px, py) = (px * self.scale, py * self.scale);
+                (
+                    [px - px * z, py - py * z, w as f32 * z, h as f32 * z],
+                    false,
+                )
+            }
+            None => (full, true),
+        };
         self.image_batch.push(image_item(
             top.bound(),
+            quad,
+            quad,
             full,
-            full,
-            [0.0, 0.0, w as f32, h as f32],
             0.0,
             top.opacity,
-            // 层与目标 1:1，nearest 免掉一次无谓的重采样。
-            true,
+            nearest,
         ));
         // 此刻 `current_view` 已回到父目标，合成 quad 正好画在那里。
         self.flush_images();
@@ -1264,6 +1339,85 @@ mod tests {
             |c| {
                 c.stroke_round_rect(20.0, 20.0, 60.0, 40.0, 0.0, 6.0, &Paint::fill(RED));
             },
+        );
+    }
+
+    /// 多边形：GPU 后端走 trait 的逐物理行扫描兜底，软后端走路径光栅化——带洞圆环在
+    /// 125% 下，环带内部与洞内部都须与软后端一致（边缘的抗锯齿差异不在取样框内）。
+    #[test]
+    fn fill_polygon_matches_soft_backend() {
+        let ring = |r: f32, ccw: bool| -> Vec<(f32, f32)> {
+            (0..64)
+                .map(|i| {
+                    let t = i as f32 / 64.0 * std::f32::consts::TAU * if ccw { -1.0 } else { 1.0 };
+                    (50.0 + r * t.cos(), 50.0 + r * t.sin())
+                })
+                .collect()
+        };
+        let (outer, hole) = (ring(30.0, false), ring(15.0, true));
+        // 物理像素取样框：环带上方一段（逻辑 y≈24..30）与洞的中心（逻辑 ≈47..53）。
+        assert_matches_soft(
+            "polygon",
+            125,
+            125,
+            1.25,
+            WHITE,
+            &[(55, 30, 15, 8), (58, 58, 8, 8)],
+            |c| c.fill_polygon(&[&outer, &hole], &Paint::fill(RED)),
+        );
+    }
+
+    /// 四角各异（按象限裁剪拼接）：半透明色在 125% 下，中线两侧（象限接缝）与直角那个角
+    /// 都须与软后端一致——接缝若重叠一列，半透明色会叠出一道深线；渐变须保留而非退成纯色。
+    #[test]
+    fn round_rect_corners_matches_soft_backend() {
+        use crate::geometry::Corners;
+        let c = Corners {
+            bottom_left: 0.0,
+            ..Corners::all(16.0)
+        };
+        let half_red = Color::rgba(255, 0, 0, 128);
+        // 物理取样框：横跨竖中线（逻辑 x≈50）与横中线（逻辑 y≈40）的两条带，加左下直角附近。
+        assert_matches_soft(
+            "corners_alpha",
+            125,
+            125,
+            1.25,
+            WHITE,
+            &[(55, 30, 15, 40), (20, 46, 85, 8), (14, 80, 6, 4)],
+            |cv| cv.fill_round_rect_corners(10.0, 10.0, 80.0, 60.0, c, &Paint::fill(half_red)),
+        );
+        let grad = crate::render::Gradient::linear(
+            (0.0, 0.0),
+            (1.0, 0.0),
+            vec![(0.0, Color::rgb(0, 0, 255)), (1.0, Color::rgb(255, 0, 0))],
+        );
+        assert_matches_soft(
+            "corners_gradient",
+            100,
+            100,
+            1.0,
+            WHITE,
+            &[(20, 30, 60, 20)],
+            |cv| {
+                cv.fill_round_rect_corners(
+                    10.0,
+                    10.0,
+                    80.0,
+                    60.0,
+                    c,
+                    &Paint::gradient(grad.clone()),
+                )
+            },
+        );
+        assert_matches_soft(
+            "corners_stroke",
+            100,
+            100,
+            1.0,
+            WHITE,
+            &[(30, 10, 40, 3), (10, 30, 3, 20), (40, 30, 20, 20)],
+            |cv| cv.stroke_round_rect_corners(10.0, 10.0, 80.0, 60.0, c, 3.0, &Paint::fill(RED)),
         );
     }
 
@@ -2405,6 +2559,47 @@ mod tests {
             "绿/蓝应被白底抬到中段（50% 合成），实得 {p:?}"
         );
         assert_eq!(p[3], 255, "不透明背景上合成后 alpha 应仍为满");
+    }
+
+    /// 缩放合成与软后端一致：红块绕中心按 0.5 合成，内部取样框与外圈白底两后端都对得上。
+    #[test]
+    fn scaled_layer_matches_soft() {
+        assert_matches_soft(
+            "layer_zoom",
+            100,
+            100,
+            1.0,
+            WHITE,
+            &[(44, 44, 12, 12), (2, 2, 20, 20), (78, 78, 20, 20)],
+            |c| {
+                c.push_layer_scaled(0.8, Rect::new(30, 30, 40, 40), 0.5, (50.0, 50.0));
+                c.fill_rect(30.0, 30.0, 40.0, 40.0, &Paint::fill(Color::hex(0xFF0000)));
+                c.pop_layer();
+            },
+        );
+    }
+
+    /// 高 DPI + 偏心支点：支点换算到物理坐标时要乘缩放，GPU 与软后端仍对得上。
+    #[test]
+    fn scaled_layer_matches_soft_hidpi_off_center() {
+        let sc = 1.25;
+        let c = |v: f32| (v * sc) as u32;
+        assert_matches_soft(
+            "layer_zoom_hidpi",
+            c(100.0),
+            c(100.0),
+            sc,
+            WHITE,
+            &[
+                (c(38.0), c(58.0), c(4.0), c(4.0)),
+                (c(2.0), c(2.0), c(10.0), c(10.0)),
+            ],
+            |cv| {
+                cv.push_layer_scaled(1.0, Rect::new(20, 40, 40, 40), 0.7, (40.0, 60.0));
+                cv.fill_rect(20.0, 40.0, 40.0, 40.0, &Paint::fill(Color::hex(0xFF0000)));
+                cv.pop_layer();
+            },
+        );
     }
 
     /// 层的意义在于「**整体**一次 opacity」：层内两块不透明色重叠，重叠处与非重叠处

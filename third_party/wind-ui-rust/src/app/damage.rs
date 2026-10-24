@@ -86,7 +86,7 @@ impl UiHost {
     ) -> (bool, Option<Rect>) {
         let overlay = self.menu.is_open()
             || self.toast.is_active()
-            || self.tooltip.will_show(&self.tree, self.hover);
+            || self.tooltip.is_overlay(&self.tree, self.hover);
         // 下一帧脏区 = 动画脏区（上帧遗留）∪ 交互脏区（事件累积）。
         let damage = match (self.damage.pending.take(), self.damage.event.take()) {
             (Some(a), Some(b)) => Some(a.union(&b)),
@@ -142,7 +142,13 @@ impl UiHost {
     /// 供平台收窄窗口失效区（见 `AppHandler::pending_damage`）。只是预测：真正的
     /// 局部/整窗判定在 `decide_repaint`，它还会看目标能否局部、浮层、DPI 等条件。
     pub(super) fn next_frame_damage(&self) -> Option<Rect> {
-        if self.damage.needs_full || self.damage.needs_relayout {
+        // 树外浮层（菜单 / toast / 上一帧画过的提示）给不出脏区，本帧必整窗。
+        if self.damage.needs_full
+            || self.damage.needs_relayout
+            || self.menu.is_open()
+            || self.toast.is_active()
+            || self.tooltip.shown.get()
+        {
             return None;
         }
         match (self.damage.pending, self.damage.event) {
@@ -215,6 +221,7 @@ impl UiHost {
             return;
         }
         target.begin_damage(Some(pdmg), self.bg);
+        let outline = self.window_outline_color();
         {
             let mut canvas = target.make_canvas(&mut self.engine, s);
             // 脏区铺底要的是**替换**，不是叠加：常驻纹理里留着上一帧的像素，而软后端那条
@@ -235,8 +242,25 @@ impl UiHost {
                 &Paint::fill(opaque_bg),
             );
             self.tree.paint(&mut *canvas);
+            super::paint_window_outline(&mut *canvas, outline, size, s);
         }
         self.last_present = Some(pdmg);
+    }
+
+    /// 本帧要宿主自己画的窗口外框色（平台没要求时为 `None`），见 `paint_window_outline`。
+    ///
+    /// 平台给的 `window_outline` 同时回答两件事：要不要画（最大化 / 非 Win10 时为 `None`）、
+    /// 平台建议什么颜色。策略只改颜色、或关掉，不会在平台说不画时画。主题色**绘制期现取**
+    /// 而不在 `set_window_outline` 那一刻换算好存起来——否则换肤、切夜间那一帧外框不跟。
+    pub(super) fn window_outline_color(&self) -> Option<Color> {
+        use crate::platform::WindowOutline;
+        let platform = self.window_outline?;
+        match self.outline_policy {
+            WindowOutline::Auto => Some(platform),
+            WindowOutline::Theme => Some(self.theme_src.current().palette.border),
+            WindowOutline::Color(c) => Some(c),
+            WindowOutline::Off => None,
+        }
     }
 
     pub(super) fn render_partial(&mut self, pixmap: &mut Pixmap, size: Size, s: f32, damage: Rect) {
@@ -251,15 +275,18 @@ impl UiHost {
         // 子 pixmap：脏区大小，按窗口背景填底（与全窗帧平台 fill 同色，重建一致）。
         let Some(mut sub) = Pixmap::new(pdmg.w as u32, pdmg.h as u32) else {
             // 分配失败（本质是 OOM）：这一帧不动 pixmap——它仍是上一帧的完整画面，
-            // 显示正确只是没更新——并要求下一帧整窗重画。
+            // 显示正确只是没更新——并要求下一帧整窗重画。报"一个像素都没改"而不是
+            // `None`：`None` 的意思是整窗都重画了，平台据此对整窗做收尾（Linux 无边框
+            // 窗口的外框混合、圆角淡出都是乘加），对没重画的像素再做一遍会越叠越深。
             self.damage.needs_full = true;
-            self.last_present = None;
+            self.last_present = Some(Rect::default());
             return;
         };
         sub.fill(tiny_skia::Color::from_rgba8(
             self.bg.r, self.bg.g, self.bg.b, self.bg.a,
         ));
         // 以脏区左上角（逻辑）为偏移绘制整树：框外图元由 tiny-skia 廉价剔除。
+        let outline = self.window_outline_color();
         {
             let mut canvas = SkiaCanvas::with_text_offset(
                 &mut sub,
@@ -268,6 +295,8 @@ impl UiHost {
                 Point::new(dmg.x, dmg.y),
             );
             self.tree.paint(&mut canvas);
+            // 子 pixmap 每次新铺底，外框画在它上面不会越叠越深。
+            super::paint_window_outline(&mut canvas, outline, size, s);
         }
         // 直接合成进平台 pixmap（脏区物理原点）。pixmap 跨帧持久且恒为 RGBA，框外行
         // 保留着上一帧的内容——此前要经宿主的后备缓冲中转一道，是因为 win32 会把 pixmap
@@ -678,6 +707,168 @@ mod tests {
         assert!(
             handler.damage.last_frame_full,
             "换色帧必须整窗——键盘路径的信号写入只给局部脏区，会把改了色的那行字漏掉"
+        );
+    }
+
+    /// 悬停提示测试台：一行两个带悬停视觉的窄按钮，A 带一句比它宽得多的提示，B 不带。
+    /// 按钮的悬停视觉会上报**节点矩形**脏区——正是放行局部重绘、盖不住浮层的那种。
+    fn tooltip_bench() -> crate::app::UiHost {
+        use crate::platform::AppHandler;
+        let app = App::new("t", 300, 200).content(
+            Element::row()
+                .width(300)
+                .height(200)
+                .child(
+                    Element::button("A")
+                        .width(30)
+                        .height(30)
+                        .tooltip("一段比控件本身宽得多的提示文字"),
+                )
+                .child(Element::button("B").width(30).height(30)),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        h
+    }
+
+    /// 把宿主时钟拨快 `ms`：悬停延时按 `start.elapsed()` 计，免得测试真睡半秒。
+    fn advance_clock(h: &mut crate::app::UiHost, ms: u64) {
+        h.start -= std::time::Duration::from_millis(ms);
+    }
+
+    /// ★ 回归：提示弹出后移开，消失那一帧必须整窗。
+    ///
+    /// 浮层画在树外、指针旁边。原判据只问"当前悬停节点有没有提示"，移开那一帧悬停
+    /// 已换成邻居 → 判为无浮层 → 放行局部重绘，而脏区只有两个按钮那块，旧提示落在
+    /// 脏区外的两端原样留在画面上（下游无边框标题栏按钮上实测的残影）。
+    #[test]
+    fn tooltip_leave_frame_is_full() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        let mut h = tooltip_bench();
+        let mut pm = Pixmap::new(300, 200).unwrap();
+        macro_rules! frame {
+            () => {
+                h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200))
+            };
+        }
+        let mv = |h: &mut crate::app::UiHost, x| {
+            h.on_pointer(PointerEvent::single(
+                PointerKind::Move,
+                Point::new(x, 15),
+                MouseButton::Left,
+            ))
+        };
+        frame!();
+        mv(&mut h, 15);
+        frame!();
+        advance_clock(&mut h, 600);
+        frame!();
+        assert!(h.tooltip.shown.get(), "前提：满延时后提示应已画出");
+
+        mv(&mut h, 45);
+        assert!(
+            h.damage.event.is_some(),
+            "前提：移到邻居应带控件脏区——否则本就整窗，测不到判据"
+        );
+        assert_eq!(
+            h.pending_damage(),
+            None,
+            "提示还在屏上时不得向平台预告局部脏区（macOS 据此收窄失效区）"
+        );
+        frame!();
+        assert!(
+            h.damage.last_frame_full,
+            "提示消失那一帧走了局部重绘，脏区外的旧提示会留成残影"
+        );
+        assert!(!h.tooltip.shown.get(), "整窗帧后提示应已撤下");
+
+        // 撤下之后不再拖累：B 上的悬停交互回到局部重绘。
+        h.damage.event = Some(Rect::new(30, 0, 30, 30));
+        frame!();
+        assert!(!h.damage.last_frame_full, "提示撤下后应恢复局部重绘");
+    }
+
+    /// 提示弹出后原地按下（抑制）同样是"消失帧"：必须**出帧**且整窗。
+    ///
+    /// 用不响应按下的 Label：按钮自带按下视觉，本就会请求重绘，测不到"没人请求重绘、
+    /// 平台不失效窗口、提示一直留在屏上"那条路。
+    #[test]
+    fn tooltip_suppressed_by_click_repaints_full() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        let app = App::new("t", 300, 200).content(
+            Element::col().width(300).height(200).child(
+                Element::label("标签")
+                    .width(60)
+                    .height(30)
+                    .tooltip("一段比控件本身宽得多的提示文字"),
+            ),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 200).unwrap();
+        macro_rules! frame {
+            () => {
+                h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200))
+            };
+        }
+        let ev = |kind, at| PointerEvent::single(kind, at, MouseButton::Left);
+        let at = Point::new(15, 15);
+        frame!();
+        h.on_pointer(ev(PointerKind::Move, at));
+        frame!();
+        advance_clock(&mut h, 600);
+        frame!();
+        assert!(h.tooltip.shown.get(), "前提：提示应已画出");
+
+        assert!(
+            h.on_pointer(ev(PointerKind::Down, at)),
+            "按下撤提示必须请求出帧，否则平台不失效窗口、提示留在屏上"
+        );
+        frame!();
+        assert!(h.damage.last_frame_full, "按下撤提示的那一帧应整窗");
+        assert!(!h.tooltip.shown.get());
+
+        h.on_pointer(ev(PointerKind::Up, at));
+        frame!();
+        // 原地再移动解除抑制：悬停节点没变，也得出一帧去排"到点再弹"的那一帧。
+        assert!(
+            h.on_pointer(ev(PointerKind::Move, Point::new(16, 15))),
+            "解除抑制须出帧，否则提示要等别的事件凑巧才弹"
+        );
+    }
+
+    /// 等待延时期间不按刷新率空转：只排一帧在到点时刻。
+    ///
+    /// 原先每帧 `request_repaint()`（截止 0），500ms 内按刷新率连出约 30 个整窗帧，
+    /// 画面却一像素不变。
+    #[test]
+    fn tooltip_delay_schedules_one_deadline_frame() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        let mut h = tooltip_bench();
+        let mut pm = Pixmap::new(300, 200).unwrap();
+        h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        h.on_pointer(PointerEvent::single(
+            PointerKind::Move,
+            Point::new(15, 15),
+            MouseButton::Left,
+        ));
+        h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        // 按钮自己的悬停补间也在续帧（截止 0），宿主取最早截止，会把提示那条压住。
+        // 拨过补间时长再看——此后剩下的只有提示的等待。
+        advance_clock(&mut h, 300);
+        h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        assert!(!h.tooltip.shown.get(), "未满延时不该画");
+        assert!(h.wants_anim, "未满延时须排一帧，否则鼠标静止后提示永远不出");
+        assert!(
+            (1..=200).contains(&h.next_delay),
+            "等待帧的截止应是剩余延时（约 200ms），实为 {}ms（0 即按刷新率空转）",
+            h.next_delay
         );
     }
 }

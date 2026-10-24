@@ -198,7 +198,8 @@ impl Tree {
             name: root_node.widget.accessibility_name().unwrap_or_default(),
             description: root_node
                 .tooltip
-                .clone()
+                .as_ref()
+                .map(|tip| tip.resolve().into_owned())
                 .or_else(|| root_node.widget.accessibility_description()),
             bounds: self.abs_bounds(root),
             enabled: root_node.own_enabled(),
@@ -255,7 +256,8 @@ impl Tree {
                 name: node.widget.accessibility_name().unwrap_or_default(),
                 description: node
                     .tooltip
-                    .clone()
+                    .as_ref()
+                    .map(|tip| tip.resolve().into_owned())
                     .or_else(|| node.widget.accessibility_description()),
                 bounds: self.abs_bounds(id.node_id()),
                 enabled,

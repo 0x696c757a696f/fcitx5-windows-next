@@ -45,9 +45,9 @@ impl Default for VScrollbar {
 }
 
 impl VScrollbar {
-    /// 轨道视觉宽度（px）。
+    /// 轨道视觉宽度的默认值（px）；实际绘制取主题 `scrollbar.width`。
     pub const TRACK_W: f32 = crate::core::scrollbar::TRACK_W;
-    /// 上下及右侧边距（px）。
+    /// 上下及右侧边距的默认值（px）；实际绘制取主题 `scrollbar.margin`。
     pub const MARGIN: f32 = crate::core::scrollbar::MARGIN;
     /// 滑块最小高度（px）。
     pub const MIN_THUMB: f32 = crate::core::scrollbar::MIN_THUMB;
@@ -66,7 +66,7 @@ impl VScrollbar {
     }
 
     fn bar_h(bounds: Rect) -> f32 {
-        (bounds.h as f32 - 2.0 * Self::MARGIN).max(0.0)
+        (bounds.h as f32 - 2.0 * crate::core::scrollbar::margin()).max(0.0)
     }
 
     /// 滑块高度。这里的基准是**轨道高** `bar_h`（已扣掉上下 `MARGIN`），与 core 直接用
@@ -89,7 +89,7 @@ impl VScrollbar {
     /// 命中判断：`pos` 是否在滚动条可点击区域内。`bounds` 为宿主控件绝对矩形。
     pub fn hit_test(&self, pos: Point, bounds: Rect, content_h: i32, view_h: i32) -> bool {
         Self::has_overflow(content_h, view_h)
-            && pos.x >= bounds.right() - Self::HIT_W
+            && pos.x >= bounds.right() - crate::core::scrollbar::hit_w()
             && pos.y >= bounds.y
             && pos.y < bounds.y + bounds.h
     }
@@ -106,29 +106,26 @@ impl VScrollbar {
         if !Self::has_overflow(content_h, view_h) {
             return;
         }
-        let bx = bounds.x as f32 + bounds.w as f32 - Self::TRACK_W - Self::MARGIN;
+        let (tw, margin) = (
+            crate::core::scrollbar::track_w(),
+            crate::core::scrollbar::margin(),
+        );
+        let bx = bounds.x as f32 + bounds.w as f32 - tw - margin;
         let by = bounds.y as f32;
         let bh = Self::bar_h(bounds);
         let th = Self::thumb_h(bh, content_h, view_h);
         let max = Self::max_scroll(content_h, view_h).max(1) as f32;
         let travel = (bh - th).max(1.0);
-        let ty = by + Self::MARGIN + travel * (scroll_y as f32 / max);
-        let r = Self::TRACK_W / 2.0;
+        let ty = by + margin + travel * (scroll_y as f32 / max);
+        let r = tw / 2.0;
         // 配色取自主题（同 core 的滚动条）：写死黑色半透明会在深色主题下把滑块一起隐没。
         // 轨道默认不画，只露滑块。
         if let Some(track) = crate::core::scrollbar::track() {
-            canvas.fill_round_rect(
-                bx,
-                by + Self::MARGIN,
-                Self::TRACK_W,
-                bh,
-                r,
-                &Paint::fill(track),
-            );
+            canvas.fill_round_rect(bx, by + margin, tw, bh, r, &Paint::fill(track));
         }
         // 滑块（拖动时加深，给出"抓住了"的反馈）
         let thumb = crate::core::scrollbar::thumb(self.dragging);
-        canvas.fill_round_rect(bx, ty, Self::TRACK_W, th, r, &Paint::fill(thumb));
+        canvas.fill_round_rect(bx, ty, tw, th, r, &Paint::fill(thumb));
     }
 
     /// 按下处理：命中则开始拖动，返回 `true`。
@@ -182,62 +179,129 @@ impl VScrollbar {
 /// 滚动容器内部 widget：处理滚轮 + 拖动滚动条。
 #[derive(Default)]
 pub struct ScrollWidget {
-    dragging: bool,
-    start_y: i32,
+    /// 正在拖的滚动条：`Some(Vertical)` 竖条、`Some(Horizontal)` 横条。
+    dragging: Option<crate::spec::Axis>,
+    /// 按下时指针在拖动方向上的坐标。
+    start_pos: i32,
     start_scroll: i32,
+    /// 高精度滚轮 / 触控板的亚格零头（见 `WheelCarry`），两个方向各攒各的。
+    wheel: crate::event::WheelCarry,
+    wheel_x: crate::event::WheelCarry,
+}
+
+impl ScrollWidget {
+    /// 竖向滚 `delta`（`Wheel` 单位）。不可滚或已到该方向边界时返回 false，冒泡给外层。
+    fn wheel_vertical(&mut self, ctx: &mut EventCtx, delta: i32) -> bool {
+        let (scroll_y, content_h, view_h) = ctx.scroll_metrics();
+        let max_scroll = (content_h - view_h).max(0);
+        // 已到边界 → 冒泡给外层滚动容器，实现嵌套滚动。按滚动方向判（像素位移可能因
+        // 零头为 0），免得触控板在边界处一点一点地把事件吞掉、外层永远滚不动。
+        let down = delta < 0;
+        if !ctx.scroll_axis().vertical()
+            || max_scroll == 0
+            || (!down && scroll_y <= 0)
+            || (down && scroll_y >= max_scroll)
+        {
+            self.wheel.reset();
+            return false;
+        }
+        // delta>0 向上（减小 scroll_y），delta<0 向下（增大 scroll_y）；每格 48px。
+        let dy = self.wheel.scroll_px(delta, 48);
+        ctx.scroll_by(dy);
+        true
+    }
+
+    /// 横向滚 `delta`（`HWheel` 单位，正=向左）。规则同 [`Self::wheel_vertical`]。
+    fn wheel_horizontal(&mut self, ctx: &mut EventCtx, delta: i32) -> bool {
+        let (scroll_x, content_w, view_w) = ctx.scroll_metrics_x();
+        let max_scroll = (content_w - view_w).max(0);
+        let right = delta < 0;
+        if !ctx.scroll_axis().horizontal()
+            || max_scroll == 0
+            || (!right && scroll_x <= 0)
+            || (right && scroll_x >= max_scroll)
+        {
+            self.wheel_x.reset();
+            return false;
+        }
+        let dx = self.wheel_x.scroll_px(delta, 48);
+        ctx.scroll_by_x(dx);
+        true
+    }
 }
 
 impl Widget for ScrollWidget {
     fn on_event(&mut self, ctx: &mut EventCtx, ev: &Event) -> bool {
         let Event::Pointer(p) = ev else { return false };
         match p.kind {
-            PointerKind::Wheel(delta) => {
-                let (scroll_y, content_h, view_h) = ctx.scroll_metrics();
-                let max_scroll = (content_h - view_h).max(0);
-                // 无溢出内容 → 直接冒泡。
-                if max_scroll == 0 {
-                    return false;
-                }
-                // delta>0 向上（减小 scroll_y），delta<0 向下（增大 scroll_y）。
-                let dy = -delta * 48 / 120;
-                // 已到边界 → 冒泡给外层滚动容器，实现嵌套滚动。
-                let at_boundary = (dy < 0 && scroll_y <= 0) || (dy > 0 && scroll_y >= max_scroll);
-                if at_boundary {
-                    return false;
-                }
-                ctx.scroll_by(dy);
-                true
+            // Shift+滚轮：横向滚（Windows / Linux 的通行做法；macOS 系统已把它转成横向量）。
+            // 本容器不能横滚时 Shift 不起作用，照常竖滚（只竖滚的容器保持原行为）。
+            PointerKind::Wheel(delta) if p.mods.shift && ctx.scroll_axis().horizontal() => {
+                self.wheel_horizontal(ctx, delta)
             }
+            // 竖向滚轮：能竖滚就竖滚；本容器根本竖滚不了（只横滚，或双向但竖向不溢出）时
+            // 转成横滚——鼠标没有横向滚轮，否则只能去拖滚动条。与 Qt / GTK / WinUI 一致。
+            // 滚到头照常冒泡给外层。
+            PointerKind::Wheel(delta) => {
+                let (_, content_h, view_h) = ctx.scroll_metrics();
+                let can_v = ctx.scroll_axis().vertical() && content_h > view_h;
+                if can_v {
+                    self.wheel_vertical(ctx, delta)
+                } else {
+                    self.wheel.reset();
+                    self.wheel_horizontal(ctx, delta)
+                }
+            }
+            PointerKind::HWheel(delta) => self.wheel_horizontal(ctx, delta),
             PointerKind::Down => {
                 // 命中到这里且在滚动条可抓取区时启动拖动（hit_node 已优先派发）。
                 // 区间取自 ctx，与 hit_node 的判定同源——贴窗口边的容器滚动条整体内缩，
                 // 这里若还按 `right - HIT_W` 自行推算就会错开一个内缩量。
+                // 两条都有时右下角交叠处归横条：竖条止于横条之上，那里没画竖条。
+                use crate::spec::Axis;
+                let (v_bar, h_bar) = ctx.scroll_bars_shown();
                 let (lo, hi) = ctx.scrollbar_hit_zone();
-                let (scroll_y, content_h, view_h) = ctx.scroll_metrics();
-                if content_h > view_h && p.pos.x >= lo && p.pos.x < hi {
-                    self.dragging = true;
-                    self.start_y = p.pos.y;
-                    self.start_scroll = scroll_y;
-                    ctx.capture();
-                    true
+                let (ylo, yhi) = ctx.hscrollbar_hit_zone();
+                let grab = if h_bar && p.pos.y >= ylo && p.pos.y < yhi {
+                    Some((Axis::Horizontal, p.pos.x, ctx.scroll_metrics_x().0))
+                } else if v_bar && p.pos.x >= lo && p.pos.x < hi {
+                    Some((Axis::Vertical, p.pos.y, ctx.scroll_metrics().0))
                 } else {
-                    false
-                }
+                    None
+                };
+                let Some((axis, pos, scroll)) = grab else {
+                    return false;
+                };
+                self.dragging = Some(axis);
+                self.start_pos = pos;
+                self.start_scroll = scroll;
+                ctx.capture();
+                true
             }
-            PointerKind::Move if self.dragging => {
-                let (_, content_h, view_h) = ctx.scroll_metrics();
-                if view_h > 0 && content_h > view_h {
-                    let max_scroll = content_h - view_h;
+            PointerKind::Move if self.dragging.is_some() => {
+                let horizontal = self.dragging == Some(crate::spec::Axis::Horizontal);
+                let ((_, content, view), pos) = if horizontal {
+                    (ctx.scroll_metrics_x(), p.pos.x)
+                } else {
+                    (ctx.scroll_metrics(), p.pos.y)
+                };
+                if view > 0 && content > view {
+                    let max_scroll = content - view;
                     // 按 thumb 实际行程换算，精确反演绘制映射（与 core paint 同源公式）。
-                    let travel = crate::core::scrollbar::travel(view_h, content_h);
-                    let dy = p.pos.y - self.start_y;
-                    let delta = (dy as f32 * max_scroll as f32 / travel) as i32;
-                    ctx.set_scroll((self.start_scroll + delta).clamp(0, max_scroll));
+                    let travel = crate::core::scrollbar::travel(view, content);
+                    let d = pos - self.start_pos;
+                    let delta = (d as f32 * max_scroll as f32 / travel) as i32;
+                    let to = (self.start_scroll + delta).clamp(0, max_scroll);
+                    if horizontal {
+                        ctx.set_scroll_x(to);
+                    } else {
+                        ctx.set_scroll(to);
+                    }
                 }
                 true
             }
-            PointerKind::Up if self.dragging => {
-                self.dragging = false;
+            PointerKind::Up if self.dragging.is_some() => {
+                self.dragging = None;
                 ctx.release_capture();
                 true
             }
@@ -248,7 +312,8 @@ impl Widget for ScrollWidget {
 
 /// 对话框可拖动的顶部带高（逻辑 px）：面板顶端起这么高的区域按下即开始拖动。
 ///
-/// 取 52 是按设置页对话框的标题行实测（18px 标题 + 上下内边距）。落在带里的按钮、
+/// 取 52 = `dialog_panel` 的顶内边距（`space_xl` 24）+ 标题行高（由 28px 关闭按钮撑起；
+/// 标题限单行，不会更高）。落在带里的按钮、
 /// 输入框照常响应点击——拖动挂在**遮罩**上，只有冒泡到最外层的按下才轮得到它，被子
 /// 控件消费掉的根本到不了（见 `Tree::dispatch_pointer` 的祖先链冒泡）。这与
 /// `Node::window_drag` 的"落在子交互控件上不拖窗"是同一套裁决，无需另写。
@@ -423,9 +488,9 @@ enum ClickState {
     Press,
 }
 
-/// hover/press 叠层不透明度（叠层取主题文字色，明暗主题均自适应）。
-const CLICK_HOVER_A: f32 = 0.06;
-const CLICK_PRESS_A: f32 = 0.11;
+/// hover/press 叠层不透明度（叠层取主题文字色，明暗主题均自适应）。与全库同一套档位。
+const CLICK_HOVER_A: f32 = crate::theme::HOVER_ALPHA;
+const CLICK_PRESS_A: f32 = crate::theme::PRESS_ALPHA;
 
 /// 通用可点击容器 widget：为任意容器（卡片 / 列表项 / 自定义行）补上 hover/press
 /// 视觉反馈 + 点击/键盘激活 + 手型光标。反馈用**主题自适应的半透明叠层**（绘制在节点
@@ -578,8 +643,8 @@ enum IconKind {
     Image(ImageContent),
 }
 
-/// 图标按钮默认方形边长与内边距（px）。Element 可用 `.size()` 覆盖。
-const ICON_BTN_SIZE: i32 = 30;
+/// 图标按钮内边距（px）。默认方形边长取主题 `metrics.control_h`，与按钮同高；
+/// Element 可用 `.size()` 覆盖。
 const ICON_BTN_PAD: i32 = 6;
 
 /// 纯图标按钮：无文字、方形、hover/press 半透明圆底 + 点击/键盘激活 + 手型光标。
@@ -622,6 +687,10 @@ impl IconButton {
 }
 
 impl Widget for IconButton {
+    fn frame_corner(&self, _bounds: Rect) -> Option<f32> {
+        let th = crate::theme::current();
+        Some(th.button.corner(&th.metrics))
+    }
     fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         match &self.kind {
             IconKind::Glyph(g) => {
@@ -630,10 +699,14 @@ impl Widget for IconButton {
                     &crate::text::TextStyle::of(style),
                     None,
                 );
-                let side = t.w.max(t.h).max(style.font_size as i32) + 2 * ICON_BTN_PAD;
-                Size::new(side.max(ICON_BTN_SIZE), side.max(ICON_BTN_SIZE))
+                let min = crate::theme::current().metrics.control_h;
+                let side = t.w.max(t.h).max(style.font_size() as i32) + 2 * ICON_BTN_PAD;
+                Size::new(side.max(min), side.max(min))
             }
-            IconKind::Image(_) => Size::new(ICON_BTN_SIZE, ICON_BTN_SIZE),
+            IconKind::Image(_) => {
+                let min = crate::theme::current().metrics.control_h;
+                Size::new(min, min)
+            }
         }
     }
     fn paint(
@@ -666,10 +739,11 @@ impl Widget for IconButton {
         let a = ov.animate();
         self.overlay.set(ov);
         if a > 0.001 {
+            // 与按钮同一个圆角（含 `ButtonTheme.corner` 覆盖），并排时外形一致。
             let r = if style.corner_radius > 0.0 {
                 style.corner_radius
             } else {
-                th.metrics.corner_sm
+                th.button.corner(&th.metrics)
             };
             canvas.fill_round_rect(
                 bounds.x as f32,
@@ -785,7 +859,9 @@ impl Widget for IconButton {
 
 /// 标签条中的一项：标题 + 可选前置图标 + 是否可选。
 pub struct TabItem {
-    pub label: String,
+    /// 标题。存 [`TextContent`]，标签条每次 measure/paint/tooltip 时现取——传
+    /// [`t!`](crate::t) 进来换语言即跟随。
+    pub label: TextContent,
     pub icon: Option<ImageContent>,
     /// 可选与否，`None` = 恒可选。`false` 时文字走 `text_disabled`、悬停不亮、
     /// 点击与键盘都跳过它。
@@ -801,9 +877,9 @@ pub struct TabItem {
 }
 
 impl TabItem {
-    pub fn new(label: String) -> Self {
+    pub fn new(label: impl Into<TextContent>) -> Self {
         Self {
-            label,
+            label: label.into(),
             icon: None,
             enabled: None,
         }
@@ -879,6 +955,8 @@ pub struct TabBar {
     /// 收缩内边距（见 [`Self::shrink_pad`]）。因此**溢出场景**下首帧前的命中可能有
     /// 几个像素偏移，paint 一跑就以真实内边距覆盖、自校正。不溢出时二者完全一致。
     layout: RefCell<Vec<(i32, i32)>>,
+    /// 上一帧哪些项收起了文字（见 [`Self::collapse`]）：收起的标签悬停时用 tooltip 补全文。
+    collapsed: RefCell<Vec<bool>>,
 }
 
 /// 单个标签的度量：`(内容宽, 整宽, 文字高)`。内容宽即指示条宽度。
@@ -892,13 +970,14 @@ impl TabBar {
             style: TabStyle::default(),
             group,
             hover: None,
-            ind_x: Cell::new(Transition::new(0.0)),
-            ind_w: Cell::new(Transition::new(0.0)),
+            ind_x: Cell::new(Transition::new(0.0).movement()),
+            ind_w: Cell::new(Transition::new(0.0).movement()),
             text_anim: (0..n)
                 .map(|_| Cell::new(Transition::new(Color::rgba(0, 0, 0, 0))))
                 .collect(),
             primed: Cell::new(false),
             layout: RefCell::new(Vec::new()),
+            collapsed: RefCell::new(Vec::new()),
         }
     }
 
@@ -929,7 +1008,7 @@ impl TabBar {
         self.items
             .iter()
             .map(|it| {
-                let t = measure(&it.label, &ts);
+                let t = measure(&it.label.resolve(), &ts);
                 let content = if it.icon.is_some() {
                     t.h + TAB_ICON_GAP + t.w
                 } else {
@@ -962,6 +1041,35 @@ impl TabBar {
         let sides = m.len() as i32 * 2;
         let per_side = (natural - avail_w + sides - 1) / sides;
         (TAB_PAD_X - per_side).max(TAB_PAD_MIN)
+    }
+
+    /// 收起文字：内边距收到下限仍放不下、且**每项都有图标**时，从最右一项起逐个把未选中
+    /// 项收成只剩图标（悬停经 tooltip 看全文），收到放得下为止；选中项始终保留文字。
+    /// 返回每项是否收起。
+    ///
+    /// 比继续挤压或截断末项好：图标本来就是为识别准备的，被切掉一半的标签既看不清
+    /// 也点不准。从右往左收，是因为左侧通常是最常用的几项。没有图标的标签条收起后
+    /// 就无从辨认，故不收，维持原先的溢出行为。
+    fn collapse(m: &mut [TabMetrics], all_icons: bool, sel: usize, avail_w: i32) -> Vec<bool> {
+        let mut out = vec![false; m.len()];
+        if !all_icons {
+            return out;
+        }
+        let min_total =
+            |m: &[TabMetrics]| -> i32 { m.iter().map(|(c, _, _)| c + TAB_PAD_MIN * 2).sum() };
+        for i in (0..m.len()).rev() {
+            if min_total(m) <= avail_w {
+                break;
+            }
+            if i == sel {
+                continue;
+            }
+            // 图标边长即文字行高（见 `metrics`）
+            m[i].0 = m[i].2;
+            m[i].1 = m[i].2 + TAB_PAD_X * 2;
+            out[i] = true;
+        }
+        out
     }
 
     /// 有效选中索引（钳到项数内，容忍外部信号越界）。
@@ -1045,7 +1153,10 @@ impl Widget for TabBar {
 
         // 布局：标签依次左排，间距 0（靠各自 padding 分隔，命中/居中都按整格算）。
         // 这里用真实可用宽算内边距，比 measure 那份更准，覆盖回缓存。
-        let m = self.metrics(style, |s, ts| canvas.measure_text(s, ts));
+        let mut m = self.metrics(style, |s, ts| canvas.measure_text(s, ts));
+        let all_icons = self.items.iter().all(|it| it.icon.is_some());
+        let collapsed = Self::collapse(&mut m, all_icons, self.selected(), bounds.w);
+        self.collapsed.replace(collapsed.clone());
         let xs = Self::lay_out(&m, Self::shrink_pad(&m, bounds.w));
         self.layout.replace(xs.clone());
 
@@ -1072,8 +1183,8 @@ impl Widget for TabBar {
             let (tx, tw) = (sel_x as f32, sel_w as f32);
             let (mut ax, mut aw) = (self.ind_x.get(), self.ind_w.get());
             if first {
-                ax = Transition::new(tx);
-                aw = Transition::new(tw);
+                ax.settle(tx);
+                aw.settle(tw);
             } else {
                 if ax.target() != tx {
                     ax.retarget(tx, th.anim.normal(), Easing::EaseOut);
@@ -1116,7 +1227,11 @@ impl Widget for TabBar {
             // 整条禁用与**单项**禁用在这里合流：两者对这一项的效果完全一样，故只取
             // 一个布尔往下走，不必在每处判断里写两遍。
             let enabled = enabled && self.items[i].is_enabled();
-            let sel_color = if pill { pal.on_accent } else { tab.accent(pal) };
+            let sel_color = if pill {
+                pal.on_accent
+            } else {
+                tab.accent_text(pal)
+            };
             let target_color = if !enabled {
                 pal.text_disabled
             } else if i == sel {
@@ -1158,9 +1273,12 @@ impl Widget for TabBar {
                     ..style.clone()
                 };
                 icon.paint_into(Rect::new(cx, iy, text_h, text_h), canvas, &istyle, vstate);
+                if collapsed[i] {
+                    continue;
+                }
                 let tx = cx + text_h + TAB_ICON_GAP;
                 canvas.draw_text(
-                    &self.items[i].label,
+                    &self.items[i].label.resolve(),
                     Rect::new(tx, bounds.y, ix + iw - tx, th_box),
                     color,
                     Align::Start,
@@ -1168,7 +1286,7 @@ impl Widget for TabBar {
                 );
             } else {
                 canvas.draw_text(
-                    &self.items[i].label,
+                    &self.items[i].label.resolve(),
                     Rect::new(ix, bounds.y, iw, th_box),
                     color,
                     Align::Center,
@@ -1185,7 +1303,7 @@ impl Widget for TabBar {
                 (bounds.y + bounds.h) as f32 - ih,
                 pw,
                 ih,
-                &Paint::fill(tab.accent(pal)),
+                &Paint::fill(tab.accent_text(pal)),
             );
         }
     }
@@ -1254,6 +1372,15 @@ impl Widget for TabBar {
         self.hover = None;
         self.primed.set(false); // 下次显示瞬时落定，不回放旧 hover / 旧指示条位置
     }
+
+    fn tooltip(&self) -> Option<String> {
+        let i = self.hover?;
+        let collapsed = self.collapsed.borrow().get(i).copied().unwrap_or(false);
+        self.items
+            .get(i)
+            .filter(|_| collapsed)
+            .map(|it| it.label.resolve().into_owned())
+    }
 }
 
 #[cfg(test)]
@@ -1293,10 +1420,7 @@ mod tests {
     }
 
     fn bar(labels: &[&str], g: Signal<usize>) -> TabBar {
-        TabBar::new(
-            labels.iter().map(|s| TabItem::new((*s).into())).collect(),
-            g,
-        )
+        TabBar::new(labels.iter().map(|s| TabItem::new(*s)).collect(), g)
     }
 
     #[test]
@@ -1336,8 +1460,7 @@ mod tests {
         let w0 = bar(&["Home"], g).measure(Size::ZERO, &style, &mut te).w;
         let red = Image::from_rgba(4, 4, &[255u8, 0, 0, 255].repeat(4 * 4)).unwrap();
         let iconed = TabBar::new(
-            vec![TabItem::new("Home".into())
-                .icon_content(ImageContent::new(Some(red)).fit(Fit::Fill))],
+            vec![TabItem::new("Home").icon_content(ImageContent::new(Some(red)).fit(Fit::Fill))],
             g,
         );
         let w1 = iconed.measure(Size::ZERO, &style, &mut te).w;
@@ -1402,13 +1525,66 @@ mod tests {
         assert!(total <= natural - 60, "收缩后应放得进可用宽，实得 {total}");
     }
 
+    #[test]
+    fn tab_collapses_from_the_right_only_as_far_as_needed() {
+        let style = Style::default();
+        let mut te = NullTextEngine;
+        let b = bar(&["设置", "控件", "表格", "图片", "历史", "关于"], signal(0));
+        b.measure(Size::ZERO, &style, &mut te);
+        let m = b.metrics(&style, |s, ts| te.measure(s, ts, None));
+        let min_total: i32 = m.iter().map(|(c, _, _)| c + TAB_PAD_MIN * 2).sum();
+        let saved = m[5].0 - m[5].2;
+
+        let mut fits = m.clone();
+        assert_eq!(
+            TabBar::collapse(&mut fits, true, 2, min_total),
+            vec![false; 6],
+            "压内边距放得下就不收"
+        );
+        assert_eq!(fits, m);
+
+        let mut no_icons = m.clone();
+        assert!(
+            !TabBar::collapse(&mut no_icons, false, 2, 10).contains(&true),
+            "无图标不收"
+        );
+
+        let mut one = m.clone();
+        let got = TabBar::collapse(&mut one, true, 2, min_total - saved);
+        assert_eq!(
+            got,
+            [false, false, false, false, false, true],
+            "差一项的宽度只收最右一项"
+        );
+        assert_eq!(one[5].0, m[5].2, "收起项只剩图标宽（= 行高）");
+
+        let mut all = m.clone();
+        let got = TabBar::collapse(&mut all, true, 5, 10);
+        assert_eq!(
+            got,
+            [true, true, true, true, true, false],
+            "选中项始终保留文字"
+        );
+    }
+
+    #[test]
+    fn collapsed_tab_tooltip_shows_hovered_label() {
+        let mut b = bar(&["概览", "权限"], signal(0));
+        b.hover = Some(1);
+        assert_eq!(b.tooltip(), None, "未收起时文字都在，不给 tooltip");
+        b.collapsed.replace(vec![false, true]);
+        assert_eq!(b.tooltip().as_deref(), Some("权限"));
+        b.hover = Some(0);
+        assert_eq!(b.tooltip(), None, "没收起的项文字仍在");
+    }
+
     /// 造一条标签条，`off` 里的下标为禁用项。
     fn bar_with_disabled(labels: &[&str], off: &[usize], g: Signal<usize>) -> TabBar {
         TabBar::new(
             labels
                 .iter()
                 .enumerate()
-                .map(|(i, s)| TabItem::new((*s).into()).enabled(signal(!off.contains(&i))))
+                .map(|(i, s)| TabItem::new(*s).enabled(signal(!off.contains(&i))))
                 .collect(),
             g,
         )
@@ -1476,15 +1652,15 @@ mod tests {
     /// `TabItem` 默认可选——不写 `.enabled(..)` 的既有调用方行为不变。
     #[test]
     fn tab_item_enabled_by_default() {
-        assert!(TabItem::new("A".into()).is_enabled());
-        assert!(!TabItem::new("A".into()).enabled(signal(false)).is_enabled());
+        assert!(TabItem::new("A").is_enabled());
+        assert!(!TabItem::new("A").enabled(signal(false)).is_enabled());
     }
 
     /// 绑了信号之后，改信号即改可用态——不必重建标签条。这正是收信号而非布尔的理由。
     #[test]
     fn tab_enabled_follows_signal() {
         let flag = signal(true);
-        let it = TabItem::new("A".into()).enabled(flag);
+        let it = TabItem::new("A").enabled(flag);
         assert!(it.is_enabled());
         flag.set(false);
         assert!(!it.is_enabled());

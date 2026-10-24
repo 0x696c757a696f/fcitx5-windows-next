@@ -4,13 +4,15 @@
 //! 即写入共享单元，外部随时读取，无需回调闭包。
 
 use std::cell::{Cell, RefCell};
+use std::ops::Range;
 
-use crate::anim::{Easing, Lerp, Transition};
+use crate::anim::{Easing, Lerp, Spring, Transition};
 use crate::core::{ClickFn, EventCtx, Widget};
 use crate::event::{
-    CursorShape, Event, Key, KeyEvent, MenuItem, MouseButton, PointerKind, Preedit,
+    CursorShape, Event, Key, KeyEvent, MenuItem, MouseButton, PointerKind, Preedit, PreeditSpan,
+    UnderlineStyle,
 };
-use crate::geometry::{Rect, Size};
+use crate::geometry::{Color, Rect, Size};
 use crate::render::{Canvas, Paint};
 use crate::signal::Signal;
 use crate::spec::Align;
@@ -66,8 +68,15 @@ type LayoutKey = (String, i32, Option<String>, u32, u16, Option<u32>);
 pub struct CheckBox {
     label: TextContent,
     state: Signal<bool>,
-    /// 勾选填充补间（0=未选、1=选中）：驱动方框底色 white↔accent + 对勾淡入。
+    /// 勾选补间（0=未选、1=选中，线性主进度）：前段驱动方框底色 white↔accent，
+    /// 后段驱动对勾沿笔画逐段画出（见 [`check_phases`]）。
     fill: Cell<Transition<f32>>,
+    /// 悬停/按下反馈叠层强度（0=静止、[`HOVER_TINT`]/[`PRESS_TINT`]），弹簧驱动。
+    tint: Cell<Transition<f32>>,
+    /// 按下时方框缩放（1=原大、[`PRESS_SCALE`]=按下），弹簧驱动：松开带一点回弹。
+    press: Cell<Transition<f32>>,
+    hovered: bool,
+    pressed: bool,
     /// 显隐翻转经 `reset_interaction` 复位；复显时首帧靠 `primed` 瞬时落定填充，不回放动画。
     primed: Cell<bool>,
     /// 点击拦截回调（受控模式）。设了它，点击/键盘激活只调回调、不自动翻转 `state`，
@@ -76,6 +85,8 @@ pub struct CheckBox {
     /// 语义意图色（默认 Primary=主题 accent）。运行时在 paint 解析，故 danger/自定义随主题/实例而变。
     intent: Intent,
     size: CheckBoxSize,
+    /// 标签折行溢出 bounds 时的裁剪判定（自带排版缓存）。
+    overflow: super::text_fit::WrapClip,
 }
 
 impl CheckBox {
@@ -85,10 +96,15 @@ impl CheckBox {
             label: label.into(),
             state,
             fill: Cell::new(Transition::new(init)),
+            tint: Cell::new(Transition::new(0.0)),
+            press: Cell::new(Transition::new(1.0).movement()),
+            hovered: false,
+            pressed: false,
             primed: Cell::new(false),
             on_toggle: None,
             intent: Intent::Primary,
             size: CheckBoxSize::Normal,
+            overflow: Default::default(),
         }
     }
     /// 设置语义意图色（供 Builder 的 `.intent()/.danger()/.accent()` 调用）。
@@ -101,8 +117,8 @@ impl CheckBox {
     }
     fn font_size(&self, style: &Style) -> f32 {
         match self.size {
-            CheckBoxSize::Normal => style.font_size,
-            CheckBoxSize::Small => (style.font_size - 2.0).max(10.0),
+            CheckBoxSize::Normal => style.font_size(),
+            CheckBoxSize::Small => (style.font_size() - 2.0).max(10.0),
         }
     }
     fn toggle(&mut self, ctx: &mut EventCtx) {
@@ -116,6 +132,10 @@ impl CheckBox {
 }
 
 impl Widget for CheckBox {
+    fn frame_corner(&self, _bounds: Rect) -> Option<f32> {
+        // 节点含文字标签：环包住整行，取小圆角（不是方框也不是圆）。
+        Some(crate::theme::current().metrics.corner_sm)
+    }
     fn measure(&self, avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         let (bsz, gap) = match self.size {
             CheckBoxSize::Normal => (BOX_SIZE, GAP),
@@ -144,6 +164,9 @@ impl Widget for CheckBox {
         // 对勾色用 IntentColors.fg 自适应对比（浅底自动转深）。
         let (base_accent, check_fg) = match self.intent {
             Intent::Primary => (tg.accent(p), p.on_accent),
+            // Neutral 的意图色是文字色的半透明叠层（给按钮用的），当勾选框的实心填充太淡——
+            // 选中后描边又淡出了，只剩一个对勾悬空。勾选框改用实色：次要文字灰底 + 表面色对勾。
+            Intent::Neutral => (p.text_muted, p.surface),
             other => {
                 let ic = other.colors(p);
                 (ic.bg, ic.fg)
@@ -160,24 +183,66 @@ impl Widget for CheckBox {
             style.fg
         };
         let (bsz_i, gap_i, radius, stroke_w, check_stroke) = match self.size {
-            CheckBoxSize::Normal => (BOX_SIZE, GAP, 4.0_f32, 1.5_f32, 2.0_f32),
+            CheckBoxSize::Normal => (BOX_SIZE, GAP, th.metrics.corner_sm, 1.5_f32, 2.0_f32),
             CheckBoxSize::Small => (BOX_SIZE_SMALL, GAP_SMALL, 3.0_f32, 1.0_f32, 1.5_f32),
         };
         let cy = bounds.y + (bounds.h - bsz_i) / 2;
         let (bx, by) = (bounds.x as f32, cy as f32);
-        // 勾选填充补间：据状态改向，amount 驱动底色渐变 + 边框淡出 + 对勾淡入。
+        // 勾选补间：据状态改向。主进度线性走，前段铺底色、后段画对勾（`check_phases`）；
+        // 取消勾选沿原路倒放——对勾先收回，底色再褪。
         let mut fill = self.fill.get();
         let target = if self.state.get() { 1.0 } else { 0.0 };
+        // 悬停/按下反馈：两者都是高频打断的反馈，走弹簧继承速度。
+        let mut tint = self.tint.get();
+        let mut press = self.press.get();
+        let tint_to = if !enabled {
+            0.0
+        } else if self.pressed {
+            PRESS_TINT
+        } else if self.hovered {
+            HOVER_TINT
+        } else {
+            0.0
+        };
+        let press_to = if self.pressed && enabled {
+            PRESS_SCALE
+        } else {
+            1.0
+        };
         if !self.primed.get() {
             // 首帧/对话框复显：瞬时落定到当前状态，不回放动画。
-            fill = Transition::new(target);
+            fill.settle(target);
+            tint.settle(tint_to);
+            press.settle(press_to);
             self.primed.set(true);
-        } else if fill.target() != target {
-            fill.retarget(target, th.anim.fast(), Easing::EaseOut);
+        } else {
+            if fill.target() != target {
+                // 时长按剩余路程折算：勾到一半又取消，只倒放走过的那段，速度与正向一致，
+                // 而不是用满整段时长慢慢收回。
+                let full = (th.anim.normal() + th.anim.fast()) as f32;
+                let dist = (fill.value() - target).abs();
+                fill.retarget(target, (full * dist).round() as u32, Easing::Linear);
+            }
+            if tint.target() != tint_to {
+                tint.retarget_spring(tint_to, th.anim.spring());
+            }
+            if press.target() != press_to {
+                press.retarget_spring(press_to, Spring::SNAPPY);
+            }
         }
         let amount = fill.animate();
+        let tint_a = tint.animate();
+        // 松开时弹簧略有过冲，钳到 1：方框只缩不放，画不出 bounds。
+        let zoom = press.animate().min(1.0);
         self.fill.set(fill);
-        let sz = bsz_i as f32;
+        self.tint.set(tint);
+        self.press.set(press);
+        let (fill_t, check_t) = check_phases(amount);
+        // 按下缩放以方框中心为支点，圆角随之等比缩。
+        let full = bsz_i as f32;
+        let sz = full * zoom;
+        let radius = radius * zoom;
+        let (bx, by) = (bx + (full - sz) / 2.0, by + (full - sz) / 2.0);
         // 底色 white→accent；边框（未选描边）随填充淡出。
         canvas.fill_round_rect(
             bx,
@@ -185,9 +250,9 @@ impl Widget for CheckBox {
             sz,
             sz,
             radius,
-            &Paint::fill(tg.knob(p).lerp(accent, amount)),
+            &Paint::fill(tg.knob(p).lerp(accent, fill_t)),
         );
-        if amount < 1.0 {
+        if fill_t < 1.0 {
             canvas.stroke_round_rect(
                 bx,
                 by,
@@ -195,26 +260,37 @@ impl Widget for CheckBox {
                 sz,
                 radius,
                 stroke_w,
-                &Paint::fill(tg.track(p).scale_alpha(1.0 - amount)),
+                &Paint::fill(tg.track(p).scale_alpha(1.0 - fill_t)),
             );
         }
-        if amount > 0.0 {
+        if tint_a > 0.001 {
+            // 悬停/按下叠层：用正文色的低透明度压一层，明暗主题下分别变暗/变亮，
+            // 与可点击容器的反馈同源。
+            canvas.fill_round_rect(
+                bx,
+                by,
+                sz,
+                sz,
+                radius,
+                &Paint::fill(p.text.scale_alpha(tint_a)),
+            );
+        }
+        if check_t > 0.0 {
             // 启用用 intent 解析的对比色（浅底自动转深）；禁用回退 on_accent。
             let check = if enabled { check_fg } else { p.on_accent };
-            // 勾：一条三点折线按 amount 淡入；坐标按方框尺寸等比缩放。
+            // 勾：一条三点折线按 check_t 沿笔画画出；坐标按方框尺寸等比缩放。
             // 必须走 `draw_polyline` 而不是两次 `draw_line`——后者在 V 底那个拐点
             // 留一块楔形缺口，低 DPI 被抗锯齿糊过去，150% 以上就是肉眼可见的裂口。
-            let paint = Paint::fill(check.scale_alpha(amount));
             let s = sz / 18.0; // 18px 为基准尺寸
-            canvas.draw_polyline(
-                &[
+            let (pts, n) = trim_polyline(
+                [
                     (bx + 4.0 * s, by + 9.0 * s),
                     (bx + 8.0 * s, by + 13.0 * s),
                     (bx + 14.0 * s, by + 5.0 * s),
                 ],
-                check_stroke,
-                &paint,
+                check_t,
             );
+            canvas.draw_polyline(&pts[..n], check_stroke * zoom, &Paint::fill(check));
         }
         let text_rect = Rect::new(
             bounds.x + bsz_i + gap_i,
@@ -222,9 +298,12 @@ impl Widget for CheckBox {
             bounds.w - bsz_i - gap_i,
             bounds.h,
         );
-        canvas.draw_text(
+        // 标签按内容折行撑高；只有钉死高度时才会折出 bounds，那时裁回。
+        self.overflow.draw_text(
+            canvas,
             self.label.resolve().as_ref(),
             text_rect,
+            bounds,
             text_color,
             Align::Start,
             &crate::text::TextStyle::of(style).with_size(self.font_size(style)),
@@ -233,13 +312,33 @@ impl Widget for CheckBox {
     fn on_event(&mut self, ctx: &mut EventCtx, ev: &Event) -> bool {
         match ev {
             Event::Pointer(p) if p.kind == PointerKind::Up => {
-                if ctx.bounds().contains(p.pos) {
+                let inside = ctx.bounds().contains(p.pos);
+                // 只认自己收到过的按下：在别处按下、拖进来松开不算点击（与按钮一致）。
+                let was_press = std::mem::replace(&mut self.pressed, false);
+                self.hovered = inside;
+                ctx.release_capture();
+                ctx.mark_dirty();
+                if was_press && inside {
                     self.toggle(ctx);
                 }
                 true
             }
             Event::Pointer(p) if p.kind == PointerKind::Down => {
+                // 捕获：拖出去再松开也要收到 Up，否则按下态（缩小的方框）会一直留着。
+                self.pressed = true;
+                ctx.capture();
                 ctx.request_focus();
+                ctx.mark_dirty();
+                true
+            }
+            Event::Pointer(p) if p.kind == PointerKind::Enter => {
+                self.hovered = true;
+                ctx.mark_dirty();
+                true
+            }
+            Event::Pointer(p) if p.kind == PointerKind::Leave => {
+                self.hovered = false;
+                ctx.mark_dirty();
                 true
             }
             Event::Key(k) if k.pressed && (k.key == Key::Space || k.key == Key::Enter) => {
@@ -256,10 +355,47 @@ impl Widget for CheckBox {
         self.on_toggle = Some(f);
     }
     fn reset_interaction(&mut self) {
-        self.primed.set(false); // 下次显示瞬时落定填充，不回放旧的勾选动画
+        // 下次显示瞬时落定填充与反馈，不回放旧的勾选动画
+        self.hovered = false;
+        self.pressed = false;
+        self.primed.set(false);
     }
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
+    }
+}
+
+/// 悬停叠层强度（正文色透明度）。
+const HOVER_TINT: f32 = 0.06;
+/// 按下叠层强度。
+const PRESS_TINT: f32 = 0.12;
+/// 按下时方框缩到的比例。
+const PRESS_SCALE: f32 = 0.86;
+
+/// 把勾选主进度 `a`（0..1，线性）拆成（底色进度，对勾笔画进度），各自已缓动。
+///
+/// 底色占前 55%、对勾从 30% 起画到终点：两段交叠，底色铺到一半时笔尖就落下，
+/// 不会出现"底色铺满后停顿一下再出勾"的断档。倒放（取消勾选）时顺序自然反过来。
+fn check_phases(a: f32) -> (f32, f32) {
+    let fill = Easing::STANDARD.apply((a / 0.55).clamp(0.0, 1.0));
+    let check = Easing::DECELERATE.apply(((a - 0.3) / 0.7).clamp(0.0, 1.0));
+    (fill, check)
+}
+
+/// 截取三点折线从起点算起、占总长 `t`（0..1）的那一段，返回点集与有效点数。
+///
+/// 按长度而非按段截：对勾短边与长边长度差近一倍，按段平分会让笔尖在拐点处突然提速。
+fn trim_polyline(pts: [(f32, f32); 3], t: f32) -> ([(f32, f32); 3], usize) {
+    let seg = |a: (f32, f32), b: (f32, f32)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+    let (l0, l1) = (seg(pts[0], pts[1]), seg(pts[1], pts[2]));
+    let want = (l0 + l1) * t.clamp(0.0, 1.0);
+    let at = |a: (f32, f32), b: (f32, f32), k: f32| (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k);
+    if want <= l0 {
+        let k = if l0 > 0.0 { want / l0 } else { 1.0 };
+        ([pts[0], at(pts[0], pts[1], k), pts[1]], 2)
+    } else {
+        let k = if l1 > 0.0 { (want - l0) / l1 } else { 1.0 };
+        ([pts[0], pts[1], at(pts[1], pts[2], k)], 3)
     }
 }
 
@@ -312,7 +448,7 @@ impl Switch {
         let init = if state.get() { 1.0 } else { 0.0 };
         Self {
             state,
-            pos: Cell::new(Transition::new(init)),
+            pos: Cell::new(Transition::new(init).movement()),
             primed: Cell::new(false),
             size: SwitchSize::Normal,
             on_change: RefCell::new(None),
@@ -344,6 +480,10 @@ impl Switch {
 }
 
 impl Widget for Switch {
+    fn frame_corner(&self, bounds: Rect) -> Option<f32> {
+        // 节点矩形就是胶囊轨道。
+        Some(bounds.h as f32 / 2.0)
+    }
     fn measure(&self, _avail: Size, _style: &Style, _text: &mut dyn TextEngine) -> Size {
         let (w, h) = self.size.dims();
         Size::new(w, h)
@@ -370,7 +510,7 @@ impl Widget for Switch {
         let target = if on { 1.0 } else { 0.0 };
         if !self.primed.get() {
             // 首帧/对话框复显：瞬时落定到当前状态，不回放动画。
-            pos = Transition::new(target);
+            pos.settle(target);
             self.primed.set(true);
         } else if pos.target() != target {
             pos.retarget(target, th.anim.normal(), Easing::EaseInOut);
@@ -436,6 +576,8 @@ pub struct RadioButton {
     sel: Cell<Transition<f32>>,
     /// 显隐翻转经 `reset_interaction` 复位；复显时首帧靠 `primed` 瞬时落定选中态，不回放动画。
     primed: Cell<bool>,
+    /// 标签折行溢出 bounds 时的裁剪判定（自带排版缓存）。
+    overflow: super::text_fit::WrapClip,
 }
 
 impl RadioButton {
@@ -447,6 +589,7 @@ impl RadioButton {
             index,
             sel: Cell::new(Transition::new(init)),
             primed: Cell::new(false),
+            overflow: Default::default(),
         }
     }
     fn selected(&self) -> bool {
@@ -460,6 +603,9 @@ impl RadioButton {
 }
 
 impl Widget for RadioButton {
+    fn frame_corner(&self, _bounds: Rect) -> Option<f32> {
+        Some(crate::theme::current().metrics.corner_sm)
+    }
     fn measure(&self, avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         let t = text.measure(
             self.label.resolve().as_ref(),
@@ -523,9 +669,12 @@ impl Widget for RadioButton {
             bounds.w - BOX_SIZE - GAP,
             bounds.h,
         );
-        canvas.draw_text(
+        // 标签按内容折行撑高；只有钉死高度时才会折出 bounds，那时裁回。
+        self.overflow.draw_text(
+            canvas,
             self.label.resolve().as_ref(),
             text_rect,
+            bounds,
             text_color,
             Align::Start,
             &crate::text::TextStyle::of(style),
@@ -560,14 +709,33 @@ impl Widget for RadioButton {
 
 // ---------------- Slider ----------------
 
-/// 值标签额外占用的宽度（px），仅 `show_value` 开启时生效。"100%" 约 4 字符。
+/// 值标签占用的宽度（px），仅 `show_value` 开启时生效。默认字号下 "100%" 约 4 字符；
+/// 字号大到放不下时按实测的 "100%" 宽度放宽，见 `Slider::label_w`。
 pub(crate) const VALUE_LABEL_W: i32 = 44;
+/// 放宽后实测宽度两侧的留白（px 合计）。
+pub(crate) const VALUE_LABEL_PAD: i32 = 8;
+
+/// 值标签宽度：`"100%"` 实测宽 `text_w` 在 [`VALUE_LABEL_W`] 内放得下（留 2px）就用它，
+/// 默认字号下的外观不变；放不下才按实测宽加留白放宽。
+pub(crate) fn value_label_w(text_w: i32) -> i32 {
+    if text_w + 2 <= VALUE_LABEL_W {
+        VALUE_LABEL_W
+    } else {
+        text_w + VALUE_LABEL_PAD
+    }
+}
 
 pub struct Slider {
     value: Signal<f32>, // 0.0..=1.0
     dragging: bool,
     /// 是否在旋钮右侧显示当前值百分比（如 "65%"）。
     pub show_value: bool,
+    /// 值标签宽度：`measure` 按当前字号实测 "100%" 后写入，`paint` 与指针换算读它——
+    /// 三处同源，轨道终点与 100% 对得上。
+    label_w: Cell<i32>,
+    /// 值标签单行截断：`label_w` 已按最宽的 "100%" 留够，这里只兜底测量与绘制不同源
+    /// （字体回退等）时不折行画出 bounds。
+    value_fit: super::text_fit::SingleLine,
 }
 
 impl Slider {
@@ -576,6 +744,8 @@ impl Slider {
             value,
             dragging: false,
             show_value: false,
+            label_w: Cell::new(VALUE_LABEL_W),
+            value_fit: Default::default(),
         }
     }
 
@@ -587,7 +757,8 @@ impl Slider {
     /// 否则旋钮视觉到头后鼠标还得多拖一个标签宽才换算到 100%（#11）。
     fn track_w(&self, w: i32) -> i32 {
         if self.show_value {
-            w - VALUE_LABEL_W
+            // 窄到连标签都放不下时轨道宽钳到 0：负的轨道宽会把标签区推到 bounds 左侧之外。
+            (w - self.label_w.get()).max(0)
         } else {
             w
         }
@@ -606,11 +777,18 @@ impl Slider {
 pub(crate) const KNOB_R: i32 = 9;
 
 impl Widget for Slider {
-    fn measure(&self, _avail: Size, style: &Style, _text: &mut dyn TextEngine) -> Size {
-        let extra = if self.show_value { VALUE_LABEL_W } else { 0 };
+    fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
+        let extra = if self.show_value {
+            let t = text.measure("100%", &crate::text::TextStyle::of(style), None);
+            let w = value_label_w(t.w);
+            self.label_w.set(w);
+            w
+        } else {
+            0
+        };
         // 高度略高于旋钮直径，留出文字空间（show_value 时取字号与旋钮直径的较大值）。
         let h = if self.show_value {
-            (2 * KNOB_R).max(style.font_size as i32 + 4)
+            (2 * KNOB_R).max(style.font_size() as i32 + 4)
         } else {
             2 * KNOB_R
         };
@@ -635,7 +813,8 @@ impl Widget for Slider {
         let cy = bounds.y as f32 + bounds.h as f32 / 2.0;
         let r = KNOB_R as f32;
         let x0 = bounds.x as f32 + r;
-        let x1 = bounds.x as f32 + track_w as f32 - r;
+        // 轨道短于旋钮直径时终点钳到起点：否则旋钮跑到 bounds 左侧之外。
+        let x1 = (bounds.x as f32 + track_w as f32 - r).max(x0);
         let knob_x = x0 + (x1 - x0) * v;
 
         // 轨道
@@ -663,9 +842,11 @@ impl Widget for Slider {
         // 值标签
         if self.show_value {
             let label = format!("{:.0}%", v * 100.0);
-            let label_rect = Rect::new(bounds.x + track_w, bounds.y, VALUE_LABEL_W, bounds.h);
+            let label_w = self.label_w.get().min(bounds.w - track_w);
+            let label_rect = Rect::new(bounds.x + track_w, bounds.y, label_w, bounds.h);
             let text_color = if enabled { pal.text } else { pal.text_disabled };
-            canvas.draw_text(
+            self.value_fit.draw_text(
+                canvas,
                 &label,
                 label_rect,
                 text_color,
@@ -727,13 +908,57 @@ impl Widget for Slider {
 
 // ---------------- TextInput ----------------
 
-const TEXT_PAD: i32 = 10;
+/// 输入框内边距。与下拉框的 `PAD_X` 同为 12，同一列里文字左缘对齐。
+pub(crate) const TEXT_PAD: i32 = 12;
 /// 单行文本绘制用的"足够宽"矩形宽度，依赖 clip_rect 裁剪保证不溢出。
 const NO_WRAP_W: i32 = 100_000;
 /// 选区跨行时行尾延伸宽度（标示换行/折行被选中）。
 const SEL_EOL_EXTRA: i32 = 6;
 /// 密码掩码字符（U+2022 BULLET）。
 const PASSWORD_MASK: char = '\u{2022}';
+
+/// 插入符的竖直范围 `(y, h)`（逻辑坐标），`ly`/`line_h` 为所在视觉行的行盒，`text` 为该行文本。
+///
+/// 未设行距时行盒就是字身，竖直只内缩 1px：再各缩 2px 会让光标明显短于字身，"矮一截"。
+///
+/// 设了行距（`line_height`）时行盒比字身高出那段行距，光标仍须是**字身**高——浏览器的
+/// `<textarea>` 也不随行距拉长插入符，否则 2.0 倍行距下就是一根比字高出一倍的竖条。
+/// 多出的行距怎么分配因引擎而异（DirectWrite 的 UNIFORM 行距把基线放在行高 0.8 处，
+/// Linux 与 Core Text 则是字身居中），这里不做假设：按**含行距**那一档的引擎度量求出
+/// 与画字同源的基线，再从基线上推字身 ascent。
+fn caret_vspan(
+    canvas: &mut dyn Canvas,
+    text: &[char],
+    ts: &crate::text::TextStyle,
+    ly: i32,
+    line_h: i32,
+) -> (i32, i32) {
+    let boxed = (ly + 1, line_h - 2);
+    if ts.line_height.is_none() {
+        return boxed;
+    }
+    let sample: String = if text.is_empty() {
+        "Ay".into()
+    } else {
+        text.iter().collect()
+    };
+    let spaced = canvas.text_line_metrics(&sample, ts);
+    let body = canvas.text_line_metrics(
+        &sample,
+        &crate::text::TextStyle {
+            line_height: None,
+            ..*ts
+        },
+    );
+    // 引擎契约：装得下时排版块在 rect 里竖直居中（见 TextEngine::draw）。
+    let baseline = ly as f32 + (line_h as f32 - spaced.height()).max(0.0) / 2.0 + spaced.ascent;
+    let top = ((baseline - body.ascent).round() as i32).max(boxed.0);
+    let bottom = ((baseline + body.descent).round() as i32).min(boxed.0 + boxed.1);
+    if bottom <= top {
+        return boxed;
+    }
+    (top, bottom - top)
+}
 
 /// TextInput 行为配置。由 Builder 的 `.password()/.multiline()/.wrap()/.leading_icon()` 设置。
 #[derive(Clone, Copy)]
@@ -747,6 +972,9 @@ pub struct TextConfig {
     /// 前置图标字形（如放大镜 🔍）：在左侧留出图标区并绘制，文字/光标/命中相应右移。
     /// 单字形（Copy 友好）；搜索框等用。
     pub leading: Option<char>,
+    /// 右侧额外留白（逻辑像素）：给复合控件画在框内右端的部件让位（如
+    /// `Element::combo_box` 的下拉箭头），文字与水平滚动在它之前截止。默认 0。
+    pub trail: i32,
     /// 无边框：不画自身的背景与边框。供**外框由容器统一绘制**的复合控件内嵌
     /// （如 `Element::stepper` 的中部数值框）——两层框叠在一起会画出双线。
     pub frameless: bool,
@@ -755,6 +983,13 @@ pub struct TextConfig {
     /// 只在文本**放得下**时生效：放不下时对齐偏移恒为 0，交回水平滚动接管，
     /// 否则居中会和"滚动跟随光标"打架，长文本编辑时左右横跳。
     pub align: Align,
+    /// 只读：可聚焦、可选择、可复制，但拒绝一切改动正文的途径（键入、输入法、退格 /
+    /// Delete、剪切、粘贴、多行 Enter 换行）。程序改写绑定信号照常刷新显示。
+    ///
+    /// 与禁用（`enabled(false)`）的区别：禁用节点不可聚焦、不可选择，正文置灰；只读
+    /// 仍能点选、拖选、Ctrl+A / Ctrl+C 与右键「复制」，正文用常规色，底色换成
+    /// [`InputTheme::bg_readonly`](crate::theme::InputTheme::bg_readonly) 以示不可编辑。
+    pub read_only: bool,
 }
 
 impl Default for TextConfig {
@@ -765,8 +1000,10 @@ impl Default for TextConfig {
             password: false,
             wrap: true,
             leading: None,
+            trail: 0,
             frameless: false,
             align: Align::Start,
+            read_only: false,
         }
     }
 }
@@ -797,12 +1034,15 @@ struct TextLayout {
 
 pub struct TextInput {
     text: Signal<String>,
-    placeholder: String,
+    /// 占位提示：可绑信号（随页号变的提示）或 `t!` 消息（随语言变）。
+    placeholder: crate::ui::TextContent,
     config: TextConfig,
     cursor: usize,         // 字符索引
     anchor: Option<usize>, // 选区锚点（Some 且 != cursor 时有选区）
     scroll_x: Cell<i32>,   // 水平滚动偏移（逻辑 px），paint 时按光标更新
     scroll_y: Cell<i32>,   // 垂直滚动偏移（逻辑 px，多行用），paint 时按光标更新
+    /// 多行滚轮的亚格零头（见 `WheelCarry`）。
+    wheel: crate::event::WheelCarry,
     /// 上下移动时保持的目标列像素（粘性 goal column）；水平移动/编辑后清空。
     goal_x: Cell<Option<i32>>,
     layout: RefCell<TextLayout>, // paint 重建的视觉行缓存
@@ -840,6 +1080,16 @@ pub struct TextInput {
     preedit: RefCell<Preedit>,
     /// 单行模式下 Enter 的出口（见 [`crate::ui::Element::on_submit`]）。
     on_submit: Option<SubmitFn>,
+    /// "改完即提交"的出口：Enter 或用户失焦时、且自上次提交后被编辑过才触发
+    /// （见 [`crate::ui::Element::on_commit`]）。
+    on_commit: Option<SubmitFn>,
+    /// 自上次提交以来用户编辑过正文。外部写信号不算——那不是用户的改动。
+    ///
+    /// 被隐藏 / 禁用时由 `reset_interaction` 作废（框架对两者都调它）。模态框接管、
+    /// App 级回调要走焦点都**不**作废：改动仍在正文里，用户日后回到这个框再离开时提交。
+    edited: bool,
+    /// 本轮编辑开始前的正文：提交时与之比较，改了又改回原样不算改动（网页 change 同此）。
+    commit_base: String,
     /// 本控件**未处理**的导航键的出口（见 [`crate::ui::Element::on_nav_key`]）。
     on_nav_key: Option<NavKeyFn>,
     /// 输入准入过滤：对**改动之后的完整正文**表态，`false` 则整次改动被丢弃。
@@ -852,6 +1102,8 @@ pub struct TextInput {
     /// 光标：节点隐藏 / 禁用时框架会调 `reset_interaction` 清掉选区，复显时要按它再
     /// 兑现一次——同一个重命名框第二次打开也得是"只选主名"。
     preset_selection: Option<(usize, usize)>,
+    /// 区间底色标记（[`crate::ui::Element::marks`]）。每帧绘制时读，不缓存。
+    marks: Option<Signal<Vec<TextMark>>>,
     /// 「本控件被点了」的通知（见 [`crate::ui::Element::on_click`]）。
     ///
     /// 与 Button 的同名回调**语义不同**：那里 on_click 就是激活本身，这里只是旁路通知，
@@ -859,6 +1111,31 @@ pub struct TextInput {
     /// 例如重新展开一个被 Escape 收起的补全/结果浮层——那种状态只有宿主知道，
     /// 而在此之前它连"用户又点了一次输入框"都收不到。
     on_click: Option<ClickFn>,
+}
+
+/// 输入框正文上的一段**底色标记**（见 [`crate::ui::Element::marks`]）：查找命中的
+/// 涂黄这类「内容在框里、区间在应用手里」的标注。只画底色，不接事件、不影响命中与
+/// 选区、不改正文。
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextMark {
+    /// `[start, end)`，**字符索引**——与光标、选区、[`select_range`](crate::ui::Element::select_range)
+    /// 同一单位，不是字节下标（字节下标 `b` 换算：`text[..b].chars().count()`）。
+    /// 越界钳到正文长度，空区间不画。
+    pub range: Range<usize>,
+    /// 底色；`None` 取主题的 `input.mark`（默认半透明琥珀色，明暗主题都看得清字）。
+    pub bg: Option<Color>,
+}
+
+impl TextMark {
+    /// 用主题底色标记 `range`（字符索引）。
+    pub fn new(range: Range<usize>) -> Self {
+        Self { range, bg: None }
+    }
+    /// 指定底色（覆盖主题）。
+    pub fn bg(mut self, bg: Color) -> Self {
+        self.bg = Some(bg);
+        self
+    }
 }
 
 /// 单行 Enter 回调。与 `on_click` 同形（`ctx` 在首位）。
@@ -872,7 +1149,8 @@ type NavKeyFn = Box<dyn FnMut(&mut EventCtx, KeyEvent) -> bool>;
 type FilterFn = Box<dyn Fn(&str) -> bool>;
 
 impl TextInput {
-    pub fn new(text: Signal<String>, placeholder: String) -> Self {
+    pub fn new(text: Signal<String>, placeholder: impl Into<crate::ui::TextContent>) -> Self {
+        let placeholder = placeholder.into();
         let cursor = text.with(|t| t.chars().count());
         Self {
             text,
@@ -882,6 +1160,7 @@ impl TextInput {
             anchor: None,
             scroll_x: Cell::new(0),
             scroll_y: Cell::new(0),
+            wheel: crate::event::WheelCarry::default(),
             goal_x: Cell::new(None),
             layout: RefCell::new(TextLayout::default()),
             caret_local: Cell::new(None),
@@ -896,10 +1175,14 @@ impl TextInput {
             composing: Cell::new(false),
             preedit: RefCell::new(Preedit::default()),
             on_submit: None,
+            on_commit: None,
+            edited: false,
+            commit_base: String::new(),
             on_nav_key: None,
             filter: None,
             on_click: None,
             preset_selection: None,
+            marks: None,
         }
     }
 
@@ -916,6 +1199,17 @@ impl TextInput {
         self.apply_selection(start, end);
     }
 
+    /// 绑定区间底色标记（供 Builder；下游用 [`crate::ui::Element::marks`]）。
+    pub fn set_marks(&mut self, marks: Signal<Vec<TextMark>>) {
+        self.marks = Some(marks);
+    }
+
+    /// 运行期设选区（`Element::select_when` 兑现时由宿主调）：只改当前选区，不动预设——
+    /// 隐藏再显示时照旧按 [`set_selection`](Self::set_selection) 的预设复位。
+    pub(crate) fn select_now(&mut self, start: usize, end: usize) {
+        self.apply_selection(start, end);
+    }
+
     fn apply_selection(&mut self, start: usize, end: usize) {
         let n = self.char_count();
         let s = start.min(n);
@@ -925,9 +1219,45 @@ impl TextInput {
         self.follow_cursor.set(true);
     }
 
+    /// 以**用户编辑**的身份整体替换正文（组合框从列表里选中一项时用）。`select_all` 为假时
+    /// 光标落到末尾、不留选区，为真时全选：
+    /// 与键入同一口径记入 `on_commit` 的改动，随后 [`Self::commit_now`] 才认得出来。
+    /// 外部直接写信号则不算改动——那条路径是给程序改值用的。
+    ///
+    /// 只读时不动正文；不过 `set_filter` 的准入——选项是应用自己给的，不归键入过滤管。
+    pub(crate) fn replace_as_edit(&mut self, s: &str, select_all: bool) {
+        if self.config.read_only {
+            return;
+        }
+        if self.text.with(|t| t != s) {
+            self.mark_edited();
+            self.text.set(s.to_string());
+        }
+        // 整段换掉不是「光标移动」：不从旧位置滑过来（长短文本之间切换时那一程滑行就是跳）。
+        self.caret.reset();
+        // 默认光标放到末尾、不留选区：与网页 / WAI-ARIA 组合框一致，选完接着打字是续写。
+        self.cursor = self.char_count();
+        self.anchor = select_all.then_some(0);
+        self.follow_cursor.set(true);
+    }
+
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.config.read_only
+    }
+
+    /// 立即走一次「改完即提交」（若改过）。组合框选中列表项即是一次完成的修改。
+    pub(crate) fn commit_now(&mut self, ctx: &mut EventCtx) {
+        self.fire_commit(ctx);
+    }
+
     /// 设置单行 Enter 回调（供 Builder；下游用 [`crate::ui::Element::on_submit`]）。
     pub fn set_on_submit(&mut self, f: impl FnMut(&mut EventCtx) + 'static) {
         self.on_submit = Some(Box::new(f));
+    }
+
+    /// 设置提交回调（供 Builder；下游用 [`crate::ui::Element::on_commit`]）。
+    pub fn set_on_commit(&mut self, f: impl FnMut(&mut EventCtx) + 'static) {
+        self.on_commit = Some(Box::new(f));
     }
 
     /// 设置导航键回调（供 Builder；下游用 [`crate::ui::Element::on_nav_key`]）。
@@ -971,10 +1301,38 @@ impl TextInput {
     fn fire_submit(&mut self, ctx: &mut EventCtx) -> bool {
         match &mut self.on_submit {
             Some(f) => {
-                f(ctx);
+                ctx.app_callback(|ctx| f(ctx));
                 true
             }
             None => false,
+        }
+    }
+
+    /// 触发 `on_commit`：仅当自上次提交后被编辑过。Enter 与失焦共用这一个出口，
+    /// 于是"Enter 提交后紧跟一次失焦"天然只提交一次——下游不必自己记一次性标志
+    /// （改名回调跑两遍，"无标题文档-2" 自己变成 "-3"）。
+    ///
+    /// 正文在每次按键时已同步写回信号，故回调读到的就是最终值。
+    ///
+    /// 只是旁路通知，**不影响 Enter 的消费**：Enter / Ctrl+Enter 消费与否仍只由
+    /// `on_submit` 决定，照常上达 `App::on_shortcut`（对话框默认按钮、多行框的"发布"
+    /// 快捷键）——挂了"改完即保存"就吞掉发布键，是用户看不出原因的失灵。
+    fn fire_commit(&mut self, ctx: &mut EventCtx) {
+        if !std::mem::take(&mut self.edited) {
+            return;
+        }
+        let base = std::mem::take(&mut self.commit_base); // 用完即释放
+        let changed = self.text.with(|t| *t != base);
+        if let (Some(f), true) = (&mut self.on_commit, changed) {
+            ctx.app_callback(|ctx| f(ctx));
+        }
+    }
+
+    /// 用户即将改动正文：一轮编辑的第一笔记下改动前的正文，供提交时比较。
+    fn mark_edited(&mut self) {
+        // 没挂 on_commit 的框不留快照：多行大文档每轮编辑多驻留一份全文，有违低内存。
+        if !std::mem::replace(&mut self.edited, true) && self.on_commit.is_some() {
+            self.commit_base = self.text.with(|t| t.clone());
         }
     }
 
@@ -985,7 +1343,7 @@ impl TextInput {
     /// 让用户失去离开该控件的唯一键盘途径。
     fn fire_nav_key(&mut self, ctx: &mut EventCtx, ev: KeyEvent) -> bool {
         match &mut self.on_nav_key {
-            Some(f) => f(ctx, ev),
+            Some(f) => ctx.app_callback(|ctx| f(ctx, ev)),
             None => false,
         }
     }
@@ -1102,6 +1460,12 @@ impl TextInput {
             self.cursor = n;
         }
     }
+    /// 光标与锚点的**存值**都钳到当前字符数（见 `on_event` 入口处的说明）。
+    fn clamp_selection(&mut self) {
+        let n = self.char_count();
+        self.cursor = self.cursor.min(n);
+        self.anchor = self.anchor.map(|a| a.min(n));
+    }
     /// 规范化选区为 [start, end)；无选区返回 None。
     /// cursor/anchor 在此夹紧到当前字符数——外部经 Rc<RefCell<String>> 改写文本后
     /// 仍保证选区范围合法，下游 delete/paint 无需各自再夹。
@@ -1117,7 +1481,11 @@ impl TextInput {
     }
     /// 删除选区文本，返回是否删除了。
     fn delete_selection(&mut self, ctx: &mut EventCtx) -> bool {
+        if self.config.read_only {
+            return false;
+        }
         if let Some((s, e)) = self.selection() {
+            self.mark_edited();
             self.text.update(|t| {
                 let bs = char_to_byte(t, s);
                 let be = char_to_byte(t, e);
@@ -1133,7 +1501,7 @@ impl TextInput {
         }
     }
     fn type_char(&mut self, ctx: &mut EventCtx, c: char) {
-        if c.is_control() {
+        if c.is_control() || self.config.read_only {
             return;
         }
         // 预检必须在 `delete_selection` **之前**：那一步已经改了正文，之后再算候选串
@@ -1145,6 +1513,7 @@ impl TextInput {
         self.delete_selection(ctx);
         self.clamp_cursor();
         let cursor = self.cursor;
+        self.mark_edited();
         self.text.update(|s| {
             let byte = char_to_byte(s, cursor);
             s.insert(byte, c);
@@ -1156,10 +1525,11 @@ impl TextInput {
     }
     fn backspace(&mut self, ctx: &mut EventCtx) {
         self.clamp_cursor();
-        if self.cursor == 0 {
+        if self.cursor == 0 || self.config.read_only {
             return;
         }
         let cursor = self.cursor;
+        self.mark_edited();
         self.text.update(|s| {
             let start = char_to_byte(s, cursor - 1);
             let end = char_to_byte(s, cursor);
@@ -1172,10 +1542,11 @@ impl TextInput {
     fn delete_forward(&mut self, ctx: &mut EventCtx) {
         self.clamp_cursor();
         let len = self.char_count();
-        if self.cursor >= len {
+        if self.cursor >= len || self.config.read_only {
             return;
         }
         let cursor = self.cursor;
+        self.mark_edited();
         self.text.update(|s| {
             let start = char_to_byte(s, cursor);
             let end = char_to_byte(s, cursor + 1);
@@ -1227,11 +1598,19 @@ impl TextInput {
             alt: false,
             meta: false,
         };
+        // VK_C / VK_A
+        let copy = MenuItem::key(crate::tr!("windui.menu.copy"), ctrl(0x43), has_sel && !pw);
+        let select_all = MenuItem::key(crate::tr!("windui.menu.select_all"), ctrl(0x41), has_text);
+        // 只读：不列剪切 / 粘贴（而不是列出来置灰）——它们在这个框里永远不可用，
+        // 置灰会让人以为"换个状态就能用"。
+        if self.config.read_only {
+            return vec![copy, select_all];
+        }
         vec![
             MenuItem::key(crate::tr!("windui.menu.cut"), ctrl(0x58), has_sel && !pw), // VK_X
-            MenuItem::key(crate::tr!("windui.menu.copy"), ctrl(0x43), has_sel && !pw), // VK_C
-            MenuItem::key(crate::tr!("windui.menu.paste"), ctrl(0x56), true),         // VK_V
-            MenuItem::key(crate::tr!("windui.menu.select_all"), ctrl(0x41), has_text), // VK_A
+            copy,
+            MenuItem::key(crate::tr!("windui.menu.paste"), ctrl(0x56), true), // VK_V
+            select_all,
         ]
     }
     /// 选中 `idx` 所在逻辑行（两 '\n' 之间）。单行文本无 '\n' 即全选。
@@ -1453,9 +1832,13 @@ impl TextInput {
 
     /// 在光标处插入换行（多行模式）。
     fn insert_newline(&mut self, ctx: &mut EventCtx) {
+        if self.config.read_only {
+            return;
+        }
         self.delete_selection(ctx);
         self.clamp_cursor();
         let cursor = self.cursor;
+        self.mark_edited();
         self.text.update(|s| {
             let byte = char_to_byte(s, cursor);
             s.insert(byte, '\n');
@@ -1477,6 +1860,9 @@ impl TextInput {
     /// 在光标处粘贴（先删选区）。单行控件过滤所有控制字符；多行保留 '\n'
     /// （\r\n / \r 归一为 \n），仍过滤其他控制字符。
     fn paste(&mut self, ctx: &mut EventCtx, s: &str) {
+        if self.config.read_only {
+            return;
+        }
         let clean: String = if self.is_multiline() {
             let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
             normalized
@@ -1499,6 +1885,7 @@ impl TextInput {
         self.clamp_cursor();
         let cursor = self.cursor;
         let added = clean.chars().count();
+        self.mark_edited();
         self.text.update(|t| {
             let byte = char_to_byte(t, cursor);
             t.insert_str(byte, &clean);
@@ -1600,17 +1987,128 @@ fn word_run(chars: &[char], idx: usize) -> (usize, usize) {
     (s, e)
 }
 
+/// 合成串落在视觉行 `[ls, le)` 上的装饰分段，索引是**显示串**下标（合成串从 `ps` 起、到
+/// `pe_end` 止）。输入法没给样式时按默认画法切：细实线，选中分句加粗——按分句切成
+/// 「细—粗—细」，不能按整行判一个粗细，否则只要分句与本行有交集整行都加粗，分节转换
+/// 就看不出当前在转换哪一段。给了样式就照着切，没被覆盖的字不出现在结果里。
+fn preedit_pieces(
+    pe: &Preedit,
+    ps: usize,
+    pe_end: usize,
+    ls: usize,
+    le: usize,
+) -> Vec<(usize, usize, PreeditSpan)> {
+    let clip = |(s, e): (usize, usize)| {
+        let a = (ps + s).clamp(ls, le).min(pe_end);
+        let b = (ps + e).clamp(ls, le).min(pe_end);
+        (b > a).then_some((a, b))
+    };
+    if !pe.spans.is_empty() {
+        return pe
+            .spans
+            .iter()
+            .filter_map(|sp| clip(sp.range).map(|(a, b)| (a, b, *sp)))
+            .collect();
+    }
+    let n = pe_end - ps;
+    let thin = PreeditSpan::default();
+    let bold = PreeditSpan { bold: true, ..thin };
+    let parts = match pe.sel {
+        Some((ss, se)) => [(0, ss, thin), (ss, se, bold), (se, n, thin)],
+        None => [(0, n, thin), (0, 0, thin), (0, 0, thin)],
+    };
+    parts
+        .into_iter()
+        .filter_map(|(s, e, sp)| clip((s.min(n), e.min(n))).map(|(a, b)| (a, b, sp)))
+        .collect()
+}
+
+/// 一个视觉行上输入法指定了字色的横向区间 `(x1, x2, 色)`（绝对 x），按 x 排序。
+fn fg_runs(
+    pieces: &[(usize, usize, PreeditSpan)],
+    ln: &VisLine,
+    base_x: i32,
+) -> Vec<(i32, i32, Color)> {
+    let mut runs: Vec<_> = pieces
+        .iter()
+        .filter_map(|&(a, b, sp)| {
+            sp.fg
+                .map(|c| (base_x + ln.x[a - ln.start], base_x + ln.x[b - ln.start], c))
+        })
+        .collect();
+    runs.sort_by_key(|r| r.0);
+    runs
+}
+
+/// 画一段合成串下划线。`bottom` 是线的底边（逻辑坐标），`t` 是线粗，`unit` 是 1 物理像素
+/// 对应的逻辑长度下限（点、划、波浪的节距都按它算，高 DPI 下等比放大）。
+#[allow(clippy::too_many_arguments)]
+fn draw_underline(
+    canvas: &mut dyn Canvas,
+    style: UnderlineStyle,
+    x1: f32,
+    x2: f32,
+    bottom: f32,
+    t: f32,
+    unit: f32,
+    color: Color,
+) {
+    let paint = Paint::fill(color);
+    let y = bottom - t;
+    // 点、划沿用同一个循环：`on` 画、`off` 空。
+    let dashed = |canvas: &mut dyn Canvas, on: f32, off: f32| {
+        let mut x = x1;
+        while x < x2 {
+            canvas.fill_rect(x, y, on.min(x2 - x), t, &paint);
+            x += on + off;
+        }
+    };
+    match style {
+        UnderlineStyle::None => {}
+        UnderlineStyle::Solid => canvas.fill_rect(x1, y, x2 - x1, t, &paint),
+        UnderlineStyle::Dot => dashed(canvas, t, t),
+        UnderlineStyle::Dash => dashed(canvas, unit * 4.0, unit * 2.0),
+        UnderlineStyle::Squiggle => {
+            // 半周期 2 单位、振幅 2 单位的折线，谷底贴着 `bottom`。
+            let half = unit * 2.0;
+            let mut pts = Vec::new();
+            let mut x = x1;
+            let mut up = true;
+            while x < x2 {
+                pts.push((x, if up { bottom - half } else { bottom - t / 2.0 }));
+                x += half;
+                up = !up;
+            }
+            // 末段不足半周期：按比例取高度，坡度与前面一致。
+            let (lo, hi) = (bottom - t / 2.0, bottom - half);
+            let frac = (x2 - (x - half)) / half;
+            let (from, to) = if up { (lo, hi) } else { (hi, lo) };
+            pts.push((x2, from + (to - from) * frac));
+            canvas.draw_polyline(&pts, t, &paint);
+        }
+    }
+}
+
 impl Widget for TextInput {
+    fn frame_corner(&self, _bounds: Rect) -> Option<f32> {
+        if self.config.frameless {
+            return None;
+        }
+        let th = crate::theme::current();
+        Some(th.input.corner(&th.metrics))
+    }
     fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         let lh = text
             .measure("Ay", &crate::text::TextStyle::of(style), None)
             .h
-            .max(style.font_size as i32);
+            .max(style.font_size() as i32);
         // 多行默认约 5 行高（用户可 .height() 覆盖）；单行沿用紧凑高度。
         let h = if self.is_multiline() {
             lh * 5 + 2 * TEXT_PAD
         } else {
-            (style.font_size as i32) + 16
+            crate::theme::current()
+                .metrics
+                .control_height(style.font_size())
         };
         Size::new(160, h)
     }
@@ -1632,11 +2130,14 @@ impl Widget for TextInput {
             bounds.h as f32,
         );
         let corner = inp.corner(&th.metrics);
-        // 禁用：背景弱化、正文用 text_disabled。
-        let bg = if enabled {
-            inp.bg(pal)
-        } else {
+        // 禁用：背景弱化、正文用 text_disabled。只读：底色换只读色以示不可编辑，正文
+        // 保持常规色——内容要读得清，置灰会把"不能改"说成"不可用"。
+        let bg = if !enabled {
             pal.surface_alt
+        } else if self.config.read_only {
+            inp.bg_readonly(pal)
+        } else {
+            inp.bg(pal)
         };
         let text_color = if enabled {
             style.resolved_fg(&th)
@@ -1650,8 +2151,14 @@ impl Widget for TextInput {
             } else {
                 inp.border(pal)
             };
-            let t = crate::theme::current();
-            let bw = t.metrics.border_width.to_logical(canvas.dpi_scale());
+            // 聚焦加粗与下拉框同一规则（`border_width_focus`），同一张表单里两者焦点态一致。
+            let m = &crate::theme::current().metrics;
+            let bw = if focused {
+                m.border_width_focus
+            } else {
+                m.border_width
+            }
+            .to_logical(canvas.dpi_scale());
             canvas.stroke_round_rect(x, y, w, h, corner, bw, &Paint::fill(border));
         }
 
@@ -1666,11 +2173,11 @@ impl Widget for TextInput {
         // 单行：仅水平内边距，垂直占满并居中（避免矮控件被垂直裁掉文字）；
         // 多行：四周都留内边距，使多行文本不贴边。
         let vpad = if multiline { TEXT_PAD } else { 0 };
-        let lead = self.lead_inset(style.font_size);
+        let lead = self.lead_inset(style.font_size());
         let inner = Rect::new(
             bounds.x + TEXT_PAD + lead,
             bounds.y + vpad,
-            bounds.w - 2 * TEXT_PAD - lead,
+            bounds.w - 2 * TEXT_PAD - lead - self.config.trail.max(0),
             bounds.h - 2 * vpad,
         );
         // 文字属性打包传递：字重与行高随 `Style` 自动带上，不必在每个调用点重列。
@@ -1727,7 +2234,8 @@ impl Widget for TextInput {
         self.scroll_y.set(sy);
 
         // 水平滚动：仅非软换行（单行 / 多行不换行）时按光标更新。
-        let mut sx = self.scroll_x.get();
+        let old_sx = self.scroll_x.get();
+        let mut sx = old_sx;
         if !wrap {
             if cx_in - sx > inner.w {
                 sx = cx_in - inner.w;
@@ -1735,11 +2243,25 @@ impl Widget for TextInput {
             if cx_in - sx < 0 {
                 sx = cx_in;
             }
-            sx = sx.max(0);
+            // 上限是「最长一行 − 视口宽」：正文变短（长文本换成短文本、删掉行尾）后，
+            // 旧的滚动量会让短文本整个缩在视口左外侧——光标落在左沿、字看不见，要等下一次
+            // 碰巧移动光标才跳回来。
+            let content_w = lay
+                .lines
+                .iter()
+                .map(|ln| ln.x.last().copied().unwrap_or(0))
+                .max()
+                .unwrap_or(0);
+            sx = sx.min((content_w - inner.w).max(0)).max(0);
         } else {
             sx = 0;
         }
         self.scroll_x.set(sx);
+        // 视口横移了：正文整体瞬间换了位置，光标若还从旧屏幕位置滑过去，看上去就是
+        // 字先跳、光标再追一程。光标跟着正文一起落位。
+        if sx != old_sx {
+            self.caret.reset();
+        }
 
         // 首行 y：多行从内框顶部减滚动；单行在内框内垂直居中。
         let first_line_y = if multiline {
@@ -1753,7 +2275,7 @@ impl Widget for TextInput {
             0
         } else {
             let content_w = if is_empty {
-                canvas.measure_text(&self.placeholder, ts).w
+                canvas.measure_text(&self.placeholder.resolve(), ts).w
             } else {
                 lay.lines
                     .first()
@@ -1772,13 +2294,75 @@ impl Widget for TextInput {
         canvas.save();
         canvas.clip_rect(inner);
 
+        // 区间底色标记：最底层，选区与合成串底色都压在它上面——「当前这一处」（被选中
+        // 的那条命中）才认得出来。只铺到字的右缘、不像选区那样延伸到行尾：标的是字，
+        // 不是换行。密码框不画：在掩码上标出命中位置等于泄露正文结构。
+        if let Some(marks) = self.marks.filter(|_| !self.config.password) {
+            let n = self.char_count();
+            let fallback = inp.mark(pal);
+            let pe_len = {
+                let pe = self.preedit.borrow();
+                pe.is_active().then(|| pe.char_len())
+            };
+            // 只看视口里的视觉行：长文档几千条命中时，光标闪烁的局部帧也会重画本框，
+            // 逐条扫全部行是「命中数 × 行数」。行等高，可见区间直接算出来。
+            let nl = lay.lines.len();
+            let lo = ((inner.y - first_line_y) / line_h - 1).max(0) as usize;
+            let hi = ((inner.y + inner.h - first_line_y) / line_h + 2).max(0) as usize;
+            let vis = lo.min(nl)..hi.min(nl);
+            let (vis_from, vis_to) = match (lay.lines.get(vis.start), vis.end.checked_sub(1)) {
+                (Some(a), Some(b)) if b >= vis.start => (a.start, lay.lines[b].end),
+                _ => (0, 0),
+            };
+            marks.try_with(|ms| {
+                for m in ms {
+                    let (s, e) = (m.range.start.min(n), m.range.end.min(n));
+                    if s >= e {
+                        continue;
+                    }
+                    // 逻辑索引 → 显示串索引（理由同下面选区那段）。起点另算：合成串插在
+                    // 光标处、排在光标处那个字之前，起点恰在插入点的标记标的是那个字，
+                    // 该从合成串之后开始；`to_display_index` 对 `i == cursor` 不平移，
+                    // 用它会把合成串一并盖住（命中「风风」，跳到第一处后光标正停在这里）。
+                    let s = match pe_len {
+                        Some(len) if s >= self.cursor => s + len,
+                        _ => s,
+                    };
+                    let e = self.to_display_index(e);
+                    if e <= vis_from || s >= vis_to {
+                        continue;
+                    }
+                    let paint = Paint::fill(m.bg.unwrap_or(fallback));
+                    for i in vis.clone() {
+                        let ln = &lay.lines[i];
+                        let ly = first_line_y + i as i32 * line_h;
+                        let a = s.clamp(ln.start, ln.end);
+                        let b = e.clamp(ln.start, ln.end);
+                        if b > a {
+                            let x1 = ln.x[a - ln.start];
+                            let x2 = ln.x[b - ln.start];
+                            canvas.fill_rect(
+                                (base_x + x1) as f32,
+                                ly as f32,
+                                (x2 - x1) as f32,
+                                line_h as f32,
+                                &paint,
+                            );
+                        }
+                    }
+                }
+            });
+        }
+
         // 选区高亮（逐视觉行；跨行处延伸到行尾标示换行/折行被选中）。
         // `selection()` 给的是**逻辑**索引，而下面按视觉行切分用的是**显示串**索引——
         // 有合成串时两者差一个合成串长度，不换算就会整体偏移。
-        if let Some((s, e)) = self
+        let sel_disp = self
             .selection()
-            .map(|(s, e)| (self.to_display_index(s), self.to_display_index(e)))
-        {
+            .map(|(s, e)| (self.to_display_index(s), self.to_display_index(e)));
+        // 禁用态的字一律置灰，不另换选区字色。
+        let sel_fg = inp.selection_text().filter(|_| enabled);
+        if let Some((s, e)) = sel_disp {
             for (i, ln) in lay.lines.iter().enumerate() {
                 let ly = first_line_y + i as i32 * line_h;
                 if ly + line_h < inner.y || ly > inner.y + inner.h {
@@ -1807,6 +2391,36 @@ impl Widget for TextInput {
             }
         }
 
+        // 输入法给的合成串底色（TSF 的 `crBk`）。画在文字之前，与选区高亮同为铺满行盒。
+        let pe_range = self.preedit_span();
+        let pe_pieces = pe_range.map(|(ps, pe_end)| {
+            let pe = self.preedit.borrow();
+            lay.lines
+                .iter()
+                .map(|ln| preedit_pieces(&pe, ps, pe_end, ln.start, ln.end))
+                .collect::<Vec<_>>()
+        });
+        let line_visible = |i: usize| {
+            let ly = first_line_y + i as i32 * line_h;
+            (ly + line_h >= inner.y && ly <= inner.y + inner.h).then_some(ly)
+        };
+        for (i, (ln, pieces)) in lay.lines.iter().zip(pe_pieces.iter().flatten()).enumerate() {
+            let Some(ly) = line_visible(i) else { continue };
+            for (a, b, sp) in pieces {
+                if let Some(bg) = sp.bg {
+                    let x1 = base_x + ln.x[a - ln.start];
+                    let x2 = base_x + ln.x[b - ln.start];
+                    canvas.fill_rect(
+                        x1 as f32,
+                        ly as f32,
+                        (x2 - x1) as f32,
+                        line_h as f32,
+                        &Paint::fill(bg),
+                    );
+                }
+            }
+        }
+
         let chars: Vec<char> = disp.chars().collect();
         if is_empty {
             // 与正文同一 base_x：占位符也吃 align_off，居中框里的占位符才真居中。
@@ -1817,7 +2431,7 @@ impl Widget for TextInput {
             let pw = if multiline { inner.w } else { NO_WRAP_W };
             let pr = Rect::new(base_x, first_line_y, pw, line_h);
             canvas.draw_text(
-                &self.placeholder,
+                &self.placeholder.resolve(),
                 pr,
                 inp.placeholder(pal),
                 Align::Start,
@@ -1832,66 +2446,84 @@ impl Widget for TextInput {
                 if ln.end > ln.start {
                     let s: String = chars[ln.start..ln.end].iter().collect();
                     let tr = Rect::new(base_x, ly, NO_WRAP_W, line_h);
-                    canvas.draw_text(&s, tr, text_color, Align::Start, ts);
+                    let mut fg_runs = pe_pieces
+                        .as_ref()
+                        .and_then(|p| p.get(i))
+                        .map(|pieces| fg_runs(pieces, ln, base_x))
+                        .unwrap_or_default();
+                    // 选区字色（`[input] selection_text`）与输入法字色走同一套分区描字。
+                    // 区间与上面的选区底同源，但不含行尾的换行示意宽度——那里没有字。
+                    // 合成串那段扣掉：它的底是输入法给的（压在选区底之上），字色也须由输入法
+                    // 或正文色决定；反向选区（锚点在右）下开始组字时，合成串整段落在选区里。
+                    if let (Some(c), Some((ss, se))) = (sel_fg, sel_disp) {
+                        let (a, b) = (ss.clamp(ln.start, ln.end), se.clamp(ln.start, ln.end));
+                        let (ps, pe) = pe_range.unwrap_or((b, b));
+                        for (l, r) in [(a, b.min(ps)), (a.max(pe), b)] {
+                            if r > l {
+                                fg_runs.push((
+                                    base_x + ln.x[l - ln.start],
+                                    base_x + ln.x[r - ln.start],
+                                    c,
+                                ));
+                            }
+                        }
+                        fg_runs.sort_by_key(|r| r.0);
+                    }
+                    // 下面的分色循环按起点推进，区间重叠时先开始的那段胜出、被包住的丢掉。
+                    // 选区段已扣掉合成串，故两类来源互不重叠；输入法自己的 span 来自平台，
+                    // 不保证不重叠，所以这里不断言。
+                    if fg_runs.is_empty() {
+                        canvas.draw_text(&s, tr, text_color, Align::Start, ts);
+                    } else {
+                        // 输入法给了字色（TSF 的 `crText`）：同一次排版按横向区间裁剪分色描，
+                        // 字形位置逐像素一致。不在正文上覆盖重画——那样得先铺底盖掉旧色，
+                        // 而 frameless 框的底来自外层容器，本控件不知道是什么色。
+                        let right = inner.x + inner.w;
+                        let mut cur = inner.x;
+                        let draw = |canvas: &mut dyn Canvas, l: i32, r: i32, c: Color| {
+                            if r > l {
+                                canvas.save();
+                                canvas.clip_rect(Rect::new(l, inner.y, r - l, inner.h));
+                                canvas.draw_text(&s, tr, c, Align::Start, ts);
+                                canvas.restore();
+                            }
+                        };
+                        for (x1, x2, c) in fg_runs {
+                            draw(canvas, cur, x1, text_color);
+                            draw(canvas, x1.max(cur), x2, c);
+                            cur = cur.max(x2);
+                        }
+                        draw(canvas, cur, right, text_color);
+                    }
                 }
             }
         }
 
         // 输入法合成串的下划线：告诉用户「这段还没定下来」。逐视觉行画，长合成串
         // 折行后每段各有一条。画在文字之后、光标之前——压在字身下方，不挡字形。
-        if let Some((ps, pe_end)) = self.preedit_span() {
-            let pe = self.preedit.borrow();
+        if let Some(pe_pieces) = &pe_pieces {
             let ul_color = inp.preedit_underline(pal);
-            // 1dp 实线。`fill_rect` 收**逻辑**坐标（canvas 内部再乘 DPI），故这里就是 1.0；
+            // 1dp。`fill_rect` 收**逻辑**坐标（canvas 内部再乘 DPI），故这里就是 1.0；
             // 用 dpi_scale 算会画出 scale 倍粗。低于 1x 的缩放下兜底到 1 物理像素，
             // 否则会被舍成 0、整条下划线消失。
             let thin = 1.0f32.max(1.0 / canvas.dpi_scale());
-            // 选中分句（日文分节转换中正在转换的那一段）在**显示串**中的绝对范围。
-            let sel_abs = pe.sel.map(|(ss, se)| (ps + ss, ps + se));
-            for (i, ln) in lay.lines.iter().enumerate() {
-                let ly = first_line_y + i as i32 * line_h;
-                if ly + line_h < inner.y || ly > inner.y + inner.h {
-                    continue;
-                }
-                let a = ps.clamp(ln.start, ln.end);
-                let b = pe_end.clamp(ln.start, ln.end);
-                if b <= a {
-                    continue;
-                }
-                // 按选中分句把本行的合成段切成「细—粗—细」最多三段，各自画。
-                // 不能按整行判一个粗细：那样只要分句与本行有交集，整行都会加粗，
-                // 分节转换就完全看不出当前在转换哪一段了。
-                //
-                // 加粗而非背景高亮：背景会与选区高亮撞色，且原生 macOS 也是靠粗细区分。
-                let mut segs: [(usize, usize, bool); 3] = [(0, 0, false); 3];
-                let n_seg = match sel_abs {
-                    Some((gs, ge)) => {
-                        let (gs, ge) = (gs.clamp(a, b), ge.clamp(a, b));
-                        let mut k = 0;
-                        for seg in [(a, gs, false), (gs, ge, true), (ge, b, false)] {
-                            if seg.1 > seg.0 {
-                                segs[k] = seg;
-                                k += 1;
-                            }
-                        }
-                        k
-                    }
-                    None => {
-                        segs[0] = (a, b, false);
-                        1
-                    }
-                };
-                for &(s0, s1, bold) in segs.iter().take(n_seg) {
-                    let x1 = base_x + ln.x[s0 - ln.start];
-                    let x2 = base_x + ln.x[s1 - ln.start];
-                    let t = if bold { thin * 2.0 } else { thin };
-                    // 底边对齐行盒底（向上加粗），三段的基线因此始终齐平。
-                    canvas.fill_rect(
-                        x1 as f32,
-                        (ly + line_h - 1) as f32 - t,
-                        (x2 - x1) as f32,
+            for (i, (ln, pieces)) in lay.lines.iter().zip(pe_pieces).enumerate() {
+                let Some(ly) = line_visible(i) else { continue };
+                for &(a, b, sp) in pieces {
+                    let x1 = (base_x + ln.x[a - ln.start]) as f32;
+                    let x2 = (base_x + ln.x[b - ln.start]) as f32;
+                    let color = sp.line.or(sp.fg).unwrap_or(ul_color);
+                    let t = if sp.bold { thin * 2.0 } else { thin };
+                    // 底边对齐行盒底（向上加粗），粗细不同的段基线因此始终齐平。
+                    draw_underline(
+                        canvas,
+                        sp.underline,
+                        x1,
+                        x2,
+                        (ly + line_h - 1) as f32,
                         t,
-                        &Paint::fill(ul_color),
+                        thin,
+                        color,
                     );
                 }
             }
@@ -1933,11 +2565,15 @@ impl Widget for TextInput {
             // ——真正的底是外层容器画的，两者在自定义主题下并不同色。拿它去反色重绘，
             // 光标处会糊上一小段不属于这里的颜色，故 frameless 直接不做反色。
             let invert_over_glyph = !self.config.frameless;
+            // 度量取本行实际文本：纯中文行经回退字体后字身 ascent 与 "Ay" 不同。
+            let line_chars = lay
+                .lines
+                .get(cl)
+                .map_or(&[][..], |ln| &chars[ln.start..ln.end]);
+            let (caret_y, caret_h) = caret_vspan(canvas, line_chars, ts, ly, line_h);
             if let Some((caret, alpha)) =
-                // 竖直只内缩 1px：行盒本就含行距，再各缩 2px 会让光标明显短于字身，
-                // 视觉上"矮一截"。
                 self.caret
-                        .paint(canvas, cxx, ly + 1, line_h - 2, inp.cursor(pal), &opts)
+                    .paint(canvas, cxx, caret_y, caret_h, inp.cursor(pal), &opts)
             {
                 if let Some(ln) = lay
                     .lines
@@ -1974,6 +2610,8 @@ impl Widget for TextInput {
             Event::Pointer(p) => match p.kind {
                 PointerKind::Down => {
                     ctx.request_focus();
+                    // 同按键入口：右键落在选区内与否要按钳过的选区判。
+                    self.clamp_selection();
                     // 多行：滚动条命中优先于文字交互。右键跳过（不拖滚动条）。
                     if self.is_multiline() && p.button != MouseButton::Right {
                         let b = ctx.bounds();
@@ -2095,7 +2733,7 @@ impl Widget for TextInput {
                     // 普通悬停：更新滚动条命中标志（驱动光标形状切换）。
                     if self.is_multiline() {
                         let b = ctx.bounds();
-                        let in_sb = p.pos.x >= b.right() - VScrollbar::HIT_W;
+                        let in_sb = p.pos.x >= b.right() - crate::core::scrollbar::hit_w();
                         if in_sb != self.hover_in_scrollbar.get() {
                             self.hover_in_scrollbar.set(in_sb);
                             // 不需要 mark_dirty：光标形状由平台 WM_SETCURSOR 独立查询，
@@ -2135,16 +2773,19 @@ impl Widget for TextInput {
                         (lay.lines.len() as i32 * lh, lh)
                     };
                     if content_h <= inner_h {
+                        self.wheel.reset();
                         return false; // 无溢出 → 冒泡给外层滚动容器
                     }
                     let max_scroll = (content_h - inner_h).max(0);
                     let sy_old = self.scroll_y.get();
-                    // 每刻度 120，滚动约 3 行（与外层 ScrollWidget 步长对齐）。
+                    // 每刻度 120，滚动约 3 行（与外层 ScrollWidget 步长对齐）；亚格零头攒着。
                     let step = (3 * line_h).max(48);
-                    let dy = -delta * step / 120;
-                    // 已到边界 → 冒泡让外层继续滚动。
-                    let at_boundary = (dy < 0 && sy_old == 0) || (dy > 0 && sy_old >= max_scroll);
+                    let dy = self.wheel.scroll_px(delta, step);
+                    // 已到边界 → 冒泡让外层继续滚动（按滚动方向判，见 ScrollWidget）。
+                    let down = delta < 0;
+                    let at_boundary = (!down && sy_old == 0) || (down && sy_old >= max_scroll);
                     if at_boundary {
+                        self.wheel.reset();
                         return false;
                     }
                     self.scroll_y.set((sy_old + dy).clamp(0, max_scroll));
@@ -2153,7 +2794,25 @@ impl Widget for TextInput {
                 }
                 _ => false,
             },
+            // Alt+方向键 / Home / End 不是编辑键（系统编辑框同样不理），放给应用：
+            // 对话框拿它们做"切到左栏 / 右栏"这类快捷键。不放的话被当成裸方向键
+            // 移了光标，还算消费掉，`on_shortcut` 永远收不到。
+            Event::Key(k)
+                if k.pressed
+                    && k.alt
+                    && !k.ctrl
+                    && matches!(
+                        k.key,
+                        Key::Left | Key::Right | Key::Up | Key::Down | Key::Home | Key::End
+                    ) =>
+            {
+                false
+            }
             Event::Key(k) if k.pressed => {
+                // 正文可能已被程序改短：先把存着的光标 / 锚点钳进去，否则第一下 Left 从
+                // 越界处起算、看着没反应，Shift 扩选也从越界处起。`selection()` 读时虽也钳，
+                // 但不改存值。
+                self.clamp_selection();
                 // 任何按键都应将视口滚回光标位置（用户开始编辑/导航）。
                 self.follow_cursor.set(true);
                 let len = self.char_count();
@@ -2188,7 +2847,9 @@ impl Widget for TextInput {
                     // 换行与提交这才各有各的键，与业界通例一致（Enter 换行 / Ctrl+Enter
                     // 发送）。未声明 `on_submit` 的多行框上 Ctrl+Enter 变成不消费，
                     // 于是能冒到 `App::on_shortcut`——那正是应用级「提交」该待的地方。
-                    Key::Enter if self.is_multiline() && !k.ctrl => {
+                    // 只读多行框没有换行可插：Enter 落到下面单行那条臂，交 `on_submit`
+                    // 或照常上达 `on_shortcut`（对话框的默认按钮）。
+                    Key::Enter if self.is_multiline() && !k.ctrl && !self.config.read_only => {
                         self.insert_newline(ctx);
                         true
                     }
@@ -2206,7 +2867,12 @@ impl Widget for TextInput {
                     // 放在多行守卫之后，故多行模式的**裸** Enter 走不到这里（换行、
                     // 上下移行是编辑器的固有语义，不该被应用截走）；多行的
                     // **Ctrl+Enter** 则由上面那条臂让出来，与单行 Enter 汇到同一个出口。
-                    Key::Enter => self.fire_submit(ctx),
+                    // 先提交值、再跑 Enter 动作：on_submit 里多半要用到刚提交的结果。
+                    // 提交不算消费，Enter 照常上达 on_shortcut（见 `fire_commit`）。
+                    Key::Enter => {
+                        self.fire_commit(ctx);
+                        self.fire_submit(ctx)
+                    }
                     // 上下键：单行本控件不用，交给应用。
                     //
                     // Tab：**两种模式都转发**，且默认不消费——宿主的焦点导航是兜底，
@@ -2282,8 +2948,10 @@ impl Widget for TextInput {
                         true
                     }
                     // Ctrl+X 剪切（VK_X=0x58）。密码模式禁止剪切（不外泄明文）。
+                    // 只读不剪切也不顺手复制：原生只读框的 Ctrl+X 同样是空操作，
+                    // 「剪切变成复制」会让用户以为内容已被拿走。
                     Key::Other(0x58) if k.ctrl => {
-                        if !self.config.password {
+                        if !self.config.password && !self.config.read_only {
                             if let Some(sel) = self.selected_text() {
                                 ctx.clipboard_set(&sel);
                                 self.delete_selection(ctx);
@@ -2293,6 +2961,9 @@ impl Widget for TextInput {
                     }
                     // Ctrl+V 粘贴（VK_V=0x56）
                     Key::Other(0x56) if k.ctrl => {
+                        if self.config.read_only {
+                            return true;
+                        }
                         if let Some(s) = ctx.clipboard_get() {
                             self.paste(ctx, &s);
                         }
@@ -2314,12 +2985,44 @@ impl Widget for TextInput {
         Some(self)
     }
     fn ime_caret(&self) -> Option<(i32, i32, i32)> {
+        // 只读框照常报光标：系统合成窗 / 候选窗要有个落点。不报的话 win32 的合成窗停在
+        // 上一个可编辑框的光标处（看着像字打进了别的框），macOS 的候选窗跑到屏幕角落、
+        // 用户看不出自己正在组字。提交的字走 `Key::Char`，在 `type_char` 被拒。
         self.caret_local.get()
     }
+    fn accepts_ime(&self) -> bool {
+        // 只读框照常报光标（上面那条注释），但不接受输入法：Windows 上据此摘掉输入法上下文，
+        // 用户不会组完一串才发现被 `type_char` 吞掉。
+        !self.config.read_only && self.ime_caret().is_some()
+    }
+    fn accepts_text(&self) -> bool {
+        // 不看光标：焦点查询可能发生在首帧之前，或框被滚出视口、没画就没记光标。
+        !self.config.read_only
+    }
+    /// 打字、移光标、扩选写的都是自己的状态（只读框同样只动选区与滚动）；转交给应用的
+    /// 回调经 `app_callback` 自行升整窗。
+    fn keys_damage_self_only(&self) -> bool {
+        true
+    }
     fn set_composing(&mut self, composing: bool) {
+        // 只读：不进入组合态（不藏光标——这里没有字会被打进来）；退出照常放行，
+        // 运行期切到只读时不至于把光标永远藏着。
+        if self.config.read_only && composing {
+            return;
+        }
         self.composing.set(composing);
+        // 与 `set_preedit` 同理：开始组合时把视口拉回光标。光标先前被滚出可视区的话，
+        // 系统合成窗与候选窗会跟着它落到框外（甚至窗口外）。
+        if composing {
+            self.follow_cursor.set(true);
+        }
     }
     fn set_preedit(&mut self, pe: &Preedit) {
+        // 只读：不内联显示合成串——那看起来就像字被打进去了。清空照常放行，
+        // 运行期切到只读时残留的合成串才清得掉。
+        if self.config.read_only && pe.is_active() {
+            return;
+        }
         // 合成串长度变化会改变文本宽度与换行，`rebuild_layout` 的缓存键第一项就是
         // 显示串，故这里只需换掉数据、下一帧 paint 自动重排，无需手动失效布局。
         *self.preedit.borrow_mut() = pe.clone();
@@ -2331,15 +3034,34 @@ impl Widget for TextInput {
         // 返回 None 会被理解成「没有文本上下文」。
         Some(self.selection().unwrap_or((self.cursor, self.cursor)))
     }
+    fn ime_hints(&self) -> crate::event::ImeHints {
+        crate::event::ImeHints {
+            multiline: self.is_multiline(),
+            password: self.config.password,
+        }
+    }
     fn ime_text(&self) -> Option<String> {
         // 密码框不把内容交给输入法：这段文字会被 IME 读去做联想与重转换，
         // 密码不该流到那里。
-        if self.config.password {
+        if self.config.password || self.config.read_only {
             return None;
         }
         Some(self.text.with(|t| t.clone()))
     }
+    fn on_blur(&mut self, ctx: &mut EventCtx) {
+        self.fire_commit(ctx);
+    }
+    fn focus_lost(&mut self) {
+        // 只让拿着焦点的那个框显示选区：失焦就收起选区（光标位置保留），
+        // 否则在几个框里各划一段，屏幕上会同时亮着好几段选区。
+        self.anchor = None;
+        self.dragging = false;
+    }
     fn reset_interaction(&mut self) {
+        // 未提交的编辑随隐藏作废：复用同一对话框切换编辑目标时，带着上一条的"改过"
+        // 进入下一次编辑，没动一个字也会在失焦时提交。
+        self.edited = false;
+        self.commit_base = String::new();
         // 复用同一对话框切换编辑目标时（隐藏→再显示），清掉上一条残留的选区/拖选状态，
         // 光标落到（新填充文本的）文末，避免带着旧选区进入下一次编辑；有预置选区的
         // 按预置再兑现一次（钳到新正文长度）。
@@ -2353,6 +3075,10 @@ impl Widget for TextInput {
         self.dragging = false;
         self.goal_x.set(None);
         self.follow_cursor.set(true);
+    }
+    fn frame_shows_focus(&self) -> bool {
+        // 无框时没有外框可变色，焦点只能靠焦点环。
+        !self.config.frameless
     }
     fn wants_right_click(&self) -> bool {
         true // 右键弹出上下文菜单（剪切/复制/粘贴/全选）
@@ -2369,12 +3095,63 @@ impl Widget for TextInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{word_run, wrap_paragraph, Preedit, TextInput, TextLayout, VisLine};
+    use super::{
+        preedit_pieces, trim_polyline, word_run, wrap_paragraph, Color, Preedit, PreeditSpan,
+        TextInput, TextLayout, UnderlineStyle, VisLine,
+    };
     use crate::signal::signal;
+
+    /// 对勾截取按**长度**分配：两段长 5 与 10，总长 15 的 1/4 落在第一段 3/4 处，
+    /// 3/4 落在第二段的 5/8 处。按段平分的实现会在 t=0.25 时给出第一段的一半。
+    #[test]
+    fn trim_polyline_splits_by_length() {
+        let pts = [(0.0, 0.0), (3.0, 4.0), (3.0, 14.0)];
+        let close =
+            |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 1e-4 && (a.1 - b.1).abs() < 1e-4;
+        let (p, n) = trim_polyline(pts, 0.25);
+        assert_eq!(n, 2);
+        assert!(close(p[1], (2.25, 3.0)), "{:?}", p[1]);
+        let (p, n) = trim_polyline(pts, 0.75);
+        assert_eq!(n, 3);
+        assert!(close(p[2], (3.0, 10.25)), "{:?}", p[2]);
+        let (p, n) = trim_polyline(pts, 1.0);
+        assert_eq!((n, p), (3, pts));
+    }
 
     fn run(s: &str, idx: usize) -> (usize, usize) {
         let chars: Vec<char> = s.chars().collect();
         word_run(&chars, idx)
+    }
+
+    /// Alt+方向键不归输入框：不移光标、不消费，好让应用的 `on_shortcut` 收到。
+    #[test]
+    fn alt_arrows_pass_through() {
+        use crate::core::Widget;
+        use crate::event::{Event, Key, KeyEvent};
+        let text = signal(String::from("abc"));
+        let mut ti = TextInput::new(text, String::new());
+        ti.cursor = 2;
+        let key = |key, alt| {
+            Event::Key(KeyEvent {
+                key,
+                pressed: true,
+                shift: false,
+                ctrl: false,
+                alt,
+                meta: false,
+            })
+        };
+        let mut consumed = true;
+        crate::testing::run_with_ctx(|ctx| {
+            consumed = ti.on_event(ctx, &key(Key::Left, true));
+        });
+        assert!(!consumed, "Alt+Left 不该被输入框消费");
+        assert_eq!(ti.cursor, 2, "Alt+Left 不该移动光标");
+        crate::testing::run_with_ctx(|ctx| {
+            consumed = ti.on_event(ctx, &key(Key::Left, false));
+        });
+        assert!(consumed);
+        assert_eq!(ti.cursor, 1, "裸 Left 照常移光标");
     }
 
     /// Escape 要能到达 `on_nav_key`：就地编辑框靠它取消。
@@ -2689,7 +3466,30 @@ mod tests {
             text: String::from(text),
             caret,
             sel: None,
+            spans: Vec::new(),
         }
+    }
+
+    /// win32 开始组合（`set_composing(true)`）时同样把视口拉回光标：光标先前被滚出可视区
+    /// 的话，系统合成窗与候选窗会跟着它落到框外。只读框不进入组合态，也不拉。
+    #[test]
+    fn composing_start_scrolls_caret_back_into_view() {
+        use crate::core::Widget;
+        let mut ti = dummy_input();
+        ti.follow_cursor.set(false);
+        ti.set_composing(true);
+        assert!(ti.follow_cursor.get(), "开始组合应请求跟随光标");
+        ti.follow_cursor.set(false);
+        ti.set_composing(false);
+        assert!(!ti.follow_cursor.get(), "结束组合不必再拉");
+        let mut ro = dummy_input();
+        ro.config.read_only = true;
+        ro.follow_cursor.set(false);
+        ro.set_composing(true);
+        assert!(
+            !ro.composing.get() && !ro.follow_cursor.get(),
+            "只读框不进入组合态"
+        );
     }
 
     /// 合成串插在光标处，且**不改动**正文信号本身。
@@ -2841,6 +3641,277 @@ mod tests {
         crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
     }
 
+    fn styled(text: &str, spans: &[PreeditSpan]) -> Preedit {
+        Preedit {
+            spans: spans.to_vec(),
+            ..preedit(text, 0)
+        }
+    }
+
+    fn span(range: (usize, usize), underline: UnderlineStyle) -> PreeditSpan {
+        PreeditSpan {
+            range,
+            underline,
+            ..PreeditSpan::default()
+        }
+    }
+
+    /// 输入法给了样式就照着切：越出本行的部分裁掉，没被覆盖的字不出现；没给样式时
+    /// 按分句切「细—粗—细」。
+    #[test]
+    fn preedit_pieces_follow_ime_spans_and_clip_to_the_line() {
+        let pe = styled(
+            "abcdef",
+            &[
+                span((0, 2), UnderlineStyle::Dot),
+                span((4, 6), UnderlineStyle::Dash),
+            ],
+        );
+        // 合成串在显示串 10..16，本行只到 15。
+        let got: Vec<_> = preedit_pieces(&pe, 10, 16, 0, 15)
+            .into_iter()
+            .map(|(a, b, sp)| (a, b, sp.underline))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (10, 12, UnderlineStyle::Dot),
+                (14, 15, UnderlineStyle::Dash)
+            ],
+            "2..4 没有样式，不应出现"
+        );
+
+        // 一段跨两条视觉行：每行各得自己那一截。
+        let pe = styled("abcdef", &[span((0, 6), UnderlineStyle::Dot)]);
+        let ranges = |ls, le| -> Vec<_> {
+            preedit_pieces(&pe, 10, 16, ls, le)
+                .into_iter()
+                .map(|(a, b, _)| (a, b))
+                .collect()
+        };
+        assert_eq!(ranges(0, 13), [(10, 13)]);
+        assert_eq!(ranges(13, 20), [(13, 16)]);
+
+        let mut pe = preedit("abcdef", 0);
+        pe.sel = Some((2, 4));
+        let got: Vec<_> = preedit_pieces(&pe, 0, 6, 0, 6)
+            .into_iter()
+            .map(|(a, b, sp)| (a, b, sp.bold, sp.underline))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (0, 2, false, UnderlineStyle::Solid),
+                (2, 4, true, UnderlineStyle::Solid),
+                (4, 6, false, UnderlineStyle::Solid),
+            ]
+        );
+    }
+
+    /// 线型要真的画成不同的样子：以「无下划线」为基线量墨，点线约为实线的一半，
+    /// 波浪线因为有起伏比实线多墨。
+    #[test]
+    fn preedit_underline_style_changes_the_ink() {
+        with_caret_style(crate::ui::CaretStyle::Solid);
+        let frame = |u| caret_frame(&input_with("", 0, styled("abcdef", &[span((0, 6), u)])), 0);
+        let base = frame(UnderlineStyle::None);
+        let ink = |u| frame_diff(&frame(u), &base);
+        let (solid, dot, dash, squiggle) = (
+            ink(UnderlineStyle::Solid),
+            ink(UnderlineStyle::Dot),
+            ink(UnderlineStyle::Dash),
+            ink(UnderlineStyle::Squiggle),
+        );
+        assert!(
+            dot < dash && dash < solid,
+            "虚线（4 画 2 空）应介于点线与实线之间：点 {dot} 虚 {dash} 实 {solid}"
+        );
+        assert!(solid > 0, "实线应有墨");
+        assert!(
+            dot * 10 > solid * 3 && dot * 10 < solid * 7,
+            "点线应约为实线一半：点 {dot} vs 实 {solid}"
+        );
+        // 波浪线靠起伏区分：占的像素行比实线多（墨量反而相近，斜线抗锯齿后很淡）。
+        let rows = |u| {
+            let f = frame(u);
+            f.chunks(200 * 4)
+                .zip(base.chunks(200 * 4))
+                .filter(|(a, b)| a != b)
+                .count()
+        };
+        let (solid_rows, squiggle_rows) =
+            (rows(UnderlineStyle::Solid), rows(UnderlineStyle::Squiggle));
+        assert!(squiggle > 0, "波浪线应有墨");
+        assert!(
+            squiggle_rows > solid_rows,
+            "波浪线应有起伏：波 {squiggle_rows} 行 vs 实 {solid_rows} 行"
+        );
+        crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
+    }
+
+    /// 输入法指定的线色、字色、底色都要出现在画面上。
+    #[test]
+    fn preedit_span_colors_reach_the_pixels() {
+        with_caret_style(crate::ui::CaretStyle::Solid);
+        let red = Color::rgb(255, 0, 0);
+        // 字色要真画出字来，故带上文字引擎（`caret_frame` 的画布不画字）。拉丁字母每台机器
+        // 都有字体，CI 也稳。
+        let count = |sp: PreeditSpan| {
+            use crate::core::Widget;
+            let ti = input_with("", 0, styled("WWWWWW", &[sp]));
+            let b = crate::geometry::Rect::new(0, 0, 200, 30);
+            let mut pm = tiny_skia::Pixmap::new(200, 30).unwrap();
+            let mut eng = crate::ui::text_fit::ink::engine();
+            {
+                let mut c = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+                ti.paint(b, b, true, true, &mut c, &crate::style::Style::default());
+            }
+            pm.data()
+                .chunks(4)
+                .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60)
+                .count()
+        };
+        let plain = span((0, 6), UnderlineStyle::None);
+        assert_eq!(count(plain), 0, "前提：默认画面里没有纯红");
+        assert!(
+            count(PreeditSpan {
+                line: Some(red),
+                ..span((0, 6), UnderlineStyle::Solid)
+            }) > 20,
+            "线色"
+        );
+        assert!(
+            count(PreeditSpan {
+                fg: Some(red),
+                ..plain
+            }) > 20,
+            "字色"
+        );
+        assert!(
+            count(PreeditSpan {
+                bg: Some(red),
+                ..plain
+            }) > 200,
+            "底色"
+        );
+        crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
+    }
+
+    /// 字色靠裁剪分色描，不铺底：frameless 框的底来自外层容器，铺一块自己的底色会在
+    /// 合成串上糊出色块。以「不透明像素数」衡量——分色描只换字的颜色，字形覆盖不变。
+    #[test]
+    fn preedit_fg_does_not_paint_a_background_in_frameless_input() {
+        with_caret_style(crate::ui::CaretStyle::Solid);
+        let opaque = |sp: PreeditSpan| {
+            use crate::core::Widget;
+            let mut ti = input_with("", 0, styled("WWWWWW", &[sp]));
+            ti.config.frameless = true;
+            let b = crate::geometry::Rect::new(0, 0, 200, 30);
+            let mut pm = tiny_skia::Pixmap::new(200, 30).unwrap();
+            let mut eng = crate::ui::text_fit::ink::engine();
+            {
+                let mut c = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+                ti.paint(b, b, true, true, &mut c, &crate::style::Style::default());
+            }
+            pm.data().chunks(4).filter(|p| p[3] == 255).count()
+        };
+        let plain = span((0, 6), UnderlineStyle::None);
+        let base = opaque(plain);
+        let red = opaque(PreeditSpan {
+            fg: Some(Color::rgb(255, 0, 0)),
+            ..plain
+        });
+        assert!(base > 0, "前提：frameless 框里的字是不透明的");
+        // 不要求两者相等：红字与默认字色的抗锯齿覆盖不同（DirectWrite 下差得更明显）。
+        // 回归的特征是整段铺满——6 个 W 宽、整个行高，远超这点差异（实测 70 → 2520）。
+        assert!(
+            red < base * 2 + 300,
+            "换字色不应多出整块不透明底：默认 {base} vs 红字 {red}"
+        );
+        crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
+    }
+
+    /// `[input] selection_text`：选中的字换成这一色，未选中的仍是正文色；不设时与以前一样。
+    /// 选区底设成不透明白（深色主题配白底黑字的用法），字形用平台文字引擎真实出墨。
+    #[test]
+    fn selection_text_recolors_only_the_selected_glyphs() {
+        use crate::core::Widget;
+        with_caret_style(crate::ui::CaretStyle::Solid);
+        let red = Color::rgb(255, 0, 0);
+        // 返回 (红色像素的最右 x, 深色正文像素的最右 x, 红色像素数)。
+        let render = |sel_text: Option<Color>| {
+            let mut t = crate::theme::Theme::default();
+            t.input.selection = Some(Color::WHITE);
+            t.input.selection_text = sel_text;
+            crate::theme::set_current(std::rc::Rc::new(t));
+            // 选中前 3 个字；光标停在左端，免得它的深色竖线混进右侧的统计。
+            let mut ti = input_with("WWWWWW", 0, Preedit::default());
+            ti.anchor = Some(3);
+            let b = crate::geometry::Rect::new(0, 0, 200, 30);
+            let mut pm = tiny_skia::Pixmap::new(200, 30).unwrap();
+            let mut eng = crate::ui::text_fit::ink::engine();
+            {
+                let mut c = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+                ti.paint(b, b, true, true, &mut c, &crate::style::Style::default());
+            }
+            // 只认不透明像素：数据是预乘的，圆角外缘的半透明像素数值也很小，会被当成深色。
+            let (mut red_max, mut dark_max, mut reds) = (-1i32, -1i32, 0usize);
+            for (i, px) in pm.data().chunks(4).enumerate() {
+                let x = (i % 200) as i32;
+                if px[0] > 180 && px[1] < 90 && px[2] < 90 {
+                    red_max = red_max.max(x);
+                    reds += 1;
+                } else if px[0] < 100 && px[1] < 100 && px[2] < 100 && px[3] == 255 {
+                    dark_max = dark_max.max(x);
+                }
+            }
+            (red_max, dark_max, reds)
+        };
+        let (_, dark_off, reds_off) = render(None);
+        assert_eq!(reds_off, 0, "不设 selection_text 时选中的字仍是正文色");
+        assert!(dark_off > 0, "前提：字形真实出墨");
+        let (red_max, dark_max, reds) = render(Some(red));
+        assert!(reds > 0, "选中的字应换成 selection_text");
+        assert!(
+            dark_max > red_max,
+            "未选中的字仍是正文色，且都在选区右侧：红到 x={red_max}，深色到 x={dark_max}"
+        );
+        crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
+    }
+
+    /// 反向选区（锚点在光标右侧）下开始组字，合成串整段落在选区的显示区间里。选区字色
+    /// 必须让出合成串：那段的字色归输入法，否则会盖掉输入法给的 crText。
+    #[test]
+    fn selection_text_yields_to_preedit_colors() {
+        use crate::core::Widget;
+        with_caret_style(crate::ui::CaretStyle::Solid);
+        let mut t = crate::theme::Theme::default();
+        t.input.selection = Some(Color::WHITE);
+        t.input.selection_text = Some(Color::rgb(255, 0, 0));
+        crate::theme::set_current(std::rc::Rc::new(t));
+        // 合成串第一段不给字色、第二段给蓝色：首段起点与选区起点重合，最容易被吞掉。
+        let blue = PreeditSpan {
+            fg: Some(Color::rgb(0, 0, 255)),
+            ..span((1, 3), UnderlineStyle::None)
+        };
+        let pe = styled("WWW", &[span((0, 1), UnderlineStyle::None), blue]);
+        let mut ti = input_with("WWWW", 0, pe);
+        ti.anchor = Some(4);
+        let b = crate::geometry::Rect::new(0, 0, 240, 30);
+        let mut pm = tiny_skia::Pixmap::new(240, 30).unwrap();
+        let mut eng = crate::ui::text_fit::ink::engine();
+        {
+            let mut c = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+            ti.paint(b, b, true, true, &mut c, &crate::style::Style::default());
+        }
+        let count = |f: fn(&[u8]) -> bool| pm.data().chunks(4).filter(|p| f(p)).count();
+        let blues = count(|p| p[2] > 180 && p[0] < 90 && p[1] < 90);
+        let reds = count(|p| p[0] > 180 && p[1] < 90 && p[2] < 90);
+        assert!(blues > 0, "合成串里输入法给的字色不能被选区字色盖掉");
+        assert!(reds > 0, "合成串之外的选中正文仍换成 selection_text");
+        crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
+    }
+
     /// 合成串变化必须触发重排：布局缓存键的第一项就是显示串，漏了会让
     /// 合成串变长时沿用旧的视觉行，光标落点与实际字形对不上。
     #[test]
@@ -2873,6 +3944,45 @@ mod tests {
         pm.data().to_vec()
     }
 
+    /// 开关切换后第 `at_ms` 毫秒时滑块所处的进度（0=关、1=开），走真实 paint。
+    fn switch_progress_after_toggle(level: crate::anim::MotionLevel, at_ms: u64) -> f32 {
+        use crate::core::Widget;
+        use crate::geometry::Rect;
+        use crate::render::SkiaCanvas;
+        use crate::style::Style;
+        use tiny_skia::Pixmap;
+        crate::anim::set_motion_level(level);
+        let state = crate::signal::signal(false);
+        let sw = super::Switch::new(state);
+        let b = Rect::new(0, 0, 60, 30);
+        let mut pm = Pixmap::new(60, 30).unwrap();
+        let mut frame = |ms: u64| {
+            crate::anim::set_clock_ms(ms);
+            let mut c = SkiaCanvas::new(&mut pm);
+            sw.paint(b, b, false, false, &mut c, &Style::default());
+        };
+        frame(1_000); // 首帧落定
+        state.set(true);
+        frame(1_000); // 本帧改向
+        frame(1_000 + at_ms);
+        let v = sw.pos.get().value();
+        crate::anim::set_motion_level(crate::anim::MotionLevel::Full);
+        v
+    }
+
+    /// 开关滑块是位移：减弱档下瞬时到位，全开档下中途确在半路。两档对照，
+    /// 免得"本来就没动画"也被当成"减弱生效"。
+    #[test]
+    fn switch_knob_snaps_under_reduced_motion() {
+        let full = switch_progress_after_toggle(crate::anim::MotionLevel::Full, 60);
+        assert!(
+            full > 0.05 && full < 0.95,
+            "全开档 60ms 时应在半路，实得 {full}"
+        );
+        let reduced = switch_progress_after_toggle(crate::anim::MotionLevel::Reduced, 60);
+        assert_eq!(reduced, 1.0, "减弱档下滑块应瞬时到位");
+    }
+
     /// 两帧间的墨量差（逐通道绝对差之和）。
     ///
     /// 全部取样都在**聚焦帧之间**做，不拿失焦帧当基线：失焦会 `CaretState::reset`，
@@ -2882,6 +3992,79 @@ mod tests {
             .zip(b)
             .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs())
             .sum()
+    }
+
+    /// 用真实文字引擎在 `now_ms` 画一帧聚焦态（120 宽，长文本会溢出），返回像素。
+    fn text_frame(ti: &TextInput, now_ms: u64) -> Vec<u8> {
+        use crate::core::Widget;
+        let b = crate::geometry::Rect::new(0, 0, 120, 32);
+        crate::anim::set_clock_ms(now_ms);
+        let mut pm = tiny_skia::Pixmap::new(120, 32).unwrap();
+        let mut eng = crate::ui::text_fit::ink::engine();
+        {
+            let mut c = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+            ti.paint(b, b, true, true, &mut c, &crate::style::Style::default());
+        }
+        pm.data().to_vec()
+    }
+
+    /// 回归：长文本滚到末尾后整段换成短文本，横向滚动要钳回正文宽——此前滚动量停在
+    /// 半路，短文本整个缩在视口左外侧、光标贴在左沿。
+    #[test]
+    fn shrinking_text_clamps_horizontal_scroll() {
+        let text = signal("WWWWWWWWWWWWWWWWWWWWWWWW".to_string());
+        let mut ti = TextInput::new(text, "");
+        ti.cursor = ti.char_count();
+        text_frame(&ti, 1_000);
+        assert!(ti.scroll_x.get() > 0, "前提：长文本溢出、已横向滚动");
+        ti.replace_as_edit("WW", false);
+        text_frame(&ti, 1_000);
+        assert_eq!(ti.scroll_x.get(), 0, "短文本放得下，不该再有滚动量");
+    }
+
+    /// 整段换掉正文（组合框选中一项）时光标直接落位，不从旧位置滑过来——与一个本来就是
+    /// 这段正文的框画出来的第一帧逐像素相同。长→短（视口横移）与短→短（视口不动）都测：
+    /// 前者靠「视口横移即落位」，后者靠「整段替换不是光标移动」，两条各管一边。
+    #[test]
+    fn replacing_whole_text_snaps_caret_without_sliding() {
+        crate::anim::set_enabled(true);
+        crate::ui::caret::set_animated(true);
+        with_caret_style(crate::ui::CaretStyle::Solid);
+        for from in ["WWWWWWWWWWWWWWWWWWWWWWWW", "WWWWWW"] {
+            let text = signal(from.to_string());
+            let mut ti = TextInput::new(text, "");
+            ti.cursor = ti.char_count();
+            text_frame(&ti, 1_000);
+            ti.replace_as_edit("WW", false);
+            let got = text_frame(&ti, 1_010);
+
+            let fresh = TextInput::new(signal("WW".to_string()), "");
+            let want = text_frame(&fresh, 1_010);
+            assert_eq!(frame_diff(&got, &want), 0, "{from} → WW：光标应直接落位");
+        }
+        crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
+    }
+
+    /// 视口横移时光标随正文一起落位：长文本停在末尾按 Home，正文瞬间跳回开头，光标不该
+    /// 再从右沿横穿整段字滑过去。
+    #[test]
+    fn caret_snaps_when_horizontal_scroll_jumps() {
+        crate::anim::set_enabled(true);
+        crate::ui::caret::set_animated(true);
+        with_caret_style(crate::ui::CaretStyle::Solid);
+        let long = "WWWWWWWWWWWWWWWWWWWWWWWW";
+        let mut ti = TextInput::new(signal(long.to_string()), "");
+        text_frame(&ti, 1_000);
+        assert!(ti.scroll_x.get() > 0, "前提：停在末尾、已横向滚动");
+        ti.cursor = 0; // 等同 Home
+        ti.follow_cursor.set(true);
+        let got = text_frame(&ti, 1_010);
+
+        let mut fresh = TextInput::new(signal(long.to_string()), "");
+        fresh.cursor = 0;
+        let want = text_frame(&fresh, 1_010);
+        assert_eq!(frame_diff(&got, &want), 0, "视口跳回开头时光标应直接落位");
+        crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
     }
 
     /// 临时把当前主题换成指定光标风格（thread_local，用完须还原）。
@@ -2937,6 +4120,198 @@ mod tests {
             );
         }
         crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
+    }
+
+    /// 设了行距时插入符是字身高、且按绘制的同一条基线放。期望值按无引擎画布的 0.8 基线
+    /// 约定手算：14px、2.0 倍行距 → 行盒 28、基线 22.4；字身 ascent 11.2、descent 2.8
+    /// → 光标 [11.2, 25.2] 取整为 y=11、h=14。行盒居中的写法会给出 y=7。
+    #[test]
+    fn caret_spans_font_body_not_spaced_line_box() {
+        use crate::render::SkiaCanvas;
+        use tiny_skia::Pixmap;
+        let mut pm = Pixmap::new(8, 8).unwrap();
+        let mut c = SkiaCanvas::new(&mut pm);
+        let mut ts = crate::text::TextStyle {
+            family: None,
+            size: 14.0,
+            weight: crate::text::WEIGHT_NORMAL,
+            italic: false,
+            line_height: Some(2.0),
+        };
+        assert_eq!(super::caret_vspan(&mut c, &[], &ts, 100, 28), (111, 14));
+        // 未设行距：行盒即字身，保持原来的上下各缩 1px。
+        ts.line_height = None;
+        assert_eq!(super::caret_vspan(&mut c, &[], &ts, 100, 17), (101, 15));
+        // 行距小于 1：字身比行盒高，钳回行盒内。
+        ts.line_height = Some(0.8);
+        let (y, h) = super::caret_vspan(&mut c, &[], &ts, 100, 12);
+        assert!(
+            y >= 101 && y + h <= 111,
+            "钳在行盒 [101,111) 内：y={y} h={h}"
+        );
+    }
+
+    /// 经真实 paint 路径：2.0 倍行距的多行框里，亮/灭两帧之差（只有光标）的竖直跨度
+    /// 是字身高而非行盒高，且重心落在行盒中线以下（基线在行高 0.8 处）。
+    #[test]
+    fn caret_pixels_follow_font_body_with_line_spacing() {
+        use crate::core::Widget;
+        use crate::geometry::Rect;
+        use crate::render::SkiaCanvas;
+        use crate::style::Style;
+        use tiny_skia::Pixmap;
+        crate::anim::set_enabled(true);
+        crate::ui::caret::set_animated(true);
+        crate::ui::caret::set_window_active(true);
+        crate::ui::caret::set_blink_period_ms(Some(crate::ui::caret::BLINK_HALF_MS as u32));
+        with_caret_style(crate::ui::CaretStyle::Blink);
+        let mut ti = dummy_input();
+        ti.config.multiline = true;
+        let style = Style {
+            font_size: Some(14.0),
+            line_height: Some(2.0),
+            ..Style::default()
+        };
+        let frame = |ti: &TextInput, now: u64| {
+            let b = Rect::new(0, 0, 200, 80);
+            crate::anim::set_clock_ms(now);
+            let mut pm = Pixmap::new(200, 80).unwrap();
+            {
+                let mut c = SkiaCanvas::new(&mut pm);
+                ti.paint(b, b, true, true, &mut c, &style);
+            }
+            pm
+        };
+        let lit = frame(&ti, 0);
+        let out = frame(&ti, crate::ui::caret::TYPING_PAUSE_MS + 530 + 65);
+        let rows: Vec<u32> = (0..80)
+            .filter(|&y| (0..200).any(|x| lit.pixel(x, y).unwrap() != out.pixel(x, y).unwrap()))
+            .collect();
+        crate::theme::set_current(std::rc::Rc::new(crate::theme::Theme::default()));
+        let (top, bottom) = (*rows.first().expect("光标应出墨"), *rows.last().unwrap());
+        let h = bottom - top + 1;
+        assert!(h <= 15, "光标高 {h}，应为字身约 14 而非行盒 28 - 2");
+        assert_eq!(ti.layout.borrow().line_h, 28, "前提：14px × 2.0 的行盒");
+        // paint 记下的光标所在行顶（相对节点）；按 0.8 基线手算光标顶应在其下 11。
+        // 行盒居中的写法是 7，原先按行盒的写法是 1。
+        let (_, line_top, _) = ti.caret_local.get().expect("paint 应记下光标位置");
+        assert_eq!(top as i32 - line_top, 11, "光标顶相对行顶的偏移");
+    }
+
+    /// 用真实文字引擎画一帧输入框（静态光标），`origin` 为局部帧原点（逻辑）。
+    #[cfg(target_os = "linux")]
+    fn engine_frame(
+        ti: &TextInput,
+        style: &crate::style::Style,
+        b: crate::geometry::Rect,
+        focused: bool,
+        scale: f32,
+        origin: crate::geometry::Point,
+        size: (u32, u32),
+    ) -> tiny_skia::Pixmap {
+        use crate::core::Widget;
+        use crate::render::SkiaCanvas;
+        use crate::text::TextEngine;
+        let mut eng = crate::text::LinuxTextEngine::new();
+        eng.set_scale(scale);
+        let mut pm = tiny_skia::Pixmap::new(size.0, size.1).unwrap();
+        {
+            let mut c = SkiaCanvas::with_text_offset(&mut pm, &mut eng, scale, origin);
+            ti.paint(b, b, focused, true, &mut c, style);
+        }
+        pm
+    }
+
+    /// 真实引擎下（度量与画字各走引擎自己的路径，不是测试里的 0.8 约定）：2.0 倍行距时
+    /// 插入符的竖直范围包住本行字形墨迹，且明显矮于行盒。拉丁字母，不依赖 CJK 字体。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn caret_covers_real_glyph_ink_with_line_spacing() {
+        use crate::geometry::Point;
+        crate::anim::set_enabled(true);
+        crate::ui::caret::set_animated(false);
+        let style = crate::style::Style {
+            font_size: Some(14.0),
+            line_height: Some(2.0),
+            ..crate::style::Style::default()
+        };
+        for scale in [1.0f32, 1.25, 1.5] {
+            let (w, h) = ((220.0 * scale) as u32, (80.0 * scale) as u32);
+            let b = crate::geometry::Rect::new(0, 0, 220, 80);
+            let input = |text: &str| {
+                let mut ti = TextInput::new(signal(String::from(text)), String::new());
+                ti.config.multiline = true;
+                ti.cursor = text.chars().count();
+                ti
+            };
+            let rows_differing = |a: &tiny_skia::Pixmap, b: &tiny_skia::Pixmap| -> Vec<u32> {
+                (0..h)
+                    .filter(|&y| (0..w).any(|x| a.pixel(x, y) != b.pixel(x, y)))
+                    .collect()
+            };
+            let o = Point::new(0, 0);
+            let text = input("AyHg");
+            // 字形墨迹：同为失焦的「有字」与「空框」之差。
+            let glyphs = rows_differing(
+                &engine_frame(&text, &style, b, false, scale, o, (w, h)),
+                &engine_frame(&input(""), &style, b, false, scale, o, (w, h)),
+            );
+            // 光标：同一个框聚焦与失焦之差，只取光标那一列附近。聚焦还会换描边色、把描边
+            // 加粗到 `border_width_focus`，故上下各让开描边（含抗锯齿）那几行。
+            let focused = engine_frame(&text, &style, b, true, scale, o, (w, h));
+            let blurred = engine_frame(&text, &style, b, false, scale, o, (w, h));
+            let (cx, ..) = text.caret_local.get().expect("聚焦帧应记下光标位置");
+            let col = ((cx as f32 + 0.5) * scale) as u32;
+            let edge = (3.0 * scale).ceil() as u32 + 1;
+            let caret: Vec<u32> = (edge..h - edge)
+                .filter(|&y| focused.pixel(col, y) != blurred.pixel(col, y))
+                .collect();
+            let (g0, g1) = (glyphs[0], *glyphs.last().unwrap());
+            let (c0, c1) = (*caret.first().expect("光标应出墨"), *caret.last().unwrap());
+            let line_px = 28.0 * scale;
+            assert!(
+                c0 <= g0 + 1 && c1 + 1 >= g1,
+                "scale={scale}：光标 {c0}..={c1} 应包住字形 {g0}..={g1}"
+            );
+            assert!(
+                ((c1 - c0 + 1) as f32) < line_px * 0.8,
+                "scale={scale}：光标高 {} 应是字身而非行盒 {line_px}",
+                c1 - c0 + 1
+            );
+        }
+    }
+
+    /// 局部重绘（子 pixmap + 原点平移）画出来的输入框必须与整窗帧对应区域逐像素相同。
+    /// 原点取在节点内部，节点与文字的左 / 上边落在负的局部坐标上——`f32::round` 在负的
+    /// 半数上取整方向相反，正是这里会差 1 物理像素。四个起点覆盖 1.25 下的全部相位。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn text_input_on_offset_subpixmap_matches_full_frame() {
+        use crate::geometry::Point;
+        crate::anim::set_enabled(true);
+        crate::ui::caret::set_animated(false);
+        let style = crate::style::Style {
+            font_size: Some(13.0),
+            ..crate::style::Style::default()
+        };
+        let s = 1.25f32;
+        let origin = Point::new(20, 12); // × 1.25 为整数，同局部帧的 4 逻辑像素网格
+        let (ox, oy) = ((origin.x as f32 * s) as u32, (origin.y as f32 * s) as u32);
+        for start in 0..4 {
+            let b = crate::geometry::Rect::new(start, start, 200, 30);
+            let ti = TextInput::new(signal(String::from("Hello, windui")), String::new());
+            let full = engine_frame(&ti, &style, b, false, s, Point::new(0, 0), (300, 60));
+            let sub = engine_frame(&ti, &style, b, false, s, origin, (120, 30));
+            for y in 0..sub.height() {
+                for x in 0..sub.width() {
+                    assert_eq!(
+                        sub.pixel(x, y),
+                        full.pixel(x + ox, y + oy),
+                        "start={start} 局部帧 ({x},{y}) 与整窗帧不同"
+                    );
+                }
+            }
+        }
     }
 
     /// 光标动画关闭（截图路径、系统省电/无障碍设置）时：画面恒定，且**不请求续帧**。
@@ -3220,5 +4595,149 @@ mod label_wrap_tests {
             single,
             "窄到放不下文字时应按单行量，而不是折成极窄的多行"
         );
+    }
+}
+
+/// 复选/单选标签在钉死高度下折行溢出：真实文字引擎 + 真实 layout/paint。
+#[cfg(test)]
+mod overflow_tests {
+    use crate::signal::signal;
+    use crate::ui::text_fit::ink::*;
+    use crate::ui::Element;
+
+    fn checkbox() -> Element {
+        Element::checkbox(LONG_LATIN, signal(false)).font_size(13.0)
+    }
+
+    fn radio() -> Element {
+        Element::radio(LONG_LATIN, signal(1usize), 0).font_size(13.0)
+    }
+
+    /// 显式宽高：标签折行后不得画出 bounds。
+    #[test]
+    fn wrapped_toggle_labels_stay_inside_bounds_explicit_width() {
+        assert_wraps_taller(LONG_LATIN, 13.0, 150, 20);
+        for (what, el) in [("CheckBox", checkbox()), ("Radio", radio())] {
+            let el = Element::col().children([
+                el.width(150).height(20),
+                Element::col().height(80).width_match(),
+            ]);
+            let (pm, b) = paint_first_child(el, 200, 100);
+            assert_eq!((b.w, b.h), (150, 20));
+            assert_no_ink_outside(&pm, b, &format!("{what} 显式宽"));
+        }
+    }
+
+    /// Wrap 宽：测量按父宽折行撑高，但钉了高度时同样不得出界。
+    #[test]
+    fn wrapped_toggle_labels_stay_inside_bounds_wrap_width() {
+        assert_wraps_taller(LONG_LATIN, 13.0, 150, 20);
+        for (what, el) in [("CheckBox", checkbox()), ("Radio", radio())] {
+            let el = Element::col()
+                .width_match()
+                .children([el.height(20), Element::col().height(80).width_match()]);
+            let (pm, b) = paint_first_child(el, 150, 100);
+            assert!(b.w <= 150, "{what}：Wrap 宽应受父宽约束：{b:?}");
+            assert_no_ink_outside(&pm, b, &format!("{what} Wrap 宽"));
+        }
+    }
+}
+
+/// 滑块值标签：宽度随字号放宽，大字号下 "100%" 完整显示；兜底的单行截断保证不折行画出
+/// bounds。
+#[cfg(test)]
+mod slider_value_overflow_tests {
+    use crate::core::Widget;
+    use crate::geometry::{Color, Rect, Size};
+    use crate::render::{Canvas, SkiaCanvas};
+    use crate::signal::signal;
+    use crate::style::Style;
+    use crate::text::TextStyle;
+    use crate::ui::text_fit::ink::*;
+    use crate::ui::Element;
+
+    /// 大字号下值标签区画的就是完整的 "100%"：与同一矩形里直接画 "100%" 逐像素一致。
+    /// 标签宽钉死 44px 时这里画的是 "10…"。
+    #[test]
+    fn large_font_value_label_shows_full_text() {
+        assert_single_line_wider_than("100%", 24.0, super::VALUE_LABEL_W);
+        let mut slider = super::Slider::new(signal(1.0f32));
+        slider.set_show_value(true);
+        let style = Style {
+            font_size: Some(24.0),
+            ..Style::default()
+        };
+        let mut eng = engine();
+        let size = slider.measure(Size::new(400, 100), &style, &mut eng);
+        let label_w = slider.label_w.get();
+        let label = Rect::new(size.w - label_w, 0, label_w, size.h);
+        let bounds = Rect::new(0, 0, size.w, size.h);
+
+        let mut got = tiny_skia::Pixmap::new(size.w as u32, size.h as u32).unwrap();
+        got.fill(tiny_skia::Color::WHITE);
+        let mut cv = SkiaCanvas::with_text(&mut got, &mut eng, 1.0);
+        slider.paint(bounds, bounds, false, true, &mut cv, &style);
+        drop(cv);
+
+        let mut want = tiny_skia::Pixmap::new(size.w as u32, size.h as u32).unwrap();
+        want.fill(tiny_skia::Color::WHITE);
+        let mut cv = SkiaCanvas::with_text(&mut want, &mut eng, 1.0);
+        let color: Color = crate::theme::current().palette.text;
+        cv.draw_text(
+            "100%",
+            label,
+            color,
+            crate::spec::Align::Center,
+            &TextStyle::of(&style),
+        );
+        drop(cv);
+
+        // 旋钮右缘恰在标签左缘，抗锯齿会落进首列，跳过它。
+        let inner = Rect::new(label.x + 1, label.y, label.w - 1, label.h);
+        assert!(ink_in(&want, inner) > 0, "正控：期望图里应有字");
+        let (gw, ww) = (got.width() as i32, want.width() as i32);
+        assert_eq!(gw, ww);
+        for y in inner.y..inner.bottom() {
+            for x in inner.x..inner.right() {
+                let i = ((y * gw + x) * 4) as usize;
+                assert_eq!(
+                    got.data()[i..i + 4],
+                    want.data()[i..i + 4],
+                    "({x},{y}) 与完整的 \"100%\" 不一致：值标签被截断了"
+                );
+            }
+        }
+    }
+
+    fn slider() -> Element {
+        Element::slider(signal(1.0f32))
+            .show_value(true)
+            .font_size(24.0)
+    }
+
+    /// 显式宽比值标签还窄：标签区不得被推到 bounds 左侧之外。
+    #[test]
+    fn narrow_slider_value_label_stays_inside_bounds() {
+        for w in [20, 40, 60] {
+            let el = Element::row().children([Element::col().width(80), slider().width(w)]);
+            let (pm, b) = paint_at(el, 300, 80, &[1]);
+            assert_eq!(b.w, w);
+            assert_no_ink_outside(&pm, b, &format!("宽 {w} 的 Slider"));
+        }
+    }
+
+    #[test]
+    fn large_value_label_stays_inside_bounds() {
+        assert_single_line_wider_than("100%", 24.0, super::VALUE_LABEL_W);
+        for (what, el, win_w) in [
+            ("显式宽", slider().width(200), 260),
+            ("Wrap 宽", slider(), 200),
+        ] {
+            let el = Element::col()
+                .width_match()
+                .children([el, Element::col().height(80).width_match()]);
+            let (pm, b) = paint_first_child(el, win_w, 150);
+            assert_no_ink_outside(&pm, b, &format!("Slider 值标签 {what}"));
+        }
     }
 }

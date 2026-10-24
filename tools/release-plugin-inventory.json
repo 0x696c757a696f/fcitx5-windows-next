@@ -10,12 +10,12 @@
       "license": "LGPL-2.1-or-later",
       "source": {
         "repository": "https://github.com/fcitx/fcitx5-rime.git",
-        "commit": "4e996319edea790495edc2c91893e9af4c4e6d6a"
+        "commit": "f5048611ea60e53955d5f013f608551e85d38f09"
       },
       "build": {
         "script": "tools/bootstrap-fcitx.ps1",
         "dependencies": [
-          {"name": "librime", "commit": "33e78140250125871856cdc5b42ddc6a5fcd3cd4", "license": "BSD-3-Clause"},
+          {"name": "librime", "commit": "1b3417d2b6a11b5e50e0e1fa9dc396056aa11dce", "license": "BSD-3-Clause"},
           {"name": "librime-data", "version": "0.0.0.20251229-1", "license": "BSD-3-Clause"}
         ]
       },
@@ -33,7 +33,7 @@
       "license": "LGPL-2.1-or-later",
       "source": {
         "repository": "https://github.com/fcitx/fcitx5-lua.git",
-        "commit": "05db9ee519d448a64ccbe216044e8e0342e8c536"
+        "commit": "9bf8d3dd2c6240d8e3e194d09547acbfa6a81204"
       },
       "build": {
         "script": "tools/bootstrap-fcitx.ps1",
@@ -57,7 +57,7 @@
       "license": "GPL-2.0-or-later",
       "source": {
         "repository": "https://github.com/fcitx/fcitx5-unikey.git",
-        "commit": "53f82a1e01dc0484f46dc8ed419d586cebd2f114"
+        "commit": "ed9170c35c1a6275d105e03d7f9bc4f674c1469c"
       },
       "build": {
         "script": "tools/bootstrap-fcitx.ps1",

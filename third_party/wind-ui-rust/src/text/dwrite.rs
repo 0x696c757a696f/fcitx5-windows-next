@@ -15,29 +15,31 @@
 //! 再由我们自己做标准预乘 source-over——见 [`glyph_backdrop`] 与
 //! [`composite_glyph_over_translucent`]。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 use windows::core::{implement, IUnknown, Interface, Ref, Result, BOOL, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, DWRITE_E_NOCOLOR, FALSE};
+use windows::Win32::Foundation::{COLORREF, DWRITE_E_NOCOLOR, ERROR_INSUFFICIENT_BUFFER, FALSE};
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteBitmapRenderTarget, IDWriteFactory, IDWriteFactory2,
-    IDWriteFactory3, IDWriteFontCollection, IDWriteFontCollection1, IDWriteFontSetBuilder1,
-    IDWriteGdiInterop, IDWriteInlineObject, IDWriteLocalizedStrings, IDWritePixelSnapping_Impl,
-    IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextLayout, IDWriteTextRenderer,
-    IDWriteTextRenderer_Impl, DWRITE_COLOR_F, DWRITE_FACTORY_TYPE_SHARED,
+    IDWriteFactory3, IDWriteFont1, IDWriteFontCollection, IDWriteFontCollection1,
+    IDWriteFontSetBuilder1, IDWriteGdiInterop, IDWriteInlineObject, IDWriteLocalizedStrings,
+    IDWritePixelSnapping_Impl, IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextLayout,
+    IDWriteTextRenderer, IDWriteTextRenderer_Impl, DWRITE_COLOR_F, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION,
     DWRITE_LINE_METRICS, DWRITE_LINE_SPACING_METHOD_UNIFORM, DWRITE_MATRIX, DWRITE_MEASURING_MODE,
     DWRITE_STRIKETHROUGH, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_UNDERLINE,
+    DWRITE_UNICODE_RANGE,
 };
 use windows::Win32::Graphics::Gdi::{
     GetCurrentObject, GetObjectW, DEFAULT_CHARSET, DIBSECTION, LOGFONTW, OBJ_BITMAP,
 };
 
-use super::{LineMetrics, TextEngine, TextStyle};
+use super::{FontCoverage, LineMetrics, TextEngine, TextStyle};
 use crate::geometry::{Color, Rect, Size};
 use crate::spec::Align;
 
@@ -50,7 +52,8 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-const DEFAULT_FAMILY: &str = "Microsoft YaHei UI"; // 中文友好的默认字体
+/// 中文友好的默认字体。软引擎与 D2D 后端共用这一份，两后端字体才一致。
+pub(crate) const DEFAULT_FAMILY: &str = "Microsoft YaHei UI";
 
 /// 扫描 UTF-16 序列，返回私用区（PUA）字符的连续段 `[(起始下标, 码元长度)]`。
 /// 下标/长度均以 **UTF-16 码元** 计，可直接用作 `DWRITE_TEXT_RANGE`。
@@ -115,7 +118,7 @@ fn pua_runs(wide: &[u16]) -> Vec<(usize, usize)> {
 ///
 /// `Clone` 是 COM 的 AddRef，廉价；引擎创建时从注册表克隆一份持有。
 #[derive(Clone)]
-struct PrivateUseFont {
+pub(crate) struct PrivateUseFont {
     collection: IDWriteFontCollection1,
     family: Vec<u16>,
 }
@@ -158,8 +161,9 @@ fn build_private_use_font(path: &str, family: &str) -> Result<PrivateUseFont> {
 /// - `family`：字体文件**内部的家族名**（不是文件名）——双击字体文件即可在预览窗口顶部
 ///   看到。它无法从路径推断，必须显式给出；写错的表现是图标仍为方框。
 ///
-/// **须在 [`crate::app::App::run`] 之前调用**：文字引擎在窗口创建时读取本注册表。
-/// 运行期改字体请拿 [`DWriteEngine::set_private_use_font`]（它会一并清测量缓存）。
+/// **须在 [`crate::app::App::run`] 之前调用**：软渲染引擎与 GPU 后端都在窗口创建时读取
+/// 本注册表、各持一份快照，之后再注册只影响新开的窗口。已开窗口不支持运行期更换；
+/// [`DWriteEngine::set_private_use_font`] 只作用于自己构造的独立引擎。
 ///
 /// 失败返回 `Err`（文件不存在、格式不受支持等），此时保持未注册状态——图标渲染为方框，
 /// 其余文本不受影响。重复调用以最后一次为准。
@@ -167,6 +171,31 @@ pub fn register_private_use_font(path: &str, family: &str) -> Result<()> {
     let puf = build_private_use_font(path, family)?;
     PRIVATE_USE_FONT.with(|f| *f.borrow_mut() = Some(puf));
     Ok(())
+}
+
+/// 把 `layout` 中的私用区段切到 `puf`。无私用区字符时不做任何事。
+///
+/// 走**字体集 + 家族名**而非 DirectWrite 的 fallback 机制：后者按脚本/语言匹配，
+/// 私用区没有脚本归属，匹配不到。
+pub(crate) fn apply_private_use(puf: &PrivateUseFont, layout: &IDWriteTextLayout, text_w: &[u16]) {
+    for (start, len) in pua_runs(text_w) {
+        let range = DWRITE_TEXT_RANGE {
+            startPosition: start as u32,
+            length: len as u32,
+        };
+        unsafe {
+            let _ = layout.SetFontCollection(&puf.collection, range);
+            let _ = layout.SetFontFamilyName(PCWSTR(puf.family.as_ptr()), range);
+        }
+    }
+}
+
+/// 当前已注册的私用区回退字体（见 [`register_private_use_font`]）的一份快照。
+///
+/// 软引擎与 D2D 后端都在**创建时**取一次、此后持有不变——两边同一时刻取、同一语义，
+/// 违约在运行期再注册也只影响之后建的窗口，不会让同一窗口的测量与绘制各用各的字体。
+pub(crate) fn registered_private_use_font() -> Option<PrivateUseFont> {
+    PRIVATE_USE_FONT.with(|f| f.borrow().clone())
 }
 
 /// 文本测量缓存容量上限；满则整体清空（周期性重测，命中率仍极高）。
@@ -291,7 +320,8 @@ pub struct DWriteEngine {
     /// 文本测量缓存：键为 (文本+字体+字号+换行宽+字重+行高+scale) 的 64 位哈希，值为逻辑尺寸。
     /// 避免每帧对稳定文本重复 CreateTextLayout/GetMetrics（DirectWrite COM 往返昂贵）。
     /// 用哈希键省去每次查表的字符串分配；64 位空间碰撞概率可忽略。
-    measure_cache: HashMap<u64, Size>,
+    /// 值的第二项是未取整的逻辑宽（含尾随空白），供 `advance`。
+    measure_cache: HashMap<u64, (Size, f32)>,
     /// 基线度量缓存：键与 measure 同要素（无 max_width），值为逻辑 LineMetrics。
     /// 富文本每个碎片都要问基线，缓存后 COM 往返只发生在首次。
     metrics_cache: HashMap<u64, LineMetrics>,
@@ -303,9 +333,6 @@ pub struct DWriteEngine {
     bitmap_h: i32,
     /// 私用区回退字体（可选）：设置后，文本里的私用区码位改用它渲染。
     private_use: Option<PrivateUseFont>,
-    /// 字体名解析缓存：配置里写的名字 → DirectWrite 家族名 + 字体自带字重/斜体。
-    /// 见 [`DWriteEngine::resolve_family`]，解析要走 GDI 字体映射，不能每次绘字都做。
-    family_cache: HashMap<String, ResolvedFamily>,
 }
 
 /// 一个字体名解析成 DirectWrite 认得的形态。
@@ -326,14 +353,197 @@ pub struct DWriteEngine {
 /// 解析把 GDI 名交给 GDI 字体映射，反查出真正的 DirectWrite 字体，取回它的家族名与
 /// **字体自带的字重**。所以选「思源宋体 SemiBold」不只是能显示了，字重也真的是
 /// SemiBold——用户想要的「能选字重」由此一并落地，不必再加一个配置项。
+///
+/// 软引擎与 D2D 后端都经 [`font_choice`] 走这一层——只有一边走的话，同一个字体名
+/// 换个渲染后端就时灵时不灵。
 #[derive(Clone, Debug, PartialEq)]
-struct ResolvedFamily {
+pub(crate) struct ResolvedFamily {
     /// DirectWrite 家族名，交给 `CreateTextFormat`。
-    family: String,
-    /// 字体条目自带的字重。仅在调用方**没有显式要求字重**时采用，见 `format`。
-    weight: u16,
+    pub(crate) family: String,
+    /// 字体条目自带的字重。仅在调用方**没有显式要求字重**时采用，见 [`font_choice`]。
+    pub(crate) weight: u16,
     /// 字体条目自带的斜体。与 `weight` 同理。
-    italic: bool,
+    pub(crate) italic: bool,
+}
+
+thread_local! {
+    /// 字体名解析缓存：配置里写的名字 → DirectWrite 家族名 + 字体自带字重/斜体。
+    /// 解析要走 GDI 字体映射，不能每次建格式都做。
+    ///
+    /// 放线程局部而非引擎字段：软引擎与 D2D 后端各持一份工厂，但
+    /// `DWRITE_FACTORY_TYPE_SHARED` 下系统字体集是同一个，解析结果两边通用。
+    /// DirectWrite 对象本就只在 UI 线程上用，线程局部正合其约束。
+    ///
+    /// 不失效：一个名字解析一次，线程存续期间结果不变。D2D 的 layout 缓存以调用方原值
+    /// 做键正依赖这一点——将来若加失效（如监听字体安装），须一并清空那份缓存。
+    ///
+    /// 值为 `None` 表示本机没装这个名字的字体（见 [`family_available`]）。
+    static FAMILY_CACHE: RefCell<HashMap<String, Option<ResolvedFamily>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// 一段文字最终交给 `CreateTextFormat` 的字体：家族名 + 字重 + 斜体。
+///
+/// 家族名先过一层解析（理由见 [`ResolvedFamily`]）；调用方显式要的字重优先，没要求
+/// （常规）时才采用字体条目自带的字重——否则主题里写死的粗体标题会被「用户选了个
+/// Light 字体」悄悄改细。斜体同理。
+pub(crate) fn font_choice(factory: &IDWriteFactory, ts: &TextStyle) -> ResolvedFamily {
+    let name = ts.family_or_default().unwrap_or(DEFAULT_FAMILY);
+    // 没装的名字原样交给 DirectWrite，由它自己回退——与加解析层之前的行为一致。
+    let resolved = resolve_family(factory, name).unwrap_or_else(|| ResolvedFamily {
+        family: name.to_string(),
+        weight: crate::text::WEIGHT_NORMAL,
+        italic: false,
+    });
+    ResolvedFamily {
+        weight: if ts.weight == crate::text::WEIGHT_NORMAL {
+            resolved.weight
+        } else {
+            ts.weight
+        },
+        italic: ts.italic || resolved.italic,
+        family: resolved.family,
+    }
+}
+
+/// 把配置里写的字体名解析成 DirectWrite 认得的家族名（+ 字体自带字重/斜体）。
+/// 语义与代价见 [`ResolvedFamily`]；结果按名字缓存，同一个名字只解析一次。
+/// 本机没装这个名字的字体时返回 `None`。
+fn resolve_family(factory: &IDWriteFactory, name: &str) -> Option<ResolvedFamily> {
+    if let Some(r) = FAMILY_CACHE.with(|c| c.borrow().get(name).cloned()) {
+        return r;
+    }
+    let resolved = resolve_family_uncached(factory, name);
+    FAMILY_CACHE.with(|c| c.borrow_mut().insert(name.to_string(), resolved.clone()));
+    resolved
+}
+
+fn resolve_family_uncached(factory: &IDWriteFactory, name: &str) -> Option<ResolvedFamily> {
+    unsafe {
+        // 1. DirectWrite 自己就认这个家族名：原样用。绝大多数字体走这条，不碰 GDI。
+        let mut coll: Option<IDWriteFontCollection> = None;
+        factory.GetSystemFontCollection(&mut coll, false).ok()?;
+        let name_w = wide_nul(name);
+        let mut index = 0u32;
+        let mut exists = FALSE;
+        if coll?
+            .FindFamilyName(PCWSTR(name_w.as_ptr()), &mut index, &mut exists)
+            .is_ok()
+            && exists.as_bool()
+        {
+            return Some(ResolvedFamily {
+                family: name.to_string(),
+                weight: crate::text::WEIGHT_NORMAL,
+                italic: false,
+            });
+        }
+        // 2. 不认：当作 GDI face name 反查。名字本就是 GDI 枚举出来的，这一步能中。
+        let mut lf = LOGFONTW {
+            // FW_DONTCARE：让 GDI 挑该 face 的原生字重，而不是硬按常规去匹配——
+            // 「思源宋体 SemiBold」的原生字重正是我们要取回的那个值。
+            lfWeight: 0,
+            lfCharSet: DEFAULT_CHARSET,
+            ..Default::default()
+        };
+        // lfFaceName 是 32 个 u16 的定长数组且必须留 NUL：超长名字截断，不溢出。
+        let name_w: Vec<u16> = name.encode_utf16().take(lf.lfFaceName.len() - 1).collect();
+        lf.lfFaceName[..name_w.len()].copy_from_slice(&name_w);
+        let font = factory
+            .GetGdiInterop()
+            .ok()?
+            .CreateFontFromLOGFONT(&lf)
+            .ok()?;
+        let names = font.GetFontFamily().and_then(|f| f.GetFamilyNames()).ok()?;
+        Some(ResolvedFamily {
+            family: localized_string(&names)?,
+            weight: font.GetWeight().0 as u16,
+            italic: font.GetStyle() != DWRITE_FONT_STYLE_NORMAL,
+        })
+    }
+}
+
+/// 本机是否装了名为 `name` 的字体。
+///
+/// 判据与渲染**同源**：走的正是 `font_family` 绘字前那一层族名解析，所以 DirectWrite
+/// 家族名（「思源宋体」）与 GDI 族名（「思源宋体 SemiBold」，字体选择界面通常列的是这种）
+/// 都认；这里说有，`.font_family(name)` 就真能用上它。大小写不敏感。
+///
+/// 结果按名字缓存（线程局部：同一线程上与渲染共用一份），运行期间新装的字体看不到。
+/// 空名字恒为 `false`。
+///
+/// **仅 Windows**（`#[cfg(windows)]`）。
+pub fn family_available(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let Ok(factory) =
+        (unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) })
+    else {
+        return false;
+    };
+    resolve_family(&factory, name).is_some()
+}
+
+/// 名为 `name` 的字体覆盖哪些 Unicode 码位；没装时返回 `None`。
+///
+/// `None` 也可能是系统太旧（无 `IDWriteFont1`）或系统调用失败——此时 [`family_available`]
+/// 可能仍为 `true`。覆盖表本身**不缓存**，每次调用都完整查一遍，请调用方存起来。
+///
+/// 一次取回整款字体的覆盖区间（全部平面，不只 BMP——CJK 扩展 B 区以后的生僻字都在辅助
+/// 平面），之后用 [`FontCoverage::contains`] / [`FontCoverage::missing`] 在本地判定，
+/// 排版热路径不再走系统调用。
+///
+/// 名字解析与 [`family_available`] 同源；带字重后缀的 GDI 名取的是**那一款**字重的
+/// 字体文件——同一族的不同字重覆盖范围可能不同（常见于只给常规体补全字符集的字体）。
+/// 覆盖表对应名字本身指向的字面，不跟调用方另设的 `font_weight` / 斜体走。
+///
+/// **仅 Windows**（`#[cfg(windows)]`）。需要 Windows 8 及以上（`IDWriteFont1`）。
+pub fn font_coverage(name: &str) -> Option<FontCoverage> {
+    let factory: IDWriteFactory =
+        unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }.ok()?;
+    let r = resolve_family(&factory, name)?;
+    unsafe {
+        let mut coll: Option<IDWriteFontCollection> = None;
+        factory.GetSystemFontCollection(&mut coll, false).ok()?;
+        let coll = coll?;
+        let fam_w = wide_nul(&r.family);
+        let mut index = 0u32;
+        let mut exists = FALSE;
+        coll.FindFamilyName(PCWSTR(fam_w.as_ptr()), &mut index, &mut exists)
+            .ok()?;
+        if !exists.as_bool() {
+            return None;
+        }
+        let font: IDWriteFont1 = coll
+            .GetFontFamily(index)
+            .ok()?
+            .GetFirstMatchingFont(
+                DWRITE_FONT_WEIGHT(r.weight as i32),
+                DWRITE_FONT_STRETCH_NORMAL,
+                if r.italic {
+                    DWRITE_FONT_STYLE_ITALIC
+                } else {
+                    DWRITE_FONT_STYLE_NORMAL
+                },
+            )
+            .ok()?
+            .cast()
+            .ok()?;
+        // 两段式取数：先问个数（返回 E_NOT_SUFFICIENT_BUFFER 属正常），再按个数取。
+        // 其余错误不能吞：count 停在 0 会得到一张空表，调用方会当成「装了但一个字都没有」。
+        let mut count = 0u32;
+        if let Err(e) = font.GetUnicodeRanges(None, &mut count) {
+            if e.code() != ERROR_INSUFFICIENT_BUFFER.to_hresult() {
+                return None;
+            }
+        }
+        let mut buf = vec![DWRITE_UNICODE_RANGE::default(); count as usize];
+        font.GetUnicodeRanges(Some(&mut buf), &mut count).ok()?;
+        buf.truncate(count as usize);
+        Some(FontCoverage::from_ranges(
+            buf.iter().map(|r| r.first..=r.last),
+        ))
+    }
 }
 
 impl DWriteEngine {
@@ -368,75 +578,7 @@ impl DWriteEngine {
                 bitmap_h: 0,
                 // 取启动时注册的回退字体（见 `register_private_use_font`）。此刻缓存尚空，
                 // 故无需失效处理；运行期改字体走 `set_private_use_font`，它自己清缓存。
-                private_use: PRIVATE_USE_FONT.with(|f| f.borrow().clone()),
-                family_cache: HashMap::new(),
-            }
-        }
-    }
-
-    /// 把配置里写的字体名解析成 DirectWrite 认得的家族名（+ 字体自带字重/斜体）。
-    /// 语义与代价见 [`ResolvedFamily`]；结果按名字缓存，同一个名字只解析一次。
-    fn resolve_family(&mut self, name: &str) -> ResolvedFamily {
-        if let Some(r) = self.family_cache.get(name) {
-            return r.clone();
-        }
-        let resolved = self.resolve_family_uncached(name);
-        self.family_cache.insert(name.to_string(), resolved.clone());
-        resolved
-    }
-
-    fn resolve_family_uncached(&self, name: &str) -> ResolvedFamily {
-        // 解析不出来就原样交给 DirectWrite——行为与加这层之前完全一致，不会更差。
-        let as_is = ResolvedFamily {
-            family: name.to_string(),
-            weight: crate::text::WEIGHT_NORMAL,
-            italic: false,
-        };
-        unsafe {
-            // 1. DirectWrite 自己就认这个家族名：原样用。绝大多数字体走这条，不碰 GDI。
-            let mut coll: Option<IDWriteFontCollection> = None;
-            if self
-                .factory
-                .GetSystemFontCollection(&mut coll, false)
-                .is_ok()
-            {
-                if let Some(coll) = coll {
-                    let name_w = wide_nul(name);
-                    let mut index = 0u32;
-                    let mut exists = FALSE;
-                    if coll
-                        .FindFamilyName(PCWSTR(name_w.as_ptr()), &mut index, &mut exists)
-                        .is_ok()
-                        && exists.as_bool()
-                    {
-                        return as_is;
-                    }
-                }
-            }
-            // 2. 不认：当作 GDI face name 反查。名字本就是 GDI 枚举出来的，这一步能中。
-            let mut lf = LOGFONTW {
-                // FW_DONTCARE：让 GDI 挑该 face 的原生字重，而不是硬按常规去匹配——
-                // 「思源宋体 SemiBold」的原生字重正是我们要取回的那个值。
-                lfWeight: 0,
-                lfCharSet: DEFAULT_CHARSET,
-                ..Default::default()
-            };
-            // lfFaceName 是 32 个 u16 的定长数组且必须留 NUL：超长名字截断，不溢出。
-            let name_w: Vec<u16> = name.encode_utf16().take(lf.lfFaceName.len() - 1).collect();
-            lf.lfFaceName[..name_w.len()].copy_from_slice(&name_w);
-            let Ok(font) = self.gdi_interop.CreateFontFromLOGFONT(&lf) else {
-                return as_is;
-            };
-            let Ok(names) = font.GetFontFamily().and_then(|f| f.GetFamilyNames()) else {
-                return as_is;
-            };
-            let Some(family) = localized_string(&names) else {
-                return as_is;
-            };
-            ResolvedFamily {
-                family,
-                weight: font.GetWeight().0 as u16,
-                italic: font.GetStyle() != DWRITE_FONT_STYLE_NORMAL,
+                private_use: registered_private_use_font(),
             }
         }
     }
@@ -453,23 +595,10 @@ impl DWriteEngine {
         Ok(())
     }
 
-    /// 把 `layout` 中的私用区段切到回退字体。无回退字体或无私用区字符时不做任何事。
-    ///
-    /// 走**字体集 + 家族名**而非 DirectWrite 的 fallback 机制：后者按脚本/语言匹配，
-    /// 私用区没有脚本归属，匹配不到。
+    /// 把 `layout` 中的私用区段切到本引擎的回退字体，见 [`apply_private_use`]。
     fn apply_private_use(&self, layout: &IDWriteTextLayout, text_w: &[u16]) {
-        let Some(puf) = &self.private_use else {
-            return;
-        };
-        for (start, len) in pua_runs(text_w) {
-            let range = DWRITE_TEXT_RANGE {
-                startPosition: start as u32,
-                length: len as u32,
-            };
-            unsafe {
-                let _ = layout.SetFontCollection(&puf.collection, range);
-                let _ = layout.SetFontFamilyName(PCWSTR(puf.family.as_ptr()), range);
-            }
+        if let Some(puf) = &self.private_use {
+            apply_private_use(puf, layout, text_w);
         }
     }
 
@@ -477,16 +606,11 @@ impl DWriteEngine {
     fn format(&mut self, ts: &TextStyle, psize: f32) -> Option<IDWriteTextFormat> {
         // 家族名先过一层解析：界面用 GDI 名列字体，这里要的是 DirectWrite 家族名，
         // 两者对不上时字体会静默失效。理由见 [`ResolvedFamily`]。
-        let resolved = self.resolve_family(ts.family.unwrap_or(DEFAULT_FAMILY));
-        let fam = resolved.family;
-        // 调用方显式要的字重优先；没要求（常规）时才采用字体条目自带的字重——否则
-        // 主题里写死的粗体标题会被「用户选了个 Light 字体」悄悄改细。斜体同理。
-        let weight = if ts.weight == crate::text::WEIGHT_NORMAL {
-            resolved.weight
-        } else {
-            ts.weight
-        };
-        let italic = ts.italic || resolved.italic;
+        let ResolvedFamily {
+            family: fam,
+            weight,
+            italic,
+        } = font_choice(&self.factory, ts);
         // 行距进缓存键：同字族同字号但行距不同，是两套格式。漏掉它会让先构造的那套
         // 被后者复用，表现为行高时灵时不灵——取决于谁先进缓存。
         let lh_key = ts.line_height.map(f32::to_bits);
@@ -580,33 +704,24 @@ impl Default for DWriteEngine {
     }
 }
 
-impl TextEngine for DWriteEngine {
-    fn set_scale(&mut self, scale: f32) {
-        let new = scale.max(0.1);
-        if new != self.scale {
-            // scale 变更使所有缓存尺寸失效（物理字号变了）。
-            self.measure_cache.clear();
-            self.metrics_cache.clear();
-        }
-        self.scale = new;
-    }
-
-    fn scale(&self) -> f32 {
-        self.scale
-    }
-
-    fn measure(&mut self, text: &str, ts: &TextStyle, max_width: Option<f32>) -> Size {
+impl DWriteEngine {
+    /// `measure` 与 `advance` 的共同实现：返回 (逻辑尺寸, 未取整的逻辑宽)。两者同一次
+    /// 排版、同一份缓存，`advance` 的宽度因此就是绘制用的那个 advance。
+    fn measure_raw(&mut self, text: &str, ts: &TextStyle, max_width: Option<f32>) -> (Size, f32) {
         let size = ts.size;
         if text.is_empty() {
             // 空串也要占一行的高度，否则空标签会把周围布局吸扁。
-            return Size::new(0, ts.line_height_px().unwrap_or(size).ceil() as i32);
+            return (
+                Size::new(0, ts.line_height_px().unwrap_or(size).ceil() as i32),
+                0.0,
+            );
         }
         // 缓存键：把所有影响排版的输入哈希成 64 位（含线程局部字重与当前 scale）。
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             text.hash(&mut h);
-            ts.family.hash(&mut h);
+            ts.family_or_default().hash(&mut h);
             size.to_bits().hash(&mut h);
             max_width.map(f32::to_bits).hash(&mut h);
             ts.weight.hash(&mut h);
@@ -623,22 +738,44 @@ impl TextEngine for DWriteEngine {
         let psize = size * s;
         let pmw = max_width.map(|w| w * s).unwrap_or(f32::MAX);
         let Some(layout) = self.layout(text, ts, psize, pmw) else {
-            return Size::new(0, size.ceil() as i32);
+            return (Size::new(0, size.ceil() as i32), 0.0);
         };
         let mut m = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&mut m).ok() };
         // width 不含尾随空白宽度，连续空格会被折叠为同一测量值，导致光标定位到
         // 尾随空格处时 x 坐标不再前进；改用 widthIncludingTrailingWhitespace。
-        let sz = Size::new(
-            (m.widthIncludingTrailingWhitespace / s).ceil() as i32,
-            (m.height / s).ceil() as i32,
-        );
+        let w = m.widthIncludingTrailingWhitespace / s;
+        let out = (Size::new(w.ceil() as i32, (m.height / s).ceil() as i32), w);
         // 容量上限：满则清空（稳定 UI 下命中率仍极高）。
         if self.measure_cache.len() >= MEASURE_CACHE_CAP {
             self.measure_cache.clear();
         }
-        self.measure_cache.insert(key, sz);
-        sz
+        self.measure_cache.insert(key, out);
+        out
+    }
+}
+
+impl TextEngine for DWriteEngine {
+    fn set_scale(&mut self, scale: f32) {
+        let new = scale.max(0.1);
+        if new != self.scale {
+            // scale 变更使所有缓存尺寸失效（物理字号变了）。
+            self.measure_cache.clear();
+            self.metrics_cache.clear();
+        }
+        self.scale = new;
+    }
+
+    fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    fn measure(&mut self, text: &str, ts: &TextStyle, max_width: Option<f32>) -> Size {
+        self.measure_raw(text, ts, max_width).0
+    }
+
+    fn advance(&mut self, text: &str, ts: &TextStyle) -> f32 {
+        self.measure_raw(text, ts, None).1
     }
 
     fn line_metrics(&mut self, text: &str, ts: &TextStyle) -> LineMetrics {
@@ -657,7 +794,7 @@ impl TextEngine for DWriteEngine {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             text.hash(&mut h);
-            ts.family.hash(&mut h);
+            ts.family_or_default().hash(&mut h);
             ts.size.to_bits().hash(&mut h);
             ts.weight.hash(&mut h);
             ts.italic.hash(&mut h);
@@ -728,7 +865,7 @@ impl TextEngine for DWriteEngine {
         let ph = pixmap.height() as i32;
         // 文本完整物理宽度——单行横向超长时可远超 pixmap 宽。
         let mw = m.width.ceil().max(1.0) as i32;
-        let th = (m.height.ceil().max(1.0) as i32).min(ph);
+        let full_th = m.height.ceil().max(1.0) as i32;
 
         // 文本原点 X（pixmap 物理坐标）：按对齐用**完整**文本宽度推算，
         // 故横向滚动后 prect.x 为负、或文本宽超窗口时定位仍正确。
@@ -752,6 +889,22 @@ impl TextEngine for DWriteEngine {
         }
         let tw = vis1 - vis0; // 可见宽度（恒 <= pixmap 宽）
         let glyph_dx = (text_x0 - vis0) as f32; // 字形横向偏移：滚动右移时为负
+
+        // 竖直同理：文本块顶按**完整**高度居中，再只为可见行分配位图。不能先把高度钳到
+        // pixmap 高再居中——局部重绘的子 pixmap 只有脏区那么高，钳过的高度会让同一行字在
+        // 局部帧里比整窗帧低 `(全高 − 子图高) / 2`（行距大、脏区只罩住光标那一小条时）。
+        let text_y0 = prect.y + (prect.h - full_th).max(0) / 2;
+        let mut visy0 = text_y0.max(0);
+        let mut visy1 = (text_y0 + full_th).min(ph);
+        if let Some(c) = pclip {
+            visy0 = visy0.max(c.y);
+            visy1 = visy1.min(c.y + c.h);
+        }
+        if visy1 <= visy0 {
+            return;
+        }
+        let th = visy1 - visy0;
+        let glyph_dy = (text_y0 - visy0) as f32; // 字形纵向偏移：块顶在可见区之上时为负
 
         // 复用的离屏位图渲染目标（按需扩容）；失败则跳过该文字。
         let Some(brt) = self.ensure_bitmap(tw, th) else {
@@ -783,7 +936,7 @@ impl TextEngine for DWriteEngine {
 
         // 文字位图在 pixmap 中的目标位置（物理坐标）：可见切片起点。
         let ox = vis0;
-        let oy = prect.y + (prect.h - th).max(0) / 2;
+        let oy = visy0;
 
         // 1. 把背景从 pixmap 拷入位图（BGRA），DirectWrite 将在其上抗锯齿混合。
         //    不透明处拷真背景（gamma 由 DirectWrite 自己正确处理）；非不透明处拷探针色，
@@ -824,7 +977,7 @@ impl TextEngine for DWriteEngine {
                     Some(&ctx as *const _ as *const c_void),
                     &self.renderer,
                     glyph_dx,
-                    0.0,
+                    glyph_dy,
                 )
                 .ok()
         };
@@ -1626,13 +1779,20 @@ mod scale_contract_tests {
 /// ——正是论坛 #144 那类字体的形态，本机不装第三方字体也能复现。
 #[cfg(test)]
 mod family_resolve_tests {
-    use super::DWriteEngine;
-    use crate::text::WEIGHT_NORMAL;
+    use super::{family_available, font_choice, font_coverage, resolve_family, FAMILY_CACHE};
+    use crate::text::{TextStyle, WEIGHT_NORMAL};
+    use windows::Win32::Graphics::DirectWrite::{
+        DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED,
+    };
+
+    fn factory() -> IDWriteFactory {
+        unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("DWriteCreateFactory") }
+    }
 
     #[test]
     fn dwrite_family_is_kept_as_is() {
-        let mut e = DWriteEngine::new();
-        let r = e.resolve_family("Segoe UI");
+        let f = factory();
+        let r = resolve_family(&f, "Segoe UI").expect("Segoe UI 随系统自带");
         assert_eq!(r.family, "Segoe UI", "DirectWrite 认得的家族名应原样保留");
         assert_eq!(
             r.weight, WEIGHT_NORMAL,
@@ -1643,8 +1803,8 @@ mod family_resolve_tests {
 
     #[test]
     fn gdi_face_name_maps_to_family_and_weight() {
-        let mut e = DWriteEngine::new();
-        let r = e.resolve_family("Segoe UI Semibold");
+        let f = factory();
+        let r = resolve_family(&f, "Segoe UI Semibold").expect("Segoe UI Semibold 随系统自带");
         assert_eq!(
             r.family, "Segoe UI",
             "带字重后缀的 GDI 名应解析回 DirectWrite 家族名，否则渲染时静默落回默认字体"
@@ -1656,24 +1816,183 @@ mod family_resolve_tests {
         );
     }
 
+    /// 没装的名字判为没装（`CreateFontFromLOGFONT` 对它返回错误，不会像 GDI 那样换成
+    /// 替身——注册表 FontSubstitutes 里的替身名如 `MS Shell Dlg 2` 也一样，Win10 实测），
+    /// 绘字时原样交给 DirectWrite 自己回退。
     #[test]
-    fn unknown_name_does_not_panic() {
-        let mut e = DWriteEngine::new();
-        // GDI 字体映射对认不出的名字会替换成别的字体，取回什么名字都行——
-        // 这里守的是「不 panic、不返回空名字」，空名字会让 CreateTextFormat 失败。
-        assert!(!e.resolve_family("绝无此字体 ZZZ").family.is_empty());
+    fn unknown_name_is_reported_missing() {
+        let f = factory();
+        assert_eq!(resolve_family(&f, "绝无此字体 ZZZ"), None);
+        let mut ts = TextStyle::new(14.0);
+        ts.family = Some("绝无此字体 ZZZ");
+        assert_eq!(
+            font_choice(&f, &ts).family,
+            "绝无此字体 ZZZ",
+            "没装的名字原样交给 DirectWrite"
+        );
+    }
+
+    #[test]
+    fn availability_follows_the_same_resolution() {
+        assert!(family_available("Segoe UI"), "DirectWrite 家族名");
+        assert!(family_available("segoe ui"), "大小写不敏感");
+        assert!(family_available("Segoe UI Semibold"), "带字重后缀的 GDI 名");
+        // 带字重后缀、且 GDI 名有中文本地化版本的字体（论坛 #144 的形态），中英两个名字都认。
+        assert!(family_available("Microsoft YaHei Light"));
+        assert!(family_available("微软雅黑 Light"));
+        assert!(!family_available("绝无此字体 ZZZ"));
+        assert!(!family_available(""), "空名字恒为没装");
+    }
+
+    #[test]
+    fn coverage_reflects_the_fonts_cmap() {
+        let latin = font_coverage("Segoe UI").expect("Segoe UI 随系统自带");
+        assert!(latin.contains('A'));
+        assert!(!latin.contains('中'), "Segoe UI 不含汉字");
+        let cjk = font_coverage("Microsoft YaHei UI").expect("微软雅黑随系统自带");
+        assert!(cjk.contains('中'));
+        // 辅助平面：只取 BMP 的实现在这里会漏。
+        let emoji = font_coverage("Segoe UI Emoji").expect("Segoe UI Emoji 随系统自带");
+        assert!(emoji.contains('\u{1F600}'), "辅助平面码位须在覆盖表里");
+        assert_eq!(latin.missing("Ab中"), vec!['中']);
+        assert!(font_coverage("绝无此字体 ZZZ").is_none());
     }
 
     #[test]
     fn resolution_is_cached() {
-        let mut e = DWriteEngine::new();
-        let first = e.resolve_family("Segoe UI Semibold");
-        assert_eq!(
-            e.family_cache.len(),
-            1,
-            "解析结果应进缓存，不能每次绘字都走 GDI"
+        let f = factory();
+        let first = resolve_family(&f, "Segoe UI Semibold");
+        assert!(first.is_some());
+        let len = FAMILY_CACHE.with(|c| c.borrow().len());
+        assert!(
+            FAMILY_CACHE.with(|c| c.borrow().contains_key("Segoe UI Semibold")),
+            "解析结果应进缓存，不能每次建格式都走 GDI"
         );
-        assert_eq!(first, e.resolve_family("Segoe UI Semibold"));
-        assert_eq!(e.family_cache.len(), 1);
+        assert_eq!(first, resolve_family(&f, "Segoe UI Semibold"));
+        assert_eq!(
+            FAMILY_CACHE.with(|c| c.borrow().len()),
+            len,
+            "重复解析不应新增条目"
+        );
+    }
+
+    /// 调用方显式要的字重压过字体条目自带的；没要求时才采用自带的。
+    #[test]
+    fn explicit_weight_beats_the_face_weight() {
+        let f = factory();
+        let mut ts = TextStyle::new(14.0);
+        ts.family = Some("Segoe UI Semibold");
+        let implied = font_choice(&f, &ts);
+        assert!(
+            implied.weight > WEIGHT_NORMAL,
+            "未要求字重时应取 Semibold 自带的"
+        );
+        let bold = font_choice(&f, &ts.with_weight(800));
+        assert_eq!(bold.weight, 800, "显式字重应原样保留");
+        assert_eq!(bold.family, "Segoe UI");
+    }
+}
+
+/// 测量 / 基线缓存按**实际字族**做键（见 `TextStyle::family_or_default`）。
+#[cfg(test)]
+mod default_family_cache_tests {
+    use super::DWriteEngine;
+    use crate::text::{TextEngine, TextStyle};
+    use crate::theme::{set_current, Theme};
+
+    fn set(f: &str) {
+        set_current(std::rc::Rc::new(Theme {
+            font_family: Some(f.into()),
+            ..Theme::default()
+        }));
+    }
+
+    /// 字面量 `family: None` 换了主题默认字族后必须重测；命中旧条目就是旧字体的宽度。
+    #[test]
+    fn caches_follow_the_theme_default_family() {
+        let mut e = DWriteEngine::new();
+        e.set_scale(1.0);
+        let literal = TextStyle {
+            family: None,
+            ..TextStyle::new(14.0)
+        };
+        set("Segoe UI");
+        let a = e.measure("iiiiiiii", &literal, None);
+        e.line_metrics("iiiiiiii", &literal);
+        let (m, l) = (e.measure_cache.len(), e.metrics_cache.len());
+        set("Consolas");
+        let b = e.measure("iiiiiiii", &literal, None);
+        e.line_metrics("iiiiiiii", &literal);
+        assert_eq!(e.measure_cache.len(), m + 1, "测量缓存应是新键");
+        assert_eq!(e.metrics_cache.len(), l + 1, "基线缓存应是新键");
+        assert_ne!(a.w, b.w, "换到等宽字体后窄字母串应变宽");
+    }
+}
+
+/// 局部重绘的子画布只有脏区那么高，常常比一行文字的排版块还矮（行距大、脏区只罩住
+/// 光标那一小条）。同一行字画进这样的子画布，必须与整窗帧对应的那几行逐像素相同。
+///
+/// ★ 回归：曾先把排版高度钳到画布高再居中，子画布越矮，字在里面落得越低。
+#[cfg(test)]
+mod short_subpixmap_tests {
+    use super::{Color, DWriteEngine, Rect};
+    use crate::spec::Align;
+    use crate::text::{TextEngine, TextStyle};
+    use tiny_skia::Pixmap;
+
+    #[test]
+    fn text_in_short_subpixmap_matches_full_frame() {
+        let line = Rect::new(10, 4, 180, 56);
+        let ts = TextStyle {
+            line_height: Some(3.0),
+            ..TextStyle::new(14.0)
+        };
+        let white = tiny_skia::Color::WHITE;
+        for scale in [1.0f32, 1.25] {
+            let (w, h) = ((200.0 * scale) as u32, (80.0 * scale) as u32);
+            let mut eng = DWriteEngine::new();
+            eng.set_scale(scale);
+            let mut full = Pixmap::new(w, h).unwrap();
+            full.fill(white);
+            eng.draw(
+                &mut full,
+                "AyHg",
+                line,
+                Color::BLACK,
+                Align::Start,
+                &ts,
+                None,
+            );
+            // 子画布 = 世界坐标 y ∈ [36, 48) 那一条（× scale 为整数，同局部帧的对齐网格）。
+            let (oy, sub_h) = (36, 12);
+            let poy = (oy as f32 * scale) as u32;
+            let mut sub = Pixmap::new(w, (sub_h as f32 * scale) as u32).unwrap();
+            sub.fill(white);
+            eng.draw(
+                &mut sub,
+                "AyHg",
+                line.offset(0, -oy),
+                Color::BLACK,
+                Align::Start,
+                &ts,
+                None,
+            );
+            let sub_rows = poy..poy + sub.height();
+            assert!(
+                sub_rows
+                    .clone()
+                    .any(|y| (0..w).any(|x| full.pixel(x, y).unwrap().red() < 128)),
+                "前提：整窗帧的这一条里有字形（scale={scale}）"
+            );
+            for y in 0..sub.height() {
+                for x in 0..w {
+                    assert_eq!(
+                        sub.pixel(x, y),
+                        full.pixel(x, y + poy),
+                        "scale={scale} 子画布 ({x},{y}) 与整窗帧不同"
+                    );
+                }
+            }
+        }
     }
 }

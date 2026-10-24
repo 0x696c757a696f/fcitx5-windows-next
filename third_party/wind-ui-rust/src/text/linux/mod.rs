@@ -46,7 +46,8 @@ pub struct LinuxTextEngine {
     glyphs: HashMap<GlyphKey, Option<GlyphBmp>>,
     /// 上一代字形缓存：命中即提升回 `glyphs`。
     glyphs_old: HashMap<GlyphKey, Option<GlyphBmp>>,
-    measures: HashMap<MeasureKey, Size>,
+    /// 值的第二项是未取整的逻辑宽（单行时含尾随空白），供 `advance`。
+    measures: HashMap<MeasureKey, (Size, f32)>,
 }
 
 /// 测量缓存键。`scale` 不进键：它变了整表清空（见 `set_scale`）。
@@ -130,7 +131,7 @@ impl LinuxTextEngine {
     fn layout(&mut self, text: &str, ts: &TextStyle, max_w: Option<f32>) -> Layout {
         let ppem = (ts.size * self.scale).max(1.0);
         store::with(|st| {
-            let chain = st.chain(ts.family, ts.weight, ts.italic);
+            let chain = st.chain(ts.family_or_default(), ts.weight, ts.italic);
             let (ascent, descent, gap) = match st.primary(chain) {
                 Some(id) => {
                     let f = st.face(id);
@@ -483,6 +484,39 @@ fn blit(pm: &mut Pixmap, g: &GlyphBmp, x0: i32, y0: i32, color: Color, clip: Rec
     }
 }
 
+impl LinuxTextEngine {
+    /// `measure` 与 `advance` 的共同实现：返回 (逻辑尺寸, 未取整的逻辑宽)，同一次排版、
+    /// 同一份缓存。
+    fn measure_raw(&mut self, text: &str, ts: &TextStyle, max_width: Option<f32>) -> (Size, f32) {
+        let key = MeasureKey {
+            text: text.to_string(),
+            family: ts.family_or_default().map(str::to_string),
+            size: ts.size.to_bits(),
+            weight: ts.weight,
+            italic: ts.italic,
+            line_height: ts.line_height.map(f32::to_bits),
+            max_width: max_width.map(f32::to_bits),
+        };
+        if let Some(&hit) = self.measures.get(&key) {
+            return hit;
+        }
+        let s = self.scale;
+        let lay = self.layout(text, ts, max_width.map(|w| w * s));
+        let sz = if text.is_empty() {
+            (Size::new(0, (lay.line_h / s).ceil() as i32), 0.0)
+        } else {
+            let w = lay.lines.iter().map(|l| l.full).fold(0.0f32, f32::max) / s;
+            let h = lay.lines.len() as f32 * lay.line_h;
+            (Size::new(w.ceil() as i32, (h / s).ceil() as i32), w)
+        };
+        if self.measures.len() >= MEASURE_CACHE_MAX {
+            self.measures.clear();
+        }
+        self.measures.insert(key, sz);
+        sz
+    }
+}
+
 impl TextEngine for LinuxTextEngine {
     fn set_scale(&mut self, scale: f32) {
         let s = scale.max(0.1);
@@ -497,32 +531,11 @@ impl TextEngine for LinuxTextEngine {
     }
 
     fn measure(&mut self, text: &str, ts: &TextStyle, max_width: Option<f32>) -> Size {
-        let key = MeasureKey {
-            text: text.to_string(),
-            family: ts.family.map(str::to_string),
-            size: ts.size.to_bits(),
-            weight: ts.weight,
-            italic: ts.italic,
-            line_height: ts.line_height.map(f32::to_bits),
-            max_width: max_width.map(f32::to_bits),
-        };
-        if let Some(&sz) = self.measures.get(&key) {
-            return sz;
-        }
-        let s = self.scale;
-        let lay = self.layout(text, ts, max_width.map(|w| w * s));
-        let sz = if text.is_empty() {
-            Size::new(0, (lay.line_h / s).ceil() as i32)
-        } else {
-            let w = lay.lines.iter().map(|l| l.full).fold(0.0f32, f32::max);
-            let h = lay.lines.len() as f32 * lay.line_h;
-            Size::new((w / s).ceil() as i32, (h / s).ceil() as i32)
-        };
-        if self.measures.len() >= MEASURE_CACHE_MAX {
-            self.measures.clear();
-        }
-        self.measures.insert(key, sz);
-        sz
+        self.measure_raw(text, ts, max_width).0
+    }
+
+    fn advance(&mut self, text: &str, ts: &TextStyle) -> f32 {
+        self.measure_raw(text, ts, None).1
     }
 
     fn line_metrics(&mut self, text: &str, ts: &TextStyle) -> LineMetrics {
@@ -586,7 +599,7 @@ impl TextEngine for LinuxTextEngine {
             if line_top > bounds.bottom() as f32 || line_top + lay.line_h < bounds.y as f32 {
                 continue;
             }
-            let baseline = (line_top + lay.baseline).round() as i32;
+            let baseline = crate::geometry::round_half_up(line_top + lay.baseline);
             // 单行按含尾随空白的宽度对齐（与 Core Text 的 CTLine 一致，也与 measure 给宿主
             // 的宽度一致）；折行各行按可见宽度对齐（段落样式的惯例）。
             let lw = if single { line.full } else { line.width };
@@ -636,6 +649,34 @@ mod tests {
         let mut e = LinuxTextEngine::new();
         e.set_scale(1.0);
         e
+    }
+
+    /// 测量缓存按**实际字族**做键：字面量 `family: None` 在换了主题默认字族后必须重测，
+    /// 不能命中旧条目（那是旧字体的宽度）。只看条目数，与本机装了哪些字体无关。
+    #[test]
+    fn measure_cache_follows_the_theme_default_family() {
+        use crate::theme::{set_current, Theme};
+        let set = |f: &str| {
+            set_current(std::rc::Rc::new(Theme {
+                font_family: Some(f.into()),
+                ..Theme::default()
+            }))
+        };
+        let mut e = eng();
+        let literal = TextStyle {
+            family: None,
+            ..TextStyle::new(14.0)
+        };
+        set("DejaVu Sans");
+        e.measure("abc", &literal, None);
+        let n = e.measures.len();
+        set("DejaVu Serif");
+        e.measure("abc", &literal, None);
+        assert_eq!(
+            e.measures.len(),
+            n + 1,
+            "换默认字族后应是新键，而非命中旧宽度"
+        );
     }
 
     #[test]

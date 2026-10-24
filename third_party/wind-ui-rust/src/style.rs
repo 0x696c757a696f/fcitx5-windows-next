@@ -38,6 +38,9 @@ pub enum Role {
     AccentHover,
     AccentActive,
     OnAccent,
+    /// 强调色当前景（文字 / 描边 / 图标）用时的取值，见 `Palette::accent_text`。
+    /// 暗色主题下比 [`Role::Accent`] 亮一档，蓝字压在深色底上才读得清。
+    AccentText,
     Danger,
     /// 成功 / 已完成语义色。与 [`crate::theme::Intent::Success`] 同源于 `palette.success`。
     Success,
@@ -51,6 +54,8 @@ pub enum Role {
     InputBg,
     /// 输入框类边框（含 InputTheme 覆盖层回退）。
     InputBorder,
+    /// 模态遮罩（`Theme.modal.scrim`，含 alpha）。
+    Scrim,
 }
 
 impl Role {
@@ -75,6 +80,7 @@ impl Role {
             Role::AccentHover => p.accent_hover,
             Role::AccentActive => p.accent_active,
             Role::OnAccent => p.on_accent,
+            Role::AccentText => p.accent_text(),
             Role::Danger => p.danger,
             Role::Success => p.success,
             Role::Warning => p.warning,
@@ -82,6 +88,7 @@ impl Role {
             Role::AccordionHeaderBg => t.accordion.header_bg(p),
             Role::InputBg => t.input.bg(p),
             Role::InputBorder => t.input.border(p),
+            Role::Scrim => t.modal.scrim(p),
         }
     }
 }
@@ -95,6 +102,13 @@ pub enum Brush {
     /// 角色色 × 透明度调制（badge/chip 的"意图色 15% 淡底"模式）：
     /// paint 期解析，运行期换主题自动跟随——比为每个角色加 XxxSoft 变体正交。
     RoleAlpha(Role, f32),
+    /// 线性渐变，各 stop 取主题角色色：paint 期解析，运行期换主题（含换强调色）自动跟随。
+    /// 坐标口径同 [`Gradient::linear`]（相对绘制矩形的归一化坐标）。
+    RoleLinear {
+        start: (f32, f32),
+        end: (f32, f32),
+        stops: Vec<(f32, Role)>,
+    },
 }
 
 impl Brush {
@@ -105,6 +119,11 @@ impl Brush {
             Brush::Gradient(g) => Paint::gradient(g.clone()),
             Brush::Role(r) => Paint::fill(r.resolve(t)),
             Brush::RoleAlpha(r, a) => Paint::fill(r.resolve(t).scale_alpha(*a)),
+            Brush::RoleLinear { start, end, stops } => Paint::gradient(Gradient::linear(
+                *start,
+                *end,
+                stops.iter().map(|&(o, r)| (o, r.resolve(t))).collect(),
+            )),
         }
     }
     /// 解析出的纯色用色（Gradient 取首个 stop，用于边框 stroke）。
@@ -216,6 +235,11 @@ pub struct Style {
     pub border_edges: Edges,
     /// 圆角半径 px。
     pub corner_radius: f32,
+    /// 四角各自的半径（`Some` 时取代 `corner_radius` 绘制本节点的背景、边框与焦点环；投影按最大半径近似）。
+    ///
+    /// 自绘背景的控件（按钮、输入框等）仍按 `corner_radius` 画统一圆角——四角形状是给
+    /// 容器（卡片、面板、标签页头）用的。
+    pub corner_radii: Option<crate::geometry::Corners>,
     /// 前景/文字色（当 `fg_role` 为 None 时生效）。
     pub fg: Color,
     /// 前景主题角色（Some 时优先于 `fg`，运行期换主题跟随）。
@@ -227,8 +251,10 @@ pub struct Style {
     /// `visible_when`，外加包住它们的容器也要带同样的判定（否则父容器仍为那个高度为 0 的
     /// 容器计入 spacing）——三个节点、两处判定，表达的是"这行字有两种颜色"。
     pub fg_role_signal: Option<Signal<Role>>,
-    /// 字号 px。
-    pub font_size: f32,
+    /// 字号 px。`None`（默认）= 跟随主题 `metrics.font_md`，于布局/绘制期解析——
+    /// 改主题字号或运行期换主题时，没显式设过字号的文字全部跟着变。
+    /// 读取一律经 [`Style::font_size`]。
+    pub font_size: Option<f32>,
     /// 字重（DirectWrite 数值：400=Normal、500=Medium、600=SemiBold、700=Bold）。
     pub font_weight: u16,
     /// 字体族（None = 系统默认）。
@@ -252,6 +278,14 @@ pub struct Style {
     pub opacity: f32,
 }
 
+impl Style {
+    /// 实际生效的字号：显式设过用自己的，否则取当前主题的 `metrics.font_md`。
+    pub fn font_size(&self) -> f32 {
+        self.font_size
+            .unwrap_or_else(|| crate::theme::current().metrics.font_md)
+    }
+}
+
 impl Default for Style {
     fn default() -> Self {
         Self {
@@ -259,10 +293,11 @@ impl Default for Style {
             border: None,
             border_edges: Edges::ALL,
             corner_radius: 0.0,
+            corner_radii: None,
             fg: Color::hex(0x1A1A1A),
             fg_role: Some(Role::Text),
             fg_role_signal: None,
-            font_size: 14.0,
+            font_size: None,
             font_weight: crate::text::WEIGHT_NORMAL,
             font_family: None,
             font_italic: false,
@@ -341,6 +376,25 @@ mod tests {
         let t = Theme::default();
         let p = Brush::Role(Role::Surface).resolve_paint(&t);
         assert_eq!(p.color, t.palette.surface);
+    }
+
+    /// 角色渐变的 stop 按传入的主题解析：同一把画刷换主题即换色，不是构建期定死。
+    #[test]
+    fn brush_role_linear_resolves_stops_per_theme() {
+        let brush = Brush::RoleLinear {
+            start: (0.0, 0.0),
+            end: (1.0, 1.0),
+            stops: vec![(0.0, Role::AccentActive), (1.0, Role::Accent)],
+        };
+        let mut t = Theme::default();
+        for accent in [Color::hex(0x2F6BED), Color::hex(0x059669)] {
+            t.palette.accent = accent;
+            let p = brush.resolve_paint(&t);
+            let stops = p.gradient.as_ref().expect("应解析成渐变").stops();
+            assert_eq!(stops[0].color, t.palette.accent_active);
+            assert_eq!(stops[1].color, accent);
+            assert_eq!((stops[0].offset, stops[1].offset), (0.0, 1.0));
+        }
     }
 
     #[test]

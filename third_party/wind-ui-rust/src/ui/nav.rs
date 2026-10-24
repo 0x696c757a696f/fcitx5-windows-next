@@ -19,10 +19,10 @@ use crate::signal::Signal;
 use crate::spec::Align;
 use crate::style::Style;
 use crate::text::TextEngine;
+use crate::ui::text_fit::SingleLine;
 use crate::ui::TextContent;
 
-/// 行高（逻辑 px），NavRow 与 CollapsibleHeader 共用。
-pub const NAV_ROW_H: i32 = 40;
+/// 行内水平内边距（逻辑 px）。行高取主题 `metrics.row_h`，NavRow 与 CollapsibleHeader 共用。
 const PAD_X: i32 = 12;
 /// 右侧箭头区宽度。
 const CHEVRON_W: i32 = 20;
@@ -56,13 +56,43 @@ fn chevron_down(canvas: &mut dyn Canvas, cx: f32, cy: f32, color: crate::geometr
     );
 }
 
-/// 折叠/手风琴面板头的共用绘制：可选 hover 底色 + 左标题 + 右侧三角（展开 `v` / 收起 `>`）。
+/// 在 `(cx, cy)` 处画一个从 `>` 顺时针转过 `turn × 90°` 的箭头（展开过渡的中间态）。
+/// 端点处直接画两个静态箭头，保证终态与过渡前后逐像素一致。
+fn chevron_turning(
+    canvas: &mut dyn Canvas,
+    cx: f32,
+    cy: f32,
+    turn: f32,
+    color: crate::geometry::Color,
+) {
+    if turn <= 0.0 {
+        return chevron_right(canvas, cx, cy, color);
+    }
+    if turn >= 1.0 {
+        return chevron_down(canvas, cx, cy, color);
+    }
+    let (sin, cos) = (turn * std::f32::consts::FRAC_PI_2).sin_cos();
+    let rot = |x: f32, y: f32| (cx + x * cos - y * sin, cy + x * sin + y * cos);
+    // `>` 转满 90° 后尖端在 cy+2，而静态的 `v` 尖端在 cy+3（与下拉框同一形状）：尖端随转角
+    // 往下补那 1px，终点才与静态箭头严丝合缝，不在最后一帧跳一下。
+    let tip = rot(2.0, 0.0);
+    canvas.draw_polyline(
+        &[rot(-2.0, -4.0), (tip.0, tip.1 + turn), rot(-2.0, 4.0)],
+        1.6,
+        &Paint::fill(color),
+    );
+}
+
+/// 折叠/手风琴面板头的共用绘制：可选 hover 底色 + 左标题 + 右侧三角（`turn`：0 = 收起 `>`，
+/// 1 = 展开 `v`，中间为旋转过渡）。
 /// `CollapsibleHeader` 与 `AccordionHeader` 共用，避免重复（NavTheme 提供文字/箭头/hover 色）。
+#[allow(clippy::too_many_arguments)]
 fn paint_panel_header(
     canvas: &mut dyn Canvas,
+    fit: &SingleLine,
     bounds: Rect,
     title: &str,
-    expanded: bool,
+    turn: f32,
     hover_amount: f32,
     enabled: bool,
     style: &Style,
@@ -101,7 +131,9 @@ fn paint_panel_header(
         bounds.w - 2 * PAD_X - CHEVRON_W,
         bounds.h,
     );
-    canvas.draw_text(
+    // 行高固定：长标题截成单行，不折行画出 bounds。
+    fit.draw_text(
+        canvas,
         title,
         tr,
         text_color,
@@ -110,11 +142,26 @@ fn paint_panel_header(
     );
     let cx = bounds.x as f32 + bounds.w as f32 - PAD_X as f32 - CHEVRON_W as f32 / 2.0;
     let cy = bounds.y as f32 + bounds.h as f32 / 2.0;
-    if expanded {
-        chevron_down(canvas, cx, cy, chevron);
-    } else {
-        chevron_right(canvas, cx, cy, chevron);
+    chevron_turning(canvas, cx, cy, turn, chevron);
+}
+
+/// 据展开态推进箭头旋转补间，返回当前转角（0..1）。属位移类，减弱动效时瞬时到位。
+/// 时长与内容的进出场一致：展开 `normal`、收起 `fast`，箭头与内容同时到位。
+fn turn_amount(anim: &Cell<Transition<f32>>, expanded: bool) -> f32 {
+    let mut tr = anim.get();
+    let target = if expanded { 1.0 } else { 0.0 };
+    if tr.target() != target {
+        let th = crate::theme::current();
+        let ms = if expanded {
+            th.anim.normal()
+        } else {
+            th.anim.fast()
+        };
+        tr.retarget(target, ms, th.anim.easing());
     }
+    let v = tr.animate();
+    anim.set(tr);
+    v
 }
 
 /// 据 hover 状态推进 hover 淡入补间，返回当前淡入量（0..1）。retarget-in-paint，
@@ -138,6 +185,8 @@ pub struct NavRow {
     label: TextContent,
     state: State,
     on_click: Option<ClickFn>,
+    /// 标签单行截断。
+    fit: SingleLine,
 }
 
 impl NavRow {
@@ -146,6 +195,7 @@ impl NavRow {
             label: label.into(),
             state: State::Normal,
             on_click: None,
+            fit: SingleLine::default(),
         }
     }
     fn activate(&mut self, ctx: &mut EventCtx) {
@@ -157,7 +207,7 @@ impl NavRow {
 
 impl Widget for NavRow {
     fn measure(&self, avail: Size, _style: &Style, _text: &mut dyn TextEngine) -> Size {
-        Size::new(avail.w.max(0), NAV_ROW_H)
+        Size::new(avail.w.max(0), crate::theme::current().metrics.row_h)
     }
 
     fn paint(
@@ -198,7 +248,9 @@ impl Widget for NavRow {
             bounds.w - 2 * PAD_X - CHEVRON_W,
             bounds.h,
         );
-        canvas.draw_text(
+        // 行高固定：长标签截成单行，不折行画出 bounds。
+        self.fit.draw_text(
+            canvas,
             self.label.resolve().as_ref(),
             tr,
             text_color,
@@ -279,19 +331,28 @@ impl Widget for NavRow {
 /// 不同于 NavRow：折叠头用 `hover: bool` 而非三态、按下不 `capture()`——toggle
 /// 语义无需"拖出取消"，也无独立按压色，故不引入 Press 态。
 pub struct CollapsibleHeader {
-    title: String,
+    /// 标题。存 [`TextContent`]，paint 时现取——传 `t!` 进来换语言即跟随。
+    title: TextContent,
     expanded: Signal<bool>,
     hover: bool,
     hover_anim: Cell<Transition<f32>>,
+    /// 箭头旋转（0 = 收起 `>`，1 = 展开 `v`）。
+    turn_anim: Cell<Transition<f32>>,
+    /// 标题单行截断。
+    fit: SingleLine,
 }
 
 impl CollapsibleHeader {
-    pub fn new(title: String, expanded: Signal<bool>) -> Self {
+    pub fn new(title: impl Into<TextContent>, expanded: Signal<bool>) -> Self {
         Self {
-            title,
+            title: title.into(),
             expanded,
             hover: false,
             hover_anim: Cell::new(Transition::new(0.0)),
+            turn_anim: Cell::new(
+                Transition::new(if expanded.get() { 1.0 } else { 0.0 }).movement(),
+            ),
+            fit: SingleLine::default(),
         }
     }
     fn toggle(&self, ctx: &mut EventCtx) {
@@ -303,7 +364,15 @@ impl CollapsibleHeader {
 
 impl Widget for CollapsibleHeader {
     fn measure(&self, avail: Size, _style: &Style, _text: &mut dyn TextEngine) -> Size {
-        Size::new(avail.w.max(0), NAV_ROW_H)
+        Size::new(avail.w.max(0), crate::theme::current().metrics.row_h)
+    }
+
+    /// 隐藏期间展开态被程序改过（标签页切走时改了选中面板）：内容那边已就地落定，
+    /// 箭头也得跟着落定，否则露出来时补播一段与内容对不上的旋转。
+    fn settle_offscreen(&mut self) {
+        let mut tr = self.turn_anim.get();
+        tr.settle(if self.expanded.get() { 1.0 } else { 0.0 });
+        self.turn_anim.set(tr);
     }
 
     fn paint(
@@ -318,9 +387,10 @@ impl Widget for CollapsibleHeader {
         let amt = hover_amount(&self.hover_anim, self.hover);
         paint_panel_header(
             canvas,
+            &self.fit,
             bounds,
-            &self.title,
-            self.expanded.get(),
+            &self.title.resolve(),
+            turn_amount(&self.turn_anim, self.expanded.get()),
             amt,
             enabled,
             style,
@@ -410,19 +480,28 @@ impl ExpandState {
 /// 卡片分层用的 header 背景由 `Element::accordion` 在 Element 层 `.bg()` 注入（折叠头没有），
 /// 不在本 widget 内绘制——故两者头部背景不同是有意为之。
 pub struct AccordionHeader {
-    title: String,
+    /// 标题。存 [`TextContent`]，paint 时现取——传 `t!` 进来换语言即跟随。
+    title: TextContent,
     state: ExpandState,
     hover: bool,
     hover_anim: Cell<Transition<f32>>,
+    /// 箭头旋转（0 = 收起 `>`，1 = 展开 `v`）。
+    turn_anim: Cell<Transition<f32>>,
+    /// 标题单行截断。
+    fit: SingleLine,
 }
 
 impl AccordionHeader {
-    pub fn new(title: String, state: ExpandState) -> Self {
+    pub fn new(title: impl Into<TextContent>, state: ExpandState) -> Self {
         Self {
-            title,
+            title: title.into(),
+            turn_anim: Cell::new(
+                Transition::new(if state.is_expanded() { 1.0 } else { 0.0 }).movement(),
+            ),
             state,
             hover: false,
             hover_anim: Cell::new(Transition::new(0.0)),
+            fit: SingleLine::default(),
         }
     }
     fn toggle(&self, ctx: &mut EventCtx) {
@@ -434,7 +513,15 @@ impl AccordionHeader {
 
 impl Widget for AccordionHeader {
     fn measure(&self, avail: Size, _style: &Style, _text: &mut dyn TextEngine) -> Size {
-        Size::new(avail.w.max(0), NAV_ROW_H)
+        Size::new(avail.w.max(0), crate::theme::current().metrics.row_h)
+    }
+
+    /// 隐藏期间展开态被程序改过（标签页切走时改了选中面板）：内容那边已就地落定，
+    /// 箭头也得跟着落定，否则露出来时补播一段与内容对不上的旋转。
+    fn settle_offscreen(&mut self) {
+        let mut tr = self.turn_anim.get();
+        tr.settle(if self.state.is_expanded() { 1.0 } else { 0.0 });
+        self.turn_anim.set(tr);
     }
 
     fn paint(
@@ -449,9 +536,10 @@ impl Widget for AccordionHeader {
         let amt = hover_amount(&self.hover_anim, self.hover);
         paint_panel_header(
             canvas,
+            &self.fit,
             bounds,
-            &self.title,
-            self.state.is_expanded(),
+            &self.title.resolve(),
+            turn_amount(&self.turn_anim, self.state.is_expanded()),
             amt,
             enabled,
             style,
@@ -685,5 +773,103 @@ mod tests {
             Some(header0),
         );
         assert_eq!(sel.get(), Some(0), "回车应展开聚焦的面板头");
+    }
+}
+
+/// 行高固定的导航行 / 面板头配长标题：截成单行，不折行画出 bounds。
+#[cfg(test)]
+mod overflow_tests {
+    use super::*;
+    use crate::core::Layout;
+    use crate::signal::signal;
+    use crate::ui::text_fit::ink::*;
+    use crate::ui::Element;
+
+    fn rows() -> Vec<(&'static str, Element)> {
+        let row = || Element::base(Layout::None).height(crate::theme::current().metrics.row_h);
+        vec![
+            ("NavRow", row().widget(NavRow::new(LONG_LATIN))),
+            (
+                "CollapsibleHeader",
+                row().widget(CollapsibleHeader::new(LONG_LATIN, signal(false))),
+            ),
+            (
+                "AccordionHeader",
+                row().widget(AccordionHeader::new(
+                    LONG_LATIN,
+                    ExpandState::Multi(signal(false)),
+                )),
+            ),
+        ]
+    }
+
+    #[test]
+    fn long_nav_titles_stay_in_their_row_explicit_width() {
+        assert_wraps_taller(LONG_LATIN, 14.0, 120, crate::theme::current().metrics.row_h);
+        for (what, el) in rows() {
+            let el =
+                Element::col().children([el.width(120), Element::col().height(80).width_match()]);
+            let (pm, b) = paint_first_child(el, 200, 150);
+            assert_eq!(b.w, 120);
+            assert_no_ink_outside(&pm, b, &format!("{what} 显式宽"));
+        }
+    }
+
+    #[test]
+    fn long_nav_titles_stay_in_their_row_wrap_width() {
+        assert_wraps_taller(LONG_LATIN, 14.0, 120, crate::theme::current().metrics.row_h);
+        for (what, el) in rows() {
+            let el = Element::col()
+                .width_match()
+                .children([el, Element::col().height(80).width_match()]);
+            let (pm, b) = paint_first_child(el, 120, 150);
+            assert!(b.w <= 120, "{what}：Wrap 宽应受父宽约束：{b:?}");
+            assert_no_ink_outside(&pm, b, &format!("{what} Wrap 宽"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod chevron_tests {
+    use super::*;
+    use crate::render::SkiaCanvas;
+
+    /// 在 4× 画布上画一个箭头，返回像素（放大后 1 逻辑像素的错位才量得出来）。
+    fn draw(f: impl Fn(&mut dyn Canvas)) -> Vec<u8> {
+        let mut pm = tiny_skia::Pixmap::new(80, 80).unwrap();
+        {
+            let mut eng = crate::text::NullTextEngine;
+            let mut c = SkiaCanvas::with_text(&mut pm, &mut eng, 4.0);
+            f(&mut c);
+        }
+        pm.data().to_vec()
+    }
+
+    fn diff(a: &[u8], b: &[u8]) -> u64 {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (*x as i64 - *y as i64).unsigned_abs())
+            .sum()
+    }
+
+    /// 旋转过渡在两端都要与静态箭头接得上：转到 99.9% 时与静态 `v` 几乎无差、
+    /// 0.1% 时与静态 `>` 几乎无差。尖端不补那 1px 的话，最后一帧会跳一下。
+    #[test]
+    fn turning_chevron_meets_both_static_arrows() {
+        let c = crate::geometry::Color::BLACK;
+        let down = draw(|cv| chevron_down(cv, 10.0, 10.0, c));
+        let right = draw(|cv| chevron_right(cv, 10.0, 10.0, c));
+        let almost_down = draw(|cv| chevron_turning(cv, 10.0, 10.0, 0.999, c));
+        let almost_right = draw(|cv| chevron_turning(cv, 10.0, 10.0, 0.001, c));
+        let between = diff(&down, &right);
+        assert!(between > 0, "前提：两个静态箭头不同");
+        assert!(
+            diff(&almost_down, &down) * 20 < between,
+            "转到 99.9% 应与静态 v 几乎重合"
+        );
+        assert!(
+            diff(&almost_right, &right) * 20 < between,
+            "转到 0.1% 应与静态 > 几乎重合"
+        );
     }
 }
