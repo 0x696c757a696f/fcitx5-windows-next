@@ -72,6 +72,23 @@ jobs:
       - name: Configure CI compiler cache
         run: ./tools/configure-ci-cache.ps1
 
+      - name: Restore MSYS2 toolchain cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            out/downloads
+            out/toolchains/msys64
+          key: ${{ runner.os }}-msys2-clang64-${{ hashFiles('tools/bootstrap-fcitx.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-msys2-clang64-
+
+      - name: Bootstrap native Fcitx engine
+        run: |
+          # The first bootstrap verifies and unpacks the MSYS2 archive with
+          # Git for Windows' xz and gpg, which are not on PATH by default.
+          $env:PATH = "$env:PATH;C:\Program Files\Git\usr\bin"
+          ./tools/bootstrap-fcitx.ps1
+
       - name: Build, test, and stage the unsigned package
         run: ./tools/verify-product.ps1 package -Version 0.1.0 -Channel nightly
 
