@@ -82,6 +82,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-msys2-clang64-
 
+      - name: Restore native Fcitx build cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            out/sources
+            out/stage/fcitx5
+            out/build/fcitx5-core
+            out/build/libime
+            out/build/fcitx5-chinese-addons
+            out/build/librime
+            out/build/fcitx5-rime
+            out/build/fcitx5-lua
+            out/build/fcitx5-unikey
+            out/build/native-engine
+          key: ${{ runner.os }}-fcitx-native-${{ hashFiles('tools/bootstrap-fcitx.ps1', 'third_party/patches/**') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-fcitx-native-${{ hashFiles('tools/bootstrap-fcitx.ps1', 'third_party/patches/**') }}-
+
       - name: Prepare Rust for the native engine
         run: |
           ./tools/prepare-rust.ps1
