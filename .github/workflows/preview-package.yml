@@ -82,6 +82,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-msys2-clang64-
 
+      - name: Prepare Rust for the native engine
+        run: |
+          ./tools/prepare-rust.ps1
+          rustup target add x86_64-pc-windows-gnu --toolchain 1.98.0-x86_64-pc-windows-msvc
+          # native-engine invokes cargo from the repository CARGO_HOME. The
+          # runner's rustup lives elsewhere, so give that bin directory rustup
+          # proxies of its own.
+          $bin = Join-Path $env:CARGO_HOME 'bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $rustup = (Get-Command rustup -ErrorAction Stop).Source
+          foreach ($proxy in @('cargo.exe', 'rustc.exe')) {
+            $path = Join-Path $bin $proxy
+            if (-not (Test-Path -LiteralPath $path)) {
+              Copy-Item -LiteralPath $rustup -Destination $path
+            }
+          }
+
       - name: Bootstrap native Fcitx engine
         run: |
           # The first bootstrap verifies and unpacks the MSYS2 archive with
