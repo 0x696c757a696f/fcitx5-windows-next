@@ -143,20 +143,6 @@ pub struct FrameUpdateOutputs {
     pub horizontal: bool,
 }
 
-/// Grid columns of a horizontal scrolling matrix (one page per row), or 0
-/// when candidates share one set of label/text/comment anchors. Paint makes
-/// the same decision from the same configuration.
-fn frame_grid_columns(config: &FrameConfig, page_size: u32) -> usize {
-    let horizontal_grid = config.orientation == FrameOrientation::Horizontal
-        && frame_overflow(config) == OverflowBehavior::Scrolling
-        && page_size > 0;
-    if horizontal_grid {
-        crate::axis_layout::scroll_grid_line_len_for(page_size as usize)
-    } else {
-        0
-    }
-}
-
 fn frame_overflow(config: &FrameConfig) -> OverflowBehavior {
     // Frozen C++ mapping: non-horizontal writing collapses to paging, wrapping
     // stays wrapping, scrolling stays scrolling.
@@ -376,6 +362,16 @@ pub fn frame_update(
         },
     );
     let mut horizontal = resolved == Orientation::Horizontal;
+    let layout_options = |horizontal: bool| CandidateLayoutOptions {
+        orientation: if horizontal {
+            Orientation::Horizontal
+        } else {
+            Orientation::Vertical
+        },
+        overflow: frame_overflow(&config),
+        writing_mode: frame_writing(&config),
+    };
+    let page_size = response.candidate_page_size as usize;
 
     let configured_max_width = config.max_width_dip * scale;
     let work_width = (work_area.right - work_area.left).max(0.0);
@@ -399,14 +395,20 @@ pub fn frame_update(
         font_size: config.font_size_dip * scale,
         label_font_size: config.font_size_dip * config.label_font_scale * scale,
         comment_font_size: config.font_size_dip * config.annotation_font_scale * scale,
-        dpi_scale: scale,
+        // Font sizes above are already in device pixels, which is also how
+        // paint measures them; scaling again would round at a different
+        // pixel size and let measured widths drift from painted ones.
+        dpi_scale: 1.0,
         max_width: measurement_max_width,
         window_padding_x: config.padding_x_dip * scale,
         max_height: (work_area.bottom - work_area.top).max(0.0),
         window_padding_y: config.padding_y_dip * scale,
-        grid_columns: frame_grid_columns(&config, response.candidate_page_size),
+        anchor_stride: crate::axis_layout::horizontal_anchor_stride(
+            layout_options(horizontal),
+            page_size,
+        ),
     };
-    let Some((items, preedit_panel_size, _scroll_label_column, horizontal_effective_width)) =
+    let Some((mut items, preedit_panel_size, _scroll_label_column, horizontal_effective_width)) =
         measure_visual_items(
             state.measure,
             state.arena.built_outputs(),
@@ -467,20 +469,32 @@ pub fn frame_update(
         } != 0
         {
             horizontal = false;
+            // A vertical list aligns every candidate's columns, while the
+            // horizontal row just measured kept each one natural.
+            let vertical_params = MeasureLoopParams {
+                horizontal: false,
+                anchor_stride: crate::axis_layout::horizontal_anchor_stride(
+                    layout_options(false),
+                    page_size,
+                ),
+                ..measure_params
+            };
+            let Some((vertical_items, ..)) = measure_visual_items(
+                state.measure,
+                state.arena.built_outputs(),
+                &render_indices,
+                None,
+                &vertical_params,
+            ) else {
+                return FrameUpdateOutcome::Dismiss;
+            };
+            items = vertical_items;
         }
     }
 
     // 12. Axis layout.
     let axis_result = crate::axis_layout::layout(&AxisLayoutInput {
-        options: CandidateLayoutOptions {
-            orientation: if horizontal {
-                Orientation::Horizontal
-            } else {
-                Orientation::Vertical
-            },
-            overflow: frame_overflow(&config),
-            writing_mode: frame_writing(&config),
-        },
+        options: layout_options(horizontal),
         items: items
             .iter()
             .map(|item| Size {
@@ -500,7 +514,7 @@ pub fn frame_update(
         padding_y: config.padding_y_dip * scale,
         row_gap: config.row_gap_dip * scale,
         column_gap: config.column_gap_dip * scale,
-        page_size: response.candidate_page_size as usize,
+        page_size,
         selected: selected_index,
         scroll_override: {
             let override_px = state.scroll.override_px();
