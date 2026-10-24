@@ -8,7 +8,7 @@
 use core::ffi::c_void;
 
 use crate::renderer::{
-    grapheme_clusters, horizontal_available_width, horizontal_column_anchors,
+    grapheme_clusters, horizontal_available_width, horizontal_candidate_anchors,
     horizontal_run_plan_with_anchors, Fcitx5CandidateMeasureSize, HorizontalColumnInput,
     MeasureEngine, VERTICAL_GLYPH_STEP_RATIO,
 };
@@ -36,6 +36,8 @@ pub(crate) struct MeasureLoopParams {
     pub max_height: f32,
     /// Outer vertical window padding included in `max_height`.
     pub window_padding_y: f32,
+    /// Grid columns of a horizontal scrolling grid (0 = shared anchors).
+    pub grid_columns: usize,
 }
 
 /// The frozen measure loop over live arena outputs: optional scroll-label
@@ -102,8 +104,9 @@ pub(crate) fn measure_visual_items(
         params.item_padding_x,
         params.scroll_mode,
     );
-    let horizontal_anchors = horizontal_column_anchors(
+    let horizontal_anchors = horizontal_candidate_anchors(
         &column_inputs,
+        params.grid_columns,
         if params.scroll_mode && params.horizontal {
             scroll_label_column_width
         } else {
@@ -172,7 +175,7 @@ pub(crate) fn measure_visual_items(
                 params.label_font_size,
                 params.font_size,
                 params.comment_font_size,
-                horizontal_anchors,
+                horizontal_anchors[position],
                 |value, size| engine.measure(value, size, params.dpi_scale),
             );
             (plan.width, plan.height)
@@ -197,7 +200,10 @@ pub(crate) fn measure_visual_items(
         items,
         panel,
         scroll_label_column_width,
-        horizontal_anchors.effective_width,
+        horizontal_anchors
+            .iter()
+            .map(|anchors| anchors.effective_width)
+            .fold(0.0_f32, f32::max),
     ))
 }
 
@@ -283,6 +289,7 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
         window_padding_x: 0.0,
         max_height: 0.0,
         window_padding_y: 0.0,
+        grid_columns: 0,
     };
     let Some((items, panel, scroll_label_column_width, _horizontal_effective_width)) =
         measure_visual_items(engine, outputs, indices, preedit_text.as_deref(), &params)
@@ -355,6 +362,7 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_text_utf8(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::horizontal_column_anchors;
 
     #[test]
     fn measure_text_utf8_rejects_invalid_utf8_and_null_outputs() {
@@ -508,6 +516,7 @@ mod tests {
             window_padding_x: 12.0,
             max_height: 0.0,
             window_padding_y: 0.0,
+            grid_columns: 0,
         };
         let available = horizontal_available_width(
             params.max_width,
@@ -591,6 +600,7 @@ mod tests {
             window_padding_x: 0.0,
             max_height: 0.0,
             window_padding_y: 0.0,
+            grid_columns: 0,
         };
         let (vertical_items, _, _, _) =
             measure_visual_items(&mut engine, &outputs, &indices, None, &vertical)
@@ -667,6 +677,7 @@ mod tests {
             window_padding_x: 8.0,
             max_height: 728.0,
             window_padding_y: 8.0,
+            grid_columns: 0,
         };
         let (items, _, _, _) = measure_visual_items(&mut engine, &outputs, &[0], None, &params)
             .expect("vertical measure loop must succeed");

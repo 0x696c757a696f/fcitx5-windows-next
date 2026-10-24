@@ -143,6 +143,20 @@ pub struct FrameUpdateOutputs {
     pub horizontal: bool,
 }
 
+/// Grid columns of a horizontal scrolling matrix (one page per row), or 0
+/// when candidates share one set of label/text/comment anchors. Paint makes
+/// the same decision from the same configuration.
+fn frame_grid_columns(config: &FrameConfig, page_size: u32) -> usize {
+    let horizontal_grid = config.orientation == FrameOrientation::Horizontal
+        && frame_overflow(config) == OverflowBehavior::Scrolling
+        && page_size > 0;
+    if horizontal_grid {
+        crate::axis_layout::scroll_grid_line_len_for(page_size as usize)
+    } else {
+        0
+    }
+}
+
 fn frame_overflow(config: &FrameConfig) -> OverflowBehavior {
     // Frozen C++ mapping: non-horizontal writing collapses to paging, wrapping
     // stays wrapping, scrolling stays scrolling.
@@ -390,6 +404,7 @@ pub fn frame_update(
         window_padding_x: config.padding_x_dip * scale,
         max_height: (work_area.bottom - work_area.top).max(0.0),
         window_padding_y: config.padding_y_dip * scale,
+        grid_columns: frame_grid_columns(&config, response.candidate_page_size),
     };
     let Some((items, preedit_panel_size, _scroll_label_column, horizontal_effective_width)) =
         measure_visual_items(

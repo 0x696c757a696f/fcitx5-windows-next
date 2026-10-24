@@ -4285,6 +4285,15 @@ pub unsafe extern "C" fn fcitx5_candidate_render_window(
             scroll_mode: geometry.overflow == 1,
             max_width: geometry.max_width,
             window_padding_x: geometry.padding_x,
+            grid_columns: if orientation == Orientation::Horizontal
+                && overflow == crate::axis_layout::OverflowBehavior::Scrolling
+                && writing_mode == crate::axis_layout::WritingMode::Horizontal
+                && geometry.page_size > 0
+            {
+                crate::axis_layout::scroll_grid_line_len_for(geometry.page_size as usize)
+            } else {
+                0
+            },
         },
         font_family: "Microsoft YaHei UI",
         preedit: preedit.as_deref(),
