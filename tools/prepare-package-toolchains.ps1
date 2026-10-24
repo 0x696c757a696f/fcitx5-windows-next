@@ -35,9 +35,14 @@ foreach ($tool in $lock.tools) {
 if (-not $VerifyOnly) {
   $innoRoot = Join-Path $toolchainRoot 'inno-7.0.2'
   if (-not (Test-Path -LiteralPath (Join-Path $innoRoot 'ISCC.exe'))) {
-    & (Join-Path $toolchainRoot 'innosetup-7.0.2-x64.exe') /CURRENTUSER /PORTABLE=1 `
-      /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOICONS "/DIR=$innoRoot"
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to install the pinned portable Inno Setup.' }
+    # The installer is a GUI executable, so wait for it explicitly.
+    $installer = Start-Process -FilePath (Join-Path $toolchainRoot 'innosetup-7.0.2-x64.exe') `
+      -ArgumentList @('/CURRENTUSER', '/PORTABLE=1', '/VERYSILENT', '/SUPPRESSMSGBOXES',
+                      '/NORESTART', '/NOICONS', "`"/DIR=$innoRoot`"") -Wait -PassThru
+    if ($installer.ExitCode -ne 0 -or
+        -not (Test-Path -LiteralPath (Join-Path $innoRoot 'ISCC.exe') -PathType Leaf)) {
+      throw 'Unable to install the pinned portable Inno Setup.'
+    }
   }
 }
 

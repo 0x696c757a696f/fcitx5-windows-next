@@ -202,6 +202,21 @@ function Get-VcVarsArgument([string] $TargetArchitecture) {
   }
 }
 
+function Compress-MsvcSearchPaths {
+  # Each vcvarsall import prepends its directories again. Drop repeats so a
+  # process that imports several lanes stays under cmd's line length limit.
+  foreach ($name in @('PATH', 'INCLUDE', 'LIB', 'LIBPATH')) {
+    $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+    if ([string]::IsNullOrEmpty($value)) { continue }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $kept = foreach ($entry in $value.Split(';')) {
+      $trimmed = $entry.Trim()
+      if ($trimmed -and $seen.Add($trimmed.TrimEnd('\'))) { $trimmed }
+    }
+    [Environment]::SetEnvironmentVariable($name, ($kept -join ';'), 'Process')
+  }
+}
+
 function Import-MsvcEnvironment([string] $TargetArchitecture) {
   $vswhere = Get-VsWherePath
   $requires = @('Microsoft.VisualStudio.Component.VC.Tools.x86.x64')
@@ -226,6 +241,7 @@ function Import-MsvcEnvironment([string] $TargetArchitecture) {
   }
 
   $vcvarsArgument = Get-VcVarsArgument $TargetArchitecture
+  Compress-MsvcSearchPaths
   $command = "`"$vcvars`" $vcvarsArgument >nul && set"
   $environmentLines = & $env:ComSpec /d /s /c $command
   if ($LASTEXITCODE -ne 0) {
@@ -401,7 +417,7 @@ try {
       & (Join-Path $PSScriptRoot 'check-text-format.ps1')
       & (Join-Path $PSScriptRoot 'test-signing-credential-policy.ps1')
       & (Join-Path $PSScriptRoot 'stage-package.ps1') -Version $Version -Channel $Channel
-      & (Join-Path $PSScriptRoot 'test-portable.ps1')
+      & (Join-Path $PSScriptRoot 'test-portable.ps1') -Version $Version -Channel $Channel
       Write-Host 'Package gate passed using the tested Release artifacts.'
     }
     'release' {

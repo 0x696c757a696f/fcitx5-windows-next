@@ -63,6 +63,11 @@ $patchPins = @(
 
 $packagePins = @(
   'mingw-w64-clang-x86_64-clang=22.1.8-2',
+  'mingw-w64-clang-x86_64-clang-libs=22.1.8-2',
+  'mingw-w64-clang-x86_64-compiler-rt=22.1.8-2',
+  'mingw-w64-clang-x86_64-llvm-libs=22.1.8-2',
+  'mingw-w64-clang-x86_64-llvm-tools=22.1.8-2',
+  'mingw-w64-clang-x86_64-lld=22.1.8-2',
   'mingw-w64-clang-x86_64-cmake=4.4.2-2',
   'mingw-w64-clang-x86_64-ninja=1.13.2-1',
   'mingw-w64-clang-x86_64-extra-cmake-modules=6.29.0-1',
@@ -76,7 +81,9 @@ $packagePins = @(
   'mingw-w64-clang-x86_64-zstd=1.5.7-2',
   'mingw-w64-clang-x86_64-libiconv=1.19-1',
   'mingw-w64-clang-x86_64-libc++=22.1.8-1',
+  'mingw-w64-clang-x86_64-libunwind=22.1.8-1',
   'mingw-w64-clang-x86_64-libwinpthread=14.0.0.r302.gd7f3c5201-1',
+  'mingw-w64-clang-x86_64-winpthreads=14.0.0.r302.gd7f3c5201-1',
   'mingw-w64-clang-x86_64-pkgconf=1~3.0.5-1',
   'mingw-w64-clang-x86_64-capnproto=1.4.0-3',
   'mingw-w64-clang-x86_64-gflags=2.3.0-1',
@@ -281,10 +288,19 @@ foreach ($name in @('protocols', 'services', 'networks')) {
   }
 }
 
-$packageNames = $packagePins | ForEach-Object { $_.Split('=', 2)[0] }
 if (-not $SkipToolchainSync) {
   Invoke-Msys "pacman -Syu --noconfirm"
-  Invoke-Msys "pacman -S --needed --noconfirm $($packageNames -join ' ')"
+  # Install the exact pinned builds rather than whatever the sync database
+  # currently offers, so a fresh toolchain matches Assert-Pins.
+  $packageUrls = $packagePins | ForEach-Object {
+    $parts = $_.Split('=', 2)
+    if ($parts[0].StartsWith('mingw-w64-clang-x86_64-', [StringComparison]::Ordinal)) {
+      "https://repo.msys2.org/mingw/clang64/$($parts[0])-$($parts[1])-any.pkg.tar.zst"
+    } else {
+      "https://repo.msys2.org/msys/x86_64/$($parts[0])-$($parts[1])-x86_64.pkg.tar.zst"
+    }
+  }
+  Invoke-Msys "pacman -U --needed --noconfirm $($packageUrls -join ' ')"
 }
 
 foreach ($pin in $sourcePins) {
