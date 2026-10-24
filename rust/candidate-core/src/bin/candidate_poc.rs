@@ -2306,7 +2306,7 @@ mod window_smoke {
             .collect::<Vec<_>>();
         let (segments, label_column_width) = candidate_render_segments(&render_inputs);
         let qingfeng_orientation = if scroll_mode {
-            QingfengOrientation::Grid
+            QingfengOrientation::Grid { columns }
         } else if orientation == Orientation::Vertical {
             QingfengOrientation::Vertical
         } else {
