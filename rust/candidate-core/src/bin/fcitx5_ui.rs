@@ -680,11 +680,15 @@ impl Host {
         self.selection_inflate_x = outputs.selection_inflate_x;
         self.selection_inflate_y = outputs.selection_inflate_y;
         self.resolved_horizontal = outputs.horizontal;
-        if let Some(rect) = outputs.preedit_panel {
-            self.preedit_panel_rect = Some((rect.left, rect.top, rect.right, rect.bottom));
-            self.preedit_divider_y = outputs.preedit_divider_y;
-            self.preedit_panel_text = outputs.preedit_utf8;
-        }
+        self.preedit_panel_rect = outputs
+            .preedit_panel
+            .map(|rect| (rect.left, rect.top, rect.right, rect.bottom));
+        self.preedit_divider_y = outputs.preedit_divider_y;
+        self.preedit_panel_text = if self.preedit_panel_rect.is_some() {
+            outputs.preedit_utf8
+        } else {
+            Vec::new()
+        };
         self.candidate_page_size = response.candidate_page_size;
         self.target_foreground =
             // SAFETY: plain Win32 query.
@@ -921,7 +925,9 @@ impl Host {
             row_gap: vc.row_gap_dip * scale,
             column_gap: vc.column_gap_dip * scale,
             page_size: self.candidate_page_size,
-            orientation: u8::from(vc.orientation != FrameOrientation::Horizontal),
+            // Lay out along the orientation the frame update resolved, so an
+            // automatic layout paints the row it measured.
+            orientation: u8::from(!self.resolved_horizontal),
             overflow: match vc.writing {
                 FrameWriting::VerticalRl | FrameWriting::VerticalLr => 0_u8,
                 _ => match vc.overflow {

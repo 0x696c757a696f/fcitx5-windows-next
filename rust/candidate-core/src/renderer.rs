@@ -119,9 +119,9 @@ pub struct RenderGeometry {
     pub max_width: f32,
     /// Outer horizontal padding already included in `max_width`.
     pub window_padding_x: f32,
-    /// Grid columns of a horizontal scrolling grid (0 = one shared set of
-    /// label/text/comment anchors for every candidate).
-    pub grid_columns: usize,
+    /// Candidates this many positions apart share label/text/comment
+    /// columns; see `horizontal_candidate_anchors`.
+    pub anchor_stride: usize,
 }
 
 impl Default for RenderGeometry {
@@ -137,7 +137,7 @@ impl Default for RenderGeometry {
             scroll_mode: false,
             max_width: 0.0,
             window_padding_x: 0.0,
-            grid_columns: 0,
+            anchor_stride: 1,
         }
     }
 }
@@ -335,14 +335,15 @@ where
     }
 }
 
-/// Anchors for every candidate, in candidate order. With `grid_columns` set
-/// (a horizontal scrolling grid with one page per row), label, text and
-/// comment align within each grid column only, so a long word or comment in
-/// one column no longer widens every cell of the matrix.
+/// Anchors for every candidate, in candidate order. Candidates
+/// `anchor_stride` positions apart share label/text/comment columns: 1 for a
+/// list where every candidate sits under the previous one, the column count
+/// of a matrix so cells align within their grid column only, and 0 for a
+/// single row where each candidate keeps its own natural spacing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn horizontal_candidate_anchors<F>(
     candidates: &[HorizontalColumnInput<'_>],
-    grid_columns: usize,
+    anchor_stride: usize,
     reserved_label_width: f32,
     max_width: f32,
     label_gap: f32,
@@ -366,22 +367,27 @@ where
             &mut measure,
         )
     };
-    if grid_columns == 0 {
+    if anchor_stride == 1 {
         return vec![anchors_for(candidates); candidates.len()];
     }
-    let per_column: Vec<_> = (0..grid_columns.min(candidates.len()))
+    let stride = if anchor_stride == 0 {
+        candidates.len().max(1)
+    } else {
+        anchor_stride
+    };
+    let per_column: Vec<_> = (0..stride.min(candidates.len()))
         .map(|column| {
             let group: Vec<_> = candidates
                 .iter()
                 .skip(column)
-                .step_by(grid_columns)
+                .step_by(stride)
                 .copied()
                 .collect();
             anchors_for(&group)
         })
         .collect();
     (0..candidates.len())
-        .map(|index| per_column[index % grid_columns])
+        .map(|index| per_column[index % stride])
         .collect()
 }
 
@@ -586,6 +592,11 @@ pub struct RenderWindowOutput {
     pub stride: u32,
 }
 
+thread_local! {
+    static PAINT_ENGINE: std::cell::RefCell<Option<DWriteEngine>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 #[derive(Default)]
 struct TextMeasurementCache {
     // DirectWrite layout creation is the expensive part of a paint. Keep a
@@ -661,7 +672,11 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
         };
     };
     let scale = input.dpi_scale.clamp(0.25, 8.0);
-    let mut engine = DWriteEngine::new();
+    // Reuse one engine per thread so its font and measurement caches survive
+    // from one paint to the next.
+    let mut engine = PAINT_ENGINE
+        .with(|slot| slot.borrow_mut().take())
+        .unwrap_or_else(DWriteEngine::new);
     engine.set_scale(scale);
     let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut engine, scale);
     let mut measurement_cache = TextMeasurementCache::default();
@@ -719,7 +734,7 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
     );
     let horizontal_anchors = horizontal_candidate_anchors(
         &horizontal_inputs,
-        input.geometry.grid_columns,
+        input.geometry.anchor_stride,
         scroll_label_slot_width,
         horizontal_budget,
         input.geometry.label_gap,
@@ -785,6 +800,7 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
     draw_border(&mut canvas, input, window_w, window_h);
 
     drop(canvas);
+    PAINT_ENGINE.with(|slot| *slot.borrow_mut() = Some(engine));
     RenderWindowOutput {
         pixels: pixmap_to_bgra(&pixmap),
         width,
@@ -1378,8 +1394,8 @@ fn text_style<'a>(family: &'a str, size: f32) -> WindTextStyle<'a> {
 
 /// Owns the windui DirectWrite engine for host-side text measurement.
 pub struct MeasureEngine {
+    // DWriteEngine keeps its own bounded measurement cache.
     engine: DWriteEngine,
-    cache: HashMap<(String, String, u32, u32), (f32, f32)>,
 }
 
 impl MeasureEngine {
@@ -1387,7 +1403,6 @@ impl MeasureEngine {
     pub fn new() -> Self {
         Self {
             engine: DWriteEngine::new(),
-            cache: HashMap::new(),
         }
     }
 
@@ -1406,22 +1421,10 @@ impl MeasureEngine {
         font_size: f32,
         dpi_scale: f32,
     ) -> (f32, f32) {
-        let size = font_size.max(1.0);
-        let key = (
-            text.to_owned(),
-            family.to_owned(),
-            size.to_bits(),
-            dpi_scale.to_bits(),
-        );
-        if let Some(measured) = self.cache.get(&key) {
-            return *measured;
-        }
         self.engine.set_scale(dpi_scale);
-        let style = text_style(family, size);
+        let style = text_style(family, font_size.max(1.0));
         let size = TextEngine::measure(&mut self.engine, text, &style, None);
-        let measured = (size.w as f32, size.h as f32);
-        self.cache.insert(key, measured);
-        measured
+        (size.w as f32, size.h as f32)
     }
 }
 
@@ -1530,7 +1533,7 @@ mod tests {
             scroll_mode: false,
             max_width: 0.0,
             window_padding_x: 0.0,
-            grid_columns: 0,
+            anchor_stride: 1,
         }
     }
 
@@ -1579,10 +1582,10 @@ mod tests {
             candidate("点", ""),
             candidate("的确如此", ""),
         ];
-        let anchors = |grid_columns| {
+        let anchors = |anchor_stride| {
             horizontal_candidate_anchors(
                 &candidates,
-                grid_columns,
+                anchor_stride,
                 0.0,
                 f32::INFINITY,
                 4.0,
@@ -1592,8 +1595,12 @@ mod tests {
                 anchor_measure,
             )
         };
-        let shared = anchors(0);
+        let shared = anchors(1);
         assert!(shared.windows(2).all(|pair| pair[0] == pair[1]));
+        let row = anchors(0);
+        assert_eq!(row[0].text_width, 18.0, "a row keeps each word natural");
+        assert_eq!(row[1].comment_x, row[1].text_x + 18.0 + 4.0);
+        assert_eq!(row[3].text_width, 72.0);
         let grid = anchors(2);
         assert_eq!(grid[0], grid[2]);
         assert_eq!(grid[1], grid[3]);

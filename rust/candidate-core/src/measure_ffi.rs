@@ -36,8 +36,9 @@ pub(crate) struct MeasureLoopParams {
     pub max_height: f32,
     /// Outer vertical window padding included in `max_height`.
     pub window_padding_y: f32,
-    /// Grid columns of a horizontal scrolling grid (0 = shared anchors).
-    pub grid_columns: usize,
+    /// Candidates this many positions apart share label/text/comment
+    /// columns; see `renderer::horizontal_candidate_anchors`.
+    pub anchor_stride: usize,
 }
 
 /// The frozen measure loop over live arena outputs: optional scroll-label
@@ -106,7 +107,7 @@ pub(crate) fn measure_visual_items(
     );
     let horizontal_anchors = horizontal_candidate_anchors(
         &column_inputs,
-        params.grid_columns,
+        params.anchor_stride,
         if params.scroll_mode && params.horizontal {
             scroll_label_column_width
         } else {
@@ -289,7 +290,7 @@ pub unsafe extern "C" fn fcitx5_candidate_measure_visual_items(
         window_padding_x: 0.0,
         max_height: 0.0,
         window_padding_y: 0.0,
-        grid_columns: 0,
+        anchor_stride: 1,
     };
     let Some((items, panel, scroll_label_column_width, _horizontal_effective_width)) =
         measure_visual_items(engine, outputs, indices, preedit_text.as_deref(), &params)
@@ -516,7 +517,7 @@ mod tests {
             window_padding_x: 12.0,
             max_height: 0.0,
             window_padding_y: 0.0,
-            grid_columns: 0,
+            anchor_stride: 1,
         };
         let available = horizontal_available_width(
             params.max_width,
@@ -600,7 +601,7 @@ mod tests {
             window_padding_x: 0.0,
             max_height: 0.0,
             window_padding_y: 0.0,
-            grid_columns: 0,
+            anchor_stride: 1,
         };
         let (vertical_items, _, _, _) =
             measure_visual_items(&mut engine, &outputs, &indices, None, &vertical)
@@ -677,7 +678,7 @@ mod tests {
             window_padding_x: 8.0,
             max_height: 728.0,
             window_padding_y: 8.0,
-            grid_columns: 0,
+            anchor_stride: 1,
         };
         let (items, _, _, _) = measure_visual_items(&mut engine, &outputs, &[0], None, &params)
             .expect("vertical measure loop must succeed");

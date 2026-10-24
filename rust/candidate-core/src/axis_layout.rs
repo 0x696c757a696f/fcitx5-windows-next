@@ -505,6 +505,23 @@ pub(crate) fn scroll_grid_line_len_for(page_size: usize) -> usize {
     page_size.clamp(1, 9)
 }
 
+/// Which candidates share label/text/comment columns under `options`, as the
+/// stride `renderer::horizontal_candidate_anchors` takes: a list aligns every
+/// candidate (1), a horizontal matrix aligns each grid column, and a single
+/// horizontal row keeps every candidate at its natural width (0).
+pub(crate) fn horizontal_anchor_stride(options: CandidateLayoutOptions, page_size: usize) -> usize {
+    if options.writing_mode != WritingMode::Horizontal
+        || options.orientation != Orientation::Horizontal
+    {
+        return 1;
+    }
+    if options.overflow == OverflowBehavior::Scrolling && page_size > 0 {
+        scroll_grid_line_len_for(page_size)
+    } else {
+        0
+    }
+}
+
 /// Shrinks columns to fit `available`, taking width from the widest columns
 /// first so short candidates keep their full glyph budget.
 fn shrink_widest_columns(widths: &mut [f32], available: f32) {
@@ -1157,6 +1174,34 @@ mod tests {
         ));
         assert!(result.items.iter().all(|entry| entry.visible));
         assert!(result.viewport_offset.is_none());
+    }
+
+    #[test]
+    fn anchor_stride_follows_how_candidates_line_up() {
+        let horizontal = options();
+        let vertical = CandidateLayoutOptions {
+            orientation: Orientation::Vertical,
+            ..options()
+        };
+        assert_eq!(horizontal_anchor_stride(horizontal, 5), 0, "one row");
+        assert_eq!(
+            horizontal_anchor_stride(horizontal.with_overflow(OverflowBehavior::Wrapping), 5),
+            0
+        );
+        assert_eq!(
+            horizontal_anchor_stride(horizontal.with_overflow(OverflowBehavior::Scrolling), 5),
+            5,
+            "matrix aligns per grid column"
+        );
+        assert_eq!(
+            horizontal_anchor_stride(horizontal.with_overflow(OverflowBehavior::Scrolling), 0),
+            0
+        );
+        assert_eq!(horizontal_anchor_stride(vertical, 5), 1, "list aligns all");
+        assert_eq!(
+            horizontal_anchor_stride(horizontal.with_writing(WritingMode::VerticalRl), 5),
+            1
+        );
     }
 
     #[test]
